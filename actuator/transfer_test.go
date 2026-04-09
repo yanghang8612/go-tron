@@ -3,12 +3,12 @@ package actuator
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"github.com/tronprotocol/go-tron/trondb/memorydb"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -32,8 +32,8 @@ func makeTransferTx(from, to common.Address, amount int64) *types.Transaction {
 	return types.NewTransactionFromPB(pb)
 }
 
-func setupDB(accounts map[common.Address]int64) *memorydb.Database {
-	db := memorydb.New()
+func setupDB(accounts map[common.Address]int64) ethdb.KeyValueStore {
+	db := rawdb.NewMemoryDatabase()
 	for addr, balance := range accounts {
 		acc := types.NewAccount(addr, corepb.AccountType_Normal)
 		acc.SetBalance(balance)

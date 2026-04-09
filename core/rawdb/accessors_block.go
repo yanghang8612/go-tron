@@ -3,12 +3,12 @@ package rawdb
 import (
 	"encoding/binary"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
-	"github.com/tronprotocol/go-tron/trondb"
 )
 
-func WriteBlock(db trondb.KeyValueWriter, block *types.Block) {
+func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) {
 	data, err := block.Marshal()
 	if err != nil {
 		return
@@ -20,7 +20,7 @@ func WriteBlock(db trondb.KeyValueWriter, block *types.Block) {
 	db.Put(blockHashKey(block.Hash().Bytes()), num)
 }
 
-func ReadBlock(db trondb.KeyValueReader, number uint64) *types.Block {
+func ReadBlock(db ethdb.KeyValueReader, number uint64) *types.Block {
 	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return nil
@@ -32,7 +32,7 @@ func ReadBlock(db trondb.KeyValueReader, number uint64) *types.Block {
 	return block
 }
 
-func ReadBlockNumber(db trondb.KeyValueReader, hash common.Hash) *uint64 {
+func ReadBlockNumber(db ethdb.KeyValueReader, hash common.Hash) *uint64 {
 	data, err := db.Get(blockHashKey(hash.Bytes()))
 	if err != nil || len(data) != 8 {
 		return nil

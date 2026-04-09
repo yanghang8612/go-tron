@@ -3,14 +3,16 @@ package actuator
 import (
 	"errors"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"github.com/tronprotocol/go-tron/trondb"
 )
 
 type Context struct {
-	DB trondb.Database
-	Tx *types.Transaction
+	DB          ethdb.KeyValueStore
+	Tx          *types.Transaction
+	BlockTime   int64
+	BlockNumber uint64
 }
 
 type Result struct {

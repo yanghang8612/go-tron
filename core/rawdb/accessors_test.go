@@ -6,11 +6,10 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"github.com/tronprotocol/go-tron/trondb/memorydb"
 )
 
 func TestWriteReadBlock(t *testing.T) {
-	db := memorydb.New()
+	db := NewMemoryDatabase()
 	pb := &corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{
@@ -32,7 +31,7 @@ func TestWriteReadBlock(t *testing.T) {
 }
 
 func TestWriteReadBlockByHash(t *testing.T) {
-	db := memorydb.New()
+	db := NewMemoryDatabase()
 	pb := &corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{Number: 10},
@@ -51,7 +50,7 @@ func TestWriteReadBlockByHash(t *testing.T) {
 }
 
 func TestHeadBlock(t *testing.T) {
-	db := memorydb.New()
+	db := NewMemoryDatabase()
 	WriteHeadBlockHash(db, common.HexToHash("aabb"))
 	h := ReadHeadBlockHash(db)
 	if h != common.HexToHash("aabb") {
@@ -60,7 +59,7 @@ func TestHeadBlock(t *testing.T) {
 }
 
 func TestWriteReadAccount(t *testing.T) {
-	db := memorydb.New()
+	db := NewMemoryDatabase()
 	addr := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 	acc := types.NewAccount(addr, corepb.AccountType_Normal)
 	acc.SetBalance(1000000)

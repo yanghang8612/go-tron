@@ -1,15 +1,15 @@
 package rawdb
 
 import (
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/trondb"
 )
 
-func WriteHeadBlockHash(db trondb.KeyValueWriter, hash common.Hash) {
+func WriteHeadBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headBlockKey, hash.Bytes())
 }
 
-func ReadHeadBlockHash(db trondb.KeyValueReader) common.Hash {
+func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 	data, err := db.Get(headBlockKey)
 	if err != nil {
 		return common.Hash{}
@@ -17,11 +17,11 @@ func ReadHeadBlockHash(db trondb.KeyValueReader) common.Hash {
 	return common.BytesToHash(data)
 }
 
-func WriteHeadSolidBlockHash(db trondb.KeyValueWriter, hash common.Hash) {
+func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headSolidBlockKey, hash.Bytes())
 }
 
-func ReadHeadSolidBlockHash(db trondb.KeyValueReader) common.Hash {
+func ReadHeadSolidBlockHash(db ethdb.KeyValueReader) common.Hash {
 	data, err := db.Get(headSolidBlockKey)
 	if err != nil {
 		return common.Hash{}
@@ -29,11 +29,11 @@ func ReadHeadSolidBlockHash(db trondb.KeyValueReader) common.Hash {
 	return common.BytesToHash(data)
 }
 
-func WriteDynamicProperty(db trondb.KeyValueWriter, name string, value []byte) {
+func WriteDynamicProperty(db ethdb.KeyValueWriter, name string, value []byte) {
 	db.Put(dynPropKey(name), value)
 }
 
-func ReadDynamicProperty(db trondb.KeyValueReader, name string) []byte {
+func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 	data, err := db.Get(dynPropKey(name))
 	if err != nil {
 		return nil

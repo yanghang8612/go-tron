@@ -1,12 +1,12 @@
 package rawdb
 
 import (
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
-	"github.com/tronprotocol/go-tron/trondb"
 )
 
-func WriteAccount(db trondb.KeyValueWriter, addr common.Address, acc *types.Account) {
+func WriteAccount(db ethdb.KeyValueWriter, addr common.Address, acc *types.Account) {
 	data, err := acc.Marshal()
 	if err != nil {
 		return
@@ -14,7 +14,7 @@ func WriteAccount(db trondb.KeyValueWriter, addr common.Address, acc *types.Acco
 	db.Put(accountKey(addr.Bytes()), data)
 }
 
-func ReadAccount(db trondb.KeyValueReader, addr common.Address) *types.Account {
+func ReadAccount(db ethdb.KeyValueReader, addr common.Address) *types.Account {
 	data, err := db.Get(accountKey(addr.Bytes()))
 	if err != nil {
 		return nil
@@ -26,16 +26,16 @@ func ReadAccount(db trondb.KeyValueReader, addr common.Address) *types.Account {
 	return acc
 }
 
-func DeleteAccount(db trondb.KeyValueWriter, addr common.Address) {
+func DeleteAccount(db ethdb.KeyValueWriter, addr common.Address) {
 	db.Delete(accountKey(addr.Bytes()))
 }
 
-func HasAccount(db trondb.KeyValueReader, addr common.Address) bool {
+func HasAccount(db ethdb.KeyValueReader, addr common.Address) bool {
 	has, _ := db.Has(accountKey(addr.Bytes()))
 	return has
 }
 
-func WriteWitness(db trondb.KeyValueWriter, addr common.Address, w *types.Witness) {
+func WriteWitness(db ethdb.KeyValueWriter, addr common.Address, w *types.Witness) {
 	data, err := w.Marshal()
 	if err != nil {
 		return
@@ -43,7 +43,7 @@ func WriteWitness(db trondb.KeyValueWriter, addr common.Address, w *types.Witnes
 	db.Put(witnessKey(addr.Bytes()), data)
 }
 
-func ReadWitness(db trondb.KeyValueReader, addr common.Address) *types.Witness {
+func ReadWitness(db ethdb.KeyValueReader, addr common.Address) *types.Witness {
 	data, err := db.Get(witnessKey(addr.Bytes()))
 	if err != nil {
 		return nil
