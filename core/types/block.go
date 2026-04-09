@@ -3,6 +3,7 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -92,7 +93,7 @@ func (b *Block) Hash() common.Hash {
 		}
 		data, err := proto.Marshal(b.pb.BlockHeader.RawData)
 		if err != nil {
-			return
+			panic(fmt.Sprintf("block header marshal failed: %v", err))
 		}
 		b.hash = sha256.Sum256(data)
 	})

@@ -2,12 +2,16 @@ package types
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+// ContractTypeNone indicates no contract is present in the transaction.
+const ContractTypeNone corepb.Transaction_Contract_ContractType = -1
 
 type Transaction struct {
 	pb       *corepb.Transaction
@@ -28,7 +32,7 @@ func (tx *Transaction) Hash() common.Hash {
 		}
 		data, err := proto.Marshal(tx.pb.RawData)
 		if err != nil {
-			return
+			panic(fmt.Sprintf("transaction raw marshal failed: %v", err))
 		}
 		tx.hash = sha256.Sum256(data)
 	})
@@ -37,7 +41,7 @@ func (tx *Transaction) Hash() common.Hash {
 
 func (tx *Transaction) ContractType() corepb.Transaction_Contract_ContractType {
 	if tx.pb.RawData == nil || len(tx.pb.RawData.Contract) == 0 {
-		return -1
+		return ContractTypeNone
 	}
 	return tx.pb.RawData.Contract[0].Type
 }
