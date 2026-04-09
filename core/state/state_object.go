@@ -32,3 +32,6 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 func (s *stateObject) markDirty() {
 	s.dirty = true
 }
+
+// Account returns the underlying account for direct mutation during genesis setup.
+func (s *stateObject) Account() *types.Account { return s.account }
