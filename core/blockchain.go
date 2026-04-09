@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -25,6 +26,7 @@ type BlockChain struct {
 	config  *params.ChainConfig
 
 	currentBlock atomic.Pointer[types.Block]
+	chainmu      sync.Mutex // serializes block insertion
 
 	genesisBlock *types.Block
 }
@@ -64,14 +66,17 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	return bc, nil
 }
 
+// CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
 }
 
+// GetBlockByNumber retrieves a block by its number.
 func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 	return rawdb.ReadBlock(bc.db, number)
 }
 
+// GetBlockByHash retrieves a block by its hash.
 func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	num := rawdb.ReadBlockNumber(bc.db, hash)
 	if num == nil {
@@ -80,16 +85,25 @@ func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	return rawdb.ReadBlock(bc.db, *num)
 }
 
+// GenesisTimestamp returns the genesis block timestamp.
 func (bc *BlockChain) GenesisTimestamp() int64 {
 	return bc.genesisBlock.Timestamp()
 }
 
+// Config returns the chain config.
 func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
 }
 
 // InsertBlockWithoutVerify inserts a block without consensus verification.
 func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
+	if block == nil {
+		return errors.New("block is nil")
+	}
+
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+
 	current := bc.CurrentBlock()
 
 	if block.Number() != current.Number()+1 {
