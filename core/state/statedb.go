@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
@@ -29,6 +28,11 @@ type StateDB struct {
 	snapshots []int // journal length at each snapshot
 
 	dynProps *DynamicProperties
+
+	// originRoot is the trie root at the time of the last successful Commit (or
+	// the root passed to New). It is used as the parent root when updating the
+	// triedb so that the hashdb reference graph is correct across multiple blocks.
+	originRoot ethcommon.Hash
 }
 
 // New creates a StateDB from the given state root.
@@ -44,6 +48,7 @@ func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 		witnesses:    make(map[tcommon.Address]*types.Witness),
 		journal:      newJournal(),
 		dynProps:     NewDynamicProperties(),
+		originRoot:   ethcommon.Hash(root),
 	}, nil
 }
 
@@ -164,6 +169,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
 				return tcommon.Hash{}, err
 			}
+			obj.dirty = false // Issue 2: clear dirty flag for deleted objects
 			continue
 		}
 		data, err := obj.account.Marshal()
@@ -178,13 +184,28 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 
 	root, nodes := s.trie.Commit(false)
 	if nodes != nil {
-		if err := s.db.TrieDB().Update(root, ethcommon.Hash(ethtypes.EmptyRootHash), 0, trienode.NewWithNodeSet(nodes), nil); err != nil {
+		// Issue 3: pass s.originRoot as parent so the hashdb reference graph is correct.
+		if err := s.db.TrieDB().Update(root, s.originRoot, 0, trienode.NewWithNodeSet(nodes), nil); err != nil {
 			return tcommon.Hash{}, err
 		}
 		if err := s.db.TrieDB().Commit(root, false); err != nil {
 			return tcommon.Hash{}, err
 		}
 	}
+
+	// Issue 1: reopen the trie from the new root so StateDB remains usable.
+	newTrie, err := s.db.OpenTrie(root)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	s.trie = newTrie
+
+	// Issue 3: advance originRoot for the next commit.
+	s.originRoot = root
+
+	// Issue 4: clear journal and snapshots after a successful commit.
+	s.journal = newJournal()
+	s.snapshots = s.snapshots[:0]
 
 	return tcommon.Hash(root), nil
 }

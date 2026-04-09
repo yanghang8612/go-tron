@@ -135,6 +135,33 @@ func TestStateDBFreezeV2(t *testing.T) {
 	}
 }
 
+func TestStateDBCommitThenContinue(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(1)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 1000)
+
+	root1, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// StateDB should still be usable after commit
+	sdb.AddBalance(addr, 500)
+	if got := sdb.GetBalance(addr); got != 1500 {
+		t.Fatalf("balance after second add: want 1500, got %d", got)
+	}
+
+	root2, err := sdb.Commit()
+	if err != nil {
+		t.Fatal("second commit failed:", err)
+	}
+
+	if root1 == root2 {
+		t.Fatal("roots should differ after second commit")
+	}
+}
+
 func TestStateDBWitness(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(1)
