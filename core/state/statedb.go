@@ -159,6 +159,186 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	s.snapshots = s.snapshots[:id]
 }
 
+// AccountExists returns whether an account exists (non-nil and not deleted).
+func (s *StateDB) AccountExists(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	return obj != nil && !obj.deleted
+}
+
+// CreateAccount creates a new account at addr with the given type.
+// If the account already exists, it returns the existing account.
+func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.AccountType) *types.Account {
+	obj := s.GetOrCreateAccount(addr)
+	obj.account.SetAccountType(accountType)
+	obj.markDirty()
+	return obj.account
+}
+
+// SetIsWitness sets the witness flag on an account.
+func (s *StateDB) SetIsWitness(addr tcommon.Address, isWitness bool) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetIsWitness(isWitness)
+	obj.markDirty()
+}
+
+// GetFrozenV2Amount returns the frozen amount for a specific resource type.
+func (s *StateDB) GetFrozenV2Amount(addr tcommon.Address, resourceType corepb.ResourceCode) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.GetFrozenV2Amount(resourceType)
+}
+
+// ReduceFreezeV2 reduces the frozen amount for a resource type.
+func (s *StateDB) ReduceFreezeV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ReduceFreezeV2(resourceType, amount)
+	obj.markDirty()
+}
+
+// AddUnfreezeV2 adds a pending unfreeze entry with expiration time.
+func (s *StateDB) AddUnfreezeV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount, expireTime int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.AddUnfreezeV2(resourceType, amount, expireTime)
+	obj.markDirty()
+}
+
+// UnfreezeV2Count returns the number of pending unfreeze entries.
+func (s *StateDB) UnfreezeV2Count(addr tcommon.Address) int {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return len(obj.account.UnfrozenV2())
+}
+
+// RemoveExpiredUnfreezeV2 removes expired entries and returns the total withdrawn.
+func (s *StateDB) RemoveExpiredUnfreezeV2(addr tcommon.Address, now int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	amount := obj.account.RemoveExpiredUnfreezeV2(now)
+	if amount > 0 {
+		obj.markDirty()
+	}
+	return amount
+}
+
+// TotalFrozenV2 returns the total frozen balance across all resource types.
+func (s *StateDB) TotalFrozenV2(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.TotalFrozenV2()
+}
+
+// GetVotes returns the votes for an account.
+func (s *StateDB) GetVotes(addr tcommon.Address) []*corepb.Vote {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return nil
+	}
+	return obj.account.Votes()
+}
+
+// SetVotes sets the vote list on an account.
+func (s *StateDB) SetVotes(addr tcommon.Address, votes []*corepb.Vote) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetVotes(votes)
+	obj.markDirty()
+}
+
+// ClearVotes clears all votes on an account.
+func (s *StateDB) ClearVotes(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearVotes()
+	obj.markDirty()
+}
+
+// AddWitnessVoteCount adds delta to a witness's vote count.
+func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
+	w := s.witnesses[addr]
+	if w == nil {
+		return
+	}
+	w.SetVoteCount(w.VoteCount() + delta)
+}
+
+// GetAllowance returns the witness reward allowance.
+func (s *StateDB) GetAllowance(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.Allowance()
+}
+
+// SetAllowance sets the witness reward allowance.
+func (s *StateDB) SetAllowance(addr tcommon.Address, allowance int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetAllowance(allowance)
+	obj.markDirty()
+}
+
+// AddAllowance adds amount to the witness reward allowance.
+func (s *StateDB) AddAllowance(addr tcommon.Address, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetAllowance(obj.account.Allowance() + amount)
+	obj.markDirty()
+}
+
+// GetLatestWithdrawTime returns the latest withdraw timestamp.
+func (s *StateDB) GetLatestWithdrawTime(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestWithdrawTime()
+}
+
+// SetLatestWithdrawTime sets the latest withdraw timestamp.
+func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestWithdrawTime(t)
+	obj.markDirty()
+}
+
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
 	for addr, obj := range s.stateObjects {

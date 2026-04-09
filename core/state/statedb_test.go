@@ -179,3 +179,113 @@ func TestStateDBWitness(t *testing.T) {
 		t.Fatalf("witness url: want http://example.com, got %s", w.URL())
 	}
 }
+
+func TestStateDBAccountExists(t *testing.T) {
+	db := newTestStateDB(t)
+	addr := testAddr(0x01)
+
+	if db.AccountExists(addr) {
+		t.Fatal("should not exist before creation")
+	}
+
+	db.CreateAccount(addr, corepb.AccountType_Normal)
+	if !db.AccountExists(addr) {
+		t.Fatal("should exist after creation")
+	}
+}
+
+func TestStateDBFreezeAndUnfreeze(t *testing.T) {
+	db := newTestStateDB(t)
+	addr := testAddr(0x01)
+	db.CreateAccount(addr, corepb.AccountType_Normal)
+	db.AddBalance(addr, 10_000_000)
+
+	// Freeze
+	db.AddFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 5_000_000)
+	if got := db.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH); got != 5_000_000 {
+		t.Fatalf("frozen: got %d, want 5000000", got)
+	}
+	if got := db.TotalFrozenV2(addr); got != 5_000_000 {
+		t.Fatalf("total frozen: got %d, want 5000000", got)
+	}
+
+	// Reduce frozen
+	db.ReduceFreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 2_000_000)
+	if got := db.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH); got != 3_000_000 {
+		t.Fatalf("after reduce: got %d, want 3000000", got)
+	}
+
+	// Add unfreeze entry
+	db.AddUnfreezeV2(addr, corepb.ResourceCode_BANDWIDTH, 2_000_000, 100_000)
+	if got := db.UnfreezeV2Count(addr); got != 1 {
+		t.Fatalf("unfreeze count: got %d, want 1", got)
+	}
+
+	// Remove expired
+	withdrawn := db.RemoveExpiredUnfreezeV2(addr, 200_000)
+	if withdrawn != 2_000_000 {
+		t.Fatalf("withdrawn: got %d, want 2000000", withdrawn)
+	}
+	if got := db.UnfreezeV2Count(addr); got != 0 {
+		t.Fatalf("unfreeze count after remove: got %d, want 0", got)
+	}
+}
+
+func TestStateDBVotes(t *testing.T) {
+	db := newTestStateDB(t)
+	addr := testAddr(0x01)
+	db.CreateAccount(addr, corepb.AccountType_Normal)
+
+	votes := []*corepb.Vote{
+		{VoteAddress: testAddr(0x10).Bytes(), VoteCount: 100},
+		{VoteAddress: testAddr(0x11).Bytes(), VoteCount: 200},
+	}
+	db.SetVotes(addr, votes)
+	got := db.GetVotes(addr)
+	if len(got) != 2 {
+		t.Fatalf("votes: got %d, want 2", len(got))
+	}
+
+	db.ClearVotes(addr)
+	got = db.GetVotes(addr)
+	if len(got) != 0 {
+		t.Fatalf("after clear: got %d votes, want 0", len(got))
+	}
+}
+
+func TestStateDBAllowanceAndWithdraw(t *testing.T) {
+	db := newTestStateDB(t)
+	addr := testAddr(0x01)
+	db.CreateAccount(addr, corepb.AccountType_Normal)
+
+	db.SetAllowance(addr, 1000)
+	if got := db.GetAllowance(addr); got != 1000 {
+		t.Fatalf("allowance: got %d, want 1000", got)
+	}
+
+	db.AddAllowance(addr, 500)
+	if got := db.GetAllowance(addr); got != 1500 {
+		t.Fatalf("after add: got %d, want 1500", got)
+	}
+
+	db.SetLatestWithdrawTime(addr, 999)
+	if got := db.GetLatestWithdrawTime(addr); got != 999 {
+		t.Fatalf("withdraw time: got %d, want 999", got)
+	}
+}
+
+func TestStateDBWitnessVoteCount(t *testing.T) {
+	db := newTestStateDB(t)
+	wAddr := testAddr(0x10)
+	db.PutWitness(wAddr, "http://w1.example.com")
+
+	db.AddWitnessVoteCount(wAddr, 100)
+	w := db.GetWitness(wAddr)
+	if w.VoteCount() != 100 {
+		t.Fatalf("vote count: got %d, want 100", w.VoteCount())
+	}
+	db.AddWitnessVoteCount(wAddr, -30)
+	if w.VoteCount() != 70 {
+		t.Fatalf("after sub: got %d, want 70", w.VoteCount())
+	}
+}

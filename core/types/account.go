@@ -27,8 +27,9 @@ func (a *Account) Proto() *corepb.Account  { return a.pb }
 func (a *Account) Address() common.Address  { return common.BytesToAddress(a.pb.Address) }
 func (a *Account) Balance() int64           { return a.pb.Balance }
 func (a *Account) SetBalance(b int64)       { a.pb.Balance = b }
-func (a *Account) Type() corepb.AccountType { return a.pb.Type }
-func (a *Account) IsWitness() bool          { return a.pb.IsWitness }
+func (a *Account) Type() corepb.AccountType        { return a.pb.Type }
+func (a *Account) SetAccountType(t corepb.AccountType) { a.pb.Type = t }
+func (a *Account) IsWitness() bool                  { return a.pb.IsWitness }
 func (a *Account) SetIsWitness(v bool)      { a.pb.IsWitness = v }
 func (a *Account) CreateTime() int64        { return a.pb.CreateTime }
 func (a *Account) SetCreateTime(t int64)    { a.pb.CreateTime = t }
