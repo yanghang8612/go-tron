@@ -9,7 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/trondb"
 )
 
-var errNotFound = errors.New("not found")
+var errClosed = errors.New("database closed")
 
 // Database is an in-memory key-value database for testing.
 type Database struct {
@@ -24,6 +24,9 @@ func New() *Database {
 func (db *Database) Has(key []byte) (bool, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+	if db.data == nil {
+		return false, errClosed
+	}
 	_, ok := db.data[string(key)]
 	return ok, nil
 }
@@ -31,9 +34,12 @@ func (db *Database) Has(key []byte) (bool, error) {
 func (db *Database) Get(key []byte) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+	if db.data == nil {
+		return nil, errClosed
+	}
 	val, ok := db.data[string(key)]
 	if !ok {
-		return nil, errNotFound
+		return nil, trondb.ErrNotFound
 	}
 	return append([]byte{}, val...), nil
 }
@@ -41,6 +47,9 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 func (db *Database) Put(key []byte, value []byte) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.data == nil {
+		return errClosed
+	}
 	db.data[string(key)] = append([]byte{}, value...)
 	return nil
 }
@@ -48,6 +57,9 @@ func (db *Database) Put(key []byte, value []byte) error {
 func (db *Database) Delete(key []byte) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	if db.data == nil {
+		return errClosed
+	}
 	delete(db.data, string(key))
 	return nil
 }
@@ -60,12 +72,17 @@ func (db *Database) NewIterator(prefix []byte, start []byte) trondb.Iterator {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	var startKey []byte
+	if start != nil {
+		startKey = append(append([]byte{}, prefix...), start...)
+	}
+
 	var keys []string
 	for k := range db.data {
 		if prefix != nil && !bytes.HasPrefix([]byte(k), prefix) {
 			continue
 		}
-		if start != nil && bytes.Compare([]byte(k), start) < 0 {
+		if startKey != nil && bytes.Compare([]byte(k), startKey) < 0 {
 			continue
 		}
 		keys = append(keys, k)
@@ -81,7 +98,13 @@ func (db *Database) NewIterator(prefix []byte, start []byte) trondb.Iterator {
 
 func (db *Database) Stat() (string, error)                    { return "memorydb", nil }
 func (db *Database) Compact(start []byte, limit []byte) error { return nil }
-func (db *Database) Close() error                             { return nil }
+
+func (db *Database) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.data = nil
+	return nil
+}
 
 // Verify interface compliance.
 var _ trondb.Database = (*Database)(nil)

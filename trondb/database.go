@@ -1,6 +1,12 @@
 package trondb
 
-import "io"
+import (
+	"errors"
+	"io"
+)
+
+// ErrNotFound is returned when a requested key is not found in the database.
+var ErrNotFound = errors.New("not found")
 
 // KeyValueReader provides read access to a key-value store.
 type KeyValueReader interface {
