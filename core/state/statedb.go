@@ -169,6 +169,7 @@ func (s *StateDB) AccountExists(addr tcommon.Address) bool {
 // If the account already exists, it returns the existing account.
 func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.AccountType) *types.Account {
 	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
 	obj.account.SetAccountType(accountType)
 	obj.markDirty()
 	return obj.account
@@ -231,11 +232,20 @@ func (s *StateDB) RemoveExpiredUnfreezeV2(addr tcommon.Address, now int64) int64
 	if obj == nil {
 		return 0
 	}
+	// Check if any entries would expire before journaling.
+	hasExpired := false
+	for _, u := range obj.account.UnfrozenV2() {
+		if u.UnfreezeExpireTime <= now {
+			hasExpired = true
+			break
+		}
+	}
+	if !hasExpired {
+		return 0
+	}
 	s.journalAccount(addr, obj)
 	amount := obj.account.RemoveExpiredUnfreezeV2(now)
-	if amount > 0 {
-		obj.markDirty()
-	}
+	obj.markDirty()
 	return amount
 }
 
