@@ -70,6 +70,13 @@ func (b *Block) WitnessSignature() []byte {
 	return b.pb.BlockHeader.WitnessSignature
 }
 
+func (b *Block) AccountStateRoot() common.Hash {
+	if b.pb.BlockHeader == nil || b.pb.BlockHeader.RawData == nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(b.pb.BlockHeader.RawData.AccountStateRoot)
+}
+
 func (b *Block) Version() int32 {
 	if b.pb.BlockHeader == nil || b.pb.BlockHeader.RawData == nil {
 		return 0
