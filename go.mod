@@ -6,6 +6,7 @@ require (
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/mr-tron/base58 v1.3.0
 	github.com/urfave/cli/v2 v2.27.7
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

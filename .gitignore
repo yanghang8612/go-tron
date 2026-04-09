@@ -16,6 +16,5 @@ Thumbs.db
 # Go
 vendor/
 
-# Protobuf generated
-proto/core/*.pb.go
-proto/api/*.pb.go
+# Protobuf generated (committed intentionally)
+# proto/**/*.pb.go
