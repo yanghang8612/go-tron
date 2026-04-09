@@ -37,6 +37,8 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &FreezeBalanceV2Actuator{}, nil
 	case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
 		return &UnfreezeBalanceV2Actuator{}, nil
+	case corepb.Transaction_Contract_VoteWitnessContract:
+		return &VoteWitnessActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
