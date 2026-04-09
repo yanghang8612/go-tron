@@ -9,6 +9,8 @@ type Engine interface {
 	VerifyHeader(chain ChainReader, header *types.Block) error
 	GetScheduledWitness(slot int64) (common.Address, error)
 	IsInMaintenance(timestamp int64) bool
+	DoMaintenance(chain ChainHeaderWriter) error
+	PayBlockReward(chain ChainHeaderWriter, witness common.Address)
 }
 
 type ChainReader interface {
@@ -17,4 +19,14 @@ type ChainReader interface {
 	GenesisTimestamp() int64
 	ActiveWitnesses() []common.Address
 	NextMaintenanceTime() int64
+}
+
+type ChainHeaderWriter interface {
+	GetWitness(addr common.Address) *types.Witness
+	PutWitness(w *types.Witness)
+	AddAllowance(addr common.Address, amount int64)
+	SetNextMaintenanceTime(t int64)
+	WitnessPayPerBlock() int64
+	WitnessStandbyAllowance() int64
+	MaintenanceTimeInterval() int64
 }
