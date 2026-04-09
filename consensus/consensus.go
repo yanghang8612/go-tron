@@ -25,6 +25,7 @@ type ChainHeaderWriter interface {
 	GetWitness(addr common.Address) *types.Witness
 	PutWitness(w *types.Witness)
 	AddAllowance(addr common.Address, amount int64)
+	NextMaintenanceTime() int64
 	SetNextMaintenanceTime(t int64)
 	WitnessPayPerBlock() int64
 	WitnessStandbyAllowance() int64
