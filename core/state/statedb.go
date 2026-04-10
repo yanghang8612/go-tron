@@ -10,6 +10,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 var (
@@ -467,6 +468,163 @@ func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
 		return 0
 	}
 	return obj.account.LatestConsumeTimeForEnergy()
+}
+
+// --- Contract support ---
+
+// GetCode returns the contract bytecode at addr.
+func (s *StateDB) GetCode(addr tcommon.Address) []byte {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return nil
+	}
+	return obj.code
+}
+
+// SetCode sets the contract bytecode at addr. Creates the account if needed.
+func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
+	obj := s.GetOrCreateAccount(addr)
+	s.journal.append(codeChange{
+		address:  addr,
+		prevCode: obj.code,
+		prevHash: obj.codeHash,
+	})
+	obj.setCode(code)
+}
+
+// GetCodeSize returns the length of the contract bytecode.
+func (s *StateDB) GetCodeSize(addr tcommon.Address) int {
+	return len(s.GetCode(addr))
+}
+
+// GetCodeHash returns the SHA256 hash of the contract bytecode.
+func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return tcommon.Hash{}
+	}
+	return obj.codeHash
+}
+
+// GetState returns a storage value from a contract.
+func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return tcommon.Hash{}
+	}
+	return obj.getStorage(key)
+}
+
+// SetState sets a storage value on a contract.
+func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
+	obj := s.GetOrCreateAccount(addr)
+	prev := obj.getStorage(key)
+	s.journal.append(storageChange{
+		address: addr,
+		key:     key,
+		prev:    prev,
+	})
+	obj.setStorage(key, value)
+}
+
+// GetContract returns the contract metadata at addr.
+func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return nil
+	}
+	return obj.contractMeta
+}
+
+// SetContract stores contract metadata at addr.
+func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
+	obj := s.GetOrCreateAccount(addr)
+	obj.contractMeta = contract
+	obj.markDirty()
+}
+
+// IsContract returns whether the address has contract code or metadata.
+func (s *StateDB) IsContract(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return false
+	}
+	return obj.contractMeta != nil || len(obj.code) > 0
+}
+
+// Exist returns whether an account exists (non-nil and not deleted).
+func (s *StateDB) Exist(addr tcommon.Address) bool {
+	return s.AccountExists(addr)
+}
+
+// Empty returns whether an account is empty (no balance, no code).
+func (s *StateDB) Empty(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return true
+	}
+	return obj.account.Balance() == 0 && len(obj.code) == 0
+}
+
+// SelfDestruct marks an account as self-destructed.
+func (s *StateDB) SelfDestruct(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journal.append(selfDestructChange{
+		address: addr,
+		prev:    obj.selfDestructed,
+	})
+	obj.markSelfDestructed()
+}
+
+// HasSelfDestructed returns whether the account has been self-destructed.
+func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return false
+	}
+	return obj.selfDestructed
+}
+
+// Copy creates a deep copy of the StateDB for read-only execution.
+func (s *StateDB) Copy() (*StateDB, error) {
+	tr, err := s.db.OpenTrie(s.originRoot)
+	if err != nil {
+		return nil, err
+	}
+	cp := &StateDB{
+		db:           s.db,
+		trie:         tr,
+		stateObjects: make(map[tcommon.Address]*stateObject),
+		witnesses:    make(map[tcommon.Address]*types.Witness),
+		journal:      newJournal(),
+		dynProps:      s.dynProps,
+		originRoot:   s.originRoot,
+	}
+	for addr, obj := range s.stateObjects {
+		newObj := &stateObject{
+			address:        addr,
+			dirty:          obj.dirty,
+			deleted:        obj.deleted,
+			code:           append([]byte{}, obj.code...),
+			codeHash:       obj.codeHash,
+			storage:        make(map[tcommon.Hash]tcommon.Hash),
+			contractMeta:   obj.contractMeta,
+			selfDestructed: obj.selfDestructed,
+		}
+		if obj.account != nil {
+			data, _ := obj.account.Marshal()
+			acc, _ := types.UnmarshalAccount(data)
+			newObj.account = acc
+		}
+		for k, v := range obj.storage {
+			newObj.storage[k] = v
+		}
+		cp.stateObjects[addr] = newObj
+	}
+	return cp, nil
 }
 
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
