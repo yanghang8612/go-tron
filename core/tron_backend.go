@@ -1,9 +1,11 @@
 package core
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -116,55 +118,170 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 }
 
 func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
+	blockNum := rawdb.ReadTransactionIndex(b.chain.db, txHash[:])
+	if blockNum == nil {
+		return nil, fmt.Errorf("transaction not found")
+	}
+	block := rawdb.ReadBlock(b.chain.db, *blockNum)
+	if block == nil {
+		return nil, fmt.Errorf("block %d not found", *blockNum)
+	}
+	for _, tx := range block.Transactions() {
+		if tx.Hash() == txHash {
+			return tx.Proto(), nil
+		}
+	}
+	return nil, fmt.Errorf("transaction not found in block %d", *blockNum)
 }
 
 func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	info := rawdb.ReadTransactionInfo(b.chain.db, txHash[:])
+	if info == nil {
+		return nil, fmt.Errorf("transaction info not found")
+	}
+	return info, nil
 }
 
 func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	infos := rawdb.ReadTransactionInfosByBlock(b.chain.db, blockNum)
+	return infos, nil
 }
 
 func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
-	return nil, fmt.Errorf("not implemented")
+	block := b.chain.GetBlockByHash(hash)
+	if block == nil {
+		return nil, fmt.Errorf("block not found")
+	}
+	return block, nil
 }
 
 func (b *TronBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
-	return nil, fmt.Errorf("not implemented")
+	if end <= start {
+		return nil, fmt.Errorf("invalid range")
+	}
+	if end-start > 100 {
+		end = start + 100
+	}
+	var blocks []*types.Block
+	for i := start; i < end; i++ {
+		block := b.chain.GetBlockByNumber(i)
+		if block == nil {
+			break
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks, nil
 }
 
 func (b *TronBackend) BuildTransferTransaction(owner, to tcommon.Address, amount int64) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	tc := &contractpb.TransferContract{
+		OwnerAddress: owner[:],
+		ToAddress:    to[:],
+		Amount:       amount,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_TransferContract, tc, 0)
 }
 
 func (b *TronBackend) BuildDeployContractTransaction(owner tcommon.Address, abi string, bytecode []byte,
 	feeLimit int64, callValue int64, name string, consumePercent int64) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	csc := &contractpb.CreateSmartContract{
+		OwnerAddress: owner[:],
+		NewContract: &contractpb.SmartContract{
+			OriginAddress:              owner[:],
+			Abi:                        &contractpb.SmartContract_ABI{},
+			Bytecode:                   bytecode,
+			CallValue:                  callValue,
+			Name:                       name,
+			ConsumeUserResourcePercent: consumePercent,
+		},
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_CreateSmartContract, csc, feeLimit)
 }
 
 func (b *TronBackend) BuildTriggerContractTransaction(owner, contract tcommon.Address, data []byte,
 	feeLimit int64, callValue int64) (*corepb.Transaction, *tronapi.TriggerResult, error) {
-	return nil, nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contract[:],
+		Data:            data,
+		CallValue:       callValue,
+	}
+	tx, err := tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_TriggerSmartContract, tsc, feeLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	triggerResult, _ := b.TriggerConstantContract(owner, contract, data, 30_000_000)
+	return tx, triggerResult, nil
 }
 
 func (b *TronBackend) EstimateEnergy(owner, contract tcommon.Address, data []byte) (int64, error) {
-	return 0, fmt.Errorf("not implemented")
+	result, err := b.TriggerConstantContract(owner, contract, data, 30_000_000)
+	if err != nil {
+		return 0, err
+	}
+	return result.EnergyUsed, nil
 }
 
 func (b *TronBackend) GetAccountResource(addr tcommon.Address) (*tronapi.AccountResource, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+
+	dynProps := state.LoadDynamicProperties(b.chain.db)
+
+	return &tronapi.AccountResource{
+		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
+		FreeNetLimit:     dynProps.FreeNetLimit(),
+		NetUsed:          statedb.GetNetUsage(addr),
+		TotalNetLimit:    dynProps.TotalNetLimit(),
+		TotalEnergyLimit: dynProps.TotalEnergyCurrentLimit(),
+	}, nil
 }
 
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
-	return nil
+	dynProps := state.LoadDynamicProperties(b.chain.db)
+	all := dynProps.All()
+	params := make([]tronapi.ChainParameter, 0, len(all))
+	for k, v := range all {
+		params = append(params, tronapi.ChainParameter{Key: k, Value: v})
+	}
+	return params
 }
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.db)
+	activeSet := b.chain.ActiveWitnesses()
+	activeMap := make(map[tcommon.Address]bool, len(activeSet))
+	for _, a := range activeSet {
+		activeMap[a] = true
+	}
+
+	var result []*tronapi.WitnessInfo
+	for _, addr := range witnessAddrs {
+		w := rawdb.ReadWitness(b.chain.db, addr)
+		if w == nil {
+			continue
+		}
+		result = append(result, &tronapi.WitnessInfo{
+			Address:   hex.EncodeToString(addr[:]),
+			VoteCount: w.VoteCount(),
+			URL:       w.URL(),
+			IsJobs:    activeMap[addr],
+		})
+	}
+	return result, nil
 }
 
 func (b *TronBackend) NextMaintenanceTime() int64 {
-	return 0
+	return b.chain.NextMaintenanceTime()
 }
