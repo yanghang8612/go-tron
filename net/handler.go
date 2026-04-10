@@ -1,6 +1,7 @@
 package net
 
 import (
+	"encoding/binary"
 	"log"
 	"sync"
 	"time"
@@ -271,8 +272,16 @@ func (h *TronHandler) handleFetchInvData(peer *p2p.Peer, payload []byte) {
 	switch inv.Type {
 	case corepb.Inventory_BLOCK:
 		for _, id := range inv.Ids {
-			hash := tcommon.BytesToHash(id)
-			block := h.chain.GetBlockByHash(hash)
+			// Block IDs have block number in first 8 bytes (big-endian).
+			// Try by number first (more reliable), fallback to hash.
+			var block *types.Block
+			if len(id) >= 8 {
+				num := binary.BigEndian.Uint64(id[:8])
+				block = h.chain.GetBlockByNumber(num)
+			}
+			if block == nil {
+				block = h.chain.GetBlockByHash(tcommon.BytesToHash(id))
+			}
 			if block != nil {
 				data, err := proto.Marshal(block.Proto())
 				if err == nil {
