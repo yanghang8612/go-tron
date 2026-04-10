@@ -78,6 +78,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, timestamp, allWitnesses)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
 		bc.SetActiveWitnesses(newActive)
+		ProcessProposals(bc.db, dynProps, len(newActive), timestamp)
 	}
 
 	// Commit state to get the root
