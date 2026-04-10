@@ -557,9 +557,17 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
 	obj := s.GetOrCreateAccount(addr)
+	// Clone prevMeta so the journal holds a snapshot of the pre-mutation state.
+	// Callers often mutate the pointer returned by GetContract in-place and then
+	// call SetContract with the same pointer; without cloning, prevMeta would
+	// already reflect the mutation and RevertToSnapshot would be a no-op.
+	var prevMeta *contractpb.SmartContract
+	if obj.contractMeta != nil {
+		prevMeta = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+	}
 	s.journal.append(contractMetaChange{
 		address:  addr,
-		prevMeta: obj.contractMeta,
+		prevMeta: prevMeta,
 	})
 	obj.contractMeta = contract
 	obj.contractMetaDirty = true
