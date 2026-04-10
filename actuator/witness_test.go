@@ -3,15 +3,14 @@ package actuator
 import (
 	"testing"
 
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-func makeWitnessCreateTx(owner common.Address, url string) *types.Transaction {
+func makeWitnessCreateTx(ownerByte byte, url string) *types.Transaction {
+	owner := makeTestAddr(ownerByte)
 	contract := &contractpb.WitnessCreateContract{
 		OwnerAddress: owner.Bytes(),
 		Url:          []byte(url),
@@ -31,11 +30,12 @@ func makeWitnessCreateTx(owner common.Address, url string) *types.Transaction {
 }
 
 func TestWitnessCreateExecute(t *testing.T) {
-	owner := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{owner: 100_000_000_000})
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	seedAccount(statedb, owner, 100_000_000_000)
 
-	tx := makeWitnessCreateTx(owner, "http://test.com")
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeWitnessCreateTx(1, "http://test.com")
+	ctx := setupContext(t, statedb, tx)
 	act := &WitnessCreateActuator{}
 
 	_, err := act.Execute(ctx)
@@ -43,7 +43,7 @@ func TestWitnessCreateExecute(t *testing.T) {
 		t.Fatalf("execute failed: %v", err)
 	}
 
-	w := rawdb.ReadWitness(db, owner)
+	w := statedb.GetWitness(owner)
 	if w == nil {
 		t.Fatal("witness should exist after creation")
 	}
@@ -56,14 +56,15 @@ func TestWitnessCreateExecute(t *testing.T) {
 }
 
 func TestWitnessCreateValidate_AlreadyWitness(t *testing.T) {
-	owner := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{owner: 100_000_000_000})
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	seedAccount(statedb, owner, 100_000_000_000)
 
-	w := types.NewWitness(owner, "http://existing.com")
-	rawdb.WriteWitness(db, owner, w)
+	// Pre-register as witness
+	statedb.PutWitness(owner, "http://existing.com")
 
-	tx := makeWitnessCreateTx(owner, "http://new.com")
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeWitnessCreateTx(1, "http://new.com")
+	ctx := setupContext(t, statedb, tx)
 	act := &WitnessCreateActuator{}
 
 	if err := act.Validate(ctx); err == nil {

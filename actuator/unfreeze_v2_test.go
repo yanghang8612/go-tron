@@ -3,15 +3,14 @@ package actuator
 import (
 	"testing"
 
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-func makeUnfreezeV2Tx(owner common.Address, amount int64, resource corepb.ResourceCode) *types.Transaction {
+func makeUnfreezeV2Tx(ownerByte byte, amount int64, resource corepb.ResourceCode) *types.Transaction {
+	owner := makeTestAddr(ownerByte)
 	uc := &contractpb.UnfreezeBalanceV2Contract{
 		OwnerAddress:    owner.Bytes(),
 		UnfreezeBalance: amount,
@@ -28,47 +27,52 @@ func makeUnfreezeV2Tx(owner common.Address, amount int64, resource corepb.Resour
 }
 
 func TestUnfreezeV2Validate(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
+	statedb := setupStateDB(t)
 	owner := makeTestAddr(3)
 
-	tx := makeUnfreezeV2Tx(owner, 100, corepb.ResourceCode_BANDWIDTH)
+	// Missing account
+	tx := makeUnfreezeV2Tx(3, 100, corepb.ResourceCode_BANDWIDTH)
 	act := &UnfreezeBalanceV2Actuator{}
-	ctx := &Context{DB: db, Tx: tx}
+	ctx := setupContext(t, statedb, tx)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
 
-	acc := types.NewAccount(owner, corepb.AccountType_Normal)
-	acc.SetBalance(1000)
-	acc.AddFreezeV2(corepb.ResourceCode_BANDWIDTH, 500)
-	rawdb.WriteAccount(db, owner, acc)
+	// Create account and freeze some balance
+	seedAccount(statedb, owner, 1000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 500)
 
-	tx = makeUnfreezeV2Tx(owner, 1000, corepb.ResourceCode_BANDWIDTH)
-	ctx = &Context{DB: db, Tx: tx}
+	// Insufficient frozen
+	tx = makeUnfreezeV2Tx(3, 1000, corepb.ResourceCode_BANDWIDTH)
+	ctx = setupContext(t, statedb, tx)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for insufficient frozen")
 	}
 
-	tx = makeUnfreezeV2Tx(owner, 200, corepb.ResourceCode_BANDWIDTH)
-	ctx = &Context{DB: db, Tx: tx}
+	// Success
+	tx = makeUnfreezeV2Tx(3, 200, corepb.ResourceCode_BANDWIDTH)
+	ctx = setupContext(t, statedb, tx)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestUnfreezeV2Execute(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
+	statedb := setupStateDB(t)
 	owner := makeTestAddr(3)
-
-	acc := types.NewAccount(owner, corepb.AccountType_Normal)
-	acc.SetBalance(1000)
-	acc.AddFreezeV2(corepb.ResourceCode_BANDWIDTH, 500)
-	rawdb.WriteAccount(db, owner, acc)
+	seedAccount(statedb, owner, 1000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 500)
 
 	blockTime := int64(100000)
-	tx := makeUnfreezeV2Tx(owner, 200, corepb.ResourceCode_BANDWIDTH)
+	tx := makeUnfreezeV2Tx(3, 200, corepb.ResourceCode_BANDWIDTH)
 	act := &UnfreezeBalanceV2Actuator{}
-	ctx := &Context{DB: db, Tx: tx, BlockTime: blockTime}
+	ctx := &Context{
+		State:       statedb,
+		DynProps:    nil,
+		Tx:          tx,
+		BlockTime:   blockTime,
+		BlockNumber: 1,
+	}
 
 	result, err := act.Execute(ctx)
 	if err != nil {
@@ -78,11 +82,11 @@ func TestUnfreezeV2Execute(t *testing.T) {
 		t.Fatalf("fee: want 0, got %d", result.Fee)
 	}
 
-	updated := rawdb.ReadAccount(db, owner)
-	if got := updated.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH); got != 300 {
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH); got != 300 {
 		t.Fatalf("frozen BW: want 300, got %d", got)
 	}
-	unfrozen := updated.UnfrozenV2()
+	acc := statedb.GetAccount(owner)
+	unfrozen := acc.UnfrozenV2()
 	if len(unfrozen) != 1 {
 		t.Fatalf("unfrozen count: want 1, got %d", len(unfrozen))
 	}
@@ -93,7 +97,7 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	if unfrozen[0].UnfreezeExpireTime != expectedExpire {
 		t.Fatalf("expire time: want %d, got %d", expectedExpire, unfrozen[0].UnfreezeExpireTime)
 	}
-	if updated.Balance() != 1000 {
-		t.Fatalf("balance: want 1000, got %d", updated.Balance())
+	if statedb.GetBalance(owner) != 1000 {
+		t.Fatalf("balance: want 1000, got %d", statedb.GetBalance(owner))
 	}
 }

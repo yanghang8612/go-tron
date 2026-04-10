@@ -3,13 +3,14 @@ package actuator
 import (
 	"errors"
 
-	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 type Context struct {
-	DB          ethdb.KeyValueStore
+	State       *state.StateDB
+	DynProps    *state.DynamicProperties
 	Tx          *types.Transaction
 	BlockTime   int64
 	BlockNumber uint64

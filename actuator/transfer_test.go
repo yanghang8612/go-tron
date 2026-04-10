@@ -3,19 +3,19 @@ package actuator
 import (
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-func makeTransferTx(from, to common.Address, amount int64) *types.Transaction {
+func makeTransferTx(from, to byte, amount int64) *types.Transaction {
+	fromAddr := makeTestAddr(from)
+	toAddr := makeTestAddr(to)
 	transfer := &contractpb.TransferContract{
-		OwnerAddress: from.Bytes(),
-		ToAddress:    to.Bytes(),
+		OwnerAddress: fromAddr.Bytes(),
+		ToAddress:    toAddr.Bytes(),
 		Amount:       amount,
 	}
 	anyParam, _ := anypb.New(transfer)
@@ -32,23 +32,15 @@ func makeTransferTx(from, to common.Address, amount int64) *types.Transaction {
 	return types.NewTransactionFromPB(pb)
 }
 
-func setupDB(accounts map[common.Address]int64) ethdb.KeyValueStore {
-	db := rawdb.NewMemoryDatabase()
-	for addr, balance := range accounts {
-		acc := types.NewAccount(addr, corepb.AccountType_Normal)
-		acc.SetBalance(balance)
-		rawdb.WriteAccount(db, addr, acc)
-	}
-	return db
-}
-
 func TestTransferValidate_Success(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	to := common.BytesToAddress([]byte{0x41, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 10_000_000, to: 0})
+	statedb := setupStateDB(t)
+	from := makeTestAddr(1)
+	to := makeTestAddr(2)
+	seedAccount(statedb, from, 10_000_000)
+	seedAccount(statedb, to, 0)
 
-	tx := makeTransferTx(from, to, 5_000_000)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 2, 5_000_000)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	if err := act.Validate(ctx); err != nil {
@@ -57,12 +49,12 @@ func TestTransferValidate_Success(t *testing.T) {
 }
 
 func TestTransferValidate_InsufficientBalance(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	to := common.BytesToAddress([]byte{0x41, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 100, to: 0})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 100)
+	seedAccount(statedb, makeTestAddr(2), 0)
 
-	tx := makeTransferTx(from, to, 5_000_000)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 2, 5_000_000)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -71,12 +63,11 @@ func TestTransferValidate_InsufficientBalance(t *testing.T) {
 }
 
 func TestTransferValidate_NegativeAmount(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	to := common.BytesToAddress([]byte{0x41, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 10_000_000})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
 
-	tx := makeTransferTx(from, to, -1)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 2, -1)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -85,11 +76,11 @@ func TestTransferValidate_NegativeAmount(t *testing.T) {
 }
 
 func TestTransferValidate_SelfTransfer(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 10_000_000})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
 
-	tx := makeTransferTx(from, from, 100)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 1, 100)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -98,12 +89,14 @@ func TestTransferValidate_SelfTransfer(t *testing.T) {
 }
 
 func TestTransferExecute_Success(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	to := common.BytesToAddress([]byte{0x41, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 10_000_000, to: 5_000_000})
+	statedb := setupStateDB(t)
+	from := makeTestAddr(1)
+	to := makeTestAddr(2)
+	seedAccount(statedb, from, 10_000_000)
+	seedAccount(statedb, to, 5_000_000)
 
-	tx := makeTransferTx(from, to, 3_000_000)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 2, 3_000_000)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	result, err := act.Execute(ctx)
@@ -114,23 +107,22 @@ func TestTransferExecute_Success(t *testing.T) {
 		t.Fatal("result should not be nil")
 	}
 
-	fromAcc := rawdb.ReadAccount(db, from)
-	toAcc := rawdb.ReadAccount(db, to)
-	if fromAcc.Balance() != 7_000_000 {
-		t.Fatalf("from balance: expected 7000000, got %d", fromAcc.Balance())
+	if statedb.GetBalance(from) != 7_000_000 {
+		t.Fatalf("from balance: expected 7000000, got %d", statedb.GetBalance(from))
 	}
-	if toAcc.Balance() != 8_000_000 {
-		t.Fatalf("to balance: expected 8000000, got %d", toAcc.Balance())
+	if statedb.GetBalance(to) != 8_000_000 {
+		t.Fatalf("to balance: expected 8000000, got %d", statedb.GetBalance(to))
 	}
 }
 
 func TestTransferExecute_CreatesRecipient(t *testing.T) {
-	from := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	to := common.BytesToAddress([]byte{0x41, 3, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{from: 10_000_000})
+	statedb := setupStateDB(t)
+	from := makeTestAddr(1)
+	to := makeTestAddr(3)
+	seedAccount(statedb, from, 10_000_000)
 
-	tx := makeTransferTx(from, to, 1_000_000)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeTransferTx(1, 3, 1_000_000)
+	ctx := setupContext(t, statedb, tx)
 	act := &TransferActuator{}
 
 	_, err := act.Execute(ctx)
@@ -138,11 +130,13 @@ func TestTransferExecute_CreatesRecipient(t *testing.T) {
 		t.Fatalf("execute failed: %v", err)
 	}
 
-	toAcc := rawdb.ReadAccount(db, to)
-	if toAcc == nil {
+	if !statedb.AccountExists(to) {
 		t.Fatal("recipient account should have been created")
 	}
-	if toAcc.Balance() != 1_000_000 {
-		t.Fatalf("to balance: expected 1000000, got %d", toAcc.Balance())
+	if statedb.GetBalance(to) != 1_000_000 {
+		t.Fatalf("to balance: expected 1000000, got %d", statedb.GetBalance(to))
 	}
 }
+
+// Suppress unused import warning for tcommon.
+var _ tcommon.Address

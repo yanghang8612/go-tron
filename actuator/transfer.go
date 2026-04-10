@@ -4,8 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -29,25 +27,20 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-
 	ownerAddr := common.BytesToAddress(tc.OwnerAddress)
 	toAddr := common.BytesToAddress(tc.ToAddress)
-
 	if ownerAddr == toAddr {
 		return errors.New("cannot transfer to self")
 	}
 	if tc.Amount <= 0 {
 		return errors.New("transfer amount must be positive")
 	}
-
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ownerAcc.Balance() < tc.Amount {
+	if ctx.State.GetBalance(ownerAddr) < tc.Amount {
 		return errors.New("insufficient balance")
 	}
-
 	return nil
 }
 
@@ -56,20 +49,15 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	ownerAddr := common.BytesToAddress(tc.OwnerAddress)
 	toAddr := common.BytesToAddress(tc.ToAddress)
 
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	ownerAcc.SetBalance(ownerAcc.Balance() - tc.Amount)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
-
-	toAcc := rawdb.ReadAccount(ctx.DB, toAddr)
-	if toAcc == nil {
-		toAcc = types.NewAccount(toAddr, corepb.AccountType_Normal)
+	if err := ctx.State.SubBalance(ownerAddr, tc.Amount); err != nil {
+		return nil, err
 	}
-	toAcc.SetBalance(toAcc.Balance() + tc.Amount)
-	rawdb.WriteAccount(ctx.DB, toAddr, toAcc)
-
+	if !ctx.State.AccountExists(toAddr) {
+		ctx.State.CreateAccount(toAddr, corepb.AccountType_Normal)
+	}
+	ctx.State.AddBalance(toAddr, tc.Amount)
 	return &Result{Fee: 0}, nil
 }

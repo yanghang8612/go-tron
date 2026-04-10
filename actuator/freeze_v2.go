@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -29,14 +28,13 @@ func (a *FreezeBalanceV2Actuator) Validate(ctx *Context) error {
 		return err
 	}
 	ownerAddr := common.BytesToAddress(fc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	if fc.FrozenBalance <= 0 {
 		return errors.New("frozen balance must be positive")
 	}
-	if ownerAcc.Balance() < fc.FrozenBalance {
+	if ctx.State.GetBalance(ownerAddr) < fc.FrozenBalance {
 		return errors.New("insufficient balance to freeze")
 	}
 	if fc.Resource != corepb.ResourceCode_BANDWIDTH && fc.Resource != corepb.ResourceCode_ENERGY {
@@ -51,9 +49,9 @@ func (a *FreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(fc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	ownerAcc.SetBalance(ownerAcc.Balance() - fc.FrozenBalance)
-	ownerAcc.AddFreezeV2(fc.Resource, fc.FrozenBalance)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
+	if err := ctx.State.SubBalance(ownerAddr, fc.FrozenBalance); err != nil {
+		return nil, err
+	}
+	ctx.State.AddFreezeV2(ownerAddr, fc.Resource, fc.FrozenBalance)
 	return &Result{Fee: 0}, nil
 }

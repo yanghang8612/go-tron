@@ -3,15 +3,15 @@ package actuator
 import (
 	"testing"
 
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-func makeCreateAccountTx(owner, newAddr common.Address) *types.Transaction {
+func makeCreateAccountTx(ownerByte, newByte byte) *types.Transaction {
+	owner := makeTestAddr(ownerByte)
+	newAddr := makeTestAddr(newByte)
 	contract := &contractpb.AccountCreateContract{
 		OwnerAddress:   owner.Bytes(),
 		AccountAddress: newAddr.Bytes(),
@@ -32,12 +32,11 @@ func makeCreateAccountTx(owner, newAddr common.Address) *types.Transaction {
 }
 
 func TestCreateAccountValidate_Success(t *testing.T) {
-	owner := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	newAddr := common.BytesToAddress([]byte{0x41, 5, 5, 5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{owner: 10_000_000})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
 
-	tx := makeCreateAccountTx(owner, newAddr)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeCreateAccountTx(1, 5)
+	ctx := setupContext(t, statedb, tx)
 	act := &CreateAccountActuator{}
 
 	if err := act.Validate(ctx); err != nil {
@@ -46,12 +45,12 @@ func TestCreateAccountValidate_Success(t *testing.T) {
 }
 
 func TestCreateAccountValidate_AlreadyExists(t *testing.T) {
-	owner := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	existing := common.BytesToAddress([]byte{0x41, 5, 5, 5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{owner: 10_000_000, existing: 0})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
+	seedAccount(statedb, makeTestAddr(5), 0)
 
-	tx := makeCreateAccountTx(owner, existing)
-	ctx := &Context{DB: db, Tx: tx}
+	tx := makeCreateAccountTx(1, 5)
+	ctx := setupContext(t, statedb, tx)
 	act := &CreateAccountActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -60,12 +59,12 @@ func TestCreateAccountValidate_AlreadyExists(t *testing.T) {
 }
 
 func TestCreateAccountExecute(t *testing.T) {
-	owner := common.BytesToAddress([]byte{0x41, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	newAddr := common.BytesToAddress([]byte{0x41, 7, 7, 7, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	db := setupDB(map[common.Address]int64{owner: 10_000_000})
+	statedb := setupStateDB(t)
+	seedAccount(statedb, makeTestAddr(1), 10_000_000)
 
-	tx := makeCreateAccountTx(owner, newAddr)
-	ctx := &Context{DB: db, Tx: tx}
+	newAddr := makeTestAddr(7)
+	tx := makeCreateAccountTx(1, 7)
+	ctx := setupContext(t, statedb, tx)
 	act := &CreateAccountActuator{}
 
 	_, err := act.Execute(ctx)
@@ -73,8 +72,7 @@ func TestCreateAccountExecute(t *testing.T) {
 		t.Fatalf("execute failed: %v", err)
 	}
 
-	newAcc := rawdb.ReadAccount(db, newAddr)
-	if newAcc == nil {
+	if !statedb.AccountExists(newAddr) {
 		t.Fatal("new account should exist")
 	}
 }

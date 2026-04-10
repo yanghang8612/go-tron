@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -30,18 +29,17 @@ func (a *UnfreezeBalanceV2Actuator) Validate(ctx *Context) error {
 		return err
 	}
 	ownerAddr := common.BytesToAddress(uc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	if uc.UnfreezeBalance <= 0 {
 		return errors.New("unfreeze balance must be positive")
 	}
-	frozenAmount := ownerAcc.GetFrozenV2Amount(uc.Resource)
-	if frozenAmount < uc.UnfreezeBalance {
+	frozen := ctx.State.GetFrozenV2Amount(ownerAddr, uc.Resource)
+	if frozen < uc.UnfreezeBalance {
 		return errors.New("insufficient frozen balance")
 	}
-	if len(ownerAcc.UnfrozenV2()) >= maxUnfreezeCount {
+	if ctx.State.UnfreezeV2Count(ownerAddr) >= maxUnfreezeCount {
 		return errors.New("too many pending unfreezes")
 	}
 	return nil
@@ -53,10 +51,8 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(uc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	ownerAcc.ReduceFreezeV2(uc.Resource, uc.UnfreezeBalance)
-	expireTime := ctx.BlockTime + 14*86400000
-	ownerAcc.AddUnfreezeV2(uc.Resource, uc.UnfreezeBalance, expireTime)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
+	ctx.State.ReduceFreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance)
+	expireTime := ctx.BlockTime + 14*86_400_000
+	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
 	return &Result{Fee: 0}, nil
 }

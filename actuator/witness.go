@@ -4,8 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -28,22 +26,16 @@ func (a *WitnessCreateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-
-	if rawdb.ReadWitness(ctx.DB, ownerAddr) != nil {
+	if ctx.State.GetWitness(ownerAddr) != nil {
 		return errors.New("witness already exists")
 	}
-
 	if len(wc.Url) == 0 {
 		return errors.New("witness URL is empty")
 	}
-
 	return nil
 }
 
@@ -52,15 +44,8 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-
-	witness := types.NewWitness(ownerAddr, string(wc.Url))
-	rawdb.WriteWitness(ctx.DB, ownerAddr, witness)
-
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	ownerAcc.SetIsWitness(true)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
-
+	ctx.State.PutWitness(ownerAddr, string(wc.Url))
+	ctx.State.SetIsWitness(ownerAddr, true)
 	return &Result{Fee: 0}, nil
 }

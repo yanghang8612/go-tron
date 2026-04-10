@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -28,12 +27,12 @@ func (a *WithdrawExpireUnfreezeActuator) Validate(ctx *Context) error {
 		return err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
+	acc := ctx.State.GetAccount(ownerAddr)
 	hasExpired := false
-	for _, u := range ownerAcc.UnfrozenV2() {
+	for _, u := range acc.UnfrozenV2() {
 		if u.UnfreezeExpireTime <= ctx.BlockTime {
 			hasExpired = true
 			break
@@ -51,9 +50,7 @@ func (a *WithdrawExpireUnfreezeActuator) Execute(ctx *Context) (*Result, error) 
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	withdrawn := ownerAcc.RemoveExpiredUnfreezeV2(ctx.BlockTime)
-	ownerAcc.SetBalance(ownerAcc.Balance() + withdrawn)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
+	withdrawn := ctx.State.RemoveExpiredUnfreezeV2(ownerAddr, ctx.BlockTime)
+	ctx.State.AddBalance(ownerAddr, withdrawn)
 	return &Result{Fee: 0}, nil
 }

@@ -4,11 +4,10 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-const withdrawCooldown = 86400000 // 24 hours in ms
+const withdrawCooldown = 86_400_000 // 24 hours in ms
 
 type WithdrawBalanceActuator struct{}
 
@@ -30,15 +29,15 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 		return err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	if ownerAcc == nil {
+	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ownerAcc.Allowance() <= 0 {
+	if ctx.State.GetAllowance(ownerAddr) <= 0 {
 		return errors.New("no allowance to withdraw")
 	}
-	if ctx.BlockTime-ownerAcc.LatestWithdrawTime() < withdrawCooldown {
-		return errors.New("withdraw too frequent, must wait 24 hours")
+	lastWithdraw := ctx.State.GetLatestWithdrawTime(ownerAddr)
+	if ctx.BlockTime-lastWithdraw < withdrawCooldown {
+		return errors.New("withdraw too frequent")
 	}
 	return nil
 }
@@ -49,11 +48,9 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-	ownerAcc := rawdb.ReadAccount(ctx.DB, ownerAddr)
-	allowance := ownerAcc.Allowance()
-	ownerAcc.SetBalance(ownerAcc.Balance() + allowance)
-	ownerAcc.SetAllowance(0)
-	ownerAcc.SetLatestWithdrawTime(ctx.BlockTime)
-	rawdb.WriteAccount(ctx.DB, ownerAddr, ownerAcc)
+	allowance := ctx.State.GetAllowance(ownerAddr)
+	ctx.State.AddBalance(ownerAddr, allowance)
+	ctx.State.SetAllowance(ownerAddr, 0)
+	ctx.State.SetLatestWithdrawTime(ownerAddr, ctx.BlockTime)
 	return &Result{Fee: 0}, nil
 }
