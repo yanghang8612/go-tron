@@ -28,6 +28,7 @@ var defaultProps = map[string]int64{
 	"latest_solidified_block_num":               0,
 	"next_maintenance_time":                     0,
 	"allow_new_resource_model":                  0,
+	"free_net_limit":                            1500,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -156,6 +157,10 @@ func (dp *DynamicProperties) MaxCpuTimeOfOneTx() int64 {
 
 func (dp *DynamicProperties) AllowNewResourceModel() bool {
 	return dp.props["allow_new_resource_model"] != 0
+}
+
+func (dp *DynamicProperties) FreeNetLimit() int64 {
+	return dp.props["free_net_limit"]
 }
 
 func (dp *DynamicProperties) LatestBlockHeaderHash() common.Hash {

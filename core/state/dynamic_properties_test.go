@@ -192,6 +192,21 @@ func TestDynamicProperties_OnlyDirtyFlushed(t *testing.T) {
 	}
 }
 
+// Test 7: FreeNetLimit typed getter.
+func TestDynamicProperties_FreeNetLimit(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	got := dp.FreeNetLimit()
+	if got != 1500 {
+		t.Fatalf("default FreeNetLimit: want 1500, got %d", got)
+	}
+
+	dp.Set("free_net_limit", 3000)
+	if dp.FreeNetLimit() != 3000 {
+		t.Fatalf("after set: want 3000, got %d", dp.FreeNetLimit())
+	}
+}
+
 // Test 6: AllowNewResourceModel bool conversion.
 func TestDynamicProperties_AllowNewResourceModel(t *testing.T) {
 	dp := NewDynamicProperties()
