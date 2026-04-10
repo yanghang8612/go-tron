@@ -25,6 +25,8 @@ func makeConfig(ctx *cli.Context) *node.Config {
 		P2PPort:     ctx.Int("p2p.port"),
 		HTTPPort:    ctx.Int("http.port"),
 		JSONRPCPort: ctx.Int("jsonrpc.port"),
+		SeedNodes:   ctx.StringSlice("seednode"),
+		MaxPeers:    ctx.Int("maxpeers"),
 	}
 }
 

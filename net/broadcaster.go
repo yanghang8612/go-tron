@@ -29,6 +29,11 @@ func NewBroadcastService(getPeers func() []*p2p.Peer) *BroadcastService {
 	}
 }
 
+// SetPeersFunc sets the function used to get handshaked peers.
+func (bs *BroadcastService) SetPeersFunc(fn func() []*p2p.Peer) {
+	bs.getPeers = fn
+}
+
 // BroadcastBlock sends an INVENTORY message for a new block to all peers.
 func (bs *BroadcastService) BroadcastBlock(block *types.Block) {
 	hash := block.Hash()

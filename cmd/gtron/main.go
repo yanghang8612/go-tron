@@ -13,9 +13,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
+	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/node"
+	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/urfave/cli/v2"
 )
 
@@ -56,6 +59,15 @@ var (
 		Name:  "dev",
 		Usage: "Dev mode: single-witness chain using the provided witness key",
 	}
+	seednodeFlag = &cli.StringSliceFlag{
+		Name:  "seednode",
+		Usage: "Seed node address (host:port), can be specified multiple times",
+	}
+	maxpeersFlag = &cli.IntFlag{
+		Name:  "maxpeers",
+		Usage: "Maximum number of P2P peers",
+		Value: 30,
+	}
 )
 
 var app = &cli.App{
@@ -71,6 +83,8 @@ var app = &cli.App{
 		witnessFlag,
 		witnessKeyFlag,
 		devFlag,
+		seednodeFlag,
+		maxpeersFlag,
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
@@ -159,12 +173,28 @@ func gtron(ctx *cli.Context) error {
 	backend := core.NewTronBackend(bc, pool)
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
 
+	// Create P2P layer
+	broadcaster := tnet.NewBroadcastService(nil)
+	handler := tnet.NewTronHandler(bc, pool, broadcaster)
+	syncService := tnet.NewSyncService(bc, handler)
+	handler.SetSyncService(syncService)
+
+	p2pServer := p2p.NewServer(p2p.ServerConfig{
+		ListenAddr: fmt.Sprintf(":%d", cfg.P2PPort),
+		MaxPeers:   cfg.MaxPeers,
+		SeedNodes:  cfg.SeedNodes,
+	}, handler)
+	handler.SetServer(p2pServer)
+	handler.StartKeepAlive()
+	broadcaster.SetPeersFunc(handler.HandshakedPeers)
+
 	// Create node and register services
 	stack, err := node.New(cfg)
 	if err != nil {
 		db.Close()
 		return err
 	}
+	stack.RegisterLifecycle(p2pServer)
 	stack.RegisterLifecycle(apiServer)
 
 	// If witness mode (explicit or dev), create producer
@@ -197,6 +227,9 @@ func gtron(ctx *cli.Context) error {
 			fmt.Printf("Witness mode enabled (address=%x)\n", witnessAddr[:6])
 		}
 		prod := producer.New(bc, pool, engine, key)
+		prod.BlockCallback = func(block *types.Block) {
+			broadcaster.BroadcastBlock(block)
+		}
 		stack.RegisterLifecycle(prod)
 	}
 
