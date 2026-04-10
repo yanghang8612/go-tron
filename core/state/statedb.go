@@ -8,9 +8,11 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -478,6 +480,13 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	if obj == nil {
 		return nil
 	}
+	if len(obj.code) == 0 {
+		code := rawdb.ReadCode(s.db.DiskDB(), addr)
+		if len(code) > 0 {
+			obj.code = code
+			obj.codeHash = tcommon.Sha256(code)
+		}
+	}
 	return obj.code
 }
 
@@ -533,6 +542,15 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	if obj == nil {
 		return nil
 	}
+	if obj.contractMeta == nil {
+		data := rawdb.ReadContract(s.db.DiskDB(), addr)
+		if len(data) > 0 {
+			var sc contractpb.SmartContract
+			if err := proto.Unmarshal(data, &sc); err == nil {
+				obj.contractMeta = &sc
+			}
+		}
+	}
 	return obj.contractMeta
 }
 
@@ -540,6 +558,7 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
 	obj := s.GetOrCreateAccount(addr)
 	obj.contractMeta = contract
+	obj.contractMetaDirty = true
 	obj.markDirty()
 }
 
@@ -605,14 +624,16 @@ func (s *StateDB) Copy() (*StateDB, error) {
 	}
 	for addr, obj := range s.stateObjects {
 		newObj := &stateObject{
-			address:        addr,
-			dirty:          obj.dirty,
-			deleted:        obj.deleted,
-			code:           append([]byte{}, obj.code...),
-			codeHash:       obj.codeHash,
-			storage:        make(map[tcommon.Hash]tcommon.Hash),
-			contractMeta:   obj.contractMeta,
-			selfDestructed: obj.selfDestructed,
+			address:           addr,
+			dirty:             obj.dirty,
+			deleted:           obj.deleted,
+			code:              append([]byte{}, obj.code...),
+			codeHash:          obj.codeHash,
+			codeDirty:         obj.codeDirty,
+			contractMeta:      obj.contractMeta,
+			contractMetaDirty: obj.contractMetaDirty,
+			storage:           make(map[tcommon.Hash]tcommon.Hash),
+			selfDestructed:    obj.selfDestructed,
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -637,7 +658,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
 				return tcommon.Hash{}, err
 			}
-			obj.dirty = false // Issue 2: clear dirty flag for deleted objects
+			obj.dirty = false
 			continue
 		}
 		data, err := obj.account.Marshal()
@@ -647,12 +668,22 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		if err := s.trie.Update(trieKey(addr), data); err != nil {
 			return tcommon.Hash{}, err
 		}
+		if obj.codeDirty {
+			rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
+			obj.codeDirty = false
+		}
+		if obj.contractMetaDirty && obj.contractMeta != nil {
+			metaBytes, err := proto.Marshal(obj.contractMeta)
+			if err == nil {
+				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
+				obj.contractMetaDirty = false
+			}
+		}
 		obj.dirty = false
 	}
 
 	root, nodes := s.trie.Commit(false)
 	if nodes != nil {
-		// Issue 3: pass s.originRoot as parent so the hashdb reference graph is correct.
 		if err := s.db.TrieDB().Update(root, s.originRoot, 0, trienode.NewWithNodeSet(nodes), nil); err != nil {
 			return tcommon.Hash{}, err
 		}
@@ -661,17 +692,12 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		}
 	}
 
-	// Issue 1: reopen the trie from the new root so StateDB remains usable.
 	newTrie, err := s.db.OpenTrie(root)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
 	s.trie = newTrie
-
-	// Issue 3: advance originRoot for the next commit.
 	s.originRoot = root
-
-	// Issue 4: clear journal and snapshots after a successful commit.
 	s.journal = newJournal()
 	s.snapshots = s.snapshots[:0]
 

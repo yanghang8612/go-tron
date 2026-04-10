@@ -15,12 +15,13 @@ type stateObject struct {
 	deleted bool
 
 	// Contract fields
-	code           []byte                       // contract bytecode
-	codeHash       tcommon.Hash                 // SHA256 hash of the code
-	codeDirty      bool                         // true if code was modified
-	storage        map[tcommon.Hash]tcommon.Hash // dirty contract storage
-	contractMeta   *contractpb.SmartContract    // contract metadata
-	selfDestructed bool
+	code              []byte                        // contract bytecode
+	codeHash          tcommon.Hash                  // SHA256 hash of the code
+	codeDirty         bool                          // true if code was modified
+	contractMeta      *contractpb.SmartContract     // contract metadata
+	contractMetaDirty bool                          // true if contractMeta was modified
+	storage           map[tcommon.Hash]tcommon.Hash // dirty contract storage
+	selfDestructed    bool
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
