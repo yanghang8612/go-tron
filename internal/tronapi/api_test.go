@@ -43,6 +43,18 @@ func (m *mockBackend) GetAccount(addr common.Address) (*types.Account, error) {
 	return acc, nil
 }
 
+func (m *mockBackend) BroadcastTransaction(tx *types.Transaction) error {
+	return nil
+}
+
+func (m *mockBackend) GetNodeInfo() *NodeInfo {
+	return &NodeInfo{Version: "test", CurrentBlock: 100}
+}
+
+func (m *mockBackend) PendingTransactionCount() int {
+	return 0
+}
+
 func TestGetNowBlock(t *testing.T) {
 	api := NewAPI(&mockBackend{})
 	mux := http.NewServeMux()
