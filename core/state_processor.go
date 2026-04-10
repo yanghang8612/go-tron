@@ -29,6 +29,11 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return 0, fmt.Errorf("validate: %w", err)
 	}
 
+	// Consume bandwidth
+	if err := consumeBandwidth(statedb, dynProps, tx, blockTime); err != nil {
+		return 0, fmt.Errorf("bandwidth: %w", err)
+	}
+
 	snap := statedb.Snapshot()
 	result, err := act.Execute(ctx)
 	if err != nil {
