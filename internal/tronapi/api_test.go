@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -174,5 +175,82 @@ func TestGetBlockByNum(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestEstimateEnergy(t *testing.T) {
+	api := NewAPI(&mockBackend{})
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	body := `{"owner_address":"4101","contract_address":"4102","data":"00"}`
+	req := httptest.NewRequest("POST", "/wallet/estimateenergy", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if _, ok := result["energy_required"]; !ok {
+		t.Fatal("expected energy_required in response")
+	}
+}
+
+func TestGetChainParameters(t *testing.T) {
+	api := NewAPI(&mockBackend{})
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/wallet/getchainparameters", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if _, ok := result["chainParameter"]; !ok {
+		t.Fatal("expected chainParameter in response")
+	}
+}
+
+func TestListWitnesses(t *testing.T) {
+	api := NewAPI(&mockBackend{})
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/wallet/listwitnesses", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if _, ok := result["witnesses"]; !ok {
+		t.Fatal("expected witnesses in response")
+	}
+}
+
+func TestGetNextMaintenanceTime(t *testing.T) {
+	api := NewAPI(&mockBackend{})
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/wallet/getnextmaintenancetime", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string]int64
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["num"] != 1700000000000 {
+		t.Fatalf("expected 1700000000000, got %d", result["num"])
 	}
 }
