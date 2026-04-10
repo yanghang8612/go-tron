@@ -3,15 +3,12 @@ package actuator
 import (
 	"errors"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-type UpdateBrokerageActuator struct {
-	DB ethdb.KeyValueWriter
-}
+type UpdateBrokerageActuator struct{}
 
 func (a *UpdateBrokerageActuator) getContract(ctx *Context) (*contractpb.UpdateBrokerageContract, error) {
 	contract := ctx.Tx.Contract()
@@ -49,8 +46,8 @@ func (a *UpdateBrokerageActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
-	if a.DB != nil {
-		rawdb.WriteWitnessBrokerage(a.DB, ownerAddr, int64(c.Brokerage))
+	if ctx.DB != nil {
+		rawdb.WriteWitnessBrokerage(ctx.DB, ownerAddr, int64(c.Brokerage))
 	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

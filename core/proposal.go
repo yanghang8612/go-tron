@@ -18,6 +18,9 @@ func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties,
 		if p.ExpirationTime > maintenanceTime {
 			continue // not yet expired
 		}
+		if activeCount == 0 {
+			continue // cannot compute threshold with zero active witnesses
+		}
 
 		approvalCount := len(p.Approvals)
 		// 70% threshold: approvals * 10 >= activeCount * 7

@@ -731,6 +731,18 @@ func (s *StateDB) SetPermissions(addr tcommon.Address, owner, witness *corepb.Pe
 	obj.markDirty()
 }
 
+// GetDelegatedFrozenV2 returns the delegated (outgoing) frozen balance for a resource type.
+func (s *StateDB) GetDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		return obj.account.DelegatedFrozenV2BalanceForBandwidth()
+	}
+	return obj.account.DelegatedFrozenV2BalanceForEnergy()
+}
+
 // AddDelegatedFrozenV2 adds to the delegated (outgoing) frozen balance for a resource.
 func (s *StateDB) AddDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
 	obj := s.getStateObject(addr)

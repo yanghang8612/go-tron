@@ -46,7 +46,9 @@ func (a *DelegateResourceActuator) Validate(ctx *Context) error {
 		return errors.New("invalid resource type")
 	}
 	frozen := ctx.State.GetFrozenV2Amount(ownerAddr, c.Resource)
-	if frozen < c.Balance {
+	alreadyDelegated := ctx.State.GetDelegatedFrozenV2(ownerAddr, c.Resource)
+	available := frozen - alreadyDelegated
+	if available < c.Balance {
 		return errors.New("insufficient frozen balance to delegate")
 	}
 	return nil

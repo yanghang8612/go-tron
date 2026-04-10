@@ -63,7 +63,13 @@ func (a *ProposalApproveActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	if ctx.DB == nil {
+		return nil, errors.New("database not available")
+	}
 	proposal := rawdb.ReadProposal(ctx.DB, c.ProposalId)
+	if proposal == nil {
+		return nil, errors.New("proposal not found")
+	}
 
 	if c.IsAddApproval {
 		proposal.Approvals = append(proposal.Approvals, ownerAddr)

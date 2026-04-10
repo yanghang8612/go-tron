@@ -61,7 +61,8 @@ func TestUpdateBrokerageExecute(t *testing.T) {
 	ctx.State.PutWitness(owner, "http://w.com")
 
 	db := ethrawdb.NewMemoryDatabase()
-	act := &UpdateBrokerageActuator{DB: db}
+	ctx.DB = db
+	act := &UpdateBrokerageActuator{}
 	result, err := act.Execute(ctx)
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
