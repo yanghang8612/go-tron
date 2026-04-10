@@ -58,7 +58,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	blockNum := parent.Number() + 1
 
 	for _, tx := range pendingTxs {
-		_, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum)
+		_, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses())
 		if err != nil {
 			failedTxIDs = append(failedTxIDs, tx.Hash())
 			continue // skip failing transactions

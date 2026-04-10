@@ -56,7 +56,7 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestApplyTransaction_ValidationFails(t *testing.T) {
 
 	// No account seeded — validation should fail
 	tx := makeTestTransferTx(1, 2, 100)
-	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -114,7 +114,7 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	txInfos, err := ProcessBlock(statedb, dynProps, block)
+	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx.Proto()},
 	})
 
-	_, err := ProcessBlock(statedb, dynProps, block)
+	_, err := ProcessBlock(statedb, dynProps, block, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid transaction")
 	}
@@ -177,7 +177,7 @@ func TestApplyTransaction_ReturnsResult(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	txInfos, err := ProcessBlock(statedb, dynProps, block)
+	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

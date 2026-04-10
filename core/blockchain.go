@@ -189,7 +189,7 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	}
 
 	// Process block (execute transactions, pay reward — does not commit)
-	txInfos, err := ProcessBlock(statedb, dynProps, block)
+	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses())
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}

@@ -17,7 +17,7 @@ type Context struct {
 	Tx              *types.Transaction
 	BlockTime       int64
 	BlockNumber     uint64
-	DB              ethdb.Database   // rawdb access for governance/brokerage
+	DB              ethdb.KeyValueStore // rawdb access for governance/brokerage
 	ActiveWitnesses []common.Address // active witness set for governance checks
 }
 

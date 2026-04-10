@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -12,18 +13,20 @@ import (
 
 // ApplyTransaction executes a single transaction against the given state.
 // Returns the full actuator Result including fee, energy, net, and contract details.
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64) (*actuator.Result, error) {
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address) (*actuator.Result, error) {
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
 		return nil, fmt.Errorf("create actuator: %w", err)
 	}
 
 	ctx := &actuator.Context{
-		State:       statedb,
-		DynProps:    dynProps,
-		Tx:          tx,
-		BlockTime:   blockTime,
-		BlockNumber: blockNum,
+		State:           statedb,
+		DynProps:        dynProps,
+		Tx:              tx,
+		BlockTime:       blockTime,
+		BlockNumber:     blockNum,
+		DB:              db,
+		ActiveWitnesses: activeWitnesses,
 	}
 
 	if err := act.Validate(ctx); err != nil {
@@ -101,11 +104,11 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 // It does NOT commit state — the caller (InsertBlock/BuildBlock) is responsible
 // for committing after any post-processing (e.g., maintenance).
 // Returns the TransactionInfos for all executed transactions.
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block) ([]*corepb.TransactionInfo, error) {
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address) ([]*corepb.TransactionInfo, error) {
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
-		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number())
+		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number(), db, activeWitnesses)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}
