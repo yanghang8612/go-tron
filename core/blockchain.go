@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -119,4 +120,62 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 	bc.currentBlock.Store(block)
 
 	return nil
+}
+
+// InsertBlock inserts a block with full state processing.
+func (bc *BlockChain) InsertBlock(block *types.Block) error {
+	if block == nil {
+		return errors.New("block is nil")
+	}
+
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+
+	current := bc.CurrentBlock()
+	if block.Number() != current.Number()+1 {
+		return ErrInvalidNumber
+	}
+	if block.ParentHash() != current.Hash() {
+		return ErrInvalidParent
+	}
+
+	// Open StateDB from parent's state root
+	parentRoot := current.AccountStateRoot()
+	statedb, err := state.New(parentRoot, bc.stateDB)
+	if err != nil {
+		return fmt.Errorf("open state: %w", err)
+	}
+
+	// Load dynamic properties
+	dynProps := state.LoadDynamicProperties(bc.db)
+
+	// Process block (execute transactions, pay reward)
+	newRoot, err := ProcessBlock(statedb, dynProps, block)
+	if err != nil {
+		return fmt.Errorf("process block: %w", err)
+	}
+
+	// Verify state root if the block has one set
+	blockRoot := block.AccountStateRoot()
+	if blockRoot != (tcommon.Hash{}) && blockRoot != newRoot {
+		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
+	}
+
+	// Update dynamic properties
+	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
+	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
+	dynProps.SetLatestBlockHeaderHash(block.Hash())
+	dynProps.Flush(bc.db)
+
+	// Persist block
+	rawdb.WriteBlock(bc.db, block)
+	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
+	bc.currentBlock.Store(block)
+
+	return nil
+}
+
+// StateDB returns the state database for reading state.
+func (bc *BlockChain) StateDB() *state.Database {
+	return bc.stateDB
 }
