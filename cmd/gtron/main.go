@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ecdsa"
 	"fmt"
 	"os"
 	"os/signal"
@@ -51,6 +52,10 @@ var (
 		Name:  "witness.key",
 		Usage: "Witness private key (hex-encoded)",
 	}
+	devFlag = &cli.BoolFlag{
+		Name:  "dev",
+		Usage: "Dev mode: single-witness chain using the provided witness key",
+	}
 )
 
 var app = &cli.App{
@@ -65,6 +70,7 @@ var app = &cli.App{
 		testnetFlag,
 		witnessFlag,
 		witnessKeyFlag,
+		devFlag,
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
@@ -103,8 +109,24 @@ func initCmd(ctx *cli.Context) error {
 
 func gtron(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
-	genesis := makeGenesis(ctx)
 	dbPath := chainDataDir(cfg.DataDir)
+
+	// In dev mode, parse witness key early so we can build the genesis with it
+	var devWitnessKey *ecdsa.PrivateKey
+	if ctx.Bool("dev") {
+		key, err := parseWitnessKey(ctx)
+		if err != nil {
+			return fmt.Errorf("dev mode requires --witness.key: %w", err)
+		}
+		devWitnessKey = key
+	}
+
+	genesis := makeGenesis(ctx)
+	if ctx.Bool("dev") {
+		witnessAddr := crypto.PubkeyToAddress(&devWitnessKey.PublicKey)
+		genesis = makeDevGenesis(witnessAddr)
+		fmt.Printf("Dev mode: single-witness genesis (witness=%x)\n", witnessAddr[:6])
+	}
 
 	// Open database
 	db, err := rawdb.NewPebbleDB(dbPath, 256, 500)
@@ -145,15 +167,35 @@ func gtron(ctx *cli.Context) error {
 	}
 	stack.RegisterLifecycle(apiServer)
 
-	// If witness mode, create producer
-	if ctx.Bool("witness") {
-		key, err := parseWitnessKey(ctx)
-		if err != nil {
-			db.Close()
-			return fmt.Errorf("witness key: %w", err)
+	// If witness mode (explicit or dev), create producer
+	if ctx.Bool("witness") || ctx.Bool("dev") {
+		var key *ecdsa.PrivateKey
+		if devWitnessKey != nil {
+			key = devWitnessKey
+		} else {
+			var err error
+			key, err = parseWitnessKey(ctx)
+			if err != nil {
+				db.Close()
+				return fmt.Errorf("witness key: %w", err)
+			}
 		}
 		witnessAddr := crypto.PubkeyToAddress(&key.PublicKey)
-		fmt.Printf("Witness mode enabled (address=%x)\n", witnessAddr[:6])
+		// Verify witness is in active list
+		activeWitnesses := bc.ActiveWitnesses()
+		found := false
+		for _, aw := range activeWitnesses {
+			if aw == witnessAddr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("WARNING: witness %x is NOT in the active witness list (%d witnesses). No blocks will be produced.\n", witnessAddr[:6], len(activeWitnesses))
+			fmt.Println("Hint: use --dev mode to create a single-witness dev chain with your key.")
+		} else {
+			fmt.Printf("Witness mode enabled (address=%x)\n", witnessAddr[:6])
+		}
 		prod := producer.New(bc, pool, engine, key)
 		stack.RegisterLifecycle(prod)
 	}

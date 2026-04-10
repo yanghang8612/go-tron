@@ -23,6 +23,7 @@ type Producer struct {
 	witnessAddr tcommon.Address
 
 	lastProducedSlot int64
+	loggedWitnessErr bool
 	quit             chan struct{}
 	wg               sync.WaitGroup
 }
@@ -91,6 +92,10 @@ func (p *Producer) tryProduceBlock() {
 
 	scheduled, err := p.engine.GetScheduledWitness(headSlot)
 	if err != nil {
+		if !p.loggedWitnessErr {
+			log.Printf("Cannot get scheduled witness: %v", err)
+			p.loggedWitnessErr = true
+		}
 		return
 	}
 	if scheduled != p.witnessAddr {
