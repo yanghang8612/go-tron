@@ -56,12 +56,12 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	fee, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fee != 0 {
-		t.Fatalf("fee: got %d, want 0", fee)
+	if result.Fee != 0 {
+		t.Fatalf("fee: got %d, want 0", result.Fee)
 	}
 	if got := statedb.GetBalance(testProcessorAddr(1)); got != 700_000 {
 		t.Fatalf("sender: got %d, want 700000", got)
@@ -114,10 +114,11 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	err = ProcessBlock(statedb, dynProps, block)
+	txInfos, err := ProcessBlock(statedb, dynProps, block)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = txInfos
 
 	// Verify: sender lost 3M, recipients got 1M and 2M
 	if got := statedb.GetBalance(testProcessorAddr(1)); got != 7_000_000 {
@@ -157,7 +158,7 @@ func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx.Proto()},
 	})
 
-	err := ProcessBlock(statedb, dynProps, block)
+	_, err := ProcessBlock(statedb, dynProps, block)
 	if err == nil {
 		t.Fatal("expected error for invalid transaction")
 	}
@@ -165,5 +166,72 @@ func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 	// Balance should be unchanged
 	if got := statedb.GetBalance(testProcessorAddr(1)); got != 100 {
 		t.Fatalf("balance should be unchanged: got %d, want 100", got)
+	}
+}
+
+func TestApplyTransaction_ReturnsResult(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
+
+	tx := makeTestTransferTx(1, 2, 300_000)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ContractRet != 1 {
+		t.Fatalf("expected ContractRet=1, got %d", result.ContractRet)
+	}
+}
+
+func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+	statedb.AddBalance(testProcessorAddr(1), 10_000_000)
+	_, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx1 := makeTestTransferTx(1, 2, 1_000_000)
+	tx2 := makeTestTransferTx(1, 3, 2_000_000)
+	witnessAddr := testProcessorAddr(0xFF)
+	statedb.CreateAccount(witnessAddr, corepb.AccountType_Normal)
+
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         1,
+				Timestamp:      3000,
+				WitnessAddress: witnessAddr.Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
+	})
+
+	txInfos, err := ProcessBlock(statedb, dynProps, block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txInfos) != 2 {
+		t.Fatalf("expected 2 txInfos, got %d", len(txInfos))
+	}
+	for i, info := range txInfos {
+		if info.BlockNumber != 1 {
+			t.Fatalf("txInfo[%d] blockNumber: got %d, want 1", i, info.BlockNumber)
+		}
+		if info.BlockTimeStamp != 3000 {
+			t.Fatalf("txInfo[%d] blockTimeStamp: got %d, want 3000", i, info.BlockTimeStamp)
+		}
+		if len(info.Id) == 0 {
+			t.Fatalf("txInfo[%d] has empty ID", i)
+		}
 	}
 }

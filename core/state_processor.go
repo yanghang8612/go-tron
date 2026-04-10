@@ -7,14 +7,15 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // ApplyTransaction executes a single transaction against the given state.
-// Returns the fee charged by the actuator.
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64) (int64, error) {
+// Returns the full actuator Result including fee, energy, net, and contract details.
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64) (*actuator.Result, error) {
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
-		return 0, fmt.Errorf("create actuator: %w", err)
+		return nil, fmt.Errorf("create actuator: %w", err)
 	}
 
 	ctx := &actuator.Context{
@@ -26,33 +27,90 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	if err := act.Validate(ctx); err != nil {
-		return 0, fmt.Errorf("validate: %w", err)
+		return nil, fmt.Errorf("validate: %w", err)
 	}
 
-	// Consume bandwidth
-	if err := consumeBandwidth(statedb, dynProps, tx, blockTime); err != nil {
-		return 0, fmt.Errorf("bandwidth: %w", err)
+	bwResult, err := consumeBandwidth(statedb, dynProps, tx, blockTime)
+	if err != nil {
+		return nil, fmt.Errorf("bandwidth: %w", err)
 	}
 
 	snap := statedb.Snapshot()
 	result, err := act.Execute(ctx)
 	if err != nil {
 		statedb.RevertToSnapshot(snap)
-		return 0, fmt.Errorf("execute: %w", err)
+		return nil, fmt.Errorf("execute: %w", err)
 	}
 
-	return result.Fee, nil
+	result.NetUsage = bwResult.NetUsage
+	result.NetFee = bwResult.NetFee
+
+	return result, nil
+}
+
+// buildTransactionInfo constructs a TransactionInfo proto from the execution result.
+func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64) *corepb.TransactionInfo {
+	txID := tx.Hash()
+
+	info := &corepb.TransactionInfo{
+		Id:             txID[:],
+		Fee:            result.Fee + result.NetFee,
+		BlockNumber:    int64(blockNum),
+		BlockTimeStamp: blockTime,
+		Receipt: &corepb.ResourceReceipt{
+			EnergyUsage:       result.EnergyUsed,
+			EnergyFee:         result.EnergyFee,
+			OriginEnergyUsage: result.OriginEnergyUsage,
+			EnergyUsageTotal:  result.EnergyUsed + result.OriginEnergyUsage,
+			NetUsage:          result.NetUsage,
+			NetFee:            result.NetFee,
+			Result:            corepb.Transaction_ResultContractResult(result.ContractRet),
+		},
+	}
+
+	if len(result.ContractResult) > 0 {
+		info.ContractResult = [][]byte{result.ContractResult}
+	}
+
+	if len(result.ContractAddress) > 0 {
+		info.ContractAddress = result.ContractAddress
+	}
+
+	for _, l := range result.Logs {
+		pbLog := &corepb.TransactionInfo_Log{
+			Address: l.Address[:],
+			Data:    l.Data,
+		}
+		for _, topic := range l.Topics {
+			pbLog.Topics = append(pbLog.Topics, topic)
+		}
+		info.Log = append(info.Log, pbLog)
+	}
+
+	if result.ContractRet > 1 {
+		info.Result = corepb.TransactionInfo_FAILED
+		if result.ContractRet == 2 && len(result.ContractResult) > 0 {
+			info.ResMessage = result.ContractResult
+		}
+	}
+
+	return info
 }
 
 // ProcessBlock executes all transactions in a block and pays the block reward.
 // It does NOT commit state — the caller (InsertBlock/BuildBlock) is responsible
 // for committing after any post-processing (e.g., maintenance).
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block) error {
+// Returns the TransactionInfos for all executed transactions.
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block) ([]*corepb.TransactionInfo, error) {
+	var txInfos []*corepb.TransactionInfo
+
 	for i, tx := range block.Transactions() {
-		_, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number())
+		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number())
 		if err != nil {
-			return fmt.Errorf("tx %d: %w", i, err)
+			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}
+		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp())
+		txInfos = append(txInfos, info)
 	}
 
 	// Pay block reward to witness
@@ -64,5 +122,5 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 	}
 
-	return nil
+	return txInfos, nil
 }

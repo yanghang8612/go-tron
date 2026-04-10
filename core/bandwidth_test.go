@@ -18,7 +18,7 @@ func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestConsumeBandwidth_BurnTRX(t *testing.T) {
 	txSize := int64(tx.Size())
 
 	balBefore := statedb.GetBalance(sender)
-	err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestConsumeBandwidth_InsufficientBalance(t *testing.T) {
 	statedb.SetLatestConsumeFreeTime(sender, 3000)
 
 	tx := makeTestTransferTx(1, 2, 0)
-	err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
 	if err == nil {
 		t.Fatal("expected error for insufficient balance to pay bandwidth")
 	}

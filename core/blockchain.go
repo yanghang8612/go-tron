@@ -189,9 +189,11 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	}
 
 	// Process block (execute transactions, pay reward — does not commit)
-	if err := ProcessBlock(statedb, dynProps, block); err != nil {
+	txInfos, err := ProcessBlock(statedb, dynProps, block)
+	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+	_ = txInfos // will be wired to persistence in Task 6
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {

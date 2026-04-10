@@ -9,12 +9,18 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+// BandwidthResult captures bandwidth consumption details.
+type BandwidthResult struct {
+	NetUsage int64
+	NetFee   int64
+}
+
 // consumeBandwidth charges bandwidth for a transaction.
 // Priority: frozen bandwidth -> free bandwidth -> burn TRX.
-func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64) error {
+func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64) (*BandwidthResult, error) {
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
-		return fmt.Errorf("cannot determine sender")
+		return nil, fmt.Errorf("cannot determine sender")
 	}
 
 	txSize := int64(tx.Size())
@@ -26,7 +32,7 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		if recoveredUsage+txSize <= frozenBW {
 			statedb.SetNetUsage(sender, recoveredUsage+txSize)
 			statedb.SetLatestConsumeTime(sender, blockTime)
-			return nil
+			return &BandwidthResult{NetUsage: txSize}, nil
 		}
 	}
 
@@ -36,15 +42,15 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	if recoveredFreeUsage+txSize <= freeLimit {
 		statedb.SetFreeNetUsage(sender, recoveredFreeUsage+txSize)
 		statedb.SetLatestConsumeFreeTime(sender, blockTime)
-		return nil
+		return &BandwidthResult{NetUsage: txSize}, nil
 	}
 
 	// Burn TRX
 	cost := txSize * dynProps.TransactionFee()
 	if err := statedb.SubBalance(sender, cost); err != nil {
-		return fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
+		return nil, fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
 	}
-	return nil
+	return &BandwidthResult{NetFee: cost}, nil
 }
 
 // extractSender extracts the owner address from the first contract of a transaction.
