@@ -46,6 +46,49 @@ func (e witnessChange) revert(_ map[tcommon.Address]*stateObject, witnesses map[
 	}
 }
 
+// storageChange records a single storage slot change for revert.
+type storageChange struct {
+	address tcommon.Address
+	key     tcommon.Hash
+	prev    tcommon.Hash
+}
+
+func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj != nil {
+		obj.storage[e.key] = e.prev
+	}
+}
+
+// codeChange records a code change for revert.
+type codeChange struct {
+	address  tcommon.Address
+	prevCode []byte
+	prevHash tcommon.Hash
+}
+
+func (e codeChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj != nil {
+		obj.code = e.prevCode
+		obj.codeHash = e.prevHash
+		obj.codeDirty = true
+	}
+}
+
+// selfDestructChange records a self-destruct for revert.
+type selfDestructChange struct {
+	address tcommon.Address
+	prev    bool
+}
+
+func (e selfDestructChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj != nil {
+		obj.selfDestructed = e.prev
+	}
+}
+
 // journal tracks state changes for snapshot/revert.
 type journal struct {
 	entries []journalChange
