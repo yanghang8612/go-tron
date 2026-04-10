@@ -18,8 +18,17 @@ type EVM struct {
 	Coinbase    tcommon.Address // block producer
 	ChainID     int64
 	Depth       int // call depth
+	Logs        []Log // accumulated log events from this execution
 
 	interpreter *Interpreter
+}
+
+func (evm *EVM) LogSnapshot() int {
+	return len(evm.Logs)
+}
+
+func (evm *EVM) RevertLogs(snapshot int) {
+	evm.Logs = evm.Logs[:snapshot]
 }
 
 // NewEVM creates a new EVM instance.
@@ -83,11 +92,13 @@ func (evm *EVM) Create2(caller tcommon.Address, code []byte, energy uint64, valu
 
 func (evm *EVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64) ([]byte, tcommon.Address, uint64, error) {
 	snap := evm.StateDB.Snapshot()
+	logSnap := evm.LogSnapshot()
 
 	evm.StateDB.GetOrCreateAccount(contractAddr)
 
 	if value > 0 {
 		if err := evm.StateDB.SubBalance(caller, value); err != nil {
+			evm.RevertLogs(logSnap)
 			evm.StateDB.RevertToSnapshot(snap)
 			return nil, tcommon.Address{}, energy, ErrInsufficientBalance
 		}
@@ -102,6 +113,7 @@ func (evm *EVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	evm.Depth--
 
 	if err != nil {
+		evm.RevertLogs(logSnap)
 		evm.StateDB.RevertToSnapshot(snap)
 		if err == ErrExecutionReverted {
 			return ret, tcommon.Address{}, contract.Energy, err
@@ -110,12 +122,14 @@ func (evm *EVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	}
 
 	if len(ret) > maxCodeSize {
+		evm.RevertLogs(logSnap)
 		evm.StateDB.RevertToSnapshot(snap)
 		return nil, tcommon.Address{}, 0, ErrContractCodeTooLarge
 	}
 
 	depositCost := uint64(len(ret)) * EnergyCodeDeposit
 	if !contract.UseEnergy(depositCost) {
+		evm.RevertLogs(logSnap)
 		evm.StateDB.RevertToSnapshot(snap)
 		return nil, tcommon.Address{}, 0, ErrOutOfEnergy
 	}
@@ -131,6 +145,7 @@ func (evm *EVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	}
 
 	snap := evm.StateDB.Snapshot()
+	logSnap := evm.LogSnapshot()
 
 	if value > 0 {
 		if err := evm.StateDB.SubBalance(caller, value); err != nil {
@@ -145,6 +160,7 @@ func (evm *EVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		ret, energyUsed, err := p.Run(input, energy)
 		remaining := energy - energyUsed
 		if err != nil {
+			evm.RevertLogs(logSnap)
 			evm.StateDB.RevertToSnapshot(snap)
 			return nil, 0, err
 		}
@@ -167,6 +183,7 @@ func (evm *EVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	evm.interpreter.returnData = ret
 
 	if err != nil {
+		evm.RevertLogs(logSnap)
 		evm.StateDB.RevertToSnapshot(snap)
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err
