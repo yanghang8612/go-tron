@@ -3,6 +3,8 @@ package actuator
 import (
 	"errors"
 
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -10,11 +12,13 @@ import (
 )
 
 type Context struct {
-	State       *state.StateDB
-	DynProps    *state.DynamicProperties
-	Tx          *types.Transaction
-	BlockTime   int64
-	BlockNumber uint64
+	State           *state.StateDB
+	DynProps        *state.DynamicProperties
+	Tx              *types.Transaction
+	BlockTime       int64
+	BlockNumber     uint64
+	DB              ethdb.Database   // rawdb access for governance/brokerage
+	ActiveWitnesses []common.Address // active witness set for governance checks
 }
 
 type Result struct {
@@ -68,6 +72,12 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &AccountPermissionUpdateActuator{}, nil
 	case corepb.Transaction_Contract_UpdateBrokerageContract:
 		return &UpdateBrokerageActuator{}, nil
+	case corepb.Transaction_Contract_ProposalCreateContract:
+		return &ProposalCreateActuator{}, nil
+	case corepb.Transaction_Contract_ProposalApproveContract:
+		return &ProposalApproveActuator{}, nil
+	case corepb.Transaction_Contract_ProposalDeleteContract:
+		return &ProposalDeleteActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
