@@ -10,6 +10,7 @@ var (
 	blockHashPrefix = []byte("bh-")
 	txPrefix        = []byte("tx-")
 	txInfoPrefix    = []byte("ti-")
+	txInfoBlockPrefix = []byte("tib-")
 	accountPrefix   = []byte("a-")
 	witnessPrefix   = []byte("w-")
 	votesPrefix     = []byte("v-")
@@ -38,6 +39,17 @@ func blockHashKey(hash []byte) []byte {
 
 func txKey(hash []byte) []byte {
 	return append(append([]byte{}, txPrefix...), hash...)
+}
+
+func txInfoKey(hash []byte) []byte {
+	return append(append([]byte{}, txInfoPrefix...), hash...)
+}
+
+func txInfoBlockKey(number uint64) []byte {
+	k := make([]byte, len(txInfoBlockPrefix)+8)
+	copy(k, txInfoBlockPrefix)
+	binary.BigEndian.PutUint64(k[len(txInfoBlockPrefix):], number)
+	return k
 }
 
 func accountKey(addr []byte) []byte {
