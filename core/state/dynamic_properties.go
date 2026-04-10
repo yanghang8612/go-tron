@@ -29,6 +29,7 @@ var defaultProps = map[string]int64{
 	"next_maintenance_time":                     0,
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            1500,
+	"next_proposal_id":                          0,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -188,6 +189,14 @@ func (dp *DynamicProperties) SetLatestSolidifiedBlockNum(n int64) {
 func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
+}
+
+func (dp *DynamicProperties) NextProposalID() int64 {
+	return dp.props["next_proposal_id"]
+}
+
+func (dp *DynamicProperties) SetNextProposalID(id int64) {
+	dp.Set("next_proposal_id", id)
 }
 
 // All returns a read-only copy of all dynamic properties.

@@ -171,6 +171,58 @@ func (a *Account) SetAllowance(v int64)          { a.pb.Allowance = v }
 func (a *Account) LatestWithdrawTime() int64     { return a.pb.LatestWithdrawTime }
 func (a *Account) SetLatestWithdrawTime(t int64) { a.pb.LatestWithdrawTime = t }
 
+// AccountId accessors.
+func (a *Account) AccountId() string       { return string(a.pb.AccountId) }
+func (a *Account) SetAccountId(id string)  { a.pb.AccountId = []byte(id) }
+
+// Permission accessors.
+func (a *Account) OwnerPermission() *corepb.Permission            { return a.pb.OwnerPermission }
+func (a *Account) WitnessPermission() *corepb.Permission          { return a.pb.WitnessPermission }
+func (a *Account) ActivePermission() []*corepb.Permission         { return a.pb.ActivePermission }
+func (a *Account) SetOwnerPermission(p *corepb.Permission)        { a.pb.OwnerPermission = p }
+func (a *Account) SetWitnessPermission(p *corepb.Permission)      { a.pb.WitnessPermission = p }
+func (a *Account) SetActivePermission(perms []*corepb.Permission) { a.pb.ActivePermission = perms }
+
+// Delegated frozen V2 balance accessors (resources delegated TO this account).
+func (a *Account) DelegatedFrozenV2BalanceForBandwidth() int64 {
+	return a.pb.DelegatedFrozenV2BalanceForBandwidth
+}
+func (a *Account) SetDelegatedFrozenV2BalanceForBandwidth(v int64) {
+	a.pb.DelegatedFrozenV2BalanceForBandwidth = v
+}
+func (a *Account) AcquiredDelegatedFrozenV2BalanceForBandwidth() int64 {
+	return a.pb.AcquiredDelegatedFrozenV2BalanceForBandwidth
+}
+func (a *Account) SetAcquiredDelegatedFrozenV2BalanceForBandwidth(v int64) {
+	a.pb.AcquiredDelegatedFrozenV2BalanceForBandwidth = v
+}
+
+func (a *Account) DelegatedFrozenV2BalanceForEnergy() int64 {
+	if a.pb.AccountResource == nil {
+		return 0
+	}
+	return a.pb.AccountResource.DelegatedFrozenV2BalanceForEnergy
+}
+func (a *Account) SetDelegatedFrozenV2BalanceForEnergy(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.DelegatedFrozenV2BalanceForEnergy = v
+}
+func (a *Account) AcquiredDelegatedFrozenV2BalanceForEnergy() int64 {
+	if a.pb.AccountResource == nil {
+		return 0
+	}
+	return a.pb.AccountResource.AcquiredDelegatedFrozenV2BalanceForEnergy
+}
+func (a *Account) SetAcquiredDelegatedFrozenV2BalanceForEnergy(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.AcquiredDelegatedFrozenV2BalanceForEnergy = v
+}
+
+// ClearUnfrozenV2 removes all pending unfreeze entries.
+func (a *Account) ClearUnfrozenV2() {
+	a.pb.UnfrozenV2 = nil
+}
+
 func (a *Account) Marshal() ([]byte, error) {
 	return proto.Marshal(a.pb)
 }

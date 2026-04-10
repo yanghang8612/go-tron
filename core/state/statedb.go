@@ -678,6 +678,146 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	return tcommon.Hash(root), nil
 }
 
+// SetAccountName sets the account name.
+func (s *StateDB) SetAccountName(addr tcommon.Address, name string) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetAccountName(name)
+	obj.markDirty()
+}
+
+// GetAccountName returns the account name.
+func (s *StateDB) GetAccountName(addr tcommon.Address) string {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return ""
+	}
+	return obj.account.AccountName()
+}
+
+// SetAccountId sets the account ID.
+func (s *StateDB) SetAccountId(addr tcommon.Address, id string) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetAccountId(id)
+	obj.markDirty()
+}
+
+// GetAccountId returns the account ID.
+func (s *StateDB) GetAccountId(addr tcommon.Address) string {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return ""
+	}
+	return obj.account.AccountId()
+}
+
+// SetPermissions sets all permissions on the account.
+func (s *StateDB) SetPermissions(addr tcommon.Address, owner, witness *corepb.Permission, actives []*corepb.Permission) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetOwnerPermission(owner)
+	obj.account.SetWitnessPermission(witness)
+	obj.account.SetActivePermission(actives)
+	obj.markDirty()
+}
+
+// AddDelegatedFrozenV2 adds to the delegated (outgoing) frozen balance for a resource.
+func (s *StateDB) AddDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(obj.account.DelegatedFrozenV2BalanceForBandwidth() + amount)
+	} else {
+		obj.account.SetDelegatedFrozenV2BalanceForEnergy(obj.account.DelegatedFrozenV2BalanceForEnergy() + amount)
+	}
+	obj.markDirty()
+}
+
+// SubDelegatedFrozenV2 subtracts from the delegated (outgoing) frozen balance for a resource.
+func (s *StateDB) SubDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		v := obj.account.DelegatedFrozenV2BalanceForBandwidth() - amount
+		if v < 0 {
+			v = 0
+		}
+		obj.account.SetDelegatedFrozenV2BalanceForBandwidth(v)
+	} else {
+		v := obj.account.DelegatedFrozenV2BalanceForEnergy() - amount
+		if v < 0 {
+			v = 0
+		}
+		obj.account.SetDelegatedFrozenV2BalanceForEnergy(v)
+	}
+	obj.markDirty()
+}
+
+// AddAcquiredDelegatedFrozenV2 adds to the acquired (incoming) delegated frozen balance.
+func (s *StateDB) AddAcquiredDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		obj.account.SetAcquiredDelegatedFrozenV2BalanceForBandwidth(obj.account.AcquiredDelegatedFrozenV2BalanceForBandwidth() + amount)
+	} else {
+		obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() + amount)
+	}
+	obj.markDirty()
+}
+
+// SubAcquiredDelegatedFrozenV2 subtracts from the acquired (incoming) delegated frozen balance.
+func (s *StateDB) SubAcquiredDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	if resourceType == corepb.ResourceCode_BANDWIDTH {
+		v := obj.account.AcquiredDelegatedFrozenV2BalanceForBandwidth() - amount
+		if v < 0 {
+			v = 0
+		}
+		obj.account.SetAcquiredDelegatedFrozenV2BalanceForBandwidth(v)
+	} else {
+		v := obj.account.AcquiredDelegatedFrozenV2BalanceForEnergy() - amount
+		if v < 0 {
+			v = 0
+		}
+		obj.account.SetAcquiredDelegatedFrozenV2BalanceForEnergy(v)
+	}
+	obj.markDirty()
+}
+
+// ClearUnfrozenV2 removes all pending unfreeze entries.
+func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearUnfrozenV2()
+	obj.markDirty()
+}
+
 // getStateObject returns the state object for addr, loading from trie if needed.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if obj, ok := s.stateObjects[addr]; ok {
