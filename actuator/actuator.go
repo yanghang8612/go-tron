@@ -78,6 +78,12 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &ProposalApproveActuator{}, nil
 	case corepb.Transaction_Contract_ProposalDeleteContract:
 		return &ProposalDeleteActuator{}, nil
+	case corepb.Transaction_Contract_DelegateResourceContract:
+		return &DelegateResourceActuator{}, nil
+	case corepb.Transaction_Contract_UnDelegateResourceContract:
+		return &UnDelegateResourceActuator{}, nil
+	case corepb.Transaction_Contract_CancelAllUnfreezeV2Contract:
+		return &CancelAllUnfreezeV2Actuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
