@@ -3,6 +3,7 @@ package state
 import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // journalChange represents a single undoable state change.
@@ -73,6 +74,20 @@ func (e codeChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[
 		obj.code = e.prevCode
 		obj.codeHash = e.prevHash
 		obj.codeDirty = true
+	}
+}
+
+// contractMetaChange records a contract metadata change for revert.
+type contractMetaChange struct {
+	address  tcommon.Address
+	prevMeta *contractpb.SmartContract
+}
+
+func (e contractMetaChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj != nil {
+		obj.contractMeta = e.prevMeta
+		obj.contractMetaDirty = e.prevMeta != nil
 	}
 }
 

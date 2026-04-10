@@ -557,6 +557,10 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 // SetContract stores contract metadata at addr.
 func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartContract) {
 	obj := s.GetOrCreateAccount(addr)
+	s.journal.append(contractMetaChange{
+		address:  addr,
+		prevMeta: obj.contractMeta,
+	})
 	obj.contractMeta = contract
 	obj.contractMetaDirty = true
 	obj.markDirty()
@@ -564,11 +568,7 @@ func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartCo
 
 // IsContract returns whether the address has contract code or metadata.
 func (s *StateDB) IsContract(addr tcommon.Address) bool {
-	obj := s.getStateObject(addr)
-	if obj == nil {
-		return false
-	}
-	return obj.contractMeta != nil || len(obj.code) > 0
+	return s.GetContract(addr) != nil || len(s.GetCode(addr)) > 0
 }
 
 // Exist returns whether an account exists (non-nil and not deleted).
@@ -582,7 +582,7 @@ func (s *StateDB) Empty(addr tcommon.Address) bool {
 	if obj == nil || obj.deleted {
 		return true
 	}
-	return obj.account.Balance() == 0 && len(obj.code) == 0
+	return obj.account.Balance() == 0 && len(s.GetCode(addr)) == 0
 }
 
 // SelfDestruct marks an account as self-destructed.
@@ -623,6 +623,10 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		originRoot:   s.originRoot,
 	}
 	for addr, obj := range s.stateObjects {
+		var metaCopy *contractpb.SmartContract
+		if obj.contractMeta != nil {
+			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
+		}
 		newObj := &stateObject{
 			address:           addr,
 			dirty:             obj.dirty,
@@ -630,7 +634,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			code:              append([]byte{}, obj.code...),
 			codeHash:          obj.codeHash,
 			codeDirty:         obj.codeDirty,
-			contractMeta:      obj.contractMeta,
+			contractMeta:      metaCopy,
 			contractMetaDirty: obj.contractMetaDirty,
 			storage:           make(map[tcommon.Hash]tcommon.Hash),
 			selfDestructed:    obj.selfDestructed,
