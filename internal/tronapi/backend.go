@@ -42,6 +42,16 @@ type WitnessInfo struct {
 	IsJobs    bool   `json:"isJobs"`
 }
 
+type ProposalInfo struct {
+	ProposalID      int64            `json:"proposal_id"`
+	ProposerAddress string           `json:"proposer_address"`
+	Parameters      map[string]int64 `json:"parameters"`
+	ExpirationTime  int64            `json:"expiration_time"`
+	CreateTime      int64            `json:"create_time"`
+	Approvals       []string         `json:"approvals"`
+	State           string           `json:"state"`
+}
+
 type Backend interface {
 	// Existing
 	CurrentBlock() *types.Block
@@ -75,4 +85,10 @@ type Backend interface {
 	GetChainParameters() []ChainParameter
 	ListWitnesses() ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64
+
+	// Proposal APIs
+	BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error)
+	BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error)
+	BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error)
+	ListProposals() ([]*ProposalInfo, error)
 }

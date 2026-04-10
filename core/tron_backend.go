@@ -296,3 +296,70 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 func (b *TronBackend) NextMaintenanceTime() int64 {
 	return b.chain.NextMaintenanceTime()
 }
+
+func (b *TronBackend) BuildProposalCreateTransaction(owner tcommon.Address, params map[int64]int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner[:],
+		Parameters:   params,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_ProposalCreateContract, c, 0)
+}
+
+func (b *TronBackend) BuildProposalApproveTransaction(owner tcommon.Address, proposalID int64, approve bool) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.ProposalApproveContract{
+		OwnerAddress:  owner[:],
+		ProposalId:    proposalID,
+		IsAddApproval: approve,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_ProposalApproveContract, c, 0)
+}
+
+func (b *TronBackend) BuildProposalDeleteTransaction(owner tcommon.Address, proposalID int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.ProposalDeleteContract{
+		OwnerAddress: owner[:],
+		ProposalId:   proposalID,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
+}
+
+func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	ids := rawdb.ReadProposalIndex(b.chain.db)
+	var result []*tronapi.ProposalInfo
+	for _, id := range ids {
+		p := rawdb.ReadProposal(b.chain.db, id)
+		if p == nil {
+			continue
+		}
+		params := make(map[string]int64, len(p.Parameters))
+		for k, v := range p.Parameters {
+			params[fmt.Sprintf("%d", k)] = v
+		}
+		approvals := make([]string, len(p.Approvals))
+		for i, a := range p.Approvals {
+			approvals[i] = hex.EncodeToString(a[:])
+		}
+		stateStr := "PENDING"
+		switch p.State {
+		case rawdb.ProposalStateApproved:
+			stateStr = "APPROVED"
+		case rawdb.ProposalStateCanceled:
+			stateStr = "CANCELED"
+		}
+		result = append(result, &tronapi.ProposalInfo{
+			ProposalID:      p.ID,
+			ProposerAddress: hex.EncodeToString(p.Proposer[:]),
+			Parameters:      params,
+			ExpirationTime:  p.ExpirationTime,
+			CreateTime:      p.CreateTime,
+			Approvals:       approvals,
+			State:           stateStr,
+		})
+	}
+	return result, nil
+}

@@ -133,6 +133,22 @@ func (m *mockBackend) NextMaintenanceTime() int64 {
 	return 1700000000000
 }
 
+func (m *mockBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) ListProposals() ([]*ProposalInfo, error) {
+	return nil, nil
+}
+
 func TestGetNowBlock(t *testing.T) {
 	api := NewAPI(&mockBackend{})
 	mux := http.NewServeMux()

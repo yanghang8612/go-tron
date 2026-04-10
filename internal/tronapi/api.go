@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -53,6 +54,12 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getchainparameters", api.getChainParameters)
 	mux.HandleFunc("/wallet/listwitnesses", api.listWitnesses)
 	mux.HandleFunc("/wallet/getnextmaintenancetime", api.getNextMaintenanceTime)
+
+	// Proposal APIs
+	mux.HandleFunc("/wallet/proposalcreate", api.proposalCreate)
+	mux.HandleFunc("/wallet/proposalapprove", api.proposalApprove)
+	mux.HandleFunc("/wallet/proposaldelete", api.proposalDelete)
+	mux.HandleFunc("/wallet/listproposals", api.listProposals)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -633,3 +640,90 @@ func (api *API) getNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (api *API) proposalCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress string           `json:"owner_address"`
+		Parameters   map[string]int64 `json:"parameters"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	// Convert string keys to int64
+	params := make(map[int64]int64, len(body.Parameters))
+	for k, v := range body.Parameters {
+		var key int64
+		fmt.Sscanf(k, "%d", &key)
+		params[key] = v
+	}
+	tx, err := api.backend.BuildProposalCreateTransaction(owner, params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
+
+func (api *API) proposalApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress  string `json:"owner_address"`
+		ProposalID    int64  `json:"proposal_id"`
+		IsAddApproval bool   `json:"is_add_approval"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	tx, err := api.backend.BuildProposalApproveTransaction(owner, body.ProposalID, body.IsAddApproval)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
+
+func (api *API) proposalDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress string `json:"owner_address"`
+		ProposalID   int64  `json:"proposal_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	tx, err := api.backend.BuildProposalDeleteTransaction(owner, body.ProposalID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
+
+func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	proposals, err := api.backend.ListProposals()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"proposals": proposals})
+}
