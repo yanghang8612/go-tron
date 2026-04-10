@@ -225,3 +225,21 @@ func TestDynamicProperties_AllowNewResourceModel(t *testing.T) {
 		t.Error("AllowNewResourceModel: expected false after setting back to 0")
 	}
 }
+
+func TestDynamicProperties_All(t *testing.T) {
+	dp := NewDynamicProperties()
+	dp.Set("energy_fee", 420)
+
+	all := dp.All()
+	if all["energy_fee"] != 420 {
+		t.Fatalf("energy_fee: got %d, want 420", all["energy_fee"])
+	}
+	// Verify it's a copy
+	all["energy_fee"] = 999
+	if dp.EnergyFee() != 420 {
+		t.Fatal("All() should return a copy, not a reference")
+	}
+	if _, ok := all["maintenance_time_interval"]; !ok {
+		t.Fatal("missing maintenance_time_interval in All()")
+	}
+}

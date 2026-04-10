@@ -189,3 +189,12 @@ func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
 }
+
+// All returns a read-only copy of all dynamic properties.
+func (dp *DynamicProperties) All() map[string]int64 {
+	result := make(map[string]int64, len(dp.props))
+	for k, v := range dp.props {
+		result[k] = v
+	}
+	return result
+}
