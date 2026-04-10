@@ -33,10 +33,11 @@ func TestBuildBlock_EmptyPool(t *testing.T) {
 	pool := txpool.New()
 	witnessAddr := testProcessorAddr(0xFF)
 
-	block, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
 	if err != nil {
 		t.Fatal(err)
 	}
+	block := result.Block
 
 	if block.Number() != 1 {
 		t.Fatalf("block number: want 1, got %d", block.Number())
@@ -78,13 +79,13 @@ func TestBuildBlock_WithTransactions(t *testing.T) {
 	pool.Add(tx)
 
 	witnessAddr := testProcessorAddr(0xFF)
-	block, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(block.Transactions()) != 1 {
-		t.Fatalf("expected 1 transaction, got %d", len(block.Transactions()))
+	if len(result.Block.Transactions()) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(result.Block.Transactions()))
 	}
 }
 
@@ -112,13 +113,16 @@ func TestBuildBlock_SkipsFailingTx(t *testing.T) {
 	pool.Add(tx2)
 
 	witnessAddr := testProcessorAddr(0xFF)
-	block, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(block.Transactions()) != 1 {
-		t.Fatalf("expected 1 transaction (skipped failing), got %d", len(block.Transactions()))
+	if len(result.Block.Transactions()) != 1 {
+		t.Fatalf("expected 1 transaction (skipped failing), got %d", len(result.Block.Transactions()))
+	}
+	if len(result.FailedTxIDs) != 1 {
+		t.Fatalf("expected 1 failed tx, got %d", len(result.FailedTxIDs))
 	}
 }
 

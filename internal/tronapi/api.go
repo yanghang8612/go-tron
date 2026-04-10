@@ -1,8 +1,9 @@
 package tronapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -37,7 +38,7 @@ func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no current block", http.StatusInternalServerError)
 		return
 	}
-	writeProtoJSON(w, block.Proto())
+	writeBlockJSON(w, block.Proto())
 }
 
 func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +61,7 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "block not found", http.StatusNotFound)
 		return
 	}
-	writeProtoJSON(w, block.Proto())
+	writeBlockJSON(w, block.Proto())
 }
 
 func (api *API) getAccount(w http.ResponseWriter, r *http.Request) {
@@ -80,10 +81,11 @@ func (api *API) getAccount(w http.ResponseWriter, r *http.Request) {
 	addr := common.BytesToAddress(common.FromHex(addrHex))
 	acc, err := api.backend.GetAccount(addr)
 	if err != nil || acc == nil {
-		http.Error(w, "account not found", http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
 		return
 	}
-	writeProtoJSON(w, acc.Proto())
+	writeTronJSON(w, acc.Proto())
 }
 
 func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {
@@ -91,23 +93,35 @@ func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	var pbTx corepb.Transaction
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body failed", http.StatusBadRequest)
 		return
 	}
+
+	var pbTx corepb.Transaction
 	if err := protojson.Unmarshal(body, &pbTx); err != nil {
 		http.Error(w, "invalid transaction JSON", http.StatusBadRequest)
 		return
 	}
+
+	// Compute txID from raw_data
+	var txID string
+	if pbTx.RawData != nil {
+		rawBytes, _ := proto.Marshal(pbTx.RawData)
+		h := sha256.Sum256(rawBytes)
+		txID = hex.EncodeToString(h[:])
+	}
+
 	tx := types.NewTransactionFromPB(&pbTx)
 	if err := api.backend.BroadcastTransaction(tx); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		data, _ := MarshalBroadcastResult(false, txID, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
 		return
 	}
-	resp := map[string]string{"txhash": fmt.Sprintf("%x", tx.Hash())}
-	data, _ := json.Marshal(resp)
+
+	data, _ := MarshalBroadcastResult(true, txID, "")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
@@ -127,9 +141,8 @@ func (api *API) getTxPoolCount(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func writeProtoJSON(w http.ResponseWriter, msg proto.Message) {
-	marshaler := protojson.MarshalOptions{UseProtoNames: true}
-	data, err := marshaler.Marshal(msg)
+func writeTronJSON(w http.ResponseWriter, msg proto.Message) {
+	data, err := marshalTronJSON(msg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -137,3 +150,14 @@ func writeProtoJSON(w http.ResponseWriter, msg proto.Message) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
+
+func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
+	data, err := MarshalBlock(msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+

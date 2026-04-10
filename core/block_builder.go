@@ -16,10 +16,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// BuildResult holds the output of BuildBlock.
+type BuildResult struct {
+	Block       *types.Block
+	FailedTxIDs []tcommon.Hash // transactions that failed validation and should be evicted
+}
+
 // BuildBlock assembles a new block from pending transactions.
 // Failing transactions are skipped rather than aborting the block.
 // The returned block is unsigned — call SignBlock separately.
-func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address, timestamp int64) (*types.Block, error) {
+func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address, timestamp int64) (*BuildResult, error) {
 	parent := bc.CurrentBlock()
 
 	// Open StateDB from parent's state root
@@ -48,11 +54,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction
+	var failedTxIDs []tcommon.Hash
 	blockNum := parent.Number() + 1
 
 	for _, tx := range pendingTxs {
 		_, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum)
 		if err != nil {
+			failedTxIDs = append(failedTxIDs, tx.Hash())
 			continue // skip failing transactions
 		}
 		appliedTxProtos = append(appliedTxProtos, tx.Proto())
@@ -92,7 +100,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		Transactions: appliedTxProtos,
 	})
 
-	return block, nil
+	return &BuildResult{Block: block, FailedTxIDs: failedTxIDs}, nil
 }
 
 // SignBlock signs the block with the witness private key.

@@ -111,9 +111,16 @@ func (p *Producer) tryProduceBlock() {
 }
 
 func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) error {
-	block, err := core.BuildBlock(p.chain, p.pool, witnessAddr, timestamp)
+	result, err := core.BuildBlock(p.chain, p.pool, witnessAddr, timestamp)
 	if err != nil {
 		return err
+	}
+	block := result.Block
+
+	// Evict transactions that failed validation
+	if len(result.FailedTxIDs) > 0 {
+		p.pool.RemoveBatch(result.FailedTxIDs)
+		log.Printf("Evicted %d invalid transactions from pool", len(result.FailedTxIDs))
 	}
 
 	if err := core.SignBlock(block, p.witnessKey); err != nil {

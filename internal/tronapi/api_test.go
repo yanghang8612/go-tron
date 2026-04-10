@@ -72,10 +72,14 @@ func TestGetNowBlock(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&result)
 	header := result["block_header"].(map[string]interface{})
 	raw := header["raw_data"].(map[string]interface{})
-	// protojson encodes int64 as string
-	numStr := raw["number"].(string)
-	if numStr != "100" {
-		t.Fatalf("expected block 100, got %v", numStr)
+	// tronapi encodes int64 as number (matching java-tron)
+	numVal := raw["number"].(float64)
+	if numVal != 100 {
+		t.Fatalf("expected block 100, got %v", numVal)
+	}
+	// Check blockID is present
+	if _, ok := result["blockID"]; !ok {
+		t.Fatal("expected blockID field in response")
 	}
 }
 
