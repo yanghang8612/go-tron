@@ -44,12 +44,14 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	return result.Fee, nil
 }
 
-// ProcessBlock executes all transactions in a block and returns the new state root.
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block) (tcommon.Hash, error) {
+// ProcessBlock executes all transactions in a block and pays the block reward.
+// It does NOT commit state — the caller (InsertBlock/BuildBlock) is responsible
+// for committing after any post-processing (e.g., maintenance).
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block) error {
 	for i, tx := range block.Transactions() {
 		_, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number())
 		if err != nil {
-			return tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
+			return fmt.Errorf("tx %d: %w", i, err)
 		}
 	}
 
@@ -62,11 +64,5 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 	}
 
-	// Commit state to get new root
-	root, err := statedb.Commit()
-	if err != nil {
-		return tcommon.Hash{}, fmt.Errorf("commit state: %w", err)
-	}
-
-	return root, nil
+	return nil
 }

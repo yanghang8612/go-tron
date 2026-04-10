@@ -186,10 +186,23 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		}
 	}
 
-	// Process block (execute transactions, pay reward)
-	newRoot, err := ProcessBlock(statedb, dynProps, block)
-	if err != nil {
+	// Process block (execute transactions, pay reward — does not commit)
+	if err := ProcessBlock(statedb, dynProps, block); err != nil {
 		return fmt.Errorf("process block: %w", err)
+	}
+
+	// Run maintenance if at boundary (before commit so allowances are included)
+	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
+		allWitnesses := bc.gatherWitnessVotes(statedb)
+		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
+		newActive := dpos.SelectActiveWitnesses(allWitnesses)
+		bc.SetActiveWitnesses(newActive)
+	}
+
+	// Commit state (includes both tx execution and maintenance changes)
+	newRoot, err := statedb.Commit()
+	if err != nil {
+		return fmt.Errorf("commit state: %w", err)
 	}
 
 	// Verify state root if the block has one set
@@ -203,15 +216,6 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
 	dynProps.Flush(bc.db)
-
-	// Check maintenance
-	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
-		allWitnesses := bc.gatherWitnessVotes(statedb)
-		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
-		newActive := dpos.SelectActiveWitnesses(allWitnesses)
-		bc.SetActiveWitnesses(newActive)
-		dynProps.Flush(bc.db)
-	}
 
 	// Persist block
 	rawdb.WriteBlock(bc.db, block)
@@ -259,6 +263,7 @@ func (a *chainHeaderAdapter) GetWitness(addr tcommon.Address) *types.Witness {
 
 func (a *chainHeaderAdapter) PutWitness(w *types.Witness) {
 	a.statedb.PutWitness(w.Address(), w.URL())
+	a.statedb.AddWitnessVoteCount(w.Address(), w.VoteCount())
 }
 
 func (a *chainHeaderAdapter) AddAllowance(addr tcommon.Address, amount int64) {

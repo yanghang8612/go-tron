@@ -114,12 +114,9 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	root, err := ProcessBlock(statedb, dynProps, block)
+	err = ProcessBlock(statedb, dynProps, block)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if root == (tcommon.Hash{}) {
-		t.Fatal("expected non-empty state root")
 	}
 
 	// Verify: sender lost 3M, recipients got 1M and 2M
@@ -160,7 +157,7 @@ func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx.Proto()},
 	})
 
-	_, err := ProcessBlock(statedb, dynProps, block)
+	err := ProcessBlock(statedb, dynProps, block)
 	if err == nil {
 		t.Fatal("expected error for invalid transaction")
 	}
