@@ -16,6 +16,9 @@ func GetScheduledWitness(slot int64, headTimestamp, genesisTime int64, activeWit
 		return common.Address{}
 	}
 	currentAbsSlot := AbsoluteSlot(headTimestamp, genesisTime) + slot
+	if isMaintenance {
+		currentAbsSlot += maintenanceSkipSlots
+	}
 	idx := WitnessIndex(currentAbsSlot, len(activeWitnesses))
 	return activeWitnesses[idx]
 }

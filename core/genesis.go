@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -49,7 +50,9 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 		return nil, tcommon.Hash{}, err
 	}
 
-	rawdb.WriteBlock(db, block)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("write genesis block: %w", err)
+	}
 	rawdb.WriteHeadBlockHash(db, block.Hash())
 
 	// Write dynamic properties

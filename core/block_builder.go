@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -29,6 +31,18 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	dynProps := state.LoadDynamicProperties(bc.db)
 
+	// Load witnesses into statedb for maintenance access
+	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
+	for _, addr := range witnessAddrs {
+		if statedb.GetWitness(addr) == nil {
+			w := rawdb.ReadWitness(bc.db, addr)
+			if w != nil {
+				statedb.PutWitness(addr, w.URL())
+				statedb.AddWitnessVoteCount(addr, w.VoteCount())
+			}
+		}
+	}
+
 	// Pull all pending transactions
 	pendingTxs := pool.Pending()
 
@@ -48,6 +62,14 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	reward := dynProps.WitnessPayPerBlock()
 	if reward > 0 {
 		statedb.AddAllowance(witnessAddr, reward)
+	}
+
+	// Run maintenance if at boundary (before commit so allowances are included)
+	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
+		allWitnesses := bc.gatherWitnessVotes(statedb)
+		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, timestamp, allWitnesses)
+		newActive := dpos.SelectActiveWitnesses(allWitnesses)
+		bc.SetActiveWitnesses(newActive)
 	}
 
 	// Commit state to get the root

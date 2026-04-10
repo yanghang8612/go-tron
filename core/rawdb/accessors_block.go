@@ -8,16 +8,17 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
-func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) {
+func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	data, err := block.Marshal()
 	if err != nil {
-		return
+		return err
 	}
-	db.Put(blockKey(block.Number()), data)
-
+	if err := db.Put(blockKey(block.Number()), data); err != nil {
+		return err
+	}
 	num := make([]byte, 8)
 	binary.BigEndian.PutUint64(num, block.Number())
-	db.Put(blockHashKey(block.Hash().Bytes()), num)
+	return db.Put(blockHashKey(block.Hash().Bytes()), num)
 }
 
 func ReadBlock(db ethdb.KeyValueReader, number uint64) *types.Block {

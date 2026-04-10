@@ -72,13 +72,8 @@ func (p *Producer) tryProduceBlock() {
 	genesisTime := p.chain.GenesisTimestamp()
 	interval := int64(params.BlockProducedInterval)
 
-	// Align to slot boundary
-	slotTimestamp := (now / interval) * interval
-	offset := genesisTime % interval
-	slotTimestamp = slotTimestamp + offset
-	if slotTimestamp > now {
-		slotTimestamp -= interval
-	}
+	// Align to slot boundary relative to genesis
+	slotTimestamp := ((now - genesisTime) / interval) * interval + genesisTime
 
 	// Check duplicate production
 	currentSlot := dpos.AbsoluteSlot(slotTimestamp, genesisTime)

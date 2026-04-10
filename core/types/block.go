@@ -26,7 +26,8 @@ func (id BlockID) Number() uint64 {
 type Block struct {
 	pb       *corepb.Block
 	hash     common.Hash
-	hashOnce sync.Once
+	hashDone bool
+	hashMu   sync.Mutex
 }
 
 func NewBlockFromPB(pb *corepb.Block) *Block {
@@ -94,16 +95,18 @@ func (b *Block) Transactions() []*Transaction {
 
 // Hash computes SHA-256 of serialized BlockHeader.RawData.
 func (b *Block) Hash() common.Hash {
-	b.hashOnce.Do(func() {
-		if b.pb.BlockHeader == nil || b.pb.BlockHeader.RawData == nil {
-			return
+	b.hashMu.Lock()
+	defer b.hashMu.Unlock()
+	if !b.hashDone {
+		if b.pb.BlockHeader != nil && b.pb.BlockHeader.RawData != nil {
+			data, err := proto.Marshal(b.pb.BlockHeader.RawData)
+			if err != nil {
+				panic(fmt.Sprintf("block header marshal failed: %v", err))
+			}
+			b.hash = sha256.Sum256(data)
 		}
-		data, err := proto.Marshal(b.pb.BlockHeader.RawData)
-		if err != nil {
-			panic(fmt.Sprintf("block header marshal failed: %v", err))
-		}
-		b.hash = sha256.Sum256(data)
-	})
+		b.hashDone = true
+	}
 	return b.hash
 }
 
@@ -136,7 +139,9 @@ func (b *Block) SetAccountStateRoot(root common.Hash) {
 
 // ResetHash clears the cached hash so it will be recomputed on next Hash() call.
 func (b *Block) ResetHash() {
-	b.hashOnce = sync.Once{}
+	b.hashMu.Lock()
+	b.hashDone = false
+	b.hashMu.Unlock()
 }
 
 func (b *Block) Marshal() ([]byte, error) {

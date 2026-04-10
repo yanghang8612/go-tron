@@ -49,6 +49,9 @@ func (n *Node) Stop() {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
+	if !n.running {
+		return
+	}
 	for i := len(n.lifecycles) - 1; i >= 0; i-- {
 		n.lifecycles[i].Stop()
 	}

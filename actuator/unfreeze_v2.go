@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/params"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -54,5 +55,20 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.ReduceFreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance)
 	expireTime := ctx.BlockTime + 14*86_400_000
 	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
+
+	// Invalidate votes if remaining Tron Power < total votes cast
+	newTP := ctx.State.TotalFrozenV2(ownerAddr) / int64(params.TRXPrecision)
+	votes := ctx.State.GetVotes(ownerAddr)
+	var totalVotes int64
+	for _, v := range votes {
+		totalVotes += v.VoteCount
+	}
+	if totalVotes > newTP {
+		for _, v := range votes {
+			ctx.State.AddWitnessVoteCount(common.BytesToAddress(v.VoteAddress), -v.VoteCount)
+		}
+		ctx.State.ClearVotes(ownerAddr)
+	}
+
 	return &Result{Fee: 0}, nil
 }

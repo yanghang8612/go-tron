@@ -70,7 +70,7 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 		return obj
 	}
 	// Journal a nil-prev entry so revert can delete this new account.
-	s.journal.append(journalEntry{
+	s.journal.append(accountChange{
 		address: addr,
 		prev:    nil,
 	})
@@ -127,8 +127,9 @@ func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 	return s.witnesses[addr]
 }
 
-// PutWitness stores a witness.
+// PutWitness stores a witness, journaling the previous state for revert.
 func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
+	s.journalWitness(addr)
 	s.witnesses[addr] = types.NewWitness(addr, url)
 }
 
@@ -155,7 +156,7 @@ func (s *StateDB) RevertToSnapshot(id int) {
 		return
 	}
 	journalLen := s.snapshots[id]
-	s.journal.revert(s.stateObjects, journalLen)
+	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
 	s.snapshots = s.snapshots[:id]
 }
 
@@ -173,6 +174,15 @@ func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.Account
 	obj.account.SetAccountType(accountType)
 	obj.markDirty()
 	return obj.account
+}
+
+// IsWitness returns whether the account is marked as a witness.
+func (s *StateDB) IsWitness(addr tcommon.Address) bool {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return false
+	}
+	return obj.account.IsWitness()
 }
 
 // SetIsWitness sets the witness flag on an account.
@@ -295,6 +305,7 @@ func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
 	if w == nil {
 		return
 	}
+	s.journalWitness(addr)
 	w.SetVoteCount(w.VoteCount() + delta)
 }
 
@@ -429,6 +440,35 @@ func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
 	obj.markDirty()
 }
 
+// GetEnergyUsage returns the energy usage for an account.
+func (s *StateDB) GetEnergyUsage(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.EnergyUsage()
+}
+
+// SetEnergyUsage sets the energy usage for an account.
+func (s *StateDB) SetEnergyUsage(addr tcommon.Address, usage int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetEnergyUsage(usage)
+	obj.markDirty()
+}
+
+// GetLatestConsumeTimeForEnergy returns the latest energy consume time for an account.
+func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestConsumeTimeForEnergy()
+}
+
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
 	for addr, obj := range s.stateObjects {
@@ -504,7 +544,20 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	if obj != nil && obj.account != nil {
 		prev, _ = obj.account.Marshal()
 	}
-	s.journal.append(journalEntry{
+	s.journal.append(accountChange{
+		address: addr,
+		prev:    prev,
+	})
+}
+
+// journalWitness records the current witness state for revert.
+func (s *StateDB) journalWitness(addr tcommon.Address) {
+	existing := s.witnesses[addr]
+	var prev *types.Witness
+	if existing != nil {
+		prev = existing.Copy()
+	}
+	s.journal.append(witnessChange{
 		address: addr,
 		prev:    prev,
 	})

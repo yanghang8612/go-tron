@@ -35,6 +35,11 @@ func (w *Witness) SetTotalMissed(v int64)     { w.pb.TotalMissed = v }
 func (w *Witness) IsJobs() bool               { return w.pb.IsJobs }
 func (w *Witness) SetIsJobs(v bool)           { w.pb.IsJobs = v }
 
+// Copy returns a deep copy of the witness.
+func (w *Witness) Copy() *Witness {
+	return NewWitnessFromPB(proto.Clone(w.pb).(*corepb.Witness))
+}
+
 func (w *Witness) Marshal() ([]byte, error) {
 	return proto.Marshal(w.pb)
 }

@@ -17,36 +17,33 @@ func NewResourceProcessor(statedb *state.StateDB) *ResourceProcessor {
 }
 
 // RecoverBandwidth applies sliding window recovery to frozen bandwidth usage.
-// The LatestConsumeTime is not modified here; it is updated only when bandwidth is consumed.
 func (r *ResourceProcessor) RecoverBandwidth(addr tcommon.Address, now int64) {
-	acc := r.statedb.GetAccount(addr)
-	if acc == nil {
-		return
+	oldUsage := r.statedb.GetNetUsage(addr)
+	lastTime := r.statedb.GetLatestConsumeTime(addr)
+	newUsage := recoverUsage(oldUsage, lastTime, now)
+	if newUsage != oldUsage {
+		r.statedb.SetNetUsage(addr, newUsage)
 	}
-	newUsage := recoverUsage(acc.NetUsage(), acc.LatestConsumeTime(), now)
-	acc.SetNetUsage(newUsage)
 }
 
 // RecoverFreeBandwidth applies sliding window recovery to free bandwidth usage.
-// The LatestConsumeFreeTime is not modified here; it is updated only when bandwidth is consumed.
 func (r *ResourceProcessor) RecoverFreeBandwidth(addr tcommon.Address, now int64) {
-	acc := r.statedb.GetAccount(addr)
-	if acc == nil {
-		return
+	oldUsage := r.statedb.GetFreeNetUsage(addr)
+	lastTime := r.statedb.GetLatestConsumeFreeTime(addr)
+	newUsage := recoverUsage(oldUsage, lastTime, now)
+	if newUsage != oldUsage {
+		r.statedb.SetFreeNetUsage(addr, newUsage)
 	}
-	newUsage := recoverUsage(acc.FreeNetUsage(), acc.LatestConsumeFreeTime(), now)
-	acc.SetFreeNetUsage(newUsage)
 }
 
 // RecoverEnergy applies sliding window recovery to energy usage.
-// The LatestConsumeTimeForEnergy is not modified here; it is updated only when energy is consumed.
 func (r *ResourceProcessor) RecoverEnergy(addr tcommon.Address, now int64) {
-	acc := r.statedb.GetAccount(addr)
-	if acc == nil {
-		return
+	oldUsage := r.statedb.GetEnergyUsage(addr)
+	lastTime := r.statedb.GetLatestConsumeTimeForEnergy(addr)
+	newUsage := recoverUsage(oldUsage, lastTime, now)
+	if newUsage != oldUsage {
+		r.statedb.SetEnergyUsage(addr, newUsage)
 	}
-	newUsage := recoverUsage(acc.EnergyUsage(), acc.LatestConsumeTimeForEnergy(), now)
-	acc.SetEnergyUsage(newUsage)
 }
 
 // recoverUsage computes new usage after sliding window recovery.

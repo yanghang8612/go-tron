@@ -139,7 +139,9 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 		return ErrInvalidParent
 	}
 
-	rawdb.WriteBlock(bc.db, block)
+	if err := rawdb.WriteBlock(bc.db, block); err != nil {
+		return fmt.Errorf("write block: %w", err)
+	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 
 	bc.currentBlock.Store(block)
@@ -218,7 +220,9 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	dynProps.Flush(bc.db)
 
 	// Persist block
-	rawdb.WriteBlock(bc.db, block)
+	if err := rawdb.WriteBlock(bc.db, block); err != nil {
+		return fmt.Errorf("write block: %w", err)
+	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 	bc.currentBlock.Store(block)
 

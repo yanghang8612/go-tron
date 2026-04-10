@@ -3,6 +3,7 @@ package tronapi
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -27,7 +28,11 @@ func NewServer(backend Backend, port int) *Server {
 }
 
 func (s *Server) Start() error {
-	go s.httpServer.ListenAndServe()
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("http listen: %w", err)
+	}
+	go s.httpServer.Serve(ln)
 	return nil
 }
 

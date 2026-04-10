@@ -32,6 +32,9 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
+	if !ctx.State.IsWitness(ownerAddr) {
+		return errors.New("account is not a witness")
+	}
 	if ctx.State.GetAllowance(ownerAddr) <= 0 {
 		return errors.New("no allowance to withdraw")
 	}
