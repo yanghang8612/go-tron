@@ -289,3 +289,54 @@ func TestStateDBWitnessVoteCount(t *testing.T) {
 		t.Fatalf("after sub: got %d, want 70", w.VoteCount())
 	}
 }
+
+func TestStateDB_BandwidthMethods(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := testAddr(0x01)
+	statedb.GetOrCreateAccount(addr)
+
+	// NetUsage
+	if statedb.GetNetUsage(addr) != 0 {
+		t.Fatal("initial NetUsage should be 0")
+	}
+	statedb.SetNetUsage(addr, 500)
+	if statedb.GetNetUsage(addr) != 500 {
+		t.Fatalf("NetUsage: want 500, got %d", statedb.GetNetUsage(addr))
+	}
+
+	// LatestConsumeTime
+	statedb.SetLatestConsumeTime(addr, 3000)
+	if statedb.GetLatestConsumeTime(addr) != 3000 {
+		t.Fatalf("LatestConsumeTime: want 3000, got %d", statedb.GetLatestConsumeTime(addr))
+	}
+
+	// FreeNetUsage
+	statedb.SetFreeNetUsage(addr, 200)
+	if statedb.GetFreeNetUsage(addr) != 200 {
+		t.Fatalf("FreeNetUsage: want 200, got %d", statedb.GetFreeNetUsage(addr))
+	}
+
+	// LatestConsumeFreeTime
+	statedb.SetLatestConsumeFreeTime(addr, 6000)
+	if statedb.GetLatestConsumeFreeTime(addr) != 6000 {
+		t.Fatalf("LatestConsumeFreeTime: want 6000, got %d", statedb.GetLatestConsumeFreeTime(addr))
+	}
+}
+
+func TestStateDB_BandwidthRevert(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := testAddr(0x01)
+	statedb.GetOrCreateAccount(addr)
+	statedb.SetNetUsage(addr, 100)
+
+	snap := statedb.Snapshot()
+	statedb.SetNetUsage(addr, 999)
+	if statedb.GetNetUsage(addr) != 999 {
+		t.Fatalf("want 999 after set, got %d", statedb.GetNetUsage(addr))
+	}
+
+	statedb.RevertToSnapshot(snap)
+	if statedb.GetNetUsage(addr) != 100 {
+		t.Fatalf("want 100 after revert, got %d", statedb.GetNetUsage(addr))
+	}
+}

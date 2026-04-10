@@ -349,6 +349,86 @@ func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
 	obj.markDirty()
 }
 
+// GetNetUsage returns the net (bandwidth) usage for an account.
+func (s *StateDB) GetNetUsage(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.NetUsage()
+}
+
+// SetNetUsage sets the net (bandwidth) usage for an account.
+func (s *StateDB) SetNetUsage(addr tcommon.Address, usage int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetNetUsage(usage)
+	obj.markDirty()
+}
+
+// GetLatestConsumeTime returns the latest consume time for an account.
+func (s *StateDB) GetLatestConsumeTime(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestConsumeTime()
+}
+
+// SetLatestConsumeTime sets the latest consume time for an account.
+func (s *StateDB) SetLatestConsumeTime(addr tcommon.Address, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestConsumeTime(t)
+	obj.markDirty()
+}
+
+// GetFreeNetUsage returns the free net (bandwidth) usage for an account.
+func (s *StateDB) GetFreeNetUsage(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.FreeNetUsage()
+}
+
+// SetFreeNetUsage sets the free net (bandwidth) usage for an account.
+func (s *StateDB) SetFreeNetUsage(addr tcommon.Address, usage int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetFreeNetUsage(usage)
+	obj.markDirty()
+}
+
+// GetLatestConsumeFreeTime returns the latest consume free time for an account.
+func (s *StateDB) GetLatestConsumeFreeTime(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestConsumeFreeTime()
+}
+
+// SetLatestConsumeFreeTime sets the latest consume free time for an account.
+func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestConsumeFreeTime(t)
+	obj.markDirty()
+}
+
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
 	for addr, obj := range s.stateObjects {
