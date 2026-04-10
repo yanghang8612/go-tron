@@ -26,6 +26,10 @@ var (
 	witnessIndexKey    = []byte("WitnessIndex")
 
 	proposalIndexKey = []byte("propi")
+
+	delegationPrefix      = []byte("dr-")
+	delegationIndexPrefix = []byte("dri-")
+	brokeragePrefix       = []byte("wb-")
 )
 
 func blockKey(number uint64) []byte {
@@ -71,4 +75,20 @@ func proposalKey(id int64) []byte {
 	copy(k, proposalPrefix)
 	binary.BigEndian.PutUint64(k[len(proposalPrefix):], uint64(id))
 	return k
+}
+
+func delegationKey(from, to []byte) []byte {
+	k := make([]byte, len(delegationPrefix)+len(from)+len(to))
+	copy(k, delegationPrefix)
+	copy(k[len(delegationPrefix):], from)
+	copy(k[len(delegationPrefix)+len(from):], to)
+	return k
+}
+
+func delegationIndexKey(from []byte) []byte {
+	return append(append([]byte{}, delegationIndexPrefix...), from...)
+}
+
+func brokerageKey(addr []byte) []byte {
+	return append(append([]byte{}, brokeragePrefix...), addr...)
 }
