@@ -49,13 +49,22 @@ func (p *Peer) Start() {
 	go p.writeLoop()
 }
 
-// Stop gracefully shuts down the peer.
+// Stop gracefully shuts down the peer and waits for goroutines to exit.
 func (p *Peer) Stop() {
 	if p.closed.CompareAndSwap(false, true) {
 		close(p.quit)
 		p.conn.Close()
 	}
 	p.wg.Wait()
+}
+
+// Close closes the connection without waiting for goroutines.
+// Safe to call from within readLoop (unlike Stop which would deadlock).
+func (p *Peer) Close() {
+	if p.closed.CompareAndSwap(false, true) {
+		close(p.quit)
+		p.conn.Close()
+	}
 }
 
 // Send queues a message for sending. Non-blocking; drops if buffer full.
