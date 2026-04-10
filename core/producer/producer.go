@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -26,6 +27,10 @@ type Producer struct {
 	loggedWitnessErr bool
 	quit             chan struct{}
 	wg               sync.WaitGroup
+
+	// BlockCallback is called after a new block is produced and inserted.
+	// Used by the P2P layer to broadcast the block to peers.
+	BlockCallback func(block *types.Block)
 }
 
 func New(chain *core.BlockChain, pool *txpool.TxPool, engine *dpos.DPoS, witnessKey *ecdsa.PrivateKey) *Producer {
@@ -141,5 +146,9 @@ func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) er
 
 	log.Printf("Produced block #%d at timestamp %d (%d txs)",
 		block.Number(), block.Timestamp(), len(block.Transactions()))
+
+	if p.BlockCallback != nil {
+		p.BlockCallback(block)
+	}
 	return nil
 }
