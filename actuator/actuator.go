@@ -64,14 +64,20 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &VMActuator{}, nil
 	case corepb.Transaction_Contract_WitnessUpdateContract:
 		return &WitnessUpdateActuator{}, nil
+	case corepb.Transaction_Contract_UpdateSettingContract:
+		return &UpdateSettingActuator{}, nil
 	case corepb.Transaction_Contract_AccountUpdateContract:
 		return &AccountUpdateActuator{}, nil
 	case corepb.Transaction_Contract_SetAccountIdContract:
 		return &SetAccountIdActuator{}, nil
 	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
 		return &AccountPermissionUpdateActuator{}, nil
+	case corepb.Transaction_Contract_UpdateEnergyLimitContract:
+		return &UpdateEnergyLimitActuator{}, nil
 	case corepb.Transaction_Contract_UpdateBrokerageContract:
 		return &UpdateBrokerageActuator{}, nil
+	case corepb.Transaction_Contract_ClearABIContract:
+		return &ClearABIActuator{}, nil
 	case corepb.Transaction_Contract_ProposalCreateContract:
 		return &ProposalCreateActuator{}, nil
 	case corepb.Transaction_Contract_ProposalApproveContract:
