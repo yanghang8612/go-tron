@@ -53,5 +53,5 @@ func (a *FreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ctx.State.AddFreezeV2(ownerAddr, fc.Resource, fc.FrozenBalance)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

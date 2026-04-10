@@ -6,6 +6,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"github.com/tronprotocol/go-tron/vm"
 )
 
 type Context struct {
@@ -17,7 +18,16 @@ type Context struct {
 }
 
 type Result struct {
-	Fee int64
+	Fee               int64
+	EnergyUsed        int64
+	EnergyFee         int64
+	OriginEnergyUsage int64
+	NetUsage          int64
+	NetFee            int64
+	ContractResult    []byte
+	ContractAddress   []byte
+	Logs              []vm.Log
+	ContractRet       int32
 }
 
 type Actuator interface {

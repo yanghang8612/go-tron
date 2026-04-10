@@ -47,5 +47,5 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

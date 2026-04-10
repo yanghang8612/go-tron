@@ -202,6 +202,95 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	t.Logf("Trigger fee: %d sun", result.Fee)
 }
 
+func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+
+	runtime := []byte{
+		0x60, 0x42, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3,
+	}
+	runtimeLen := byte(len(runtime))
+	initCode := []byte{
+		0x60, runtimeLen, 0x80, 0x60, 0x00, 0x60, 0x00, 0x39,
+		0x60, runtimeLen, 0x60, 0x00, 0xf3,
+	}
+	initCode[4] = byte(len(initCode))
+	bytecode := append(initCode, runtime...)
+
+	csc := &contractpb.CreateSmartContract{
+		OwnerAddress: owner[:],
+		NewContract: &contractpb.SmartContract{
+			OriginAddress: owner[:],
+			Bytecode:      bytecode,
+			Name:          "TestContract",
+		},
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_CreateSmartContract, csc, 10_000_000)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+
+	act := &VMActuator{}
+	result, err := act.Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.EnergyUsed <= 0 {
+		t.Fatal("expected non-zero EnergyUsed")
+	}
+	if result.EnergyFee <= 0 {
+		t.Fatal("expected non-zero EnergyFee")
+	}
+	if result.ContractRet != 1 {
+		t.Fatalf("expected ContractRet=1 (SUCCESS), got %d", result.ContractRet)
+	}
+	if len(result.ContractAddress) == 0 {
+		t.Fatal("expected non-empty ContractAddress")
+	}
+	t.Logf("EnergyUsed=%d, EnergyFee=%d, ContractRet=%d, ContractAddr=%x",
+		result.EnergyUsed, result.EnergyFee, result.ContractRet, result.ContractAddress)
+}
+
+func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	// Code: LOG0(0,0) then PUSH1 0x42 PUSH1 0 MSTORE PUSH1 32 PUSH1 0 RETURN
+	code := []byte{
+		0x60, 0x00, 0x60, 0x00, 0xA0, // LOG0(0,0)
+		0x60, 0x42, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3,
+	}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetCode(contractAddr, code)
+
+	act := &VMActuator{}
+	result, err := act.Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.EnergyUsed <= 0 {
+		t.Fatal("expected non-zero EnergyUsed")
+	}
+	if result.ContractRet != 1 {
+		t.Fatalf("expected ContractRet=1 (SUCCESS), got %d", result.ContractRet)
+	}
+	if len(result.Logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(result.Logs))
+	}
+	if len(result.ContractResult) != 32 {
+		t.Fatalf("expected 32 bytes contract result, got %d", len(result.ContractResult))
+	}
+	t.Logf("EnergyUsed=%d, Logs=%d, ContractResult=%x",
+		result.EnergyUsed, len(result.Logs), result.ContractResult)
+}
+
 func TestCreateActuatorVMTypes(t *testing.T) {
 	// Verify that CreateActuator returns VMActuator for types 30 and 31
 	csc := &contractpb.CreateSmartContract{}

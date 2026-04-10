@@ -52,5 +52,5 @@ func (a *WithdrawExpireUnfreezeActuator) Execute(ctx *Context) (*Result, error) 
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
 	withdrawn := ctx.State.RemoveExpiredUnfreezeV2(ownerAddr, ctx.BlockTime)
 	ctx.State.AddBalance(ownerAddr, withdrawn)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

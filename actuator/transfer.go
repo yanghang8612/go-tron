@@ -59,5 +59,5 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.CreateAccount(toAddr, corepb.AccountType_Normal)
 	}
 	ctx.State.AddBalance(toAddr, tc.Amount)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

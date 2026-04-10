@@ -73,6 +73,29 @@ func (a *VMActuator) Execute(ctx *Context) (*Result, error) {
 	}
 }
 
+func contractRetFromError(err error) int32 {
+	switch err {
+	case vm.ErrExecutionReverted:
+		return 2 // REVERT
+	case vm.ErrInvalidJump:
+		return 3 // BAD_JUMP_DESTINATION
+	case vm.ErrOutOfEnergy:
+		return 10 // OUT_OF_ENERGY
+	case vm.ErrStackUnderflow:
+		return 6 // STACK_TOO_SMALL
+	case vm.ErrStackOverflow:
+		return 7 // STACK_TOO_LARGE
+	case vm.ErrWriteProtection:
+		return 8 // ILLEGAL_OPERATION
+	case vm.ErrDepthExceeded:
+		return 9 // STACK_OVERFLOW
+	case vm.ErrContractCodeTooLarge:
+		return 15 // INVALID_CODE
+	default:
+		return 13 // UNKNOWN
+	}
+}
+
 func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	csc, err := a.getCreateContract(ctx)
 	if err != nil {
@@ -83,10 +106,9 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	callValue := csc.NewContract.CallValue
 	bytecode := csc.NewContract.Bytecode
 
-	// Convert fee_limit (sun) to energy
 	energyFee := ctx.DynProps.EnergyFee()
 	if energyFee <= 0 {
-		energyFee = 100 // default
+		energyFee = 100
 	}
 	energyLimit := uint64(ctx.Tx.FeeLimit()) / uint64(energyFee)
 
@@ -97,18 +119,27 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	energyUsed := energyLimit - energyLeft
 	fee := int64(energyUsed) * energyFee
 
-	if vmErr != nil {
-		// On VM error, state was already reverted inside evm.Create
-		return &Result{Fee: fee}, nil
+	result := &Result{
+		Fee:            fee,
+		EnergyUsed:     int64(energyUsed),
+		EnergyFee:      fee,
+		ContractResult: ret,
+		Logs:           evm.Logs,
 	}
 
-	// Store contract metadata
+	if vmErr != nil {
+		result.ContractRet = contractRetFromError(vmErr)
+		return result, nil
+	}
+
+	result.ContractRet = 1 // SUCCESS
+	result.ContractAddress = contractAddr[:]
+
 	sc := csc.NewContract
 	sc.ContractAddress = contractAddr[:]
 	ctx.State.SetContract(contractAddr, sc)
 
-	_ = ret
-	return &Result{Fee: fee}, nil
+	return result, nil
 }
 
 func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
@@ -130,16 +161,26 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	evm := vm.NewEVM(ctx.State, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1)
 
-	_, energyLeft, vmErr := evm.Call(owner, contractAddr, data, energyLimit, callValue)
+	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, energyLimit, callValue)
 
 	energyUsed := energyLimit - energyLeft
 	fee := int64(energyUsed) * energyFee
 
-	if vmErr != nil {
-		return &Result{Fee: fee}, nil
+	result := &Result{
+		Fee:            fee,
+		EnergyUsed:     int64(energyUsed),
+		EnergyFee:      fee,
+		ContractResult: ret,
+		Logs:           evm.Logs,
 	}
 
-	return &Result{Fee: fee}, nil
+	if vmErr != nil {
+		result.ContractRet = contractRetFromError(vmErr)
+		return result, nil
+	}
+
+	result.ContractRet = 1 // SUCCESS
+	return result, nil
 }
 
 func (a *VMActuator) getCreateContract(ctx *Context) (*contractpb.CreateSmartContract, error) {

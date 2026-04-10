@@ -92,5 +92,5 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.AddWitnessVoteCount(targetAddr, v.VoteCount)
 	}
 
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

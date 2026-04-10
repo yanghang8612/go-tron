@@ -55,5 +55,5 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.AddBalance(ownerAddr, allowance)
 	ctx.State.SetAllowance(ownerAddr, 0)
 	ctx.State.SetLatestWithdrawTime(ownerAddr, ctx.BlockTime)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }

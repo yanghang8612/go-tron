@@ -44,5 +44,5 @@ func (a *CreateAccountActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	newAddr := common.BytesToAddress(ac.AccountAddress)
 	ctx.State.CreateAccount(newAddr, ac.Type)
-	return &Result{Fee: 0}, nil
+	return &Result{Fee: 0, ContractRet: 1}, nil
 }
