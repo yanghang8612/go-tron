@@ -6,10 +6,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/urfave/cli/v2"
@@ -40,18 +43,28 @@ var (
 		Name:  "testnet",
 		Usage: "Use Nile testnet",
 	}
+	witnessFlag = &cli.BoolFlag{
+		Name:  "witness",
+		Usage: "Enable block production",
+	}
+	witnessKeyFlag = &cli.StringFlag{
+		Name:  "witness.key",
+		Usage: "Witness private key (hex-encoded)",
+	}
 )
 
 var app = &cli.App{
 	Name:    "gtron",
 	Usage:   "TRON blockchain node (Go implementation)",
-	Version: "0.2.0-dev",
+	Version: "0.3.0-dev",
 	Flags: []cli.Flag{
 		dataDirFlag,
 		p2pPortFlag,
 		httpPortFlag,
 		jsonrpcPortFlag,
 		testnetFlag,
+		witnessFlag,
+		witnessKeyFlag,
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
@@ -117,6 +130,9 @@ func gtron(ctx *cli.Context) error {
 	// Create transaction pool
 	pool := txpool.New()
 
+	// Create DPoS engine
+	engine := dpos.New(bc)
+
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
@@ -128,6 +144,19 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	stack.RegisterLifecycle(apiServer)
+
+	// If witness mode, create producer
+	if ctx.Bool("witness") {
+		key, err := parseWitnessKey(ctx)
+		if err != nil {
+			db.Close()
+			return fmt.Errorf("witness key: %w", err)
+		}
+		witnessAddr := crypto.PubkeyToAddress(&key.PublicKey)
+		fmt.Printf("Witness mode enabled (address=%x)\n", witnessAddr[:6])
+		prod := producer.New(bc, pool, engine, key)
+		stack.RegisterLifecycle(prod)
+	}
 
 	// Start
 	if err := stack.Start(); err != nil {

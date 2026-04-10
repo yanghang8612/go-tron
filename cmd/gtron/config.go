@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
@@ -32,4 +36,16 @@ func makeGenesis(ctx *cli.Context) *params.Genesis {
 
 func chainDataDir(dataDir string) string {
 	return filepath.Join(dataDir, "gtron", "chaindata")
+}
+
+func parseWitnessKey(ctx *cli.Context) (*ecdsa.PrivateKey, error) {
+	hexKey := ctx.String("witness.key")
+	if hexKey == "" {
+		return nil, fmt.Errorf("--witness.key is required when --witness is set")
+	}
+	keyBytes, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hex key: %w", err)
+	}
+	return crypto.BytesToPrivateKey(keyBytes)
 }
