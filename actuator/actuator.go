@@ -58,6 +58,12 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &VMActuator{}, nil
 	case corepb.Transaction_Contract_TriggerSmartContract:
 		return &VMActuator{}, nil
+	case corepb.Transaction_Contract_WitnessUpdateContract:
+		return &WitnessUpdateActuator{}, nil
+	case corepb.Transaction_Contract_AccountUpdateContract:
+		return &AccountUpdateActuator{}, nil
+	case corepb.Transaction_Contract_SetAccountIdContract:
+		return &SetAccountIdActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
