@@ -115,6 +115,30 @@ func (b *Block) ID() BlockID {
 	return BlockID{Hash: h, Num: num}
 }
 
+// SetWitnessSignature sets the witness signature on the block header.
+func (b *Block) SetWitnessSignature(sig []byte) {
+	if b.pb.BlockHeader == nil {
+		b.pb.BlockHeader = &corepb.BlockHeader{}
+	}
+	b.pb.BlockHeader.WitnessSignature = sig
+}
+
+// SetAccountStateRoot sets the account state root in the block header raw data.
+func (b *Block) SetAccountStateRoot(root common.Hash) {
+	if b.pb.BlockHeader == nil {
+		b.pb.BlockHeader = &corepb.BlockHeader{}
+	}
+	if b.pb.BlockHeader.RawData == nil {
+		b.pb.BlockHeader.RawData = &corepb.BlockHeaderRaw{}
+	}
+	b.pb.BlockHeader.RawData.AccountStateRoot = root.Bytes()
+}
+
+// ResetHash clears the cached hash so it will be recomputed on next Hash() call.
+func (b *Block) ResetHash() {
+	b.hashOnce = sync.Once{}
+}
+
 func (b *Block) Marshal() ([]byte, error) {
 	return proto.Marshal(b.pb)
 }

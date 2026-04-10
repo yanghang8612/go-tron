@@ -117,3 +117,56 @@ func TestBlockProtoRoundTrip(t *testing.T) {
 		t.Fatal("proto round trip not equal")
 	}
 }
+
+func TestBlock_SetWitnessSignature(t *testing.T) {
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3000},
+		},
+	})
+
+	sig := make([]byte, 65)
+	sig[0] = 0xAA
+	block.SetWitnessSignature(sig)
+
+	if got := block.WitnessSignature(); len(got) != 65 || got[0] != 0xAA {
+		t.Fatalf("unexpected signature: %x", got)
+	}
+}
+
+func TestBlock_SetAccountStateRoot(t *testing.T) {
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 1},
+		},
+	})
+
+	var root common.Hash
+	root[0] = 0xBB
+	block.SetAccountStateRoot(root)
+
+	if block.AccountStateRoot() != root {
+		t.Fatalf("expected root %x, got %x", root, block.AccountStateRoot())
+	}
+}
+
+func TestBlock_ResetHash(t *testing.T) {
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3000},
+		},
+	})
+
+	hash1 := block.Hash()
+
+	block.Proto().BlockHeader.RawData.Timestamp = 6000
+	if block.Hash() != hash1 {
+		t.Fatal("hash should be cached")
+	}
+
+	block.ResetHash()
+	hash2 := block.Hash()
+	if hash2 == hash1 {
+		t.Fatal("hash should change after ResetHash + modified RawData")
+	}
+}
