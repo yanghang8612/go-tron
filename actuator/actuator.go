@@ -64,6 +64,10 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &AccountUpdateActuator{}, nil
 	case corepb.Transaction_Contract_SetAccountIdContract:
 		return &SetAccountIdActuator{}, nil
+	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
+		return &AccountPermissionUpdateActuator{}, nil
+	case corepb.Transaction_Contract_UpdateBrokerageContract:
+		return &UpdateBrokerageActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
