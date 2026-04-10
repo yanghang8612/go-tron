@@ -631,10 +631,22 @@ func makeLog(topicCount int) executionFunc {
 		}
 		memory.resize(offset.Uint64() + sz)
 
+		topics := make([][]byte, topicCount)
 		for i := 0; i < topicCount; i++ {
-			stack.pop()
+			t := stack.pop()
+			b := t.Bytes32()
+			topics[i] = make([]byte, 32)
+			copy(topics[i], b[:])
 		}
-		// Log data consumed but not stored (event subscription is out of scope)
+
+		data := memory.getCopy(int64(offset.Uint64()), int64(sz))
+
+		interpreter.evm.Logs = append(interpreter.evm.Logs, Log{
+			Address: contract.Address,
+			Topics:  topics,
+			Data:    data,
+		})
+
 		return nil, nil
 	}
 }
