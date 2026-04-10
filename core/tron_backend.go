@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -148,11 +149,21 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 }
 
 func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
+	// Try direct hash lookup first
 	block := b.chain.GetBlockByHash(hash)
-	if block == nil {
-		return nil, fmt.Errorf("block not found")
+	if block != nil {
+		return block, nil
 	}
-	return block, nil
+	// The input may be a blockID (first 8 bytes = block number, rest = hash[8:]).
+	// Extract the block number and look up by number, then verify the ID matches.
+	num := binary.BigEndian.Uint64(hash[:8])
+	if num > 0 {
+		block = b.chain.GetBlockByNumber(num)
+		if block != nil && block.ID().Hash == hash {
+			return block, nil
+		}
+	}
+	return nil, fmt.Errorf("block not found")
 }
 
 func (b *TronBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
