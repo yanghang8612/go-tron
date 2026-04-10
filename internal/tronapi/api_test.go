@@ -65,6 +65,73 @@ func (m *mockBackend) TriggerConstantContract(owner, contract common.Address, da
 	return &TriggerResult{Result: []byte{0x42}, EnergyUsed: 100}, nil
 }
 
+func (m *mockBackend) GetTransactionByID(txHash common.Hash) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockBackend) GetTransactionInfoByID(txHash common.Hash) (*corepb.TransactionInfo, error) {
+	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	return nil, nil
+}
+
+func (m *mockBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
+	return nil, fmt.Errorf("not found")
+}
+
+func (m *mockBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	var blocks []*types.Block
+	for i := start; i < end; i++ {
+		b, _ := m.GetBlockByNumber(i)
+		blocks = append(blocks, b)
+	}
+	return blocks, nil
+}
+
+func (m *mockBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+
+func (m *mockBackend) BuildDeployContractTransaction(owner common.Address, abi string, bytecode []byte,
+	feeLimit int64, callValue int64, name string, consumePercent int64) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+
+func (m *mockBackend) BuildTriggerContractTransaction(owner, contract common.Address, data []byte,
+	feeLimit int64, callValue int64) (*corepb.Transaction, *TriggerResult, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, &TriggerResult{Result: []byte{0x42}, EnergyUsed: 100}, nil
+}
+
+func (m *mockBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
+	return 21000, nil
+}
+
+func (m *mockBackend) GetAccountResource(addr common.Address) (*AccountResource, error) {
+	return &AccountResource{
+		FreeNetLimit:     1500,
+		TotalNetLimit:    43200000000,
+		TotalEnergyLimit: 50000000000,
+	}, nil
+}
+
+func (m *mockBackend) GetChainParameters() []ChainParameter {
+	return []ChainParameter{
+		{Key: "energy_fee", Value: 420},
+	}
+}
+
+func (m *mockBackend) ListWitnesses() ([]*WitnessInfo, error) {
+	return []*WitnessInfo{
+		{Address: "4100000000000000000000000000000000000001", VoteCount: 100, IsJobs: true},
+	}, nil
+}
+
+func (m *mockBackend) NextMaintenanceTime() int64 {
+	return 1700000000000
+}
+
 func TestGetNowBlock(t *testing.T) {
 	api := NewAPI(&mockBackend{})
 	mux := http.NewServeMux()

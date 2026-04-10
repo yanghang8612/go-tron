@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
 )
@@ -112,4 +113,58 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 		Result:     ret,
 		EnergyUsed: energyUsed,
 	}, nil
+}
+
+func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.TransactionInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetBlockByHash(hash tcommon.Hash) (*types.Block, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) BuildTransferTransaction(owner, to tcommon.Address, amount int64) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) BuildDeployContractTransaction(owner tcommon.Address, abi string, bytecode []byte,
+	feeLimit int64, callValue int64, name string, consumePercent int64) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) BuildTriggerContractTransaction(owner, contract tcommon.Address, data []byte,
+	feeLimit int64, callValue int64) (*corepb.Transaction, *tronapi.TriggerResult, error) {
+	return nil, nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) EstimateEnergy(owner, contract tcommon.Address, data []byte) (int64, error) {
+	return 0, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetAccountResource(addr tcommon.Address) (*tronapi.AccountResource, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
+	return nil
+}
+
+func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) NextMaintenanceTime() int64 {
+	return 0
 }
