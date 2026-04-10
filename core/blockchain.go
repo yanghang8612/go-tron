@@ -193,7 +193,6 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
-	_ = txInfos // will be wired to persistence in Task 6
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
@@ -226,6 +225,17 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		return fmt.Errorf("write block: %w", err)
 	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
+
+	// Persist transaction infos and indexes
+	for _, info := range txInfos {
+		rawdb.WriteTransactionInfo(bc.db, info.Id, info)
+	}
+	rawdb.WriteTransactionInfosByBlock(bc.db, block.Number(), txInfos)
+	for _, tx := range block.Transactions() {
+		h := tx.Hash()
+		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
+	}
+
 	bc.currentBlock.Store(block)
 
 	return nil
