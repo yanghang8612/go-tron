@@ -24,6 +24,8 @@ var (
 
 	activeWitnessesKey = []byte("ActiveWitnesses")
 	witnessIndexKey    = []byte("WitnessIndex")
+
+	proposalIndexKey = []byte("propi")
 )
 
 func blockKey(number uint64) []byte {
@@ -62,4 +64,11 @@ func witnessKey(addr []byte) []byte {
 
 func dynPropKey(name string) []byte {
 	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
+}
+
+func proposalKey(id int64) []byte {
+	k := make([]byte, len(proposalPrefix)+8)
+	copy(k, proposalPrefix)
+	binary.BigEndian.PutUint64(k[len(proposalPrefix):], uint64(id))
+	return k
 }
