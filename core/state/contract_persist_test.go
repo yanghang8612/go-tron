@@ -9,7 +9,50 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
+
+// TestContractMetaSnapshotRevert verifies that a contractMeta mutation can be
+// reverted via RevertToSnapshot. This guards against journal aliasing bugs where
+// the pre-mutation snapshot is lost because the same proto pointer is shared.
+func TestContractMetaSnapshotRevert(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contractAddr := testAddr(9)
+	originAddr := testAddr(8)
+	sdb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	sdb.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:              originAddr[:],
+		ConsumeUserResourcePercent: 10,
+	})
+
+	snap := sdb.Snapshot()
+
+	// Actuator pattern: clone before mutating so journal can capture pre-mutation state.
+	raw := sdb.GetContract(contractAddr)
+	mutated := proto.Clone(raw).(*contractpb.SmartContract)
+	mutated.ConsumeUserResourcePercent = 99
+	sdb.SetContract(contractAddr, mutated)
+
+	if got := sdb.GetContract(contractAddr); got.ConsumeUserResourcePercent != 99 {
+		t.Fatalf("mutation not applied: got %d", got.ConsumeUserResourcePercent)
+	}
+
+	sdb.RevertToSnapshot(snap)
+
+	reverted := sdb.GetContract(contractAddr)
+	if reverted == nil {
+		t.Fatal("contract nil after revert")
+	}
+	if reverted.ConsumeUserResourcePercent != 10 {
+		t.Fatalf("revert failed: ConsumeUserResourcePercent = %d, want 10", reverted.ConsumeUserResourcePercent)
+	}
+}
 
 func TestContractCodePersistence(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()

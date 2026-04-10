@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -686,10 +687,11 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		}
 		if obj.contractMetaDirty && obj.contractMeta != nil {
 			metaBytes, err := proto.Marshal(obj.contractMeta)
-			if err == nil {
-				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
-				obj.contractMetaDirty = false
+			if err != nil {
+				return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
 			}
+			rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
+			obj.contractMetaDirty = false
 		}
 		obj.dirty = false
 	}

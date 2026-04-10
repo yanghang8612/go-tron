@@ -5,6 +5,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 type ClearABIActuator struct{}
@@ -49,10 +50,11 @@ func (a *ClearABIActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	contractAddr := tcommon.BytesToAddress(c.ContractAddress)
-	meta := ctx.State.GetContract(contractAddr)
-	if meta == nil {
+	raw := ctx.State.GetContract(contractAddr)
+	if raw == nil {
 		return nil, errors.New("contract not found")
 	}
+	meta := proto.Clone(raw).(*contractpb.SmartContract)
 	meta.Abi = nil
 	ctx.State.SetContract(contractAddr, meta)
 	return &Result{Fee: 0, ContractRet: 1}, nil
