@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -29,7 +30,8 @@ type BlockChain struct {
 	currentBlock atomic.Pointer[types.Block]
 	chainmu      sync.Mutex // serializes block insertion
 
-	genesisBlock *types.Block
+	genesisBlock    *types.Block
+	activeWitnesses atomic.Value // []tcommon.Address
 }
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
@@ -62,6 +64,29 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 				bc.currentBlock.Store(block)
 			}
 		}
+	}
+
+	// Load active witnesses from DB; if empty, derive from genesis witnesses
+	witnesses := rawdb.ReadActiveWitnesses(db)
+	if len(witnesses) == 0 {
+		var allWitnesses []dpos.WitnessVote
+		witnessAddrs := rawdb.ReadWitnessIndex(db)
+		for _, addr := range witnessAddrs {
+			w := rawdb.ReadWitness(db, addr)
+			if w != nil {
+				allWitnesses = append(allWitnesses, dpos.WitnessVote{
+					Address: w.Address(),
+					Votes:   w.VoteCount(),
+				})
+			}
+		}
+		if len(allWitnesses) > 0 {
+			witnesses = dpos.SelectActiveWitnesses(allWitnesses)
+			rawdb.WriteActiveWitnesses(db, witnesses)
+		}
+	}
+	if len(witnesses) > 0 {
+		bc.activeWitnesses.Store(witnesses)
 	}
 
 	return bc, nil
@@ -178,4 +203,25 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // StateDB returns the state database for reading state.
 func (bc *BlockChain) StateDB() *state.Database {
 	return bc.stateDB
+}
+
+// ActiveWitnesses returns the current active witness list.
+func (bc *BlockChain) ActiveWitnesses() []tcommon.Address {
+	v := bc.activeWitnesses.Load()
+	if v == nil {
+		return nil
+	}
+	return v.([]tcommon.Address)
+}
+
+// SetActiveWitnesses updates the active witness list in memory and persists it to the DB.
+func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
+	bc.activeWitnesses.Store(witnesses)
+	rawdb.WriteActiveWitnesses(bc.db, witnesses)
+}
+
+// NextMaintenanceTime returns the next scheduled maintenance time from dynamic properties.
+func (bc *BlockChain) NextMaintenanceTime() int64 {
+	dynProps := state.LoadDynamicProperties(bc.db)
+	return dynProps.NextMaintenanceTime()
 }

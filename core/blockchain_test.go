@@ -199,3 +199,69 @@ func TestBlockChainInsertInvalidParent(t *testing.T) {
 		t.Fatalf("expected ErrInvalidParent, got %v", err)
 	}
 }
+
+func TestBlockChainActiveWitnesses(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 1000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: testCoreAddr(10), VoteCount: 100, URL: "http://w1"},
+			{Address: testCoreAddr(11), VoteCount: 200, URL: "http://w2"},
+		},
+	}
+
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	witnesses := bc.ActiveWitnesses()
+	if len(witnesses) == 0 {
+		t.Fatal("expected non-empty active witnesses")
+	}
+
+	newList := []tcommon.Address{testCoreAddr(20), testCoreAddr(21)}
+	bc.SetActiveWitnesses(newList)
+
+	got := bc.ActiveWitnesses()
+	if len(got) != 2 || got[0] != testCoreAddr(20) || got[1] != testCoreAddr(21) {
+		t.Fatalf("unexpected witnesses after set: %v", got)
+	}
+
+	persisted := rawdb.ReadActiveWitnesses(diskdb)
+	if len(persisted) != 2 {
+		t.Fatalf("expected 2 persisted witnesses, got %d", len(persisted))
+	}
+}
+
+func TestBlockChainNextMaintenanceTime(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 1000,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 1000},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 100000,
+		},
+	}
+
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bc.NextMaintenanceTime() != 100000 {
+		t.Fatalf("expected 100000, got %d", bc.NextMaintenanceTime())
+	}
+}

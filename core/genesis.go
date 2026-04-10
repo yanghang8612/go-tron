@@ -69,6 +69,7 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 		w := types.NewWitness(gw.Address, gw.URL)
 		w.SetVoteCount(gw.VoteCount)
 		rawdb.WriteWitness(db, gw.Address, w)
+		rawdb.AppendWitnessIndex(db, gw.Address)
 	}
 
 	return genesis.Config, block.Hash(), nil
