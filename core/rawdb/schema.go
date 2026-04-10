@@ -20,6 +20,9 @@ var (
 	dynPropPrefix   = []byte("dp-")
 
 	witnessScheduleKey = []byte("ws")
+
+	activeWitnessesKey = []byte("ActiveWitnesses")
+	witnessIndexKey    = []byte("WitnessIndex")
 )
 
 func blockKey(number uint64) []byte {

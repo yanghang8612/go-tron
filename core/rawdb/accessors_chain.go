@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"encoding/binary"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -39,4 +41,66 @@ func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 		return nil
 	}
 	return data
+}
+
+// WriteActiveWitnesses stores the active witness list as length-prefixed addresses.
+func WriteActiveWitnesses(db ethdb.KeyValueWriter, witnesses []common.Address) {
+	buf := make([]byte, 4+len(witnesses)*common.AddressLength)
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(witnesses)))
+	for i, w := range witnesses {
+		copy(buf[4+i*common.AddressLength:], w.Bytes())
+	}
+	db.Put(activeWitnessesKey, buf)
+}
+
+func ReadActiveWitnesses(db ethdb.KeyValueReader) []common.Address {
+	data, err := db.Get(activeWitnessesKey)
+	if err != nil || len(data) < 4 {
+		return nil
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	if len(data) < 4+count*common.AddressLength {
+		return nil
+	}
+	witnesses := make([]common.Address, count)
+	for i := 0; i < count; i++ {
+		witnesses[i] = common.BytesToAddress(data[4+i*common.AddressLength : 4+(i+1)*common.AddressLength])
+	}
+	return witnesses
+}
+
+func WriteWitnessIndex(db ethdb.KeyValueWriter, witnesses []common.Address) {
+	buf := make([]byte, 4+len(witnesses)*common.AddressLength)
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(witnesses)))
+	for i, w := range witnesses {
+		copy(buf[4+i*common.AddressLength:], w.Bytes())
+	}
+	db.Put(witnessIndexKey, buf)
+}
+
+func ReadWitnessIndex(db ethdb.KeyValueReader) []common.Address {
+	data, err := db.Get(witnessIndexKey)
+	if err != nil || len(data) < 4 {
+		return nil
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	if len(data) < 4+count*common.AddressLength {
+		return nil
+	}
+	witnesses := make([]common.Address, count)
+	for i := 0; i < count; i++ {
+		witnesses[i] = common.BytesToAddress(data[4+i*common.AddressLength : 4+(i+1)*common.AddressLength])
+	}
+	return witnesses
+}
+
+func AppendWitnessIndex(db ethdb.KeyValueStore, addr common.Address) {
+	existing := ReadWitnessIndex(db)
+	for _, w := range existing {
+		if w == addr {
+			return
+		}
+	}
+	existing = append(existing, addr)
+	WriteWitnessIndex(db, existing)
 }
