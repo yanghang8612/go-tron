@@ -3,6 +3,8 @@ package common
 import (
 	"crypto/sha256"
 	"encoding/hex"
+
+	"golang.org/x/crypto/sha3"
 )
 
 const HashLength = 32
@@ -30,6 +32,14 @@ func Sha256(data []byte) Hash {
 func (h Hash) Bytes() []byte   { return h[:] }
 func (h Hash) Hex() string     { return hex.EncodeToString(h[:]) }
 func (h Hash) String() string  { return h.Hex() }
+
+func Keccak256(data []byte) Hash {
+	h := sha3.NewLegacyKeccak256()
+	h.Write(data)
+	var result Hash
+	h.Sum(result[:0])
+	return result
+}
 
 func (h Hash) IsEmpty() bool {
 	for _, b := range h {

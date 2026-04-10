@@ -2,6 +2,7 @@ package tronapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 type mockBackend struct{}
@@ -53,6 +55,14 @@ func (m *mockBackend) GetNodeInfo() *NodeInfo {
 
 func (m *mockBackend) PendingTransactionCount() int {
 	return 0
+}
+
+func (m *mockBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
+	return nil, fmt.Errorf("contract not found")
+}
+
+func (m *mockBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*TriggerResult, error) {
+	return &TriggerResult{Result: []byte{0x42}, EnergyUsed: 100}, nil
 }
 
 func TestGetNowBlock(t *testing.T) {

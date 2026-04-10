@@ -67,6 +67,13 @@ func (tx *Transaction) Expiration() int64 {
 	return tx.pb.RawData.Expiration
 }
 
+func (tx *Transaction) FeeLimit() int64 {
+	if tx.pb.RawData == nil {
+		return 0
+	}
+	return tx.pb.RawData.FeeLimit
+}
+
 func (tx *Transaction) Signatures() [][]byte {
 	return tx.pb.Signature
 }

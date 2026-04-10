@@ -44,6 +44,10 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &WithdrawBalanceActuator{}, nil
 	case corepb.Transaction_Contract_WithdrawExpireUnfreezeContract:
 		return &WithdrawExpireUnfreezeActuator{}, nil
+	case corepb.Transaction_Contract_CreateSmartContract:
+		return &VMActuator{}, nil
+	case corepb.Transaction_Contract_TriggerSmartContract:
+		return &VMActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}

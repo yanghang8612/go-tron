@@ -30,6 +30,8 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/broadcasttransaction", api.broadcastTransaction)
 	mux.HandleFunc("/wallet/getnodeinfo", api.getNodeInfo)
 	mux.HandleFunc("/wallet/gettransactioncountinpool", api.getTxPoolCount)
+	mux.HandleFunc("/wallet/getcontract", api.getContract)
+	mux.HandleFunc("/wallet/triggerconstantcontract", api.triggerConstantContract)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -159,5 +161,86 @@ func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
+	addrHex := r.URL.Query().Get("value")
+	if addrHex == "" {
+		var body struct {
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			addrHex = body.Value
+		}
+	}
+	if addrHex == "" {
+		http.Error(w, "contract address required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	sc, err := api.backend.GetContract(addr)
+	if err != nil || sc == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, sc)
+}
+
+func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress    string `json:"owner_address"`
+		ContractAddress string `json:"contract_address"`
+		FunctionSelector string `json:"function_selector"`
+		Parameter       string `json:"parameter"`
+		Data            string `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	contract := common.BytesToAddress(common.FromHex(body.ContractAddress))
+
+	// Build calldata: if data is provided directly, use it;
+	// otherwise build from function_selector + parameter
+	var data []byte
+	if body.Data != "" {
+		data = common.FromHex(body.Data)
+	} else if body.FunctionSelector != "" {
+		// Hash the function selector to get the 4-byte selector
+		selectorHash := common.Keccak256([]byte(body.FunctionSelector))
+		data = selectorHash[:4]
+		if body.Parameter != "" {
+			paramBytes := common.FromHex(body.Parameter)
+			data = append(data, paramBytes...)
+		}
+	}
+
+	result, err := api.backend.TriggerConstantContract(owner, contract, data, 30_000_000)
+
+	resp := map[string]interface{}{
+		"result": map[string]interface{}{
+			"result": err == nil,
+		},
+	}
+	if result != nil {
+		resp["energy_used"] = result.EnergyUsed
+		if len(result.Result) > 0 {
+			resp["constant_result"] = []string{hex.EncodeToString(result.Result)}
+		}
+	}
+	if err != nil {
+		resp["result"].(map[string]interface{})["message"] = hex.EncodeToString([]byte(err.Error()))
+	}
+
+	jsonData, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(jsonData)
 }
 
