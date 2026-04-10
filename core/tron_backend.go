@@ -16,14 +16,27 @@ import (
 	"github.com/tronprotocol/go-tron/vm"
 )
 
+// TxBroadcaster announces new transactions to P2P peers.
+// Implemented by net.BroadcastService; defined here to avoid an import cycle.
+type TxBroadcaster interface {
+	BroadcastTx(tx *types.Transaction)
+}
+
 // TronBackend implements tronapi.Backend.
 type TronBackend struct {
-	chain *BlockChain
-	pool  *txpool.TxPool
+	chain       *BlockChain
+	pool        *txpool.TxPool
+	txBroadcast TxBroadcaster // nil until wired from main
 }
 
 func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
 	return &TronBackend{chain: chain, pool: pool}
+}
+
+// SetTxBroadcaster wires in the P2P broadcaster so BroadcastTransaction
+// announces the tx to peers after adding it to the local pool.
+func (b *TronBackend) SetTxBroadcaster(bc TxBroadcaster) {
+	b.txBroadcast = bc
 }
 
 func (b *TronBackend) CurrentBlock() *types.Block {
@@ -53,7 +66,13 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 }
 
 func (b *TronBackend) BroadcastTransaction(tx *types.Transaction) error {
-	return b.pool.Add(tx)
+	if err := b.pool.Add(tx); err != nil {
+		return err
+	}
+	if b.txBroadcast != nil {
+		b.txBroadcast.BroadcastTx(tx)
+	}
+	return nil
 }
 
 func (b *TronBackend) GetNodeInfo() *tronapi.NodeInfo {

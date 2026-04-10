@@ -187,6 +187,7 @@ func gtron(ctx *cli.Context) error {
 	handler.SetServer(p2pServer)
 	handler.StartKeepAlive()
 	broadcaster.SetPeersFunc(handler.HandshakedPeers)
+	backend.SetTxBroadcaster(broadcaster)
 
 	// Create node and register services
 	stack, err := node.New(cfg)
