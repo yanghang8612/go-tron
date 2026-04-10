@@ -174,6 +174,18 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	// Load dynamic properties
 	dynProps := state.LoadDynamicProperties(bc.db)
 
+	// Load witnesses into statedb for maintenance access
+	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
+	for _, addr := range witnessAddrs {
+		if statedb.GetWitness(addr) == nil {
+			w := rawdb.ReadWitness(bc.db, addr)
+			if w != nil {
+				statedb.PutWitness(addr, w.URL())
+				statedb.AddWitnessVoteCount(addr, w.VoteCount())
+			}
+		}
+	}
+
 	// Process block (execute transactions, pay reward)
 	newRoot, err := ProcessBlock(statedb, dynProps, block)
 	if err != nil {
@@ -191,6 +203,15 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
 	dynProps.Flush(bc.db)
+
+	// Check maintenance
+	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
+		allWitnesses := bc.gatherWitnessVotes(statedb)
+		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
+		newActive := dpos.SelectActiveWitnesses(allWitnesses)
+		bc.SetActiveWitnesses(newActive)
+		dynProps.Flush(bc.db)
+	}
 
 	// Persist block
 	rawdb.WriteBlock(bc.db, block)
@@ -224,4 +245,61 @@ func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
 func (bc *BlockChain) NextMaintenanceTime() int64 {
 	dynProps := state.LoadDynamicProperties(bc.db)
 	return dynProps.NextMaintenanceTime()
+}
+
+// chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
+type chainHeaderAdapter struct {
+	statedb  *state.StateDB
+	dynProps *state.DynamicProperties
+}
+
+func (a *chainHeaderAdapter) GetWitness(addr tcommon.Address) *types.Witness {
+	return a.statedb.GetWitness(addr)
+}
+
+func (a *chainHeaderAdapter) PutWitness(w *types.Witness) {
+	a.statedb.PutWitness(w.Address(), w.URL())
+}
+
+func (a *chainHeaderAdapter) AddAllowance(addr tcommon.Address, amount int64) {
+	a.statedb.AddAllowance(addr, amount)
+}
+
+func (a *chainHeaderAdapter) NextMaintenanceTime() int64 {
+	return a.dynProps.NextMaintenanceTime()
+}
+
+func (a *chainHeaderAdapter) SetNextMaintenanceTime(t int64) {
+	a.dynProps.SetNextMaintenanceTime(t)
+}
+
+func (a *chainHeaderAdapter) WitnessPayPerBlock() int64 {
+	return a.dynProps.WitnessPayPerBlock()
+}
+
+func (a *chainHeaderAdapter) WitnessStandbyAllowance() int64 {
+	return a.dynProps.WitnessStandbyAllowance()
+}
+
+func (a *chainHeaderAdapter) MaintenanceTimeInterval() int64 {
+	return a.dynProps.MaintenanceTimeInterval()
+}
+
+// gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).
+func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessVote {
+	addrs := rawdb.ReadWitnessIndex(bc.db)
+	var result []dpos.WitnessVote
+	for _, addr := range addrs {
+		w := statedb.GetWitness(addr)
+		if w == nil {
+			w = rawdb.ReadWitness(bc.db, addr)
+		}
+		if w != nil {
+			result = append(result, dpos.WitnessVote{
+				Address: w.Address(),
+				Votes:   w.VoteCount(),
+			})
+		}
+	}
+	return result
 }

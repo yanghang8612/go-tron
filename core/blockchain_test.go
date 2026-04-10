@@ -265,3 +265,66 @@ func TestBlockChainNextMaintenanceTime(t *testing.T) {
 		t.Fatalf("expected 100000, got %d", bc.NextMaintenanceTime())
 	}
 }
+
+func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testCoreAddr(10)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 100_000_000},
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://w1"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 6000,
+		},
+	}
+
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build block 1 at timestamp 3000 (before maintenance)
+	block1 := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+
+	dynProps := state.LoadDynamicProperties(diskdb)
+	if dynProps.NextMaintenanceTime() != 6000 {
+		t.Fatalf("maintenance should not have run yet, got %d", dynProps.NextMaintenanceTime())
+	}
+
+	// Build block 2 at timestamp 6000 (at maintenance boundary)
+	block2 := buildTestBlock(bc, witnessAddr, 6000)
+	if err := bc.InsertBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	dynProps = state.LoadDynamicProperties(diskdb)
+	if dynProps.NextMaintenanceTime() <= 6000 {
+		t.Fatalf("next_maintenance_time should have advanced past 6000, got %d", dynProps.NextMaintenanceTime())
+	}
+}
+
+func buildTestBlock(bc *BlockChain, witnessAddr tcommon.Address, timestamp int64) *types.Block {
+	parent := bc.CurrentBlock()
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         int64(parent.Number() + 1),
+				Timestamp:      timestamp,
+				ParentHash:     parent.Hash().Bytes(),
+				WitnessAddress: witnessAddr.Bytes(),
+			},
+		},
+	})
+}
