@@ -607,5 +607,140 @@ func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) 
 }
 
 func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
-	return nil, fmt.Errorf("not implemented")
+	const maxBlockRange = 2000
+
+	var fromBlock, toBlock uint64
+
+	if filter.BlockHash != nil {
+		// Single-block mode
+		block := b.chain.GetBlockByHash(*filter.BlockHash)
+		if block == nil {
+			return []*jsonrpc.RPCLog{}, nil
+		}
+		fromBlock = block.Number()
+		toBlock = block.Number()
+	} else {
+		current := b.chain.CurrentBlock().Number()
+		fromBlock = 0
+		if filter.FromBlock != nil {
+			fromBlock = *filter.FromBlock
+		}
+		toBlock = current
+		if filter.ToBlock != nil {
+			toBlock = *filter.ToBlock
+		}
+		if toBlock > current {
+			toBlock = current
+		}
+		if toBlock < fromBlock {
+			return []*jsonrpc.RPCLog{}, nil
+		}
+		if toBlock-fromBlock+1 > maxBlockRange {
+			return nil, fmt.Errorf("block range too large (max %d)", maxBlockRange)
+		}
+	}
+
+	var logs []*jsonrpc.RPCLog
+
+	for num := fromBlock; num <= toBlock; num++ {
+		block := b.chain.GetBlockByNumber(num)
+		if block == nil {
+			continue
+		}
+		blockHash := block.Hash()
+		infos := rawdb.ReadTransactionInfosByBlock(b.chain.db, num)
+
+		logIndex := uint64(0)
+
+		for txIdx, info := range infos {
+			for _, l := range info.Log {
+				// Address filter
+				if len(filter.Addresses) > 0 {
+					addrStart := 0
+					if len(l.Address) > 20 {
+						addrStart = len(l.Address) - 20
+					}
+					addr := tcommon.BytesToAddress(l.Address[addrStart:])
+					match := false
+					for _, fa := range filter.Addresses {
+						if fa == addr {
+							match = true
+							break
+						}
+					}
+					if !match {
+						continue
+					}
+				}
+
+				// Topics filter
+				if !matchTopics(filter.Topics, l.Topics) {
+					continue
+				}
+
+				topics := make([]string, len(l.Topics))
+				for i, t := range l.Topics {
+					topics[i] = fmt.Sprintf("0x%064x", t)
+				}
+
+				// Recover the txHash from block transactions at txIdx
+				txHash := tcommon.Hash{}
+				txs := block.Transactions()
+				if txIdx < len(txs) {
+					txHash = txs[txIdx].Hash()
+				}
+
+				addrStart := 0
+				if len(l.Address) > 20 {
+					addrStart = len(l.Address) - 20
+				}
+				address := fmt.Sprintf("0x%x", l.Address[addrStart:])
+
+				logs = append(logs, &jsonrpc.RPCLog{
+					Address:          address,
+					Topics:           topics,
+					Data:             fmt.Sprintf("0x%x", l.Data),
+					BlockNumber:      fmt.Sprintf("0x%x", num),
+					TransactionHash:  fmt.Sprintf("0x%x", txHash),
+					TransactionIndex: fmt.Sprintf("0x%x", txIdx),
+					BlockHash:        fmt.Sprintf("0x%x", blockHash),
+					LogIndex:         fmt.Sprintf("0x%x", logIndex),
+					Removed:          false,
+				})
+				logIndex++
+			}
+		}
+	}
+
+	if logs == nil {
+		logs = []*jsonrpc.RPCLog{}
+	}
+	return logs, nil
+}
+
+// matchTopics returns true if the log topics match the filter topics.
+// filter.Topics[i] == nil means any value is accepted at position i.
+// filter.Topics[i] with multiple hashes means OR match.
+func matchTopics(filterTopics [][]tcommon.Hash, logTopics [][]byte) bool {
+	for i, required := range filterTopics {
+		if len(required) == 0 {
+			continue // nil / empty = any
+		}
+		if i >= len(logTopics) {
+			return false
+		}
+		var logTopic tcommon.Hash
+		copy(logTopic[:], logTopics[i])
+		matched := false
+		for _, h := range required {
+			if h == logTopic {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
