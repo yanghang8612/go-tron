@@ -42,6 +42,8 @@ type Actuator interface {
 func CreateActuator(tx *types.Transaction) (Actuator, error) {
 	ct := tx.ContractType()
 	switch ct {
+	case corepb.Transaction_Contract_AssetIssueContract:
+		return &AssetIssueActuator{}, nil
 	case corepb.Transaction_Contract_TransferContract:
 		return &TransferActuator{}, nil
 	case corepb.Transaction_Contract_AccountCreateContract:

@@ -1,0 +1,114 @@
+package actuator
+
+import (
+	"errors"
+	"strconv"
+
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+)
+
+// AssetIssueActuator handles TRC10 token issuance (contract type 6).
+type AssetIssueActuator struct{}
+
+func (a *AssetIssueActuator) getContract(ctx *Context) (*contractpb.AssetIssueContract, error) {
+	contract := ctx.Tx.Contract()
+	if contract == nil {
+		return nil, errors.New("no contract in transaction")
+	}
+	c := &contractpb.AssetIssueContract{}
+	if err := contract.Parameter.UnmarshalTo(c); err != nil {
+		return nil, errors.New("failed to unmarshal AssetIssueContract")
+	}
+	return c, nil
+}
+
+func (a *AssetIssueActuator) Validate(ctx *Context) error {
+	if ctx.DB == nil {
+		return errors.New("DB not available")
+	}
+	c, err := a.getContract(ctx)
+	if err != nil {
+		return err
+	}
+	owner := common.BytesToAddress(c.OwnerAddress)
+	if !ctx.State.AccountExists(owner) {
+		return errors.New("owner account does not exist")
+	}
+	if len(c.Name) == 0 {
+		return errors.New("token name is required")
+	}
+	if len(c.Abbr) == 0 {
+		return errors.New("token abbreviation is required")
+	}
+	if c.TotalSupply <= 0 {
+		return errors.New("total supply must be positive")
+	}
+	if c.TrxNum <= 0 {
+		return errors.New("trx_num must be positive")
+	}
+	if c.Num <= 0 {
+		return errors.New("num must be positive")
+	}
+	if c.StartTime >= c.EndTime {
+		return errors.New("start_time must be before end_time")
+	}
+	if c.Precision < 0 || c.Precision > 6 {
+		return errors.New("precision must be 0-6")
+	}
+	var frozenTotal int64
+	for _, f := range c.FrozenSupply {
+		frozenTotal += f.FrozenAmount
+	}
+	if frozenTotal > c.TotalSupply {
+		return errors.New("frozen supply exceeds total supply")
+	}
+	if ctx.State.GetBalance(owner) < ctx.DynProps.AssetIssueFee() {
+		return errors.New("insufficient balance for asset issue fee")
+	}
+	if _, ok := rawdb.ReadAssetNameIndex(ctx.DB, c.Name); ok {
+		return errors.New("token name already exists")
+	}
+	if _, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:]); ok {
+		return errors.New("address has already issued a token")
+	}
+	return nil
+}
+
+func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
+	c, err := a.getContract(ctx)
+	if err != nil {
+		return nil, err
+	}
+	owner := common.BytesToAddress(c.OwnerAddress)
+
+	// Assign and increment token ID
+	tokenID := ctx.DynProps.NextTokenID()
+	ctx.DynProps.SetNextTokenID(tokenID + 1)
+	c.Id = strconv.FormatInt(tokenID, 10)
+
+	// Persist metadata and indexes
+	rawdb.WriteAssetIssue(ctx.DB, tokenID, c)
+	rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID)
+	rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID)
+	rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.BlockTime)
+
+	// Mint free supply to issuer (frozen supply is held until UnfreezeAsset)
+	var frozenTotal int64
+	for _, f := range c.FrozenSupply {
+		frozenTotal += f.FrozenAmount
+	}
+	freeAmount := c.TotalSupply - frozenTotal
+	if freeAmount > 0 {
+		ctx.State.SetTRC10Balance(owner, tokenID, freeAmount)
+	}
+
+	// Burn issuance fee
+	fee := ctx.DynProps.AssetIssueFee()
+	if err := ctx.State.SubBalance(owner, fee); err != nil {
+		return nil, err
+	}
+
+	return &Result{Fee: fee, ContractRet: 1}, nil
+}
