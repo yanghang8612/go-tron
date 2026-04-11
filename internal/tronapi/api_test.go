@@ -117,6 +117,23 @@ func (s *stubBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 	return s.nodes, nil
 }
 
+// --- New Phase 12 methods (TRC10 asset queries) ---
+func (s *stubBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+	return nil
+}
+func (s *stubBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+	return nil
+}
+func (s *stubBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+	return nil
+}
+func (s *stubBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+	return nil
+}
+func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract {
+	return nil
+}
+
 // --- Helpers ---
 func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {
 	t.Helper()

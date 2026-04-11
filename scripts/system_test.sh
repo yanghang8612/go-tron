@@ -705,6 +705,40 @@ RESULT=$(curl -s -X POST "$JRPC_URL" \
 check "batch request returns array" "$RESULT" '"jsonrpc":"2.0"'
 
 # ─────────────────────────────────────────────────────────────────
+# SECTION 11: Phase 12 — TRC10 Asset Query Endpoints
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Test Group 11: TRC10 Asset Query Endpoints ==="
+
+# 11.1 getassetissuelist — empty on fresh node
+RESULT=$(http_get $SR_HTTP "/wallet/getassetissuelist")
+check "getassetissuelist returns assetIssue key" "$RESULT" '"assetIssue"'
+
+# 11.2 getassetissuebyid — unknown ID returns {}
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyid" \
+    -H "Content-Type: application/json" \
+    -d '{"value":1000001}' 2>/dev/null || echo "CURL_ERROR")
+check "getassetissuebyid unknown returns {}" "$RESULT" '{}'
+
+# 11.3 getassetissuebyname — unknown name returns {}
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyname" \
+    -H "Content-Type: application/json" \
+    -d '{"value":"UNKNOWNTOKEN"}' 2>/dev/null || echo "CURL_ERROR")
+check "getassetissuebyname unknown returns {}" "$RESULT" '{}'
+
+# 11.4 getpaginatedassetissuelist — empty returns assetIssue array
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getpaginatedassetissuelist" \
+    -H "Content-Type: application/json" \
+    -d '{"offset":0,"limit":10}' 2>/dev/null || echo "CURL_ERROR")
+check "getpaginatedassetissuelist returns assetIssue key" "$RESULT" '"assetIssue"'
+
+# 11.5 getassetissuebyaccount — unknown account returns {}
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyaccount" \
+    -H "Content-Type: application/json" \
+    -d "{\"address\":\"$WITNESS_ADDR\"}" 2>/dev/null || echo "CURL_ERROR")
+check "getassetissuebyaccount unknown returns {}" "$RESULT" '{}'
+
+# ─────────────────────────────────────────────────────────────────
 # Summary: print last few lines of logs
 # ─────────────────────────────────────────────────────────────────
 echo ""
