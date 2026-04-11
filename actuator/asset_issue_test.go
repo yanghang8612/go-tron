@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"math"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -163,5 +164,26 @@ func TestAssetIssueExecute_WithFrozenSupply(t *testing.T) {
 	// Only the 800,000 free tokens are minted; 200,000 are frozen
 	if bal := ctx.State.GetTRC10Balance(owner, tokenID); bal != 800_000 {
 		t.Fatalf("TRC10 balance: want 800000 (free portion), got %d", bal)
+	}
+}
+
+func TestAssetIssueValidate_FrozenSumOverflow(t *testing.T) {
+	owner := makeTestAddr(1)
+	// Use math.MaxInt64 as total supply so individual amounts pass the per-entry check,
+	// but two entries each just over half of MaxInt64 will overflow when summed.
+	overflowAmount := int64(math.MaxInt64/2 + 1)
+	c := makeAssetIssueContract(1, "OVERFLOWTOKEN", math.MaxInt64)
+	c.FrozenSupply = []*contractpb.AssetIssueContract_FrozenSupply{
+		{FrozenAmount: overflowAmount, FrozenDays: 30},
+		{FrozenAmount: overflowAmount, FrozenDays: 60},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
+
+	act := &AssetIssueActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for frozen supply sum overflow, got nil")
 	}
 }

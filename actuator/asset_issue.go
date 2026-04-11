@@ -3,6 +3,7 @@ package actuator
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -65,6 +66,9 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 		}
 		if f.FrozenDays <= 0 {
 			return errors.New("frozen_days must be positive")
+		}
+		if frozenTotal > 0 && f.FrozenAmount > math.MaxInt64-frozenTotal {
+			return errors.New("frozen supply total overflows int64")
 		}
 		frozenTotal += f.FrozenAmount
 	}
