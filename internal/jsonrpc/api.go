@@ -28,7 +28,7 @@ type rpcRequest struct {
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	Result  interface{}     `json:"result,omitempty"`
+	Result  interface{}     `json:"result"`       // must be present on success, even if null
 	Error   *rpcError       `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id"`
 }
@@ -166,20 +166,26 @@ func hex20(b []byte) string {
 }
 
 // parseBlockParam converts a block tag ("latest", "earliest", "pending", "0x1") to uint64.
-// Returns ^uint64(0) as sentinel for "latest"/"pending".
-func parseBlockParam(s string) uint64 {
+// Returns ^uint64(0) as sentinel for "latest"/"pending". Returns an error for invalid input.
+func parseBlockParam(s string) (uint64, error) {
 	switch s {
 	case "", "latest", "pending":
-		return ^uint64(0)
+		return ^uint64(0), nil
 	case "earliest":
-		return 0
+		return 0, nil
 	default:
 		if len(s) > 2 && s[:2] == "0x" {
-			n, _ := strconv.ParseUint(s[2:], 16, 64)
-			return n
+			n, err := strconv.ParseUint(s[2:], 16, 64)
+			if err != nil {
+				return 0, fmt.Errorf("invalid block number %q", s)
+			}
+			return n, nil
 		}
-		n, _ := strconv.ParseUint(s, 10, 64)
-		return n
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid block number %q", s)
+		}
+		return n, nil
 	}
 }
 
