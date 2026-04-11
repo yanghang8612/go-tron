@@ -654,6 +654,9 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 
 		for txIdx, info := range infos {
 			for _, l := range info.Log {
+				thisIndex := logIndex
+				logIndex++
+
 				// Address filter
 				if len(filter.Addresses) > 0 {
 					addrStart := 0
@@ -704,10 +707,9 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 					TransactionHash:  fmt.Sprintf("0x%x", txHash),
 					TransactionIndex: fmt.Sprintf("0x%x", txIdx),
 					BlockHash:        fmt.Sprintf("0x%x", blockHash),
-					LogIndex:         fmt.Sprintf("0x%x", logIndex),
+					LogIndex:         fmt.Sprintf("0x%x", thisIndex),
 					Removed:          false,
 				})
-				logIndex++
 			}
 		}
 	}
