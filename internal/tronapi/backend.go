@@ -52,6 +52,50 @@ type ProposalInfo struct {
 	State           string           `json:"state"`
 }
 
+// PeerInfo describes a connected P2P peer.
+type PeerInfo struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+// DelegatedResourceInfo holds the delegation record between two addresses.
+type DelegatedResourceInfo struct {
+	FromAddress               string `json:"fromAddress"`
+	ToAddress                 string `json:"toAddress"`
+	FrozenBalanceForBandwidth int64  `json:"frozenBalanceForBandwidth"`
+	FrozenBalanceForEnergy    int64  `json:"frozenBalanceForEnergy"`
+	ExpireTimeForBandwidth    int64  `json:"expireTimeForBandwidth"`
+	ExpireTimeForEnergy       int64  `json:"expireTimeForEnergy"`
+}
+
+// DelegationIndexInfo lists all addresses that addr has delegated resources to.
+type DelegationIndexInfo struct {
+	Account     string   `json:"account"`
+	ToAddresses []string `json:"toAddresses"`
+}
+
+// CanDelegateInfo reports how much resource an address can still delegate.
+type CanDelegateInfo struct {
+	MaxSize         int64 `json:"maxSize"`
+	CanDelegateSize int64 `json:"canDelegateSize"`
+	Balance         int64 `json:"balance"`
+}
+
+// CanWithdrawUnfreezeInfo holds the total withdrawable expired-unfreeze amount.
+type CanWithdrawUnfreezeInfo struct {
+	Amount int64 `json:"amount"`
+}
+
+// AvailableUnfreezeCountInfo holds the number of remaining unfreeze slots (max 32).
+type AvailableUnfreezeCountInfo struct {
+	Count int64 `json:"count"`
+}
+
+// RewardInfo holds unclaimed witness reward (allowance).
+type RewardInfo struct {
+	Reward int64 `json:"reward"`
+}
+
 type Backend interface {
 	// Existing
 	CurrentBlock() *types.Block
@@ -91,4 +135,21 @@ type Backend interface {
 	BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error)
 	BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error)
 	ListProposals() ([]*ProposalInfo, error)
+
+	// Delegation/resource queries (Stake 2.0)
+	GetDelegatedResourceV2(from, to common.Address) (*DelegatedResourceInfo, error)
+	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)
+	CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error)
+	GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error)
+	GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error)
+
+	// Rewards
+	GetReward(addr common.Address) (*RewardInfo, error)
+
+	// Transaction pool queries
+	GetTransactionFromPending(txID string) (*corepb.Transaction, error)
+	GetTransactionListFromPending() ([]*corepb.Transaction, error)
+
+	// Network
+	ListNodes() ([]*PeerInfo, error)
 }

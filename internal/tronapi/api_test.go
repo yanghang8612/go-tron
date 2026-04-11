@@ -149,6 +149,42 @@ func (m *mockBackend) ListProposals() ([]*ProposalInfo, error) {
 	return nil, nil
 }
 
+func (m *mockBackend) GetDelegatedResourceV2(from, to common.Address) (*DelegatedResourceInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetReward(addr common.Address) (*RewardInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockBackend) ListNodes() ([]*PeerInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func TestGetNowBlock(t *testing.T) {
 	api := NewAPI(&mockBackend{})
 	mux := http.NewServeMux()

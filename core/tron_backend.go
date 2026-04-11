@@ -26,7 +26,8 @@ type TxBroadcaster interface {
 type TronBackend struct {
 	chain       *BlockChain
 	pool        *txpool.TxPool
-	txBroadcast TxBroadcaster // nil until wired from main
+	txBroadcast TxBroadcaster          // nil until wired from main
+	peersFunc   func() []tronapi.PeerInfo // nil until wired from main
 }
 
 func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
@@ -37,6 +38,12 @@ func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
 // announces the tx to peers after adding it to the local pool.
 func (b *TronBackend) SetTxBroadcaster(bc TxBroadcaster) {
 	b.txBroadcast = bc
+}
+
+// SetPeerLister wires in a function that returns connected P2P peers.
+// Called from main.go to avoid a core→net import cycle.
+func (b *TronBackend) SetPeerLister(fn func() []tronapi.PeerInfo) {
+	b.peersFunc = fn
 }
 
 func (b *TronBackend) CurrentBlock() *types.Block {
@@ -381,4 +388,40 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) (*tronapi.DelegatedResourceInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (*tronapi.DelegationIndexInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
+	return nil, fmt.Errorf("not implemented")
 }
