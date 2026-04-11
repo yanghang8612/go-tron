@@ -314,13 +314,21 @@ func TestListNodes(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
 	nodes, ok := result["nodes"].([]interface{})
 	if !ok || len(nodes) != 1 {
 		t.Fatalf("expected nodes=[1 entry], got %v", result)
 	}
-	node := nodes[0].(map[string]interface{})
-	addr := node["address"].(map[string]interface{})
+	node, ok := nodes[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("nodes[0] is not an object")
+	}
+	addr, ok := node["address"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("node address is not an object")
+	}
 	if addr["host"] != "127.0.0.1" {
 		t.Fatalf("unexpected host: %v", addr["host"])
 	}
