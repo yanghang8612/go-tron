@@ -12,7 +12,7 @@ import (
 // based on the approval count vs active SR count.
 // activeWitnesses is the current active super-representative set; only approvals
 // from current witnesses are counted (matches java-tron's hasMostApprovals logic).
-func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64) {
+func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64) error {
 	activeCount := len(activeWitnesses)
 	ids := rawdb.ReadProposalIndex(db)
 	for _, id := range ids {
@@ -50,8 +50,11 @@ func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties,
 		} else {
 			p.State = rawdb.ProposalStateCanceled
 		}
-		rawdb.WriteProposal(db, id, p)
+		if err := rawdb.WriteProposal(db, id, p); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // paramIDToName maps a TRON proposal parameter ID to its DynProps key name.

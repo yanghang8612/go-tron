@@ -3,6 +3,7 @@ package actuator
 import (
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -71,7 +72,7 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	act := &UnfreezeBalanceV2Actuator{}
 	ctx := &Context{
 		State:       statedb,
-		DynProps:    nil,
+		DynProps:    state.NewDynamicProperties(),
 		Tx:          tx,
 		BlockTime:   blockTime,
 		BlockNumber: 1,

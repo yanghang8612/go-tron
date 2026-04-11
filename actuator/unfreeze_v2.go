@@ -57,7 +57,7 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 	}
 	ownerAddr := common.BytesToAddress(uc.OwnerAddress)
 	ctx.State.ReduceFreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance)
-	expireTime := ctx.BlockTime + 14*86_400_000
+	expireTime := ctx.BlockTime + ctx.DynProps.UnfreezeDelayDays()*86_400_000
 	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
 
 	// Invalidate votes if remaining Tron Power < total votes cast
