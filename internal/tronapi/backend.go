@@ -159,4 +159,9 @@ type Backend interface {
 	GetAssetIssueList() []*contractpb.AssetIssueContract
 	GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract
 	GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract
+
+	// Market queries (Phase 13)
+	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder
+	GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder
+	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList
 }

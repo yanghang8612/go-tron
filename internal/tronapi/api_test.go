@@ -134,6 +134,15 @@ func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.As
 	return nil
 }
 
+// --- New Phase 13 methods (Market order queries) ---
+func (s *stubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
+func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
+	return nil
+}
+func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+	return nil
+}
+
 // --- Helpers ---
 func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {
 	t.Helper()

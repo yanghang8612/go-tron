@@ -556,6 +556,25 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.A
 	return rawdb.ReadAssetIssue(b.chain.db, id)
 }
 
+func (b *TronBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
+	return rawdb.ReadMarketOrder(b.chain.db, orderID)
+}
+
+func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.MarketOrder {
+	mao := rawdb.ReadMarketAccountOrder(b.chain.db, addr[:])
+	var orders []*corepb.MarketOrder
+	for _, id := range mao.Orders {
+		if o := rawdb.ReadMarketOrder(b.chain.db, id); o != nil {
+			orders = append(orders, o)
+		}
+	}
+	return orders
+}
+
+func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+	return rawdb.ReadMarketPriceList(b.chain.db, sellTokenID, buyTokenID)
+}
+
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
 
 func (b *TronBackend) ChainID() int64 {

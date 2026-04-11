@@ -82,6 +82,11 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getassetissuelist", api.getAssetIssueList)
 	mux.HandleFunc("/wallet/getpaginatedassetissuelist", api.getPaginatedAssetIssueList)
 	mux.HandleFunc("/wallet/getassetissuebyaccount", api.getAssetIssueByAccount)
+
+	// Phase 13: Market order queries
+	mux.HandleFunc("/wallet/getmarketorderbyid", api.getMarketOrderByID)
+	mux.HandleFunc("/wallet/getmarketordersfromaccount", api.getMarketOrdersFromAccount)
+	mux.HandleFunc("/wallet/getmarketpricebypair", api.getMarketPriceByPair)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -1062,4 +1067,71 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeTronJSON(w, asset)
+}
+
+func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	orderID := common.FromHex(body.Value)
+	order := api.backend.GetMarketOrderByID(orderID)
+	if order == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, order)
+}
+
+func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Address string `json:"address"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Address == "" {
+		body.Address = r.URL.Query().Get("address")
+	}
+	if body.Address == "" {
+		http.Error(w, "address required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(body.Address))
+	orders := api.backend.GetMarketOrdersByAccount(addr)
+	var list []map[string]any
+	for _, o := range orders {
+		list = append(list, marshalMessage(o.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	data, _ := json.Marshal(map[string]any{"orders": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SellTokenId string `json:"sell_token_id"`
+		BuyTokenId  string `json:"buy_token_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.SellTokenId == "" || body.BuyTokenId == "" {
+		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
+		return
+	}
+	pl := api.backend.GetMarketPriceByPair([]byte(body.SellTokenId), []byte(body.BuyTokenId))
+	if pl == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, pl)
 }
