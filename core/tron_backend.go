@@ -27,7 +27,7 @@ type TronBackend struct {
 	chain       *BlockChain
 	pool        *txpool.TxPool
 	txBroadcast TxBroadcaster          // nil until wired from main
-	peersFunc   func() []tronapi.PeerInfo // nil until wired from main
+	peersFunc   func() []*tronapi.PeerInfo // nil until wired from main
 }
 
 func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
@@ -42,7 +42,7 @@ func (b *TronBackend) SetTxBroadcaster(bc TxBroadcaster) {
 
 // SetPeerLister wires in a function that returns connected P2P peers.
 // Called from main.go to avoid a core→net import cycle.
-func (b *TronBackend) SetPeerLister(fn func() []tronapi.PeerInfo) {
+func (b *TronBackend) SetPeerLister(fn func() []*tronapi.PeerInfo) {
 	b.peersFunc = fn
 }
 
