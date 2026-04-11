@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -42,27 +43,7 @@ func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties,
 
 // paramIDToName maps a TRON proposal parameter ID to its DynProps key name.
 func paramIDToName(id int64) string {
-	mapping := map[int64]string{
-		0:  "maintenance_time_interval",
-		1:  "account_upgrade_cost",
-		2:  "create_account_fee",
-		3:  "transaction_fee",
-		4:  "asset_issue_fee",
-		5:  "witness_pay_per_block",
-		6:  "witness_standby_allowance",
-		9:  "create_new_account_fee_in_system_contract",
-		10: "create_new_account_bandwidth_rate",
-		11: "energy_fee",
-		15: "max_cpu_time_of_one_tx",
-		19: "total_energy_current_limit",
-		22: "total_net_limit",
-		27: "unfreeze_delay_days",
-		65: "free_net_limit",
-	}
-	if name, ok := mapping[id]; ok {
-		return name
-	}
-	return ""
+	return forks.ProposalParamKey(id)
 }
 
 func sortedKeys(m map[int64]int64) []int64 {

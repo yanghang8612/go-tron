@@ -4,53 +4,16 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-// proposalParamKey maps governance proposal parameter IDs to DynamicProperties keys.
-var proposalParamKey = map[int64]string{
-	// Numeric parameters
-	0:  "maintenance_time_interval",
-	5:  "total_energy_current_limit",
-	7:  "energy_fee",
-	8:  "max_cpu_time_of_one_tx",
-	9:  "free_net_limit",
-	13: "witness_pay_per_block",
-	14: "witness_standby_allowance",
-	19: "total_net_limit",
-	// Allow flags
-	1:  "allow_multi_sign",
-	3:  "allow_same_token_name",
-	4:  "allow_delegate_resource",
-	6:  "allow_adaptive_energy_limit",
-	15: "allow_tvm_transfer_trc10",
-	16: "allow_change_delegation",
-	18: "allow_new_resource_model",
-	30: "allow_tvm_constantinople",
-	32: "allow_tvm_solidity059",
-	33: "allow_tvm_freeze",
-	35: "allow_tvm_shielded_token",
-	40: "allow_pbft",
-	41: "allow_tvm_istanbul",
-	45: "allow_market_transaction",
-	48: "allow_tvm_compatibility",
-	52: "allow_account_history",
-	57: "allow_tvm_vote",
-	65: "allow_tvm_london",
-	66: "allow_energy_adjustment",
-	70: "allow_dynamic_energy",
-	74: "allow_staking_v2",
-	78: "allow_tvm_big_integer",
-	82: "allow_tvm_cancun",
-	83: "allow_tvm_blob",
-}
-
 // applyProposal applies all parameters from an approved proposal to DynamicProperties.
 func applyProposal(ctx *Context, p *rawdb.Proposal) {
 	for paramID, value := range p.Parameters {
-		key, ok := proposalParamKey[paramID]
-		if !ok {
+		key := forks.ProposalParamKey(paramID)
+		if key == "" {
 			continue
 		}
 		ctx.DynProps.Set(key, value)

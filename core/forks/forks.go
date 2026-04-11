@@ -75,3 +75,52 @@ func IsActive(flag AllowFlag, blockNum uint64, dp *state.DynamicProperties) bool
 	v, _ := dp.Get(key)
 	return v != 0
 }
+
+// ProposalParamKey maps a governance proposal parameter ID to its DynamicProperties key.
+// Returns "" for unknown IDs. This is the single source of truth for all proposal parameter IDs.
+func ProposalParamKey(id int64) string {
+	mapping := map[int64]string{
+		// Numeric parameters
+		0:  "maintenance_time_interval",
+		1:  "account_upgrade_cost",
+		2:  "create_account_fee",
+		3:  "transaction_fee",
+		4:  "asset_issue_fee",
+		5:  "witness_pay_per_block",
+		6:  "witness_standby_allowance",
+		9:  "create_new_account_fee_in_system_contract",
+		10: "create_new_account_bandwidth_rate",
+		11: "energy_fee",
+		13: "max_cpu_time_of_one_tx",
+		19: "total_energy_current_limit",
+		22: "total_net_limit",
+		27: "unfreeze_delay_days",
+		65: "free_net_limit",
+		// Allow flags
+		14: "allow_same_token_name",
+		16: "allow_delegate_resource",
+		17: "allow_adaptive_energy_limit",
+		18: "allow_tvm_transfer_trc10",
+		20: "allow_multi_sign",
+		21: "allow_change_delegation",
+		23: "allow_new_resource_model",
+		25: "allow_tvm_constantinople",
+		26: "allow_tvm_solidity059",
+		28: "allow_tvm_freeze",
+		29: "allow_tvm_shielded_token",
+		30: "allow_pbft",
+		31: "allow_tvm_istanbul",
+		33: "allow_market_transaction",
+		34: "allow_tvm_compatibility",
+		35: "allow_account_history",
+		36: "allow_tvm_vote",
+		66: "allow_tvm_london",
+		67: "allow_energy_adjustment",
+		70: "allow_dynamic_energy",
+		74: "allow_staking_v2",
+		78: "allow_tvm_big_integer",
+		82: "allow_tvm_cancun",
+		83: "allow_tvm_blob",
+	}
+	return mapping[id]
+}
