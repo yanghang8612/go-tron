@@ -15,7 +15,9 @@ func TestWriteReadAssetIssue(t *testing.T) {
 		TotalSupply: 1_000_000,
 		Id:          "1000001",
 	}
-	_ = WriteAssetIssue(db, 1_000_001, c)
+	if err := WriteAssetIssue(db, 1_000_001, c); err != nil {
+		t.Fatal(err)
+	}
 	got := ReadAssetIssue(db, 1_000_001)
 	if got == nil {
 		t.Fatal("expected asset to be found")
@@ -34,7 +36,9 @@ func TestReadAssetIssue_NotFound(t *testing.T) {
 
 func TestAssetNameIndex(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
-	_ = WriteAssetNameIndex(db, []byte("MYTOKEN"), 1_000_001)
+	if err := WriteAssetNameIndex(db, []byte("MYTOKEN"), 1_000_001); err != nil {
+		t.Fatal(err)
+	}
 	id, ok := ReadAssetNameIndex(db, []byte("MYTOKEN"))
 	if !ok {
 		t.Fatal("expected name index to be found")
@@ -51,7 +55,9 @@ func TestAssetNameIndex(t *testing.T) {
 func TestAssetOwnerIndex(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x01}
-	_ = WriteAssetOwnerIndex(db, owner[:], 1_000_001)
+	if err := WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+		t.Fatal(err)
+	}
 	id, ok := ReadAssetOwnerIndex(db, owner[:])
 	if !ok {
 		t.Fatal("expected owner index to be found")
@@ -68,7 +74,9 @@ func TestAssetOwnerIndex(t *testing.T) {
 
 func TestAssetIssueTime(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
-	_ = WriteAssetIssueTime(db, 1_000_001, 1_713_000_000_000)
+	if err := WriteAssetIssueTime(db, 1_000_001, 1_713_000_000_000); err != nil {
+		t.Fatal(err)
+	}
 	got := ReadAssetIssueTime(db, 1_000_001)
 	if got != 1_713_000_000_000 {
 		t.Fatalf("issueTime: want 1713000000000, got %d", got)
@@ -80,8 +88,12 @@ func TestAssetIssueTime(t *testing.T) {
 
 func TestListAllAssets(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
-	_ = WriteAssetIssue(db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("AAA")})
-	_ = WriteAssetIssue(db, 1_000_002, &contractpb.AssetIssueContract{Name: []byte("BBB")})
+	if err := WriteAssetIssue(db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("AAA")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAssetIssue(db, 1_000_002, &contractpb.AssetIssueContract{Name: []byte("BBB")}); err != nil {
+		t.Fatal(err)
+	}
 	all := ListAllAssets(db)
 	if len(all) != 2 {
 		t.Fatalf("expected 2 assets, got %d", len(all))
@@ -91,7 +103,9 @@ func TestListAllAssets(t *testing.T) {
 func TestListAssetsPaginated(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	for i := int64(0); i < 5; i++ {
-		_ = WriteAssetIssue(db, 1_000_001+i, &contractpb.AssetIssueContract{})
+		if err := WriteAssetIssue(db, 1_000_001+i, &contractpb.AssetIssueContract{}); err != nil {
+			t.Fatalf("WriteAssetIssue failed: %v", err)
+		}
 	}
 	page := ListAssetsPaginated(db, 2, 2)
 	if len(page) != 2 {
