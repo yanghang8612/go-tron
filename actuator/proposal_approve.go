@@ -4,21 +4,9 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
-
-// applyProposal applies all parameters from an approved proposal to DynamicProperties.
-func applyProposal(ctx *Context, p *rawdb.Proposal) {
-	for paramID, value := range p.Parameters {
-		key := forks.ProposalParamKey(paramID)
-		if key == "" {
-			continue
-		}
-		ctx.DynProps.Set(key, value)
-	}
-}
 
 type ProposalApproveActuator struct{}
 
@@ -87,15 +75,6 @@ func (a *ProposalApproveActuator) Execute(ctx *Context) (*Result, error) {
 		proposal.Approvals = append(proposal.Approvals, ownerAddr)
 	} else {
 		proposal.Approvals = removeAddress(proposal.Approvals, ownerAddr)
-	}
-
-	// Check if approval threshold reached (>2/3 of active witnesses)
-	if c.IsAddApproval && len(ctx.ActiveWitnesses) > 0 {
-		threshold := len(ctx.ActiveWitnesses)*2/3 + 1
-		if len(proposal.Approvals) >= threshold {
-			applyProposal(ctx, proposal)
-			proposal.State = rawdb.ProposalStateApproved
-		}
 	}
 
 	if err := rawdb.WriteProposal(ctx.DB, c.ProposalId, proposal); err != nil {

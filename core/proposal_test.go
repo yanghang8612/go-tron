@@ -29,7 +29,8 @@ func TestProcessProposals_Approved(t *testing.T) {
 	rawdb.WriteProposalIndex(db, []int64{0})
 
 	// 3 approvals out of 4 SRs = 75% >= 70%
-	ProcessProposals(db, dynProps, 4, 3000)
+	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
+	ProcessProposals(db, dynProps, active, 3000)
 
 	got := rawdb.ReadProposal(db, 0)
 	if got.State != rawdb.ProposalStateApproved {
@@ -54,7 +55,8 @@ func TestProcessProposals_Canceled(t *testing.T) {
 	rawdb.WriteProposal(db, 0, p)
 	rawdb.WriteProposalIndex(db, []int64{0})
 
-	ProcessProposals(db, dynProps, 4, 3000)
+	active4 := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
+	ProcessProposals(db, dynProps, active4, 3000)
 
 	got := rawdb.ReadProposal(db, 0)
 	if got.State != rawdb.ProposalStateCanceled {
@@ -80,7 +82,7 @@ func TestProcessProposals_NotExpired(t *testing.T) {
 	rawdb.WriteProposal(db, 0, p)
 	rawdb.WriteProposalIndex(db, []int64{0})
 
-	ProcessProposals(db, dynProps, 1, 1000) // maintenance time < expiration
+	ProcessProposals(db, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000) // maintenance time < expiration
 
 	got := rawdb.ReadProposal(db, 0)
 	if got.State != rawdb.ProposalStatePending {

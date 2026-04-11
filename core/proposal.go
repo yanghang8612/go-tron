@@ -2,6 +2,7 @@ package core
 
 import (
 	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -9,7 +10,10 @@ import (
 
 // ProcessProposals checks all pending proposals and approves or cancels them
 // based on the approval count vs active SR count.
-func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties, activeCount int, maintenanceTime int64) {
+// activeWitnesses is the current active super-representative set; only approvals
+// from current witnesses are counted (matches java-tron's hasMostApprovals logic).
+func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64) {
+	activeCount := len(activeWitnesses)
 	ids := rawdb.ReadProposalIndex(db)
 	for _, id := range ids {
 		p := rawdb.ReadProposal(db, id)
@@ -23,9 +27,18 @@ func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties,
 			continue // cannot compute threshold with zero active witnesses
 		}
 
-		approvalCount := len(p.Approvals)
-		// 70% threshold: approvals * 10 >= activeCount * 7
-		if approvalCount*10 >= activeCount*7 {
+		// Count only approvals from currently-active witnesses.
+		activeApprovals := 0
+		for _, approval := range p.Approvals {
+			for _, w := range activeWitnesses {
+				if approval == w {
+					activeApprovals++
+					break
+				}
+			}
+		}
+		// 70% threshold: matches java-tron's `count >= activeWitnesses.size() * 7 / 10`
+		if activeApprovals >= activeCount*7/10 {
 			// Apply parameters
 			for _, k := range sortedKeys(p.Parameters) {
 				name := paramIDToName(k)
