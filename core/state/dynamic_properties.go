@@ -438,6 +438,17 @@ func (dp *DynamicProperties) SetAllowEnergyAdjustment(v bool) {
 	}
 }
 
+func (dp *DynamicProperties) AllowTvmSolidity058() bool {
+	return dp.props["allow_tvm_solidity058"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmSolidity058(v bool) {
+	if v {
+		dp.Set("allow_tvm_solidity058", 1)
+	} else {
+		dp.Set("allow_tvm_solidity058", 0)
+	}
+}
+
 func (dp *DynamicProperties) FreeNetLimit() int64 {
 	return dp.props["free_net_limit"]
 }
