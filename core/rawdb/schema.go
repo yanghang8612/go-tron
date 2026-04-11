@@ -30,6 +30,11 @@ var (
 	delegationPrefix      = []byte("dr-")
 	delegationIndexPrefix = []byte("dri-")
 	brokeragePrefix       = []byte("wb-")
+
+	assetPrefix          = []byte("ast-")   // tokenID big-endian 8B → AssetIssueContract proto bytes
+	assetNamePrefix      = []byte("astn-")  // token name bytes → tokenID big-endian 8B
+	assetOwnerPrefix     = []byte("asto-")  // owner address 21B → tokenID big-endian 8B
+	assetIssueTimePrefix = []byte("asti-")  // tokenID big-endian 8B → issue timestamp ms big-endian 8B
 )
 
 func blockKey(number uint64) []byte {
@@ -91,4 +96,26 @@ func delegationIndexKey(from []byte) []byte {
 
 func brokerageKey(addr []byte) []byte {
 	return append(append([]byte{}, brokeragePrefix...), addr...)
+}
+
+func assetKey(tokenID int64) []byte {
+	k := make([]byte, len(assetPrefix)+8)
+	copy(k, assetPrefix)
+	binary.BigEndian.PutUint64(k[len(assetPrefix):], uint64(tokenID))
+	return k
+}
+
+func assetNameKey(name []byte) []byte {
+	return append(append([]byte{}, assetNamePrefix...), name...)
+}
+
+func assetOwnerKey(ownerAddr []byte) []byte {
+	return append(append([]byte{}, assetOwnerPrefix...), ownerAddr...)
+}
+
+func assetIssueTimeKey(tokenID int64) []byte {
+	k := make([]byte, len(assetIssueTimePrefix)+8)
+	copy(k, assetIssueTimePrefix)
+	binary.BigEndian.PutUint64(k[len(assetIssueTimePrefix):], uint64(tokenID))
+	return k
 }
