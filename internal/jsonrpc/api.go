@@ -240,6 +240,9 @@ func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 	addr := common.BytesToAddress(common.FromHex(p[0]))
 	var slot common.Hash
 	slotBytes := common.FromHex(p[1])
+	if len(slotBytes) > 32 {
+		slotBytes = slotBytes[len(slotBytes)-32:]
+	}
 	copy(slot[32-len(slotBytes):], slotBytes)
 	val := api.backend.GetStorageAt(addr, slot)
 	return hexBytes(val[:]), nil
