@@ -30,6 +30,7 @@ var defaultProps = map[string]int64{
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            1500,
 	"next_proposal_id":                          0,
+	"next_token_id":                             1_000_001,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -198,6 +199,15 @@ func (dp *DynamicProperties) NextProposalID() int64 {
 func (dp *DynamicProperties) SetNextProposalID(id int64) {
 	dp.Set("next_proposal_id", id)
 }
+
+// NextTokenID returns the next token ID to assign (starts at 1_000_001).
+func (dp *DynamicProperties) NextTokenID() int64 { return dp.props["next_token_id"] }
+
+// SetNextTokenID updates the next token ID counter.
+func (dp *DynamicProperties) SetNextTokenID(id int64) { dp.Set("next_token_id", id) }
+
+// AssetIssueFee returns the fee (in SUN) required to issue a TRC10 token.
+func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.props["asset_issue_fee"] }
 
 // All returns a read-only copy of all dynamic properties.
 func (dp *DynamicProperties) All() map[string]int64 {

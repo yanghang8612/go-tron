@@ -115,6 +115,47 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 	return nil
 }
 
+// GetTRC10Balance returns the TRC10 token balance of addr for the given tokenID.
+// Returns 0 if the account or token slot does not exist.
+func (s *StateDB) GetTRC10Balance(addr tcommon.Address, tokenID int64) int64 {
+	return slotToInt64(s.GetState(addr, trc10BalanceSlot(tokenID)))
+}
+
+// SetTRC10Balance sets the TRC10 token balance. Used for initial token minting.
+// SetState calls GetOrCreateAccount internally, so the account is created if needed.
+func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
+	s.SetState(addr, trc10BalanceSlot(tokenID), int64ToSlot(amount))
+}
+
+// AddTRC10Balance credits amount TRC10 tokens to addr.
+func (s *StateDB) AddTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
+	s.SetTRC10Balance(addr, tokenID, s.GetTRC10Balance(addr, tokenID)+amount)
+}
+
+// SubTRC10Balance debits amount TRC10 tokens from addr.
+// Returns ErrInsufficientBalance if addr has fewer than amount tokens.
+func (s *StateDB) SubTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) error {
+	current := s.GetTRC10Balance(addr, tokenID)
+	if current < amount {
+		return ErrInsufficientBalance
+	}
+	s.SetTRC10Balance(addr, tokenID, current-amount)
+	return nil
+}
+
+// IsFrozenClaimed returns whether frozen_supply entry at index has been claimed.
+func (s *StateDB) IsFrozenClaimed(addr tcommon.Address, tokenID int64, index uint32) bool {
+	v := s.GetState(addr, trc10FrozenClaimedSlot(tokenID, index))
+	return v[31] != 0
+}
+
+// SetFrozenClaimed marks frozen_supply entry at index as claimed.
+func (s *StateDB) SetFrozenClaimed(addr tcommon.Address, tokenID int64, index uint32) {
+	var v tcommon.Hash
+	v[31] = 0x01
+	s.SetState(addr, trc10FrozenClaimedSlot(tokenID, index), v)
+}
+
 // AddFreezeV2 adds a freeze entry for the given resource type.
 func (s *StateDB) AddFreezeV2(addr tcommon.Address, resourceType corepb.ResourceCode, amount int64) {
 	obj := s.getStateObject(addr)
