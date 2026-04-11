@@ -52,6 +52,10 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &CreateAccountActuator{}, nil
 	case corepb.Transaction_Contract_WitnessCreateContract:
 		return &WitnessCreateActuator{}, nil
+	case corepb.Transaction_Contract_FreezeBalanceContract:
+		return &FreezeBalanceActuator{}, nil
+	case corepb.Transaction_Contract_UnfreezeBalanceContract:
+		return &UnfreezeBalanceActuator{}, nil
 	case corepb.Transaction_Contract_FreezeBalanceV2Contract:
 		return &FreezeBalanceV2Actuator{}, nil
 	case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
