@@ -637,6 +637,74 @@ RESULT=$(http_get $SR_HTTP "/wallet/listnodes")
 check "listnodes returns nodes key" "$RESULT" '"nodes"'
 
 # ─────────────────────────────────────────────────────────────────
+# SECTION 10: Phase 11 — JSON-RPC API at :8545
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Test Group 10: Ethereum-Compatible JSON-RPC API ==="
+
+JRPC_URL="http://localhost:8545"
+
+# Helper: JSON-RPC POST
+jrpc_call() {
+    local method="$1"
+    local params="$2"
+    curl -s -X POST "$JRPC_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}"
+}
+
+# 10.1 net_version
+RESULT=$(jrpc_call "net_version" "[]")
+check "net_version returns result" "$RESULT" '"result"'
+
+# 10.2 web3_clientVersion
+RESULT=$(jrpc_call "web3_clientVersion" "[]")
+check "web3_clientVersion returns go-tron" "$RESULT" "go-tron"
+
+# 10.3 eth_chainId
+RESULT=$(jrpc_call "eth_chainId" "[]")
+check "eth_chainId returns hex result" "$RESULT" '"result":"0x'
+
+# 10.4 eth_blockNumber
+RESULT=$(jrpc_call "eth_blockNumber" "[]")
+check "eth_blockNumber returns hex result" "$RESULT" '"result":"0x'
+
+# 10.5 eth_syncing
+RESULT=$(jrpc_call "eth_syncing" "[]")
+check "eth_syncing returns false" "$RESULT" 'false'
+
+# 10.6 eth_getBalance — witness address, latest
+RESULT=$(jrpc_call "eth_getBalance" "[\"$WITNESS_ADDR\", \"latest\"]")
+check "eth_getBalance returns hex result" "$RESULT" '"result":"0x'
+
+# 10.7 eth_getTransactionCount — always 0x0
+RESULT=$(jrpc_call "eth_getTransactionCount" "[\"$WITNESS_ADDR\", \"latest\"]")
+check "eth_getTransactionCount returns 0x0" "$RESULT" '"result":"0x0"'
+
+# 10.8 eth_getCode — witness is not a contract → 0x
+RESULT=$(jrpc_call "eth_getCode" "[\"$WITNESS_ADDR\", \"latest\"]")
+check "eth_getCode for EOA returns 0x" "$RESULT" '"result":"0x"'
+
+# 10.9 eth_getBlockByNumber — block 0 (genesis)
+RESULT=$(jrpc_call "eth_getBlockByNumber" "[\"0x0\", false]")
+check "eth_getBlockByNumber genesis returns hash" "$RESULT" '"hash"'
+
+# 10.10 eth_getTransactionByHash — unknown hash → null
+RESULT=$(jrpc_call "eth_getTransactionByHash" \
+    "[\"0x0000000000000000000000000000000000000000000000000000000000000000\"]")
+check "eth_getTransactionByHash unknown returns null" "$RESULT" '"result":null'
+
+# 10.11 eth_getLogs — empty range → []
+RESULT=$(jrpc_call "eth_getLogs" "[{\"fromBlock\":\"0x0\",\"toBlock\":\"0x0\"}]")
+check "eth_getLogs returns result array" "$RESULT" '"result"'
+
+# 10.12 batch request
+RESULT=$(curl -s -X POST "$JRPC_URL" \
+    -H "Content-Type: application/json" \
+    -d '[{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1},{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":2}]')
+check "batch request returns array" "$RESULT" '"jsonrpc":"2.0"'
+
+# ─────────────────────────────────────────────────────────────────
 # Summary: print last few lines of logs
 # ─────────────────────────────────────────────────────────────────
 echo ""
