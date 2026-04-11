@@ -94,6 +94,8 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &UnDelegateResourceActuator{}, nil
 	case corepb.Transaction_Contract_CancelAllUnfreezeV2Contract:
 		return &CancelAllUnfreezeV2Actuator{}, nil
+	case corepb.Transaction_Contract_ParticipateAssetIssueContract:
+		return &ParticipateAssetIssueActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}

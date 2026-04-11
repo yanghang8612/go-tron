@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -53,6 +54,10 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if asset.TrxNum <= 0 || asset.Num <= 0 {
 		return errors.New("invalid exchange rate in asset")
 	}
+	// Guard against overflow: c.Amount * asset.Num must not exceed int64 max.
+	if int64(asset.Num) > 0 && c.Amount > math.MaxInt64/int64(asset.Num) {
+		return errors.New("token amount overflows int64")
+	}
 	tokenAmount := c.Amount * int64(asset.Num) / int64(asset.TrxNum)
 	if tokenAmount <= 0 {
 		return errors.New("token amount rounds to zero")
@@ -78,7 +83,7 @@ func (a *ParticipateAssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	tokenID, _ := strconv.ParseInt(string(c.AssetName), 10, 64)
 	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	tokenAmount := c.Amount * int64(asset.Num) / int64(asset.TrxNum)
+	tokenAmount := c.Amount * int64(asset.Num) / int64(asset.TrxNum) // overflow already checked in Validate
 
 	buyer := common.BytesToAddress(c.OwnerAddress)
 	issuer := common.BytesToAddress(c.ToAddress)
