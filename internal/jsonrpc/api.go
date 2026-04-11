@@ -3,8 +3,11 @@ package jsonrpc
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
+
+	"github.com/tronprotocol/go-tron/common"
 )
 
 // API implements http.Handler and dispatches JSON-RPC 2.0 requests.
@@ -206,17 +209,40 @@ func (api *API) ethBlockNumber(_ json.RawMessage) (interface{}, error) {
 func (api *API) ethSyncing(_ json.RawMessage) (interface{}, error) {
 	return false, nil
 }
-func (api *API) ethGetBalance(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetBalance(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	addr := common.BytesToAddress(common.FromHex(p[0]))
+	balSUN := api.backend.GetBalance(addr)
+	// Multiply by 1e12 using big.Int to avoid int64 overflow for large balances.
+	wei := new(big.Int).Mul(big.NewInt(balSUN), big.NewInt(1_000_000_000_000))
+	return fmt.Sprintf("0x%x", wei), nil
 }
 func (api *API) ethGetTransactionCount(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	// TRON has no nonces. Always return 0.
+	return "0x0", nil
 }
-func (api *API) ethGetCode(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetCode(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	addr := common.BytesToAddress(common.FromHex(p[0]))
+	return hexBytes(api.backend.GetCode(addr)), nil
 }
-func (api *API) ethGetStorageAt(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 2 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	addr := common.BytesToAddress(common.FromHex(p[0]))
+	var slot common.Hash
+	slotBytes := common.FromHex(p[1])
+	copy(slot[32-len(slotBytes):], slotBytes)
+	val := api.backend.GetStorageAt(addr, slot)
+	return hexBytes(val[:]), nil
 }
 func (api *API) ethCall(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")

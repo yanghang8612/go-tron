@@ -539,15 +539,33 @@ func (b *TronBackend) BlockNumber() uint64 {
 }
 
 func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
-	return 0 // stub
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return 0
+	}
+	return statedb.GetBalance(addr)
 }
 
 func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
-	return nil // stub
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil
+	}
+	return statedb.GetCode(addr)
 }
 
 func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
-	return tcommon.Hash{} // stub
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return tcommon.Hash{}
+	}
+	return statedb.GetState(addr, slot)
 }
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
