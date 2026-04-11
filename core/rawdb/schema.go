@@ -35,6 +35,11 @@ var (
 	assetNamePrefix      = []byte("astn-")  // token name bytes → tokenID big-endian 8B
 	assetOwnerPrefix     = []byte("asto-")  // owner address 21B → tokenID big-endian 8B
 	assetIssueTimePrefix = []byte("asti-")  // tokenID big-endian 8B → issue timestamp ms big-endian 8B
+
+	marketOrderPrefix        = []byte("mo-")
+	marketAccountOrderPrefix = []byte("mao-")
+	marketOrderBookPrefix    = []byte("mop-")
+	marketPriceListPrefix    = []byte("mpl-")
 )
 
 func blockKey(number uint64) []byte {
@@ -118,4 +123,42 @@ func assetIssueTimeKey(tokenID int64) []byte {
 	copy(k, assetIssueTimePrefix)
 	binary.BigEndian.PutUint64(k[len(assetIssueTimePrefix):], uint64(tokenID))
 	return k
+}
+
+func gcdInt64(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// PriceKey normalizes a {sellQty, buyQty} pair by GCD and encodes as 16 bytes.
+func PriceKey(sellQty, buyQty int64) [16]byte {
+	g := gcdInt64(sellQty, buyQty)
+	var k [16]byte
+	binary.BigEndian.PutUint64(k[:8], uint64(sellQty/g))
+	binary.BigEndian.PutUint64(k[8:], uint64(buyQty/g))
+	return k
+}
+
+func marketOrderKey(orderID []byte) []byte {
+	return append(append([]byte{}, marketOrderPrefix...), orderID...)
+}
+
+func marketAccountOrderKey(ownerAddr []byte) []byte {
+	return append(append([]byte{}, marketAccountOrderPrefix...), ownerAddr...)
+}
+
+func marketOrderBookKey(sellTokenID, buyTokenID []byte, pk [16]byte) []byte {
+	k := append(append([]byte{}, marketOrderBookPrefix...), sellTokenID...)
+	k = append(k, '|')
+	k = append(k, buyTokenID...)
+	k = append(k, '|')
+	return append(k, pk[:]...)
+}
+
+func marketPriceListKey(sellTokenID, buyTokenID []byte) []byte {
+	k := append(append([]byte{}, marketPriceListPrefix...), sellTokenID...)
+	k = append(k, '|')
+	return append(k, buyTokenID...)
 }
