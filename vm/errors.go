@@ -13,5 +13,6 @@ var (
 	ErrInsufficientBalance   = errors.New("insufficient balance for transfer")
 	ErrContractCodeTooLarge  = errors.New("max code size exceeded")
 	ErrInvalidCode           = errors.New("invalid contract code")
+	ErrInvalidOpCode         = errors.New("opcode not available in current fork")
 	ErrExecutionReverted     = errors.New("execution reverted")
 )
