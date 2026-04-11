@@ -198,8 +198,10 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(p2pServer)
 	stack.RegisterLifecycle(apiServer)
 
-	// If witness mode (explicit or dev), create producer
-	if ctx.Bool("witness") || ctx.Bool("dev") {
+	// Start block producer only when --witness is explicitly set.
+	// A node can join a dev chain with --dev --witness.key (for genesis) without
+	// producing blocks by omitting --witness.
+	if ctx.Bool("witness") {
 		var key *ecdsa.PrivateKey
 		if devWitnessKey != nil {
 			key = devWitnessKey

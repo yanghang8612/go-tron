@@ -169,7 +169,7 @@ echo ""
 # SECTION 1: Start SR node (dev mode = single-witness chain)
 # ─────────────────────────────────────────────────────────────────
 echo "=== Starting SR node (dev mode) ==="
-"$GTRON" --dev \
+"$GTRON" --dev --witness \
     --witness.key "$WITNESS_KEY" \
     --datadir "$SR_DIR" \
     --p2p.port "$SR_P2P" \
@@ -436,7 +436,7 @@ fi
 echo ""
 echo "=== Test Group 6: P2P Sync & Cross-Node Consistency ==="
 
-echo "Starting regular node..."
+echo "Starting regular node (relay/sync only — no --witness flag)..."
 "$GTRON" --dev \
     --witness.key "$WITNESS_KEY" \
     --datadir "$NODE_DIR" \
@@ -539,8 +539,9 @@ check_eq "witness count matches across nodes" "$SR_W_COUNT" "$NODE_W_COUNT"
 echo ""
 echo "=== Test Group 7: Transaction via Second Node ==="
 
-# Build tx via the regular node's API and broadcast to that node.
-# TX pool propagation (Phase 9) propagates the tx to SR via P2P so it gets mined.
+# The regular node has no witness key and cannot produce blocks.
+# Broadcasting a TX to it is the definitive test of P2P TX propagation:
+# the TX must travel from NODE's pool to SR's pool via P2P, then be mined by SR.
 RECIPIENT2_ADDR="41bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 TRANSFER_AMOUNT2=500000
 
@@ -554,16 +555,28 @@ check "node: createtransaction works" "$UNSIGNED_TX2" '"raw_data"'
 TX_ID2=$(json_field "d.get('txID','')" "$UNSIGNED_TX2" || echo "")
 SIGNED_TX2=$(echo "$UNSIGNED_TX2" | "$TXSIGN" "$WITNESS_KEY" 2>&1) || true
 
-# Broadcast to the regular node — propagates to SR via P2P
+# Broadcast ONLY to the non-producing node — SR must receive it via P2P to mine it
 BCAST2=$(http_post $NODE_HTTP "/wallet/broadcasttransaction" "$SIGNED_TX2")
-check "broadcast to node propagates via P2P" "$BCAST2" '"result":true'
+check "broadcast to relay node accepted" "$BCAST2" '"result":true'
 
-echo "  Waiting for tx to be mined..."
+echo "  Waiting for SR to mine the propagated tx..."
 CURRENT_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
-wait_for_block $SR_HTTP $((CURRENT_BLOCK + 2)) "SR"
-sleep 5  # let sync catch up to node
+wait_for_block $SR_HTTP $((CURRENT_BLOCK + 3)) "SR"
+sleep 5  # let sync propagate back to node
 
-# Verify on both nodes
+# Verify SR mined TX2 (confirms P2P pool propagation worked)
+RESULT2=$(http_post $SR_HTTP "/wallet/gettransactioninfobyid" "{\"value\": \"$TX_ID2\"}")
+TX2_BLOCK=$(json_field "d.get('blockNumber',0)" "$RESULT2" || echo "0")
+echo "  TX2 mined in block: $TX2_BLOCK"
+if [ "$TX2_BLOCK" -gt 0 ] 2>/dev/null; then
+    echo "  PASS: SR mined the tx received via P2P from relay node"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: SR did not mine tx (P2P propagation may have failed)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Verify balance on both nodes
 RESULT=$(http_post $SR_HTTP "/wallet/getaccount" "{\"address\": \"$RECIPIENT2_ADDR\"}")
 SR_R2_BAL=$(json_field "d.get('balance',0)" "$RESULT" || echo "0")
 echo "  Recipient2 balance on SR: $SR_R2_BAL"
