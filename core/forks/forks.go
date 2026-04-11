@@ -14,6 +14,7 @@ const (
 	AllowTvmTransferTrc10
 	AllowTvmConstantinople
 	AllowTvmSolidity059
+	AllowTvmSolidity058
 	AllowTvmIstanbul
 	AllowMarketTransaction
 	AllowTvmFreeze
@@ -42,6 +43,7 @@ var dynKey = map[AllowFlag]string{
 	AllowTvmTransferTrc10:    "allow_tvm_transfer_trc10",
 	AllowTvmConstantinople:   "allow_tvm_constantinople",
 	AllowTvmSolidity059:      "allow_tvm_solidity059",
+	AllowTvmSolidity058:      "allow_tvm_solidity058",
 	AllowTvmIstanbul:         "allow_tvm_istanbul",
 	AllowMarketTransaction:   "allow_market_transaction",
 	AllowTvmFreeze:           "allow_tvm_freeze",

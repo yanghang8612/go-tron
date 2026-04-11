@@ -36,17 +36,28 @@ func TestIsActive_AllFlags(t *testing.T) {
 	}{
 		{forks.AllowSameTokenName, dp.SetAllowSameTokenName},
 		{forks.AllowDelegateResource, dp.SetAllowDelegateResource},
+		{forks.AllowAdaptiveEnergyLimit, dp.SetAllowAdaptiveEnergyLimit},
 		{forks.AllowMultiSign, dp.SetAllowMultiSign},
 		{forks.AllowChangeDelegation, dp.SetAllowChangeDelegation},
 		{forks.AllowTvmTransferTrc10, dp.SetAllowTvmTransferTrc10},
 		{forks.AllowTvmConstantinople, dp.SetAllowTvmConstantinople},
+		{forks.AllowTvmSolidity059, dp.SetAllowTvmSolidity059},
+		{forks.AllowTvmSolidity058, dp.SetAllowTvmSolidity058},
 		{forks.AllowTvmIstanbul, dp.SetAllowTvmIstanbul},
 		{forks.AllowMarketTransaction, dp.SetAllowMarketTransaction},
 		{forks.AllowTvmFreeze, dp.SetAllowTvmFreeze},
+		{forks.AllowTvmShieldedToken, dp.SetAllowTvmShieldedToken},
 		{forks.AllowTvmVote, dp.SetAllowTvmVote},
+		{forks.AllowAccountHistory, dp.SetAllowAccountHistory},
+		{forks.AllowPbft, dp.SetAllowPbft},
 		{forks.AllowStakingV2, dp.SetAllowStakingV2},
 		{forks.AllowTvmLondon, dp.SetAllowTvmLondon},
+		{forks.AllowTvmCompatibility, dp.SetAllowTvmCompatibility},
 		{forks.AllowDynamicEnergy, dp.SetAllowDynamicEnergy},
+		// AllowNewResourceModel skipped — no setter on DynamicProperties
+		{forks.AllowEnergyAdjustment, dp.SetAllowEnergyAdjustment},
+		{forks.AllowTvmBigInteger, dp.SetAllowTvmBigInteger},
+		{forks.AllowTvmBlob, dp.SetAllowTvmBlob},
 		{forks.AllowTvmCancun, dp.SetAllowTvmCancun},
 	}
 	for _, tc := range testCases {
