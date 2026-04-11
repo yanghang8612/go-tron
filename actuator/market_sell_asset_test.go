@@ -47,6 +47,7 @@ func TestMarketSellAssetValidate_Success(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
 
+	ctx.DynProps.SetAllowMarketTransaction(true)
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate should pass: %v", err)
@@ -64,6 +65,7 @@ func TestMarketSellAssetValidate_InsufficientBalance(t *testing.T) {
 	tx := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.DynProps.SetAllowMarketTransaction(true)
 
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -81,6 +83,7 @@ func TestMarketSellAssetValidate_SameToken(t *testing.T) {
 	tx := makeMarketSellTx(1, []byte("_"), 100, []byte("_"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.DynProps.SetAllowMarketTransaction(true)
 
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err == nil {

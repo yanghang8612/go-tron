@@ -17,6 +17,7 @@ func TestUpdateBrokerageValidate(t *testing.T) {
 		Brokerage:    30,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateBrokerageContract, c, 0)
+	ctx.DynProps.SetAllowChangeDelegation(true)
 	act := &UpdateBrokerageActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -41,6 +42,7 @@ func TestUpdateBrokerageOutOfRange(t *testing.T) {
 		Brokerage:    101,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateBrokerageContract, c, 0)
+	ctx.DynProps.SetAllowChangeDelegation(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.PutWitness(owner, "http://w.com")
 
@@ -57,6 +59,7 @@ func TestUpdateBrokerageExecute(t *testing.T) {
 		Brokerage:    50,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateBrokerageContract, c, 0)
+	ctx.DynProps.SetAllowChangeDelegation(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.PutWitness(owner, "http://w.com")
 

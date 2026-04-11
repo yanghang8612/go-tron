@@ -20,6 +20,7 @@ func TestAccountPermissionValidate(t *testing.T) {
 		},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
 	act := &AccountPermissionUpdateActuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -38,6 +39,7 @@ func TestAccountPermissionNoOwner(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	act := &AccountPermissionUpdateActuator{}
@@ -58,6 +60,7 @@ func TestAccountPermissionThresholdExceedsWeight(t *testing.T) {
 		},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	act := &AccountPermissionUpdateActuator{}
@@ -91,6 +94,7 @@ func TestAccountPermissionExecute(t *testing.T) {
 		},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	act := &AccountPermissionUpdateActuator{}

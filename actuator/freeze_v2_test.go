@@ -34,6 +34,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	tx := makeFreezeV2Tx(1, 100, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
@@ -44,6 +45,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Zero amount
 	tx = makeFreezeV2Tx(1, 0, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for zero amount")
 	}
@@ -51,6 +53,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Insufficient balance
 	tx = makeFreezeV2Tx(1, 5000, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for insufficient balance")
 	}
@@ -58,6 +61,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Success
 	tx = makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,6 +75,7 @@ func TestFreezeV2Execute(t *testing.T) {
 	tx := makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
 
 	result, err := act.Execute(ctx)
 	if err != nil {

@@ -3,6 +3,7 @@ package actuator
 import (
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -29,7 +30,9 @@ func TestWithdrawExpireUnfreezeValidate(t *testing.T) {
 	// Missing account
 	tx := makeWithdrawExpireUnfreezeTx(50)
 	act := &WithdrawExpireUnfreezeActuator{}
-	ctx := &Context{State: statedb, Tx: tx, BlockTime: 1000000}
+	dp := state.NewDynamicProperties()
+	dp.SetAllowStakingV2(true)
+	ctx := &Context{State: statedb, DynProps: dp, Tx: tx, BlockTime: 1000000}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
