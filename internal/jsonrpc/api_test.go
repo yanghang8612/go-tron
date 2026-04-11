@@ -158,17 +158,33 @@ func TestEthGetCode(t *testing.T) {
 }
 
 func TestEthGetStorageAt(t *testing.T) {
-	slot := common.Hash{1}
-	srv := newTestServer(t, &stubBackend{storage: slot})
-	defer srv.Close()
-	resp := rpcCall(t, srv, "eth_getStorageAt", []interface{}{
-		"0x4101020304050607080900010203040506070809",
-		"0x0",
-		"latest",
+	t.Run("normal slot", func(t *testing.T) {
+		slot := common.Hash{1}
+		srv := newTestServer(t, &stubBackend{storage: slot})
+		defer srv.Close()
+		resp := rpcCall(t, srv, "eth_getStorageAt", []interface{}{
+			"0x4101020304050607080900010203040506070809",
+			"0x0",
+			"latest",
+		})
+		if _, ok := resp["result"].(string); !ok {
+			t.Fatalf("eth_getStorageAt result should be a hex string, got %v", resp["result"])
+		}
 	})
-	if _, ok := resp["result"].(string); !ok {
-		t.Fatalf("eth_getStorageAt result should be a hex string, got %v", resp["result"])
-	}
+
+	t.Run("oversized slot (>32 bytes) does not panic", func(t *testing.T) {
+		srv := newTestServer(t, &stubBackend{})
+		defer srv.Close()
+		// 66 hex chars after 0x = 33 decoded bytes — triggers the length guard
+		resp := rpcCall(t, srv, "eth_getStorageAt", []interface{}{
+			"0x4101020304050607080900010203040506070809",
+			"0x000000000000000000000000000000000000000000000000000000000000000001",
+			"latest",
+		})
+		if _, ok := resp["result"].(string); !ok {
+			t.Fatalf("oversized slot: result should be a hex string, got %v", resp["result"])
+		}
+	})
 }
 
 func TestEthCall(t *testing.T) {
