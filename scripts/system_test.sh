@@ -588,6 +588,55 @@ echo "  Recipient2 balance on node: $NODE_R2_BAL"
 check_eq "recipient2 balance synced to node" "$NODE_R2_BAL" "$TRANSFER_AMOUNT2"
 
 # ─────────────────────────────────────────────────────────────────
+# SECTION 9: Phase 10 Query APIs
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Test Group 9: Phase 10 Query APIs ==="
+
+# 9.1 getdelegatedresourcev2 — no delegation in dev chain → empty list
+RESULT=$(http_post $SR_HTTP "/wallet/getdelegatedresourcev2" \
+    "{\"fromAddress\": \"$WITNESS_ADDR\", \"toAddress\": \"$WITNESS_ADDR\"}")
+check "getdelegatedresourcev2 returns delegatedResource key" "$RESULT" '"delegatedResource"'
+
+# 9.2 getdelegatedresourceaccountindexv2 — no delegation → empty toAddresses
+RESULT=$(http_post $SR_HTTP "/wallet/getdelegatedresourceaccountindexv2" \
+    "{\"value\": \"$WITNESS_ADDR\"}")
+check "getdelegatedresourceaccountindexv2 returns toAddresses key" "$RESULT" '"toAddresses"'
+
+# 9.3 candelegateresource — witness has no frozen → maxSize=0
+RESULT=$(http_post $SR_HTTP "/wallet/candelegateresource" \
+    "{\"ownerAddress\": \"$WITNESS_ADDR\", \"balance\": 0, \"type\": 0}")
+check "candelegateresource returns maxSize key" "$RESULT" '"maxSize"'
+
+# 9.4 getcanwithdrawunfreezeamount — no pending unfreezes → amount=0
+RESULT=$(http_post $SR_HTTP "/wallet/getcanwithdrawunfreezeamount" \
+    "{\"ownerAddress\": \"$WITNESS_ADDR\", \"timestamp\": 9999999999999}")
+check "getcanwithdrawunfreezeamount returns amount key" "$RESULT" '"amount"'
+
+# 9.5 getavailableunfreezecount — no pending unfreezes → count=32
+RESULT=$(http_post $SR_HTTP "/wallet/getavailableunfreezecount" \
+    "{\"ownerAddress\": \"$WITNESS_ADDR\"}")
+check "getavailableunfreezecount returns count key" "$RESULT" '"count"'
+
+# 9.6 getreward — witness earns allowance after block production
+RESULT=$(http_post $SR_HTTP "/wallet/getreward" \
+    "{\"address\": \"$WITNESS_ADDR\"}")
+check "getreward returns reward key" "$RESULT" '"reward"'
+
+# 9.7 gettransactionfrompending — tx not in pool → Error field
+RESULT=$(http_post $SR_HTTP "/wallet/gettransactionfrompending" \
+    '{"value":"0000000000000000000000000000000000000000000000000000000000000000"}')
+check "gettransactionfrompending returns Error for unknown txid" "$RESULT" '"Error"'
+
+# 9.8 gettransactionlistfrompending — pool should be empty between blocks
+RESULT=$(http_post $SR_HTTP "/wallet/gettransactionlistfrompending" '{}')
+check "gettransactionlistfrompending returns transaction key" "$RESULT" '"transaction"'
+
+# 9.9 listnodes — SR should see at least 0 nodes (relay node connects to SR)
+RESULT=$(http_get $SR_HTTP "/wallet/listnodes")
+check "listnodes returns nodes key" "$RESULT" '"nodes"'
+
+# ─────────────────────────────────────────────────────────────────
 # Summary: print last few lines of logs
 # ─────────────────────────────────────────────────────────────────
 echo ""
