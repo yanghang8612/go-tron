@@ -577,7 +577,18 @@ func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.Transaction
 }
 
 func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) ([]byte, error) {
-	return nil, fmt.Errorf("not implemented")
+	fromAddr := tcommon.Address{}
+	if from != nil {
+		fromAddr = *from
+	}
+	if to == nil {
+		return nil, fmt.Errorf("eth_call: 'to' address is required")
+	}
+	result, err := b.TriggerConstantContract(fromAddr, *to, data, 30_000_000)
+	if err != nil {
+		return nil, err
+	}
+	return result.Result, nil
 }
 
 func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {

@@ -247,8 +247,46 @@ func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 	val := api.backend.GetStorageAt(addr, slot)
 	return hexBytes(val[:]), nil
 }
-func (api *API) ethCall(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
+	// params: [{from, to, data, value, gas}, blockParam]
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+
+	var txObj struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Data  string `json:"data"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(p[0], &txObj); err != nil {
+		return nil, fmt.Errorf("invalid tx object: %w", err)
+	}
+	if txObj.To == "" {
+		return nil, fmt.Errorf("eth_call: 'to' required")
+	}
+
+	var from *common.Address
+	if txObj.From != "" {
+		a := common.BytesToAddress(common.FromHex(txObj.From))
+		from = &a
+	}
+	to := common.BytesToAddress(common.FromHex(txObj.To))
+
+	data := common.FromHex(txObj.Data)
+
+	var value int64
+	if txObj.Value != "" && txObj.Value != "0x0" && txObj.Value != "0x" {
+		v, _ := strconv.ParseInt(txObj.Value, 0, 64)
+		value = v
+	}
+
+	result, err := api.backend.Call(from, &to, data, value)
+	if err != nil {
+		return nil, err
+	}
+	return hexBytes(result), nil
 }
 func (api *API) ethGetBlockByNumber(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")
