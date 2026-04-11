@@ -528,6 +528,34 @@ func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 	return b.peersFunc(), nil
 }
 
+func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
+	return rawdb.ReadAssetIssue(b.chain.db, id)
+}
+
+func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+	id, ok := rawdb.ReadAssetNameIndex(b.chain.db, name)
+	if !ok {
+		return nil
+	}
+	return rawdb.ReadAssetIssue(b.chain.db, id)
+}
+
+func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+	return rawdb.ListAllAssets(b.chain.db)
+}
+
+func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+	return rawdb.ListAssetsPaginated(b.chain.db, offset, limit)
+}
+
+func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.AssetIssueContract {
+	id, ok := rawdb.ReadAssetOwnerIndex(b.chain.db, addr[:])
+	if !ok {
+		return nil
+	}
+	return rawdb.ReadAssetIssue(b.chain.db, id)
+}
+
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
 
 func (b *TronBackend) ChainID() int64 {

@@ -152,4 +152,11 @@ type Backend interface {
 
 	// Network
 	ListNodes() ([]*PeerInfo, error)
+
+	// Asset queries (TRC10)
+	GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
+	GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract
+	GetAssetIssueList() []*contractpb.AssetIssueContract
+	GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract
+	GetAssetIssueByAccount(addr common.Address) *contractpb.AssetIssueContract
 }

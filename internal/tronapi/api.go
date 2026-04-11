@@ -75,6 +75,13 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/gettransactionfrompending", api.getTransactionFromPending)
 	mux.HandleFunc("/wallet/gettransactionlistfrompending", api.getTransactionListFromPending)
 	mux.HandleFunc("/wallet/listnodes", api.listNodes)
+
+	// Phase 12: TRC10 asset queries
+	mux.HandleFunc("/wallet/getassetissuebyid", api.getAssetIssueByID)
+	mux.HandleFunc("/wallet/getassetissuebyname", api.getAssetIssueByName)
+	mux.HandleFunc("/wallet/getassetissuelist", api.getAssetIssueList)
+	mux.HandleFunc("/wallet/getpaginatedassetissuelist", api.getPaginatedAssetIssueList)
+	mux.HandleFunc("/wallet/getassetissuebyaccount", api.getAssetIssueByAccount)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -942,4 +949,114 @@ func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(map[string]interface{}{"nodes": nodes})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	var id int64
+	if _, err := fmt.Sscanf(body.Value, "%d", &id); err != nil {
+		http.Error(w, "invalid token ID", http.StatusBadRequest)
+		return
+	}
+	asset := api.backend.GetAssetIssueByID(id)
+	if asset == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, asset)
+}
+
+func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	asset := api.backend.GetAssetIssueByName([]byte(body.Value))
+	if asset == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, asset)
+}
+
+func (api *API) getAssetIssueList(w http.ResponseWriter, r *http.Request) {
+	assets := api.backend.GetAssetIssueList()
+	var list []map[string]any
+	for _, a := range assets {
+		list = append(list, marshalMessage(a.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	resp := map[string]any{"assetIssue": list}
+	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Offset int `json:"offset"`
+		Limit  int `json:"limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if body.Limit <= 0 {
+		body.Limit = 20
+	}
+	assets := api.backend.GetAssetIssueListPaginated(body.Offset, body.Limit)
+	var list []map[string]any
+	for _, a := range assets {
+		list = append(list, marshalMessage(a.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	resp := map[string]any{"assetIssue": list}
+	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Address string `json:"address"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Address == "" {
+		body.Address = r.URL.Query().Get("address")
+	}
+	if body.Address == "" {
+		http.Error(w, "address required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(body.Address))
+	asset := api.backend.GetAssetIssueByAccount(addr)
+	if asset == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+	writeTronJSON(w, asset)
 }
