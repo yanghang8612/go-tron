@@ -192,19 +192,19 @@ func parseBlockParam(s string) (uint64, error) {
 // ── Stub handlers (replaced task by task) ───────────────────────────────────
 
 func (api *API) netVersion(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return fmt.Sprintf("%d", api.backend.ChainID()), nil
 }
 func (api *API) web3ClientVersion(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return "go-tron/v0.3.0-dev", nil
 }
 func (api *API) ethChainId(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return hexUint64(uint64(api.backend.ChainID())), nil
 }
 func (api *API) ethBlockNumber(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return hexUint64(api.backend.BlockNumber()), nil
 }
 func (api *API) ethSyncing(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+	return false, nil
 }
 func (api *API) ethGetBalance(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")

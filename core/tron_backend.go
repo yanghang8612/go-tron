@@ -531,11 +531,11 @@ func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
 
 func (b *TronBackend) ChainID() int64 {
-	return 0 // stub
+	return b.chain.Config().ChainID
 }
 
 func (b *TronBackend) BlockNumber() uint64 {
-	return 0 // stub
+	return b.chain.CurrentBlock().Number()
 }
 
 func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
