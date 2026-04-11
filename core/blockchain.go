@@ -267,6 +267,11 @@ func (bc *BlockChain) NextMaintenanceTime() int64 {
 	return dynProps.NextMaintenanceTime()
 }
 
+// DynProps loads and returns a snapshot of the current dynamic properties.
+func (bc *BlockChain) DynProps() *state.DynamicProperties {
+	return state.LoadDynamicProperties(bc.db)
+}
+
 // chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
 type chainHeaderAdapter struct {
 	statedb  *state.StateDB
