@@ -31,6 +31,30 @@ var defaultProps = map[string]int64{
 	"free_net_limit":                            1500,
 	"next_proposal_id":                          0,
 	"next_token_id":                             1_000_001,
+	"allow_same_token_name":                     0,
+	"allow_delegate_resource":                   0,
+	"allow_adaptive_energy_limit":               0,
+	"allow_multi_sign":                          0,
+	"allow_change_delegation":                   0,
+	"allow_tvm_transfer_trc10":                  0,
+	"allow_tvm_constantinople":                  0,
+	"allow_tvm_solidity059":                     0,
+	"allow_tvm_istanbul":                        0,
+	"allow_market_transaction":                  0,
+	"allow_tvm_freeze":                          0,
+	"allow_tvm_shielded_token":                  0,
+	"allow_tvm_vote":                            0,
+	"allow_account_history":                     0,
+	"allow_pbft":                                0,
+	"allow_staking_v2":                          0,
+	"allow_tvm_london":                          0,
+	"allow_tvm_compatibility":                   0,
+	"allow_dynamic_energy":                      0,
+	"allow_tvm_big_integer":                     0,
+	"allow_tvm_blob":                            0,
+	"allow_tvm_cancun":                          0,
+	"allow_energy_adjustment":                   0,
+	"allow_tvm_solidity058":                     0,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -159,6 +183,259 @@ func (dp *DynamicProperties) MaxCpuTimeOfOneTx() int64 {
 
 func (dp *DynamicProperties) AllowNewResourceModel() bool {
 	return dp.props["allow_new_resource_model"] != 0
+}
+
+func (dp *DynamicProperties) AllowSameTokenName() bool {
+	return dp.props["allow_same_token_name"] != 0
+}
+func (dp *DynamicProperties) SetAllowSameTokenName(v bool) {
+	if v {
+		dp.Set("allow_same_token_name", 1)
+	} else {
+		dp.Set("allow_same_token_name", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowDelegateResource() bool {
+	return dp.props["allow_delegate_resource"] != 0
+}
+func (dp *DynamicProperties) SetAllowDelegateResource(v bool) {
+	if v {
+		dp.Set("allow_delegate_resource", 1)
+	} else {
+		dp.Set("allow_delegate_resource", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowAdaptiveEnergyLimit() bool {
+	return dp.props["allow_adaptive_energy_limit"] != 0
+}
+func (dp *DynamicProperties) SetAllowAdaptiveEnergyLimit(v bool) {
+	if v {
+		dp.Set("allow_adaptive_energy_limit", 1)
+	} else {
+		dp.Set("allow_adaptive_energy_limit", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowMultiSign() bool {
+	return dp.props["allow_multi_sign"] != 0
+}
+func (dp *DynamicProperties) SetAllowMultiSign(v bool) {
+	if v {
+		dp.Set("allow_multi_sign", 1)
+	} else {
+		dp.Set("allow_multi_sign", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowChangeDelegation() bool {
+	return dp.props["allow_change_delegation"] != 0
+}
+func (dp *DynamicProperties) SetAllowChangeDelegation(v bool) {
+	if v {
+		dp.Set("allow_change_delegation", 1)
+	} else {
+		dp.Set("allow_change_delegation", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmTransferTrc10() bool {
+	return dp.props["allow_tvm_transfer_trc10"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmTransferTrc10(v bool) {
+	if v {
+		dp.Set("allow_tvm_transfer_trc10", 1)
+	} else {
+		dp.Set("allow_tvm_transfer_trc10", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmConstantinople() bool {
+	return dp.props["allow_tvm_constantinople"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmConstantinople(v bool) {
+	if v {
+		dp.Set("allow_tvm_constantinople", 1)
+	} else {
+		dp.Set("allow_tvm_constantinople", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmSolidity059() bool {
+	return dp.props["allow_tvm_solidity059"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmSolidity059(v bool) {
+	if v {
+		dp.Set("allow_tvm_solidity059", 1)
+	} else {
+		dp.Set("allow_tvm_solidity059", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmIstanbul() bool {
+	return dp.props["allow_tvm_istanbul"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmIstanbul(v bool) {
+	if v {
+		dp.Set("allow_tvm_istanbul", 1)
+	} else {
+		dp.Set("allow_tvm_istanbul", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowMarketTransaction() bool {
+	return dp.props["allow_market_transaction"] != 0
+}
+func (dp *DynamicProperties) SetAllowMarketTransaction(v bool) {
+	if v {
+		dp.Set("allow_market_transaction", 1)
+	} else {
+		dp.Set("allow_market_transaction", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmFreeze() bool {
+	return dp.props["allow_tvm_freeze"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmFreeze(v bool) {
+	if v {
+		dp.Set("allow_tvm_freeze", 1)
+	} else {
+		dp.Set("allow_tvm_freeze", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmShieldedToken() bool {
+	return dp.props["allow_tvm_shielded_token"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmShieldedToken(v bool) {
+	if v {
+		dp.Set("allow_tvm_shielded_token", 1)
+	} else {
+		dp.Set("allow_tvm_shielded_token", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmVote() bool {
+	return dp.props["allow_tvm_vote"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmVote(v bool) {
+	if v {
+		dp.Set("allow_tvm_vote", 1)
+	} else {
+		dp.Set("allow_tvm_vote", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowAccountHistory() bool {
+	return dp.props["allow_account_history"] != 0
+}
+func (dp *DynamicProperties) SetAllowAccountHistory(v bool) {
+	if v {
+		dp.Set("allow_account_history", 1)
+	} else {
+		dp.Set("allow_account_history", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowPbft() bool {
+	return dp.props["allow_pbft"] != 0
+}
+func (dp *DynamicProperties) SetAllowPbft(v bool) {
+	if v {
+		dp.Set("allow_pbft", 1)
+	} else {
+		dp.Set("allow_pbft", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowStakingV2() bool {
+	return dp.props["allow_staking_v2"] != 0
+}
+func (dp *DynamicProperties) SetAllowStakingV2(v bool) {
+	if v {
+		dp.Set("allow_staking_v2", 1)
+	} else {
+		dp.Set("allow_staking_v2", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmLondon() bool {
+	return dp.props["allow_tvm_london"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmLondon(v bool) {
+	if v {
+		dp.Set("allow_tvm_london", 1)
+	} else {
+		dp.Set("allow_tvm_london", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmCompatibility() bool {
+	return dp.props["allow_tvm_compatibility"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmCompatibility(v bool) {
+	if v {
+		dp.Set("allow_tvm_compatibility", 1)
+	} else {
+		dp.Set("allow_tvm_compatibility", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowDynamicEnergy() bool {
+	return dp.props["allow_dynamic_energy"] != 0
+}
+func (dp *DynamicProperties) SetAllowDynamicEnergy(v bool) {
+	if v {
+		dp.Set("allow_dynamic_energy", 1)
+	} else {
+		dp.Set("allow_dynamic_energy", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmBigInteger() bool {
+	return dp.props["allow_tvm_big_integer"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmBigInteger(v bool) {
+	if v {
+		dp.Set("allow_tvm_big_integer", 1)
+	} else {
+		dp.Set("allow_tvm_big_integer", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmBlob() bool {
+	return dp.props["allow_tvm_blob"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmBlob(v bool) {
+	if v {
+		dp.Set("allow_tvm_blob", 1)
+	} else {
+		dp.Set("allow_tvm_blob", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowTvmCancun() bool {
+	return dp.props["allow_tvm_cancun"] != 0
+}
+func (dp *DynamicProperties) SetAllowTvmCancun(v bool) {
+	if v {
+		dp.Set("allow_tvm_cancun", 1)
+	} else {
+		dp.Set("allow_tvm_cancun", 0)
+	}
+}
+
+func (dp *DynamicProperties) AllowEnergyAdjustment() bool {
+	return dp.props["allow_energy_adjustment"] != 0
+}
+func (dp *DynamicProperties) SetAllowEnergyAdjustment(v bool) {
+	if v {
+		dp.Set("allow_energy_adjustment", 1)
+	} else {
+		dp.Set("allow_energy_adjustment", 0)
+	}
 }
 
 func (dp *DynamicProperties) FreeNetLimit() int64 {
