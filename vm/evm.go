@@ -32,7 +32,7 @@ func (evm *EVM) RevertLogs(snapshot int) {
 }
 
 // NewEVM creates a new EVM instance.
-func NewEVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64) *EVM {
+func NewEVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *EVM {
 	evm := &EVM{
 		StateDB:     stateDB,
 		Origin:      origin,
@@ -41,7 +41,7 @@ func NewEVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, tim
 		Coinbase:    coinbase,
 		ChainID:     chainID,
 	}
-	evm.interpreter = NewInterpreter(evm)
+	evm.interpreter = NewInterpreter(evm, cfg)
 	return evm
 }
 

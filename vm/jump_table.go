@@ -10,6 +10,7 @@ type operation struct {
 	minStack   int    // minimum stack items required
 	maxStack   int    // maximum stack items after execution
 	writes     bool   // true if this opcode modifies state
+	enabledFn  func(TVMConfig) bool // nil means always enabled
 }
 
 // JumpTable is the dispatch table mapping opcodes to operations.
@@ -150,6 +151,22 @@ func newJumpTable() JumpTable {
 	tbl[CALLCODE] = &operation{execute: opCallCode, minStack: 7, maxStack: 1018}
 	tbl[DELEGATECALL] = &operation{execute: opDelegateCall, minStack: 6, maxStack: 1019}
 	tbl[STATICCALL] = &operation{execute: opStaticCall, minStack: 6, maxStack: 1019}
+
+	// Constantinople opcodes — require AllowTvmConstantinople
+	constantinople := func(c TVMConfig) bool { return c.Constantinople }
+	tbl[SHL].enabledFn = constantinople
+	tbl[SHR].enabledFn = constantinople
+	tbl[SAR].enabledFn = constantinople
+	tbl[EXTCODEHASH].enabledFn = constantinople
+	tbl[CREATE2].enabledFn = constantinople
+
+	// Istanbul opcodes — require AllowTvmIstanbul
+	istanbul := func(c TVMConfig) bool { return c.Istanbul }
+	tbl[CHAINID].enabledFn = istanbul
+	tbl[SELFBALANCE].enabledFn = istanbul
+
+	// London opcodes — require AllowTvmLondon
+	tbl[BASEFEE].enabledFn = func(c TVMConfig) bool { return c.London }
 
 	return tbl
 }

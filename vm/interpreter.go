@@ -10,13 +10,15 @@ type Interpreter struct {
 	table      JumpTable
 	readOnly   bool   // static call mode
 	returnData []byte // return data from last CALL/CREATE
+	tvmConfig  TVMConfig
 }
 
 // NewInterpreter creates a new interpreter.
-func NewInterpreter(evm *EVM) *Interpreter {
+func NewInterpreter(evm *EVM, cfg TVMConfig) *Interpreter {
 	return &Interpreter{
-		evm:   evm,
-		table: newJumpTable(),
+		evm:       evm,
+		table:     newJumpTable(),
+		tvmConfig: cfg,
 	}
 }
 
@@ -37,6 +39,11 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		operation := in.table[op]
 		if operation == nil {
 			return nil, ErrInvalidCode
+		}
+
+		// Fork gate
+		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
+			return nil, ErrInvalidOpCode
 		}
 
 		// Stack validation

@@ -67,7 +67,7 @@ func TestIntegrationDeployAndCall(t *testing.T) {
 
 	deployCode := append(initCode, runtime...)
 
-	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1)
+	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 
 	// Deploy
 	_, contractAddr, energyLeft, err := evm.Create(owner, deployCode, 1000000, 0)
@@ -130,7 +130,7 @@ func TestIntegrationStaticCall(t *testing.T) {
 	}
 	sdb.SetCode(contract, code)
 
-	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1)
+	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	ret, _, err := evm.StaticCall(owner, contract, nil, 1000000)
 	if err != nil {
 		t.Fatalf("static call failed: %v", err)
@@ -167,7 +167,7 @@ func TestIntegrationSHA3(t *testing.T) {
 	}
 	sdb.SetCode(contractAddr, code)
 
-	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1)
+	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	ret, _, err := evm.StaticCall(owner, contractAddr, nil, 1000000)
 	if err != nil {
 		t.Fatalf("sha3 call failed: %v", err)
@@ -195,7 +195,7 @@ func TestIntegrationValueTransfer(t *testing.T) {
 	// Simple code: STOP (accept value)
 	sdb.SetCode(contractAddr, []byte{byte(STOP)})
 
-	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1)
+	evm := NewEVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	_, _, err = evm.Call(owner, contractAddr, nil, 100000, 500)
 	if err != nil {
 		t.Fatalf("value transfer failed: %v", err)
