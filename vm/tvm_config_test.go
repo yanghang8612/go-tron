@@ -9,7 +9,9 @@ import (
 func TestNewTVMConfig_AllFalseByDefault(t *testing.T) {
 	dp := state.NewDynamicProperties()
 	cfg := NewTVMConfig(0, dp)
-	if cfg.Constantinople || cfg.Istanbul || cfg.London || cfg.Freeze || cfg.Vote || cfg.Cancun {
+	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
+		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
+		cfg.Compatibility || cfg.DynamicEnergy || cfg.BigInteger || cfg.Blob || cfg.Cancun {
 		t.Fatal("expected all VM fork flags false by default")
 	}
 }
@@ -46,7 +48,9 @@ func TestNewTVMConfig_LondonEnabled(t *testing.T) {
 
 func TestNewTVMConfig_NilDynProps(t *testing.T) {
 	cfg := NewTVMConfig(0, nil)
-	if cfg.Constantinople || cfg.Istanbul || cfg.London {
+	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
+		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
+		cfg.Compatibility || cfg.DynamicEnergy || cfg.BigInteger || cfg.Blob || cfg.Cancun {
 		t.Fatal("expected all false with nil DynProps")
 	}
 }
