@@ -167,6 +167,162 @@ func (s *StateDB) AddFreezeV2(addr tcommon.Address, resourceType corepb.Resource
 	obj.markDirty()
 }
 
+// --- V1 Stake (Stake 1.0) StateDB methods ---
+
+func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.AddFrozenBandwidth(amount, expireTimeMs)
+	obj.markDirty()
+}
+
+func (s *StateDB) UnfreezeV1Bandwidth(addr tcommon.Address, blockTimeMs int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	refunded := obj.account.RemoveExpiredFrozenBandwidth(blockTimeMs)
+	obj.markDirty()
+	return refunded
+}
+
+func (s *StateDB) FreezeV1Energy(addr tcommon.Address, amount, expireTimeMs int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.AddFrozenEnergy(amount, expireTimeMs)
+	obj.markDirty()
+}
+
+func (s *StateDB) UnfreezeV1Energy(addr tcommon.Address, blockTimeMs int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	if obj.account.FrozenEnergyExpireTime() > blockTimeMs {
+		return 0
+	}
+	amount := obj.account.FrozenEnergyAmount()
+	if amount == 0 {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearFrozenEnergy()
+	obj.markDirty()
+	return amount
+}
+
+func (s *StateDB) GetDelegatedFrozenV1Bandwidth(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.DelegatedFrozenBandwidth()
+}
+
+func (s *StateDB) GetDelegatedFrozenV1Energy(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.DelegatedFrozenEnergy()
+}
+
+func (s *StateDB) FreezeV1DelegatedBandwidth(owner, receiver tcommon.Address, amount int64) {
+	ownerObj := s.getStateObject(owner)
+	if ownerObj == nil {
+		return
+	}
+	s.journalAccount(owner, ownerObj)
+	ownerObj.account.SetDelegatedFrozenBandwidth(ownerObj.account.DelegatedFrozenBandwidth() + amount)
+	ownerObj.markDirty()
+
+	recvObj := s.getStateObject(receiver)
+	if recvObj == nil {
+		return
+	}
+	s.journalAccount(receiver, recvObj)
+	recvObj.account.SetAcquiredDelegatedFrozenBandwidth(recvObj.account.AcquiredDelegatedFrozenBandwidth() + amount)
+	recvObj.markDirty()
+}
+
+func (s *StateDB) UnfreezeV1DelegatedBandwidth(owner, receiver tcommon.Address, amount int64) {
+	ownerObj := s.getStateObject(owner)
+	if ownerObj == nil {
+		return
+	}
+	s.journalAccount(owner, ownerObj)
+	ownerObj.account.SetDelegatedFrozenBandwidth(ownerObj.account.DelegatedFrozenBandwidth() - amount)
+	ownerObj.markDirty()
+
+	recvObj := s.getStateObject(receiver)
+	if recvObj == nil {
+		return
+	}
+	s.journalAccount(receiver, recvObj)
+	v := recvObj.account.AcquiredDelegatedFrozenBandwidth() - amount
+	if v < 0 {
+		v = 0
+	}
+	recvObj.account.SetAcquiredDelegatedFrozenBandwidth(v)
+	recvObj.markDirty()
+}
+
+func (s *StateDB) FreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amount int64) {
+	ownerObj := s.getStateObject(owner)
+	if ownerObj == nil {
+		return
+	}
+	s.journalAccount(owner, ownerObj)
+	ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() + amount)
+	ownerObj.markDirty()
+
+	recvObj := s.getStateObject(receiver)
+	if recvObj == nil {
+		return
+	}
+	s.journalAccount(receiver, recvObj)
+	recvObj.account.SetAcquiredDelegatedFrozenEnergy(recvObj.account.AcquiredDelegatedFrozenEnergy() + amount)
+	recvObj.markDirty()
+}
+
+func (s *StateDB) UnfreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amount int64) {
+	ownerObj := s.getStateObject(owner)
+	if ownerObj == nil {
+		return
+	}
+	s.journalAccount(owner, ownerObj)
+	ownerObj.account.SetDelegatedFrozenEnergy(ownerObj.account.DelegatedFrozenEnergy() - amount)
+	ownerObj.markDirty()
+
+	recvObj := s.getStateObject(receiver)
+	if recvObj == nil {
+		return
+	}
+	s.journalAccount(receiver, recvObj)
+	v := recvObj.account.AcquiredDelegatedFrozenEnergy() - amount
+	if v < 0 {
+		v = 0
+	}
+	recvObj.account.SetAcquiredDelegatedFrozenEnergy(v)
+	recvObj.markDirty()
+}
+
+// GetStateObject returns the account for addr (nil if not found). Used by tests and later tasks.
+func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return nil
+	}
+	return obj.account
+}
+
 // GetWitness returns the witness at addr.
 func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 	return s.witnesses[addr]

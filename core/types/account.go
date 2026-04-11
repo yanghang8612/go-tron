@@ -218,6 +218,110 @@ func (a *Account) SetAcquiredDelegatedFrozenV2BalanceForEnergy(v int64) {
 	a.pb.AccountResource.AcquiredDelegatedFrozenV2BalanceForEnergy = v
 }
 
+// --- V1 Stake (Stake 1.0) frozen balance accessors ---
+
+func (a *Account) FrozenBandwidthList() []*corepb.Account_Frozen {
+	return a.pb.Frozen
+}
+
+func (a *Account) AddFrozenBandwidth(amount, expireTimeMs int64) {
+	a.pb.Frozen = append(a.pb.Frozen, &corepb.Account_Frozen{
+		FrozenBalance: amount,
+		ExpireTime:    expireTimeMs,
+	})
+}
+
+func (a *Account) TotalFrozenBandwidth() int64 {
+	var total int64
+	for _, f := range a.pb.Frozen {
+		total += f.FrozenBalance
+	}
+	return total
+}
+
+func (a *Account) RemoveExpiredFrozenBandwidth(blockTimeMs int64) int64 {
+	var refunded int64
+	remaining := a.pb.Frozen[:0]
+	for _, f := range a.pb.Frozen {
+		if f.ExpireTime <= blockTimeMs {
+			refunded += f.FrozenBalance
+		} else {
+			remaining = append(remaining, f)
+		}
+	}
+	a.pb.Frozen = remaining
+	return refunded
+}
+
+func (a *Account) FrozenEnergyAmount() int64 {
+	if a.pb.AccountResource == nil || a.pb.AccountResource.FrozenBalanceForEnergy == nil {
+		return 0
+	}
+	return a.pb.AccountResource.FrozenBalanceForEnergy.FrozenBalance
+}
+
+func (a *Account) FrozenEnergyExpireTime() int64 {
+	if a.pb.AccountResource == nil || a.pb.AccountResource.FrozenBalanceForEnergy == nil {
+		return 0
+	}
+	return a.pb.AccountResource.FrozenBalanceForEnergy.ExpireTime
+}
+
+func (a *Account) AddFrozenEnergy(amount, expireTimeMs int64) {
+	a.ensureAccountResource()
+	if a.pb.AccountResource.FrozenBalanceForEnergy == nil {
+		a.pb.AccountResource.FrozenBalanceForEnergy = &corepb.Account_Frozen{
+			FrozenBalance: amount,
+			ExpireTime:    expireTimeMs,
+		}
+	} else {
+		a.pb.AccountResource.FrozenBalanceForEnergy.FrozenBalance += amount
+		if expireTimeMs > a.pb.AccountResource.FrozenBalanceForEnergy.ExpireTime {
+			a.pb.AccountResource.FrozenBalanceForEnergy.ExpireTime = expireTimeMs
+		}
+	}
+}
+
+func (a *Account) ClearFrozenEnergy() {
+	if a.pb.AccountResource != nil {
+		a.pb.AccountResource.FrozenBalanceForEnergy = nil
+	}
+}
+
+// V1 delegation: bandwidth
+func (a *Account) DelegatedFrozenBandwidth() int64 { return a.pb.DelegatedFrozenBalanceForBandwidth }
+func (a *Account) SetDelegatedFrozenBandwidth(v int64) {
+	a.pb.DelegatedFrozenBalanceForBandwidth = v
+}
+func (a *Account) AcquiredDelegatedFrozenBandwidth() int64 {
+	return a.pb.AcquiredDelegatedFrozenBalanceForBandwidth
+}
+func (a *Account) SetAcquiredDelegatedFrozenBandwidth(v int64) {
+	a.pb.AcquiredDelegatedFrozenBalanceForBandwidth = v
+}
+
+// V1 delegation: energy
+func (a *Account) DelegatedFrozenEnergy() int64 {
+	if a.pb.AccountResource == nil {
+		return 0
+	}
+	return a.pb.AccountResource.DelegatedFrozenBalanceForEnergy
+}
+func (a *Account) SetDelegatedFrozenEnergy(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.DelegatedFrozenBalanceForEnergy = v
+}
+func (a *Account) AcquiredDelegatedFrozenEnergy() int64 {
+	if a.pb.AccountResource == nil {
+		return 0
+	}
+	return a.pb.AccountResource.AcquiredDelegatedFrozenBalanceForEnergy
+}
+func (a *Account) SetAcquiredDelegatedFrozenEnergy(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.AcquiredDelegatedFrozenBalanceForEnergy = v
+}
+
 // ClearUnfrozenV2 removes all pending unfreeze entries.
 func (a *Account) ClearUnfrozenV2() {
 	a.pb.UnfrozenV2 = nil
