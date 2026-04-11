@@ -22,6 +22,12 @@ func TestAllowFlagDefaultFalse(t *testing.T) {
 		dp.AllowDynamicEnergy(),
 		dp.AllowTvmCancun(),
 		dp.AllowEnergyAdjustment(),
+		dp.AllowAdaptiveEnergyLimit(),
+		dp.AllowTvmShieldedToken(),
+		dp.AllowAccountHistory(),
+		dp.AllowPbft(),
+		dp.AllowTvmBigInteger(),
+		dp.AllowTvmBlob(),
 	}
 	for i, f := range flags {
 		if f {
