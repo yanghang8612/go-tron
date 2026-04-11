@@ -65,6 +65,11 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getdelegatedresourcev2", api.getDelegatedResourceV2)
 	mux.HandleFunc("/wallet/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/wallet/candelegateresource", api.canDelegateResource)
+
+	// Phase 10: unfreeze/reward queries
+	mux.HandleFunc("/wallet/getcanwithdrawunfreezeamount", api.getCanWithdrawUnfreezeAmount)
+	mux.HandleFunc("/wallet/getavailableunfreezecount", api.getAvailableUnfreezeCount)
+	mux.HandleFunc("/wallet/getreward", api.getReward)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -793,6 +798,74 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 	}
 	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
 	info, err := api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OwnerAddress string `json:"ownerAddress"`
+		Timestamp    int64  `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
+		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	info, err := api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
+	addrHex := r.URL.Query().Get("ownerAddress")
+	if addrHex == "" {
+		var body struct {
+			OwnerAddress string `json:"ownerAddress"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		addrHex = body.OwnerAddress
+	}
+	if addrHex == "" {
+		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	info, err := api.backend.GetAvailableUnfreezeCount(addr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
+	addrHex := r.URL.Query().Get("address")
+	if addrHex == "" {
+		var body struct {
+			Address string `json:"address"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		addrHex = body.Address
+	}
+	if addrHex == "" {
+		http.Error(w, "address required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	info, err := api.backend.GetReward(addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

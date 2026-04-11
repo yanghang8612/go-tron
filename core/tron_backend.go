@@ -453,15 +453,51 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 }
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	acc := statedb.GetAccount(addr)
+	if acc == nil {
+		return &tronapi.CanWithdrawUnfreezeInfo{Amount: 0}, nil
+	}
+	var total int64
+	for _, u := range acc.UnfrozenV2() {
+		if u.UnfreezeExpireTime <= timestamp {
+			total += u.UnfreezeAmount
+		}
+	}
+	return &tronapi.CanWithdrawUnfreezeInfo{Amount: total}, nil
 }
 
 func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	const maxUnfreezeSlots = 32
+	count := int64(maxUnfreezeSlots)
+	if acc := statedb.GetAccount(addr); acc != nil {
+		count = int64(maxUnfreezeSlots - len(acc.UnfrozenV2()))
+	}
+	if count < 0 {
+		count = 0
+	}
+	return &tronapi.AvailableUnfreezeCountInfo{Count: count}, nil
 }
 
 func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	return &tronapi.RewardInfo{Reward: statedb.GetAllowance(addr)}, nil
 }
 
 func (b *TronBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
