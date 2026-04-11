@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -525,4 +526,42 @@ func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 		return []*tronapi.PeerInfo{}, nil
 	}
 	return b.peersFunc(), nil
+}
+
+// ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
+
+func (b *TronBackend) ChainID() int64 {
+	return 0 // stub
+}
+
+func (b *TronBackend) BlockNumber() uint64 {
+	return 0 // stub
+}
+
+func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
+	return 0 // stub
+}
+
+func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
+	return nil // stub
+}
+
+func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
+	return tcommon.Hash{} // stub
+}
+
+func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
+	return nil, nil, 0, nil // stub: not found
+}
+
+func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
+	return nil, nil // stub: not found
+}
+
+func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+	return nil, fmt.Errorf("not implemented")
 }

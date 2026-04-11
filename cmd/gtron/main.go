@@ -17,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/node"
@@ -174,6 +175,7 @@ func gtron(ctx *cli.Context) error {
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
+	jrpcServer := jsonrpc.NewServer(backend, cfg.JSONRPCPort)
 
 	// Create P2P layer
 	broadcaster := tnet.NewBroadcastService(nil)
@@ -212,6 +214,7 @@ func gtron(ctx *cli.Context) error {
 	}
 	stack.RegisterLifecycle(p2pServer)
 	stack.RegisterLifecycle(apiServer)
+	stack.RegisterLifecycle(jrpcServer)
 
 	// Start block producer only when --witness is explicitly set.
 	// A node can join a dev chain with --dev --witness.key (for genesis) without
