@@ -569,11 +569,26 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 }
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
-	return nil, nil, 0, nil // stub: not found
+	// Use TransactionInfo to locate the block, then find the tx within it.
+	info := rawdb.ReadTransactionInfo(b.chain.db, hash[:])
+	if info == nil {
+		return nil, nil, 0, nil // not found
+	}
+	block := b.chain.GetBlockByNumber(uint64(info.BlockNumber))
+	if block == nil {
+		return nil, nil, 0, nil
+	}
+	for i, tx := range block.Transactions() {
+		if tx.Hash() == hash {
+			return tx.Proto(), block, i, nil
+		}
+	}
+	return nil, nil, 0, nil
 }
 
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	return nil, nil // stub: not found
+	info := rawdb.ReadTransactionInfo(b.chain.db, hash[:])
+	return info, nil // nil info = not found (not an error)
 }
 
 func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) ([]byte, error) {

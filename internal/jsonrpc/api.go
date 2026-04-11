@@ -344,11 +344,43 @@ func (api *API) ethGetBlockByHash(params json.RawMessage) (interface{}, error) {
 	}
 	return blockToRPC(block, fullTx), nil
 }
-func (api *API) ethGetTransactionByHash(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetTransactionByHash(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+
+	tx, block, index, err := api.backend.GetTransactionByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, nil // not found → null
+	}
+	return txToRPC(tx, hash, block, index), nil
 }
-func (api *API) ethGetTransactionReceipt(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetTransactionReceipt(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hash common.Hash
+	copy(hash[:], common.FromHex(p[0]))
+
+	info, err := api.backend.GetTransactionInfo(hash)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return nil, nil // not found → null
+	}
+	tx, block, index, err := api.backend.GetTransactionByHash(hash)
+	if err != nil || tx == nil {
+		return nil, nil // receipt exists but can't find tx — treat as not found
+	}
+	return receiptToRPC(hash, tx, info, block, index), nil
 }
 func (api *API) ethGetLogs(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")
@@ -428,6 +460,65 @@ func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index
 		result["to"] = nil
 	}
 	return result
+}
+
+// receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.
+func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.TransactionInfo, block *types.Block, index int) map[string]interface{} {
+	status := "0x1"
+	if info.Result == corepb.TransactionInfo_FAILED {
+		status = "0x0"
+	}
+
+	var contractAddr interface{} = nil
+	if len(info.ContractAddress) > 0 {
+		contractAddr = hex20(info.ContractAddress)
+	}
+
+	var toAddr interface{} = "0x0000000000000000000000000000000000000000"
+	if len(tx.GetRawData().GetContract()) > 0 && tx.RawData.Contract[0].Type == corepb.Transaction_Contract_CreateSmartContract {
+		toAddr = nil
+	}
+
+	energyUsed := int64(0)
+	if info.Receipt != nil {
+		energyUsed = info.Receipt.EnergyUsageTotal
+	}
+
+	// Build logs
+	logs := make([]map[string]interface{}, 0)
+	for li, l := range info.Log {
+		topics := make([]string, len(l.Topics))
+		for ti, t := range l.Topics {
+			topics[ti] = fmt.Sprintf("0x%064x", t)
+		}
+		logs = append(logs, map[string]interface{}{
+			"address":          hex20(l.Address),
+			"topics":           topics,
+			"data":             hexBytes(l.Data),
+			"blockNumber":      hexUint64(block.Number()),
+			"transactionHash":  fmt.Sprintf("0x%x", hash),
+			"transactionIndex": hexUint64(uint64(index)),
+			"blockHash":        fmt.Sprintf("0x%x", block.Hash()),
+			"logIndex":         hexUint64(uint64(li)),
+			"removed":          false,
+		})
+	}
+
+	return map[string]interface{}{
+		"transactionHash":   fmt.Sprintf("0x%x", hash),
+		"transactionIndex":  hexUint64(uint64(index)),
+		"blockHash":         fmt.Sprintf("0x%x", block.Hash()),
+		"blockNumber":       hexUint64(block.Number()),
+		"from":              "0x0000000000000000000000000000000000000000",
+		"to":                toAddr,
+		"cumulativeGasUsed": hexUint64(uint64(energyUsed)),
+		"gasUsed":           hexUint64(uint64(energyUsed)),
+		"contractAddress":   contractAddr,
+		"logs":              logs,
+		"logsBloom":         "0x" + zeroBloom(),
+		"status":            status,
+		"type":              "0x0",
+	}
 }
 
 // blockToRPC converts a types.Block to the Ethereum JSON block object.
