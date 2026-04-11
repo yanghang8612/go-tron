@@ -739,6 +739,31 @@ RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getasse
 check "getassetissuebyaccount unknown returns {}" "$RESULT" '{}'
 
 # ─────────────────────────────────────────────────────────────────
+# SECTION 12: Phase 13 — Market Order Query Endpoints
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Test Group 12: Market Order Query Endpoints ==="
+
+# 12.1 getmarketorderbyid — unknown returns {}
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketorderbyid" \
+    -H "Content-Type: application/json" \
+    -d '{"value":"0000000000000000000000000000000000000000000000000000000000000000"}' \
+    2>/dev/null || echo "CURL_ERROR")
+check "getmarketorderbyid unknown returns {}" "$RESULT" '{}'
+
+# 12.2 getmarketordersfromaccount — unknown account returns orders array
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketordersfromaccount" \
+    -H "Content-Type: application/json" \
+    -d "{\"address\":\"$WITNESS_ADDR\"}" 2>/dev/null || echo "CURL_ERROR")
+check "getmarketordersfromaccount returns orders key" "$RESULT" '"orders"'
+
+# 12.3 getmarketpricebypair — unknown pair returns sell_token_id
+RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketpricebypair" \
+    -H "Content-Type: application/json" \
+    -d '{"sell_token_id":"1000001","buy_token_id":"_"}' 2>/dev/null || echo "CURL_ERROR")
+check "getmarketpricebypair returns sell_token_id" "$RESULT" 'sell_token_id'
+
+# ─────────────────────────────────────────────────────────────────
 # Summary: print last few lines of logs
 # ─────────────────────────────────────────────────────────────────
 echo ""
