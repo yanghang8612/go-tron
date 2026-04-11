@@ -8,6 +8,9 @@ import (
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // API implements http.Handler and dispatches JSON-RPC 2.0 requests.
@@ -288,11 +291,58 @@ func (api *API) ethCall(params json.RawMessage) (interface{}, error) {
 	}
 	return hexBytes(result), nil
 }
-func (api *API) ethGetBlockByNumber(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetBlockByNumber(params json.RawMessage) (interface{}, error) {
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var blockTag string
+	json.Unmarshal(p[0], &blockTag)
+
+	var fullTx bool
+	if len(p) > 1 {
+		json.Unmarshal(p[1], &fullTx)
+	}
+
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) { // "latest"
+		num = api.backend.BlockNumber()
+	}
+	block, err := api.backend.GetBlockByNumber(num)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil // null = not found
+	}
+	return blockToRPC(block, fullTx), nil
 }
-func (api *API) ethGetBlockByHash(_ json.RawMessage) (interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (api *API) ethGetBlockByHash(params json.RawMessage) (interface{}, error) {
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var hashStr string
+	json.Unmarshal(p[0], &hashStr)
+
+	var fullTx bool
+	if len(p) > 1 {
+		json.Unmarshal(p[1], &fullTx)
+	}
+
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashStr))
+	block, err := api.backend.GetBlockByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return blockToRPC(block, fullTx), nil
 }
 func (api *API) ethGetTransactionByHash(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")
@@ -302,4 +352,124 @@ func (api *API) ethGetTransactionReceipt(_ json.RawMessage) (interface{}, error)
 }
 func (api *API) ethGetLogs(_ json.RawMessage) (interface{}, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+// ── Block/TX conversion helpers ───────────────────────────────────────────────
+
+// zeroBloom returns 512 hex zeros (256 bytes = logs bloom placeholder).
+func zeroBloom() string {
+	const zeros = "0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000"
+	return zeros
+}
+
+// txToRPC converts a raw TRON transaction proto to Ethereum-format JSON.
+func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index int) map[string]interface{} {
+	from := "0x0000000000000000000000000000000000000000"
+	to := "0x0000000000000000000000000000000000000000"
+	input := "0x"
+	value := "0x0"
+
+	if len(tx.GetRawData().GetContract()) > 0 {
+		c := tx.RawData.Contract[0]
+		switch c.Type {
+		case corepb.Transaction_Contract_TriggerSmartContract:
+			var msg contractpb.TriggerSmartContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+				to = hex20(msg.ContractAddress)
+				input = hexBytes(msg.Data)
+				value = hexUint64(uint64(msg.CallValue))
+			}
+		case corepb.Transaction_Contract_CreateSmartContract:
+			var msg contractpb.CreateSmartContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+				to = ""
+				if msg.NewContract != nil {
+					input = hexBytes(msg.NewContract.Bytecode)
+				}
+			}
+		case corepb.Transaction_Contract_TransferContract:
+			var msg contractpb.TransferContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+				to = hex20(msg.ToAddress)
+				value = hexUint64(uint64(msg.Amount))
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"hash":             fmt.Sprintf("0x%x", hash),
+		"blockHash":        fmt.Sprintf("0x%x", block.Hash()),
+		"blockNumber":      hexUint64(block.Number()),
+		"transactionIndex": hexUint64(uint64(index)),
+		"from":             from,
+		"value":            value,
+		"gas":              hexUint64(uint64(tx.GetRawData().GetFeeLimit())),
+		"gasPrice":         "0x1",
+		"input":            input,
+		"nonce":            "0x0",
+		"type":             "0x0",
+		"v":                "0x0",
+		"r":                "0x0",
+		"s":                "0x0",
+	}
+	if to != "" {
+		result["to"] = to
+	} else {
+		result["to"] = nil
+	}
+	return result
+}
+
+// blockToRPC converts a types.Block to the Ethereum JSON block object.
+func blockToRPC(b *types.Block, fullTx bool) map[string]interface{} {
+	txs := b.Transactions()
+
+	var transactions interface{}
+	if fullTx {
+		list := make([]map[string]interface{}, len(txs))
+		for i, tx := range txs {
+			list[i] = txToRPC(tx.Proto(), tx.Hash(), b, i)
+		}
+		transactions = list
+	} else {
+		hashes := make([]string, len(txs))
+		for i, tx := range txs {
+			hashes[i] = fmt.Sprintf("0x%x", tx.Hash())
+		}
+		transactions = hashes
+	}
+
+	witnessAddr := b.WitnessAddress()
+
+	return map[string]interface{}{
+		"hash":             fmt.Sprintf("0x%x", b.Hash()),
+		"parentHash":       fmt.Sprintf("0x%x", b.ParentHash()),
+		"number":           hexUint64(b.Number()),
+		"timestamp":        hexUint64(uint64(b.Timestamp() / 1000)), // ms → s
+		"miner":            fmt.Sprintf("0x%x", witnessAddr[:]),
+		"difficulty":       "0x0",
+		"totalDifficulty":  "0x0",
+		"extraData":        "0x",
+		"size":             "0x0",
+		"gasLimit":         "0x0",
+		"gasUsed":          "0x0",
+		"nonce":            "0x0000000000000000",
+		"sha3Uncles":       "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+		"logsBloom":        "0x" + zeroBloom(),
+		"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+		"stateRoot":        fmt.Sprintf("0x%x", b.AccountStateRoot()),
+		"receiptsRoot":     "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+		"uncles":           []string{},
+		"transactions":     transactions,
+	}
 }
