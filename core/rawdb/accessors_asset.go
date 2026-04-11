@@ -9,12 +9,12 @@ import (
 )
 
 // WriteAssetIssue stores an AssetIssueContract keyed by tokenID.
-func WriteAssetIssue(db ethdb.KeyValueWriter, tokenID int64, c *contractpb.AssetIssueContract) {
+func WriteAssetIssue(db ethdb.KeyValueWriter, tokenID int64, c *contractpb.AssetIssueContract) error {
 	data, err := proto.Marshal(c)
 	if err != nil {
-		return
+		return err
 	}
-	db.Put(assetKey(tokenID), data)
+	return db.Put(assetKey(tokenID), data)
 }
 
 // ReadAssetIssue returns the AssetIssueContract for tokenID, or nil if not found.
@@ -31,10 +31,10 @@ func ReadAssetIssue(db ethdb.KeyValueReader, tokenID int64) *contractpb.AssetIss
 }
 
 // WriteAssetNameIndex stores a name → tokenID mapping.
-func WriteAssetNameIndex(db ethdb.KeyValueWriter, name []byte, tokenID int64) {
+func WriteAssetNameIndex(db ethdb.KeyValueWriter, name []byte, tokenID int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(tokenID))
-	db.Put(assetNameKey(name), buf)
+	return db.Put(assetNameKey(name), buf)
 }
 
 // ReadAssetNameIndex returns the tokenID for the given name, and whether it exists.
@@ -47,10 +47,10 @@ func ReadAssetNameIndex(db ethdb.KeyValueReader, name []byte) (int64, bool) {
 }
 
 // WriteAssetOwnerIndex stores an ownerAddr → tokenID mapping (21-byte TRON address).
-func WriteAssetOwnerIndex(db ethdb.KeyValueWriter, ownerAddr []byte, tokenID int64) {
+func WriteAssetOwnerIndex(db ethdb.KeyValueWriter, ownerAddr []byte, tokenID int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(tokenID))
-	db.Put(assetOwnerKey(ownerAddr), buf)
+	return db.Put(assetOwnerKey(ownerAddr), buf)
 }
 
 // ReadAssetOwnerIndex returns the tokenID issued by ownerAddr, and whether it exists.
@@ -63,10 +63,10 @@ func ReadAssetOwnerIndex(db ethdb.KeyValueReader, ownerAddr []byte) (int64, bool
 }
 
 // WriteAssetIssueTime stores the block timestamp (ms) when the token was issued.
-func WriteAssetIssueTime(db ethdb.KeyValueWriter, tokenID int64, issueTimeMs int64) {
+func WriteAssetIssueTime(db ethdb.KeyValueWriter, tokenID int64, issueTimeMs int64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(issueTimeMs))
-	db.Put(assetIssueTimeKey(tokenID), buf)
+	return db.Put(assetIssueTimeKey(tokenID), buf)
 }
 
 // ReadAssetIssueTime returns the issue timestamp for tokenID, or 0 if not found.
