@@ -793,12 +793,12 @@ func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *htt
 
 func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OwnerAddress string `json:"ownerAddress"`
+		OwnerAddress string `json:"owner_address"`
 		Balance      int64  `json:"balance"`
 		Type         int32  `json:"type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
-		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
 	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
@@ -814,11 +814,11 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OwnerAddress string `json:"ownerAddress"`
+		OwnerAddress string `json:"owner_address"`
 		Timestamp    int64  `json:"timestamp"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
-		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
 	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
@@ -833,16 +833,16 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("ownerAddress")
+	addrHex := r.URL.Query().Get("owner_address")
 	if addrHex == "" {
 		var body struct {
-			OwnerAddress string `json:"ownerAddress"`
+			OwnerAddress string `json:"owner_address"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		addrHex = body.OwnerAddress
 	}
 	if addrHex == "" {
-		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
 	addr := common.BytesToAddress(common.FromHex(addrHex))

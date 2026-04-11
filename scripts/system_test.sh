@@ -605,17 +605,17 @@ check "getdelegatedresourceaccountindexv2 returns toAddresses key" "$RESULT" '"t
 
 # 9.3 candelegateresource — witness has no frozen → maxSize=0
 RESULT=$(http_post $SR_HTTP "/wallet/candelegateresource" \
-    "{\"ownerAddress\": \"$WITNESS_ADDR\", \"balance\": 0, \"type\": 0}")
+    "{\"owner_address\": \"$WITNESS_ADDR\", \"balance\": 0, \"type\": 0}")
 check "candelegateresource returns maxSize key" "$RESULT" '"maxSize"'
 
 # 9.4 getcanwithdrawunfreezeamount — no pending unfreezes → amount=0
 RESULT=$(http_post $SR_HTTP "/wallet/getcanwithdrawunfreezeamount" \
-    "{\"ownerAddress\": \"$WITNESS_ADDR\", \"timestamp\": 9999999999999}")
+    "{\"owner_address\": \"$WITNESS_ADDR\", \"timestamp\": 9999999999999}")
 check "getcanwithdrawunfreezeamount returns amount key" "$RESULT" '"amount"'
 
 # 9.5 getavailableunfreezecount — no pending unfreezes → count=32
 RESULT=$(http_post $SR_HTTP "/wallet/getavailableunfreezecount" \
-    "{\"ownerAddress\": \"$WITNESS_ADDR\"}")
+    "{\"owner_address\": \"$WITNESS_ADDR\"}")
 check "getavailableunfreezecount returns count key" "$RESULT" '"count"'
 
 # 9.6 getreward — witness earns allowance after block production

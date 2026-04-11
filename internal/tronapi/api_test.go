@@ -203,7 +203,7 @@ func TestCanDelegateResource(t *testing.T) {
 	defer srv.Close()
 
 	result := postJSON(t, srv.URL+"/wallet/candelegateresource",
-		`{"ownerAddress":"4101","balance":500000,"type":0}`)
+		`{"owner_address":"4101","balance":500000,"type":0}`)
 	if result["maxSize"].(float64) != 1000000 || result["canDelegateSize"].(float64) != 800000 {
 		t.Fatalf("unexpected canDelegate response: %v", result)
 	}
@@ -219,7 +219,7 @@ func TestGetCanWithdrawUnfreezeAmount(t *testing.T) {
 	defer srv.Close()
 
 	result := postJSON(t, srv.URL+"/wallet/getcanwithdrawunfreezeamount",
-		`{"ownerAddress":"4101","timestamp":1712345678000}`)
+		`{"owner_address":"4101","timestamp":1712345678000}`)
 	if result["amount"].(float64) != 5000000 {
 		t.Fatalf("unexpected amount: %v", result)
 	}
@@ -233,7 +233,7 @@ func TestGetAvailableUnfreezeCount(t *testing.T) {
 	defer srv.Close()
 
 	result := postJSON(t, srv.URL+"/wallet/getavailableunfreezecount",
-		`{"ownerAddress":"4101"}`)
+		`{"owner_address":"4101"}`)
 	if result["count"].(float64) != 30 {
 		t.Fatalf("unexpected count: %v", result)
 	}
