@@ -70,6 +70,11 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getcanwithdrawunfreezeamount", api.getCanWithdrawUnfreezeAmount)
 	mux.HandleFunc("/wallet/getavailableunfreezecount", api.getAvailableUnfreezeCount)
 	mux.HandleFunc("/wallet/getreward", api.getReward)
+
+	// Phase 10: pool and network queries
+	mux.HandleFunc("/wallet/gettransactionfrompending", api.getTransactionFromPending)
+	mux.HandleFunc("/wallet/gettransactionlistfrompending", api.getTransactionListFromPending)
+	mux.HandleFunc("/wallet/listnodes", api.listNodes)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -871,6 +876,70 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getTransactionFromPending(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	tx, err := api.backend.GetTransactionFromPending(body.Value)
+	if err != nil {
+		data, _ := json.Marshal(map[string]string{"Error": err.Error()})
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
+
+func (api *API) getTransactionListFromPending(w http.ResponseWriter, r *http.Request) {
+	txs, err := api.backend.GetTransactionListFromPending()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var result []map[string]interface{}
+	for _, tx := range txs {
+		m := marshalMessage(tx.ProtoReflect())
+		addTxComputedFields(m, tx.ProtoReflect())
+		result = append(result, m)
+	}
+	if result == nil {
+		result = []map[string]interface{}{}
+	}
+	data, _ := json.Marshal(map[string]interface{}{"transaction": result})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
+	peers, err := api.backend.ListNodes()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type nodeAddress struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	type node struct {
+		Address nodeAddress `json:"address"`
+	}
+	nodes := make([]node, len(peers))
+	for i, p := range peers {
+		nodes[i] = node{Address: nodeAddress{Host: p.Host, Port: p.Port}}
+	}
+	data, _ := json.Marshal(map[string]interface{}{"nodes": nodes})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }

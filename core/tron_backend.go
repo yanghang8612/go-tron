@@ -501,13 +501,28 @@ func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, erro
 }
 
 func (b *TronBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
+	hashBytes := tcommon.FromHex(txID)
+	var hash tcommon.Hash
+	copy(hash[:], hashBytes)
+	tx := b.pool.Get(hash)
+	if tx == nil {
+		return nil, fmt.Errorf("transaction not found")
+	}
+	return tx.Proto(), nil
 }
 
 func (b *TronBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
+	txs := b.pool.Pending()
+	result := make([]*corepb.Transaction, len(txs))
+	for i, tx := range txs {
+		result[i] = tx.Proto()
+	}
+	return result, nil
 }
 
 func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	if b.peersFunc == nil {
+		return []*tronapi.PeerInfo{}, nil
+	}
+	return b.peersFunc(), nil
 }

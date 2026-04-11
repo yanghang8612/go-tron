@@ -3,8 +3,10 @@ package main
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/tronprotocol/go-tron/consensus/dpos"
@@ -188,6 +190,19 @@ func gtron(ctx *cli.Context) error {
 	handler.StartKeepAlive()
 	broadcaster.SetPeersFunc(handler.HandshakedPeers)
 	backend.SetTxBroadcaster(broadcaster)
+	backend.SetPeerLister(func() []*tronapi.PeerInfo {
+		peers := handler.HandshakedPeers()
+		result := make([]*tronapi.PeerInfo, 0, len(peers))
+		for _, p := range peers {
+			host, portStr, err := net.SplitHostPort(p.ID())
+			if err != nil {
+				continue
+			}
+			port, _ := strconv.Atoi(portStr)
+			result = append(result, &tronapi.PeerInfo{Host: host, Port: port})
+		}
+		return result
+	})
 
 	// Create node and register services
 	stack, err := node.New(cfg)
