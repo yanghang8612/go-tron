@@ -2,6 +2,7 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -89,10 +90,18 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	c.Id = strconv.FormatInt(tokenID, 10)
 
 	// Persist metadata and indexes
-	rawdb.WriteAssetIssue(ctx.DB, tokenID, c)
-	rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID)
-	rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID)
-	rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.BlockTime)
+	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, c); err != nil {
+		return nil, fmt.Errorf("write asset: %w", err)
+	}
+	if err := rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID); err != nil {
+		return nil, fmt.Errorf("write name index: %w", err)
+	}
+	if err := rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID); err != nil {
+		return nil, fmt.Errorf("write owner index: %w", err)
+	}
+	if err := rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.BlockTime); err != nil {
+		return nil, fmt.Errorf("write issue time: %w", err)
+	}
 
 	// Mint free supply to issuer (frozen supply is held until UnfreezeAsset)
 	var frozenTotal int64
