@@ -50,8 +50,14 @@ func (a *UpdateAssetActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	owner := common.BytesToAddress(c.OwnerAddress)
-	tokenID, _ := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
+	tokenID, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
+	if !ok {
+		return nil, errors.New("no token issued by this address")
+	}
 	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
+	if asset == nil {
+		return nil, errors.New("token not found")
+	}
 
 	asset.Description = c.Description
 	asset.Url = c.Url
