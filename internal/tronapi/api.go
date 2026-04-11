@@ -953,20 +953,23 @@ func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value string `json:"value"`
+		Value int64 `json:"value"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	if body.Value == "" {
-		body.Value = r.URL.Query().Get("value")
-	}
-	if body.Value == "" {
-		http.Error(w, "value required", http.StatusBadRequest)
-		return
-	}
-	var id int64
-	if _, err := fmt.Sscanf(body.Value, "%d", &id); err != nil {
-		http.Error(w, "invalid token ID", http.StatusBadRequest)
-		return
+	id := body.Value
+	if id == 0 {
+		// fallback: query param
+		s := r.URL.Query().Get("value")
+		if s == "" {
+			http.Error(w, "value required", http.StatusBadRequest)
+			return
+		}
+		var err error
+		id, err = strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid token ID", http.StatusBadRequest)
+			return
+		}
 	}
 	asset := api.backend.GetAssetIssueByID(id)
 	if asset == nil {
