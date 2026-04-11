@@ -312,11 +312,8 @@ func (api *API) ethGetBlockByNumber(params json.RawMessage) (interface{}, error)
 		num = api.backend.BlockNumber()
 	}
 	block, err := api.backend.GetBlockByNumber(num)
-	if err != nil {
-		return nil, err
-	}
-	if block == nil {
-		return nil, nil // null = not found
+	if err != nil || block == nil {
+		return nil, nil // unknown block → null (Ethereum spec)
 	}
 	return blockToRPC(block, fullTx), nil
 }
@@ -336,11 +333,8 @@ func (api *API) ethGetBlockByHash(params json.RawMessage) (interface{}, error) {
 	var hash common.Hash
 	copy(hash[:], common.FromHex(hashStr))
 	block, err := api.backend.GetBlockByHash(hash)
-	if err != nil {
-		return nil, err
-	}
-	if block == nil {
-		return nil, nil
+	if err != nil || block == nil {
+		return nil, nil // unknown block → null (Ethereum spec)
 	}
 	return blockToRPC(block, fullTx), nil
 }
@@ -556,6 +550,29 @@ func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index
 
 // receiptToRPC converts TRON tx + info to an Ethereum receipt JSON object.
 func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.TransactionInfo, block *types.Block, index int) map[string]interface{} {
+	// Extract the sender address from the transaction.
+	from := "0x0000000000000000000000000000000000000000"
+	if len(tx.GetRawData().GetContract()) > 0 {
+		c := tx.RawData.Contract[0]
+		switch c.Type {
+		case corepb.Transaction_Contract_TriggerSmartContract:
+			var msg contractpb.TriggerSmartContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+			}
+		case corepb.Transaction_Contract_CreateSmartContract:
+			var msg contractpb.CreateSmartContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+			}
+		case corepb.Transaction_Contract_TransferContract:
+			var msg contractpb.TransferContract
+			if c.Parameter.UnmarshalTo(&msg) == nil {
+				from = hex20(msg.OwnerAddress)
+			}
+		}
+	}
+
 	status := "0x1"
 	if info.Result == corepb.TransactionInfo_FAILED {
 		status = "0x0"
@@ -601,7 +618,7 @@ func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.Transac
 		"transactionIndex":  hexUint64(uint64(index)),
 		"blockHash":         fmt.Sprintf("0x%x", block.Hash()),
 		"blockNumber":       hexUint64(block.Number()),
-		"from":              "0x0000000000000000000000000000000000000000",
+		"from":              from,
 		"to":                toAddr,
 		"cumulativeGasUsed": hexUint64(uint64(energyUsed)),
 		"gasUsed":           hexUint64(uint64(energyUsed)),
