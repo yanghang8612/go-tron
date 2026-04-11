@@ -125,6 +125,23 @@ func TestAssetIssueExecute(t *testing.T) {
 	}
 }
 
+func TestAssetIssueValidate_NegativeFrozenAmount(t *testing.T) {
+	owner := makeTestAddr(1)
+	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.FrozenSupply = []*contractpb.AssetIssueContract_FrozenSupply{
+		{FrozenAmount: -100_000, FrozenDays: 30},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
+
+	act := &AssetIssueActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for negative frozen_amount")
+	}
+}
+
 func TestAssetIssueExecute_WithFrozenSupply(t *testing.T) {
 	owner := makeTestAddr(1)
 	c := makeAssetIssueContract(1, "FROZENTOKEN", 1_000_000)

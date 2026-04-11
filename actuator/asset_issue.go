@@ -60,6 +60,12 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	}
 	var frozenTotal int64
 	for _, f := range c.FrozenSupply {
+		if f.FrozenAmount <= 0 {
+			return errors.New("frozen_amount must be positive")
+		}
+		if f.FrozenDays <= 0 {
+			return errors.New("frozen_days must be positive")
+		}
 		frozenTotal += f.FrozenAmount
 	}
 	if frozenTotal > c.TotalSupply {
