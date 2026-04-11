@@ -420,18 +420,9 @@ if [ -n "$DEPLOY_TX_ID" ] && [ "$DEPLOY_TX_ID" != "" ]; then
     echo "  Contract address: $CONTRACT_ADDR"
 
     if [ -n "$CONTRACT_ADDR" ] && [ "$CONTRACT_ADDR" != "" ]; then
-        # Query the deployed contract
-        # NOTE: getcontract currently looks for SmartContract proto in statedb.
-        # The VM stores code via SetCode but SmartContract proto storage is not
-        # yet implemented, so this is expected to return empty for now.
         RESULT=$(http_post $SR_HTTP "/wallet/getcontract" "{\"value\": \"$CONTRACT_ADDR\"}")
         echo "  Contract query: $(echo "$RESULT" | head -c 200)"
-        if echo "$RESULT" | grep -q '"bytecode"'; then
-            echo "  PASS: getcontract returns contract data"
-            PASS=$((PASS + 1))
-        else
-            skip "getcontract returns bytecode" "SmartContract proto storage not yet implemented"
-        fi
+        check "getcontract returns bytecode" "$RESULT" '"bytecode"'
     else
         skip "getcontract" "no contract address in tx info"
     fi
@@ -525,12 +516,7 @@ fi
 # Cross-node: contract query
 if [ -n "$CONTRACT_ADDR" ] && [ "$CONTRACT_ADDR" != "" ]; then
     RESULT=$(http_post $NODE_HTTP "/wallet/getcontract" "{\"value\": \"$CONTRACT_ADDR\"}")
-    if echo "$RESULT" | grep -q '"bytecode"'; then
-        echo "  PASS: node has deployed contract"
-        PASS=$((PASS + 1))
-    else
-        skip "node getcontract" "SmartContract proto storage not yet implemented"
-    fi
+    check "node getcontract returns bytecode" "$RESULT" '"bytecode"'
 fi
 
 # Cross-node: chain parameters should match
@@ -553,9 +539,8 @@ check_eq "witness count matches across nodes" "$SR_W_COUNT" "$NODE_W_COUNT"
 echo ""
 echo "=== Test Group 7: Transaction via Second Node ==="
 
-# Build tx via the regular node's API, but broadcast to SR (which produces blocks).
-# Tx pool propagation across P2P is not yet implemented, so we broadcast to the
-# block producer directly.
+# Build tx via the regular node's API and broadcast to that node.
+# TX pool propagation (Phase 9) propagates the tx to SR via P2P so it gets mined.
 RECIPIENT2_ADDR="41bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 TRANSFER_AMOUNT2=500000
 
@@ -569,9 +554,9 @@ check "node: createtransaction works" "$UNSIGNED_TX2" '"raw_data"'
 TX_ID2=$(json_field "d.get('txID','')" "$UNSIGNED_TX2" || echo "")
 SIGNED_TX2=$(echo "$UNSIGNED_TX2" | "$TXSIGN" "$WITNESS_KEY" 2>&1) || true
 
-# Broadcast to SR (block producer) so the tx gets included in a block
-BCAST2=$(http_post $SR_HTTP "/wallet/broadcasttransaction" "$SIGNED_TX2")
-check "broadcast to SR succeeds" "$BCAST2" '"result":true'
+# Broadcast to the regular node — propagates to SR via P2P
+BCAST2=$(http_post $NODE_HTTP "/wallet/broadcasttransaction" "$SIGNED_TX2")
+check "broadcast to node propagates via P2P" "$BCAST2" '"result":true'
 
 echo "  Waiting for tx to be mined..."
 CURRENT_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
