@@ -46,6 +46,8 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &AssetIssueActuator{}, nil
 	case corepb.Transaction_Contract_TransferContract:
 		return &TransferActuator{}, nil
+	case corepb.Transaction_Contract_TransferAssetContract:
+		return &TransferAssetActuator{}, nil
 	case corepb.Transaction_Contract_AccountCreateContract:
 		return &CreateAccountActuator{}, nil
 	case corepb.Transaction_Contract_WitnessCreateContract:
