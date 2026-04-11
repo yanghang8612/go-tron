@@ -60,6 +60,11 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/proposalapprove", api.proposalApprove)
 	mux.HandleFunc("/wallet/proposaldelete", api.proposalDelete)
 	mux.HandleFunc("/wallet/listproposals", api.listProposals)
+
+	// Phase 10: delegation/resource queries
+	mux.HandleFunc("/wallet/getdelegatedresourcev2", api.getDelegatedResourceV2)
+	mux.HandleFunc("/wallet/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
+	mux.HandleFunc("/wallet/candelegateresource", api.canDelegateResource)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
@@ -726,4 +731,73 @@ func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"proposals": proposals})
+}
+
+func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		FromAddress string `json:"fromAddress"`
+		ToAddress   string `json:"toAddress"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
+		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
+		return
+	}
+	from := common.BytesToAddress(common.FromHex(body.FromAddress))
+	to := common.BytesToAddress(common.FromHex(body.ToAddress))
+	info, err := api.backend.GetDelegatedResourceV2(from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	list := []*DelegatedResourceInfo{}
+	if info != nil {
+		list = []*DelegatedResourceInfo{info}
+	}
+	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Value == "" {
+		body.Value = r.URL.Query().Get("value")
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(body.Value))
+	info, err := api.backend.GetDelegatedResourceAccountIndexV2(addr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OwnerAddress string `json:"ownerAddress"`
+		Balance      int64  `json:"balance"`
+		Type         int32  `json:"type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
+		http.Error(w, "ownerAddress required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	info, err := api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }

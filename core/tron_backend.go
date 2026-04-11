@@ -391,15 +391,65 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 }
 
 func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) (*tronapi.DelegatedResourceInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	dr := rawdb.ReadDelegatedResource(b.chain.db, from, to)
+	if dr == nil {
+		return nil, nil
+	}
+	return &tronapi.DelegatedResourceInfo{
+		FromAddress:               hex.EncodeToString(from[:]),
+		ToAddress:                 hex.EncodeToString(to[:]),
+		FrozenBalanceForBandwidth: dr.FrozenBalanceForBandwidth,
+		FrozenBalanceForEnergy:    dr.FrozenBalanceForEnergy,
+		ExpireTimeForBandwidth:    dr.ExpireTimeForBandwidth,
+		ExpireTimeForEnergy:       dr.ExpireTimeForEnergy,
+	}, nil
 }
 
 func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (*tronapi.DelegationIndexInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	receivers := rawdb.ReadDelegationIndex(b.chain.db, addr)
+	toAddresses := make([]string, len(receivers))
+	for i, r := range receivers {
+		toAddresses[i] = hex.EncodeToString(r[:])
+	}
+	return &tronapi.DelegationIndexInfo{
+		Account:     hex.EncodeToString(addr[:]),
+		ToAddresses: toAddresses,
+	}, nil
 }
 
 func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	maxSize := statedb.GetFrozenV2Amount(addr, resource)
+
+	// Compute already-delegated amount from the delegation index.
+	var delegated int64
+	for _, receiver := range rawdb.ReadDelegationIndex(b.chain.db, addr) {
+		dr := rawdb.ReadDelegatedResource(b.chain.db, addr, receiver)
+		if dr == nil {
+			continue
+		}
+		switch resource {
+		case corepb.ResourceCode_BANDWIDTH:
+			delegated += dr.FrozenBalanceForBandwidth
+		case corepb.ResourceCode_ENERGY:
+			delegated += dr.FrozenBalanceForEnergy
+		}
+	}
+
+	canDelegate := maxSize - delegated
+	if canDelegate < 0 {
+		canDelegate = 0
+	}
+	return &tronapi.CanDelegateInfo{
+		MaxSize:         maxSize,
+		CanDelegateSize: canDelegate,
+		Balance:         amount,
+	}, nil
 }
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
