@@ -3,6 +3,7 @@ package actuator
 import (
 	"bytes"
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -80,7 +81,9 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 
 	// Step 2: Return remaining sell tokens to owner
 	if order.SellTokenQuantityRemain > 0 {
-		transferToken(ctx, ownerAddr, order.SellTokenId, order.SellTokenQuantityRemain)
+		if err := transferToken(ctx, ownerAddr, order.SellTokenId, order.SellTokenQuantityRemain); err != nil {
+			return nil, fmt.Errorf("return sell tokens: %w", err)
+		}
 	}
 
 	// Step 3: Remove from order book

@@ -317,7 +317,7 @@ func (s *StateDB) UnfreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amo
 // GetStateObject returns the account for addr (nil if not found). Used by tests and later tasks.
 func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
 	obj := s.getStateObject(addr)
-	if obj == nil {
+	if obj == nil || obj.deleted {
 		return nil
 	}
 	return obj.account

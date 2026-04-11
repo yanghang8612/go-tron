@@ -3,6 +3,7 @@ package actuator
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"sort"
 	"strconv"
@@ -99,7 +100,9 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 
 	// Step 5: Credit incoming owner with what was received during matching
 	if totalBuyReceived > 0 {
-		transferToken(ctx, ownerAddr, c.BuyTokenId, totalBuyReceived)
+		if err := transferToken(ctx, ownerAddr, c.BuyTokenId, totalBuyReceived); err != nil {
+			return nil, fmt.Errorf("credit buy tokens: %w", err)
+		}
 	}
 
 	// Step 6: If remaining > 0, add to order book; else mark INACTIVE
@@ -154,13 +157,17 @@ func checkTokenBalance(ctx *Context, ownerAddr tcommon.Address, tokenID []byte, 
 }
 
 // transferToken credits amount of tokenID to addr.
-func transferToken(ctx *Context, addr tcommon.Address, tokenID []byte, amount int64) {
+func transferToken(ctx *Context, addr tcommon.Address, tokenID []byte, amount int64) error {
 	if bytes.Equal(tokenID, []byte("_")) {
 		ctx.State.AddBalance(addr, amount)
-		return
+		return nil
 	}
-	tid, _ := strconv.ParseInt(string(tokenID), 10, 64)
+	tid, err := strconv.ParseInt(string(tokenID), 10, 64)
+	if err != nil {
+		return errors.New("invalid TRC10 token ID")
+	}
 	ctx.State.AddTRC10Balance(addr, tid, amount)
+	return nil
 }
 
 // deductToken deducts amount of tokenID from addr.
@@ -269,27 +276,42 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 
 			var fillBuy, fillSell int64 // fillBuy: how much of existing's sell token we get; fillSell: how much we give
 
-			if existing.SellTokenQuantityRemain <= incoming.SellTokenQuantityRemain*cp.price.SellTokenQuantity/cp.price.BuyTokenQuantity {
+			// Use big.Int for all fill calculations to avoid int64 overflow
+			pSell := big.NewInt(cp.price.SellTokenQuantity)
+			pBuy := big.NewInt(cp.price.BuyTokenQuantity)
+			bRemain := big.NewInt(incoming.SellTokenQuantityRemain)
+			bExist := big.NewInt(existing.SellTokenQuantityRemain)
+
+			// Check: existingRemain <= incomingRemain * pSell / pBuy
+			threshold := new(big.Int).Mul(bRemain, pSell)
+			threshold.Div(threshold, pBuy)
+
+			if bExist.Cmp(threshold) <= 0 {
 				// Full fill of existing order
 				fillBuy = existing.SellTokenQuantityRemain
-				// We need to give: fillBuy * BuyTokenQuantity / SellTokenQuantity
-				fillSell = fillBuy * cp.price.BuyTokenQuantity / cp.price.SellTokenQuantity
+				// We need to give: fillBuy * pBuy / pSell
+				fillSell = new(big.Int).Mul(big.NewInt(fillBuy), pBuy).Div(
+					new(big.Int).Mul(big.NewInt(fillBuy), pBuy), pSell).Int64()
 			} else {
 				// Partial fill: we give all our remaining sell tokens
 				fillSell = incoming.SellTokenQuantityRemain
-				// We get: fillSell * SellTokenQuantity / BuyTokenQuantity
-				fillBuy = fillSell * cp.price.SellTokenQuantity / cp.price.BuyTokenQuantity
+				// We get: fillSell * pSell / pBuy
+				fillBuy = new(big.Int).Mul(big.NewInt(fillSell), pSell).Div(
+					new(big.Int).Mul(big.NewInt(fillSell), pSell), pBuy).Int64()
 			}
 
 			// Make sure we don't give more than we have
 			if fillSell > incoming.SellTokenQuantityRemain {
 				fillSell = incoming.SellTokenQuantityRemain
-				fillBuy = fillSell * cp.price.SellTokenQuantity / cp.price.BuyTokenQuantity
+				fillBuy = new(big.Int).Mul(big.NewInt(fillSell), pSell).Div(
+					new(big.Int).Mul(big.NewInt(fillSell), pSell), pBuy).Int64()
 			}
 
 			// Transfer fillSell (our sell token) to the existing order's owner
 			existingOwner := tcommon.BytesToAddress(existing.OwnerAddress)
-			transferToken(ctx, existingOwner, incoming.SellTokenId, fillSell)
+			if err := transferToken(ctx, existingOwner, incoming.SellTokenId, fillSell); err != nil {
+				return 0, err
+			}
 
 			// Update existing order's remaining
 			existing.SellTokenQuantityRemain -= fillBuy
