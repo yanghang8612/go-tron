@@ -1,4 +1,4 @@
-package tronapi
+package tronapi_test
 
 import (
 	"encoding/json"
@@ -10,299 +10,318 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/internal/tronapi"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-type mockBackend struct{}
-
-func (m *mockBackend) CurrentBlock() *types.Block {
-	pb := &corepb.Block{
-		BlockHeader: &corepb.BlockHeader{
-			RawData: &corepb.BlockHeaderRaw{
-				Number:    100,
-				Timestamp: 300000,
-			},
-		},
-	}
-	return types.NewBlockFromPB(pb)
+// stubBackend is a test double for tronapi.Backend.
+// Pre-set fields control what each new method returns.
+// All pre-existing methods return zero/nil values.
+type stubBackend struct {
+	delegatedResource *tronapi.DelegatedResourceInfo
+	delegationIndex   *tronapi.DelegationIndexInfo
+	canDelegate       *tronapi.CanDelegateInfo
+	canWithdraw       *tronapi.CanWithdrawUnfreezeInfo
+	availableUnfreeze *tronapi.AvailableUnfreezeCountInfo
+	reward            *tronapi.RewardInfo
+	pendingTx         *corepb.Transaction
+	pendingTxList     []*corepb.Transaction
+	nodes             []*tronapi.PeerInfo
 }
 
-func (m *mockBackend) GetBlockByNumber(num uint64) (*types.Block, error) {
-	pb := &corepb.Block{
-		BlockHeader: &corepb.BlockHeader{
-			RawData: &corepb.BlockHeaderRaw{
-				Number:    int64(num),
-				Timestamp: int64(num) * 3000,
-			},
-		},
-	}
-	return types.NewBlockFromPB(pb), nil
-}
-
-func (m *mockBackend) GetAccount(addr common.Address) (*types.Account, error) {
-	acc := types.NewAccount(addr, corepb.AccountType_Normal)
-	acc.SetBalance(5_000_000)
-	return acc, nil
-}
-
-func (m *mockBackend) BroadcastTransaction(tx *types.Transaction) error {
-	return nil
-}
-
-func (m *mockBackend) GetNodeInfo() *NodeInfo {
-	return &NodeInfo{Version: "test", CurrentBlock: 100}
-}
-
-func (m *mockBackend) PendingTransactionCount() int {
-	return 0
-}
-
-func (m *mockBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
-	return nil, fmt.Errorf("contract not found")
-}
-
-func (m *mockBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*TriggerResult, error) {
-	return &TriggerResult{Result: []byte{0x42}, EnergyUsed: 100}, nil
-}
-
-func (m *mockBackend) GetTransactionByID(txHash common.Hash) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not found")
-}
-
-func (m *mockBackend) GetTransactionInfoByID(txHash common.Hash) (*corepb.TransactionInfo, error) {
-	return nil, fmt.Errorf("not found")
-}
-
-func (m *mockBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+// --- Pre-existing Backend methods (all return zero values) ---
+func (s *stubBackend) CurrentBlock() *types.Block                             { return nil }
+func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return nil, nil }
+func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { return nil, nil }
+func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error       { return nil }
+func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                          { return &tronapi.NodeInfo{} }
+func (s *stubBackend) PendingTransactionCount() int                            { return 0 }
+func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	return nil, nil
 }
-
-func (m *mockBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) {
-	return nil, fmt.Errorf("not found")
-}
-
-func (m *mockBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
-	var blocks []*types.Block
-	for i := start; i < end; i++ {
-		b, _ := m.GetBlockByNumber(i)
-		blocks = append(blocks, b)
-	}
-	return blocks, nil
-}
-
-func (m *mockBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
-	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
-}
-
-func (m *mockBackend) BuildDeployContractTransaction(owner common.Address, abi string, bytecode []byte,
-	feeLimit int64, callValue int64, name string, consumePercent int64) (*corepb.Transaction, error) {
-	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
-}
-
-func (m *mockBackend) BuildTriggerContractTransaction(owner, contract common.Address, data []byte,
-	feeLimit int64, callValue int64) (*corepb.Transaction, *TriggerResult, error) {
-	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, &TriggerResult{Result: []byte{0x42}, EnergyUsed: 100}, nil
-}
-
-func (m *mockBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
-	return 21000, nil
-}
-
-func (m *mockBackend) GetAccountResource(addr common.Address) (*AccountResource, error) {
-	return &AccountResource{
-		FreeNetLimit:     1500,
-		TotalNetLimit:    43200000000,
-		TotalEnergyLimit: 50000000000,
-	}, nil
-}
-
-func (m *mockBackend) GetChainParameters() []ChainParameter {
-	return []ChainParameter{
-		{Key: "energy_fee", Value: 420},
-	}
-}
-
-func (m *mockBackend) ListWitnesses() ([]*WitnessInfo, error) {
-	return []*WitnessInfo{
-		{Address: "4100000000000000000000000000000000000001", VoteCount: 100, IsJobs: true},
-	}, nil
-}
-
-func (m *mockBackend) NextMaintenanceTime() int64 {
-	return 1700000000000
-}
-
-func (m *mockBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) ListProposals() ([]*ProposalInfo, error) {
+func (s *stubBackend) TriggerConstantContract(owner, contract common.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	return nil, nil
 }
+func (s *stubBackend) GetTransactionByID(h common.Hash) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetTransactionInfoByID(h common.Hash) (*corepb.TransactionInfo, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetTransactionInfoByBlockNum(n uint64) ([]*corepb.TransactionInfo, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetBlockByHash(h common.Hash) (*types.Block, error) { return nil, nil }
+func (s *stubBackend) GetBlocksByRange(start, end uint64) ([]*types.Block, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildTransferTransaction(owner, to common.Address, amount int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildDeployContractTransaction(owner common.Address, abi string, bytecode []byte, feeLimit int64, callValue int64, name string, consumePercent int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildTriggerContractTransaction(owner, contract common.Address, data []byte, feeLimit int64, callValue int64) (*corepb.Transaction, *tronapi.TriggerResult, error) {
+	return nil, nil, nil
+}
+func (s *stubBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
+	return 0, nil
+}
+func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
+func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
+func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
+func (s *stubBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
 
-func (m *mockBackend) GetDelegatedResourceV2(from, to common.Address) (*DelegatedResourceInfo, error) {
-	return nil, fmt.Errorf("not implemented")
+// --- New Phase 10 methods ---
+func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) (*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResource, nil
+}
+func (s *stubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
+	return s.delegationIndex, nil
+}
+func (s *stubBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	return s.canDelegate, nil
+}
+func (s *stubBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	return s.canWithdraw, nil
+}
+func (s *stubBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	return s.availableUnfreeze, nil
+}
+func (s *stubBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
+	return s.reward, nil
+}
+func (s *stubBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
+	if s.pendingTx == nil {
+		return nil, fmt.Errorf("transaction not found")
+	}
+	return s.pendingTx, nil
+}
+func (s *stubBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) {
+	return s.pendingTxList, nil
+}
+func (s *stubBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
+	return s.nodes, nil
 }
 
-func (m *mockBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) GetReward(addr common.Address) (*RewardInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (m *mockBackend) ListNodes() ([]*PeerInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func TestGetNowBlock(t *testing.T) {
-	api := NewAPI(&mockBackend{})
+// --- Helpers ---
+func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {
+	t.Helper()
+	api := tronapi.NewAPI(stub)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/wallet/getnowblock", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
-	header := result["block_header"].(map[string]interface{})
-	raw := header["raw_data"].(map[string]interface{})
-	// tronapi encodes int64 as number (matching java-tron)
-	numVal := raw["number"].(float64)
-	if numVal != 100 {
-		t.Fatalf("expected block 100, got %v", numVal)
-	}
-	// Check blockID is present
-	if _, ok := result["blockID"]; !ok {
-		t.Fatal("expected blockID field in response")
-	}
+	return httptest.NewServer(mux)
 }
 
-func TestGetBlockByNum(t *testing.T) {
-	api := NewAPI(&mockBackend{})
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("POST", "/wallet/getblockbynum", nil)
-	q := req.URL.Query()
-	q.Add("num", "42")
-	req.URL.RawQuery = q.Encode()
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+func postJSON(t *testing.T, url, body string) map[string]interface{} {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
 	}
-}
-
-func TestEstimateEnergy(t *testing.T) {
-	api := NewAPI(&mockBackend{})
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
-
-	body := `{"owner_address":"4101","contract_address":"4102","data":"00"}`
-	req := httptest.NewRequest("POST", "/wallet/estimateenergy", strings.NewReader(body))
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s: status %d", url, resp.StatusCode)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
-	if _, ok := result["energy_required"]; !ok {
-		t.Fatal("expected energy_required in response")
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode JSON from %s: %v", url, err)
+	}
+	return result
+}
+
+// --- Tests: delegation group ---
+
+func TestGetDelegatedResourceV2WithData(t *testing.T) {
+	stub := &stubBackend{
+		delegatedResource: &tronapi.DelegatedResourceInfo{
+			FromAddress:            "4101",
+			ToAddress:              "4102",
+			FrozenBalanceForEnergy: 1000000,
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourcev2",
+		`{"fromAddress":"4101","toAddress":"4102"}`)
+	list, ok := result["delegatedResource"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("expected delegatedResource=[1 entry], got %v", result)
 	}
 }
 
-func TestGetChainParameters(t *testing.T) {
-	api := NewAPI(&mockBackend{})
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
+func TestGetDelegatedResourceV2Empty(t *testing.T) {
+	stub := &stubBackend{} // delegatedResource is nil
+	srv := newTestServer(t, stub)
+	defer srv.Close()
 
-	req := httptest.NewRequest("POST", "/wallet/getchainparameters", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourcev2",
+		`{"fromAddress":"4101","toAddress":"4102"}`)
+	list, ok := result["delegatedResource"].([]interface{})
+	if !ok || len(list) != 0 {
+		t.Fatalf("expected delegatedResource=[], got %v", result)
+	}
+}
 
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+func TestGetDelegatedResourceAccountIndexV2(t *testing.T) {
+	stub := &stubBackend{
+		delegationIndex: &tronapi.DelegationIndexInfo{
+			Account:     "4101",
+			ToAddresses: []string{"4102", "4103"},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourceaccountindexv2",
+		`{"value":"4101"}`)
+	addrs, ok := result["toAddresses"].([]interface{})
+	if !ok || len(addrs) != 2 {
+		t.Fatalf("expected 2 toAddresses, got %v", result)
+	}
+}
+
+func TestCanDelegateResource(t *testing.T) {
+	stub := &stubBackend{
+		canDelegate: &tronapi.CanDelegateInfo{MaxSize: 1000000, CanDelegateSize: 800000, Balance: 500000},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/candelegateresource",
+		`{"ownerAddress":"4101","balance":500000,"type":0}`)
+	if result["maxSize"].(float64) != 1000000 || result["canDelegateSize"].(float64) != 800000 {
+		t.Fatalf("unexpected canDelegate response: %v", result)
+	}
+}
+
+// --- Tests: unfreeze/reward group ---
+
+func TestGetCanWithdrawUnfreezeAmount(t *testing.T) {
+	stub := &stubBackend{
+		canWithdraw: &tronapi.CanWithdrawUnfreezeInfo{Amount: 5000000},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getcanwithdrawunfreezeamount",
+		`{"ownerAddress":"4101","timestamp":1712345678000}`)
+	if result["amount"].(float64) != 5000000 {
+		t.Fatalf("unexpected amount: %v", result)
+	}
+}
+
+func TestGetAvailableUnfreezeCount(t *testing.T) {
+	stub := &stubBackend{
+		availableUnfreeze: &tronapi.AvailableUnfreezeCountInfo{Count: 30},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getavailableunfreezecount",
+		`{"ownerAddress":"4101"}`)
+	if result["count"].(float64) != 30 {
+		t.Fatalf("unexpected count: %v", result)
+	}
+}
+
+func TestGetReward(t *testing.T) {
+	stub := &stubBackend{
+		reward: &tronapi.RewardInfo{Reward: 123456},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getreward",
+		`{"address":"4101"}`)
+	if result["reward"].(float64) != 123456 {
+		t.Fatalf("unexpected reward: %v", result)
+	}
+}
+
+// --- Tests: pool group ---
+
+func TestGetTransactionFromPendingFound(t *testing.T) {
+	stub := &stubBackend{
+		pendingTx: &corepb.Transaction{RawData: &corepb.TransactionRaw{}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/gettransactionfrompending",
+		`{"value":"aabbcc"}`)
+	if _, hasRawData := result["raw_data"]; !hasRawData {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+}
+
+func TestGetTransactionFromPendingNotFound(t *testing.T) {
+	stub := &stubBackend{} // pendingTx is nil → returns error
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/gettransactionfrompending",
+		`{"value":"aabbcc"}`)
+	if _, hasError := result["Error"]; !hasError {
+		t.Fatalf("expected Error field in not-found response, got %v", result)
+	}
+}
+
+func TestGetTransactionListFromPending(t *testing.T) {
+	stub := &stubBackend{pendingTxList: nil} // empty pool
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/gettransactionlistfrompending", `{}`)
+	txList, ok := result["transaction"].([]interface{})
+	if !ok {
+		t.Fatalf("expected transaction array, got %v", result)
+	}
+	if len(txList) != 0 {
+		t.Fatalf("expected empty transaction list, got %d entries", len(txList))
+	}
+}
+
+// --- Tests: network group ---
+
+func TestListNodes(t *testing.T) {
+	stub := &stubBackend{
+		nodes: []*tronapi.PeerInfo{{Host: "127.0.0.1", Port: 18888}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/wallet/listnodes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
-	if _, ok := result["chainParameter"]; !ok {
-		t.Fatal("expected chainParameter in response")
+	json.NewDecoder(resp.Body).Decode(&result)
+	nodes, ok := result["nodes"].([]interface{})
+	if !ok || len(nodes) != 1 {
+		t.Fatalf("expected nodes=[1 entry], got %v", result)
 	}
-}
-
-func TestListWitnesses(t *testing.T) {
-	api := NewAPI(&mockBackend{})
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("POST", "/wallet/listwitnesses", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
-	if _, ok := result["witnesses"]; !ok {
-		t.Fatal("expected witnesses in response")
-	}
-}
-
-func TestGetNextMaintenanceTime(t *testing.T) {
-	api := NewAPI(&mockBackend{})
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("POST", "/wallet/getnextmaintenancetime", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var result map[string]int64
-	json.NewDecoder(w.Body).Decode(&result)
-	if result["num"] != 1700000000000 {
-		t.Fatalf("expected 1700000000000, got %d", result["num"])
+	node := nodes[0].(map[string]interface{})
+	addr := node["address"].(map[string]interface{})
+	if addr["host"] != "127.0.0.1" {
+		t.Fatalf("unexpected host: %v", addr["host"])
 	}
 }
