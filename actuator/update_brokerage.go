@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -23,6 +24,9 @@ func (a *UpdateBrokerageActuator) getContract(ctx *Context) (*contractpb.UpdateB
 }
 
 func (a *UpdateBrokerageActuator) Validate(ctx *Context) error {
+	if !forks.IsActive(forks.AllowChangeDelegation, ctx.BlockNumber, ctx.DynProps) {
+		return errors.New("brokerage update not yet enabled")
+	}
 	c, err := a.getContract(ctx)
 	if err != nil {
 		return err

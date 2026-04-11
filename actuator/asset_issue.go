@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -78,8 +79,10 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if ctx.State.GetBalance(owner) < ctx.DynProps.AssetIssueFee() {
 		return errors.New("insufficient balance for asset issue fee")
 	}
-	if _, ok := rawdb.ReadAssetNameIndex(ctx.DB, c.Name); ok {
-		return errors.New("token name already exists")
+	if !forks.IsActive(forks.AllowSameTokenName, ctx.BlockNumber, ctx.DynProps) {
+		if _, ok := rawdb.ReadAssetNameIndex(ctx.DB, c.Name); ok {
+			return errors.New("token name already exists")
+		}
 	}
 	if _, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:]); ok {
 		return errors.New("address has already issued a token")

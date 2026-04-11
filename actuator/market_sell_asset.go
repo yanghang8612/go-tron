@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -31,6 +32,9 @@ func (a *MarketSellAssetActuator) getContract(ctx *Context) (*contractpb.MarketS
 
 // Validate checks all preconditions for a MarketSellAsset transaction.
 func (a *MarketSellAssetActuator) Validate(ctx *Context) error {
+	if !forks.IsActive(forks.AllowMarketTransaction, ctx.BlockNumber, ctx.DynProps) {
+		return errors.New("market transactions not yet enabled")
+	}
 	c, err := a.getContract(ctx)
 	if err != nil {
 		return err
