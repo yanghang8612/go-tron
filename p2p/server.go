@@ -1,11 +1,15 @@
 package p2p
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/tronprotocol/go-tron/p2p/discover"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	p2ppb "github.com/tronprotocol/go-tron/proto/p2p"
 )
 
 // ServerConfig holds P2P server configuration.
@@ -14,6 +18,14 @@ type ServerConfig struct {
 	MaxPeers   int               // max peers allowed
 	SeedNodes  []string          // initial peers to dial
 	Discovery  *discover.Service // optional; nil = no discovery
+
+	// Libp2p handshake parameters. NodeID must be 64 bytes. If NetworkID or
+	// Version is 0, defaults are applied (NetworkID=1, Version=Libp2pProtocolVersion).
+	NodeID     []byte // 64-byte node identity
+	NetworkID  int32  // network discriminator; 1 = mainnet
+	Version    int32  // protocol version; defaults to Libp2pProtocolVersion
+	ExternalIP string // IPv4 ASCII string used in HelloMessage.from.address
+	Port       int32  // our TCP port, echoed in HelloMessage.from.port
 }
 
 // Server manages TCP connections to peers.
@@ -31,6 +43,16 @@ type Server struct {
 func NewServer(config ServerConfig, handler Handler) *Server {
 	if config.MaxPeers <= 0 {
 		config.MaxPeers = 30
+	}
+	// Apply libp2p handshake defaults.
+	if len(config.NodeID) != 64 {
+		config.NodeID = discover.GenerateNodeID()
+	}
+	if config.NetworkID == 0 {
+		config.NetworkID = 1
+	}
+	if config.Version == 0 {
+		config.Version = Libp2pProtocolVersion
 	}
 	return &Server{
 		config:  config,
@@ -131,7 +153,66 @@ func (s *Server) AddPeer(addr string) error {
 	if err != nil {
 		return err
 	}
-	return s.addPeerConn(conn, addr, false)
+	if err := s.addPeerConn(conn, addr, false); err != nil {
+		conn.Close()
+		return err
+	}
+	return nil
+}
+
+// performLibp2pHandshake runs the libp2p HANDSHAKE_HELLO exchange on a raw
+// connection. On success, the conn is ready for application-layer messages.
+// On failure, it sends a DISCONNECT and returns an error — caller must close.
+func (s *Server) performLibp2pHandshake(conn net.Conn) error {
+	// Deadline so a hung peer can't stall us forever.
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{}) //nolint:errcheck
+
+	localEP := &corepb.Endpoint{
+		Address: []byte(s.config.ExternalIP),
+		Port:    s.config.Port,
+		NodeId:  s.config.NodeID,
+	}
+
+	// Send our HANDSHAKE_HELLO.
+	hello := BuildHelloMessage(localEP, s.config.NetworkID, 0)
+	helloPayload, err := EncodeHello(hello)
+	if err != nil {
+		return fmt.Errorf("encode hello: %w", err)
+	}
+	if err := WriteMsg(conn, MsgLibp2pHello, helloPayload); err != nil {
+		return fmt.Errorf("send hello: %w", err)
+	}
+
+	// Read peer's response — must be either HANDSHAKE_HELLO or DISCONNECT.
+	code, payload, err := ReadMsg(conn)
+	if err != nil {
+		return fmt.Errorf("read hello: %w", err)
+	}
+	if code == MsgLibp2pDisconnect {
+		dm, _ := ParseDisconnect(payload)
+		reason := p2ppb.DisconnectReason_UNKNOWN
+		if dm != nil {
+			reason = dm.Reason
+		}
+		return fmt.Errorf("peer sent disconnect: %v", reason)
+	}
+	if code != MsgLibp2pHello {
+		return fmt.Errorf("expected HELLO, got code %#x", code)
+	}
+	peerHello, err := ParseHello(payload)
+	if err != nil {
+		return fmt.Errorf("parse hello: %w", err)
+	}
+	reason := ValidateHello(peerHello, s.config.NetworkID, s.config.Version, time.Now())
+	if reason != p2ppb.DisconnectReason_PEER_QUITING { // 0 = accept
+		// Send disconnect back so peer knows why.
+		dm := BuildDisconnect(reason)
+		body, _ := EncodeDisconnect(dm)
+		_ = WriteMsg(conn, MsgLibp2pDisconnect, body)
+		return fmt.Errorf("reject peer: %v", reason)
+	}
+	return nil
 }
 
 func (s *Server) acceptLoop() {
@@ -156,16 +237,32 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
+	// Capacity + dedup check BEFORE expensive handshake.
 	s.mu.Lock()
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
-		conn.Close()
 		return net.ErrClosed
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
-		conn.Close()
-		return nil // already connected
+		return nil // already connected; caller closes conn
+	}
+	s.mu.Unlock()
+
+	// Libp2p handshake on the raw conn — before peer is registered.
+	if err := s.performLibp2pHandshake(conn); err != nil {
+		return err
+	}
+
+	// Re-check capacity/dedup under lock (another peer may have joined meanwhile).
+	s.mu.Lock()
+	if len(s.peers) >= s.config.MaxPeers {
+		s.mu.Unlock()
+		return net.ErrClosed
+	}
+	if _, exists := s.peers[id]; exists {
+		s.mu.Unlock()
+		return nil // already connected; caller closes conn
 	}
 	p := NewPeer(conn, id, inbound, s)
 	s.peers[id] = p
