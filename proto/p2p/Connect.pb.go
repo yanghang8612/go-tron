@@ -111,16 +111,19 @@ func (DisconnectReason) EnumDescriptor() ([]byte, []int) {
 type CompressMessage_CompressType int32
 
 const (
-	CompressMessage_uncompress CompressMessage_CompressType = 0 // more compression types may exist; only 'uncompress' is confirmed from the Java class
+	CompressMessage_uncompress CompressMessage_CompressType = 0
+	CompressMessage_snappy     CompressMessage_CompressType = 1
 )
 
 // Enum value maps for CompressMessage_CompressType.
 var (
 	CompressMessage_CompressType_name = map[int32]string{
 		0: "uncompress",
+		1: "snappy",
 	}
 	CompressMessage_CompressType_value = map[string]int32{
 		"uncompress": 0,
+		"snappy":     1,
 	}
 )
 
@@ -477,13 +480,15 @@ const file_p2p_Connect_proto_rawDesc = "" +
 	"\x10KeepAliveMessage\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"E\n" +
 	"\x14P2pDisconnectMessage\x12-\n" +
-	"\x06reason\x18\x01 \x01(\x0e2\x15.p2p.DisconnectReasonR\x06reason\"|\n" +
+	"\x06reason\x18\x01 \x01(\x0e2\x15.p2p.DisconnectReasonR\x06reason\"\x88\x01\n" +
 	"\x0fCompressMessage\x125\n" +
 	"\x04type\x18\x01 \x01(\x0e2!.p2p.CompressMessage.CompressTypeR\x04type\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\x1e\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"*\n" +
 	"\fCompressType\x12\x0e\n" +
 	"\n" +
-	"uncompress\x10\x00*\xc4\x02\n" +
+	"uncompress\x10\x00\x12\n" +
+	"\n" +
+	"\x06snappy\x10\x01*\xc4\x02\n" +
 	"\x10DisconnectReason\x12\x10\n" +
 	"\fPEER_QUITING\x10\x00\x12\x10\n" +
 	"\fBAD_PROTOCOL\x10\x01\x12\x12\n" +

@@ -44,7 +44,7 @@ message CompressMessage {
 
   enum CompressType {
     uncompress = 0;
-    // more compression types may exist; only 'uncompress' is confirmed from the Java class
+    snappy = 1;
   }
 }
 

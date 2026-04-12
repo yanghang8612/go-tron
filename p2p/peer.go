@@ -98,8 +98,10 @@ func (p *Peer) Send(code byte, payload []byte) {
 // bypass the write buffer which may be full or draining).
 func (p *Peer) GoodbyeAndClose(reason p2ppb.DisconnectReason) {
 	dm := BuildDisconnect(reason)
-	if body, err := EncodeDisconnect(dm); err == nil {
-		_ = WriteMsg(p.conn, MsgLibp2pDisconnect, body)
+	if payload, err := EncodeDisconnect(dm); err == nil {
+		if body, err := WrapPostHandshake(MsgLibp2pDisconnect, payload); err == nil {
+			_ = WriteFrameBody(p.conn, body)
+		}
 	}
 	p.Close()
 }
@@ -108,8 +110,14 @@ func (p *Peer) readLoop() {
 	defer p.wg.Done()
 	defer p.disconnect()
 	for {
-		code, payload, err := ReadMsg(p.conn)
+		// Post-handshake: every frame is a CompressMessage wrapping [code][payload].
+		body, err := ReadFrameBody(p.conn)
 		if err != nil {
+			return
+		}
+		code, payload, err := UnwrapPostHandshake(body)
+		if err != nil {
+			log.Printf("peer %s: unwrap frame: %v", p.id, err)
 			return
 		}
 		switch code {
@@ -137,7 +145,13 @@ func (p *Peer) writeLoop() {
 	for {
 		select {
 		case msg := <-p.writeCh:
-			if err := WriteMsg(p.conn, msg.code, msg.payload); err != nil {
+			// Post-handshake: wrap every frame in a CompressMessage.
+			body, err := WrapPostHandshake(msg.code, msg.payload)
+			if err != nil {
+				log.Printf("peer %s: wrap frame: %v", p.id, err)
+				return
+			}
+			if err := WriteFrameBody(p.conn, body); err != nil {
 				return
 			}
 		case <-p.quit:
