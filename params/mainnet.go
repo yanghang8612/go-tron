@@ -6,6 +6,10 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+// MainnetNetworkID is the HelloMessage.networkId value for TRON mainnet.
+// TODO: confirmed value during T11 integration test. Default assumes 1.
+const MainnetNetworkID int32 = 1
+
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
 // These are the java-tron default seed nodes from config.conf.
 var MainnetBootstrapNodes = []string{

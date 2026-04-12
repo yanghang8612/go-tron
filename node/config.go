@@ -7,5 +7,17 @@ type Config struct {
 	JSONRPCPort int
 	SeedNodes   []string // "host:port" entries for initial peer discovery
 	MaxPeers    int      // max simultaneous peers, default 30
-	PrivateKey  []byte   // secp256k1 private key bytes (32 bytes); generated on first start if empty
+
+	// NetworkID matches the value java-tron peers send in HelloMessage. Defaults
+	// to 1 (libp2p default). Mainnet/Nile should override via params.
+	NetworkID int32
+
+	// PersistentNodeID is a 64-byte random node ID. If empty, the node will
+	// generate one on first start and persist to <DataDir>/nodekey.
+	PersistentNodeID []byte
+
+	// ExternalIP is the IPv4 address this node advertises in HelloMessage.from.
+	// If empty, "127.0.0.1" is used (acceptable for dev; production should set
+	// the actual external IP).
+	ExternalIP string
 }

@@ -1,5 +1,9 @@
 package params
 
+// NileNetworkID is the HelloMessage.networkId value for Nile testnet.
+// TODO: confirm during T11.
+const NileNetworkID int32 = 1
+
 // NileBootstrapNodes is the list of TRON Nile testnet discovery seed nodes.
 var NileBootstrapNodes = []string{
 	"47.252.19.181:18888",

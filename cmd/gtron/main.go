@@ -22,6 +22,7 @@ import (
 	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/p2p"
+	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -183,10 +184,30 @@ func gtron(ctx *cli.Context) error {
 	syncService := tnet.NewSyncService(bc, handler)
 	handler.SetSyncService(syncService)
 
+	nodeID, err := node.LoadOrCreateNodeID(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("load node ID: %w", err)
+	}
+
+	// Resolve network ID: config override > params default
+	networkID := cfg.NetworkID
+	if networkID == 0 {
+		networkID = params.MainnetNetworkID // Default to mainnet; CLI can override
+	}
+
+	externalIP := cfg.ExternalIP
+	if externalIP == "" {
+		externalIP = "127.0.0.1"
+	}
+
 	p2pServer := p2p.NewServer(p2p.ServerConfig{
 		ListenAddr: fmt.Sprintf(":%d", cfg.P2PPort),
 		MaxPeers:   cfg.MaxPeers,
 		SeedNodes:  cfg.SeedNodes,
+		NodeID:     nodeID,
+		NetworkID:  networkID,
+		ExternalIP: externalIP,
+		Port:       int32(cfg.P2PPort),
 	}, handler)
 	handler.SetServer(p2pServer)
 	handler.StartKeepAlive()
