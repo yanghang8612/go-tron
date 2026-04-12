@@ -50,11 +50,11 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 		config.MaxPeers = 30
 	}
 	// Apply libp2p handshake defaults.
+	// NetworkID is NOT defaulted: 0 is a valid value (java-tron's libp2p
+	// Parameter.nodeP2pVersion defaults to 0 when the config omits p2p.version).
+	// Callers must set NetworkID explicitly to match their target chain.
 	if len(config.NodeID) != 64 {
 		config.NodeID = discover.GenerateNodeID()
-	}
-	if config.NetworkID == 0 {
-		config.NetworkID = 1
 	}
 	if config.Version == 0 {
 		config.Version = Libp2pProtocolVersion
