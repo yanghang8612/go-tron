@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/hardfork"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -23,7 +23,7 @@ func (a *WithdrawExpireUnfreezeActuator) getContract(ctx *Context) (*contractpb.
 }
 
 func (a *WithdrawExpireUnfreezeActuator) Validate(ctx *Context) error {
-	if !forks.IsActive(forks.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
+	if !hardfork.IsActive(hardfork.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("staking v2 not yet enabled")
 	}
 	wc, err := a.getContract(ctx)

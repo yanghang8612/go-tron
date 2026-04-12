@@ -1,7 +1,7 @@
 package vm
 
 import (
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/hardfork"
 	"github.com/tronprotocol/go-tron/core/state"
 )
 
@@ -25,22 +25,22 @@ type TVMConfig struct {
 
 // NewTVMConfig builds a TVMConfig from the current DynamicProperties and block number.
 func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
-	isActive := func(flag forks.AllowFlag) bool {
-		return forks.IsActive(flag, blockNum, dp)
+	isActive := func(flag hardfork.AllowFlag) bool {
+		return hardfork.IsActive(flag, blockNum, dp)
 	}
 	return TVMConfig{
-		TransferTrc10:  isActive(forks.AllowTvmTransferTrc10),
-		Constantinople: isActive(forks.AllowTvmConstantinople),
-		Solidity059:    isActive(forks.AllowTvmSolidity059),
-		Istanbul:       isActive(forks.AllowTvmIstanbul),
-		Freeze:         isActive(forks.AllowTvmFreeze),
-		ShieldedToken:  isActive(forks.AllowTvmShieldedToken),
-		Vote:           isActive(forks.AllowTvmVote),
-		London:         isActive(forks.AllowTvmLondon),
-		Compatibility:  isActive(forks.AllowTvmCompatibility),
-		DynamicEnergy:  isActive(forks.AllowDynamicEnergy),
-		BigInteger:     isActive(forks.AllowTvmBigInteger),
-		Blob:           isActive(forks.AllowTvmBlob),
-		Cancun:         isActive(forks.AllowTvmCancun),
+		TransferTrc10:  isActive(hardfork.AllowTvmTransferTrc10),
+		Constantinople: isActive(hardfork.AllowTvmConstantinople),
+		Solidity059:    isActive(hardfork.AllowTvmSolidity059),
+		Istanbul:       isActive(hardfork.AllowTvmIstanbul),
+		Freeze:         isActive(hardfork.AllowTvmFreeze),
+		ShieldedToken:  isActive(hardfork.AllowTvmShieldedToken),
+		Vote:           isActive(hardfork.AllowTvmVote),
+		London:         isActive(hardfork.AllowTvmLondon),
+		Compatibility:  isActive(hardfork.AllowTvmCompatibility),
+		DynamicEnergy:  isActive(hardfork.AllowDynamicEnergy),
+		BigInteger:     isActive(hardfork.AllowTvmBigInteger),
+		Blob:           isActive(hardfork.AllowTvmBlob),
+		Cancun:         isActive(hardfork.AllowTvmCancun),
 	}
 }

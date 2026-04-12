@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/hardfork"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -24,7 +24,7 @@ func (a *FreezeBalanceV2Actuator) getContract(ctx *Context) (*contractpb.FreezeB
 }
 
 func (a *FreezeBalanceV2Actuator) Validate(ctx *Context) error {
-	if !forks.IsActive(forks.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
+	if !hardfork.IsActive(hardfork.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("staking v2 not yet enabled")
 	}
 	fc, err := a.getContract(ctx)

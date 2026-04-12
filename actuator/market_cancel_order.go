@@ -7,7 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/hardfork"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -30,7 +30,7 @@ func (a *MarketCancelOrderActuator) getContract(ctx *Context) (*contractpb.Marke
 
 // Validate checks all preconditions for a MarketCancelOrder transaction.
 func (a *MarketCancelOrderActuator) Validate(ctx *Context) error {
-	if !forks.IsActive(forks.AllowMarketTransaction, ctx.BlockNumber, ctx.DynProps) {
+	if !hardfork.IsActive(hardfork.AllowMarketTransaction, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("market transactions not yet enabled")
 	}
 	c, err := a.getContract(ctx)

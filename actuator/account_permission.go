@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/hardfork"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -26,7 +26,7 @@ func (a *AccountPermissionUpdateActuator) getContract(ctx *Context) (*contractpb
 }
 
 func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
-	if !forks.IsActive(forks.AllowMultiSign, ctx.BlockNumber, ctx.DynProps) {
+	if !hardfork.IsActive(hardfork.AllowMultiSign, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("multi-sign not yet enabled")
 	}
 	c, err := a.getContract(ctx)
