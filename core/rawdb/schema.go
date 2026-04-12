@@ -40,6 +40,8 @@ var (
 	marketAccountOrderPrefix = []byte("mao-")
 	marketOrderBookPrefix    = []byte("mop-")
 	marketPriceListPrefix    = []byte("mpl-")
+
+	exchangePrefix = []byte("ex-")
 )
 
 func blockKey(number uint64) []byte {
@@ -161,4 +163,11 @@ func marketPriceListKey(sellTokenID, buyTokenID []byte) []byte {
 	k := append(append([]byte{}, marketPriceListPrefix...), sellTokenID...)
 	k = append(k, '|')
 	return append(k, buyTokenID...)
+}
+
+func exchangeKey(id int64) []byte {
+	k := make([]byte, len(exchangePrefix)+8)
+	copy(k, exchangePrefix)
+	binary.BigEndian.PutUint64(k[len(exchangePrefix):], uint64(id))
+	return k
 }
