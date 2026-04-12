@@ -15,6 +15,7 @@ type TVMConfig struct {
 	Freeze         bool // allow_tvm_freeze: TRON freeze precompiles
 	ShieldedToken  bool // allow_tvm_shielded_token
 	Vote           bool // allow_tvm_vote
+	StakingV2      bool // allow_staking_v2: FreezeV2/DelegateV2 precompiles
 	London         bool // allow_tvm_london: BASEFEE
 	Compatibility  bool // allow_tvm_compatibility
 	DynamicEnergy  bool // allow_dynamic_energy
@@ -36,6 +37,7 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		Freeze:         isActive(forks.AllowTvmFreeze),
 		ShieldedToken:  isActive(forks.AllowTvmShieldedToken),
 		Vote:           isActive(forks.AllowTvmVote),
+		StakingV2:      isActive(forks.AllowStakingV2),
 		London:         isActive(forks.AllowTvmLondon),
 		Compatibility:  isActive(forks.AllowTvmCompatibility),
 		DynamicEnergy:  isActive(forks.AllowDynamicEnergy),

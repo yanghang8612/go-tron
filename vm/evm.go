@@ -17,9 +17,10 @@ type EVM struct {
 	Timestamp   int64
 	Coinbase    tcommon.Address // block producer
 	ChainID     int64
-	Depth       int // call depth
+	Depth       int   // call depth
 	Logs        []Log // accumulated log events from this execution
 
+	cfg         TVMConfig
 	interpreter *Interpreter
 }
 
@@ -40,6 +41,7 @@ func NewEVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, tim
 		Timestamp:   timestamp,
 		Coinbase:    coinbase,
 		ChainID:     chainID,
+		cfg:         cfg,
 	}
 	evm.interpreter = NewInterpreter(evm, cfg)
 	return evm
@@ -156,8 +158,8 @@ func (evm *EVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	}
 
 	// Check for precompiled contract
-	if p, ok := precompiles[addr]; ok {
-		ret, energyUsed, err := p.Run(input, energy)
+	if p := getPrecompile(addr, evm.cfg); p != nil {
+		ret, energyUsed, err := p.Run(evm, caller, input, energy)
 		remaining := energy - energyUsed
 		if err != nil {
 			evm.RevertLogs(logSnap)
@@ -199,8 +201,8 @@ func (evm *EVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 		return nil, energy, ErrDepthExceeded
 	}
 
-	if p, ok := precompiles[addr]; ok {
-		ret, energyUsed, err := p.Run(input, energy)
+	if p := getPrecompile(addr, evm.cfg); p != nil {
+		ret, energyUsed, err := p.Run(evm, caller, input, energy)
 		remaining := energy - energyUsed
 		if err != nil {
 			return nil, 0, err

@@ -1,0 +1,365 @@
+package vm
+
+import (
+	"crypto/sha256"
+	"errors"
+	"math/big"
+	"math/bits"
+
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/bn256"
+	tcommon "github.com/tronprotocol/go-tron/common"
+)
+
+// ── 0x01 ECRecover ────────────────────────────────────────────────────────────
+
+type ecRecover struct{}
+
+func (c *ecRecover) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	const cost = 3000
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+
+	// Input: hash(32) + v(32) + r(32) + s(32)
+	in := getInput(input, 0, 128)
+	hash := in[0:32]
+	v := in[63] // last byte of v word
+	r := in[64:96]
+	s := in[96:128]
+
+	// Normalize v from 27/28 to 0/1
+	if v >= 27 {
+		v -= 27
+	}
+	if v > 1 {
+		return make([]byte, 32), cost, nil
+	}
+
+	// Build 65-byte [r | s | v] signature (go-ethereum convention)
+	sig := make([]byte, 65)
+	copy(sig[0:32], r)
+	copy(sig[32:64], s)
+	sig[64] = v
+
+	pubBytes, err := ethcrypto.Ecrecover(hash, sig)
+	if err != nil || len(pubBytes) != 65 {
+		return make([]byte, 32), cost, nil
+	}
+
+	// Keccak256 of the uncompressed public key (skip the 0x04 prefix byte)
+	pubHash := ethcrypto.Keccak256(pubBytes[1:])
+
+	// Ethereum address = last 20 bytes, left-padded to 32
+	result := make([]byte, 32)
+	copy(result[12:], pubHash[12:])
+	return result, cost, nil
+}
+
+// ── 0x02 SHA256 ───────────────────────────────────────────────────────────────
+
+type sha256hash struct{}
+
+func (c *sha256hash) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	cost := 60 + 12*toWordSize(uint64(len(input)))
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	h := sha256.Sum256(input)
+	return h[:], cost, nil
+}
+
+// ── 0x03 TronRipemd160 ────────────────────────────────────────────────────────
+//
+// java-tron's 0x03 precompile is NOT standard RIPEMD-160.  It computes
+// SHA256(SHA256(input)[0:20]), returning that 32-byte hash right-padded with zeros.
+
+type tronRipemd160 struct{}
+
+func (c *tronRipemd160) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	cost := 600 + 120*toWordSize(uint64(len(input)))
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	// First SHA256
+	first := sha256.Sum256(input)
+	// Truncate to 20 bytes, then SHA256 again
+	second := sha256.Sum256(first[:20])
+	return second[:], cost, nil
+}
+
+// ── 0x04 DataCopy (Identity) ──────────────────────────────────────────────────
+
+type dataCopy struct{}
+
+func (c *dataCopy) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	cost := 15 + 3*toWordSize(uint64(len(input)))
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	out := make([]byte, len(input))
+	copy(out, input)
+	return out, cost, nil
+}
+
+// ── 0x05 BigModExp ────────────────────────────────────────────────────────────
+//
+// Energy formula uses EIP-2565 (Berlin/Istanbul), minimum 200.
+
+type bigModExp struct {
+	istanbul bool
+}
+
+func (c *bigModExp) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	var (
+		baseLen = new(big.Int).SetBytes(getInput(input, 0, 32)).Uint64()
+		expLen  = new(big.Int).SetBytes(getInput(input, 32, 32)).Uint64()
+		modLen  = new(big.Int).SetBytes(getInput(input, 64, 32)).Uint64()
+	)
+
+	// Skip the 96-byte header
+	data := input
+	if len(data) > 96 {
+		data = data[96:]
+	} else {
+		data = nil
+	}
+
+	// Retrieve the leading 32 bytes of exp for adjusted exponent length
+	var expHead big.Int
+	if uint64(len(data)) > baseLen {
+		expData := getInput(data, baseLen, min64(expLen, 32))
+		expHead.SetBytes(expData)
+	}
+
+	cost := c.calcCost(baseLen, expLen, modLen, &expHead)
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+
+	// Handle edge cases
+	if baseLen == 0 && modLen == 0 {
+		return []byte{}, cost, nil
+	}
+
+	base := new(big.Int).SetBytes(getInput(data, 0, baseLen))
+	exp := new(big.Int).SetBytes(getInput(data, baseLen, expLen))
+	mod := new(big.Int).SetBytes(getInput(data, baseLen+expLen, modLen))
+
+	var result []byte
+	if mod.Sign() == 0 {
+		result = make([]byte, modLen)
+	} else {
+		r := new(big.Int).Exp(base, exp, mod)
+		// Left-pad result to modLen
+		rb := r.Bytes()
+		result = make([]byte, modLen)
+		if uint64(len(rb)) <= modLen {
+			copy(result[modLen-uint64(len(rb)):], rb)
+		}
+	}
+	return result, cost, nil
+}
+
+func (c *bigModExp) calcCost(baseLen, expLen, modLen uint64, expHead *big.Int) uint64 {
+	maxLen := max64(baseLen, modLen)
+	multComplexity := berlinMultComplexity(maxLen)
+
+	adjExpLen := c.adjustedExpLen(expLen, expHead)
+	if adjExpLen == 0 {
+		adjExpLen = 1
+	}
+
+	hi, gas := bits.Mul64(multComplexity, adjExpLen)
+	if hi != 0 {
+		return ^uint64(0)
+	}
+	gas /= 20
+	return gas
+}
+
+func (c *bigModExp) adjustedExpLen(expLen uint64, expHead *big.Int) uint64 {
+	if expLen <= 32 {
+		if expHead.Sign() == 0 {
+			return 0
+		}
+		return uint64(expHead.BitLen() - 1)
+	}
+	// expLen > 32
+	adj := uint64(0)
+	if expHead.Sign() != 0 {
+		adj = uint64(expHead.BitLen() - 1)
+	}
+	return 8*(expLen-32) + adj
+}
+
+// berlinMultComplexity computes f(words) for EIP-2565.
+func berlinMultComplexity(words uint64) uint64 {
+	switch {
+	case words <= 64:
+		return words * words
+	case words <= 1024:
+		return words*words/4 + 96*words - 3072
+	default:
+		return words*words/16 + 480*words - 199680
+	}
+}
+
+func min64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ── 0x06 BN128Add ─────────────────────────────────────────────────────────────
+
+type bn128Add struct {
+	istanbul bool
+}
+
+func (c *bn128Add) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	cost := uint64(500)
+	if c.istanbul {
+		cost = 150
+	}
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	ret, err := runBN128Add(input)
+	if err != nil {
+		return nil, cost, err
+	}
+	return ret, cost, nil
+}
+
+func runBN128Add(input []byte) ([]byte, error) {
+	x, err := newBN128G1(getInput(input, 0, 64))
+	if err != nil {
+		return nil, err
+	}
+	y, err := newBN128G1(getInput(input, 64, 64))
+	if err != nil {
+		return nil, err
+	}
+	res := new(bn256.G1)
+	res.Add(x, y)
+	return res.Marshal(), nil
+}
+
+// ── 0x07 BN128Mul ─────────────────────────────────────────────────────────────
+
+type bn128Mul struct {
+	istanbul bool
+}
+
+func (c *bn128Mul) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	cost := uint64(40000)
+	if c.istanbul {
+		cost = 6000
+	}
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	ret, err := runBN128Mul(input)
+	if err != nil {
+		return nil, cost, err
+	}
+	return ret, cost, nil
+}
+
+func runBN128Mul(input []byte) ([]byte, error) {
+	p, err := newBN128G1(getInput(input, 0, 64))
+	if err != nil {
+		return nil, err
+	}
+	k := new(big.Int).SetBytes(getInput(input, 64, 32))
+	res := new(bn256.G1)
+	res.ScalarMult(p, k)
+	return res.Marshal(), nil
+}
+
+// ── 0x08 BN128Pairing ─────────────────────────────────────────────────────────
+
+const bn128PairSize = 192
+
+type bn128Pairing struct {
+	istanbul bool
+}
+
+func (c *bn128Pairing) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	var cost uint64
+	pairs := uint64(0)
+	if len(input) > 0 {
+		pairs = uint64(len(input)) / bn128PairSize
+	}
+	if c.istanbul {
+		cost = 45000 + 34000*pairs
+	} else {
+		cost = 100000 + 80000*pairs
+	}
+	if energy < cost {
+		return nil, energy, ErrOutOfEnergy
+	}
+	ret, err := runBN128Pairing(input)
+	if err != nil {
+		return nil, cost, err
+	}
+	return ret, cost, nil
+}
+
+var (
+	errBN128BadPairingInput = errors.New("bad bn128 pairing input size")
+	bn128True32             = func() []byte { b := make([]byte, 32); b[31] = 1; return b }()
+	bn128False32            = make([]byte, 32)
+)
+
+func runBN128Pairing(input []byte) ([]byte, error) {
+	if len(input)%bn128PairSize != 0 {
+		return nil, errBN128BadPairingInput
+	}
+	var (
+		g1s []*bn256.G1
+		g2s []*bn256.G2
+	)
+	for i := 0; i < len(input); i += bn128PairSize {
+		g1, err := newBN128G1(input[i : i+64])
+		if err != nil {
+			return nil, err
+		}
+		g2, err := newBN128G2(input[i+64 : i+192])
+		if err != nil {
+			return nil, err
+		}
+		g1s = append(g1s, g1)
+		g2s = append(g2s, g2)
+	}
+	if bn256.PairingCheck(g1s, g2s) {
+		return bn128True32, nil
+	}
+	return bn128False32, nil
+}
+
+func newBN128G1(blob []byte) (*bn256.G1, error) {
+	p := new(bn256.G1)
+	if _, err := p.Unmarshal(blob); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func newBN128G2(blob []byte) (*bn256.G2, error) {
+	p := new(bn256.G2)
+	if _, err := p.Unmarshal(blob); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
