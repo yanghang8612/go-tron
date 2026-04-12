@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,10 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	p2ppb "github.com/tronprotocol/go-tron/proto/p2p"
 )
+
+// errDuplicatePeer is returned by addPeerConn when the peer ID is already
+// connected. Callers must close the connection.
+var errDuplicatePeer = errors.New("duplicate peer")
 
 // ServerConfig holds P2P server configuration.
 type ServerConfig struct {
@@ -245,7 +250,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
-		return nil // already connected; caller closes conn
+		return errDuplicatePeer
 	}
 	s.mu.Unlock()
 
@@ -262,7 +267,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
-		return nil // already connected; caller closes conn
+		return errDuplicatePeer
 	}
 	p := NewPeer(conn, id, inbound, s)
 	s.peers[id] = p
