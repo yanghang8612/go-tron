@@ -2,6 +2,7 @@ package discover
 
 import (
 	"crypto/rand"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -13,9 +14,13 @@ import (
 )
 
 const (
-	pingInterval    = 30 * time.Second
-	refreshInterval = 60 * time.Second
-	maxUDPPacket    = 2048
+	discoverCycle   = 7200 * time.Millisecond // libp2p KademliaOptions.DISCOVER_CYCLE
+	pingInterval    = 60 * time.Second        // how often we re-ping table nodes to refresh liveness
+	pingTimeout     = 15 * time.Second        // libp2p KadService.pingTimeout
+	kademliaAlpha   = 3                       // libp2p KademliaOptions.ALPHA
+	kademliaMaxLoop = 5                       // libp2p KademliaOptions.MAX_LOOP_NUM
+	kademliaWait    = 100 * time.Millisecond  // libp2p KademliaOptions.WAIT_TIME
+	maxUDPPacket    = 2048                    // libp2p P2pPacketDecoder.MAXSIZE
 )
 
 // Service is the discovery service that maintains the routing table and discovers
@@ -31,6 +36,10 @@ type Service struct {
 	wg        sync.WaitGroup
 	seeds     []*net.UDPAddr // bootstrap addresses we keep re-pinging until their pong installs real nodeIDs
 	seedsMu   sync.Mutex
+
+	lookupCycle    int
+	pendingPings   map[string]time.Time
+	pendingPingsMu sync.Mutex
 }
 
 // NewService creates a discovery service.
@@ -65,13 +74,14 @@ func NewService(listenAddr string, nodeID []byte, networkID int32, onNewPeer fun
 	}
 
 	return &Service{
-		conn:      conn,
-		table:     NewTable(nodeID),
-		localID:   nodeID,
-		networkID: networkID,
-		localEP:   localEP,
-		onNewPeer: onNewPeer,
-		quit:      make(chan struct{}),
+		conn:         conn,
+		table:        NewTable(nodeID),
+		localID:      nodeID,
+		networkID:    networkID,
+		localEP:      localEP,
+		onNewPeer:    onNewPeer,
+		quit:         make(chan struct{}),
+		pendingPings: make(map[string]time.Time),
 	}, nil
 }
 
@@ -106,7 +116,7 @@ func (s *Service) AddBootstrap(addrs []string) {
 			remoteEP.AddressIpv6 = []byte(udpAddr.IP.String())
 		}
 		go func(ua *net.UDPAddr, ep *discoverpb.Endpoint) {
-			if err := s.conn.SendPing(ua, s.localEP, ep, s.networkID); err != nil {
+			if err := s.sendPingAndTrack(ua, ep); err != nil {
 				log.Printf("discover: ping seed %s failed: %v", ua, err)
 			}
 		}(udpAddr, remoteEP)
@@ -183,6 +193,12 @@ func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
 		sender.IP = from.IP
 		sender.Port = from.Port
 
+		// Clear pending ping for this peer — it's alive.
+		key := fmt.Sprintf("%s:%d", from.IP, from.Port)
+		s.pendingPingsMu.Lock()
+		delete(s.pendingPings, key)
+		s.pendingPingsMu.Unlock()
+
 		s.table.Add(sender)
 		// Notify p2p server of new peer candidate
 		if s.onNewPeer != nil {
@@ -212,19 +228,22 @@ func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
 			// Ping each new neighbour to confirm liveness
 			udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
 			go func(ua *net.UDPAddr, node *Node) {
-				s.conn.SendPing(ua, s.localEP, node.Endpoint(), s.networkID) //nolint:errcheck
+				s.sendPingAndTrack(ua, node.Endpoint()) //nolint:errcheck
 			}(udpAddr, n)
 		}
 	}
 }
 
-// maintainLoop periodically pings known nodes and performs random lookups.
+// maintainLoop periodically pings known nodes, performs target-rotating lookups,
+// and evicts timed-out pending pings.
 func (s *Service) maintainLoop() {
 	defer s.wg.Done()
 	pingTicker := time.NewTicker(pingInterval)
-	refreshTicker := time.NewTicker(refreshInterval)
+	discoverTicker := time.NewTicker(discoverCycle)
+	cleanupTicker := time.NewTicker(5 * time.Second)
 	defer pingTicker.Stop()
-	defer refreshTicker.Stop()
+	defer discoverTicker.Stop()
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -232,8 +251,10 @@ func (s *Service) maintainLoop() {
 			return
 		case <-pingTicker.C:
 			s.pingAll()
-		case <-refreshTicker.C:
-			s.lookupRandom()
+		case <-discoverTicker.C:
+			s.lookup(s.nextLookupTarget())
+		case <-cleanupTicker.C:
+			s.evictTimedOutPings()
 		}
 	}
 }
@@ -248,7 +269,7 @@ func (s *Service) pingAll() {
 			continue
 		}
 		udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
-		go s.conn.SendPing(udpAddr, s.localEP, n.Endpoint(), s.networkID) //nolint:errcheck
+		go s.sendPingAndTrack(udpAddr, n.Endpoint()) //nolint:errcheck
 	}
 
 	s.seedsMu.Lock()
@@ -263,21 +284,65 @@ func (s *Service) pingAll() {
 		} else {
 			remoteEP.AddressIpv6 = []byte(ua.IP.String())
 		}
-		go s.conn.SendPing(ua, s.localEP, remoteEP, s.networkID) //nolint:errcheck
+		go s.sendPingAndTrack(ua, remoteEP) //nolint:errcheck
 	}
 }
 
-// lookupRandom picks a random target and asks known nodes for their neighbours.
-func (s *Service) lookupRandom() {
-	var targetID [64]byte
-	rand.Read(targetID[:]) //nolint:errcheck
+// nextLookupTarget returns the lookup target for the current cycle.
+// Every kademliaMaxLoop-th cycle the local node ID is used (table self-health);
+// all other cycles use a random 64-byte target.
+func (s *Service) nextLookupTarget() []byte {
+	s.lookupCycle++
+	if s.lookupCycle%kademliaMaxLoop == 0 {
+		return s.table.localID
+	}
+	return randomBytes(NodeIDLen)
+}
 
-	nodes := s.table.Closest(targetID[:], 3)
+// lookup asks the kademliaAlpha closest known nodes for neighbours of target.
+func (s *Service) lookup(target []byte) {
+	nodes := s.table.Closest(target, kademliaAlpha)
 	for _, n := range nodes {
 		if n.IP == nil {
 			continue
 		}
 		udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
-		go s.conn.SendFindNode(udpAddr, s.localEP, targetID[:]) //nolint:errcheck
+		go s.conn.SendFindNode(udpAddr, s.localEP, target) //nolint:errcheck
 	}
+}
+
+// sendPingAndTrack sends a Ping to target and records it in pendingPings for
+// liveness tracking. Stale entries are evicted by evictTimedOutPings.
+func (s *Service) sendPingAndTrack(target *net.UDPAddr, remoteEP *discoverpb.Endpoint) error {
+	key := fmt.Sprintf("%s:%d", target.IP, target.Port)
+	s.pendingPingsMu.Lock()
+	s.pendingPings[key] = time.Now()
+	s.pendingPingsMu.Unlock()
+	return s.conn.SendPing(target, s.localEP, remoteEP, s.networkID)
+}
+
+// evictTimedOutPings removes pendingPings entries that have not received a pong
+// within pingTimeout. Stale entries no longer consume memory; the routing table
+// will naturally replace stale nodes when fresh neighbours are discovered —
+// bucket eviction policy overwrites the oldest entry on bucket-full insertions.
+func (s *Service) evictTimedOutPings() {
+	cutoff := time.Now().Add(-pingTimeout)
+	s.pendingPingsMu.Lock()
+	var expired []string
+	for k, t := range s.pendingPings {
+		if t.Before(cutoff) {
+			expired = append(expired, k)
+		}
+	}
+	for _, k := range expired {
+		delete(s.pendingPings, k)
+	}
+	s.pendingPingsMu.Unlock()
+}
+
+// randomBytes returns n cryptographically random bytes.
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return b
 }
