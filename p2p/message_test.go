@@ -35,9 +35,8 @@ func TestEncodeDecodeMessage(t *testing.T) {
 
 func TestReadMsgTooLarge(t *testing.T) {
 	var buf bytes.Buffer
-	// Write a frame claiming 20MB payload
-	header := []byte{0x01, 0x31, 0x2D, 0x01, MsgBlock} // ~20MB
-	buf.Write(header)
+	// Write a varint frame claiming 20 MB — exceeds MaxMessageSize (5 MB).
+	WriteVarint32(&buf, 20*1024*1024)
 	_, _, err := ReadMsg(&buf)
 	if err == nil {
 		t.Fatal("expected error for oversized message")

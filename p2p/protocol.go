@@ -13,8 +13,10 @@ const (
 	MsgPing           byte = 0x22
 	MsgPong           byte = 0x23
 
-	// MaxMessageSize is the maximum allowed message payload (10 MB).
-	MaxMessageSize = 10 * 1024 * 1024
+	// MaxMessageSize is the maximum allowed frame size (5 MB).
+	// Matches java-tron libp2p's Parameter.MAX_MESSAGE_LENGTH used by
+	// P2pProtobufVarint32FrameDecoder.
+	MaxMessageSize = 5 * 1024 * 1024
 
 	// ProtocolVersion is the P2P protocol version for handshake.
 	ProtocolVersion int32 = 1
