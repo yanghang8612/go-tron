@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/hardfork"
+	"github.com/tronprotocol/go-tron/core/forks"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -24,7 +24,7 @@ func (a *CancelAllUnfreezeV2Actuator) getContract(ctx *Context) (*contractpb.Can
 }
 
 func (a *CancelAllUnfreezeV2Actuator) Validate(ctx *Context) error {
-	if !hardfork.IsActive(hardfork.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
+	if !forks.IsActive(forks.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("staking v2 not yet enabled")
 	}
 	c, err := a.getContract(ctx)

@@ -3,7 +3,7 @@ package core
 import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/hardfork"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -59,7 +59,7 @@ func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties,
 
 // paramIDToName maps a TRON proposal parameter ID to its DynProps key name.
 func paramIDToName(id int64) string {
-	return hardfork.ProposalParamKey(id)
+	return forks.ProposalParamKey(id)
 }
 
 func sortedKeys(m map[int64]int64) []int64 {

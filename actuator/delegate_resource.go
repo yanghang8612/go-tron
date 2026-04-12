@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/hardfork"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -25,7 +25,7 @@ func (a *DelegateResourceActuator) getContract(ctx *Context) (*contractpb.Delega
 }
 
 func (a *DelegateResourceActuator) Validate(ctx *Context) error {
-	if !hardfork.IsActive(hardfork.AllowDelegateResource, ctx.BlockNumber, ctx.DynProps) {
+	if !forks.IsActive(forks.AllowDelegateResource, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("resource delegation not yet enabled")
 	}
 	c, err := a.getContract(ctx)
