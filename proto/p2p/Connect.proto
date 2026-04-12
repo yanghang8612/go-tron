@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package p2p;
+
+option java_package = "org.tron.p2p.protos";
+option java_outer_classname = "Connect";
+option go_package = "github.com/tronprotocol/go-tron/proto/p2p";
+
+import "core/Discover.proto";
+
+// HelloMessage — sent by both sides immediately after TCP connect.
+message HelloMessage {
+  protocol.Endpoint from = 1;
+  int32 networkId = 2;
+  int32 code = 3;           // Optional DisconnectCode on rejection; 0 (NORMAL) on accept
+  int64 timestamp = 4;       // ms since epoch
+  int32 version = 5;         // Parameter.version, currently 1
+}
+
+// StatusMessage — exchanged after handshake, reports peer capacity.
+message StatusMessage {
+  protocol.Endpoint from = 1;
+  int32 version = 2;
+  int32 networkId = 3;
+  int32 maxConnections = 4;
+  int32 currentConnections = 5;
+  int64 timestamp = 6;
+}
+
+// KeepAliveMessage — payload of KEEP_ALIVE_PING and KEEP_ALIVE_PONG.
+message KeepAliveMessage {
+  int64 timestamp = 1;       // ms since epoch
+}
+
+// P2pDisconnectMessage — sent before closing a connection.
+message P2pDisconnectMessage {
+  DisconnectReason reason = 1;
+}
+
+// CompressMessage — wraps a compressed application-layer message.
+message CompressMessage {
+  CompressType type = 1;
+  bytes data = 2;
+
+  enum CompressType {
+    uncompress = 0;
+    // more compression types may exist; only 'uncompress' is confirmed from the Java class
+  }
+}
+
+// DisconnectReason — values from libp2p Connect.java + DisconnectCode.java
+enum DisconnectReason {
+  PEER_QUITING = 0;
+  BAD_PROTOCOL = 1;
+  TOO_MANY_PEERS = 2;
+  DUPLICATE_PEER = 3;
+  DIFFERENT_VERSION = 4;
+  RANDOM_ELIMINATION = 5;
+  EMPTY_MESSAGE = 6;
+  PING_TIMEOUT = 7;
+  DISCOVER_MODE = 8;
+  NO_SUCH_MESSAGE = 10;
+  BAD_MESSAGE = 11;
+  TOO_MANY_PEERS_WITH_SAME_IP = 12;
+  RECENT_DISCONNECT = 13;
+  DUP_HANDSHAKE = 14;
+  UNKNOWN = 255;
+}
