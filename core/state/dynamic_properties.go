@@ -31,6 +31,7 @@ var defaultProps = map[string]int64{
 	"free_net_limit":                            1500,
 	"next_proposal_id":                          0,
 	"next_token_id":                             1_000_001,
+	"next_exchange_id":                          1,
 	"allow_same_token_name":                     0,
 	"allow_delegate_resource":                   0,
 	"allow_adaptive_energy_limit":               0,
@@ -493,6 +494,12 @@ func (dp *DynamicProperties) NextTokenID() int64 { return dp.props["next_token_i
 
 // SetNextTokenID updates the next token ID counter.
 func (dp *DynamicProperties) SetNextTokenID(id int64) { dp.Set("next_token_id", id) }
+
+// NextExchangeID returns the next exchange ID to assign (starts at 1).
+func (dp *DynamicProperties) NextExchangeID() int64 { return dp.props["next_exchange_id"] }
+
+// SetNextExchangeID updates the next exchange ID counter.
+func (dp *DynamicProperties) SetNextExchangeID(id int64) { dp.Set("next_exchange_id", id) }
 
 // AssetIssueFee returns the fee (in SUN) required to issue a TRC10 token.
 func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.props["asset_issue_fee"] }

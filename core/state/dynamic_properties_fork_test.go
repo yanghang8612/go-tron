@@ -49,6 +49,17 @@ func TestAllowFlagSetAndGet(t *testing.T) {
 	}
 }
 
+func TestNextExchangeID(t *testing.T) {
+	dp := NewDynamicProperties()
+	if dp.NextExchangeID() != 1 {
+		t.Fatalf("expected default 1, got %d", dp.NextExchangeID())
+	}
+	dp.SetNextExchangeID(5)
+	if dp.NextExchangeID() != 5 {
+		t.Fatalf("expected 5, got %d", dp.NextExchangeID())
+	}
+}
+
 func TestAllowFlagPersistence(t *testing.T) {
 	dp := NewDynamicProperties()
 	dp.SetAllowStakingV2(true)
