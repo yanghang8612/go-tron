@@ -1,69 +1,72 @@
 package discover
 
 import (
-	"crypto/ecdsa"
+	"crypto/rand"
 	"math/bits"
 	"net"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	discoverpb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-// Node represents a discovered TRON network node.
+// NodeIDLen is java-tron libp2p's Constant.NODE_ID_LEN.
+const NodeIDLen = 64
+
+// Node represents a discovered TRON peer.
 type Node struct {
-	ID   []byte // 64-byte secp256k1 public key (uncompressed, no 0x04 prefix)
+	ID   []byte // 64 random bytes (not a cryptographic key)
 	IP   net.IP
 	Port int
 }
 
-// PubKeyToNodeID returns the 64-byte node ID from an ECDSA public key.
-func PubKeyToNodeID(pub ecdsa.PublicKey) []byte {
-	b := ethcrypto.FromECDSAPub(&pub)
-	// b[0] is 0x04 (uncompressed prefix) — skip it
-	id := make([]byte, 64)
-	copy(id, b[1:])
+// GenerateNodeID returns 64 random bytes from crypto/rand, for use as a TRON
+// node ID. Matches libp2p NetUtil.getNodeId().
+func GenerateNodeID() []byte {
+	id := make([]byte, NodeIDLen)
+	if _, err := rand.Read(id); err != nil {
+		panic(err) // crypto/rand should not fail
+	}
 	return id
 }
 
 // Endpoint builds a proto Endpoint for this node.
+// The Address field holds IP as ASCII string bytes — matches libp2p
+// KadMessage.getEndpointFromNode which does ByteArray.fromString(host).
 func (n *Node) Endpoint() *discoverpb.Endpoint {
-	ep := &discoverpb.Endpoint{
-		NodeId: n.ID,
-		Port:   int32(n.Port),
+	ep := &discoverpb.Endpoint{NodeId: n.ID, Port: int32(n.Port)}
+	if n.IP == nil {
+		return ep
 	}
 	if ip4 := n.IP.To4(); ip4 != nil {
-		ep.Address = ip4
-	} else if n.IP != nil {
-		ep.AddressIpv6 = n.IP.To16()
+		ep.Address = []byte(ip4.String())
+	} else {
+		ep.AddressIpv6 = []byte(n.IP.String())
 	}
 	return ep
 }
 
-// EndpointToNode converts a proto Endpoint to a Node.
+// EndpointToNode converts a proto Endpoint back to a Node.
+// Parses the ASCII string address back into a net.IP.
 func EndpointToNode(ep *discoverpb.Endpoint) *Node {
-	n := &Node{
-		ID:   ep.NodeId,
-		Port: int(ep.Port),
-	}
-	if len(ep.Address) == 4 {
-		n.IP = net.IP(ep.Address)
-	} else if len(ep.AddressIpv6) == 16 {
-		n.IP = net.IP(ep.AddressIpv6)
+	n := &Node{ID: ep.NodeId, Port: int(ep.Port)}
+	if len(ep.Address) > 0 {
+		n.IP = net.ParseIP(string(ep.Address))
+	} else if len(ep.AddressIpv6) > 0 {
+		n.IP = net.ParseIP(string(ep.AddressIpv6))
 	}
 	return n
 }
 
-// LogDist returns the XOR log-distance between two node IDs.
-// Each ID should be 64 bytes (512 bits); result is in range [0, 512].
+// LogDist returns the XOR log-distance between two 64-byte node IDs.
+// Used for bucket selection only — does not affect wire compatibility.
 func LogDist(a, b []byte) int {
-	lca := len(a)
-	if len(b) < lca {
-		lca = len(b)
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
 	}
-	for i := 0; i < lca; i++ {
+	for i := 0; i < n; i++ {
 		x := a[i] ^ b[i]
 		if x != 0 {
-			return (lca-i-1)*8 + bits.Len8(x)
+			return (n-i-1)*8 + bits.Len8(x)
 		}
 	}
 	return 0

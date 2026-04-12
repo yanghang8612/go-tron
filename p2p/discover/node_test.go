@@ -1,35 +1,53 @@
 package discover
 
 import (
+	"bytes"
 	"net"
 	"testing"
-
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
-func TestNodeIDFromKey(t *testing.T) {
-	key, err := ethcrypto.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
+func TestGenerateNodeID(t *testing.T) {
+	id1 := GenerateNodeID()
+	id2 := GenerateNodeID()
+	if len(id1) != NodeIDLen {
+		t.Fatalf("expected %d bytes, got %d", NodeIDLen, len(id1))
 	}
-	id := PubKeyToNodeID(key.PublicKey)
-	if len(id) != 64 {
-		t.Fatalf("expected 64-byte node ID, got %d", len(id))
+	if bytes.Equal(id1, id2) {
+		t.Fatalf("expected distinct random IDs")
 	}
 }
 
-func TestNodeEndpoint(t *testing.T) {
+func TestNodeEndpointStringAddress(t *testing.T) {
 	n := &Node{
 		IP:   net.ParseIP("192.168.1.1"),
 		Port: 18888,
-		ID:   make([]byte, 64),
+		ID:   make([]byte, NodeIDLen),
 	}
 	ep := n.Endpoint()
-	if ep.Port != 18888 {
-		t.Fatalf("wrong port: %d", ep.Port)
+	if string(ep.Address) != "192.168.1.1" {
+		t.Fatalf("address should be ASCII string, got %q", string(ep.Address))
 	}
-	if len(ep.Address) != 4 {
-		t.Fatalf("expected 4-byte IPv4, got %d bytes", len(ep.Address))
+	if ep.Port != 18888 {
+		t.Fatalf("port: %d", ep.Port)
+	}
+}
+
+func TestEndpointToNodeRoundtrip(t *testing.T) {
+	orig := &Node{
+		IP:   net.ParseIP("10.0.0.5"),
+		Port: 18888,
+		ID:   bytes.Repeat([]byte{0xAB}, NodeIDLen),
+	}
+	ep := orig.Endpoint()
+	got := EndpointToNode(ep)
+	if !got.IP.Equal(orig.IP) {
+		t.Fatalf("IP mismatch: got %v, want %v", got.IP, orig.IP)
+	}
+	if got.Port != orig.Port {
+		t.Fatalf("port mismatch: got %d, want %d", got.Port, orig.Port)
+	}
+	if !bytes.Equal(got.ID, orig.ID) {
+		t.Fatalf("ID mismatch")
 	}
 }
 
@@ -48,24 +66,5 @@ func TestLogDistZero(t *testing.T) {
 	d := LogDist(id, id)
 	if d != 0 {
 		t.Fatalf("expected distance 0 for identical IDs, got %d", d)
-	}
-}
-
-func TestEndpointToNode(t *testing.T) {
-	key, _ := ethcrypto.GenerateKey()
-	id := PubKeyToNodeID(key.PublicKey)
-
-	n := &Node{
-		IP:   net.ParseIP("10.0.0.1"),
-		Port: 18888,
-		ID:   id,
-	}
-	ep := n.Endpoint()
-	n2 := EndpointToNode(ep)
-	if n2.Port != n.Port {
-		t.Fatalf("port mismatch: %d vs %d", n2.Port, n.Port)
-	}
-	if string(n2.ID) != string(n.ID) {
-		t.Fatal("ID mismatch after round-trip")
 	}
 }
