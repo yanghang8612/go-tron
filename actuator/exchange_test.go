@@ -237,16 +237,19 @@ func TestExchangeTransactionBasic(t *testing.T) {
 	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, createC))
 	(&ExchangeCreateActuator{}).Execute(ctx) //nolint
 
-	// Trader sells 100M TRX
-	// Expected receive: 500000 * 100M / (1000M + 100M) = 50000000000 / 1100000000 ≈ 45454 TRC10
+	// Trader sells 100M TRX into the pool. The expected receive is computed
+	// with the Bancor formula (see exchange_processor.go) — the same routine
+	// the actuator runs, so any drift is caught here.
 	ctx.State.AddBalance(ownerExchAddr, 200_000_000) // extra TRX to sell
+	trc10Before := ctx.State.GetTRC10Balance(ownerExchAddr, 1_000_001)
+	expectedReceive := newExchangeProcessor().exchange(1_000_000_000, 500_000, 100_000_000)
 
 	txC := &contractpb.ExchangeTransactionContract{
 		OwnerAddress: ownerExchAddr.Bytes(),
 		ExchangeId:   1,
 		TokenId:      []byte("_"),
 		Quant:        100_000_000,
-		Expected:     45_000, // minimum expected (slippage tolerance)
+		Expected:     1, // slippage tolerance (any nonzero payout is fine here)
 	}
 	ctx.Tx = makeExchangeTransactionTx(txC)
 
@@ -260,14 +263,16 @@ func TestExchangeTransactionBasic(t *testing.T) {
 	}
 
 	trc10After := ctx.State.GetTRC10Balance(ownerExchAddr, 1_000_001)
-	// Before: 0 TRC10 (all was deposited on create); received ≈ 45454
-	if trc10After < 45_000 {
-		t.Fatalf("expected at least 45000 TRC10, got %d", trc10After)
+	if trc10After != trc10Before+expectedReceive {
+		t.Fatalf("got %d TRC10, want %d (delta=%d)", trc10After, trc10Before+expectedReceive, expectedReceive)
 	}
 
-	// Check exchange pool updated
+	// Check exchange pool updated.
 	ex := trawdb.ReadExchange(ctx.DB, 1)
 	if ex.FirstTokenBalance != 1_100_000_000 {
 		t.Fatalf("wrong FirstTokenBalance: %d", ex.FirstTokenBalance)
+	}
+	if ex.SecondTokenBalance != 500_000-expectedReceive {
+		t.Fatalf("pool buy-side: got %d, want %d", ex.SecondTokenBalance, 500_000-expectedReceive)
 	}
 }

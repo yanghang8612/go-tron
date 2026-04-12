@@ -60,6 +60,34 @@ func TestNextExchangeID(t *testing.T) {
 	}
 }
 
+func TestExchangeCreateFee(t *testing.T) {
+	dp := NewDynamicProperties()
+	if dp.ExchangeCreateFee() != 1_024_000_000 {
+		t.Fatalf("expected default 1_024_000_000, got %d", dp.ExchangeCreateFee())
+	}
+	dp.SetExchangeCreateFee(2_000_000_000)
+	if dp.ExchangeCreateFee() != 2_000_000_000 {
+		t.Fatalf("expected 2_000_000_000, got %d", dp.ExchangeCreateFee())
+	}
+	if _, ok := dp.dirty["exchange_create_fee"]; !ok {
+		t.Fatalf("exchange_create_fee should be dirty after Set")
+	}
+}
+
+func TestExchangeBalanceLimit(t *testing.T) {
+	dp := NewDynamicProperties()
+	if dp.ExchangeBalanceLimit() != 1_000_000_000_000_000 {
+		t.Fatalf("expected default 1e15, got %d", dp.ExchangeBalanceLimit())
+	}
+	dp.SetExchangeBalanceLimit(42)
+	if dp.ExchangeBalanceLimit() != 42 {
+		t.Fatalf("expected 42, got %d", dp.ExchangeBalanceLimit())
+	}
+	if _, ok := dp.dirty["exchange_balance_limit"]; !ok {
+		t.Fatalf("exchange_balance_limit should be dirty after Set")
+	}
+}
+
 func TestAllowFlagPersistence(t *testing.T) {
 	dp := NewDynamicProperties()
 	dp.SetAllowStakingV2(true)

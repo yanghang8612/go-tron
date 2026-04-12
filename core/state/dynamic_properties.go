@@ -32,6 +32,8 @@ var defaultProps = map[string]int64{
 	"next_proposal_id":                          0,
 	"next_token_id":                             1_000_001,
 	"next_exchange_id":                          1,
+	"exchange_create_fee":                       1_024_000_000,
+	"exchange_balance_limit":                    1_000_000_000_000_000,
 	"allow_same_token_name":                     0,
 	"allow_delegate_resource":                   0,
 	"allow_adaptive_energy_limit":               0,
@@ -503,6 +505,24 @@ func (dp *DynamicProperties) SetNextExchangeID(id int64) { dp.Set("next_exchange
 
 // AssetIssueFee returns the fee (in SUN) required to issue a TRC10 token.
 func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.props["asset_issue_fee"] }
+
+// ExchangeCreateFee returns the fee (in SUN) required to create a DEX exchange.
+// Matches java-tron DynamicPropertiesStore.getExchangeCreateFee (default 1024 TRX).
+func (dp *DynamicProperties) ExchangeCreateFee() int64 { return dp.props["exchange_create_fee"] }
+
+// SetExchangeCreateFee updates the exchange creation fee.
+func (dp *DynamicProperties) SetExchangeCreateFee(fee int64) { dp.Set("exchange_create_fee", fee) }
+
+// ExchangeBalanceLimit returns the maximum per-token balance an exchange may hold.
+// Matches java-tron DynamicPropertiesStore.getExchangeBalanceLimit (default 1e15).
+func (dp *DynamicProperties) ExchangeBalanceLimit() int64 {
+	return dp.props["exchange_balance_limit"]
+}
+
+// SetExchangeBalanceLimit updates the exchange balance limit.
+func (dp *DynamicProperties) SetExchangeBalanceLimit(limit int64) {
+	dp.Set("exchange_balance_limit", limit)
+}
 
 // All returns a read-only copy of all dynamic properties.
 func (dp *DynamicProperties) All() map[string]int64 {

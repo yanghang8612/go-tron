@@ -3,7 +3,7 @@ package actuator
 import (
 	"bytes"
 	"errors"
-	"math/big"
+	"fmt"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -11,8 +11,9 @@ import (
 )
 
 // ExchangeTransactionActuator handles ExchangeTransactionContract (type 44).
-// It executes an AMM swap using the constant product formula:
-// receive = otherBalance * quant / (thisBalance + quant).
+// It executes a swap using the Bancor connector-weight formula implemented in
+// exchangeProcessor, mirroring java-tron's ExchangeTransactionActuator +
+// ExchangeProcessor.
 type ExchangeTransactionActuator struct{}
 
 func (a *ExchangeTransactionActuator) getContract(ctx *Context) (*contractpb.ExchangeTransactionContract, error) {
@@ -28,13 +29,11 @@ func (a *ExchangeTransactionActuator) getContract(ctx *Context) (*contractpb.Exc
 }
 
 // Validate checks all preconditions for an ExchangeTransaction swap.
+// Mirrors ExchangeTransactionActuator.validate() in java-tron.
 func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 	c, err := a.getContract(ctx)
 	if err != nil {
 		return err
-	}
-	if c.Quant <= 0 {
-		return errors.New("quant must be positive")
 	}
 	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
 	if !ctx.State.AccountExists(ownerAddr) {
@@ -44,18 +43,55 @@ func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 	if ex == nil {
 		return errors.New("exchange not found")
 	}
-	// Verify the token is in the exchange
+	// Token must belong to the exchange (java line 174-176).
 	if !bytes.Equal(ex.FirstTokenId, c.TokenId) && !bytes.Equal(ex.SecondTokenId, c.TokenId) {
-		return errors.New("token not in exchange")
+		return errors.New("token is not in exchange")
 	}
-	// Verify owner has enough to sell
+	// tokenQuant > 0 (java line 178-180).
+	if c.Quant <= 0 {
+		return errors.New("token quant must greater than zero")
+	}
+	// tokenExpected > 0 (java line 182-184).
+	if c.Expected <= 0 {
+		return errors.New("token expected must greater than zero")
+	}
+	// Exchange must be open (java line 186-189).
+	if ex.FirstTokenBalance == 0 || ex.SecondTokenBalance == 0 {
+		return errors.New("Token balance in exchange is equal with 0,the exchange has been closed")
+	}
+
+	// Work out which side is the sell side and determine balances.
+	var sellBalance, buyBalance int64
+	if bytes.Equal(ex.FirstTokenId, c.TokenId) {
+		sellBalance = ex.FirstTokenBalance
+		buyBalance = ex.SecondTokenBalance
+	} else {
+		sellBalance = ex.SecondTokenBalance
+		buyBalance = ex.FirstTokenBalance
+	}
+
+	// Pool balance cap (java line 191-197).
+	balanceLimit := ctx.DynProps.ExchangeBalanceLimit()
+	if sellBalance+c.Quant > balanceLimit {
+		return fmt.Errorf("token balance must less than %d", balanceLimit)
+	}
+
+	// Owner has the funds to sell (java line 199-207).
 	if err := checkTokenBalance(ctx, ownerAddr, c.TokenId, c.Quant); err != nil {
 		return err
+	}
+
+	// Bancor quote — note this uses a throwaway processor since Validate must
+	// not mutate any persisted state (java calls exchangeCapsule.transaction(..)
+	// which mutates a local copy that is discarded on return).
+	anotherTokenQuant := newExchangeProcessor().exchange(sellBalance, buyBalance, c.Quant)
+	if anotherTokenQuant < c.Expected {
+		return errors.New("token required must greater than expected")
 	}
 	return nil
 }
 
-// Execute performs the AMM swap: sells quant of tokenId, receives the other token.
+// Execute performs the Bancor swap: sells Quant of TokenId, receives the other token.
 func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 	c, err := a.getContract(ctx)
 	if err != nil {
@@ -67,44 +103,32 @@ func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, errors.New("exchange not found")
 	}
 
-	var thisBalance, otherBalance int64
-	firstIsThis := bytes.Equal(ex.FirstTokenId, c.TokenId)
-	if firstIsThis {
-		thisBalance = ex.FirstTokenBalance
-		otherBalance = ex.SecondTokenBalance
+	var sellBalance, buyBalance int64
+	var buyTokenId []byte
+	if bytes.Equal(ex.FirstTokenId, c.TokenId) {
+		sellBalance = ex.FirstTokenBalance
+		buyBalance = ex.SecondTokenBalance
+		buyTokenId = ex.SecondTokenId
 	} else {
-		thisBalance = ex.SecondTokenBalance
-		otherBalance = ex.FirstTokenBalance
+		sellBalance = ex.SecondTokenBalance
+		buyBalance = ex.FirstTokenBalance
+		buyTokenId = ex.FirstTokenId
 	}
 
-	// AMM constant-product: receive = otherBalance * quant / (thisBalance + quant)
-	receiveBI := new(big.Int).Mul(big.NewInt(otherBalance), big.NewInt(c.Quant))
-	receiveBI.Div(receiveBI, big.NewInt(thisBalance+c.Quant))
-	receive := receiveBI.Int64()
-
-	// Slippage guard
+	// Fresh processor per execution — supply state is never shared.
+	receive := newExchangeProcessor().exchange(sellBalance, buyBalance, c.Quant)
 	if receive < c.Expected {
 		return nil, errors.New("exchange transaction: receive amount below expected")
 	}
 
-	// Transfer sold token from owner to exchange (deduct from owner)
 	if err := deductToken(ctx, ownerAddr, c.TokenId, c.Quant); err != nil {
 		return nil, err
 	}
-
-	// Transfer received token from exchange to owner
-	var otherTokenId []byte
-	if firstIsThis {
-		otherTokenId = ex.SecondTokenId
-	} else {
-		otherTokenId = ex.FirstTokenId
-	}
-	if err := transferToken(ctx, ownerAddr, otherTokenId, receive); err != nil {
+	if err := transferToken(ctx, ownerAddr, buyTokenId, receive); err != nil {
 		return nil, err
 	}
 
-	// Update exchange state
-	if firstIsThis {
+	if bytes.Equal(ex.FirstTokenId, c.TokenId) {
 		ex.FirstTokenBalance += c.Quant
 		ex.SecondTokenBalance -= receive
 	} else {
