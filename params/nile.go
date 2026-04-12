@@ -1,8 +1,11 @@
 package params
 
 // NileNetworkID is the HelloMessage.networkId value for Nile testnet.
-// TODO: confirm during T11.
-const NileNetworkID int32 = 1
+// Source: java-tron config.conf comment "Mainnet:11111; Nile:201910292; Shasta:1".
+const NileNetworkID int32 = 201910292
+
+// ShastaNetworkID is the HelloMessage.networkId value for Shasta testnet.
+const ShastaNetworkID int32 = 1
 
 // NileBootstrapNodes is the list of TRON Nile testnet discovery seed nodes.
 var NileBootstrapNodes = []string{

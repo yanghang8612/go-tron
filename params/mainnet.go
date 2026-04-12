@@ -7,8 +7,10 @@ import (
 )
 
 // MainnetNetworkID is the HelloMessage.networkId value for TRON mainnet.
-// TODO: confirmed value during T11 integration test. Default assumes 1.
-const MainnetNetworkID int32 = 1
+// Source: java-tron framework/src/main/resources/config.conf:
+//     p2p { version = 11111 # Mainnet:11111; Nile:201910292; Shasta:1 }
+// Mapped to libp2p's networkId in TronNetService.java (setNetworkId).
+const MainnetNetworkID int32 = 11111
 
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
 // These are the java-tron default seed nodes from config.conf.
