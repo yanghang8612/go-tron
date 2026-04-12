@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"bytes"
 	"crypto/rand"
 	"testing"
 )
@@ -71,6 +72,29 @@ func TestTableDeduplication(t *testing.T) {
 	table.Add(&Node{ID: id, Port: 18888})
 	if table.Len() != 1 {
 		t.Fatalf("expected 1 node after dedup, got %d", table.Len())
+	}
+}
+
+func TestClosestXOROrdering(t *testing.T) {
+	localID := make([]byte, 64)
+	table := NewTable(localID)
+
+	// Construct two nodes with the same LogDist but different XOR distances.
+	// Both have first byte 0x80 (LogDist == 511 from local), differ in last byte.
+	nodeFar := &Node{ID: append(append([]byte{}, 0x80), bytes.Repeat([]byte{0xFF}, 63)...), Port: 1}
+	nodeNear := &Node{ID: append(append([]byte{}, 0x80), bytes.Repeat([]byte{0x00}, 63)...), Port: 2}
+	table.Add(nodeFar)
+	table.Add(nodeNear)
+
+	// Target = all zeros except first byte 0x80, last byte 0x00 — closer to nodeNear in raw XOR.
+	target := make([]byte, 64)
+	target[0] = 0x80
+	closest := table.Closest(target, 2)
+	if len(closest) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(closest))
+	}
+	if closest[0].Port != nodeNear.Port {
+		t.Fatalf("expected nearest node first; got port %d, want %d", closest[0].Port, nodeNear.Port)
 	}
 }
 

@@ -87,13 +87,36 @@ func (t *Table) Len() int {
 	return total
 }
 
-// sortByDist sorts nodes by XOR log-distance to target (ascending) using insertion sort.
+// xorCmp returns -1 if XOR(target, a) < XOR(target, b), 0 if equal, 1 if greater,
+// comparing the raw byte-by-byte XOR distance in the standard big-endian sense.
+func xorCmp(target, a, b []byte) int {
+	n := len(target)
+	if len(a) < n {
+		n = len(a)
+	}
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		xa := target[i] ^ a[i]
+		xb := target[i] ^ b[i]
+		if xa < xb {
+			return -1
+		}
+		if xa > xb {
+			return 1
+		}
+	}
+	return 0
+}
+
+// sortByDist sorts nodes by raw XOR distance to target (ascending) using insertion sort.
+// Raw XOR is strictly finer than LogDist: two nodes with the same log-distance can still
+// differ by up to 2^N in actual distance, so LogDist-based ordering yields suboptimal Closest() results.
 func sortByDist(nodes []*Node, target []byte) {
 	for i := 1; i < len(nodes); i++ {
 		for j := i; j > 0; j-- {
-			di := LogDist(target, nodes[j].ID)
-			dj := LogDist(target, nodes[j-1].ID)
-			if di < dj {
+			if xorCmp(target, nodes[j].ID, nodes[j-1].ID) < 0 {
 				nodes[j], nodes[j-1] = nodes[j-1], nodes[j]
 			} else {
 				break

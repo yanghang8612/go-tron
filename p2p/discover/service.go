@@ -30,6 +30,8 @@ type Service struct {
 	onNewPeer func(addr string) // called when a new reachable peer is discovered
 	quit      chan struct{}
 	wg        sync.WaitGroup
+	seeds     []*net.UDPAddr // bootstrap addresses we keep re-pinging until their pong installs real nodeIDs
+	seedsMu   sync.Mutex
 }
 
 // NewService creates a discovery service.
@@ -80,29 +82,35 @@ func (s *Service) SetOnNewPeer(fn func(addr string)) {
 	s.onNewPeer = fn
 }
 
-// AddBootstrap adds seed nodes to the routing table and sends them initial pings.
+// AddBootstrap records seed node addresses and sends them initial pings.
+// Seeds are kept separately from the routing table; they are re-pinged on each
+// maintenance cycle until a pong arrives and the real nodeID is installed by
+// the normal MsgPong handling path.
 func (s *Service) AddBootstrap(addrs []string) {
 	for _, addr := range addrs {
-		host, portStr, err := net.SplitHostPort(addr)
-		if err != nil {
-			continue
-		}
-		port, _ := strconv.Atoi(portStr)
-		n := &Node{
-			IP:   net.ParseIP(host),
-			Port: port,
-			ID:   make([]byte, 64), // placeholder until we receive their pong
-		}
-		s.table.Add(n)
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
 			continue
 		}
-		go func(ua *net.UDPAddr, node *Node) {
-			if err := s.conn.SendPing(ua, s.localEP, node.Endpoint()); err != nil {
+		s.seedsMu.Lock()
+		s.seeds = append(s.seeds, udpAddr)
+		s.seedsMu.Unlock()
+
+		// Send initial ping. The remote endpoint node_id is unknown at this point;
+		// receivers ignore the remote endpoint's nodeId so a placeholder is fine.
+		remoteEP := &discoverpb.Endpoint{
+			Port: int32(udpAddr.Port),
+		}
+		if ip4 := udpAddr.IP.To4(); ip4 != nil {
+			remoteEP.Address = ip4
+		} else {
+			remoteEP.AddressIpv6 = udpAddr.IP.To16()
+		}
+		go func(ua *net.UDPAddr, ep *discoverpb.Endpoint) {
+			if err := s.conn.SendPing(ua, s.localEP, ep); err != nil {
 				log.Printf("discover: ping seed %s failed: %v", ua, err)
 			}
-		}(udpAddr, n)
+		}(udpAddr, remoteEP)
 	}
 }
 
@@ -224,7 +232,9 @@ func (s *Service) maintainLoop() {
 	}
 }
 
-// pingAll sends pings to all known nodes to refresh liveness.
+// pingAll sends pings to all known nodes to refresh liveness, and also re-pings
+// stored bootstrap seeds so the bootstrap path isn't lost if the first attempt
+// failed before the pong installed the real nodeID.
 func (s *Service) pingAll() {
 	nodes := s.table.Closest(s.table.localID, 256)
 	for _, n := range nodes {
@@ -233,6 +243,21 @@ func (s *Service) pingAll() {
 		}
 		udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
 		go s.conn.SendPing(udpAddr, s.localEP, n.Endpoint()) //nolint:errcheck
+	}
+
+	s.seedsMu.Lock()
+	seeds := append([]*net.UDPAddr(nil), s.seeds...)
+	s.seedsMu.Unlock()
+	for _, ua := range seeds {
+		remoteEP := &discoverpb.Endpoint{
+			Port: int32(ua.Port),
+		}
+		if ip4 := ua.IP.To4(); ip4 != nil {
+			remoteEP.Address = ip4
+		} else {
+			remoteEP.AddressIpv6 = ua.IP.To16()
+		}
+		go s.conn.SendPing(ua, s.localEP, remoteEP) //nolint:errcheck
 	}
 }
 
