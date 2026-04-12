@@ -1,76 +1,50 @@
 package discover
 
 import (
-	"crypto/ecdsa"
 	"errors"
 	"net"
 	"time"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	discoverpb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
-// Message type codes (matches java-tron NodeManager constants).
+// Message type codes — match libp2p MessageType.java.
 const (
-	MsgPing       byte = 1
-	MsgPong       byte = 2
-	MsgFindNode   byte = 3
-	MsgNeighbours byte = 4
+	MsgPing       byte = 0x01
+	MsgPong       byte = 0x02
+	MsgFindNode   byte = 0x03
+	MsgNeighbours byte = 0x04
 )
 
-// EncodeMessage serializes a discovery message with type prefix and ECDSA signature.
-// Wire format: [type(1)][sig(65)][proto payload]
-// Signature is over Keccak256(payload).
-func EncodeMessage(msgType byte, msg proto.Message, privKey *ecdsa.PrivateKey) ([]byte, error) {
+// EncodeMessage serializes a discovery message as [type(1)][proto payload].
+// No signature — sender identity comes from proto fields (e.g. PingMessage.From.NodeId).
+func EncodeMessage(msgType byte, msg proto.Message) ([]byte, error) {
 	payload, err := proto.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
-
-	hash := ethcrypto.Keccak256(payload)
-	sig, err := ethcrypto.Sign(hash, privKey)
-	if err != nil {
-		return nil, err
-	}
-
-	buf := make([]byte, 1+65+len(payload))
+	buf := make([]byte, 1+len(payload))
 	buf[0] = msgType
-	copy(buf[1:66], sig)
-	copy(buf[66:], payload)
+	copy(buf[1:], payload)
 	return buf, nil
 }
 
-// DecodeMessage parses a raw UDP datagram.
-// Returns (msgType, proto payload bytes, sender nodeID (64B pubkey), error).
-func DecodeMessage(data []byte) (byte, []byte, []byte, error) {
-	if len(data) < 66 {
-		return 0, nil, nil, errors.New("discover: message too short")
+// DecodeMessage parses [type(1)][proto payload]. Returns (msgType, payload).
+func DecodeMessage(data []byte) (byte, []byte, error) {
+	if len(data) < 2 {
+		return 0, nil, errors.New("discover: message too short")
 	}
-	msgType := data[0]
-	sig := data[1:66]
-	payload := data[66:]
-
-	hash := ethcrypto.Keccak256(payload)
-	pubBytes, err := ethcrypto.Ecrecover(hash, sig)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	// pubBytes is 65-byte (0x04 prefix + 64-byte key); strip prefix
-	senderID := make([]byte, 64)
-	copy(senderID, pubBytes[1:])
-	return msgType, payload, senderID, nil
+	return data[0], data[1:], nil
 }
 
 // Conn is a UDP connection for discovery.
 type Conn struct {
-	conn    *net.UDPConn
-	privKey *ecdsa.PrivateKey
-	localID []byte
+	conn *net.UDPConn
 }
 
-// NewConn creates a UDP discovery connection bound to listenAddr.
-func NewConn(listenAddr string, privKey *ecdsa.PrivateKey) (*Conn, error) {
+// NewConn opens a UDP discovery socket bound to listenAddr.
+func NewConn(listenAddr string) (*Conn, error) {
 	addr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
 		return nil, err
@@ -79,67 +53,52 @@ func NewConn(listenAddr string, privKey *ecdsa.PrivateKey) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Conn{
-		conn:    conn,
-		privKey: privKey,
-		localID: PubKeyToNodeID(privKey.PublicKey),
-	}, nil
+	return &Conn{conn: conn}, nil
 }
 
-// SendPing sends a PingMessage to the target.
-func (c *Conn) SendPing(target *net.UDPAddr, localEP, remoteEP *discoverpb.Endpoint) error {
+// SendPing sends a PingMessage to target.
+func (c *Conn) SendPing(target *net.UDPAddr, localEP, remoteEP *discoverpb.Endpoint, networkID int32) error {
 	msg := &discoverpb.PingMessage{
 		From:      localEP,
 		To:        remoteEP,
-		Version:   1,
+		Version:   networkID, // libp2p repurposes Version as networkId
 		Timestamp: time.Now().UnixMilli(),
 	}
-	data, err := EncodeMessage(MsgPing, msg, c.privKey)
-	if err != nil {
-		return err
-	}
-	_, err = c.conn.WriteToUDP(data, target)
-	return err
+	return c.send(target, MsgPing, msg)
 }
 
-// SendPong replies to a ping.
+// SendPong replies to a ping. `echo` is the sender's networkId (from their ping).
 func (c *Conn) SendPong(target *net.UDPAddr, localEP *discoverpb.Endpoint, echo int32) error {
 	msg := &discoverpb.PongMessage{
 		From:      localEP,
 		Echo:      echo,
 		Timestamp: time.Now().UnixMilli(),
 	}
-	data, err := EncodeMessage(MsgPong, msg, c.privKey)
-	if err != nil {
-		return err
-	}
-	_, err = c.conn.WriteToUDP(data, target)
-	return err
+	return c.send(target, MsgPong, msg)
 }
 
-// SendFindNode sends a FindNeighbours request for targetID.
+// SendFindNode asks target for neighbours of targetID.
 func (c *Conn) SendFindNode(target *net.UDPAddr, localEP *discoverpb.Endpoint, targetID []byte) error {
 	msg := &discoverpb.FindNeighbours{
 		From:      localEP,
 		TargetId:  targetID,
 		Timestamp: time.Now().UnixMilli(),
 	}
-	data, err := EncodeMessage(MsgFindNode, msg, c.privKey)
-	if err != nil {
-		return err
-	}
-	_, err = c.conn.WriteToUDP(data, target)
-	return err
+	return c.send(target, MsgFindNode, msg)
 }
 
-// SendNeighbours responds with a list of neighbours.
+// SendNeighbours replies with a list of neighbour endpoints.
 func (c *Conn) SendNeighbours(target *net.UDPAddr, localEP *discoverpb.Endpoint, neighbours []*discoverpb.Endpoint) error {
 	msg := &discoverpb.Neighbours{
 		From:       localEP,
 		Neighbours: neighbours,
 		Timestamp:  time.Now().UnixMilli(),
 	}
-	data, err := EncodeMessage(MsgNeighbours, msg, c.privKey)
+	return c.send(target, MsgNeighbours, msg)
+}
+
+func (c *Conn) send(target *net.UDPAddr, msgType byte, msg proto.Message) error {
+	data, err := EncodeMessage(msgType, msg)
 	if err != nil {
 		return err
 	}
@@ -147,12 +106,12 @@ func (c *Conn) SendNeighbours(target *net.UDPAddr, localEP *discoverpb.Endpoint,
 	return err
 }
 
-// ReadFrom reads the next UDP datagram. Blocks until data arrives or close.
+// ReadFrom reads the next UDP packet (blocks until data arrives or close).
 func (c *Conn) ReadFrom(buf []byte) (int, *net.UDPAddr, error) {
 	return c.conn.ReadFromUDP(buf)
 }
 
-// Close shuts down the UDP connection.
+// Close shuts down the socket.
 func (c *Conn) Close() error {
 	return c.conn.Close()
 }

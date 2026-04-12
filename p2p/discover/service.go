@@ -1,7 +1,6 @@
 package discover
 
 import (
-	"crypto/ecdsa"
 	"crypto/rand"
 	"log"
 	"net"
@@ -9,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	discoverpb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,7 +15,7 @@ import (
 const (
 	pingInterval    = 30 * time.Second
 	refreshInterval = 60 * time.Second
-	maxUDPPacket    = 1280
+	maxUDPPacket    = 2048
 )
 
 // Service is the discovery service that maintains the routing table and discovers
@@ -25,7 +23,8 @@ const (
 type Service struct {
 	conn      *Conn
 	table     *Table
-	privKey   *ecdsa.PrivateKey
+	localID   []byte
+	networkID int32
 	localEP   *discoverpb.Endpoint
 	onNewPeer func(addr string) // called when a new reachable peer is discovered
 	quit      chan struct{}
@@ -37,16 +36,15 @@ type Service struct {
 // NewService creates a discovery service.
 //
 // listenAddr: "host:port" for UDP discovery socket (typically same port as TCP).
-// privKey: node's secp256k1 identity key.
+// nodeID: 64-byte random node identity (use GenerateNodeID()).
+// networkID: network identifier sent in PingMessage.Version (matches java-tron networkId).
 // onNewPeer: callback invoked when a new peer is ready to dial (addr = "host:port").
 // Pass nil for onNewPeer and set it later via SetOnNewPeer before Start().
-func NewService(listenAddr string, privKey *ecdsa.PrivateKey, onNewPeer func(addr string)) (*Service, error) {
-	conn, err := NewConn(listenAddr, privKey)
+func NewService(listenAddr string, nodeID []byte, networkID int32, onNewPeer func(addr string)) (*Service, error) {
+	conn, err := NewConn(listenAddr)
 	if err != nil {
 		return nil, err
 	}
-
-	localID := PubKeyToNodeID(privKey.PublicKey)
 
 	host, portStr, _ := net.SplitHostPort(listenAddr)
 	port, _ := strconv.Atoi(portStr)
@@ -57,19 +55,20 @@ func NewService(listenAddr string, privKey *ecdsa.PrivateKey, onNewPeer func(add
 	}
 
 	localEP := &discoverpb.Endpoint{
-		NodeId: localID,
+		NodeId: nodeID,
 		Port:   int32(port),
 	}
 	if ip4 := ip.To4(); ip4 != nil {
-		localEP.Address = ip4
+		localEP.Address = []byte(ip4.String())
 	} else {
-		localEP.AddressIpv6 = ip.To16()
+		localEP.AddressIpv6 = []byte(ip.String())
 	}
 
 	return &Service{
 		conn:      conn,
-		table:     NewTable(localID),
-		privKey:   privKey,
+		table:     NewTable(nodeID),
+		localID:   nodeID,
+		networkID: networkID,
 		localEP:   localEP,
 		onNewPeer: onNewPeer,
 		quit:      make(chan struct{}),
@@ -102,12 +101,12 @@ func (s *Service) AddBootstrap(addrs []string) {
 			Port: int32(udpAddr.Port),
 		}
 		if ip4 := udpAddr.IP.To4(); ip4 != nil {
-			remoteEP.Address = ip4
+			remoteEP.Address = []byte(ip4.String())
 		} else {
-			remoteEP.AddressIpv6 = udpAddr.IP.To16()
+			remoteEP.AddressIpv6 = []byte(udpAddr.IP.String())
 		}
 		go func(ua *net.UDPAddr, ep *discoverpb.Endpoint) {
-			if err := s.conn.SendPing(ua, s.localEP, ep); err != nil {
+			if err := s.conn.SendPing(ua, s.localEP, ep, s.networkID); err != nil {
 				log.Printf("discover: ping seed %s failed: %v", ua, err)
 			}
 		}(udpAddr, remoteEP)
@@ -152,15 +151,9 @@ func (s *Service) readLoop() {
 
 // handlePacket processes a single incoming UDP datagram.
 func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
-	msgType, payload, senderID, err := DecodeMessage(data)
+	msgType, payload, err := DecodeMessage(data)
 	if err != nil {
 		return
-	}
-
-	sender := &Node{
-		ID:   senderID,
-		IP:   from.IP,
-		Port: from.Port,
 	}
 
 	switch msgType {
@@ -169,14 +162,27 @@ func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
 		if err := proto.Unmarshal(payload, &ping); err != nil {
 			return
 		}
-		// Reply with pong; echo the Version field as the echo value
+		// Sender identity comes from proto; use UDP source IP as canonical IP.
+		sender := EndpointToNode(ping.From)
+		sender.IP = from.IP
+		sender.Port = from.Port
+
+		// Reply with pong; echo the Version field (networkId) from the ping
 		if err := s.conn.SendPong(from, s.localEP, ping.Version); err != nil {
 			log.Printf("discover: pong failed: %v", err)
 		}
 		s.table.Add(sender)
 
 	case MsgPong:
-		// Add or refresh sender in table
+		var pong discoverpb.PongMessage
+		if err := proto.Unmarshal(payload, &pong); err != nil {
+			return
+		}
+		// Use UDP source IP as canonical IP; ID comes from proto.
+		sender := EndpointToNode(pong.From)
+		sender.IP = from.IP
+		sender.Port = from.Port
+
 		s.table.Add(sender)
 		// Notify p2p server of new peer candidate
 		if s.onNewPeer != nil {
@@ -206,7 +212,7 @@ func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
 			// Ping each new neighbour to confirm liveness
 			udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
 			go func(ua *net.UDPAddr, node *Node) {
-				s.conn.SendPing(ua, s.localEP, node.Endpoint()) //nolint:errcheck
+				s.conn.SendPing(ua, s.localEP, node.Endpoint(), s.networkID) //nolint:errcheck
 			}(udpAddr, n)
 		}
 	}
@@ -236,13 +242,13 @@ func (s *Service) maintainLoop() {
 // stored bootstrap seeds so the bootstrap path isn't lost if the first attempt
 // failed before the pong installed the real nodeID.
 func (s *Service) pingAll() {
-	nodes := s.table.Closest(s.table.localID, 256)
+	nodes := s.table.Closest(s.localID, 256)
 	for _, n := range nodes {
 		if n.IP == nil {
 			continue
 		}
 		udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
-		go s.conn.SendPing(udpAddr, s.localEP, n.Endpoint()) //nolint:errcheck
+		go s.conn.SendPing(udpAddr, s.localEP, n.Endpoint(), s.networkID) //nolint:errcheck
 	}
 
 	s.seedsMu.Lock()
@@ -253,11 +259,11 @@ func (s *Service) pingAll() {
 			Port: int32(ua.Port),
 		}
 		if ip4 := ua.IP.To4(); ip4 != nil {
-			remoteEP.Address = ip4
+			remoteEP.Address = []byte(ip4.String())
 		} else {
-			remoteEP.AddressIpv6 = ua.IP.To16()
+			remoteEP.AddressIpv6 = []byte(ua.IP.String())
 		}
-		go s.conn.SendPing(ua, s.localEP, remoteEP) //nolint:errcheck
+		go s.conn.SendPing(ua, s.localEP, remoteEP, s.networkID) //nolint:errcheck
 	}
 }
 
@@ -274,19 +280,4 @@ func (s *Service) lookupRandom() {
 		udpAddr := &net.UDPAddr{IP: n.IP, Port: n.Port}
 		go s.conn.SendFindNode(udpAddr, s.localEP, targetID[:]) //nolint:errcheck
 	}
-}
-
-// GenerateKey generates a new secp256k1 private key for node identity.
-func GenerateKey() (*ecdsa.PrivateKey, error) {
-	return ethcrypto.GenerateKey()
-}
-
-// KeyToBytes serializes an ECDSA private key to 32 bytes.
-func KeyToBytes(key *ecdsa.PrivateKey) []byte {
-	return ethcrypto.FromECDSA(key)
-}
-
-// KeyFromBytes deserializes an ECDSA private key from 32 bytes.
-func KeyFromBytes(b []byte) (*ecdsa.PrivateKey, error) {
-	return ethcrypto.ToECDSA(b)
 }

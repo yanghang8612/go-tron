@@ -4,89 +4,60 @@ import (
 	"bytes"
 	"testing"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	discoverpb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestEncodeDecodePing(t *testing.T) {
-	key, _ := ethcrypto.GenerateKey()
-	senderID := PubKeyToNodeID(key.PublicKey)
-
-	from := &discoverpb.Endpoint{Address: []byte{127, 0, 0, 1}, Port: 18888, NodeId: senderID}
-	to := &discoverpb.Endpoint{Address: []byte{192, 168, 1, 1}, Port: 18888}
+	from := &discoverpb.Endpoint{
+		Address: []byte("127.0.0.1"), // ASCII bytes
+		Port:    18888,
+		NodeId:  bytes.Repeat([]byte{0xAB}, 64),
+	}
+	to := &discoverpb.Endpoint{
+		Address: []byte("192.168.1.1"),
+		Port:    18888,
+	}
 	ping := &discoverpb.PingMessage{From: from, To: to, Version: 1, Timestamp: 1000}
 
-	data, err := EncodeMessage(MsgPing, ping, key)
+	data, err := EncodeMessage(MsgPing, ping)
 	if err != nil {
-		t.Fatalf("EncodeMessage: %v", err)
+		t.Fatal(err)
 	}
-	if len(data) < 66 {
-		t.Fatalf("encoded message too short: %d", len(data))
-	}
-	// Verify header byte
 	if data[0] != MsgPing {
-		t.Fatalf("expected type byte %d, got %d", MsgPing, data[0])
+		t.Fatalf("type byte: got %#x, want %#x", data[0], MsgPing)
+	}
+	// Plain wire: byte 0 is type, rest is proto payload.
+	expected, _ := proto.Marshal(ping)
+	if !bytes.Equal(data[1:], expected) {
+		t.Fatalf("payload mismatch")
 	}
 
-	msgType, payload, recoveredID, err := DecodeMessage(data)
+	msgType, payload, err := DecodeMessage(data)
 	if err != nil {
-		t.Fatalf("DecodeMessage: %v", err)
+		t.Fatal(err)
 	}
 	if msgType != MsgPing {
-		t.Fatalf("wrong type: %d", msgType)
+		t.Fatalf("type: %d", msgType)
 	}
-	if len(recoveredID) != 64 {
-		t.Fatalf("expected 64-byte sender pubkey, got %d", len(recoveredID))
+	var got discoverpb.PingMessage
+	if err := proto.Unmarshal(payload, &got); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(recoveredID, senderID) {
-		t.Fatal("recovered sender ID does not match original")
+	if string(got.From.Address) != "127.0.0.1" {
+		t.Fatalf("address: got %q, want 127.0.0.1", got.From.Address)
 	}
-	_ = payload
-}
-
-func TestEncodeDecodeRoundTrip(t *testing.T) {
-	key, _ := ethcrypto.GenerateKey()
-
-	// Test all message types
-	testCases := []struct {
-		name    string
-		msgType byte
-		msg     interface{ ProtoReflect() interface{ IsValid() bool } }
-	}{}
-	_ = testCases
-
-	// PONG
-	pong := &discoverpb.PongMessage{
-		From:      &discoverpb.Endpoint{Address: []byte{1, 2, 3, 4}, Port: 18888},
-		Echo:      42,
-		Timestamp: 9999,
+	if !bytes.Equal(got.From.NodeId, from.NodeId) {
+		t.Fatalf("nodeId mismatch")
 	}
-	data, err := EncodeMessage(MsgPong, pong, key)
-	if err != nil {
-		t.Fatalf("encode pong: %v", err)
-	}
-	msgType, _, _, err := DecodeMessage(data)
-	if err != nil {
-		t.Fatalf("decode pong: %v", err)
-	}
-	if msgType != MsgPong {
-		t.Fatalf("pong type: want %d got %d", MsgPong, msgType)
+	if got.Version != 1 || got.Timestamp != 1000 {
+		t.Fatalf("ping fields: %+v", &got)
 	}
 }
 
 func TestDecodeMessageTooShort(t *testing.T) {
-	_, _, _, err := DecodeMessage([]byte{1, 2, 3})
+	_, _, err := DecodeMessage([]byte{0x01})
 	if err == nil {
-		t.Fatal("expected error for short message")
+		t.Fatal("expected error for 1-byte packet")
 	}
-}
-
-func TestDecodeMessageInvalidSig(t *testing.T) {
-	// Build a packet with a zeroed signature — ecrecover should fail or return garbage
-	data := make([]byte, 100)
-	data[0] = MsgPing
-	// sig bytes [1:66] are all zero — invalid signature
-	_, _, _, err := DecodeMessage(data)
-	// May or may not error depending on ecrecover implementation; just ensure no panic
-	_ = err
 }
