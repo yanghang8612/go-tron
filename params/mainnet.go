@@ -6,6 +6,23 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 )
 
+// MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
+// These are the java-tron default seed nodes from config.conf.
+var MainnetBootstrapNodes = []string{
+	"47.90.247.237:18888",
+	"47.90.214.128:18888",
+	"52.53.189.99:18888",
+	"18.196.99.16:18888",
+	"34.253.187.192:18888",
+	"18.133.82.227:18888",
+	"35.180.51.163:18888",
+	"54.252.224.209:18888",
+	"18.228.15.36:18888",
+	"52.15.93.92:18888",
+	"34.220.77.106:18888",
+	"15.207.144.3:18888",
+}
+
 func hexToAddress(h string) common.Address {
 	b, _ := hex.DecodeString(h)
 	return common.BytesToAddress(b)

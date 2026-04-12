@@ -1,5 +1,11 @@
 package params
 
+// NileBootstrapNodes is the list of TRON Nile testnet discovery seed nodes.
+var NileBootstrapNodes = []string{
+	"47.252.19.181:18888",
+	"47.252.3.238:18888",
+}
+
 // DefaultNileGenesis returns the genesis configuration for the Nile testnet.
 func DefaultNileGenesis() *Genesis {
 	return &Genesis{
