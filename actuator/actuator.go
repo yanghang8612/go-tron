@@ -110,6 +110,14 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &MarketSellAssetActuator{}, nil
 	case corepb.Transaction_Contract_MarketCancelOrderContract:
 		return &MarketCancelOrderActuator{}, nil
+	case corepb.Transaction_Contract_ExchangeCreateContract:
+		return &ExchangeCreateActuator{}, nil
+	case corepb.Transaction_Contract_ExchangeInjectContract:
+		return &ExchangeInjectActuator{}, nil
+	case corepb.Transaction_Contract_ExchangeWithdrawContract:
+		return &ExchangeWithdrawActuator{}, nil
+	case corepb.Transaction_Contract_ExchangeTransactionContract:
+		return &ExchangeTransactionActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
