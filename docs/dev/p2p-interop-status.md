@@ -1,77 +1,76 @@
 # TRON P2P Interop Status
 
-Record of verified compatibility with the reference `io.github.tronprotocol/libp2p:2.2.7`
-as of 2026-04-12.
+Record of verified compatibility with the reference `io.github.tronprotocol/libp2p:2.2.7`.
 
-## What works (unit + loopback verified)
+## ✅ VERIFIED (2026-04-12)
 
-- **Protobuf varint32 framing** — matches libp2p's `ProtobufVarint32LengthFieldPrepender`
-  (Google protobuf varint). Verified with known vector 300 = `0xAC 0x02`. All p2p tests pass.
-- **UDP discovery wire format** — `[type(1)][proto payload]`, no signature wrapper.
-  Matches libp2p's `P2pPacketDecoder` + `Message.parse`.
-- **Node ID** — 64 random bytes from `crypto/rand`. Matches libp2p `NetUtil.getNodeId()`.
-- **Endpoint encoding** — IP addresses as ASCII string bytes (e.g., `[]byte("127.0.0.1")`).
-  Matches libp2p `KadMessage.getEndpointFromNode` via `ByteArray.fromString(host)`.
-- **Control message codes** — 0xFD HELLO, 0xFC STATUS, 0xFB DISCONNECT, 0xFF PING,
-  0xFE PONG. Match libp2p `connection.message.MessageType`.
-- **HelloMessage proto fields** — field numbers 1=from, 2=networkId, 3=code, 4=timestamp,
-  5=version. Match libp2p `Connect.proto` via reverse-engineered field numbers from
-  generated Java classes.
-- **Two-phase handshake** — libp2p HELLO first, then peer registered. Keepalive +
-  disconnect interception in `Peer.readLoop`. Self-compatible (tested loopback).
+**go-tron successfully connects to a real java-tron node and completes the libp2p handshake.**
 
-## What's NOT yet verified
+Against a local java-tron full node (networkID=0):
+- `TestJavaTronHandshake` PASSES — libp2p handshake completes, peer sends us
+  an app-layer message (code 0x08, 195 bytes) within 3 seconds of handshake
+- `TestJavaTronDiscoverPing` PASSES — UDP discovery ping/pong round-trip
 
-- **Real java-tron handshake** — `TestJavaTronHandshake` against live Nile and mainnet
-  seed nodes results in `read hello: EOF` — TCP connects, we send HELLO (96 bytes),
-  peer closes without responding.
-- **UDP discover/pong** — not yet tested against a real peer.
-
-## EOF-on-send investigation
-
-A `TestDumpHelloBytes` was run to confirm our wire bytes are structurally correct:
-
-```
-varint length field: 60             (96 in decimal; 1 type + 95 proto)
-type byte:           fd             (HANDSHAKE_HELLO)
-proto payload:       0a 51 ...      (starts with tag=1 length=81 — the From Endpoint)
-total frame length:  97 bytes
+To reproduce:
+```bash
+# Start java-tron locally (see java-tron-local.md)
+# Then:
+cd /Users/asuka/Projects/asuka/go/go-tron
+JAVA_TRON_ADDR=127.0.0.1:18888 JAVA_TRON_NETWORK=0 \
+  go test -tags=integration ./p2p/ -run "TestJavaTron" -v
 ```
 
-The proto payload decodes correctly by `protoc --decode`:
-```
-from { address: "127.0.0.1" port: 18888 nodeId: <64 bytes> }
-networkId: 11111 / 201910292 (match chain)
-timestamp: <current ms>
-version: 1
-```
+## Debug journey — notable fixes and discoveries
 
-Structurally aligned with libp2p schema. The EOF suggests one of:
-1. Nile seed is overloaded / rate-limiting / our IP is on a throttle list
-2. Some subtle wire field we haven't noticed (e.g., the `Version` field's
-   semantics differ, or there's a required `code` field value)
-3. A Netty-level decoder-pipeline difference (e.g., fin before varint flush)
+### Fix 1: NewServer overrode NetworkID=0 to 1
+The first attempt failed with DIFFERENT_VERSION because our `NewServer`
+treated `NetworkID==0` as "unset" and substituted the default value 1.
+Java-tron's libp2p `Parameter.nodeP2pVersion` legitimately defaults to 0
+when the HOCON config omits `p2p.version`. Many local and custom deployments
+run with networkId=0. Fix: removed the default; callers must set NetworkID
+explicitly. (Commit c089a4f.)
 
-## Next steps for validation
+### Discovery: TRON network IDs
+From java-tron `config.conf` line 197:
+- **Mainnet: 11111**
+- **Nile: 201910292**
+- **Shasta: 1**
 
-1. **Build `FullNode.jar` for ARM64** following `docs/dev/java-tron-local.md`.
-   Start java-tron locally with a custom networkId; point go-tron at it;
-   capture `java-tron.log` for the exact rejection reason.
-2. **Run tcpdump during a java-tron ↔ java-tron handshake** on a working
-   deployment. Capture the first two HELLO frames. Diff byte-for-byte against
-   what `TestDumpHelloBytes` produces.
-3. **Review `HandshakeService.processMessage`** for any validation we
-   might be failing: `processPeer` (capacity/ban/same-IP), `validNode`, and
-   any side-effects like `ChannelManager.updateNodeId`.
+### Discovery: peer's external IP in Hello.From.Address
+java-tron sends its external IP (not 127.0.0.1 for a local node — it discovers
+its public IP via `NetUtil.getExternalIpV4`). Our validation should therefore
+NOT assume `From.Address == the dial address`. Currently we ignore the peer's
+Hello.From.Address for routing purposes (we only use it for protocol).
+
+### Design confirmed: two nested enums for disconnect
+- `DisconnectCode` (Java class, used in HelloMessage.code): NORMAL=0,
+  TOO_MANY_PEERS=1, DIFFERENT_VERSION=2, TIME_BANNED=3, DUPLICATE_PEER=4,
+  MAX_CONNECTION_WITH_SAME_IP=5, UNKNOWN=256
+- `DisconnectReason` (proto enum, used in P2PDisconnectMessage.reason):
+  PEER_QUITING=0, BAD_PROTOCOL=1, TOO_MANY_PEERS=2, ...
+
+Our HelloMessage.code is int32 (DisconnectCode). Our DisconnectMessage.reason
+is DisconnectReason. These are two separate spaces — intentional in libp2p.
 
 ## Cross-verified constants (don't change without re-validation)
 
-- `MainnetNetworkID` = 11111 (from java-tron `config.conf` line 197)
-- `NileNetworkID` = 201910292 (from same config comment)
-- `ShastaNetworkID` = 1 (from same config comment)
+- `MainnetNetworkID` = 11111
+- `NileNetworkID` = 201910292
+- `ShastaNetworkID` = 1
+- libp2p Parameter default networkId = 0 (when not in config.conf)
 - `KademliaOptions.BINS` = 17, `BUCKET_SIZE` = 16, `ALPHA` = 3
 - `KademliaOptions.DISCOVER_CYCLE` = 7200 ms, `WAIT_TIME` = 100 ms
 - `Parameter.MAX_MESSAGE_LENGTH` = 5 MB (TCP), UDP = 2048 bytes
 - `KEEP_ALIVE_TIMEOUT` = 20 s, `NETWORK_TIME_DIFF` = 1 s
 - `NODE_ID_LEN` = 64
-- `Parameter.version` (HelloMessage.version) = 1 (hardcoded default)
+- `Parameter.version` (HelloMessage.version) = 1
+
+## What's still not validated
+
+- **Application-layer sync** — the test covers libp2p handshake only. After
+  handshake, java-tron sends its own app-layer HELLO (typically code 0x20)
+  and expects a response with our chain state. go-tron's `net/handler.go`
+  implements this path; T12 will validate end-to-end block sync.
+- **Testnet reachability** — live Nile/mainnet seeds appear unreachable from
+  the test environment (TCP connects, first bytes received, but full sync
+  not attempted yet).
