@@ -4,13 +4,16 @@ import (
 	"log"
 	"net"
 	"sync"
+
+	"github.com/tronprotocol/go-tron/p2p/discover"
 )
 
 // ServerConfig holds P2P server configuration.
 type ServerConfig struct {
-	ListenAddr string   // "host:port" to listen on
-	MaxPeers   int      // max peers allowed
-	SeedNodes  []string // initial peers to dial
+	ListenAddr string            // "host:port" to listen on
+	MaxPeers   int               // max peers allowed
+	SeedNodes  []string          // initial peers to dial
+	Discovery  *discover.Service // optional; nil = no discovery
 }
 
 // Server manages TCP connections to peers.
@@ -49,13 +52,19 @@ func (s *Server) Start() error {
 	s.wg.Add(1)
 	go s.acceptLoop()
 
-	// Dial seed nodes in background
-	for _, addr := range s.config.SeedNodes {
-		go func(addr string) {
-			if err := s.AddPeer(addr); err != nil {
-				log.Printf("Failed to connect to seed %s: %v", addr, err)
-			}
-		}(addr)
+	// Start discovery service if configured
+	if s.config.Discovery != nil {
+		s.config.Discovery.Start()
+		s.config.Discovery.AddBootstrap(s.config.SeedNodes)
+	} else {
+		// Dial seed nodes directly when discovery is disabled
+		for _, addr := range s.config.SeedNodes {
+			go func(addr string) {
+				if err := s.AddPeer(addr); err != nil {
+					log.Printf("Failed to connect to seed %s: %v", addr, err)
+				}
+			}(addr)
+		}
 	}
 
 	return nil
@@ -65,6 +74,11 @@ func (s *Server) Start() error {
 func (s *Server) Stop() error {
 	close(s.quit)
 	s.listener.Close()
+
+	// Stop discovery service if running
+	if s.config.Discovery != nil {
+		s.config.Discovery.Stop()
+	}
 
 	// Snapshot peers and clear map before stopping to avoid deadlock:
 	// p.Stop() waits for readLoop which calls removePeer which needs the lock.
