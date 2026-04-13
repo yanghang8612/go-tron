@@ -48,7 +48,7 @@ type Backend interface {
 	GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error)
 	GetTransactionInfo(hash common.Hash) (*corepb.TransactionInfo, error)
 
-	// EVM execution (read-only simulation)
+	// TVM execution (read-only simulation)
 	Call(from, to *common.Address, data []byte, value int64) ([]byte, error)
 
 	// Log queries

@@ -23,7 +23,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	energyForCall := contract.Energy - contract.Energy/64
 	contract.UseEnergy(energyForCall)
 
-	ret, addr, remainingEnergy, err := interpreter.evm.Create(
+	ret, addr, remainingEnergy, err := interpreter.tvm.Create(
 		contract.Address, code, energyForCall, val,
 	)
 	contract.Energy += remainingEnergy
@@ -65,7 +65,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	energyForCall := contract.Energy - contract.Energy/64
 	contract.UseEnergy(energyForCall)
 
-	ret, addr, remainingEnergy, err := interpreter.evm.Create2(
+	ret, addr, remainingEnergy, err := interpreter.tvm.Create2(
 		contract.Address, code, energyForCall, val, salt,
 	)
 	contract.Energy += remainingEnergy
@@ -93,7 +93,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	cost := uint64(EnergyCall)
 	if val > 0 {
 		cost += EnergyCallValueTx
-		if !interpreter.evm.StateDB.Exist(addr) {
+		if !interpreter.tvm.StateDB.Exist(addr) {
 			cost += EnergyCallNewAcct
 		}
 	}
@@ -127,7 +127,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	}
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.evm.Call(contract.Address, addr, input, gas, val)
+	ret, remainingEnergy, err := interpreter.tvm.Call(contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int
@@ -180,7 +180,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.evm.DelegateCall(contract.Address, addr, input, gas)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, addr, input, gas)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int
@@ -233,7 +233,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.evm.DelegateCall(contract.Caller, addr, input, gas)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, addr, input, gas)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int
@@ -286,7 +286,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.evm.StaticCall(contract.Address, addr, input, gas)
+	ret, remainingEnergy, err := interpreter.tvm.StaticCall(contract.Address, addr, input, gas)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int

@@ -168,5 +168,58 @@ func newJumpTable() JumpTable {
 	// London opcodes — require AllowTvmLondon
 	tbl[BASEFEE].enabledFn = func(c TVMConfig) bool { return c.London }
 
+	// Cancun opcodes — require AllowTvmCancun (EIP-1153 transient storage)
+	tbl[TLOAD] = &operation{execute: opTLoad, energyCost: EnergyTLoad, minStack: 1, maxStack: 1024,
+		enabledFn: func(c TVMConfig) bool { return c.Cancun }}
+	tbl[TSTORE] = &operation{execute: opTStore, energyCost: EnergyTStore, minStack: 2, maxStack: 1022,
+		writes: true, enabledFn: func(c TVMConfig) bool { return c.Cancun }}
+
+	// TRON extensions — TRC-10 token transfer (AllowTvmTransferTrc10)
+	transferTrc10 := func(c TVMConfig) bool { return c.TransferTrc10 }
+	tbl[CALLTOKEN] = &operation{execute: opCallToken, minStack: 8, maxStack: 1017,
+		writes: true, enabledFn: transferTrc10}
+	tbl[TOKENBALANCE] = &operation{execute: opTokenBalance, energyCost: EnergyTokenBalance,
+		minStack: 2, maxStack: 1023, enabledFn: transferTrc10}
+	tbl[CALLTOKENVALUE] = &operation{execute: opCallTokenValue, energyCost: EnergyBase,
+		minStack: 0, maxStack: 1024, enabledFn: transferTrc10}
+	tbl[CALLTOKENID] = &operation{execute: opCallTokenId, energyCost: EnergyBase,
+		minStack: 0, maxStack: 1024, enabledFn: transferTrc10}
+
+	// TRON extensions — ISCONTRACT (AllowTvmSolidity059)
+	tbl[ISCONTRACT] = &operation{execute: opIsContract, energyCost: EnergyIsContract,
+		minStack: 1, maxStack: 1024,
+		enabledFn: func(c TVMConfig) bool { return c.Solidity059 }}
+
+	// TRON extensions — V1 freeze/unfreeze (AllowTvmFreeze)
+	freeze := func(c TVMConfig) bool { return c.Freeze }
+	tbl[FREEZE] = &operation{execute: opFreeze, energyCost: EnergyFreeze,
+		minStack: 3, maxStack: 1022, writes: true, enabledFn: freeze}
+	tbl[UNFREEZE] = &operation{execute: opUnfreeze, energyCost: EnergyUnfreeze,
+		minStack: 2, maxStack: 1023, writes: true, enabledFn: freeze}
+	tbl[FREEZEEXPIRETIME] = &operation{execute: opFreezeExpireTime, energyCost: EnergyFreezeExpireTime,
+		minStack: 2, maxStack: 1023, enabledFn: freeze}
+
+	// TRON extensions — voting / rewards (AllowTvmVote)
+	vote := func(c TVMConfig) bool { return c.Vote }
+	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness, minStack: 4, maxStack: 1021,
+		writes: true, enabledFn: vote}
+	tbl[WITHDRAWREWARD] = &operation{execute: opWithdrawReward, energyCost: EnergyWithdrawReward,
+		minStack: 0, maxStack: 1024, writes: true, enabledFn: vote}
+
+	// TRON extensions — Stake 2.0 (AllowStakingV2)
+	stakingV2 := func(c TVMConfig) bool { return c.StakingV2 }
+	tbl[FREEZEBALANCEV2] = &operation{execute: opFreezeBalanceV2, energyCost: EnergyFreezeV2,
+		minStack: 2, maxStack: 1023, writes: true, enabledFn: stakingV2}
+	tbl[UNFREEZEBALANCEV2] = &operation{execute: opUnfreezeBalanceV2, energyCost: EnergyUnfreezeV2,
+		minStack: 2, maxStack: 1023, writes: true, enabledFn: stakingV2}
+	tbl[CANCELALLUNFREEZEV2] = &operation{execute: opCancelAllUnfreezeV2, energyCost: EnergyCancelAllUnfreezeV2,
+		minStack: 0, maxStack: 1024, writes: true, enabledFn: stakingV2}
+	tbl[WITHDRAWEXPIREUNFREEZE] = &operation{execute: opWithdrawExpireUnfreeze, energyCost: EnergyWithdrawExpireUnfreeze,
+		minStack: 0, maxStack: 1024, writes: true, enabledFn: stakingV2}
+	tbl[DELEGATERESOURCE] = &operation{execute: opDelegateResource, energyCost: EnergyDelegateResource,
+		minStack: 3, maxStack: 1022, writes: true, enabledFn: stakingV2}
+	tbl[UNDELEGATERESOURCE] = &operation{execute: opUnDelegateResource, energyCost: EnergyUnDelegateResource,
+		minStack: 3, maxStack: 1022, writes: true, enabledFn: stakingV2}
+
 	return tbl
 }

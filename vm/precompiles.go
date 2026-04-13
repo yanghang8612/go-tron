@@ -7,10 +7,10 @@ import (
 )
 
 // PrecompiledContract is the interface for precompiled contracts.
-// Run is called with the EVM context, caller address, input bytes, and available energy.
+// Run is called with the TVM context, caller address, input bytes, and available energy.
 // Returns (output, energyConsumed, error). On ErrOutOfEnergy, energyConsumed == energy.
 type PrecompiledContract interface {
-	Run(evm *EVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error)
+	Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error)
 }
 
 // addrFromUint constructs a TRON precompile address from a uint64 discriminant.
@@ -34,7 +34,7 @@ func addrFromUint(n uint64) tcommon.Address {
 // configuration, or nil if addr is not a precompile (or its fork gate is inactive).
 func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	switch addr {
-	// ── Standard EVM precompiles (always active) ─────────────────────────
+	// ── Standard TVM precompiles (always active) ─────────────────────────
 	case addrFromUint(0x01):
 		return &ecRecover{}
 	case addrFromUint(0x02):
@@ -141,7 +141,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 			return &totalAcquiredResource{}
 		}
 
-	// ── EVM compatibility precompiles (AllowTvmCompatibility) ────────────
+	// ── TVM compatibility precompiles (AllowTvmCompatibility) ────────────
 	case addrFromUint(0x020003):
 		if cfg.Compatibility {
 			return &ethRipemd160{}

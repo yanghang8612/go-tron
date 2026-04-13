@@ -1,31 +1,32 @@
 package vm
 
-// Energy cost tiers (Constantinople schedule).
+// Energy cost tiers — aligned with java-tron EnergyCost.java.
 const (
 	EnergyZero         uint64 = 0
-	EnergyBase         uint64 = 2
-	EnergyVeryLow      uint64 = 3
-	EnergyLow          uint64 = 5
-	EnergyMid          uint64 = 8
-	EnergyHigh         uint64 = 10
+	EnergyBase         uint64 = 2  // BASE_TIER
+	EnergyVeryLow      uint64 = 3  // VERY_LOW_TIER
+	EnergyLow          uint64 = 5  // LOW_TIER
+	EnergyMid          uint64 = 8  // MID_TIER
+	EnergyHigh         uint64 = 10 // HIGH_TIER
+	EnergyExt          uint64 = 20 // EXT_TIER (BALANCE, EXTCODESIZE, etc.)
 	EnergySHA3         uint64 = 30
 	EnergySHA3Word     uint64 = 6
-	EnergySload        uint64 = 200
+	EnergySload        uint64 = 50    // java-tron: SLOAD = 50
 	EnergySstoreSet    uint64 = 20000
 	EnergySstoreReset  uint64 = 5000
 	EnergySstoreRefund uint64 = 15000
 	EnergyJumpDest     uint64 = 1
 	EnergyExp          uint64 = 10
-	EnergyExpByte      uint64 = 50
+	EnergyExpByte      uint64 = 10    // java-tron: EXP_BYTE_ENERGY = 10
 	EnergyCopy         uint64 = 3
-	EnergyCall         uint64 = 700
-	EnergyCallNewAcct  uint64 = 25000
-	EnergyCallValueTx  uint64 = 9000
-	EnergyCallStipend  uint64 = 2300
+	EnergyCall         uint64 = 40    // java-tron: CALL_ENERGY = 40
+	EnergyCallNewAcct  uint64 = 25000 // java-tron: NEW_ACCT_CALL = 25000
+	EnergyCallValueTx  uint64 = 9000  // java-tron: VT_CALL = 9000
+	EnergyCallStipend  uint64 = 2300  // java-tron: STIPEND_CALL = 2300
 	EnergyCreate       uint64 = 32000
-	EnergyBalance      uint64 = 400
-	EnergyExtCodeSize  uint64 = 700
-	EnergyExtCodeCopy  uint64 = 700
+	EnergyBalance      uint64 = 20  // java-tron: BALANCE = EXT_TIER = 20
+	EnergyExtCodeSize  uint64 = 20  // java-tron: EXT_TIER = 20
+	EnergyExtCodeCopy  uint64 = 20  // java-tron: EXT_TIER = 20 (base; +per-word)
 	EnergyExtCodeHash  uint64 = 400
 	EnergyLog          uint64 = 375
 	EnergyLogTopic     uint64 = 375
@@ -35,6 +36,23 @@ const (
 	EnergyMemory       uint64 = 3
 	EnergyBlockHash    uint64 = 20
 	EnergySelfBalance  uint64 = 5
+
+	// TRON-specific staking / governance opcode costs (java-tron EnergyCost.java)
+	EnergyFreeze                uint64 = 20000
+	EnergyUnfreeze              uint64 = 20000
+	EnergyFreezeExpireTime      uint64 = 50
+	EnergyFreezeV2              uint64 = 10000
+	EnergyUnfreezeV2            uint64 = 10000
+	EnergyWithdrawExpireUnfreeze uint64 = 10000
+	EnergyCancelAllUnfreezeV2   uint64 = 10000
+	EnergyDelegateResource      uint64 = 10000
+	EnergyUnDelegateResource    uint64 = 10000
+	EnergyVoteWitness           uint64 = 30000
+	EnergyWithdrawReward        uint64 = 20000
+	EnergyIsContract            uint64 = 100 // checking code existence
+	EnergyTokenBalance          uint64 = 20  // same as BALANCE
+	EnergyTLoad                 uint64 = 100 // EIP-1153 transient storage
+	EnergyTStore                uint64 = 100
 )
 
 // maxCodeSize is the maximum contract code size (24KB, EIP-170).

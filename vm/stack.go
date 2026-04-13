@@ -4,7 +4,7 @@ import "github.com/holiman/uint256"
 
 const stackLimit = 1024
 
-// Stack is the EVM operand stack.
+// Stack is the TVM operand stack.
 type Stack struct {
 	data []uint256.Int
 }

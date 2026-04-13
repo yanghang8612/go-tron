@@ -428,6 +428,50 @@ func (s *StateDB) AddUnfreezeV2(addr tcommon.Address, resourceType corepb.Resour
 	obj.markDirty()
 }
 
+// GetFreezeV1ExpireTime returns the expire time (ms) of the V1 frozen balance
+// for the given resource type (0=BANDWIDTH, 1=ENERGY).
+func (s *StateDB) GetFreezeV1ExpireTime(addr tcommon.Address, resourceType int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	switch resourceType {
+	case 0: // BANDWIDTH: max expire time across Frozen list
+		var maxExpire int64
+		for _, f := range obj.account.FrozenBandwidthList() {
+			if f.ExpireTime > maxExpire {
+				maxExpire = f.ExpireTime
+			}
+		}
+		return maxExpire
+	case 1: // ENERGY
+		return obj.account.FrozenEnergyExpireTime()
+	}
+	return 0
+}
+
+// CancelAllUnfreezeV2 moves all pending V2 unfreeze entries back to frozen
+// and returns the total amount cancelled.
+func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	entries := obj.account.UnfrozenV2()
+	if len(entries) == 0 {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	var total int64
+	for _, u := range entries {
+		total += u.UnfreezeAmount
+		obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+	}
+	obj.account.ClearUnfrozenV2()
+	obj.markDirty()
+	return total
+}
+
 // UnfreezeV2Count returns the number of pending unfreeze entries.
 func (s *StateDB) UnfreezeV2Count(addr tcommon.Address) int {
 	obj := s.getStateObject(addr)

@@ -275,14 +275,14 @@ func opAddress(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 func opBalance(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
-	balance := interpreter.evm.StateDB.GetBalance(address)
+	balance := interpreter.tvm.StateDB.GetBalance(address)
 	addr.SetUint64(uint64(balance))
 	return nil, nil
 }
 
 func opOrigin(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	var v uint256.Int
-	v.SetBytes(interpreter.evm.Origin[:])
+	v.SetBytes(interpreter.tvm.Origin[:])
 	stack.push(&v)
 	return nil, nil
 }
@@ -361,7 +361,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 func opExtCodeSize(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
-	size := interpreter.evm.StateDB.GetCodeSize(address)
+	size := interpreter.tvm.StateDB.GetCodeSize(address)
 	addr.SetUint64(uint64(size))
 	return nil, nil
 }
@@ -379,7 +379,7 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(memOffset.Uint64() + size)
-	code := interpreter.evm.StateDB.GetCode(address)
+	code := interpreter.tvm.StateDB.GetCode(address)
 	data := getDataSlice(code, codeOffset.Uint64(), size)
 	memory.set(memOffset.Uint64(), size, data)
 	return nil, nil
@@ -414,10 +414,10 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	addr := stack.peek()
 	address := uint256ToAddress(addr)
-	if !interpreter.evm.StateDB.Exist(address) {
+	if !interpreter.tvm.StateDB.Exist(address) {
 		addr.Clear()
 	} else {
-		hash := interpreter.evm.StateDB.GetCodeHash(address)
+		hash := interpreter.tvm.StateDB.GetCodeHash(address)
 		addr.SetBytes(hash.Bytes())
 	}
 	return nil, nil
@@ -438,19 +438,19 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 
 func opCoinbase(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	var v uint256.Int
-	v.SetBytes(interpreter.evm.Coinbase[:])
+	v.SetBytes(interpreter.tvm.Coinbase[:])
 	stack.push(&v)
 	return nil, nil
 }
 
 func opTimestamp(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := uint256.NewInt(uint64(interpreter.evm.Timestamp))
+	v := uint256.NewInt(uint64(interpreter.tvm.Timestamp))
 	stack.push(v)
 	return nil, nil
 }
 
 func opNumber(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := uint256.NewInt(interpreter.evm.BlockNumber)
+	v := uint256.NewInt(interpreter.tvm.BlockNumber)
 	stack.push(v)
 	return nil, nil
 }
@@ -461,18 +461,18 @@ func opDifficulty(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 }
 
 func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(uint64(interpreter.evm.StateDB.DynamicProperties().TotalEnergyCurrentLimit())))
+	stack.push(uint256.NewInt(uint64(interpreter.tvm.StateDB.DynamicProperties().TotalEnergyCurrentLimit())))
 	return nil, nil
 }
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := uint256.NewInt(uint64(interpreter.evm.ChainID))
+	v := uint256.NewInt(uint64(interpreter.tvm.ChainID))
 	stack.push(v)
 	return nil, nil
 }
 
 func opSelfBalance(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	balance := interpreter.evm.StateDB.GetBalance(contract.Address)
+	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
 	stack.push(uint256.NewInt(uint64(balance)))
 	return nil, nil
 }
@@ -541,7 +541,7 @@ func opSload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	var k tcommon.Hash
 	b := key.Bytes32()
 	copy(k[:], b[:])
-	val := interpreter.evm.StateDB.GetState(contract.Address, k)
+	val := interpreter.tvm.StateDB.GetState(contract.Address, k)
 	key.SetBytes(val.Bytes())
 	return nil, nil
 }
@@ -554,7 +554,7 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	copy(k[:], kb[:])
 	copy(v[:], vb[:])
 
-	current := interpreter.evm.StateDB.GetState(contract.Address, k)
+	current := interpreter.tvm.StateDB.GetState(contract.Address, k)
 	var cost uint64
 	if current == (tcommon.Hash{}) && v != (tcommon.Hash{}) {
 		cost = EnergySstoreSet
@@ -565,7 +565,7 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		return nil, ErrOutOfEnergy
 	}
 
-	interpreter.evm.StateDB.SetState(contract.Address, k, v)
+	interpreter.tvm.StateDB.SetState(contract.Address, k, v)
 	return nil, nil
 }
 
@@ -641,7 +641,7 @@ func makeLog(topicCount int) executionFunc {
 
 		data := memory.getCopy(int64(offset.Uint64()), int64(sz))
 
-		interpreter.evm.Logs = append(interpreter.evm.Logs, Log{
+		interpreter.tvm.Logs = append(interpreter.tvm.Logs, Log{
 			Address: contract.Address,
 			Topics:  topics,
 			Data:    data,
@@ -686,19 +686,19 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	address := uint256ToAddress(&beneficiary)
 
 	cost := uint64(EnergySelfDestruct)
-	if !interpreter.evm.StateDB.Exist(address) {
+	if !interpreter.tvm.StateDB.Exist(address) {
 		cost += EnergyCallNewAcct
 	}
 	if !contract.UseEnergy(cost) {
 		return nil, ErrOutOfEnergy
 	}
 
-	balance := interpreter.evm.StateDB.GetBalance(contract.Address)
+	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
 	if balance > 0 {
-		interpreter.evm.StateDB.AddBalance(address, balance)
-		interpreter.evm.StateDB.SubBalance(contract.Address, balance)
+		interpreter.tvm.StateDB.AddBalance(address, balance)
+		interpreter.tvm.StateDB.SubBalance(contract.Address, balance)
 	}
-	interpreter.evm.StateDB.SelfDestruct(contract.Address)
+	interpreter.tvm.StateDB.SelfDestruct(contract.Address)
 	return nil, nil
 }
 

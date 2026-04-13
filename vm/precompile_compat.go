@@ -16,7 +16,7 @@ import (
 
 type ethRipemd160 struct{}
 
-func (c *ethRipemd160) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *ethRipemd160) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := 600 + 120*toWordSize(uint64(len(input)))
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -49,7 +49,7 @@ var (
 
 type blake2F struct{}
 
-func (c *blake2F) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *blake2F) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	if len(input) != blake2FInputLen {
 		return nil, energy, errBlake2FBadLength
 	}

@@ -11,6 +11,10 @@ type Contract struct {
 	CodeAddr tcommon.Address // code source address (differs for DELEGATECALL)
 	Input    []byte          // calldata
 
+	// TRC-10 token transfer (for CALLTOKEN opcode)
+	TokenID    int64 // TRC-10 token ID (0 = none)
+	TokenValue int64 // TRC-10 token amount
+
 	Energy     uint64 // remaining energy
 	EnergyUsed uint64 // energy consumed so far
 

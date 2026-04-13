@@ -7,7 +7,7 @@ import (
 )
 
 func TestLogSnapshotRevert(t *testing.T) {
-	evm := &EVM{}
+	evm := &TVM{}
 
 	evm.Logs = append(evm.Logs, Log{
 		Address: tcommon.Address{0x41, 0x01},

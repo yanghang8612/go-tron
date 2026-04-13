@@ -6,7 +6,7 @@ import (
 )
 
 // TVMConfig holds per-transaction fork flags for the TVM interpreter.
-// Computed once in VMActuator before constructing the EVM.
+// Computed once in VMActuator before constructing the TVM.
 type TVMConfig struct {
 	TransferTrc10  bool // allow_tvm_transfer_trc10
 	Constantinople bool // allow_tvm_constantinople: CREATE2, EXTCODEHASH, SHL/SHR/SAR

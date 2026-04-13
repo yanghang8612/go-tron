@@ -8,9 +8,9 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
-// nullEVM is a minimal EVM suitable for testing precompiles that don't need state.
-func nullEVM() *EVM {
-	return &EVM{}
+// nullEVM is a minimal TVM suitable for testing precompiles that don't need state.
+func nullEVM() *TVM {
+	return &TVM{}
 }
 
 var zeroCaller tcommon.Address
@@ -127,7 +127,7 @@ func TestAddrFromUint(t *testing.T) {
 		t.Fatalf("tron system addr mismatch: %x", addr2[:])
 	}
 
-	// EVM compat Blake2F at 0x020009
+	// TVM compat Blake2F at 0x020009
 	addr3 := addrFromUint(0x020009)
 	if addr3[18] != 0x02 || addr3[19] != 0x00 || addr3[20] != 0x09 {
 		t.Fatalf("compat addr mismatch: %x", addr3[:])

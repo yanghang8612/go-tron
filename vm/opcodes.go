@@ -1,6 +1,6 @@
 package vm
 
-// OpCode is a single byte EVM opcode.
+// OpCode is a single byte TVM opcode.
 type OpCode byte
 
 func (op OpCode) String() string {
@@ -96,6 +96,8 @@ const (
 	MSIZE    OpCode = 0x59
 	GAS      OpCode = 0x5A
 	JUMPDEST OpCode = 0x5B
+	TLOAD    OpCode = 0x5C // EIP-1153 transient storage load  (allow_tvm_cancun)
+	TSTORE   OpCode = 0x5D // EIP-1153 transient storage store (allow_tvm_cancun)
 )
 
 // 0x5f range - push
@@ -184,6 +186,26 @@ const (
 	LOG4 OpCode = 0xA4
 )
 
+// 0xd0 range - TRON extensions (Op.java)
+const (
+	CALLTOKEN              OpCode = 0xD0 // TRC-10 token call       (allow_tvm_transfer_trc10)
+	TOKENBALANCE           OpCode = 0xD1 // TRC-10 balance query    (allow_tvm_transfer_trc10)
+	CALLTOKENVALUE         OpCode = 0xD2 // incoming token value    (allow_tvm_transfer_trc10)
+	CALLTOKENID            OpCode = 0xD3 // incoming token ID       (allow_tvm_transfer_trc10)
+	ISCONTRACT             OpCode = 0xD4 // is address a contract   (allow_tvm_solidity059)
+	FREEZE                 OpCode = 0xD5 // freeze TRX (V1)         (allow_tvm_freeze)
+	UNFREEZE               OpCode = 0xD6 // unfreeze TRX (V1)       (allow_tvm_freeze)
+	FREEZEEXPIRETIME       OpCode = 0xD7 // V1 freeze expire time   (allow_tvm_freeze)
+	VOTEWITNESS            OpCode = 0xD8 // vote for SR             (allow_tvm_vote)
+	WITHDRAWREWARD         OpCode = 0xD9 // withdraw voting reward  (allow_tvm_vote)
+	FREEZEBALANCEV2        OpCode = 0xDA // stake V2                (allow_staking_v2)
+	UNFREEZEBALANCEV2      OpCode = 0xDB // unstake V2              (allow_staking_v2)
+	CANCELALLUNFREEZEV2    OpCode = 0xDC // cancel all V2 unstakes  (allow_staking_v2)
+	WITHDRAWEXPIREUNFREEZE OpCode = 0xDD // withdraw expired V2     (allow_staking_v2)
+	DELEGATERESOURCE       OpCode = 0xDE // delegate resource       (allow_staking_v2)
+	UNDELEGATERESOURCE     OpCode = 0xDF // undelegate resource     (allow_staking_v2)
+)
+
 // 0xf0 range - system
 const (
 	CREATE       OpCode = 0xF0
@@ -217,6 +239,7 @@ var opCodeNames = map[OpCode]string{
 	POP: "POP", MLOAD: "MLOAD", MSTORE: "MSTORE", MSTORE8: "MSTORE8",
 	SLOAD: "SLOAD", SSTORE: "SSTORE", JUMP: "JUMP", JUMPI: "JUMPI",
 	PC: "PC", MSIZE: "MSIZE", GAS: "GAS", JUMPDEST: "JUMPDEST",
+	TLOAD: "TLOAD", TSTORE: "TSTORE",
 	PUSH0: "PUSH0",
 	PUSH1: "PUSH1", PUSH2: "PUSH2", PUSH3: "PUSH3", PUSH4: "PUSH4",
 	PUSH5: "PUSH5", PUSH6: "PUSH6", PUSH7: "PUSH7", PUSH8: "PUSH8",
@@ -238,4 +261,13 @@ var opCodeNames = map[OpCode]string{
 	CREATE: "CREATE", CALL: "CALL", CALLCODE: "CALLCODE",
 	RETURN: "RETURN", DELEGATECALL: "DELEGATECALL", CREATE2: "CREATE2",
 	STATICCALL: "STATICCALL", REVERT: "REVERT", SELFDESTRUCT: "SELFDESTRUCT",
+	// TRON extensions
+	CALLTOKEN: "CALLTOKEN", TOKENBALANCE: "TOKENBALANCE",
+	CALLTOKENVALUE: "CALLTOKENVALUE", CALLTOKENID: "CALLTOKENID",
+	ISCONTRACT: "ISCONTRACT",
+	FREEZE: "FREEZE", UNFREEZE: "UNFREEZE", FREEZEEXPIRETIME: "FREEZEEXPIRETIME",
+	VOTEWITNESS: "VOTEWITNESS", WITHDRAWREWARD: "WITHDRAWREWARD",
+	FREEZEBALANCEV2: "FREEZEBALANCEV2", UNFREEZEBALANCEV2: "UNFREEZEBALANCEV2",
+	CANCELALLUNFREEZEV2: "CANCELALLUNFREEZEV2", WITHDRAWEXPIREUNFREEZE: "WITHDRAWEXPIREUNFREEZE",
+	DELEGATERESOURCE: "DELEGATERESOURCE", UNDELEGATERESOURCE: "UNDELEGATERESOURCE",
 }

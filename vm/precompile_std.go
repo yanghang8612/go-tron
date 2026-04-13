@@ -15,7 +15,7 @@ import (
 
 type ecRecover struct{}
 
-func (c *ecRecover) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *ecRecover) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 3000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -60,7 +60,7 @@ func (c *ecRecover) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) 
 
 type sha256hash struct{}
 
-func (c *sha256hash) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *sha256hash) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := 60 + 12*toWordSize(uint64(len(input)))
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -76,7 +76,7 @@ func (c *sha256hash) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64)
 
 type tronRipemd160 struct{}
 
-func (c *tronRipemd160) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *tronRipemd160) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := 600 + 120*toWordSize(uint64(len(input)))
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -92,7 +92,7 @@ func (c *tronRipemd160) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint
 
 type dataCopy struct{}
 
-func (c *dataCopy) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *dataCopy) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := 15 + 3*toWordSize(uint64(len(input)))
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -110,7 +110,7 @@ type bigModExp struct {
 	istanbul bool
 }
 
-func (c *bigModExp) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	var (
 		baseLen = new(big.Int).SetBytes(getInput(input, 0, 32)).Uint64()
 		expLen  = new(big.Int).SetBytes(getInput(input, 32, 32)).Uint64()
@@ -225,7 +225,7 @@ type bn128Add struct {
 	istanbul bool
 }
 
-func (c *bn128Add) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *bn128Add) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := uint64(500)
 	if c.istanbul {
 		cost = 150
@@ -260,7 +260,7 @@ type bn128Mul struct {
 	istanbul bool
 }
 
-func (c *bn128Mul) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *bn128Mul) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	cost := uint64(40000)
 	if c.istanbul {
 		cost = 6000
@@ -294,7 +294,7 @@ type bn128Pairing struct {
 	istanbul bool
 }
 
-func (c *bn128Pairing) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *bn128Pairing) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	var cost uint64
 	pairs := uint64(0)
 	if len(input) > 0 {

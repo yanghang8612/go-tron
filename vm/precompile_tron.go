@@ -102,7 +102,7 @@ func parseAddressArray(data []byte, byteOffset int) []tcommon.Address {
 
 type batchValidateSign struct{}
 
-func (c *batchValidateSign) Run(_ *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *batchValidateSign) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	// Energy: 1500 per signature (ceil of full count from input length).
 	// Formula: (words-5)/6 signatures, each costs 1500.
 	words := len(input) / 32
@@ -152,7 +152,7 @@ func (c *batchValidateSign) execute(input []byte) []byte {
 
 type validateMultiSign struct{}
 
-func (c *validateMultiSign) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *validateMultiSign) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	words := len(input) / 32
 	sigCount := 0
 	if words > 5 {
@@ -163,11 +163,11 @@ func (c *validateMultiSign) Run(evm *EVM, _ tcommon.Address, input []byte, energ
 		return nil, energy, ErrOutOfEnergy
 	}
 
-	ret := c.execute(evm, input)
+	ret := c.execute(tvm, input)
 	return ret, cost, nil
 }
 
-func (c *validateMultiSign) execute(evm *EVM, input []byte) []byte {
+func (c *validateMultiSign) execute(tvm *TVM, input []byte) []byte {
 	falseResult := make([]byte, 32)
 	trueResult := make([]byte, 32)
 	trueResult[31] = 1
@@ -200,7 +200,7 @@ func (c *validateMultiSign) execute(evm *EVM, input []byte) []byte {
 		return falseResult
 	}
 
-	acc := evm.StateDB.GetAccount(ownerAddr)
+	acc := tvm.StateDB.GetAccount(ownerAddr)
 	if acc == nil {
 		return falseResult
 	}
@@ -267,7 +267,7 @@ var errShieldedNotImplemented = errors.New("shielded token precompiles not imple
 
 type shieldedStub struct{}
 
-func (c *shieldedStub) Run(_ *EVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
+func (c *shieldedStub) Run(_ *TVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
 	// Energy cost: most expensive shielded op is VerifyTransferProof (200000).
 	// Use 200000 as a safe upper bound for any shielded stub.
 	const cost = 200000
@@ -281,7 +281,7 @@ func (c *shieldedStub) Run(_ *EVM, _ tcommon.Address, _ []byte, energy uint64) (
 
 type rewardBalance struct{}
 
-func (c *rewardBalance) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *rewardBalance) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 20
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -290,7 +290,7 @@ func (c *rewardBalance) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input)
-	bal := evm.StateDB.GetAllowance(addr)
+	bal := tvm.StateDB.GetAllowance(addr)
 	return int64ToBytes32(bal), cost, nil
 }
 
@@ -298,7 +298,7 @@ func (c *rewardBalance) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 
 type isSrCandidate struct{}
 
-func (c *isSrCandidate) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *isSrCandidate) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 20
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -308,7 +308,7 @@ func (c *isSrCandidate) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 	}
 	addr := tronAddrFromWord(input)
 	result := make([]byte, 32)
-	if evm.StateDB.GetWitness(addr) != nil {
+	if tvm.StateDB.GetWitness(addr) != nil {
 		result[31] = 1
 	}
 	return result, cost, nil
@@ -318,7 +318,7 @@ func (c *isSrCandidate) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 
 type voteCount struct{}
 
-func (c *voteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *voteCount) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 500
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -330,7 +330,7 @@ func (c *voteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64
 	srAddr := tronAddrFromWord(input[32:64])
 
 	var count int64
-	for _, vote := range evm.StateDB.GetVotes(ownerAddr) {
+	for _, vote := range tvm.StateDB.GetVotes(ownerAddr) {
 		if tcommon.BytesToAddress(vote.GetVoteAddress()) == srAddr {
 			count += vote.GetVoteCount()
 		}
@@ -342,7 +342,7 @@ func (c *voteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64
 
 type usedVoteCount struct{}
 
-func (c *usedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *usedVoteCount) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 20
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -352,7 +352,7 @@ func (c *usedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 	}
 	addr := tronAddrFromWord(input)
 	var total int64
-	for _, vote := range evm.StateDB.GetVotes(addr) {
+	for _, vote := range tvm.StateDB.GetVotes(addr) {
 		total += vote.GetVoteCount()
 	}
 	return int64ToBytes32(total), cost, nil
@@ -362,7 +362,7 @@ func (c *usedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 
 type receivedVoteCount struct{}
 
-func (c *receivedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *receivedVoteCount) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 20
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -372,7 +372,7 @@ func (c *receivedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energ
 	}
 	addr := tronAddrFromWord(input)
 	var count int64
-	if w := evm.StateDB.GetWitness(addr); w != nil {
+	if w := tvm.StateDB.GetWitness(addr); w != nil {
 		count = w.VoteCount()
 	}
 	return int64ToBytes32(count), cost, nil
@@ -382,7 +382,7 @@ func (c *receivedVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energ
 
 type totalVoteCount struct{}
 
-func (c *totalVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *totalVoteCount) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 20
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -392,7 +392,7 @@ func (c *totalVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy u
 	}
 	addr := tronAddrFromWord(input)
 	// Tron Power = total frozen V2 / TRX_PRECISION (1 TP per 1 TRX frozen)
-	tp := evm.StateDB.TotalFrozenV2(addr) / trxPrecision
+	tp := tvm.StateDB.TotalFrozenV2(addr) / trxPrecision
 	return int64ToBytes32(tp), cost, nil
 }
 
@@ -400,7 +400,7 @@ func (c *totalVoteCount) Run(evm *EVM, _ tcommon.Address, input []byte, energy u
 
 type getChainParameter struct{}
 
-func (c *getChainParameter) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *getChainParameter) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -409,7 +409,7 @@ func (c *getChainParameter) Run(evm *EVM, _ tcommon.Address, input []byte, energ
 		return make([]byte, 32), cost, nil
 	}
 	code := parseInt64FromWord(input, 0)
-	dp := evm.StateDB.DynamicProperties()
+	dp := tvm.StateDB.DynamicProperties()
 	var val int64
 	switch code {
 	case 1: // TOTAL_NET_LIMIT
@@ -430,7 +430,7 @@ const maxUnfreezeV2 = 32
 
 type availableUnfreezeV2Size struct{}
 
-func (c *availableUnfreezeV2Size) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *availableUnfreezeV2Size) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -439,7 +439,7 @@ func (c *availableUnfreezeV2Size) Run(evm *EVM, _ tcommon.Address, input []byte,
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input)
-	used := evm.StateDB.UnfreezeV2Count(addr)
+	used := tvm.StateDB.UnfreezeV2Count(addr)
 	available := int64(maxUnfreezeV2 - used)
 	if available < 0 {
 		available = 0
@@ -451,7 +451,7 @@ func (c *availableUnfreezeV2Size) Run(evm *EVM, _ tcommon.Address, input []byte,
 
 type unfreezableBalanceV2 struct{}
 
-func (c *unfreezableBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *unfreezableBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -461,7 +461,7 @@ func (c *unfreezableBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte, en
 	}
 	addr := tronAddrFromWord(input[0:32])
 	resType := resourceCodeFromInt(parseInt64FromWord(input, 32))
-	bal := evm.StateDB.GetFrozenV2Amount(addr, resType)
+	bal := tvm.StateDB.GetFrozenV2Amount(addr, resType)
 	return int64ToBytes32(bal), cost, nil
 }
 
@@ -469,7 +469,7 @@ func (c *unfreezableBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte, en
 
 type expireUnfreezeBalanceV2 struct{}
 
-func (c *expireUnfreezeBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *expireUnfreezeBalanceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -490,7 +490,7 @@ func (c *expireUnfreezeBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte,
 		timeMs = timeSec * 1000
 	}
 
-	acc := evm.StateDB.GetAccount(addr)
+	acc := tvm.StateDB.GetAccount(addr)
 	if acc == nil {
 		return make([]byte, 32), cost, nil
 	}
@@ -508,7 +508,7 @@ func (c *expireUnfreezeBalanceV2) Run(evm *EVM, _ tcommon.Address, input []byte,
 
 type delegatableResource struct{}
 
-func (c *delegatableResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *delegatableResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -519,8 +519,8 @@ func (c *delegatableResource) Run(evm *EVM, _ tcommon.Address, input []byte, ene
 	addr := tronAddrFromWord(input[0:32])
 	resType := resourceCodeFromInt(parseInt64FromWord(input, 32))
 
-	frozen := evm.StateDB.GetFrozenV2Amount(addr, resType)
-	delegatedOut := delegatedFrozenV2Out(evm, addr, resType)
+	frozen := tvm.StateDB.GetFrozenV2Amount(addr, resType)
+	delegatedOut := delegatedFrozenV2Out(tvm, addr, resType)
 	result := frozen - delegatedOut
 	if result < 0 {
 		result = 0
@@ -532,7 +532,7 @@ func (c *delegatableResource) Run(evm *EVM, _ tcommon.Address, input []byte, ene
 
 type resourceV2 struct{}
 
-func (c *resourceV2) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *resourceV2) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -547,7 +547,7 @@ func (c *resourceV2) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint6
 	var balance int64
 	if from == target {
 		// Same account: return unfrozen balance for this type
-		balance = evm.StateDB.GetFrozenV2Amount(from, resType)
+		balance = tvm.StateDB.GetFrozenV2Amount(from, resType)
 	} else {
 		// Cross-account delegation: we don't track per-pair delegation records.
 		// Return 0 — callers that need this data should use on-chain stores.
@@ -560,7 +560,7 @@ func (c *resourceV2) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint6
 
 type checkUnDelegateResource struct{}
 
-func (c *checkUnDelegateResource) Run(_ *EVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
+func (c *checkUnDelegateResource) Run(_ *TVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -573,7 +573,7 @@ func (c *checkUnDelegateResource) Run(_ *EVM, _ tcommon.Address, _ []byte, energ
 
 type resourceUsage struct{}
 
-func (c *resourceUsage) Run(_ *EVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
+func (c *resourceUsage) Run(_ *TVM, _ tcommon.Address, _ []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -586,7 +586,7 @@ func (c *resourceUsage) Run(_ *EVM, _ tcommon.Address, _ []byte, energy uint64) 
 
 type totalResource struct{}
 
-func (c *totalResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *totalResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -598,8 +598,8 @@ func (c *totalResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 	resType := resourceCodeFromInt(parseInt64FromWord(input, 32))
 
 	// Total = own frozen + acquired delegations
-	frozen := evm.StateDB.GetFrozenV2Amount(addr, resType)
-	acquired := acquiredDelegatedV2(evm, addr, resType)
+	frozen := tvm.StateDB.GetFrozenV2Amount(addr, resType)
+	acquired := acquiredDelegatedV2(tvm, addr, resType)
 	return int64ToBytes32(frozen + acquired), cost, nil
 }
 
@@ -607,7 +607,7 @@ func (c *totalResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy ui
 
 type totalDelegatedResource struct{}
 
-func (c *totalDelegatedResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *totalDelegatedResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -617,14 +617,14 @@ func (c *totalDelegatedResource) Run(evm *EVM, _ tcommon.Address, input []byte, 
 	}
 	addr := tronAddrFromWord(input[0:32])
 	resType := resourceCodeFromInt(parseInt64FromWord(input, 32))
-	return int64ToBytes32(delegatedFrozenV2Out(evm, addr, resType)), cost, nil
+	return int64ToBytes32(delegatedFrozenV2Out(tvm, addr, resType)), cost, nil
 }
 
 // ── 0x01000015 TotalAcquiredResource ─────────────────────────────────────────
 
 type totalAcquiredResource struct{}
 
-func (c *totalAcquiredResource) Run(evm *EVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *totalAcquiredResource) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 50
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -634,7 +634,7 @@ func (c *totalAcquiredResource) Run(evm *EVM, _ tcommon.Address, input []byte, e
 	}
 	addr := tronAddrFromWord(input[0:32])
 	resType := resourceCodeFromInt(parseInt64FromWord(input, 32))
-	return int64ToBytes32(acquiredDelegatedV2(evm, addr, resType)), cost, nil
+	return int64ToBytes32(acquiredDelegatedV2(tvm, addr, resType)), cost, nil
 }
 
 // ── Resource helpers ──────────────────────────────────────────────────────────
@@ -651,8 +651,8 @@ func resourceCodeFromInt(v int64) corepb.ResourceCode {
 }
 
 // delegatedFrozenV2Out returns how much of resType the account has delegated out.
-func delegatedFrozenV2Out(evm *EVM, addr tcommon.Address, resType corepb.ResourceCode) int64 {
-	acc := evm.StateDB.GetAccount(addr)
+func delegatedFrozenV2Out(tvm *TVM, addr tcommon.Address, resType corepb.ResourceCode) int64 {
+	acc := tvm.StateDB.GetAccount(addr)
 	if acc == nil {
 		return 0
 	}
@@ -666,8 +666,8 @@ func delegatedFrozenV2Out(evm *EVM, addr tcommon.Address, resType corepb.Resourc
 }
 
 // acquiredDelegatedV2 returns how much of resType others have delegated to addr.
-func acquiredDelegatedV2(evm *EVM, addr tcommon.Address, resType corepb.ResourceCode) int64 {
-	acc := evm.StateDB.GetAccount(addr)
+func acquiredDelegatedV2(tvm *TVM, addr tcommon.Address, resType corepb.ResourceCode) int64 {
+	acc := tvm.StateDB.GetAccount(addr)
 	if acc == nil {
 		return 0
 	}

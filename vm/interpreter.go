@@ -4,21 +4,23 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// Interpreter executes EVM bytecode.
+// Interpreter executes TVM bytecode.
 type Interpreter struct {
-	evm        *EVM
+	tvm        *TVM
 	table      JumpTable
 	readOnly   bool   // static call mode
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
+	transient  map[uint256.Int]uint256.Int // transient storage for TLOAD/TSTORE (EIP-1153)
 }
 
 // NewInterpreter creates a new interpreter.
-func NewInterpreter(evm *EVM, cfg TVMConfig) *Interpreter {
+func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 	return &Interpreter{
-		evm:       evm,
+		tvm:       tvm,
 		table:     newJumpTable(),
 		tvmConfig: cfg,
+		transient: make(map[uint256.Int]uint256.Int),
 	}
 }
 
