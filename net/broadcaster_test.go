@@ -28,10 +28,14 @@ func TestBroadcastBlockSendsInventory(t *testing.T) {
 	peer.Start()
 	defer peer.Stop()
 
-	// Read messages from the other end
+	// Read messages from the other end (post-handshake: CompressMessage-wrapped)
 	go func() {
 		for {
-			code, _, err := p2p.ReadMsg(c2)
+			body, err := p2p.ReadFrameBody(c2)
+			if err != nil {
+				return
+			}
+			code, _, err := p2p.UnwrapPostHandshake(body)
 			if err != nil {
 				return
 			}
@@ -74,7 +78,11 @@ func TestBroadcastDeduplicates(t *testing.T) {
 
 	go func() {
 		for {
-			code, _, err := p2p.ReadMsg(c2)
+			body, err := p2p.ReadFrameBody(c2)
+			if err != nil {
+				return
+			}
+			code, _, err := p2p.UnwrapPostHandshake(body)
 			if err != nil {
 				return
 			}
