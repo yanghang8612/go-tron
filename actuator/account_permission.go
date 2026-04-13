@@ -9,8 +9,6 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-const maxPermissionKeys = 5
-
 type AccountPermissionUpdateActuator struct{}
 
 func (a *AccountPermissionUpdateActuator) getContract(ctx *Context) (*contractpb.AccountPermissionUpdateContract, error) {
@@ -50,6 +48,12 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 		if err := validatePermission(c.Witness); err != nil {
 			return err
 		}
+		if len(c.Witness.Keys) != 1 {
+			return errors.New("witness permission must have exactly 1 key")
+		}
+	}
+	if len(c.Actives) > 8 {
+		return errors.New("too many active permissions (max 8)")
 	}
 	totalKeys := len(c.Owner.Keys)
 	if c.Witness != nil {
@@ -59,10 +63,18 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 		if err := validatePermission(active); err != nil {
 			return err
 		}
+		if len(active.Operations) > 0 && len(active.Operations) != 32 {
+			return errors.New("active permission operations must be exactly 32 bytes")
+		}
 		totalKeys += len(active.Keys)
 	}
-	if totalKeys > maxPermissionKeys {
-		return errors.New("too many keys across all permissions (max 5)")
+	maxKeys := int(ctx.DynProps.TotalSignNum())
+	if totalKeys > maxKeys {
+		return errors.New("too many keys across all permissions")
+	}
+	fee := ctx.DynProps.AccountPermissionUpdateFee()
+	if ctx.State.GetBalance(ownerAddr) < fee {
+		return errors.New("insufficient balance for account permission update fee")
 	}
 	return nil
 }
@@ -90,6 +102,12 @@ func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error)
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	fee := ctx.DynProps.AccountPermissionUpdateFee()
+	if fee > 0 {
+		if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
+			return nil, err
+		}
+	}
 	ctx.State.SetPermissions(ownerAddr, c.Owner, c.Witness, c.Actives)
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }

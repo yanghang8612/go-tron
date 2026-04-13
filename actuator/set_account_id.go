@@ -26,11 +26,16 @@ func (a *SetAccountIdActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	if len(c.AccountId) == 0 {
-		return errors.New("account id is empty")
+	if len(c.AccountId) < 8 {
+		return errors.New("account id too short (min 8 bytes)")
 	}
 	if len(c.AccountId) > 32 {
 		return errors.New("account id too long (max 32 bytes)")
+	}
+	for _, b := range c.AccountId {
+		if b < 0x21 || b > 0x7e {
+			return errors.New("account id must contain only printable non-space ASCII characters")
+		}
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
 	if !ctx.State.AccountExists(ownerAddr) {

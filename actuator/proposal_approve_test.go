@@ -39,6 +39,7 @@ func TestProposalApproveValidate(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
 	setupProposalForApprove(t, db, owner)
+	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
 
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -95,6 +96,7 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 		Approvals: []tcommon.Address{owner},
 	}
 	rawdb.WriteProposal(db, 0, p)
+	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
 
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err == nil {

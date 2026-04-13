@@ -32,6 +32,11 @@ func (a *AccountUpdateActuator) Validate(ctx *Context) error {
 	if len(c.AccountName) > 32 {
 		return errors.New("account name too long (max 32 bytes)")
 	}
+	for _, b := range c.AccountName {
+		if b < 0x20 || b > 0x7e {
+			return errors.New("account name must contain only printable ASCII characters")
+		}
+	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")

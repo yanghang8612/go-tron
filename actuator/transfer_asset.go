@@ -51,6 +51,11 @@ func (a *TransferAssetActuator) Validate(ctx *Context) error {
 	if ctx.State.GetTRC10Balance(from, tokenID) < c.Amount {
 		return errors.New("insufficient TRC10 balance")
 	}
+	if ctx.DynProps.ForbidTransferToContract() && ctx.State.AccountExists(to) {
+		if len(ctx.State.GetCode(to)) > 0 {
+			return errors.New("cannot transfer TRC10 to a smart contract")
+		}
+	}
 	return nil
 }
 
@@ -66,9 +71,11 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	fee := int64(0)
 	if !ctx.State.AccountExists(to) {
 		ctx.State.CreateAccount(to, corepb.AccountType_Normal)
-		fee = ctx.DynProps.CreateAccountFee()
-		if err := ctx.State.SubBalance(from, fee); err != nil {
-			return nil, err
+		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
+		if fee > 0 {
+			if err := ctx.State.SubBalance(from, fee); err != nil {
+				return nil, err
+			}
 		}
 	}
 

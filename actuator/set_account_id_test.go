@@ -12,7 +12,7 @@ func TestSetAccountIdValidate(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.SetAccountIdContract{
 		OwnerAddress: owner[:],
-		AccountId:    []byte("myid"),
+		AccountId:    []byte("myuserid"), // min 8 bytes
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_SetAccountIdContract, c, 0)
 	act := &SetAccountIdActuator{}
@@ -36,7 +36,7 @@ func TestSetAccountIdExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.SetAccountIdContract{
 		OwnerAddress: owner[:],
-		AccountId:    []byte("user123"),
+		AccountId:    []byte("user1234"), // min 8 bytes
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_SetAccountIdContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
@@ -49,7 +49,7 @@ func TestSetAccountIdExecute(t *testing.T) {
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1")
 	}
-	if ctx.State.GetAccountId(owner) != "user123" {
+	if ctx.State.GetAccountId(owner) != "user1234" {
 		t.Fatal("id not set")
 	}
 }

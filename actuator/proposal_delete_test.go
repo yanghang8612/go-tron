@@ -21,8 +21,9 @@ func TestProposalDeleteValidate(t *testing.T) {
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: owner, State: rawdb.ProposalStatePending}
+	p := &rawdb.Proposal{ID: 0, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
 	rawdb.WriteProposal(db, 0, p)
+	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
 
 	act := &ProposalDeleteActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -42,8 +43,9 @@ func TestProposalDeleteNotProposer(t *testing.T) {
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: other, State: rawdb.ProposalStatePending}
+	p := &rawdb.Proposal{ID: 0, Proposer: other, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
 	rawdb.WriteProposal(db, 0, p)
+	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
 
 	act := &ProposalDeleteActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -62,8 +64,9 @@ func TestProposalDeleteExecute(t *testing.T) {
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: owner, State: rawdb.ProposalStatePending}
+	p := &rawdb.Proposal{ID: 0, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
 	rawdb.WriteProposal(db, 0, p)
+	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
 
 	act := &ProposalDeleteActuator{}
 	result, err := act.Execute(ctx)

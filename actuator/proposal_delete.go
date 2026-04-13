@@ -34,12 +34,18 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if ctx.DB == nil {
 		return errors.New("database not available")
 	}
+	if c.ProposalId >= ctx.DynProps.NextProposalID() {
+		return errors.New("proposal not found")
+	}
 	proposal := rawdb.ReadProposal(ctx.DB, c.ProposalId)
 	if proposal == nil {
 		return errors.New("proposal not found")
 	}
 	if proposal.State != rawdb.ProposalStatePending {
 		return errors.New("proposal is not pending")
+	}
+	if ctx.BlockTime >= proposal.ExpirationTime {
+		return errors.New("proposal has expired")
 	}
 	if proposal.Proposer != ownerAddr {
 		return errors.New("only the proposer can delete the proposal")

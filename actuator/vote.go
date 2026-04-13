@@ -52,6 +52,9 @@ func (a *VoteWitnessActuator) Validate(ctx *Context) error {
 			return errors.New("vote count must be positive")
 		}
 		totalVoteCount += v.VoteCount
+		if !ctx.State.AccountExists(targetAddr) {
+			return errors.New("vote target account does not exist")
+		}
 		if ctx.State.GetWitness(targetAddr) == nil {
 			return errors.New("vote target is not a witness")
 		}

@@ -46,7 +46,8 @@ func TestVoteWitnessValidate(t *testing.T) {
 	seedAccount(statedb, owner, 0)
 	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 100*int64(params.TRXPrecision))
 
-	// Set up witness
+	// Set up witness (account must exist for vote target validation)
+	statedb.CreateAccount(witness1, corepb.AccountType_Normal)
 	statedb.PutWitness(witness1, "http://test.com")
 
 	// Too many votes
@@ -90,6 +91,7 @@ func TestVoteWitnessExecute(t *testing.T) {
 
 	seedAccount(statedb, owner, 0)
 	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 100*int64(params.TRXPrecision))
+	statedb.CreateAccount(witness1, corepb.AccountType_Normal)
 	statedb.PutWitness(witness1, "http://test.com")
 
 	votes := []*contractpb.VoteWitnessContract_Vote{

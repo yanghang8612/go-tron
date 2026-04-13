@@ -58,6 +58,10 @@ var defaultProps = map[string]int64{
 	"allow_tvm_cancun":                          0,
 	"allow_energy_adjustment":                   0,
 	"allow_tvm_solidity058":                     0,
+	"forbid_transfer_to_contract":              0,
+	"account_permission_update_fee":            100_000_000,
+	"total_sign_num":                           5,
+	"proposal_expire_time":                     259_200_000,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -523,6 +527,25 @@ func (dp *DynamicProperties) ExchangeBalanceLimit() int64 {
 func (dp *DynamicProperties) SetExchangeBalanceLimit(limit int64) {
 	dp.Set("exchange_balance_limit", limit)
 }
+
+// AccountUpgradeCost returns the fee (in SUN) to upgrade an account to witness.
+func (dp *DynamicProperties) AccountUpgradeCost() int64 { return dp.props["account_upgrade_cost"] }
+
+// ForbidTransferToContract returns true if TRX/TRC10 transfers to smart contracts are forbidden.
+func (dp *DynamicProperties) ForbidTransferToContract() bool {
+	return dp.props["forbid_transfer_to_contract"] != 0
+}
+
+// AccountPermissionUpdateFee returns the fee (in SUN) to update account permissions.
+func (dp *DynamicProperties) AccountPermissionUpdateFee() int64 {
+	return dp.props["account_permission_update_fee"]
+}
+
+// TotalSignNum returns the maximum total number of keys across all permissions.
+func (dp *DynamicProperties) TotalSignNum() int64 { return dp.props["total_sign_num"] }
+
+// ProposalExpireTime returns the proposal expiration window in milliseconds (default 3 days).
+func (dp *DynamicProperties) ProposalExpireTime() int64 { return dp.props["proposal_expire_time"] }
 
 // All returns a read-only copy of all dynamic properties.
 func (dp *DynamicProperties) All() map[string]int64 {

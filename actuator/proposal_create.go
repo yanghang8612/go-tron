@@ -8,8 +8,6 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-const proposalExpirationMs = 259200000 // 3 days in ms
-
 type ProposalCreateActuator struct{}
 
 func (a *ProposalCreateActuator) getContract(ctx *Context) (*contractpb.ProposalCreateContract, error) {
@@ -52,12 +50,25 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 	proposalID := ctx.DynProps.NextProposalID()
 	ctx.DynProps.SetNextProposalID(proposalID + 1)
 
+	// Expiration aligns to the first maintenance boundary strictly after
+	// (blockTime + proposalExpireTime), matching java-tron ProposalCreateActuator.
+	now3 := ctx.BlockTime + ctx.DynProps.ProposalExpireTime()
+	nextMaintenance := ctx.DynProps.NextMaintenanceTime()
+	interval := ctx.DynProps.MaintenanceTimeInterval()
+	var expirationTime int64
+	if interval > 0 {
+		round := (now3 - nextMaintenance) / interval
+		expirationTime = nextMaintenance + (round+1)*interval
+	} else {
+		expirationTime = now3
+	}
+
 	proposal := &rawdb.Proposal{
 		ID:             proposalID,
 		Proposer:       ownerAddr,
 		Parameters:     c.Parameters,
 		CreateTime:     ctx.BlockTime,
-		ExpirationTime: ctx.BlockTime + proposalExpirationMs,
+		ExpirationTime: expirationTime,
 		State:          rawdb.ProposalStatePending,
 	}
 

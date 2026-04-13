@@ -38,7 +38,16 @@ func (a *TransferActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ctx.State.GetBalance(ownerAddr) < tc.Amount {
+	if ctx.DynProps.ForbidTransferToContract() && ctx.State.AccountExists(toAddr) {
+		if len(ctx.State.GetCode(toAddr)) > 0 {
+			return errors.New("cannot transfer TRX to a smart contract")
+		}
+	}
+	fee := int64(0)
+	if !ctx.State.AccountExists(toAddr) {
+		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
+	}
+	if ctx.State.GetBalance(ownerAddr) < tc.Amount+fee {
 		return errors.New("insufficient balance")
 	}
 	return nil
@@ -52,12 +61,19 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 	ownerAddr := common.BytesToAddress(tc.OwnerAddress)
 	toAddr := common.BytesToAddress(tc.ToAddress)
 
+	fee := int64(0)
+	if !ctx.State.AccountExists(toAddr) {
+		ctx.State.CreateAccount(toAddr, corepb.AccountType_Normal)
+		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
+		if fee > 0 {
+			if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if err := ctx.State.SubBalance(ownerAddr, tc.Amount); err != nil {
 		return nil, err
 	}
-	if !ctx.State.AccountExists(toAddr) {
-		ctx.State.CreateAccount(toAddr, corepb.AccountType_Normal)
-	}
 	ctx.State.AddBalance(toAddr, tc.Amount)
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }

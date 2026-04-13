@@ -36,6 +36,10 @@ func (a *WitnessCreateActuator) Validate(ctx *Context) error {
 	if len(wc.Url) == 0 {
 		return errors.New("witness URL is empty")
 	}
+	fee := ctx.DynProps.AccountUpgradeCost()
+	if ctx.State.GetBalance(ownerAddr) < fee {
+		return errors.New("insufficient balance for witness creation fee")
+	}
 	return nil
 }
 
@@ -45,7 +49,11 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+	fee := ctx.DynProps.AccountUpgradeCost()
+	if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
+		return nil, err
+	}
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }
