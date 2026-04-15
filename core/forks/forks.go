@@ -8,7 +8,7 @@ type AllowFlag int
 const (
 	AllowSameTokenName AllowFlag = iota
 	AllowDelegateResource
-	AllowAdaptiveEnergyLimit
+	AllowAdaptiveEnergy
 	AllowMultiSign
 	AllowChangeDelegation
 	AllowTvmTransferTrc10
@@ -24,7 +24,7 @@ const (
 	AllowPbft
 	AllowStakingV2
 	AllowTvmLondon
-	AllowTvmCompatibility
+	AllowTvmCompatibleEvm
 	AllowDynamicEnergy
 	AllowNewResourceModel
 	AllowEnergyAdjustment
@@ -37,9 +37,9 @@ const (
 var dynKey = map[AllowFlag]string{
 	AllowSameTokenName:       "allow_same_token_name",
 	AllowDelegateResource:    "allow_delegate_resource",
-	AllowAdaptiveEnergyLimit: "allow_adaptive_energy_limit",
+	AllowAdaptiveEnergy:      "allow_adaptive_energy",
 	AllowMultiSign:           "allow_multi_sign",
-	AllowChangeDelegation:    "allow_change_delegation",
+	AllowChangeDelegation:    "change_delegation",
 	AllowTvmTransferTrc10:    "allow_tvm_transfer_trc10",
 	AllowTvmConstantinople:   "allow_tvm_constantinople",
 	AllowTvmSolidity059:      "allow_tvm_solidity059",
@@ -53,7 +53,7 @@ var dynKey = map[AllowFlag]string{
 	AllowPbft:                "allow_pbft",
 	AllowStakingV2:           "allow_staking_v2",
 	AllowTvmLondon:           "allow_tvm_london",
-	AllowTvmCompatibility:    "allow_tvm_compatibility",
+	AllowTvmCompatibleEvm:    "allow_tvm_compatible_evm",
 	AllowDynamicEnergy:       "allow_dynamic_energy",
 	AllowNewResourceModel:    "allow_new_resource_model",
 	AllowEnergyAdjustment:    "allow_energy_adjustment",
@@ -99,10 +99,10 @@ func ProposalParamKey(id int64) string {
 		// Allow flags
 		14: "allow_same_token_name",
 		16: "allow_delegate_resource",
-		17: "allow_adaptive_energy_limit",
+		17: "allow_adaptive_energy",
 		18: "allow_tvm_transfer_trc10",
 		20: "allow_multi_sign",
-		21: "allow_change_delegation",
+		21: "change_delegation",
 		23: "allow_new_resource_model",
 		25: "allow_tvm_constantinople",
 		26: "allow_tvm_solidity059",
@@ -111,7 +111,7 @@ func ProposalParamKey(id int64) string {
 		30: "allow_pbft",
 		31: "allow_tvm_istanbul",
 		33: "allow_market_transaction",
-		34: "allow_tvm_compatibility",
+		34: "allow_tvm_compatible_evm",
 		35: "allow_account_history",
 		36: "allow_tvm_vote",
 		66: "allow_tvm_london",

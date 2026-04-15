@@ -28,7 +28,7 @@ func TestAccountPermissionValidate(t *testing.T) {
 	}
 
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	ctx.State.AddBalance(owner, 100_000_000) // cover AccountPermissionUpdateFee
+	ctx.State.AddBalance(owner, 100_000_000) // cover UpdateAccountPermissionFee
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate failed: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAccountPermissionExecute(t *testing.T) {
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
 	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	ctx.State.AddBalance(owner, 100_000_000) // cover AccountPermissionUpdateFee
+	ctx.State.AddBalance(owner, 100_000_000) // cover UpdateAccountPermissionFee
 
 	act := &AccountPermissionUpdateActuator{}
 	result, err := act.Execute(ctx)

@@ -66,8 +66,8 @@ func TestProcessProposals_Canceled(t *testing.T) {
 	if got.State != rawdb.ProposalStateCanceled {
 		t.Fatalf("expected CANCELED, got %d", got.State)
 	}
-	// Parameter should NOT have changed (default is 16000000)
-	if dynProps.WitnessPayPerBlock() != 16000000 {
+	// Parameter should NOT have changed (mainnet default is 32000000).
+	if dynProps.WitnessPayPerBlock() != 32000000 {
 		t.Fatalf("parameter should not change: %d", dynProps.WitnessPayPerBlock())
 	}
 }

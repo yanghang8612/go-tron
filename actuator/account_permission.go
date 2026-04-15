@@ -72,7 +72,7 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 	if totalKeys > maxKeys {
 		return errors.New("too many keys across all permissions")
 	}
-	fee := ctx.DynProps.AccountPermissionUpdateFee()
+	fee := ctx.DynProps.UpdateAccountPermissionFee()
 	if ctx.State.GetBalance(ownerAddr) < fee {
 		return errors.New("insufficient balance for account permission update fee")
 	}
@@ -102,7 +102,7 @@ func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error)
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
-	fee := ctx.DynProps.AccountPermissionUpdateFee()
+	fee := ctx.DynProps.UpdateAccountPermissionFee()
 	if fee > 0 {
 		if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
 			return nil, err

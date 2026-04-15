@@ -141,7 +141,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 			return &totalAcquiredResource{}
 		}
 
-	// ── TVM compatibility precompiles (AllowTvmCompatibility) ────────────
+	// ── TVM compatibility precompiles (AllowTvmCompatibleEvm) ────────────
 	case addrFromUint(0x020003):
 		if cfg.Compatibility {
 			return &ethRipemd160{}

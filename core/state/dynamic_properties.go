@@ -14,21 +14,25 @@ var defaultProps = map[string]int64{
 	"create_account_fee":                        100000,
 	"transaction_fee":                           10,
 	"asset_issue_fee":                           1024000000,
-	"witness_pay_per_block":                     16000000,
+	"witness_pay_per_block":                     32000000,
+	"witness_127_pay_per_block":                 16000000,
 	"witness_standby_allowance":                 115200000000,
 	"create_new_account_fee_in_system_contract": 0,
 	"create_new_account_bandwidth_rate":         1,
 	"energy_fee":                                100,
-	"max_cpu_time_of_one_tx":                    80,
+	"max_cpu_time_of_one_tx":                    50,
 	"total_energy_current_limit":                50000000000,
+	"total_energy_limit":                        50000000000,
+	"total_energy_target_limit":                 3472222,
+	"total_energy_average_usage":                0,
 	"total_net_limit":                           43200000000,
-	"unfreeze_delay_days":                       14,
+	"unfreeze_delay_days":                       0,
 	"latest_block_header_timestamp":             0,
 	"latest_block_header_number":                0,
 	"latest_solidified_block_num":               0,
 	"next_maintenance_time":                     0,
 	"allow_new_resource_model":                  0,
-	"free_net_limit":                            1500,
+	"free_net_limit":                            5000,
 	"next_proposal_id":                          0,
 	"next_token_id":                             1_000_001,
 	"next_exchange_id":                          1,
@@ -36,9 +40,9 @@ var defaultProps = map[string]int64{
 	"exchange_balance_limit":                    1_000_000_000_000_000,
 	"allow_same_token_name":                     0,
 	"allow_delegate_resource":                   0,
-	"allow_adaptive_energy_limit":               0,
+	"allow_adaptive_energy":               0,
 	"allow_multi_sign":                          0,
-	"allow_change_delegation":                   0,
+	"change_delegation":                   0,
 	"allow_tvm_transfer_trc10":                  0,
 	"allow_tvm_constantinople":                  0,
 	"allow_tvm_solidity059":                     0,
@@ -51,7 +55,7 @@ var defaultProps = map[string]int64{
 	"allow_pbft":                                0,
 	"allow_staking_v2":                          0,
 	"allow_tvm_london":                          0,
-	"allow_tvm_compatibility":                   0,
+	"allow_tvm_compatible_evm":                   0,
 	"allow_dynamic_energy":                      0,
 	"allow_tvm_big_integer":                     0,
 	"allow_tvm_blob":                            0,
@@ -59,7 +63,7 @@ var defaultProps = map[string]int64{
 	"allow_energy_adjustment":                   0,
 	"allow_tvm_solidity058":                     0,
 	"forbid_transfer_to_contract":              0,
-	"account_permission_update_fee":            100_000_000,
+	"update_account_permission_fee":            100_000_000,
 	"total_sign_num":                           5,
 	"proposal_expire_time":                     259_200_000,
 	"allow_shielded_transaction":               0,
@@ -67,6 +71,46 @@ var defaultProps = map[string]int64{
 	"total_shielded_pool_value":                0,
 	"shielded_transaction_fee":                 100_000,
 	"shielded_transaction_create_account_fee":  1_000_000,
+
+	// M1.1: chain parameters backfilled from java-tron mainnet fixture
+	// (test/fixtures/00-genesis-dp-mainnet/fixture.json). Defaults align
+	// to java-tron's DynamicPropertiesStore initial values. Adaptive /
+	// reward / dynamic-energy *behaviour* is not yet implemented — these
+	// keys only ensure that initial state and governance proposals
+	// serialize to the same DB shape as java-tron.
+	"adaptive_resource_limit_multiplier":            1000,
+	"adaptive_resource_limit_target_ratio":          10,
+	"allow_account_asset_optimization":              0,
+	"allow_account_state_root":                      0,
+	"allow_asset_optimization":                      0,
+	"allow_cancel_all_unfreeze_v2":                  0,
+	"allow_creation_of_contracts":                   0,
+	"allow_delegate_optimization":                   0,
+	"allow_higher_limit_for_max_cpu_time_of_one_tx": 0,
+	"allow_new_reward":                              0,
+	"allow_old_reward_opt":                          0,
+	"allow_optimize_black_hole":                     0,
+	"allow_optimized_return_value_of_chain_id":      0,
+	"allow_proto_filter_num":                        0,
+	"allow_shielded_trc20_transaction":              0,
+	"allow_strict_math":                             0,
+	"allow_transaction_fee_pool":                    0,
+	"allow_tvm_osaka":                               0,
+	"allow_tvm_selfdestruct_restriction":            0,
+	"allow_tvm_shanghai":                            0,
+	"allow_update_account_name":                     0,
+	"consensus_logic_optimization":                  0,
+	"dynamic_energy_increase_factor":                0,
+	"dynamic_energy_max_factor":                     0,
+	"dynamic_energy_threshold":                      0,
+	"market_cancel_fee":                             0,
+	"market_sell_fee":                               0,
+	"max_create_account_tx_size":                    1000,
+	"max_delegate_lock_period":                      86400,
+	"max_fee_limit":                                 1_000_000_000,
+	"memo_fee":                                      0,
+	"multi_sign_fee":                                1_000_000,
+	"remove_the_power_of_the_gr":                    0,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -219,14 +263,14 @@ func (dp *DynamicProperties) SetAllowDelegateResource(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowAdaptiveEnergyLimit() bool {
-	return dp.props["allow_adaptive_energy_limit"] != 0
+func (dp *DynamicProperties) AllowAdaptiveEnergy() bool {
+	return dp.props["allow_adaptive_energy"] != 0
 }
-func (dp *DynamicProperties) SetAllowAdaptiveEnergyLimit(v bool) {
+func (dp *DynamicProperties) SetAllowAdaptiveEnergy(v bool) {
 	if v {
-		dp.Set("allow_adaptive_energy_limit", 1)
+		dp.Set("allow_adaptive_energy", 1)
 	} else {
-		dp.Set("allow_adaptive_energy_limit", 0)
+		dp.Set("allow_adaptive_energy", 0)
 	}
 }
 
@@ -241,14 +285,14 @@ func (dp *DynamicProperties) SetAllowMultiSign(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowChangeDelegation() bool {
-	return dp.props["allow_change_delegation"] != 0
+func (dp *DynamicProperties) ChangeDelegation() bool {
+	return dp.props["change_delegation"] != 0
 }
-func (dp *DynamicProperties) SetAllowChangeDelegation(v bool) {
+func (dp *DynamicProperties) SetChangeDelegation(v bool) {
 	if v {
-		dp.Set("allow_change_delegation", 1)
+		dp.Set("change_delegation", 1)
 	} else {
-		dp.Set("allow_change_delegation", 0)
+		dp.Set("change_delegation", 0)
 	}
 }
 
@@ -384,14 +428,14 @@ func (dp *DynamicProperties) SetAllowTvmLondon(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowTvmCompatibility() bool {
-	return dp.props["allow_tvm_compatibility"] != 0
+func (dp *DynamicProperties) AllowTvmCompatibleEvm() bool {
+	return dp.props["allow_tvm_compatible_evm"] != 0
 }
-func (dp *DynamicProperties) SetAllowTvmCompatibility(v bool) {
+func (dp *DynamicProperties) SetAllowTvmCompatibleEvm(v bool) {
 	if v {
-		dp.Set("allow_tvm_compatibility", 1)
+		dp.Set("allow_tvm_compatible_evm", 1)
 	} else {
-		dp.Set("allow_tvm_compatibility", 0)
+		dp.Set("allow_tvm_compatible_evm", 0)
 	}
 }
 
@@ -541,9 +585,9 @@ func (dp *DynamicProperties) ForbidTransferToContract() bool {
 	return dp.props["forbid_transfer_to_contract"] != 0
 }
 
-// AccountPermissionUpdateFee returns the fee (in SUN) to update account permissions.
-func (dp *DynamicProperties) AccountPermissionUpdateFee() int64 {
-	return dp.props["account_permission_update_fee"]
+// UpdateAccountPermissionFee returns the fee (in SUN) to update account permissions.
+func (dp *DynamicProperties) UpdateAccountPermissionFee() int64 {
+	return dp.props["update_account_permission_fee"]
 }
 
 // TotalSignNum returns the maximum total number of keys across all permissions.
@@ -594,4 +638,270 @@ func (dp *DynamicProperties) All() map[string]int64 {
 		result[k] = v
 	}
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// M1.1 backfilled accessors.
+//
+// These mirror java-tron's DynamicPropertiesStore getter/setter names; the
+// backing string keys are enforced by dynamic_properties_fixture_test.go.
+// Behaviour coupled to these flags (adaptive energy recalc, reward v2,
+// dynamic energy scaling, storage rent, ...) is out of M1.1 scope — see
+// M1.4–M1.8 of PLAN.md.
+// ---------------------------------------------------------------------------
+
+func boolGet(dp *DynamicProperties, key string) bool { return dp.props[key] != 0 }
+func boolSet(dp *DynamicProperties, key string, v bool) {
+	if v {
+		dp.Set(key, 1)
+	} else {
+		dp.Set(key, 0)
+	}
+}
+
+// Numeric params.
+
+func (dp *DynamicProperties) AdaptiveResourceLimitMultiplier() int64 {
+	return dp.props["adaptive_resource_limit_multiplier"]
+}
+func (dp *DynamicProperties) SetAdaptiveResourceLimitMultiplier(v int64) {
+	dp.Set("adaptive_resource_limit_multiplier", v)
+}
+
+func (dp *DynamicProperties) AdaptiveResourceLimitTargetRatio() int64 {
+	return dp.props["adaptive_resource_limit_target_ratio"]
+}
+func (dp *DynamicProperties) SetAdaptiveResourceLimitTargetRatio(v int64) {
+	dp.Set("adaptive_resource_limit_target_ratio", v)
+}
+
+func (dp *DynamicProperties) TotalEnergyLimit() int64 { return dp.props["total_energy_limit"] }
+func (dp *DynamicProperties) SetTotalEnergyLimit(v int64) {
+	dp.Set("total_energy_limit", v)
+}
+
+func (dp *DynamicProperties) TotalEnergyTargetLimit() int64 {
+	return dp.props["total_energy_target_limit"]
+}
+func (dp *DynamicProperties) SetTotalEnergyTargetLimit(v int64) {
+	dp.Set("total_energy_target_limit", v)
+}
+
+func (dp *DynamicProperties) TotalEnergyAverageUsage() int64 {
+	return dp.props["total_energy_average_usage"]
+}
+func (dp *DynamicProperties) SetTotalEnergyAverageUsage(v int64) {
+	dp.Set("total_energy_average_usage", v)
+}
+
+func (dp *DynamicProperties) DynamicEnergyIncreaseFactor() int64 {
+	return dp.props["dynamic_energy_increase_factor"]
+}
+func (dp *DynamicProperties) SetDynamicEnergyIncreaseFactor(v int64) {
+	dp.Set("dynamic_energy_increase_factor", v)
+}
+
+func (dp *DynamicProperties) DynamicEnergyMaxFactor() int64 {
+	return dp.props["dynamic_energy_max_factor"]
+}
+func (dp *DynamicProperties) SetDynamicEnergyMaxFactor(v int64) {
+	dp.Set("dynamic_energy_max_factor", v)
+}
+
+func (dp *DynamicProperties) DynamicEnergyThreshold() int64 {
+	return dp.props["dynamic_energy_threshold"]
+}
+func (dp *DynamicProperties) SetDynamicEnergyThreshold(v int64) {
+	dp.Set("dynamic_energy_threshold", v)
+}
+
+func (dp *DynamicProperties) MarketCancelFee() int64 { return dp.props["market_cancel_fee"] }
+func (dp *DynamicProperties) SetMarketCancelFee(v int64) {
+	dp.Set("market_cancel_fee", v)
+}
+
+func (dp *DynamicProperties) MarketSellFee() int64 { return dp.props["market_sell_fee"] }
+func (dp *DynamicProperties) SetMarketSellFee(v int64) {
+	dp.Set("market_sell_fee", v)
+}
+
+func (dp *DynamicProperties) MaxCreateAccountTxSize() int64 {
+	return dp.props["max_create_account_tx_size"]
+}
+func (dp *DynamicProperties) SetMaxCreateAccountTxSize(v int64) {
+	dp.Set("max_create_account_tx_size", v)
+}
+
+func (dp *DynamicProperties) MaxDelegateLockPeriod() int64 {
+	return dp.props["max_delegate_lock_period"]
+}
+func (dp *DynamicProperties) SetMaxDelegateLockPeriod(v int64) {
+	dp.Set("max_delegate_lock_period", v)
+}
+
+func (dp *DynamicProperties) MaxFeeLimit() int64 { return dp.props["max_fee_limit"] }
+func (dp *DynamicProperties) SetMaxFeeLimit(v int64) { dp.Set("max_fee_limit", v) }
+
+func (dp *DynamicProperties) MemoFee() int64 { return dp.props["memo_fee"] }
+func (dp *DynamicProperties) SetMemoFee(v int64) { dp.Set("memo_fee", v) }
+
+func (dp *DynamicProperties) MultiSignFee() int64 { return dp.props["multi_sign_fee"] }
+func (dp *DynamicProperties) SetMultiSignFee(v int64) { dp.Set("multi_sign_fee", v) }
+
+func (dp *DynamicProperties) Witness127PayPerBlock() int64 {
+	return dp.props["witness_127_pay_per_block"]
+}
+func (dp *DynamicProperties) SetWitness127PayPerBlock(v int64) {
+	dp.Set("witness_127_pay_per_block", v)
+}
+
+// Boolean / integer flag params.
+
+func (dp *DynamicProperties) AllowAccountAssetOptimization() bool {
+	return boolGet(dp, "allow_account_asset_optimization")
+}
+func (dp *DynamicProperties) SetAllowAccountAssetOptimization(v bool) {
+	boolSet(dp, "allow_account_asset_optimization", v)
+}
+
+func (dp *DynamicProperties) AllowAccountStateRoot() bool {
+	return boolGet(dp, "allow_account_state_root")
+}
+func (dp *DynamicProperties) SetAllowAccountStateRoot(v bool) {
+	boolSet(dp, "allow_account_state_root", v)
+}
+
+func (dp *DynamicProperties) AllowAssetOptimization() bool {
+	return boolGet(dp, "allow_asset_optimization")
+}
+func (dp *DynamicProperties) SetAllowAssetOptimization(v bool) {
+	boolSet(dp, "allow_asset_optimization", v)
+}
+
+func (dp *DynamicProperties) AllowCancelAllUnfreezeV2() bool {
+	return boolGet(dp, "allow_cancel_all_unfreeze_v2")
+}
+func (dp *DynamicProperties) SetAllowCancelAllUnfreezeV2(v bool) {
+	boolSet(dp, "allow_cancel_all_unfreeze_v2", v)
+}
+
+func (dp *DynamicProperties) AllowCreationOfContracts() bool {
+	return boolGet(dp, "allow_creation_of_contracts")
+}
+func (dp *DynamicProperties) SetAllowCreationOfContracts(v bool) {
+	boolSet(dp, "allow_creation_of_contracts", v)
+}
+
+func (dp *DynamicProperties) AllowDelegateOptimization() bool {
+	return boolGet(dp, "allow_delegate_optimization")
+}
+func (dp *DynamicProperties) SetAllowDelegateOptimization(v bool) {
+	boolSet(dp, "allow_delegate_optimization", v)
+}
+
+func (dp *DynamicProperties) AllowHigherLimitForMaxCpuTimeOfOneTx() bool {
+	return boolGet(dp, "allow_higher_limit_for_max_cpu_time_of_one_tx")
+}
+func (dp *DynamicProperties) SetAllowHigherLimitForMaxCpuTimeOfOneTx(v bool) {
+	boolSet(dp, "allow_higher_limit_for_max_cpu_time_of_one_tx", v)
+}
+
+func (dp *DynamicProperties) AllowNewReward() bool {
+	return boolGet(dp, "allow_new_reward")
+}
+func (dp *DynamicProperties) SetAllowNewReward(v bool) {
+	boolSet(dp, "allow_new_reward", v)
+}
+
+func (dp *DynamicProperties) AllowOldRewardOpt() bool {
+	return boolGet(dp, "allow_old_reward_opt")
+}
+func (dp *DynamicProperties) SetAllowOldRewardOpt(v bool) {
+	boolSet(dp, "allow_old_reward_opt", v)
+}
+
+func (dp *DynamicProperties) AllowOptimizeBlackHole() bool {
+	return boolGet(dp, "allow_optimize_black_hole")
+}
+func (dp *DynamicProperties) SetAllowOptimizeBlackHole(v bool) {
+	boolSet(dp, "allow_optimize_black_hole", v)
+}
+
+func (dp *DynamicProperties) AllowOptimizedReturnValueOfChainId() bool {
+	return boolGet(dp, "allow_optimized_return_value_of_chain_id")
+}
+func (dp *DynamicProperties) SetAllowOptimizedReturnValueOfChainId(v bool) {
+	boolSet(dp, "allow_optimized_return_value_of_chain_id", v)
+}
+
+func (dp *DynamicProperties) AllowProtoFilterNum() int64 {
+	return dp.props["allow_proto_filter_num"]
+}
+func (dp *DynamicProperties) SetAllowProtoFilterNum(v int64) {
+	dp.Set("allow_proto_filter_num", v)
+}
+
+func (dp *DynamicProperties) AllowShieldedTrc20Transaction() bool {
+	return boolGet(dp, "allow_shielded_trc20_transaction")
+}
+func (dp *DynamicProperties) SetAllowShieldedTrc20Transaction(v bool) {
+	boolSet(dp, "allow_shielded_trc20_transaction", v)
+}
+
+func (dp *DynamicProperties) AllowStrictMath() bool {
+	return boolGet(dp, "allow_strict_math")
+}
+func (dp *DynamicProperties) SetAllowStrictMath(v bool) {
+	boolSet(dp, "allow_strict_math", v)
+}
+
+func (dp *DynamicProperties) AllowTransactionFeePool() bool {
+	return boolGet(dp, "allow_transaction_fee_pool")
+}
+func (dp *DynamicProperties) SetAllowTransactionFeePool(v bool) {
+	boolSet(dp, "allow_transaction_fee_pool", v)
+}
+
+func (dp *DynamicProperties) AllowTvmOsaka() bool {
+	return boolGet(dp, "allow_tvm_osaka")
+}
+func (dp *DynamicProperties) SetAllowTvmOsaka(v bool) {
+	boolSet(dp, "allow_tvm_osaka", v)
+}
+
+func (dp *DynamicProperties) AllowTvmSelfdestructRestriction() bool {
+	return boolGet(dp, "allow_tvm_selfdestruct_restriction")
+}
+func (dp *DynamicProperties) SetAllowTvmSelfdestructRestriction(v bool) {
+	boolSet(dp, "allow_tvm_selfdestruct_restriction", v)
+}
+
+func (dp *DynamicProperties) AllowTvmShanghai() bool {
+	return boolGet(dp, "allow_tvm_shanghai")
+}
+func (dp *DynamicProperties) SetAllowTvmShanghai(v bool) {
+	boolSet(dp, "allow_tvm_shanghai", v)
+}
+
+func (dp *DynamicProperties) AllowUpdateAccountName() bool {
+	return boolGet(dp, "allow_update_account_name")
+}
+func (dp *DynamicProperties) SetAllowUpdateAccountName(v bool) {
+	boolSet(dp, "allow_update_account_name", v)
+}
+
+func (dp *DynamicProperties) ConsensusLogicOptimization() bool {
+	return boolGet(dp, "consensus_logic_optimization")
+}
+func (dp *DynamicProperties) SetConsensusLogicOptimization(v bool) {
+	boolSet(dp, "consensus_logic_optimization", v)
+}
+
+// RemoveThePowerOfTheGr mirrors java-tron's getRemoveThePowerOfTheGr,
+// which stores 0 (initial) or -1 (executed) — it is not a classic bool.
+func (dp *DynamicProperties) RemoveThePowerOfTheGr() int64 {
+	return dp.props["remove_the_power_of_the_gr"]
+}
+func (dp *DynamicProperties) SetRemoveThePowerOfTheGr(v int64) {
+	dp.Set("remove_the_power_of_the_gr", v)
 }

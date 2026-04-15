@@ -70,9 +70,13 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	blockTime := int64(100000)
 	tx := makeUnfreezeV2Tx(3, 200, corepb.ResourceCode_BANDWIDTH)
 	act := &UnfreezeBalanceV2Actuator{}
+	dp := state.NewDynamicProperties()
+	// Java-tron's mainnet default is 0 days (immediate unfreeze). Set 14
+	// explicitly here so the test exercises the delayed-unfreeze path.
+	dp.Set("unfreeze_delay_days", 14)
 	ctx := &Context{
 		State:       statedb,
-		DynProps:    state.NewDynamicProperties(),
+		DynProps:    dp,
 		Tx:          tx,
 		BlockTime:   blockTime,
 		BlockNumber: 1,

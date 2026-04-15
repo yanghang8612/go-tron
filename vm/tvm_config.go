@@ -39,7 +39,7 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		Vote:           isActive(forks.AllowTvmVote),
 		StakingV2:      isActive(forks.AllowStakingV2),
 		London:         isActive(forks.AllowTvmLondon),
-		Compatibility:  isActive(forks.AllowTvmCompatibility),
+		Compatibility:  isActive(forks.AllowTvmCompatibleEvm),
 		DynamicEnergy:  isActive(forks.AllowDynamicEnergy),
 		BigInteger:     isActive(forks.AllowTvmBigInteger),
 		Blob:           isActive(forks.AllowTvmBlob),

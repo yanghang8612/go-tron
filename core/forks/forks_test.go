@@ -36,9 +36,9 @@ func TestIsActive_AllFlags(t *testing.T) {
 	}{
 		{forks.AllowSameTokenName, dp.SetAllowSameTokenName},
 		{forks.AllowDelegateResource, dp.SetAllowDelegateResource},
-		{forks.AllowAdaptiveEnergyLimit, dp.SetAllowAdaptiveEnergyLimit},
+		{forks.AllowAdaptiveEnergy, dp.SetAllowAdaptiveEnergy},
 		{forks.AllowMultiSign, dp.SetAllowMultiSign},
-		{forks.AllowChangeDelegation, dp.SetAllowChangeDelegation},
+		{forks.AllowChangeDelegation, dp.SetChangeDelegation},
 		{forks.AllowTvmTransferTrc10, dp.SetAllowTvmTransferTrc10},
 		{forks.AllowTvmConstantinople, dp.SetAllowTvmConstantinople},
 		{forks.AllowTvmSolidity059, dp.SetAllowTvmSolidity059},
@@ -52,7 +52,7 @@ func TestIsActive_AllFlags(t *testing.T) {
 		{forks.AllowPbft, dp.SetAllowPbft},
 		{forks.AllowStakingV2, dp.SetAllowStakingV2},
 		{forks.AllowTvmLondon, dp.SetAllowTvmLondon},
-		{forks.AllowTvmCompatibility, dp.SetAllowTvmCompatibility},
+		{forks.AllowTvmCompatibleEvm, dp.SetAllowTvmCompatibleEvm},
 		{forks.AllowDynamicEnergy, dp.SetAllowDynamicEnergy},
 		// AllowNewResourceModel skipped — no setter on DynamicProperties
 		{forks.AllowEnergyAdjustment, dp.SetAllowEnergyAdjustment},

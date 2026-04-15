@@ -310,7 +310,7 @@ func TestForkGate_UpdateBrokerage_FlagOn(t *testing.T) {
 		Brokerage:    20,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateBrokerageContract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowChangeDelegation(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetChangeDelegation(true) })
 
 	act := &UpdateBrokerageActuator{}
 	assertNotForkError(t, act.Validate(ctx), "brokerage update not yet enabled")

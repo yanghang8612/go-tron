@@ -14,8 +14,8 @@ func TestNewDynamicProperties_Defaults(t *testing.T) {
 	if got := dp.MaintenanceTimeInterval(); got != 21600000 {
 		t.Errorf("MaintenanceTimeInterval: got %d, want 21600000", got)
 	}
-	if got := dp.WitnessPayPerBlock(); got != 16000000 {
-		t.Errorf("WitnessPayPerBlock: got %d, want 16000000", got)
+	if got := dp.WitnessPayPerBlock(); got != 32000000 {
+		t.Errorf("WitnessPayPerBlock: got %d, want 32000000", got)
 	}
 	if got := dp.WitnessStandbyAllowance(); got != 115200000000 {
 		t.Errorf("WitnessStandbyAllowance: got %d, want 115200000000", got)
@@ -38,11 +38,11 @@ func TestNewDynamicProperties_Defaults(t *testing.T) {
 	if got := dp.TotalNetLimit(); got != 43200000000 {
 		t.Errorf("TotalNetLimit: got %d, want 43200000000", got)
 	}
-	if got := dp.UnfreezeDelayDays(); got != 14 {
-		t.Errorf("UnfreezeDelayDays: got %d, want 14", got)
+	if got := dp.UnfreezeDelayDays(); got != 0 {
+		t.Errorf("UnfreezeDelayDays: got %d, want 0", got)
 	}
-	if got := dp.MaxCpuTimeOfOneTx(); got != 80 {
-		t.Errorf("MaxCpuTimeOfOneTx: got %d, want 80", got)
+	if got := dp.MaxCpuTimeOfOneTx(); got != 50 {
+		t.Errorf("MaxCpuTimeOfOneTx: got %d, want 50", got)
 	}
 	if got := dp.AllowNewResourceModel(); got != false {
 		t.Errorf("AllowNewResourceModel: got %v, want false", got)
@@ -170,11 +170,11 @@ func TestDynamicProperties_OnlyDirtyFlushed(t *testing.T) {
 	if got := loaded.MaintenanceTimeInterval(); got != 21600000 {
 		t.Errorf("MaintenanceTimeInterval: got %d, want 21600000", got)
 	}
-	if got := loaded.UnfreezeDelayDays(); got != 14 {
-		t.Errorf("UnfreezeDelayDays: got %d, want 14", got)
+	if got := loaded.UnfreezeDelayDays(); got != 0 {
+		t.Errorf("UnfreezeDelayDays: got %d, want 0", got)
 	}
-	if got := loaded.WitnessPayPerBlock(); got != 16000000 {
-		t.Errorf("WitnessPayPerBlock: got %d, want 16000000", got)
+	if got := loaded.WitnessPayPerBlock(); got != 32000000 {
+		t.Errorf("WitnessPayPerBlock: got %d, want 32000000", got)
 	}
 
 	// Now set one prop, flush, reload — only that one should differ from the fresh default.
@@ -197,8 +197,8 @@ func TestDynamicProperties_FreeNetLimit(t *testing.T) {
 	dp := NewDynamicProperties()
 
 	got := dp.FreeNetLimit()
-	if got != 1500 {
-		t.Fatalf("default FreeNetLimit: want 1500, got %d", got)
+	if got != 5000 {
+		t.Fatalf("default FreeNetLimit: want 5000, got %d", got)
 	}
 
 	dp.Set("free_net_limit", 3000)
