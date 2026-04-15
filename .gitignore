@@ -13,6 +13,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Claude Code local state
+.claude/
+
 # Go
 vendor/
 
