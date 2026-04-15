@@ -2,8 +2,7 @@
 
 **日期：** 2026-04-15
 **对应 spec：** [2026-04-15-m1-3-version-bits-fork-audit-design.md](../specs/2026-04-15-m1-3-version-bits-fork-audit-design.md)
-**依赖：** M1.1 完成（DP 已对齐）
-**与 M1.2 并行：** 本 plan 与 M1.2 不共享文件；先完成者先 merge，后者 rebase。
+**依赖：** M1.1 完成（DP 已对齐）；**M1.2 先合并**（Task 5 audit 会修 freeze actuator）。
 
 ---
 
@@ -71,11 +70,12 @@
 
 ---
 
-## Task 5 · Fork Gate Audit 脚本 + 补齐调用点
+## Task 5 · Fork Gate Audit 脚本 + 补齐调用点（仅执行路径）
 
 **动作**
 - `scripts/dev/fork_audit.sh`：对 java-tron grep `forkController\.pass\(\s*[^)]+\)`，对 go-tron grep `forks\.(IsActive|Pass)`，输出 CSV 到 `docs/dev/fork-audit-2026-04-15.md`。
-- 从 audit CSV 逐条核对，把缺失调用点按 actuator 分子 commit 补齐。预计至少以下子集：
+- **分类每一行为 (a) 执行路径门 或 (b) 提案合法性门**。(b) 归入 "Deferred to M4" section，本里程碑不补。
+- 从 (a) CSV 逐条核对，把缺失调用点按 actuator 分子 commit 补齐。预计至少以下子集：
   - `asset_issue.go`（pass(V_4_8_1)）
   - `update_asset.go`
   - `exchange_create.go` / `exchange_inject.go` / `exchange_withdraw.go` / `exchange_transaction.go`
@@ -94,14 +94,19 @@
 
 ## Task 6 · 三个独有 flag 处置
 
+**前置事实**（已在 spec 写稿期 grep 确认，无需再 Step A）：
+- `AllowTvmShieldedToken` 在 `vm/precompiles.go:65` + `vm/tvm_config.go:38` 使用。
+- `AllowTvmBigInteger` 在 `vm/tvm_config.go:44` 使用。
+- `AllowTvmSolidity058` 仅在 `vm/tvm_config.go` 加载（interpreter 实际是否用到待查）+ `forks_test.go` / `dynamic_properties_fork_test.go` 测试。
+
 **动作**
-- Step A：`grep -r "AllowTvmSolidity058\|AllowTvmShieldedToken\|AllowTvmBigInteger" --include="*.go" /Users/asuka/Projects/asuka/go/go-tron` 找引用。
-- Step B：按 spec §4.5 决策树逐个定处理。可能结果：
-  - 全部无引用 → 从 AllowFlag enum + dynKey 删除。
-  - ShieldedToken 被 ShieldedTrc20 precompile 用 → rename 到 `AllowShieldedTrc20Transaction`（proposal #39）。
-  - Solidity058 被 VM 用于区分编译器差异 → 在 `docs/dev/fork-gates.md` 登记为 go-tron 私有；考虑用隐式版本 gate 替代（如依赖 `pass(V_3_6_5)`）。
-- Step C：相应更新 `core/forks/forks.go`、相关 VM/actuator 代码、测试。
-- Step D：若决定删除，将 `dp.Get("allow_tvm_shielded_token")` 的静态初始化项一起清掉（M1.1 backfill 时已 mark TODO）。
+- **ShieldedToken → Rename**：把 AllowFlag 改名 `AllowShieldedTrc20Transaction`，DP key 改 `allow_shielded_trc20_transaction`；`vm/tvm_config.go` 的 struct 字段沿用 `ShieldedToken`（VM 内部命名延续），但 `isActive(...)` 调用点改成新 flag。`proposalParamKey[39]` 已映射此 key（M1.1 已就位），无需新增。
+- **BigInteger → 保留，登记**：keep as-is；`docs/dev/fork-gates.md` "go-tron specific" 段登记；`requiredVersion` 表里留空或指向一个合理的版本门（查 java-tron 的 BIGINT 精度处理是否与某 fork 版本绑定；若无，置 no-version-gate）。
+- **Solidity058 → 深查 VM**：在 `vm/` 全文搜 `Solidity058` / `cfg.Solidity058`——
+  - 若 interpreter 真用：登记为 go-tron private，保留。
+  - 若仅 tvm_config 读不用：标 "dead, pending M7 cleanup"，但本里程碑不删（避免误伤）。
+- **测试同步**：`core/forks/forks_test.go` + `core/state/dynamic_properties_fork_test.go` 适配 rename。
+- **Fixture 一致性测试**：`TestDynamicProperties_MatchMainnetFixture` 若涉及这些 key，需加 skip 列表（java-tron `getchainparameters` 不返回它们）——M1.1 已处理，但 rename 后 key 名变了要同步。
 
 **验收**：
 - `go test ./... -count=1` 绿。
