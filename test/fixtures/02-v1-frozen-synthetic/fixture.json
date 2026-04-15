@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "scenario": "02-v1-frozen-synthetic",
+  "source": "synthetic",
+  "javaTron": {
+    "version": "n/a",
+    "jarSha256": "",
+    "configSha256": ""
+  },
+  "extractedAt": "2026-04-15T00:00:00Z",
+  "blockNum": 0,
+  "dynamicProperties": {
+    "total_net_limit": 43200000000,
+    "total_net_weight": 3000,
+    "total_energy_limit": 90000000000,
+    "total_energy_weight": 3000
+  },
+  "accounts": {
+    "TXfakeAcctPureV1": {
+      "balance": 0,
+      "frozenBandwidth": [
+        {"balance": 1000000000, "expireTime": 0}
+      ],
+      "frozenEnergy": {"balance": 1000000000, "expireTime": 0}
+    },
+    "TXfakeAcctPureV2": {
+      "balance": 0,
+      "frozenV2": [
+        {"type": "BANDWIDTH", "amount": 1000000000},
+        {"type": "ENERGY", "amount": 1000000000}
+      ]
+    },
+    "TXfakeAcctMixed": {
+      "balance": 0,
+      "frozenBandwidth": [
+        {"balance": 500000000, "expireTime": 0}
+      ],
+      "delegatedFrozenBandwidth": 500000000,
+      "frozenEnergy": {"balance": 500000000, "expireTime": 0},
+      "delegatedFrozenEnergy": 500000000,
+      "frozenV2": [
+        {"type": "BANDWIDTH", "amount": 1000000000},
+        {"type": "ENERGY", "amount": 1000000000}
+      ]
+    }
+  }
+}

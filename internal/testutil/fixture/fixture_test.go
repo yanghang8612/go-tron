@@ -101,6 +101,58 @@ func TestLoadFromPath_PrecisionLossDetected(t *testing.T) {
 	}
 }
 
+func TestLoad_SyntheticV1Frozen(t *testing.T) {
+	fix := Load(t, "02-v1-frozen-synthetic")
+
+	if fix.Source != "synthetic" {
+		t.Errorf("source: got %q, want %q", fix.Source, "synthetic")
+	}
+	if got := len(fix.Accounts); got != 3 {
+		t.Fatalf("accounts: got %d, want 3", got)
+	}
+
+	pureV1 := fix.Accounts["TXfakeAcctPureV1"]
+	if pureV1 == nil {
+		t.Fatal("TXfakeAcctPureV1 missing")
+	}
+	if len(pureV1.FrozenBandwidth) != 1 || pureV1.FrozenBandwidth[0].Balance != 1_000_000_000 {
+		t.Errorf("pureV1 frozenBandwidth: %+v", pureV1.FrozenBandwidth)
+	}
+	if pureV1.FrozenEnergy == nil || pureV1.FrozenEnergy.Balance != 1_000_000_000 {
+		t.Errorf("pureV1 frozenEnergy: %+v", pureV1.FrozenEnergy)
+	}
+	if len(pureV1.FrozenV2) != 0 {
+		t.Errorf("pureV1 frozenV2 should be empty, got %+v", pureV1.FrozenV2)
+	}
+
+	pureV2 := fix.Accounts["TXfakeAcctPureV2"]
+	if pureV2 == nil {
+		t.Fatal("TXfakeAcctPureV2 missing")
+	}
+	if len(pureV2.FrozenBandwidth) != 0 || pureV2.FrozenEnergy != nil {
+		t.Errorf("pureV2 should have no V1 frozen: %+v", pureV2)
+	}
+	if len(pureV2.FrozenV2) != 2 {
+		t.Errorf("pureV2 frozenV2: got %d entries, want 2", len(pureV2.FrozenV2))
+	}
+
+	mixed := fix.Accounts["TXfakeAcctMixed"]
+	if mixed == nil {
+		t.Fatal("TXfakeAcctMixed missing")
+	}
+	if mixed.DelegatedFrozenBandwidth != 500_000_000 || mixed.DelegatedFrozenEnergy != 500_000_000 {
+		t.Errorf("mixed delegated: bw=%d energy=%d",
+			mixed.DelegatedFrozenBandwidth, mixed.DelegatedFrozenEnergy)
+	}
+	if len(mixed.FrozenBandwidth) != 1 || len(mixed.FrozenV2) != 2 {
+		t.Errorf("mixed shape: v1=%d v2=%d", len(mixed.FrozenBandwidth), len(mixed.FrozenV2))
+	}
+
+	if fix.DynamicProperties["total_net_weight"] != 3000 {
+		t.Errorf("total_net_weight: got %d", fix.DynamicProperties["total_net_weight"])
+	}
+}
+
 func TestDefaultPath_RejectsBadName(t *testing.T) {
 	cases := []string{"", "../escape", "a/b", "with/slash"}
 	for _, c := range cases {

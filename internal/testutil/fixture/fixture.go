@@ -22,9 +22,16 @@ const SchemaVersion = 1
 
 // Fixture is a snapshot of java-tron state after running a named scenario.
 // Fields that the scenario did not populate are left nil.
+//
+// Source distinguishes how the fixture was produced. When empty or
+// "java-tron", JavaTron.{JarSha256,ConfigSha256} must be non-empty so the
+// observation is reproducible. When Source == "synthetic", the fixture was
+// hand-authored for unit tests (e.g. for V1/V2 freeze mix cases that can't
+// be produced by a genesis snapshot), and jar/config hashes may be empty.
 type Fixture struct {
 	Schema            int                 `json:"schema"`
 	Scenario          string              `json:"scenario"`
+	Source            string              `json:"source,omitempty"`
 	JavaTron          JavaTronVersion     `json:"javaTron"`
 	ExtractedAt       string              `json:"extractedAt"`
 	BlockNum          uint64              `json:"blockNum"`
@@ -46,9 +53,34 @@ type JavaTronVersion struct {
 
 // Account is a post-state snapshot of one account. Fields are added on
 // demand by the scenario that needs them; absent fields decode to zero.
+//
+// FrozenBandwidth / FrozenEnergy / Delegated* / FrozenV2 mirror java-tron's
+// AccountCapsule layout for freeze V1 and V2; see
+// chainbase/.../AccountCapsule.java getFrozenList / getFrozenBalanceForEnergy
+// / getFrozenV2List.
 type Account struct {
-	Balance int64  `json:"balance"`
-	Type    string `json:"type,omitempty"`
+	Balance                  int64            `json:"balance"`
+	Type                     string           `json:"type,omitempty"`
+	FrozenBandwidth          []FrozenEntry    `json:"frozenBandwidth,omitempty"`
+	FrozenEnergy             *FrozenEntry     `json:"frozenEnergy,omitempty"`
+	DelegatedFrozenBandwidth int64            `json:"delegatedFrozenBandwidth,omitempty"`
+	DelegatedFrozenEnergy    int64            `json:"delegatedFrozenEnergy,omitempty"`
+	FrozenV2                 []FrozenV2Entry  `json:"frozenV2,omitempty"`
+}
+
+// FrozenEntry is one V1 frozen entry: an amount of SUN with an expire time
+// (ms). A zero ExpireTime indicates "already unlocked" for unfreeze purposes;
+// bandwidth/energy consumption ignores ExpireTime.
+type FrozenEntry struct {
+	Balance    int64 `json:"balance"`
+	ExpireTime int64 `json:"expireTime"`
+}
+
+// FrozenV2Entry is one V2 frozen record. Type is the java-tron enum name
+// ("BANDWIDTH", "ENERGY", "TRON_POWER"); Amount is SUN.
+type FrozenV2Entry struct {
+	Type   string `json:"type"`
+	Amount int64  `json:"amount"`
 }
 
 // Receipt is a post-state snapshot of one transaction receipt.
