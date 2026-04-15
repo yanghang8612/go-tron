@@ -42,6 +42,10 @@ var (
 	marketPriceListPrefix    = []byte("mpl-")
 
 	exchangePrefix = []byte("ex-")
+
+	nullifierPrefix        = []byte("nf-")
+	noteCommitmentPrefix   = []byte("nc-")
+	noteCommitmentCountKey = []byte("nccount")
 )
 
 func blockKey(number uint64) []byte {
@@ -169,5 +173,16 @@ func exchangeKey(id int64) []byte {
 	k := make([]byte, len(exchangePrefix)+8)
 	copy(k, exchangePrefix)
 	binary.BigEndian.PutUint64(k[len(exchangePrefix):], uint64(id))
+	return k
+}
+
+func nullifierKey(nullifier []byte) []byte {
+	return append(append([]byte{}, nullifierPrefix...), nullifier...)
+}
+
+func noteCommitmentKey(index int64) []byte {
+	k := make([]byte, len(noteCommitmentPrefix)+8)
+	copy(k, noteCommitmentPrefix)
+	binary.BigEndian.PutUint64(k[len(noteCommitmentPrefix):], uint64(index))
 	return k
 }

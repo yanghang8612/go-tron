@@ -62,6 +62,11 @@ var defaultProps = map[string]int64{
 	"account_permission_update_fee":            100_000_000,
 	"total_sign_num":                           5,
 	"proposal_expire_time":                     259_200_000,
+	"allow_shielded_transaction":               0,
+	"zen_token_id":                             1_000_016,
+	"total_shielded_pool_value":                0,
+	"shielded_transaction_fee":                 100_000,
+	"shielded_transaction_create_account_fee":  1_000_000,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -546,6 +551,41 @@ func (dp *DynamicProperties) TotalSignNum() int64 { return dp.props["total_sign_
 
 // ProposalExpireTime returns the proposal expiration window in milliseconds (default 3 days).
 func (dp *DynamicProperties) ProposalExpireTime() int64 { return dp.props["proposal_expire_time"] }
+
+// AllowShieldedTransaction returns true if shielded (Sapling) transactions are enabled.
+func (dp *DynamicProperties) AllowShieldedTransaction() bool {
+	return dp.props["allow_shielded_transaction"] != 0
+}
+func (dp *DynamicProperties) SetAllowShieldedTransaction(v bool) {
+	if v {
+		dp.Set("allow_shielded_transaction", 1)
+	} else {
+		dp.Set("allow_shielded_transaction", 0)
+	}
+}
+
+// ZenTokenID returns the TRC10 token ID of the ZEN token (default 1000016).
+func (dp *DynamicProperties) ZenTokenID() int64 { return dp.props["zen_token_id"] }
+
+// TotalShieldedPoolValue returns the total ZEN value currently held in the shielded pool.
+func (dp *DynamicProperties) TotalShieldedPoolValue() int64 {
+	return dp.props["total_shielded_pool_value"]
+}
+
+// AdjustTotalShieldedPoolValue adds delta to the total shielded pool value.
+func (dp *DynamicProperties) AdjustTotalShieldedPoolValue(delta int64) {
+	dp.Set("total_shielded_pool_value", dp.props["total_shielded_pool_value"]+delta)
+}
+
+// ShieldedTransactionFee returns the fee (in ZEN smallest unit) for a shielded transaction.
+func (dp *DynamicProperties) ShieldedTransactionFee() int64 {
+	return dp.props["shielded_transaction_fee"]
+}
+
+// ShieldedTransactionCreateAccountFee returns the fee when a shielded tx creates a new account.
+func (dp *DynamicProperties) ShieldedTransactionCreateAccountFee() int64 {
+	return dp.props["shielded_transaction_create_account_fee"]
+}
 
 // All returns a read-only copy of all dynamic properties.
 func (dp *DynamicProperties) All() map[string]int64 {

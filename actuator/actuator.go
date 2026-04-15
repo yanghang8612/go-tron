@@ -119,7 +119,7 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 	case corepb.Transaction_Contract_ExchangeTransactionContract:
 		return &ExchangeTransactionActuator{}, nil
 	case corepb.Transaction_Contract_ShieldedTransferContract:
-		return nil, errors.New("shielded transfer not supported")
+		return &ShieldedTransferActuator{}, nil
 	default:
 		return nil, errors.New("unsupported contract type")
 	}
