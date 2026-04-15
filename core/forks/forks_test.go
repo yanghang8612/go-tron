@@ -48,7 +48,6 @@ func TestIsActive_AllFlags(t *testing.T) {
 		{forks.AllowTvmFreeze, dp.SetAllowTvmFreeze},
 		{forks.AllowTvmShieldedToken, dp.SetAllowTvmShieldedToken},
 		{forks.AllowTvmVote, dp.SetAllowTvmVote},
-		{forks.AllowAccountHistory, dp.SetAllowAccountHistory},
 		{forks.AllowPbft, dp.SetAllowPbft},
 		{forks.AllowStakingV2, dp.SetAllowStakingV2},
 		{forks.AllowTvmLondon, dp.SetAllowTvmLondon},

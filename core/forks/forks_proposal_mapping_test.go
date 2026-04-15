@@ -1,0 +1,56 @@
+package forks_test
+
+import (
+	"testing"
+
+	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/state"
+)
+
+// activeProposalTypes is the exhaustive list of active (not commented-out)
+// entries in java-tron's org.tron.core.utils.ProposalUtil.ProposalType
+// enum. Keep in sync with the java-tron source; any change there must be
+// mirrored here and in core/forks/forks.go.
+var activeProposalTypes = []int64{
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+	10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+	20, 21, 22, 23, 24, 25, 26,
+	29, 30, 31, 32, 33,
+	35, 39,
+	40, 41, 44, 45, 46, 47, 48, 49,
+	51, 52, 53, 59, 60, 61, 62, 63,
+	65, 66, 67, 68, 69,
+	70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+	81, 82, 83, 87, 88, 89,
+	92, 94, 96,
+}
+
+func TestProposalParamKey_AllActiveTypesMapped(t *testing.T) {
+	dp := state.NewDynamicProperties()
+	for _, id := range activeProposalTypes {
+		key := forks.ProposalParamKey(id)
+		if key == "" {
+			t.Errorf("ProposalType id=%d: no go-tron key mapped", id)
+			continue
+		}
+		if _, ok := dp.Get(key); !ok {
+			t.Errorf("ProposalType id=%d → %q: key missing from DynamicProperties defaults",
+				id, key)
+		}
+	}
+}
+
+func TestProposalParamKey_UnknownReturnsEmpty(t *testing.T) {
+	cases := []int64{
+		// Historical IDs that were commented out in ProposalUtil.java and
+		// must not map to anything in go-tron.
+		27, 28, 34, 42, 43, 58,
+		// Far outside the defined range.
+		1000, -1,
+	}
+	for _, id := range cases {
+		if key := forks.ProposalParamKey(id); key != "" {
+			t.Errorf("ProposalParamKey(%d): got %q, want empty", id, key)
+		}
+	}
+}

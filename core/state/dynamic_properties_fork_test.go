@@ -24,7 +24,6 @@ func TestAllowFlagDefaultFalse(t *testing.T) {
 		dp.AllowEnergyAdjustment(),
 		dp.AllowAdaptiveEnergy(),
 		dp.AllowTvmShieldedToken(),
-		dp.AllowAccountHistory(),
 		dp.AllowPbft(),
 		dp.AllowTvmBigInteger(),
 		dp.AllowTvmBlob(),

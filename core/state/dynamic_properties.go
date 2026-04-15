@@ -49,10 +49,12 @@ var defaultProps = map[string]int64{
 	"allow_tvm_istanbul":                        0,
 	"allow_market_transaction":                  0,
 	"allow_tvm_freeze":                          0,
-	"allow_tvm_shielded_token":                  0,
-	"allow_tvm_vote":                            0,
-	"allow_account_history":                     0,
-	"allow_pbft":                                0,
+	// TODO(M1.3): allow_tvm_shielded_token is go-tron-specific;
+	// java-tron gates the same precompiles on allow_shielded_trc20_transaction.
+	// Reconcile during fork-gate audit.
+	"allow_tvm_shielded_token": 0,
+	"allow_tvm_vote":           0,
+	"allow_pbft":               0,
 	"allow_staking_v2":                          0,
 	"allow_tvm_london":                          0,
 	"allow_tvm_compatible_evm":                   0,
@@ -381,17 +383,6 @@ func (dp *DynamicProperties) SetAllowTvmVote(v bool) {
 		dp.Set("allow_tvm_vote", 1)
 	} else {
 		dp.Set("allow_tvm_vote", 0)
-	}
-}
-
-func (dp *DynamicProperties) AllowAccountHistory() bool {
-	return dp.props["allow_account_history"] != 0
-}
-func (dp *DynamicProperties) SetAllowAccountHistory(v bool) {
-	if v {
-		dp.Set("allow_account_history", 1)
-	} else {
-		dp.Set("allow_account_history", 0)
 	}
 }
 
