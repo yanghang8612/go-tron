@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -98,6 +99,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 				ParentHash:       parent.Hash().Bytes(),
 				WitnessAddress:   witnessAddr.Bytes(),
 				AccountStateRoot: root.Bytes(),
+				Version:          params.BlockVersion,
 			},
 		},
 		Transactions: appliedTxProtos,

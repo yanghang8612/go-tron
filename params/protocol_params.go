@@ -15,7 +15,12 @@ const (
 	FrozenPeriod               = 86_400_000
 	DelegatePeriod             = 3 * 86_400_000
 	DefaultMaintenanceInterval = 6 * 3600 * 1000
-	BlockVersion               = 34
+	// BlockVersion is the value written to BlockHeader.raw.version by
+	// producers. It declares the SR's running software fork version;
+	// java-tron's ForkController tallies these across recent blocks to
+	// activate version-gated features. Bumping this value implies a
+	// coordinated network upgrade — see core/forks/versions.go.
+	BlockVersion = 35 // VERSION_4_8_2, mirrors java-tron ChainConstant.BLOCK_VERSION
 	WindowSizeMs               = 86_400_000
 	WindowSizeSlots            = WindowSizeMs / BlockProducedInterval
 )

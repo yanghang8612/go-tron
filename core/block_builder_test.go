@@ -54,6 +54,9 @@ func TestBuildBlock_EmptyPool(t *testing.T) {
 	if len(block.Transactions()) != 0 {
 		t.Fatalf("expected 0 transactions, got %d", len(block.Transactions()))
 	}
+	if got := block.Version(); got != params.BlockVersion {
+		t.Fatalf("block version: want %d, got %d", params.BlockVersion, got)
+	}
 }
 
 func TestBuildBlock_WithTransactions(t *testing.T) {
