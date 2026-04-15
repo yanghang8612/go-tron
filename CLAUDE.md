@@ -60,6 +60,8 @@ Forked from go-ethereum's EVM and then trimmed/renamed to TVM semantics: TRON-sp
 
 `params/mainnet.go` and `params/nile.go` pin chain IDs, network IDs, and fork block numbers. `core/forks/forks.go` defines the fork gates that actuators and the VM check. Adding a fork: update the params file, add a gate predicate in `forks.go`, and gate behavior changes behind that predicate — never behind a raw block number comparison scattered in actuators.
 
+SR software fork versions follow java-tron's quorum model: block producers write `params.BlockVersion` into `BlockHeader.raw.version`, and `core/forks/controller.go` tallies these per-version byte bitmaps (persisted via `core/rawdb/accessors_fork.go`) and returns `Pass(version)` once the HardForkTime + rate threshold is met. The complete AllowFlag → DP key → proposal ID map lives in `docs/dev/fork-gates.md`; snapshot audits under `docs/dev/fork-audit-<date>.md` are produced by `scripts/dev/fork_audit.sh`.
+
 ## Conventions
 
 - Module path `github.com/tronprotocol/go-tron`, Go 1.25.

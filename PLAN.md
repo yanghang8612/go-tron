@@ -312,7 +312,7 @@
 | M0″ 完整一致性回放 | 未开始 | — | — | M1 核心落地后再做 |
 | M1.1 DP backfill | 完成 | 2026-04-15 | 待提交 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
 | M1.2 Freeze V1 | 完成 | 2026-04-15 | 待提交 | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
-| M1.3 版本位 + 分叉 audit | 未开始 | — | — | M1.2 已合入；下一步启动 |
+| M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 待提交 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
 | M1.4 自适应能量 | 未开始 | — | — | |
 | M1.5 奖励 v2 + 委托奖励 | 未开始 | — | — | |
 | M1.6 存储租金 | 未开始 | — | — | |
