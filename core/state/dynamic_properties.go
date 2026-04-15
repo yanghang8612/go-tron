@@ -55,13 +55,8 @@ var defaultProps = map[string]int64{
 	"allow_tvm_istanbul":                        0,
 	"allow_market_transaction":                  0,
 	"allow_tvm_freeze":                          0,
-	// TODO(M1.3): allow_tvm_shielded_token is go-tron-specific;
-	// java-tron gates the same precompiles on allow_shielded_trc20_transaction.
-	// Reconcile during fork-gate audit.
-	"allow_tvm_shielded_token": 0,
 	"allow_tvm_vote":           0,
 	"allow_pbft":               0,
-	"allow_staking_v2":                          0,
 	"allow_tvm_london":                          0,
 	"allow_tvm_compatible_evm":                   0,
 	"allow_dynamic_energy":                      0,
@@ -309,6 +304,13 @@ func (dp *DynamicProperties) MaxCpuTimeOfOneTx() int64 {
 func (dp *DynamicProperties) AllowNewResourceModel() bool {
 	return dp.props["allow_new_resource_model"] != 0
 }
+func (dp *DynamicProperties) SetAllowNewResourceModel(v bool) {
+	if v {
+		dp.Set("allow_new_resource_model", 1)
+	} else {
+		dp.Set("allow_new_resource_model", 0)
+	}
+}
 
 func (dp *DynamicProperties) AllowSameTokenName() bool {
 	return dp.props["allow_same_token_name"] != 0
@@ -431,15 +433,13 @@ func (dp *DynamicProperties) SetAllowTvmFreeze(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowTvmShieldedToken() bool {
-	return dp.props["allow_tvm_shielded_token"] != 0
-}
+// AllowTvmShieldedToken / SetAllowTvmShieldedToken are compatibility wrappers.
+// VM precompiles named this historically; java-tron gates them on
+// allow_shielded_trc20_transaction (proposal #39). Delegate so the flag
+// flips when proposal #39 passes.
+func (dp *DynamicProperties) AllowTvmShieldedToken() bool { return dp.AllowShieldedTrc20Transaction() }
 func (dp *DynamicProperties) SetAllowTvmShieldedToken(v bool) {
-	if v {
-		dp.Set("allow_tvm_shielded_token", 1)
-	} else {
-		dp.Set("allow_tvm_shielded_token", 0)
-	}
+	dp.SetAllowShieldedTrc20Transaction(v)
 }
 
 func (dp *DynamicProperties) AllowTvmVote() bool {
@@ -464,16 +464,13 @@ func (dp *DynamicProperties) SetAllowPbft(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowStakingV2() bool {
-	return dp.props["allow_staking_v2"] != 0
-}
-func (dp *DynamicProperties) SetAllowStakingV2(v bool) {
-	if v {
-		dp.Set("allow_staking_v2", 1)
-	} else {
-		dp.Set("allow_staking_v2", 0)
-	}
-}
+// AllowStakingV2 and SetAllowStakingV2 are compatibility wrappers for the
+// V2 staking feature gate. java-tron uses a single flag for both the
+// state-layer V2 rules (freeze/unfreeze/delegate) and the VM V2 precompiles:
+// `allow_new_resource_model` (proposal #62). These wrappers delegate there
+// so every go-tron gate flips together when proposal #62 passes.
+func (dp *DynamicProperties) AllowStakingV2() bool { return dp.AllowNewResourceModel() }
+func (dp *DynamicProperties) SetAllowStakingV2(v bool) { dp.SetAllowNewResourceModel(v) }
 
 func (dp *DynamicProperties) AllowTvmLondon() bool {
 	return dp.props["allow_tvm_london"] != 0

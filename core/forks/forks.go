@@ -46,10 +46,10 @@ var dynKey = map[AllowFlag]string{
 	AllowTvmIstanbul:         "allow_tvm_istanbul",
 	AllowMarketTransaction:   "allow_market_transaction",
 	AllowTvmFreeze:           "allow_tvm_freeze",
-	AllowTvmShieldedToken:    "allow_tvm_shielded_token",
+	AllowTvmShieldedToken:    "allow_shielded_trc20_transaction", // alias: proposal #39 gates the VM shielded token precompiles
 	AllowTvmVote:             "allow_tvm_vote",
 	AllowPbft:                "allow_pbft",
-	AllowStakingV2:           "allow_staking_v2",
+	AllowStakingV2:           "allow_new_resource_model", // alias: V2 staking rides the same proposal #62 as the state-layer V2 gate
 	AllowTvmLondon:           "allow_tvm_london",
 	AllowTvmCompatibleEvm:    "allow_tvm_compatible_evm",
 	AllowDynamicEnergy:       "allow_dynamic_energy",

@@ -89,14 +89,19 @@ func TestExchangeBalanceLimit(t *testing.T) {
 
 func TestAllowFlagPersistence(t *testing.T) {
 	dp := NewDynamicProperties()
+	// AllowStakingV2 is an alias for AllowNewResourceModel since M1.3 Task 5
+	// — java-tron uses one flag for both state-layer V2 and VM V2 precompiles.
 	dp.SetAllowStakingV2(true)
 	dp.SetAllowTvmIstanbul(true)
-	v1, ok1 := dp.Get("allow_staking_v2")
+	v1, ok1 := dp.Get("allow_new_resource_model")
 	v2, ok2 := dp.Get("allow_tvm_istanbul")
 	if !ok1 || v1 != 1 {
-		t.Fatalf("allow_staking_v2 not persisted correctly: ok=%v v=%v", ok1, v1)
+		t.Fatalf("allow_new_resource_model not persisted correctly: ok=%v v=%v", ok1, v1)
 	}
 	if !ok2 || v2 != 1 {
 		t.Fatalf("allow_tvm_istanbul not persisted correctly: ok=%v v=%v", ok2, v2)
+	}
+	if !dp.AllowStakingV2() || !dp.AllowNewResourceModel() {
+		t.Fatal("both alias and canonical getters must read true")
 	}
 }
