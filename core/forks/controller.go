@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 )
 
 // ForkController tallies per-block SR votes for software fork versions and
@@ -114,6 +115,32 @@ func (fc *ForkController) Pass(version int32, latestBlockTime, maintenanceInterv
 	}
 	required := int(math.Ceil(float64(vp.HardForkRate) * float64(len(stats)) / 100.0))
 	return upvotes >= required
+}
+
+// IsActive answers the "feature is on" question for a governance AllowFlag.
+// Two checks: the DP soft flag (allow_X) must be nonzero AND — if the
+// flag has a required version — that version must have passed the
+// hardForkTime + rate quorum gate.
+//
+// This is the call the actuator / VM path should make going forward.
+// During Task 5 migration, existing forks.IsActive(flag, blockNum, dp)
+// sites are moved to fc.IsActive(flag, dp, latestBlockTime).
+func (fc *ForkController) IsActive(flag AllowFlag, dp *state.DynamicProperties, latestBlockTime int64) bool {
+	if dp == nil {
+		return false
+	}
+	key, ok := dynKey[flag]
+	if !ok {
+		return false
+	}
+	if v, _ := dp.Get(key); v == 0 {
+		return false
+	}
+	req, hasVersionGate := RequiredVersion(flag)
+	if !hasVersionGate {
+		return true
+	}
+	return fc.Pass(req, latestBlockTime, dp.MaintenanceTimeInterval())
 }
 
 // Stats returns the raw bitmap for a version, primarily for tests and
