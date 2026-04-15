@@ -34,6 +34,10 @@ func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
+	// Single-account world: total_net_weight mirrors this account's freeze
+	// so availableAccountNet == total_net_limit.
+	dynProps.SetTotalNetWeight(1)
+	dynProps.Set("unfreeze_delay_days", 14)
 
 	sender := testProcessorAddr(1)
 	statedb.CreateAccount(sender, corepb.AccountType_Normal)
