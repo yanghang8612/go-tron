@@ -311,8 +311,8 @@
 | M0′ Fixture 抽取工具 | 完成（Nile 场景延后） | 2026-04-15 | 待提交 | 场景 00 mainnet DP 已入库；01 Nile 因缺 config 延后 |
 | M0″ 完整一致性回放 | 未开始 | — | — | M1 核心落地后再做 |
 | M1.1 DP backfill | 完成 | 2026-04-15 | 待提交 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
-| M1.2 Freeze V1 | 未开始 | — | — | |
-| M1.3 版本位 + 分叉 audit | 未开始 | — | — | |
+| M1.2 Freeze V1 | 完成 | 2026-04-15 | 待提交 | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
+| M1.3 版本位 + 分叉 audit | 未开始 | — | — | M1.2 已合入；下一步启动 |
 | M1.4 自适应能量 | 未开始 | — | — | |
 | M1.5 奖励 v2 + 委托奖励 | 未开始 | — | — | |
 | M1.6 存储租金 | 未开始 | — | — | |
