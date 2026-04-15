@@ -46,6 +46,13 @@ var (
 	nullifierPrefix        = []byte("nf-")
 	noteCommitmentPrefix   = []byte("nc-")
 	noteCommitmentCountKey = []byte("nccount")
+
+	// forkStatsPrefix stores per-block-version SR vote bitmaps.
+	// Key:   forkStatsPrefix || big-endian int32 version
+	// Value: byte slice of length == active witness count; index = slot,
+	//        value == 0x01 (VERSION_UPGRADE) or 0x00 (VERSION_DOWNGRADE).
+	// Mirrors java-tron DynamicPropertiesStore's FORK_VERSION_<v> keys.
+	forkStatsPrefix = []byte("fv-")
 )
 
 func blockKey(number uint64) []byte {
@@ -84,6 +91,13 @@ func witnessKey(addr []byte) []byte {
 
 func dynPropKey(name string) []byte {
 	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
+}
+
+func forkStatsKey(version int32) []byte {
+	k := make([]byte, len(forkStatsPrefix)+4)
+	copy(k, forkStatsPrefix)
+	binary.BigEndian.PutUint32(k[len(forkStatsPrefix):], uint32(version))
+	return k
 }
 
 func proposalKey(id int64) []byte {
