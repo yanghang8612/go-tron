@@ -49,14 +49,15 @@ The machinery behind each column:
 
 ## go-tron specific (no java-tron proposal)
 
-| AllowFlag | DP key | Disposition | Notes |
-|---|---|---|---|
-| `AllowTvmBigInteger` | `allow_tvm_big_integer` | **Keep private.** | Consumed by `vm/tvm_config.go:44` (TVM BigInt opcode). java-tron has no matching `ProposalType`; no proposal can activate it. Revisit in M7 TVM alignment when deciding whether to remove or map to a version-bit gate. |
-| `AllowTvmSolidity058` | `allow_tvm_solidity058` | **Dead leaf.** | Loaded into `vm/tvm_config.go` but interpreter doesn't actually branch on it. No java counterpart. Candidate for deletion in M7 after VM cleanup sweep. |
+(none — the flags previously listed here were verified against
+java-tron and removed; see Retired.)
 
 ## Retired
 
-(none yet)
+| AllowFlag | DP key | Removed | Reason |
+|---|---|---|---|
+| `AllowTvmBigInteger` | `allow_tvm_big_integer` | 2026-04-15 | No `ProposalType`, no `DynamicPropertiesStore` getter, no `VMConfig` method in java-tron. Full-tree grep found only `java.math.BigInteger` standard-class usages. The go-tron flag was invented in 6f3decd and never read by the TVM interpreter. |
+| `AllowTvmSolidity058` | `allow_tvm_solidity058` | 2026-04-15 | java-tron `ProposalType` has `ALLOW_TVM_SOLIDITY_059` (ID 32) only — 058 was never proposed and is not even commented out. go-tron already had `AllowTvmSolidity059` correctly mapped to proposal #32; 058 was a duplicate typo. |
 
 ## Audit workflow
 

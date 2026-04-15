@@ -42,7 +42,6 @@ func TestIsActive_AllFlags(t *testing.T) {
 		{forks.AllowTvmTransferTrc10, dp.SetAllowTvmTransferTrc10},
 		{forks.AllowTvmConstantinople, dp.SetAllowTvmConstantinople},
 		{forks.AllowTvmSolidity059, dp.SetAllowTvmSolidity059},
-		{forks.AllowTvmSolidity058, dp.SetAllowTvmSolidity058},
 		{forks.AllowTvmIstanbul, dp.SetAllowTvmIstanbul},
 		{forks.AllowMarketTransaction, dp.SetAllowMarketTransaction},
 		{forks.AllowTvmFreeze, dp.SetAllowTvmFreeze},
@@ -55,7 +54,6 @@ func TestIsActive_AllFlags(t *testing.T) {
 		{forks.AllowDynamicEnergy, dp.SetAllowDynamicEnergy},
 		// AllowNewResourceModel skipped — no setter on DynamicProperties
 		{forks.AllowEnergyAdjustment, dp.SetAllowEnergyAdjustment},
-		{forks.AllowTvmBigInteger, dp.SetAllowTvmBigInteger},
 		{forks.AllowTvmBlob, dp.SetAllowTvmBlob},
 		{forks.AllowTvmCancun, dp.SetAllowTvmCancun},
 	}

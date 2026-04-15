@@ -25,9 +25,7 @@ func TestAllowFlagDefaultFalse(t *testing.T) {
 		dp.AllowAdaptiveEnergy(),
 		dp.AllowTvmShieldedToken(),
 		dp.AllowPbft(),
-		dp.AllowTvmBigInteger(),
 		dp.AllowTvmBlob(),
-		dp.AllowTvmSolidity058(),
 	}
 	for i, f := range flags {
 		if f {

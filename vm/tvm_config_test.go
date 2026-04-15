@@ -11,7 +11,7 @@ func TestNewTVMConfig_AllFalseByDefault(t *testing.T) {
 	cfg := NewTVMConfig(0, dp)
 	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
 		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
-		cfg.Compatibility || cfg.DynamicEnergy || cfg.BigInteger || cfg.Blob || cfg.Cancun {
+		cfg.Compatibility || cfg.DynamicEnergy || cfg.Blob || cfg.Cancun {
 		t.Fatal("expected all VM fork flags false by default")
 	}
 }
@@ -50,7 +50,7 @@ func TestNewTVMConfig_NilDynProps(t *testing.T) {
 	cfg := NewTVMConfig(0, nil)
 	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
 		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
-		cfg.Compatibility || cfg.DynamicEnergy || cfg.BigInteger || cfg.Blob || cfg.Cancun {
+		cfg.Compatibility || cfg.DynamicEnergy || cfg.Blob || cfg.Cancun {
 		t.Fatal("expected all false with nil DynProps")
 	}
 }

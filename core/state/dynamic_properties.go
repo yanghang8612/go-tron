@@ -60,11 +60,9 @@ var defaultProps = map[string]int64{
 	"allow_tvm_london":                          0,
 	"allow_tvm_compatible_evm":                   0,
 	"allow_dynamic_energy":                      0,
-	"allow_tvm_big_integer":                     0,
 	"allow_tvm_blob":                            0,
 	"allow_tvm_cancun":                          0,
 	"allow_energy_adjustment":                   0,
-	"allow_tvm_solidity058":                     0,
 	"forbid_transfer_to_contract":              0,
 	"update_account_permission_fee":            100_000_000,
 	"total_sign_num":                           5,
@@ -505,17 +503,6 @@ func (dp *DynamicProperties) SetAllowDynamicEnergy(v bool) {
 	}
 }
 
-func (dp *DynamicProperties) AllowTvmBigInteger() bool {
-	return dp.props["allow_tvm_big_integer"] != 0
-}
-func (dp *DynamicProperties) SetAllowTvmBigInteger(v bool) {
-	if v {
-		dp.Set("allow_tvm_big_integer", 1)
-	} else {
-		dp.Set("allow_tvm_big_integer", 0)
-	}
-}
-
 func (dp *DynamicProperties) AllowTvmBlob() bool {
 	return dp.props["allow_tvm_blob"] != 0
 }
@@ -546,17 +533,6 @@ func (dp *DynamicProperties) SetAllowEnergyAdjustment(v bool) {
 		dp.Set("allow_energy_adjustment", 1)
 	} else {
 		dp.Set("allow_energy_adjustment", 0)
-	}
-}
-
-func (dp *DynamicProperties) AllowTvmSolidity058() bool {
-	return dp.props["allow_tvm_solidity058"] != 0
-}
-func (dp *DynamicProperties) SetAllowTvmSolidity058(v bool) {
-	if v {
-		dp.Set("allow_tvm_solidity058", 1)
-	} else {
-		dp.Set("allow_tvm_solidity058", 0)
 	}
 }
 

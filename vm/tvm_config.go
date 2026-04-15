@@ -19,7 +19,6 @@ type TVMConfig struct {
 	London         bool // allow_tvm_london: BASEFEE
 	Compatibility  bool // allow_tvm_compatibility
 	DynamicEnergy  bool // allow_dynamic_energy
-	BigInteger     bool // allow_tvm_big_integer
 	Blob           bool // allow_tvm_blob
 	Cancun         bool // allow_tvm_cancun: TLOAD, TSTORE, MCOPY
 }
@@ -41,7 +40,6 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		London:         isActive(forks.AllowTvmLondon),
 		Compatibility:  isActive(forks.AllowTvmCompatibleEvm),
 		DynamicEnergy:  isActive(forks.AllowDynamicEnergy),
-		BigInteger:     isActive(forks.AllowTvmBigInteger),
 		Blob:           isActive(forks.AllowTvmBlob),
 		Cancun:         isActive(forks.AllowTvmCancun),
 	}
