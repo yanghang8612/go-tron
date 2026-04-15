@@ -84,28 +84,32 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	ownerAddr := common.BytesToAddress(uc.OwnerAddress)
 	delegated := len(uc.ReceiverAddress) > 0
 
+	var removed int64
 	if !delegated {
-		var refunded int64
 		switch uc.Resource {
 		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
-			refunded = ctx.State.UnfreezeV1Bandwidth(ownerAddr, ctx.BlockTime)
+			removed = ctx.State.UnfreezeV1Bandwidth(ownerAddr, ctx.BlockTime)
 		case corepb.ResourceCode_ENERGY:
-			refunded = ctx.State.UnfreezeV1Energy(ownerAddr, ctx.BlockTime)
+			removed = ctx.State.UnfreezeV1Energy(ownerAddr, ctx.BlockTime)
 		}
-		ctx.State.AddBalance(ownerAddr, refunded)
+		ctx.State.AddBalance(ownerAddr, removed)
 	} else {
 		receiverAddr := common.BytesToAddress(uc.ReceiverAddress)
-		var delegatedAmt int64
 		switch uc.Resource {
 		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
-			delegatedAmt = ctx.State.GetDelegatedFrozenV1Bandwidth(ownerAddr)
-			ctx.State.UnfreezeV1DelegatedBandwidth(ownerAddr, receiverAddr, delegatedAmt)
+			removed = ctx.State.GetDelegatedFrozenV1Bandwidth(ownerAddr)
+			ctx.State.UnfreezeV1DelegatedBandwidth(ownerAddr, receiverAddr, removed)
 		case corepb.ResourceCode_ENERGY:
-			delegatedAmt = ctx.State.GetDelegatedFrozenV1Energy(ownerAddr)
-			ctx.State.UnfreezeV1DelegatedEnergy(ownerAddr, receiverAddr, delegatedAmt)
+			removed = ctx.State.GetDelegatedFrozenV1Energy(ownerAddr)
+			ctx.State.UnfreezeV1DelegatedEnergy(ownerAddr, receiverAddr, removed)
 		}
-		ctx.State.AddBalance(ownerAddr, delegatedAmt)
+		ctx.State.AddBalance(ownerAddr, removed)
 	}
+
+	// Shrink global weight by the amount returned to liquid balance.
+	// Intentionally NOT gated on allow_new_resource_model — historical V1
+	// unfreezes must stay reachable post-fork.
+	addV1ResourceWeight(ctx.DynProps, uc.Resource, -removed)
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }
