@@ -90,7 +90,7 @@ docs/dev/
   "scenario": "00-genesis-dp-mainnet",
   "javaTron": {
     "version": "4.7.5",
-    "gitCommit": "abc1234",
+    "jarSha256": "abcdef...",
     "configSha256": "deadbeef..."
   },
   "extractedAt": "2026-04-15T12:00:00Z",
@@ -154,12 +154,13 @@ func TestDynamicProperties_MainnetDefaults(t *testing.T) {
 
 ## 4. 种子场景
 
-两个，仅此足以支撑 M1.1 启动：
+一个，足以驱动 M1.1 启动并验证抽取管线：
 
 | 场景 | config | 交易 | dump section | 用途 |
 |---|---|---|---|---|
 | `00-genesis-dp-mainnet` | mainnet 默认 | 无 | `dynamicProperties` | M1.1 断言 `params/mainnet.go` 初始 DP |
-| `01-genesis-dp-nile` | nile 默认 | 无 | `dynamicProperties` | M1.1 断言 `params/nile.go` 初始 DP |
+
+**原计划的 `01-genesis-dp-nile` 延后**：Nile 的规范 config（含 genesis、SR 列表、网络 ID）未在 `tronprotocol/tron-deployment` 等公开仓库中发布，本地 java-tron 源码也不含。等后续能确认一份可信 Nile config 后再补场景；现状不影响 M1.1 的主要验证目标（go-tron 默认 DP 对齐 mainnet）。
 
 后续 M1 子里程碑按需新增场景：
 - M1.2 Freeze V1: `freeze-v1-then-unfreeze`、`freeze-v1-delegate` 等。

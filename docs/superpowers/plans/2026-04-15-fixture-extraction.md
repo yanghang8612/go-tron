@@ -251,23 +251,11 @@ java-tron `/wallet/getchainparameters` 返回形如 `{"chainParameter": [{"key":
 
 ---
 
-## Task 6：种子场景 01 (`01-genesis-dp-nile`)
+## Task 6：种子场景 01 (`01-genesis-dp-nile`) — **DEFERRED**
 
-**Files:**
-- Create: `scripts/fixtures/scenarios/01-genesis-dp-nile/*`（结构同 Task 5）
-- Create: `test/fixtures/01-genesis-dp-nile/fixture.json`
+**状态**：暂缓。`tronprotocol/tron-deployment` 公开仓库当前只提供 `main_net`、`test_net`、`private_net` 三个 config，**没有** Nile 专用 config；java-tron 源码树也不含。为避免猜造一份不可信 config 污染 fixture，Task 6 延后到能确认可信 Nile config 来源后再补。
 
-**Steps:**
-
-- [ ] **Step 1**：复制场景 00 的脚手架，`config.conf` 切换为 Nile 配置（参考 java-tron 仓库 `framework/src/main/resources/config-nile.conf` 或 Nile 官方配置）
-
-- [ ] **Step 2**：run/dump 仅替换 scenario 名字
-
-- [ ] **Step 3**：跑一次落盘
-
-**Acceptance:**
-- 与场景 00 同样验收标准。
-- **Nile 的 DP 默认值与 mainnet 有实质差异**（至少几个 `allow_*` 标志不同），否则说明 config 没切对。
+不影响 M1.1 主验证目标：M1.1 的核心价值是对齐 go-tron 默认 DP 与 java-tron mainnet 默认 DP，场景 00 已够。Nile 场景后续作为独立 PR 补入。
 
 ---
 

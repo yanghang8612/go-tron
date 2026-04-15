@@ -1,4 +1,4 @@
-.PHONY: gtron all test lint proto clean
+.PHONY: gtron all test lint proto clean fixtures fixtures-list
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -29,3 +29,11 @@ proto:
 clean:
 	rm -rf build/
 	$(GO) clean -cache
+
+# Fixture extraction needs a local java-tron; not part of `all` or `test`.
+# See docs/dev/fixture-tooling.md.
+fixtures-list:
+	@scripts/fixtures/run.sh list
+
+fixtures:
+	@scripts/fixtures/run.sh all
