@@ -26,6 +26,12 @@ var defaultProps = map[string]int64{
 	"total_energy_target_limit":                 3472222,
 	"total_energy_average_usage":                0,
 	"total_net_limit":                           43200000000,
+	// Internal resource-weight counters (in TRX units, per java-tron
+	// DynamicPropertiesStore.addTotalNetWeight comment "The unit is trx").
+	// Default 0 — grown by freeze actuators, shrunk by unfreeze.
+	"total_net_weight":                          0,
+	"total_energy_weight":                       0,
+	"total_tron_power_weight":                   0,
 	"unfreeze_delay_days":                       0,
 	"latest_block_header_timestamp":             0,
 	"latest_block_header_number":                0,
@@ -229,6 +235,67 @@ func (dp *DynamicProperties) TotalEnergyCurrentLimit() int64 {
 
 func (dp *DynamicProperties) TotalNetLimit() int64 {
 	return dp.props["total_net_limit"]
+}
+
+// --- Resource weight counters ---
+// Mirror java-tron's TOTAL_{NET,ENERGY,TRON_POWER}_WEIGHT in
+// DynamicPropertiesStore. Unit is TRX (not SUN); actuators convert
+// frozen SUN amounts via `amount / TRX_PRECISION` before calling Add*.
+
+func (dp *DynamicProperties) TotalNetWeight() int64 { return dp.props["total_net_weight"] }
+func (dp *DynamicProperties) SetTotalNetWeight(v int64) {
+	dp.Set("total_net_weight", v)
+}
+
+func (dp *DynamicProperties) TotalEnergyWeight() int64 { return dp.props["total_energy_weight"] }
+func (dp *DynamicProperties) SetTotalEnergyWeight(v int64) {
+	dp.Set("total_energy_weight", v)
+}
+
+func (dp *DynamicProperties) TotalTronPowerWeight() int64 {
+	return dp.props["total_tron_power_weight"]
+}
+func (dp *DynamicProperties) SetTotalTronPowerWeight(v int64) {
+	dp.Set("total_tron_power_weight", v)
+}
+
+// AddTotalNetWeight adds delta to total_net_weight and clamps the result
+// to >= 0 when allow_new_reward is active, mirroring java-tron's
+// DynamicPropertiesStore.addTotalNetWeight. delta == 0 is a no-op and
+// leaves the dirty flag unset.
+func (dp *DynamicProperties) AddTotalNetWeight(delta int64) {
+	if delta == 0 {
+		return
+	}
+	next := dp.TotalNetWeight() + delta
+	if dp.AllowNewReward() && next < 0 {
+		next = 0
+	}
+	dp.SetTotalNetWeight(next)
+}
+
+// AddTotalEnergyWeight — see AddTotalNetWeight.
+func (dp *DynamicProperties) AddTotalEnergyWeight(delta int64) {
+	if delta == 0 {
+		return
+	}
+	next := dp.TotalEnergyWeight() + delta
+	if dp.AllowNewReward() && next < 0 {
+		next = 0
+	}
+	dp.SetTotalEnergyWeight(next)
+}
+
+// AddTotalTronPowerWeight — see AddTotalNetWeight.
+func (dp *DynamicProperties) AddTotalTronPowerWeight(delta int64) {
+	if delta == 0 {
+		return
+	}
+	next := dp.TotalTronPowerWeight() + delta
+	if dp.AllowNewReward() && next < 0 {
+		next = 0
+	}
+	dp.SetTotalTronPowerWeight(next)
 }
 
 func (dp *DynamicProperties) UnfreezeDelayDays() int64 {
