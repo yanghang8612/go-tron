@@ -1,7 +1,22 @@
 # Hard Fork Mechanism — Design Spec
 
-**Date:** 2026-04-12  
-**Status:** Approved  
+**Date:** 2026-04-12
+**Status:** ⚠️ **SUPERSEDED — do not consult for planning**
+
+This spec was the original single-shot plan for the fork mechanism.
+The work was re-scoped and delivered as three independent milestones:
+
+- DP backfill → `2026-04-15-m1-1-dp-backfill-design.md` + `…plan` (M1.1)
+- Freeze V1 legacy support → `2026-04-15-m1-2-freeze-v1-design.md` + `…plan` (M1.2)
+- Version-bit voting + audit → `2026-04-15-m1-3-version-bits-fork-audit-design.md` + `…plan` (M1.3)
+
+This file contains several references to AllowFlags that do not exist
+in java-tron (`AllowTvmBigInteger` proposal-ID 78, `AllowTvmSolidity058`,
+`AllowTvmShieldedToken` / `AllowStakingV2` as standalone proposals).
+Those were either removed (phantom flags) or aliased to their real
+java-tron counterparts during M1.3 — see `docs/dev/fork-gates.md` for
+the current authoritative table.
+
 **Approach:** Option C — Hybrid proposal flags + block-height fallback
 
 ---

@@ -1,5 +1,17 @@
 # Hard Fork Mechanism Implementation Plan
 
+> ⚠️ **SUPERSEDED — historical reference only.** Follow the M1.1 / M1.2 / M1.3 plans instead:
+> - `2026-04-15-m1-1-dp-backfill.md`
+> - `2026-04-15-m1-2-freeze-v1.md`
+> - `2026-04-15-m1-3-version-bits-fork-audit.md`
+>
+> This plan names several AllowFlags that turned out to be phantoms
+> (`AllowTvmBigInteger` with proposal-ID 78, `AllowTvmSolidity058`) or
+> duplicated names already present in java-tron under different keys
+> (`AllowStakingV2`, `AllowTvmShieldedToken`). Do not use it as the
+> source-of-truth for what to implement; `docs/dev/fork-gates.md`
+> carries the current authoritative table.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement java-tron's hard fork mechanism in go-tron: 24 AllowXxx feature flags, a `core/forks` package, a `TVMConfig` struct, VM opcode gating, proposal→flag wiring, and fork gates in 11 actuators.
