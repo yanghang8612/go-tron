@@ -107,7 +107,7 @@ var proposalParamKey = map[int64]string{
 	16: "allow_delegate_resource",
 	17: "total_energy_limit",
 	18: "allow_tvm_transfer_trc10",
-	19: "total_energy_current_limit",
+	19: "total_energy_limit", // java `TOTAL_CURRENT_ENERGY_LIMIT` writes to the same DP key as #17 via saveTotalEnergyLimit2
 	20: "allow_multi_sign",
 	21: "allow_adaptive_energy",
 	22: "update_account_permission_fee",
@@ -129,7 +129,7 @@ var proposalParamKey = map[int64]string{
 	46: "market_cancel_fee",
 	47: "max_fee_limit",
 	48: "allow_transaction_fee_pool",
-	49: "allow_optimize_black_hole",
+	49: "allow_blackhole_optimization",
 	51: "allow_new_resource_model",
 	52: "allow_tvm_freeze",
 	53: "allow_account_asset_optimization",

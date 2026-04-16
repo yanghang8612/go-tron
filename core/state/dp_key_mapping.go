@@ -78,7 +78,10 @@ var javaGetterToGoKeyMap = map[string]string{
 	"getAllowHigherLimitForMaxCpuTimeOfOneTx":  "allow_higher_limit_for_max_cpu_time_of_one_tx",
 	"getAllowNewReward":                        "allow_new_reward",
 	"getAllowOldRewardOpt":                     "allow_old_reward_opt",
-	"getAllowOptimizeBlackHole":                "allow_optimize_black_hole",
+	// Wallet.java:1354 exposes the DP value under the historical SDK label
+	// "getAllowOptimizeBlackHole" but the internal DP key is
+	// ALLOW_BLACKHOLE_OPTIMIZATION (see DynamicPropertiesStore.java:168).
+	"getAllowOptimizeBlackHole":                "allow_blackhole_optimization",
 	"getAllowOptimizedReturnValueOfChainId":    "allow_optimized_return_value_of_chain_id",
 	"getAllowProtoFilterNum":                   "allow_proto_filter_num",
 	"getAllowShieldedTRC20Transaction":         "allow_shielded_trc20_transaction",

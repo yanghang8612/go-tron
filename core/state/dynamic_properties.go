@@ -90,7 +90,7 @@ var defaultProps = map[string]int64{
 	"allow_higher_limit_for_max_cpu_time_of_one_tx": 0,
 	"allow_new_reward":                              0,
 	"allow_old_reward_opt":                          0,
-	"allow_optimize_black_hole":                     0,
+	"allow_blackhole_optimization":                     0,
 	"allow_optimized_return_value_of_chain_id":      0,
 	"allow_proto_filter_num":                        0,
 	"allow_shielded_trc20_transaction":              0,
@@ -851,11 +851,15 @@ func (dp *DynamicProperties) SetAllowOldRewardOpt(v bool) {
 	boolSet(dp, "allow_old_reward_opt", v)
 }
 
-func (dp *DynamicProperties) AllowOptimizeBlackHole() bool {
-	return boolGet(dp, "allow_optimize_black_hole")
+// AllowBlackHoleOptimization mirrors java-tron's getAllowBlackHoleOptimization
+// (DP key ALLOW_BLACKHOLE_OPTIMIZATION). Note: the /wallet/getchainparameters
+// HTTP API still exposes this value under the legacy label
+// "getAllowOptimizeBlackHole" for SDK compatibility (see Wallet.java:1354).
+func (dp *DynamicProperties) AllowBlackHoleOptimization() bool {
+	return boolGet(dp, "allow_blackhole_optimization")
 }
-func (dp *DynamicProperties) SetAllowOptimizeBlackHole(v bool) {
-	boolSet(dp, "allow_optimize_black_hole", v)
+func (dp *DynamicProperties) SetAllowBlackHoleOptimization(v bool) {
+	boolSet(dp, "allow_blackhole_optimization", v)
 }
 
 func (dp *DynamicProperties) AllowOptimizedReturnValueOfChainId() bool {
