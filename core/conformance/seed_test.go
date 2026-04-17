@@ -1,11 +1,16 @@
 package conformance
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func writeJSON(t *testing.T, path string, v any) {
@@ -88,17 +93,61 @@ func TestLoadSeed_BadAddress(t *testing.T) {
 	}
 }
 
-func TestLoadSeed_RawFieldRejectedForNow(t *testing.T) {
+func TestLoadSeed_RawAccountRoundTrip(t *testing.T) {
+	// Build a full Account proto with fields not covered by SeedAccount's
+	// named fields (latestOpTime, allowance). Base64-encode it; round-trip
+	// it through LoadSeed; assert every field survives.
+	pb := &corepb.Account{
+		Address:       []byte{0x41, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa},
+		Balance:       12345,
+		LatestOprationTime: 999,
+		Allowance:     1_000_000,
+	}
+	bs, err := proto.Marshal(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(base64.StdEncoding.EncodeToString(bs))
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "seed.json")
 	writeJSON(t, path, Seed{
 		Schema: SchemaVersion,
 		Accounts: []SeedAccount{
-			{Address: mustAddr("a"), Raw: json.RawMessage(`{"balance":1}`)},
+			{Address: mustAddr("a"), Raw: json.RawMessage(encoded)},
+		},
+		ClosureAddresses: []string{mustAddr("a")},
+	})
+	loaded, err := LoadSeed(path)
+	if err != nil {
+		t.Fatalf("load raw account: %v", err)
+	}
+	got := loaded.StateDB.GetAccount(loaded.Closure[0])
+	if got == nil {
+		t.Fatal("account missing after raw ingestion")
+	}
+	if got.Balance() != 12345 {
+		t.Fatalf("balance: got %d, want 12345", got.Balance())
+	}
+	if got.Proto().LatestOprationTime != 999 {
+		t.Fatalf("latestOprationTime lost: got %d", got.Proto().LatestOprationTime)
+	}
+	if got.Proto().Allowance != 1_000_000 {
+		t.Fatalf("allowance lost: got %d", got.Proto().Allowance)
+	}
+}
+
+func TestLoadSeed_RawAccountRejectsMalformed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seed.json")
+	writeJSON(t, path, Seed{
+		Schema: SchemaVersion,
+		Accounts: []SeedAccount{
+			{Address: mustAddr("a"), Raw: json.RawMessage(`{"not":"a string"}`)},
 		},
 	})
 	if _, err := LoadSeed(path); err == nil {
-		t.Fatal("expected raw unsupported error")
+		t.Fatal("expected raw parse error")
 	}
 }
 

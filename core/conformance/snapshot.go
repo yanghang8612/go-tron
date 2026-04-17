@@ -87,16 +87,16 @@ func LoadSnapshot(r io.Reader) (*Loaded, *Snapshot, error) {
 		if err := proto.Unmarshal(accBytes, &pb); err != nil {
 			return nil, nil, fmt.Errorf("account %s: proto unmarshal: %w", a.Address, err)
 		}
-		// Mirror the incoming proto onto a fresh state object. We can't
-		// just shove the proto in — StateDB expects to construct its own
-		// object. Recreate the account and copy the fields we care about.
+		// Let StateDB construct the account, then replace its underlying
+		// proto with the incoming one so every field survives (frozenV2,
+		// delegated resources, assets, allowance, latestOpTime, ...).
+		// Using proto.Reset + proto.Merge instead of a struct copy keeps
+		// the embedded protoimpl.MessageState intact (copylocks-safe).
 		sdb.CreateAccount(addr, pb.Type)
-		if pb.Balance != 0 {
-			sdb.AddBalance(addr, pb.Balance)
-		}
 		if obj := sdb.GetAccount(addr); obj != nil {
-			// Overwrite directly so every field of the proto survives.
-			*obj.Proto() = pb
+			dst := obj.Proto()
+			proto.Reset(dst)
+			proto.Merge(dst, &pb)
 		}
 	}
 

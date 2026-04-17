@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/anypb"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -31,7 +32,7 @@ func TestComputeClosure_Smoke_WitnessOnly(t *testing.T) {
 		t.Skip("empty smoke corpus")
 	}
 
-	addrs, unhandled, err := ComputeClosure(blocks)
+	addrs, unhandled, err := ComputeClosure(blocks, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestComputeClosure_TransferContract(t *testing.T) {
 		Transactions: []*corepb.Transaction{txPB},
 	})
 
-	addrs, unhandled, err := ComputeClosure([]*types.Block{blk})
+	addrs, unhandled, err := ComputeClosure([]*types.Block{blk}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +114,30 @@ func TestComputeClosure_TransferContract(t *testing.T) {
 	}
 }
 
+func TestComputeClosure_ExtrasMergeIn(t *testing.T) {
+	// Empty block + 3 extras → closure must contain the witness + all 3 extras.
+	witness, _ := ParseAddress("41" + strings.Repeat("a", 40))
+	blk := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         1,
+				WitnessAddress: witness[:],
+			},
+		},
+	})
+	e1, _ := ParseAddress("41" + strings.Repeat("b", 40))
+	e2, _ := ParseAddress("41" + strings.Repeat("c", 40))
+	e3, _ := ParseAddress("41" + strings.Repeat("d", 40))
+
+	addrs, _, err := ComputeClosure([]*types.Block{blk}, []tcommon.Address{e1, e2, e3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 4 {
+		t.Fatalf("want 4 addrs (witness+3 extras), got %d", len(addrs))
+	}
+}
+
 func TestComputeClosure_UnknownTypeGoesToUnhandled(t *testing.T) {
 	// VoteAssetContract is a real type but not in our switch — should
 	// surface as unhandled, not panic.
@@ -127,7 +152,7 @@ func TestComputeClosure_UnknownTypeGoesToUnhandled(t *testing.T) {
 		BlockHeader:  &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1}},
 		Transactions: []*corepb.Transaction{tx},
 	})
-	_, unhandled, err := ComputeClosure([]*types.Block{blk})
+	_, unhandled, err := ComputeClosure([]*types.Block{blk}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

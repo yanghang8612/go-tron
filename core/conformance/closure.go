@@ -11,15 +11,22 @@ import (
 )
 
 // ComputeClosure walks every tx in every block and returns the sorted
-// deduplicated set of addresses a replay might touch: the block witness
-// plus every address field referenced by each contract type.
+// deduplicated set of addresses a replay might touch: the block witness,
+// every address field referenced by each contract type, and any extra
+// addresses the caller supplies via `extras`.
 //
-// Contract types we don't yet extract are logged to `unhandled` (key = type,
-// value = count) so the operator can decide whether to hand-extend the
-// closure before recording. The closure is a best-effort upper bound; the
-// operator can also extend it after-the-fact via seed.json if replay
-// surfaces a missed address.
-func ComputeClosure(blocks []*types.Block) (addrs []tcommon.Address, unhandled map[corepb.Transaction_Contract_ContractType]int, err error) {
+// The standby top-127 witnesses MUST be passed through `extras` — once
+// `change_delegation` is active (mainnet default since 2021),
+// payStandbyWitness touches their allowance/cycle-reward on every block,
+// and none of those addresses appear in any transaction. Missing them
+// would silently drop state changes from the digest.
+//
+// Contract types we don't yet extract are logged to `unhandled` (key =
+// type, value = count) so the operator can decide whether to hand-extend
+// the closure. The closure is a best-effort upper bound; the operator
+// can still extend it after-the-fact via seed.json if replay surfaces a
+// missed address.
+func ComputeClosure(blocks []*types.Block, extras []tcommon.Address) (addrs []tcommon.Address, unhandled map[corepb.Transaction_Contract_ContractType]int, err error) {
 	seen := make(map[tcommon.Address]struct{})
 	unhandled = make(map[corepb.Transaction_Contract_ContractType]int)
 
@@ -29,6 +36,10 @@ func ComputeClosure(blocks []*types.Block) (addrs []tcommon.Address, unhandled m
 		}
 		var a tcommon.Address
 		copy(a[:], b)
+		seen[a] = struct{}{}
+	}
+
+	for _, a := range extras {
 		seen[a] = struct{}{}
 	}
 

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"google.golang.org/protobuf/proto"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -137,15 +139,45 @@ func normalizeDPKey(k string) string {
 }
 
 func applySeedAccount(sdb *state.StateDB, addr tcommon.Address, a SeedAccount) error {
+	// raw is the full Account proto base64-encoded (emitted by
+	// fixture-digest's DumpSnapshot / the capture pipeline). When present
+	// it's authoritative — every Account field (frozenV2, delegated
+	// resources, assets, allowance, latestOpTime, ...) survives through.
 	if a.Raw != nil {
-		return fmt.Errorf("account %s: raw proto-json not yet supported", a.Address)
+		return applyRawAccount(sdb, addr, a.Raw)
 	}
 	sdb.CreateAccount(addr, corepb.AccountType(a.AccountType))
 	if a.Balance != 0 {
 		sdb.AddBalance(addr, a.Balance)
 	}
 	if a.FrozenV1Net != 0 {
-		return fmt.Errorf("account %s: frozenV1Net seeding not yet wired", a.Address)
+		return fmt.Errorf("account %s: frozenV1Net seeding not yet wired — use raw field instead", a.Address)
+	}
+	return nil
+}
+
+// applyRawAccount unmarshals a base64-encoded corepb.Account and replaces
+// the StateDB account's underlying proto with it. Uses proto.Reset +
+// proto.Merge rather than a struct copy to keep the embedded
+// protoimpl.MessageState intact (copylocks-safe).
+func applyRawAccount(sdb *state.StateDB, addr tcommon.Address, raw json.RawMessage) error {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return fmt.Errorf("account raw: not a JSON string: %w", err)
+	}
+	bs, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("account raw: base64: %w", err)
+	}
+	var pb corepb.Account
+	if err := proto.Unmarshal(bs, &pb); err != nil {
+		return fmt.Errorf("account raw: proto: %w", err)
+	}
+	sdb.CreateAccount(addr, pb.Type)
+	if obj := sdb.GetAccount(addr); obj != nil {
+		dst := obj.Proto()
+		proto.Reset(dst)
+		proto.Merge(dst, &pb)
 	}
 	return nil
 }

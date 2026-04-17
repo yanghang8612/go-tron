@@ -103,14 +103,26 @@ own driver following this protocol.
 2. **Compute closure** (touched address set for the range):
 
    ```bash
-   go run ./cmd/fixture-closure --blocks=test/fixtures/mainnet-blocks/<name>/blocks.bin > closure.json
+   # At StartBlock-1, read the top-127 SR set from java-tron
+   # (wallet/listwitnesses, sort by voteCount desc, take 127 unless
+   # change_delegation is off in which case take 27).
+   standby="41...,41...,..."    # comma-separated 41-hex
+
+   go run ./cmd/fixture-closure \
+       --blocks=test/fixtures/mainnet-blocks/<name>/blocks.bin \
+       --standby-witnesses="$standby" > closure.json
    ```
+
+   Passing `--standby-witnesses` is required for mainnet ranges where
+   `change_delegation` is active — `payStandbyWitness` mutates
+   allowance/cycle-reward for the top-127 every block, and none of those
+   addresses appear in any tx. Missing them silently drops state changes
+   from the digest.
 
    Review the stderr warning list of unhandled ContractTypes; if any are
    present in your range, extend the switch in `core/conformance/closure.go`
    (TDD: add a test with a hand-built block, then the extraction) before
-   continuing. Missing a closure address silently drops that account from
-   the digest.
+   continuing.
 
 3. **Prune your mainnet java-tron to `start-1`**, restart it, wait for the
    chain head to settle at `start-1`. (java-tron's own rollback tool:
@@ -131,11 +143,12 @@ own driver following this protocol.
 
    Assemble into `seed.json` following the `core/conformance.Seed` schema
    (see `core/conformance/fixture_format.go`). Set `closureAddresses` to
-   the closure list. The simplest path is to let each account go through
-   the `raw` escape hatch with the full `anypb.Any` proto-JSON; that
-   requires extending `applySeedAccount` to honor `raw`, a PR
-   of its own — until then, limit `seed.json` to the fields the struct
-   literally names (`balance`, `accountType`, `frozenV1Net`).
+   the closure list. **Use the `raw` field** (JSON string carrying the
+   base64-encoded `corepb.Account` proto) for every account so fields
+   outside the named subset (frozenV2, delegated resources, assets,
+   allowance, latestOprationTime, etc.) survive the load. The
+   `balance` / `accountType` / `frozenV1Net` fields are convenience-only
+   and get overridden whenever `raw` is present.
 
 5. **Advance java-tron block-by-block**, dumping state after each block:
 
@@ -177,6 +190,15 @@ own driver following this protocol.
    to java-tron.
 
 6. **Write `divergence-allowlist.json` as `[]`** (empty).
+
+Note on `activeWitnesses` in `fixture.json`: this is a **static snapshot at
+`StartBlock-1`**, not a per-block rotating list. go-tron's
+`ProcessBlock` uses it only for proposal-create / proposal-approve
+permission checks; reward distribution reads vote counts instead. For
+ranges that cross a maintenance boundary containing a proposal tx,
+expect to allowlist the permission-check outcome and note the cause —
+there is no per-block hook today. Document this in the range's `README`
+if it applies.
 
 7. **Write `fixture.json`** with schema 1, scenario `<name>`,
    `javaTron.version` (read from `jar --version` or
