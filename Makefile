@@ -1,4 +1,5 @@
-.PHONY: gtron all test lint proto clean fixtures fixtures-list
+.PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
+        conformance-replay conformance-replay-exit-gate
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -8,6 +9,10 @@ gtron:
 	$(GO) build $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron."
 	@echo "Run \"$(GOBIN)/gtron\" to launch."
+
+gtron-replay:
+	$(GO) build $(GOFLAGS) -o $(GOBIN)/gtron-replay ./cmd/gtron-replay
+	@echo "Done building gtron-replay."
 
 all: gtron
 
@@ -37,3 +42,14 @@ fixtures-list:
 
 fixtures:
 	@scripts/fixtures/run.sh all
+
+# Conformance replay — exercises core/conformance against one or more
+# pre-captured mainnet-blocks ranges. Smoke range runs without git-lfs;
+# the real mainnet ranges require `git lfs pull` before use.
+# See docs/dev/conformance-harness.md (to be written in PR-5).
+conformance-replay: gtron-replay
+	@RANGES="$${RANGES:-smoke}" scripts/conformance_replay.sh
+
+conformance-replay-exit-gate: gtron-replay
+	@EXIT_GATE=1 RANGES="$${RANGES:-smoke range-freeze-v2 range-maintenance range-contract}" \
+		scripts/conformance_replay.sh
