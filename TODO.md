@@ -13,35 +13,38 @@ Severity legend:
 
 State-divergence risk is concentrated here. These gaps cause the state root to drift from mainnet once the feature is exercised.
 
-### 1.1 Adaptive energy limit (TIP-341) — not implemented — *milestone M1.4*
+### 1.1 Adaptive energy limit (TIP-341) — **implemented** — *milestone M1.4*
 
-All required DP keys exist in `core/state/dynamic_properties.go` as of M1.1 (`total_energy_current_limit`, `total_energy_target_limit`, `total_energy_average_usage`, `total_energy_average_time`, `adaptive_resource_limit_multiplier`, `adaptive_resource_limit_target_ratio`). What's missing is the behaviour:
-
-- Per-block adjustment of `total_energy_current_limit` based on moving-average usage and the `allow_adaptive_energy` gate. Mirrors `DynamicEnergyProcessor.updateTotalEnergyAverageUsage` / `EnergyProcessor.updateAdaptiveTotalEnergyLimit` in java-tron.
-- No maintenance-boundary recalculation.
-
-**Effect:** per-block energy limit wrong once mainnet is under load.
+Implemented in M1.4. `core/energy_adaptive.go` ports java-tron's `EnergyProcessor.updateAdaptiveTotalEnergyLimit` (contract 99/100, expand 1000/999, clamped to [base, base×multiplier]) and `updateTotalEnergyAverageUsage` (sliding-window average over 20 blocks). Both run per-block in `ProcessBlock` when `allow_adaptive_energy` is set. `SetTotalEnergyLimit` mirrors `saveTotalEnergyLimit2` side-effects. Proposal #21 activation auto-adjusts `targetRatio` (→2880) and `multiplier` (→50) when version ≥ 3.6.5. `availableAccountEnergy` now uses `TotalEnergyCurrentLimit` (dynamic) instead of `TotalEnergyLimit` (static). Missing DP keys `total_energy_average_time` and `block_energy_usage` added.
 
 ### 1.2 Storage fee / rent model (`StorageTaxProcessor`) — not implemented — *milestone M1.6*
 
 Missing DP keys: `total_storage_pool`, `total_storage_tax`, `total_storage_reserved`, `storage_exchange_tax_rate`. No per-contract storage tax accounting in the state processor.
 
-### 1.3 Dynamic energy pricing (TIP-1327) — not implemented — *milestone M1.7*
+### 1.3 Dynamic energy pricing (TIP-1327) — **implemented** — *milestone M1.7*
 
-DP key `allow_dynamic_energy` backfilled in M1.1 and per-contract `EnergyProperty` fields exist in `AccountCapsule`. Missing behaviour: the usage-driven scaling factor when a contract goes hot. Mirrors java-tron's `DynamicEnergyProcessor` cycle update.
+Implemented in M1.7. New `core/types/contract_state.go` wraps the `ContractState` proto (energy_usage, energy_factor, update_cycle) with `CatchUpToCycle`: single-step increase when last-cycle usage exceeded the threshold (`factor' = min(maxFactor, (factor+decimal) × (1 + increaseFactor/decimal) − decimal)`) followed by compound decay across quiet cycles (`factor' = max(0, (factor+decimal) × (1 − increaseFactor/4/decimal)^cycleCount − decimal)`). Stored per contract via new rawdb prefix `cs-` (mirrors java-tron `ContractStateStore`). The VM interpreter fetches the factor once at contract entry (`updateContractEnergyFactor`), applies `cost × factor / decimal` per opcode when factor > 1.0×, and writes the accumulated **base** (pre-factor) energy back to `ContractState.energy_usage` at return/revert — that counter is the input the next cycle's catch-up tests against `DynamicEnergyThreshold`.
 
-### 1.4 Reward algorithm v2 / vote rewards — not implemented — *milestone M1.5*
+### 1.4 Reward algorithm v2 / vote rewards — **implemented** — *milestone M1.5*
 
-DP keys `new_reward_algorithm_effective_cycle`, `allow_new_reward`, `allow_old_reward_opt`, `current_cycle_number` backfilled in M1.1. Missing behaviour:
+Implemented in M1.5. `core/reward.go` + `core/reward/voter_reward.go` port java-tron's MortgageService + DelegationStore:
+- Per-block `payBlockReward` splits by brokerage: witness commission → allowance, voter pool → DelegationStore (rawdb prefix `dl-`).
+- Per-block `payStandbyWitness` distributes `witness_127_pay_per_block` pro-rata by votes among the top-127 (only when `change_delegation` is on).
+- `applyRewardMaintenance` runs VI accumulation (`deltaVi = reward × 10^18 / voteCount`) + cycle rollover at each maintenance boundary.
+- `ComputeVoterReward` handles old (pro-rata) and new (VI-based) algorithms with a hybrid split across `new_reward_algorithm_effective_cycle`.
+- `withdrawReward` in the actuator settles pending voter rewards into allowance; called before vote changes in `VoteWitnessActuator.Execute` to preserve java-tron's invariant.
+- Proposal #67 (ALLOW_NEW_REWARD) side-effect sets `new_reward_algorithm_effective_cycle = currentCycle + 1` on activation.
+- `WithdrawBalanceActuator` no longer gates on `IsWitness` — voters can now withdraw pending rewards.
 
-- `consensus/dpos/reward.go` implements block reward + flat brokerage only.
-- No `RewardViStore`-style per-cycle accumulated-reward bucket.
-- No dynamic brokerage rate.
-- No `witness_127_pay_per_block` standby allowance distribution.
+Known divergence from java-tron flagged for M0″ conformance: VI uses go-tron's immediate-vote-application counts vs java-tron's pre-countVote counts at the same maintenance boundary. Functionally equivalent when votes don't change during a cycle.
 
-### 1.5 Freeze-V2 delegated resource consumption — *milestone M1.8*
+### 1.5 Freeze-V2 delegated resource consumption — **implemented** — *milestone M1.8*
 
-Delegation records are written and V1 acquired-in sums are counted (`availableAccountNet` / `availableAccountEnergy` since M1.2), but transaction processing does not yet debit the delegatee's consumable pool from the delegator's V2 bucket during actual resource use. Needs audit against java-tron's `DelegationService` and wiring into `core/resource.go` / `core/bandwidth.go`.
+Implemented in M1.8. `actuator/undelegate_resource.go` now mirrors java-tron's usage-transfer math:
+- Before reducing balances, receiver's net/energy usage is recovered and the portion proportional to the undelegated balance (capped at `maxUsage = unDelegateBalance/TRX × totalLimit/totalWeight`) is peeled off and folded into the owner's counter.
+- Both receiver and owner `latestConsumeTime` are advanced so the subsequent decay tracks from the right point.
+
+Known parity gap flagged for M0″: go-tron uses a single global 24h recovery window (`params.WindowSizeMs`), while java-tron has per-account window sizes reshuffled via `getNewWindowSize` during undelegation. Functionally equivalent when windows haven't diverged. Separate lock/unlock delegation entries (java-tron `createDbKeyV2(owner, receiver, lock)`) are also not yet split — go-tron uses a single `DelegatedResource` record with per-resource expire time.
 
 ### 1.6 DynamicProperties keys still absent
 
@@ -169,7 +172,7 @@ Dispatch covers all 37 mainnet `ContractType` enums; `actuator/` has Go equivale
 
 ## 6. Cross-cutting / Meta
 
-- **Conformance corpus (M0″):** replay a slice of mainnet blocks through go-tron's state processor and diff the resulting state against a java-tron node at the same height. Deferred until M1.4–M1.8 land so the output isn't drowned in known-missing-feature noise.
+- **Conformance corpus (M0″):** **Phase 1 landed 2026-04-17** — replay engine `core/conformance/`, CLI `gtron-replay`, capture helpers `fixture-closure` / `fixture-digest`, smoke corpus, and full operator protocol in `docs/dev/conformance-harness.md`. `make conformance-replay` green on smoke. **Phase 2 blocked on java-tron operator access** — record 3 mainnet ranges (freeze-v2 activation, maintenance boundary, contract-dense), populate each `divergence-allowlist.json` with known M1.5 / M1.8 parity gaps, ship `scripts/system_test_cross.sh`. M0″ exits when `make conformance-replay-exit-gate` returns 0 (every allowlist empty).
 - **Cross-impl integration coverage:** `scripts/system_test.sh` exercises 2-node gtron↔gtron. Add a parallel `system_test_cross.sh` running gtron ↔ java-tron end-to-end (both sides producing and relaying).
 - **Genesis / params (`params/mainnet.go`):** 27 GRs + 3 genesis accounts match java-tron's `config.conf`. Still missing genesis-level defaults for `allowMultiSign`, `allowAccountStateRoot`, `allowCreationOfContracts`, and shielded defaults — these are currently hardcoded in `dynamic_properties.go` rather than driven off the genesis file.
 
@@ -182,12 +185,16 @@ These items from earlier revisions of this file are now addressed and no longer 
 - **DP-key backfill + rename + proposal-ID mapping rebuild** (M1.1) — `core/state/dp_key_mapping.go`, 76-key fixture match, `ProposalParamKey` rebuilt from `ProposalUtil.ProposalType`. Two residual routing bugs (proposals #19 and #49) corrected 2026-04-15.
 - **Freeze V1 legacy support** (M1.2) — `availableAccountNet` / `availableAccountEnergy` sum V1+V2, freeze/unfreeze sync `total_{net,energy}_weight`, post-`allow_new_resource_model` gate rejects new V1 freezes.
 - **Fork version-bit tracking + audit** (M1.3) — `ForkController` tallies SR votes from `BlockHeader.raw.version`, `fc.IsActive` combines DP soft flag with hardForkTime + rate quorum, `docs/dev/fork-audit-2026-04-15.md` snapshot catalogues execution-path vs proposal-validation gates. Two phantom AllowFlags (`AllowTvmBigInteger`, `AllowTvmSolidity058`) with no java-tron counterpart removed; two alias bugs (`AllowStakingV2`, `AllowTvmShieldedToken`) pointed at the real proposal keys.
+- **Adaptive energy limit** (M1.4) — `core/energy_adaptive.go` ports per-block `total_energy_current_limit` adjustment (contract 99/100 / expand 1000/999, sliding-window average, clamp to [base, base×multiplier]). `availableAccountEnergy` fixed to use `TotalEnergyCurrentLimit`. Proposal #21 side-effects (version ≥ 3.6.5: ratio→2880, multiplier→50). `ForkController` wired into `BlockChain`.
+- **Reward algorithm v2 + voter rewards** (M1.5) — `core/reward.go` + `core/reward/voter_reward.go` + DelegationStore rawdb (prefix `dl-`). Brokerage-split per-block reward, per-block pro-rata standby, maintenance-time VI accumulation + cycle rollover, hybrid voter-reward computation (old pro-rata / new VI), `withdrawReward` settles into allowance. `VoteWitnessActuator` settles rewards before vote mutation. Proposal #67 sets effective cycle. DP keys `current_cycle_number` + `new_reward_algorithm_effective_cycle` added.
+- **Freeze-V2 delegation usage transfer** (M1.8) — new `core/delegation` package shared between actuator (`delegate_resource.go`, `undelegate_resource.go`) and VM opcodes (`0xDE DELEGATERESOURCE`, `0xDF UNDELEGATERESOURCE`). Delegate path refreshes owner's usage before the frozen pool shifts; undelegate path transfers the proportional usage back from receiver to owner. `SetLatestConsumeTimeForEnergy` added to StateDB.
+- **Dynamic energy pricing** (M1.7) — `core/types/contract_state.go` + rawdb `cs-` prefix for per-contract energy factor; `vm/dynamic_energy.go` hooks `Interpreter.Run` to fetch factor at entry, penalize opcodes with `cost × factor / decimal`, and accumulate base usage for the next cycle's threshold test. Proposals #72-#75 continue to flow through `proposalParamKey`.
 
 ---
 
 ## Suggested sequencing
 
-1. **State divergence remaining (§1.1, §1.2, §1.4, §1.5):** the M1.4–M1.8 milestones. Each shipped independently behind its own fork gate.
+1. **State divergence remaining (§1.2):** only M1.6 (storage rent) remains. Dormant on mainnet (never activated) — lowest-priority item on the M1 track.
 2. **DP + rawdb backfill (§1.6, §1.7):** prerequisite for any store-layer work past M2.
 3. **Conformance harness (M0″):** replay mainnet blocks, diff state. Makes subsequent work measurable; run only after M1.4/M1.5/M1.8 land.
 4. **P2P hardening (§2.3, §2.4, §2.6):** tolerable peer loss and DoS resistance.

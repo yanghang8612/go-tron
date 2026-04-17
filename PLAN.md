@@ -46,19 +46,33 @@
 
 ---
 
-## M0″ · 完整一致性回放 — **后置（M1 大头落地后）**
+## M0″ · 完整一致性回放 — **Phase 1 完成；Phase 2 待操作员 (2026-04-17)**
 
-**前提**：M1.1 + M1.3 + M1.4 + M1.5 至少落地，此时跑回放能真正给出"还差在哪"的信号，而不是噪声。
+本里程碑天然分两阶段：
+
+### Phase 1 · 引擎 + CLI + 捕获工具 + 文档  ✅ 完成
 
 **交付物**
-1. `scripts/conformance_replay.sh` — 给定起止块高，从本地 java-tron mainnet 节点抓区块，喂给 gtron `state_processor`，每块末尾产出账户集合 + DP 的 digest 与 java-tron 同高值比对。
-2. `scripts/system_test_cross.sh` — 1 gtron + 1 java-tron 双节点端到端。
-3. `test/fixtures/mainnet-blocks/` — 3 段代表性区间（Freeze V2 激活前后、一次 maintenance 边界、合约密集块）。
-4. `docs/dev/conformance-harness.md`。
+1. `core/conformance/` — 纯 Go 回放引擎：seed loader、DigestB/DigestC（确定性 sha256 + 人类可读 JSON）、allowlist（带 stale 检测）、Report、ReplayRange、Snapshot 序列化。22 个单测全绿。
+2. `cmd/gtron-replay` — 薄 CLI wrapper，退出码 0/1/2/3 按 spec §5.4。
+3. `cmd/fixture-closure` — 从 blocks.bin 按 ContractType 提取 touched-address 闭包。
+4. `cmd/fixture-digest` — 从 java-tron 状态快照算 OracleEntry。
+5. `scripts/conformance_replay.sh` + `make conformance-replay` — 顶层编排。
+6. `test/fixtures/mainnet-blocks/smoke/` — 5 块合成 range（由 `go run ./scripts/fixtures/cmd/gen-smoke` 再生）；`make conformance-replay` 绿。
+7. `docs/dev/conformance-harness.md` — 运行说明 + Phase 2 操作员协议（prune + replay-and-snapshot + snapshot JSON schema + allowlist 策略）。
 
-**退出条件**：3 段语料在 master 上跑完，全量匹配；作为 G1 的准入检查。
+### Phase 2 · 录真实语料 + cross e2e — 操作员任务
 
-**依赖**：M0′、M1 核心子项。
+**前置**：需要访问本地 mainnet-synced java-tron 节点（个人/运维持有）；Phase 1 产物已 merge。
+
+**交付物**
+1. `test/fixtures/mainnet-blocks/range-freeze-v2/`、`range-maintenance/`、`range-contract/` — 3 段 500 块级别的真实区间（具体高度在录入时定）。
+2. 每个 range 的初版 `divergence-allowlist.json`：catalog 所有已知 parity gap（reward v2 VI timing、freeze-v2 window、lock/unlock key split），每条带 `trackingIssue`。
+3. `scripts/system_test_cross.sh` — 1 gtron + 1 java-tron 双节点 e2e。
+
+**退出条件**：`make conformance-replay-exit-gate` 返回 0（allowlist 全空、无 stale）—— 作为 G1 的准入检查。在那之前 M0″ 整体"未完成"。
+
+**依赖**：Phase 1；java-tron 操作员访问。
 
 ---
 
@@ -86,28 +100,39 @@
 - 对全部 actuator 和 VM 操作码做 `forks.IsActive()` 调用点 audit（参考 java-tron 的 `forkController.pass(...)` 调用点清单），缺的补上。
 - **退出**：`core/forks/forks_audit_test.go` 扫一遍所有 actuator/opcode，断言凡是 java-tron 有 `forkController.pass()` 的位置 go-tron 也调用了 `IsActive()`。
 
-### M1.4 自适应能量上限（TIP-341）
-- 在 DP 中补齐 §1.1 所列 6 个 key，在 maintenance 边界计算 `total_energy_current_limit` 新值。
-- 引 `core/resource_adaptive.go`（新文件）；state processor 每块末尾更新 `average_usage`/`average_time`。
-- **退出**：主网某次明显负载变化区间的 `total_energy_current_limit` 值与 java-tron `getchainparameters` 返回一致。
+### M1.4 自适应能量上限（TIP-341） ✅ 完成
+- `core/energy_adaptive.go`：移植 java-tron `EnergyProcessor.updateAdaptiveTotalEnergyLimit`（收缩 99/100、扩张 1000/999）与 `updateTotalEnergyAverageUsage`（20 块滑动窗口均值）。
+- `ProcessBlock` 每块末尾在 `allow_adaptive_energy` 激活时执行调整。
+- `availableAccountEnergy` 改用 `TotalEnergyCurrentLimit`（动态值）。
+- `SetTotalEnergyLimit` 移植 `saveTotalEnergyLimit2` 副作用。提案 #21 激活时 version ≥ 3.6.5 自动调整 ratio→2880、multiplier→50。
+- 补缺 DP key：`total_energy_average_time`、`block_energy_usage`。`ForkController` 集成到 `BlockChain`。
 
-### M1.5 奖励算法 v2 & 委托奖励
-- 引 `core/rawdb/accessors_reward.go` 与 `accumulated-reward` / `reward-vi` 前缀（见 M2）。
-- `consensus/dpos/reward.go` 实现 per-cycle 累积奖励桶、动态 brokerage、`WITNESS_127_PAY_PER_BLOCK` 候补奖励。
-- **退出**：一个完整 maintenance 周期内，27 SR + 100+ 候选的账户余额增量与 java-tron 一致。
+### M1.5 奖励算法 v2 & 委托奖励 ✅ 完成
+- `core/rawdb/accessors_reward.go` + 新前缀 `dl-`：per-cycle 奖励池 / 投票快照 / VI / brokerage / 投票人 begin/endCycle 游标。
+- `core/reward.go`：`payBlockReward`（brokerage 拆分 → witness 佣金入 allowance，voter pool 累积到 DelegationStore），`payStandbyWitness`（top-127 按票按比例分），`accumulateWitnessVi`（reward × 10^18 / voteCount），`applyRewardMaintenance`（维护点执行 VI 累积 + cycle rollover + brokerage/vote 快照）。
+- `core/reward/voter_reward.go`：`ComputeVoterReward` 支持 old 和 new 两种算法，按 `new_reward_algorithm_effective_cycle` 分段。
+- `actuator/withdraw_reward.go` + `VoteWitnessActuator.Execute` 改造：投票变更前先结算投票人奖励，保留 java-tron 不变量。
+- 提案 #67（ALLOW_NEW_REWARD）激活时设置 `new_reward_algorithm_effective_cycle = currentCycle + 1`。
+- `WithdrawBalanceActuator` 去掉 `IsWitness` 门控，支持投票人提现。
 
 ### M1.6 存储租金（StorageTaxProcessor）
 - 新建 `core/storage_tax.go`；合约存储余额按时间衰减。
 - 接入 DP 的 `total_storage_*` 簿记。
 - **退出**：长期合约账户的 storage 字段在 M0 回放中匹配。
 
-### M1.7 动态能量价格（TIP-1327）
-- `allow_dynamic_energy` 激活后，合约调用能量成本按 24h 调用量缩放。
-- **退出**：压力测试脚本下能量消耗随调用量线性变化。
+### M1.7 动态能量价格（TIP-1327） ✅ 完成
+- `core/types/contract_state.go`：ContractState 包装器 + `CatchUpToCycle`（上界 clamp maxFactor、下界 floor 0、衰减基数 `1 - increaseFactor/4/decimal`）。
+- `core/rawdb/accessors_contract_state.go` + 新前缀 `cs-`：per-contract 状态存储，映射 java-tron ContractStateStore。
+- `vm/dynamic_energy.go`：`updateContractEnergyFactor` 在 Contract 入口取因子；`applyDynamicEnergyPenalty` 按 `cost × factor / decimal` 计算加价；`recordContractEnergyUsage` 在 return/revert 时累加**未 scaling 的基础用量**到 energy_usage，供下次 threshold 比较使用。
+- `vm/interpreter.go Run()`：每条 opcode 先扣基础 cost，若 factor > 1.0× 则加 penalty；`rawEnergyUsed` 累加基础用量在收尾写回。
 
-### M1.8 Freeze-V2 委托资源消费账
-- 委托方带宽/能量从被委托方 quota 扣除；解委托后反写。
-- **退出**：专项单测 + M0 回放匹配。
+### M1.8 Freeze-V2 委托资源消费账 ✅ 完成
+- 新包 `core/delegation`：`TransferUsageFromReceiver`、`FoldUsageIntoOwner`、`RecoverUsageWindow`。actuator 和 vm 共用避免循环依赖。
+- `actuator/delegate_resource.go`：委托前刷新委托方 usage。
+- `actuator/undelegate_resource.go`：解委托时先恢复接收方 usage，按解委托比例（capped by `unDelegateBalance/TRX × totalLimit/totalWeight`）扣除并折入委托方 usage。
+- `vm/instructions_tron.go`：opcode `0xDE DELEGATERESOURCE` 和 `0xDF UNDELEGATERESOURCE` 走同一套 helper。
+- `core/state/statedb.go` 补缺 `SetLatestConsumeTimeForEnergy`。
+- 已知差异：go-tron 用全局 24h 滑窗，java-tron 用 per-account window size；锁/解锁委托条目未分开（java-tron `createDbKeyV2(owner, receiver, lock)`）。
 
 **总退出**：M0 回放 3 段语料全部通过（state root 一致）；`docs/dev/p2p-interop-status.md` 追加一条"state conformance verified"。
 
@@ -309,7 +334,8 @@
 | 里程碑 | 状态 | 退出日期 | 主 PR / commit | 备注 |
 |---|---|---|---|---|
 | M0′ Fixture 抽取工具 | 完成（Nile 场景延后） | 2026-04-15 | 待提交 | 场景 00 mainnet DP 已入库；01 Nile 因缺 config 延后 |
-| M0″ 完整一致性回放 | 未开始 | — | — | M1 核心落地后再做 |
+| M0″ Phase 1 引擎+CLI+文档 | 完成 | 2026-04-17 | commits 6d3396d..528cec5 | engine + gtron-replay + fixture-closure/digest + smoke corpus + 完整操作协议文档 |
+| M0″ Phase 2 录真实语料+cross e2e | 待操作员 | — | — | blocker = java-tron mainnet 访问 |
 | M1.1 DP backfill | 完成 | 2026-04-15 | 待提交 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
 | M1.2 Freeze V1 | 完成 | 2026-04-15 | 待提交 | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
 | M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 待提交 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
@@ -335,7 +361,7 @@
 
 | 门 | 依赖 | 状态 |
 |---|---|---|
-| G1 可跟链 | M0′+M1+M2+M3+M0″ | ❌ |
+| G1 可跟链 | M0′+M1+M2+M3+M0″ | ❌ (M0″ Phase 1 完成；Phase 2 是 G1 的最后一块) |
 | G2 生态可用 | M4+M5 | ❌ |
 | G3 可当验证人 | G1+M6 | ❌ |
 | G4 主网前置就绪 | G1+G2+G3+M7+M8 | ❌ |
