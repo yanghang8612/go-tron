@@ -62,6 +62,7 @@ Add each to `core/state/dynamic_properties.go` defaults plus getters/setters; wh
 `core/rawdb/schema.go` has ~20 prefixes vs java-tron's ~37. Verified-missing stores (each was confirmed to exist in `java-tron/chainbase/src/main/java/.../store/*Store.java`):
 
 - **Indexing:** ✅ `account-asset` (`aa-`), `account-id-index` (`aid-`), `account-trace` (`at-`), `delegated-resource-account-index` (`drax-`) — M2 PR-1 (2026-04-17). Accessors are infrastructure-only; actuator wiring lands in follow-up PRs.
+- **Consensus:** ✅ shuffled-witnesses (`ws-shuffled` — complements existing `ActiveWitnesses` key; covers java-tron WitnessScheduleStore's second slot), `pbft-signdata` (`psd-` with BLOCK/SRL variants, byte-for-byte key compat with java-tron `DataType.{BLOCK,SRL}.toString() + long`), `section-bloom` (`sb-`, dormant), `tree-block-index` (`tbi-`, dormant). M2 PR-2 (2026-04-17). `pbft-signdata` unlocks M6 when that milestone starts.
 - **Consensus:** `witness-schedule` snapshot, `section-bloom`, `pbft-signdata`, `tree-block-index`.
 - **History / audit:** `transaction-history`, `transaction-retstore`, `balance-trace`, `check-point-v2`, `reward-vi`.
 - **Market side:** `market-account`, `market-pair-to-price`, `market-pair-price-to-order` (only the order side is in `accessors_market.go`).
