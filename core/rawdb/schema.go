@@ -53,6 +53,26 @@ var (
 	//        value == 0x01 (VERSION_UPGRADE) or 0x00 (VERSION_DOWNGRADE).
 	// Mirrors java-tron DynamicPropertiesStore's FORK_VERSION_<v> keys.
 	forkStatsPrefix = []byte("fv-")
+
+	// delegRewardPrefix (dl-) maps to java-tron's DelegationStore (db name
+	// "delegation"). Distinct from delegationPrefix ("dr-") which stores
+	// Freeze-V2 resource delegation records. Holds per-cycle voter reward
+	// pools, vote snapshots, brokerage rates, accumulated witness VI, and
+	// voter beginCycle/endCycle cursors used by the reward v2 algorithm.
+	delegRewardPrefix = []byte("dl-")
+
+	// contractStatePrefix (cs-) maps to java-tron's ContractStateStore
+	// (db name "contract-state"). Per-contract dynamic-energy state:
+	// rolling energy usage, energy factor, and last-update cycle.
+	contractStatePrefix = []byte("cs-")
+
+	// accountAssetPrefix (aa-) maps to java-tron's AccountAssetStore
+	// (db name "account-asset"). Per-(owner,tokenID) asset balance,
+	// populated when allow_account_asset_optimization is active so the
+	// main Account proto doesn't carry the whole asset map. Key:
+	//   aa- || owner (21B) || tokenID (varint-style uint64 big-endian 8B)
+	// Value: big-endian int64 balance (matches Java's Longs.toByteArray).
+	accountAssetPrefix = []byte("aa-")
 )
 
 func blockKey(number uint64) []byte {
@@ -121,6 +141,57 @@ func delegationIndexKey(from []byte) []byte {
 
 func brokerageKey(addr []byte) []byte {
 	return append(append([]byte{}, brokeragePrefix...), addr...)
+}
+
+// delegRewardKey builds a per-cycle-per-witness key with the given suffix.
+// Layout: dl- || big-endian int64 cycle || 0x2d '-' || addr || 0x2d '-' || suffix
+// Matches java-tron DelegationStore's "{cycle}-{hex(address)}-{suffix}"
+// string keys semantically (we use raw bytes rather than hex, but the
+// cycle/address/suffix separation is preserved).
+func delegRewardKey(cycle int64, addr []byte, suffix string) []byte {
+	k := make([]byte, 0, len(delegRewardPrefix)+8+1+len(addr)+1+len(suffix))
+	k = append(k, delegRewardPrefix...)
+	var cb [8]byte
+	binary.BigEndian.PutUint64(cb[:], uint64(cycle))
+	k = append(k, cb[:]...)
+	k = append(k, '-')
+	k = append(k, addr...)
+	k = append(k, '-')
+	k = append(k, []byte(suffix)...)
+	return k
+}
+
+// delegBeginCycleKey stores a voter's beginCycle cursor: dl- || addr.
+// Mirrors java-tron DelegationStore.setBeginCycle(address, number).
+func delegBeginCycleKey(addr []byte) []byte {
+	k := make([]byte, 0, len(delegRewardPrefix)+len(addr))
+	k = append(k, delegRewardPrefix...)
+	return append(k, addr...)
+}
+
+// delegEndCycleKey stores a voter's endCycle cursor: dl- || "end-" || addr.
+func delegEndCycleKey(addr []byte) []byte {
+	k := make([]byte, 0, len(delegRewardPrefix)+4+len(addr))
+	k = append(k, delegRewardPrefix...)
+	k = append(k, []byte("end-")...)
+	return append(k, addr...)
+}
+
+// contractStateKey builds the per-contract dynamic-energy state key.
+func contractStateKey(addr []byte) []byte {
+	return append(append([]byte{}, contractStatePrefix...), addr...)
+}
+
+// accountAssetKey builds an account-asset lookup key. Mirrors java-tron's
+// AccountAssetStore key layout: owner address (21B) concatenated with the
+// asset's tokenID, big-endian 8-byte. Value is the int64 balance.
+func accountAssetKey(owner []byte, tokenID int64) []byte {
+	k := make([]byte, 0, len(accountAssetPrefix)+len(owner)+8)
+	k = append(k, accountAssetPrefix...)
+	k = append(k, owner...)
+	var tb [8]byte
+	binary.BigEndian.PutUint64(tb[:], uint64(tokenID))
+	return append(k, tb[:]...)
 }
 
 func assetKey(tokenID int64) []byte {
