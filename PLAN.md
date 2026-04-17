@@ -344,7 +344,7 @@
 | M1.6 存储租金 | 未开始 | — | — | |
 | M1.7 动态能量 | 未开始 | — | — | |
 | M1.8 委托资源消费 | 未开始 | — | — | |
-| M2 rawdb schema 补齐 | 未开始 | — | — | 分 6 PR |
+| M2 rawdb schema 补齐 | PR-1/6 完成 | 2026-04-17 | ae59a48..670e73b | Indexing: account-asset (`aa-`), account-id-index (`aid-`), account-trace (`at-`), delegated-resource-account-index (`drax-`). Remaining: PR-2 consensus (witness-schedule/section-bloom/pbft-signdata/tree-block-index), PR-3 history/audit, PR-4 market-complete, PR-5 shielded, PR-6 abi. |
 | M3.1 sync 稳定性 | 未开始 | — | — | |
 | M3.2 Adv/Relay | 未开始 | — | — | |
 | M3.3 速率限制 | 未开始 | — | — | |
