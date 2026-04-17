@@ -81,6 +81,10 @@ var defaultProps = map[string]int64{
 	// serialize to the same DB shape as java-tron.
 	"adaptive_resource_limit_multiplier":            1000,
 	"adaptive_resource_limit_target_ratio":          10,
+	"block_energy_usage":                            0,
+	"total_energy_average_time":                     0,
+	"current_cycle_number":                          0,
+	"new_reward_algorithm_effective_cycle":          9_223_372_036_854_775_807, // Long.MAX_VALUE — disabled until set by proposal
 	"allow_account_asset_optimization":              0,
 	"allow_account_state_root":                      0,
 	"allow_asset_optimization":                      0,
@@ -176,6 +180,17 @@ func (dp *DynamicProperties) Set(key string, value int64) {
 	dp.dirty[key] = struct{}{}
 }
 
+// Keys returns every currently-known DP key (defaults plus anything Set()).
+// The result is unsorted; callers that need stability (e.g. the conformance
+// digest) must sort it themselves.
+func (dp *DynamicProperties) Keys() []string {
+	out := make([]string, 0, len(dp.props))
+	for k := range dp.props {
+		out = append(out, k)
+	}
+	return out
+}
+
 // --- Typed getters ---
 
 func (dp *DynamicProperties) MaintenanceTimeInterval() int64 {
@@ -224,6 +239,21 @@ func (dp *DynamicProperties) CreateNewAccountFeeInSystemContract() int64 {
 
 func (dp *DynamicProperties) TotalEnergyCurrentLimit() int64 {
 	return dp.props["total_energy_current_limit"]
+}
+func (dp *DynamicProperties) SetTotalEnergyCurrentLimit(v int64) {
+	dp.Set("total_energy_current_limit", v)
+}
+
+func (dp *DynamicProperties) BlockEnergyUsage() int64 { return dp.props["block_energy_usage"] }
+func (dp *DynamicProperties) SetBlockEnergyUsage(v int64) {
+	dp.Set("block_energy_usage", v)
+}
+
+func (dp *DynamicProperties) TotalEnergyAverageTime() int64 {
+	return dp.props["total_energy_average_time"]
+}
+func (dp *DynamicProperties) SetTotalEnergyAverageTime(v int64) {
+	dp.Set("total_energy_average_time", v)
 }
 
 func (dp *DynamicProperties) TotalNetLimit() int64 {
@@ -707,8 +737,19 @@ func (dp *DynamicProperties) SetAdaptiveResourceLimitTargetRatio(v int64) {
 }
 
 func (dp *DynamicProperties) TotalEnergyLimit() int64 { return dp.props["total_energy_limit"] }
+
+// SetTotalEnergyLimit mirrors java-tron's saveTotalEnergyLimit2: updates the
+// base limit, recomputes targetLimit, and (only when adaptive energy is OFF)
+// also sets currentLimit to match.
 func (dp *DynamicProperties) SetTotalEnergyLimit(v int64) {
 	dp.Set("total_energy_limit", v)
+	ratio := dp.AdaptiveResourceLimitTargetRatio()
+	if ratio > 0 {
+		dp.SetTotalEnergyTargetLimit(v / ratio)
+	}
+	if !dp.AllowAdaptiveEnergy() {
+		dp.SetTotalEnergyCurrentLimit(v)
+	}
 }
 
 func (dp *DynamicProperties) TotalEnergyTargetLimit() int64 {
@@ -849,6 +890,30 @@ func (dp *DynamicProperties) AllowOldRewardOpt() bool {
 }
 func (dp *DynamicProperties) SetAllowOldRewardOpt(v bool) {
 	boolSet(dp, "allow_old_reward_opt", v)
+}
+
+func (dp *DynamicProperties) CurrentCycleNumber() int64 {
+	return dp.props["current_cycle_number"]
+}
+func (dp *DynamicProperties) SetCurrentCycleNumber(v int64) {
+	dp.Set("current_cycle_number", v)
+}
+
+// NewRewardAlgorithmEffectiveCycle returns the cycle at which the VI-based
+// reward algorithm takes over. Defaults to math.MaxInt64 (disabled) until
+// the proposal activates; then set by proposal application to the current
+// cycle + 1.
+func (dp *DynamicProperties) NewRewardAlgorithmEffectiveCycle() int64 {
+	return dp.props["new_reward_algorithm_effective_cycle"]
+}
+func (dp *DynamicProperties) SetNewRewardAlgorithmEffectiveCycle(v int64) {
+	dp.Set("new_reward_algorithm_effective_cycle", v)
+}
+
+// UseNewRewardAlgorithm mirrors java-tron's useNewRewardAlgorithm:
+// true once the effective cycle has been set (i.e., != MaxInt64).
+func (dp *DynamicProperties) UseNewRewardAlgorithm() bool {
+	return dp.NewRewardAlgorithmEffectiveCycle() != 9_223_372_036_854_775_807
 }
 
 // AllowBlackHoleOptimization mirrors java-tron's getAllowBlackHoleOptimization
