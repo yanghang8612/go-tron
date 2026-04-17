@@ -107,6 +107,23 @@ var (
 	// a prefix iterator hands the latest trace back on first hit.
 	accountTracePrefix = []byte("at-")
 
+	// sectionBloomPrefix (sb-) maps to java-tron's SectionBloomStore
+	// (db name "section-bloom"). Bloom filter per (section, bitIndex)
+	// for eth_getLogs / log-filter acceleration. Dormant on mainnet
+	// today (writer wired but not called); store is here for parity
+	// and future M5.2 filter support.
+	// Key:   sb- || (section * 1_000_000 + bitIndex) decimal ASCII
+	// Value: opaque bytes (java side stores zlib-compressed BitSet).
+	sectionBloomPrefix = []byte("sb-")
+
+	// treeBlockIndexPrefix (tbi-) maps to java-tron's
+	// TreeBlockIndexStore (db name "tree-block-index"). blockNum →
+	// merkle root bytes, used for shielded-transaction proof
+	// acceleration. Dormant on mainnet (zksnark feature flag).
+	// Key:   tbi- || blockNum big-endian int64
+	// Value: opaque bytes (merkle root identifier).
+	treeBlockIndexPrefix = []byte("tbi-")
+
 	// pbftSignDataPrefix (psd-) maps to java-tron's PbftSignDataStore
 	// (db name "pbft-sign-data"). Holds PBFT quorum signatures for
 	// committed blocks and election-cycle SR lists. Live on mainnet
@@ -286,6 +303,22 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(xored))
 	return append(k, b[:]...)
+}
+
+// sectionBloomKey builds the section-bloom key: java-tron encodes the
+// (section, bitIndex) composite as a single decimal integer
+// section*1_000_000 + bitIndex, then takes its ASCII bytes.
+func sectionBloomKey(section, bitIndex uint64) []byte {
+	composite := section*1_000_000 + bitIndex
+	return append(append([]byte{}, sectionBloomPrefix...), []byte(strconv.FormatUint(composite, 10))...)
+}
+
+// treeBlockIndexKey builds the tree-block-index key: blockNum big-endian.
+func treeBlockIndexKey(blockNum int64) []byte {
+	k := make([]byte, len(treeBlockIndexPrefix)+8)
+	copy(k, treeBlockIndexPrefix)
+	binary.BigEndian.PutUint64(k[len(treeBlockIndexPrefix):], uint64(blockNum))
+	return k
 }
 
 // pbftBlockSignKey builds the per-block PBFT sign-data key, matching
