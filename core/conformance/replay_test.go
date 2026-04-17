@@ -10,79 +10,27 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core"
-	"github.com/tronprotocol/go-tron/core/types"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-// buildRangeFixture writes seed.json, blocks.bin, oracle.ndjson to dir for a
-// 2-block synthetic range. The seed has a witness account with `witnessBal`
-// balance; each block is empty (no txs) but valid — ProcessBlock pays
-// WitnessPayPerBlock to the witness's allowance. Returns the paths plus the
-// active-witnesses list used to drive ReplayRange.
-func buildRangeFixture(t *testing.T, dir string, witnessBal int64) (witness tcommon.Address) {
+// buildRangeFixture delegates to BuildSyntheticRange so tests and the smoke-
+// corpus generator share one code path.
+func buildRangeFixture(t *testing.T, dir string, witnessBal int64) tcommon.Address {
 	t.Helper()
 	witnessHex := "41" + strings.Repeat("a", 40)
-
-	// Seed.
-	seed := Seed{
-		Schema:       SchemaVersion,
-		StartHeight:  100,
-		DynamicProps: map[string]int64{"witness_pay_per_block": 32_000_000},
-		Accounts: []SeedAccount{
-			{Address: witnessHex, Balance: witnessBal, AccountType: 0},
-		},
-		ClosureAddresses: []string{witnessHex},
-	}
-	writeJSON(t, filepath.Join(dir, "seed.json"), seed)
-
-	// Build 2 empty blocks.
-	witness, _ = ParseAddress(witnessHex)
-	blocks := []*types.Block{
-		makeEmptyBlock(100, nil, witness),
-		nil, // filled below once we know block 100's hash
-	}
-	blocks[1] = makeEmptyBlock(101, blocks[0], witness)
-	if err := WriteBlocks(filepath.Join(dir, "blocks.bin"), blocks); err != nil {
-		t.Fatal(err)
-	}
-
-	// Compute oracle by running the blocks through a throwaway state.
-	loaded, err := LoadSeed(filepath.Join(dir, "seed.json"))
+	err := BuildSyntheticRange(SyntheticRangeParams{
+		Dir:        dir,
+		Scenario:   "test",
+		StartBlock: 100,
+		BlockCount: 2,
+		WitnessHex: witnessHex,
+		WitnessBal: witnessBal,
+		CapturedAt: "2026-04-17T00:00:00Z",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var entries []OracleEntry
-	for _, blk := range blocks {
-		if _, err := core.ProcessBlock(loaded.StateDB, loaded.DynProps, blk, loaded.DiskDB, []tcommon.Address{witness}, 0); err != nil {
-			t.Fatal(err)
-		}
-		d := DigestB(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps)
-		entries = append(entries, OracleEntry{
-			BlockNum: blk.Number(),
-			DigestB:  hex.EncodeToString(d[:]),
-			DiagC:    DigestC(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps),
-		})
-	}
-	if err := WriteOracle(filepath.Join(dir, "oracle.ndjson"), entries); err != nil {
-		t.Fatal(err)
-	}
-	return witness
-}
-
-func makeEmptyBlock(num uint64, parent *types.Block, witness tcommon.Address) *types.Block {
-	raw := &corepb.BlockHeaderRaw{
-		Number:         int64(num),
-		Timestamp:      int64(num) * 3000,
-		WitnessAddress: witness[:],
-	}
-	if parent != nil {
-		h := parent.Hash()
-		raw.ParentHash = h[:]
-	}
-	return types.NewBlockFromPB(&corepb.Block{
-		BlockHeader: &corepb.BlockHeader{RawData: raw},
-	})
+	w, _ := ParseAddress(witnessHex)
+	return w
 }
 
 func TestReplayRange_SyntheticPass(t *testing.T) {

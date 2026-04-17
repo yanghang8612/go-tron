@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "javaTronVersion": "",
+  "startHeight": 1000000,
+  "dynamicProperties": {
+    "witness_pay_per_block": 32000000
+  },
+  "accounts": [
+    {
+      "address": "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "balance": 1000000,
+      "accountType": 0
+    }
+  ],
+  "contracts": null,
+  "closureAddresses": [
+    "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

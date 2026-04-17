@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "scenario": "smoke",
+  "javaTron.version": "synthetic",
+  "javaTron.jarSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "capturedAt": "2026-04-17T00:00:00Z",
+  "startBlock": 1000000,
+  "endBlock": 1000004,
+  "genesisTime": 0,
+  "activeWitnesses": [
+    "41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

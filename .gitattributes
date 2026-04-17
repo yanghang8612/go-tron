@@ -1,0 +1,5 @@
+# Real mainnet-blocks corpora can run tens of megabytes each — track via
+# git-lfs. The synthetic "smoke" range is small (<50 KB) and stays plain
+# so contributors can `make conformance-replay` without lfs set up.
+test/fixtures/mainnet-blocks/range-*/blocks.bin filter=lfs diff=lfs merge=lfs -text
+test/fixtures/mainnet-blocks/range-*/oracle.ndjson filter=lfs diff=lfs merge=lfs -text
