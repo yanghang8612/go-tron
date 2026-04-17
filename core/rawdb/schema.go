@@ -93,6 +93,35 @@ var (
 	// XOR trick makes newer blocks sort first under lex ordering, so
 	// a prefix iterator hands the latest trace back on first hit.
 	accountTracePrefix = []byte("at-")
+
+	// drAccIdxPrefix (drax-) maps to java-tron's
+	// DelegatedResourceAccountIndexStore (db name
+	// "DelegatedResourceAccountIndex"). Holds forward and reverse
+	// bindings for both Freeze-V1 and Freeze-V2 delegation pairs, one
+	// record per (direction, anchor, counterparty) tuple — lets a
+	// wallet answer "who delegated TO me" or "who have I delegated to"
+	// via prefix scans without walking the primary DelegatedResource
+	// store. The direction byte distinguishes V1/V2 × from/to:
+	//   0x01 V1 from-anchor   (anchor=from, counterparty=to)
+	//   0x02 V1 to-anchor     (anchor=to,   counterparty=from)
+	//   0x03 V2 from-anchor   "
+	//   0x04 V2 to-anchor     "
+	// Key:   drax- || direction (1B) || anchor (21B) || counterparty (21B)
+	// Value: proto-encoded DelegatedResourceAccountIndex with `Account`
+	//        = counterparty and `Timestamp` = delegate/undelegate time.
+	drAccIdxPrefix = []byte("drax-")
+)
+
+// drAccIdxDirection enumerates the four sub-indices of
+// DelegatedResourceAccountIndexStore, matching java-tron's 0x01..0x04
+// prefix bytes for V1/V2 × from/to-anchored lookups.
+type drAccIdxDirection byte
+
+const (
+	DrAccIdxV1From drAccIdxDirection = 0x01 // V1: from-anchored  (anchor=from, counterparty=to)
+	DrAccIdxV1To   drAccIdxDirection = 0x02 // V1: to-anchored    (anchor=to,   counterparty=from)
+	DrAccIdxV2From drAccIdxDirection = 0x03 // V2: from-anchored
+	DrAccIdxV2To   drAccIdxDirection = 0x04 // V2: to-anchored
 )
 
 func blockKey(number uint64) []byte {
@@ -233,6 +262,27 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(xored))
 	return append(k, b[:]...)
+}
+
+// drAccIdxKey builds a DelegatedResourceAccountIndex key. Mirrors
+// java-tron's Bytes.concat(PREFIX, anchor, counterparty) layout with
+// the prefix byte selecting V1/V2 × from/to.
+func drAccIdxKey(dir drAccIdxDirection, anchor, counterparty []byte) []byte {
+	k := make([]byte, 0, len(drAccIdxPrefix)+1+len(anchor)+len(counterparty))
+	k = append(k, drAccIdxPrefix...)
+	k = append(k, byte(dir))
+	k = append(k, anchor...)
+	return append(k, counterparty...)
+}
+
+// drAccIdxAnchorPrefix returns the byte prefix that iterates every
+// (counterparty, value) under a given direction+anchor — drax- ||
+// direction || anchor.
+func drAccIdxAnchorPrefix(dir drAccIdxDirection, anchor []byte) []byte {
+	k := make([]byte, 0, len(drAccIdxPrefix)+1+len(anchor))
+	k = append(k, drAccIdxPrefix...)
+	k = append(k, byte(dir))
+	return append(k, anchor...)
 }
 
 func assetKey(tokenID int64) []byte {
