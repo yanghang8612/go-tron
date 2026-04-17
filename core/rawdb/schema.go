@@ -82,6 +82,17 @@ var (
 	// Key:   aid- || account_id bytes (utf-8, lowercased before insert)
 	// Value: 21-byte owner address.
 	accountIdIndexPrefix = []byte("aid-")
+
+	// accountTracePrefix (at-) maps to java-tron's AccountTraceStore
+	// (db name "account-trace"). Per-account historical balance
+	// records, one per block height where the account changed. Gated
+	// on CommonParameter.isHistoryBalanceLookup — dormant on mainnet
+	// today, but ports live for parity + future opt-in auditing.
+	// Key:   at- || owner (21B) || (blockNum XOR Long.MAX_VALUE) BE 8B
+	// Value: proto-encoded AccountTrace ({balance: int64}).
+	// XOR trick makes newer blocks sort first under lex ordering, so
+	// a prefix iterator hands the latest trace back on first hit.
+	accountTracePrefix = []byte("at-")
 )
 
 func blockKey(number uint64) []byte {
@@ -207,6 +218,21 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 // AccountIdIndexStore — key is the raw account ID bytes (UTF-8).
 func accountIdIndexKey(accountID []byte) []byte {
 	return append(append([]byte{}, accountIdIndexPrefix...), accountID...)
+}
+
+// accountTraceKey builds an account-trace key: prefix || owner (21B) ||
+// (blockNum XOR Long.MAX_VALUE) big-endian 8B. The XOR inverts numeric
+// ordering so a lexicographic iterator walks newest-first, matching
+// java-tron's AccountTraceStore key layout for recordBalanceWithBlock.
+func accountTraceKey(owner []byte, blockNum int64) []byte {
+	const longMax int64 = 0x7FFFFFFFFFFFFFFF
+	xored := blockNum ^ longMax
+	k := make([]byte, 0, len(accountTracePrefix)+len(owner)+8)
+	k = append(k, accountTracePrefix...)
+	k = append(k, owner...)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(xored))
+	return append(k, b[:]...)
 }
 
 func assetKey(tokenID int64) []byte {
