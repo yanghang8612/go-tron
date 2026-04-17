@@ -73,6 +73,15 @@ var (
 	//   aa- || owner (21B) || tokenID (varint-style uint64 big-endian 8B)
 	// Value: big-endian int64 balance (matches Java's Longs.toByteArray).
 	accountAssetPrefix = []byte("aa-")
+
+	// accountIdIndexPrefix (aid-) maps to java-tron's
+	// AccountIdIndexStore (db name "accountid-index"). Reverse lookup
+	// from account_id (a user-chosen UTF-8 string) to the 21-byte
+	// owner address. Written by SetAccountIdContract; read by its
+	// uniqueness check and by the getaccountbyid RPC.
+	// Key:   aid- || account_id bytes (utf-8, lowercased before insert)
+	// Value: 21-byte owner address.
+	accountIdIndexPrefix = []byte("aid-")
 )
 
 func blockKey(number uint64) []byte {
@@ -192,6 +201,12 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 	var tb [8]byte
 	binary.BigEndian.PutUint64(tb[:], uint64(tokenID))
 	return append(k, tb[:]...)
+}
+
+// accountIdIndexKey builds the accountid-index key. Mirrors java-tron's
+// AccountIdIndexStore — key is the raw account ID bytes (UTF-8).
+func accountIdIndexKey(accountID []byte) []byte {
+	return append(append([]byte{}, accountIdIndexPrefix...), accountID...)
 }
 
 func assetKey(tokenID int64) []byte {
