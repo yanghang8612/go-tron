@@ -119,15 +119,30 @@ own driver following this protocol.
    addresses appear in any tx. Missing them silently drops state changes
    from the digest.
 
-   Review the stderr warning list of unhandled ContractTypes; if any are
-   present in your range, extend the switch in `core/conformance/closure.go`
-   (TDD: add a test with a hand-built block, then the extraction) before
-   continuing.
+   Review the stderr warning list of unhandled ContractTypes. The switch
+   currently covers every mainnet-active ContractType (37 of the 40
+   defined in the proto) — the only types that can still surface as
+   unhandled are rarely-seen historical placeholders (`CustomContract`,
+   `GetContract`). If a real mainnet range trips this warning, extend
+   the switch in `core/conformance/closure.go` (TDD: add a test with a
+   hand-built block, then the extraction) before continuing.
 
-3. **Prune your mainnet java-tron to `start-1`**, restart it, wait for the
-   chain head to settle at `start-1`. (java-tron's own rollback tool:
-   `java -cp FullNode.jar org.tron.program.FullNode --db-rollback <start-1>`.
-   Check current documentation — the exact invocation moves.)
+3. **Rewind your mainnet java-tron to `start-1`.** There is no built-in
+   arbitrary-height rollback in java-tron today (no `--db-rollback`
+   flag, no `DbRollback` Toolkit subcommand — verified against the
+   current source). Options:
+
+   - **Pre-captured snapshot** at the desired height if one is
+     available from a snapshot provider (simplest).
+   - **Run a dedicated follower** that starts at some earlier height
+     and syncs forward, stopping cleanly at `start-1`.
+   - **Prune with `java -jar Toolkit.jar db lite …`** if your target
+     is recent enough (DbLite only moves forward to a
+     snapshot-consistent state; it does not rewind past where you're
+     already at).
+
+   Whichever you pick, verify via `wallet/getnowblock` that the chain
+   head is exactly `start-1` before continuing.
 
 4. **Dump the seed state** at `start-1` for the closure addresses. For
    each `addr` in `closure.json`:
@@ -201,11 +216,16 @@ there is no per-block hook today. Document this in the range's `README`
 if it applies.
 
 7. **Write `fixture.json`** with schema 1, scenario `<name>`,
-   `javaTron.version` (read from `jar --version` or
-   `wallet/getnowblockversion`), `javaTron.jarSha256` (from the running
-   jar), `capturedAt`, `startBlock`, `endBlock`, `genesisTime`
-   (mainnet genesis is `1529891469000`), and `activeWitnesses` (from
-   the witness schedule at `start-1`).
+   `javaTron.version` (read from `java -jar FullNode.jar --version`,
+   or from `BlockHeader.raw.version` in any block the node produces —
+   `wallet/getnowblockversion` does **not** exist in java-tron),
+   `javaTron.jarSha256` (from the running jar), `capturedAt`,
+   `startBlock`, `endBlock`, `genesisTime` (for TRON mainnet the
+   canonical value is `1529891469000` — May 2018 — but the
+   authoritative source is your own genesis block's
+   `BlockHeader.raw.timestamp` from `wallet/getblockbynum {"num":0}`),
+   and `activeWitnesses` (from `wallet/listwitnesses` at `start-1`,
+   taking the addresses flagged as active in that SR set).
 
 8. **First replay pass:**
 

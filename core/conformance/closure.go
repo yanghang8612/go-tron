@@ -225,6 +225,151 @@ func extractContractAddrs(
 		}
 		add(m.OwnerAddress)
 
+	case corepb.Transaction_Contract_ProposalCreateContract:
+		var m contractpb.ProposalCreateContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ProposalApproveContract:
+		var m contractpb.ProposalApproveContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ProposalDeleteContract:
+		var m contractpb.ProposalDeleteContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_AssetIssueContract:
+		var m contractpb.AssetIssueContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_UpdateAssetContract:
+		var m contractpb.UpdateAssetContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_UnfreezeAssetContract:
+		var m contractpb.UnfreezeAssetContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ParticipateAssetIssueContract:
+		var m contractpb.ParticipateAssetIssueContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+		add(m.ToAddress)
+
+	case corepb.Transaction_Contract_VoteAssetContract:
+		var m contractpb.VoteAssetContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_SetAccountIdContract:
+		var m contractpb.SetAccountIdContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ExchangeCreateContract:
+		var m contractpb.ExchangeCreateContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ExchangeInjectContract:
+		var m contractpb.ExchangeInjectContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ExchangeWithdrawContract:
+		var m contractpb.ExchangeWithdrawContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_ExchangeTransactionContract:
+		var m contractpb.ExchangeTransactionContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_MarketSellAssetContract:
+		var m contractpb.MarketSellAssetContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_MarketCancelOrderContract:
+		var m contractpb.MarketCancelOrderContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
+	case corepb.Transaction_Contract_UpdateSettingContract:
+		var m contractpb.UpdateSettingContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+		add(m.ContractAddress)
+
+	case corepb.Transaction_Contract_UpdateEnergyLimitContract:
+		var m contractpb.UpdateEnergyLimitContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+		add(m.ContractAddress)
+
+	case corepb.Transaction_Contract_ClearABIContract:
+		var m contractpb.ClearABIContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+		add(m.ContractAddress)
+
+	case corepb.Transaction_Contract_ShieldedTransferContract:
+		var m contractpb.ShieldedTransferContract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.TransparentFromAddress)
+		add(m.TransparentToAddress)
+
+	case corepb.Transaction_Contract_CancelAllUnfreezeV2Contract:
+		var m contractpb.CancelAllUnfreezeV2Contract
+		if err := c.Parameter.UnmarshalTo(&m); err != nil {
+			return err
+		}
+		add(m.OwnerAddress)
+
 	default:
 		unhandled[c.Type]++
 	}

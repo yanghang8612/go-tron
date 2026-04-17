@@ -180,6 +180,9 @@ Dispatch covers all 37 mainnet `ContractType` enums; `actuator/` has Go equivale
 
 ## Completed since 2026-04-12
 
+- **M0″ conformance replay harness — Phase 1** (2026-04-17) — `core/conformance/` pure-Go engine (seed loader with raw Account proto ingestion; DigestB/DigestC; allowlist with stale detection; Report; ReplayRange; Snapshot round-trip) with 26 unit tests. `cmd/gtron-replay` CLI + `scripts/conformance_replay.sh` + Makefile targets. `cmd/fixture-closure` (extracts touched-address closure from blocks.bin, merges optional `--standby-witnesses` CSV) and `cmd/fixture-digest` (java-tron capture snapshot → OracleEntry) for Phase 2 operator use. `test/fixtures/mainnet-blocks/smoke/` 5-block synthetic range regenerable via `go run ./scripts/fixtures/cmd/gen-smoke`. `docs/dev/conformance-harness.md` covers replay commands + the Phase 2 prune-and-replay-and-snapshot capture protocol + allowlist policy. Phase 2 (record 3 real mainnet ranges, populate allowlists with known M1.5/M1.8 parity gaps, ship `scripts/system_test_cross.sh`) is blocked on mainnet java-tron access; M0″ exits when every range's allowlist is empty.
+
+
 These items from earlier revisions of this file are now addressed and no longer appear above. Referenced here so reviewers can cross-check the decrease in scope:
 
 - **DP-key backfill + rename + proposal-ID mapping rebuild** (M1.1) — `core/state/dp_key_mapping.go`, 76-key fixture match, `ProposalParamKey` rebuilt from `ProposalUtil.ProposalType`. Two residual routing bugs (proposals #19 and #49) corrected 2026-04-15.

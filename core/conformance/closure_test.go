@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -139,13 +140,13 @@ func TestComputeClosure_ExtrasMergeIn(t *testing.T) {
 }
 
 func TestComputeClosure_UnknownTypeGoesToUnhandled(t *testing.T) {
-	// VoteAssetContract is a real type but not in our switch — should
-	// surface as unhandled, not panic.
-	anyParam, _ := anypb.New(&contractpb.VoteAssetContract{})
+	// CustomContract (type 20) has no defined proto in contractpb and is
+	// deliberately not in our switch — should surface as unhandled, not
+	// panic. An unmarshal to an arbitrary contract type here isn't
+	// required; the switch hits `default` before UnmarshalTo.
 	tx := &corepb.Transaction{RawData: &corepb.TransactionRaw{
 		Contract: []*corepb.Transaction_Contract{{
-			Type:      corepb.Transaction_Contract_VoteAssetContract,
-			Parameter: anyParam,
+			Type: corepb.Transaction_Contract_CustomContract,
 		}},
 	}}
 	blk := types.NewBlockFromPB(&corepb.Block{
@@ -156,7 +157,66 @@ func TestComputeClosure_UnknownTypeGoesToUnhandled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unhandled[corepb.Transaction_Contract_VoteAssetContract] != 1 {
-		t.Fatalf("want 1 VoteAssetContract in unhandled, got %+v", unhandled)
+	if unhandled[corepb.Transaction_Contract_CustomContract] != 1 {
+		t.Fatalf("want 1 CustomContract in unhandled, got %+v", unhandled)
+	}
+}
+
+func TestComputeClosure_ExtendedContractTypes(t *testing.T) {
+	// Spot-check a representative sample from the extended switch.
+	witness, _ := ParseAddress("41" + strings.Repeat("a", 40))
+	owner, _ := ParseAddress("41" + strings.Repeat("b", 40))
+	contractAddr, _ := ParseAddress("41" + strings.Repeat("c", 40))
+	fromShielded, _ := ParseAddress("41" + strings.Repeat("d", 40))
+	toShielded, _ := ParseAddress("41" + strings.Repeat("e", 40))
+
+	mk := func(t corepb.Transaction_Contract_ContractType, msg interface {
+		ProtoReflect() protoreflect.Message
+	}) *corepb.Transaction {
+		p, err := anypb.New(msg)
+		if err != nil {
+			panic(err)
+		}
+		return &corepb.Transaction{RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{Type: t, Parameter: p}},
+		}}
+	}
+	txs := []*corepb.Transaction{
+		mk(corepb.Transaction_Contract_ProposalApproveContract,
+			&contractpb.ProposalApproveContract{OwnerAddress: owner[:]}),
+		mk(corepb.Transaction_Contract_ExchangeCreateContract,
+			&contractpb.ExchangeCreateContract{OwnerAddress: owner[:]}),
+		mk(corepb.Transaction_Contract_UpdateSettingContract,
+			&contractpb.UpdateSettingContract{OwnerAddress: owner[:], ContractAddress: contractAddr[:]}),
+		mk(corepb.Transaction_Contract_ShieldedTransferContract,
+			&contractpb.ShieldedTransferContract{TransparentFromAddress: fromShielded[:], TransparentToAddress: toShielded[:]}),
+	}
+	blk := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number:         1,
+			WitnessAddress: witness[:],
+		}},
+		Transactions: txs,
+	})
+
+	addrs, unhandled, err := ComputeClosure([]*types.Block{blk}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unhandled) != 0 {
+		t.Fatalf("unhandled must be empty, got %+v", unhandled)
+	}
+	// Expect witness, owner, contractAddr, fromShielded, toShielded (5 unique).
+	if len(addrs) != 5 {
+		t.Fatalf("want 5 addrs, got %d: %v", len(addrs), addrs)
+	}
+	seen := map[string]bool{}
+	for _, a := range addrs {
+		seen[string(a[:])] = true
+	}
+	for _, want := range []tcommon.Address{witness, owner, contractAddr, fromShielded, toShielded} {
+		if !seen[string(want[:])] {
+			t.Fatalf("missing expected addr: %x", want[:])
+		}
 	}
 }
