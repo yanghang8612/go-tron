@@ -20,7 +20,17 @@ var (
 	storagePrefix   = []byte("s-")
 	dynPropPrefix   = []byte("dp-")
 
+	// witnessScheduleKey is the head sentinel for witness-schedule state.
+	// Kept for backwards compatibility with pre-M2 data; not written today.
 	witnessScheduleKey = []byte("ws")
+
+	// shuffledWitnessesKey maps to java-tron WitnessScheduleStore's
+	// `current_shuffled_witnesses` key — the per-cycle shuffled block-
+	// production order. go-tron doesn't wire this into block scheduling
+	// yet (M3/M6 work) but the store is here for parity so capture and
+	// future behaviour ports don't have to coin a prefix.
+	// Value: 21*N bytes (concatenated addresses in shuffled order).
+	shuffledWitnessesKey = []byte("ws-shuffled")
 
 	activeWitnessesKey = []byte("ActiveWitnesses")
 	witnessIndexKey    = []byte("WitnessIndex")
