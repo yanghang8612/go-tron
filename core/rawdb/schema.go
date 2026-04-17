@@ -1,6 +1,9 @@
 package rawdb
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"strconv"
+)
 
 var (
 	headBlockKey      = []byte("LastBlock")
@@ -103,6 +106,17 @@ var (
 	// XOR trick makes newer blocks sort first under lex ordering, so
 	// a prefix iterator hands the latest trace back on first hit.
 	accountTracePrefix = []byte("at-")
+
+	// pbftSignDataPrefix (psd-) maps to java-tron's PbftSignDataStore
+	// (db name "pbft-sign-data"). Holds PBFT quorum signatures for
+	// committed blocks and election-cycle SR lists. Live on mainnet
+	// once PBFT (proposal #50 ALLOW_PBFT) is active; essential for
+	// validators and for RPC proof-of-finality lookups.
+	// Key variants (mirroring DataType.BLOCK / DataType.SRL):
+	//   psd- || "BLOCK" || blockNum decimal ASCII  → PBFTCommitResult
+	//   psd- || "SRL"   || epoch    decimal ASCII  → PBFTCommitResult
+	// Value: proto-encoded corepb.PBFTCommitResult { data, signature[] }.
+	pbftSignDataPrefix = []byte("psd-")
 
 	// drAccIdxPrefix (drax-) maps to java-tron's
 	// DelegatedResourceAccountIndexStore (db name
@@ -272,6 +286,18 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(xored))
 	return append(k, b[:]...)
+}
+
+// pbftBlockSignKey builds the per-block PBFT sign-data key, matching
+// java-tron: "BLOCK" + Long.toString(blockNum).
+func pbftBlockSignKey(blockNum int64) []byte {
+	return append(append([]byte{}, pbftSignDataPrefix...), []byte("BLOCK"+strconv.FormatInt(blockNum, 10))...)
+}
+
+// pbftSrSignKey builds the per-epoch SR list PBFT sign-data key, matching
+// java-tron: "SRL" + Long.toString(epoch).
+func pbftSrSignKey(epoch int64) []byte {
+	return append(append([]byte{}, pbftSignDataPrefix...), []byte("SRL"+strconv.FormatInt(epoch, 10))...)
 }
 
 // drAccIdxKey builds a DelegatedResourceAccountIndex key. Mirrors
