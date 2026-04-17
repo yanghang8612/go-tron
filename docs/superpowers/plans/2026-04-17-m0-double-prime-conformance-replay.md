@@ -16,11 +16,18 @@
 
 ## 执行原则
 
-1. 五个 PR 串行：**PR-1 → PR-2 → PR-3 → PR-4 → PR-5**。每个 PR 结束时 `make test` 全绿。
-2. 每 Task 独立 commit：`feat(conformance): M0'' PR-N Task M — <短描述>`。
-3. PR-1 的 engine 必须 100% 单测覆盖（纯库、无外部依赖），为后续 PR 打下信任基础。
-4. 关于 allowlist：**PR-4 之前**任何 allowlist 条目都当作"待补齐"候选；PR-4 正式录入 3 段真实 corpus 之后才认定为"已知分歧"。
-5. Corpus 文件（`blocks.bin` 等）一律走 git-lfs；仓库根目录 `.gitattributes` 追加 `test/fixtures/mainnet-blocks/*/blocks.bin filter=lfs diff=lfs merge=lfs -text`。
+本里程碑自然分两阶段：
+
+- **Phase 1 — 在本仓库里可独立交付** (PR-1, PR-2, PR-3)：引擎 + CLI + smoke corpus + 可测试的 Go helper + 捕获协议文档。不需要 java-tron。
+- **Phase 2 — 需要本地 java-tron 协作** (PR-4, PR-5)：录入真实 mainnet 三段 corpus、补 allowlist、跑 cross e2e。必须由有 java-tron 访问权限的操作员执行；本 plan 只给规范和工具，不做 speculative scripting。
+
+原则：
+
+1. 每 Task 独立 commit：`feat(conformance): M0'' PR-N Task M — <短描述>`。
+2. PR-1 的 engine 必须 100% 单测覆盖（纯库、无外部依赖），为后续 PR 打下信任基础。
+3. 关于 allowlist：Phase 1 产物的 allowlist 始终为 `[]`；Phase 2 录入真实 corpus 后才有条目，并在 PR-4 之后逐步清空。
+4. Corpus 文件（`blocks.bin` 等）一律走 git-lfs（只针对 `range-*/`，smoke 小到可不走 lfs）；仓库根目录 `.gitattributes` 追加 `test/fixtures/mainnet-blocks/range-*/blocks.bin filter=lfs diff=lfs merge=lfs -text`。
+5. **不写无法在当前环境验证的 bash**：capture 流程本身是 bash + java-tron 的编排，除非能在 CI 里真的跑通，否则只写规范（operator 指南）不写脚本骨架。bash 由后续有 java-tron 访问的操作员补。
 
 ---
 
@@ -757,113 +764,108 @@ func TestGenerateSmokeCorpus(t *testing.T) {
 
 ---
 
-# PR-3 · `capture_range.sh` + java-tron 端到端
+# PR-3 · 捕获工具（Go helpers）+ 捕获协议文档
 
-**目标：** 操作员能用一条命令从真实 java-tron 抓一个 range，产物落到 fixture 目录。
+**目标：** 把 capture 过程中**可以在本仓库里单测的部分**写死 — 两个 Go 小工具 + 一份供操作员照做的协议文档。不写 bash capture 脚本（那份等 Phase 2 操作员补）。
 
-## Task 12 · 参数与 gRPC 连接骨架
+## Task 12 · `cmd/fixture-closure`
 
-**Files:**
-- Create: `scripts/fixtures/capture_range.sh`
-- Create: `scripts/fixtures/lib/capture.sh`
-
-- [ ] `capture_range.sh <range-name> <start> <end>`：
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-_here="$(cd "$(dirname "$0")" && pwd)"
-source "$_here/lib/api.sh"
-source "$_here/lib/capture.sh"
-
-name="$1"; start="$2"; end="$3"
-workdir="/tmp/capture-${name}-$$"
-outdir="$(cd "$_here/../.." && pwd)/test/fixtures/mainnet-blocks/${name}"
-mkdir -p "$outdir"
-
-start_java_tron "$workdir"  # reuse M0' helper
-trap 'stop_java_tron' EXIT
-
-capture_blocks "$start" "$end" "$outdir/blocks.bin"
-closure=$(compute_closure "$outdir/blocks.bin")
-capture_seed "$((start-1))" "$closure" "$outdir/seed.json"
-capture_oracle "$start" "$end" "$closure" "$outdir/oracle.ndjson"
-echo '[]' > "$outdir/divergence-allowlist.json"
-write_fixture_meta "$outdir/fixture.json" "$name" "$start" "$end"
-```
-
-- [ ] Commit。
-
-**验收：** 参数解析、工作目录管理走通；不需要真执行 java-tron 抓数据。
-
----
-
-## Task 13 · Blocks 抓取 + closure 计算
-
-- [ ] `lib/capture.sh: capture_blocks`：gRPC `GetBlockByNum` 逐块抓，写 varint-prefixed `blocks.bin`。
-- [ ] `lib/capture.sh: compute_closure`：走一个 Go 小工具 `cmd/fixture-closure`（新增），读 `blocks.bin`、遍历每个 tx contract 中的 owner/receiver/contract-address、输出去重后的 hex 列表到 stdout。
+**目标：** 读 `blocks.bin`，按 ContractType switch 从每个 tx 抽出 owner/receiver/contract 地址；再叠加每个 block 的 witness 地址；输出去重后的 41-hex 列表。
 
 **Files:**
 - Create: `cmd/fixture-closure/main.go`
+- Create: `cmd/fixture-closure/main_test.go`（或 package 内 _test）
 
-- [ ] `cmd/fixture-closure/main.go` 实现：
-  - 读 `blocks.bin`
-  - 对每个 block 的 `Transactions`，按 `ContractType` switch 提取地址（参考 `actuator/` 各 actuator 的 Validate 流程识别相关字段）
-  - 输出 stdout JSON `[<addr>,...]`
+- [ ] 每个 ContractType 对应的地址提取规则写在 `core/conformance/closure.go` 里（测试更简单、不依赖 main 包）。main.go 做 CLI wrapper。
+- [ ] 对 `ContractType_TransferContract`：parse `TransferContract` 取 `owner_address`、`to_address`。同样处理 `TransferAssetContract`, `TriggerSmartContract`（`contract_address` + `owner_address`）, `CreateSmartContract`, `VoteWitnessContract`（每个 vote 的 `vote_address`）, `FreezeBalanceContract`（v1）, `FreezeBalanceV2Contract`（v2）, `UnfreezeBalanceContract`, `DelegateResourceContract`, `UnDelegateResourceContract`, `WithdrawBalanceContract`, `AccountUpdateContract`, `AccountPermissionUpdateContract`, `UpdateBrokerageContract`。其余列入 TODO comment；未处理的 ContractType 不 panic、只 warn。
+- [ ] **测试：** 针对 smoke corpus 的 `blocks.bin`（纯空块），期望 closure = {witness_address}。此外再针对手工组装的含一条 `TransferContract` 的 `*corepb.Block` 测试 owner+to 被抽出。
+- [ ] Commit：`feat(conformance): M0'' PR-3 Task 12 — fixture-closure`。
 
-- [ ] Commit。
-
-**验收：** 对 smoke corpus 运行 `fixture-closure` 输出与 PR-2 里的 closure 一致。
+**验收：** `go run ./cmd/fixture-closure --blocks=test/fixtures/mainnet-blocks/smoke/blocks.bin` 输出 `["41aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]`。
 
 ---
 
-## Task 14 · Seed + oracle 抓取
+## Task 13 · `cmd/fixture-digest`
 
-- [ ] `capture_seed`：对 closure 里的每个地址，调 java-tron HTTP `wallet/getaccount`，补 DP via `wallet/getchainparameters`，拼成 `seed.json`。
-- [ ] `capture_oracle`：对 `[start..end]` 每个 height，抓所有 closure 地址的 state（`wallet/getaccount?visible=false` + block-specific 参数 if needed — TRON HTTP 不支持按 height 查询；使用 gRPC `getaccount` 的快照接口；如果都不支持就 `replay-and-snapshot` in-place：跑 java-tron 并在每 block 结束时 dump 状态）。
+**目标：** 从 java-tron 输出的 JSON 状态快照（schema 见 Task 14 文档）计算 DigestB/DigestC。
 
-**注意：** java-tron 没有按 height 查询账户的公开接口。两个可行办法：
-- (a) 改 java-tron 源码加一个本地开发用 endpoint，对 history 层做查询；
-- (b) 让 capture 过程本身就是回放：先 prune java-tron 到 `start-1`，然后一块一块往前推进，每推一块 dump 一次状态。
+**输入 JSON schema** (`capture-snapshot.json` 单个 block 版)：
 
-选 (b) 更现实但更慢：
-
-- [ ] `capture_oracle` 伪代码：
-
-```bash
-capture_oracle() {
-    local start="$1" end="$2" closure="$3" out="$4"
-    : > "$out"
-    # Assume java-tron is running at block start-1 (we prune to it in start_java_tron)
-    for ((h=start; h<=end; h++)); do
-        wait_for_block "$h"
-        dump_state_at_tip "$closure" | \
-            go run ./cmd/fixture-digest --block="$h" --mode=B+C >> "$out"
-    done
+```json
+{
+  "blockNum": 1000000,
+  "accounts": [
+    { "address": "41aaa…", "accountProto": "<base64 of Account proto>" },
+    …
+  ],
+  "contractStates": [
+    { "address": "41bbb…", "contractStateProto": "<base64>" }
+  ],
+  "code": [
+    { "address": "41bbb…", "codeHex": "6080…" }
+  ],
+  "dp": { "energy_fee": 100, "total_energy_current_limit": 50000000000, … }
 }
 ```
 
-- [ ] 新工具 `cmd/fixture-digest`：读 stdin（java-tron state dump JSON）、算 B+C 输出 `OracleEntry` JSON 行。
-
 **Files:**
 - Create: `cmd/fixture-digest/main.go`
+- Create: `core/conformance/snapshot.go` — `LoadSnapshot(reader) (*state.StateDB, *state.DynamicProperties, []Address)`
+- Create: `core/conformance/snapshot_test.go`
 
-- [ ] Commit。
+- [ ] `LoadSnapshot` 使用与 `LoadSeed` 同一个 in-mem StateDB 构造路径；把 `accountProto` base64-decode → `proto.Unmarshal` → `sdb.SetAccount`（新增方法？如 StateDB 无直接 SetAccount，加一个 internal helper；若太复杂，走 `CreateAccount` + 逐字段复制）；`contractStateProto` 写 rawdb；`code` 用 `sdb.SetCode`。
+- [ ] `fixture-digest`：读 stdin 或 `--input`，吐出一行 `OracleEntry` JSON（含 `blockNum`、`digestB`、可选 `diagC`）。
+- [ ] **测试：**
+  - 构造一个 `capture-snapshot.json`（手写一个账户 + 几个 DP），喂给 `fixture-digest`。
+  - 拿 smoke corpus 的 `oracle.ndjson[0]`（engine 自己算出来的），用相同账户/DP 手工构造一个 snapshot，期望 `fixture-digest` 出的 digestB 和 oracle 一致。这是"digest 算法跨格式自洽"的证据。
+- [ ] Commit：`feat(conformance): M0'' PR-3 Task 13 — fixture-digest`。
 
-**验收：** 对一段本地 java-tron 新链跑出来的 5-block synthetic range，capture 产物和 PR-2 的 smoke 结构一致（按同一流程生成）。
+**验收：** 自洽测试通过。
 
 ---
 
-## Task 15 · PR-3 收尾
+## Task 14 · Capture Protocol 文档
 
-- [ ] 在 `docs/dev/conformance-harness.md` 里写清操作流程：`FULLNODE_JAR=… ./scripts/fixtures/capture_range.sh range-freeze-v2 44999950 45000500`。
-- [ ] 用本地 java-tron 跑一次 small range（例如 genesis + 10 块的 devnet）生成产物，校验 `gtron-replay` 能 load。
+把 capture 的 java-tron 端协议写死在 `docs/dev/conformance-harness.md`，让下一个有 java-tron 的操作员能照做。
+
+**Files:**
+- Modify: `docs/dev/conformance-harness.md`
+
+- [ ] 新增 "Capture protocol" 顶级段落，覆盖：
+  - **Why manual**：java-tron 没有 getAccount-at-height 接口；唯一办法是 prune 后从 `start-1` 一块一块推进，每块末尾 dump 状态。不在本仓库里自动化。
+  - **Expected flow**（伪流程，操作员自己补 bash）：
+    1. 停 java-tron；用 `db-fast-fork` 或等效工具 prune 到 `start-1`。
+    2. 启 java-tron，等它稳定在 `start-1`。
+    3. `go run ./cmd/fixture-closure --blocks=<pre-fetched blocks.bin> > closure.json`。
+    4. Dump snapshot at `start-1` → `seed.json`（格式见 §Capture JSON schema）。
+    5. 让 java-tron 逐块推进；每块末尾 HTTP 取 closure 里每个地址的 `wallet/getaccount` + DP + contract state → `capture-snapshot.json` 喂给 `cmd/fixture-digest` → 追加一行到 `oracle.ndjson`。
+    6. `fixture.json` 用同一对 `(javaTronVersion, jarSha256)` + `start/end/genesisTime/activeWitnesses` 填好。
+  - **Capture JSON schema** — 给 Task 13 的 snapshot 格式写清楚。
+  - **Pre-fetching blocks**：`blocks.bin` 的 varint framing 写明白，建议 `wallet/getblockbynum` 遍历 + `proto.Marshal` 拼接。
+  - **Sanity check**：操作员捕获完后跑 `make conformance-replay RANGES=<name>`，应该先看到很多 divergence —— 那些就是 allowlist 的候选。
+- [ ] Commit：`docs(conformance): M0'' PR-3 Task 14 — capture protocol`。
+
+**验收：** 读过文档的操作员（本仓库外）可以写一份 bash 实现协议，**不**需要来回问问题。
 
 ---
 
-# PR-4 · 录入 3 段真实 mainnet range
+## Task 15 · Phase 1 收尾
+
+- [ ] `go test ./... -count=1 -timeout 300s` 全绿。
+- [ ] 在 `core/conformance/doc.go` 顶部加一句 "Phase 1 delivers …; Phase 2 operator task …"。
+- [ ] **PLAN.md 进度表**：M0″ 拆成 `M0″ Phase 1 (engine+helpers+docs)` = **完成**，`M0″ Phase 2 (mainnet ranges+cross e2e)` = **待 java-tron 操作员**。
+- [ ] **TODO.md §6**：注明 M0″ Phase 1 落地日期 + commit range；Phase 2 blocker = operator access。
+- [ ] Commit：`docs(conformance): M0'' Phase 1 complete, Phase 2 operator-gated`。
+
+**验收：** `make test` 绿；`make conformance-replay` smoke 绿；PLAN/TODO 说明清楚 Phase 2 的前置条件。
+
+---
+
+# PR-4 · 录入 3 段真实 mainnet range  (Phase 2 — operator-gated)
 
 **目标：** 真 corpus 落盘、跑起来、把所有现有 divergence 写进 allowlist，配 tracking issue。
+
+**前置：** 能访问 mainnet-synced 本地 java-tron 节点；PR-3 的 fixture-closure / fixture-digest / 捕获协议文档已 merge。
 
 ## Task 16 · 三段 range 的高度定案
 
@@ -899,9 +901,11 @@ capture_oracle() {
 
 ---
 
-# PR-5 · Cross e2e + docs
+# PR-5 · Cross e2e + docs  (Phase 2 — operator-gated)
 
 **目标：** 双节点端到端 + 面向操作员的完整文档。
+
+**前置：** 同 PR-4。
 
 ## Task 21 · `scripts/system_test_cross.sh`
 
