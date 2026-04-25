@@ -118,6 +118,17 @@ var (
 	// voter beginCycle/endCycle cursors used by the reward v2 algorithm.
 	delegRewardPrefix = []byte("dl-")
 
+	// abiPrefix (abi-) maps to java-tron's AbiStore (db "abi"). When
+	// allow_account_asset_optimization is active, contract ABIs are moved
+	// OUT of the inline SmartContract proto and stored here so the main
+	// contract store no longer carries ABI bytes on every read.
+	// Key:   abi- || contract address 21B
+	// Value: proto-encoded SmartContract_ABI
+	// Note: go-tron currently stores ABI inline in SmartContract (via
+	// contractPrefix "ct-"). This store exists for forward-compatibility
+	// when the ABI extraction feature activates.
+	abiPrefix = []byte("abi-")
+
 	// contractStatePrefix (cs-) maps to java-tron's ContractStateStore
 	// (db name "contract-state"). Per-contract dynamic-energy state:
 	// rolling energy usage, energy factor, and last-update cycle.
@@ -348,6 +359,11 @@ func delegEndCycleKey(addr []byte) []byte {
 	k = append(k, delegRewardPrefix...)
 	k = append(k, []byte("end-")...)
 	return append(k, addr...)
+}
+
+// abiKey builds the per-contract ABI key.
+func abiKey(contractAddr []byte) []byte {
+	return append(append([]byte{}, abiPrefix...), contractAddr...)
 }
 
 // contractStateKey builds the per-contract dynamic-energy state key.
