@@ -30,7 +30,7 @@ func TestProcessProposals_Approved(t *testing.T) {
 
 	// 3 approvals out of 4 SRs = 75% >= 70%
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active, 3000); err != nil {
+	if err := ProcessProposals(db, dynProps, active, 3000, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestProcessProposals_Canceled(t *testing.T) {
 	rawdb.WriteProposalIndex(db, []int64{0})
 
 	active4 := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active4, 3000); err != nil {
+	if err := ProcessProposals(db, dynProps, active4, 3000, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestProcessProposals_NotExpired(t *testing.T) {
 	rawdb.WriteProposal(db, 0, p)
 	rawdb.WriteProposalIndex(db, []int64{0})
 
-	if err := ProcessProposals(db, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000); err != nil { // maintenance time < expiration
+	if err := ProcessProposals(db, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000, nil); err != nil { // maintenance time < expiration
 		t.Fatalf("unexpected error: %v", err)
 	}
 

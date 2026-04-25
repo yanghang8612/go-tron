@@ -114,7 +114,7 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil)
+	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx.Proto()},
 	})
 
-	_, err := ProcessBlock(statedb, dynProps, block, nil, nil)
+	_, err := ProcessBlock(statedb, dynProps, block, nil, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for invalid transaction")
 	}
@@ -216,7 +216,7 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 		Transactions: []*corepb.Transaction{tx1.Proto(), tx2.Proto()},
 	})
 
-	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil)
+	txInfos, err := ProcessBlock(statedb, dynProps, block, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

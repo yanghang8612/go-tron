@@ -104,7 +104,10 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 // It does NOT commit state — the caller (InsertBlock/BuildBlock) is responsible
 // for committing after any post-processing (e.g., maintenance).
 // Returns the TransactionInfos for all executed transactions.
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address) ([]*corepb.TransactionInfo, error) {
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address, genesisTimestamp int64) ([]*corepb.TransactionInfo, error) {
+	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
+	dynProps.SetBlockEnergyUsage(0)
+
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
@@ -114,15 +117,25 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp())
 		txInfos = append(txInfos, info)
+
+		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsed > 0 {
+			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsed)
+		}
 	}
 
-	// Pay block reward to witness
+	// Pay block reward to witness (and standby top-127 when change_delegation
+	// is active — the new-algorithm reward path goes through payBlockReward
+	// which splits by brokerage and accumulates the voter pool).
 	witnessAddr := block.WitnessAddress()
 	if witnessAddr != (tcommon.Address{}) {
-		reward := dynProps.WitnessPayPerBlock()
-		if reward > 0 {
-			statedb.AddAllowance(witnessAddr, reward)
-		}
+		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	}
+	payStandbyWitness(db, statedb, dynProps)
+
+	// Per-block adaptive energy limit adjustment.
+	if dynProps.AllowAdaptiveEnergy() {
+		UpdateTotalEnergyAverageUsage(dynProps, genesisTimestamp)
+		UpdateAdaptiveTotalEnergyLimit(dynProps)
 	}
 
 	return txInfos, nil

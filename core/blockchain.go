@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -32,6 +33,7 @@ type BlockChain struct {
 
 	genesisBlock    *types.Block
 	activeWitnesses atomic.Value // []tcommon.Address
+	fc              *forks.ForkController
 }
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
@@ -40,6 +42,7 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 		db:      db,
 		stateDB: stateDB,
 		config:  config,
+		fc:      forks.NewForkController(db),
 	}
 
 	// Load genesis
@@ -121,6 +124,11 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
 }
 
+// ForkController returns the chain's fork controller.
+func (bc *BlockChain) ForkController() *forks.ForkController {
+	return bc.fc
+}
+
 // InsertBlockWithoutVerify inserts a block without consensus verification.
 func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 	if block == nil {
@@ -189,7 +197,7 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	}
 
 	// Process block (execute transactions, pay reward — does not commit)
-	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses())
+	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses(), bc.GenesisTimestamp())
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
@@ -198,6 +206,7 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
+		applyRewardMaintenance(bc.db, statedb, dynProps)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
 		bc.SetActiveWitnesses(newActive)
 	}
@@ -305,6 +314,10 @@ func (a *chainHeaderAdapter) WitnessPayPerBlock() int64 {
 
 func (a *chainHeaderAdapter) WitnessStandbyAllowance() int64 {
 	return a.dynProps.WitnessStandbyAllowance()
+}
+
+func (a *chainHeaderAdapter) ChangeDelegation() bool {
+	return a.dynProps.ChangeDelegation()
 }
 
 func (a *chainHeaderAdapter) MaintenanceTimeInterval() int64 {

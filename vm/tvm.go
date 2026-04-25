@@ -3,6 +3,7 @@ package vm
 import (
 	"crypto/sha256"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -12,7 +13,8 @@ const maxCallDepth = 1024
 // TVM is the top-level TVM execution context.
 type TVM struct {
 	StateDB     *state.StateDB
-	Origin      tcommon.Address // tx.origin
+	DB          ethdb.KeyValueStore // rawdb access (e.g., ContractState for dynamic energy)
+	Origin      tcommon.Address     // tx.origin
 	BlockNumber uint64
 	Timestamp   int64
 	Coinbase    tcommon.Address // block producer
@@ -45,6 +47,12 @@ func NewTVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, tim
 	}
 	tvm.interpreter = NewInterpreter(tvm, cfg)
 	return tvm
+}
+
+// SetDB sets the rawdb store used for access to per-contract state
+// (ContractState for dynamic energy factor tracking, etc.).
+func (tvm *TVM) SetDB(db ethdb.KeyValueStore) {
+	tvm.DB = db
 }
 
 // Create deploys a new contract.

@@ -72,6 +72,14 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	ownerAddr := common.BytesToAddress(vc.OwnerAddress)
 
+	// Settle pending voter rewards BEFORE changing votes. Java-tron's
+	// VoteWitnessActuator.execute calls mortgageService.withdrawReward
+	// first so that the voter's accumulated rewards are locked in against
+	// the OLD vote list before the new vote list applies. Without this,
+	// a voter who changes targets would retroactively earn the new
+	// witness's rewards for past cycles.
+	withdrawReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr)
+
 	// Remove old votes from witnesses
 	oldVotes := ctx.State.GetVotes(ownerAddr)
 	for _, v := range oldVotes {

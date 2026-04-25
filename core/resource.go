@@ -9,17 +9,9 @@ import (
 )
 
 // availableAccountEnergy returns this account's share of the global energy
-// pool, mirroring java-tron's EnergyProcessor.calculateGlobalEnergyLimit
-// (chainbase/.../EnergyProcessor.java:149). Sums own V1 frozen-for-energy,
-// V1 energy delegation acquired-in, own V2 frozen-for-energy, and V2 energy
-// delegation acquired-in; returns that weight's share of total_energy_limit.
-//
-// Returns 0 when the account has no weight or total_energy_weight <= 0.
-//
-// Callers use this to bound the max energy a contract call may burn from
-// the account's staked pool before falling back to TRX. The VM actuator
-// does not yet route through this helper — it caps purely on feeLimit/
-// energyFee — see M1.8 for the wiring work.
+// pool, mirroring java-tron's EnergyProcessor.calculateGlobalEnergyLimit.
+// Uses total_energy_current_limit (which is dynamically adjusted when
+// adaptive energy is active) rather than the static total_energy_limit.
 func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) int64 {
 	if acct == nil {
 		return 0
@@ -33,7 +25,7 @@ func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) in
 	if totalWeight <= 0 {
 		return 0
 	}
-	totalLimit := dp.TotalEnergyLimit()
+	totalLimit := dp.TotalEnergyCurrentLimit()
 
 	if dp.UnfreezeDelayDays() > 0 {
 		netWeight := float64(frozen) / float64(trxPrecision)

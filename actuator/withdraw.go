@@ -32,15 +32,16 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if !ctx.State.IsWitness(ownerAddr) {
-		return errors.New("account is not a witness")
-	}
-	if ctx.State.GetAllowance(ownerAddr) <= 0 {
-		return errors.New("no allowance to withdraw")
-	}
 	lastWithdraw := ctx.State.GetLatestWithdrawTime(ownerAddr)
 	if ctx.BlockTime-lastWithdraw < withdrawCooldown {
 		return errors.New("withdraw too frequent")
+	}
+	// Must either have existing allowance OR a pending voter reward to
+	// settle. This replaces the old IsWitness-only check so that voters
+	// claiming vote rewards (M1.5 new reward path) can also withdraw.
+	if ctx.State.GetAllowance(ownerAddr) <= 0 &&
+		queryReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr) <= 0 {
+		return errors.New("no allowance to withdraw")
 	}
 	return nil
 }
@@ -51,6 +52,11 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+
+	// Settle any pending voter reward into allowance first (no-op when
+	// change_delegation is off — voter rewards only apply on the new path).
+	withdrawReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr)
+
 	allowance := ctx.State.GetAllowance(ownerAddr)
 	ctx.State.AddBalance(ownerAddr, allowance)
 	ctx.State.SetAllowance(ownerAddr, 0)

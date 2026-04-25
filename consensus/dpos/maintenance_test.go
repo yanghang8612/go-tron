@@ -52,6 +52,9 @@ func (m *mockChainHeaderWriter) WitnessStandbyAllowance() int64 {
 func (m *mockChainHeaderWriter) MaintenanceTimeInterval() int64 {
 	return m.maintenanceInterval
 }
+func (m *mockChainHeaderWriter) ChangeDelegation() bool {
+	return false
+}
 
 func TestDoMaintenance_DistributesAllowance(t *testing.T) {
 	chain := newMockChainHeaderWriter()
@@ -65,10 +68,18 @@ func TestDoMaintenance_DistributesAllowance(t *testing.T) {
 
 	DoMaintenance(chain, blockTime, witnesses)
 
-	expectedPerWitness := int64(115200000000) / 3
+	// Pro-rata distribution: eachVotePay = totalPay / voteSum; pay = votes * eachVotePay.
+	// voteSum = 600, totalPay = 115_200_000_000 → eachVotePay = 192_000_000.
+	expectations := map[int64]int64{
+		300: 57_600_000_000,
+		200: 38_400_000_000,
+		100: 19_200_000_000,
+	}
 	for _, w := range witnesses {
-		if chain.allowances[w.Address] != expectedPerWitness {
-			t.Errorf("witness %v: got allowance %d, want %d", w.Address, chain.allowances[w.Address], expectedPerWitness)
+		want := expectations[w.Votes]
+		if chain.allowances[w.Address] != want {
+			t.Errorf("witness %v (%d votes): got allowance %d, want %d",
+				w.Address, w.Votes, chain.allowances[w.Address], want)
 		}
 	}
 

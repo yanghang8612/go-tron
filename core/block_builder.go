@@ -53,33 +53,44 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// Pull all pending transactions
 	pendingTxs := pool.Pending()
 
+	// Reset per-block energy accumulator.
+	dynProps.SetBlockEnergyUsage(0)
+
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction
 	var failedTxIDs []tcommon.Hash
 	blockNum := parent.Number() + 1
 
 	for _, tx := range pendingTxs {
-		_, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses())
+		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses())
 		if err != nil {
 			failedTxIDs = append(failedTxIDs, tx.Hash())
 			continue // skip failing transactions
 		}
 		appliedTxProtos = append(appliedTxProtos, tx.Proto())
+		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsed > 0 {
+			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsed)
+		}
 	}
 
-	// Pay block reward to witness
-	reward := dynProps.WitnessPayPerBlock()
-	if reward > 0 {
-		statedb.AddAllowance(witnessAddr, reward)
+	// Pay block reward to witness (brokerage-aware once change_delegation is on).
+	payBlockReward(bc.db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	payStandbyWitness(bc.db, statedb, dynProps)
+
+	// Per-block adaptive energy limit adjustment.
+	if dynProps.AllowAdaptiveEnergy() {
+		UpdateTotalEnergyAverageUsage(dynProps, bc.GenesisTimestamp())
+		UpdateAdaptiveTotalEnergyLimit(dynProps)
 	}
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, timestamp, allWitnesses)
+		applyRewardMaintenance(bc.db, statedb, dynProps)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
 		bc.SetActiveWitnesses(newActive)
-		if err := ProcessProposals(bc.db, dynProps, newActive, timestamp); err != nil {
+		if err := ProcessProposals(bc.db, dynProps, newActive, timestamp, bc.fc); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 	}

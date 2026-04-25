@@ -9,6 +9,7 @@ import (
 
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/delegation"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -376,6 +377,9 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
+	// Refresh owner's usage before their frozen pool shifts. Mirrors
+	// java-tron Program.java:645 / DelegateResourceActuator.java:155.
+	delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, 0, in.tvm.Timestamp)
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)
@@ -400,9 +404,16 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
+	// Before balances shift, transfer the receiver's proportional usage
+	// back to the owner. Mirrors java-tron UnDelegateResourceActuator.execute.
+	dp := in.tvm.StateDB.DynamicProperties()
+	transfer := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, in.tvm.Timestamp)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
+	if transfer > 0 {
+		delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, transfer, in.tvm.Timestamp)
+	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }

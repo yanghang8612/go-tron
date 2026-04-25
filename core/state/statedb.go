@@ -714,6 +714,17 @@ func (s *StateDB) GetLatestConsumeTimeForEnergy(addr tcommon.Address) int64 {
 	return obj.account.LatestConsumeTimeForEnergy()
 }
 
+// SetLatestConsumeTimeForEnergy sets the latest energy consume time for an account.
+func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestConsumeTimeForEnergy(t)
+	obj.markDirty()
+}
+
 // --- Contract support ---
 
 // GetCode returns the contract bytecode at addr.

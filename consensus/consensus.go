@@ -30,4 +30,8 @@ type ChainHeaderWriter interface {
 	WitnessPayPerBlock() int64
 	WitnessStandbyAllowance() int64
 	MaintenanceTimeInterval() int64
+	// ChangeDelegation reports whether the "new reward algorithm" switch
+	// is on. When true, maintenance skips the legacy IncentiveManager.reward
+	// path (per-block payStandbyWitness handles standby pay instead).
+	ChangeDelegation() bool
 }

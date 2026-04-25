@@ -2,6 +2,8 @@ package vm
 
 import (
 	"github.com/holiman/uint256"
+
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // Interpreter executes TVM bytecode.
@@ -32,6 +34,23 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		stack        = newStack()
 	)
 
+	// Fetch (and advance) the contract's dynamic-energy factor once at
+	// the start of execution. factor is the effective multiplier in
+	// units of DynamicEnergyFactorDecimal (factor==10_000 → 1.0×). We
+	// only apply penalties when factor strictly exceeds the decimal;
+	// otherwise opcodes charge their base cost unchanged.
+	//
+	// rawEnergyUsed tracks the unscaled opcode costs so we can commit
+	// them to the contract's ContractState.energy_usage counter at the
+	// end — that counter is the input to the next cycle's catchUp math.
+	var (
+		factor        int64 = types.DynamicEnergyFactorDecimal
+		rawEnergyUsed uint64
+	)
+	if in.tvmConfig.DynamicEnergy {
+		factor = updateContractEnergyFactor(in.tvm, contract.Address)
+	}
+
 	for {
 		if pc >= uint64(len(contract.Code)) {
 			break
@@ -60,7 +79,12 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 		// Charge static energy cost
 		if operation.energyCost > 0 {
-			if !contract.UseEnergy(operation.energyCost) {
+			rawEnergyUsed += operation.energyCost
+			cost := operation.energyCost
+			if factor > types.DynamicEnergyFactorDecimal {
+				cost += applyDynamicEnergyPenalty(operation.energyCost, factor)
+			}
+			if !contract.UseEnergy(cost) {
 				return nil, ErrOutOfEnergy
 			}
 		}
@@ -68,11 +92,17 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// Execute
 		ret, err := operation.execute(&pc, in, contract, mem, stack)
 		if err != nil {
+			if in.tvmConfig.DynamicEnergy {
+				recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+			}
 			return nil, err
 		}
 
 		// Terminal opcodes
 		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
+			if in.tvmConfig.DynamicEnergy {
+				recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+			}
 			if op == REVERT {
 				return ret, ErrExecutionReverted
 			}
@@ -82,6 +112,9 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		pc++
 	}
 
+	if in.tvmConfig.DynamicEnergy {
+		recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+	}
 	return nil, nil
 }
 

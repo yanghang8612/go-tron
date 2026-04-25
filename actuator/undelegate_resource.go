@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -73,12 +74,23 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
 	receiverAddr := tcommon.BytesToAddress(c.ReceiverAddress)
 
+	// Mirrors java-tron UnDelegateResourceActuator.execute:
+	// Before mutating balances, recover the receiver's current usage and
+	// compute the portion of it attributable to the undelegated amount.
+	// That transferUsage is deducted from the receiver and folded into the
+	// owner's usage so neither party gets a free ride.
+	transferUsage := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, ctx.BlockTime)
+
 	// Return to owner's frozen balance
 	ctx.State.AddFreezeV2(ownerAddr, c.Resource, c.Balance)
 	// Reduce outgoing delegation on owner
 	ctx.State.SubDelegatedFrozenV2(ownerAddr, c.Resource, c.Balance)
 	// Reduce incoming delegation on receiver
 	ctx.State.SubAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
+
+	if transferUsage > 0 {
+		delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, transferUsage, ctx.BlockTime)
+	}
 
 	// Update delegation record
 	dr := rawdb.ReadDelegatedResource(ctx.DB, ownerAddr, receiverAddr)
@@ -100,3 +112,4 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }
+

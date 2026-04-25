@@ -114,6 +114,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	evm := vm.NewTVM(ctx.State, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
+	evm.SetDB(ctx.DB)
 
 	ret, contractAddr, energyLeft, vmErr := evm.Create(owner, bytecode, energyLimit, callValue)
 
@@ -162,6 +163,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	evm := vm.NewTVM(ctx.State, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
+	evm.SetDB(ctx.DB)
 
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, energyLimit, callValue)
 
