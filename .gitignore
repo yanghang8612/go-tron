@@ -3,6 +3,9 @@ build/
 *.exe
 *.test
 *.out
+fixture-closure
+fixture-digest
+gtron-replay
 
 # IDE
 .idea/
