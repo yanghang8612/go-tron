@@ -344,7 +344,7 @@
 | M1.6 存储租金 | 未开始 | — | — | |
 | M1.7 动态能量 | 完成 | 2026-04-25 | 62d1b22 | ContractState + CatchUpToCycle; cs- rawdb prefix; interpreter factor-per-opcode + rawEnergyUsed tracking |
 | M1.8 委托资源消费 | 完成 | 2026-04-25 | 62d1b22 | core/delegation/usage.go; undelegate usage-transfer math; DELEGATERESOURCE/UNDELEGATERESOURCE opcodes wired |
-| M2 rawdb schema 补齐 | PR-1+PR-2 完成 | 2026-04-17 | ae59a48..a4d6cd4 | ✅ PR-1 indexing: `aa-`, `aid-`, `at-`, `drax-`. ✅ PR-2 consensus: `ws-shuffled` shuffled-witness accessors (complements existing `ActiveWitnesses`), `psd-` PbftSignData (BLOCK/SRL variants, byte-for-byte key compat), `sb-` SectionBloom (dormant), `tbi-` TreeBlockIndex (dormant). Remaining: PR-3 history/audit (tx-history/retstore, balance-trace, check-point-v2, reward-vi, accumulated-reward), PR-4 market-complete, PR-5 shielded, PR-6 abi inline→独立 store. |
+| M2 rawdb schema 补齐 | 完成 | 2026-04-26 | ae59a48..8b3877d | ✅ PR-1 indexing: `aa-`, `aid-`, `at-`, `drax-`. ✅ PR-2 consensus: `ws-shuffled`, `psd-` PbftSignData, `sb-` SectionBloom, `tbi-` TreeBlockIndex. ✅ PR-3 history/audit: `btrace-` BalanceTrace, `rvi-` RewardVi (IS_DONE sentinel + per-cycle VI), `cpv2-` CheckPointV2 (dormant); ti-/tib- documented as TransactionHistoryStore/RetStore equivalents. ✅ PR-4 market: `mptop-` MarketPairToPriceCount; mao-/mop-/mpl- documented. ✅ PR-5 shielded: `zkp-` ZKProof, `imt-` IncrementalMerkleTree. ✅ PR-6 abi: `abi-` AbiStore (inline→dedicated store migration prefix). Total: 36 tests, all green. |
 | M3.1 sync 稳定性 | 未开始 | — | — | |
 | M3.2 Adv/Relay | 未开始 | — | — | |
 | M3.3 速率限制 | 未开始 | — | — | |
