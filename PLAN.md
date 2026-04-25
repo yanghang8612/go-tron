@@ -114,6 +114,7 @@
 - `actuator/withdraw_reward.go` + `VoteWitnessActuator.Execute` 改造：投票变更前先结算投票人奖励，保留 java-tron 不变量。
 - 提案 #67（ALLOW_NEW_REWARD）激活时设置 `new_reward_algorithm_effective_cycle = currentCycle + 1`。
 - `WithdrawBalanceActuator` 去掉 `IsWitness` 门控，支持投票人提现。
+- **验证完毕**：java-tron `WithdrawBalanceActuator.validate()` 无 `isWitness` 检查——任何账户只要有 allowance 或投票奖励均可提现。go-tron 实现与之一致，无需额外门控。
 
 ### M1.6 存储租金（StorageTaxProcessor） ✅ 完成（stub）
 - java-tron 存储市场功能（BuyStorage/SellStorage）在主网从未被激活；对应的 actuator 实现在 java-tron 当前代码中不存在。
