@@ -135,6 +135,45 @@ var (
 	// Value: proto-encoded corepb.PBFTCommitResult { data, signature[] }.
 	pbftSignDataPrefix = []byte("psd-")
 
+	// txHistoryPrefix (ti-) maps to java-tron's TransactionHistoryStore
+	// (db name "transactionHistoryStore"). Stores TransactionInfo protos
+	// keyed by tx hash; gated on the transactionHistorySwitch config option.
+	// NOTE: go-tron uses "ti-" as the prefix; the java-tron DB name
+	// "transactionHistoryStore" maps to this prefix for parity purposes.
+	// (txInfoPrefix above — same variable, documented here for completeness.)
+
+	// txRetPrefix (tib-) maps to java-tron's TransactionRetStore
+	// (db name "transactionRetStore"). Stores TransactionRet (list of
+	// TransactionInfo) keyed by block number; also gated on the history
+	// switch. NOTE: go-tron uses "tib-" as the prefix; java-tron's
+	// "transactionRetStore" maps to this prefix for parity purposes.
+	// (txInfoBlockPrefix above — same variable, documented here.)
+
+	// balanceTracePrefix (btrace-) maps to java-tron's BalanceTraceStore
+	// (db name "balance-trace"). Stores BlockBalanceTrace protos keyed by
+	// block number (big-endian int64). Gated on isHistoryBalanceLookup;
+	// dormant on mainnet today but live when balance-history audit is on.
+	// Key:   btrace- || blockNum big-endian int64
+	// Value: proto-encoded contract.BlockBalanceTrace.
+	balanceTracePrefix = []byte("btrace-")
+
+	// checkPointV2Prefix (cpv2-) maps to java-tron's CheckPointV2Store
+	// (db path "check-point-v2"). A crash-recovery WAL: before committing
+	// a batch of chainbase writes, java-tron writes the same rows here
+	// with sync=true so they can be replayed on restart. In go-tron,
+	// Pebble's native WAL provides equivalent crash safety; this prefix
+	// is dormant (never written) and exists solely for schema completeness.
+	checkPointV2Prefix = []byte("cpv2-")
+
+	// rewardViPrefix (rvi-) maps to java-tron's RewardViStore (db name
+	// "reward-vi"). Caches per-(cycle,witness) cumulative VI values for
+	// the new reward algorithm; computed once by RewardViCalService and
+	// then used for fast voter-reward lookups without re-scanning history.
+	// Key: rvi- || cycle big-endian int64 || '-' || addr 21B || '-' || "vi"
+	// Sentinel: rvi- || 0x00 → 0x01 (IS_DONE flag after initial migration)
+	// Value: BigInteger bytes (two's-complement big-endian, minimum bytes).
+	rewardViPrefix = []byte("rvi-")
+
 	// drAccIdxPrefix (drax-) maps to java-tron's
 	// DelegatedResourceAccountIndexStore (db name
 	// "DelegatedResourceAccountIndex"). Holds forward and reverse
@@ -331,6 +370,34 @@ func pbftBlockSignKey(blockNum int64) []byte {
 // java-tron: "SRL" + Long.toString(epoch).
 func pbftSrSignKey(epoch int64) []byte {
 	return append(append([]byte{}, pbftSignDataPrefix...), []byte("SRL"+strconv.FormatInt(epoch, 10))...)
+}
+
+// balanceTraceKey builds the per-block balance-trace key: blockNum big-endian.
+// Mirrors java-tron BalanceTraceStore.putBlockBalanceTrace (ByteArray.fromLong).
+func balanceTraceKey(blockNum int64) []byte {
+	k := make([]byte, len(balanceTracePrefix)+8)
+	copy(k, balanceTracePrefix)
+	binary.BigEndian.PutUint64(k[len(balanceTracePrefix):], uint64(blockNum))
+	return k
+}
+
+// rewardViKey builds the per-(cycle, witness) VI key. Format:
+//   rvi- || cycle big-endian 8B || '-' || addr
+// The "-vi" suffix is omitted — all non-sentinel keys in this store are VI
+// values, so the suffix adds no disambiguation value in go-tron's layout.
+func rewardViKey(cycle int64, addr []byte) []byte {
+	k := make([]byte, 0, len(rewardViPrefix)+8+1+len(addr))
+	k = append(k, rewardViPrefix...)
+	var cb [8]byte
+	binary.BigEndian.PutUint64(cb[:], uint64(cycle))
+	k = append(k, cb[:]...)
+	k = append(k, '-')
+	return append(k, addr...)
+}
+
+// rewardViIsDoneKey is the IS_DONE sentinel key.
+func rewardViIsDoneKey() []byte {
+	return append(append([]byte{}, rewardViPrefix...), 0x00)
 }
 
 // drAccIdxKey builds a DelegatedResourceAccountIndex key. Mirrors
