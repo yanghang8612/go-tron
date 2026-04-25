@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"encoding/binary"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -85,6 +87,33 @@ func WriteMarketPriceList(db ethdb.KeyValueWriter, sellTokenID, buyTokenID []byt
 		return err
 	}
 	return db.Put(marketPriceListKey(sellTokenID, buyTokenID), data)
+}
+
+// ReadMarketPairPriceCount returns the number of distinct prices for a token
+// pair. Zero means the pair has no standing orders. Mirrors java-tron
+// MarketPairToPriceStore.getPriceNum.
+func ReadMarketPairPriceCount(db ethdb.KeyValueReader, sellTokenID, buyTokenID []byte) int64 {
+	data, err := db.Get(marketPairToPriceKey(sellTokenID, buyTokenID))
+	if err != nil || len(data) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(data))
+}
+
+// WriteMarketPairPriceCount stores the price count for a token pair. Mirrors
+// java-tron MarketPairToPriceStore.setPriceNum.
+func WriteMarketPairPriceCount(db ethdb.KeyValueWriter, sellTokenID, buyTokenID []byte, count int64) {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(count))
+	_ = db.Put(marketPairToPriceKey(sellTokenID, buyTokenID), buf[:])
+}
+
+// IncrMarketPairPriceCount atomically adds delta to the price count for a
+// pair. Mirrors java-tron MarketPairToPriceStore.addNewPriceKey (increment)
+// and the symmetric decrement on order cancellation.
+func IncrMarketPairPriceCount(db ethdb.KeyValueStore, sellTokenID, buyTokenID []byte, delta int64) {
+	cur := ReadMarketPairPriceCount(db, sellTokenID, buyTokenID)
+	WriteMarketPairPriceCount(db, sellTokenID, buyTokenID, cur+delta)
 }
 
 // ReadMarketPriceList returns the MarketPriceList for a token pair.

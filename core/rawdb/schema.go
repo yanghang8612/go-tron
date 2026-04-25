@@ -49,10 +49,36 @@ var (
 	assetOwnerPrefix     = []byte("asto-")  // owner address 21B → tokenID big-endian 8B
 	assetIssueTimePrefix = []byte("asti-")  // tokenID big-endian 8B → issue timestamp ms big-endian 8B
 
-	marketOrderPrefix        = []byte("mo-")
+	// marketOrderPrefix (mo-) maps to java-tron's MarketOrderStore
+	// (db name "market-order"). Stores individual MarketOrder protos keyed
+	// by orderID. Present in go-tron since initial market implementation.
+	marketOrderPrefix = []byte("mo-")
+
+	// marketAccountOrderPrefix (mao-) maps to java-tron's MarketAccountStore
+	// (db name "market_account"). Per-owner list of active order IDs.
+	// Covers the "market-account" store in the M2 schema gap list.
 	marketAccountOrderPrefix = []byte("mao-")
-	marketOrderBookPrefix    = []byte("mop-")
-	marketPriceListPrefix    = []byte("mpl-")
+
+	// marketOrderBookPrefix (mop-) maps to java-tron's
+	// MarketPairPriceToOrderStore (db name "market_pair_price_to_order").
+	// Stores MarketOrderIdList for each (sellToken, buyToken, price) triple.
+	// Covers the "market-pair-price-to-order" store in the M2 schema gap list.
+	marketOrderBookPrefix = []byte("mop-")
+
+	// marketPriceListPrefix (mpl-) is a go-tron-specific cache that stores
+	// the full computed MarketPriceList proto for a token pair. Java-tron
+	// computes this dynamically from MarketPairToPriceStore + MarketPairPriceToOrderStore;
+	// go-tron materializes it at write time. Used by market actuators.
+	marketPriceListPrefix = []byte("mpl-")
+
+	// marketPairToPricePrefix (mptop-) maps to java-tron's
+	// MarketPairToPriceStore (db name "market_pair_to_price"). Stores the
+	// int64 count of distinct prices for a (sellToken, buyToken) pair.
+	// Key: mptop- || sellTokenID bytes || '|' || buyTokenID bytes
+	// Value: big-endian int64 count.
+	// Used for existence checks and RPC pagination (java-tron: getPriceNum).
+	// Covers the "market-pair-to-price" store in the M2 schema gap list.
+	marketPairToPricePrefix = []byte("mptop-")
 
 	exchangePrefix = []byte("ex-")
 
@@ -457,6 +483,12 @@ func PriceKey(sellQty, buyQty int64) [16]byte {
 	binary.BigEndian.PutUint64(k[:8], uint64(sellQty/g))
 	binary.BigEndian.PutUint64(k[8:], uint64(buyQty/g))
 	return k
+}
+
+func marketPairToPriceKey(sellTokenID, buyTokenID []byte) []byte {
+	k := append(append([]byte{}, marketPairToPricePrefix...), sellTokenID...)
+	k = append(k, '|')
+	return append(k, buyTokenID...)
 }
 
 func marketOrderKey(orderID []byte) []byte {

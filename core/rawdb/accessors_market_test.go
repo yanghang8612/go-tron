@@ -171,6 +171,53 @@ func TestReadMarketPriceList_NotFound(t *testing.T) {
 	}
 }
 
+func TestMarketPairPriceCount_RoundTrip(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	sell := []byte("_")
+	buy := []byte("1000001")
+
+	if got := ReadMarketPairPriceCount(db, sell, buy); got != 0 {
+		t.Fatalf("expected 0 for absent pair, got %d", got)
+	}
+
+	WriteMarketPairPriceCount(db, sell, buy, 5)
+	if got := ReadMarketPairPriceCount(db, sell, buy); got != 5 {
+		t.Fatalf("expected 5, got %d", got)
+	}
+}
+
+func TestMarketPairPriceCount_Incr(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	sell := []byte("_")
+	buy := []byte("1000002")
+
+	IncrMarketPairPriceCount(db, sell, buy, 1)
+	if got := ReadMarketPairPriceCount(db, sell, buy); got != 1 {
+		t.Fatalf("expected 1 after first incr, got %d", got)
+	}
+	IncrMarketPairPriceCount(db, sell, buy, 1)
+	if got := ReadMarketPairPriceCount(db, sell, buy); got != 2 {
+		t.Fatalf("expected 2 after second incr, got %d", got)
+	}
+	IncrMarketPairPriceCount(db, sell, buy, -1)
+	if got := ReadMarketPairPriceCount(db, sell, buy); got != 1 {
+		t.Fatalf("expected 1 after decr, got %d", got)
+	}
+}
+
+func TestMarketPairPriceCount_PairSeparation(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	WriteMarketPairPriceCount(db, []byte("_"), []byte("1000001"), 10)
+	WriteMarketPairPriceCount(db, []byte("_"), []byte("1000002"), 20)
+
+	if got := ReadMarketPairPriceCount(db, []byte("_"), []byte("1000001")); got != 10 {
+		t.Fatalf("pair1: expected 10, got %d", got)
+	}
+	if got := ReadMarketPairPriceCount(db, []byte("_"), []byte("1000002")); got != 20 {
+		t.Fatalf("pair2: expected 20, got %d", got)
+	}
+}
+
 func TestPriceKey_Normalization(t *testing.T) {
 	// 200/100 should normalize to 2/1
 	pk200_100 := PriceKey(200, 100)
