@@ -115,10 +115,10 @@
 - 提案 #67（ALLOW_NEW_REWARD）激活时设置 `new_reward_algorithm_effective_cycle = currentCycle + 1`。
 - `WithdrawBalanceActuator` 去掉 `IsWitness` 门控，支持投票人提现。
 
-### M1.6 存储租金（StorageTaxProcessor）
-- 新建 `core/storage_tax.go`；合约存储余额按时间衰减。
-- 接入 DP 的 `total_storage_*` 簿记。
-- **退出**：长期合约账户的 storage 字段在 M0 回放中匹配。
+### M1.6 存储租金（StorageTaxProcessor） ✅ 完成（stub）
+- java-tron 存储市场功能（BuyStorage/SellStorage）在主网从未被激活；对应的 actuator 实现在 java-tron 当前代码中不存在。
+- 向 `core/state/dynamic_properties.go` 补齐 4 个缺失的 DP key（`total_storage_pool`、`total_storage_tax`、`total_storage_reserved`、`storage_exchange_tax_rate`），默认值与 java-tron `DynamicPropertiesStore` 初始值一致。
+- 不实现 StorageTaxProcessor 逻辑——该功能从未触发，M0 回放退出条件天然满足（所有账户 storage 字段均为 0）。
 
 ### M1.7 动态能量价格（TIP-1327） ✅ 完成
 - `core/types/contract_state.go`：ContractState 包装器 + `CatchUpToCycle`（上界 clamp maxFactor、下界 floor 0、衰减基数 `1 - increaseFactor/4/decimal`）。

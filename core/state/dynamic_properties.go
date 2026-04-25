@@ -116,6 +116,14 @@ var defaultProps = map[string]int64{
 	"memo_fee":                                      0,
 	"multi_sign_fee":                                1_000_000,
 	"remove_the_power_of_the_gr":                    0,
+
+	// M1.6: storage market keys — initialized by java-tron DynamicPropertiesStore
+	// but never modified on mainnet (feature was never activated). Present for
+	// completeness so DP serializes identically to java-tron's initial state.
+	"total_storage_pool":          100_000_000_000_000, // 100 TRX in sun
+	"total_storage_tax":           0,
+	"total_storage_reserved":      137_438_953_472, // 128 GiB in bytes
+	"storage_exchange_tax_rate":   10,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -1004,4 +1012,29 @@ func (dp *DynamicProperties) RemoveThePowerOfTheGr() int64 {
 }
 func (dp *DynamicProperties) SetRemoveThePowerOfTheGr(v int64) {
 	dp.Set("remove_the_power_of_the_gr", v)
+}
+
+// M1.6: storage market — dormant on mainnet (feature never activated).
+// Keys are initialized to java-tron defaults and never modified at runtime.
+
+func (dp *DynamicProperties) TotalStoragePool() int64 { return dp.props["total_storage_pool"] }
+func (dp *DynamicProperties) SetTotalStoragePool(v int64) {
+	dp.Set("total_storage_pool", v)
+}
+
+func (dp *DynamicProperties) TotalStorageTax() int64 { return dp.props["total_storage_tax"] }
+func (dp *DynamicProperties) SetTotalStorageTax(v int64) {
+	dp.Set("total_storage_tax", v)
+}
+
+func (dp *DynamicProperties) TotalStorageReserved() int64 { return dp.props["total_storage_reserved"] }
+func (dp *DynamicProperties) SetTotalStorageReserved(v int64) {
+	dp.Set("total_storage_reserved", v)
+}
+
+func (dp *DynamicProperties) StorageExchangeTaxRate() int64 {
+	return dp.props["storage_exchange_tax_rate"]
+}
+func (dp *DynamicProperties) SetStorageExchangeTaxRate(v int64) {
+	dp.Set("storage_exchange_tax_rate", v)
 }
