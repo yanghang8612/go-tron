@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	shieldpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // HasNullifier returns true if the nullifier has already been spent.
@@ -45,4 +47,60 @@ func ReadNoteCommitment(db ethdb.KeyValueReader, index int64) []byte {
 		return nil
 	}
 	return data
+}
+
+// HasZKProof returns true if this ZK proof has already been accepted.
+// Used to prevent replay attacks on shielded transactions. Mirrors
+// java-tron ZKProofStore.has.
+func HasZKProof(db ethdb.KeyValueReader, proof []byte) bool {
+	ok, _ := db.Has(zkProofKey(proof))
+	return ok
+}
+
+// WriteZKProof marks a ZK proof as accepted (replay prevention).
+// Mirrors java-tron ZKProofStore.put.
+func WriteZKProof(db ethdb.KeyValueWriter, proof []byte) error {
+	return db.Put(zkProofKey(proof), []byte{0x01})
+}
+
+// DeleteZKProof removes a ZK proof entry (used during state rollback).
+func DeleteZKProof(db ethdb.KeyValueWriter, proof []byte) error {
+	return db.Delete(zkProofKey(proof))
+}
+
+// WriteIncrMerkleTree stores the IncrementalMerkleTree state keyed by the
+// 32-byte commitment-tree root (anchor). Mirrors java-tron
+// IncrementalMerkleTreeStore.put.
+func WriteIncrMerkleTree(db ethdb.KeyValueWriter, root []byte, tree *shieldpb.IncrementalMerkleTree) error {
+	data, err := proto.Marshal(tree)
+	if err != nil {
+		return err
+	}
+	return db.Put(incrMerkleTreeKey(root), data)
+}
+
+// ReadIncrMerkleTree returns the IncrementalMerkleTree for the given
+// commitment-tree root (anchor), or nil if absent. Mirrors java-tron
+// IncrementalMerkleTreeStore.get.
+func ReadIncrMerkleTree(db ethdb.KeyValueReader, root []byte) *shieldpb.IncrementalMerkleTree {
+	data, err := db.Get(incrMerkleTreeKey(root))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	var tree shieldpb.IncrementalMerkleTree
+	if err := proto.Unmarshal(data, &tree); err != nil {
+		return nil
+	}
+	return &tree
+}
+
+// HasIncrMerkleTree reports whether a tree state is stored for root.
+func HasIncrMerkleTree(db ethdb.KeyValueReader, root []byte) bool {
+	ok, _ := db.Has(incrMerkleTreeKey(root))
+	return ok
+}
+
+// DeleteIncrMerkleTree removes the tree state for root (state rollback).
+func DeleteIncrMerkleTree(db ethdb.KeyValueWriter, root []byte) error {
+	return db.Delete(incrMerkleTreeKey(root))
 }

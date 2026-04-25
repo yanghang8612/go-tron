@@ -86,6 +86,24 @@ var (
 	noteCommitmentPrefix   = []byte("nc-")
 	noteCommitmentCountKey = []byte("nccount")
 
+	// zkProofPrefix (zkp-) maps to java-tron's ZKProofStore (db "zkProof").
+	// Stores a seen-flag for each ZK proof to prevent replay attacks on
+	// shielded transactions (distinct from the nullifier used for double-spend).
+	// Key:   zkp- || proof bytes (opaque, 192 bytes for Groth16)
+	// Value: 0x01 (proof has been accepted once)
+	// Gated on allow_shielded_transaction.
+	zkProofPrefix = []byte("zkp-")
+
+	// incrMerkleTreePrefix (imt-) maps to java-tron's
+	// IncrementalMerkleTreeStore (db "IncrementalMerkleTree"). Stores the
+	// full IncrementalMerkleTree proto for a given commitment-tree root
+	// (anchor). The key is the 32-byte root hash; the value is the serialised
+	// IncrementalMerkleTree proto. Used by shielded-transaction verification
+	// to look up the tree state at any past anchor.
+	// Key:   imt- || 32-byte commitment tree root
+	// Value: proto-encoded shield_contract.IncrementalMerkleTree
+	incrMerkleTreePrefix = []byte("imt-")
+
 	// forkStatsPrefix stores per-block-version SR vote bitmaps.
 	// Key:   forkStatsPrefix || big-endian int32 version
 	// Value: byte slice of length == active witness count; index = slot,
@@ -522,6 +540,14 @@ func exchangeKey(id int64) []byte {
 
 func nullifierKey(nullifier []byte) []byte {
 	return append(append([]byte{}, nullifierPrefix...), nullifier...)
+}
+
+func zkProofKey(proof []byte) []byte {
+	return append(append([]byte{}, zkProofPrefix...), proof...)
+}
+
+func incrMerkleTreeKey(root []byte) []byte {
+	return append(append([]byte{}, incrMerkleTreePrefix...), root...)
 }
 
 func noteCommitmentKey(index int64) []byte {
