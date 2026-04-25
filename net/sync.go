@@ -3,6 +3,7 @@ package net
 import (
 	"log"
 	"sync"
+	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
@@ -17,16 +18,22 @@ const (
 	maxFetchBatch         = 100
 )
 
+// syncFetchTimeout is how long to wait for a block response before failing over
+// to another peer. Tests may override this.
+var syncFetchTimeout = 30 * time.Second
+
 // SyncService handles the block sync protocol.
 type SyncService struct {
 	chain   *core.BlockChain
 	handler *TronHandler
 
-	mu        sync.Mutex
-	syncing   bool
-	syncPeer  *p2p.Peer
-	fetchList []types.BlockID // blocks to fetch from peer
-	remainNum int64
+	mu         sync.Mutex
+	syncing    bool
+	syncPeer   *p2p.Peer
+	fetchList  []types.BlockID // blocks to fetch from peer
+	remainNum  int64
+	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
+	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
 }
 
 // NewSyncService creates a new sync service.
@@ -223,6 +230,7 @@ func (ss *SyncService) fetchNextBatch() {
 	}
 	ss.fetchList = ss.fetchList[len(batch):]
 	peer := ss.syncPeer
+	ss.armFetchTimer()
 	ss.mu.Unlock()
 
 	var ids [][]byte
@@ -246,6 +254,13 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.mu.Unlock()
 		return false
 	}
+	// Cancel the fetch timeout and bump seq so any already-fired timer callback
+	// is a no-op.
+	if ss.fetchTimer != nil {
+		ss.fetchTimer.Stop()
+		ss.fetchTimer = nil
+	}
+	ss.fetchSeq++
 	ss.mu.Unlock()
 
 	if err := ss.chain.InsertBlock(block); err != nil {
@@ -264,12 +279,72 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	return true
 }
 
-func (ss *SyncService) finishSync() {
-	ss.mu.Lock()
+// doReset clears all sync state. Must be called with ss.mu held.
+func (ss *SyncService) doReset() {
 	ss.syncing = false
 	ss.syncPeer = nil
 	ss.fetchList = nil
 	ss.remainNum = 0
+	ss.fetchSeq++
+	if ss.fetchTimer != nil {
+		ss.fetchTimer.Stop()
+		ss.fetchTimer = nil
+	}
+}
+
+// armFetchTimer arms the fetch-response timeout. Must be called with ss.mu held.
+func (ss *SyncService) armFetchTimer() {
+	if ss.fetchTimer != nil {
+		ss.fetchTimer.Stop()
+	}
+	seq := ss.fetchSeq
+	stalePeer := ss.syncPeer
+	ss.fetchTimer = time.AfterFunc(syncFetchTimeout, func() {
+		ss.onFetchTimeout(seq, stalePeer)
+	})
+}
+
+func (ss *SyncService) onFetchTimeout(seq uint64, stalePeer *p2p.Peer) {
+	ss.mu.Lock()
+	if !ss.syncing || ss.fetchSeq != seq || ss.syncPeer != stalePeer {
+		ss.mu.Unlock()
+		return
+	}
+	ss.doReset()
+	ss.mu.Unlock()
+	log.Printf("Sync: fetch timeout from %s; trying another peer", stalePeer.ID())
+	ss.tryFindSyncPeer(stalePeer)
+}
+
+// PeerDisconnected is called by the handler when a peer goes away. If that
+// peer is the active sync peer, the sync is aborted and we immediately try
+// to find a replacement.
+func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
+	ss.mu.Lock()
+	if !ss.syncing || ss.syncPeer != peer {
+		ss.mu.Unlock()
+		return
+	}
+	ss.doReset()
+	ss.mu.Unlock()
+	log.Printf("Sync: syncPeer %s disconnected; trying another peer", peer.ID())
+	ss.tryFindSyncPeer(peer)
+}
+
+// tryFindSyncPeer picks the best available peer (excluding the failed one) and
+// starts a new sync if one exists.
+func (ss *SyncService) tryFindSyncPeer(exclude *p2p.Peer) {
+	if ss.handler == nil {
+		return
+	}
+	if p := ss.handler.BestSyncCandidate(exclude); p != nil {
+		ss.StartSync(p)
+	}
+}
+
+func (ss *SyncService) finishSync() {
+	ss.mu.Lock()
+	ss.doReset()
 	ss.mu.Unlock()
 	log.Printf("Sync complete (head=#%d)", ss.chain.CurrentBlock().Number())
 }

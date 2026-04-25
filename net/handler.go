@@ -85,6 +85,34 @@ func (h *TronHandler) HandshakedPeers() []*p2p.Peer {
 	return result
 }
 
+// BestSyncCandidate returns the handshaked peer with the highest head that is
+// ahead of our own chain head, excluding the given peer. Returns nil when no
+// suitable candidate exists.
+func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ourHead := h.chain.CurrentBlock().Number()
+	var best *peerState
+	for _, ps := range h.peers {
+		if !ps.handshaked {
+			continue
+		}
+		if exclude != nil && ps.peer == exclude {
+			continue
+		}
+		if ps.headNum <= ourHead {
+			continue
+		}
+		if best == nil || ps.headNum > best.headNum {
+			best = ps
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return best.peer
+}
+
 // OnPeerConnected is called when a new TCP connection is established.
 func (h *TronHandler) OnPeerConnected(peer *p2p.Peer) {
 	h.mu.Lock()
@@ -107,6 +135,11 @@ func (h *TronHandler) OnPeerDisconnected(peer *p2p.Peer) {
 	h.mu.Lock()
 	delete(h.peers, peer.ID())
 	h.mu.Unlock()
+	// h.mu released before notifying syncService to avoid lock-order inversion
+	// (syncService.tryFindSyncPeer re-acquires h.mu via BestSyncCandidate).
+	if h.syncService != nil {
+		h.syncService.PeerDisconnected(peer)
+	}
 }
 
 // OnMessage routes incoming messages by type.
