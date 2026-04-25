@@ -339,11 +339,11 @@
 | M1.1 DP backfill | 完成 | 2026-04-15 | 待提交 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
 | M1.2 Freeze V1 | 完成 | 2026-04-15 | 待提交 | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
 | M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 待提交 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
-| M1.4 自适应能量 | 未开始 | — | — | |
-| M1.5 奖励 v2 + 委托奖励 | 未开始 | — | — | |
+| M1.4 自适应能量 | 完成 | 2026-04-25 | 62d1b22 | core/energy_adaptive.go + 20-block avg; ProcessBlock/BuildBlock per-block hooks; proposal #21 side-effect |
+| M1.5 奖励 v2 + 委托奖励 | 完成 | 2026-04-25 | 62d1b22 | payBlockReward/payStandbyWitness/applyRewardMaintenance; voter ComputeVoterReward (old+new hybrid); withdrawReward in vote + withdraw actuators; proposal #67 side-effect |
 | M1.6 存储租金 | 未开始 | — | — | |
-| M1.7 动态能量 | 未开始 | — | — | |
-| M1.8 委托资源消费 | 未开始 | — | — | |
+| M1.7 动态能量 | 完成 | 2026-04-25 | 62d1b22 | ContractState + CatchUpToCycle; cs- rawdb prefix; interpreter factor-per-opcode + rawEnergyUsed tracking |
+| M1.8 委托资源消费 | 完成 | 2026-04-25 | 62d1b22 | core/delegation/usage.go; undelegate usage-transfer math; DELEGATERESOURCE/UNDELEGATERESOURCE opcodes wired |
 | M2 rawdb schema 补齐 | PR-1+PR-2 完成 | 2026-04-17 | ae59a48..a4d6cd4 | ✅ PR-1 indexing: `aa-`, `aid-`, `at-`, `drax-`. ✅ PR-2 consensus: `ws-shuffled` shuffled-witness accessors (complements existing `ActiveWitnesses`), `psd-` PbftSignData (BLOCK/SRL variants, byte-for-byte key compat), `sb-` SectionBloom (dormant), `tbi-` TreeBlockIndex (dormant). Remaining: PR-3 history/audit (tx-history/retstore, balance-trace, check-point-v2, reward-vi, accumulated-reward), PR-4 market-complete, PR-5 shielded, PR-6 abi inline→独立 store. |
 | M3.1 sync 稳定性 | 未开始 | — | — | |
 | M3.2 Adv/Relay | 未开始 | — | — | |
