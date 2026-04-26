@@ -17,18 +17,18 @@
 - [x] Add 6 handler tests in `internal/tronapi/api_test.go` (7 tests total)
 - [x] `go test ./...` green (25 packages)
 
-## PR-2: Transaction builders (~16 endpoints)
+## PR-2: Transaction builders (~15 endpoints) ✅ 完成 2026-04-26
 
-- [ ] Add 9 new Backend methods: `BuildTransferAssetTransaction`,
+- [x] Add 8 new Backend methods: `BuildTransferAssetTransaction`,
   `BuildParticipateAssetIssueTransaction`, `BuildCreateWitnessTransaction`,
   `BuildUpdateWitnessTransaction`, `BuildWithdrawBalanceTransaction`,
   `BuildUpdateBrokerageTransaction`, `BuildFreezeBalanceV1Transaction`,
-  `BuildUnfreezeBalanceV1Transaction`, `BuildCreateCommonTransaction`
-- [ ] Implement 9 methods in `core/tron_backend.go`
-- [ ] Create `internal/tronapi/api_tx.go` with 16 handlers
-- [ ] Register 16 routes in `api.go`
-- [ ] Add 16 tests
-- [ ] `go test ./...` green
+  `BuildUnfreezeBalanceV1Transaction`
+  (`createcommontransaction` deferred — complex dispatch, low usage priority)
+- [x] Implement 8 methods in `core/tron_backend.go`
+- [x] Create `internal/tronapi/api_tx.go` with 15 handlers
+- [x] Register 15 routes in `api.go`
+- [x] Add 15 tests; all 25 packages green
 
 ## PR-3: TRC10 asset extras
 

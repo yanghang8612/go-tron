@@ -202,4 +202,14 @@ type Backend interface {
 	BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error)
 	GetAccountById(accountID []byte) (*types.Account, error)
 	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
+
+	// Transaction builders (M5.1 PR-2)
+	BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error)
+	BuildParticipateAssetIssueTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error)
+	BuildCreateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error)
+	BuildUpdateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error)
+	BuildWithdrawBalanceTransaction(owner common.Address) (*corepb.Transaction, error)
+	BuildUpdateBrokerageTransaction(owner common.Address, brokerage int32) (*corepb.Transaction, error)
+	BuildFreezeBalanceV1Transaction(owner common.Address, amount, duration int64, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error)
+	BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error)
 }

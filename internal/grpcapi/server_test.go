@@ -199,6 +199,30 @@ func (b *testBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
 	return nil, nil
 }
+func (b *testBackend) BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildParticipateAssetIssueTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildCreateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildUpdateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildWithdrawBalanceTransaction(owner common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildUpdateBrokerageTransaction(owner common.Address, brokerage int32) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildFreezeBalanceV1Transaction(owner common.Address, amount, duration int64, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {

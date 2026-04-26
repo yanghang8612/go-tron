@@ -777,6 +777,93 @@ func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMess
 	}, nil
 }
 
+// ── M5.1 PR-2: Transaction builders ─────────────────────────────────────
+
+func (b *TronBackend) BuildTransferAssetTransaction(owner, to tcommon.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.TransferAssetContract{
+		AssetName:    assetName,
+		OwnerAddress: owner[:],
+		ToAddress:    to[:],
+		Amount:       amount,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_TransferAssetContract, c, 0)
+}
+
+func (b *TronBackend) BuildParticipateAssetIssueTransaction(owner, to tcommon.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.ParticipateAssetIssueContract{
+		OwnerAddress: owner[:],
+		ToAddress:    to[:],
+		AssetName:    assetName,
+		Amount:       amount,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_ParticipateAssetIssueContract, c, 0)
+}
+
+func (b *TronBackend) BuildCreateWitnessTransaction(owner tcommon.Address, url []byte) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.WitnessCreateContract{
+		OwnerAddress: owner[:],
+		Url:          url,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_WitnessCreateContract, c, 0)
+}
+
+func (b *TronBackend) BuildUpdateWitnessTransaction(owner tcommon.Address, url []byte) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.WitnessUpdateContract{
+		OwnerAddress: owner[:],
+		UpdateUrl:    url,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_WitnessUpdateContract, c, 0)
+}
+
+func (b *TronBackend) BuildWithdrawBalanceTransaction(owner tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.WithdrawBalanceContract{OwnerAddress: owner[:]}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_WithdrawBalanceContract, c, 0)
+}
+
+func (b *TronBackend) BuildUpdateBrokerageTransaction(owner tcommon.Address, brokerage int32) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.UpdateBrokerageContract{
+		OwnerAddress: owner[:],
+		Brokerage:    brokerage,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_UpdateBrokerageContract, c, 0)
+}
+
+func (b *TronBackend) BuildFreezeBalanceV1Transaction(owner tcommon.Address, amount, duration int64, resource corepb.ResourceCode, receiver tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.FreezeBalanceContract{
+		OwnerAddress:    owner[:],
+		FrozenBalance:   amount,
+		FrozenDuration:  duration,
+		Resource:        resource,
+		ReceiverAddress: receiver[:],
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_FreezeBalanceContract, c, 0)
+}
+
+func (b *TronBackend) BuildUnfreezeBalanceV1Transaction(owner tcommon.Address, resource corepb.ResourceCode, receiver tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.UnfreezeBalanceContract{
+		OwnerAddress:    owner[:],
+		Resource:        resource,
+		ReceiverAddress: receiver[:],
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_UnfreezeBalanceContract, c, 0)
+}
+
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
 
 func (b *TronBackend) ChainID() int64 {

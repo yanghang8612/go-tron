@@ -151,25 +151,25 @@ func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64    { return 0 
 func (s *stubBackend) TotalTransaction() int64                       { return 0 }
 func (s *stubBackend) GetBurnTrx() int64                             { return 0 }
 func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildUnfreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode, lock bool) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildUnDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildCancelAllUnfreezeV2Transaction(owner common.Address) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Address) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
-	return nil, nil
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetBandwidthPrices() string { return "" }
 func (s *stubBackend) GetEnergyPrices() string    { return "" }
@@ -204,6 +204,32 @@ func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessa
 		return s.accountNet, nil
 	}
 	return nil, nil
+}
+
+// --- M5.1 PR-2: Transaction builders ---
+func (s *stubBackend) BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildParticipateAssetIssueTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildCreateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildUpdateWitnessTransaction(owner common.Address, url []byte) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildWithdrawBalanceTransaction(owner common.Address) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildUpdateBrokerageTransaction(owner common.Address, brokerage int32) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildFreezeBalanceV1Transaction(owner common.Address, amount, duration int64, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 
 // --- Helpers ---
@@ -515,4 +541,78 @@ func TestGetAccountNet(t *testing.T) {
 	if result["freeNetUsed"] != "100" {
 		t.Fatalf("unexpected freeNetUsed: %v", result)
 	}
+}
+
+// --- Tests: M5.1 PR-2 transaction builders ---
+
+func testTxBuilder(t *testing.T, url, body string) {
+	t.Helper()
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+url, body)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response for %s, got %v", url, result)
+	}
+}
+
+func TestTransferAsset(t *testing.T) {
+	testTxBuilder(t, "/wallet/transferasset",
+		`{"owner_address":"4101","to_address":"4102","asset_name":"1000001","amount":100}`)
+}
+func TestParticipateAssetIssue(t *testing.T) {
+	testTxBuilder(t, "/wallet/participateassetissue",
+		`{"owner_address":"4101","to_address":"4102","asset_name":"1000001","amount":100}`)
+}
+func TestCreateWitness(t *testing.T) {
+	testTxBuilder(t, "/wallet/createwitness",
+		`{"owner_address":"4101","url":"https://witness.example.com"}`)
+}
+func TestVoteWitnessAccount(t *testing.T) {
+	testTxBuilder(t, "/wallet/votewitnessaccount",
+		`{"owner_address":"4101","votes":[{"vote_address":"4102","vote_count":100}]}`)
+}
+func TestUpdateWitness(t *testing.T) {
+	testTxBuilder(t, "/wallet/updatewitness",
+		`{"owner_address":"4101","update_url":"https://updated.example.com"}`)
+}
+func TestWithdrawBalance(t *testing.T) {
+	testTxBuilder(t, "/wallet/withdrawbalance",
+		`{"owner_address":"4101"}`)
+}
+func TestUpdateBrokerage(t *testing.T) {
+	testTxBuilder(t, "/wallet/updatebrokerage",
+		`{"owner_address":"4101","brokerage":20}`)
+}
+func TestFreezeBalance(t *testing.T) {
+	testTxBuilder(t, "/wallet/freezebalance",
+		`{"owner_address":"4101","frozen_balance":1000000,"frozen_duration":3,"resource":0}`)
+}
+func TestUnfreezeBalance(t *testing.T) {
+	testTxBuilder(t, "/wallet/unfreezebalance",
+		`{"owner_address":"4101","resource":0}`)
+}
+func TestFreezeBalanceV2(t *testing.T) {
+	testTxBuilder(t, "/wallet/freezebalancev2",
+		`{"owner_address":"4101","frozen_balance":1000000,"resource":0}`)
+}
+func TestUnfreezeBalanceV2(t *testing.T) {
+	testTxBuilder(t, "/wallet/unfreezebalancev2",
+		`{"owner_address":"4101","unfreeze_balance":1000000,"resource":0}`)
+}
+func TestCancelAllUnfreezeV2(t *testing.T) {
+	testTxBuilder(t, "/wallet/cancelallunfreezev2",
+		`{"owner_address":"4101"}`)
+}
+func TestDelegateResource(t *testing.T) {
+	testTxBuilder(t, "/wallet/delegateresource",
+		`{"owner_address":"4101","receiver_address":"4102","balance":1000000,"resource":0}`)
+}
+func TestUndelegateResource(t *testing.T) {
+	testTxBuilder(t, "/wallet/undelegateresource",
+		`{"owner_address":"4101","receiver_address":"4102","balance":1000000,"resource":0}`)
+}
+func TestWithdrawExpireUnfreeze(t *testing.T) {
+	testTxBuilder(t, "/wallet/withdrawexpireunfreeze",
+		`{"owner_address":"4101"}`)
 }

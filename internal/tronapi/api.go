@@ -95,6 +95,23 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/accountpermissionupdate", api.accountPermissionUpdate)
 	mux.HandleFunc("/wallet/getaccountbyid", api.getAccountById)
 	mux.HandleFunc("/wallet/getaccountnet", api.getAccountNet)
+
+	// M5.1 PR-2: Transaction builders
+	mux.HandleFunc("/wallet/transferasset", api.transferAsset)
+	mux.HandleFunc("/wallet/participateassetissue", api.participateAssetIssue)
+	mux.HandleFunc("/wallet/createwitness", api.createWitness)
+	mux.HandleFunc("/wallet/votewitnessaccount", api.voteWitnessAccount)
+	mux.HandleFunc("/wallet/updatewitness", api.updateWitness)
+	mux.HandleFunc("/wallet/withdrawbalance", api.withdrawBalance)
+	mux.HandleFunc("/wallet/updatebrokerage", api.updateBrokerage)
+	mux.HandleFunc("/wallet/freezebalance", api.freezeBalance)
+	mux.HandleFunc("/wallet/unfreezebalance", api.unfreezeBalance)
+	mux.HandleFunc("/wallet/freezebalancev2", api.freezeBalanceV2)
+	mux.HandleFunc("/wallet/unfreezebalancev2", api.unfreezeBalanceV2)
+	mux.HandleFunc("/wallet/cancelallunfreezev2", api.cancelAllUnfreezeV2)
+	mux.HandleFunc("/wallet/delegateresource", api.delegateResource)
+	mux.HandleFunc("/wallet/undelegateresource", api.undelegateResource)
+	mux.HandleFunc("/wallet/withdrawexpireunfreeze", api.withdrawExpireUnfreeze)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {
