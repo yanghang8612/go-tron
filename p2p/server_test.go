@@ -134,11 +134,11 @@ func TestServerMaintainReconnectsToSeed(t *testing.T) {
 	client.Start()
 	defer client.Stop()
 
-	// Dial seed manually (simulate initial connection).
-	if err := client.AddPeer(seedAddr); err != nil {
-		t.Fatalf("initial connect: %v", err)
+	// Start() already dials SeedNodes in the background; wait for the connection.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) && client.PeerCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(80 * time.Millisecond)
 	if client.PeerCount() != 1 {
 		t.Fatalf("expected 1 peer after connect, got %d", client.PeerCount())
 	}

@@ -53,4 +53,8 @@ type Backend interface {
 
 	// Log queries
 	GetLogs(filter LogFilter) ([]*RPCLog, error)
+
+	// Node metadata
+	GasPrice() int64 // energy fee in SUN per energy unit
+	PeerCount() int
 }

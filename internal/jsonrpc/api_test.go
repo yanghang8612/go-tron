@@ -27,10 +27,12 @@ type stubBackend struct {
 	txInfo      *corepb.TransactionInfo
 	callResult  []byte
 	logs        []*jsonrpc.RPCLog
+	gasPrice    int64
+	peerCount   int
 }
 
-func (s *stubBackend) ChainID() int64     { return s.chainID }
-func (s *stubBackend) BlockNumber() uint64 { return s.blockNumber }
+func (s *stubBackend) ChainID() int64      { return s.chainID }
+func (s *stubBackend) BlockNumber() uint64  { return s.blockNumber }
 func (s *stubBackend) GetBalance(addr common.Address) int64 { return s.balance }
 func (s *stubBackend) GetCode(addr common.Address) []byte   { return s.code }
 func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) common.Hash {
@@ -50,6 +52,8 @@ func (s *stubBackend) Call(from, to *common.Address, data []byte, value int64) (
 func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
 	return s.logs, nil
 }
+func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
+func (s *stubBackend) PeerCount() int  { return s.peerCount }
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -257,6 +261,88 @@ func TestEthGetLogs_Empty(t *testing.T) {
 	logs, ok := resp["result"].([]interface{})
 	if !ok || len(logs) != 0 {
 		t.Fatalf("eth_getLogs empty should return [], got %v", resp["result"])
+	}
+}
+
+func TestEthGasPrice(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{gasPrice: 420})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_gasPrice", []interface{}{})
+	if resp["result"] != "0x1a4" {
+		t.Fatalf("eth_gasPrice: expected 0x1a4, got %v", resp["result"])
+	}
+}
+
+func TestWeb3Sha3(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	// keccak256("") = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+	resp := rpcCall(t, srv, "web3_sha3", []interface{}{"0x"})
+	got, ok := resp["result"].(string)
+	if !ok || len(got) != 66 {
+		t.Fatalf("web3_sha3: expected 66-char hex, got %v", resp["result"])
+	}
+}
+
+func TestNetListening(t *testing.T) {
+	t.Run("no peers", func(t *testing.T) {
+		srv := newTestServer(t, &stubBackend{peerCount: 0})
+		defer srv.Close()
+		resp := rpcCall(t, srv, "net_listening", []interface{}{})
+		if resp["result"] != false {
+			t.Fatalf("net_listening with 0 peers: expected false, got %v", resp["result"])
+		}
+	})
+	t.Run("has peers", func(t *testing.T) {
+		srv := newTestServer(t, &stubBackend{peerCount: 3})
+		defer srv.Close()
+		resp := rpcCall(t, srv, "net_listening", []interface{}{})
+		if resp["result"] != true {
+			t.Fatalf("net_listening with 3 peers: expected true, got %v", resp["result"])
+		}
+	})
+}
+
+func TestNetPeerCount(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{peerCount: 7})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "net_peerCount", []interface{}{})
+	if resp["result"] != "0x7" {
+		t.Fatalf("net_peerCount: expected 0x7, got %v", resp["result"])
+	}
+}
+
+func TestEthAccounts(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_accounts", []interface{}{})
+	accounts, ok := resp["result"].([]interface{})
+	if !ok || len(accounts) != 0 {
+		t.Fatalf("eth_accounts should return [], got %v", resp["result"])
+	}
+}
+
+func TestWriteMethodsNotAvailable(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	for _, method := range []string{"eth_sendRawTransaction", "eth_sendTransaction", "eth_sign", "eth_signTransaction"} {
+		body, _ := json.Marshal(map[string]interface{}{
+			"jsonrpc": "2.0", "method": method, "params": []interface{}{}, "id": 1,
+		})
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		defer resp.Body.Close()
+		var result map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&result)
+		errField, hasErr := result["error"].(map[string]interface{})
+		if !hasErr {
+			t.Fatalf("%s should return an error, got %v", method, result)
+		}
+		if errField["code"] != float64(-32601) {
+			t.Fatalf("%s error code: expected -32601, got %v", method, errField["code"])
+		}
 	}
 }
 

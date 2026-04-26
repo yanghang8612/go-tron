@@ -921,6 +921,19 @@ func (b *TronBackend) ChainID() int64 {
 	return b.chain.Config().ChainID
 }
 
+// ── M5.2 PR-1: JSON-RPC node metadata ────────────────────────────────────────
+
+func (b *TronBackend) GasPrice() int64 {
+	return state.LoadDynamicProperties(b.chain.db).EnergyFee()
+}
+
+func (b *TronBackend) PeerCount() int {
+	if b.peersFunc == nil {
+		return 0
+	}
+	return len(b.peersFunc())
+}
+
 func (b *TronBackend) BlockNumber() uint64 {
 	return b.chain.CurrentBlock().Number()
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -140,6 +141,18 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.ethGetTransactionReceipt(req.Params)
 	case "eth_getLogs":
 		result, err = api.ethGetLogs(req.Params)
+	case "eth_gasPrice":
+		result, err = api.ethGasPrice(req.Params)
+	case "web3_sha3":
+		result, err = api.web3Sha3(req.Params)
+	case "net_listening":
+		result, err = api.netListening(req.Params)
+	case "net_peerCount":
+		result, err = api.netPeerCount(req.Params)
+	case "eth_accounts":
+		result, err = api.ethAccounts(req.Params)
+	case "eth_sendRawTransaction", "eth_sendTransaction", "eth_sign", "eth_signTransaction":
+		return errResp(id, codeMethodNotFound, "the method "+req.Method+" does not exist/is not available")
 	default:
 		return errResp(id, codeMethodNotFound, "method not found")
 	}
@@ -148,6 +161,27 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		return errResp(id, codeInternal, err.Error())
 	}
 	return rpcResponse{JSONRPC: "2.0", Result: result, ID: id}
+}
+
+func (api *API) ethGasPrice(_ json.RawMessage) (interface{}, error) {
+	return hexUint64(uint64(api.backend.GasPrice())), nil
+}
+func (api *API) web3Sha3(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	input := common.FromHex(p[0])
+	return hexBytes(crypto.Keccak256(input)), nil
+}
+func (api *API) netListening(_ json.RawMessage) (interface{}, error) {
+	return api.backend.PeerCount() >= 1, nil
+}
+func (api *API) netPeerCount(_ json.RawMessage) (interface{}, error) {
+	return hexUint64(uint64(api.backend.PeerCount())), nil
+}
+func (api *API) ethAccounts(_ json.RawMessage) (interface{}, error) {
+	return []string{}, nil
 }
 
 // ── Hex helpers ──────────────────────────────────────────────────────────────
