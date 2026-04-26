@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
@@ -699,6 +700,81 @@ func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Excha
 		end = len(all)
 	}
 	return all[offset:end], nil
+}
+
+// ── M5.1 PR-1: Account / Permission ─────────────────────────────────────
+
+func (b *TronBackend) BuildCreateAccountTransaction(owner, account tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.AccountCreateContract{
+		OwnerAddress:   owner[:],
+		AccountAddress: account[:],
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_AccountCreateContract, c, 0)
+}
+
+func (b *TronBackend) BuildUpdateAccountTransaction(owner tcommon.Address, name []byte) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.AccountUpdateContract{
+		OwnerAddress: owner[:],
+		AccountName:  name,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_AccountUpdateContract, c, 0)
+}
+
+func (b *TronBackend) BuildSetAccountIdTransaction(owner tcommon.Address, accountID []byte) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.SetAccountIdContract{
+		OwnerAddress: owner[:],
+		AccountId:    accountID,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_SetAccountIdContract, c, 0)
+}
+
+func (b *TronBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+}
+
+func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	addrBytes := rawdb.ReadAccountIdIndex(b.chain.db, accountID)
+	if addrBytes == nil {
+		return nil, fmt.Errorf("account not found")
+	}
+	var addr tcommon.Address
+	copy(addr[:], addrBytes)
+	return b.GetAccount(addr)
+}
+
+func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMessage, error) {
+	current := b.chain.CurrentBlock()
+	root := current.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	acc := statedb.GetAccount(addr)
+	if acc == nil {
+		return nil, nil
+	}
+	dynProps := state.LoadDynamicProperties(b.chain.db)
+	frozenBW := statedb.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH)
+	var netLimit int64
+	if total := dynProps.TotalNetWeight(); total > 0 {
+		netLimit = frozenBW * dynProps.TotalNetLimit() / total
+	}
+	return &apipb.AccountNetMessage{
+		FreeNetUsed:    statedb.GetFreeNetUsage(addr),
+		FreeNetLimit:   dynProps.FreeNetLimit(),
+		NetUsed:        statedb.GetNetUsage(addr),
+		NetLimit:       netLimit,
+		TotalNetLimit:  dynProps.TotalNetLimit(),
+		TotalNetWeight: dynProps.TotalNetWeight(),
+	}, nil
 }
 
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────

@@ -87,6 +87,14 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getmarketorderbyid", api.getMarketOrderByID)
 	mux.HandleFunc("/wallet/getmarketordersfromaccount", api.getMarketOrdersFromAccount)
 	mux.HandleFunc("/wallet/getmarketpricebypair", api.getMarketPriceByPair)
+
+	// M5.1 PR-1: Account / permission
+	mux.HandleFunc("/wallet/createaccount", api.createAccount)
+	mux.HandleFunc("/wallet/updateaccount", api.updateAccount)
+	mux.HandleFunc("/wallet/setaccountid", api.setAccountId)
+	mux.HandleFunc("/wallet/accountpermissionupdate", api.accountPermissionUpdate)
+	mux.HandleFunc("/wallet/getaccountbyid", api.getAccountById)
+	mux.HandleFunc("/wallet/getaccountnet", api.getAccountNet)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {

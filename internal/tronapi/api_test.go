@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -28,6 +29,9 @@ type stubBackend struct {
 	pendingTx         *corepb.Transaction
 	pendingTxList     []*corepb.Transaction
 	nodes             []*tronapi.PeerInfo
+	// M5.1 PR-1
+	accountByID *types.Account
+	accountNet  *apipb.AccountNetMessage
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -173,6 +177,32 @@ func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 	return nil, nil
 }
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	return nil, nil
+}
+
+// --- M5.1 PR-1: Account / permission ---
+func (s *stubBackend) BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildUpdateAccountTransaction(owner common.Address, name []byte) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildSetAccountIdTransaction(owner common.Address, accountID []byte) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	if s.accountByID != nil {
+		return s.accountByID, nil
+	}
+	return nil, fmt.Errorf("account not found")
+}
+func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	if s.accountNet != nil {
+		return s.accountNet, nil
+	}
 	return nil, nil
 }
 
@@ -390,5 +420,99 @@ func TestListNodes(t *testing.T) {
 	}
 	if addr["host"] != "127.0.0.1" {
 		t.Fatalf("unexpected host: %v", addr["host"])
+	}
+}
+
+// --- Tests: M5.1 PR-1 account/permission ---
+
+func TestCreateAccount(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/createaccount",
+		`{"owner_address":"4101","account_address":"4102"}`)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+}
+
+func TestUpdateAccount(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/updateaccount",
+		`{"owner_address":"4101","account_name":"deadbeef"}`)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+}
+
+func TestSetAccountId(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/setaccountid",
+		`{"owner_address":"4101","account_id":"myid"}`)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+}
+
+func TestAccountPermissionUpdate(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/accountpermissionupdate",
+		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+}
+
+func TestGetAccountByIdFound(t *testing.T) {
+	pb := &corepb.Account{Address: []byte{0x41, 0x01}}
+	stub := &stubBackend{accountByID: types.NewAccountFromPB(pb)}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getaccountbyid",
+		`{"account_id":"myid"}`)
+	if result["address"] == nil {
+		t.Fatalf("expected address in response, got %v", result)
+	}
+}
+
+func TestGetAccountByIdNotFound(t *testing.T) {
+	stub := &stubBackend{} // accountByID is nil
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getaccountbyid",
+		`{"account_id":"unknown"}`)
+	if len(result) != 0 {
+		t.Fatalf("expected empty object for not-found, got %v", result)
+	}
+}
+
+func TestGetAccountNet(t *testing.T) {
+	stub := &stubBackend{
+		accountNet: &apipb.AccountNetMessage{
+			FreeNetUsed:  100,
+			FreeNetLimit: 1500,
+			TotalNetLimit: 43200000000,
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getaccountnet",
+		`{"address":"4101"}`)
+	// protojson encodes int64 as string
+	if result["freeNetUsed"] != "100" {
+		t.Fatalf("unexpected freeNetUsed: %v", result)
 	}
 }

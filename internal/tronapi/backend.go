@@ -3,6 +3,7 @@ package tronapi
 import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -193,4 +194,12 @@ type Backend interface {
 	// Paginated queries
 	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
 	ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error)
+
+	// Account / permission (M5.1 PR-1)
+	BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error)
+	BuildUpdateAccountTransaction(owner common.Address, name []byte) (*corepb.Transaction, error)
+	BuildSetAccountIdTransaction(owner common.Address, accountID []byte) (*corepb.Transaction, error)
+	BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error)
+	GetAccountById(accountID []byte) (*types.Account, error)
+	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
 }

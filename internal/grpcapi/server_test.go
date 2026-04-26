@@ -181,6 +181,24 @@ func (b *testBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	return nil, nil
 }
+func (b *testBackend) BuildCreateAccountTransaction(owner, account common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildUpdateAccountTransaction(owner common.Address, name []byte) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildSetAccountIdTransaction(owner common.Address, accountID []byte) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
+	return nil, nil
+}
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {
