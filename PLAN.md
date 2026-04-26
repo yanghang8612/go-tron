@@ -342,15 +342,15 @@
 | M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 待提交 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
 | M1.4 自适应能量 | 完成 | 2026-04-25 | 62d1b22 | core/energy_adaptive.go + 20-block avg; ProcessBlock/BuildBlock per-block hooks; proposal #21 side-effect |
 | M1.5 奖励 v2 + 委托奖励 | 完成 | 2026-04-25 | 62d1b22 | payBlockReward/payStandbyWitness/applyRewardMaintenance; voter ComputeVoterReward (old+new hybrid); withdrawReward in vote + withdraw actuators; proposal #67 side-effect |
-| M1.6 存储租金 | 未开始 | — | — | |
+| M1.6 存储租金 | 完成（stub） | 2026-04-25 | 62d1b22 | 4 DP keys (total_storage_pool/tax/reserved, storage_exchange_tax_rate)；StorageTaxProcessor 未实现（功能从未激活） |
 | M1.7 动态能量 | 完成 | 2026-04-25 | 62d1b22 | ContractState + CatchUpToCycle; cs- rawdb prefix; interpreter factor-per-opcode + rawEnergyUsed tracking |
 | M1.8 委托资源消费 | 完成 | 2026-04-25 | 62d1b22 | core/delegation/usage.go; undelegate usage-transfer math; DELEGATERESOURCE/UNDELEGATERESOURCE opcodes wired |
 | M2 rawdb schema 补齐 | 完成 | 2026-04-26 | ae59a48..8b3877d | ✅ PR-1 indexing: `aa-`, `aid-`, `at-`, `drax-`. ✅ PR-2 consensus: `ws-shuffled`, `psd-` PbftSignData, `sb-` SectionBloom, `tbi-` TreeBlockIndex. ✅ PR-3 history/audit: `btrace-` BalanceTrace, `rvi-` RewardVi (IS_DONE sentinel + per-cycle VI), `cpv2-` CheckPointV2 (dormant); ti-/tib- documented as TransactionHistoryStore/RetStore equivalents. ✅ PR-4 market: `mptop-` MarketPairToPriceCount; mao-/mop-/mpl- documented. ✅ PR-5 shielded: `zkp-` ZKProof, `imt-` IncrementalMerkleTree. ✅ PR-6 abi: `abi-` AbiStore (inline→dedicated store migration prefix). Total: 36 tests, all green. |
-| M3.1 sync 稳定性 | 进行中（slice-1 完成） | — | — | fetch-timeout（30s）+ peer failover：PeerDisconnected → doReset → tryFindSyncPeer；BestSyncCandidate；5 新测试全绿。slice-2 待：peer 状态机 + 10-block fork 恢复 |
-| M3.2 Adv/Relay | 未开始 | — | — | |
-| M3.3 速率限制 | 未开始 | — | — | |
-| M3.4 discovery 驱逐 | 未开始 | — | — | |
-| M4 gRPC Wallet server | 未开始 | — | — | 分 5 PR |
+| M3.1 sync 稳定性 | 进行中（slice-2a 完成） | — | — | slice-1: fetch-timeout(30s)+peer failover；slice-2a: peerConnState enum, lastInsertNano+LastInsertTime, SyncService.Start/Stop+watchdog(30s isolation check, 60s stall threshold)。slice-2b(10-block fork 恢复)阻塞于 KhaosDB 链回滚，暂缓。 |
+| M3.2 Adv/Relay | 完成 | 2026-04-26 | — | slice-1: batched INV spread (30ms ticker), immediate block flush, two-gen seen cache, BroadcastBlockFrom/BroadcastTxFrom origin exclusion, MAX_SPREAD_SIZE=1000 backpressure, block 3s expiry. Start/Stop lifecycle. 4 新测试。slice-2: per-IP inbound cap (MaxConnectionsWithSameIP=2, from ChannelManager.processPeer()); Server.stopOnce idempotent Stop; maintainLoop+maintainPeers() seed reconnect on disconnect (ConnPoolService.triggerConnect() equivalent). 2 新测试全绿。 |
+| M3.3 速率限制 | 完成 | 2026-04-26 | — | p2p/ratelimiter.go: 零依赖 token bucket。NewRateLimiter() 默认 SyncBlockChain=3/s, FetchInvData=3/s, Disconnect=1/s (java-tron clearParam 值)。handleProtocolMessage 检查 rl.Allow(code)，超限则 drop+log。4 率限测试全绿。 |
+| M3.4 discovery 驱逐 | 完成 | 2026-04-26 | — | Table.RemoveByAddr(ip,port)；evictTimedOutPings 现在在清理 pendingPings 的同时驱逐无响应节点；pendingPing struct 存储 sentAt+ip+port。service_test+table_test 新增 3 测试全绿。 |
+| M4 gRPC Wallet server | 完成 | 2026-04-26 | 已完成 | PR-A0~E 全部实现：proto codegen, 48个 bufconn tests全绿，`--grpc.port` flag，Wallet 只读/交易构建/广播/分页/价格 RPC，TronBackend 扩展 14 个新方法，system_test.sh 修复 grpc port 冲突。 |
 | M5.1 HTTP 补齐 | 未开始 | — | — | 分 7 PR |
 | M5.2 JSON-RPC 写路径 | 未开始 | — | — | |
 | M6 PBFT 路由 | 未开始 | — | — | G3 依赖 |

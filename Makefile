@@ -27,7 +27,15 @@ proto:
 	cd proto && protoc --go_out=. --go_opt=paths=source_relative \
 		core/Tron.proto \
 		core/Discover.proto \
-		core/contract/*.proto \
+		core/contract/*.proto
+	cd proto && protoc \
+		--proto_path=. \
+		--go_out=. --go_opt=paths=source_relative \
+		--go_opt=Mgoogle/api/annotations.proto=google.golang.org/genproto/googleapis/api/annotations \
+		--go_opt=Mgoogle/api/http.proto=google.golang.org/genproto/googleapis/api/annotations \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		--go-grpc_opt=Mgoogle/api/annotations.proto=google.golang.org/genproto/googleapis/api/annotations \
+		--go-grpc_opt=Mgoogle/api/http.proto=google.golang.org/genproto/googleapis/api/annotations \
 		api/api.proto
 	@echo "Done."
 

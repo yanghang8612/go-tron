@@ -130,6 +130,17 @@ type Backend interface {
 	ListWitnesses() ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64
 
+	// Stake 2.0 transaction building
+	BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error)
+	BuildUnfreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error)
+	BuildDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode, lock bool) (*corepb.Transaction, error)
+	BuildUnDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode) (*corepb.Transaction, error)
+	BuildCancelAllUnfreezeV2Transaction(owner common.Address) (*corepb.Transaction, error)
+	BuildWithdrawExpireUnfreezeTransaction(owner common.Address) (*corepb.Transaction, error)
+
+	// Vote
+	BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error)
+
 	// Proposal APIs
 	BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error)
 	BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error)
@@ -164,4 +175,22 @@ type Backend interface {
 	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder
 	GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder
 	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList
+
+	// Exchange queries
+	ListExchanges() ([]*corepb.Exchange, error)
+
+	// Brokerage
+	GetBrokerageInfo(addr common.Address) int64
+
+	// Chain-level counters (stubs until dynamic-properties tracking is wired)
+	TotalTransaction() int64
+	GetBurnTrx() int64
+
+	// Historical price strings (encoded as "blockNum:price,blockNum:price,...")
+	GetBandwidthPrices() string
+	GetEnergyPrices() string
+
+	// Paginated queries
+	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
+	ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error)
 }

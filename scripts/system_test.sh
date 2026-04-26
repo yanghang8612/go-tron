@@ -174,6 +174,7 @@ echo "=== Starting SR node (dev mode) ==="
     --datadir "$SR_DIR" \
     --p2p.port "$SR_P2P" \
     --http.port "$SR_HTTP" \
+    --grpc.port 0 \
     > "$TMPDIR/sr.log" 2>&1 &
 SR_PID=$!
 echo "SR PID=$SR_PID"
@@ -442,6 +443,7 @@ echo "Starting regular node (relay/sync only — no --witness flag)..."
     --datadir "$NODE_DIR" \
     --p2p.port "$NODE_P2P" \
     --http.port "$NODE_HTTP" \
+    --grpc.port 0 \
     --seednode "localhost:$SR_P2P" \
     > "$TMPDIR/node.log" 2>&1 &
 NODE_PID=$!

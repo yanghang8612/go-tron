@@ -142,6 +142,39 @@ func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.Ma
 func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return nil
 }
+func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error)    { return nil, nil }
+func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64    { return 0 }
+func (s *stubBackend) TotalTransaction() int64                       { return 0 }
+func (s *stubBackend) GetBurnTrx() int64                             { return 0 }
+func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildUnfreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode, lock bool) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildUnDelegateResourceTransaction(owner, receiver common.Address, balance int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildCancelAllUnfreezeV2Transaction(owner common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildWithdrawExpireUnfreezeTransaction(owner common.Address) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes map[common.Address]int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (s *stubBackend) GetBandwidthPrices() string { return "" }
+func (s *stubBackend) GetEnergyPrices() string    { return "" }
+func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	return nil, nil
+}
+func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {

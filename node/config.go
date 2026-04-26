@@ -5,6 +5,7 @@ type Config struct {
 	P2PPort     int
 	HTTPPort    int
 	JSONRPCPort int
+	GRPCPort    int // gRPC Wallet service port; 0 = disabled
 	SeedNodes   []string // "host:port" entries for initial peer discovery
 	MaxPeers    int      // max simultaneous peers, default 30
 

@@ -6,6 +6,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ListAllExchanges returns all exchanges stored in the database.
+func ListAllExchanges(db ethdb.Iteratee) []*corepb.Exchange {
+	it := db.NewIterator(exchangePrefix, nil)
+	defer it.Release()
+	var result []*corepb.Exchange
+	for it.Next() {
+		ex := &corepb.Exchange{}
+		if err := proto.Unmarshal(it.Value(), ex); err == nil {
+			result = append(result, ex)
+		}
+	}
+	return result
+}
+
 // WriteExchange stores an Exchange by its ExchangeId.
 func WriteExchange(db ethdb.KeyValueWriter, ex *corepb.Exchange) error {
 	data, err := proto.Marshal(ex)

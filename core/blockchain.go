@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -28,8 +29,9 @@ type BlockChain struct {
 	stateDB *state.Database
 	config  *params.ChainConfig
 
-	currentBlock atomic.Pointer[types.Block]
-	chainmu      sync.Mutex // serializes block insertion
+	currentBlock   atomic.Pointer[types.Block]
+	chainmu        sync.Mutex // serializes block insertion
+	lastInsertNano atomic.Int64
 
 	genesisBlock    *types.Block
 	activeWitnesses atomic.Value // []tcommon.Address
@@ -44,6 +46,7 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 		config:  config,
 		fc:      forks.NewForkController(db),
 	}
+	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	// Load genesis
 	bc.genesisBlock = rawdb.ReadBlock(db, 0)
@@ -153,6 +156,7 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 
 	bc.currentBlock.Store(block)
+	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	return nil
 }
@@ -246,8 +250,14 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	}
 
 	bc.currentBlock.Store(block)
+	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	return nil
+}
+
+// LastInsertTime returns when the last block was successfully inserted.
+func (bc *BlockChain) LastInsertTime() time.Time {
+	return time.Unix(0, bc.lastInsertNano.Load())
 }
 
 // StateDB returns the state database for reading state.

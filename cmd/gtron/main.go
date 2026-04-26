@@ -17,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/internal/grpcapi"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	tnet "github.com/tronprotocol/go-tron/net"
@@ -72,6 +73,11 @@ var (
 		Usage: "Maximum number of P2P peers",
 		Value: 30,
 	}
+	grpcPortFlag = &cli.IntFlag{
+		Name:  "grpc.port",
+		Usage: "gRPC Wallet service port (0 = disabled)",
+		Value: 50051,
+	}
 )
 
 var app = &cli.App{
@@ -83,6 +89,7 @@ var app = &cli.App{
 		p2pPortFlag,
 		httpPortFlag,
 		jsonrpcPortFlag,
+		grpcPortFlag,
 		testnetFlag,
 		witnessFlag,
 		witnessKeyFlag,
@@ -177,6 +184,7 @@ func gtron(ctx *cli.Context) error {
 	backend := core.NewTronBackend(bc, pool)
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
 	jrpcServer := jsonrpc.NewServer(backend, cfg.JSONRPCPort)
+	grpcServer := grpcapi.NewServer(backend, fmt.Sprintf(":%d", cfg.GRPCPort))
 
 	// Create P2P layer
 	broadcaster := tnet.NewBroadcastService(nil)
@@ -211,6 +219,8 @@ func gtron(ctx *cli.Context) error {
 	}, handler)
 	handler.SetServer(p2pServer)
 	handler.StartKeepAlive()
+	syncService.Start()
+	broadcaster.Start()
 	broadcaster.SetPeersFunc(handler.HandshakedPeers)
 	backend.SetTxBroadcaster(broadcaster)
 	backend.SetPeerLister(func() []*tronapi.PeerInfo {
@@ -236,6 +246,9 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(p2pServer)
 	stack.RegisterLifecycle(apiServer)
 	stack.RegisterLifecycle(jrpcServer)
+	if cfg.GRPCPort > 0 {
+		stack.RegisterLifecycle(grpcServer)
+	}
 
 	// Start block producer only when --witness is explicitly set.
 	// A node can join a dev chain with --dev --witness.key (for genesis) without
@@ -290,6 +303,8 @@ func gtron(ctx *cli.Context) error {
 	<-sigc
 
 	fmt.Println("\nShutting down...")
+	broadcaster.Stop()
+	syncService.Stop()
 	stack.Stop()
 	db.Close()
 	return nil

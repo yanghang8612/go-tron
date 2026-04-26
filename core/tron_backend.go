@@ -325,6 +325,85 @@ func (b *TronBackend) NextMaintenanceTime() int64 {
 	return b.chain.NextMaintenanceTime()
 }
 
+func (b *TronBackend) BuildFreezeBalanceV2Transaction(owner tcommon.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.FreezeBalanceV2Contract{
+		OwnerAddress:  owner[:],
+		FrozenBalance: amount,
+		Resource:      resource,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_FreezeBalanceV2Contract, c, 0)
+}
+
+func (b *TronBackend) BuildUnfreezeBalanceV2Transaction(owner tcommon.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.UnfreezeBalanceV2Contract{
+		OwnerAddress:    owner[:],
+		UnfreezeBalance: amount,
+		Resource:        resource,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_UnfreezeBalanceV2Contract, c, 0)
+}
+
+func (b *TronBackend) BuildDelegateResourceTransaction(owner, receiver tcommon.Address, balance int64, resource corepb.ResourceCode, lock bool) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Balance:         balance,
+		Resource:        resource,
+		Lock:            lock,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+}
+
+func (b *TronBackend) BuildUnDelegateResourceTransaction(owner, receiver tcommon.Address, balance int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.UnDelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Balance:         balance,
+		Resource:        resource,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_UnDelegateResourceContract, c, 0)
+}
+
+func (b *TronBackend) BuildCancelAllUnfreezeV2Transaction(owner tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.CancelAllUnfreezeV2Contract{OwnerAddress: owner[:]}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_CancelAllUnfreezeV2Contract, c, 0)
+}
+
+func (b *TronBackend) BuildWithdrawExpireUnfreezeTransaction(owner tcommon.Address) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	c := &contractpb.WithdrawExpireUnfreezeContract{OwnerAddress: owner[:]}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_WithdrawExpireUnfreezeContract, c, 0)
+}
+
+func (b *TronBackend) BuildVoteWitnessTransaction(owner tcommon.Address, votes map[tcommon.Address]int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	vs := make([]*contractpb.VoteWitnessContract_Vote, 0, len(votes))
+	for addr, count := range votes {
+		a := addr
+		vs = append(vs, &contractpb.VoteWitnessContract_Vote{
+			VoteAddress: a[:],
+			VoteCount:   count,
+		})
+	}
+	c := &contractpb.VoteWitnessContract{
+		OwnerAddress: owner[:],
+		Votes:        vs,
+	}
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		corepb.Transaction_Contract_VoteWitnessContract, c, 0)
+}
+
 func (b *TronBackend) BuildProposalCreateTransaction(owner tcommon.Address, params map[int64]int64) (*corepb.Transaction, error) {
 	current := b.chain.CurrentBlock()
 	c := &contractpb.ProposalCreateContract{
@@ -574,6 +653,52 @@ func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.M
 
 func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return rawdb.ReadMarketPriceList(b.chain.db, sellTokenID, buyTokenID)
+}
+
+func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	return rawdb.ListAllExchanges(b.chain.db), nil
+}
+
+func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
+	return rawdb.ReadWitnessBrokerage(b.chain.db, addr)
+}
+
+func (b *TronBackend) TotalTransaction() int64 { return 0 }
+
+func (b *TronBackend) GetBurnTrx() int64 { return 0 }
+
+func (b *TronBackend) GetBandwidthPrices() string { return "" }
+
+func (b *TronBackend) GetEnergyPrices() string { return "" }
+
+func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	all, err := b.ListProposals()
+	if err != nil || len(all) == 0 {
+		return nil, err
+	}
+	if offset >= len(all) {
+		return []*tronapi.ProposalInfo{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
+func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
+	all := rawdb.ListAllExchanges(b.chain.db)
+	if len(all) == 0 {
+		return []*corepb.Exchange{}, nil
+	}
+	if offset >= len(all) {
+		return []*corepb.Exchange{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
 }
 
 // ── JSON-RPC Backend implementation (Phase 11) ────────────────────────────
