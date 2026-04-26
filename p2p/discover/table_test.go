@@ -3,6 +3,7 @@ package discover
 import (
 	"bytes"
 	"crypto/rand"
+	"net"
 	"testing"
 )
 
@@ -106,5 +107,43 @@ func TestTableLen(t *testing.T) {
 	}
 	if table.Len() != 10 {
 		t.Fatalf("expected 10 nodes, got %d", table.Len())
+	}
+}
+
+func TestTableRemoveByAddr(t *testing.T) {
+	localID := randID()
+	table := NewTable(localID)
+
+	ip := net.IPv4(192, 168, 1, 1)
+	port := 18888
+
+	node := &Node{ID: randID(), IP: ip, Port: port}
+	table.Add(node)
+
+	if table.Len() != 1 {
+		t.Fatalf("expected 1 node, got %d", table.Len())
+	}
+
+	removed := table.RemoveByAddr(ip, port)
+	if removed != 1 {
+		t.Fatalf("expected 1 removed, got %d", removed)
+	}
+	if table.Len() != 0 {
+		t.Fatalf("expected 0 nodes after removal, got %d", table.Len())
+	}
+}
+
+func TestTableRemoveByAddrUnknown(t *testing.T) {
+	localID := randID()
+	table := NewTable(localID)
+	table.Add(&Node{ID: randID(), IP: net.IPv4(10, 0, 0, 1), Port: 1234})
+
+	// Remove a different address — should remove nothing
+	removed := table.RemoveByAddr(net.IPv4(10, 0, 0, 2), 1234)
+	if removed != 0 {
+		t.Fatalf("expected 0 removed, got %d", removed)
+	}
+	if table.Len() != 1 {
+		t.Fatalf("expected 1 node still present, got %d", table.Len())
 	}
 }

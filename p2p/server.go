@@ -13,9 +13,20 @@ import (
 	p2ppb "github.com/tronprotocol/go-tron/proto/p2p"
 )
 
+const (
+	// defaultMaxConnectionsWithSameIP mirrors java-tron libp2p ChannelManager
+	// (maxConnectionsWithSameIp = 2 from config.conf default).
+	defaultMaxConnectionsWithSameIP = 2
+	// maintainInterval is how often we check whether seed nodes need reconnection.
+	maintainInterval = 10 * time.Second
+)
+
 // errDuplicatePeer is returned by addPeerConn when the peer ID is already
 // connected. Callers must close the connection.
 var errDuplicatePeer = errors.New("duplicate peer")
+
+// errTooManyFromSameIP is returned when an inbound peer exceeds the per-IP cap.
+var errTooManyFromSameIP = errors.New("too many connections from same IP")
 
 // ServerConfig holds P2P server configuration.
 type ServerConfig struct {
@@ -31,17 +42,23 @@ type ServerConfig struct {
 	Version    int32  // protocol version; defaults to Libp2pProtocolVersion
 	ExternalIP string // IPv4 ASCII string used in HelloMessage.from.address
 	Port       int32  // our TCP port, echoed in HelloMessage.from.port
+
+	// MaxConnectionsWithSameIP caps inbound connections from a single remote IP.
+	// 0 → default (2), matching java-tron ChannelManager.processPeer().
+	MaxConnectionsWithSameIP int
 }
 
 // Server manages TCP connections to peers.
 type Server struct {
-	config   ServerConfig
-	handler  Handler
-	listener net.Listener
-	peers    map[string]*Peer
-	mu       sync.RWMutex
-	quit     chan struct{}
-	wg       sync.WaitGroup
+	config     ServerConfig
+	handler    Handler
+	listener   net.Listener
+	peers      map[string]*Peer
+	mu         sync.RWMutex
+	quit       chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
+	maintainCh chan struct{} // signals the maintain loop to reconnect now
 }
 
 // NewServer creates a new P2P server.
@@ -59,11 +76,15 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 	if config.Version == 0 {
 		config.Version = Libp2pProtocolVersion
 	}
+	if config.MaxConnectionsWithSameIP <= 0 {
+		config.MaxConnectionsWithSameIP = defaultMaxConnectionsWithSameIP
+	}
 	return &Server{
-		config:  config,
-		handler: handler,
-		peers:   make(map[string]*Peer),
-		quit:    make(chan struct{}),
+		config:     config,
+		handler:    handler,
+		peers:      make(map[string]*Peer),
+		quit:       make(chan struct{}),
+		maintainCh: make(chan struct{}, 1),
 	}
 }
 
@@ -76,8 +97,9 @@ func (s *Server) Start() error {
 	s.listener = ln
 	log.Printf("P2P listening on %s", ln.Addr().String())
 
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.acceptLoop()
+	go s.maintainLoop()
 
 	// Start discovery service if configured
 	if s.config.Discovery != nil {
@@ -97,9 +119,9 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop shuts down the server and disconnects all peers.
+// Stop shuts down the server and disconnects all peers. Safe to call multiple times.
 func (s *Server) Stop() error {
-	close(s.quit)
+	s.stopOnce.Do(func() { close(s.quit) })
 	s.listener.Close()
 
 	// Stop discovery service if running
@@ -242,7 +264,7 @@ func (s *Server) acceptLoop() {
 }
 
 func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
-	// Capacity + dedup check BEFORE expensive handshake.
+	// Capacity + dedup + per-IP cap check BEFORE expensive handshake.
 	s.mu.Lock()
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
@@ -251,6 +273,13 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
 		return errDuplicatePeer
+	}
+	if inbound {
+		remoteHost, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		if s.countInboundFromIPLocked(remoteHost) >= s.config.MaxConnectionsWithSameIP {
+			s.mu.Unlock()
+			return errTooManyFromSameIP
+		}
 	}
 	s.mu.Unlock()
 
@@ -259,7 +288,7 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 		return err
 	}
 
-	// Re-check capacity/dedup under lock (another peer may have joined meanwhile).
+	// Re-check capacity/dedup/per-IP under lock (another peer may have joined meanwhile).
 	s.mu.Lock()
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
@@ -268,6 +297,13 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
 		return errDuplicatePeer
+	}
+	if inbound {
+		remoteHost, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		if s.countInboundFromIPLocked(remoteHost) >= s.config.MaxConnectionsWithSameIP {
+			s.mu.Unlock()
+			return errTooManyFromSameIP
+		}
 	}
 	p := NewPeer(conn, id, inbound, s)
 	s.peers[id] = p
@@ -278,11 +314,79 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	return nil
 }
 
-// removePeer removes a peer from the map (called on disconnect).
+// removePeer removes a peer from the map (called on disconnect) and nudges
+// the maintain loop to reconnect to seeds if needed.
 func (s *Server) removePeer(id string) {
 	s.mu.Lock()
 	delete(s.peers, id)
 	s.mu.Unlock()
+	// Non-blocking send: if a signal is already pending, skip.
+	select {
+	case s.maintainCh <- struct{}{}:
+	default:
+	}
+}
+
+// countInboundFromIPLocked counts active inbound peers whose remote host equals
+// remoteHost. Must be called with s.mu held at least for reading.
+func (s *Server) countInboundFromIPLocked(remoteHost string) int {
+	count := 0
+	for id, p := range s.peers {
+		if !p.Inbound() {
+			continue
+		}
+		host, _, _ := net.SplitHostPort(id)
+		if host == remoteHost {
+			count++
+		}
+	}
+	return count
+}
+
+// maintainLoop periodically reconnects to configured seed nodes when we are
+// below capacity. Mirrors java-tron ConnPoolService.connect() + triggerConnect().
+func (s *Server) maintainLoop() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(maintainInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.quit:
+			return
+		case <-ticker.C:
+			s.maintainPeers()
+		case <-s.maintainCh:
+			s.maintainPeers()
+		}
+	}
+}
+
+// maintainPeers dials seed nodes that are not yet connected, up to MaxPeers.
+func (s *Server) maintainPeers() {
+	if len(s.config.SeedNodes) == 0 {
+		return
+	}
+	s.mu.RLock()
+	current := len(s.peers)
+	connected := make(map[string]bool, len(s.peers))
+	for id := range s.peers {
+		connected[id] = true
+	}
+	s.mu.RUnlock()
+
+	if current >= s.config.MaxPeers {
+		return
+	}
+	for _, addr := range s.config.SeedNodes {
+		if connected[addr] {
+			continue
+		}
+		go func(a string) {
+			if err := s.AddPeer(a); err != nil {
+				log.Printf("P2P: reconnect to seed %s: %v", a, err)
+			}
+		}(addr)
+	}
 }
 
 // --- Server implements Handler to intercept disconnect events ---

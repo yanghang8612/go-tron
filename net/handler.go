@@ -15,10 +15,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// peerConnState is the lifecycle state of a peer connection.
+type peerConnState uint8
+
+const (
+	peerStateInit      peerConnState = iota // connected, no hello yet
+	peerStateHandshaked                     // hello exchanged successfully
+	peerStateBad                            // hard failure (e.g. genesis mismatch)
+)
+
 // peerState tracks per-peer protocol state.
 type peerState struct {
 	peer        *p2p.Peer
-	handshaked  bool
+	connState   peerConnState
+	rl          *p2p.RateLimiter
 	headBlockID tcommon.Hash
 	headNum     uint64
 }
@@ -65,7 +75,7 @@ func (h *TronHandler) HandshakedPeerCount() int {
 	defer h.mu.RUnlock()
 	count := 0
 	for _, ps := range h.peers {
-		if ps.handshaked {
+		if ps.connState == peerStateHandshaked {
 			count++
 		}
 	}
@@ -78,7 +88,7 @@ func (h *TronHandler) HandshakedPeers() []*p2p.Peer {
 	defer h.mu.RUnlock()
 	var result []*p2p.Peer
 	for _, ps := range h.peers {
-		if ps.handshaked {
+		if ps.connState == peerStateHandshaked {
 			result = append(result, ps.peer)
 		}
 	}
@@ -94,7 +104,7 @@ func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
 	ourHead := h.chain.CurrentBlock().Number()
 	var best *peerState
 	for _, ps := range h.peers {
-		if !ps.handshaked {
+		if ps.connState != peerStateHandshaked {
 			continue
 		}
 		if exclude != nil && ps.peer == exclude {
@@ -116,7 +126,7 @@ func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
 // OnPeerConnected is called when a new TCP connection is established.
 func (h *TronHandler) OnPeerConnected(peer *p2p.Peer) {
 	h.mu.Lock()
-	h.peers[peer.ID()] = &peerState{peer: peer}
+	h.peers[peer.ID()] = &peerState{peer: peer, rl: p2p.NewRateLimiter()}
 	h.mu.Unlock()
 
 	// Send hello
@@ -158,7 +168,7 @@ func (h *TronHandler) OnMessage(peer *p2p.Peer, code byte, payload []byte) {
 		h.mu.RLock()
 		ps := h.peers[peer.ID()]
 		h.mu.RUnlock()
-		if ps == nil || !ps.handshaked {
+		if ps == nil || ps.connState != peerStateHandshaked {
 			return
 		}
 		h.handleProtocolMessage(peer, code, payload)
@@ -230,6 +240,11 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	if hello.GenesisBlockId == nil ||
 		tcommon.BytesToHash(hello.GenesisBlockId.Hash) != genesisID.Hash {
 		log.Printf("Peer %s: genesis mismatch", peer.ID())
+		h.mu.Lock()
+		if ps := h.peers[peer.ID()]; ps != nil {
+			ps.connState = peerStateBad
+		}
+		h.mu.Unlock()
 		h.disconnectPeer(peer, corepb.ReasonCode_INCOMPATIBLE_CHAIN)
 		return
 	}
@@ -241,7 +256,7 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 		h.mu.Unlock()
 		return
 	}
-	ps.handshaked = true
+	ps.connState = peerStateHandshaked
 	if hello.HeadBlockId != nil {
 		ps.headNum = uint64(hello.HeadBlockId.Number)
 		ps.headBlockID = tcommon.BytesToHash(hello.HeadBlockId.Hash)
@@ -277,6 +292,15 @@ func (h *TronHandler) disconnectPeer(peer *p2p.Peer, reason corepb.ReasonCode) {
 }
 
 func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload []byte) {
+	// Rate-limit check: drop throttled messages rather than crashing or disconnecting.
+	h.mu.RLock()
+	ps := h.peers[peer.ID()]
+	h.mu.RUnlock()
+	if ps != nil && ps.rl != nil && !ps.rl.Allow(code) {
+		log.Printf("Rate limited: msg 0x%02x from %s", code, peer.ID())
+		return
+	}
+
 	switch code {
 	case p2p.MsgSyncBlockChain:
 		if h.syncService != nil {
@@ -356,7 +380,7 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 
 	// Relay to other peers
 	if h.broadcaster != nil {
-		h.broadcaster.BroadcastBlock(block)
+		h.broadcaster.BroadcastBlockFrom(block, peer)
 	}
 }
 
@@ -371,7 +395,7 @@ func (h *TronHandler) handleTx(peer *p2p.Peer, payload []byte) {
 	}
 	// Relay inventory to other peers
 	if h.broadcaster != nil {
-		h.broadcaster.BroadcastTx(tx)
+		h.broadcaster.BroadcastTxFrom(tx, peer)
 	}
 }
 

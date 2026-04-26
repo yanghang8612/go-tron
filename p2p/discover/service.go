@@ -38,8 +38,15 @@ type Service struct {
 	seedsMu   sync.Mutex
 
 	lookupCycle    int
-	pendingPings   map[string]time.Time
+	pendingPings   map[string]*pendingPing
 	pendingPingsMu sync.Mutex
+}
+
+// pendingPing tracks an outbound ping waiting for a pong response.
+type pendingPing struct {
+	sentAt time.Time
+	ip     net.IP
+	port   int
 }
 
 // NewService creates a discovery service.
@@ -81,7 +88,7 @@ func NewService(listenAddr string, nodeID []byte, networkID int32, onNewPeer fun
 		localEP:      localEP,
 		onNewPeer:    onNewPeer,
 		quit:         make(chan struct{}),
-		pendingPings: make(map[string]time.Time),
+		pendingPings: make(map[string]*pendingPing),
 	}, nil
 }
 
@@ -316,28 +323,30 @@ func (s *Service) lookup(target []byte) {
 func (s *Service) sendPingAndTrack(target *net.UDPAddr, remoteEP *discoverpb.Endpoint) error {
 	key := fmt.Sprintf("%s:%d", target.IP, target.Port)
 	s.pendingPingsMu.Lock()
-	s.pendingPings[key] = time.Now()
+	s.pendingPings[key] = &pendingPing{sentAt: time.Now(), ip: target.IP, port: target.Port}
 	s.pendingPingsMu.Unlock()
 	return s.conn.SendPing(target, s.localEP, remoteEP, s.networkID)
 }
 
 // evictTimedOutPings removes pendingPings entries that have not received a pong
-// within pingTimeout. Stale entries no longer consume memory; the routing table
-// will naturally replace stale nodes when fresh neighbours are discovered —
-// bucket eviction policy overwrites the oldest entry on bucket-full insertions.
+// within pingTimeout and removes those dead nodes from the routing table.
 func (s *Service) evictTimedOutPings() {
 	cutoff := time.Now().Add(-pingTimeout)
 	s.pendingPingsMu.Lock()
-	var expired []string
-	for k, t := range s.pendingPings {
-		if t.Before(cutoff) {
-			expired = append(expired, k)
+	var expired []*pendingPing
+	for k, p := range s.pendingPings {
+		if p.sentAt.Before(cutoff) {
+			expired = append(expired, p)
+			delete(s.pendingPings, k)
 		}
 	}
-	for _, k := range expired {
-		delete(s.pendingPings, k)
-	}
 	s.pendingPingsMu.Unlock()
+
+	for _, p := range expired {
+		if n := s.table.RemoveByAddr(p.ip, p.port); n > 0 {
+			log.Printf("discover: evicted dead node %s:%d (no pong in %v)", p.ip, p.port, pingTimeout)
+		}
+	}
 }
 
 // randomBytes returns n cryptographically random bytes.

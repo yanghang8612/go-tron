@@ -1,6 +1,9 @@
 package discover
 
-import "sync"
+import (
+	"net"
+	"sync"
+)
 
 const (
 	BucketSize = 16  // k in Kademlia
@@ -74,6 +77,27 @@ func (t *Table) Closest(target []byte, n int) []*Node {
 		result = result[:n]
 	}
 	return result
+}
+
+// RemoveByAddr removes all table entries matching the given IP and port.
+// Returns the number of entries removed.
+func (t *Table) RemoveByAddr(ip net.IP, port int) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	removed := 0
+	for _, b := range t.buckets {
+		j := 0
+		for _, n := range b.entries {
+			if n.IP.Equal(ip) && n.Port == port {
+				removed++
+				continue
+			}
+			b.entries[j] = n
+			j++
+		}
+		b.entries = b.entries[:j]
+	}
+	return removed
 }
 
 // Len returns the total number of nodes in the table.
