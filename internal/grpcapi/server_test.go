@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 const bufSize = 1 << 20
@@ -223,6 +224,11 @@ func (b *testBackend) BuildFreezeBalanceV1Transaction(owner common.Address, amou
 func (b *testBackend) BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
 	return nil, nil
 }
+func (b *testBackend) BuildContractTransaction(contractType corepb.Transaction_Contract_ContractType, contract proto.Message, feeLimit int64) (*corepb.Transaction, error) {
+	return nil, nil
+}
+func (b *testBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) { return nil, nil }
+func (b *testBackend) ValidateAddress(addr string) (bool, string)              { return false, "" }
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {

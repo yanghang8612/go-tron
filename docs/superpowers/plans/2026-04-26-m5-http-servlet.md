@@ -30,51 +30,49 @@
 - [x] Register 15 routes in `api.go`
 - [x] Add 15 tests; all 25 packages green
 
-## PR-3: TRC10 asset extras
+## PR-3: TRC10 asset extras ✅ 完成 2026-04-26
 
-- [ ] Add `BuildCreateAssetIssueTransaction`, `BuildUpdateAssetTransaction` to Backend
-- [ ] Implement in `core/tron_backend.go`
-- [ ] Create `internal/tronapi/api_trc10.go` with:
+- [x] Add `BuildCreateAssetIssueTransaction`, `BuildUpdateAssetTransaction` to Backend
+- [x] Implement in `core/tron_backend.go`
+- [x] Create `internal/tronapi/api_trc10.go` with:
   `createAssetIssue`, `updateAsset`, `getAssetIssueListByName`
-- [ ] Register 3 routes in `api.go`
-- [ ] Add 3 tests
-- [ ] `go test ./...` green
+- [x] Register 3 routes in `api.go`
+- [x] Add 3 tests
+- [x] `go test ./...` green
 
-## PR-4: Smart contract extras
+## PR-4: Smart contract extras ✅ 完成 2026-04-26
 
-- [ ] Add `BuildClearABITransaction` to Backend
-- [ ] Implement in `core/tron_backend.go`
-- [ ] Create `internal/tronapi/api_contract.go` with `clearABI`
-- [ ] Register 1 route in `api.go`
-- [ ] Add 1 test
-- [ ] `go test ./...` green
+- [x] Add `BuildClearABITransaction` to Backend (via generic `BuildContractTransaction`)
+- [x] Implement in `core/tron_backend.go`
+- [x] `clearABI` handler in `internal/tronapi/api_trc10.go`
+- [x] Register 1 route in `api.go`
+- [x] Add 1 test
+- [x] `go test ./...` green
 
-## PR-5: Exchange / Market
+## PR-5: Exchange / Market ✅ 完成 2026-04-26
 
-- [ ] Add 6 Backend methods: `BuildExchangeCreateTransaction`, `BuildExchangeInjectTransaction`,
-  `BuildExchangeTransactionTransaction`, `BuildExchangeWithdrawTransaction`,
-  `BuildMarketCancelOrderTransaction`, `BuildMarketSellAssetTransaction`
-- [ ] Implement 6 methods in `core/tron_backend.go`
-- [ ] Create `internal/tronapi/api_exchange.go` with 6 handlers
-- [ ] Register 6 routes in `api.go`
-- [ ] Add 6 tests
-- [ ] `go test ./...` green
+- [x] 6 Backend methods via generic `BuildContractTransaction`
+- [x] Create `internal/tronapi/api_exchange.go` with 6 handlers:
+  `exchangeCreate`, `exchangeInject`, `exchangeTransaction`, `exchangeWithdraw`,
+  `marketSellAsset`, `marketCancelOrder`
+- [x] Register 6 routes in `api.go`
+- [x] Add 6 tests
+- [x] `go test ./...` green
 
-## PR-6: Proposal / Monitoring extras
+## PR-6: Proposal / Monitoring extras ✅ 完成 2026-04-26
 
-- [ ] Add `GetProposalByID`, `GetBandwidthPrices`, `GetEnergyPrices` (already exist) to usable list
-- [ ] Create `internal/tronapi/api_proposal.go` with:
-  `getProposalByID`, `getPaginatedProposalList`, `metricsStub`
-- [ ] Register 3 routes in `api.go`
-- [ ] Add 3 tests
-- [ ] `go test ./...` green
+- [x] `GetProposalByID`, `ListProposalsPaginated`, `ValidateAddress` added to Backend
+- [x] Create `internal/tronapi/api_misc.go` with:
+  `getProposalById`, `getPaginatedProposalList`, `metricsStub`,
+  `getTransactionReceiptById`, `validateAddress`
+- [x] Register 3 routes in `api.go`
+- [x] Add 3 tests
+- [x] `go test ./...` green
 
-## PR-7: Transaction meta
+## PR-7: Transaction meta ✅ 完成 2026-04-26
 
-- [ ] Add `GetTransactionApprovedList`, `ValidateAddress` to Backend
-- [ ] Create `internal/tronapi/api_misc.go` with:
-  `getTransactionReceiptByID`, `getTransactionApprovedList`,
-  `getTransactionSignWeight`, `validateAddress`
-- [ ] Register 4 routes in `api.go`
-- [ ] Add 4 tests
-- [ ] `go test ./...` green
+- [x] `ValidateAddress` added to Backend
+- [x] `getTransactionReceiptById` (alias), `validateAddress` handlers in `api_misc.go`
+- [x] Register 2 routes in `api.go`
+- [x] Add 2 tests
+- [x] `go test ./...` green (all 28 packages)

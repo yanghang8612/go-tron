@@ -6,6 +6,7 @@ import (
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 type NodeInfo struct {
@@ -203,6 +204,11 @@ type Backend interface {
 	GetAccountById(accountID []byte) (*types.Account, error)
 	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
 
+	// Generic contract transaction builder (M5.1 PR-3+)
+	// Wraps tronapi.BuildTransaction with head-block context from the chain.
+	// Used for contract types that don't need special Go-level parameter handling.
+	BuildContractTransaction(contractType corepb.Transaction_Contract_ContractType, contract proto.Message, feeLimit int64) (*corepb.Transaction, error)
+
 	// Transaction builders (M5.1 PR-2)
 	BuildTransferAssetTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error)
 	BuildParticipateAssetIssueTransaction(owner, to common.Address, assetName []byte, amount int64) (*corepb.Transaction, error)
@@ -212,4 +218,10 @@ type Backend interface {
 	BuildUpdateBrokerageTransaction(owner common.Address, brokerage int32) (*corepb.Transaction, error)
 	BuildFreezeBalanceV1Transaction(owner common.Address, amount, duration int64, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error)
 	BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error)
+
+	// Proposal queries (M5.1 PR-6)
+	GetProposalByID(id int64) (*ProposalInfo, error)
+
+	// Address validation (M5.1 PR-7) — pure utility, no state needed
+	ValidateAddress(addr string) (bool, string)
 }

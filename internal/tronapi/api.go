@@ -112,6 +112,31 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/delegateresource", api.delegateResource)
 	mux.HandleFunc("/wallet/undelegateresource", api.undelegateResource)
 	mux.HandleFunc("/wallet/withdrawexpireunfreeze", api.withdrawExpireUnfreeze)
+
+	// M5.1 PR-3: TRC10 asset extras
+	mux.HandleFunc("/wallet/createassetissue", api.createAssetIssue)
+	mux.HandleFunc("/wallet/updateasset", api.updateAsset)
+	mux.HandleFunc("/wallet/getassetissuelistbyname", api.getAssetIssueListByName)
+
+	// M5.1 PR-4: Smart contract extras
+	mux.HandleFunc("/wallet/clearabi", api.clearABI)
+
+	// M5.1 PR-5: Exchange / Market
+	mux.HandleFunc("/wallet/exchangecreate", api.exchangeCreate)
+	mux.HandleFunc("/wallet/exchangeinject", api.exchangeInject)
+	mux.HandleFunc("/wallet/exchangetransaction", api.exchangeTransaction)
+	mux.HandleFunc("/wallet/exchangewithdraw", api.exchangeWithdraw)
+	mux.HandleFunc("/wallet/marketsellasset", api.marketSellAsset)
+	mux.HandleFunc("/wallet/marketcancelorder", api.marketCancelOrder)
+
+	// M5.1 PR-6: Proposal / Monitoring extras
+	mux.HandleFunc("/wallet/getproposalbyid", api.getProposalById)
+	mux.HandleFunc("/wallet/getpaginatedproposallist", api.getPaginatedProposalList)
+	mux.HandleFunc("/wallet/metrics", api.metricsStub)
+
+	// M5.1 PR-7: Transaction meta
+	mux.HandleFunc("/wallet/gettransactionreceiptbyid", api.getTransactionReceiptById)
+	mux.HandleFunc("/wallet/validateaddress", api.validateAddress)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {

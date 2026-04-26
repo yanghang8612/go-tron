@@ -14,6 +14,7 @@ import (
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // stubBackend is a test double for tronapi.Backend.
@@ -230,6 +231,20 @@ func (s *stubBackend) BuildFreezeBalanceV1Transaction(owner common.Address, amou
 }
 func (s *stubBackend) BuildUnfreezeBalanceV1Transaction(owner common.Address, resource corepb.ResourceCode, receiver common.Address) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+
+// --- M5.1 PR-3+: Generic contract builder + misc ---
+func (s *stubBackend) BuildContractTransaction(contractType corepb.Transaction_Contract_ContractType, contract proto.Message, feeLimit int64) (*corepb.Transaction, error) {
+	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
+}
+func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	if id == 1 {
+		return &tronapi.ProposalInfo{ProposalID: 1}, nil
+	}
+	return nil, fmt.Errorf("not found")
+}
+func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
+	return len(addr) == 42, "test"
 }
 
 // --- Helpers ---
@@ -615,4 +630,116 @@ func TestUndelegateResource(t *testing.T) {
 func TestWithdrawExpireUnfreeze(t *testing.T) {
 	testTxBuilder(t, "/wallet/withdrawexpireunfreeze",
 		`{"owner_address":"4101"}`)
+}
+
+// --- Tests: M5.1 PR-3 TRC10 + PR-4 ClearABI ---
+
+func TestCreateAssetIssue(t *testing.T) {
+	testTxBuilder(t, "/wallet/createassetissue",
+		`{"owner_address":"4101000000000000000000000000000000000000000000","name":"dGVzdA==","abbr":"dA==","total_supply":"1000000","trx_num":1,"num":1,"start_time":"1000","end_time":"2000","precision":6}`)
+}
+func TestUpdateAsset(t *testing.T) {
+	testTxBuilder(t, "/wallet/updateasset",
+		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+}
+func TestGetAssetIssueListByName(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/getassetissuelistbyname", `{"value":"deadbeef"}`)
+	if _, ok := result["assetIssue"]; !ok {
+		t.Fatalf("expected assetIssue key, got %v", result)
+	}
+}
+func TestClearABI(t *testing.T) {
+	testTxBuilder(t, "/wallet/clearabi",
+		`{"owner_address":"4101","contract_address":"4102"}`)
+}
+
+// --- Tests: M5.1 PR-5 Exchange/Market ---
+
+func TestExchangeCreate(t *testing.T) {
+	testTxBuilder(t, "/wallet/exchangecreate",
+		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+}
+func TestExchangeInject(t *testing.T) {
+	testTxBuilder(t, "/wallet/exchangeinject",
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100"}`)
+}
+func TestExchangeTransaction(t *testing.T) {
+	testTxBuilder(t, "/wallet/exchangetransaction",
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100","expected":"50"}`)
+}
+func TestExchangeWithdraw(t *testing.T) {
+	testTxBuilder(t, "/wallet/exchangewithdraw",
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100"}`)
+}
+func TestMarketSellAsset(t *testing.T) {
+	testTxBuilder(t, "/wallet/marketsellasset",
+		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+}
+func TestMarketCancelOrder(t *testing.T) {
+	testTxBuilder(t, "/wallet/marketcancelorder",
+		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+}
+
+// --- Tests: M5.1 PR-6 Proposal/Monitoring ---
+
+func TestGetProposalByIdFound(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/getproposalbyid", `{"id":1}`)
+	if result["proposal_id"].(float64) != 1 {
+		t.Fatalf("expected proposal_id=1, got %v", result)
+	}
+}
+func TestGetProposalByIdNotFound(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/getproposalbyid", `{"id":999}`)
+	if len(result) != 0 {
+		t.Fatalf("expected empty object, got %v", result)
+	}
+}
+func TestGetPaginatedProposalList(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
+	if _, ok := result["proposal"]; !ok {
+		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+func TestMetrics(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/wallet/metrics")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("metrics failed: %v %v", err, resp)
+	}
+}
+
+// --- Tests: M5.1 PR-7 Transaction meta ---
+
+func TestValidateAddressValid(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/validateaddress",
+		`{"address":"411234567890123456789012345678901234567890ab"}`)
+	if result["message"] != "test" {
+		t.Fatalf("unexpected message: %v", result)
+	}
+}
+func TestGetTransactionReceiptById(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+	result := postJSON(t, srv.URL+"/wallet/gettransactionreceiptbyid",
+		`{"value":"aabbcc"}`)
+	// stub returns nil tx info → empty object
+	_ = result
 }

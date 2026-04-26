@@ -16,6 +16,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
+	"google.golang.org/protobuf/proto"
 )
 
 // TxBroadcaster announces new transactions to P2P peers.
@@ -775,6 +776,56 @@ func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMess
 		TotalNetLimit:  dynProps.TotalNetLimit(),
 		TotalNetWeight: dynProps.TotalNetWeight(),
 	}, nil
+}
+
+// ── M5.1 PR-3+: Generic contract builder ────────────────────────────────
+
+func (b *TronBackend) BuildContractTransaction(contractType corepb.Transaction_Contract_ContractType, contract proto.Message, feeLimit int64) (*corepb.Transaction, error) {
+	current := b.chain.CurrentBlock()
+	return tronapi.BuildTransaction(current.Number(), current.Hash().Bytes(), current.Timestamp(),
+		contractType, contract, feeLimit)
+}
+
+func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	p := rawdb.ReadProposal(b.chain.db, id)
+	if p == nil {
+		return nil, fmt.Errorf("proposal %d not found", id)
+	}
+	params := make(map[string]int64, len(p.Parameters))
+	for k, v := range p.Parameters {
+		params[fmt.Sprintf("%d", k)] = v
+	}
+	approvals := make([]string, len(p.Approvals))
+	for i, a := range p.Approvals {
+		approvals[i] = hex.EncodeToString(a[:])
+	}
+	stateStr := "PENDING"
+	switch p.State {
+	case rawdb.ProposalStateApproved:
+		stateStr = "APPROVED"
+	case rawdb.ProposalStateCanceled:
+		stateStr = "CANCELED"
+	}
+	return &tronapi.ProposalInfo{
+		ProposalID:      p.ID,
+		ProposerAddress: hex.EncodeToString(p.Proposer[:]),
+		Parameters:      params,
+		ExpirationTime:  p.ExpirationTime,
+		CreateTime:      p.CreateTime,
+		Approvals:       approvals,
+		State:           stateStr,
+	}, nil
+}
+
+func (b *TronBackend) ValidateAddress(addr string) (bool, string) {
+	raw := tcommon.FromHex(addr)
+	if len(raw) == 21 && raw[0] == 0x41 {
+		return true, "Hex string format"
+	}
+	if len(raw) == 21 {
+		return false, "Invalid address prefix"
+	}
+	return false, "Invalid address length"
 }
 
 // ── M5.1 PR-2: Transaction builders ─────────────────────────────────────
