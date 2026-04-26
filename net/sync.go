@@ -34,6 +34,9 @@ type SyncService struct {
 	remainNum  int64
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
+
+	quit     chan struct{}
+	stopOnce sync.Once
 }
 
 // NewSyncService creates a new sync service.
@@ -41,6 +44,49 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	return &SyncService{
 		chain:   chain,
 		handler: handler,
+		quit:    make(chan struct{}),
+	}
+}
+
+// Start launches the isolation watchdog goroutine.
+func (ss *SyncService) Start() {
+	go ss.watchdog()
+}
+
+// Stop shuts down the sync service and cancels any in-progress sync.
+func (ss *SyncService) Stop() {
+	ss.stopOnce.Do(func() { close(ss.quit) })
+	ss.mu.Lock()
+	ss.doReset()
+	ss.mu.Unlock()
+}
+
+// watchdog fires every 30 s and triggers a sync if the chain appears isolated.
+func (ss *SyncService) watchdog() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			ss.checkIsolation()
+		case <-ss.quit:
+			return
+		}
+	}
+}
+
+// checkIsolation starts a sync if we are not already syncing, the chain head
+// has not advanced in over 60 s, and a better peer is available.
+func (ss *SyncService) checkIsolation() {
+	if ss.IsSyncing() || ss.chain == nil || ss.handler == nil {
+		return
+	}
+	if time.Since(ss.chain.LastInsertTime()) < 60*time.Second {
+		return
+	}
+	if candidate := ss.handler.BestSyncCandidate(nil); candidate != nil {
+		log.Printf("Sync: chain stalled, starting sync with %s", candidate.ID())
+		ss.StartSync(candidate)
 	}
 }
 
