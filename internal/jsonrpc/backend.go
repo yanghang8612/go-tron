@@ -51,10 +51,17 @@ type Backend interface {
 	// TVM execution (read-only simulation)
 	Call(from, to *common.Address, data []byte, value int64) ([]byte, error)
 
+	// EstimateGas simulates execution and returns energy used.
+	EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)
+
 	// Log queries
 	GetLogs(filter LogFilter) ([]*RPCLog, error)
 
 	// Node metadata
 	GasPrice() int64 // energy fee in SUN per energy unit
 	PeerCount() int
+
+	// Block subscriptions for the filter subsystem
+	SubscribeBlocks(ch chan<- *types.Block)
+	UnsubscribeBlocks(ch chan<- *types.Block)
 }

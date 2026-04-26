@@ -3,51 +3,32 @@
 **Date**: 2026-04-26  
 **Spec**: `docs/superpowers/specs/2026-04-26-m5-jsonrpc-write-design.md`
 
-## PR-1: Utility methods (eth_gasPrice, web3_sha3, net_listening, net_peerCount)
+## PR-1: Utility methods (eth_gasPrice, web3_sha3, net_listening, net_peerCount) ✅ 完成 2026-04-26
 
-- [ ] Add `GasPrice() int64` and `PeerCount() int` to `jsonrpc.Backend`
-- [ ] Implement in `core/tron_backend.go`:
+- [x] Add `GasPrice() int64` and `PeerCount() int` to `jsonrpc.Backend`
+- [x] Implement in `core/tron_backend.go`:
   - `GasPrice()` → `state.LoadDynamicProperties(b.chain.db).EnergyFee()`
-  - `PeerCount()` → `b.p2pServer.PeerCount()` (needs `p2p.Server` reference on TronBackend)
-- [ ] Add handlers in `api.go`:
-  - `eth_gasPrice` → `hexUint64(backend.GasPrice())`
-  - `web3_sha3` → decode hex param, return keccak256
-  - `net_listening` → `backend.PeerCount() >= 1`
-  - `net_peerCount` → `hexUint64(uint64(backend.PeerCount()))`
-- [ ] Add stub methods to `api_test.go` stubBackend + 4 tests
-- [ ] Update grpcapi stubBackend if needed
-- [ ] `go test ./...` green
+  - `PeerCount()` → `len(b.peersFunc())` (reuses existing peersFunc)
+- [x] Add handlers in `api.go`: eth_gasPrice, web3_sha3, net_listening, net_peerCount
+- [x] Tests pass; also fixed flaky p2p TestServerMaintainReconnectsToSeed
 
-## PR-2: Write stubs + eth_accounts
+## PR-2: Write stubs + eth_accounts ✅ 完成 2026-04-26
 
-- [ ] Add 5 case entries to `dispatch` in `api.go`:
-  - `eth_sendRawTransaction`, `eth_sendTransaction`, `eth_sign`, `eth_signTransaction` → return error -32601
-  - `eth_accounts` → return `[]string{}`
-- [ ] Add 5 tests to `api_test.go`
-- [ ] `go test ./...` green
+- [x] eth_sendRawTransaction, eth_sendTransaction, eth_sign, eth_signTransaction → -32601
+- [x] eth_accounts → []
+- [x] 5 tests pass
 
-## PR-3: eth_estimateGas
+## PR-3: eth_estimateGas ✅ 完成 2026-04-26
 
-- [ ] Add `EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error)` to `jsonrpc.Backend`
-- [ ] Implement in `core/tron_backend.go`:
-  - If `to != nil && len(data) == 0`: return 0 (plain transfer, no energy)
-  - Else: run `b.Call(from, to, data, value)` and return energy from result
-- [ ] Add `eth_estimateGas` handler in `api.go`
-- [ ] Add stub + test
-- [ ] `go test ./...` green
+- [x] Add `EstimateGas` to `jsonrpc.Backend`; implement via TriggerConstantContract
+- [x] Handler + test; 28 packages green
 
-## PR-4: Filter subsystem
+## PR-4: Filter subsystem ✅ 完成 2026-04-26
 
-- [ ] Create `internal/jsonrpc/filter.go`:
-  - `FilterManager` struct with mutex-guarded `map[string]*filter`
-  - `filter` struct: kind (log/block), `LogFilter`, `lastPoll time.Time`, `pendingLogs`, `pendingHashes`
-  - `generateFilterID()` → 32 random bytes → hex
-  - `NewFilter`, `NewBlockFilter`, `UninstallFilter`, `GetFilterChanges`, `GetFilterLogs` methods
-  - `Start()`/`Stop()` lifecycle with background GC goroutine (5 min idle expiry, 30s tick)
-- [ ] Add `SubscribeBlocks(chan<- *types.Block)` and `UnsubscribeBlocks(chan<- *types.Block)` to `jsonrpc.Backend`
-- [ ] Implement subscription in `core/tron_backend.go`:
-  - Slice of subscriber channels; non-blocking fan-out called from `BlockChain` after insert
-- [ ] Wire `FilterManager` into `API` struct; call `fm.Start()` in `NewAPI` or separate `Start()` call
-- [ ] Add 5 dispatch cases to `api.go`
-- [ ] Add tests: newFilter, newBlockFilter, getFilterChanges, getFilterLogs, uninstallFilter
-- [ ] `go test ./...` green
+- [x] `internal/jsonrpc/filter.go`: FilterManager, NewLogFilter, NewBlockFilter,
+  UninstallFilter, GetFilterChanges, GetFilterLogs; 5min GC, 30s tick
+- [x] `SubscribeBlocks`/`UnsubscribeBlocks` on Backend + TronBackend via AddBlockHook
+- [x] `blockchain.go`: AddBlockHook + fanOut in InsertBlock
+- [x] FilterManager wired into API struct; started in NewAPI
+- [x] 5 dispatch cases added; 7 filter tests pass
+- [x] 28 packages green

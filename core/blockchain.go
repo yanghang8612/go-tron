@@ -36,6 +36,16 @@ type BlockChain struct {
 	genesisBlock    *types.Block
 	activeWitnesses atomic.Value // []tcommon.Address
 	fc              *forks.ForkController
+
+	blockHookMu sync.Mutex
+	blockHooks  []func(*types.Block) // called after each successful InsertBlock
+}
+
+// AddBlockHook registers a callback called after each successfully inserted block.
+func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
+	bc.blockHookMu.Lock()
+	bc.blockHooks = append(bc.blockHooks, fn)
+	bc.blockHookMu.Unlock()
 }
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
@@ -251,6 +261,13 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 
 	bc.currentBlock.Store(block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
+
+	bc.blockHookMu.Lock()
+	hooks := bc.blockHooks
+	bc.blockHookMu.Unlock()
+	for _, h := range hooks {
+		h(block)
+	}
 
 	return nil
 }

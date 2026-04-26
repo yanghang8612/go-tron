@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -29,12 +30,45 @@ type TxBroadcaster interface {
 type TronBackend struct {
 	chain       *BlockChain
 	pool        *txpool.TxPool
-	txBroadcast TxBroadcaster          // nil until wired from main
+	txBroadcast TxBroadcaster             // nil until wired from main
 	peersFunc   func() []*tronapi.PeerInfo // nil until wired from main
+
+	subsMu    sync.Mutex
+	blockSubs []chan<- *types.Block
 }
 
 func NewTronBackend(chain *BlockChain, pool *txpool.TxPool) *TronBackend {
-	return &TronBackend{chain: chain, pool: pool}
+	b := &TronBackend{chain: chain, pool: pool}
+	chain.AddBlockHook(b.notifyBlockSubs)
+	return b
+}
+
+func (b *TronBackend) notifyBlockSubs(block *types.Block) {
+	b.subsMu.Lock()
+	defer b.subsMu.Unlock()
+	for _, ch := range b.blockSubs {
+		select {
+		case ch <- block:
+		default: // drop if subscriber is slow
+		}
+	}
+}
+
+func (b *TronBackend) SubscribeBlocks(ch chan<- *types.Block) {
+	b.subsMu.Lock()
+	b.blockSubs = append(b.blockSubs, ch)
+	b.subsMu.Unlock()
+}
+
+func (b *TronBackend) UnsubscribeBlocks(ch chan<- *types.Block) {
+	b.subsMu.Lock()
+	for i, s := range b.blockSubs {
+		if s == ch {
+			b.blockSubs = append(b.blockSubs[:i], b.blockSubs[i+1:]...)
+			break
+		}
+	}
+	b.subsMu.Unlock()
 }
 
 // SetTxBroadcaster wires in the P2P broadcaster so BroadcastTransaction
@@ -989,6 +1023,24 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
 	info := rawdb.ReadTransactionInfo(b.chain.db, hash[:])
 	return info, nil // nil info = not found (not an error)
+}
+
+func (b *TronBackend) EstimateGas(from, to *tcommon.Address, data []byte, value int64) (uint64, error) {
+	if to != nil && len(data) == 0 {
+		return 0, nil // plain TRX transfer costs no energy
+	}
+	fromAddr := tcommon.Address{}
+	if from != nil {
+		fromAddr = *from
+	}
+	if to == nil {
+		return 0, fmt.Errorf("eth_estimateGas: 'to' required for contract call")
+	}
+	result, err := b.TriggerConstantContract(fromAddr, *to, data, 30_000_000)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(result.EnergyUsed), nil
 }
 
 func (b *TronBackend) Call(from, to *tcommon.Address, data []byte, value int64) ([]byte, error) {

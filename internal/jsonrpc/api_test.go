@@ -54,6 +54,11 @@ func (s *stubBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 }
 func (s *stubBackend) GasPrice() int64 { return s.gasPrice }
 func (s *stubBackend) PeerCount() int  { return s.peerCount }
+func (s *stubBackend) EstimateGas(from, to *common.Address, data []byte, value int64) (uint64, error) {
+	return 0, nil
+}
+func (s *stubBackend) SubscribeBlocks(_ chan<- *types.Block)   {}
+func (s *stubBackend) UnsubscribeBlocks(_ chan<- *types.Block) {}
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -261,6 +266,82 @@ func TestEthGetLogs_Empty(t *testing.T) {
 	logs, ok := resp["result"].([]interface{})
 	if !ok || len(logs) != 0 {
 		t.Fatalf("eth_getLogs empty should return [], got %v", resp["result"])
+	}
+}
+
+func TestFilterLifecycle(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+
+	// Create a log filter
+	resp := rpcCall(t, srv, "eth_newFilter", []interface{}{
+		map[string]interface{}{"fromBlock": "0x0", "toBlock": "latest"},
+	})
+	filterID, ok := resp["result"].(string)
+	if !ok || len(filterID) == 0 {
+		t.Fatalf("eth_newFilter: expected string ID, got %v", resp["result"])
+	}
+
+	// GetFilterChanges on empty filter should return empty list
+	changesResp := rpcCall(t, srv, "eth_getFilterChanges", []interface{}{filterID})
+	_, isSlice := changesResp["result"].([]interface{})
+	if !isSlice {
+		t.Fatalf("eth_getFilterChanges: expected slice, got %v", changesResp["result"])
+	}
+
+	// GetFilterLogs
+	logsResp := rpcCall(t, srv, "eth_getFilterLogs", []interface{}{filterID})
+	_, isSlice = logsResp["result"].([]interface{})
+	if !isSlice {
+		t.Fatalf("eth_getFilterLogs: expected slice, got %v", logsResp["result"])
+	}
+
+	// Uninstall filter
+	uninstResp := rpcCall(t, srv, "eth_uninstallFilter", []interface{}{filterID})
+	if uninstResp["result"] != true {
+		t.Fatalf("eth_uninstallFilter: expected true, got %v", uninstResp["result"])
+	}
+
+	// Uninstall again should return false (filter gone)
+	body, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0", "method": "eth_uninstallFilter", "params": []interface{}{filterID}, "id": 1,
+	})
+	resp2, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	defer resp2.Body.Close()
+	var r2 map[string]interface{}
+	json.NewDecoder(resp2.Body).Decode(&r2)
+	if r2["result"] != false {
+		t.Fatalf("eth_uninstallFilter on gone filter: expected false, got %v", r2["result"])
+	}
+}
+
+func TestNewBlockFilter(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_newBlockFilter", []interface{}{})
+	id, ok := resp["result"].(string)
+	if !ok || len(id) == 0 {
+		t.Fatalf("eth_newBlockFilter: expected string ID, got %v", resp["result"])
+	}
+	// GetFilterChanges on block filter returns empty array initially
+	changesResp := rpcCall(t, srv, "eth_getFilterChanges", []interface{}{id})
+	_, isSlice := changesResp["result"].([]interface{})
+	if !isSlice {
+		t.Fatalf("eth_getFilterChanges (block filter): expected slice, got %v", changesResp["result"])
+	}
+}
+
+func TestEthEstimateGas(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	resp := rpcCall(t, srv, "eth_estimateGas", []interface{}{
+		map[string]interface{}{
+			"to":   "0x4101020304050607080900010203040506070809",
+			"data": "0x",
+		},
+	})
+	if _, ok := resp["result"].(string); !ok {
+		t.Fatalf("eth_estimateGas: expected hex string, got %v", resp["result"])
 	}
 }
 

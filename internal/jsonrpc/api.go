@@ -17,11 +17,14 @@ import (
 // API implements http.Handler and dispatches JSON-RPC 2.0 requests.
 type API struct {
 	backend Backend
+	filters *FilterManager
 }
 
-// NewAPI creates a new API handler. Exposed for testing.
+// NewAPI creates a new API handler with an active filter manager. Exposed for testing.
 func NewAPI(backend Backend) *API {
-	return &API{backend: backend}
+	fm := NewFilterManager(backend)
+	fm.Start()
+	return &API{backend: backend, filters: fm}
 }
 
 // ── JSON-RPC protocol types ────────────────────────────────────────────────
@@ -151,6 +154,18 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		result, err = api.netPeerCount(req.Params)
 	case "eth_accounts":
 		result, err = api.ethAccounts(req.Params)
+	case "eth_estimateGas":
+		result, err = api.ethEstimateGas(req.Params)
+	case "eth_newFilter":
+		result, err = api.ethNewFilter(req.Params)
+	case "eth_newBlockFilter":
+		result, err = api.ethNewBlockFilter(req.Params)
+	case "eth_uninstallFilter":
+		result, err = api.ethUninstallFilter(req.Params)
+	case "eth_getFilterChanges":
+		result, err = api.ethGetFilterChanges(req.Params)
+	case "eth_getFilterLogs":
+		result, err = api.ethGetFilterLogs(req.Params)
 	case "eth_sendRawTransaction", "eth_sendTransaction", "eth_sign", "eth_signTransaction":
 		return errResp(id, codeMethodNotFound, "the method "+req.Method+" does not exist/is not available")
 	default:
@@ -161,6 +176,154 @@ func (api *API) dispatch(req rpcRequest) rpcResponse {
 		return errResp(id, codeInternal, err.Error())
 	}
 	return rpcResponse{JSONRPC: "2.0", Result: result, ID: id}
+}
+
+func (api *API) ethNewFilter(params json.RawMessage) (interface{}, error) {
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var filterObj struct {
+		FromBlock string          `json:"fromBlock"`
+		ToBlock   string          `json:"toBlock"`
+		BlockHash string          `json:"blockHash"`
+		Address   json.RawMessage `json:"address"`
+		Topics    json.RawMessage `json:"topics"`
+	}
+	if err := json.Unmarshal(p[0], &filterObj); err != nil {
+		return nil, fmt.Errorf("invalid filter: %w", err)
+	}
+	lf := LogFilter{}
+	if filterObj.BlockHash != "" {
+		var h common.Hash
+		copy(h[:], common.FromHex(filterObj.BlockHash))
+		lf.BlockHash = &h
+	} else {
+		if filterObj.FromBlock != "" {
+			n, err := parseBlockParam(filterObj.FromBlock)
+			if err != nil {
+				return nil, err
+			}
+			if n == ^uint64(0) {
+				n = api.backend.BlockNumber()
+			}
+			lf.FromBlock = &n
+		}
+		if filterObj.ToBlock != "" {
+			n, err := parseBlockParam(filterObj.ToBlock)
+			if err != nil {
+				return nil, err
+			}
+			if n == ^uint64(0) {
+				n = api.backend.BlockNumber()
+			}
+			lf.ToBlock = &n
+		}
+	}
+	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
+		var addrStr string
+		var addrSlice []string
+		if json.Unmarshal(filterObj.Address, &addrStr) == nil {
+			lf.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
+		} else if json.Unmarshal(filterObj.Address, &addrSlice) == nil {
+			for _, a := range addrSlice {
+				lf.Addresses = append(lf.Addresses, common.BytesToAddress(common.FromHex(a)))
+			}
+		}
+	}
+	if len(filterObj.Topics) > 0 && string(filterObj.Topics) != "null" {
+		var rawTopics []json.RawMessage
+		if err := json.Unmarshal(filterObj.Topics, &rawTopics); err == nil {
+			lf.Topics = make([][]common.Hash, len(rawTopics))
+			for i, rt := range rawTopics {
+				if string(rt) == "null" {
+					continue
+				}
+				var single string
+				var multi []string
+				if json.Unmarshal(rt, &single) == nil {
+					var h common.Hash
+					copy(h[:], common.FromHex(single))
+					lf.Topics[i] = []common.Hash{h}
+				} else if json.Unmarshal(rt, &multi) == nil {
+					for _, s := range multi {
+						var h common.Hash
+						copy(h[:], common.FromHex(s))
+						lf.Topics[i] = append(lf.Topics[i], h)
+					}
+				}
+			}
+		}
+	}
+	return api.filters.NewLogFilter(lf)
+}
+func (api *API) ethNewBlockFilter(_ json.RawMessage) (interface{}, error) {
+	return api.filters.NewBlockFilter()
+}
+func (api *API) ethUninstallFilter(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	return api.filters.UninstallFilter(p[0]), nil
+}
+func (api *API) ethGetFilterChanges(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	result, ok := api.filters.GetFilterChanges(p[0])
+	if !ok {
+		return nil, fmt.Errorf("filter not found")
+	}
+	return result, nil
+}
+func (api *API) ethGetFilterLogs(params json.RawMessage) (interface{}, error) {
+	var p []string
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	logs, ok := api.filters.GetFilterLogs(p[0])
+	if !ok {
+		return nil, fmt.Errorf("filter not found")
+	}
+	return logs, nil
+}
+
+func (api *API) ethEstimateGas(params json.RawMessage) (interface{}, error) {
+	var p []json.RawMessage
+	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
+		return nil, fmt.Errorf("invalid params")
+	}
+	var txObj struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Data  string `json:"data"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(p[0], &txObj); err != nil {
+		return nil, fmt.Errorf("invalid tx object: %w", err)
+	}
+	var from *common.Address
+	if txObj.From != "" {
+		a := common.BytesToAddress(common.FromHex(txObj.From))
+		from = &a
+	}
+	var to *common.Address
+	if txObj.To != "" {
+		a := common.BytesToAddress(common.FromHex(txObj.To))
+		to = &a
+	}
+	data := common.FromHex(txObj.Data)
+	var value int64
+	if txObj.Value != "" && txObj.Value != "0x0" && txObj.Value != "0x" {
+		value, _ = strconv.ParseInt(txObj.Value, 0, 64)
+	}
+	energy, err := api.backend.EstimateGas(from, to, data, value)
+	if err != nil {
+		return nil, err
+	}
+	return hexUint64(energy), nil
 }
 
 func (api *API) ethGasPrice(_ json.RawMessage) (interface{}, error) {
