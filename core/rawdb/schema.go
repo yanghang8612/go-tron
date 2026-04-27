@@ -35,6 +35,13 @@ var (
 	// Value: 21*N bytes (concatenated addresses in shuffled order).
 	shuffledWitnessesKey = []byte("ws-shuffled")
 
+	// previousShuffledWitnessesKey stores the previous maintenance cycle's
+	// shuffled witness list. Written at each maintenance boundary (before
+	// overwriting shuffledWitnessesKey with the new list). Used by the PBFT
+	// message handler to accept signatures from the prior epoch's SRs.
+	// Value: 21*N bytes (same encoding as shuffledWitnessesKey).
+	previousShuffledWitnessesKey = []byte("ws-prev-shuffled")
+
 	activeWitnessesKey = []byte("ActiveWitnesses")
 	witnessIndexKey    = []byte("WitnessIndex")
 

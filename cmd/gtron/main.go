@@ -237,6 +237,11 @@ func gtron(ctx *cli.Context) error {
 		return result
 	})
 
+	// Wire PBFT block hook before node start so commit results are validated
+	// when blocks arrive via sync or broadcast.
+	pbftDataSync := handler.PbftDataSync()
+	bc.AddBlockHook(pbftDataSync.ProcessOnBlock)
+
 	// Create node and register services
 	stack, err := node.New(cfg)
 	if err != nil {
@@ -249,6 +254,8 @@ func gtron(ctx *cli.Context) error {
 	if cfg.GRPCPort > 0 {
 		stack.RegisterLifecycle(grpcServer)
 	}
+	stack.RegisterLifecycle(handler.PbftHandler())
+	stack.RegisterLifecycle(pbftDataSync)
 
 	// Start block producer only when --witness is explicitly set.
 	// A node can join a dev chain with --dev --witness.key (for genesis) without

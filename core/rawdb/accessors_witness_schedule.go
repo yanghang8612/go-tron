@@ -39,3 +39,31 @@ func ReadShuffledWitnesses(db ethdb.KeyValueReader) []tcommon.Address {
 func DeleteShuffledWitnesses(db ethdb.KeyValueWriter) error {
 	return db.Delete(shuffledWitnessesKey)
 }
+
+// WritePreviousShuffledWitnesses stores the previous maintenance cycle's
+// shuffled witness list. Call this before overwriting the current list.
+func WritePreviousShuffledWitnesses(db ethdb.KeyValueWriter, witnesses []tcommon.Address) error {
+	buf := make([]byte, 0, len(witnesses)*tcommon.AddressLength)
+	for _, w := range witnesses {
+		buf = append(buf, w[:]...)
+	}
+	return db.Put(previousShuffledWitnessesKey, buf)
+}
+
+// ReadPreviousShuffledWitnesses returns the previous maintenance cycle's
+// shuffled witness list, or nil if none has been stored yet.
+func ReadPreviousShuffledWitnesses(db ethdb.KeyValueReader) []tcommon.Address {
+	data, err := db.Get(previousShuffledWitnessesKey)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	if len(data)%tcommon.AddressLength != 0 {
+		return nil
+	}
+	count := len(data) / tcommon.AddressLength
+	out := make([]tcommon.Address, count)
+	for i := range out {
+		copy(out[i][:], data[i*tcommon.AddressLength:(i+1)*tcommon.AddressLength])
+	}
+	return out
+}

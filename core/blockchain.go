@@ -282,6 +282,11 @@ func (bc *BlockChain) StateDB() *state.Database {
 	return bc.stateDB
 }
 
+// DB returns the underlying key-value store.
+func (bc *BlockChain) DB() ethdb.KeyValueStore {
+	return bc.db
+}
+
 // ActiveWitnesses returns the current active witness list.
 func (bc *BlockChain) ActiveWitnesses() []tcommon.Address {
 	v := bc.activeWitnesses.Load()

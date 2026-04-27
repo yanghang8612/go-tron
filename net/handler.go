@@ -44,6 +44,8 @@ type TronHandler struct {
 
 	syncService *SyncService
 	broadcaster *BroadcastService
+	pbftHandler *PbftHandler
+	pbftDataSync *PbftDataSyncHandler
 
 	quit chan struct{}
 }
@@ -51,22 +53,36 @@ type TronHandler struct {
 // NewTronHandler creates a new TronHandler.
 func NewTronHandler(chain *core.BlockChain, pool *txpool.TxPool, broadcaster *BroadcastService) *TronHandler {
 	return &TronHandler{
-		chain:       chain,
-		pool:        pool,
-		broadcaster: broadcaster,
-		peers:       make(map[string]*peerState),
-		quit:        make(chan struct{}),
+		chain:        chain,
+		pool:         pool,
+		broadcaster:  broadcaster,
+		peers:        make(map[string]*peerState),
+		quit:         make(chan struct{}),
+		pbftHandler:  NewPbftHandler(chain, chain.DB(), nil, nil),
+		pbftDataSync: NewPbftDataSyncHandler(chain, chain.DB()),
 	}
 }
 
 // SetServer sets the P2P server reference (for sending messages).
 func (h *TronHandler) SetServer(srv *p2p.Server) {
 	h.server = srv
+	h.pbftHandler.server = srv
 }
 
 // SetSyncService sets the sync service reference.
 func (h *TronHandler) SetSyncService(ss *SyncService) {
 	h.syncService = ss
+	h.pbftHandler.sync = ss
+}
+
+// PbftHandler returns the PBFT message handler (for Lifecycle registration and hook wiring).
+func (h *TronHandler) PbftHandler() *PbftHandler {
+	return h.pbftHandler
+}
+
+// PbftDataSync returns the PBFT data sync handler (for Lifecycle registration and hook wiring).
+func (h *TronHandler) PbftDataSync() *PbftDataSyncHandler {
+	return h.pbftDataSync
 }
 
 // HandshakedPeerCount returns the number of handshaked peers.
@@ -318,6 +334,10 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 		h.handleTx(peer, payload)
 	case p2p.MsgInventory:
 		h.handleInventory(peer, payload)
+	case p2p.MsgPbftMsg:
+		h.pbftHandler.HandlePbftMsg(peer, payload)
+	case p2p.MsgPbftCommitMsg:
+		h.pbftDataSync.HandleCommitMsg(peer, payload)
 	}
 }
 

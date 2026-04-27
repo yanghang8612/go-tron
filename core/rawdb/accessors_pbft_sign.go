@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -8,6 +9,30 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+var latestPbftBlockNumKey = []byte("LATEST_PBFT_BLOCK_NUM")
+
+// WriteLatestPbftBlockNum records the highest PBFT-confirmed block number.
+// Only-increases: if num <= current stored value the write is skipped, matching
+// java-tron commonDataBase semantics.
+func WriteLatestPbftBlockNum(db ethdb.KeyValueStore, num int64) {
+	if cur := ReadLatestPbftBlockNum(db); num <= cur {
+		return
+	}
+	val := make([]byte, 8)
+	binary.BigEndian.PutUint64(val, uint64(num))
+	db.Put(latestPbftBlockNumKey, val) //nolint:errcheck
+}
+
+// ReadLatestPbftBlockNum returns the stored latest PBFT-confirmed block number,
+// or -1 if none has been written yet.
+func ReadLatestPbftBlockNum(db ethdb.KeyValueReader) int64 {
+	val, err := db.Get(latestPbftBlockNumKey)
+	if err != nil || len(val) != 8 {
+		return -1
+	}
+	return int64(binary.BigEndian.Uint64(val))
+}
 
 // WriteBlockSignData stores a per-block PBFT commit result — the quorum
 // signatures collected for blockNum. Mirrors java-tron

@@ -60,6 +60,42 @@ func TestHandshakeSuccess(t *testing.T) {
 	}
 }
 
+func TestPbftMsgDispatch(t *testing.T) {
+	bc := makeTestChain(t)
+	pool := txpool.New()
+
+	h1 := NewTronHandler(bc, pool, nil)
+	h2 := NewTronHandler(bc, pool, nil)
+
+	srv1 := p2p.NewServer(p2p.ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, h1)
+	srv2 := p2p.NewServer(p2p.ServerConfig{ListenAddr: "127.0.0.1:0", MaxPeers: 5}, h2)
+	h1.SetServer(srv1)
+	h2.SetServer(srv2)
+
+	srv1.Start()
+	defer srv1.Stop()
+	srv2.Start()
+	defer srv2.Stop()
+
+	srv2.AddPeer(srv1.ListenAddr())
+	time.Sleep(200 * time.Millisecond)
+
+	if h2.HandshakedPeerCount() != 1 {
+		t.Fatalf("expected 1 handshaked peer, got %d", h2.HandshakedPeerCount())
+	}
+
+	// Send PBFT messages from h2 to h1 — stubs must dispatch without panic.
+	peers2 := h2.HandshakedPeers()
+	peers2[0].Send(p2p.MsgPbftMsg, []byte{})
+	peers2[0].Send(p2p.MsgPbftCommitMsg, []byte{})
+
+	time.Sleep(50 * time.Millisecond)
+	// success = no panic, no disconnect
+	if h1.HandshakedPeerCount() != 1 {
+		t.Fatalf("peer disconnected after PBFT messages")
+	}
+}
+
 func TestHandshakeRejectsWrongGenesis(t *testing.T) {
 	bc1 := makeTestChain(t)
 

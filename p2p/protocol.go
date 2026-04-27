@@ -14,6 +14,8 @@ const (
 	MsgDisconnect     byte = 0x21
 	MsgPing           byte = 0x22
 	MsgPong           byte = 0x23
+	MsgPbftCommitMsg  byte = 0x14 // PBFT_COMMIT_MSG — pre-aggregated commit result
+	MsgPbftMsg        byte = 0x34 // PBFT_MSG — three-phase PBFT protocol message
 
 	// libp2p control messages (TCP layer) — match io.github.tronprotocol/libp2p's
 	// connection/message/MessageType.java enum.
