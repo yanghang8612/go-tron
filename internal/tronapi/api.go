@@ -1077,7 +1077,7 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName([]byte(body.Value))
+	asset := api.backend.GetAssetIssueByName(common.FromHex(body.Value))
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1207,7 +1207,7 @@ func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
 		return
 	}
-	pl := api.backend.GetMarketPriceByPair([]byte(body.SellTokenId), []byte(body.BuyTokenId))
+	pl := api.backend.GetMarketPriceByPair(common.FromHex(body.SellTokenId), common.FromHex(body.BuyTokenId))
 	if pl == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

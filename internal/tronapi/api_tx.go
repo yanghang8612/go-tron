@@ -25,7 +25,7 @@ func (api *API) transferAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
 	to := common.BytesToAddress(common.FromHex(body.ToAddress))
-	tx, err := api.backend.BuildTransferAssetTransaction(owner, to, []byte(body.AssetName), body.Amount)
+	tx, err := api.backend.BuildTransferAssetTransaction(owner, to, common.FromHex(body.AssetName), body.Amount)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -50,7 +50,7 @@ func (api *API) participateAssetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
 	to := common.BytesToAddress(common.FromHex(body.ToAddress))
-	tx, err := api.backend.BuildParticipateAssetIssueTransaction(owner, to, []byte(body.AssetName), body.Amount)
+	tx, err := api.backend.BuildParticipateAssetIssueTransaction(owner, to, common.FromHex(body.AssetName), body.Amount)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -72,7 +72,7 @@ func (api *API) createWitness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	tx, err := api.backend.BuildCreateWitnessTransaction(owner, []byte(body.URL))
+	tx, err := api.backend.BuildCreateWitnessTransaction(owner, common.FromHex(body.URL))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -124,7 +124,7 @@ func (api *API) updateWitness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	tx, err := api.backend.BuildUpdateWitnessTransaction(owner, []byte(body.UpdateURL))
+	tx, err := api.backend.BuildUpdateWitnessTransaction(owner, common.FromHex(body.UpdateURL))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

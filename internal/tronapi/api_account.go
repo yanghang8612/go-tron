@@ -69,7 +69,7 @@ func (api *API) setAccountId(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	tx, err := api.backend.BuildSetAccountIdTransaction(owner, []byte(body.AccountID))
+	tx, err := api.backend.BuildSetAccountIdTransaction(owner, common.FromHex(body.AccountID))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
