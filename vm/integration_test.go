@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -206,5 +207,66 @@ func TestIntegrationValueTransfer(t *testing.T) {
 	}
 	if sdb.GetBalance(owner) != 999500 {
 		t.Fatalf("owner should have 999500, got %d", sdb.GetBalance(owner))
+	}
+}
+
+// TestSolidityStorageContract tests the Solidity 0.8.19 Storage contract bytecode
+// that is used in the system test F8 flows (F8/1 deploy, F8/2 trigger, F8/3 constant).
+// This test exercises the full deploy→set→get lifecycle through TVM.
+func TestSolidityStorageContract(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	owner := tcommon.Address{0x41, 0x01}
+	sdb.AddBalance(owner, 1_000_000_000_000)
+
+	// Solidity 0.8.19 compiled Storage contract (set/get uint256).
+	// 368 bytes total: 32-byte init code + 336-byte runtime.
+	deployHex := "608060405234801561001057600080fd5b50610150806100206000396000f3fe608060405234801561001057600080fd5b50600436106100365760003560e01c806360fe47b11461003b5780636d4ce63c14610057575b600080fd5b610055600480360381019061005091906100c3565b610075565b005b61005f61007f565b60405161006c91906100ff565b60405180910390f35b8060008190555050565b60008054905090565b600080fd5b6000819050919050565b6100a08161008d565b81146100ab57600080fd5b50565b6000813590506100bd81610097565b92915050565b6000602082840312156100d9576100d8610088565b5b60006100e7848285016100ae565b91505092915050565b6100f98161008d565b82525050565b600060208201905061011460008301846100f0565b9291505056fea2646970667358221220abcdef1234567890fedcba9876543210abcdef0011223344556677889900aabbcc64736f6c63430008130033"
+	deployCode, err := hex.DecodeString(deployHex)
+	if err != nil {
+		t.Fatalf("decode bytecode: %v", err)
+	}
+
+	cfg := TVMConfig{Constantinople: true}
+	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+
+	_, contractAddr, _, vmErr := evm.Create(owner, deployCode, 10_000_000, 0)
+	if vmErr != nil {
+		t.Fatalf("deploy failed: %v", vmErr)
+	}
+	t.Logf("deployed at %x", contractAddr)
+
+	code := sdb.GetCode(contractAddr)
+	if len(code) != 336 {
+		t.Errorf("runtime code length: got %d, want 336", len(code))
+	}
+
+	// set(42): selector keccak256("set(uint256)")[:4] = 0x60fe47b1
+	setInput := make([]byte, 36)
+	setInput[0], setInput[1], setInput[2], setInput[3] = 0x60, 0xfe, 0x47, 0xb1
+	setInput[35] = 42
+	evm2 := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+	_, _, vmErr = evm2.Call(owner, contractAddr, setInput, 10_000_000, 0)
+	if vmErr != nil {
+		t.Fatalf("set(42) failed: %v", vmErr)
+	}
+
+	// get(): selector keccak256("get()")[:4] = 0x6d4ce63c
+	getInput := []byte{0x6d, 0x4c, 0xe6, 0x3c}
+	evm3 := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+	ret, _, vmErr := evm3.Call(owner, contractAddr, getInput, 10_000_000, 0)
+	if vmErr != nil {
+		t.Fatalf("get() failed: %v", vmErr)
+	}
+	if len(ret) < 32 {
+		t.Fatalf("get() returned %d bytes, want 32", len(ret))
+	}
+	if ret[31] != 42 {
+		t.Fatalf("get() returned %d, want 42", ret[31])
 	}
 }
