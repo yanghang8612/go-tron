@@ -64,6 +64,16 @@ var (
 		Name:  "dev",
 		Usage: "Dev mode: single-witness chain using the provided witness key",
 	}
+	devFullFeaturesFlag = &cli.BoolFlag{
+		Name:  "dev.full-features",
+		Usage: "Enable all mainnet-activated allow_* feature flags in dev genesis (default true)",
+		Value: true,
+	}
+	devMaintenanceIntervalFlag = &cli.Int64Flag{
+		Name:  "dev.maintenance-interval",
+		Usage: "Maintenance interval in ms for dev genesis (set 30000 to test proposal activation quickly)",
+		Value: 21600000,
+	}
 	seednodeFlag = &cli.StringSliceFlag{
 		Name:  "seednode",
 		Usage: "Seed node address (host:port), can be specified multiple times",
@@ -94,6 +104,8 @@ var app = &cli.App{
 		witnessFlag,
 		witnessKeyFlag,
 		devFlag,
+		devFullFeaturesFlag,
+		devMaintenanceIntervalFlag,
 		seednodeFlag,
 		maxpeersFlag,
 	},
@@ -149,7 +161,7 @@ func gtron(ctx *cli.Context) error {
 	genesis := makeGenesis(ctx)
 	if ctx.Bool("dev") {
 		witnessAddr := crypto.PubkeyToAddress(&devWitnessKey.PublicKey)
-		genesis = makeDevGenesis(witnessAddr)
+		genesis = makeDevGenesis(witnessAddr, ctx.Bool("dev.full-features"), ctx.Int64("dev.maintenance-interval"))
 		fmt.Printf("Dev mode: single-witness genesis (witness=%x)\n", witnessAddr[:6])
 	}
 
