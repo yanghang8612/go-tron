@@ -56,7 +56,7 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestApplyTransaction_ValidationFails(t *testing.T) {
 
 	// No account seeded — validation should fail
 	tx := makeTestTransferTx(1, 2, 100)
-	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -177,7 +177,7 @@ func TestApplyTransaction_ReturnsResult(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

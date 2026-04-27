@@ -254,6 +254,12 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 
+	// Advance the current-block pointer before writing tx infos so that any
+	// caller unblocked by WriteTransactionInfo (e.g. wait_for_confirm) sees the
+	// new state root when it calls CurrentBlock().
+	bc.currentBlock.Store(block)
+	bc.lastInsertNano.Store(time.Now().UnixNano())
+
 	// Persist transaction infos and indexes
 	for _, info := range txInfos {
 		rawdb.WriteTransactionInfo(bc.db, info.Id, info)
@@ -263,9 +269,6 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		h := tx.Hash()
 		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
 	}
-
-	bc.currentBlock.Store(block)
-	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	bc.blockHookMu.Lock()
 	hooks := bc.blockHooks

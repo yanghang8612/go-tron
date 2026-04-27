@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -116,15 +117,25 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 }
 
 // GetTRC10Balance returns the TRC10 token balance of addr for the given tokenID.
-// Returns 0 if the account or token slot does not exist.
+// Balances are stored in the account proto's AssetV2 map (persisted through state commits).
 func (s *StateDB) GetTRC10Balance(addr tcommon.Address, tokenID int64) int64 {
-	return slotToInt64(s.GetState(addr, trc10BalanceSlot(tokenID)))
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.Proto().GetAssetV2()[strconv.FormatInt(tokenID, 10)]
 }
 
-// SetTRC10Balance sets the TRC10 token balance. Used for initial token minting.
-// SetState calls GetOrCreateAccount internally, so the account is created if needed.
+// SetTRC10Balance sets the TRC10 token balance in the account proto's AssetV2 map.
 func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
-	s.SetState(addr, trc10BalanceSlot(tokenID), int64ToSlot(amount))
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	if pb.AssetV2 == nil {
+		pb.AssetV2 = make(map[string]int64)
+	}
+	pb.AssetV2[strconv.FormatInt(tokenID, 10)] = amount
+	obj.markDirty()
 }
 
 // AddTRC10Balance credits amount TRC10 tokens to addr.

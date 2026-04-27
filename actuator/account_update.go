@@ -41,7 +41,7 @@ func (a *AccountUpdateActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ctx.State.GetAccountName(ownerAddr) != "" {
+	if ctx.State.GetAccountName(ownerAddr) != "" && !ctx.DynProps.AllowUpdateAccountName() {
 		return errors.New("account name already set")
 	}
 	return nil

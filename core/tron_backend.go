@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -119,6 +120,10 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	acc := statedb.GetAccount(addr)
 	if acc == nil {
 		return nil, fmt.Errorf("account not found")
+	}
+	// Populate asset_issued_ID from rawdb (stored by AssetIssueActuator, not in statedb).
+	if tokenID, ok := rawdb.ReadAssetOwnerIndex(b.chain.DB(), addr[:]); ok {
+		acc.Proto().AssetIssued_ID = []byte(strconv.FormatInt(tokenID, 10))
 	}
 	return acc, nil
 }
@@ -1232,6 +1237,20 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	}
 
 	dynProps := state.LoadDynamicProperties(b.chain.DB())
+
+	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing step.
+	// Actuators that check ctx.State.GetWitness (witness_update, vote, brokerage, etc.)
+	// will fail "owner is not a witness" without this.
+	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.DB())
+	for _, addr := range witnessAddrs {
+		if statedb.GetWitness(addr) == nil {
+			w := rawdb.ReadWitness(b.chain.DB(), addr)
+			if w != nil {
+				statedb.PutWitness(addr, w.URL())
+				statedb.AddWitnessVoteCount(addr, w.VoteCount())
+			}
+		}
+	}
 
 	ctx := &actuator.Context{
 		State:           statedb,

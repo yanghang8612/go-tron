@@ -63,7 +63,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	blockNum := parent.Number() + 1
 
 	for _, tx := range pendingTxs {
-		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses())
+		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses(), true)
 		if err != nil {
 			h := tx.Hash()
 			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)

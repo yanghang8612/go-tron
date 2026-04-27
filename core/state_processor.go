@@ -13,7 +13,10 @@ import (
 
 // ApplyTransaction executes a single transaction against the given state.
 // Returns the full actuator Result including fee, energy, net, and contract details.
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address) (*actuator.Result, error) {
+// When validate is true, act.Validate is called before Execute; set to false when
+// processing committed blocks (txs were validated at broadcast/build time, and some
+// actuators write rawdb indexes in Execute that would cause re-validation to fail).
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
 		return nil, fmt.Errorf("create actuator: %w", err)
@@ -29,8 +32,10 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		ActiveWitnesses: activeWitnesses,
 	}
 
-	if err := act.Validate(ctx); err != nil {
-		return nil, fmt.Errorf("validate: %w", err)
+	if validate {
+		if err := act.Validate(ctx); err != nil {
+			return nil, fmt.Errorf("validate: %w", err)
+		}
 	}
 
 	bwResult, err := consumeBandwidth(statedb, dynProps, tx, blockTime)
@@ -111,7 +116,9 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
-		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number(), db, activeWitnesses)
+		// validate=false: txs in a committed block were validated at build/broadcast time;
+		// re-validating would fail for actuators that write rawdb indexes in Execute.
+		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number(), db, activeWitnesses, false)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}

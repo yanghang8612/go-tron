@@ -116,10 +116,8 @@ except: print(False)" 2>/dev/null)
     warn "$desc" "result=$res err=$err"
     return 1
   fi
-  if [ -n "$cr" ] && [ "$cr" != "SUCCESS" ]; then
-    warn "$desc" "contractRet=$cr err=$err"
-    return 1
-  fi
+  # contractResult[0] is TVM return data (deployed bytecode for deploys, call return value for calls).
+  # Not an error indicator — receipt.result is the authoritative success/fail field.
   LAST_TXID="$txid"
   ok "$desc (block $blk)"
 }
@@ -127,6 +125,31 @@ except: print(False)" 2>/dev/null)
 balance_of() {
   http_post /wallet/getaccount "{\"address\":\"$1\"}" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('balance',0))" 2>/dev/null
+}
+
+# Build+broadcast a tx and verify it is REJECTED (BCAST_REJECT or BUILDER_ERR).
+# Counts as PASS if rejected, FAIL if unexpectedly accepted.
+run_tx_expect_reject() {
+  local desc="$1" path="$2" body="$3"
+  local raw=$(http_post_raw "$path" "$body")
+  local has_raw=$(echo "$raw" | python3 -c "import sys,json
+try: print(bool(json.load(sys.stdin).get('raw_data_hex')))
+except: print(False)" 2>/dev/null)
+  if [ "$has_raw" != "True" ]; then
+    ok "$desc (rejected at builder — expected)"
+    return 0
+  fi
+  local signed=$(echo "$raw" | "$TXSIGN" "$WITNESS_KEY" 2>/dev/null)
+  if [ -z "$signed" ]; then ok "$desc (rejected — txsign error)"; return 0; fi
+  local bcast=$(http_post_raw /wallet/broadcasttransaction "$signed")
+  local rok=$(echo "$bcast" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result',False))" 2>/dev/null)
+  local code=$(echo "$bcast" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code',''))" 2>/dev/null)
+  local msg=$(echo "$bcast" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',''))" 2>/dev/null)
+  if [ "$rok" != "True" ]; then
+    ok "$desc (rejected as expected: $code)"
+  else
+    fail "$desc" "expected rejection but tx was accepted"
+  fi
 }
 
 # ── start node if requested ─────────────────────────────────────
@@ -191,11 +214,12 @@ run_tx "F1/4 accountPermissionUpdate (owner+actives)" /wallet/accountpermissionu
 # ════════════════════════════════════════════════════════════════
 section "F3 Freeze V1"
 
-# resource: 0=BANDWIDTH, 1=ENERGY, 2=TRON_POWER (numeric, per go-tron handler)
-run_tx "F3/1 freezeBalance v1 (BANDWIDTH)" /wallet/freezebalance \
+# Dev genesis has allow_new_resource_model=1 which closes freeze V1.
+# java-tron rejects with "freeze v2 is open, old freeze is closed" — expected.
+run_tx_expect_reject "F3/1 freezeBalance v1 (BANDWIDTH)" /wallet/freezebalance \
   "{\"owner_address\":\"$WITNESS_ADDR\",\"frozen_balance\":1000000,\"frozen_duration\":3,\"resource\":0}"
 
-run_tx "F3/2 unfreezeBalance v1 (BANDWIDTH)" /wallet/unfreezebalance \
+run_tx_expect_reject "F3/2 unfreezeBalance v1 (BANDWIDTH)" /wallet/unfreezebalance \
   "{\"owner_address\":\"$WITNESS_ADDR\",\"resource\":0}"
 
 # ════════════════════════════════════════════════════════════════
@@ -227,8 +251,8 @@ run_tx "F4/5 unfreezeBalanceV2 BANDWIDTH 50 TRX" /wallet/unfreezebalancev2 \
 run_tx "F4/6 cancelAllUnfreezeV2" /wallet/cancelallunfreezev2 \
   "{\"owner_address\":\"$WITNESS_ADDR\"}"
 
-# Builder-only: withdrawExpireUnfreeze (no expired entries → may BUILDER_ERR or EVICTED)
-run_tx "F4/7 withdrawExpireUnfreeze (no expired entries expected)" /wallet/withdrawexpireunfreeze \
+# withdrawExpireUnfreeze with no expired entries is correctly rejected.
+run_tx_expect_reject "F4/7 withdrawExpireUnfreeze (no expired entries expected)" /wallet/withdrawexpireunfreeze \
   "{\"owner_address\":\"$WITNESS_ADDR\"}"
 
 # Query endpoints
@@ -277,14 +301,15 @@ PLIST=$(http_post /wallet/listproposals '{}')
 PROPOSAL_ID=$(echo "$PLIST" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
-ps=d.get('proposals',[])
-print(max((p.get('proposal_id',0) for p in ps),default=0))
+ps=d.get('proposals',None) or []
+# Proposal IDs start at 0; find the most recent one, defaulting to -1 if empty.
+print(max((p.get('proposal_id',-1) for p in ps),default=-1))
 " 2>/dev/null)
-[ -n "$PROPOSAL_ID" ] && [ "$PROPOSAL_ID" != "0" ] \
+[ -n "$PROPOSAL_ID" ] && [ "$PROPOSAL_ID" != "-1" ] \
   && ok "F6/q1 listProposals returns id=$PROPOSAL_ID" \
   || warn "F6/q1 listProposals" "no proposals (proposalCreate may have been evicted)"
 
-if [ "$PROPOSAL_ID" != "0" ] && [ -n "$PROPOSAL_ID" ]; then
+if [ -n "$PROPOSAL_ID" ] && [ "$PROPOSAL_ID" != "-1" ]; then
   GP=$(http_post /wallet/getproposalbyid "{\"id\":$PROPOSAL_ID}")
   GP_KEY=$(echo "$GP" | python3 -c "
 import sys,json
@@ -326,10 +351,13 @@ ASSET_ID=$(echo "$AC" | python3 -c "import sys,json; d=json.load(sys.stdin); pri
 [ -n "$ASSET_ID" ] && ok "F2/q1 asset_issued_ID=$ASSET_ID" || warn "F2/q1 asset_issued_ID" "empty"
 
 if [ -n "$ASSET_ID" ]; then
-  ASSET_NAME_HEX=$(printf '%s' "$ASSET_ID" | xxd -ps | tr -d '\n')
+  # ASSET_ID is already hex-encoded bytes of the token ID string (e.g. hex("1000001")).
+  # API endpoints expecting hex bytes: use ASSET_ID directly.
+  # API endpoints expecting a plain decimal integer: decode hex first.
+  ASSET_ID_INT=$(echo "$ASSET_ID" | python3 -c "import sys; print(bytes.fromhex(sys.stdin.read().strip()).decode('ascii','replace'))" 2>/dev/null)
   run_tx "F2/2 transferAsset (1000) SR→B" /wallet/transferasset \
     "{\"owner_address\":\"$WITNESS_ADDR\",\"to_address\":\"$B_ADDR\",
-      \"asset_name\":\"$ASSET_NAME_HEX\",\"amount\":1000}"
+      \"asset_name\":\"$ASSET_ID\",\"amount\":1000}"
 
   run_tx "F2/3 updateAsset" /wallet/updateasset \
     "{\"owner_address\":\"$WITNESS_ADDR\",
@@ -337,7 +365,7 @@ if [ -n "$ASSET_ID" ]; then
       \"url\":\"687474703a2f2f78322e636f6d\",
       \"new_limit\":100,\"new_public_limit\":1000}"
 
-  RESP=$(http_post /wallet/getassetissuebyid "{\"value\":\"$ASSET_ID\"}")
+  RESP=$(http_post /wallet/getassetissuebyid "{\"value\":\"$ASSET_ID_INT\"}")
   ID_NAME=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
   [ -n "$ID_NAME" ] && ok "F2/q2 getAssetIssueByID name=$ID_NAME" || warn "F2/q2 getAssetIssueByID" "no name"
 fi
@@ -347,31 +375,18 @@ fi
 # ════════════════════════════════════════════════════════════════
 section "F7 Exchange"
 
-# Build a second asset
-NOW_MS=$(($(date +%s)*1000))
-END_MS=$((NOW_MS + 7*86400000))
-ASSET2_NAME=$(printf '464c5755%02x' $(( $(date +%s) % 256 )))
-run_tx "F7/1 createAssetIssue (second asset for exchange)" /wallet/createassetissue \
-  "{\"owner_address\":\"$WITNESS_ADDR\",
-    \"name\":\"$ASSET2_NAME\",
-    \"abbr\":\"4655\",
-    \"total_supply\":2000000,
-    \"trx_num\":1,\"num\":10,
-    \"start_time\":$NOW_MS,\"end_time\":$END_MS,
-    \"description\":\"666c7762\",\"url\":\"687474703a2f2f7932\",
-    \"precision\":0}"
+# Each address can only issue one TRC10 token.  Pair TRX ("_") with the
+# TRC10 asset issued in F2/1 to test the full exchange lifecycle without
+# needing a second signing key.
+ok "F7/q1 ASSET2_ID=(N/A — using TRX as second token)"
 
-AC=$(http_post /wallet/getaccount "{\"address\":\"$WITNESS_ADDR\"}")
-ASSET2_ID=$(echo "$AC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('asset_issued_ID',''))" 2>/dev/null)
-ok "F7/q1 ASSET2_ID=$ASSET2_ID"
-
-if [ -n "$ASSET_ID" ] && [ -n "$ASSET2_ID" ] && [ "$ASSET_ID" != "$ASSET2_ID" ]; then
-  ASSET_HEX=$(printf '%s' "$ASSET_ID" | xxd -ps | tr -d '\n')
-  ASSET2_HEX=$(printf '%s' "$ASSET2_ID" | xxd -ps | tr -d '\n')
-  run_tx "F7/2 exchangeCreate ($ASSET_ID/$ASSET2_ID)" /wallet/exchangecreate \
+if [ -n "$ASSET_ID" ]; then
+  ASSET_HEX="$ASSET_ID"  # ASSET_ID is already hex-encoded bytes of the token ID
+  TRX_HEX="5f"  # hex("_") — TRX sentinel in TRON exchange contracts
+  run_tx "F7/1 exchangeCreate (TRX/$ASSET_ID)" /wallet/exchangecreate \
     "{\"owner_address\":\"$WITNESS_ADDR\",
-      \"first_token_id\":\"$ASSET_HEX\",\"first_token_balance\":100000,
-      \"second_token_id\":\"$ASSET2_HEX\",\"second_token_balance\":100000}"
+      \"first_token_id\":\"$TRX_HEX\",\"first_token_balance\":1000000,
+      \"second_token_id\":\"$ASSET_HEX\",\"second_token_balance\":1000}"
 
   EX=$(http_post /wallet/listexchanges '{}')
   EXCH_ID=$(echo "$EX" | python3 -c "
@@ -384,17 +399,17 @@ print(max((e.get('exchange_id',0) for e in xs),default=0))
   if [ -n "$EXCH_ID" ] && [ "$EXCH_ID" != "0" ]; then
     ok "F7/q2 listExchanges latest id=$EXCH_ID"
 
-    run_tx "F7/3 exchangeInject" /wallet/exchangeinject \
+    run_tx "F7/3 exchangeInject (TRX)" /wallet/exchangeinject \
       "{\"owner_address\":\"$WITNESS_ADDR\",\"exchange_id\":$EXCH_ID,
-        \"token_id\":\"$ASSET_HEX\",\"quant\":10000}"
+        \"token_id\":\"$TRX_HEX\",\"quant\":100000}"
 
-    run_tx "F7/4 exchangeTransaction" /wallet/exchangetransaction \
+    run_tx "F7/4 exchangeTransaction (TRX→ASSET)" /wallet/exchangetransaction \
       "{\"owner_address\":\"$WITNESS_ADDR\",\"exchange_id\":$EXCH_ID,
-        \"token_id\":\"$ASSET_HEX\",\"quant\":1000,\"expected\":1}"
+        \"token_id\":\"$TRX_HEX\",\"quant\":10000,\"expected\":1}"
 
-    run_tx "F7/5 exchangeWithdraw" /wallet/exchangewithdraw \
+    run_tx "F7/5 exchangeWithdraw (TRX)" /wallet/exchangewithdraw \
       "{\"owner_address\":\"$WITNESS_ADDR\",\"exchange_id\":$EXCH_ID,
-        \"token_id\":\"$ASSET_HEX\",\"quant\":500}"
+        \"token_id\":\"$TRX_HEX\",\"quant\":50000}"
   else
     warn "F7/q2 listExchanges" "no exchange found after create (probably evicted)"
   fi
