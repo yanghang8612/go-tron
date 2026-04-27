@@ -276,10 +276,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) error {
 		return fmt.Errorf("commit state: %w", err)
 	}
 
-	// Verify state root if the block has one set.
+	// Verify state root if the block has one set; otherwise stamp the computed root.
 	blockRoot := block.AccountStateRoot()
-	if blockRoot != (tcommon.Hash{}) && blockRoot != newRoot {
-		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
+	if blockRoot != (tcommon.Hash{}) {
+		if blockRoot != newRoot {
+			return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
+		}
+	} else {
+		block.SetAccountStateRoot(newRoot)
 	}
 
 	// Update dynamic properties.

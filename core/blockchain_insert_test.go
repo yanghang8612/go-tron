@@ -226,4 +226,18 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	if !bc.khaosDB.ContainsBlock(chainB[11].Hash()) {
 		t.Error("chain B tip should be in KhaosDB")
 	}
+
+	// State correctness: open StateDB from the new canonical root and verify
+	// that witness allowance equals exactly 11 × WitnessPayPerBlock.
+	// If switchFork opened applyBlock from the wrong parent root, allowance
+	// would carry chain-A's accumulated rewards too (21 blocks × rate).
+	statedb, err := state.New(bc.CurrentBlock().AccountStateRoot(), sdb)
+	if err != nil {
+		t.Fatalf("open state after fork switch: %v", err)
+	}
+	dynProps := state.LoadDynamicProperties(diskdb)
+	wantAllowance := dynProps.WitnessPayPerBlock() * 11
+	if got := statedb.GetAllowance(witnessAddr); got != wantAllowance {
+		t.Fatalf("witness allowance after fork switch: got %d, want %d (11 × WitnessPayPerBlock)", got, wantAllowance)
+	}
 }
