@@ -38,6 +38,8 @@ type BlockChain struct {
 	activeWitnesses atomic.Value // []tcommon.Address
 	fc              *forks.ForkController
 
+	khaosDB *KhaosDB
+
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
 }
@@ -82,6 +84,10 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 			}
 		}
 	}
+
+	// Initialize KhaosDB with the current head.
+	bc.khaosDB = NewKhaosDB()
+	bc.khaosDB.Start(bc.currentBlock.Load())
 
 	// Load active witnesses from DB; if empty, derive from genesis witnesses
 	witnesses := rawdb.ReadActiveWitnesses(db)
@@ -173,6 +179,10 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 }
 
 // InsertBlock inserts a block with full state processing.
+// It accepts blocks on competing forks: if the incoming block makes the KhaosDB
+// head longer than the current canonical tip and on a different branch, switchFork
+// is invoked to rewind and replay state on top of the lowest common ancestor.
+// This mirrors java-tron Manager.pushBlock.
 func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	if block == nil {
 		return errors.New("block is nil")
@@ -182,24 +192,58 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	defer bc.chainmu.Unlock()
 
 	current := bc.CurrentBlock()
-	if block.Number() != current.Number()+1 {
-		return ErrInvalidNumber
-	}
-	if block.ParentHash() != current.Hash() {
-		return ErrInvalidParent
+
+	// Duplicate check: already committed on the canonical chain.
+	if block.Number() <= current.Number() && bc.khaosDB.ContainsInMiniStore(block.Hash()) {
+		return nil
 	}
 
-	// Open StateDB from parent's state root
+	// Push to KhaosDB — validates parent linkage and block number.
+	// Returns the current global KhaosDB head (highest block seen across all branches).
+	newHead, err := bc.khaosDB.Push(block)
+	if err != nil {
+		return err
+	}
+
+	// If the global KhaosDB head didn't surpass canonical, nothing to apply.
+	if newHead.Number() <= current.Number() {
+		return nil
+	}
+
+	// The global head advanced. If it doesn't extend the canonical tip → fork.
+	if newHead.ParentHash() != current.Hash() {
+		if err := bc.switchFork(newHead); err != nil {
+			bc.khaosDB.RemoveBlk(block.Hash())
+			return fmt.Errorf("switchFork: %w", err)
+		}
+		return nil
+	}
+
+	// Normal linear extension: the pushed block IS the new global head.
+	if err := bc.applyBlock(block); err != nil {
+		bc.khaosDB.RemoveBlk(block.Hash())
+		return err
+	}
+	return nil
+}
+
+// applyBlock executes, commits, and persists a single block on top of the
+// current canonical tip (bc.CurrentBlock()). It updates currentBlock on success.
+// Callers must hold bc.chainmu.
+func (bc *BlockChain) applyBlock(block *types.Block) error {
+	current := bc.CurrentBlock()
+
+	// Open StateDB from parent's state root.
 	parentRoot := current.AccountStateRoot()
 	statedb, err := state.New(parentRoot, bc.stateDB)
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
 	}
 
-	// Load dynamic properties
+	// Load dynamic properties.
 	dynProps := state.LoadDynamicProperties(bc.db)
 
-	// Load witnesses into statedb for maintenance access
+	// Load witnesses into statedb for maintenance access.
 	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
@@ -211,13 +255,13 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		}
 	}
 
-	// Process block (execute transactions, pay reward — does not commit)
+	// Process block (execute transactions, pay reward — does not commit).
 	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses(), bc.GenesisTimestamp())
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
 
-	// Run maintenance if at boundary (before commit so allowances are included)
+	// Run maintenance if at boundary (before commit so allowances are included).
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
@@ -226,19 +270,19 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		bc.SetActiveWitnesses(newActive)
 	}
 
-	// Commit state (includes both tx execution and maintenance changes)
+	// Commit state (includes both tx execution and maintenance changes).
 	newRoot, err := statedb.Commit()
 	if err != nil {
 		return fmt.Errorf("commit state: %w", err)
 	}
 
-	// Verify state root if the block has one set
+	// Verify state root if the block has one set.
 	blockRoot := block.AccountStateRoot()
 	if blockRoot != (tcommon.Hash{}) && blockRoot != newRoot {
 		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
 	}
 
-	// Update dynamic properties
+	// Update dynamic properties.
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
@@ -248,19 +292,18 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 
 	dynProps.Flush(bc.db)
 
-	// Persist block
+	// Persist block.
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
 		return fmt.Errorf("write block: %w", err)
 	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 
-	// Advance the current-block pointer before writing tx infos so that any
-	// caller unblocked by WriteTransactionInfo (e.g. wait_for_confirm) sees the
-	// new state root when it calls CurrentBlock().
+	// Advance currentBlock before writing tx infos so that any caller
+	// unblocked by WriteTransactionInfo sees the new state root.
 	bc.currentBlock.Store(block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
-	// Persist transaction infos and indexes
+	// Persist transaction infos and indexes.
 	for _, info := range txInfos {
 		rawdb.WriteTransactionInfo(bc.db, info.Id, info)
 	}
@@ -277,6 +320,61 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 		h(block)
 	}
 
+	return nil
+}
+
+// switchFork rewinds the canonical chain to the LCA of newHead and the current
+// tip, then re-applies the new branch on top of LCA state.
+// Callers must hold bc.chainmu.
+func (bc *BlockChain) switchFork(newHead *types.Block) error {
+	currentHash := bc.CurrentBlock().Hash()
+	newBranch, oldBranch, err := bc.khaosDB.GetBranch(newHead.Hash(), currentHash)
+	if err != nil {
+		// Can't find LCA: discard the entire new branch from KhaosDB.
+		tmp := newHead
+		for tmp != nil {
+			bc.khaosDB.RemoveBlk(tmp.Hash())
+			tmp = bc.khaosDB.GetBlock(tmp.ParentHash())
+		}
+		return err
+	}
+
+	// Determine LCA block hash.
+	var lcaHash tcommon.Hash
+	if len(oldBranch) == 0 {
+		// newHead is a direct descendant of currentHash (shouldn't reach switchFork,
+		// but handle defensively).
+		lcaHash = currentHash
+	} else {
+		lcaHash = oldBranch[len(oldBranch)-1].ParentHash()
+	}
+
+	var lcaBlock *types.Block
+	numPtr := rawdb.ReadBlockNumber(bc.db, lcaHash)
+	if numPtr != nil {
+		lcaBlock = rawdb.ReadBlock(bc.db, *numPtr)
+	}
+	if lcaBlock == nil {
+		return fmt.Errorf("LCA block %x not found in DB", lcaHash)
+	}
+
+	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
+	bc.currentBlock.Store(lcaBlock)
+
+	// Apply new branch blocks in order LCA+1 → newHead.
+	reversed := make([]*types.Block, len(newBranch))
+	for i, kb := range newBranch {
+		reversed[len(newBranch)-1-i] = kb.block
+	}
+	for _, b := range reversed {
+		if err := bc.applyBlock(b); err != nil {
+			// Remove orphaned new-branch blocks from KhaosDB.
+			for _, kb := range newBranch {
+				bc.khaosDB.RemoveBlk(kb.block.Hash())
+			}
+			return fmt.Errorf("apply fork block %d: %w", b.Number(), err)
+		}
+	}
 	return nil
 }
 
