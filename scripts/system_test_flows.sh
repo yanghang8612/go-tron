@@ -257,8 +257,8 @@ run_tx_expect_reject "F4/7 withdrawExpireUnfreeze (no expired entries expected)"
 
 # Query endpoints
 RESP=$(http_post /wallet/candelegateresource "{\"owner_address\":\"$WITNESS_ADDR\",\"type\":1}")
-CDR=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('max_size',-1))" 2>/dev/null)
-[ "$CDR" != "" ] && [ "$CDR" != "-1" ] && ok "F4/q1 candelegateresource max_size=$CDR" || warn "F4/q1 candelegateresource" "max_size=$CDR"
+CDR=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('maxSize',-1))" 2>/dev/null)
+[ "$CDR" != "" ] && [ "$CDR" != "-1" ] && ok "F4/q1 candelegateresource maxSize=$CDR" || warn "F4/q1 candelegateresource" "maxSize=$CDR"
 
 # ════════════════════════════════════════════════════════════════
 # F5: Witness / Vote / Reward (M1.5 critical path)

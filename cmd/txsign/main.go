@@ -1,9 +1,13 @@
 // Command txsign reads an unsigned transaction JSON (tron-format) from stdin,
-// signs it with the given private key, and writes the signed transaction as
-// protojson to stdout (suitable for broadcasttransaction endpoint).
+// signs it with the given private key, and writes the signed transaction JSON
+// to stdout (suitable for broadcasttransaction endpoint).
 //
 // The input JSON must contain a "raw_data_hex" field (hex-encoded marshaled
 // TransactionRaw protobuf).
+//
+// The output JSON contains "raw_data_hex" (passthrough) and "signature"
+// (array of hex-encoded signature bytes), matching the broadcasttransaction
+// wire format.
 //
 // Usage: echo '{"txID":"...","raw_data":{...},"raw_data_hex":"..."}' | txsign <hex-private-key>
 package main
@@ -17,10 +21,6 @@ import (
 	"os"
 
 	"github.com/tronprotocol/go-tron/crypto"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
-	_ "github.com/tronprotocol/go-tron/proto/core/contract" // register proto types for Any resolution
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 func main() {
@@ -65,13 +65,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Unmarshal raw_data from protobuf bytes
-	var rawData corepb.TransactionRaw
-	if err := proto.Unmarshal(rawBytes, &rawData); err != nil {
-		fmt.Fprintf(os.Stderr, "unmarshal raw_data proto: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Sign: SHA256(rawBytes) → ECDSA
 	hash := sha256.Sum256(rawBytes)
 	sig, err := crypto.Sign(hash[:], privKey)
@@ -80,18 +73,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build signed Transaction protobuf
-	tx := &corepb.Transaction{
-		RawData:   &rawData,
-		Signature: [][]byte{sig},
-	}
+	// Compute txID
+	txID := hex.EncodeToString(hash[:])
 
-	// Output as protojson (broadcasttransaction expects this format)
-	out, err := protojson.Marshal(tx)
+	// Output hex-format JSON matching broadcasttransaction wire format
+	out := map[string]interface{}{
+		"txID":         txID,
+		"raw_data_hex": rawHex,
+		"signature":    []string{hex.EncodeToString(sig)},
+	}
+	outBytes, err := json.Marshal(out)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "marshal signed tx: %v\n", err)
+		fmt.Fprintf(os.Stderr, "marshal output: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println(string(out))
+	fmt.Println(string(outBytes))
 }

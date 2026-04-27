@@ -1062,10 +1062,16 @@ func (api *API) listNodes(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value int64 `json:"value"`
+		Value interface{} `json:"value"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	id := body.Value
+	var id int64
+	switch v := body.Value.(type) {
+	case float64:
+		id = int64(v)
+	case string:
+		id, _ = strconv.ParseInt(v, 10, 64)
+	}
 	if id == 0 {
 		// fallback: query param
 		s := r.URL.Query().Get("value")
