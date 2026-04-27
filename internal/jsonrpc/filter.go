@@ -35,6 +35,7 @@ type FilterManager struct {
 	mu      sync.Mutex
 	filters map[string]*filter
 	backend Backend
+	subMgr  *SubscriptionManager // optional; notified after poll filters on each block
 	blockCh chan *types.Block
 	quit    chan struct{}
 	wg      sync.WaitGroup
@@ -86,7 +87,7 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 	blockHash := block.Hash()
 	hashHex := "0x" + hex.EncodeToString(blockHash[:])
 
-	// Gather logs from block transactions for log filters
+	// Gather logs from block transactions for log and subscription filters.
 	var logs []*RPCLog
 	for i, tx := range block.Transactions() {
 		info, err := fm.backend.GetTransactionInfo(tx.Hash())
@@ -114,7 +115,6 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 	}
 
 	fm.mu.Lock()
-	defer fm.mu.Unlock()
 	for _, f := range fm.filters {
 		switch f.kind {
 		case filterKindBlock:
@@ -126,6 +126,11 @@ func (fm *FilterManager) fanOut(block *types.Block) {
 				}
 			}
 		}
+	}
+	fm.mu.Unlock()
+
+	if fm.subMgr != nil {
+		fm.subMgr.notify(block, logs)
 	}
 }
 

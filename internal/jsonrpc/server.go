@@ -16,7 +16,7 @@ type Server struct {
 
 // NewServer creates a JSON-RPC server on the given port.
 func NewServer(backend Backend, port int) *Server {
-	api := &API{backend: backend}
+	api := NewAPI(backend)
 	return &Server{
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),

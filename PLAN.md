@@ -253,20 +253,26 @@
 
 ## M6 · PBFT 消息路由与验证人能力 — **P0（验证人） / P2（全节点）**
 
-**范围**：TODO §2.1。
+**范围**：TODO §2.1（全节点接收路径）。SR 签名发送（M6b）留待后续。
 
 **交付物**
-1. `net/pbft_handler.go`：PBFT 消息（0x40 起）类型路由、签名校验、去重 cache（10 分钟过期）、stripelock 并行化。
-2. `net/pbft_data_sync.go`：quorum 数据补齐通道（独立于块同步）。
-3. PBFT 消息源码级参考：java-tron `framework/src/main/java/org/tron/core/net/messagehandler/PbftMsgHandler.java` 和 `PbftDataSyncHandler.java`。
-4. 与 `consensus/dpos` 的集成：出块者产生 pre-commit / commit 签名；收集 2f+1 后落盘到 M2 PR-2 的 `pbft-signdata` 前缀。
-5. CLI flag `--pbft.enable`；默认全节点启用（只中继），持 SR 私钥时启用签名发送。
+1. `net/pbft_handler.go`：PBFT 消息（0x34 = PBFT_MSG）类型路由、SHA-256 签名恢复、SR 成员检查（当前+前一维护期）、去重 cache（10 分钟 TTL，10000 上限）、三阶段状态机（PREPREPARE → PREPARE → COMMIT）、quorum 达成后写入 `pbft-signdata` 前缀。
+2. `net/pbft_data_sync.go`：PBFT_COMMIT_MSG（0x14）预聚合提交结果接收、签名验证（≥19 有效 SR 签名）、InsertBlock 后触发写入。
+3. `core/rawdb/accessors_pbft_sign.go`：`WriteLatestPbftBlockNum` / `ReadLatestPbftBlockNum`（key: "LATEST_PBFT_BLOCK_NUM"，big-endian int64，只增不减）。
+4. `core/rawdb/accessors_witness_schedule.go`：`WritePreviousShuffledWitnesses` / `ReadPreviousShuffledWitnesses`（key: "ws-prev-shuffled"）。
+5. PBFT 消息源码级参考：java-tron `PbftMsgHandler.java`、`PbftDataSyncHandler.java`、`PbftMessageHandle.java`。
+6. 协议常量勘误：消息类型码为 0x34（PBFT_MSG）和 0x14（PBFT_COMMIT_MSG），**不是** 0x40 起。
 
-**退出**：2 SR gtron + 1 SR java-tron 组成小型测试网，PBFT 轮次能正常推进；mainnet 观察窗口 48h 无被踢出的 DisconnectReason。
+**退出条件（全节点路径）**：
+- `rawdb.ReadBlockSignData(db, N)` 对已确认块 N 返回非 nil（需连接 java-tron 观察）。
+- `make test` 28 包全绿（不依赖 java-tron 进程）。
+- 无 DisconnectReason 被 java-tron 对端踢出。
+
+SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 
 **依赖**：M2 PR-2（witness-schedule / pbft-signdata）、M3.1（peer 状态机）。
 
-**文档**：新建 `2026-04-XX-pbft-message-routing-*`。
+**文档**：`docs/superpowers/specs/2026-04-26-m6-pbft-routing-design.md` + `docs/superpowers/plans/2026-04-26-m6-pbft-routing.md`。
 
 ---
 
@@ -353,16 +359,16 @@
 | M4 gRPC Wallet server | 完成 | 2026-04-26 | 已完成 | PR-A0~E 全部实现：proto codegen, 48个 bufconn tests全绿，`--grpc.port` flag，Wallet 只读/交易构建/广播/分页/价格 RPC，TronBackend 扩展 14 个新方法，system_test.sh 修复 grpc port 冲突。 |
 | M5.1 HTTP 补齐 | 完成 | 2026-04-26 | — | PR-1~7 全部实现：api_account/api_tx/api_trc10/api_exchange/api_misc 5 个 cluster 文件，BuildContractTransaction 泛型构建器，GetProposalByID/ListProposalsPaginated/ValidateAddress，共 ~35 个端点，28 包全绿。 |
 | M5.2 JSON-RPC 写路径 | 完成 | 2026-04-26 | — | PR-1~4 全部实现：eth_gasPrice/web3_sha3/net_listening/net_peerCount/eth_accounts，write方法返回-32601（与java-tron一致），eth_estimateGas，filter subsystem（eth_newFilter/newBlockFilter/uninstallFilter/getFilterChanges/getFilterLogs + FilterManager + BlockChain.AddBlockHook），28包全绿。 |
-| M6 PBFT 路由 | 未开始 | — | — | G3 依赖 |
+| M6 PBFT 路由（全节点） | 完成 | 2026-04-26 | — | PR-1~5 全部实现：协议常量 0x34/0x14（勘误 0x40+），SHA-256 签名恢复，SR 成员检查（当前+前一维护期），去重 cache，三阶段状态机，quorum 写 pbft-signdata，PBFT_COMMIT_MSG 验证，WriteLatestPbftBlockNum，PbftHandler/PbftDataSyncHandler node.Lifecycle，block hook 接入，28 包全绿，13 新测试。SR 签名发送留 M6b。 |
 | M7 TVM Cancun | 未开始 | — | — | 等待 TIP |
-| M8.1 Solidity/PBFT API | 未开始 | — | — | |
-| M8.2 事件订阅 | 未开始 | — | — | |
+| M8.1 Solidity/PBFT API | 完成 | 2026-04-26 | — | /walletsolidity/ + /walletpbft/ HTTP routes; gRPC WalletSolidity service (SolidityServer, ~30 methods); SolidifiedBlockNum()/LatestPbftBlockNum() backend methods; 10 new tests; 28 包全绿。 |
+| M8.2 事件订阅 | 完成 | 2026-04-26 | — | eth_subscribe/eth_unsubscribe over WebSocket; newHeads + logs subscription types; gorilla/websocket direct dep; SubscriptionManager wired into FilterManager.fanOut; 4 new tests (newHeads, logs, unsubscribe, HTTP coexistence); 28 包全绿。 |
 
 **退出门追踪**
 
 | 门 | 依赖 | 状态 |
 |---|---|---|
 | G1 可跟链 | M0′+M1+M2+M3+M0″ | ❌ (M0″ Phase 1 完成；Phase 2 是 G1 的最后一块) |
-| G2 生态可用 | M4+M5 | ❌ |
+| G2 生态可用 | M4+M5 | ❌ (M4+M5 代码完成；门控条件：主流 SDK 连接运行节点验证，需操作员环境) |
 | G3 可当验证人 | G1+M6 | ❌ |
 | G4 主网前置就绪 | G1+G2+G3+M7+M8 | ❌ |

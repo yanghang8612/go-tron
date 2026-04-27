@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gorilla/websocket"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -18,13 +19,16 @@ import (
 type API struct {
 	backend Backend
 	filters *FilterManager
+	subMgr  *SubscriptionManager
 }
 
 // NewAPI creates a new API handler with an active filter manager. Exposed for testing.
 func NewAPI(backend Backend) *API {
+	sm := newSubscriptionManager()
 	fm := NewFilterManager(backend)
+	fm.subMgr = sm
 	fm.Start()
-	return &API{backend: backend, filters: fm}
+	return &API{backend: backend, filters: fm, subMgr: sm}
 }
 
 // ── JSON-RPC protocol types ────────────────────────────────────────────────
@@ -59,6 +63,10 @@ const (
 // ── HTTP handler ────────────────────────────────────────────────────────────
 
 func (api *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if websocket.IsWebSocketUpgrade(r) {
+		api.subMgr.ServeWS(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
