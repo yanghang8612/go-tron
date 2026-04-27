@@ -429,13 +429,13 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 | M7 TVM Cancun | 未开始 | — | — | 等待 TIP |
 | M8.1 Solidity/PBFT API | 完成（路由层；solid-head 更新缺失见 M9.5） | 2026-04-26 | — | /walletsolidity/ + /walletpbft/ HTTP routes; gRPC WalletSolidity service (SolidityServer, ~30 methods); SolidifiedBlockNum()/LatestPbftBlockNum() backend methods; 10 new tests; 28 包全绿。**已知 gap（2026-04-27 系统测试）**：`SetLatestSolidifiedBlockNum` 仅在测试中调用，生产路径从未写入，`walletsolidity/getnowblock` 永远返回 genesis（block 0）。需移植 java-tron `Manager.updateSolidifiedBlock()` 到 InsertBlock。详见 M9.5。 |
 | M8.2 事件订阅 | 完成 | 2026-04-26 | — | eth_subscribe/eth_unsubscribe over WebSocket; newHeads + logs subscription types; gorilla/websocket direct dep; SubscriptionManager wired into FilterManager.fanOut; 4 new tests (newHeads, logs, unsubscribe, HTTP coexistence); 28 包全绿。 |
-| M9 HTTP wire-format + dev hardening | 未开始 | — | — | 2026-04-27 system_test_flows.sh 扫描出的 P0/P1 兼容性 catalog（spec: 2026-04-27-system-test-findings.md）。9 个子项 (M9.1-M9.9)：protojson hex/base64、`[]byte()` silent corrupt、resource 字段 string/int 双形式、proposalCreate.parameters 数组、walletsolidity solid-head 更新、dev.full-features/maintenance-interval 旗标、broadcasttransaction 同步 actuator.Validate、updateSetting/updateEnergyLimit 路由注册、system_test_flows CI 接入。退出 = system_test_flows PASS ≥ 30 / WARN ≤ 4。已落地：`core/block_builder.go` BuildBlock skipping log（P1-6）。 |
+| M9 HTTP wire-format + dev hardening | 完成 | 2026-04-27 | — | 9 个子项全部落地：M9.6 `--dev.full-features`/`--dev.maintenance-interval` flags（28 allow_* flags 激活）；M9.1 protojson→plain JSON+hex（api_exchange/trc10/account/broadcasttransaction）；M9.2 `[]byte(x)`→`common.FromHex(x)`（7 处 silent-corrupt fix）；M9.3 ResourceField 双形式（string+int）；M9.4 proposalCreate.parameters 数组形式；M9.5 updateSolidifiedBlock 移植（java-tron 70%-threshold，rawdb wlb- 前缀，InsertBlock hook）；M9.7 broadcasttransaction 同步 actuator.Validate（CONTRACT_VALIDATE_ERROR）；M9.8 /wallet/updatesetting + /wallet/updateenergylimit 路由注册；M9.9 `make system-test-flows` CI target（PASS≥30/WARN≤4 exit gate）。全包绿。 |
 
 **退出门追踪**
 
 | 门 | 依赖 | 状态 |
 |---|---|---|
 | G1 可跟链 | M0′+M1+M2+M3+M0″ | ❌ (M0″ Phase 1 完成；Phase 2 是 G1 的最后一块) |
-| G2 生态可用 | M4+M5+M9 | ❌ (M4+M5 路由完成；M9 wire-format 修复中——2026-04-27 系统测试发现 SDK 连接所需的 hex/base64、resource string、solid-head 等 P0 兼容性 gap，详见 docs/superpowers/specs/2026-04-27-system-test-findings.md) |
+| G2 生态可用 | M4+M5+M9 | ✅ (2026-04-27: M4+M5 路由完成 + M9 所有 P0 wire-format/solid-head/dev-mode 修复落地，全包绿) |
 | G3 可当验证人 | G1+M6 | ❌ |
 | G4 主网前置就绪 | G1+G2+G3+M7+M8 | ❌ |
