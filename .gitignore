@@ -5,6 +5,7 @@ build/
 *.out
 fixture-closure
 fixture-digest
+gtron
 gtron-replay
 
 # IDE

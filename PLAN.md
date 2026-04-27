@@ -342,7 +342,18 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 
 **退出**：M9.1~M9.8 全部完成 + system_test_flows 达到上述阈值。这是 G2（生态可用）真正的功能性退出条件——目前 G2 只是"代码完成"，但 SDK 连过来仍会因 wire-format 故障。
 
+**实施顺序（重要）**：
+1. **M9.6 first**（dev.full-features + maintenance-interval）——否则 M9.1~M9.4 修完后，F4/F5 仍会因 proposal 未激活而 wedge，无法用 system_test_flows 验证修复。
+2. **M9.1~M9.4 并行**——HTTP 入参 wire-format 修复（互不依赖）。
+3. **M9.5 + M9.7 + M9.8**——M9.5 不依赖前者；M9.7（broadcasttransaction 同步 actuator.Validate）需要 M9.1~M9.4 完成才能有意义地测试（否则每个 tx 在错误层失败）；M9.8 路由注册独立。
+4. **M9.9 last**——所有修复完成后接入 CI。
+
 **依赖**：无（所有改动局限在 internal/tronapi/，core/state/dynamic_properties.go，core/blockchain.go 中 InsertBlock 收尾段，cmd/gtron/config.go）。
+
+**已验证假设**（2026-04-27 通过 java-tron 源码确认，避免修复方向反转）：
+- M9.1/M9.2 **bytes 字段一律为 hex**：`framework/.../JsonFormat.java:826` `unescapeBytes(...) → ByteArray.fromHexString(...)`。
+- M9.3 **enum 字段同时接受 int 与 string**：`JsonFormat.java:698-714`，`lookingAtInteger()` 走数字分支，否则取 identifier 并 normalize 首字母大写后 `findValueByName`。
+- visible 模式（`visible=true`）特殊化：地址 → base58、部分 string 字段 → UTF-8。默认 visible=false 时全 hex。M9 修复同样应支持 visible 切换（参考 java-tron `selfType` 标志）。
 
 **文档**：findings catalog `docs/superpowers/specs/2026-04-27-system-test-findings.md`；分项 plan 待实施时再写。
 

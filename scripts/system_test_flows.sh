@@ -10,6 +10,15 @@
 #   scripts/system_test_flows.sh          # run against existing node on :18090
 #   scripts/system_test_flows.sh --start  # spawn node in /tmp/gtron-flow-test
 #
+# IMPORTANT — ✅ PASS semantics:
+#   PASS means the tx was confirmed in a block. It does NOT verify the field
+#   *content* matches what the caller intended. M9 P0-2 (silent corruption from
+#   `[]byte(stringField)`) currently causes setAccountId / updateWitness etc. to
+#   return PASS while writing the literal hex string as bytes (16 chars stored
+#   when 8 were intended). After M9.2 lands, these will still PASS but write
+#   the correct decoded bytes. Don't read PASS as "fully correct" until M9 is
+#   complete. See docs/superpowers/specs/2026-04-27-system-test-findings.md.
+#
 set -uo pipefail
 
 BASEDIR="$(cd "$(dirname "$0")/.." && pwd)"
