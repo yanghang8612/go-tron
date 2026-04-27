@@ -315,6 +315,57 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	}
 }
 
+func TestSolidifiedBlockSingleSR(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testCoreAddr(10)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 100_000_000},
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://sr1"},
+		},
+		DynamicProperties: map[string]int64{
+			// Push maintenance far out so it doesn't fire during the test.
+			"next_maintenance_time": 9_000_000_000,
+		},
+	}
+
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Single SR: floor(1 * 0.3) = 0, so solidified == that SR's latest block.
+	const numBlocks = 5
+	for i := 1; i <= numBlocks; i++ {
+		block := buildTestBlock(bc, witnessAddr, int64(i*3000))
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+	}
+
+	want := uint64(numBlocks)
+	got := uint64(state.LoadDynamicProperties(diskdb).LatestSolidifiedBlockNum())
+	if got != want {
+		t.Fatalf("LatestSolidifiedBlockNum: got %d, want %d", got, want)
+	}
+
+	// Also confirm it matches the current head.
+	if bc.CurrentBlock().Number() != want {
+		t.Fatalf("CurrentBlock.Number: got %d, want %d", bc.CurrentBlock().Number(), want)
+	}
+}
+
 func buildTestBlock(bc *BlockChain, witnessAddr tcommon.Address, timestamp int64) *types.Block {
 	parent := bc.CurrentBlock()
 	return types.NewBlockFromPB(&corepb.Block{

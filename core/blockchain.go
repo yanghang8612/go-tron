@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,6 +242,10 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
+
+	// Update solidified block number (mirrors java-tron Manager.updateSolidifiedBlock).
+	bc.updateSolidifiedBlock(block.WitnessAddress(), int64(block.Number()), dynProps)
+
 	dynProps.Flush(bc.db)
 
 	// Persist block
@@ -354,6 +359,41 @@ func (a *chainHeaderAdapter) ChangeDelegation() bool {
 
 func (a *chainHeaderAdapter) MaintenanceTimeInterval() int64 {
 	return a.dynProps.MaintenanceTimeInterval()
+}
+
+// updateSolidifiedBlock updates the per-witness latest-block cursor and
+// recomputes the solidified block number using the java-tron algorithm:
+//
+//	sort all active witnesses by their latest produced block number and
+//	take nums[floor(N * 0.3)] as the new solidified block (SOLIDIFIED_THRESHOLD = 0.7).
+//
+// For a single-SR chain (N=1) this means floor(1*0.3)=0, so the solidified
+// number always equals that SR's latest block (i.e. the current head).
+// Mirrors java-tron Manager.updateSolidifiedBlock().
+func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
+	// Persist this witness's latest produced block number.
+	rawdb.WriteWitnessLatestBlock(bc.db, producerAddr, blockNum)
+
+	active := bc.ActiveWitnesses()
+	n := len(active)
+	if n == 0 {
+		return
+	}
+
+	nums := make([]int64, 0, n)
+	for _, addr := range active {
+		nums = append(nums, rawdb.ReadWitnessLatestBlock(bc.db, addr))
+	}
+	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
+
+	pos := int(float64(n) * 0.3) // SOLIDIFIED_THRESHOLD = 0.7 → position = floor(N*0.3)
+	if pos >= n {
+		pos = n - 1
+	}
+	solidified := nums[pos]
+	if solidified >= dynProps.LatestSolidifiedBlockNum() {
+		dynProps.SetLatestSolidifiedBlockNum(solidified)
+	}
 }
 
 // gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).

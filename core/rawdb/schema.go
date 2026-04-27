@@ -15,8 +15,9 @@ var (
 	txInfoPrefix    = []byte("ti-")
 	txInfoBlockPrefix = []byte("tib-")
 	accountPrefix   = []byte("a-")
-	witnessPrefix   = []byte("w-")
-	votesPrefix     = []byte("v-")
+	witnessPrefix            = []byte("w-")
+	witnessLatestBlockPrefix = []byte("wlb-") // per-witness latest produced block number
+	votesPrefix              = []byte("v-")
 	proposalPrefix  = []byte("p-")
 	codePrefix      = []byte("c-")
 	contractPrefix  = []byte("ct-")
@@ -298,6 +299,10 @@ func accountKey(addr []byte) []byte {
 
 func witnessKey(addr []byte) []byte {
 	return append(append([]byte{}, witnessPrefix...), addr...)
+}
+
+func witnessLatestBlockKey(addr []byte) []byte {
+	return append(append([]byte{}, witnessLatestBlockPrefix...), addr...)
 }
 
 func dynPropKey(name string) []byte {
