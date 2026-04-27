@@ -407,9 +407,9 @@ print(max((e.get('exchange_id',0) for e in xs),default=0))
       "{\"owner_address\":\"$WITNESS_ADDR\",\"exchange_id\":$EXCH_ID,
         \"token_id\":\"$TRX_HEX\",\"quant\":10000,\"expected\":1}"
 
-    run_tx "F7/5 exchangeWithdraw (TRX)" /wallet/exchangewithdraw \
+    run_tx "F7/5 exchangeWithdraw (ASSET)" /wallet/exchangewithdraw \
       "{\"owner_address\":\"$WITNESS_ADDR\",\"exchange_id\":$EXCH_ID,
-        \"token_id\":\"$TRX_HEX\",\"quant\":50000}"
+        \"token_id\":\"$ASSET_HEX\",\"quant\":500}"
   else
     warn "F7/q2 listExchanges" "no exchange found after create (probably evicted)"
   fi
