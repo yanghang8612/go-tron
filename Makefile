@@ -1,5 +1,5 @@
 .PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
-        conformance-replay conformance-replay-exit-gate
+        conformance-replay conformance-replay-exit-gate txsign system-test-flows
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -61,3 +61,12 @@ conformance-replay: gtron-replay
 conformance-replay-exit-gate: gtron-replay
 	@EXIT_GATE=1 RANGES="$${RANGES:-smoke range-freeze-v2 range-maintenance range-contract}" \
 		scripts/conformance_replay.sh
+
+# Build txsign utility.
+txsign:
+	$(GO) build $(GOFLAGS) -o $(GOBIN)/txsign ./cmd/txsign
+
+# System test flows — builds binaries, starts dev node, runs HTTP flow tests.
+# EXIT: non-zero if PASS < 30 or WARN > 4.
+system-test-flows: gtron txsign
+	@scripts/ci_system_test.sh
