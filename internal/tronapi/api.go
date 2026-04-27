@@ -119,6 +119,10 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	// M5.1 PR-4: Smart contract extras
 	mux.HandleFunc("/wallet/clearabi", api.clearABI)
 
+	// M9.8: Smart contract update endpoints
+	mux.HandleFunc("/wallet/updatesetting", api.updateSetting)
+	mux.HandleFunc("/wallet/updateenergylimit", api.updateEnergyLimit)
+
 	// M5.1 PR-5: Exchange / Market
 	mux.HandleFunc("/wallet/listexchanges", api.listExchanges)
 	mux.HandleFunc("/wallet/exchangecreate", api.exchangeCreate)

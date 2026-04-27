@@ -163,3 +163,59 @@ func writeAssetIssueList(w http.ResponseWriter, items []*contractpb.AssetIssueCo
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
+
+func (api *API) updateSetting(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress              string `json:"owner_address"`
+		ContractAddress          string `json:"contract_address"`
+		ConsumeUserResourcePercent int64 `json:"consume_user_resource_percent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	c := &contractpb.UpdateSettingContract{
+		OwnerAddress:              common.FromHex(body.OwnerAddress),
+		ContractAddress:          common.FromHex(body.ContractAddress),
+		ConsumeUserResourcePercent: body.ConsumeUserResourcePercent,
+	}
+	tx, err := api.backend.BuildContractTransaction(
+		corepb.Transaction_Contract_UpdateSettingContract, c, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
+
+func (api *API) updateEnergyLimit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		OwnerAddress     string `json:"owner_address"`
+		ContractAddress string `json:"contract_address"`
+		OriginEnergyLimit int64 `json:"origin_energy_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	c := &contractpb.UpdateEnergyLimitContract{
+		OwnerAddress:     common.FromHex(body.OwnerAddress),
+		ContractAddress: common.FromHex(body.ContractAddress),
+		OriginEnergyLimit: body.OriginEnergyLimit,
+	}
+	tx, err := api.backend.BuildContractTransaction(
+		corepb.Transaction_Contract_UpdateEnergyLimitContract, c, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeTransactionJSON(w, tx)
+}
