@@ -785,7 +785,18 @@ func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash 
 	if obj == nil {
 		return tcommon.Hash{}
 	}
-	return obj.getStorage(key)
+	if v, ok := obj.storage[key]; ok {
+		return v
+	}
+	// Load from persistent storage on cache miss.
+	raw := rawdb.ReadStorage(s.db.DiskDB(), addr, key)
+	if len(raw) == 0 {
+		return tcommon.Hash{}
+	}
+	var h tcommon.Hash
+	copy(h[len(h)-len(raw):], raw)
+	obj.storage[key] = h
+	return h
 }
 
 // SetState sets a storage value on a contract.
@@ -955,6 +966,9 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			}
 			rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
 			obj.contractMetaDirty = false
+		}
+		for k, v := range obj.storage {
+			rawdb.WriteStorage(s.db.DiskDB(), addr, k, v.Bytes())
 		}
 		obj.dirty = false
 	}

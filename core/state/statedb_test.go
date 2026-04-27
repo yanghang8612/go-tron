@@ -340,3 +340,37 @@ func TestStateDB_BandwidthRevert(t *testing.T) {
 		t.Fatalf("want 100 after revert, got %d", statedb.GetNetUsage(addr))
 	}
 }
+
+func TestContractStoragePersistsAcrossCommit(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contract := testAddr(0x42)
+	sdb.CreateAccount(contract, corepb.AccountType_Normal)
+
+	var slot, value tcommon.Hash
+	slot[31] = 0x00
+	value[31] = 42
+
+	sdb.SetState(contract, slot, value)
+
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Re-open state from committed root (simulates TriggerConstantContract)
+	sdb2, err := New(root, db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+
+	got := sdb2.GetState(contract, slot)
+	if got != value {
+		t.Fatalf("storage after reopen: got %x, want %x", got, value)
+	}
+}
