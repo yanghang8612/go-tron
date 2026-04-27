@@ -2,8 +2,19 @@
 
 **Date**: 2026-04-26  
 **Milestone**: M5.1  
-**Status**: Active  
+**Status**: Done (routes); known wire-format gaps tracked in M9 — see `docs/superpowers/specs/2026-04-27-system-test-findings.md`
 **Spec basis**: `TODO.md §4.2`, java-tron `framework/src/main/java/org/tron/core/services/http/`
+
+## Known Compatibility Gaps (post-merge audit, 2026-04-27)
+
+System tests with real HTTP build → sign → broadcast → confirm flows surfaced four wire-format issues that this design did **not** call out, leading to silent SDK incompatibility:
+
+1. **`protojson.Unmarshal` on contract proto** misinterprets `bytes` fields (owner_address, asset_name, …) as base64; java-tron HTTP API expects hex. Affects 9 endpoints across `api_account.go`, `api_exchange.go`, `api_trc10.go`, `api.go:215 broadcasttransaction`. Tracked as M9.1.
+2. **`[]byte(stringField)` instead of `common.FromHex(stringField)`** silently writes the literal hex characters as the field's bytes — tx confirms but with corrupted state. Affects setAccountId.account_id, transferAsset.asset_name, participateAssetIssue.asset_name, createWitness.url, updateWitness.update_url, getAssetIssueByName.value, getMarketPriceByPair.{sell,buy}_token_id. Tracked as M9.2.
+3. **`Resource int32`** rejects java-tron's string form (`"BANDWIDTH"`/`"ENERGY"`/`"TRON_POWER"`). Tracked as M9.3.
+4. **`proposalCreate.parameters`** expects `map[string]int64` object but java-tron uses `[{key,value}]` array. Tracked as M9.4.
+
+Future M5-style HTTP additions MUST: (a) use plain JSON struct + `common.FromHex` for byte fields; (b) accept both string-enum and int form for any proto enum field; (c) match java-tron's array-vs-object body shape literally.
 
 ## Goal
 

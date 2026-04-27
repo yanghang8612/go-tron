@@ -293,6 +293,61 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 
 ---
 
+## M9 · HTTP API 兼容性 + dev 模式硬化 — **P0（G2 真正退出条件）**
+
+**背景**：2026-04-27 用 `scripts/system_test_flows.sh` 对 8 个交易类型 flow 做端到端 build→sign→broadcast→confirm→state 扫描，34 项断言只 11 PASS / 21 WARN / 1 FAIL / 1 SKIP。绝大多数 WARN 不是 actuator 逻辑问题，而是 HTTP API 层 bytes/枚举的 wire-format 与 java-tron 不兼容；最严重的是 protojson 把 hex 当 base64、`[]byte(string)` silent-corrupt、以及 `walletsolidity` 永远停在 block 0。完整 catalog 见 `docs/superpowers/specs/2026-04-27-system-test-findings.md`。
+
+**范围**：
+
+### M9.1 protojson-on-contract 路径全部改 plain JSON + hex
+- `internal/tronapi/api_account.go:91 accountPermissionUpdate`
+- `api_exchange.go:42/65/88/111/134/157` exchange*+market*
+- `api_trc10.go:26/50` createAssetIssue / updateAsset
+- `api.go:215` broadcasttransaction（外层 transaction proto 内层 contract）
+- 单测：每个 endpoint 用 hex `owner_address` 调用 → 解出的 contract.OwnerAddress 必须等于 hex 解码值。
+
+### M9.2 `[]byte(stringField)` → `common.FromHex(stringField)`
+- setAccountId.account_id、transferAsset.asset_name、participateAssetIssue.asset_name、createWitness.url、updateWitness.update_url、getAssetIssueByName.value、getMarketPriceByPair.{sell,buy}_token_id
+- 反例保留：triggerSmartContract.function_selector（java-tron 这个字段就是 ASCII signature）
+
+### M9.3 `resource` 字段同时接受 string + int
+- 自定义 `type ResourceField int32; func (r *ResourceField) UnmarshalJSON(...)` 识别 `0/1/2` 与 `"BANDWIDTH"/"ENERGY"/"TRON_POWER"`
+- 替换 freeze/freezeV2/unfreeze/unfreezeV2/delegate/undelegate handler 的 `Resource int32` 字段
+
+### M9.4 `proposalCreate.parameters` 接受数组形式
+- `[]struct{Key int64 \`json:"key"\`; Value int64 \`json:"value"\`}` → 转 `map[int64]int64` 后送 backend。
+
+### M9.5 `walletsolidity` solid-head 更新（M8.1 续）
+- 移植 `java-tron Manager.updateSolidifiedBlock()`：取 active SR 集合的 latestBlockHeader.raw.number，排序，取第 `(2/3)*N+1`-th 小（`SOLIDIFIED_THRESHOLD`）。
+- Hook 点：`BlockChain.InsertBlock` 末尾或独立 block hook。
+- `dynProps.SetLatestSolidifiedBlockNum(value)` + commit。
+- 单测：单 SR dev 链 → solid == head；27 SR 模拟 → 取第 19th。
+
+### M9.6 dev 模式硬化
+- `--dev.full-features`（默认 true）：在 `makeDevGenesis` 把所有"主网已激活、风险无副作用"的 `allow_*` flag 直接设成激活值（new_resource_model / delegate_resource / change_delegation / multi_sign / 全 TVM_*）。
+- `--dev.maintenance-interval <ms>`（默认 21600000；支持 30000）：dev 链 30s 内完成一次维护周期，覆盖 reward distribution / proposal 激活。
+- 验证：当前 system_test_flows 未跑通的 F4/F5 在 dev.full-features 下应直接 PASS。
+
+### M9.7 broadcasttransaction 同步业务校验
+- 在 push to pool 之前调用 actuator.Validate（read-only StateDB）。失败 → 返回 `code=CONTRACT_VALIDATE_ERROR, message=<reason>` 而非静默 `result.true`。
+- 与 java-tron `Wallet#broadcastTransaction` 行为对齐。
+
+### M9.8 注册缺失 endpoint
+- `/wallet/updatesetting`（actuator/update_setting.go 已存在）
+- `/wallet/updateenergylimit`（actuator/update_energy_limit.go 已存在）
+
+### M9.9 把 `system_test_flows.sh` 接入 CI
+- `make system-test-flows`（启 dev 节点 + 跑脚本 + 解析 FINDINGS_BEGIN/END 生成测试矩阵）
+- 退出条件：M9.1 ~ M9.8 完成后，PASS ≥ 30 / WARN ≤ 4。
+
+**退出**：M9.1~M9.8 全部完成 + system_test_flows 达到上述阈值。这是 G2（生态可用）真正的功能性退出条件——目前 G2 只是"代码完成"，但 SDK 连过来仍会因 wire-format 故障。
+
+**依赖**：无（所有改动局限在 internal/tronapi/，core/state/dynamic_properties.go，core/blockchain.go 中 InsertBlock 收尾段，cmd/gtron/config.go）。
+
+**文档**：findings catalog `docs/superpowers/specs/2026-04-27-system-test-findings.md`；分项 plan 待实施时再写。
+
+---
+
 ## M8 · Solidity/PBFT API 变种 + 事件订阅 — **P1/P2**
 
 **范围**：TODO §4.4、§4.5。
@@ -357,18 +412,19 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 | M3.3 速率限制 | 完成 | 2026-04-26 | — | p2p/ratelimiter.go: 零依赖 token bucket。NewRateLimiter() 默认 SyncBlockChain=3/s, FetchInvData=3/s, Disconnect=1/s (java-tron clearParam 值)。handleProtocolMessage 检查 rl.Allow(code)，超限则 drop+log。4 率限测试全绿。 |
 | M3.4 discovery 驱逐 | 完成 | 2026-04-26 | — | Table.RemoveByAddr(ip,port)；evictTimedOutPings 现在在清理 pendingPings 的同时驱逐无响应节点；pendingPing struct 存储 sentAt+ip+port。service_test+table_test 新增 3 测试全绿。 |
 | M4 gRPC Wallet server | 完成 | 2026-04-26 | 已完成 | PR-A0~E 全部实现：proto codegen, 48个 bufconn tests全绿，`--grpc.port` flag，Wallet 只读/交易构建/广播/分页/价格 RPC，TronBackend 扩展 14 个新方法，system_test.sh 修复 grpc port 冲突。 |
-| M5.1 HTTP 补齐 | 完成 | 2026-04-26 | — | PR-1~7 全部实现：api_account/api_tx/api_trc10/api_exchange/api_misc 5 个 cluster 文件，BuildContractTransaction 泛型构建器，GetProposalByID/ListProposalsPaginated/ValidateAddress，共 ~35 个端点，28 包全绿。 |
+| M5.1 HTTP 补齐 | 完成（路由全部覆盖；wire-format 兼容性 gap 见 M9） | 2026-04-26 | — | PR-1~7 全部实现：api_account/api_tx/api_trc10/api_exchange/api_misc 5 个 cluster 文件，BuildContractTransaction 泛型构建器，GetProposalByID/ListProposalsPaginated/ValidateAddress，共 ~35 个端点，28 包全绿。**已知 gap（2026-04-27 系统测试）**：(a) 用 protojson.Unmarshal 直接解 contract proto 的 9 个 endpoint 把 hex bytes 当成 base64 → 见 M9.1；(b) `[]byte(stringField)` 对 7 个 endpoint silent corrupt → 见 M9.2；(c) freeze/delegate `resource` 字段不接受 string → M9.3；(d) `proposalCreate.parameters` 不接受 java-tron 数组形式 → M9.4。完整 catalog: docs/superpowers/specs/2026-04-27-system-test-findings.md。 |
 | M5.2 JSON-RPC 写路径 | 完成 | 2026-04-26 | — | PR-1~4 全部实现：eth_gasPrice/web3_sha3/net_listening/net_peerCount/eth_accounts，write方法返回-32601（与java-tron一致），eth_estimateGas，filter subsystem（eth_newFilter/newBlockFilter/uninstallFilter/getFilterChanges/getFilterLogs + FilterManager + BlockChain.AddBlockHook），28包全绿。 |
 | M6 PBFT 路由（全节点） | 完成 | 2026-04-26 | — | PR-1~5 全部实现：协议常量 0x34/0x14（勘误 0x40+），SHA-256 签名恢复，SR 成员检查（当前+前一维护期），去重 cache，三阶段状态机，quorum 写 pbft-signdata，PBFT_COMMIT_MSG 验证，WriteLatestPbftBlockNum，PbftHandler/PbftDataSyncHandler node.Lifecycle，block hook 接入，28 包全绿，13 新测试。SR 签名发送留 M6b。 |
 | M7 TVM Cancun | 未开始 | — | — | 等待 TIP |
-| M8.1 Solidity/PBFT API | 完成 | 2026-04-26 | — | /walletsolidity/ + /walletpbft/ HTTP routes; gRPC WalletSolidity service (SolidityServer, ~30 methods); SolidifiedBlockNum()/LatestPbftBlockNum() backend methods; 10 new tests; 28 包全绿。 |
+| M8.1 Solidity/PBFT API | 完成（路由层；solid-head 更新缺失见 M9.5） | 2026-04-26 | — | /walletsolidity/ + /walletpbft/ HTTP routes; gRPC WalletSolidity service (SolidityServer, ~30 methods); SolidifiedBlockNum()/LatestPbftBlockNum() backend methods; 10 new tests; 28 包全绿。**已知 gap（2026-04-27 系统测试）**：`SetLatestSolidifiedBlockNum` 仅在测试中调用，生产路径从未写入，`walletsolidity/getnowblock` 永远返回 genesis（block 0）。需移植 java-tron `Manager.updateSolidifiedBlock()` 到 InsertBlock。详见 M9.5。 |
 | M8.2 事件订阅 | 完成 | 2026-04-26 | — | eth_subscribe/eth_unsubscribe over WebSocket; newHeads + logs subscription types; gorilla/websocket direct dep; SubscriptionManager wired into FilterManager.fanOut; 4 new tests (newHeads, logs, unsubscribe, HTTP coexistence); 28 包全绿。 |
+| M9 HTTP wire-format + dev hardening | 未开始 | — | — | 2026-04-27 system_test_flows.sh 扫描出的 P0/P1 兼容性 catalog（spec: 2026-04-27-system-test-findings.md）。9 个子项 (M9.1-M9.9)：protojson hex/base64、`[]byte()` silent corrupt、resource 字段 string/int 双形式、proposalCreate.parameters 数组、walletsolidity solid-head 更新、dev.full-features/maintenance-interval 旗标、broadcasttransaction 同步 actuator.Validate、updateSetting/updateEnergyLimit 路由注册、system_test_flows CI 接入。退出 = system_test_flows PASS ≥ 30 / WARN ≤ 4。已落地：`core/block_builder.go` BuildBlock skipping log（P1-6）。 |
 
 **退出门追踪**
 
 | 门 | 依赖 | 状态 |
 |---|---|---|
 | G1 可跟链 | M0′+M1+M2+M3+M0″ | ❌ (M0″ Phase 1 完成；Phase 2 是 G1 的最后一块) |
-| G2 生态可用 | M4+M5 | ❌ (M4+M5 代码完成；门控条件：主流 SDK 连接运行节点验证，需操作员环境) |
+| G2 生态可用 | M4+M5+M9 | ❌ (M4+M5 路由完成；M9 wire-format 修复中——2026-04-27 系统测试发现 SDK 连接所需的 hex/base64、resource string、solid-head 等 P0 兼容性 gap，详见 docs/superpowers/specs/2026-04-27-system-test-findings.md) |
 | G3 可当验证人 | G1+M6 | ❌ |
 | G4 主网前置就绪 | G1+G2+G3+M7+M8 | ❌ |
