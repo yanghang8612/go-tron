@@ -224,4 +224,8 @@ type Backend interface {
 
 	// Address validation (M5.1 PR-7) — pure utility, no state needed
 	ValidateAddress(addr string) (bool, string)
+
+	// Confirmation-depth block numbers (M8.1)
+	SolidifiedBlockNum() uint64 // latest solidified (DPoS 2/3 confirmed) block number
+	LatestPbftBlockNum() int64  // latest PBFT-confirmed block number; -1 if not yet active
 }

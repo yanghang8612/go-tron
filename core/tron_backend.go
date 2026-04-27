@@ -87,6 +87,19 @@ func (b *TronBackend) CurrentBlock() *types.Block {
 	return b.chain.CurrentBlock()
 }
 
+func (b *TronBackend) SolidifiedBlockNum() uint64 {
+	dp := state.LoadDynamicProperties(b.chain.DB())
+	n := dp.LatestSolidifiedBlockNum()
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+func (b *TronBackend) LatestPbftBlockNum() int64 {
+	return rawdb.ReadLatestPbftBlockNum(b.chain.DB())
+}
+
 func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {
 	block := b.chain.GetBlockByNumber(number)
 	if block == nil {

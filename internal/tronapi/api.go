@@ -122,6 +122,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/clearabi", api.clearABI)
 
 	// M5.1 PR-5: Exchange / Market
+	mux.HandleFunc("/wallet/listexchanges", api.listExchanges)
 	mux.HandleFunc("/wallet/exchangecreate", api.exchangeCreate)
 	mux.HandleFunc("/wallet/exchangeinject", api.exchangeInject)
 	mux.HandleFunc("/wallet/exchangetransaction", api.exchangeTransaction)
@@ -137,6 +138,10 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	// M5.1 PR-7: Transaction meta
 	mux.HandleFunc("/wallet/gettransactionreceiptbyid", api.getTransactionReceiptById)
 	mux.HandleFunc("/wallet/validateaddress", api.validateAddress)
+
+	// M8.1: /walletsolidity/ and /walletpbft/ confirmation-depth variants
+	api.RegisterSolidityRoutes(mux)
+	api.RegisterPbftRoutes(mux)
 }
 
 func (api *API) getNowBlock(w http.ResponseWriter, r *http.Request) {

@@ -247,6 +247,10 @@ func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 	return len(addr) == 42, "test"
 }
 
+// --- M8.1: confirmation-depth stubs ---
+func (s *stubBackend) SolidifiedBlockNum() uint64 { return 0 }
+func (s *stubBackend) LatestPbftBlockNum() int64  { return -1 }
+
 // --- Helpers ---
 func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {
 	t.Helper()

@@ -1,6 +1,7 @@
 package tronapi
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -8,6 +9,24 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+func (api *API) listExchanges(w http.ResponseWriter, r *http.Request) {
+	exchanges, err := api.backend.ListExchanges()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var list []map[string]any
+	for _, e := range exchanges {
+		list = append(list, marshalMessage(e.ProtoReflect()))
+	}
+	if list == nil {
+		list = []map[string]any{}
+	}
+	data, _ := json.Marshal(map[string]any{"exchanges": list})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
 
 func (api *API) exchangeCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

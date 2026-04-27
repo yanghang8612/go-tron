@@ -41,6 +41,7 @@ func (s *Server) Start() error {
 	}
 	s.grpc = grpc.NewServer()
 	apipb.RegisterWalletServer(s.grpc, s)
+	apipb.RegisterWalletSolidityServer(s.grpc, NewSolidityServer(s.backend))
 	go func() {
 		if err := s.grpc.Serve(ln); err != nil {
 			log.Printf("gRPC server stopped: %v", err)
