@@ -2,11 +2,43 @@ package tronapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+// ResourceField represents a resource type that can be unmarshaled from either
+// a JSON number (0/1/2) or a JSON string ("BANDWIDTH"/"ENERGY"/"TRON_POWER").
+type ResourceField int32
+
+func (r *ResourceField) UnmarshalJSON(data []byte) error {
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err == nil {
+		v, err := n.Int64()
+		if err != nil {
+			return fmt.Errorf("invalid resource: %w", err)
+		}
+		*r = ResourceField(v)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("invalid resource field")
+	}
+	switch s {
+	case "BANDWIDTH":
+		*r = 0
+	case "ENERGY":
+		*r = 1
+	case "TRON_POWER":
+		*r = 2
+	default:
+		return fmt.Errorf("unknown resource: %q", s)
+	}
+	return nil
+}
 
 func (api *API) transferAsset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -181,11 +213,11 @@ func (api *API) freezeBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		FrozenBalance   int64  `json:"frozen_balance"`
-		FrozenDuration  int64  `json:"frozen_duration"`
-		Resource        int32  `json:"resource"`
-		ReceiverAddress string `json:"receiver_address"`
+		OwnerAddress    string        `json:"owner_address"`
+		FrozenBalance   int64         `json:"frozen_balance"`
+		FrozenDuration  int64         `json:"frozen_duration"`
+		Resource        ResourceField `json:"resource"`
+		ReceiverAddress string        `json:"receiver_address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -208,9 +240,9 @@ func (api *API) unfreezeBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		Resource        int32  `json:"resource"`
-		ReceiverAddress string `json:"receiver_address"`
+		OwnerAddress    string        `json:"owner_address"`
+		Resource        ResourceField `json:"resource"`
+		ReceiverAddress string        `json:"receiver_address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -233,9 +265,9 @@ func (api *API) freezeBalanceV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress  string `json:"owner_address"`
-		FrozenBalance int64  `json:"frozen_balance"`
-		Resource      int32  `json:"resource"`
+		OwnerAddress  string        `json:"owner_address"`
+		FrozenBalance int64         `json:"frozen_balance"`
+		Resource      ResourceField `json:"resource"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -257,9 +289,9 @@ func (api *API) unfreezeBalanceV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		UnfreezeBalance int64  `json:"unfreeze_balance"`
-		Resource        int32  `json:"resource"`
+		OwnerAddress    string        `json:"owner_address"`
+		UnfreezeBalance int64         `json:"unfreeze_balance"`
+		Resource        ResourceField `json:"resource"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -302,11 +334,11 @@ func (api *API) delegateResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		ReceiverAddress string `json:"receiver_address"`
-		Balance         int64  `json:"balance"`
-		Resource        int32  `json:"resource"`
-		Lock            bool   `json:"lock"`
+		OwnerAddress    string        `json:"owner_address"`
+		ReceiverAddress string        `json:"receiver_address"`
+		Balance         int64         `json:"balance"`
+		Resource        ResourceField `json:"resource"`
+		Lock            bool          `json:"lock"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -329,10 +361,10 @@ func (api *API) undelegateResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		ReceiverAddress string `json:"receiver_address"`
-		Balance         int64  `json:"balance"`
-		Resource        int32  `json:"resource"`
+		OwnerAddress    string        `json:"owner_address"`
+		ReceiverAddress string        `json:"receiver_address"`
+		Balance         int64         `json:"balance"`
+		Resource        ResourceField `json:"resource"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
