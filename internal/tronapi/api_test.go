@@ -33,6 +33,9 @@ type stubBackend struct {
 	// M5.1 PR-1
 	accountByID *types.Account
 	accountNet  *apipb.AccountNetMessage
+	// For inspecting what contract was passed to BuildContractTransaction
+	lastContractType corepb.Transaction_Contract_ContractType
+	lastContract     proto.Message
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -235,6 +238,8 @@ func (s *stubBackend) BuildUnfreezeBalanceV1Transaction(owner common.Address, re
 
 // --- M5.1 PR-3+: Generic contract builder + misc ---
 func (s *stubBackend) BuildContractTransaction(contractType corepb.Transaction_Contract_ContractType, contract proto.Message, feeLimit int64) (*corepb.Transaction, error) {
+	s.lastContractType = contractType
+	s.lastContract = contract
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
@@ -640,7 +645,7 @@ func TestWithdrawExpireUnfreeze(t *testing.T) {
 
 func TestCreateAssetIssue(t *testing.T) {
 	testTxBuilder(t, "/wallet/createassetissue",
-		`{"owner_address":"4101000000000000000000000000000000000000000000","name":"dGVzdA==","abbr":"dA==","total_supply":"1000000","trx_num":1,"num":1,"start_time":"1000","end_time":"2000","precision":6}`)
+		`{"owner_address":"4101000000000000000000000000000000000000000000","name":"74657374","abbr":"74","total_supply":1000000,"trx_num":1,"num":1,"start_time":1000,"end_time":2000,"precision":6}`)
 }
 func TestUpdateAsset(t *testing.T) {
 	testTxBuilder(t, "/wallet/updateasset",
@@ -668,15 +673,15 @@ func TestExchangeCreate(t *testing.T) {
 }
 func TestExchangeInject(t *testing.T) {
 	testTxBuilder(t, "/wallet/exchangeinject",
-		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100"}`)
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":1,"token_id":"747278","quant":100}`)
 }
 func TestExchangeTransaction(t *testing.T) {
 	testTxBuilder(t, "/wallet/exchangetransaction",
-		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100","expected":"50"}`)
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":1,"token_id":"747278","quant":100,"expected":50}`)
 }
 func TestExchangeWithdraw(t *testing.T) {
 	testTxBuilder(t, "/wallet/exchangewithdraw",
-		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":"1","token_id":"dHJ4","quant":"100"}`)
+		`{"owner_address":"4101000000000000000000000000000000000000000000","exchange_id":1,"token_id":"747278","quant":100}`)
 }
 func TestMarketSellAsset(t *testing.T) {
 	testTxBuilder(t, "/wallet/marketsellasset",
@@ -685,6 +690,45 @@ func TestMarketSellAsset(t *testing.T) {
 func TestMarketCancelOrder(t *testing.T) {
 	testTxBuilder(t, "/wallet/marketcancelorder",
 		`{"owner_address":"4101000000000000000000000000000000000000000000"}`)
+}
+
+// --- Tests: M9.1 hex decode verification ---
+
+func TestExchangeCreateHexDecode(t *testing.T) {
+	stub := &stubBackend{}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	// owner_address, first_token_id, second_token_id are all hex strings
+	result := postJSON(t, srv.URL+"/wallet/exchangecreate",
+		`{"owner_address":"41e2ba4c4a3a8d31db8d893a13c3b0bc40f27ec2ff","first_token_id":"5f","first_token_balance":1000,"second_token_id":"313030303030","second_token_balance":1000}`)
+	if _, ok := result["raw_data"]; !ok {
+		t.Fatalf("expected raw_data in response, got %v", result)
+	}
+
+	// Verify that the contract passed to BuildContractTransaction has hex-decoded bytes.
+	if stub.lastContract == nil {
+		t.Fatal("lastContract was not captured")
+	}
+	ec, ok := stub.lastContract.(*contractpb.ExchangeCreateContract)
+	if !ok {
+		t.Fatalf("expected *ExchangeCreateContract, got %T", stub.lastContract)
+	}
+	wantOwner := common.FromHex("41e2ba4c4a3a8d31db8d893a13c3b0bc40f27ec2ff")
+	if string(ec.OwnerAddress) != string(wantOwner) {
+		t.Fatalf("OwnerAddress: got %x, want %x", ec.OwnerAddress, wantOwner)
+	}
+	wantFirstToken := common.FromHex("5f")
+	if string(ec.FirstTokenId) != string(wantFirstToken) {
+		t.Fatalf("FirstTokenId: got %x, want %x", ec.FirstTokenId, wantFirstToken)
+	}
+	if ec.FirstTokenBalance != 1000 {
+		t.Fatalf("FirstTokenBalance: got %d, want 1000", ec.FirstTokenBalance)
+	}
+	wantSecondToken := common.FromHex("313030303030")
+	if string(ec.SecondTokenId) != string(wantSecondToken) {
+		t.Fatalf("SecondTokenId: got %x, want %x", ec.SecondTokenId, wantSecondToken)
+	}
 }
 
 // --- Tests: M5.1 PR-6 Proposal/Monitoring ---

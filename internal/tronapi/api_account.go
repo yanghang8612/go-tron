@@ -2,10 +2,10 @@ package tronapi
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/tronprotocol/go-tron/common"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -77,22 +77,68 @@ func (api *API) setAccountId(w http.ResponseWriter, r *http.Request) {
 	writeTransactionJSON(w, tx)
 }
 
+// permBodyKey is a helper struct for JSON decoding a Permission.
+type permBodyKey struct {
+	Address string `json:"address"`
+	Weight  int64  `json:"weight"`
+}
+
+type permBody struct {
+	Type           int32         `json:"type"`
+	Id             int32         `json:"id"`
+	PermissionName string        `json:"permission_name"`
+	Threshold      int64         `json:"threshold"`
+	Operations     string        `json:"operations"`
+	Keys           []permBodyKey `json:"keys"`
+}
+
+func buildPermission(p *permBody) *corepb.Permission {
+	if p == nil {
+		return nil
+	}
+	keys := make([]*corepb.Key, 0, len(p.Keys))
+	for _, k := range p.Keys {
+		keys = append(keys, &corepb.Key{
+			Address: common.FromHex(k.Address),
+			Weight:  k.Weight,
+		})
+	}
+	return &corepb.Permission{
+		Type:           corepb.Permission_PermissionType(p.Type),
+		Id:             p.Id,
+		PermissionName: p.PermissionName,
+		Threshold:      p.Threshold,
+		Operations:     common.FromHex(p.Operations),
+		Keys:           keys,
+	}
+}
+
 func (api *API) accountPermissionUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body failed", http.StatusBadRequest)
+	var body struct {
+		OwnerAddress string     `json:"owner_address"`
+		Owner        *permBody  `json:"owner"`
+		Witness      *permBody  `json:"witness"`
+		Actives      []permBody `json:"actives"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	var c contractpb.AccountPermissionUpdateContract
-	if err := protojson.Unmarshal(body, &c); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
-		return
+	actives := make([]*corepb.Permission, 0, len(body.Actives))
+	for i := range body.Actives {
+		actives = append(actives, buildPermission(&body.Actives[i]))
 	}
-	tx, err := api.backend.BuildAccountPermissionUpdateTransaction(&c)
+	c := &contractpb.AccountPermissionUpdateContract{
+		OwnerAddress: common.FromHex(body.OwnerAddress),
+		Owner:        buildPermission(body.Owner),
+		Witness:      buildPermission(body.Witness),
+		Actives:      actives,
+	}
+	tx, err := api.backend.BuildAccountPermissionUpdateTransaction(c)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -2,33 +2,71 @@ package tronapi
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// createAssetIssue accepts the full AssetIssueContract proto JSON.
+// createAssetIssue accepts the AssetIssueContract fields as hex-encoded bytes.
 func (api *API) createAssetIssue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body failed", http.StatusBadRequest)
+	var body struct {
+		OwnerAddress          string `json:"owner_address"`
+		Name                  string `json:"name"`
+		Abbr                  string `json:"abbr"`
+		TotalSupply           int64  `json:"total_supply"`
+		FrozenSupply          []struct {
+			FrozenAmount int64 `json:"frozen_amount"`
+			FrozenDays   int64 `json:"frozen_days"`
+		} `json:"frozen_supply"`
+		TrxNum                int32  `json:"trx_num"`
+		Precision             int32  `json:"precision"`
+		Num                   int32  `json:"num"`
+		StartTime             int64  `json:"start_time"`
+		EndTime               int64  `json:"end_time"`
+		VoteScore             int32  `json:"vote_score"`
+		Description           string `json:"description"`
+		URL                   string `json:"url"`
+		FreeAssetNetLimit     int64  `json:"free_asset_net_limit"`
+		PublicFreeAssetNetLimit int64 `json:"public_free_asset_net_limit"`
+		ID                    string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	var c contractpb.AssetIssueContract
-	if err := protojson.Unmarshal(body, &c); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
-		return
+	frozen := make([]*contractpb.AssetIssueContract_FrozenSupply, 0, len(body.FrozenSupply))
+	for _, fs := range body.FrozenSupply {
+		frozen = append(frozen, &contractpb.AssetIssueContract_FrozenSupply{
+			FrozenAmount: fs.FrozenAmount,
+			FrozenDays:   fs.FrozenDays,
+		})
+	}
+	c := &contractpb.AssetIssueContract{
+		OwnerAddress:            common.FromHex(body.OwnerAddress),
+		Name:                    common.FromHex(body.Name),
+		Abbr:                    common.FromHex(body.Abbr),
+		TotalSupply:             body.TotalSupply,
+		FrozenSupply:            frozen,
+		TrxNum:                  body.TrxNum,
+		Precision:               body.Precision,
+		Num:                     body.Num,
+		StartTime:               body.StartTime,
+		EndTime:                 body.EndTime,
+		VoteScore:               body.VoteScore,
+		Description:             common.FromHex(body.Description),
+		Url:                     common.FromHex(body.URL),
+		FreeAssetNetLimit:       body.FreeAssetNetLimit,
+		PublicFreeAssetNetLimit: body.PublicFreeAssetNetLimit,
+		Id:                      body.ID,
 	}
 	tx, err := api.backend.BuildContractTransaction(
-		corepb.Transaction_Contract_AssetIssueContract, &c, 0)
+		corepb.Transaction_Contract_AssetIssueContract, c, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -41,18 +79,26 @@ func (api *API) updateAsset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body failed", http.StatusBadRequest)
+	var body struct {
+		OwnerAddress   string `json:"owner_address"`
+		Description    string `json:"description"`
+		URL            string `json:"url"`
+		NewLimit       int64  `json:"new_limit"`
+		NewPublicLimit int64  `json:"new_public_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	var c contractpb.UpdateAssetContract
-	if err := protojson.Unmarshal(body, &c); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
-		return
+	c := &contractpb.UpdateAssetContract{
+		OwnerAddress:   common.FromHex(body.OwnerAddress),
+		Description:    common.FromHex(body.Description),
+		Url:            common.FromHex(body.URL),
+		NewLimit:       body.NewLimit,
+		NewPublicLimit: body.NewPublicLimit,
 	}
 	tx, err := api.backend.BuildContractTransaction(
-		corepb.Transaction_Contract_UpdateAssetContract, &c, 0)
+		corepb.Transaction_Contract_UpdateAssetContract, c, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

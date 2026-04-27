@@ -12,7 +12,6 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -211,21 +210,47 @@ func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var pbTx corepb.Transaction
-	if err := protojson.Unmarshal(body, &pbTx); err != nil {
-		http.Error(w, "invalid transaction JSON", http.StatusBadRequest)
+	var envelope struct {
+		RawDataHex string   `json:"raw_data_hex"`
+		Signature  []string `json:"signature"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.RawDataHex == "" {
+		http.Error(w, "invalid transaction: missing raw_data_hex", http.StatusBadRequest)
 		return
 	}
 
-	// Compute txID from raw_data
-	var txID string
-	if pbTx.RawData != nil {
-		rawBytes, _ := proto.Marshal(pbTx.RawData)
-		h := sha256.Sum256(rawBytes)
-		txID = hex.EncodeToString(h[:])
+	rawBytes, err := hex.DecodeString(envelope.RawDataHex)
+	if err != nil {
+		http.Error(w, "invalid raw_data_hex", http.StatusBadRequest)
+		return
 	}
 
-	tx := types.NewTransactionFromPB(&pbTx)
+	var rawData corepb.TransactionRaw
+	if err := proto.Unmarshal(rawBytes, &rawData); err != nil {
+		http.Error(w, "invalid raw_data proto", http.StatusBadRequest)
+		return
+	}
+
+	sigs := make([][]byte, 0, len(envelope.Signature))
+	for _, s := range envelope.Signature {
+		sigBytes, err := hex.DecodeString(s)
+		if err != nil {
+			http.Error(w, "invalid signature hex", http.StatusBadRequest)
+			return
+		}
+		sigs = append(sigs, sigBytes)
+	}
+
+	pbTx := &corepb.Transaction{
+		RawData:   &rawData,
+		Signature: sigs,
+	}
+
+	// Compute txID from raw_data
+	h := sha256.Sum256(rawBytes)
+	txID := hex.EncodeToString(h[:])
+
+	tx := types.NewTransactionFromPB(pbTx)
 	if err := api.backend.BroadcastTransaction(tx); err != nil {
 		data, _ := MarshalBroadcastResult(false, txID, err.Error())
 		w.Header().Set("Content-Type", "application/json")
