@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/actuator"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -1210,4 +1211,37 @@ func matchTopics(filterTopics [][]tcommon.Hash, logTopics [][]byte) bool {
 		}
 	}
 	return true
+}
+
+// ValidateTransaction validates a transaction's contract logic against current state.
+// Mirrors java-tron Wallet#broadcastTransaction's synchronous validation step.
+// Returns nil if valid, nil for unsupported contract types (to allow broadcast),
+// or a human-readable error describing the validation failure.
+func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
+	act, err := actuator.CreateActuator(tx)
+	if err != nil {
+		// Unsupported contract type — skip validation, allow broadcast.
+		return nil
+	}
+
+	head := b.chain.CurrentBlock()
+	root := head.AccountStateRoot()
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return fmt.Errorf("open state: %w", err)
+	}
+
+	dynProps := state.LoadDynamicProperties(b.chain.DB())
+
+	ctx := &actuator.Context{
+		State:           statedb,
+		DynProps:        dynProps,
+		Tx:              tx,
+		BlockTime:       head.Timestamp(),
+		BlockNumber:     head.Number(),
+		DB:              b.chain.DB(),
+		ActiveWitnesses: b.chain.ActiveWitnesses(),
+	}
+
+	return act.Validate(ctx)
 }

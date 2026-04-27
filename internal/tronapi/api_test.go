@@ -1,7 +1,10 @@
 package tronapi_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,7 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // stubBackend is a test double for tronapi.Backend.
@@ -36,6 +40,8 @@ type stubBackend struct {
 	// For inspecting what contract was passed to BuildContractTransaction
 	lastContractType corepb.Transaction_Contract_ContractType
 	lastContract     proto.Message
+	// M9.7: controlled by test to simulate validate failure
+	validateErr error
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -255,6 +261,11 @@ func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 // --- M8.1: confirmation-depth stubs ---
 func (s *stubBackend) SolidifiedBlockNum() uint64 { return 0 }
 func (s *stubBackend) LatestPbftBlockNum() int64  { return -1 }
+
+// --- M9.7: synchronous actuator validate ---
+func (s *stubBackend) ValidateTransaction(tx *types.Transaction) error {
+	return s.validateErr
+}
 
 // --- Helpers ---
 func newTestServer(t *testing.T, stub *stubBackend) *httptest.Server {
@@ -790,4 +801,95 @@ func TestGetTransactionReceiptById(t *testing.T) {
 		`{"value":"aabbcc"}`)
 	// stub returns nil tx info → empty object
 	_ = result
+}
+
+// --- Tests: M9.7 broadcastTransaction synchronous actuator.Validate ---
+
+// buildBroadcastEnvelope creates the JSON body for /wallet/broadcasttransaction.
+// Uses a TransferContract so it matches a supported contract type.
+func buildBroadcastEnvelope(t *testing.T) string {
+	t.Helper()
+	transfer := &contractpb.TransferContract{
+		OwnerAddress: common.FromHex("410000000000000000000000000000000000000000"),
+		ToAddress:    common.FromHex("410000000000000000000000000000000000000001"),
+		Amount:       1000,
+	}
+	paramAny, err := anypb.New(transfer)
+	if err != nil {
+		t.Fatalf("anypb.New: %v", err)
+	}
+	rawData := &corepb.TransactionRaw{
+		Contract: []*corepb.Transaction_Contract{{
+			Type:      corepb.Transaction_Contract_TransferContract,
+			Parameter: paramAny,
+		}},
+		Expiration: 9999999999000,
+		Timestamp:  1000000,
+	}
+	rawBytes, err := proto.Marshal(rawData)
+	if err != nil {
+		t.Fatalf("proto.Marshal TransactionRaw: %v", err)
+	}
+	h := sha256.Sum256(rawBytes)
+	_ = h // txID used internally
+
+	body, err := json.Marshal(map[string]any{
+		"raw_data_hex": hex.EncodeToString(rawBytes),
+		"signature":    []string{},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal envelope: %v", err)
+	}
+	return string(body)
+}
+
+func TestBroadcastTransactionValidateError(t *testing.T) {
+	stub := &stubBackend{
+		validateErr: errors.New("owner account not found"),
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	envelope := buildBroadcastEnvelope(t)
+	result := postJSON(t, srv.URL+"/wallet/broadcasttransaction", envelope)
+
+	if result["result"] != false {
+		t.Fatalf("expected result=false, got %v", result["result"])
+	}
+	if result["code"] != "CONTRACT_VALIDATE_ERROR" {
+		t.Fatalf("expected code=CONTRACT_VALIDATE_ERROR, got %v", result["code"])
+	}
+	if result["message"] == "" {
+		t.Fatalf("expected non-empty message hex, got empty")
+	}
+	// message must decode to the original error string
+	msgHex, ok := result["message"].(string)
+	if !ok {
+		t.Fatalf("message is not a string: %T %v", result["message"], result["message"])
+	}
+	decoded, err := hex.DecodeString(msgHex)
+	if err != nil {
+		t.Fatalf("message is not valid hex: %v", err)
+	}
+	if string(decoded) != "owner account not found" {
+		t.Fatalf("decoded message mismatch: got %q", string(decoded))
+	}
+}
+
+func TestBroadcastTransactionValidateSuccess(t *testing.T) {
+	stub := &stubBackend{
+		validateErr: nil, // passes validation
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	envelope := buildBroadcastEnvelope(t)
+	result := postJSON(t, srv.URL+"/wallet/broadcasttransaction", envelope)
+
+	if result["result"] != true {
+		t.Fatalf("expected result=true on success, got %v", result["result"])
+	}
+	if result["code"] != "SUCCESS" {
+		t.Fatalf("expected code=SUCCESS, got %v", result["code"])
+	}
 }

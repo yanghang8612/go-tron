@@ -228,4 +228,9 @@ type Backend interface {
 	// Confirmation-depth block numbers (M8.1)
 	SolidifiedBlockNum() uint64 // latest solidified (DPoS 2/3 confirmed) block number
 	LatestPbftBlockNum() int64  // latest PBFT-confirmed block number; -1 if not yet active
+
+	// ValidateTransaction validates a transaction's contract logic against current state.
+	// Returns nil if valid; a human-readable error otherwise.
+	// Returns nil (skips validation) for unsupported contract types.
+	ValidateTransaction(tx *types.Transaction) error
 }

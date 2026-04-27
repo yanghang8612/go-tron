@@ -231,6 +231,7 @@ func (b *testBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 func (b *testBackend) ValidateAddress(addr string) (bool, string)              { return false, "" }
 func (b *testBackend) SolidifiedBlockNum() uint64                              { return 0 }
 func (b *testBackend) LatestPbftBlockNum() int64                               { return -1 }
+func (b *testBackend) ValidateTransaction(tx *types.Transaction) error         { return nil }
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {

@@ -254,6 +254,16 @@ func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {
 	txID := hex.EncodeToString(h[:])
 
 	tx := types.NewTransactionFromPB(pbTx)
+
+	// Validate business logic synchronously (mirrors java-tron Wallet#broadcastTransaction).
+	// ValidateTransaction returns nil for unsupported contract types (no blocking).
+	if err := api.backend.ValidateTransaction(tx); err != nil {
+		data, _ := marshalValidateError(txID, err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+
 	if err := api.backend.BroadcastTransaction(tx); err != nil {
 		data, _ := MarshalBroadcastResult(false, txID, err.Error())
 		w.Header().Set("Content-Type", "application/json")
@@ -264,6 +274,17 @@ func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {
 	data, _ := MarshalBroadcastResult(true, txID, "")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// marshalValidateError builds a java-tron-compatible CONTRACT_VALIDATE_ERROR response.
+func marshalValidateError(txID string, errMsg string) ([]byte, error) {
+	result := map[string]any{
+		"result":  false,
+		"txid":    txID,
+		"code":    "CONTRACT_VALIDATE_ERROR",
+		"message": hex.EncodeToString([]byte(errMsg)),
+	}
+	return json.Marshal(result)
 }
 
 func (api *API) getNodeInfo(w http.ResponseWriter, r *http.Request) {
