@@ -386,3 +386,4 @@ Eviction removes entries from both `byHash` and `byNum`. Since parent pointers i
 - PBFT-based solidification floor (M6 dependency): solidified blocks cannot be forked away; for now, `maxCapacity=1024` is the only floor.
 - Transaction re-injection after fork switch (java-tron re-adds popped transactions to `rePushTransactions`): deferred to a later slice.
 - Metrics/counters for fork events: deferred.
+- **Mid-fork failure partial-rewind**: if `applyBlock` fails on block N of the new branch (N > LCA+1), `currentBlock` ends up pointing at block N-1 on the new chain — neither the original canonical tip nor the new tip. The next successful push will recover naturally if a valid block arrives there. java-tron avoids this by fully re-applying the old branch on error; go-tron does not attempt that recovery (the old-branch state roots are still accessible via the hash-based MPT, but the re-apply loop was omitted as out of scope for this milestone).
