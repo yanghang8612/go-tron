@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -753,20 +752,20 @@ func (api *API) proposalCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress string           `json:"owner_address"`
-		Parameters   map[string]int64 `json:"parameters"`
+		OwnerAddress string `json:"owner_address"`
+		Parameters   []struct {
+			Key   int64 `json:"key"`
+			Value int64 `json:"value"`
+		} `json:"parameters"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	// Convert string keys to int64
 	params := make(map[int64]int64, len(body.Parameters))
-	for k, v := range body.Parameters {
-		var key int64
-		fmt.Sscanf(k, "%d", &key)
-		params[key] = v
+	for _, p := range body.Parameters {
+		params[p.Key] = p.Value
 	}
 	tx, err := api.backend.BuildProposalCreateTransaction(owner, params)
 	if err != nil {
