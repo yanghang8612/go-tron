@@ -95,3 +95,49 @@ func TestProcessProposals_NotExpired(t *testing.T) {
 		t.Fatalf("expected still PENDING, got %d", got.State)
 	}
 }
+
+func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+
+	runProposal := func(paramID, value, expirationTime int64, active []tcommon.Address) *state.DynamicProperties {
+		t.Helper()
+		dp := state.NewDynamicProperties()
+		p := &rawdb.Proposal{
+			Parameters:     map[int64]int64{paramID: value},
+			ExpirationTime: expirationTime,
+			Approvals:      active,
+			State:          rawdb.ProposalStatePending,
+		}
+		rawdb.WriteProposal(db, p.ID, p)
+		rawdb.WriteProposalIndex(db, []int64{p.ID})
+		if err := ProcessProposals(db, dp, active, expirationTime+1, nil); err != nil {
+			t.Fatalf("ProcessProposals: %v", err)
+		}
+		return dp
+	}
+
+	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}}
+
+	// Proposal #3 (TRANSACTION_FEE) appends to bandwidth_price_history
+	dp := runProposal(3, 20, 5000, active)
+	want := "0:10,5000:20"
+	if got := dp.BandwidthPriceHistory(); got != want {
+		t.Errorf("BandwidthPriceHistory after proposal #3: got %q, want %q", got, want)
+	}
+
+	// Proposal #11 (ENERGY_FEE) appends to energy_price_history
+	db = ethrawdb.NewMemoryDatabase()
+	dp = runProposal(11, 200, 6000, active)
+	want = "0:100,6000:200"
+	if got := dp.EnergyPriceHistory(); got != want {
+		t.Errorf("EnergyPriceHistory after proposal #11: got %q, want %q", got, want)
+	}
+
+	// Proposal #68 (MEMO_FEE) appends to memo_fee_history
+	db = ethrawdb.NewMemoryDatabase()
+	dp = runProposal(68, 100, 7000, active)
+	want = "0:0,7000:100"
+	if got := dp.MemoFeeHistory(); got != want {
+		t.Errorf("MemoFeeHistory after proposal #68: got %q, want %q", got, want)
+	}
+}

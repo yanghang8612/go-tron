@@ -524,6 +524,48 @@ func (s *StateDB) TotalFrozenV2(addr tcommon.Address) int64 {
 	return obj.account.TotalFrozenV2()
 }
 
+// GetLegacyTronPower returns the pre-AllowNewResourceModel voting power in drops.
+func (s *StateDB) GetLegacyTronPower(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LegacyTronPower()
+}
+
+// GetAllTronPower returns the AllowNewResourceModel voting power in drops.
+func (s *StateDB) GetAllTronPower(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.AllTronPower()
+}
+
+// InitializeOldTronPowerIfNeeded snapshots LegacyTronPower into old_tron_power
+// when the field is still uninitialized (== 0). No-op otherwise.
+func (s *StateDB) InitializeOldTronPowerIfNeeded(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil || !obj.account.OldTronPowerIsNotInitialized() {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.InitializeOldTronPower()
+	obj.markDirty()
+}
+
+// InvalidateOldTronPower sets old_tron_power to -1 (invalid), consuming the
+// legacy snapshot. No-op if already invalid.
+func (s *StateDB) InvalidateOldTronPower(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.account.OldTronPowerIsInvalid() {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.InvalidateOldTronPower()
+	obj.markDirty()
+}
+
 // GetVotes returns the votes for an account.
 func (s *StateDB) GetVotes(addr tcommon.Address) []*corepb.Vote {
 	obj := s.getStateObject(addr)

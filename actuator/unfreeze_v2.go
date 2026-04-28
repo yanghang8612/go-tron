@@ -56,12 +56,30 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(uc.OwnerAddress)
+
+	// AllowNewResourceModel: snapshot legacy tron power before the unfreeze so
+	// that old_tron_power captures the pre-unfreeze state.
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
+	}
+
 	ctx.State.ReduceFreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance)
 	expireTime := ctx.BlockTime + ctx.DynProps.UnfreezeDelayDays()*86_400_000
 	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
 
-	// Invalidate votes if remaining Tron Power < total votes cast
-	newTP := ctx.State.TotalFrozenV2(ownerAddr) / int64(params.TRXPrecision)
+	// AllowNewResourceModel: any V2 unfreeze consumes the legacy snapshot,
+	// so only explicit TRON_POWER-typed frozen counts going forward.
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		ctx.State.InvalidateOldTronPower(ownerAddr)
+	}
+
+	// Prune votes if remaining tron power is now less than votes cast.
+	var newTP int64
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		newTP = ctx.State.GetAllTronPower(ownerAddr) / int64(params.TRXPrecision)
+	} else {
+		newTP = ctx.State.GetLegacyTronPower(ownerAddr) / int64(params.TRXPrecision)
+	}
 	votes := ctx.State.GetVotes(ownerAddr)
 	var totalVotes int64
 	for _, v := range votes {

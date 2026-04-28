@@ -391,9 +391,13 @@ func (c *totalVoteCount) Run(tvm *TVM, _ tcommon.Address, input []byte, energy u
 		return make([]byte, 32), cost, nil
 	}
 	addr := tronAddrFromWord(input)
-	// Tron Power = total frozen V2 / TRX_PRECISION (1 TP per 1 TRX frozen)
-	tp := tvm.StateDB.TotalFrozenV2(addr) / trxPrecision
-	return int64ToBytes32(tp), cost, nil
+	var tp int64
+	if tvm.cfg.NewResourceModelPower {
+		tp = tvm.StateDB.GetAllTronPower(addr)
+	} else {
+		tp = tvm.StateDB.GetLegacyTronPower(addr)
+	}
+	return int64ToBytes32(tp/trxPrecision), cost, nil
 }
 
 // ── 0x0100000b GetChainParameter ─────────────────────────────────────────────

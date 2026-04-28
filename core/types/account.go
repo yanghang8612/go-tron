@@ -89,6 +89,92 @@ func (a *Account) TotalFrozenV2() int64 {
 	return total
 }
 
+// OldTronPower returns the old_tron_power field: 0=uninitialized, -1=invalid, >0=snapshot.
+func (a *Account) OldTronPower() int64 { return a.pb.OldTronPower }
+
+// SetOldTronPower sets the old_tron_power field directly.
+func (a *Account) SetOldTronPower(v int64) { a.pb.OldTronPower = v }
+
+// OldTronPowerIsNotInitialized reports whether the field has not been set yet (== 0).
+func (a *Account) OldTronPowerIsNotInitialized() bool { return a.pb.OldTronPower == 0 }
+
+// OldTronPowerIsInvalid reports whether the field is marked invalid (== -1).
+func (a *Account) OldTronPowerIsInvalid() bool { return a.pb.OldTronPower == -1 }
+
+// V1TronPowerFrozen returns the V1 explicit tron_power-typed frozen balance (proto field 47).
+func (a *Account) V1TronPowerFrozen() int64 {
+	if a.pb.TronPower == nil {
+		return 0
+	}
+	return a.pb.TronPower.FrozenBalance
+}
+
+// V2TronPowerFrozen returns the V2 TRON_POWER-resource-typed frozen balance.
+func (a *Account) V2TronPowerFrozen() int64 {
+	for _, f := range a.pb.FrozenV2 {
+		if f.Type == corepb.ResourceCode_TRON_POWER {
+			return f.Amount
+		}
+	}
+	return 0
+}
+
+// LegacyTronPower returns voting power using the pre-AllowNewResourceModel model:
+// V1 frozen (bandwidth + energy + delegated) + non-TRON_POWER V2 frozen + V2 delegated.
+// Mirrors java-tron AccountCapsule.getTronPower().
+func (a *Account) LegacyTronPower() int64 {
+	var tp int64
+	tp += a.TotalFrozenBandwidth()
+	tp += a.FrozenEnergyAmount()
+	tp += a.DelegatedFrozenBandwidth()
+	tp += a.DelegatedFrozenEnergy()
+	for _, f := range a.pb.FrozenV2 {
+		if f.Type != corepb.ResourceCode_TRON_POWER {
+			tp += f.Amount
+		}
+	}
+	tp += a.DelegatedFrozenV2BalanceForBandwidth()
+	tp += a.DelegatedFrozenV2BalanceForEnergy()
+	return tp
+}
+
+// AllTronPower returns voting power using the AllowNewResourceModel model.
+// The old_tron_power field controls which legacy amount to credit:
+//   - 0 (uninitialized): use LegacyTronPower() live
+//   - -1 (invalid): legacy contribution is zero
+//   - >0 (snapshot): use the snapshotted value
+//
+// Either way, explicit V1 and V2 TRON_POWER-typed frozen are always added.
+// Mirrors java-tron AccountCapsule.getAllTronPower().
+func (a *Account) AllTronPower() int64 {
+	v1tp := a.V1TronPowerFrozen()
+	v2tp := a.V2TronPowerFrozen()
+	switch {
+	case a.pb.OldTronPower == -1:
+		return v1tp + v2tp
+	case a.pb.OldTronPower == 0:
+		return a.LegacyTronPower() + v1tp + v2tp
+	default:
+		return a.pb.OldTronPower + v1tp + v2tp
+	}
+}
+
+// InitializeOldTronPower snapshots the current LegacyTronPower into old_tron_power,
+// or sets -1 if the legacy power is zero. Mirrors AccountCapsule.initializeOldTronPower().
+func (a *Account) InitializeOldTronPower() {
+	value := a.LegacyTronPower()
+	if value == 0 {
+		value = -1
+	}
+	a.pb.OldTronPower = value
+}
+
+// InvalidateOldTronPower marks old_tron_power as -1 (invalid).
+// Called after any V2 unfreeze to consume the legacy snapshot.
+func (a *Account) InvalidateOldTronPower() {
+	a.pb.OldTronPower = -1
+}
+
 // UnfrozenV2 returns all UnFreezeV2 entries.
 func (a *Account) UnfrozenV2() []*corepb.Account_UnFreezeV2 {
 	return a.pb.UnfrozenV2

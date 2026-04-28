@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -39,7 +40,13 @@ func (a *VoteWitnessActuator) Validate(ctx *Context) error {
 		return errors.New("too many votes")
 	}
 
-	tronPower := ctx.State.TotalFrozenV2(ownerAddr) / int64(params.TRXPrecision)
+	var tronPower int64
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		tronPower = ctx.State.GetAllTronPower(ownerAddr)
+	} else {
+		tronPower = ctx.State.GetLegacyTronPower(ownerAddr)
+	}
+	tronPower /= int64(params.TRXPrecision)
 	var totalVoteCount int64
 	seen := make(map[common.Address]bool)
 	for _, v := range vc.Votes {
@@ -79,6 +86,13 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 	// a voter who changes targets would retroactively earn the new
 	// witness's rewards for past cycles.
 	withdrawReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr)
+
+	// AllowNewResourceModel: snapshot legacy tron power into old_tron_power on the
+	// first vote after the fork, so subsequent getAllTronPower() calls return a
+	// stable value independent of new non-TRON_POWER-typed V2 freezes.
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
+	}
 
 	// Remove old votes from witnesses
 	oldVotes := ctx.State.GetVotes(ownerAddr)
