@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
@@ -70,6 +72,12 @@ func paramIDToName(id int64) string {
 func applyProposalSideEffects(p *rawdb.Proposal, dynProps *state.DynamicProperties, fc *forks.ForkController, maintenanceTime int64) {
 	for paramID, value := range p.Parameters {
 		switch paramID {
+		case 3: // TRANSACTION_FEE — append entry to bandwidth price history
+			dynProps.SetBandwidthPriceHistory(
+				dynProps.BandwidthPriceHistory() + fmt.Sprintf(",%d:%d", p.ExpirationTime, value))
+		case 11: // ENERGY_FEE — append entry to energy price history
+			dynProps.SetEnergyPriceHistory(
+				dynProps.EnergyPriceHistory() + fmt.Sprintf(",%d:%d", p.ExpirationTime, value))
 		case 21: // ALLOW_ADAPTIVE_ENERGY
 			if fc != nil && fc.Pass(version3_6_5, maintenanceTime, dynProps.MaintenanceTimeInterval()) {
 				dynProps.SetAdaptiveResourceLimitTargetRatio(2880)
@@ -84,6 +92,9 @@ func applyProposalSideEffects(p *rawdb.Proposal, dynProps *state.DynamicProperti
 				// at the NEXT maintenance boundary.
 				dynProps.SetNewRewardAlgorithmEffectiveCycle(dynProps.CurrentCycleNumber() + 1)
 			}
+		case 68: // MEMO_FEE — append entry to memo fee history
+			dynProps.SetMemoFeeHistory(
+				dynProps.MemoFeeHistory() + fmt.Sprintf(",%d:%d", p.ExpirationTime, value))
 		}
 	}
 }

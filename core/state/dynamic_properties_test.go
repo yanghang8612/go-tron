@@ -1,6 +1,7 @@
 package state
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -242,4 +243,74 @@ func TestDynamicProperties_All(t *testing.T) {
 	if _, ok := all["maintenance_time_interval"]; !ok {
 		t.Fatal("missing maintenance_time_interval in All()")
 	}
+}
+
+// String DP keys
+
+func TestDynamicProperties_StringDefaults(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	if got := dp.EnergyPriceHistory(); got != "0:100" {
+		t.Errorf("EnergyPriceHistory default: got %q, want %q", got, "0:100")
+	}
+	if got := dp.BandwidthPriceHistory(); got != "0:10" {
+		t.Errorf("BandwidthPriceHistory default: got %q, want %q", got, "0:10")
+	}
+	if got := dp.MemoFeeHistory(); got != "0:0" {
+		t.Errorf("MemoFeeHistory default: got %q, want %q", got, "0:0")
+	}
+}
+
+func TestDynamicProperties_StringSetGet(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	dp.SetEnergyPriceHistory("0:100,1000000:200")
+	if got := dp.EnergyPriceHistory(); got != "0:100,1000000:200" {
+		t.Errorf("SetEnergyPriceHistory: got %q, want %q", got, "0:100,1000000:200")
+	}
+}
+
+func TestDynamicProperties_StringFlushAndLoad(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dp := NewDynamicProperties()
+
+	dp.SetEnergyPriceHistory("0:100,9999:200")
+	dp.SetBandwidthPriceHistory("0:10,8888:20")
+	dp.SetMemoFeeHistory("0:0,7777:50")
+	dp.Flush(db)
+
+	loaded := LoadDynamicProperties(db)
+
+	if got := loaded.EnergyPriceHistory(); got != "0:100,9999:200" {
+		t.Errorf("loaded EnergyPriceHistory: got %q, want %q", got, "0:100,9999:200")
+	}
+	if got := loaded.BandwidthPriceHistory(); got != "0:10,8888:20" {
+		t.Errorf("loaded BandwidthPriceHistory: got %q, want %q", got, "0:10,8888:20")
+	}
+	if got := loaded.MemoFeeHistory(); got != "0:0,7777:50" {
+		t.Errorf("loaded MemoFeeHistory: got %q, want %q", got, "0:0,7777:50")
+	}
+}
+
+func TestDynamicProperties_StringNotInAll(t *testing.T) {
+	dp := NewDynamicProperties()
+	all := dp.All()
+	// The string-typed history keys must not appear in the int64 All() map.
+	// (The "_done" int64 companions are fine to be there.)
+	stringOnlyKeys := []string{"energy_price_history", "bandwidth_price_history", "memo_fee_history"}
+	for _, k := range stringOnlyKeys {
+		if _, ok := all[k]; ok {
+			t.Errorf("All() must not contain string-typed key %q", k)
+		}
+	}
+	// The int64 done-flags should be present.
+	if _, ok := all["energy_price_history_done"]; !ok {
+		t.Error("All() missing energy_price_history_done")
+	}
+	if _, ok := all["bandwidth_price_history_done"]; !ok {
+		t.Error("All() missing bandwidth_price_history_done")
+	}
+	// Suppress unused import warning; strings.Contains is used elsewhere in the
+	// test file so this reference keeps things tidy.
+	_ = strings.Contains
 }

@@ -8,6 +8,17 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
+// defaultStringProps holds the initial values for string-typed DP keys.
+// These are stored as raw UTF-8 bytes in the DB (not as int64).
+// Price-history format: "timestamp1:price1,timestamp2:price2,..."
+// Default prices match java-tron DynamicPropertiesStore constants:
+//   DEFAULT_ENERGY_FEE = 100, DEFAULT_TRANSACTION_FEE = 10, MEMO_FEE = 0.
+var defaultStringProps = map[string]string{
+	"energy_price_history":    "0:100",
+	"bandwidth_price_history": "0:10",
+	"memo_fee_history":        "0:0",
+}
+
 var defaultProps = map[string]int64{
 	"maintenance_time_interval":                 21600000,
 	"account_upgrade_cost":                      9999000000,
@@ -127,6 +138,10 @@ var defaultProps = map[string]int64{
 
 	// §1.6: freeze/supply/bandwidth/accounting keys missing from earlier
 	// backfills. Defaults verified against java-tron DynamicPropertiesStore.
+	// The "done" flags track whether the one-time price-history loader has
+	// run (0 = not yet, 1 = done); default 0 matches java-tron's initial state.
+	"energy_price_history_done":    0,
+	"bandwidth_price_history_done": 0,
 	"max_frozen_time":              3,
 	"min_frozen_time":              3,
 	"max_frozen_supply_number":     10,
@@ -148,6 +163,8 @@ var defaultProps = map[string]int64{
 type DynamicProperties struct {
 	props                 map[string]int64
 	dirty                 map[string]struct{}
+	stringProps           map[string]string
+	stringDirty           map[string]struct{}
 	latestBlockHeaderHash common.Hash
 	hashDirty             bool
 }
@@ -155,11 +172,16 @@ type DynamicProperties struct {
 // NewDynamicProperties creates a DynamicProperties with default values.
 func NewDynamicProperties() *DynamicProperties {
 	dp := &DynamicProperties{
-		props: make(map[string]int64, len(defaultProps)),
-		dirty: make(map[string]struct{}),
+		props:       make(map[string]int64, len(defaultProps)),
+		dirty:       make(map[string]struct{}),
+		stringProps: make(map[string]string, len(defaultStringProps)),
+		stringDirty: make(map[string]struct{}),
 	}
 	for k, v := range defaultProps {
 		dp.props[k] = v
+	}
+	for k, v := range defaultStringProps {
+		dp.stringProps[k] = v
 	}
 	return dp
 }
@@ -171,6 +193,12 @@ func LoadDynamicProperties(db ethdb.KeyValueReader) *DynamicProperties {
 		data := rawdb.ReadDynamicProperty(db, k)
 		if len(data) == 8 {
 			dp.props[k] = int64(binary.BigEndian.Uint64(data))
+		}
+	}
+	for k := range defaultStringProps {
+		data := rawdb.ReadDynamicProperty(db, k)
+		if len(data) > 0 {
+			dp.stringProps[k] = string(data)
 		}
 	}
 	hashData := rawdb.ReadDynamicProperty(db, "latest_block_header_hash")
@@ -187,11 +215,15 @@ func (dp *DynamicProperties) Flush(db ethdb.KeyValueWriter) {
 		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
 		rawdb.WriteDynamicProperty(db, k, append([]byte{}, buf...))
 	}
+	for k := range dp.stringDirty {
+		rawdb.WriteDynamicProperty(db, k, []byte(dp.stringProps[k]))
+	}
 	if dp.hashDirty {
 		rawdb.WriteDynamicProperty(db, "latest_block_header_hash", dp.latestBlockHeaderHash.Bytes())
 		dp.hashDirty = false
 	}
 	dp.dirty = make(map[string]struct{})
+	dp.stringDirty = make(map[string]struct{})
 }
 
 // Get returns the value for a key and whether it was found.
@@ -1146,4 +1178,58 @@ func (dp *DynamicProperties) SetBlockFilledSlotsIndex(v int64) {
 func (dp *DynamicProperties) VersionNumber() int64 { return dp.props["version_number"] }
 func (dp *DynamicProperties) SetVersionNumber(v int64) {
 	dp.Set("version_number", v)
+}
+
+// --- String DP properties ---
+
+// GetString returns the value and existence flag for a string-typed DP key.
+func (dp *DynamicProperties) GetString(key string) (string, bool) {
+	v, ok := dp.stringProps[key]
+	return v, ok
+}
+
+// SetString sets a string-typed DP key and marks it dirty.
+func (dp *DynamicProperties) SetString(key string, value string) {
+	dp.stringProps[key] = value
+	dp.stringDirty[key] = struct{}{}
+}
+
+// Price-history accessors.
+// Format: "timestamp1:price1,timestamp2:price2,..."
+// Timestamps are proposal expiration times (milliseconds since epoch, matches
+// java-tron ProposalService.proposalCapsule.getExpirationTime()).
+
+func (dp *DynamicProperties) EnergyPriceHistory() string {
+	return dp.stringProps["energy_price_history"]
+}
+func (dp *DynamicProperties) SetEnergyPriceHistory(v string) {
+	dp.SetString("energy_price_history", v)
+}
+
+func (dp *DynamicProperties) BandwidthPriceHistory() string {
+	return dp.stringProps["bandwidth_price_history"]
+}
+func (dp *DynamicProperties) SetBandwidthPriceHistory(v string) {
+	dp.SetString("bandwidth_price_history", v)
+}
+
+func (dp *DynamicProperties) MemoFeeHistory() string {
+	return dp.stringProps["memo_fee_history"]
+}
+func (dp *DynamicProperties) SetMemoFeeHistory(v string) {
+	dp.SetString("memo_fee_history", v)
+}
+
+func (dp *DynamicProperties) EnergyPriceHistoryDone() int64 {
+	return dp.props["energy_price_history_done"]
+}
+func (dp *DynamicProperties) SetEnergyPriceHistoryDone(v int64) {
+	dp.Set("energy_price_history_done", v)
+}
+
+func (dp *DynamicProperties) BandwidthPriceHistoryDone() int64 {
+	return dp.props["bandwidth_price_history_done"]
+}
+func (dp *DynamicProperties) SetBandwidthPriceHistoryDone(v int64) {
+	dp.Set("bandwidth_price_history_done", v)
 }

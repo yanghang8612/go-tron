@@ -722,9 +722,13 @@ func (b *TronBackend) TotalTransaction() int64 { return 0 }
 
 func (b *TronBackend) GetBurnTrx() int64 { return 0 }
 
-func (b *TronBackend) GetBandwidthPrices() string { return "" }
+func (b *TronBackend) GetBandwidthPrices() string {
+	return state.LoadDynamicProperties(b.chain.db).BandwidthPriceHistory()
+}
 
-func (b *TronBackend) GetEnergyPrices() string { return "" }
+func (b *TronBackend) GetEnergyPrices() string {
+	return state.LoadDynamicProperties(b.chain.db).EnergyPriceHistory()
+}
 
 func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
 	all, err := b.ListProposals()
