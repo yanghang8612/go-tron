@@ -6,6 +6,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -39,6 +40,17 @@ func (a *UnfreezeBalanceV2Actuator) Validate(ctx *Context) error {
 	}
 	if uc.UnfreezeBalance <= 0 {
 		return errors.New("unfreeze balance must be positive")
+	}
+	newResourceModel := forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps)
+	switch uc.Resource {
+	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
+		// always valid under StakingV2
+	case corepb.ResourceCode_TRON_POWER:
+		if !newResourceModel {
+			return errors.New("TRON_POWER unfreeze requires AllowNewResourceModel")
+		}
+	default:
+		return errors.New("invalid resource type")
 	}
 	frozen := ctx.State.GetFrozenV2Amount(ownerAddr, uc.Resource)
 	if frozen < uc.UnfreezeBalance {

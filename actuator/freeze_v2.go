@@ -41,8 +41,19 @@ func (a *FreezeBalanceV2Actuator) Validate(ctx *Context) error {
 	if ctx.State.GetBalance(ownerAddr) < fc.FrozenBalance {
 		return errors.New("insufficient balance to freeze")
 	}
-	if fc.Resource != corepb.ResourceCode_BANDWIDTH && fc.Resource != corepb.ResourceCode_ENERGY {
-		return errors.New("invalid resource type")
+	newResourceModel := forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps)
+	switch fc.Resource {
+	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
+		// always allowed under StakingV2
+	case corepb.ResourceCode_TRON_POWER:
+		if !newResourceModel {
+			return errors.New("TRON_POWER freeze requires AllowNewResourceModel")
+		}
+	default:
+		if newResourceModel {
+			return errors.New("invalid resource type; valid: BANDWIDTH, ENERGY, TRON_POWER")
+		}
+		return errors.New("invalid resource type; valid: BANDWIDTH, ENERGY")
 	}
 	return nil
 }
@@ -53,6 +64,13 @@ func (a *FreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(fc.OwnerAddress)
+
+	// AllowNewResourceModel: snapshot legacy tron power on the first V2 freeze
+	// after the fork, so getAllTronPower() remains stable going forward.
+	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
+		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
+	}
+
 	if err := ctx.State.SubBalance(ownerAddr, fc.FrozenBalance); err != nil {
 		return nil, err
 	}
