@@ -81,7 +81,7 @@ func (a *ExchangeCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
 	fee := ctx.DynProps.ExchangeCreateFee()
 
-	if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
 	}
 	if err := deductToken(ctx, ownerAddr, c.FirstTokenId, c.FirstTokenBalance); err != nil {

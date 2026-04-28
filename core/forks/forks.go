@@ -28,6 +28,7 @@ const (
 	AllowEnergyAdjustment
 	AllowTvmBlob
 	AllowTvmCancun
+	AllowBlackholeOptimization
 )
 
 // dynKey maps each AllowFlag to its DynamicProperties string key.
@@ -52,8 +53,9 @@ var dynKey = map[AllowFlag]string{
 	AllowDynamicEnergy:       "allow_dynamic_energy",
 	AllowNewResourceModel:    "allow_new_resource_model",
 	AllowEnergyAdjustment:    "allow_energy_adjustment",
-	AllowTvmBlob:             "allow_tvm_blob",
-	AllowTvmCancun:           "allow_tvm_cancun",
+	AllowTvmBlob:                 "allow_tvm_blob",
+	AllowTvmCancun:               "allow_tvm_cancun",
+	AllowBlackholeOptimization:   "allow_blackhole_optimization",
 }
 
 // IsActive returns true if the flag is activated in the DynamicProperties.

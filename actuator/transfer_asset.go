@@ -72,10 +72,8 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if !ctx.State.AccountExists(to) {
 		ctx.State.CreateAccount(to, corepb.AccountType_Normal)
 		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
-		if fee > 0 {
-			if err := ctx.State.SubBalance(from, fee); err != nil {
-				return nil, err
-			}
+		if err := burnFee(ctx, from, fee); err != nil {
+			return nil, err
 		}
 	}
 

@@ -50,7 +50,7 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
 	fee := ctx.DynProps.AccountUpgradeCost()
-	if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
 	}
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))

@@ -138,9 +138,8 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.SetTRC10Balance(owner, tokenID, freeAmount)
 	}
 
-	// Burn issuance fee
 	fee := ctx.DynProps.AssetIssueFee()
-	if err := ctx.State.SubBalance(owner, fee); err != nil {
+	if err := burnFee(ctx, owner, fee); err != nil {
 		return nil, err
 	}
 
