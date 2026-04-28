@@ -58,6 +58,11 @@ func (a *MarketSellAssetActuator) Validate(ctx *Context) error {
 	if err := checkTokenBalance(ctx, ownerAddr, c.SellTokenId, c.SellTokenQuantity); err != nil {
 		return err
 	}
+	// Check sufficient TRX balance for sell fee
+	fee := ctx.DynProps.MarketSellFee()
+	if ctx.State.GetBalance(ownerAddr) < fee {
+		return errors.New("insufficient balance for market sell fee")
+	}
 	return nil
 }
 
@@ -69,6 +74,10 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	fee := ctx.DynProps.MarketSellFee()
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
+		return nil, err
+	}
 
 	// Step 1: Deduct sell tokens from owner (put in escrow)
 	if err := deductToken(ctx, ownerAddr, c.SellTokenId, c.SellTokenQuantity); err != nil {
@@ -133,7 +142,7 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	return &Result{ContractRet: 1}, nil
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }
 
 // generateOrderID creates a unique order ID by hashing owner address + tx hash.

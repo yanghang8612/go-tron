@@ -65,6 +65,12 @@ func (a *MarketCancelOrderActuator) Validate(ctx *Context) error {
 		return errors.New("order is not ACTIVE")
 	}
 
+	// 6. Sufficient balance for cancel fee (may be zero, but still checked)
+	fee := ctx.DynProps.MarketCancelFee()
+	if ctx.State.GetBalance(ownerAddr) < fee {
+		return errors.New("insufficient balance for market cancel fee")
+	}
+
 	return nil
 }
 
@@ -76,6 +82,10 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	fee := ctx.DynProps.MarketCancelFee()
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
+		return nil, err
+	}
 
 	// Step 1: Read order from DB
 	order := rawdb.ReadMarketOrder(ctx.DB, c.OrderId)
@@ -115,8 +125,9 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	return &Result{ContractRet: 1}, nil
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }
+
 
 // removeOrderFromBook unlinks the order from the linked list in the order book.
 // If the list becomes empty, it deletes the order book entry and removes the price from the price list.
