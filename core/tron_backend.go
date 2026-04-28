@@ -718,9 +718,13 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
 	return rawdb.ReadWitnessBrokerage(b.chain.db, addr)
 }
 
-func (b *TronBackend) TotalTransaction() int64 { return 0 }
+func (b *TronBackend) TotalTransaction() int64 {
+	return rawdb.ReadTotalTransactionCount(b.chain.db)
+}
 
-func (b *TronBackend) GetBurnTrx() int64 { return 0 }
+func (b *TronBackend) GetBurnTrx() int64 {
+	return state.LoadDynamicProperties(b.chain.db).BurnTrxAmount()
+}
 
 func (b *TronBackend) GetBandwidthPrices() string {
 	return state.LoadDynamicProperties(b.chain.db).BandwidthPriceHistory()

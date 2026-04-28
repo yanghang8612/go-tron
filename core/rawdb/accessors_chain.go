@@ -104,3 +104,21 @@ func AppendWitnessIndex(db ethdb.KeyValueStore, addr common.Address) {
 	existing = append(existing, addr)
 	WriteWitnessIndex(db, existing)
 }
+
+// ReadTotalTransactionCount returns the cumulative number of transactions ever
+// processed by this node. Returns 0 if the counter has not been written yet.
+// Non-consensus metric: not part of any state root or block hash.
+func ReadTotalTransactionCount(db ethdb.KeyValueReader) int64 {
+	data, err := db.Get(totalTransactionCountKey)
+	if err != nil || len(data) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(data))
+}
+
+// WriteTotalTransactionCount persists the cumulative transaction count.
+func WriteTotalTransactionCount(db ethdb.KeyValueWriter, count int64) {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(count))
+	db.Put(totalTransactionCountKey, buf[:])
+}

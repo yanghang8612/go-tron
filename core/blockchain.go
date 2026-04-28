@@ -317,6 +317,12 @@ func (bc *BlockChain) applyBlock(block *types.Block) error {
 		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
 	}
 
+	// Increment the non-consensus total transaction counter.
+	if n := len(block.Transactions()); n > 0 {
+		count := rawdb.ReadTotalTransactionCount(bc.db)
+		rawdb.WriteTotalTransactionCount(bc.db, count+int64(n))
+	}
+
 	bc.blockHookMu.Lock()
 	hooks := bc.blockHooks
 	bc.blockHookMu.Unlock()

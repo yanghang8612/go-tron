@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	headBlockKey      = []byte("LastBlock")
-	headSolidBlockKey = []byte("LastSolidBlock")
+	headBlockKey            = []byte("LastBlock")
+	headSolidBlockKey       = []byte("LastSolidBlock")
+	totalTransactionCountKey = []byte("total-tx-count")
 
 	blockPrefix     = []byte("b-")
 	blockHashPrefix = []byte("bh-")
