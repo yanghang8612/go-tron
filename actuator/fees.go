@@ -1,9 +1,11 @@
 package actuator
 
 import (
+	"fmt"
+
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -27,30 +29,26 @@ func burnFee(ctx *Context, owner common.Address, fee int64) error {
 	return nil
 }
 
-// extractOwner returns the owner address from the first contract in tx.
-// Returns zero address if the tx has no contract or the contract type does not
-// expose GetOwnerAddress (should not happen for any valid TRON transaction).
-func extractOwner(tx *types.Transaction) common.Address {
-	contract := tx.Contract()
-	if contract == nil {
+// ownerOfContract returns the owner address embedded in a contract parameter.
+// Returns zero address when the contract type does not expose GetOwnerAddress.
+func ownerOfContract(c *corepb.Transaction_Contract) common.Address {
+	if c == nil || c.Parameter == nil {
 		return common.Address{}
 	}
-	msg, err := contract.Parameter.UnmarshalNew()
+	msg, err := c.Parameter.UnmarshalNew()
 	if err != nil {
 		return common.Address{}
 	}
-	type ownerAddressGetter interface {
-		GetOwnerAddress() []byte
-	}
+	type ownerAddressGetter interface{ GetOwnerAddress() []byte }
 	if oag, ok := msg.(ownerAddressGetter); ok {
 		return common.BytesToAddress(oag.GetOwnerAddress())
 	}
 	return common.Address{}
 }
 
-// ConsumeMultiSignFee charges multi_sign_fee when the transaction has more than
-// one signature and allow_multi_sign is active. Mirrors java-tron
-// TransactionTrace.consumeMultiSignFee.
+// ConsumeMultiSignFee charges multi_sign_fee for each contract owner when the
+// transaction carries more than one signature. Mirrors java-tron Manager.consumeMultiSignFee:
+// the fee is charged per-contract (not once per tx), matching the contract list loop there.
 func ConsumeMultiSignFee(ctx *Context) error {
 	if len(ctx.Tx.Signatures()) <= 1 {
 		return nil
@@ -62,13 +60,25 @@ func ConsumeMultiSignFee(ctx *Context) error {
 	if fee <= 0 {
 		return nil
 	}
-	owner := extractOwner(ctx.Tx)
-	return burnFee(ctx, owner, fee)
+	rawData := ctx.Tx.Proto().RawData
+	if rawData == nil {
+		return nil
+	}
+	for _, c := range rawData.Contract {
+		owner := ownerOfContract(c)
+		if owner == (common.Address{}) {
+			continue
+		}
+		if err := burnFee(ctx, owner, fee); err != nil {
+			return fmt.Errorf("multi-sign fee for %s: %w", owner.Hex(), err)
+		}
+	}
+	return nil
 }
 
-// ConsumeMemoFee charges memo_fee when the transaction has a non-empty data
-// memo field. Only applies when memo_fee > 0 (governance-controlled, default 0).
-// Mirrors java-tron TransactionTrace.consumeMemoFee.
+// ConsumeMemoFee charges memo_fee for each contract owner when the transaction
+// carries a non-empty data memo. Mirrors java-tron Manager.consumeMemoFee:
+// the fee is charged per-contract (not once per tx), matching the contract list loop there.
 func ConsumeMemoFee(ctx *Context) error {
 	rawData := ctx.Tx.Proto().RawData
 	if rawData == nil || len(rawData.Data) == 0 {
@@ -78,6 +88,14 @@ func ConsumeMemoFee(ctx *Context) error {
 	if fee <= 0 {
 		return nil
 	}
-	owner := extractOwner(ctx.Tx)
-	return burnFee(ctx, owner, fee)
+	for _, c := range rawData.Contract {
+		owner := ownerOfContract(c)
+		if owner == (common.Address{}) {
+			continue
+		}
+		if err := burnFee(ctx, owner, fee); err != nil {
+			return fmt.Errorf("memo fee for %s: %w", owner.Hex(), err)
+		}
+	}
+	return nil
 }
