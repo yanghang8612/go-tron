@@ -92,3 +92,75 @@ func TestFreezeV2Execute(t *testing.T) {
 		t.Fatalf("frozen BW: want 500, got %d", got)
 	}
 }
+
+// TestFreezeV2_TronPower_Validate: TRON_POWER resource is allowed once StakingV2
+// (= AllowNewResourceModel, same proposal #62) is active.
+func TestFreezeV2_TronPower_Validate(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(5)
+	seedAccount(statedb, owner, 1000)
+	act := &FreezeBalanceV2Actuator{}
+
+	tx := makeFreezeV2Tx(5, 100, corepb.ResourceCode_TRON_POWER)
+
+	// Fork inactive: all V2 operations fail at the StakingV2 gate.
+	ctx := setupContext(t, statedb, tx)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error: staking v2 not yet enabled")
+	}
+
+	// Fork active: TRON_POWER freeze is accepted.
+	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("unexpected error with fork active: %v", err)
+	}
+}
+
+// TestFreezeV2_InvalidResource: an unknown resource code is rejected whether
+// the fork is inactive (StakingV2 gate) or active (resource-type guard).
+func TestFreezeV2_InvalidResource(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(6)
+	seedAccount(statedb, owner, 1000)
+	act := &FreezeBalanceV2Actuator{}
+
+	tx := makeFreezeV2Tx(6, 100, corepb.ResourceCode(99))
+
+	// Fork inactive: rejected at the StakingV2 gate.
+	ctx := setupContext(t, statedb, tx)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error: staking v2 not yet enabled")
+	}
+
+	// Fork active: rejected by the resource-type default branch.
+	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for unknown resource code")
+	}
+}
+
+// TestFreezeV2_Execute_InitializesOldTronPower: Execute snapshots LegacyTronPower into
+// old_tron_power before the freeze when AllowNewResourceModel is active.
+func TestFreezeV2_Execute_InitializesOldTronPower(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(7)
+	seedAccount(statedb, owner, 1000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 300)
+
+	tx := makeFreezeV2Tx(7, 200, corepb.ResourceCode_BANDWIDTH)
+	act := &FreezeBalanceV2Actuator{}
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetAllowNewResourceModel(true)
+
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	acc := statedb.GetAccount(owner)
+	if got := acc.OldTronPower(); got != 300 {
+		t.Errorf("old_tron_power: want 300 (pre-freeze snapshot), got %d", got)
+	}
+}

@@ -109,3 +109,28 @@ func TestUnfreezeV2Execute(t *testing.T) {
 		t.Fatalf("balance: want 1000, got %d", statedb.GetBalance(owner))
 	}
 }
+
+// TestUnfreezeV2_TronPower_Validate: TRON_POWER unfreeze is accepted once StakingV2
+// (= AllowNewResourceModel, same proposal #62) is active.
+func TestUnfreezeV2_TronPower_Validate(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(4)
+	seedAccount(statedb, owner, 1000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_TRON_POWER, 300)
+	act := &UnfreezeBalanceV2Actuator{}
+
+	tx := makeUnfreezeV2Tx(4, 200, corepb.ResourceCode_TRON_POWER)
+
+	// Fork inactive: all V2 operations fail at the StakingV2 gate.
+	ctx := setupContext(t, statedb, tx)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error: staking v2 not yet enabled")
+	}
+
+	// Fork active: TRON_POWER unfreeze is accepted.
+	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowStakingV2(true)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("unexpected error with fork active: %v", err)
+	}
+}
