@@ -167,6 +167,87 @@ func TestAssetIssueExecute_WithFrozenSupply(t *testing.T) {
 	}
 }
 
+func TestAssetIssueValidate_TooManyFrozenEntries(t *testing.T) {
+	owner := makeTestAddr(1)
+	c := makeAssetIssueContract(1, "BIGTOKEN", 10_000_000)
+	// maxFrozenSupplyNumber defaults to 10; add 11 entries
+	for i := 0; i < 11; i++ {
+		c.FrozenSupply = append(c.FrozenSupply, &contractpb.AssetIssueContract_FrozenSupply{
+			FrozenAmount: 100,
+			FrozenDays:   1,
+		})
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
+
+	act := &AssetIssueActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for frozen supply count > max_frozen_supply_number")
+	}
+}
+
+func makeAssetIssueCtx(t *testing.T, c *contractpb.AssetIssueContract) *Context {
+	t.Helper()
+	owner := makeTestAddr(1)
+	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
+	return ctx
+}
+
+func TestAssetIssueValidate_FreeAssetNetLimitOutOfRange(t *testing.T) {
+	act := &AssetIssueActuator{}
+
+	// Negative limit
+	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.FreeAssetNetLimit = -1
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err == nil {
+		t.Fatal("expected error for negative free_asset_net_limit")
+	}
+
+	// At the upper bound (== oneDayNetLimit = 57_600_000_000)
+	c2 := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c2.FreeAssetNetLimit = 57_600_000_000
+	if err := act.Validate(makeAssetIssueCtx(t, c2)); err == nil {
+		t.Fatal("expected error for free_asset_net_limit >= one_day_net_limit")
+	}
+}
+
+func TestAssetIssueValidate_PublicFreeAssetNetLimitOutOfRange(t *testing.T) {
+	act := &AssetIssueActuator{}
+
+	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.PublicFreeAssetNetLimit = 57_600_000_000
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err == nil {
+		t.Fatal("expected error for public_free_asset_net_limit >= one_day_net_limit")
+	}
+}
+
+func TestAssetIssueValidate_FrozenDaysOutOfRange(t *testing.T) {
+	act := &AssetIssueActuator{}
+
+	// frozen_days = 0 (below minFrozenSupplyTime=1)
+	c1 := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c1.FrozenSupply = []*contractpb.AssetIssueContract_FrozenSupply{
+		{FrozenAmount: 100, FrozenDays: 0},
+	}
+	if err := act.Validate(makeAssetIssueCtx(t, c1)); err == nil {
+		t.Fatal("expected error for frozen_days=0 (below min)")
+	}
+
+	// frozen_days = 3653 (above maxFrozenSupplyTime=3652)
+	c2 := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c2.FrozenSupply = []*contractpb.AssetIssueContract_FrozenSupply{
+		{FrozenAmount: 100, FrozenDays: 3653},
+	}
+	if err := act.Validate(makeAssetIssueCtx(t, c2)); err == nil {
+		t.Fatal("expected error for frozen_days=3653 (above max)")
+	}
+}
+
 func TestAssetIssueValidate_FrozenSumOverflow(t *testing.T) {
 	owner := makeTestAddr(1)
 	// Use math.MaxInt64 as total supply so individual amounts pass the per-entry check,

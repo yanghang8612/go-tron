@@ -41,6 +41,13 @@ func (a *UpdateAssetActuator) Validate(ctx *Context) error {
 	if rawdb.ReadAssetIssue(ctx.DB, tokenID) == nil {
 		return errors.New("token not found")
 	}
+	oneDayNetLimit := ctx.DynProps.OneDayNetLimit()
+	if c.NewLimit < 0 || c.NewLimit >= oneDayNetLimit {
+		return errors.New("new_limit out of range")
+	}
+	if c.NewPublicLimit < 0 || c.NewPublicLimit >= oneDayNetLimit {
+		return errors.New("new_public_limit out of range")
+	}
 	return nil
 }
 

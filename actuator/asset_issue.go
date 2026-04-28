@@ -60,13 +60,25 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if c.Precision < 0 || c.Precision > 6 {
 		return errors.New("precision must be 0-6")
 	}
+	if int64(len(c.FrozenSupply)) > ctx.DynProps.MaxFrozenSupplyNumber() {
+		return errors.New("frozen supply count exceeds max_frozen_supply_number")
+	}
+	oneDayNetLimit := ctx.DynProps.OneDayNetLimit()
+	if c.FreeAssetNetLimit < 0 || c.FreeAssetNetLimit >= oneDayNetLimit {
+		return errors.New("free_asset_net_limit out of range")
+	}
+	if c.PublicFreeAssetNetLimit < 0 || c.PublicFreeAssetNetLimit >= oneDayNetLimit {
+		return errors.New("public_free_asset_net_limit out of range")
+	}
+	minSupplyTime := ctx.DynProps.MinFrozenSupplyTime()
+	maxSupplyTime := ctx.DynProps.MaxFrozenSupplyTime()
 	var frozenTotal int64
 	for _, f := range c.FrozenSupply {
 		if f.FrozenAmount <= 0 {
 			return errors.New("frozen_amount must be positive")
 		}
-		if f.FrozenDays <= 0 {
-			return errors.New("frozen_days must be positive")
+		if f.FrozenDays < minSupplyTime || f.FrozenDays > maxSupplyTime {
+			return fmt.Errorf("frozen_days must be in [%d, %d]", minSupplyTime, maxSupplyTime)
 		}
 		if frozenTotal > 0 && f.FrozenAmount > math.MaxInt64-frozenTotal {
 			return errors.New("frozen supply total overflows int64")

@@ -75,6 +75,67 @@ func TestUpdateAssetValidate_NotOwner(t *testing.T) {
 	}
 }
 
+func TestUpdateAssetValidate_NewLimitOutOfRange(t *testing.T) {
+	owner := makeTestAddr(1)
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	statedb := setupStateDB(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+
+	act := &UpdateAssetActuator{}
+
+	// negative new_limit
+	tx := makeUpdateAssetTx(1, "", "", -1, 0)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for negative new_limit")
+	}
+
+	// new_limit == oneDayNetLimit (at upper bound)
+	tx = makeUpdateAssetTx(1, "", "", ctx.DynProps.OneDayNetLimit(), 0)
+	ctx = setupContext(t, statedb, tx)
+	ctx.DB = db
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for new_limit >= one_day_net_limit")
+	}
+}
+
+func TestUpdateAssetValidate_NewPublicLimitOutOfRange(t *testing.T) {
+	owner := makeTestAddr(1)
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	statedb := setupStateDB(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	act := &UpdateAssetActuator{}
+
+	tx := makeUpdateAssetTx(1, "", "", 0, -1)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for negative new_public_limit")
+	}
+
+	tx = makeUpdateAssetTx(1, "", "", 0, ctx.DynProps.OneDayNetLimit())
+	ctx = setupContext(t, statedb, tx)
+	ctx.DB = db
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for new_public_limit >= one_day_net_limit")
+	}
+}
+
 func TestUpdateAssetExecute(t *testing.T) {
 	owner := makeTestAddr(1)
 	db := ethrawdb.NewMemoryDatabase()

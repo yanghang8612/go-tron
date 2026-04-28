@@ -124,6 +124,24 @@ var defaultProps = map[string]int64{
 	"total_storage_tax":           0,
 	"total_storage_reserved":      137_438_953_472, // 128 GiB in bytes
 	"storage_exchange_tax_rate":   10,
+
+	// §1.6: freeze/supply/bandwidth/accounting keys missing from earlier
+	// backfills. Defaults verified against java-tron DynamicPropertiesStore.
+	"max_frozen_time":              3,
+	"min_frozen_time":              3,
+	"max_frozen_supply_number":     10,
+	"max_frozen_supply_time":       3652,
+	"min_frozen_supply_time":       1,
+	"witness_allowance_frozen_time": 1,
+	"one_day_net_limit":            57_600_000_000,
+	"public_net_limit":             14_400_000_000,
+	"public_net_usage":             0,
+	"public_net_time":              0,
+	"transaction_fee_pool":         0,
+	"total_transaction_cost":       0,
+	"total_create_account_cost":    0,
+	"block_filled_slots_index":     0,
+	"version_number":               0,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -1037,4 +1055,95 @@ func (dp *DynamicProperties) StorageExchangeTaxRate() int64 {
 }
 func (dp *DynamicProperties) SetStorageExchangeTaxRate(v int64) {
 	dp.Set("storage_exchange_tax_rate", v)
+}
+
+// §1.6: freeze/supply/bandwidth/accounting accessors.
+
+func (dp *DynamicProperties) MaxFrozenTime() int64 { return dp.props["max_frozen_time"] }
+func (dp *DynamicProperties) SetMaxFrozenTime(v int64) {
+	dp.Set("max_frozen_time", v)
+}
+
+func (dp *DynamicProperties) MinFrozenTime() int64 { return dp.props["min_frozen_time"] }
+func (dp *DynamicProperties) SetMinFrozenTime(v int64) {
+	dp.Set("min_frozen_time", v)
+}
+
+func (dp *DynamicProperties) MaxFrozenSupplyNumber() int64 {
+	return dp.props["max_frozen_supply_number"]
+}
+func (dp *DynamicProperties) SetMaxFrozenSupplyNumber(v int64) {
+	dp.Set("max_frozen_supply_number", v)
+}
+
+func (dp *DynamicProperties) MaxFrozenSupplyTime() int64 {
+	return dp.props["max_frozen_supply_time"]
+}
+func (dp *DynamicProperties) SetMaxFrozenSupplyTime(v int64) {
+	dp.Set("max_frozen_supply_time", v)
+}
+
+func (dp *DynamicProperties) MinFrozenSupplyTime() int64 {
+	return dp.props["min_frozen_supply_time"]
+}
+func (dp *DynamicProperties) SetMinFrozenSupplyTime(v int64) {
+	dp.Set("min_frozen_supply_time", v)
+}
+
+func (dp *DynamicProperties) WitnessAllowanceFrozenTime() int64 {
+	return dp.props["witness_allowance_frozen_time"]
+}
+func (dp *DynamicProperties) SetWitnessAllowanceFrozenTime(v int64) {
+	dp.Set("witness_allowance_frozen_time", v)
+}
+
+func (dp *DynamicProperties) OneDayNetLimit() int64 { return dp.props["one_day_net_limit"] }
+func (dp *DynamicProperties) SetOneDayNetLimit(v int64) {
+	dp.Set("one_day_net_limit", v)
+}
+
+func (dp *DynamicProperties) PublicNetLimit() int64 { return dp.props["public_net_limit"] }
+func (dp *DynamicProperties) SetPublicNetLimit(v int64) {
+	dp.Set("public_net_limit", v)
+}
+
+func (dp *DynamicProperties) PublicNetUsage() int64 { return dp.props["public_net_usage"] }
+func (dp *DynamicProperties) SetPublicNetUsage(v int64) {
+	dp.Set("public_net_usage", v)
+}
+
+func (dp *DynamicProperties) PublicNetTime() int64 { return dp.props["public_net_time"] }
+func (dp *DynamicProperties) SetPublicNetTime(v int64) {
+	dp.Set("public_net_time", v)
+}
+
+func (dp *DynamicProperties) TransactionFeePool() int64 { return dp.props["transaction_fee_pool"] }
+func (dp *DynamicProperties) SetTransactionFeePool(v int64) {
+	dp.Set("transaction_fee_pool", v)
+}
+
+func (dp *DynamicProperties) TotalTransactionCost() int64 {
+	return dp.props["total_transaction_cost"]
+}
+func (dp *DynamicProperties) SetTotalTransactionCost(v int64) {
+	dp.Set("total_transaction_cost", v)
+}
+
+func (dp *DynamicProperties) TotalCreateAccountCost() int64 {
+	return dp.props["total_create_account_cost"]
+}
+func (dp *DynamicProperties) SetTotalCreateAccountCost(v int64) {
+	dp.Set("total_create_account_cost", v)
+}
+
+func (dp *DynamicProperties) BlockFilledSlotsIndex() int64 {
+	return dp.props["block_filled_slots_index"]
+}
+func (dp *DynamicProperties) SetBlockFilledSlotsIndex(v int64) {
+	dp.Set("block_filled_slots_index", v)
+}
+
+func (dp *DynamicProperties) VersionNumber() int64 { return dp.props["version_number"] }
+func (dp *DynamicProperties) SetVersionNumber(v int64) {
+	dp.Set("version_number", v)
 }
