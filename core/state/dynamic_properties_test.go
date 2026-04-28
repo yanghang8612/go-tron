@@ -292,6 +292,39 @@ func TestDynamicProperties_StringFlushAndLoad(t *testing.T) {
 	}
 }
 
+func TestDynamicProperties_BurnTrxAmount(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	if got := dp.BurnTrxAmount(); got != 0 {
+		t.Errorf("initial BurnTrxAmount: want 0, got %d", got)
+	}
+
+	dp.AddBurnTrx(1_000_000)
+	if got := dp.BurnTrxAmount(); got != 1_000_000 {
+		t.Errorf("after +1M: want 1000000, got %d", got)
+	}
+
+	dp.AddBurnTrx(500_000)
+	if got := dp.BurnTrxAmount(); got != 1_500_000 {
+		t.Errorf("after +500k: want 1500000, got %d", got)
+	}
+
+	// Zero delta is a no-op and must not mark the key dirty.
+	dirtyBefore := len(dp.dirty)
+	dp.AddBurnTrx(0)
+	if len(dp.dirty) != dirtyBefore {
+		t.Error("AddBurnTrx(0) must not change dirty set")
+	}
+
+	// Persistence round-trip: flush accumulated value, reload, verify.
+	db := rawdb.NewMemoryDatabase()
+	dp.Flush(db)
+	loaded := LoadDynamicProperties(db)
+	if got := loaded.BurnTrxAmount(); got != 1_500_000 {
+		t.Errorf("after flush+load: want 1500000, got %d", got)
+	}
+}
+
 func TestDynamicProperties_StringNotInAll(t *testing.T) {
 	dp := NewDynamicProperties()
 	all := dp.All()

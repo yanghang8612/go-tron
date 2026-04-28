@@ -43,6 +43,13 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("bandwidth: %w", err)
 	}
 
+	if err := actuator.ConsumeMultiSignFee(ctx); err != nil {
+		return nil, fmt.Errorf("multi-sign fee: %w", err)
+	}
+	if err := actuator.ConsumeMemoFee(ctx); err != nil {
+		return nil, fmt.Errorf("memo fee: %w", err)
+	}
+
 	snap := statedb.Snapshot()
 	result, err := act.Execute(ctx)
 	if err != nil {

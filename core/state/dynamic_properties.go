@@ -124,6 +124,7 @@ var defaultProps = map[string]int64{
 	"max_create_account_tx_size":                    1000,
 	"max_delegate_lock_period":                      86400,
 	"max_fee_limit":                                 1_000_000_000,
+	"burn_trx_amount":                                0,
 	"memo_fee":                                      0,
 	"multi_sign_fee":                                1_000_000,
 	"remove_the_power_of_the_gr":                    0,
@@ -871,6 +872,17 @@ func (dp *DynamicProperties) SetMaxDelegateLockPeriod(v int64) {
 
 func (dp *DynamicProperties) MaxFeeLimit() int64 { return dp.props["max_fee_limit"] }
 func (dp *DynamicProperties) SetMaxFeeLimit(v int64) { dp.Set("max_fee_limit", v) }
+
+func (dp *DynamicProperties) BurnTrxAmount() int64 { return dp.props["burn_trx_amount"] }
+
+// AddBurnTrx accumulates burned TRX (in SUN). Only called when AllowBlackholeOptimization
+// is active; mirrors java-tron DynamicPropertiesStore.burnTrx.
+func (dp *DynamicProperties) AddBurnTrx(amount int64) {
+	if amount <= 0 {
+		return
+	}
+	dp.Set("burn_trx_amount", dp.props["burn_trx_amount"]+amount)
+}
 
 func (dp *DynamicProperties) MemoFee() int64 { return dp.props["memo_fee"] }
 func (dp *DynamicProperties) SetMemoFee(v int64) { dp.Set("memo_fee", v) }
