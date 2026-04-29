@@ -8,8 +8,14 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
+// BlockFilledSlotsNumber is the size of the BLOCK_FILLED_SLOTS rolling window
+// (java-tron ChainConstant.BLOCK_FILLED_SLOTS_NUMBER). Each slot holds 0 or 1.
+const BlockFilledSlotsNumber = 128
+
 // defaultStringProps holds the initial values for string-typed DP keys.
-// These are stored as raw UTF-8 bytes in the DB (not as int64).
+// These are stored as raw bytes in the DB (not as int64). UTF-8 is not
+// enforced — values may be arbitrary byte sequences (e.g. block_filled_slots
+// is 128 raw 0/1 bytes).
 // Price-history format: "timestamp1:price1,timestamp2:price2,..."
 // Default prices match java-tron DynamicPropertiesStore constants:
 //   DEFAULT_ENERGY_FEE = 100, DEFAULT_TRANSACTION_FEE = 10, MEMO_FEE = 0.
@@ -17,6 +23,7 @@ var defaultStringProps = map[string]string{
 	"energy_price_history":    "0:100",
 	"bandwidth_price_history": "0:10",
 	"memo_fee_history":        "0:0",
+	"block_filled_slots":      string(make([]byte, BlockFilledSlotsNumber)),
 }
 
 var defaultProps = map[string]int64{
@@ -1185,6 +1192,53 @@ func (dp *DynamicProperties) BlockFilledSlotsIndex() int64 {
 }
 func (dp *DynamicProperties) SetBlockFilledSlotsIndex(v int64) {
 	dp.Set("block_filled_slots_index", v)
+}
+
+// BlockFilledSlots returns the 128-byte rolling window of produced/missed slot
+// flags (1 = produced, 0 = missed). Mirrors java-tron BLOCK_FILLED_SLOTS.
+func (dp *DynamicProperties) BlockFilledSlots() []byte {
+	v := dp.stringProps["block_filled_slots"]
+	if len(v) != BlockFilledSlotsNumber {
+		return make([]byte, BlockFilledSlotsNumber)
+	}
+	return []byte(v)
+}
+
+// SetBlockFilledSlots replaces the rolling window. Length must equal
+// BlockFilledSlotsNumber; otherwise this panics (programmer error).
+func (dp *DynamicProperties) SetBlockFilledSlots(v []byte) {
+	if len(v) != BlockFilledSlotsNumber {
+		panic("dynamic_properties: SetBlockFilledSlots length mismatch")
+	}
+	dp.SetString("block_filled_slots", string(v))
+}
+
+// ApplyBlockToFilledSlots writes filled (1 if true, 0 if false) at the current
+// index, then advances index modulo BlockFilledSlotsNumber. Mirrors java-tron
+// DynamicPropertiesStore.applyBlock.
+func (dp *DynamicProperties) ApplyBlockToFilledSlots(filled bool) {
+	slots := dp.BlockFilledSlots()
+	idx := dp.BlockFilledSlotsIndex()
+	if idx < 0 || idx >= BlockFilledSlotsNumber {
+		idx = 0
+	}
+	if filled {
+		slots[idx] = 1
+	} else {
+		slots[idx] = 0
+	}
+	dp.SetBlockFilledSlots(slots)
+	dp.SetBlockFilledSlotsIndex((idx + 1) % BlockFilledSlotsNumber)
+}
+
+// CalculateFilledSlotsCount returns the percentage of produced slots in the
+// rolling window (0..100). Mirrors java-tron calculateFilledSlotsCount.
+func (dp *DynamicProperties) CalculateFilledSlotsCount() int64 {
+	var sum int64
+	for _, v := range dp.BlockFilledSlots() {
+		sum += int64(v)
+	}
+	return 100 * sum / BlockFilledSlotsNumber
 }
 
 func (dp *DynamicProperties) VersionNumber() int64 { return dp.props["version_number"] }

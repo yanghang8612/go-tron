@@ -255,11 +255,24 @@ func (bc *BlockChain) applyBlock(block *types.Block) error {
 		}
 	}
 
+	// Capture old-head timestamp BEFORE ProcessBlock; needed by ApplyBlockStatistics
+	// to compute slot offset against the chain head as it stood pre-insert
+	// (matches java-tron StatisticManager.applyBlock semantics).
+	previousHeadTimestamp := current.Timestamp()
+	prevIsMaintenance := dynProps.NextMaintenanceTime() > 0 &&
+		previousHeadTimestamp >= dynProps.NextMaintenanceTime()
+
 	// Process block (execute transactions, pay reward — does not commit).
 	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses(), bc.GenesisTimestamp())
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+
+	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
+	// (mirrors java-tron StatisticManager.applyBlock). Writes go directly to
+	// rawdb because the in-memory statedb witness cache is not committed.
+	dpos.ApplyBlockStatistics(bc.db, dynProps, block, previousHeadTimestamp,
+		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 
 	// Run maintenance if at boundary (before commit so allowances are included).
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {

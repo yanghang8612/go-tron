@@ -347,3 +347,97 @@ func TestDynamicProperties_StringNotInAll(t *testing.T) {
 	// test file so this reference keeps things tidy.
 	_ = strings.Contains
 }
+
+func TestBlockFilledSlots_DefaultEmpty(t *testing.T) {
+	dp := NewDynamicProperties()
+	got := dp.BlockFilledSlots()
+	if len(got) != BlockFilledSlotsNumber {
+		t.Fatalf("default length: want %d, got %d", BlockFilledSlotsNumber, len(got))
+	}
+	for i, b := range got {
+		if b != 0 {
+			t.Errorf("default slot[%d] = %d, want 0", i, b)
+		}
+	}
+	if got := dp.CalculateFilledSlotsCount(); got != 0 {
+		t.Errorf("default fill rate: want 0, got %d", got)
+	}
+}
+
+func TestBlockFilledSlots_RingRotation(t *testing.T) {
+	dp := NewDynamicProperties()
+	// Apply 130 filled blocks. Index should wrap; first 2 entries get
+	// overwritten by the wrap, but every entry was set to 1 at some point so
+	// the ring is fully filled.
+	for i := 0; i < 130; i++ {
+		dp.ApplyBlockToFilledSlots(true)
+	}
+	if got := dp.BlockFilledSlotsIndex(); got != 2 {
+		t.Errorf("index after 130 applies: want 2 (130 mod 128), got %d", got)
+	}
+	for i, b := range dp.BlockFilledSlots() {
+		if b != 1 {
+			t.Errorf("slot[%d] = %d, want 1 (every position written)", i, b)
+		}
+	}
+	if got := dp.CalculateFilledSlotsCount(); got != 100 {
+		t.Errorf("fill rate after 130 applies: want 100, got %d", got)
+	}
+}
+
+func TestBlockFilledSlots_FillRate(t *testing.T) {
+	dp := NewDynamicProperties()
+	// 64 filled, then 64 missed → 50% fill rate.
+	for i := 0; i < 64; i++ {
+		dp.ApplyBlockToFilledSlots(true)
+	}
+	for i := 0; i < 64; i++ {
+		dp.ApplyBlockToFilledSlots(false)
+	}
+	if got := dp.CalculateFilledSlotsCount(); got != 50 {
+		t.Errorf("fill rate: want 50, got %d", got)
+	}
+	if got := dp.BlockFilledSlotsIndex(); got != 0 {
+		t.Errorf("index after 128 applies: want 0 (full wrap), got %d", got)
+	}
+}
+
+func TestBlockFilledSlots_Persistence(t *testing.T) {
+	dp := NewDynamicProperties()
+	// Make a recognizable pattern: every other slot filled.
+	for i := 0; i < 64; i++ {
+		dp.ApplyBlockToFilledSlots(true)
+		dp.ApplyBlockToFilledSlots(false)
+	}
+	want := dp.BlockFilledSlots()
+
+	db := rawdb.NewMemoryDatabase()
+	dp.Flush(db)
+	loaded := LoadDynamicProperties(db)
+	got := loaded.BlockFilledSlots()
+	if len(got) != BlockFilledSlotsNumber {
+		t.Fatalf("loaded length: want %d, got %d", BlockFilledSlotsNumber, len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("slot[%d]: want %d, got %d", i, want[i], got[i])
+		}
+	}
+	if loaded.BlockFilledSlotsIndex() != dp.BlockFilledSlotsIndex() {
+		t.Errorf("index round-trip: want %d, got %d",
+			dp.BlockFilledSlotsIndex(), loaded.BlockFilledSlotsIndex())
+	}
+}
+
+func TestBlockFilledSlots_SetLengthMismatchPanics(t *testing.T) {
+	dp := NewDynamicProperties()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("SetBlockFilledSlots with wrong length must panic")
+		}
+	}()
+	dp.SetBlockFilledSlots(make([]byte, 64)) // wrong length
+}
+
+// Suppress potentially-unused import warning when only some tests reference common.
+var _ = common.Address{}

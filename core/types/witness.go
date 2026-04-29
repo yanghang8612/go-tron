@@ -34,6 +34,10 @@ func (w *Witness) TotalMissed() int64         { return w.pb.TotalMissed }
 func (w *Witness) SetTotalMissed(v int64)     { w.pb.TotalMissed = v }
 func (w *Witness) IsJobs() bool               { return w.pb.IsJobs }
 func (w *Witness) SetIsJobs(v bool)           { w.pb.IsJobs = v }
+func (w *Witness) LatestBlockNum() int64      { return w.pb.LatestBlockNum }
+func (w *Witness) SetLatestBlockNum(v int64)  { w.pb.LatestBlockNum = v }
+func (w *Witness) LatestSlotNum() int64       { return w.pb.LatestSlotNum }
+func (w *Witness) SetLatestSlotNum(v int64)   { w.pb.LatestSlotNum = v }
 
 // Copy returns a deep copy of the witness.
 func (w *Witness) Copy() *Witness {
