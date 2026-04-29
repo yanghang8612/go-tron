@@ -179,6 +179,7 @@ var defaultProps = map[string]int64{
 	"transaction_fee_pool":         0,
 	"total_transaction_cost":       0,
 	"total_create_account_cost":    0,
+	"total_create_witness_cost":    0,
 	"block_filled_slots_index":     0,
 	"version_number":               0,
 }
@@ -1211,6 +1212,23 @@ func (dp *DynamicProperties) TotalCreateAccountCost() int64 {
 }
 func (dp *DynamicProperties) SetTotalCreateAccountCost(v int64) {
 	dp.Set("total_create_account_cost", v)
+}
+
+// TotalCreateWitnessCost returns the cumulative TRX (in SUN) burned to upgrade
+// accounts to witnesses. Mirrors java-tron TOTAL_CREATE_WITNESS_FEE (note the
+// java DB key string is "TOTAL_CREATE_WITNESS_FEE" while the constant is
+// TOTAL_CREATE_WITNESS_COST).
+func (dp *DynamicProperties) TotalCreateWitnessCost() int64 {
+	return dp.props["total_create_witness_cost"]
+}
+func (dp *DynamicProperties) SetTotalCreateWitnessCost(v int64) {
+	dp.Set("total_create_witness_cost", v)
+}
+func (dp *DynamicProperties) AddTotalCreateWitnessCost(amount int64) {
+	if amount == 0 {
+		return
+	}
+	dp.Set("total_create_witness_cost", dp.props["total_create_witness_cost"]+amount)
 }
 
 func (dp *DynamicProperties) BlockFilledSlotsIndex() int64 {

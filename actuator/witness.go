@@ -53,6 +53,7 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
 	}
+	ctx.DynProps.AddTotalCreateWitnessCost(fee)
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
 	return &Result{Fee: fee, ContractRet: 1}, nil
