@@ -12,18 +12,34 @@ import (
 // (java-tron ChainConstant.BLOCK_FILLED_SLOTS_NUMBER). Each slot holds 0 or 1.
 const BlockFilledSlotsNumber = 128
 
+// ContractTypeBitmapBytes is the length of the available_contract_type and
+// active_default_operations bitmaps (256 contract types in 32 bytes).
+const ContractTypeBitmapBytes = 32
+
+// padBitmapDefault returns a 32-byte bitmap with the given prefix and zero
+// remainder, matching java-tron DynamicPropertiesStore.init() defaults.
+func padBitmapDefault(prefix []byte) string {
+	out := make([]byte, ContractTypeBitmapBytes)
+	copy(out, prefix)
+	return string(out)
+}
+
 // defaultStringProps holds the initial values for string-typed DP keys.
 // These are stored as raw bytes in the DB (not as int64). UTF-8 is not
 // enforced — values may be arbitrary byte sequences (e.g. block_filled_slots
-// is 128 raw 0/1 bytes).
+// is 128 raw 0/1 bytes; available_contract_type is 32 bytes).
 // Price-history format: "timestamp1:price1,timestamp2:price2,..."
 // Default prices match java-tron DynamicPropertiesStore constants:
 //   DEFAULT_ENERGY_FEE = 100, DEFAULT_TRANSACTION_FEE = 10, MEMO_FEE = 0.
+// available_contract_type / active_default_operations: byte-for-byte the
+// java-tron defaults 7fff1fc0037e... / 7fff1fc0033e... padded to 32 bytes.
 var defaultStringProps = map[string]string{
-	"energy_price_history":    "0:100",
-	"bandwidth_price_history": "0:10",
-	"memo_fee_history":        "0:0",
-	"block_filled_slots":      string(make([]byte, BlockFilledSlotsNumber)),
+	"energy_price_history":      "0:100",
+	"bandwidth_price_history":   "0:10",
+	"memo_fee_history":          "0:0",
+	"block_filled_slots":        string(make([]byte, BlockFilledSlotsNumber)),
+	"available_contract_type":   padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x7e}),
+	"active_default_operations": padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x3e}),
 }
 
 var defaultProps = map[string]int64{
@@ -1249,6 +1265,76 @@ func (dp *DynamicProperties) CalculateFilledSlotsCount() int64 {
 		sum += int64(v)
 	}
 	return 100 * sum / BlockFilledSlotsNumber
+}
+
+// AvailableContractType returns the 32-byte bitmap of contract types that
+// custom permissions are allowed to reference in their operations bitmap.
+// Mirrors java-tron AVAILABLE_CONTRACT_TYPE.
+func (dp *DynamicProperties) AvailableContractType() []byte {
+	v := dp.stringProps["available_contract_type"]
+	if len(v) != ContractTypeBitmapBytes {
+		out := make([]byte, ContractTypeBitmapBytes)
+		copy(out, v)
+		return out
+	}
+	return []byte(v)
+}
+
+// SetAvailableContractType replaces the bitmap. Length must equal
+// ContractTypeBitmapBytes; otherwise this panics (programmer error).
+func (dp *DynamicProperties) SetAvailableContractType(v []byte) {
+	if len(v) != ContractTypeBitmapBytes {
+		panic("dynamic_properties: SetAvailableContractType length mismatch")
+	}
+	dp.SetString("available_contract_type", string(v))
+}
+
+// ActiveDefaultOperations returns the 32-byte bitmap of contract types that
+// appear by default in a newly-created account's active permission. Mirrors
+// java-tron ACTIVE_DEFAULT_OPERATIONS.
+func (dp *DynamicProperties) ActiveDefaultOperations() []byte {
+	v := dp.stringProps["active_default_operations"]
+	if len(v) != ContractTypeBitmapBytes {
+		out := make([]byte, ContractTypeBitmapBytes)
+		copy(out, v)
+		return out
+	}
+	return []byte(v)
+}
+
+// SetActiveDefaultOperations replaces the bitmap. Length must equal
+// ContractTypeBitmapBytes; otherwise this panics (programmer error).
+func (dp *DynamicProperties) SetActiveDefaultOperations(v []byte) {
+	if len(v) != ContractTypeBitmapBytes {
+		panic("dynamic_properties: SetActiveDefaultOperations length mismatch")
+	}
+	dp.SetString("active_default_operations", string(v))
+}
+
+// IsContractTypeAvailable reports whether bit `id` is set in the
+// available_contract_type bitmap. id must be in [0, 256).
+func (dp *DynamicProperties) IsContractTypeAvailable(id int) bool {
+	if id < 0 || id >= ContractTypeBitmapBytes*8 {
+		return false
+	}
+	avail := dp.AvailableContractType()
+	return avail[id/8]&(1<<(id%8)) != 0
+}
+
+// AddSystemContractAndSetPermission OR-ins bit `id` into BOTH the
+// available_contract_type and active_default_operations bitmaps. Mirrors
+// java-tron DynamicPropertiesStore.addSystemContractAndSetPermission. Idempotent.
+func (dp *DynamicProperties) AddSystemContractAndSetPermission(id int) {
+	if id < 0 || id >= ContractTypeBitmapBytes*8 {
+		panic("dynamic_properties: AddSystemContractAndSetPermission id out of range")
+	}
+	avail := dp.AvailableContractType()
+	avail[id/8] |= 1 << (id % 8)
+	dp.SetAvailableContractType(avail)
+
+	active := dp.ActiveDefaultOperations()
+	active[id/8] |= 1 << (id % 8)
+	dp.SetActiveDefaultOperations(active)
 }
 
 func (dp *DynamicProperties) VersionNumber() int64 { return dp.props["version_number"] }

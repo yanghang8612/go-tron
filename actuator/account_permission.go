@@ -2,9 +2,11 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -66,6 +68,11 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 		if len(active.Operations) > 0 && len(active.Operations) != 32 {
 			return errors.New("active permission operations must be exactly 32 bytes")
 		}
+		if len(active.Operations) == 32 {
+			if err := validateOperationsBits(active.Operations, ctx.DynProps); err != nil {
+				return err
+			}
+		}
 		totalKeys += len(active.Keys)
 	}
 	maxKeys := int(ctx.DynProps.TotalSignNum())
@@ -75,6 +82,22 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 	fee := ctx.DynProps.UpdateAccountPermissionFee()
 	if ctx.State.GetBalance(ownerAddr) < fee {
 		return errors.New("insufficient balance for account permission update fee")
+	}
+	return nil
+}
+
+// validateOperationsBits enforces that every bit set in the active
+// permission's operations bitmap corresponds to a contract type marked
+// available in dp.AvailableContractType. Mirrors java-tron
+// AccountPermissionUpdateActuator's per-bit check.
+func validateOperationsBits(operations []byte, dp *state.DynamicProperties) error {
+	avail := dp.AvailableContractType()
+	for i := 0; i < state.ContractTypeBitmapBytes*8; i++ {
+		opBit := operations[i/8]&(1<<(i%8)) != 0
+		availBit := avail[i/8]&(1<<(i%8)) != 0
+		if opBit && !availBit {
+			return fmt.Errorf("%d isn't a validate ContractType", i)
+		}
 	}
 	return nil
 }

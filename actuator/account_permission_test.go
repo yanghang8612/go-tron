@@ -70,6 +70,70 @@ func TestAccountPermissionThresholdExceedsWeight(t *testing.T) {
 	}
 }
 
+func TestAccountPermissionRejectsUnavailableContractType(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	// Set bit 48 (ClearABIContract) — not in default available_contract_type.
+	ops := make([]byte, 32)
+	ops[48/8] |= 1 << (48 % 8)
+	c := &contractpb.AccountPermissionUpdateContract{
+		OwnerAddress: owner[:],
+		Owner: &corepb.Permission{
+			Threshold: 1,
+			Keys:      []*corepb.Key{{Address: owner[:], Weight: 1}},
+		},
+		Actives: []*corepb.Permission{{
+			Type:       corepb.Permission_Active,
+			Id:         2,
+			Threshold:  1,
+			Keys:       []*corepb.Key{{Address: owner[:], Weight: 1}},
+			Operations: ops,
+		}},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+
+	act := &AccountPermissionUpdateActuator{}
+	err := act.Validate(ctx)
+	if err == nil {
+		t.Fatal("expected validation error for unavailable contract type 48")
+	}
+	if err.Error() != "48 isn't a validate ContractType" {
+		t.Errorf("unexpected error message: %q", err.Error())
+	}
+}
+
+func TestAccountPermissionAcceptsAvailableContractType(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	// Set only bit 1 (TransferContract) — in default available_contract_type.
+	ops := make([]byte, 32)
+	ops[1/8] |= 1 << (1 % 8)
+	c := &contractpb.AccountPermissionUpdateContract{
+		OwnerAddress: owner[:],
+		Owner: &corepb.Permission{
+			Threshold: 1,
+			Keys:      []*corepb.Key{{Address: owner[:], Weight: 1}},
+		},
+		Actives: []*corepb.Permission{{
+			Type:       corepb.Permission_Active,
+			Id:         2,
+			Threshold:  1,
+			Keys:       []*corepb.Key{{Address: owner[:], Weight: 1}},
+			Operations: ops,
+		}},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+
+	act := &AccountPermissionUpdateActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate must accept available contract type: %v", err)
+	}
+}
+
 func TestAccountPermissionExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	key2 := tcommon.Address{0x41, 0x02}

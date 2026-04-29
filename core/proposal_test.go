@@ -141,3 +141,53 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 		t.Errorf("MemoFeeHistory after proposal #68: got %q, want %q", got, want)
 	}
 }
+
+// TestApplyProposalSideEffects_AddSystemContract verifies that the proposals
+// that gate new system contracts (java-tron addSystemContractAndSetPermission
+// call sites) update both AvailableContractType and ActiveDefaultOperations.
+func TestApplyProposalSideEffects_AddSystemContract(t *testing.T) {
+	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}}
+
+	runProposal := func(paramID, value, expirationTime int64) *state.DynamicProperties {
+		t.Helper()
+		db := ethrawdb.NewMemoryDatabase()
+		dp := state.NewDynamicProperties()
+		p := &rawdb.Proposal{
+			Parameters:     map[int64]int64{paramID: value},
+			ExpirationTime: expirationTime,
+			Approvals:      active,
+			State:          rawdb.ProposalStatePending,
+		}
+		rawdb.WriteProposal(db, p.ID, p)
+		rawdb.WriteProposalIndex(db, []int64{p.ID})
+		if err := ProcessProposals(db, dp, active, expirationTime+1, nil); err != nil {
+			t.Fatalf("ProcessProposals: %v", err)
+		}
+		return dp
+	}
+
+	check := func(t *testing.T, dp *state.DynamicProperties, ids []int) {
+		t.Helper()
+		avail := dp.AvailableContractType()
+		active := dp.ActiveDefaultOperations()
+		for _, id := range ids {
+			if avail[id/8]&(1<<(id%8)) == 0 {
+				t.Errorf("AvailableContractType: bit %d not set", id)
+			}
+			if active[id/8]&(1<<(id%8)) == 0 {
+				t.Errorf("ActiveDefaultOperations: bit %d not set", id)
+			}
+		}
+	}
+
+	// Proposal 26 (ALLOW_TVM_CONSTANTINOPLE) → bit 48
+	check(t, runProposal(26, 1, 1000), []int{48})
+	// Proposal 30 (ALLOW_CHANGE_DELEGATION) → bit 49
+	check(t, runProposal(30, 1, 1000), []int{49})
+	// Proposal 44 (ALLOW_MARKET_TRANSACTION) → bits 52, 53
+	check(t, runProposal(44, 1, 1000), []int{52, 53})
+	// Proposal 70 (UNFREEZE_DELAY_DAYS) → bits 54-58
+	check(t, runProposal(70, 86400, 1000), []int{54, 55, 56, 57, 58})
+	// Proposal 77 (ALLOW_CANCEL_ALL_UNFREEZE_V2) → bit 59
+	check(t, runProposal(77, 1, 1000), []int{59})
+}

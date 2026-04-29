@@ -441,3 +441,102 @@ func TestBlockFilledSlots_SetLengthMismatchPanics(t *testing.T) {
 
 // Suppress potentially-unused import warning when only some tests reference common.
 var _ = common.Address{}
+
+func TestAvailableContractType_Default(t *testing.T) {
+	dp := NewDynamicProperties()
+	got := dp.AvailableContractType()
+	if len(got) != ContractTypeBitmapBytes {
+		t.Fatalf("length: want %d, got %d", ContractTypeBitmapBytes, len(got))
+	}
+	wantPrefix := []byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x7e}
+	for i, b := range wantPrefix {
+		if got[i] != b {
+			t.Errorf("byte[%d]: want 0x%02x, got 0x%02x", i, b, got[i])
+		}
+	}
+	for i := len(wantPrefix); i < ContractTypeBitmapBytes; i++ {
+		if got[i] != 0 {
+			t.Errorf("byte[%d]: want 0 (zero-padded), got 0x%02x", i, got[i])
+		}
+	}
+}
+
+func TestActiveDefaultOperations_Default(t *testing.T) {
+	dp := NewDynamicProperties()
+	got := dp.ActiveDefaultOperations()
+	if len(got) != ContractTypeBitmapBytes {
+		t.Fatalf("length: want %d, got %d", ContractTypeBitmapBytes, len(got))
+	}
+	wantPrefix := []byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x3e}
+	for i, b := range wantPrefix {
+		if got[i] != b {
+			t.Errorf("byte[%d]: want 0x%02x, got 0x%02x", i, b, got[i])
+		}
+	}
+}
+
+func TestIsContractTypeAvailable_DefaultSet(t *testing.T) {
+	dp := NewDynamicProperties()
+	// Defaults enable bits 0..6, 8..15, 20..28, 30, 33..38, 41..46.
+	// Spot-check both available and unavailable bits.
+	cases := []struct {
+		id        int
+		available bool
+	}{
+		{0, true},   // AccountCreate (bit 0 of 0x7f)
+		{6, true},   // AssetIssue (bit 6 of 0x7f)
+		{7, false},  // bit 7 of 0x7f is 0
+		{45, true},  // UpdateEnergyLimit (in range 41..46)
+		{48, false}, // ClearABI: not in default; activated by proposal 26
+		{59, false}, // CancelAllUnfreezeV2: not in default
+	}
+	for _, c := range cases {
+		got := dp.IsContractTypeAvailable(c.id)
+		if got != c.available {
+			t.Errorf("IsContractTypeAvailable(%d): want %v, got %v", c.id, c.available, got)
+		}
+	}
+}
+
+func TestAddSystemContractAndSetPermission_BothBitmaps(t *testing.T) {
+	dp := NewDynamicProperties()
+	if dp.IsContractTypeAvailable(48) {
+		t.Fatal("invariant: bit 48 should not be available before activation")
+	}
+	dp.AddSystemContractAndSetPermission(48)
+
+	if !dp.IsContractTypeAvailable(48) {
+		t.Error("AvailableContractType bit 48 not set after activation")
+	}
+	if dp.ActiveDefaultOperations()[48/8]&(1<<(48%8)) == 0 {
+		t.Error("ActiveDefaultOperations bit 48 not set after activation")
+	}
+}
+
+func TestAddSystemContractAndSetPermission_Idempotent(t *testing.T) {
+	dp := NewDynamicProperties()
+	dp.AddSystemContractAndSetPermission(48)
+	avail1 := append([]byte(nil), dp.AvailableContractType()...)
+	active1 := append([]byte(nil), dp.ActiveDefaultOperations()...)
+
+	dp.AddSystemContractAndSetPermission(48)
+	avail2 := dp.AvailableContractType()
+	active2 := dp.ActiveDefaultOperations()
+
+	if string(avail1) != string(avail2) {
+		t.Error("AvailableContractType changed on second add (must be idempotent)")
+	}
+	if string(active1) != string(active2) {
+		t.Error("ActiveDefaultOperations changed on second add (must be idempotent)")
+	}
+}
+
+func TestSetAvailableContractType_LengthMismatchPanics(t *testing.T) {
+	dp := NewDynamicProperties()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("must panic on wrong length")
+		}
+	}()
+	dp.SetAvailableContractType(make([]byte, 16))
+}

@@ -95,6 +95,32 @@ func applyProposalSideEffects(p *rawdb.Proposal, dynProps *state.DynamicProperti
 		case 68: // MEMO_FEE — append entry to memo fee history
 			dynProps.SetMemoFeeHistory(
 				dynProps.MemoFeeHistory() + fmt.Sprintf(",%d:%d", p.ExpirationTime, value))
+		case 26: // ALLOW_TVM_CONSTANTINOPLE → enables ClearABIContract (48)
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(48)
+			}
+		case 30: // ALLOW_CHANGE_DELEGATION → enables UpdateBrokerageContract (49)
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(49)
+			}
+		case 44: // ALLOW_MARKET_TRANSACTION → enables MarketSellAsset (52), MarketCancelOrder (53)
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(52)
+				dynProps.AddSystemContractAndSetPermission(53)
+			}
+		case 70: // UNFREEZE_DELAY_DAYS → enables FreezeBalanceV2 (54), UnfreezeBalanceV2 (55),
+			// WithdrawExpireUnfreeze (56), DelegateResource (57), UnDelegateResource (58)
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(54)
+				dynProps.AddSystemContractAndSetPermission(55)
+				dynProps.AddSystemContractAndSetPermission(56)
+				dynProps.AddSystemContractAndSetPermission(57)
+				dynProps.AddSystemContractAndSetPermission(58)
+			}
+		case 77: // ALLOW_CANCEL_ALL_UNFREEZE_V2 → enables CancelAllUnfreezeV2 (59)
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(59)
+			}
 		}
 	}
 }
