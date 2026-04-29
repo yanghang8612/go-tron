@@ -257,6 +257,16 @@ func (dp *DynamicProperties) Keys() []string {
 	return out
 }
 
+// StringKeys returns every currently-known string-typed DP key.
+// The result is unsorted; callers that need stability must sort it themselves.
+func (dp *DynamicProperties) StringKeys() []string {
+	out := make([]string, 0, len(dp.stringProps))
+	for k := range dp.stringProps {
+		out = append(out, k)
+	}
+	return out
+}
+
 // --- Typed getters ---
 
 func (dp *DynamicProperties) MaintenanceTimeInterval() int64 {

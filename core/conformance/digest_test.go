@@ -101,6 +101,86 @@ func TestDigestB_DetectsCodeChange(t *testing.T) {
 	}
 }
 
+func TestDigestB_DetectsWitnessChange(t *testing.T) {
+	sdb, db, dp, addrs := newDigestFixture(t)
+	// Make addrs[0] a witness with initial counters.
+	w := types.NewWitness(addrs[0], "http://example.com")
+	rawdb.WriteWitness(db, addrs[0], w)
+	d0 := DigestB(sdb, db, addrs, dp)
+
+	// Bump TotalProduced; digest must change.
+	w.SetTotalProduced(w.TotalProduced() + 1)
+	rawdb.WriteWitness(db, addrs[0], w)
+	d1 := DigestB(sdb, db, addrs, dp)
+	if d0 == d1 {
+		t.Fatal("digest must change when witness TotalProduced changes")
+	}
+}
+
+func TestDigestB_DetectsDPStringChange(t *testing.T) {
+	sdb, db, dp, addrs := newDigestFixture(t)
+	d0 := DigestB(sdb, db, addrs, dp)
+	dp.SetEnergyPriceHistory("0:100,1234567890:200")
+	d1 := DigestB(sdb, db, addrs, dp)
+	if d0 == d1 {
+		t.Fatal("digest must change when DP string-typed value changes")
+	}
+}
+
+func TestDigestB_DetectsBlockFilledSlotsChange(t *testing.T) {
+	sdb, db, dp, addrs := newDigestFixture(t)
+	d0 := DigestB(sdb, db, addrs, dp)
+	// One application of the ring must produce a different digest.
+	dp.ApplyBlockToFilledSlots(true)
+	d1 := DigestB(sdb, db, addrs, dp)
+	if d0 == d1 {
+		t.Fatal("digest must change when block_filled_slots ring changes")
+	}
+}
+
+func TestDigestC_WitnessAndDPStrings(t *testing.T) {
+	sdb, db, dp, addrs := newDigestFixture(t)
+	w := types.NewWitness(addrs[0], "http://example.com")
+	w.SetTotalProduced(5)
+	w.SetTotalMissed(1)
+	w.SetLatestBlockNum(123)
+	rawdb.WriteWitness(db, addrs[0], w)
+
+	raw := DigestC(sdb, db, addrs, dp)
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("not valid JSON: %v\n%s", err, raw)
+	}
+	dpStrings, ok := m["dpStrings"].(map[string]any)
+	if !ok {
+		t.Fatalf("dpStrings field missing or wrong type: %s", raw)
+	}
+	if _, ok := dpStrings["energy_price_history"]; !ok {
+		t.Errorf("dpStrings missing energy_price_history: %s", raw)
+	}
+	if _, ok := dpStrings["block_filled_slots"]; !ok {
+		t.Errorf("dpStrings missing block_filled_slots (hex-encoded): %s", raw)
+	}
+
+	accs, _ := m["accounts"].(map[string]any)
+	a0Hex := strings.Repeat("a", 40) // matches the addr fixture format
+	addrKey := "41" + a0Hex
+	a0Entry, ok := accs[addrKey].(map[string]any)
+	if !ok {
+		t.Fatalf("addr[0] entry missing: %s", raw)
+	}
+	witnessEntry, ok := a0Entry["witness"].(map[string]any)
+	if !ok {
+		t.Fatalf("witness sub-entry missing for addr[0]: %s", raw)
+	}
+	if got := witnessEntry["totalProduced"].(float64); got != 5 {
+		t.Errorf("witness.totalProduced: want 5, got %v", got)
+	}
+	if got := witnessEntry["latestBlockNum"].(float64); got != 123 {
+		t.Errorf("witness.latestBlockNum: want 123, got %v", got)
+	}
+}
+
 func TestDigestC_IsValidJSON(t *testing.T) {
 	sdb, db, dp, addrs := newDigestFixture(t)
 	raw := DigestC(sdb, db, addrs, dp)

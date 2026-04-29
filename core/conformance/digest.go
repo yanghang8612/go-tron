@@ -18,9 +18,13 @@ import (
 )
 
 // DigestB is the cheap per-block fingerprint: sha256 over a canonical
-// encoding of the touched-address closure's account/code/contract-state
-// bytes plus every known DP key/value. Used as the primary pass/fail signal
-// during replay.
+// encoding of the touched-address closure's account/code/contract-state/witness
+// bytes plus every known DP key/value (int64 and string-typed). Used as the
+// primary pass/fail signal during replay.
+//
+// Versioning: the salt below is bumped (vN → vN+1) whenever the canonical
+// encoding changes, since any change invalidates allowlists captured against
+// the previous version.
 func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address, dp *state.DynamicProperties) [32]byte {
 	sorted := append([]tcommon.Address(nil), addrs...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -28,7 +32,8 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 	})
 
 	h := sha256.New()
-	h.Write([]byte("conformance/digestB/v1"))
+	// v2: adds Witness proto + DP string-typed values.
+	h.Write([]byte("conformance/digestB/v2"))
 
 	for _, a := range sorted {
 		h.Write(a[:])
@@ -55,6 +60,16 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 			}
 		}
 		writeLenPrefixed(h, csBytes)
+
+		// Witness proto (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/
+		// VoteCount/IsJobs/URL). Non-witness addresses → length-0 marker.
+		var wBytes []byte
+		if w := rawdb.ReadWitness(db, a); w != nil {
+			if b, err := w.Marshal(); err == nil {
+				wBytes = b
+			}
+		}
+		writeLenPrefixed(h, wBytes)
 	}
 
 	keys := dp.Keys()
@@ -63,6 +78,14 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 		v, _ := dp.Get(k)
 		writeLenPrefixed(h, []byte(k))
 		writeInt64BE(h, v)
+	}
+
+	stringKeys := dp.StringKeys()
+	sort.Strings(stringKeys)
+	for _, k := range stringKeys {
+		v, _ := dp.GetString(k)
+		writeLenPrefixed(h, []byte(k))
+		writeLenPrefixed(h, []byte(v))
 	}
 
 	var out [32]byte
@@ -110,6 +133,17 @@ func DigestC(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 				"energyUsage":  cs.EnergyUsage(),
 			}
 		}
+		if w := rawdb.ReadWitness(db, a); w != nil {
+			entry["witness"] = map[string]any{
+				"totalProduced":  w.TotalProduced(),
+				"totalMissed":    w.TotalMissed(),
+				"latestBlockNum": w.LatestBlockNum(),
+				"latestSlotNum":  w.LatestSlotNum(),
+				"voteCount":      w.VoteCount(),
+				"isJobs":         w.IsJobs(),
+				"url":            w.URL(),
+			}
+		}
 		if len(entry) > 0 {
 			accounts[hex.EncodeToString(a[:])] = entry
 		}
@@ -121,9 +155,21 @@ func DigestC(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 		dpMap[k] = v
 	}
 
+	dpStrings := map[string]string{}
+	for _, k := range dp.StringKeys() {
+		v, _ := dp.GetString(k)
+		// block_filled_slots is 128 raw bytes; hex-encode for readable JSON diff.
+		if k == "block_filled_slots" {
+			dpStrings[k] = hex.EncodeToString([]byte(v))
+		} else {
+			dpStrings[k] = v
+		}
+	}
+
 	out, err := json.Marshal(map[string]any{
-		"accounts": accounts,
-		"dp":       dpMap,
+		"accounts":  accounts,
+		"dp":        dpMap,
+		"dpStrings": dpStrings,
 	})
 	if err != nil {
 		return json.RawMessage(fmt.Sprintf(`{"error":%q}`, err.Error()))
