@@ -406,12 +406,12 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 
 | 里程碑 | 状态 | 退出日期 | 主 PR / commit | 备注 |
 |---|---|---|---|---|
-| M0′ Fixture 抽取工具 | 完成（Nile 场景延后） | 2026-04-15 | 待提交 | 场景 00 mainnet DP 已入库；01 Nile 因缺 config 延后 |
+| M0′ Fixture 抽取工具 | 完成（Nile 场景延后） | 2026-04-15 | 9863df2..7fce4c6 | 场景 00 mainnet DP 已入库；01 Nile 因缺 config 延后 |
 | M0″ Phase 1 引擎+CLI+文档 | 完成 | 2026-04-17 | 6d3396d..2ef1152 (19 commits) | `core/conformance/` 11 文件 + 26 单测；`cmd/{gtron-replay,fixture-closure,fixture-digest}` + `scripts/fixtures/cmd/gen-smoke`；`test/fixtures/mainnet-blocks/smoke/` (regen via `go run ./scripts/fixtures/cmd/gen-smoke`)；`scripts/conformance_replay.sh` + make targets；`docs/dev/conformance-harness.md` 操作员协议；`go vet -copylocks` 清；全 23 包测试绿 |
 | M0″ Phase 2 录真实语料+cross e2e | 待操作员 | — | — | blocker = java-tron mainnet 访问。退出 = `make conformance-replay-exit-gate` 返回 0（三段 allowlist 全空） |
-| M1.1 DP backfill | 完成 | 2026-04-15 | 待提交 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
-| M1.2 Freeze V1 | 完成 | 2026-04-15 | 待提交 | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
-| M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 待提交 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
+| M1.1 DP backfill | 完成 | 2026-04-15 | 3be3d4c..1e76d08 | 76-key fixture 全 match；ProposalParamKey 按 ProposalUtil.java 重建 |
+| M1.2 Freeze V1 | 完成 | 2026-04-15 | 16956d4..01d4afe | V1+V2 share formula (availableAccountNet/Energy) + freeze/unfreeze weight sync + post-fork gate；VM actuator 能量重接走线延至 M1.8 |
+| M1.3 版本位 + 分叉 audit | 完成 | 2026-04-15 | 48ff35e..b8636c4 | BlockHeader.version + ForkController（版本位投票/时间窗/比率门）+ fc.IsActive + audit 脚本/doc + AllowStakingV2/TvmShieldedToken 别名修正。剩余执行路径门缺口文档化为 backlog（见 docs/dev/fork-audit-2026-04-15.md），提案合法性门延至 M4。 |
 | M1.4 自适应能量 | 完成 | 2026-04-25 | 62d1b22 | core/energy_adaptive.go + 20-block avg; ProcessBlock/BuildBlock per-block hooks; proposal #21 side-effect |
 | M1.5 奖励 v2 + 委托奖励 | 完成 | 2026-04-25 | 62d1b22 | payBlockReward/payStandbyWitness/applyRewardMaintenance; voter ComputeVoterReward (old+new hybrid); withdrawReward in vote + withdraw actuators; proposal #67 side-effect |
 | M1.6 存储租金 | 完成（stub） | 2026-04-25 | 62d1b22 | 4 DP keys (total_storage_pool/tax/reserved, storage_exchange_tax_rate)；StorageTaxProcessor 未实现（功能从未激活） |
