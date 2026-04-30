@@ -9,6 +9,16 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 )
 
+// KVReadWriter is the narrow ethdb capability ApplyBlockStatistics needs:
+// per-witness ReadWitness lookups plus WriteWitness updates. Both
+// rawdb.NewMemoryDatabase() (an ethdb.KeyValueStore) and
+// blockbuffer.Buffer satisfy this interface, letting callers route the
+// writes either to disk directly or through the fork-rewind buffer.
+type KVReadWriter interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 // ApplyBlockStatistics updates per-witness production counters and the
 // BLOCK_FILLED_SLOTS rolling window after a block has been processed.
 // Mirrors java-tron consensus.dpos.StatisticManager.applyBlock.
@@ -23,7 +33,7 @@ import (
 // witness cache is not used because nothing else mutates these counters in the
 // same applyBlock pass.
 func ApplyBlockStatistics(
-	db ethdb.KeyValueStore,
+	db KVReadWriter,
 	dp *state.DynamicProperties,
 	block *types.Block,
 	previousHeadTimestamp int64,
