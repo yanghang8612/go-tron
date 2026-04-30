@@ -56,5 +56,10 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.DynProps.AddTotalCreateWitnessCost(fee)
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
+	// M11.5 slice 2a: java-tron AccountCapsule.setDefaultWitnessPermission,
+	// gated on AllowMultiSign (WitnessCreateActuator.java:137).
+	if ctx.DynProps.AllowMultiSign() {
+		ctx.State.ApplyWitnessPermissions(ownerAddr, ctx.DynProps)
+	}
 	return &Result{Fee: fee, ContractRet: 1}, nil
 }

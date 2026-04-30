@@ -441,3 +441,41 @@ func TestMakeDefaultActivePermission(t *testing.T) {
 		t.Errorf("Operations not defensively copied: now %#x", p.Operations[0])
 	}
 }
+
+func TestMakeDefaultWitnessPermission(t *testing.T) {
+	addr := common.BytesToAddress([]byte{
+		0x41, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44,
+		0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+	})
+	p := MakeDefaultWitnessPermission(addr)
+	if p == nil {
+		t.Fatal("nil permission")
+	}
+	if p.Type != corepb.Permission_Witness {
+		t.Errorf("Type: want Witness, got %v", p.Type)
+	}
+	if p.Id != 1 {
+		t.Errorf("Id: want 1, got %d", p.Id)
+	}
+	if p.PermissionName != "witness" {
+		t.Errorf("PermissionName: want \"witness\", got %q", p.PermissionName)
+	}
+	if p.Threshold != 1 {
+		t.Errorf("Threshold: want 1, got %d", p.Threshold)
+	}
+	if p.ParentId != 0 {
+		t.Errorf("ParentId: want 0, got %d", p.ParentId)
+	}
+	if len(p.Operations) != 0 {
+		t.Errorf("Operations: want empty (witness has no ops bitmap), got %d bytes", len(p.Operations))
+	}
+	if len(p.Keys) != 1 {
+		t.Fatalf("Keys: want 1, got %d", len(p.Keys))
+	}
+	if string(p.Keys[0].Address) != string(addr.Bytes()) {
+		t.Errorf("Keys[0].Address mismatch")
+	}
+	if p.Keys[0].Weight != 1 {
+		t.Errorf("Keys[0].Weight: want 1, got %d", p.Keys[0].Weight)
+	}
+}
