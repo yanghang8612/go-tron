@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -40,6 +41,12 @@ type BlockChain struct {
 
 	khaosDB *KhaosDB
 
+	// buffer holds rawdb-direct writes from applyBlock that must be
+	// rewindable on switchFork (slice 1: witness statistics only). Layered
+	// per applyBlock; switchFork drops orphan-branch layers. Slice 1 does
+	// not flush to disk; reads must consult the buffer (see BufferedDB).
+	buffer *blockbuffer.Buffer
+
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
 }
@@ -58,6 +65,7 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 		stateDB: stateDB,
 		config:  config,
 		fc:      forks.NewForkController(db),
+		buffer:  blockbuffer.New(db),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -230,8 +238,19 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // applyBlock executes, commits, and persists a single block on top of the
 // current canonical tip (bc.CurrentBlock()). It updates currentBlock on success.
 // Callers must hold bc.chainmu.
-func (bc *BlockChain) applyBlock(block *types.Block) error {
+func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	current := bc.CurrentBlock()
+
+	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
+	// writes (slice 1: witness statistics only) so that switchFork can drop
+	// the orphan-branch layers via DiscardBlock. On any error path the
+	// active layer is discarded; on success it is promoted via CommitBlock.
+	bc.buffer.BeginBlock(block.Hash())
+	defer func() {
+		if retErr != nil {
+			bc.buffer.DiscardActive()
+		}
+	}()
 
 	// Open StateDB from parent's state root.
 	parentRoot := current.AccountStateRoot()
@@ -269,9 +288,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) error {
 	}
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
-	// (mirrors java-tron StatisticManager.applyBlock). Writes go directly to
-	// rawdb because the in-memory statedb witness cache is not committed.
-	dpos.ApplyBlockStatistics(bc.db, dynProps, block, previousHeadTimestamp,
+	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
+	// counter writes go through bc.buffer so switchFork can rewind them on
+	// reorgs (slice 1 of the fork-rewind fix). The BLOCK_FILLED_SLOTS ring
+	// is updated on dynProps in-memory and lands via dynProps.Flush(bc.db)
+	// below — not yet retrofitted onto the buffer (see slice 2 backlog in
+	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
+	dpos.ApplyBlockStatistics(bc.buffer, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 
 	// Run maintenance if at boundary (before commit so allowances are included).
@@ -343,6 +366,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) error {
 		h(block)
 	}
 
+	// Promote the buffer layer to the layered stack. Slice 1 does not flush
+	// to disk; reads via bc.BufferedDB() consult the buffer first.
+	bc.buffer.CommitBlock()
 	return nil
 }
 
@@ -370,6 +396,16 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 		lcaHash = currentHash
 	} else {
 		lcaHash = oldBranch[len(oldBranch)-1].ParentHash()
+	}
+
+	// Drop the buffer layers belonging to orphan-branch blocks. These were
+	// laid down by earlier applyBlock calls (linear extensions) and contain
+	// the rawdb-direct writes (slice 1: witness statistics) that must be
+	// rewound before re-applying the new branch. DiscardBlock is a no-op
+	// for hashes not present in the buffer, which covers the deeper shared
+	// prefix above the LCA.
+	for _, kb := range oldBranch {
+		bc.buffer.DiscardBlock(kb.block.Hash())
 	}
 
 	var lcaBlock *types.Block
@@ -414,6 +450,16 @@ func (bc *BlockChain) StateDB() *state.Database {
 // DB returns the underlying key-value store.
 func (bc *BlockChain) DB() ethdb.KeyValueStore {
 	return bc.db
+}
+
+// BufferedDB returns a read-only view that consults the in-memory
+// applyBlock buffer first, then falls through to the disk store. Reads of
+// rawdb fields that are written through the buffer (slice 1: witness
+// statistics counters) must go through this view to see the current state
+// — disk reads alone return stale values until slice 2 wires a flush
+// policy.
+func (bc *BlockChain) BufferedDB() ethdb.KeyValueReader {
+	return bc.buffer
 }
 
 // ActiveWitnesses returns the current active witness list.

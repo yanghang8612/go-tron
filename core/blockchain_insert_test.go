@@ -5,6 +5,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -239,5 +240,188 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	wantAllowance := dynProps.WitnessPayPerBlock() * 11
 	if got := statedb.GetAllowance(witnessAddr); got != wantAllowance {
 		t.Fatalf("witness allowance after fork switch: got %d, want %d (11 × WitnessPayPerBlock)", got, wantAllowance)
+	}
+}
+
+// TestForkSwitch_WitnessCountersNoDoubleCount drives a 3-vs-4 reorg where the
+// same witness produces every block on both branches and asserts that, after
+// the fork switch, the canonical witness's TotalProduced equals exactly the
+// length of the canonical chain (4) — not 7, which would indicate that the
+// orphan-branch increments leaked through.
+//
+// Reads go via bc.BufferedDB() because slice 1 of the fork-rewind fix does
+// not flush the buffer to disk; rawdb.ReadWitness(diskdb, ...) would return
+// nil/zero in this test until slice 2 lands a stable-flush policy. See
+// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md.
+func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1, // far future — no maintenance
+		},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build chain A: 3 blocks, all produced by witnessAddr.
+	chainA := make([]*types.Block, 4)
+	chainA[0] = bc.genesisBlock
+	for i := 1; i <= 3; i++ {
+		parent := chainA[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("chain A block %d: %v", i, err)
+		}
+		chainA[i] = b
+	}
+	if bc.CurrentBlock().Number() != 3 {
+		t.Fatalf("after chain A: head = %d, want 3", bc.CurrentBlock().Number())
+	}
+
+	// Sanity: buffer reflects exactly 3 productions (linear extension path).
+	wA := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
+	if wA == nil {
+		t.Fatal("witness counter not buffered after chain A")
+	}
+	if got := wA.TotalProduced(); got != 3 {
+		t.Fatalf("after chain A: TotalProduced = %d, want 3", got)
+	}
+
+	// Genesis hash captured for the chain B build below.
+	_ = genesisHash
+
+	// Build chain B: 4 blocks, also produced by witnessAddr, branching from
+	// genesis with offset timestamps so block hashes diverge from chain A.
+	chainB := make([]*types.Block, 5)
+	chainB[0] = bc.genesisBlock
+	for i := 1; i <= 4; i++ {
+		parent := chainB[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i)*3000 + 1, // +1 → distinct hash
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		chainB[i] = b
+	}
+
+	// Insert B1..B3: KhaosDB stores them as a competing branch but no
+	// switchFork yet (chain A still longer/equal).
+	for i := 1; i <= 3; i++ {
+		if err := bc.InsertBlock(chainB[i]); err != nil {
+			t.Fatalf("chain B block %d (pre-switch): %v", i, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainA[3].Hash() {
+		t.Fatal("chain B should not have triggered switchFork yet")
+	}
+
+	// Insert B4 — chain B now strictly longer → switchFork.
+	if err := bc.InsertBlock(chainB[4]); err != nil {
+		t.Fatalf("chain B block 4 (switch trigger): %v", err)
+	}
+	if bc.CurrentBlock().Number() != 4 {
+		t.Fatalf("after switchFork: head = %d, want 4", bc.CurrentBlock().Number())
+	}
+	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
+		t.Fatal("after switchFork: head hash != chain B tip")
+	}
+
+	// The bug: without orphan-buffer rollback, TotalProduced would be
+	// 3 (chain A) + 4 (chain B) = 7. With slice-1 fix it must be exactly 4.
+	wPost := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
+	if wPost == nil {
+		t.Fatal("witness counter missing after switchFork")
+	}
+	if got := wPost.TotalProduced(); got != 4 {
+		t.Fatalf("after switchFork: TotalProduced = %d, want 4 "+
+			"(orphan branch counters must NOT be double-counted)", got)
+	}
+
+	// LatestBlockNum must reflect canonical chain B's tip.
+	if got := wPost.LatestBlockNum(); got != 4 {
+		t.Fatalf("after switchFork: LatestBlockNum = %d, want 4", got)
+	}
+}
+
+// TestLinearExtension_WitnessCountersThroughBuffer is a regression check that
+// the buffer wiring does not perturb the non-fork path: a 3-block linear
+// chain produces TotalProduced == 3 when read through the buffer.
+func TestLinearExtension_WitnessCountersThroughBuffer(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 1_000_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 3; i++ {
+		parent := bc.CurrentBlock()
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+	}
+
+	w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
+	if w == nil {
+		t.Fatal("witness counter not buffered after linear chain")
+	}
+	if got := w.TotalProduced(); got != 3 {
+		t.Fatalf("linear extension: TotalProduced = %d, want 3", got)
+	}
+	if got := w.LatestBlockNum(); got != 3 {
+		t.Fatalf("linear extension: LatestBlockNum = %d, want 3", got)
 	}
 }
