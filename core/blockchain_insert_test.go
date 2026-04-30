@@ -267,8 +267,7 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 			"next_maintenance_time": 1<<62 - 1, // far future — no maintenance
 		},
 	}
-	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
-	if err != nil {
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
 	sdb := state.NewDatabase(diskdb)
@@ -309,9 +308,6 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	if got := wA.TotalProduced(); got != 3 {
 		t.Fatalf("after chain A: TotalProduced = %d, want 3", got)
 	}
-
-	// Genesis hash captured for the chain B build below.
-	_ = genesisHash
 
 	// Build chain B: 4 blocks, also produced by witnessAddr, branching from
 	// genesis with offset timestamps so block hashes diverge from chain A.
@@ -368,6 +364,14 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	// LatestBlockNum must reflect canonical chain B's tip.
 	if got := wPost.LatestBlockNum(); got != 4 {
 		t.Fatalf("after switchFork: LatestBlockNum = %d, want 4", got)
+	}
+
+	// Pin the missed-slot semantics: each block's timestamp is exactly one
+	// BlockProducedInterval after its parent (no gaps), so ApplyBlockStatistics
+	// records zero missed slots for every block. If TotalMissed grows, the
+	// test is exercising different slot semantics than intended.
+	if got := wPost.TotalMissed(); got != 0 {
+		t.Fatalf("after switchFork: TotalMissed = %d, want 0 (no skipped slots)", got)
 	}
 }
 
