@@ -79,8 +79,12 @@ func TestBlockChain_InsertBlock_Transfer(t *testing.T) {
 		t.Fatalf("current block: got %d, want 1", bc.CurrentBlock().Number())
 	}
 
-	// Verify DynProps updated
-	dynProps := state.LoadDynamicProperties(diskdb)
+	// Verify DynProps updated. Read via bc.DynProps() (buffered): slice 2 of
+	// the fork-rewind fix routes DP writes through the in-memory buffer and
+	// flushes them to disk only after the block becomes solidified.
+	// state.LoadDynamicProperties(diskdb) would return defaults until that
+	// happens. See docs/superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md.
+	dynProps := bc.DynProps()
 	if got := dynProps.LatestBlockHeaderNumber(); got != 1 {
 		t.Fatalf("dynprops block number: got %d, want 1", got)
 	}
@@ -249,10 +253,16 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 // length of the canonical chain (4) — not 7, which would indicate that the
 // orphan-branch increments leaked through.
 //
-// Reads go via bc.BufferedDB() because slice 1 of the fork-rewind fix does
-// not flush the buffer to disk; rawdb.ReadWitness(diskdb, ...) would return
-// nil/zero in this test until slice 2 lands a stable-flush policy. See
-// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md.
+// Slice 2 of the fork-rewind fix extends this test to also cover
+// total_transaction_count, latest_solidified_block_num (DP), and the per-
+// witness latest-block cursor — all of which were on the disk-direct path
+// in slice 1 and would otherwise leak across switchFork even with the
+// witness-counter buffer in place.
+//
+// Reads go via bc.BufferedDB() because at the moment of assertion the
+// canonical chain B's blocks may still be above solidified and therefore
+// in-memory only. See
+// docs/superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md.
 func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
@@ -262,6 +272,18 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 		Timestamp: 0,
 		Accounts: []params.GenesisAccount{
 			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		// Three active witnesses, only one produces. updateSolidifiedBlock's
+		// java-tron rule is `nums[floor(N*0.3)]` after sorting ascending; for
+		// N=3 that's `nums[0]`, which stays at 0 because the other two
+		// witnesses never produce. So solidified stays at 0 throughout the
+		// test, all layers stay in memory, and switchFork can rewind the
+		// full orphan branch via DiscardBlock. This mirrors mainnet, where
+		// solidified lags head by ~19 blocks (27 SRs).
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
 		},
 		DynamicProperties: map[string]int64{
 			"next_maintenance_time": 1<<62 - 1, // far future — no maintenance
@@ -372,6 +394,148 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	// test is exercising different slot semantics than intended.
 	if got := wPost.TotalMissed(); got != 0 {
 		t.Fatalf("after switchFork: TotalMissed = %d, want 0 (no skipped slots)", got)
+	}
+
+	// Slice 2 retrofits — these were leaking before slice 2:
+
+	// total_transaction_count: zero in this test (no txs in any block). If
+	// the orphan increments had leaked the count would be > 0.
+	if got := rawdb.ReadTotalTransactionCount(bc.BufferedDB()); got != 0 {
+		t.Fatalf("after switchFork: total_transaction_count = %d, want 0", got)
+	}
+
+	// Per-witness latest-block cursor (used by updateSolidifiedBlock):
+	// must reflect canonical chain B's tip, not chain A's stale tip.
+	if got := rawdb.ReadWitnessLatestBlock(bc.BufferedDB(), witnessAddr); got != 4 {
+		t.Fatalf("after switchFork: WitnessLatestBlock = %d, want 4", got)
+	}
+
+	// latest_solidified_block_num (DP, computed by updateSolidifiedBlock):
+	// with 3 active witnesses where only one produces, the floor(N*0.3)=0
+	// position resolves to a witness that never produced (stays at 0).
+	// Solidified therefore never advances in this test — which is what we
+	// want, because it keeps the orphan layers in memory so DiscardBlock
+	// can rewind them.
+	dynPost := state.LoadDynamicProperties(bc.BufferedDB())
+	if got := dynPost.LatestSolidifiedBlockNum(); got != 0 {
+		t.Fatalf("after switchFork: LatestSolidifiedBlockNum = %d, want 0 (test holds solidified flat)", got)
+	}
+
+	// latest_block_header_number (DP): from canonical chain B.
+	if got := dynPost.LatestBlockHeaderNumber(); got != 4 {
+		t.Fatalf("after switchFork: LatestBlockHeaderNumber = %d, want 4", got)
+	}
+
+	// Buffer must contain all 4 canonical layers (none flushed because
+	// solidified stayed at 0). If it contained more (orphan leakage) or
+	// fewer (premature flush) the test would catch it.
+	if got := len(bc.buffer.PendingBlocks()); got != 4 {
+		t.Fatalf("after switchFork: buffer holds %d layers, want 4 (canonical-only)", got)
+	}
+
+	// burn_trx_amount and total_create_witness_cost (also DP keys) flow
+	// through the same dp.Flush(bc.buffer) → DiscardBlock path as
+	// latest_block_header_number, so the LatestBlockHeaderNumber rewind
+	// above is the property test for all DP-tracked counters. We don't
+	// duplicate the assertion for every DP key; the fork-rewind retrofit
+	// is uniform across `dp.dirty`.
+}
+
+// TestFlushAtSolidified_SurvivesRestart verifies the slice-2 flush-at-
+// solidified policy: with a single active witness, solidified == head every
+// block (floor(1*0.3)=0 → solidified = nums[0] = the single witness's
+// latest), so flushBufferUpToSolidified drains every layer to disk
+// immediately after CommitBlock. After 5 blocks the buffer must be empty,
+// and a fresh BlockChain rebuilt from the same disk store must read
+// post-applyBlock counters consistent with what slice-1's direct-write
+// path would have produced.
+func TestFlushAtSolidified_SurvivesRestart(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		// Single active witness → solidified == head every block.
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1, // far future — no maintenance
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+		// After every block, all prior layers should be flushed (single-SR:
+		// solidified == head). The just-committed block itself was solidified
+		// during applyBlock, so its layer is also flushed by the time
+		// flushBufferUpToSolidified returns.
+		if got := len(bc.buffer.PendingBlocks()); got != 0 {
+			t.Fatalf("after block %d: buffer holds %d layers, want 0 (solidified=head should flush)", i, got)
+		}
+	}
+
+	// Restart simulation: drop bc, build fresh on the same disk.
+	bc2, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 5 {
+		t.Fatalf("restart: head = %d, want 5", got)
+	}
+
+	// Read post-applyBlock counters DIRECTLY from disk (not via the new
+	// buffer). They must match what slice 1's direct-write path would have
+	// produced — i.e. the on-disk consistency property.
+	w := rawdb.ReadWitness(diskdb, witnessAddr)
+	if w == nil {
+		t.Fatal("witness counter not on disk after restart")
+	}
+	if got := w.TotalProduced(); got != 5 {
+		t.Fatalf("disk-side TotalProduced = %d, want 5", got)
+	}
+	if got := w.LatestBlockNum(); got != 5 {
+		t.Fatalf("disk-side LatestBlockNum = %d, want 5", got)
+	}
+
+	// DP `latest_solidified_block_num` survived restart.
+	dpDisk := state.LoadDynamicProperties(diskdb)
+	if got := dpDisk.LatestSolidifiedBlockNum(); got != 5 {
+		t.Fatalf("disk-side LatestSolidifiedBlockNum = %d, want 5", got)
+	}
+	if got := dpDisk.LatestBlockHeaderNumber(); got != 5 {
+		t.Fatalf("disk-side LatestBlockHeaderNumber = %d, want 5", got)
+	}
+
+	// Per-witness latest-block cursor (used by updateSolidifiedBlock) is
+	// also on disk after restart.
+	if got := rawdb.ReadWitnessLatestBlock(diskdb, witnessAddr); got != 5 {
+		t.Fatalf("disk-side WitnessLatestBlock = %d, want 5", got)
 	}
 }
 

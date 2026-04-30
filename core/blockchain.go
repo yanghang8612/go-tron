@@ -259,8 +259,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("open state: %w", err)
 	}
 
-	// Load dynamic properties.
-	dynProps := state.LoadDynamicProperties(bc.db)
+	// Load dynamic properties through the buffer so that DP keys written by
+	// pending (not-yet-flushed) layers are visible to this applyBlock — e.g.
+	// `current_cycle_number` advanced by an unflushed maintenance boundary
+	// must be readable here. Slice 2 of the fork-rewind fix.
+	dynProps := state.LoadDynamicProperties(bc.buffer)
 
 	// Load witnesses into statedb for maintenance access.
 	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
@@ -301,7 +304,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
-		applyRewardMaintenance(bc.db, statedb, dynProps)
+		// Cycle brokerage / vote / VI writes go through bc.buffer so they
+		// rewind on switchFork (slice 2). Reads from rawdb inside
+		// applyRewardMaintenance also consult the buffer, so cross-block
+		// accumulators see in-flight values.
+		applyRewardMaintenance(bc.buffer, statedb, dynProps)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
 		bc.SetActiveWitnesses(newActive)
 	}
@@ -328,9 +335,17 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
 
 	// Update solidified block number (mirrors java-tron Manager.updateSolidifiedBlock).
+	// Routes WriteWitnessLatestBlock + the per-witness ReadWitnessLatestBlock
+	// loop through bc.buffer so the solidified compute reflects in-flight
+	// updates (slice 2).
 	bc.updateSolidifiedBlock(block.WitnessAddress(), int64(block.Number()), dynProps)
 
-	dynProps.Flush(bc.db)
+	// Land DP changes into the active buffer layer (slice 2). This includes
+	// block_filled_slots (from ApplyBlockStatistics), latest_block_header_*,
+	// latest_solidified_block_num, burn_trx_amount (from burnFee actuators),
+	// total_create_witness_cost (from witness create), maintenance-touched
+	// keys, etc. — every dirty DP key.
+	dynProps.Flush(bc.buffer)
 
 	// Persist block.
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
@@ -353,10 +368,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
 	}
 
-	// Increment the non-consensus total transaction counter.
+	// Increment the non-consensus total transaction counter through bc.buffer
+	// so switchFork rewinds the increment on orphan blocks (slice 2). The
+	// matching read also consults the buffer — otherwise a buffered
+	// increment would be overwritten by the disk's stale value on the next
+	// block.
 	if n := len(block.Transactions()); n > 0 {
-		count := rawdb.ReadTotalTransactionCount(bc.db)
-		rawdb.WriteTotalTransactionCount(bc.db, count+int64(n))
+		count := rawdb.ReadTotalTransactionCount(bc.buffer)
+		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
 	}
 
 	bc.blockHookMu.Lock()
@@ -366,10 +385,40 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		h(block)
 	}
 
-	// Promote the buffer layer to the layered stack. Slice 1 does not flush
-	// to disk; reads via bc.BufferedDB() consult the buffer first.
+	// Promote the buffer layer to the layered stack. Slice 1 introduced the
+	// layered stack; slice 2 adds the flush-at-solidified policy below.
 	bc.buffer.CommitBlock()
+
+	// Flush every layer at or below the new solidified-block number to
+	// disk, oldest-first. Layers above solidified stay in memory and remain
+	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
+	// invariant that Manager.eraseBlock can never pop past solidified.
+	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
+		return fmt.Errorf("flush buffer up to solidified: %w", err)
+	}
 	return nil
+}
+
+// flushBufferUpToSolidified drains every committed buffer layer whose block
+// number is <= solidified to bc.db (oldest-first), then drops those layers
+// from the buffer. Higher layers remain in memory and rewindable on
+// switchFork. Slice 2 of the fork-rewind fix.
+//
+// On a single-SR chain (and many small testnets) solidified == head, so
+// every block flushes immediately. On mainnet (27 SRs) solidified lags
+// head by at least 19 blocks, giving switchFork plenty of headroom.
+func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
+	if solidified <= 0 {
+		return nil
+	}
+	numberOf := func(h tcommon.Hash) (uint64, bool) {
+		p := rawdb.ReadBlockNumber(bc.db, h)
+		if p == nil {
+			return 0, false
+		}
+		return *p, true
+	}
+	return bc.buffer.FlushUpTo(uint64(solidified), numberOf, bc.db)
 }
 
 // switchFork rewinds the canonical chain to the LCA of newHead and the current
@@ -478,14 +527,19 @@ func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic properties.
+// Reads through bc.buffer so unflushed maintenance updates are visible (slice 2).
 func (bc *BlockChain) NextMaintenanceTime() int64 {
-	dynProps := state.LoadDynamicProperties(bc.db)
+	dynProps := state.LoadDynamicProperties(bc.buffer)
 	return dynProps.NextMaintenanceTime()
 }
 
 // DynProps loads and returns a snapshot of the current dynamic properties.
+// Reads through bc.buffer so unflushed DP writes (slice 2: every dirty DP
+// key including counters, fee totals, latest_solidified_block_num) are
+// visible to RPC and other external readers without waiting for the
+// solidified-flush boundary.
 func (bc *BlockChain) DynProps() *state.DynamicProperties {
-	return state.LoadDynamicProperties(bc.db)
+	return state.LoadDynamicProperties(bc.buffer)
 }
 
 // chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
@@ -541,8 +595,11 @@ func (a *chainHeaderAdapter) MaintenanceTimeInterval() int64 {
 // number always equals that SR's latest block (i.e. the current head).
 // Mirrors java-tron Manager.updateSolidifiedBlock().
 func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
-	// Persist this witness's latest produced block number.
-	rawdb.WriteWitnessLatestBlock(bc.db, producerAddr, blockNum)
+	// Persist this witness's latest produced block number through bc.buffer
+	// so it rewinds on switchFork (slice 2). The N-way read below also
+	// consults the buffer — otherwise the solidified compute would use a
+	// stale on-disk value for the just-written witness.
+	rawdb.WriteWitnessLatestBlock(bc.buffer, producerAddr, blockNum)
 
 	active := bc.ActiveWitnesses()
 	n := len(active)
@@ -552,7 +609,7 @@ func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockN
 
 	nums := make([]int64, 0, n)
 	for _, addr := range active {
-		nums = append(nums, rawdb.ReadWitnessLatestBlock(bc.db, addr))
+		nums = append(nums, rawdb.ReadWitnessLatestBlock(bc.buffer, addr))
 	}
 	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
 

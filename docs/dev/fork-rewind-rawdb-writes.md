@@ -1,6 +1,9 @@
 # Rawdb-direct writes vs switchFork rewind — known follow-up
 
-**Status:** Open follow-up (not blocking M11 / current work)
+**Status:** Slice 1 + slice 2 landed (per-block buffer + flush-at-solidified).
+Per-block `AddCycleReward` (gated on `change_delegation`, off on mainnet)
+and actuator-side rawdb writes remain on the disk-direct path —
+documented at the bottom of this file as known follow-ups.
 **First documented:** 2026-04-29 (during M11.1 review)
 **Owner:** TBD
 
@@ -85,3 +88,28 @@ Either should land before:
 - M10: burn_trx_amount, total-tx-count
 - M11.1: witness statistics
 - M11.4: total_create_witness_cost (via DP)
+
+## Resolution status
+
+- **Slice 1** (`f85bde0` / `1692c8e` on master): introduced `core/blockbuffer`
+  and retrofitted `consensus/dpos.ApplyBlockStatistics` (witness statistics).
+- **Slice 2**: retrofitted the remaining 5 enumerated writers (DP `Flush`,
+  `applyRewardMaintenance`, `WriteTotalTransactionCount`,
+  `updateSolidifiedBlock` / `WriteWitnessLatestBlock`, `burnFee` via DP)
+  and added a flush-at-solidified-block-boundary policy. See
+  [docs/superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md](../superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md).
+
+## Known remaining gaps (post slice 2)
+
+The following per-block rawdb-direct writes are NOT covered by the buffer
+mechanism and would still leak across `switchFork` if the gating condition
+fired during the orphan branch:
+
+- `payBlockReward → AddCycleReward` (`core/reward.go`). Gated on
+  `change_delegation` (proposal #82, off on mainnet at writing).
+- Actuator-side rawdb-direct writes inside `Execute(ctx)`:
+  `WriteAssetIssue`, `WriteExchange`, `WriteProposal`, `WriteContractCode`,
+  `WriteNullifier`, etc. — anything written via `ctx.DB` directly. These
+  cross-cut M11.5's actuator scope and require widening
+  `actuator.Context.DB` from `ethdb.KeyValueStore` to a buffer-compatible
+  reader/writer interface.

@@ -281,6 +281,148 @@ func TestBuffer_FlushTombstones(t *testing.T) {
 	}
 }
 
+// FlushUpTo flushes only layers ≤ cutoff and keeps higher layers in memory.
+func TestBuffer_FlushUpTo_FlushesOnlyMatchingLayers(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+
+	// Three layers at heights 1, 2, 3.
+	hashes := []common.Hash{bufHash(1), bufHash(2), bufHash(3)}
+	for i, h := range hashes {
+		b.BeginBlock(h)
+		if err := b.Put([]byte{byte('a' + i)}, []byte{byte('A' + i)}); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	numberOf := func(h common.Hash) (uint64, bool) {
+		for i, x := range hashes {
+			if x == h {
+				return uint64(i + 1), true
+			}
+		}
+		return 0, false
+	}
+
+	dst := rawdb.NewMemoryDatabase()
+	if err := b.FlushUpTo(2, numberOf, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	// Layers 1 and 2 flushed, layer 3 still in memory.
+	if got, _ := dst.Get([]byte("a")); !bytes.Equal(got, []byte("A")) {
+		t.Fatalf("layer 1 not flushed: %q", got)
+	}
+	if got, _ := dst.Get([]byte("b")); !bytes.Equal(got, []byte("B")) {
+		t.Fatalf("layer 2 not flushed: %q", got)
+	}
+	if has, _ := dst.Has([]byte("c")); has {
+		t.Fatalf("layer 3 unexpectedly flushed")
+	}
+
+	pending := b.PendingBlocks()
+	if len(pending) != 1 || pending[0] != bufHash(3) {
+		t.Fatalf("pending = %v, want [hash3]", pending)
+	}
+
+	// Buffer still reads layer 3 from memory.
+	mustGet(t, b, []byte("c"), []byte("C"))
+}
+
+// FlushUpTo with an unknown hash conservatively keeps the layer.
+func TestBuffer_FlushUpTo_UnknownHashKeepsLayer(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("a"), []byte("A"))
+	b.CommitBlock()
+	b.BeginBlock(bufHash(2))
+	b.Put([]byte("b"), []byte("B"))
+	b.CommitBlock()
+
+	// numberOf returns (_, false) for hash2 — should stop iteration there.
+	numberOf := func(h common.Hash) (uint64, bool) {
+		if h == bufHash(1) {
+			return 1, true
+		}
+		return 0, false
+	}
+
+	dst := rawdb.NewMemoryDatabase()
+	if err := b.FlushUpTo(99, numberOf, dst); err != nil {
+		t.Fatal(err)
+	}
+	// Layer 1 flushed, layer 2 kept (unknown number).
+	if got, _ := dst.Get([]byte("a")); !bytes.Equal(got, []byte("A")) {
+		t.Fatalf("layer 1 not flushed")
+	}
+	if has, _ := dst.Has([]byte("b")); has {
+		t.Fatal("layer 2 unexpectedly flushed (its number is unknown)")
+	}
+	if pending := b.PendingBlocks(); len(pending) != 1 || pending[0] != bufHash(2) {
+		t.Fatalf("pending = %v, want [hash2]", pending)
+	}
+}
+
+// FlushUpTo is idempotent.
+func TestBuffer_FlushUpTo_Idempotent(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("k"), []byte("v"))
+	b.CommitBlock()
+
+	numberOf := func(h common.Hash) (uint64, bool) {
+		if h == bufHash(1) {
+			return 1, true
+		}
+		return 0, false
+	}
+
+	dst := rawdb.NewMemoryDatabase()
+	if err := b.FlushUpTo(5, numberOf, dst); err != nil {
+		t.Fatal(err)
+	}
+	// Second call: zero matching layers (already flushed).
+	if err := b.FlushUpTo(5, numberOf, dst); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.PendingBlocks()) != 0 {
+		t.Fatalf("PendingBlocks not empty after flush")
+	}
+}
+
+// FlushUpTo keeps higher layers rewindable: a layer above the cutoff can
+// still be discarded via DiscardBlock after a partial flush.
+func TestBuffer_FlushUpTo_KeepsHigherLayersRewindable(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("a"), []byte("flushed"))
+	b.CommitBlock()
+	b.BeginBlock(bufHash(2))
+	b.Put([]byte("b"), []byte("orphan"))
+	b.CommitBlock()
+
+	numberOf := func(h common.Hash) (uint64, bool) {
+		switch h {
+		case bufHash(1):
+			return 1, true
+		case bufHash(2):
+			return 2, true
+		}
+		return 0, false
+	}
+
+	// Flush up to 1.
+	if err := b.FlushUpTo(1, numberOf, rawdb.NewMemoryDatabase()); err != nil {
+		t.Fatal(err)
+	}
+	// Discard layer 2 — orphan rewind.
+	b.DiscardBlock(bufHash(2))
+	mustNotFound(t, b, []byte("b"))
+	if got := len(b.PendingBlocks()); got != 0 {
+		t.Fatalf("PendingBlocks = %d, want 0 after flush+discard", got)
+	}
+}
+
 // Buffer satisfies the ethdb.KeyValueReader and Writer interfaces in shape.
 func TestBuffer_SatisfiesEthdbInterfaces(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())

@@ -116,6 +116,16 @@ func payStandbyWitness(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state
 	}
 }
 
+// kvReadWriter is the narrow ethdb capability applyRewardMaintenance and
+// accumulateWitnessVi need: reads (Read*) and writes (Write*) on per-cycle
+// reward keys. Both rawdb.NewMemoryDatabase() (an ethdb.KeyValueStore) and
+// blockbuffer.Buffer satisfy this, letting callers route the writes either
+// to disk directly or through the fork-rewind buffer (slice 2).
+type kvReadWriter interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 // accumulateWitnessVi rolls the per-cycle reward into the witness VI at a
 // maintenance boundary. Mirrors DelegationStore.accumulateWitnessVi.
 //
@@ -123,7 +133,7 @@ func payStandbyWitness(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state
 // If reward or voteCount is zero, VI is just forwarded (only persisted
 // when the forwarded value is nonzero, matching java-tron's
 // "Zero vi will not be record" guard).
-func accumulateWitnessVi(db ethdb.KeyValueStore, cycle int64, addr []byte, voteCount int64) {
+func accumulateWitnessVi(db kvReadWriter, cycle int64, addr []byte, voteCount int64) {
 	preVi := rawdb.ReadWitnessVI(db, cycle-1, addr)
 	cycleReward := rawdb.ReadCycleReward(db, cycle, addr)
 	if cycleReward == 0 || voteCount == 0 {
@@ -151,7 +161,7 @@ func accumulateWitnessVi(db ethdb.KeyValueStore, cycle int64, addr []byte, voteC
 //
 // Called from InsertBlock / BuildBlock under the same maintenance-trigger
 // condition as dpos.DoMaintenance.
-func applyRewardMaintenance(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.DynamicProperties) {
+func applyRewardMaintenance(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
 	witnessAddrs := rawdb.ReadWitnessIndex(db)
 	if len(witnessAddrs) == 0 {
 		return
