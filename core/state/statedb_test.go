@@ -434,3 +434,192 @@ func TestApplyDefaultAccountPermissions_NoOpIfMissing(t *testing.T) {
 		t.Fatal("ApplyDefaultAccountPermissions created an account; expected no-op")
 	}
 }
+
+// ---- M11.5 slice 2a: ApplyWitnessPermissions ------------------------------
+
+func TestApplyWitnessPermissions_NoOpIfMissing(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(9)
+
+	// Account does not exist; helper must not panic and must not create the account.
+	sdb.ApplyWitnessPermissions(addr, dp)
+
+	if sdb.AccountExists(addr) {
+		t.Fatal("ApplyWitnessPermissions created an account; expected no-op")
+	}
+}
+
+func TestApplyWitnessPermissions_PopulatesAllOnEmptyAccount(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(10)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.ApplyWitnessPermissions(addr, dp)
+
+	acct := sdb.GetAccount(addr)
+	if acct == nil {
+		t.Fatal("account missing after create")
+	}
+	owner := acct.OwnerPermission()
+	if owner == nil {
+		t.Fatal("OwnerPermission is nil; want default owner shape")
+	}
+	if owner.Type != corepb.Permission_Owner || owner.Id != 0 || owner.PermissionName != "owner" || owner.Threshold != 1 {
+		t.Errorf("owner shape mismatch: type=%v id=%d name=%q threshold=%d", owner.Type, owner.Id, owner.PermissionName, owner.Threshold)
+	}
+	if len(owner.Keys) != 1 || string(owner.Keys[0].Address) != string(addr.Bytes()) || owner.Keys[0].Weight != 1 {
+		t.Errorf("owner key mismatch")
+	}
+
+	actives := acct.ActivePermission()
+	if len(actives) != 1 {
+		t.Fatalf("ActivePermission: want 1 entry, got %d", len(actives))
+	}
+	active := actives[0]
+	if active.Type != corepb.Permission_Active || active.Id != 2 || active.PermissionName != "active" || active.Threshold != 1 {
+		t.Errorf("active shape mismatch: type=%v id=%d name=%q threshold=%d", active.Type, active.Id, active.PermissionName, active.Threshold)
+	}
+	want := dp.ActiveDefaultOperations()
+	if len(active.Operations) != len(want) {
+		t.Fatalf("active.Operations length: want %d, got %d", len(want), len(active.Operations))
+	}
+	for i := range want {
+		if active.Operations[i] != want[i] {
+			t.Errorf("active.Operations[%d]: want %#x, got %#x", i, want[i], active.Operations[i])
+		}
+	}
+
+	witness := acct.WitnessPermission()
+	if witness == nil {
+		t.Fatal("WitnessPermission is nil; want default witness shape")
+	}
+	if witness.Type != corepb.Permission_Witness || witness.Id != 1 || witness.PermissionName != "witness" || witness.Threshold != 1 {
+		t.Errorf("witness shape mismatch: type=%v id=%d name=%q threshold=%d", witness.Type, witness.Id, witness.PermissionName, witness.Threshold)
+	}
+	if len(witness.Keys) != 1 || string(witness.Keys[0].Address) != string(addr.Bytes()) || witness.Keys[0].Weight != 1 {
+		t.Errorf("witness key mismatch")
+	}
+	if len(witness.Operations) != 0 {
+		t.Errorf("witness.Operations: want empty, got %d bytes", len(witness.Operations))
+	}
+}
+
+func TestApplyWitnessPermissions_PreservesCustomOwner(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(11)
+	co1 := testAddr(101)
+	co2 := testAddr(102)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	// Install a custom 2-of-2-ish Owner via SetPermissions (Active untouched).
+	customOwner := &corepb.Permission{
+		Type:           corepb.Permission_Owner,
+		Id:             0,
+		PermissionName: "owner-custom",
+		Threshold:      2,
+		ParentId:       0,
+		Keys: []*corepb.Key{
+			{Address: co1.Bytes(), Weight: 1},
+			{Address: co2.Bytes(), Weight: 1},
+		},
+	}
+	sdb.SetPermissions(addr, customOwner, nil, nil)
+
+	sdb.ApplyWitnessPermissions(addr, dp)
+
+	acct := sdb.GetAccount(addr)
+	if acct == nil {
+		t.Fatal("account missing")
+	}
+	owner := acct.OwnerPermission()
+	if owner == nil {
+		t.Fatal("OwnerPermission cleared; want preserved custom")
+	}
+	if owner.PermissionName != "owner-custom" || owner.Threshold != 2 || len(owner.Keys) != 2 {
+		t.Errorf("custom owner not preserved: name=%q threshold=%d keys=%d", owner.PermissionName, owner.Threshold, len(owner.Keys))
+	}
+	if string(owner.Keys[0].Address) != string(co1.Bytes()) || string(owner.Keys[1].Address) != string(co2.Bytes()) {
+		t.Errorf("custom owner key addresses changed")
+	}
+
+	// Active was empty -> default Active[0] should now be installed.
+	actives := acct.ActivePermission()
+	if len(actives) != 1 {
+		t.Fatalf("ActivePermission: want 1 entry installed (was empty), got %d", len(actives))
+	}
+	if actives[0].PermissionName != "active" || actives[0].Threshold != 1 {
+		t.Errorf("active not the default shape after install")
+	}
+
+	// Witness is always set.
+	witness := acct.WitnessPermission()
+	if witness == nil || witness.PermissionName != "witness" {
+		t.Fatal("WitnessPermission missing or wrong shape")
+	}
+}
+
+func TestApplyWitnessPermissions_PreservesCustomActives(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(12)
+	signer1 := testAddr(201)
+	signer2 := testAddr(202)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	// Install two custom Active permissions; leave Owner nil.
+	customA0 := &corepb.Permission{
+		Type:           corepb.Permission_Active,
+		Id:             2,
+		PermissionName: "active-a",
+		Threshold:      1,
+		ParentId:       0,
+		Operations:     []byte{0x01, 0x02},
+		Keys:           []*corepb.Key{{Address: signer1.Bytes(), Weight: 1}},
+	}
+	customA1 := &corepb.Permission{
+		Type:           corepb.Permission_Active,
+		Id:             3,
+		PermissionName: "active-b",
+		Threshold:      1,
+		ParentId:       0,
+		Operations:     []byte{0x03, 0x04},
+		Keys:           []*corepb.Key{{Address: signer2.Bytes(), Weight: 1}},
+	}
+	sdb.SetPermissions(addr, nil, nil, []*corepb.Permission{customA0, customA1})
+
+	sdb.ApplyWitnessPermissions(addr, dp)
+
+	acct := sdb.GetAccount(addr)
+	if acct == nil {
+		t.Fatal("account missing")
+	}
+
+	// Owner was nil -> default Owner should now be installed.
+	owner := acct.OwnerPermission()
+	if owner == nil {
+		t.Fatal("OwnerPermission missing; expected default install")
+	}
+	if owner.PermissionName != "owner" {
+		t.Errorf("Owner not default shape: name=%q", owner.PermissionName)
+	}
+
+	// Active list (non-empty) preserved verbatim.
+	actives := acct.ActivePermission()
+	if len(actives) != 2 {
+		t.Fatalf("ActivePermission: want 2 entries (preserved), got %d", len(actives))
+	}
+	if actives[0].PermissionName != "active-a" || actives[1].PermissionName != "active-b" {
+		t.Errorf("custom active list mutated: %q, %q", actives[0].PermissionName, actives[1].PermissionName)
+	}
+
+	// Witness is always set.
+	witness := acct.WitnessPermission()
+	if witness == nil || witness.PermissionName != "witness" {
+		t.Fatal("WitnessPermission missing or wrong shape")
+	}
+}

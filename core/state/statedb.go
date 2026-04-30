@@ -1112,6 +1112,39 @@ func (s *StateDB) ApplyDefaultAccountPermissions(addr tcommon.Address, dp *Dynam
 	obj.markDirty()
 }
 
+// ApplyWitnessPermissions installs the witness permission on addr and
+// back-fills default Owner / Active[0] only if they are missing. Mirrors
+// java-tron AccountCapsule.setDefaultWitnessPermission. The caller is
+// responsible for the AllowMultiSign gate. No-op if the account does not
+// exist.
+//
+// Conditional semantics (java-tron parity):
+//   - Witness permission is ALWAYS set/overwritten (default shape).
+//   - Owner permission is only set if account.OwnerPermission() == nil.
+//   - Active[0] is only appended if len(account.ActivePermission()) == 0.
+//
+// This preserves any custom Owner/Active permissions the account installed
+// via AccountPermissionUpdate before being upgraded to a witness.
+func (s *StateDB) ApplyWitnessPermissions(addr tcommon.Address, dp *DynamicProperties) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return
+	}
+	s.journalAccount(addr, obj)
+	// Witness: unconditional (overwrite if any).
+	obj.account.SetWitnessPermission(types.MakeDefaultWitnessPermission(addr))
+	// Owner: only fill if missing.
+	if obj.account.OwnerPermission() == nil {
+		obj.account.SetOwnerPermission(types.MakeDefaultOwnerPermission(addr))
+	}
+	// Active: only fill if list is empty.
+	if len(obj.account.ActivePermission()) == 0 {
+		active := types.MakeDefaultActivePermission(addr, dp.ActiveDefaultOperations())
+		obj.account.SetActivePermission([]*corepb.Permission{active})
+	}
+	obj.markDirty()
+}
+
 // GetDelegatedFrozenV2 returns the delegated (outgoing) frozen balance for a resource type.
 func (s *StateDB) GetDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode) int64 {
 	obj := s.getStateObject(addr)

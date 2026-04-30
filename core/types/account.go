@@ -308,6 +308,23 @@ func MakeDefaultActivePermission(addr common.Address, activeDefaultOps []byte) *
 	}
 }
 
+// MakeDefaultWitnessPermission builds the default Witness permission for addr:
+// type=Witness, id=1, name="witness", threshold=1, parent_id=0, single key
+// (addr, weight=1), no operations bitmap. Mirrors java-tron
+// AccountCapsule.createDefaultWitnessPermission.
+func MakeDefaultWitnessPermission(addr common.Address) *corepb.Permission {
+	return &corepb.Permission{
+		Type:           corepb.Permission_Witness,
+		Id:             1,
+		PermissionName: "witness",
+		Threshold:      1,
+		ParentId:       0,
+		Keys: []*corepb.Key{
+			{Address: addr.Bytes(), Weight: 1},
+		},
+	}
+}
+
 // Delegated frozen V2 balance accessors (resources delegated TO this account).
 func (a *Account) DelegatedFrozenV2BalanceForBandwidth() int64 {
 	return a.pb.DelegatedFrozenV2BalanceForBandwidth
