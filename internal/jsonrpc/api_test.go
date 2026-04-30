@@ -306,7 +306,10 @@ func TestFilterLifecycle(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0", "method": "eth_uninstallFilter", "params": []interface{}{filterID}, "id": 1,
 	})
-	resp2, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	resp2, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("eth_uninstallFilter post: %v", err)
+	}
 	defer resp2.Body.Close()
 	var r2 map[string]interface{}
 	json.NewDecoder(resp2.Body).Decode(&r2)
