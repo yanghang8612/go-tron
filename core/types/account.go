@@ -269,6 +269,45 @@ func (a *Account) SetOwnerPermission(p *corepb.Permission)        { a.pb.OwnerPe
 func (a *Account) SetWitnessPermission(p *corepb.Permission)      { a.pb.WitnessPermission = p }
 func (a *Account) SetActivePermission(perms []*corepb.Permission) { a.pb.ActivePermission = perms }
 
+// MakeDefaultOwnerPermission builds the default Owner permission for addr:
+// type=Owner, id=0, name="owner", threshold=1, parent_id=0, single key
+// (addr, weight=1), no operations bitmap. Mirrors java-tron
+// AccountCapsule.createDefaultOwnerPermission.
+func MakeDefaultOwnerPermission(addr common.Address) *corepb.Permission {
+	return &corepb.Permission{
+		Type:           corepb.Permission_Owner,
+		Id:             0,
+		PermissionName: "owner",
+		Threshold:      1,
+		ParentId:       0,
+		Keys: []*corepb.Key{
+			{Address: addr.Bytes(), Weight: 1},
+		},
+	}
+}
+
+// MakeDefaultActivePermission builds the default Active permission for addr,
+// loading the operations bitmap from activeDefaultOps. Mirrors java-tron
+// AccountCapsule.createDefaultActivePermission. The returned permission has
+// type=Active, id=2, name="active", threshold=1, parent_id=0, a single key
+// (addr, weight=1), and a defensive copy of activeDefaultOps as its
+// operations bitmap.
+func MakeDefaultActivePermission(addr common.Address, activeDefaultOps []byte) *corepb.Permission {
+	ops := make([]byte, len(activeDefaultOps))
+	copy(ops, activeDefaultOps)
+	return &corepb.Permission{
+		Type:           corepb.Permission_Active,
+		Id:             2,
+		PermissionName: "active",
+		Threshold:      1,
+		ParentId:       0,
+		Operations:     ops,
+		Keys: []*corepb.Key{
+			{Address: addr.Bytes(), Weight: 1},
+		},
+	}
+}
+
 // Delegated frozen V2 balance accessors (resources delegated TO this account).
 func (a *Account) DelegatedFrozenV2BalanceForBandwidth() int64 {
 	return a.pb.DelegatedFrozenV2BalanceForBandwidth
