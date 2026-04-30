@@ -1090,6 +1090,28 @@ func (s *StateDB) SetPermissions(addr tcommon.Address, owner, witness *corepb.Pe
 	obj.markDirty()
 }
 
+// ApplyDefaultAccountPermissions installs the default Owner permission and a
+// default Active[0] permission whose operations bitmap is loaded from
+// dp.ActiveDefaultOperations(). Mirrors java-tron AccountCapsule's
+// `withDefaultPermission=true` constructor branch (createDefaultOwnerPermission
+// + createDefaultActivePermission). The caller is responsible for the
+// AllowMultiSign gate. No-op if the account does not exist.
+//
+// Note: this OVERWRITES any existing Owner / Active permissions; intended use
+// is immediately after StateDB.CreateAccount on a freshly-minted account.
+func (s *StateDB) ApplyDefaultAccountPermissions(addr tcommon.Address, dp *DynamicProperties) {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return
+	}
+	s.journalAccount(addr, obj)
+	owner := types.MakeDefaultOwnerPermission(addr)
+	active := types.MakeDefaultActivePermission(addr, dp.ActiveDefaultOperations())
+	obj.account.SetOwnerPermission(owner)
+	obj.account.SetActivePermission([]*corepb.Permission{active})
+	obj.markDirty()
+}
+
 // GetDelegatedFrozenV2 returns the delegated (outgoing) frozen balance for a resource type.
 func (s *StateDB) GetDelegatedFrozenV2(addr tcommon.Address, resourceType corepb.ResourceCode) int64 {
 	obj := s.getStateObject(addr)

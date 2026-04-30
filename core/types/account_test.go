@@ -353,3 +353,91 @@ func TestAccountMarshalRoundTrip(t *testing.T) {
 		t.Errorf("LatestWithdrawTime: want 600, got %d", a2.LatestWithdrawTime())
 	}
 }
+
+// ---- Default permission helpers (M11.5) ------------------------------------
+
+func TestMakeDefaultOwnerPermission(t *testing.T) {
+	addr := common.BytesToAddress([]byte{
+		0x41, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+		0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+	})
+	p := MakeDefaultOwnerPermission(addr)
+	if p == nil {
+		t.Fatal("nil permission")
+	}
+	if p.Type != corepb.Permission_Owner {
+		t.Errorf("Type: want Owner, got %v", p.Type)
+	}
+	if p.Id != 0 {
+		t.Errorf("Id: want 0, got %d", p.Id)
+	}
+	if p.PermissionName != "owner" {
+		t.Errorf("PermissionName: want \"owner\", got %q", p.PermissionName)
+	}
+	if p.Threshold != 1 {
+		t.Errorf("Threshold: want 1, got %d", p.Threshold)
+	}
+	if p.ParentId != 0 {
+		t.Errorf("ParentId: want 0, got %d", p.ParentId)
+	}
+	if len(p.Operations) != 0 {
+		t.Errorf("Operations: want empty, got %d bytes", len(p.Operations))
+	}
+	if len(p.Keys) != 1 {
+		t.Fatalf("Keys: want 1, got %d", len(p.Keys))
+	}
+	if string(p.Keys[0].Address) != string(addr.Bytes()) {
+		t.Errorf("Keys[0].Address mismatch")
+	}
+	if p.Keys[0].Weight != 1 {
+		t.Errorf("Keys[0].Weight: want 1, got %d", p.Keys[0].Weight)
+	}
+}
+
+func TestMakeDefaultActivePermission(t *testing.T) {
+	addr := common.BytesToAddress([]byte{
+		0x41, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22,
+		0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22,
+	})
+	ops := []byte{
+		0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x3e, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
+	p := MakeDefaultActivePermission(addr, ops)
+	if p == nil {
+		t.Fatal("nil permission")
+	}
+	if p.Type != corepb.Permission_Active {
+		t.Errorf("Type: want Active, got %v", p.Type)
+	}
+	if p.Id != 2 {
+		t.Errorf("Id: want 2, got %d", p.Id)
+	}
+	if p.PermissionName != "active" {
+		t.Errorf("PermissionName: want \"active\", got %q", p.PermissionName)
+	}
+	if p.Threshold != 1 {
+		t.Errorf("Threshold: want 1, got %d", p.Threshold)
+	}
+	if p.ParentId != 0 {
+		t.Errorf("ParentId: want 0, got %d", p.ParentId)
+	}
+	if len(p.Keys) != 1 || string(p.Keys[0].Address) != string(addr.Bytes()) || p.Keys[0].Weight != 1 {
+		t.Errorf("Keys mismatch")
+	}
+	if len(p.Operations) != 32 {
+		t.Fatalf("Operations: want 32 bytes, got %d", len(p.Operations))
+	}
+	for i := range ops {
+		if p.Operations[i] != ops[i] {
+			t.Errorf("Operations[%d]: want %#x, got %#x", i, ops[i], p.Operations[i])
+		}
+	}
+	// Defensive copy: mutating input must not change permission.
+	ops[0] = 0x00
+	if p.Operations[0] != 0x7f {
+		t.Errorf("Operations not defensively copied: now %#x", p.Operations[0])
+	}
+}

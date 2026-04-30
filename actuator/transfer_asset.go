@@ -71,6 +71,9 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	fee := int64(0)
 	if !ctx.State.AccountExists(to) {
 		ctx.State.CreateAccount(to, corepb.AccountType_Normal)
+		if ctx.DynProps.AllowMultiSign() {
+			ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
+		}
 		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
 		if err := burnFee(ctx, from, fee); err != nil {
 			return nil, err

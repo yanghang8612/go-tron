@@ -44,5 +44,8 @@ func (a *CreateAccountActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	newAddr := common.BytesToAddress(ac.AccountAddress)
 	ctx.State.CreateAccount(newAddr, ac.Type)
+	if ctx.DynProps.AllowMultiSign() {
+		ctx.State.ApplyDefaultAccountPermissions(newAddr, ctx.DynProps)
+	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

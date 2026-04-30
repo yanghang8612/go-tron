@@ -374,3 +374,63 @@ func TestContractStoragePersistsAcrossCommit(t *testing.T) {
 		t.Fatalf("storage after reopen: got %x, want %x", got, value)
 	}
 }
+
+// ---- M11.5: ApplyDefaultAccountPermissions --------------------------------
+
+func TestApplyDefaultAccountPermissions_PopulatesBoth(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(7)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.ApplyDefaultAccountPermissions(addr, dp)
+
+	acct := sdb.GetAccount(addr)
+	if acct == nil {
+		t.Fatal("account missing after create")
+	}
+	owner := acct.OwnerPermission()
+	if owner == nil {
+		t.Fatal("OwnerPermission is nil")
+	}
+	if owner.Type != corepb.Permission_Owner || owner.Id != 0 || owner.PermissionName != "owner" {
+		t.Errorf("owner shape mismatch: type=%v id=%d name=%q", owner.Type, owner.Id, owner.PermissionName)
+	}
+	if len(owner.Keys) != 1 || string(owner.Keys[0].Address) != string(addr.Bytes()) {
+		t.Errorf("owner key mismatch")
+	}
+	if len(owner.Operations) != 0 {
+		t.Errorf("owner.Operations: want empty, got %d bytes", len(owner.Operations))
+	}
+
+	actives := acct.ActivePermission()
+	if len(actives) != 1 {
+		t.Fatalf("ActivePermission: want 1 entry, got %d", len(actives))
+	}
+	active := actives[0]
+	if active.Type != corepb.Permission_Active || active.Id != 2 || active.PermissionName != "active" {
+		t.Errorf("active shape mismatch: type=%v id=%d name=%q", active.Type, active.Id, active.PermissionName)
+	}
+	want := dp.ActiveDefaultOperations()
+	if len(active.Operations) != len(want) {
+		t.Fatalf("active.Operations length: want %d, got %d", len(want), len(active.Operations))
+	}
+	for i := range want {
+		if active.Operations[i] != want[i] {
+			t.Errorf("active.Operations[%d]: want %#x, got %#x", i, want[i], active.Operations[i])
+		}
+	}
+}
+
+func TestApplyDefaultAccountPermissions_NoOpIfMissing(t *testing.T) {
+	sdb := newTestStateDB(t)
+	dp := NewDynamicProperties()
+	addr := testAddr(8)
+
+	// Account does not exist; helper must not panic and must not create the account.
+	sdb.ApplyDefaultAccountPermissions(addr, dp)
+
+	if sdb.AccountExists(addr) {
+		t.Fatal("ApplyDefaultAccountPermissions created an account; expected no-op")
+	}
+}

@@ -130,6 +130,9 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 		to := common.BytesToAddress(c.TransparentToAddress)
 		if !ctx.State.AccountExists(to) {
 			ctx.State.CreateAccount(to, corepb.AccountType_Normal)
+			if ctx.DynProps.AllowMultiSign() {
+				ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
+			}
 		}
 		ctx.State.AddTRC10Balance(to, zenID, c.ToAmount)
 	}
