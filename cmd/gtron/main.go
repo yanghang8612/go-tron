@@ -305,6 +305,14 @@ func gtron(ctx *cli.Context) error {
 			broadcaster.BroadcastBlock(block)
 		}
 		stack.RegisterLifecycle(prod)
+
+		// M6b slice 1: register a NO-OP PBFT signing hook on this SR. The
+		// hook only logs; the three-phase signing/broadcast path lands in
+		// slice 2. Same active-list policy as `producer` above — register
+		// regardless of current active membership; the runtime gate
+		// (isLocalSR + allowPBFT) handles inactive SRs naturally.
+		pbftProducer := tnet.NewPbftProducer(bc, bc.DB(), p2pServer, syncService, key)
+		bc.AddBlockHook(pbftProducer.OnBlockApplied)
 	}
 
 	// Start
