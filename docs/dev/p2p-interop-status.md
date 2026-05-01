@@ -2,19 +2,25 @@
 
 Record of verified compatibility with the reference `io.github.tronprotocol/libp2p:2.2.7`.
 
-## ✅ VERIFIED (2026-04-12)
+## ✅ VERIFIED (2026-04-12 / updated 2026-05-01)
 
 **go-tron successfully connects to a real java-tron node and completes the libp2p handshake.**
 
 Against a local java-tron full node (networkID=0):
-- `TestJavaTronHandshake` PASSES — libp2p handshake completes, peer sends us
-  an app-layer message (code 0x08, 195 bytes) within 3 seconds of handshake
+- `TestJavaTronHandshake` PASSES — libp2p handshake completes; java-tron logs
+  "Add peer, total channels: 1" and proactively sends TRON Hello (0x20,
+  code=32) within 3s. The bare `testHandler` accepts it but does not respond
+  (no TRON protocol logic). Further protocol exchange (SyncBlockChain 0x08)
+  does not happen since we never reply with our Hello. Real TronHandler path
+  (net/handler.go) performs full Hello exchange; that path is exercised by
+  `scripts/system_test.sh` 2-node dev chain.
 - `TestJavaTronDiscoverPing` PASSES — UDP discovery ping/pong round-trip
 
 To reproduce:
 ```bash
 # Start java-tron locally (see java-tron-local.md)
-# Then:
+# Note: if a prior test run disconnected from this node, wait 65s for the
+# libp2p DEFAULT_BAN_TIME (60s) to expire before re-running.
 cd /Users/asuka/Projects/asuka/go/go-tron
 JAVA_TRON_ADDR=127.0.0.1:18888 JAVA_TRON_NETWORK=0 \
   go test -tags=integration ./p2p/ -run "TestJavaTron" -v
@@ -67,10 +73,18 @@ is DisconnectReason. These are two separate spaces — intentional in libp2p.
 
 ## What's still not validated
 
-- **Application-layer sync** — the test covers libp2p handshake only. After
-  handshake, java-tron sends its own app-layer HELLO (typically code 0x20)
-  and expects a response with our chain state. go-tron's `net/handler.go`
-  implements this path; T12 will validate end-to-end block sync.
+- **Full application-layer sync** — TRON Hello (0x20) received from java-tron
+  is confirmed; go-tron's `net/handler.go` implements the response and
+  SyncBlockChain path. End-to-end block exchange is exercised by
+  `scripts/system_test.sh` (2-node dev chain) but not yet against a real
+  java-tron mainnet/Nile node.
+- **Real-network block sync (G1)** — requires a java-tron node on mainnet or
+  Nile (networkID=11111 or 201910292). The local private test chain
+  (networkID=0) cannot be used: gtron defaults to networkID=11111 and the
+  libp2p hello would reject with DIFFERENT_VERSION. Even with a matching
+  network ID, genesis block hashes must match for TRON Hello validation to
+  pass. G1 validation is deferred to M0″ Phase 2 (requires operator with
+  mainnet-synced java-tron; see PLAN.md).
 - **Testnet reachability** — live Nile/mainnet seeds appear unreachable from
   the test environment (TCP connects, first bytes received, but full sync
   not attempted yet).
