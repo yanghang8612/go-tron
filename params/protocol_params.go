@@ -23,4 +23,13 @@ const (
 	BlockVersion = 35 // VERSION_4_8_2, mirrors java-tron ChainConstant.BLOCK_VERSION
 	WindowSizeMs               = 86_400_000
 	WindowSizeSlots            = WindowSizeMs / BlockProducedInterval
+	// MinParticipationRate is the minimum recent block-fill percentage a
+	// witness requires to keep producing. When the rolling
+	// BLOCK_FILLED_SLOTS rate drops below this, witnesses skip their slot
+	// (java-tron State.LOW_PARTICIPATION). Mirrors the default in
+	// java-tron framework/src/main/resources/config.conf:179
+	// (minParticipationRate = 15) and the comparison at
+	// consensus/src/main/java/org/tron/consensus/dpos/StateManager.java:56
+	// (strict <).
+	MinParticipationRate = 15
 )
