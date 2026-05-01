@@ -71,6 +71,7 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 		if err := burnFee(ctx, ownerAddr, fee); err != nil {
 			return nil, err
 		}
+		ctx.DynProps.AddTotalCreateAccountCost(fee)
 	}
 	if err := ctx.State.SubBalance(ownerAddr, tc.Amount); err != nil {
 		return nil, err

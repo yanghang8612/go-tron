@@ -1233,6 +1233,12 @@ func (dp *DynamicProperties) TotalCreateAccountCost() int64 {
 func (dp *DynamicProperties) SetTotalCreateAccountCost(v int64) {
 	dp.Set("total_create_account_cost", v)
 }
+func (dp *DynamicProperties) AddTotalCreateAccountCost(amount int64) {
+	if amount == 0 {
+		return
+	}
+	dp.Set("total_create_account_cost", dp.props["total_create_account_cost"]+amount)
+}
 
 // TotalCreateWitnessCost returns the cumulative TRX (in SUN) burned to upgrade
 // accounts to witnesses. Mirrors java-tron TOTAL_CREATE_WITNESS_FEE (note the

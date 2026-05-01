@@ -129,6 +129,34 @@ func TestTransferAssetExecute_Success(t *testing.T) {
 	}
 }
 
+func TestTransferAssetExecute_CreateAccountCostCounter(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1_000_000)
+	statedb.SetTRC10Balance(owner, tokenID, 1_000_000)
+
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeTransferAssetTx(1, 0xBB, tokenID, 500_000)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
+
+	act := &TransferAssetActuator{}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if got := ctx.DynProps.TotalCreateAccountCost(); got != 100_000 {
+		t.Fatalf("TotalCreateAccountCost: want 100000, got %d", got)
+	}
+}
+
 func TestTransferAssetExecute_CreatesRecipient(t *testing.T) {
 	const tokenID = int64(1_000_001)
 	statedb := setupStateDB(t)

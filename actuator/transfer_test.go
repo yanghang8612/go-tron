@@ -138,5 +138,45 @@ func TestTransferExecute_CreatesRecipient(t *testing.T) {
 	}
 }
 
+func TestTransferExecute_CreateAccountCostCounter(t *testing.T) {
+	statedb := setupStateDB(t)
+	from := makeTestAddr(1)
+	seedAccount(statedb, from, 10_000_000)
+
+	tx := makeTransferTx(1, 0xAA, 1_000_000)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
+	act := &TransferActuator{}
+
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if got := ctx.DynProps.TotalCreateAccountCost(); got != 100_000 {
+		t.Fatalf("TotalCreateAccountCost: want 100000, got %d", got)
+	}
+}
+
+func TestTransferExecute_NoCounterWhenRecipientExists(t *testing.T) {
+	statedb := setupStateDB(t)
+	from := makeTestAddr(1)
+	to := makeTestAddr(2)
+	seedAccount(statedb, from, 10_000_000)
+	seedAccount(statedb, to, 0)
+
+	tx := makeTransferTx(1, 2, 1_000_000)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
+	act := &TransferActuator{}
+
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if got := ctx.DynProps.TotalCreateAccountCost(); got != 0 {
+		t.Fatalf("TotalCreateAccountCost should remain 0: got %d", got)
+	}
+}
+
 // Suppress unused import warning for tcommon.
 var _ tcommon.Address
