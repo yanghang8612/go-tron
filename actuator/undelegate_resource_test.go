@@ -21,6 +21,7 @@ func TestUnDelegateResourceValidate(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UnDelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	db := ethrawdb.NewMemoryDatabase()
@@ -48,6 +49,7 @@ func TestUnDelegateResourceLocked(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UnDelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.BlockTime = 1000
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
@@ -77,6 +79,7 @@ func TestUnDelegateResourceExecute(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UnDelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 

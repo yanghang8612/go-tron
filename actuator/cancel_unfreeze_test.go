@@ -14,7 +14,8 @@ func TestCancelAllUnfreezeV2Validate(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_CancelAllUnfreezeV2Contract, c, 0)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetAllowCancelAllUnfreezeV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	act := &CancelAllUnfreezeV2Actuator{}
 
 	if err := act.Validate(ctx); err == nil {
@@ -38,7 +39,8 @@ func TestCancelAllUnfreezeV2Execute(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_CancelAllUnfreezeV2Contract, c, 0)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetAllowCancelAllUnfreezeV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 0) // ensure entry exists
 	ctx.State.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 1000000, 999999)

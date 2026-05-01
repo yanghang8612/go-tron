@@ -157,6 +157,7 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	statedb := setupStateDB(t)
 	dp := state.NewDynamicProperties()
 	dp.SetAllowDelegateResource(true)
+	dp.SetUnfreezeDelayDays(14)
 	dp.Set("total_net_limit", 43_200_000_000)
 	dp.SetTotalNetWeight(1000)
 	db := ethrawdb.NewMemoryDatabase()

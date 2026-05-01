@@ -21,6 +21,7 @@ func TestDelegateResourceValidate(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	act := &DelegateResourceActuator{}
 
 	// Accounts don't exist
@@ -47,6 +48,7 @@ func TestDelegateResourceSelfDelegation(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	act := &DelegateResourceActuator{}
@@ -66,6 +68,7 @@ func TestDelegateResourceExecute(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
 	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5000000)

@@ -31,7 +31,7 @@ func TestWithdrawExpireUnfreezeValidate(t *testing.T) {
 	tx := makeWithdrawExpireUnfreezeTx(50)
 	act := &WithdrawExpireUnfreezeActuator{}
 	dp := state.NewDynamicProperties()
-	dp.SetAllowStakingV2(true)
+	dp.SetUnfreezeDelayDays(14)
 	ctx := &Context{State: statedb, DynProps: dp, Tx: tx, BlockTime: 1000000}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")

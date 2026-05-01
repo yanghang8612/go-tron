@@ -29,6 +29,9 @@ func (a *UnDelegateResourceActuator) Validate(ctx *Context) error {
 	if !forks.IsActive(forks.AllowDelegateResource, ctx.BlockNumber, ctx.DynProps) {
 		return errors.New("resource delegation not yet enabled")
 	}
+	if !ctx.DynProps.SupportUnfreezeDelay() {
+		return errors.New("staking v2 not yet enabled")
+	}
 	c, err := a.getContract(ctx)
 	if err != nil {
 		return err

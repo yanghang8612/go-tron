@@ -27,7 +27,7 @@ func (a *UnfreezeBalanceV2Actuator) getContract(ctx *Context) (*contractpb.Unfre
 }
 
 func (a *UnfreezeBalanceV2Actuator) Validate(ctx *Context) error {
-	if !forks.IsActive(forks.AllowStakingV2, ctx.BlockNumber, ctx.DynProps) {
+	if !ctx.DynProps.SupportUnfreezeDelay() {
 		return errors.New("staking v2 not yet enabled")
 	}
 	uc, err := a.getContract(ctx)

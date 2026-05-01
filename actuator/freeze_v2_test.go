@@ -34,7 +34,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	tx := makeFreezeV2Tx(1, 100, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
@@ -45,7 +45,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Zero amount
 	tx = makeFreezeV2Tx(1, 0, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for zero amount")
 	}
@@ -53,7 +53,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Insufficient balance
 	tx = makeFreezeV2Tx(1, 5000, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for insufficient balance")
 	}
@@ -61,7 +61,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	// Success
 	tx = makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestFreezeV2Execute(t *testing.T) {
 	tx := makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 
 	result, err := act.Execute(ctx)
 	if err != nil {
@@ -109,9 +109,12 @@ func TestFreezeV2_TronPower_Validate(t *testing.T) {
 		t.Fatal("expected error: staking v2 not yet enabled")
 	}
 
-	// Fork active: TRON_POWER freeze is accepted.
+	// Fork active: TRON_POWER freeze is accepted; needs both the top-level
+	// StakingV2 gate (unfreeze_delay_days > 0) and AllowNewResourceModel for
+	// the TRON_POWER resource switch branch.
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowNewResourceModel(true)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error with fork active: %v", err)
 	}
@@ -135,7 +138,7 @@ func TestFreezeV2_InvalidResource(t *testing.T) {
 
 	// Fork active: rejected by the resource-type default branch.
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for unknown resource code")
 	}

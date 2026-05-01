@@ -35,7 +35,7 @@ func TestUnfreezeV2Validate(t *testing.T) {
 	tx := makeUnfreezeV2Tx(3, 100, corepb.ResourceCode_BANDWIDTH)
 	act := &UnfreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
@@ -47,7 +47,7 @@ func TestUnfreezeV2Validate(t *testing.T) {
 	// Insufficient frozen
 	tx = makeUnfreezeV2Tx(3, 1000, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for insufficient frozen")
 	}
@@ -55,7 +55,7 @@ func TestUnfreezeV2Validate(t *testing.T) {
 	// Success
 	tx = makeUnfreezeV2Tx(3, 200, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,9 +127,11 @@ func TestUnfreezeV2_TronPower_Validate(t *testing.T) {
 		t.Fatal("expected error: staking v2 not yet enabled")
 	}
 
-	// Fork active: TRON_POWER unfreeze is accepted.
+	// Fork active: TRON_POWER unfreeze is accepted; needs both the top-level
+	// StakingV2 gate (unfreeze_delay_days > 0) and AllowNewResourceModel.
 	ctx = setupContext(t, statedb, tx)
-	ctx.DynProps.SetAllowStakingV2(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowNewResourceModel(true)
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error with fork active: %v", err)
 	}

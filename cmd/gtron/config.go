@@ -118,6 +118,7 @@ func makeDevGenesis(witnessAddr tcommon.Address, fullFeatures bool, maintenanceI
 			"allow_tvm_blob":                        1,
 			"allow_tvm_cancun":                      1,
 			"allow_cancel_all_unfreeze_v2":          1,
+			"unfreeze_delay_days":                   14,
 			"allow_delegate_optimization":           1,
 			"allow_update_account_name":             1,
 			"allow_strict_math":                     1,

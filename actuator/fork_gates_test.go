@@ -72,7 +72,7 @@ func TestForkGate_AccountPermission_FlagOn(t *testing.T) {
 	assertNotForkError(t, act.Validate(ctx), "multi-sign not yet enabled")
 }
 
-// ---------- 2. DelegateResourceActuator / AllowDelegateResource -----------
+// ---------- 2. DelegateResourceActuator / AllowDelegateResource + SupportUnfreezeDelay -----------
 
 func TestForkGate_DelegateResource_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -92,13 +92,16 @@ func TestForkGate_DelegateResource_FlagOn(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowDelegateResource(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) {
+		dp.SetAllowDelegateResource(true)
+		dp.SetUnfreezeDelayDays(14)
+	})
 
 	act := &DelegateResourceActuator{}
 	assertNotForkError(t, act.Validate(ctx), "resource delegation not yet enabled")
 }
 
-// ---------- 3. UnDelegateResourceActuator / AllowDelegateResource ---------
+// ---------- 3. UnDelegateResourceActuator / AllowDelegateResource + SupportUnfreezeDelay ---------
 
 func TestForkGate_UnDelegateResource_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -118,13 +121,16 @@ func TestForkGate_UnDelegateResource_FlagOn(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UnDelegateResourceContract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowDelegateResource(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) {
+		dp.SetAllowDelegateResource(true)
+		dp.SetUnfreezeDelayDays(14)
+	})
 
 	act := &UnDelegateResourceActuator{}
 	assertNotForkError(t, act.Validate(ctx), "resource delegation not yet enabled")
 }
 
-// ---------- 4. FreezeBalanceV2Actuator / AllowStakingV2 -------------------
+// ---------- 4. FreezeBalanceV2Actuator / SupportUnfreezeDelay -------------------
 
 func TestForkGate_FreezeBalanceV2_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -148,13 +154,13 @@ func TestForkGate_FreezeBalanceV2_FlagOn(t *testing.T) {
 		Resource:      corepb.ResourceCode_BANDWIDTH,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_FreezeBalanceV2Contract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowStakingV2(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetUnfreezeDelayDays(14) })
 
 	act := &FreezeBalanceV2Actuator{}
 	assertNotForkError(t, act.Validate(ctx), "staking v2 not yet enabled")
 }
 
-// ---------- 5. UnfreezeBalanceV2Actuator / AllowStakingV2 -----------------
+// ---------- 5. UnfreezeBalanceV2Actuator / SupportUnfreezeDelay -----------------
 
 func TestForkGate_UnfreezeBalanceV2_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -178,13 +184,13 @@ func TestForkGate_UnfreezeBalanceV2_FlagOn(t *testing.T) {
 		Resource:        corepb.ResourceCode_BANDWIDTH,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UnfreezeBalanceV2Contract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowStakingV2(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetUnfreezeDelayDays(14) })
 
 	act := &UnfreezeBalanceV2Actuator{}
 	assertNotForkError(t, act.Validate(ctx), "staking v2 not yet enabled")
 }
 
-// ---------- 6. WithdrawExpireUnfreezeActuator / AllowStakingV2 ------------
+// ---------- 6. WithdrawExpireUnfreezeActuator / SupportUnfreezeDelay ------------
 
 func TestForkGate_WithdrawExpireUnfreeze_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -204,13 +210,13 @@ func TestForkGate_WithdrawExpireUnfreeze_FlagOn(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_WithdrawExpireUnfreezeContract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowStakingV2(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetUnfreezeDelayDays(14) })
 
 	act := &WithdrawExpireUnfreezeActuator{}
 	assertNotForkError(t, act.Validate(ctx), "staking v2 not yet enabled")
 }
 
-// ---------- 7. CancelAllUnfreezeV2Actuator / AllowStakingV2 ---------------
+// ---------- 7. CancelAllUnfreezeV2Actuator / SupportCancelAllUnfreezeV2 ---------------
 
 func TestForkGate_CancelAllUnfreezeV2_FlagOff(t *testing.T) {
 	owner := makeTestAddr(1)
@@ -230,7 +236,10 @@ func TestForkGate_CancelAllUnfreezeV2_FlagOn(t *testing.T) {
 		OwnerAddress: owner[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_CancelAllUnfreezeV2Contract, c, 0)
-	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) { dp.SetAllowStakingV2(true) })
+	ctx.DynProps = dynOn(t, func(dp *state.DynamicProperties) {
+		dp.SetAllowCancelAllUnfreezeV2(true)
+		dp.SetUnfreezeDelayDays(14)
+	})
 
 	act := &CancelAllUnfreezeV2Actuator{}
 	assertNotForkError(t, act.Validate(ctx), "staking v2 not yet enabled")

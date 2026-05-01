@@ -418,6 +418,25 @@ func (dp *DynamicProperties) AddTotalTronPowerWeight(delta int64) {
 func (dp *DynamicProperties) UnfreezeDelayDays() int64 {
 	return dp.props["unfreeze_delay_days"]
 }
+func (dp *DynamicProperties) SetUnfreezeDelayDays(days int64) {
+	dp.Set("unfreeze_delay_days", days)
+}
+
+// SupportUnfreezeDelay mirrors java-tron DynamicPropertiesStore.supportUnfreezeDelay():
+// the StakingV2 operations (FreezeV2, UnfreezeV2, WithdrawExpireUnfreeze, DelegateResource,
+// UnDelegateResource) are gated on proposal #70 (unfreeze_delay_days), not proposal #51
+// (allow_new_resource_model). The two proposals activate at different blocks on mainnet.
+func (dp *DynamicProperties) SupportUnfreezeDelay() bool {
+	return dp.UnfreezeDelayDays() > 0
+}
+
+// SupportCancelAllUnfreezeV2 mirrors java-tron
+// DynamicPropertiesStore.supportAllowCancelAllUnfreezeV2():
+// requires BOTH allow_cancel_all_unfreeze_v2 (proposal #71) AND unfreeze_delay_days > 0
+// (proposal #70).
+func (dp *DynamicProperties) SupportCancelAllUnfreezeV2() bool {
+	return dp.AllowCancelAllUnfreezeV2() && dp.SupportUnfreezeDelay()
+}
 
 func (dp *DynamicProperties) MaxCpuTimeOfOneTx() int64 {
 	return dp.props["max_cpu_time_of_one_tx"]
@@ -586,11 +605,11 @@ func (dp *DynamicProperties) SetAllowPbft(v bool) {
 	}
 }
 
-// AllowStakingV2 and SetAllowStakingV2 are compatibility wrappers for the
-// V2 staking feature gate. java-tron uses a single flag for both the
-// state-layer V2 rules (freeze/unfreeze/delegate) and the VM V2 precompiles:
-// `allow_new_resource_model` (proposal #62). These wrappers delegate there
-// so every go-tron gate flips together when proposal #62 passes.
+// AllowStakingV2 / SetAllowStakingV2 are aliases for AllowNewResourceModel
+// (proposal #51, allow_new_resource_model). These are used by the VM precompile
+// layer and the secondary TRON_POWER resource checks inside FreezeV2/UnfreezeV2
+// actuators. They do NOT gate the top-level StakingV2 operations — that gate is
+// SupportUnfreezeDelay() (= unfreeze_delay_days > 0, proposal #70).
 func (dp *DynamicProperties) AllowStakingV2() bool { return dp.AllowNewResourceModel() }
 func (dp *DynamicProperties) SetAllowStakingV2(v bool) { dp.SetAllowNewResourceModel(v) }
 
