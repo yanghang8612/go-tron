@@ -162,6 +162,7 @@ if [ "$START_NODE" = "1" ]; then
     --datadir "$WORKDIR/sr" \
     --p2p.port "$P2P" --http.port "$HTTP" \
     --grpc.port 0 --jsonrpc.port "$JSONRPC" \
+    --dev.maintenance-interval 30000 \
     > "$WORKDIR/sr.log" 2>&1 &
   GTRON_PID=$!
   trap 'kill $GTRON_PID 2>/dev/null' EXIT
@@ -233,10 +234,13 @@ run_tx "F4/1 freezeBalanceV2 BANDWIDTH 200 TRX" /wallet/freezebalancev2 \
 run_tx "F4/2 freezeBalanceV2 ENERGY 300 TRX" /wallet/freezebalancev2 \
   "{\"owner_address\":\"$WITNESS_ADDR\",\"frozen_balance\":300000000,\"resource\":1}"
 
-# Verify account.frozenV2 reflects both freezes
+run_tx "F4/2.2 freezeBalanceV2 TRON_POWER 100 TRX" /wallet/freezebalancev2 \
+  "{\"owner_address\":\"$WITNESS_ADDR\",\"frozen_balance\":100000000,\"resource\":2}"
+
+# Verify account.frozenV2 reflects all three freezes (600 TRX total)
 AC=$(http_post /wallet/getaccount "{\"address\":\"$WITNESS_ADDR\"}")
 FV2_TOTAL=$(echo "$AC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(f.get('amount',0) for f in d.get('frozenV2',[])))")
-[ "$FV2_TOTAL" -ge 500000000 ] 2>/dev/null && ok "F4/2.5 frozenV2 total ≥ 500 TRX (got $FV2_TOTAL)" \
+[ "$FV2_TOTAL" -ge 600000000 ] 2>/dev/null && ok "F4/2.5 frozenV2 total ≥ 600 TRX (got $FV2_TOTAL)" \
   || warn "F4/2.5 frozenV2 total" "got $FV2_TOTAL"
 
 run_tx "F4/3 delegateResource ENERGY → B (100 TRX)" /wallet/delegateresource \
@@ -279,14 +283,23 @@ RESP=$(http_post /wallet/getreward "{\"address\":\"$WITNESS_ADDR\"}")
 RWD=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reward',0))" 2>/dev/null)
 ok "F5/q1 getReward(SR) = $RWD (pre-maintenance)"
 
-# withdrawBalance — pre-maintenance: should return BUILDER_ERR or EVICTED (no allowance to withdraw)
-run_tx "F5/4 withdrawBalance pre-maintenance (expected: rejected)" /wallet/withdrawbalance \
-  "{\"owner_address\":\"$WITNESS_ADDR\"}"
-
 NEXT_MT=$(http_post /wallet/getnextmaintenancetime '{}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('num',0))" 2>/dev/null)
 NOW_MS=$(($(date +%s)*1000))
 TIME_TO_MT=$((NEXT_MT - NOW_MS))
-skip "F5/post-maintenance reward distribution" "next_maintenance=$NEXT_MT (in ${TIME_TO_MT}ms; default 6h interval. Add --dev.maintenance-interval flag)"
+if [ "$TIME_TO_MT" -gt 60000 ]; then
+  skip "F5/post-maintenance reward distribution" "next_maintenance in ${TIME_TO_MT}ms (> 60s). Pass --dev.maintenance-interval 30000 via --start."
+else
+  echo "  Waiting for maintenance cycle (~${TIME_TO_MT}ms)..."
+  WAIT_S=$(( (TIME_TO_MT / 1000) + 6 ))
+  sleep "$WAIT_S"
+  # After maintenance: reward allowance should be > 0.
+  RWD_POST=$(http_post /wallet/getreward "{\"address\":\"$WITNESS_ADDR\"}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reward',0))" 2>/dev/null)
+  [ "${RWD_POST:-0}" -gt 0 ] 2>/dev/null && ok "F5/m1 post-maintenance reward > 0 (got $RWD_POST)" \
+    || warn "F5/m1 post-maintenance reward" "got $RWD_POST"
+  # withdrawBalance — first withdrawal ever on this fresh chain, should succeed.
+  run_tx "F5/m2 withdrawBalance post-maintenance" /wallet/withdrawbalance \
+    "{\"owner_address\":\"$WITNESS_ADDR\"}"
+fi
 
 # ════════════════════════════════════════════════════════════════
 # F6: Proposal lifecycle

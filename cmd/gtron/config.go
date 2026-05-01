@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -90,8 +91,10 @@ func parseWitnessKeysFile(path string) ([]*ecdsa.PrivateKey, error) {
 // fullFeatures enables all mainnet-activated allow_* flags in DynamicProperties.
 // maintenanceInterval sets the maintenance_time_interval (ms).
 func makeDevGenesis(witnessAddr tcommon.Address, fullFeatures bool, maintenanceInterval int64) *params.Genesis {
+	nowMs := time.Now().UnixMilli()
 	dp := map[string]int64{
 		"maintenance_time_interval": maintenanceInterval,
+		"next_maintenance_time":     nowMs + maintenanceInterval,
 		"transaction_fee":           10,
 		"witness_pay_per_block":     16000000,
 		"witness_standby_allowance": 115200000000,
