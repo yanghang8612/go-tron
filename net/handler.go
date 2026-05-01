@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -47,20 +48,34 @@ type TronHandler struct {
 	pbftHandler *PbftHandler
 	pbftDataSync *PbftDataSyncHandler
 
+	// cheatDetector watches advertised blocks for double-signing by a
+	// witness (same height + same witness + different hash). Mirrors
+	// java-tron `WitnessProductBlockService` and is exposed via
+	// `CheatDetector()` for the NodeInfo RPC. Detection is monitoring
+	// only — no consensus or witness state is mutated.
+	cheatDetector *dpos.CheatDetector
+
 	quit chan struct{}
 }
 
 // NewTronHandler creates a new TronHandler.
 func NewTronHandler(chain *core.BlockChain, pool *txpool.TxPool, broadcaster *BroadcastService) *TronHandler {
 	return &TronHandler{
-		chain:        chain,
-		pool:         pool,
-		broadcaster:  broadcaster,
-		peers:        make(map[string]*peerState),
-		quit:         make(chan struct{}),
-		pbftHandler:  NewPbftHandler(chain, chain.DB(), nil, nil),
-		pbftDataSync: NewPbftDataSyncHandler(chain, chain.DB()),
+		chain:         chain,
+		pool:          pool,
+		broadcaster:   broadcaster,
+		peers:         make(map[string]*peerState),
+		quit:          make(chan struct{}),
+		pbftHandler:   NewPbftHandler(chain, chain.DB(), nil, nil),
+		pbftDataSync:  NewPbftDataSyncHandler(chain, chain.DB()),
+		cheatDetector: dpos.NewCheatDetector(),
 	}
+}
+
+// CheatDetector returns the witness double-sign detector. Exposed for the
+// NodeInfo RPC and operator tooling.
+func (h *TronHandler) CheatDetector() *dpos.CheatDetector {
+	return h.cheatDetector
 }
 
 // SetServer sets the P2P server reference (for sending messages).
@@ -397,6 +412,17 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 		return
 	}
 	log.Printf("Received block #%d from peer %s", block.Number(), peer.ID())
+
+	// Witness cheat detection runs only on the advertised-block path,
+	// matching java-tron `BlockMsgHandler.processAdvBlock` line 153 where
+	// `witnessProductBlockService.validWitnessProductTwoBlock(block)` is
+	// invoked after `tronNetDelegate.processBlock` succeeds. The sync
+	// path returns above, the producer path inserts directly through
+	// BlockChain without coming through here, so this is the single
+	// adv-only hook.
+	if h.cheatDetector != nil {
+		h.cheatDetector.CheckBlock(block)
+	}
 
 	// Relay to other peers
 	if h.broadcaster != nil {
