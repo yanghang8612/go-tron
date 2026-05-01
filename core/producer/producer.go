@@ -107,12 +107,31 @@ func (p *Producer) tryProduceBlock() {
 		return
 	}
 
+	// LOW_PARTICIPATION gate: skip the slot when the rolling
+	// BLOCK_FILLED_SLOTS rate has dropped below the threshold. Mirrors
+	// java-tron consensus/dpos/StateManager.java:54-59 invoked from
+	// DposTask.produceBlock (DposTask.java:89-92).
+	if skip, rate := shouldSkipLowParticipation(p.chain); skip {
+		log.Printf("LOW_PARTICIPATION rate=%d threshold=%d, skipping slot",
+			rate, params.MinParticipationRate)
+		return
+	}
+
 	if err := p.produceBlock(p.witnessAddr, slotTimestamp); err != nil {
 		log.Printf("Failed to produce block: %v", err)
 		return
 	}
 
 	p.lastProducedSlot = currentSlot
+}
+
+// shouldSkipLowParticipation reports whether the network's recent block-fill
+// rate is below params.MinParticipationRate. Returns the observed rate so the
+// caller can log it. Comparison is strict less-than to match java-tron
+// StateManager.java:56 (`participation < minParticipationRate`).
+func shouldSkipLowParticipation(chain *core.BlockChain) (bool, int64) {
+	rate := chain.DynProps().CalculateFilledSlotsCount()
+	return rate < int64(params.MinParticipationRate), rate
 }
 
 func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) error {
