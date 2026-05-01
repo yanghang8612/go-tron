@@ -63,7 +63,7 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 
 	fee := int64(0)
 	if !ctx.State.AccountExists(toAddr) {
-		ctx.State.CreateAccount(toAddr, corepb.AccountType_Normal)
+		ctx.State.CreateAccountWithTime(toAddr, corepb.AccountType_Normal, ctx.DynProps.LatestBlockHeaderTimestamp())
 		if ctx.DynProps.AllowMultiSign() {
 			ctx.State.ApplyDefaultAccountPermissions(toAddr, ctx.DynProps)
 		}

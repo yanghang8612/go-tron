@@ -623,3 +623,38 @@ func TestApplyWitnessPermissions_PreservesCustomActives(t *testing.T) {
 		t.Fatal("WitnessPermission missing or wrong shape")
 	}
 }
+
+// M11.5 slice 2b: CreateAccountWithTime mirrors java-tron's AccountCapsule
+// 5-arg constructor (AccountCapsule.java:158-180), stamping create_time on
+// the new account. Bare CreateAccount leaves it at 0 (used by VM-internal
+// paths and genesis).
+func TestCreateAccount_CreateTimeFromDynProps(t *testing.T) {
+	sdb := newTestStateDB(t)
+
+	// 2-arg form: create_time stays 0.
+	addrZero := testAddr(0xa1)
+	sdb.CreateAccount(addrZero, corepb.AccountType_Normal)
+	if got := sdb.GetAccount(addrZero).CreateTime(); got != 0 {
+		t.Errorf("CreateAccount: want create_time=0, got %d", got)
+	}
+
+	// 3-arg form: stamps the supplied timestamp (mirrors actuator's
+	// dp.LatestBlockHeaderTimestamp() argument).
+	const ts = int64(1_700_000_000_321)
+	addrStamped := testAddr(0xa2)
+	sdb.CreateAccountWithTime(addrStamped, corepb.AccountType_Normal, ts)
+	if got := sdb.GetAccount(addrStamped).CreateTime(); got != ts {
+		t.Errorf("CreateAccountWithTime: want create_time=%d, got %d", ts, got)
+	}
+
+	// Distinct timestamps must be wired through verbatim (no truncation /
+	// override / fallback to zero). Use the `dp` accessor explicitly to mirror
+	// the actuator call shape.
+	dp := NewDynamicProperties()
+	dp.SetLatestBlockHeaderTimestamp(ts + 999)
+	addrFromDP := testAddr(0xa3)
+	sdb.CreateAccountWithTime(addrFromDP, corepb.AccountType_Normal, dp.LatestBlockHeaderTimestamp())
+	if got := sdb.GetAccount(addrFromDP).CreateTime(); got != ts+999 {
+		t.Errorf("CreateAccountWithTime via DP: want %d, got %d", ts+999, got)
+	}
+}

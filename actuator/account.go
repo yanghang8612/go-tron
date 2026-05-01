@@ -43,7 +43,7 @@ func (a *CreateAccountActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	newAddr := common.BytesToAddress(ac.AccountAddress)
-	ctx.State.CreateAccount(newAddr, ac.Type)
+	ctx.State.CreateAccountWithTime(newAddr, ac.Type, ctx.DynProps.LatestBlockHeaderTimestamp())
 	if ctx.DynProps.AllowMultiSign() {
 		ctx.State.ApplyDefaultAccountPermissions(newAddr, ctx.DynProps)
 	}
