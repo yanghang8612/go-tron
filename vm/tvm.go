@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/core/state"
 )
 
@@ -14,7 +15,8 @@ const maxCallDepth = 1024
 type TVM struct {
 	StateDB     *state.StateDB
 	DB          ethdb.KeyValueStore // rawdb access (e.g., ContractState for dynamic energy)
-	Origin      tcommon.Address     // tx.origin
+	DynProps    *state.DynamicProperties
+	Origin      tcommon.Address // tx.origin
 	BlockNumber uint64
 	Timestamp   int64
 	Coinbase    tcommon.Address // block producer
@@ -35,9 +37,16 @@ func (tvm *TVM) RevertLogs(snapshot int) {
 }
 
 // NewTVM creates a new TVM instance.
-func NewTVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *TVM {
+//
+// dp may be nil for legacy/test paths that do not exercise the
+// allow_tvm_solidity059 auto-create branch; production callers in
+// actuator/vm_actuator.go and core/tron_backend.go must pass a real
+// *DynamicProperties so the CALL/CALLTOKEN/SUICIDE → createNormalAccount
+// parity (slice 2c) fires.
+func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.Address, blockNum uint64, timestamp int64, coinbase tcommon.Address, chainID int64, cfg TVMConfig) *TVM {
 	tvm := &TVM{
 		StateDB:     stateDB,
+		DynProps:    dp,
 		Origin:      origin,
 		BlockNumber: blockNum,
 		Timestamp:   timestamp,
@@ -53,6 +62,33 @@ func NewTVM(stateDB *state.StateDB, origin tcommon.Address, blockNum uint64, tim
 // (ContractState for dynamic energy factor tracking, etc.).
 func (tvm *TVM) SetDB(db ethdb.KeyValueStore) {
 	tvm.DB = db
+}
+
+// maybeCreateNormalAccountForValueTransfer mirrors java-tron
+// `Program.createAccountIfNotExist` (Program.java:1874-1882) which is invoked
+// from `Program.callToAddress` (1083) and `Program.suicide`/`suicide2`
+// (483, 555) before the value transfer. The path is gated on
+// `VMConfig.allowTvmSolidity059()`; the underlying
+// `RepositoryImpl.createNormalAccount` (RepositoryImpl.java:1103-1114)
+// stamps `Account.create_time = latestBlockHeaderTimestamp` and, when
+// `AllowMultiSign` is set, installs default Owner/Active permissions.
+//
+// No-op if Solidity059 is off, the account already exists, or DP is nil
+// (test paths that don't exercise this fork).
+func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
+	if !tvm.cfg.Solidity059 {
+		return
+	}
+	if tvm.DynProps == nil {
+		return
+	}
+	if tvm.StateDB.AccountExists(addr) {
+		return
+	}
+	tvm.StateDB.CreateAccountWithTime(addr, corepb.AccountType_Normal, tvm.DynProps.LatestBlockHeaderTimestamp())
+	if tvm.DynProps.AllowMultiSign() {
+		tvm.StateDB.ApplyDefaultAccountPermissions(addr, tvm.DynProps)
+	}
 }
 
 // Create deploys a new contract.
@@ -158,6 +194,15 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	logSnap := tvm.LogSnapshot()
 
 	if value > 0 {
+		// java-tron Program.callToAddress (Program.java:1081-1083):
+		// createAccountIfNotExist is gated on TRX endowment > 0. Java
+		// dispatches precompile targets to `callToPrecompiledAddress`
+		// BEFORE entering callToAddress (OperationActions.java:1034-1042),
+		// so precompile addresses never reach `createAccountIfNotExist` —
+		// guard with the same precompile check to preserve wire format.
+		if getPrecompile(addr, tvm.cfg) == nil {
+			tvm.maybeCreateNormalAccountForValueTransfer(addr)
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
@@ -213,6 +258,15 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	logSnap := tvm.LogSnapshot()
 
 	if value > 0 {
+		// Mirror java-tron `endowment > 0` gate: only auto-create on TRX
+		// value transfer, not on pure token transfer (Program.java:1081-1083).
+		// Precompile-targeted calls take a different java dispatch path
+		// (OperationActions.java:1034-1042 → callToPrecompiledAddress) and
+		// don't materialize the destination account; skip the helper to
+		// preserve that wire format.
+		if getPrecompile(addr, tvm.cfg) == nil {
+			tvm.maybeCreateNormalAccountForValueTransfer(addr)
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance

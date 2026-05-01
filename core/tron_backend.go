@@ -183,7 +183,7 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 	}
 
 	cfg := vm.NewTVMConfig(current.Number(), b.chain.DynProps())
-	evm := vm.NewTVM(statedbCopy, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
+	evm := vm.NewTVM(statedbCopy, b.chain.DynProps(), owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
 
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)

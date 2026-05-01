@@ -695,6 +695,13 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 
 	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
 	if balance > 0 {
+		// java-tron Program.suicide (Program.java:483) and suicide2 (555)
+		// call createAccountIfNotExist before transferring to a non-existent
+		// obtainer; the call is gated by allowTvmSolidity059 inside the
+		// helper. Mirror that here so SUICIDE-with-balance auto-create
+		// stamps create_time and (when AllowMultiSign is on) default
+		// permissions, matching RepositoryImpl.createNormalAccount.
+		interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
 		interpreter.tvm.StateDB.AddBalance(address, balance)
 		interpreter.tvm.StateDB.SubBalance(contract.Address, balance)
 	}

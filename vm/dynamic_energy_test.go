@@ -23,7 +23,7 @@ func newTestTVMWithDB(t *testing.T) (*TVM, ethdb.KeyValueStore, *state.DynamicPr
 	dp := state.NewDynamicProperties()
 	stateDB.SetDynamicProperties(dp)
 
-	tvm := NewTVM(stateDB, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{DynamicEnergy: true})
+	tvm := NewTVM(stateDB, dp, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{DynamicEnergy: true})
 	tvm.SetDB(diskdb)
 	return tvm, diskdb, dp
 }

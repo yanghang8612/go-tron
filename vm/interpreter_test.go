@@ -16,7 +16,7 @@ func newTestEVM(t *testing.T) *TVM {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewTVM(sdb, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	return NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 }
 
 func TestInterpreterAddition(t *testing.T) {
@@ -113,7 +113,7 @@ func TestInterpreterChainIDRequiresIstanbul(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Istanbul NOT enabled (TVMConfig{} has all false)
-	evm := NewTVM(sdb, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 
 	// CHAINID PUSH1 0 MSTORE PUSH1 32 PUSH1 0 RETURN
 	code := []byte{byte(CHAINID), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}
@@ -133,7 +133,7 @@ func TestInterpreterChainIDWorksWithIstanbul(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evm := NewTVM(sdb, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{Istanbul: true})
+	evm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{Istanbul: true})
 
 	// CHAINID PUSH1 0 MSTORE PUSH1 32 PUSH1 0 RETURN
 	code := []byte{byte(CHAINID), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}

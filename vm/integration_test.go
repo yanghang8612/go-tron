@@ -68,7 +68,7 @@ func TestIntegrationDeployAndCall(t *testing.T) {
 
 	deployCode := append(initCode, runtime...)
 
-	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 
 	// Deploy
 	_, contractAddr, energyLeft, err := evm.Create(owner, deployCode, 1000000, 0)
@@ -131,7 +131,7 @@ func TestIntegrationStaticCall(t *testing.T) {
 	}
 	sdb.SetCode(contract, code)
 
-	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	ret, _, err := evm.StaticCall(owner, contract, nil, 1000000)
 	if err != nil {
 		t.Fatalf("static call failed: %v", err)
@@ -168,7 +168,7 @@ func TestIntegrationSHA3(t *testing.T) {
 	}
 	sdb.SetCode(contractAddr, code)
 
-	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	ret, _, err := evm.StaticCall(owner, contractAddr, nil, 1000000)
 	if err != nil {
 		t.Fatalf("sha3 call failed: %v", err)
@@ -196,7 +196,7 @@ func TestIntegrationValueTransfer(t *testing.T) {
 	// Simple code: STOP (accept value)
 	sdb.SetCode(contractAddr, []byte{byte(STOP)})
 
-	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 	_, _, err = evm.Call(owner, contractAddr, nil, 100000, 500)
 	if err != nil {
 		t.Fatalf("value transfer failed: %v", err)
@@ -233,7 +233,7 @@ func TestSolidityStorageContract(t *testing.T) {
 	}
 
 	cfg := TVMConfig{Constantinople: true}
-	evm := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+	evm := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, cfg)
 
 	_, contractAddr, _, vmErr := evm.Create(owner, deployCode, 10_000_000, 0)
 	if vmErr != nil {
@@ -250,7 +250,7 @@ func TestSolidityStorageContract(t *testing.T) {
 	setInput := make([]byte, 36)
 	setInput[0], setInput[1], setInput[2], setInput[3] = 0x60, 0xfe, 0x47, 0xb1
 	setInput[35] = 42
-	evm2 := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+	evm2 := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, cfg)
 	_, _, vmErr = evm2.Call(owner, contractAddr, setInput, 10_000_000, 0)
 	if vmErr != nil {
 		t.Fatalf("set(42) failed: %v", vmErr)
@@ -258,7 +258,7 @@ func TestSolidityStorageContract(t *testing.T) {
 
 	// get(): selector keccak256("get()")[:4] = 0x6d4ce63c
 	getInput := []byte{0x6d, 0x4c, 0xe6, 0x3c}
-	evm3 := NewTVM(sdb, owner, 1, 1000, tcommon.Address{}, 1, cfg)
+	evm3 := NewTVM(sdb, nil, owner, 1, 1000, tcommon.Address{}, 1, cfg)
 	ret, _, vmErr := evm3.Call(owner, contractAddr, getInput, 10_000_000, 0)
 	if vmErr != nil {
 		t.Fatalf("get() failed: %v", vmErr)

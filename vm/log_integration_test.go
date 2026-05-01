@@ -16,7 +16,7 @@ func TestMakeLogCapturesEvents(t *testing.T) {
 	contractAddr := tcommon.Address{0x41, 0x01}
 	origin := tcommon.Address{0x41, 0x02}
 
-	evm := NewTVM(statedb, origin, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(statedb, nil, origin, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 
 	// LOG1 with topic and data "hello"
 	// Store "hello" at memory[27..31] (right-aligned in 32-byte MSTORE)
@@ -88,7 +88,7 @@ func TestLogRevertOnSubCallFailure(t *testing.T) {
 	}
 	statedb.SetCode(contractAddr, code)
 
-	evm := NewTVM(statedb, caller, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	evm := NewTVM(statedb, nil, caller, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
 
 	_, _, err := evm.Call(caller, contractAddr, nil, 1_000_000, 0)
 	if err != ErrExecutionReverted {
