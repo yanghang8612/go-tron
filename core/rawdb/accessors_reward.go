@@ -34,8 +34,14 @@ func WriteCycleReward(db ethdb.KeyValueWriter, cycle int64, addr []byte, v int64
 }
 
 // AddCycleReward increments the voter pool by delta. Creates the key if
-// absent. Mirrors DelegationStore.addReward.
-func AddCycleReward(db ethdb.KeyValueStore, cycle int64, addr []byte, delta int64) {
+// absent. Mirrors DelegationStore.addReward. The db parameter is the
+// read+write composite so both `ethdb.KeyValueStore` and
+// `core/blockbuffer.Buffer` satisfy it (slice 3 of the fork-rewind fix
+// routes per-block AddCycleReward writes through the buffer).
+func AddCycleReward(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, cycle int64, addr []byte, delta int64) {
 	WriteCycleReward(db, cycle, addr, ReadCycleReward(db, cycle, addr)+delta)
 }
 

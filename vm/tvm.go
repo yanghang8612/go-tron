@@ -11,10 +11,25 @@ import (
 
 const maxCallDepth = 1024
 
+// KVReadWriter is the narrow ethdb capability the TVM needs from the
+// rawdb store: per-contract ReadContractState lookups plus
+// WriteContractState updates for dynamic-energy accounting. Both
+// `ethdb.KeyValueStore` and `core/blockbuffer.Buffer` satisfy it, letting
+// callers (`actuator.VMActuator`) route writes either directly to disk
+// (BuildBlock path) or through the fork-rewind buffer (applyBlock path).
+//
+// Slice 3 of the fork-rewind fix widened this from `ethdb.KeyValueStore`
+// so that contract-state writes during `act.Execute(ctx)` are rewound on
+// switchFork.
+type KVReadWriter interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 // TVM is the top-level TVM execution context.
 type TVM struct {
 	StateDB     *state.StateDB
-	DB          ethdb.KeyValueStore // rawdb access (e.g., ContractState for dynamic energy)
+	DB          KVReadWriter // rawdb access (e.g., ContractState for dynamic energy)
 	DynProps    *state.DynamicProperties
 	Origin      tcommon.Address // tx.origin
 	BlockNumber uint64
@@ -60,7 +75,7 @@ func NewTVM(stateDB *state.StateDB, dp *state.DynamicProperties, origin tcommon.
 
 // SetDB sets the rawdb store used for access to per-contract state
 // (ContractState for dynamic energy factor tracking, etc.).
-func (tvm *TVM) SetDB(db ethdb.KeyValueStore) {
+func (tvm *TVM) SetDB(db KVReadWriter) {
 	tvm.DB = db
 }
 

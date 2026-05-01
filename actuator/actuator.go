@@ -11,13 +11,29 @@ import (
 	"github.com/tronprotocol/go-tron/vm"
 )
 
+// BufferedKVStore is the read+write capability that actuators need from
+// `Context.DB`. It is satisfied by both the on-disk `ethdb.KeyValueStore`
+// (used by tests and the producer's BuildBlock path) and by
+// `core/blockbuffer.Buffer` (used by `BlockChain.applyBlock` so that
+// rawdb-direct writes inside `act.Execute` are rewindable on switchFork).
+//
+// Slice 3 of the fork-rewind fix widened this from `ethdb.KeyValueStore`
+// to a Reader+Writer interface so the in-memory buffer can be plugged in
+// without changing every actuator's call signature — every rawdb accessor
+// already uses narrow `ethdb.KeyValueReader` / `ethdb.KeyValueWriter`
+// signatures, which `BufferedKVStore` composes.
+type BufferedKVStore interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 type Context struct {
 	State           *state.StateDB
 	DynProps        *state.DynamicProperties
 	Tx              *types.Transaction
 	BlockTime       int64
 	BlockNumber     uint64
-	DB              ethdb.KeyValueStore // rawdb access for governance/brokerage
+	DB              BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
 	ActiveWitnesses []common.Address // active witness set for governance checks
 }
 

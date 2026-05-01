@@ -29,8 +29,15 @@ func NoteCommitmentCount(db ethdb.KeyValueReader) int64 {
 }
 
 // AppendNoteCommitment stores a note commitment at the next sequential index.
-// The index is used for Merkle tree position tracking.
-func AppendNoteCommitment(db ethdb.KeyValueStore, commitment []byte) error {
+// The index is used for Merkle tree position tracking. The db parameter is
+// the read+write composite so both the on-disk store and a buffer-aware
+// view (`core/blockbuffer.Buffer`) work — slice 3 of the fork-rewind fix
+// routes shielded-transfer writes through the buffer for switchFork
+// rewindability.
+func AppendNoteCommitment(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, commitment []byte) error {
 	idx := NoteCommitmentCount(db)
 	if err := db.Put(noteCommitmentKey(idx), commitment); err != nil {
 		return err

@@ -299,7 +299,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		previousHeadTimestamp >= dynProps.NextMaintenanceTime()
 
 	// Process block (execute transactions, pay reward — does not commit).
-	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.db, bc.ActiveWitnesses(), bc.GenesisTimestamp())
+	// The buffer is passed so per-block actuator-side rawdb-direct writes
+	// (WriteAssetIssue, WriteExchange, WriteProposal, WriteContractState
+	// from VMActuator dynamic-energy, WriteNullifier, etc.) and the
+	// `payBlockReward → AddCycleReward` write (gated on change_delegation)
+	// land in the active buffer layer. `switchFork` rewinds them on orphan
+	// discard. Slice 3 of the fork-rewind fix.
+	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp())
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
@@ -449,6 +455,43 @@ func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
 		return *p, true
 	}
 	return bc.buffer.FlushUpTo(uint64(solidified), numberOf, bc.db)
+}
+
+// Close performs a graceful shutdown of the BlockChain: it acquires
+// chainmu, flushes every buffer layer at or below the current solidified
+// block to disk, and drops layers above solidified.
+//
+// We deliberately do NOT flush past solidified — the layers above the
+// solidified line could in principle still be reorged out from under us
+// on the next start (java-tron's `Manager.eraseBlock` invariant: cannot
+// pop past solidified, but may pop the in-memory window above it). After
+// restart, `NewBlockChain` reloads from `rawdb.ReadHeadBlockHash` whose
+// most-recent fully-flushed image is at the solidified line, and the
+// node re-syncs the post-solidified blocks from peers. This matches
+// java-tron's behavior on a clean shutdown — `revokingStore` sessions
+// above solidified are dropped (they were never persisted).
+//
+// Trade-off accepted: a clean shutdown loses up to `head - solidified`
+// blocks of post-applyBlock counters. On mainnet (27 SRs) this is ~19
+// blocks; recovery is automatic via re-sync. The alternative — flushing
+// everything — would persist non-solidified state that a post-restart
+// reorg could no longer rewind, which is the worse failure mode.
+//
+// Callers should invoke Close before closing the underlying KeyValueStore.
+// Slice 3 of the fork-rewind fix.
+func (bc *BlockChain) Close() error {
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+	dynProps := state.LoadDynamicProperties(bc.buffer)
+	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
+		return fmt.Errorf("close: flush up to solidified: %w", err)
+	}
+	// Drop any leftover layers above solidified — they would otherwise
+	// retain memory and (more importantly) be silently dropped on the
+	// next Buffer mutation. Discard explicitly so reads after Close fall
+	// straight through to disk.
+	bc.buffer.Discard()
+	return nil
 }
 
 // switchFork rewinds the canonical chain to the LCA of newHead and the current

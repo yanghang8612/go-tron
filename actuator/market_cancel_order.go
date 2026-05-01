@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -128,10 +127,9 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	return &Result{Fee: fee, ContractRet: 1}, nil
 }
 
-
 // removeOrderFromBook unlinks the order from the linked list in the order book.
 // If the list becomes empty, it deletes the order book entry and removes the price from the price list.
-func removeOrderFromBook(db ethdb.KeyValueStore, order *corepb.MarketOrder, pk [16]byte) error {
+func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]byte) error {
 	ob := rawdb.ReadMarketOrderBook(db, order.SellTokenId, order.BuyTokenId, pk)
 	if ob == nil {
 		// Already absent — nothing to do

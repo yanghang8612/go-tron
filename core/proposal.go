@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -16,7 +15,12 @@ const version3_6_5 int32 = 9
 // based on the approval count vs active SR count.
 // activeWitnesses is the current active super-representative set; only approvals
 // from current witnesses are counted (matches java-tron's hasMostApprovals logic).
-func ProcessProposals(db ethdb.KeyValueStore, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
+//
+// db accepts a Reader+Writer so callers can pass either an `ethdb.KeyValueStore`
+// (BuildBlock path) or `core/blockbuffer.Buffer` (applyBlock path) — slice 3
+// of the fork-rewind fix routes the per-proposal WriteProposal updates
+// through the buffer when invoked from `applyBlock`.
+func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
 	activeCount := len(activeWitnesses)
 	ids := rawdb.ReadProposalIndex(db)
 	for _, id := range ids {
