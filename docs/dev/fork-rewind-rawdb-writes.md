@@ -1,9 +1,12 @@
 # Rawdb-direct writes vs switchFork rewind — known follow-up
 
-**Status:** Slice 1 + slice 2 landed (per-block buffer + flush-at-solidified).
-Per-block `AddCycleReward` (gated on `change_delegation`, off on mainnet)
-and actuator-side rawdb writes remain on the disk-direct path —
-documented at the bottom of this file as known follow-ups.
+**Status:** Slice 1 + slice 2 + slice 3 landed (per-block buffer +
+flush-at-solidified + Context.DB widening + reward path + graceful
+shutdown). Every documented per-block writer now routes through
+`bc.buffer` and is rewindable via `switchFork`'s `DiscardBlock`. The
+remaining gap is process-level (`kill -9` between block insertion and
+the next solidified flush), addressed by `BlockChain.Close()` for the
+clean-shutdown path.
 **First documented:** 2026-04-29 (during M11.1 review)
 **Owner:** TBD
 
@@ -98,18 +101,33 @@ Either should land before:
   `updateSolidifiedBlock` / `WriteWitnessLatestBlock`, `burnFee` via DP)
   and added a flush-at-solidified-block-boundary policy. See
   [docs/superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md](../superpowers/specs/2026-04-30-fork-rewind-fix-slice2-design.md).
+- **Slice 3**: closed the remaining slice-2 follow-ups — widened
+  `actuator.Context.DB` to a `BufferedKVStore` (Reader+Writer)
+  interface so every actuator-side rawdb write (WriteAssetIssue,
+  WriteExchange, WriteProposal, WriteNullifier, WriteContractState via
+  TVM, etc.) routes through `bc.buffer`; routed
+  `payBlockReward → AddCycleReward` through the buffer (gated on
+  `change_delegation`); added `BlockChain.Close()` for graceful-shutdown
+  flush up to solidified, wired into `cmd/gtron/main.go` ahead of
+  `db.Close()`.
 
-## Known remaining gaps (post slice 2)
+## Known remaining gaps (post slice 3)
 
-The following per-block rawdb-direct writes are NOT covered by the buffer
-mechanism and would still leak across `switchFork` if the gating condition
-fired during the orphan branch:
-
-- `payBlockReward → AddCycleReward` (`core/reward.go`). Gated on
-  `change_delegation` (proposal #82, off on mainnet at writing).
-- Actuator-side rawdb-direct writes inside `Execute(ctx)`:
-  `WriteAssetIssue`, `WriteExchange`, `WriteProposal`, `WriteContractCode`,
-  `WriteNullifier`, etc. — anything written via `ctx.DB` directly. These
-  cross-cut M11.5's actuator scope and require widening
-  `actuator.Context.DB` from `ethdb.KeyValueStore` to a buffer-compatible
-  reader/writer interface.
+- **Process crash between applyBlock and the next solidified flush**
+  (`kill -9` / unhandled panic). The current `BlockChain.Close()` is
+  invoked only on a clean SIGINT/SIGTERM path through `cmd/gtron/main.go`.
+  A crash that bypasses lifecycle teardown loses the buffer layers above
+  solidified (~19 blocks on mainnet). This is the same property
+  java-tron's `revokingStore` provides — sessions above solidified are
+  in-memory only, and a crash drops them; on restart, the node re-syncs
+  the missing range from peers.
+- **BuildBlock writes still go to disk directly.** The producer's
+  `core.BuildBlock` invokes `ApplyTransaction` / `payBlockReward` /
+  `payStandbyWitness` / `applyRewardMaintenance` / `ProcessProposals`
+  with `bc.db` (not `bc.buffer`). This is intentional for now — the
+  built block is then handed to `bc.InsertBlock` which re-applies via
+  `applyBlock`, and the second pass writes through the buffer.
+  Pre-slice-3 this caused double-writes on disk; that is unchanged. A
+  future cleanup would either (a) make BuildBlock pure (no rawdb writes
+  during construction) or (b) route both paths through a transient
+  buffer that is discarded if the build fails.
