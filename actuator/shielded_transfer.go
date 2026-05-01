@@ -129,7 +129,7 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 	if len(c.TransparentToAddress) > 0 {
 		to := common.BytesToAddress(c.TransparentToAddress)
 		if !ctx.State.AccountExists(to) {
-			ctx.State.CreateAccount(to, corepb.AccountType_Normal)
+			ctx.State.CreateAccountWithTime(to, corepb.AccountType_Normal, ctx.DynProps.LatestBlockHeaderTimestamp())
 			if ctx.DynProps.AllowMultiSign() {
 				ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
 			}

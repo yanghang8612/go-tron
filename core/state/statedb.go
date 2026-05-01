@@ -380,10 +380,39 @@ func (s *StateDB) AccountExists(addr tcommon.Address) bool {
 
 // CreateAccount creates a new account at addr with the given type.
 // If the account already exists, it returns the existing account.
+//
+// NOTE: This entry point leaves Account.create_time at 0. New on-chain
+// account-creation paths must use CreateAccountWithTime so the field mirrors
+// java-tron's `dynamicStore.getLatestBlockHeaderTimestamp()`. This 2-arg form
+// is retained for VM-internal call sites (slice 2c) and tests/genesis paths
+// where create_time is irrelevant.
 func (s *StateDB) CreateAccount(addr tcommon.Address, accountType corepb.AccountType) *types.Account {
 	obj := s.GetOrCreateAccount(addr)
 	s.journalAccount(addr, obj)
 	obj.account.SetAccountType(accountType)
+	obj.markDirty()
+	return obj.account
+}
+
+// CreateAccountWithTime creates a new account at addr with the given type and
+// stamps Account.create_time = createTime. Mirrors java-tron's AccountCapsule
+// 5-arg constructor (AccountCapsule.java:158-180), which sets create_time on
+// both the with-default-permission and without-default-permission branches —
+// i.e. createTime is unconditional, independent of AllowMultiSign.
+//
+// Callers should pass `dp.LatestBlockHeaderTimestamp()` so the value matches
+// java-tron's `dynamicStore.getLatestBlockHeaderTimestamp()`.
+//
+// This is the entry point for actuators creating new on-chain accounts
+// (Transfer / TransferAsset / CreateAccount / ShieldedTransfer). Like
+// CreateAccount, it overwrites type/create_time on an existing account, so
+// callers must first gate on !AccountExists(addr) to preserve real stored
+// values — every actuator call site already does this.
+func (s *StateDB) CreateAccountWithTime(addr tcommon.Address, accountType corepb.AccountType, createTime int64) *types.Account {
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	obj.account.SetAccountType(accountType)
+	obj.account.SetCreateTime(createTime)
 	obj.markDirty()
 	return obj.account
 }

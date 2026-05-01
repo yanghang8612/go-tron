@@ -70,7 +70,7 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 
 	fee := int64(0)
 	if !ctx.State.AccountExists(to) {
-		ctx.State.CreateAccount(to, corepb.AccountType_Normal)
+		ctx.State.CreateAccountWithTime(to, corepb.AccountType_Normal, ctx.DynProps.LatestBlockHeaderTimestamp())
 		if ctx.DynProps.AllowMultiSign() {
 			ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
 		}
