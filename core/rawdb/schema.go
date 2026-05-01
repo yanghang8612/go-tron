@@ -10,6 +10,12 @@ var (
 	headSolidBlockKey       = []byte("LastSolidBlock")
 	totalTransactionCountKey = []byte("total-tx-count")
 
+	// genesisStateRootKey holds the post-genesis state root. java-tron does
+	// not put account_state_root on the genesis block header (we mirror that
+	// for cross-impl genesis-hash parity), so we persist it here for
+	// applyBlock to bootstrap block #1's StateDB. See core.SetupGenesisBlock.
+	genesisStateRootKey = []byte("genesis-state-root")
+
 	blockPrefix     = []byte("b-")
 	blockHashPrefix = []byte("bh-")
 	txPrefix        = []byte("tx-")

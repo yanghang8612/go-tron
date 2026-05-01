@@ -30,8 +30,13 @@ type BuildResult struct {
 func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address, timestamp int64) (*BuildResult, error) {
 	parent := bc.CurrentBlock()
 
-	// Open StateDB from parent's state root
+	// Open StateDB from parent's state root. Genesis omits
+	// `account_state_root` from its header (java-tron parity); fall back
+	// to the persisted post-genesis state root in that case.
 	parentRoot := parent.AccountStateRoot()
+	if parentRoot == (tcommon.Hash{}) && parent.Number() == 0 {
+		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
+	}
 	statedb, err := state.New(parentRoot, bc.stateDB)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)

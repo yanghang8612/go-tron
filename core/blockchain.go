@@ -266,8 +266,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}()
 
-	// Open StateDB from parent's state root.
+	// Open StateDB from parent's state root. The genesis block deliberately
+	// omits `account_state_root` from its header (java-tron parity); fall
+	// back to the post-genesis state root persisted by SetupGenesisBlock so
+	// block #1 can find genesis-allocated accounts.
 	parentRoot := current.AccountStateRoot()
+	if parentRoot == (tcommon.Hash{}) && current.Number() == 0 {
+		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
+	}
 	statedb, err := state.New(parentRoot, bc.stateDB)
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)

@@ -122,3 +122,20 @@ func WriteTotalTransactionCount(db ethdb.KeyValueWriter, count int64) {
 	binary.BigEndian.PutUint64(buf[:], uint64(count))
 	db.Put(totalTransactionCountKey, buf[:])
 }
+
+// WriteGenesisStateRoot persists the post-genesis StateDB root, used to
+// bootstrap block #1's parent state. The genesis block itself omits
+// `account_state_root` to match java-tron's wire format.
+func WriteGenesisStateRoot(db ethdb.KeyValueWriter, root common.Hash) {
+	db.Put(genesisStateRootKey, root.Bytes())
+}
+
+// ReadGenesisStateRoot returns the post-genesis StateDB root, or the zero
+// hash if it has not been written yet.
+func ReadGenesisStateRoot(db ethdb.KeyValueReader) common.Hash {
+	data, err := db.Get(genesisStateRootKey)
+	if err != nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(data)
+}

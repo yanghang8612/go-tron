@@ -1,12 +1,14 @@
 package core
 
 import (
+	"encoding/hex"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -36,8 +38,15 @@ func TestGenesisToBlock(t *testing.T) {
 	if block.ParentHash() != (common.Hash{}) {
 		t.Fatal("genesis parent hash should be zero")
 	}
-	if block.AccountStateRoot() == (common.Hash{}) {
-		t.Fatal("genesis accountStateRoot should not be zero")
+	if block.AccountStateRoot() != (common.Hash{}) {
+		t.Fatalf("genesis accountStateRoot should be zero (java-tron parity), got %x", block.AccountStateRoot())
+	}
+	if len(block.Transactions()) != len(genesis.Accounts) {
+		t.Fatalf("genesis tx count: want %d, got %d", len(genesis.Accounts), len(block.Transactions()))
+	}
+	if string(block.Proto().GetBlockHeader().GetRawData().GetWitnessAddress()) !=
+		"A new system must allow existing systems to be linked together without requiring any central control or coordination" {
+		t.Fatal("genesis witness_address should be the famous-quote bytes (java-tron parity)")
 	}
 }
 
@@ -102,5 +111,67 @@ func TestSetupGenesisBlock(t *testing.T) {
 	}
 	if config2.ChainID != config.ChainID {
 		t.Fatal("config mismatch")
+	}
+}
+
+// TestGenesisToBlock_MatchesJavaTronPrivateChain pins the genesis block hash
+// against a live java-tron private chain at /Users/asuka/Works/Tests/TVM/run.
+//
+// The expected hash was captured 2026-05-02 by the diagnostic
+// p2p.TestProbeJavaTronGenesis, which extracts the genesis BlockID from
+// the peer's app-layer P2P_HELLO. The first 8 bytes of the BlockID encode
+// the block number (zero for genesis); the remaining 24 bytes are the
+// trailing 24 bytes of SHA256(BlockHeaderRaw proto bytes).
+//
+// Concretely, java-tron reported genesis ID
+//
+//	000000000000000075da3fe749503edb5d6121d96d450b980294a03648934988
+//
+// and gtron's `Block.ID()` overwrites the leading 8 bytes with the
+// big-endian block number, so we compare on the BlockID, not the raw hash.
+func TestGenesisToBlock_MatchesJavaTronPrivateChain(t *testing.T) {
+	zion, err := crypto.Base58ToAddress("TMVQGm1qAQYVdetCeGRRkTWYYrLXuHK2HC")
+	if err != nil {
+		t.Fatalf("decode Zion: %v", err)
+	}
+	blackhole, err := crypto.Base58ToAddress("TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy")
+	if err != nil {
+		t.Fatalf("decode Blackhole: %v", err)
+	}
+	parentBytes, err := hex.DecodeString("e58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f")
+	if err != nil {
+		t.Fatalf("decode parent: %v", err)
+	}
+
+	g := &params.Genesis{
+		Config:     params.MainnetChainConfig,
+		Timestamp:  0,
+		ParentHash: common.BytesToHash(parentBytes),
+		Accounts: []params.GenesisAccount{
+			{Address: zion, Balance: 99_000_000_000_000_000, AccountName: "Zion"},
+			{Address: blackhole, Balance: -9_223_372_036_854_775_808, AccountName: "Blackhole"},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: zion, VoteCount: 100, URL: "http://test.io"},
+		},
+	}
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	block, err := GenesisToBlock(g, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatalf("GenesisToBlock: %v", err)
+	}
+
+	const wantHex = "000000000000000075da3fe749503edb5d6121d96d450b980294a03648934988"
+	id := block.ID()
+	gotHex := hex.EncodeToString(id.Hash[:])
+	if gotHex != wantHex {
+		t.Fatalf("genesis BlockID mismatch:\n  want %s\n  got  %s", wantHex, gotHex)
+	}
+	if block.AccountStateRoot() != (common.Hash{}) {
+		t.Fatalf("genesis accountStateRoot must be zero, got %x", block.AccountStateRoot())
+	}
+	if len(block.Transactions()) != 2 {
+		t.Fatalf("expected 2 genesis txs, got %d", len(block.Transactions()))
 	}
 }
