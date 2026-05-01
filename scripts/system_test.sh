@@ -18,6 +18,8 @@ SR_HTTP=18090
 NODE_HTTP=18091
 SR_P2P=19888
 NODE_P2P=19889
+SR_JRPC=18545
+NODE_JRPC=18546
 SR_PID=""
 NODE_PID=""
 PASS=0
@@ -174,6 +176,7 @@ echo "=== Starting SR node (dev mode) ==="
     --datadir "$SR_DIR" \
     --p2p.port "$SR_P2P" \
     --http.port "$SR_HTTP" \
+    --jsonrpc.port "$SR_JRPC" \
     --grpc.port 0 \
     > "$TMPDIR/sr.log" 2>&1 &
 SR_PID=$!
@@ -443,6 +446,7 @@ echo "Starting regular node (relay/sync only — no --witness flag)..."
     --datadir "$NODE_DIR" \
     --p2p.port "$NODE_P2P" \
     --http.port "$NODE_HTTP" \
+    --jsonrpc.port "$NODE_JRPC" \
     --grpc.port 0 \
     --seednode "localhost:$SR_P2P" \
     > "$TMPDIR/node.log" 2>&1 &
@@ -644,7 +648,7 @@ check "listnodes returns nodes key" "$RESULT" '"nodes"'
 echo ""
 echo "=== Test Group 10: Ethereum-Compatible JSON-RPC API ==="
 
-JRPC_URL="http://localhost:8545"
+JRPC_URL="http://localhost:$SR_JRPC"
 
 # Helper: JSON-RPC POST
 jrpc_call() {
