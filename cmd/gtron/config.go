@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -52,6 +53,37 @@ func parseWitnessKey(ctx *cli.Context) (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("invalid hex key: %w", err)
 	}
 	return crypto.BytesToPrivateKey(keyBytes)
+}
+
+// parseWitnessKeysFile reads N hex-encoded private keys, one per line, from
+// path. Used by --witness.keys-file for multi-SR PBFT testing where one
+// process holds multiple SR keys. Lines starting with `#` and blank lines
+// are ignored.
+func parseWitnessKeysFile(path string) ([]*ecdsa.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var keys []*ecdsa.PrivateKey
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		raw, err := hex.DecodeString(line)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: invalid hex: %w", i+1, err)
+		}
+		k, err := crypto.BytesToPrivateKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no keys found in %s", path)
+	}
+	return keys, nil
 }
 
 // makeDevGenesis creates a minimal single-witness development genesis.

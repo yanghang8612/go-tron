@@ -45,10 +45,11 @@ type PbftHandler struct {
 	mu   sync.Mutex // protects dedup map
 	smMu sync.Mutex // protects all state machine maps
 
-	chain  *core.BlockChain
-	db     ethdb.KeyValueStore
-	server *p2p.Server
-	sync   *SyncService
+	chain    *core.BlockChain
+	db       ethdb.KeyValueStore
+	server   *p2p.Server
+	sync     *SyncService
+	producer *PbftProducer // optional: when set, SR-side PREPARE/COMMIT emit fires in onPrePrepare/onPrepare
 
 	// dedup: global per-message dedup (key = dedupKey including msgType)
 	dedup map[string]time.Time
@@ -67,6 +68,12 @@ type PbftHandler struct {
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+}
+
+// SetProducer wires the SR-side producer; once set, this handler will trigger
+// PREPARE / COMMIT emits at the appropriate state-machine transitions.
+func (h *PbftHandler) SetProducer(p *PbftProducer) {
+	h.producer = p
 }
 
 // NewPbftHandler creates a PbftHandler. Call Start() to activate the GC loop.
@@ -204,6 +211,47 @@ func pbftNo(viewN int64, dt corepb.PBFTMessage_DataType) string {
 	return fmt.Sprintf("%d_%v", viewN, dt)
 }
 
+// HandleSelfPbftMsg dispatches a self-emitted (locally signed) PBFT message
+// directly into the receive-side state machine, bypassing dedup, peer
+// forwarding, and SR membership re-validation. Mirrors java-tron's
+// `forwardMessage(...); analyzeSignature(); onPrepare(paMessage)` pattern in
+// PbftMessageHandle.onPrePrepare (lines 130-136): the producer already
+// broadcasted to peers, so all that remains is to feed the SM for self-vote
+// counting.
+func (h *PbftHandler) HandleSelfPbftMsg(payload []byte) {
+	if !h.allowPBFT() {
+		return
+	}
+	var msg corepb.PBFTMessage
+	if err := proto.Unmarshal(payload, &msg); err != nil {
+		return
+	}
+	raw := msg.GetRawData()
+	if raw == nil {
+		return
+	}
+	rawBytes, err := proto.Marshal(raw)
+	if err != nil {
+		return
+	}
+	sig := msg.GetSignature()
+	if len(sig) != 65 {
+		return
+	}
+	srAddr, err := pbftSigToAddress(rawBytes, sig)
+	if err != nil {
+		return
+	}
+	switch raw.GetMsgType() {
+	case corepb.PBFTMessage_PREPREPARE:
+		h.onPrePrepare(raw, rawBytes, sig, srAddr)
+	case corepb.PBFTMessage_PREPARE:
+		h.onPrepare(raw, rawBytes, sig, srAddr)
+	case corepb.PBFTMessage_COMMIT:
+		h.onCommit(raw, rawBytes, sig, srAddr)
+	}
+}
+
 // HandlePbftMsg is the entry point for PBFT_MSG (0x34) messages.
 func (h *PbftHandler) HandlePbftMsg(peer *p2p.Peer, payload []byte) {
 	if !h.allowPBFT() {
@@ -302,15 +350,23 @@ func (h *PbftHandler) onPrePrepare(raw *corepb.PBFTMessage_Raw, rawBytes, sig []
 	no := pbftNo(viewN, dt)
 
 	h.smMu.Lock()
-	defer h.smMu.Unlock()
 
 	// isSwitch not in proto; full node never receives it as true.
 	if _, ok := h.preVotes[no]; ok {
+		h.smMu.Unlock()
 		return // already seen PREPREPARE for this slot
 	}
 	h.preVotes[no] = struct{}{}
 	h.timeOuts[no] = time.Now()
 	h.checkPrepareMsgCacheNoLock(no)
+	h.smMu.Unlock()
+
+	// SR-side: emit PREPARE for every local SR. Mirrors java-tron's
+	// PbftMessageHandle.onPrePrepare loop at line 128 which iterates
+	// `getSrMinerList(epoch)` and forwards a PREPARE per miner.
+	if h.producer != nil {
+		h.producer.EmitPrepare(raw)
+	}
 }
 
 func (h *PbftHandler) onPrepare(raw *corepb.PBFTMessage_Raw, rawBytes, sig []byte, srAddr tcommon.Address) {
@@ -321,27 +377,39 @@ func (h *PbftHandler) onPrepare(raw *corepb.PBFTMessage_Raw, rawBytes, sig []byt
 	dk := pbftDataKey(viewN, dt, raw.GetData())
 
 	h.smMu.Lock()
-	defer h.smMu.Unlock()
 
 	if _, ok := h.preVotes[no]; !ok {
 		// PREPREPARE hasn't arrived yet; cache this PREPARE.
 		if len(h.pareMsgCache) < pbftCacheMaxSize {
 			h.pareMsgCache = append(h.pareMsgCache, pbftCachedMsg{raw: raw, rawBytes: rawBytes, sig: sig, srAddr: srAddr, added: time.Now()})
 		}
+		h.smMu.Unlock()
 		return
 	}
 	if _, ok := h.pareVoteMap[sk]; ok {
+		h.smMu.Unlock()
 		return // already counted this SR's PREPARE
 	}
 	h.pareVoteMap[sk] = struct{}{}
 	h.checkCommitMsgCacheNoLock(no)
 
-	// Full node only counts votes; does not emit COMMIT.
+	// Track whether this PREPARE pushed us over the agreement threshold,
+	// so we can emit COMMIT after releasing smMu.
+	emitCommit := false
 	if _, done := h.doneMsg[no]; !done {
 		h.agreePare[dk]++
 		if h.agreePare[dk] >= pbftAgreeCount {
 			delete(h.agreePare, dk)
+			h.doneMsg[no] = struct{}{}
+			emitCommit = true
 		}
+	}
+	h.smMu.Unlock()
+
+	// SR-side: on quorum-of-PREPARE, emit COMMIT for every local SR. Mirrors
+	// java-tron PbftMessageHandle.onPrepare's loop at line 173.
+	if emitCommit && h.producer != nil {
+		h.producer.EmitCommit(raw)
 	}
 }
 

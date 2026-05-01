@@ -60,6 +60,10 @@ var (
 		Name:  "witness.key",
 		Usage: "Witness private key (hex-encoded)",
 	}
+	witnessKeysFileFlag = &cli.StringFlag{
+		Name:  "witness.keys-file",
+		Usage: "Path to a file with one hex-encoded SR private key per line (multi-SR PBFT testing)",
+	}
 	devFlag = &cli.BoolFlag{
 		Name:  "dev",
 		Usage: "Dev mode: single-witness chain using the provided witness key",
@@ -103,6 +107,7 @@ var app = &cli.App{
 		testnetFlag,
 		witnessFlag,
 		witnessKeyFlag,
+		witnessKeysFileFlag,
 		devFlag,
 		devFullFeaturesFlag,
 		devMaintenanceIntervalFlag,
@@ -306,13 +311,28 @@ func gtron(ctx *cli.Context) error {
 		}
 		stack.RegisterLifecycle(prod)
 
-		// M6b slice 1: register a NO-OP PBFT signing hook on this SR. The
-		// hook only logs; the three-phase signing/broadcast path lands in
-		// slice 2. Same active-list policy as `producer` above — register
-		// regardless of current active membership; the runtime gate
-		// (isLocalSR + allowPBFT) handles inactive SRs naturally.
-		pbftProducer := tnet.NewPbftProducer(bc, bc.DB(), p2pServer, syncService, key)
-		bc.AddBlockHook(pbftProducer.OnBlockApplied)
+		// M6b slice 2: wire the SR-side PBFT producer. The producer:
+		//   - emits a BLOCK PREPREPARE on every successful InsertBlock
+		//   - emits an SRL PREPREPARE on every maintenance boundary
+		//   - emits PREPARE / COMMIT in response to inbound state-machine
+		//     transitions (via PbftHandler.SetProducer)
+		// Multi-SR keys are loaded from --witness.keys-file when set; the
+		// primary --witness.key is also included.
+		srKeys := []*ecdsa.PrivateKey{key}
+		if path := ctx.String("witness.keys-file"); path != "" {
+			extra, err := parseWitnessKeysFile(path)
+			if err != nil {
+				db.Close()
+				return fmt.Errorf("witness keys file: %w", err)
+			}
+			srKeys = append(srKeys, extra...)
+		}
+		pbftProducer := tnet.NewPbftProducer(bc, bc.DB(), p2pServer, syncService, srKeys...)
+		if pbftProducer != nil {
+			handler.PbftHandler().SetProducer(pbftProducer)
+			bc.AddBlockHook(pbftProducer.OnBlockApplied)
+			bc.AddMaintenanceHook(pbftProducer.OnMaintenance)
+		}
 	}
 
 	// Start

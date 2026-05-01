@@ -22,11 +22,13 @@ func makeProducerForTest(t *testing.T) (*PbftProducer, *ecdsa.PrivateKey, tcommo
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+	addr := crypto.PubkeyToAddress(&key.PublicKey)
 	p := &PbftProducer{
-		srKey:  key,
-		srAddr: crypto.PubkeyToAddress(&key.PublicKey),
+		srKeys:  []*ecdsa.PrivateKey{key},
+		srAddrs: []tcommon.Address{addr},
 	}
-	return p, key, p.srAddr
+	p.broadcast = p.defaultBroadcast
+	return p, key, addr
 }
 
 func makeBlockWithNumber(num uint64) *types.Block {

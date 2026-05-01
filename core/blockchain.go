@@ -49,6 +49,9 @@ type BlockChain struct {
 
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
+
+	maintHookMu sync.Mutex
+	maintHooks  []func(*types.Block, []tcommon.Address) // fired after a maintenance block
 }
 
 // AddBlockHook registers a callback called after each successfully inserted block.
@@ -56,6 +59,17 @@ func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
 	bc.blockHookMu.Lock()
 	bc.blockHooks = append(bc.blockHooks, fn)
 	bc.blockHookMu.Unlock()
+}
+
+// AddMaintenanceHook registers a callback fired after each successfully
+// inserted block whose timestamp crossed the maintenance boundary. The new
+// active-witness set (post-rotation) is passed alongside the block. Mirrors
+// java-tron MaintenanceManager.applyBlock's `pbftManager.srPrePrepare` trigger
+// (consensus/src/main/java/org/tron/consensus/dpos/MaintenanceManager.java:72).
+func (bc *BlockChain) AddMaintenanceHook(fn func(*types.Block, []tcommon.Address)) {
+	bc.maintHookMu.Lock()
+	bc.maintHooks = append(bc.maintHooks, fn)
+	bc.maintHookMu.Unlock()
 }
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
@@ -301,6 +315,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 
 	// Run maintenance if at boundary (before commit so allowances are included).
+	wasMaintenanceBlock := false
+	var maintNewWitnesses []tcommon.Address
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
@@ -311,6 +327,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		applyRewardMaintenance(bc.buffer, statedb, dynProps)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
 		bc.SetActiveWitnesses(newActive)
+		wasMaintenanceBlock = true
+		maintNewWitnesses = newActive
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).
@@ -376,6 +394,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if n := len(block.Transactions()); n > 0 {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
+	}
+
+	// Fire maintenance hooks first so the SRL PBFT message goes out before
+	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
+	// ordering (srPrePrepare at line 72, blockPrePrepare at line 81).
+	if wasMaintenanceBlock {
+		bc.maintHookMu.Lock()
+		mhooks := bc.maintHooks
+		bc.maintHookMu.Unlock()
+		for _, h := range mhooks {
+			h(block, maintNewWitnesses)
+		}
 	}
 
 	bc.blockHookMu.Lock()
