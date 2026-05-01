@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -37,7 +38,7 @@ var defaultStringProps = map[string]string{
 	"energy_price_history":      "0:100",
 	"bandwidth_price_history":   "0:10",
 	"memo_fee_history":          "0:0",
-	"block_filled_slots":        string(make([]byte, BlockFilledSlotsNumber)),
+	"block_filled_slots":        string(bytes.Repeat([]byte{1}, BlockFilledSlotsNumber)),
 	"available_contract_type":   padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x7e}),
 	"active_default_operations": padBitmapDefault([]byte{0x7f, 0xff, 0x1f, 0xc0, 0x03, 0x3e}),
 }

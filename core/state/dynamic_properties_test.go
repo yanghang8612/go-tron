@@ -348,19 +348,22 @@ func TestDynamicProperties_StringNotInAll(t *testing.T) {
 	_ = strings.Contains
 }
 
-func TestBlockFilledSlots_DefaultEmpty(t *testing.T) {
+func TestBlockFilledSlots_DefaultFull(t *testing.T) {
+	// Mirror java-tron DynamicPropertiesStore.java:722-724
+	// (Arrays.fill(blockFilledSlots, 1)): genesis ring is all-1s so a
+	// fresh chain starts above the LOW_PARTICIPATION threshold.
 	dp := NewDynamicProperties()
 	got := dp.BlockFilledSlots()
 	if len(got) != BlockFilledSlotsNumber {
 		t.Fatalf("default length: want %d, got %d", BlockFilledSlotsNumber, len(got))
 	}
 	for i, b := range got {
-		if b != 0 {
-			t.Errorf("default slot[%d] = %d, want 0", i, b)
+		if b != 1 {
+			t.Errorf("default slot[%d] = %d, want 1", i, b)
 		}
 	}
-	if got := dp.CalculateFilledSlotsCount(); got != 0 {
-		t.Errorf("default fill rate: want 0, got %d", got)
+	if got := dp.CalculateFilledSlotsCount(); got != 100 {
+		t.Errorf("default fill rate: want 100, got %d", got)
 	}
 }
 
