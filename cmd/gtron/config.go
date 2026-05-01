@@ -33,11 +33,22 @@ func makeConfig(ctx *cli.Context) *node.Config {
 	}
 }
 
-func makeGenesis(ctx *cli.Context) *params.Genesis {
-	if ctx.Bool("testnet") {
-		return params.DefaultNileGenesis()
+func makeGenesis(ctx *cli.Context) (*params.Genesis, error) {
+	gFile := ctx.String("genesis")
+	if gFile != "" {
+		if ctx.Bool("testnet") || ctx.Bool("dev") {
+			return nil, fmt.Errorf("--genesis is mutually exclusive with --testnet and --dev")
+		}
+		g, err := loadGenesisFile(gFile)
+		if err != nil {
+			return nil, err
+		}
+		return g, nil
 	}
-	return params.DefaultMainnetGenesis()
+	if ctx.Bool("testnet") {
+		return params.DefaultNileGenesis(), nil
+	}
+	return params.DefaultMainnetGenesis(), nil
 }
 
 func chainDataDir(dataDir string) string {

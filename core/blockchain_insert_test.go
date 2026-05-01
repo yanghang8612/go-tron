@@ -236,7 +236,8 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	// that witness allowance equals exactly 11 × WitnessPayPerBlock.
 	// If switchFork opened applyBlock from the wrong parent root, allowance
 	// would carry chain-A's accumulated rewards too (21 blocks × rate).
-	statedb, err := state.New(bc.CurrentBlock().AccountStateRoot(), sdb)
+	stateRoot := rawdb.ReadBlockStateRoot(diskdb, bc.CurrentBlock().Hash())
+	statedb, err := state.New(stateRoot, sdb)
 	if err != nil {
 		t.Fatalf("open state after fork switch: %v", err)
 	}

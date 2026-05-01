@@ -16,6 +16,13 @@ var (
 	// applyBlock to bootstrap block #1's StateDB. See core.SetupGenesisBlock.
 	genesisStateRootKey = []byte("genesis-state-root")
 
+	// blockStateRootPrefix maps block hash → post-apply state root. Stored
+	// alongside the block (out-of-band) so we never have to mutate the
+	// block proto's `account_state_root` field — which would break wire-
+	// format parity with java-tron blocks that arrived with that field
+	// empty.
+	blockStateRootPrefix = []byte("bsr-")
+
 	blockPrefix     = []byte("b-")
 	blockHashPrefix = []byte("bh-")
 	txPrefix        = []byte("tx-")
@@ -283,6 +290,10 @@ func blockKey(number uint64) []byte {
 
 func blockHashKey(hash []byte) []byte {
 	return append(append([]byte{}, blockHashPrefix...), hash...)
+}
+
+func blockStateRootKey(hash []byte) []byte {
+	return append(append([]byte{}, blockStateRootPrefix...), hash...)
 }
 
 func txKey(hash []byte) []byte {

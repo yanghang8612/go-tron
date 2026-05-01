@@ -139,3 +139,21 @@ func ReadGenesisStateRoot(db ethdb.KeyValueReader) common.Hash {
 	}
 	return common.BytesToHash(data)
 }
+
+// WriteBlockStateRoot persists the post-apply state root for the given
+// block hash. Stored out-of-band so that the block proto's
+// `account_state_root` field can stay empty for wire-format parity with
+// java-tron blocks that arrived without it.
+func WriteBlockStateRoot(db ethdb.KeyValueWriter, blockHash, root common.Hash) {
+	db.Put(blockStateRootKey(blockHash.Bytes()), root.Bytes())
+}
+
+// ReadBlockStateRoot returns the post-apply state root for the given
+// block hash, or the zero hash if not stored.
+func ReadBlockStateRoot(db ethdb.KeyValueReader, blockHash common.Hash) common.Hash {
+	data, err := db.Get(blockStateRootKey(blockHash.Bytes()))
+	if err != nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(data)
+}

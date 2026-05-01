@@ -239,8 +239,16 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 	genesisID := genesis.ID()
 	headID := head.ID()
 
+	// HelloMessage.Version is java-tron's `p2p.version` (network
+	// discriminator), distinct from the libp2p-handshake protocol version.
+	// Pull it from the configured server so custom-chain bootstrap
+	// (--genesis with `p2p_version: 0`) handshakes against java-tron.
+	version := p2p.ProtocolVersion
+	if h.server != nil {
+		version = h.server.NetworkID()
+	}
 	return &corepb.HelloMessage{
-		Version:   p2p.ProtocolVersion,
+		Version:   version,
 		Timestamp: time.Now().UnixMilli(),
 		GenesisBlockId: &corepb.HelloMessage_BlockId{
 			Hash:   genesisID.Hash[:],

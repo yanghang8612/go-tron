@@ -163,6 +163,12 @@ func (s *Server) PeerCount() int {
 	return len(s.peers)
 }
 
+// NetworkID returns the libp2p networkId this server advertises in its
+// Hello (= java-tron's `p2p.version` config field).
+func (s *Server) NetworkID() int32 {
+	return s.config.NetworkID
+}
+
 // Peers returns a snapshot of all connected peers.
 func (s *Server) Peers() []*Peer {
 	s.mu.RLock()

@@ -266,13 +266,19 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}()
 
-	// Open StateDB from parent's state root. The genesis block deliberately
-	// omits `account_state_root` from its header (java-tron parity); fall
-	// back to the post-genesis state root persisted by SetupGenesisBlock so
-	// block #1 can find genesis-allocated accounts.
-	parentRoot := current.AccountStateRoot()
+	// Open StateDB from parent's state root. State roots live in a side
+	// store keyed by block hash, not on the block proto, so blocks coming
+	// in from java-tron (which has empty account_state_root) round-trip
+	// without losing wire-format identity. Genesis falls back to the
+	// dedicated post-genesis-state-root key.
+	parentRoot := rawdb.ReadBlockStateRoot(bc.db, current.Hash())
 	if parentRoot == (tcommon.Hash{}) && current.Number() == 0 {
 		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
+	}
+	if parentRoot == (tcommon.Hash{}) {
+		// Backwards-compat fallback for chain databases written before
+		// blockStateRootPrefix existed.
+		parentRoot = current.AccountStateRoot()
 	}
 	statedb, err := state.New(parentRoot, bc.stateDB)
 	if err != nil {
@@ -349,15 +355,16 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("commit state: %w", err)
 	}
 
-	// Verify state root if the block has one set; otherwise stamp the computed root.
+	// Verify state root if the block carries one (java-tron sets this on
+	// post-fork blocks via the AccountStateCallBack hook); otherwise just
+	// trust our computed root. The root is persisted out-of-band — we do
+	// NOT mutate `block.AccountStateRoot()` because the block proto's
+	// content must round-trip byte-identical to what the wire delivered.
 	blockRoot := block.AccountStateRoot()
-	if blockRoot != (tcommon.Hash{}) {
-		if blockRoot != newRoot {
-			return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
-		}
-	} else {
-		block.SetAccountStateRoot(newRoot)
+	if blockRoot != (tcommon.Hash{}) && blockRoot != newRoot {
+		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
 	}
+	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
 
 	// Update dynamic properties.
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))

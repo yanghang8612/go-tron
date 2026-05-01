@@ -93,7 +93,14 @@ func (b *Block) Transactions() []*Transaction {
 	return txs
 }
 
-// Hash computes SHA-256 of serialized BlockHeader.RawData.
+// Hash returns the canonical block identifier: SHA-256 of serialized
+// BlockHeader.RawData with the first 8 bytes overwritten by the
+// big-endian block number. This matches java-tron's `BlockId` format and
+// is what `block_header.raw_data.parent_hash` references on the wire.
+//
+// Use `recoverWitness` / `SignBlock` for the raw SHA256(RawData) bytes
+// when verifying / producing witness signatures — those compute the
+// pre-overwrite digest directly.
 func (b *Block) Hash() common.Hash {
 	b.hashMu.Lock()
 	defer b.hashMu.Unlock()
@@ -104,18 +111,17 @@ func (b *Block) Hash() common.Hash {
 				panic(fmt.Sprintf("block header marshal failed: %v", err))
 			}
 			b.hash = sha256.Sum256(data)
+			binary.BigEndian.PutUint64(b.hash[:8], uint64(b.pb.BlockHeader.RawData.Number))
 		}
 		b.hashDone = true
 	}
 	return b.hash
 }
 
-// ID returns BlockID (hash with block number in first 8 bytes).
+// ID returns BlockID. With Hash() now in BlockId format, this is a thin
+// wrapper kept for callers that need the explicit (Hash, Num) pair.
 func (b *Block) ID() BlockID {
-	h := b.Hash()
-	num := b.Number()
-	binary.BigEndian.PutUint64(h[:8], num)
-	return BlockID{Hash: h, Num: num}
+	return BlockID{Hash: b.Hash(), Num: b.Number()}
 }
 
 // SetWitnessSignature sets the witness signature on the block header.
