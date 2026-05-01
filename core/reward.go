@@ -23,7 +23,13 @@ import (
 // witness's per-cycle brokerage: witness keeps `brokerage%`, the rest
 // accumulates into DelegationStore as the voter reward pool for the
 // current cycle.
-func payBlockReward(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.DynamicProperties, witness tcommon.Address, amount int64) {
+//
+// The db parameter is widened to `kvReadWriter` (slice 3 of the fork-rewind
+// fix) so applyBlock can pass `bc.buffer`, making the cycle-reward write
+// rewindable on switchFork once `change_delegation` is active. The legacy
+// flat path does not touch rawdb, so the gate keeps disk traffic unchanged
+// on mainnet pre-fork.
+func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties, witness tcommon.Address, amount int64) {
 	if amount <= 0 {
 		return
 	}
@@ -56,7 +62,10 @@ func payBlockReward(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.Dy
 //
 // Only runs once change_delegation is active — before that, the legacy
 // IncentiveManager.reward path at maintenance time handles standby pay.
-func payStandbyWitness(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.DynamicProperties) {
+//
+// db is `kvReadWriter` so applyBlock can pass `bc.buffer` (slice 3 of the
+// fork-rewind fix); see payBlockReward for the rewind semantics.
+func payStandbyWitness(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
 	if !dp.ChangeDelegation() {
 		return
 	}
@@ -208,4 +217,3 @@ func applyRewardMaintenance(db kvReadWriter, statedb *state.StateDB, dp *state.D
 		dp.SetCurrentCycleNumber(nextCycle)
 	}
 }
-

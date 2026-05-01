@@ -117,9 +117,9 @@ var app = &cli.App{
 			Action: versionCmd,
 		},
 		{
-			Name:  "init",
-			Usage: "Initialize genesis block",
-			Flags: []cli.Flag{dataDirFlag, testnetFlag},
+			Name:   "init",
+			Usage:  "Initialize genesis block",
+			Flags:  []cli.Flag{dataDirFlag, testnetFlag},
 			Action: initCmd,
 		},
 	},
@@ -333,6 +333,12 @@ func gtron(ctx *cli.Context) error {
 	broadcaster.Stop()
 	syncService.Stop()
 	stack.Stop()
+	// Flush the BlockChain's per-block buffer up to the solidified line
+	// before closing the underlying store. Layers above solidified are
+	// dropped — see core.BlockChain.Close for the trade-off rationale.
+	if err := bc.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "blockchain close: %v\n", err)
+	}
 	db.Close()
 	return nil
 }

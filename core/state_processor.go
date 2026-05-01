@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -16,7 +15,11 @@ import (
 // When validate is true, act.Validate is called before Execute; set to false when
 // processing committed blocks (txs were validated at broadcast/build time, and some
 // actuators write rawdb indexes in Execute that would cause re-validation to fail).
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
+//
+// The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
+// or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
+// fix widened the type so actuator-side rawdb-direct writes are rewindable.
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
 		return nil, fmt.Errorf("create actuator: %w", err)
@@ -116,7 +119,12 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 // It does NOT commit state — the caller (InsertBlock/BuildBlock) is responsible
 // for committing after any post-processing (e.g., maintenance).
 // Returns the TransactionInfos for all executed transactions.
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db ethdb.KeyValueStore, activeWitnesses []tcommon.Address, genesisTimestamp int64) ([]*corepb.TransactionInfo, error) {
+//
+// The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
+// or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
+// fix routes block-reward + actuator rawdb-direct writes through the buffer
+// so switchFork can rewind them on orphan-branch discard.
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64) ([]*corepb.TransactionInfo, error) {
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
 

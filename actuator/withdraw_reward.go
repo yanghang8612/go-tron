@@ -23,7 +23,7 @@ import (
 //     whichever algorithm applies per cycle.
 //  4. Writes the new cursors and snapshots the current account-vote for
 //     the next withdrawal.
-func withdrawReward(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) {
+func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) {
 	if dp == nil || db == nil || !dp.ChangeDelegation() {
 		return
 	}
@@ -79,7 +79,7 @@ func withdrawReward(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.Dy
 
 // queryReward returns the pending reward a voter would settle on withdraw,
 // without mutating state. Mirrors MortgageService.queryReward.
-func queryReward(db ethdb.KeyValueStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) int64 {
+func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) int64 {
 	if dp == nil || db == nil || !dp.ChangeDelegation() {
 		return 0
 	}

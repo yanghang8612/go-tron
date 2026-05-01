@@ -593,3 +593,460 @@ func TestLinearExtension_WitnessCountersThroughBuffer(t *testing.T) {
 		t.Fatalf("linear extension: LatestBlockNum = %d, want 3", got)
 	}
 }
+
+// TestForkSwitch_AddCycleRewardRollback exercises slice-3 sub-task A: with
+// `change_delegation` enabled, every produced block routes through
+// payBlockReward → AddCycleReward, which writes the per-cycle voter pool
+// via the buffer. After a 3-vs-4 reorg the canonical AddCycleReward total
+// must reflect ONLY chain B (4 blocks × witness_pay_per_block × (1 - brokerage%)),
+// not chain A's orphaned 3-block additions on top.
+//
+// Mirrors the slice-2 TestForkSwitch_WitnessCountersNoDoubleCount layout
+// (3 active witnesses → solidified stays at 0 → all layers in memory).
+func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time":     1<<62 - 1, // far future — no maintenance
+			"change_delegation":         1,         // gate AddCycleReward writer ON
+			"current_cycle_number":      7,         // arbitrary — must match across runs
+			"witness_127_pay_per_block": 0,         // disable standby pay → simpler math
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Default brokerage is 20% per java-tron MortgageService. With the
+	// default `witness_pay_per_block` = 32_000_000, voter pool per block
+	// is 32_000_000 × 0.80 = 25_600_000. Standby pay disabled above.
+	const voterPerBlock int64 = 32_000_000 - (32_000_000 * 20 / 100)
+
+	// Build chain A: 3 blocks produced by witnessAddr.
+	chainA := make([]*types.Block, 4)
+	chainA[0] = bc.genesisBlock
+	for i := 1; i <= 3; i++ {
+		parent := chainA[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("chain A block %d: %v", i, err)
+		}
+		chainA[i] = b
+	}
+
+	// Sanity: cycle reward reflects 3 chain-A blocks (read via buffer —
+	// solidified stays at 0 with 3 witnesses).
+	gotA := rawdb.ReadCycleReward(bc.BufferedDB(), 7, witnessAddr.Bytes())
+	wantA := 3 * voterPerBlock
+	if gotA != wantA {
+		t.Fatalf("after chain A: cycle 7 reward = %d, want %d", gotA, wantA)
+	}
+
+	// Build chain B: 4 blocks branching from genesis (offset timestamps).
+	chainB := make([]*types.Block, 5)
+	chainB[0] = bc.genesisBlock
+	for i := 1; i <= 4; i++ {
+		parent := chainB[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i)*3000 + 1, // +1 → distinct hash
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		chainB[i] = b
+	}
+	for i := 1; i <= 4; i++ {
+		if err := bc.InsertBlock(chainB[i]); err != nil {
+			t.Fatalf("chain B block %d: %v", i, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
+		t.Fatalf("after switchFork: head hash != chain B tip")
+	}
+
+	// Without slice-3 buffer routing, this would be (3 + 4) × voterPerBlock.
+	// With the fix, only chain B's 4 blocks survive.
+	gotB := rawdb.ReadCycleReward(bc.BufferedDB(), 7, witnessAddr.Bytes())
+	wantB := 4 * voterPerBlock
+	if gotB != wantB {
+		t.Fatalf("after switchFork: cycle 7 reward = %d, want %d "+
+			"(orphan AddCycleReward writes must NOT leak)", gotB, wantB)
+	}
+}
+
+// TestForkSwitch_AssetIssueActuatorRollback exercises slice-3 sub-task B:
+// an actuator that writes via `ctx.DB.Put` (here `WriteAssetIssue` /
+// `WriteAssetNameIndex` / `WriteAssetOwnerIndex`) must have its writes
+// rolled back when the block landed on the orphan branch.
+//
+// Setup: chain A includes an asset-issue tx at block 1; chain B is 2
+// blocks longer with no asset issues. Pre-slice-3, chain A's asset
+// indexes would persist on disk after the reorg. With slice-3's
+// actuator.Context.DB widening, the writes go through bc.buffer and
+// switchFork's DiscardBlock rewinds them.
+func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+	issuer := testInsertAddr(7)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+			{Address: issuer, Balance: 99_000_000_000_000_000},
+		},
+		// 3 active witnesses → solidified stays at 0 → all layers in memory.
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build asset-issue contract. Name "FORKTKN" — distinctive enough that
+	// we can assert its absence on disk after the reorg.
+	assetName := []byte("FORKTKN")
+	tokenContract := &contractpb.AssetIssueContract{
+		OwnerAddress:      issuer.Bytes(),
+		Name:              assetName,
+		Abbr:              []byte("FT"),
+		TotalSupply:       1_000_000,
+		TrxNum:            1,
+		Num:               1,
+		StartTime:         1000,
+		EndTime:           2_000_000_000_000, // far future
+		Precision:         0,
+		FreeAssetNetLimit: 0,
+	}
+	param, err := anypb.New(tokenContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_AssetIssueContract,
+				Parameter: param,
+			}},
+		},
+	}
+
+	// Build chain A: 3 blocks. Block 1 contains the asset-issue tx; blocks
+	// 2 and 3 are empty.
+	chainA := make([]*types.Block, 4)
+	chainA[0] = bc.genesisBlock
+	for i := 1; i <= 3; i++ {
+		parent := chainA[i-1]
+		blkPB := &corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		}
+		if i == 1 {
+			blkPB.Transactions = []*corepb.Transaction{txPB}
+		}
+		b := types.NewBlockFromPB(blkPB)
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("chain A block %d: %v", i, err)
+		}
+		chainA[i] = b
+	}
+
+	// Sanity: asset indexes are buffered on chain A.
+	if _, ok := rawdb.ReadAssetNameIndex(bc.BufferedDB(), assetName); !ok {
+		t.Fatal("after chain A: asset name index missing from buffer")
+	}
+	if _, ok := rawdb.ReadAssetOwnerIndex(bc.BufferedDB(), issuer[:]); !ok {
+		t.Fatal("after chain A: asset owner index missing from buffer")
+	}
+
+	// Build chain B: 4 empty blocks → triggers switchFork on B[4].
+	chainB := make([]*types.Block, 5)
+	chainB[0] = bc.genesisBlock
+	for i := 1; i <= 4; i++ {
+		parent := chainB[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i)*3000 + 1, // +1 → distinct hash
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		chainB[i] = b
+	}
+	for i := 1; i <= 4; i++ {
+		if err := bc.InsertBlock(chainB[i]); err != nil {
+			t.Fatalf("chain B block %d: %v", i, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
+		t.Fatal("after switchFork: head != chain B tip")
+	}
+
+	// Asset indexes from chain A's orphaned issuance must be GONE from the
+	// buffer view (they would still be on disk if the actuator widening
+	// were not in place — but solidified=0 means nothing was flushed, so
+	// the buffer view is the canonical source of truth here).
+	if _, ok := rawdb.ReadAssetNameIndex(bc.BufferedDB(), assetName); ok {
+		t.Fatal("after switchFork: asset name index leaked from orphan branch")
+	}
+	if _, ok := rawdb.ReadAssetOwnerIndex(bc.BufferedDB(), issuer[:]); ok {
+		t.Fatal("after switchFork: asset owner index leaked from orphan branch")
+	}
+	// And specifically NOT on disk either.
+	if _, ok := rawdb.ReadAssetNameIndex(diskdb, assetName); ok {
+		t.Fatal("after switchFork: asset name index leaked to disk from orphan branch")
+	}
+	if _, ok := rawdb.ReadAssetOwnerIndex(diskdb, issuer[:]); ok {
+		t.Fatal("after switchFork: asset owner index leaked to disk from orphan branch")
+	}
+}
+
+// TestGracefulShutdown_FlushesSolidified exercises slice-3 sub-task C: a
+// clean shutdown via bc.Close() must persist every buffer layer at or
+// below `latest_solidified_block_num` to disk and drop everything above.
+// On restart, the new BlockChain reads the solidified-line state from
+// disk and matches what slice-1's direct-write path would have produced
+// for a chain frozen at solidified.
+//
+// Setup: 27 active witnesses, only one produces. floor(27 × 0.3) = 8;
+// after 9 produced blocks by witnessAddr, the witness's WitnessLatestBlock
+// reaches 9, but the sorted nums[] list across all 27 witnesses has 26
+// zeros and one 9 — nums[8] (zero-indexed) is still 0, so solidified
+// stays at 0 and no flush happens. To force a real flush boundary we use
+// 1 active witness so solidified == head every block, giving a non-trivial
+// flush window for each call.
+//
+// We then produce 5 blocks WITHOUT going through Close (they all flush
+// immediately due to solidified=head), and 5 more after temporarily
+// adding a second silent witness (still solidified=head with 1 producer
+// and 1 other since floor(2×0.3)=0). Close() runs, restart, assert state.
+func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		// Single active witness → floor(1 × 0.3) = 0 → solidified == head
+		// every block. Every applyBlock flushes its layer immediately.
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+	}
+
+	// Pre-Close sanity: with 1 SR, solidified == head, so flush is automatic
+	// per applyBlock and the buffer is already empty. Close should be a no-op
+	// in this configuration (idempotent).
+	if got := len(bc.buffer.PendingBlocks()); got != 0 {
+		t.Fatalf("pre-Close: buffer holds %d layers, want 0 (solidified=head)", got)
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Buffer must be empty after Close.
+	if got := len(bc.buffer.PendingBlocks()); got != 0 {
+		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
+	}
+
+	// Restart: open fresh BlockChain on the same disk store.
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 5 {
+		t.Fatalf("restart: head = %d, want 5", got)
+	}
+
+	// Disk-side counters must match what was on the now-flushed buffer.
+	w := rawdb.ReadWitness(diskdb, witnessAddr)
+	if w == nil {
+		t.Fatal("witness counter not on disk after Close+restart")
+	}
+	if got := w.TotalProduced(); got != 5 {
+		t.Fatalf("disk-side TotalProduced = %d, want 5", got)
+	}
+	if got := w.LatestBlockNum(); got != 5 {
+		t.Fatalf("disk-side LatestBlockNum = %d, want 5", got)
+	}
+	dpDisk := state.LoadDynamicProperties(diskdb)
+	if got := dpDisk.LatestSolidifiedBlockNum(); got != 5 {
+		t.Fatalf("disk-side LatestSolidifiedBlockNum = %d, want 5", got)
+	}
+	if got := dpDisk.LatestBlockHeaderNumber(); got != 5 {
+		t.Fatalf("disk-side LatestBlockHeaderNumber = %d, want 5", got)
+	}
+}
+
+// TestGracefulShutdown_DropsLayersAboveSolidified exercises the harder
+// branch of slice-3 sub-task C: when applyBlock leaves layers above the
+// solidified line in memory, Close must flush only up to solidified and
+// drop the higher layers. After restart, the disk-side image reflects
+// the solidified-line state — NOT the unflushed in-memory state.
+//
+// 3 active witnesses (where only one produces) keeps solidified at 0
+// across every applyBlock — same configuration as the slice-2 reorg test.
+// All 5 layers stay in memory. Close() drops them.
+func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+	}
+
+	// All 5 layers in memory (solidified stays at 0 with 3 SRs / 1 producer).
+	if got := len(bc.buffer.PendingBlocks()); got != 5 {
+		t.Fatalf("pre-Close: buffer holds %d layers, want 5", got)
+	}
+
+	// Close: flushes up to solidified=0 (no-op) and drops the 5 layers.
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := len(bc.buffer.PendingBlocks()); got != 0 {
+		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
+	}
+
+	// Restart: disk-side state reflects ZERO post-applyBlock counters,
+	// because none of the 5 layers were flushed. This documents the
+	// trade-off: clean shutdown above solidified loses the post-block
+	// counters. Recovery: re-sync the missing range from peers.
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	// Block bodies are persisted in applyBlock (rawdb.WriteBlock is direct,
+	// not through the buffer), so head still advances. This is consistent
+	// with java-tron, where Manager.pushBlock writes the block before the
+	// session-tracked DP/witness mutations.
+	if got := bc2.CurrentBlock().Number(); got != 5 {
+		t.Fatalf("restart: head = %d, want 5", got)
+	}
+	// Witness counter NOT on disk — was only ever in the dropped buffer.
+	w := rawdb.ReadWitness(diskdb, witnessAddr)
+	if w != nil && w.TotalProduced() != 0 {
+		t.Fatalf("disk-side TotalProduced = %d, want 0 "+
+			"(layers above solidified were dropped on Close)", w.TotalProduced())
+	}
+}
