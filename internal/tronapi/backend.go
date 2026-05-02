@@ -48,14 +48,25 @@ type WitnessInfo struct {
 	LatestSlotNum  int64  `json:"latestSlotNum,omitempty"`
 }
 
+// ProposalParameterEntry is one (key, value) pair in a proposal's parameters list.
+//
+// java-tron emits the proto `map<int64, int64> parameters` field as a JSON
+// array of MapEntry messages (the wire-format representation), e.g.
+// `[{"key":19,"value":259200000}]`. SDKs targeting java-tron expect that
+// shape, so we serialize as an array, not as a `{"19": 259200000}` dict.
+type ProposalParameterEntry struct {
+	Key   int64 `json:"key"`
+	Value int64 `json:"value"`
+}
+
 type ProposalInfo struct {
-	ProposalID      int64            `json:"proposal_id"`
-	ProposerAddress string           `json:"proposer_address"`
-	Parameters      map[string]int64 `json:"parameters"`
-	ExpirationTime  int64            `json:"expiration_time"`
-	CreateTime      int64            `json:"create_time"`
-	Approvals       []string         `json:"approvals"`
-	State           string           `json:"state"`
+	ProposalID      int64                    `json:"proposal_id"`
+	ProposerAddress string                   `json:"proposer_address"`
+	Parameters      []ProposalParameterEntry `json:"parameters"`
+	ExpirationTime  int64                    `json:"expiration_time"`
+	CreateTime      int64                    `json:"create_time"`
+	Approvals       []string                 `json:"approvals"`
+	State           string                   `json:"state"`
 }
 
 // PeerInfo describes a connected P2P peer.

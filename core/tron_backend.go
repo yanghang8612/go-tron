@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -499,10 +500,7 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 		if p == nil {
 			continue
 		}
-		params := make(map[string]int64, len(p.Parameters))
-		for k, v := range p.Parameters {
-			params[fmt.Sprintf("%d", k)] = v
-		}
+		params := proposalParametersToList(p.Parameters)
 		approvals := make([]string, len(p.Approvals))
 		for i, a := range p.Approvals {
 			approvals[i] = hex.EncodeToString(a[:])
@@ -525,6 +523,21 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+// proposalParametersToList converts a Proposal.parameters map to a sorted
+// slice of {key, value} entries, matching java-tron's HTTP wire format
+// (`[{"key":N,"value":V},...]`). Sorted by key for deterministic output.
+func proposalParametersToList(m map[int64]int64) []tronapi.ProposalParameterEntry {
+	if len(m) == 0 {
+		return []tronapi.ProposalParameterEntry{}
+	}
+	out := make([]tronapi.ProposalParameterEntry, 0, len(m))
+	for k, v := range m {
+		out = append(out, tronapi.ProposalParameterEntry{Key: k, Value: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) (*tronapi.DelegatedResourceInfo, error) {
@@ -848,10 +861,7 @@ func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	if p == nil {
 		return nil, fmt.Errorf("proposal %d not found", id)
 	}
-	params := make(map[string]int64, len(p.Parameters))
-	for k, v := range p.Parameters {
-		params[fmt.Sprintf("%d", k)] = v
-	}
+	params := proposalParametersToList(p.Parameters)
 	approvals := make([]string, len(p.Approvals))
 	for i, a := range p.Approvals {
 		approvals[i] = hex.EncodeToString(a[:])

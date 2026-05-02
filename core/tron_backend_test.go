@@ -119,3 +119,33 @@ func TestTronBackend_GetLogs_EmptyRange(t *testing.T) {
 		t.Fatal("GetLogs should return empty slice, not nil")
 	}
 }
+
+// TestProposalParametersToList_SortedAscending verifies the proposal-parameters
+// helper emits a key-sorted slice so HTTP `/wallet/(get|list)proposal*` output
+// is deterministic — Go map iteration is randomized, so the sort is required
+// for byte-stable JSON across calls.
+func TestProposalParametersToList_SortedAscending(t *testing.T) {
+	in := map[int64]int64{19: 259200000, 5: 1, 11: 100}
+	got := proposalParametersToList(in)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %v", len(got), got)
+	}
+	if got[0].Key != 5 || got[1].Key != 11 || got[2].Key != 19 {
+		t.Fatalf("expected keys [5, 11, 19] in ascending order, got %v", got)
+	}
+	if got[0].Value != 1 || got[1].Value != 100 || got[2].Value != 259200000 {
+		t.Fatalf("values mis-paired with keys: %v", got)
+	}
+}
+
+// TestProposalParametersToList_EmptyReturnsNonNil ensures an empty input
+// produces a non-nil empty slice so JSON encodes it as `[]`, not `null`.
+func TestProposalParametersToList_EmptyReturnsNonNil(t *testing.T) {
+	got := proposalParametersToList(nil)
+	if got == nil {
+		t.Fatal("expected non-nil slice for nil map (so json renders [], not null)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %v", got)
+	}
+}

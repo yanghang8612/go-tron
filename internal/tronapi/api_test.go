@@ -42,6 +42,9 @@ type stubBackend struct {
 	lastContract     proto.Message
 	// M9.7: controlled by test to simulate validate failure
 	validateErr error
+	// Proposal output divergence test (D-4): canned proposals returned
+	// from ListProposals / ListProposalsPaginated / GetProposalByID.
+	proposals []*tronapi.ProposalInfo
 }
 
 // --- Pre-existing Backend methods (all return zero values) ---
@@ -97,7 +100,7 @@ func (s *stubBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
+func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return s.proposals, nil }
 
 // --- New Phase 10 methods ---
 func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) (*tronapi.DelegatedResourceInfo, error) {
@@ -184,7 +187,17 @@ func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes ma
 func (s *stubBackend) GetBandwidthPrices() string { return "" }
 func (s *stubBackend) GetEnergyPrices() string    { return "" }
 func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
-	return nil, nil
+	if len(s.proposals) == 0 {
+		return nil, nil
+	}
+	if offset >= len(s.proposals) {
+		return []*tronapi.ProposalInfo{}, nil
+	}
+	end := offset + limit
+	if end > len(s.proposals) {
+		end = len(s.proposals)
+	}
+	return s.proposals[offset:end], nil
 }
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	return nil, nil
@@ -249,6 +262,11 @@ func (s *stubBackend) BuildContractTransaction(contractType corepb.Transaction_C
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	for _, p := range s.proposals {
+		if p.ProposalID == id {
+			return p, nil
+		}
+	}
 	if id == 1 {
 		return &tronapi.ProposalInfo{ProposalID: 1}, nil
 	}
@@ -769,6 +787,152 @@ func TestGetPaginatedProposalList(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
 	if _, ok := result["proposal"]; !ok {
 		t.Fatalf("expected proposal key, got %v", result)
+	}
+}
+
+// --- Wire-format parity: parameters MUST be array, not dict ---
+//
+// java-tron's HTTP serialization flattens proto map<int64,int64> as a
+// repeated MapEntry, producing `[{"key":N,"value":V},...]`. SDKs that
+// target java-tron break when gtron emits a dict instead.
+// Cross-impl divergence ref: docs/dev/cross-impl-divergences-2026-05-02.md.
+
+func TestProposalParametersArrayShape_GetProposalById(t *testing.T) {
+	stub := &stubBackend{
+		proposals: []*tronapi.ProposalInfo{{
+			ProposalID:      7,
+			ProposerAddress: "41" + strings.Repeat("ab", 20),
+			Parameters: []tronapi.ProposalParameterEntry{
+				{Key: 19, Value: 259200000},
+				{Key: 5, Value: 1},
+			},
+			ExpirationTime: 1234,
+			CreateTime:     1000,
+			State:          "PENDING",
+		}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getproposalbyid", `{"id":7}`)
+	params, ok := result["parameters"].([]interface{})
+	if !ok {
+		t.Fatalf("parameters must be a JSON array (java-tron parity), got %T: %v",
+			result["parameters"], result["parameters"])
+	}
+	if len(params) != 2 {
+		t.Fatalf("expected 2 parameter entries, got %d: %v", len(params), params)
+	}
+	first, ok := params[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("parameter entry must be an object, got %T: %v", params[0], params[0])
+	}
+	// Field names must match java-tron exactly (lowercase "key"/"value").
+	if _, ok := first["key"]; !ok {
+		t.Fatalf("parameter entry missing \"key\": %v", first)
+	}
+	if _, ok := first["value"]; !ok {
+		t.Fatalf("parameter entry missing \"value\": %v", first)
+	}
+	// Spot-check first entry's encoded values — the stub feeds entries
+	// in the order {19, 5}, so first should be {key:19,value:259200000}.
+	// (TronBackend sorts by key for determinism — covered separately.)
+	if first["key"].(float64) != 19 || first["value"].(float64) != 259200000 {
+		t.Fatalf("expected {key:19,value:259200000}, got %v", first)
+	}
+}
+
+func TestProposalParametersArrayShape_ListProposals(t *testing.T) {
+	stub := &stubBackend{
+		proposals: []*tronapi.ProposalInfo{{
+			ProposalID: 1,
+			Parameters: []tronapi.ProposalParameterEntry{
+				{Key: 19, Value: 259200000},
+			},
+			State: "PENDING",
+		}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/listproposals", `{}`)
+	proposals, ok := result["proposals"].([]interface{})
+	if !ok || len(proposals) != 1 {
+		t.Fatalf("expected proposals array of length 1, got %v", result["proposals"])
+	}
+	first := proposals[0].(map[string]interface{})
+	params, ok := first["parameters"].([]interface{})
+	if !ok {
+		t.Fatalf("parameters must be a JSON array, got %T: %v", first["parameters"], first["parameters"])
+	}
+	if len(params) != 1 {
+		t.Fatalf("expected 1 parameter entry, got %d", len(params))
+	}
+	entry := params[0].(map[string]interface{})
+	if entry["key"].(float64) != 19 || entry["value"].(float64) != 259200000 {
+		t.Fatalf("expected {key:19,value:259200000}, got %v", entry)
+	}
+}
+
+func TestProposalParametersArrayShape_PaginatedList(t *testing.T) {
+	stub := &stubBackend{
+		proposals: []*tronapi.ProposalInfo{{
+			ProposalID: 1,
+			Parameters: []tronapi.ProposalParameterEntry{
+				{Key: 11, Value: 100},
+				{Key: 9, Value: 200},
+			},
+			State: "PENDING",
+		}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getpaginatedproposallist", `{"offset":0,"limit":10}`)
+	proposals, ok := result["proposal"].([]interface{})
+	if !ok || len(proposals) != 1 {
+		t.Fatalf("expected proposal array of length 1, got %v", result["proposal"])
+	}
+	first := proposals[0].(map[string]interface{})
+	params, ok := first["parameters"].([]interface{})
+	if !ok {
+		t.Fatalf("parameters must be a JSON array, got %T: %v", first["parameters"], first["parameters"])
+	}
+	if len(params) != 2 {
+		t.Fatalf("expected 2 parameter entries, got %d: %v", len(params), params)
+	}
+	for _, e := range params {
+		entry := e.(map[string]interface{})
+		if _, ok := entry["key"]; !ok {
+			t.Fatalf("parameter entry missing \"key\": %v", entry)
+		}
+		if _, ok := entry["value"]; !ok {
+			t.Fatalf("parameter entry missing \"value\": %v", entry)
+		}
+	}
+}
+
+func TestProposalParametersArrayShape_EmptyMapStillArray(t *testing.T) {
+	// A proposal with no parameters must still emit `"parameters": []`,
+	// not `null` or a missing key — keep the field type stable for SDKs.
+	stub := &stubBackend{
+		proposals: []*tronapi.ProposalInfo{{
+			ProposalID: 42,
+			Parameters: []tronapi.ProposalParameterEntry{},
+			State:      "PENDING",
+		}},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getproposalbyid", `{"id":42}`)
+	params, ok := result["parameters"].([]interface{})
+	if !ok {
+		t.Fatalf("parameters must be a JSON array even when empty, got %T: %v",
+			result["parameters"], result["parameters"])
+	}
+	if len(params) != 0 {
+		t.Fatalf("expected empty array, got %v", params)
 	}
 }
 func TestMetrics(t *testing.T) {

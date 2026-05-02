@@ -611,10 +611,8 @@ func (s *Server) ListProposals(_ context.Context, _ *apipb.EmptyMessage) (*apipb
 			approvals[j] = common.FromHex(a)
 		}
 		params := make(map[int64]int64, len(p.Parameters))
-		for k, v := range p.Parameters {
-			var key int64
-			fmt.Sscanf(k, "%d", &key)
-			params[key] = v
+		for _, e := range p.Parameters {
+			params[e.Key] = e.Value
 		}
 		result[i] = &corepb.Proposal{
 			ProposalId:      p.ProposalID,
@@ -1003,10 +1001,8 @@ func (s *Server) GetPaginatedProposalList(_ context.Context, in *apipb.Paginated
 			approvals[j] = common.FromHex(a)
 		}
 		params := make(map[int64]int64, len(p.Parameters))
-		for k, v := range p.Parameters {
-			var key int64
-			fmt.Sscanf(k, "%d", &key)
-			params[key] = v
+		for _, e := range p.Parameters {
+			params[e.Key] = e.Value
 		}
 		result[i] = &corepb.Proposal{
 			ProposalId:      p.ProposalID,
