@@ -307,8 +307,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// to compute slot offset against the chain head as it stood pre-insert
 	// (matches java-tron StatisticManager.applyBlock semantics).
 	previousHeadTimestamp := current.Timestamp()
-	prevIsMaintenance := dynProps.NextMaintenanceTime() > 0 &&
-		previousHeadTimestamp >= dynProps.NextMaintenanceTime()
+	// state_flag is 1 iff the previous applied block triggered maintenance.
+	// java-tron's `lastHeadBlockIsMaintenance` reads this flag; recomputing
+	// it from `previousHeadTimestamp >= NextMaintenanceTime` would always
+	// be false (NextMaintenanceTime was just advanced past the prev block)
+	// and miss the +MAINTENANCE_SKIP_SLOTS adjustment, over-counting
+	// totalMissed once per maintenance cycle.
+	prevIsMaintenance := dynProps.StateFlag() == 1
 
 	// Process block (execute transactions, pay reward — does not commit).
 	// The buffer is passed so per-block actuator-side rawdb-direct writes
@@ -347,6 +352,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		bc.SetActiveWitnesses(newActive)
 		wasMaintenanceBlock = true
 		maintNewWitnesses = newActive
+	}
+	// Record whether this block triggered maintenance; the next block will
+	// read this via `dynProps.StateFlag()` to decide whether to add the
+	// MAINTENANCE_SKIP_SLOTS offset when computing missed slots.
+	if wasMaintenanceBlock {
+		dynProps.SetStateFlag(1)
+	} else {
+		dynProps.SetStateFlag(0)
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).

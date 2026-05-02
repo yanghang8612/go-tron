@@ -72,6 +72,12 @@ var defaultProps = map[string]int64{
 	"latest_block_header_number":                0,
 	"latest_solidified_block_num":               0,
 	"next_maintenance_time":                     0,
+	// state_flag = 1 iff the most recently applied block triggered a
+	// maintenance pass. java-tron `DynamicPropertiesStore` stateFlag, written
+	// by `MaintenanceManager.applyBlock` and read by
+	// `DposSlot.getTime`/`StatisticManager.applyBlock` to know whether to add
+	// `MAINTENANCE_SKIP_SLOTS` when computing the slot of the current block.
+	"state_flag":                                0,
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            5000,
 	"next_proposal_id":                          0,
@@ -293,6 +299,17 @@ func (dp *DynamicProperties) MaintenanceTimeInterval() int64 {
 
 func (dp *DynamicProperties) NextMaintenanceTime() int64 {
 	return dp.props["next_maintenance_time"]
+}
+
+// StateFlag is 1 iff the most recently applied block triggered a maintenance
+// pass; the next block reads it to know whether to add MAINTENANCE_SKIP_SLOTS
+// when computing slot offsets (mirrors java-tron `lastHeadBlockIsMaintenance`).
+func (dp *DynamicProperties) StateFlag() int64 {
+	return dp.props["state_flag"]
+}
+
+func (dp *DynamicProperties) SetStateFlag(v int64) {
+	dp.Set("state_flag", v)
 }
 
 func (dp *DynamicProperties) LatestBlockHeaderNumber() int64 {
