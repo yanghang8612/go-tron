@@ -315,6 +315,101 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	}
 }
 
+// TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary is the
+// regression test for D-2.b — under the original cross-impl fixture
+// (CD=OFF) gtron's distributeLegacyStandby fired 37 times in 11 cycles
+// (~3.4× over). Even with CD=ON masking the allowance leak, the fix
+// must guarantee that crossing a single maintenance boundary triggers
+// DoMaintenance exactly once, regardless of how many blocks fall after
+// the boundary inside the same maintenance interval.
+func TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testCoreAddr(10)
+	const interval = int64(21_600_000) // 6h, java-tron default
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 100_000_000},
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://w1"},
+		},
+		DynamicProperties: map[string]int64{
+			"maintenance_time_interval": interval,
+			"next_maintenance_time":     interval, // first boundary at t=interval
+		},
+	}
+
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var fires int
+	bc.AddMaintenanceHook(func(*types.Block, []tcommon.Address) {
+		fires++
+	})
+
+	// Three blocks all *after* the first boundary but inside the same
+	// interval. Only the first should trigger maintenance; the next two
+	// must observe the advanced next_maintenance_time and skip.
+	timestamps := []int64{interval, interval + 3000, interval + 6000}
+	for _, ts := range timestamps {
+		block := buildTestBlock(bc, witnessAddr, ts)
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("InsertBlock(ts=%d): %v", ts, err)
+		}
+	}
+
+	if fires != 1 {
+		t.Fatalf("DoMaintenance fires across one boundary: got %d, want 1", fires)
+	}
+
+	// next_maintenance_time must advance to exactly 2*interval after one
+	// fire (round=0 in calcNextMaintenanceTime, since blockTime − currentMaint
+	// < interval).
+	dynProps := state.LoadDynamicProperties(diskdb)
+	if got, want := dynProps.NextMaintenanceTime(), 2*interval; got != want {
+		t.Fatalf("next_maintenance_time after fire: got %d, want %d", got, want)
+	}
+
+	// Now feed a block that crosses the *second* boundary — exactly one
+	// more fire. Confirms multi-boundary cadence.
+	block := buildTestBlock(bc, witnessAddr, 2*interval+1000)
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatal(err)
+	}
+	if fires != 2 {
+		t.Fatalf("DoMaintenance fires across two boundaries: got %d, want 2", fires)
+	}
+
+	// Long stress: feed blocks every 3s for several maintenance intervals.
+	// Mirrors the cross-impl scenario where many blocks fall between
+	// maintenance boundaries. Trigger must fire exactly once per boundary.
+	startBlockNum := bc.CurrentBlock().Number()
+	startTs := bc.CurrentBlock().Timestamp()
+	const blockTickMs = int64(3000)
+	const cycles = int64(5) // five maintenance cycles, ~36k blocks at 3s/block
+	want := int(2 + cycles)
+	for ts := startTs + blockTickMs; ts <= startTs+cycles*interval+blockTickMs; ts += blockTickMs {
+		b := buildTestBlock(bc, witnessAddr, ts)
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("InsertBlock at ts=%d: %v", ts, err)
+		}
+	}
+	if fires != want {
+		t.Fatalf("DoMaintenance fires across stress run: got %d, want %d (blocks=%d→%d)",
+			fires, want, startBlockNum+1, bc.CurrentBlock().Number())
+	}
+}
+
 func TestSolidifiedBlockSingleSR(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
