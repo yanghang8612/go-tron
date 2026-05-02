@@ -120,15 +120,84 @@ Affected endpoints (likely all four):
 - gRPC `wallet.Wallet/ListProposals`
 - gRPC `wallet.Wallet/GetProposalById`
 
-## Status (2026-05-02 — end of day)
+## Status (2026-05-02 — closed)
 
 | # | status | fix commit |
 |---|---|---|
-| D-1 SR balance | **closed (with 2,400 sun residual)** — root cause was energy fee never debited from caller balance. New `actuator/PayEnergyBill` mirrors java-tron's `ReceiptCapsule.payEnergyBill`: drain stake-funded energy off `energy_usage`, multiply overage × `energy_fee`, SubBalance, route to `transaction_fee_pool` / `burn_trx_amount` / blackhole. Wired in `ApplyTransaction` post-Execute with snapshot rollback. Baseline gap closed from 16,915,000 sun → 2,400 sun (99.985%). The 2,400-sun residual is stable (doesn't grow with new flows) and is most likely the deferred `consume_user_resource_percent` origin-stake split, only relevant for caller≠origin TRC-20 triggers. | `952a3b3` |
-| D-2 SR allowance | **closed** — fixture missed the `committee` block from java-tron's config.conf, so gtron started with `change_delegation=0` while java-tron had it on. Adding all committee flags to the fixture made per-block allowance accumulator byte-equal. Allowance verified at 776,880,000,000 sun on both nodes at H=80925, and 821,587,200,000 sun at H=85582 after re-test. | `52a78ad` |
-| D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal at 4 (then 5 on re-test) on both nodes. | `42c597f` |
+| D-1 SR balance | **closed** — energy fee path landed in two slices: (1) `952a3b3` introduced `actuator/PayEnergyBill` mirroring `ReceiptCapsule.payEnergyBill`, closing 99.985% of the 16,915,000-sun gap; (2) `de4cb47` fixed the residual by removing gtron's spurious `EnergyVeryLow=3` base on MLOAD/MSTORE/MSTORE8/CODECOPY/CALLDATACOPY/RETURNDATACOPY (java-tron charges memDelta+copy only, with a `SPECIAL_TIER=1` only after proposal #65). Final verification at H=87740: SR balance byte-equal at 98,999,998,950,874,000 sun. | `952a3b3` + `de4cb47` |
+| D-2 SR allowance | **closed** — fixture missed the `committee` block from java-tron's config.conf, so gtron started with `change_delegation=0` while java-tron had it on. Adding all committee flags to the fixture made per-block allowance accumulator byte-equal. Allowance verified at 842,304,000,000 sun on both nodes at H=87740. | `52a78ad` |
+| D-2.b extra maintenance fires | **closed (false positive)** — regression test in `9bf4a7f` proves trigger fires exactly once per boundary. Original "37 fires" was an attribution error: under CD=OFF on a 1-SR chain, allowance also accrues from `payBlockReward` (per-block), inflating the inferred fire count. Trigger code itself matches java-tron `MaintenanceManager.doMaintenance` byte-for-byte. | `9bf4a7f` (test only) |
+| D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal on both nodes across multiple re-tests. | `42c597f` |
 | listproposals.parameters wire format | **closed** — switched HTTP-side `ProposalInfo.Parameters` from `map[string]int64` to `[]ProposalParameterEntry` (sorted by key). gRPC unaffected (returns `corepb.Proposal` directly). | `7b202d4` |
 
+## Closed: D-1.b 2,400-sun balance residual
+
+Root cause: gtron's `vm/instructions.go` charged `EnergyVeryLow=3` as a
+base tier on MLOAD/MSTORE/MSTORE8/CODECOPY/CALLDATACOPY/RETURNDATACOPY;
+java-tron charges only memDelta + copy on these ops, with a
+`SPECIAL_TIER=1` added to MLOAD/MSTORE/MSTORE8 only after proposal #65
+(`allow_higher_limit_for_max_cpu_time_of_one_tx`). Probe walked all 87,032
+blocks, found 6 historical TVM txs (all CreateSmartContract from Zion),
+each with init code containing MSTORE+CODECOPY → +6 energy/tx × 4 larger
+txs × 100 sun/energy = exactly 2,400 sun over-charge.
+
+Fix: `de4cb47`. Removed the base from the 6 ops; added `SPECIAL_TIER=1`
+behind proposal #65; new test `vm/memory_ops_energy_test.go`.
+
+H1 (origin-stake split) was correctly diagnosed as a real follow-up but
+NOT the source of the residual on this chain — all 6 historical TVM
+txs have caller==origin. Implementing it remains a real future task
+for chains that exercise TRC-20-style triggers; flagged below.
+
+## Genuinely open follow-ups (not exercised on this chain)
+
+These are real cross-impl divergences for code paths the cross-impl
+chain doesn't currently exercise. Will resurface on richer chains.
+
+### `consume_user_resource_percent` origin-stake split (caller ≠ origin)
+
+`actuator/energy_bill.go::PayEnergyBill` only handles caller-pays. Java
+has a 3-arg overload (`ReceiptCapsule.java:201-239`) that splits the
+bill between caller and origin contract owner per
+`consume_user_resource_percent`. All 6 TVM txs on the cross-impl chain
+are CreateSmartContract from Zion, so this never fires here. Will fire
+on any TRC-20 trigger from a non-origin caller. Mainnet-relevant.
+
+### EXTCODECOPY pre-existing under-charge
+
+D-1.b agent flagged: gtron charges `EnergyCopy*words + memDelta`; java
+charges `EXT_CODE_COPY=20 + memDelta + 3*words`. Not exercised by the
+cross-impl chain.
+
+### Dynamic-energy penalty on memory ops
+
+D-1.b agent flagged: gtron's interpreter applies the dynamic-energy
+factor only to `operation.energyCost` (static field). Memory ops have
+static cost 0 and charge dynamically inside the op function, so the
+factor never multiplies the memory portion. java applies the factor to
+the whole `op.getEnergyCost(program)` return. Pre-existing divergence;
+not exercised because no high-usage contract on this chain.
+
+### Producer-side `payBlockReward` double-write
+
+D-2.b agent flagged: `core/block_builder.go:87,100` calls
+`payBlockReward(bc.db, ...)` and `applyRewardMaintenance(bc.db, ...)`
+directly on `bc.db`; the subsequent `InsertBlock → applyBlock` re-runs
+the same writes through `bc.buffer`. When `change_delegation=1` and the
+local node is producing, `cycleReward[N][witness]` is written twice
+per locally-produced block. Does NOT affect the cross-impl follower
+test (gtron is sync-only there) and does NOT affect M0″ Phase 2
+conformance replay (no BuildBlock invocation). Affects local witness
+production only. File separately.
+
+### V1 freeze with empty receiver_address
+
+Cross-impl test Flow 4 fails: java-tron rejects V1 FreezeBalance with
+empty `receiver_address` as "receiver account does not exist" when
+`allow_delegate_resource=1`. Likely a script bug (need to omit or
+explicitly set receiver=owner) rather than a cross-impl divergence.
+
+### (Old D-1.b briefing follows for reference; root cause now identified above)
 ## Follow-up D-1.b — 2,400-sun balance residual
 
 Symptom (re-test at H=85582):
