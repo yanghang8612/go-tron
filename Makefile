@@ -1,6 +1,6 @@
 .PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
         conformance-replay conformance-replay-exit-gate txsign system-test-flows \
-        system-test-cross
+        system-test-cross system-test-cross-flows
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -78,3 +78,10 @@ system-test-flows: gtron txsign
 # See docs/dev/p2p-interop-status.md for the verified-against setup.
 system-test-cross: gtron
 	@scripts/system_test_cross.sh
+
+# Cross-impl transaction-flow integration tests: drives 7+ contract types
+# end-to-end through the gtron <-> java-tron pair and asserts the post-tx
+# state on both nodes is byte-equal. java-tron must be running with the
+# fixture genesis at /Users/asuka/Works/Tests/TVM/run/config.conf.
+system-test-cross-flows: gtron txsign
+	@scripts/system_test_cross_flows.sh
