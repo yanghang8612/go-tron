@@ -1245,6 +1245,20 @@ func (dp *DynamicProperties) SetTransactionFeePool(v int64) {
 	dp.Set("transaction_fee_pool", v)
 }
 
+// AddTransactionFeePool accumulates `amount` (in SUN) into the per-block
+// transaction fee pool. Mirrors java-tron's
+// DynamicPropertiesStore.addTransactionFeePool, which is invoked from
+// ReceiptCapsule.payEnergyBill (and BandwidthProcessor.consume*) whenever
+// `supportTransactionFeePool` is active and the contract result is not
+// OUT_OF_TIME. The pool is drained back to the witness's allowance once
+// per block in `Manager.payReward` (see core.payBlockReward TODO).
+func (dp *DynamicProperties) AddTransactionFeePool(amount int64) {
+	if amount <= 0 {
+		return
+	}
+	dp.Set("transaction_fee_pool", dp.props["transaction_fee_pool"]+amount)
+}
+
 func (dp *DynamicProperties) TotalTransactionCost() int64 {
 	return dp.props["total_transaction_cost"]
 }

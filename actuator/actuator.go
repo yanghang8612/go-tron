@@ -37,8 +37,30 @@ type Context struct {
 	ActiveWitnesses []common.Address // active witness set for governance checks
 }
 
+// Result captures the outcome of an actuator's Execute() call. The energy
+// fields mirror java-tron's `Protocol.ResourceReceipt` semantics so that
+// `core/state_processor.buildTransactionInfo` can map them onto proto
+// fields without further translation:
+//
+//   - EnergyUsageTotal: total VM energy consumed by the call (proto field 4).
+//     Set by VMActuator.executeCreate/executeTrigger.
+//   - EnergyUsed:       fraction of EnergyUsageTotal that was paid from the
+//                       caller's frozen-energy stake (proto field 1). 0 if
+//                       the entire bill was paid from balance. Set by
+//                       PayEnergyBill.
+//   - OriginEnergyUsage: fraction paid from the contract origin's frozen
+//                       energy under the consume_user_resource_percent split
+//                       (proto field 3). Currently always 0 (see
+//                       PayEnergyBill TODO).
+//   - EnergyFee:        balance-paid portion of the energy bill in SUN
+//                       (proto field 2). Set by PayEnergyBill.
+//   - Fee:              total transaction fee in SUN. Sum of EnergyFee plus
+//                       any actuator-specific fees (asset issue, exchange
+//                       create, etc.). Bandwidth NetFee is *not* included
+//                       here — it's added in buildTransactionInfo.
 type Result struct {
 	Fee               int64
+	EnergyUsageTotal  int64
 	EnergyUsed        int64
 	EnergyFee         int64
 	OriginEnergyUsage int64

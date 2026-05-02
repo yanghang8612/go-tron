@@ -96,6 +96,11 @@ func contractRetFromError(err error) int32 {
 	}
 }
 
+// executeCreate runs CreateSmartContract. It populates result.EnergyUsageTotal
+// with the full VM energy consumed; the on-chain balance debit and the
+// EnergyUsed/EnergyFee/Fee splits are deferred to PayEnergyBill, which the
+// state processor calls after Execute returns. This mirrors java-tron's
+// VMActuator -> TransactionTrace.pay -> ReceiptCapsule.payEnergyBill flow.
 func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	csc, err := a.getCreateContract(ctx)
 	if err != nil {
@@ -119,14 +124,11 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	ret, contractAddr, energyLeft, vmErr := evm.Create(owner, bytecode, energyLimit, callValue)
 
 	energyUsed := energyLimit - energyLeft
-	fee := int64(energyUsed) * energyFee
 
 	result := &Result{
-		Fee:            fee,
-		EnergyUsed:     int64(energyUsed),
-		EnergyFee:      fee,
-		ContractResult: ret,
-		Logs:           evm.Logs,
+		EnergyUsageTotal: int64(energyUsed),
+		ContractResult:   ret,
+		Logs:             evm.Logs,
 	}
 
 	if vmErr != nil {
@@ -144,6 +146,8 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	return result, nil
 }
 
+// executeTrigger runs TriggerSmartContract. See executeCreate for the
+// energy-bill deferral note.
 func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	tsc, err := a.getTriggerContract(ctx)
 	if err != nil {
@@ -168,14 +172,11 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, energyLimit, callValue)
 
 	energyUsed := energyLimit - energyLeft
-	fee := int64(energyUsed) * energyFee
 
 	result := &Result{
-		Fee:            fee,
-		EnergyUsed:     int64(energyUsed),
-		EnergyFee:      fee,
-		ContractResult: ret,
-		Logs:           evm.Logs,
+		EnergyUsageTotal: int64(energyUsed),
+		ContractResult:   ret,
+		Logs:             evm.Logs,
 	}
 
 	if vmErr != nil {

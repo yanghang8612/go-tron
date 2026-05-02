@@ -126,10 +126,12 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if result.Fee <= 0 {
-		t.Fatal("expected non-zero fee")
+	// VMActuator.Execute populates EnergyUsageTotal; the SUN-side Fee/
+	// EnergyFee split is filled in by PayEnergyBill in state_processor.
+	if result.EnergyUsageTotal <= 0 {
+		t.Fatal("expected non-zero EnergyUsageTotal")
 	}
-	t.Logf("Create fee: %d sun", result.Fee)
+	t.Logf("Create energy total: %d", result.EnergyUsageTotal)
 }
 
 func TestVMActuatorTriggerValidate(t *testing.T) {
@@ -196,10 +198,10 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if result.Fee <= 0 {
-		t.Fatal("expected non-zero fee")
+	if result.EnergyUsageTotal <= 0 {
+		t.Fatal("expected non-zero EnergyUsageTotal")
 	}
-	t.Logf("Trigger fee: %d sun", result.Fee)
+	t.Logf("Trigger energy total: %d", result.EnergyUsageTotal)
 }
 
 func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
@@ -234,11 +236,17 @@ func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if result.EnergyUsed <= 0 {
-		t.Fatal("expected non-zero EnergyUsed")
+	// EnergyUsed/EnergyFee are zero until PayEnergyBill runs;
+	// EnergyUsageTotal carries the full VM energy consumption out of
+	// Execute. See actuator.Result godoc.
+	if result.EnergyUsageTotal <= 0 {
+		t.Fatal("expected non-zero EnergyUsageTotal")
 	}
-	if result.EnergyFee <= 0 {
-		t.Fatal("expected non-zero EnergyFee")
+	if result.EnergyUsed != 0 {
+		t.Fatalf("expected EnergyUsed=0 pre-PayEnergyBill, got %d", result.EnergyUsed)
+	}
+	if result.EnergyFee != 0 {
+		t.Fatalf("expected EnergyFee=0 pre-PayEnergyBill, got %d", result.EnergyFee)
 	}
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1 (SUCCESS), got %d", result.ContractRet)
@@ -246,8 +254,8 @@ func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 	if len(result.ContractAddress) == 0 {
 		t.Fatal("expected non-empty ContractAddress")
 	}
-	t.Logf("EnergyUsed=%d, EnergyFee=%d, ContractRet=%d, ContractAddr=%x",
-		result.EnergyUsed, result.EnergyFee, result.ContractRet, result.ContractAddress)
+	t.Logf("EnergyUsageTotal=%d, ContractRet=%d, ContractAddr=%x",
+		result.EnergyUsageTotal, result.ContractRet, result.ContractAddress)
 }
 
 func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
@@ -275,8 +283,8 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if result.EnergyUsed <= 0 {
-		t.Fatal("expected non-zero EnergyUsed")
+	if result.EnergyUsageTotal <= 0 {
+		t.Fatal("expected non-zero EnergyUsageTotal")
 	}
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1 (SUCCESS), got %d", result.ContractRet)
@@ -287,8 +295,8 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	if len(result.ContractResult) != 32 {
 		t.Fatalf("expected 32 bytes contract result, got %d", len(result.ContractResult))
 	}
-	t.Logf("EnergyUsed=%d, Logs=%d, ContractResult=%x",
-		result.EnergyUsed, len(result.Logs), result.ContractResult)
+	t.Logf("EnergyUsageTotal=%d, Logs=%d, ContractResult=%x",
+		result.EnergyUsageTotal, len(result.Logs), result.ContractResult)
 }
 
 func TestCreateActuatorVMTypes(t *testing.T) {

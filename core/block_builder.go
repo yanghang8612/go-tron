@@ -78,8 +78,8 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 			continue // skip failing transactions
 		}
 		appliedTxProtos = append(appliedTxProtos, tx.Proto())
-		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsed > 0 {
-			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsed)
+		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsageTotal > 0 {
+			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsageTotal)
 		}
 	}
 

@@ -80,6 +80,21 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("execute: %w", err)
 	}
 
+	// Settle the energy bill after Execute returns, mirroring java-tron's
+	// VMActuator -> TransactionTrace.pay -> ReceiptCapsule.payEnergyBill
+	// chain. For non-TVM actuators result.EnergyUsageTotal is zero and
+	// PayEnergyBill is a no-op; for VMActuator it does the stake/balance
+	// split, debits the caller, and routes the bill (transactionFeePool /
+	// burn_trx_amount / blackhole). Failures here are unwound by
+	// reverting to the pre-Execute snapshot — keeps state consistent if
+	// the caller doesn't have enough TRX to cover the overage. Mirrors
+	// java's BalanceInsufficientException re-throw at line 299 of
+	// ReceiptCapsule.java.
+	if err := actuator.PayEnergyBill(ctx, result); err != nil {
+		statedb.RevertToSnapshot(snap)
+		return nil, fmt.Errorf("pay energy bill: %w", err)
+	}
+
 	result.NetUsage = bwResult.NetUsage
 	result.NetFee = bwResult.NetFee
 
@@ -90,6 +105,11 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64) *corepb.TransactionInfo {
 	txID := tx.Hash()
 
+	// Receipt fields mirror java-tron `Protocol.ResourceReceipt`: EnergyUsage
+	// is the stake-funded portion only (proto field 1), EnergyUsageTotal is
+	// the full VM energy spent (proto field 4) and EnergyFee is the
+	// balance-paid bill in SUN (proto field 2). The split between
+	// EnergyUsed/EnergyFee is set by actuator.PayEnergyBill.
 	info := &corepb.TransactionInfo{
 		Id:             txID[:],
 		Fee:            result.Fee + result.NetFee,
@@ -99,7 +119,7 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			EnergyUsage:       result.EnergyUsed,
 			EnergyFee:         result.EnergyFee,
 			OriginEnergyUsage: result.OriginEnergyUsage,
-			EnergyUsageTotal:  result.EnergyUsed + result.OriginEnergyUsage,
+			EnergyUsageTotal:  result.EnergyUsageTotal,
 			NetUsage:          result.NetUsage,
 			NetFee:            result.NetFee,
 			Result:            corepb.Transaction_ResultContractResult(result.ContractRet),
@@ -160,8 +180,8 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp())
 		txInfos = append(txInfos, info)
 
-		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsed > 0 {
-			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsed)
+		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsageTotal > 0 {
+			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsageTotal)
 		}
 	}
 
