@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 const defaultMaxPoolSize = 10000
@@ -14,6 +15,12 @@ var (
 	ErrPoolFull     = errors.New("transaction pool is full")
 	ErrAlreadyKnown = errors.New("transaction already in pool")
 	ErrNoContract   = errors.New("transaction has no contract")
+	// ErrExchangeRejected mirrors java-tron Manager.pushTransaction's
+	// unconditional reject for ExchangeTransactionContract introduced in
+	// PR #6507 (commit 45e3bf88ca, master VERSION_4_8_0_1). Wire-format
+	// error message matches java-tron so log-grep consumers see the same
+	// string from either implementation.
+	ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 )
 
 // TxPool holds pending transactions waiting to be included in a block.
@@ -35,6 +42,9 @@ func New() *TxPool {
 func (pool *TxPool) Add(tx *types.Transaction) error {
 	if tx.Contract() == nil {
 		return ErrNoContract
+	}
+	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract {
+		return ErrExchangeRejected
 	}
 
 	hash := tx.Hash()

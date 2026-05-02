@@ -1,14 +1,24 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+// ErrExchangeRejected is returned by ApplyTransaction when an
+// ExchangeTransactionContract reaches the block-apply path after the
+// VERSION_4_8_0_1 (block version 33) fork has activated. Mirrors java-tron
+// Manager.rejectExchangeTransaction (PR #6507, master commit 45e3bf88ca).
+// Same error string as core/txpool.ErrExchangeRejected so log-grep
+// consumers see one wire-format value across both paths.
+var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 
 // ApplyTransaction executes a single transaction against the given state.
 // Returns the full actuator Result including fee, energy, net, and contract details.
@@ -20,6 +30,16 @@ import (
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
 func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
+	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
+	// activates. Mirrors java-tron Manager.processBlock's per-tx
+	// rejectExchangeTransaction call (master 45e3bf88ca). Pre-fork blocks
+	// retain replay safety because PassVersion returns false until the
+	// version-bitmap quorum is met.
+	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
+		forks.PassVersion(db, 33, blockTime, dynProps.MaintenanceTimeInterval()) {
+		return nil, ErrExchangeRejected
+	}
+
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
 		return nil, fmt.Errorf("create actuator: %w", err)

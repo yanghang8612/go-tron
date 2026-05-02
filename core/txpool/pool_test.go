@@ -65,6 +65,38 @@ func TestTxPool_NoContractReject(t *testing.T) {
 	}
 }
 
+// TestTxPool_RejectsExchangeTransaction locks down master PR #6507's
+// unconditional mempool reject for ExchangeTransactionContract — independent
+// of fork state, since java-tron's pushTransaction has no version gate.
+func TestTxPool_RejectsExchangeTransaction(t *testing.T) {
+	pool := New()
+	var addr tcommon.Address
+	addr[0] = 0x41
+	addr[20] = 0x01
+	exchange := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: addr.Bytes(),
+		ExchangeId:   1,
+		TokenId:      []byte("_"),
+		Quant:        1,
+		Expected:     1,
+	}
+	param, err := anypb.New(exchange)
+	if err != nil {
+		t.Fatalf("anypb.New: %v", err)
+	}
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_ExchangeTransactionContract,
+				Parameter: param,
+			}},
+		},
+	})
+	if err := pool.Add(tx); err != ErrExchangeRejected {
+		t.Fatalf("expected ErrExchangeRejected, got %v", err)
+	}
+}
+
 func TestTxPool_Remove(t *testing.T) {
 	pool := New()
 	tx := makeTx(1, 100)

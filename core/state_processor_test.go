@@ -1,11 +1,14 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -190,6 +193,74 @@ func TestApplyTransaction_ReturnsResult(t *testing.T) {
 	}
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1, got %d", result.ContractRet)
+	}
+}
+
+// makeExchangeTransactionTx builds a syntactically valid
+// ExchangeTransactionContract transaction. Used by the v33 fork-gated
+// reject tests below.
+func makeExchangeTransactionTx(owner byte) *types.Transaction {
+	tc := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: testProcessorAddr(owner).Bytes(),
+		ExchangeId:   1,
+		TokenId:      []byte("_"),
+		Quant:        1,
+		Expected:     1,
+	}
+	param, _ := anypb.New(tc)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_ExchangeTransactionContract,
+				Parameter: param,
+			}},
+		},
+	})
+}
+
+// TestApplyTransaction_ExchangeRejectedAfterFork seeds the v33 fork bitmap
+// at quorum and asserts that an ExchangeTransactionContract is rejected at
+// the block-apply path with the master-aligned error string. Mirrors
+// java-tron Manager.rejectExchangeTransaction (PR #6507).
+func TestApplyTransaction_ExchangeRejectedAfterFork(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties() // maintenance_time_interval defaults to 21_600_000
+
+	db := ethrawdb.NewMemoryDatabase()
+	// Seed v33 votes at quorum: 70% of 27 witnesses = ceil(18.9) = 19.
+	stats := make([]byte, 27)
+	for i := 0; i < 19; i++ {
+		stats[i] = forks.VoteUpgrade
+	}
+	rawdb.WriteForkStats(db, 33, stats)
+
+	tx := makeExchangeTransactionTx(1)
+	// blockTime well past the v33 HardForkTime ceiling.
+	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1, db, nil, false)
+	if !errors.Is(err, ErrExchangeRejected) {
+		t.Fatalf("expected ErrExchangeRejected, got %v", err)
+	}
+}
+
+// TestApplyTransaction_ExchangePassesPreFork asserts that with no v33
+// votes, the early reject does not fire — preserving replay safety for
+// historical pre-fork blocks. Whether the actuator itself succeeds is
+// unrelated to this gate; the test only locks in that the early-return
+// path is gated.
+func TestApplyTransaction_ExchangePassesPreFork(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	db := ethrawdb.NewMemoryDatabase()
+	// No fork stats written → PassVersion returns false.
+
+	tx := makeExchangeTransactionTx(1)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1, db, nil, false)
+	// The actuator can fail later for unrelated reasons (no exchange
+	// state seeded); the only thing we care about here is that the
+	// failure mode is NOT the v33 early reject.
+	if errors.Is(err, ErrExchangeRejected) {
+		t.Fatalf("pre-fork exchange tx must not hit the v33 early reject; got %v", err)
 	}
 }
 

@@ -82,39 +82,7 @@ func (fc *ForkController) Pass(version int32, latestBlockTime, maintenanceInterv
 	fc.mu.RLock()
 	stats := rawdb.ReadForkStats(fc.db, version)
 	fc.mu.RUnlock()
-	if len(stats) == 0 {
-		return false
-	}
-
-	if version <= Version4_0 {
-		// Legacy: every slot must have voted upgrade. Matches java-tron's
-		// ForkController.check(). ENERGY_LIMIT (version 5) uses a block-number
-		// gate in java-tron; go-tron doesn't implement that legacy branch.
-		for _, b := range stats {
-			if b != VoteUpgrade {
-				return false
-			}
-		}
-		return true
-	}
-
-	if maintenanceIntervalMs <= 0 {
-		return false
-	}
-	// Ceil-align HardForkTime to the next maintenance boundary.
-	alignedHardForkTime := ((vp.HardForkTime-1)/maintenanceIntervalMs + 1) * maintenanceIntervalMs
-	if latestBlockTime < alignedHardForkTime {
-		return false
-	}
-
-	upvotes := 0
-	for _, b := range stats {
-		if b == VoteUpgrade {
-			upvotes++
-		}
-	}
-	required := int(math.Ceil(float64(vp.HardForkRate) * float64(len(stats)) / 100.0))
-	return upvotes >= required
+	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
 }
 
 // IsActive answers the "feature is on" question for a governance AllowFlag.
@@ -170,18 +138,26 @@ func (fc *ForkController) Reset(latestBlockTime, maintenanceIntervalMs int64, wi
 }
 
 // passLocked is the mutex-free core of Pass for use from already-locked
-// contexts (Reset). Duplication over Pass is intentional — it avoids the
-// correctness hazard of sync.RWMutex upgrade.
+// contexts (Reset).
 func (fc *ForkController) passLocked(version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
 	vp, ok := lookupVersion(version)
 	if !ok {
 		return false
 	}
 	stats := rawdb.ReadForkStats(fc.db, version)
+	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
+}
+
+// passFromStats is the pure activation check shared by ForkController.Pass,
+// passLocked, and the stateless PassVersion helper.
+func passFromStats(stats []byte, vp VersionParam, latestBlockTime, maintenanceIntervalMs int64) bool {
 	if len(stats) == 0 {
 		return false
 	}
-	if version <= Version4_0 {
+	if vp.Value <= Version4_0 {
+		// Legacy: every slot must have voted upgrade. Matches java-tron's
+		// ForkController.check(). ENERGY_LIMIT (version 5) uses a block-number
+		// gate in java-tron; go-tron doesn't implement that legacy branch.
 		for _, b := range stats {
 			if b != VoteUpgrade {
 				return false
@@ -192,6 +168,7 @@ func (fc *ForkController) passLocked(version int32, latestBlockTime, maintenance
 	if maintenanceIntervalMs <= 0 {
 		return false
 	}
+	// Ceil-align HardForkTime to the next maintenance boundary.
 	alignedHardForkTime := ((vp.HardForkTime-1)/maintenanceIntervalMs + 1) * maintenanceIntervalMs
 	if latestBlockTime < alignedHardForkTime {
 		return false
