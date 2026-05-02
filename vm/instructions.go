@@ -322,7 +322,9 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	memOffset, dataOffset, length := stack.pop(), stack.pop(), stack.pop()
 	size := length.Uint64()
 	words := toWordSize(size)
-	cost := EnergyVeryLow + EnergyCopy*words
+	// java-tron `EnergyCost.getCallDataCopyCost` charges only memDelta + copy
+	// energy — there is no per-op base tier. Mirror that exactly.
+	cost := EnergyCopy * words
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
@@ -345,7 +347,9 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	memOffset, codeOffset, length := stack.pop(), stack.pop(), stack.pop()
 	size := length.Uint64()
 	words := toWordSize(size)
-	cost := EnergyVeryLow + EnergyCopy*words
+	// java-tron `EnergyCost.getCodeCopyCost` charges only memDelta + copy
+	// energy — no per-op base tier. Mirror that exactly.
+	cost := EnergyCopy * words
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
@@ -399,7 +403,9 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 		return nil, ErrReturnDataOutOfBounds
 	}
 	words := toWordSize(size)
-	cost := EnergyVeryLow + EnergyCopy*words
+	// java-tron `EnergyCost.getReturnDataCopyCost` charges only memDelta +
+	// copy energy — no per-op base tier. Mirror that exactly.
+	cost := EnergyCopy * words
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
@@ -492,7 +498,14 @@ func opPop(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Mem
 func opMload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	offset := stack.peek()
 	off := offset.Uint64()
-	cost := EnergyVeryLow
+	// java-tron `EnergyCost.getMloadCost` charges only memDelta by default.
+	// When proposal #65 (`allow_higher_limit_for_max_cpu_time_of_one_tx`) is
+	// active, `OperationRegistry.adjustMemOperations` rebases MLOAD to
+	// `SPECIAL_TIER (1) + memDelta` (see EnergyCost.java:170-172).
+	var cost uint64
+	if interpreter.tvmConfig.HigherLimitForMaxCpuTimeOfOneTx {
+		cost = EnergySpecial
+	}
 	if mcost := memoryExpansionCost(memory, off, 32); mcost > 0 {
 		cost += mcost
 	}
@@ -509,7 +522,11 @@ func opMload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 func opMstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	offset, val := stack.pop(), stack.pop()
 	off := offset.Uint64()
-	cost := EnergyVeryLow
+	// See opMload for the proposal-#65 base-tier note.
+	var cost uint64
+	if interpreter.tvmConfig.HigherLimitForMaxCpuTimeOfOneTx {
+		cost = EnergySpecial
+	}
 	if mcost := memoryExpansionCost(memory, off, 32); mcost > 0 {
 		cost += mcost
 	}
@@ -524,7 +541,11 @@ func opMstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 func opMstore8(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	offset, val := stack.pop(), stack.pop()
 	off := offset.Uint64()
-	cost := EnergyVeryLow
+	// See opMload for the proposal-#65 base-tier note.
+	var cost uint64
+	if interpreter.tvmConfig.HigherLimitForMaxCpuTimeOfOneTx {
+		cost = EnergySpecial
+	}
 	if mcost := memoryExpansionCost(memory, off, 1); mcost > 0 {
 		cost += mcost
 	}

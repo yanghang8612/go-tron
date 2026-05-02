@@ -21,6 +21,12 @@ type TVMConfig struct {
 	DynamicEnergy       bool // allow_dynamic_energy
 	Blob                bool // allow_tvm_blob
 	Cancun              bool // allow_tvm_cancun: TLOAD, TSTORE, MCOPY
+	// HigherLimitForMaxCpuTimeOfOneTx mirrors java-tron proposal #65
+	// (`allow_higher_limit_for_max_cpu_time_of_one_tx`). When active,
+	// java-tron's `OperationRegistry.adjustMemOperations` rebases
+	// MLOAD/MSTORE/MSTORE8 from the default `0 + memDelta` to
+	// `SPECIAL_TIER (1) + memDelta` (see EnergyCost.java:170-196).
+	HigherLimitForMaxCpuTimeOfOneTx bool
 	// NewResourceModelPower mirrors java-tron's joint check
 	// `supportUnfreezeDelay() && supportAllowNewResourceModel()` used in the
 	// TotalVoteCount precompile to select getAllTronPower() vs getTronPower().
@@ -31,6 +37,12 @@ type TVMConfig struct {
 func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 	isActive := func(flag forks.AllowFlag) bool {
 		return forks.IsActive(flag, blockNum, dp)
+	}
+	higherLimit := false
+	unfreezeDelay := false
+	if dp != nil {
+		higherLimit = dp.AllowHigherLimitForMaxCpuTimeOfOneTx()
+		unfreezeDelay = dp.UnfreezeDelayDays() > 0
 	}
 	return TVMConfig{
 		TransferTrc10:         isActive(forks.AllowTvmTransferTrc10),
@@ -46,6 +58,11 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		DynamicEnergy:         isActive(forks.AllowDynamicEnergy),
 		Blob:                  isActive(forks.AllowTvmBlob),
 		Cancun:                isActive(forks.AllowTvmCancun),
-		NewResourceModelPower: isActive(forks.AllowNewResourceModel) && dp.UnfreezeDelayDays() > 0,
+		// AllowHigherLimitForMaxCpuTimeOfOneTx is read directly off DP.
+		// It is governed by proposal #65 but does not have an `AllowFlag`
+		// entry — only the VM consumes it, and the gating is on the DP
+		// boolean rather than on a fork-controller version vote.
+		HigherLimitForMaxCpuTimeOfOneTx: higherLimit,
+		NewResourceModelPower:           isActive(forks.AllowNewResourceModel) && unfreezeDelay,
 	}
 }

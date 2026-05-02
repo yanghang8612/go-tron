@@ -16,6 +16,11 @@ const (
 	EnergySstoreReset  uint64 = 5000
 	EnergySstoreRefund uint64 = 15000
 	EnergyJumpDest     uint64 = 1
+	// EnergySpecial mirrors java-tron's `SPECIAL_TIER = 1` (EnergyCost.java:20).
+	// Used by JUMPDEST always, and by MLOAD/MSTORE/MSTORE8 only when the
+	// `allow_higher_limit_for_max_cpu_time_of_one_tx` proposal (#65) is
+	// active, via `OperationRegistry.adjustMemOperations`.
+	EnergySpecial      uint64 = 1
 	EnergyExp          uint64 = 10
 	EnergyExpByte      uint64 = 10    // java-tron: EXP_BYTE_ENERGY = 10
 	EnergyCopy         uint64 = 3
