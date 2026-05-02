@@ -8,78 +8,103 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // PayEnergyBill settles the energy fee for a smart-contract transaction.
 //
 // Mirrors java-tron `ReceiptCapsule.payEnergyBill`
-// (chainbase/src/main/java/org/tron/core/capsule/ReceiptCapsule.java::260).
-// Routing precedence and the OUT_OF_TIME exception match java line-for-line:
+// (chainbase/src/main/java/org/tron/core/capsule/ReceiptCapsule.java).
+// java has two overloads:
 //
-//  1. Subtract `accountEnergyLeft` (stake-funded energy after sliding-window
-//     recovery) from `EnergyUsageTotal`. Stake portion is debited from the
-//     caller's energy_usage counter (EnergyProcessor.useEnergy) — no SUN
-//     leaves the caller's balance.
-//  2. The overage is multiplied by the per-energy SUN price (DP key
-//     `energy_fee`, default 100) to produce the balance bill.
-//  3. The bill is debited from the caller's TRX balance, then routed:
-//       - `support_transaction_fee_pool` && result != OUT_OF_TIME
-//             -> dynamic property `transaction_fee_pool` += bill
-//       - else `allow_blackhole_optimization`
-//             -> dynamic property `burn_trx_amount` += bill
-//       - else
-//             -> credit the genesis "Blackhole" account
+//  - 1-arg `payEnergyBill(account, usage, ...)` (line 260): drain
+//    account's stake-funded energy first; spill to balance-billed
+//    energy_fee at the per-SUN rate; route the fee to
+//    `transaction_fee_pool` / `burn_trx_amount` / blackhole based on DP
+//    flags. The OUT_OF_TIME exception skips the fee-pool path so the
+//    SR-time-budget overrun gets burned rather than rebated to the SR.
+//  - 3-arg `payEnergyBill(origin, caller, percent, originEnergyLimit, …)`
+//    (line 201): when caller != origin and the contract has
+//    `consume_user_resource_percent > 0`, split the bill — origin
+//    absorbs `percent%` of EnergyUsageTotal (capped by its stake-energy
+//    AND `origin_energy_limit`), the remainder bills the caller via
+//    the 1-arg path. Origin NEVER pays TRX from balance; if its stake
+//    can't cover its share, the shortfall flows back to caller.
 //
-// On the live cross-impl chain (config.conf private chain), the active
-// branch is `allow_blackhole_optimization` (see
-// docs/dev/cross-impl-divergences-2026-05-02.md D-1 root cause).
+// On the live cross-impl chain (`allow_blackhole_optimization` active),
+// the spill goes to `burn_trx_amount`. See
+// docs/dev/cross-impl-divergences-2026-05-02.md.
 //
-// FOLLOW-UP: this implementation does NOT yet model the
-// `consume_user_resource_percent` split (origin contract owner absorbs a
-// fraction of the energy via stake). java-tron handles that case in
-// payEnergyBill's three-arg overload at line 201-239 of ReceiptCapsule.java.
-// All historical TVM txs on the cross-impl chain are CreateSmartContract
-// where caller == origin, so the split path is unexercised; deferring is
-// safe for D-1 parity but must land before mainnet replay covers TRC-20
-// triggers.
+// gtron uses the "modern" `getOriginUsage` formula
+// (allowTvmFreeze/supportUnfreezeDelay path), which caps origin usage by
+// min(stake-left, origin_energy_limit). All chains since 4.0 take this
+// branch; pre-4.0 historical replay (no origin_energy_limit cap) is not
+// modeled here — would need a fork gate if M0″ Phase 2 covers blocks
+// from that era.
 func PayEnergyBill(ctx *Context, result *Result) error {
 	if result.EnergyUsageTotal <= 0 {
 		return nil
 	}
 
-	owner := extractOwnerAddress(ctx)
-	if owner == (common.Address{}) {
+	caller := extractOwnerAddress(ctx)
+	if caller == (common.Address{}) {
 		return fmt.Errorf("payEnergyBill: cannot determine caller for tx %x", ctx.Tx.Hash())
 	}
 
 	totalEnergy := result.EnergyUsageTotal
 
-	// Step 1: drain stake-funded energy first.
-	//
-	// availableAccountEnergyForBill returns the caller's stake-energy
-	// allowance after sliding-window recovery applied to its prior
-	// energy_usage. java-tron computes this in
-	// EnergyProcessor.getAccountLeftEnergyFromFreeze; we inline it here so
-	// the actuator package doesn't import the parent core package.
-	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.BlockTime)
+	// 3-arg path: TriggerSmartContract with caller != origin and a
+	// non-zero ConsumeUserResourcePercent. Mirrors java's split.
+	origin, originUsage, callerUsage := splitOriginCallerUsage(ctx, caller, totalEnergy)
+	if originUsage > 0 {
+		// Bill origin against its stake-energy only. No balance debit.
+		// Mirrors `energyProcessor.useEnergy(origin, originUsage, now)` at
+		// ReceiptCapsule.java:235 — we already pre-capped originUsage by
+		// origin's available stake in splitOriginCallerUsage, so this
+		// never over-bills.
+		recovered := recoverEnergyUsage(
+			ctx.State.GetEnergyUsage(origin),
+			ctx.State.GetLatestConsumeTimeForEnergy(origin),
+			ctx.BlockTime,
+		)
+		ctx.State.SetEnergyUsage(origin, recovered+originUsage)
+		ctx.State.SetLatestConsumeTimeForEnergy(origin, ctx.BlockTime)
+		// Receipt's origin_energy_usage carries the split share so SDKs
+		// see the same TransactionInfo as java-tron.
+		result.OriginEnergyUsage = originUsage
+	}
+
+	return billCallerSide(ctx, result, caller, callerUsage)
+}
+
+// billCallerSide implements java-tron's 1-arg payEnergyBill: drain
+// caller's stake-funded energy, spill to balance, route the fee.
+func billCallerSide(ctx *Context, result *Result, caller common.Address, usage int64) error {
+	if usage <= 0 {
+		// All energy was absorbed by origin's stake (or the tx was a no-op).
+		// Nothing to bill on the caller side.
+		return nil
+	}
+
+	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, ctx.BlockTime)
 
 	stakeUsed := stakeLeft
-	if stakeUsed > totalEnergy {
-		stakeUsed = totalEnergy
+	if stakeUsed > usage {
+		stakeUsed = usage
 	}
-	balanceUsed := totalEnergy - stakeUsed
+	balanceUsed := usage - stakeUsed
 
 	// Mark the stake-funded portion against the caller's energy_usage.
 	// Mirrors EnergyProcessor.useEnergy: recovered_usage + stakeUsed,
 	// timestamp updated to `now`.
 	if stakeUsed > 0 {
 		recovered := recoverEnergyUsage(
-			ctx.State.GetEnergyUsage(owner),
-			ctx.State.GetLatestConsumeTimeForEnergy(owner),
+			ctx.State.GetEnergyUsage(caller),
+			ctx.State.GetLatestConsumeTimeForEnergy(caller),
 			ctx.BlockTime,
 		)
-		ctx.State.SetEnergyUsage(owner, recovered+stakeUsed)
-		ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.BlockTime)
+		ctx.State.SetEnergyUsage(caller, recovered+stakeUsed)
+		ctx.State.SetLatestConsumeTimeForEnergy(caller, ctx.BlockTime)
 	}
 
 	// proto field 1 (energy_usage) carries the stake-paid amount.
@@ -92,7 +117,7 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 		return nil
 	}
 
-	// Step 2: balance-paid portion.
+	// Balance-paid portion.
 	sunPerEnergy := ctx.DynProps.EnergyFee()
 	if sunPerEnergy <= 0 {
 		// Mirrors java's Constant.SUN_PER_ENERGY fallback. The DP value is
@@ -102,20 +127,17 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 	}
 	bill := balanceUsed * sunPerEnergy
 
-	if err := ctx.State.SubBalance(owner, bill); err != nil {
+	if err := ctx.State.SubBalance(caller, bill); err != nil {
 		return fmt.Errorf("payEnergyBill: insufficient balance to pay %d sun: %w", bill, err)
 	}
 
 	result.EnergyFee = bill
 	result.Fee += bill
 
-	// Step 3: route the bill.
-	//
-	// The OUT_OF_TIME exception is critical: java skips the
-	// transaction_fee_pool path when the contract result is OUT_OF_TIME so
-	// that the SR-time-budget overrun fee gets burned rather than rebated
-	// to the SR via the witness pay-out. Falling through to
-	// blackhole/burnTrx mirrors that escape.
+	// Route the bill. The OUT_OF_TIME exception is critical: java skips
+	// the transaction_fee_pool path when the contract result is
+	// OUT_OF_TIME so that the SR-time-budget overrun fee gets burned
+	// rather than rebated to the SR via the witness pay-out.
 	contractRet := corepb.Transaction_ResultContractResult(result.ContractRet)
 	outOfTime := contractRet == corepb.Transaction_Result_OUT_OF_TIME
 
@@ -134,6 +156,66 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 	}
 	ctx.State.AddBalance(params.BlackholeAddress, bill)
 	return nil
+}
+
+// splitOriginCallerUsage decides the (origin, originUsage, callerUsage)
+// split for the current tx. Returns (zeroAddr, 0, totalEnergy) for the
+// no-split path: not a TriggerSmartContract, caller == origin,
+// ConsumeUserResourcePercent == 0, or the contract metadata is missing.
+//
+// For TriggerSmartContract with a non-zero percent and caller != origin,
+// applies java-tron's modern `getOriginUsage` formula:
+//
+//	originUsage = min(totalEnergy * percent / 100,
+//	                  min(originStakeLeft, originEnergyLimit))
+//	callerUsage = totalEnergy - originUsage
+func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int64) (origin common.Address, originShare, callerShare int64) {
+	if ctx.Tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
+		return common.Address{}, 0, totalEnergy
+	}
+	c := ctx.Tx.Contract()
+	if c == nil || c.Parameter == nil {
+		return common.Address{}, 0, totalEnergy
+	}
+	tsc := &contractpb.TriggerSmartContract{}
+	if err := c.Parameter.UnmarshalTo(tsc); err != nil {
+		return common.Address{}, 0, totalEnergy
+	}
+	contractAddr := common.BytesToAddress(tsc.ContractAddress)
+	contract := ctx.State.GetContract(contractAddr)
+	if contract == nil {
+		// Metadata went missing. Fall back to caller-only billing.
+		return common.Address{}, 0, totalEnergy
+	}
+	originAddr := common.BytesToAddress(contract.OriginAddress)
+	if originAddr == (common.Address{}) || originAddr == caller {
+		return common.Address{}, 0, totalEnergy
+	}
+
+	percent := contract.ConsumeUserResourcePercent
+	if percent <= 0 {
+		return common.Address{}, 0, totalEnergy
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	want := totalEnergy * percent / 100
+
+	originLimit := contract.OriginEnergyLimit
+	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.BlockTime)
+
+	cap := originStakeLeft
+	if originLimit > 0 && originLimit < cap {
+		cap = originLimit
+	}
+	if want > cap {
+		want = cap
+	}
+	if want < 0 {
+		want = 0
+	}
+	return originAddr, want, totalEnergy - want
 }
 
 // extractOwnerAddress mirrors core.extractSender but stays inside the

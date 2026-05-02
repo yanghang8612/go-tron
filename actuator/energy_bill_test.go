@@ -350,3 +350,237 @@ func TestPayEnergyBill_InsufficientBalance(t *testing.T) {
 		t.Fatal("expected insufficient-balance error, got nil")
 	}
 }
+
+// installOriginContract writes a SmartContract record to state at
+// `contractAddr` with the given `origin` deployer, percent, and limit.
+// Mirrors the java-tron contract metadata layout used by the 3-arg
+// payEnergyBill split.
+func installOriginContract(t *testing.T, ctx *Context, contractAddr, origin tcommon.Address, percent, originLimit int64) {
+	t.Helper()
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		ContractAddress:            contractAddr.Bytes(),
+		OriginAddress:              origin.Bytes(),
+		ConsumeUserResourcePercent: percent,
+		OriginEnergyLimit:          originLimit,
+	})
+}
+
+// stakeForEnergyBill seeds an account with enough frozen-V2 energy stake
+// to make `availableAccountEnergyForBill` return exactly `targetEnergy`
+// (modulo a 1-unit rounding tolerance from float math). Uses the modern
+// V2 path (UnfreezeDelayDays > 0) which is the live cross-impl chain
+// configuration.
+//
+// Math: calcAccountEnergyLimit returns
+// (frozen / TRXPrecision) * (totalLimit / totalWeight).
+// We pin totalLimit == totalWeight so the ratio is 1.0 — frozen TRX
+// units map 1:1 to energy units. Then frozen = targetEnergy * TRXPrecision.
+func stakeForEnergyBill(t *testing.T, ctx *Context, addr tcommon.Address, targetEnergy int64) {
+	t.Helper()
+	if targetEnergy <= 0 {
+		return
+	}
+	// 1 TRX (1_000_000 sun) of frozen weight ↔ 1 energy unit. Pin both
+	// limit and weight unconditionally — DynamicProperties' default
+	// `total_energy_current_limit` is 5×10^10, so a conditional override
+	// would silently miss and skew the ratio.
+	ctx.DynProps.SetTotalEnergyWeight(1_000_000_000_000)              // 10^12
+	ctx.DynProps.Set("total_energy_current_limit", 1_000_000_000_000) // 10^12
+	ctx.DynProps.Set("unfreeze_delay_days", 14)
+
+	if !ctx.State.AccountExists(addr) {
+		ctx.State.CreateAccount(addr, corepb.AccountType_Normal)
+	}
+	// Round up by 1 TRX so the float math gives at least targetEnergy.
+	frozenSun := (targetEnergy + 1) * params.TRXPrecision
+	ctx.State.AddFreezeV2(addr, corepb.ResourceCode_ENERGY, frozenSun)
+}
+
+// TestPayEnergyBill_OriginSplit_HappyPath: TriggerSmartContract with
+// caller != origin, percent=50, both have stake; origin absorbs 50%
+// against its stake (no balance debit), caller absorbs 50% against its
+// stake. No SUN leaves either balance.
+func TestPayEnergyBill_OriginSplit_HappyPath(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x01}
+	origin := tcommon.Address{0x41, 0xBB, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	installOriginContract(t, ctx, contractAddr, origin, 50, 1_000_000)
+	stakeForEnergyBill(t, ctx, caller, 1_000_000)
+	stakeForEnergyBill(t, ctx, origin, 1_000_000)
+
+	const initialBalance = int64(100_000_000)
+	ctx.State.AddBalance(caller, initialBalance)
+	ctx.State.AddBalance(origin, initialBalance)
+
+	const totalEnergy = int64(20_000)
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	// origin absorbs exactly 50% (=10_000); caller absorbs the rest.
+	if result.OriginEnergyUsage != totalEnergy/2 {
+		t.Errorf("OriginEnergyUsage = %d, want %d", result.OriginEnergyUsage, totalEnergy/2)
+	}
+	if result.EnergyUsed != totalEnergy/2 {
+		t.Errorf("EnergyUsed (caller stake) = %d, want %d", result.EnergyUsed, totalEnergy/2)
+	}
+	// No balance leaves either account: both shares fit within stake.
+	if got := ctx.State.GetBalance(caller); got != initialBalance {
+		t.Errorf("caller balance = %d, want %d (no balance debit)", got, initialBalance)
+	}
+	if got := ctx.State.GetBalance(origin); got != initialBalance {
+		t.Errorf("origin balance = %d, want %d (origin must NEVER pay TRX)", got, initialBalance)
+	}
+	// Both energy_usage counters bumped.
+	if got := ctx.State.GetEnergyUsage(caller); got != totalEnergy/2 {
+		t.Errorf("caller energy_usage = %d, want %d", got, totalEnergy/2)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got != totalEnergy/2 {
+		t.Errorf("origin energy_usage = %d, want %d", got, totalEnergy/2)
+	}
+	// burn_trx_amount untouched since no balance debit happened.
+	if got := ctx.DynProps.BurnTrxAmount(); got != 0 {
+		t.Errorf("burn_trx_amount = %d, want 0 (no balance bill on this path)", got)
+	}
+}
+
+// TestPayEnergyBill_OriginSplit_OriginCappedByLimit: percent=80 wants
+// origin to cover 80%, but origin_energy_limit caps it lower; the
+// uncapped portion spills back to the caller's bill.
+func TestPayEnergyBill_OriginSplit_OriginCappedByLimit(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x02}
+	origin := tcommon.Address{0x41, 0xBB, 0x02}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const totalEnergy = int64(10_000)
+	const originLimit = int64(2_000) // forces origin to absorb at most 2_000
+
+	installOriginContract(t, ctx, contractAddr, origin, 80, originLimit)
+	// Plenty of stake on both, but the limit is the tighter constraint.
+	stakeForEnergyBill(t, ctx, caller, totalEnergy)
+	stakeForEnergyBill(t, ctx, origin, totalEnergy)
+
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != originLimit {
+		t.Errorf("OriginEnergyUsage = %d, want %d (capped by origin_energy_limit)", result.OriginEnergyUsage, originLimit)
+	}
+	expectedCaller := totalEnergy - originLimit
+	if result.EnergyUsed != expectedCaller {
+		t.Errorf("caller EnergyUsed = %d, want %d", result.EnergyUsed, expectedCaller)
+	}
+}
+
+// TestPayEnergyBill_OriginSplit_OriginCappedByStake: origin has less
+// stake-energy than its 50% share would demand; the uncovered portion
+// flows back to caller (who pays it via its own stake or balance).
+func TestPayEnergyBill_OriginSplit_OriginCappedByStake(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x03}
+	origin := tcommon.Address{0x41, 0xBB, 0x03}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const totalEnergy = int64(10_000)
+	const originStake = int64(1_500) // less than the 5_000 percent share
+
+	installOriginContract(t, ctx, contractAddr, origin, 50, totalEnergy)
+	stakeForEnergyBill(t, ctx, caller, totalEnergy)
+	stakeForEnergyBill(t, ctx, origin, originStake)
+
+	const initialBalance = int64(100_000_000)
+	ctx.State.AddBalance(caller, initialBalance)
+
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	// availableAccountEnergyForBill rounds via float math, so origin's
+	// usable share is somewhere in [originStake, originStake+1]. The
+	// invariant we lock down is that origin's share ≤ originStake+1
+	// (cap by stake) and caller covers the rest.
+	if result.OriginEnergyUsage > originStake+1 || result.OriginEnergyUsage < originStake-1 {
+		t.Errorf("OriginEnergyUsage = %d, want ~%d (capped by stake)", result.OriginEnergyUsage, originStake)
+	}
+	expectedCaller := totalEnergy - result.OriginEnergyUsage
+	if result.EnergyUsed != expectedCaller {
+		t.Errorf("caller EnergyUsed = %d, want %d (rest after origin's share)",
+			result.EnergyUsed, expectedCaller)
+	}
+}
+
+// TestPayEnergyBill_OriginSplit_PercentZero: when the contract's
+// ConsumeUserResourcePercent is 0, java skips the split entirely —
+// caller pays everything regardless of caller != origin.
+func TestPayEnergyBill_OriginSplit_PercentZero(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x04}
+	origin := tcommon.Address{0x41, 0xBB, 0x04}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const totalEnergy = int64(5_000)
+	installOriginContract(t, ctx, contractAddr, origin, 0, 100_000)
+	stakeForEnergyBill(t, ctx, origin, totalEnergy*10) // origin has plenty; should still not be billed
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != 0 {
+		t.Errorf("OriginEnergyUsage = %d, want 0 (percent=0 ⇒ no split)", result.OriginEnergyUsage)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got != 0 {
+		t.Errorf("origin energy_usage = %d, want 0 (must not be billed)", got)
+	}
+}
+
+// TestPayEnergyBill_OriginSplit_CallerEqualsOrigin: when caller IS the
+// contract's deployer (common case for owner-only admin functions),
+// java skips the split and bills caller directly.
+func TestPayEnergyBill_OriginSplit_CallerEqualsOrigin(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x05}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	installOriginContract(t, ctx, contractAddr, caller, 50, 1_000_000)
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	const totalEnergy = int64(5_000)
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != 0 {
+		t.Errorf("OriginEnergyUsage = %d, want 0 (caller==origin path)", result.OriginEnergyUsage)
+	}
+	// Caller paid the whole thing via balance (no caller stake set up).
+	expectedFee := totalEnergy * 100
+	if result.EnergyFee != expectedFee {
+		t.Errorf("EnergyFee = %d, want %d", result.EnergyFee, expectedFee)
+	}
+}
