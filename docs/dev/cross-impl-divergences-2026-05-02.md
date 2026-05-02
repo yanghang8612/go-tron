@@ -154,14 +154,20 @@ for chains that exercise TRC-20-style triggers; flagged below.
 These are real cross-impl divergences for code paths the cross-impl
 chain doesn't currently exercise. Will resurface on richer chains.
 
-### `consume_user_resource_percent` origin-stake split (caller ≠ origin)
+### ~~`consume_user_resource_percent` origin-stake split (caller ≠ origin)~~ — closed `8748568`
 
-`actuator/energy_bill.go::PayEnergyBill` only handles caller-pays. Java
-has a 3-arg overload (`ReceiptCapsule.java:201-239`) that splits the
-bill between caller and origin contract owner per
-`consume_user_resource_percent`. All 6 TVM txs on the cross-impl chain
-are CreateSmartContract from Zion, so this never fires here. Will fire
-on any TRC-20 trigger from a non-origin caller. Mainnet-relevant.
+Implemented the 3-arg overload in `splitOriginCallerUsage` /
+`billCallerSide` / `PayEnergyBill`. Origin absorbs `percent%` of
+EnergyUsageTotal capped by min(stake-left, origin_energy_limit);
+caller covers the remainder. Modern `getOriginUsage` formula only
+(allowTvmFreeze / supportUnfreezeDelay branch) — pre-4.0 historical
+replay would need a fork gate. 5 new unit tests cover happy path,
+cap-by-limit, cap-by-stake, percent=0, caller==origin.
+
+Cross-impl baseline (H=88062) still byte-equal after the change —
+the chain's 6 historical TVM txs are all CreateSmartContract with
+caller==origin so the split path is unexercised here; the fix lands
+without disturbing chain replay.
 
 ### EXTCODECOPY pre-existing under-charge
 
