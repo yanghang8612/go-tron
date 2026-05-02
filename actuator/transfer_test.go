@@ -138,10 +138,16 @@ func TestTransferExecute_CreatesRecipient(t *testing.T) {
 	}
 }
 
-func TestTransferExecute_CreateAccountCostCounter(t *testing.T) {
+func TestTransferExecute_CreateAccountFeeBurnedNotCounted(t *testing.T) {
+	// java-tron's TransferActuator deducts CreateNewAccountFeeInSystemContract
+	// (proposal #12 default 0; here forced to 100k) from owner and routes it
+	// to blackhole, but does NOT update total_create_account_cost — that
+	// counter is bumped only by BandwidthProcessor's create_account_fee path
+	// (mirrored in core.consumeBandwidthForCreateNewAccount).
 	statedb := setupStateDB(t)
 	from := makeTestAddr(1)
 	seedAccount(statedb, from, 10_000_000)
+	balanceBefore := statedb.GetBalance(from)
 
 	tx := makeTransferTx(1, 0xAA, 1_000_000)
 	ctx := setupContext(t, statedb, tx)
@@ -152,8 +158,12 @@ func TestTransferExecute_CreateAccountCostCounter(t *testing.T) {
 		t.Fatalf("execute failed: %v", err)
 	}
 
-	if got := ctx.DynProps.TotalCreateAccountCost(); got != 100_000 {
-		t.Fatalf("TotalCreateAccountCost: want 100000, got %d", got)
+	if got := ctx.DynProps.TotalCreateAccountCost(); got != 0 {
+		t.Fatalf("TotalCreateAccountCost should remain 0 (counter belongs to bandwidth path): got %d", got)
+	}
+	wantBalance := balanceBefore - 1_000_000 - 100_000
+	if got := statedb.GetBalance(from); got != wantBalance {
+		t.Fatalf("owner balance after fee burn: want %d, got %d", wantBalance, got)
 	}
 }
 

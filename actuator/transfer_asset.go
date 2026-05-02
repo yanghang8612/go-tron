@@ -74,11 +74,13 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 		if ctx.DynProps.AllowMultiSign() {
 			ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
 		}
+		// Actuator-level extra fee (proposal #12, default 0). java-tron does
+		// NOT increment total_create_account_cost here — see transfer.go for
+		// the rationale.
 		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
 		if err := burnFee(ctx, from, fee); err != nil {
 			return nil, err
 		}
-		ctx.DynProps.AddTotalCreateAccountCost(fee)
 	}
 
 	if err := ctx.State.SubTRC10Balance(from, tokenID, c.Amount); err != nil {

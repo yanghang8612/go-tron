@@ -54,6 +54,8 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 
 	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
+	// Pre-create the recipient so this stays on the regular bandwidth path.
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
 	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
@@ -89,6 +91,8 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 
 	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
 	statedb.AddBalance(testProcessorAddr(1), 10_000_000)
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+	statedb.CreateAccount(testProcessorAddr(3), corepb.AccountType_Normal)
 
 	// Commit the initial state so we have a clean base
 	_, err := statedb.Commit()

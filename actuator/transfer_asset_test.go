@@ -129,7 +129,9 @@ func TestTransferAssetExecute_Success(t *testing.T) {
 	}
 }
 
-func TestTransferAssetExecute_CreateAccountCostCounter(t *testing.T) {
+func TestTransferAssetExecute_CreateAccountFeeBurnedNotCounted(t *testing.T) {
+	// Same rationale as the TransferActuator test: actuator-level fee from
+	// proposal #12 is burned but does not update total_create_account_cost.
 	const tokenID = int64(1_000_001)
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(1)
@@ -146,14 +148,18 @@ func TestTransferAssetExecute_CreateAccountCostCounter(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
+	balanceBefore := statedb.GetBalance(owner)
 
 	act := &TransferAssetActuator{}
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
 
-	if got := ctx.DynProps.TotalCreateAccountCost(); got != 100_000 {
-		t.Fatalf("TotalCreateAccountCost: want 100000, got %d", got)
+	if got := ctx.DynProps.TotalCreateAccountCost(); got != 0 {
+		t.Fatalf("TotalCreateAccountCost should remain 0 (bandwidth-path counter): got %d", got)
+	}
+	if got := statedb.GetBalance(owner); got != balanceBefore-100_000 {
+		t.Fatalf("owner TRX balance after burn: want %d, got %d", balanceBefore-100_000, got)
 	}
 }
 

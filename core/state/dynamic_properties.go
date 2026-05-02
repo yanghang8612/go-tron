@@ -331,6 +331,14 @@ func (dp *DynamicProperties) CreateNewAccountFeeInSystemContract() int64 {
 	return dp.props["create_new_account_fee_in_system_contract"]
 }
 
+// CreateNewAccountBandwidthRate is the bytes-per-bandwidth-credit ratio used
+// when consuming personal staked bandwidth for txs that materialize a new
+// account (TransferContract / TransferAssetContract / AccountCreateContract).
+// Default 1; mirrors java-tron `getCreateNewAccountBandwidthRate`.
+func (dp *DynamicProperties) CreateNewAccountBandwidthRate() int64 {
+	return dp.props["create_new_account_bandwidth_rate"]
+}
+
 func (dp *DynamicProperties) TotalEnergyCurrentLimit() int64 {
 	return dp.props["total_energy_current_limit"]
 }

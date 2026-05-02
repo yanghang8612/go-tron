@@ -6,6 +6,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -61,6 +62,13 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 
 // consumeBandwidth charges bandwidth for a transaction.
 // Priority: staked bandwidth (V1+V2 mixed) -> free bandwidth -> burn TRX.
+//
+// Special case (mirrors java-tron `BandwidthProcessor.consumeForCreateNewAccount`):
+// when the contract creates a new on-chain account (TransferContract /
+// TransferAssetContract / AccountCreateContract whose target doesn't yet exist),
+// only staked bandwidth is consulted. On insufficient stake the path falls
+// back to the `create_account_fee` (default 100_000 SUN), bypassing the
+// free-bandwidth daily quota entirely.
 func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64) (*BandwidthResult, error) {
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
@@ -68,6 +76,10 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	txSize := int64(tx.Size())
+
+	if contractCreatesNewAccount(statedb, tx) {
+		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, blockTime)
+	}
 
 	acct := statedb.GetAccount(sender)
 	netLimit := availableAccountNet(acct, dynProps)
@@ -95,6 +107,83 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
 	}
 	return &BandwidthResult{NetFee: cost}, nil
+}
+
+// contractCreatesNewAccount mirrors java-tron's
+// `BandwidthProcessor.contractCreateNewAccount`: returns true when the
+// transaction's first contract type is one that materializes a new on-chain
+// account. For Transfer/TransferAsset, this depends on whether the recipient
+// already exists in state.
+func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bool {
+	contract := tx.Contract()
+	if contract == nil || contract.Parameter == nil {
+		return false
+	}
+	switch contract.Type {
+	case corepb.Transaction_Contract_AccountCreateContract:
+		return true
+	case corepb.Transaction_Contract_TransferContract:
+		msg, err := contract.Parameter.UnmarshalNew()
+		if err != nil {
+			return false
+		}
+		type toGetter interface{ GetToAddress() []byte }
+		if g, ok := msg.(toGetter); ok {
+			return !statedb.AccountExists(tcommon.BytesToAddress(g.GetToAddress()))
+		}
+	case corepb.Transaction_Contract_TransferAssetContract:
+		msg, err := contract.Parameter.UnmarshalNew()
+		if err != nil {
+			return false
+		}
+		type toGetter interface{ GetToAddress() []byte }
+		if g, ok := msg.(toGetter); ok {
+			return !statedb.AccountExists(tcommon.BytesToAddress(g.GetToAddress()))
+		}
+	}
+	return false
+}
+
+// consumeBandwidthForCreateNewAccount charges bandwidth for txs that
+// materialize a new account. java-tron `BandwidthProcessor` line 192-206:
+// only personal staked bandwidth is consulted (`createNewAccountBandwidthRate`
+// applied per byte); on shortage the `create_account_fee` is taken from the
+// owner balance and either burned or sent to the blackhole — and
+// `total_create_account_cost` is incremented.
+func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, blockTime int64) (*BandwidthResult, error) {
+	ratio := dynProps.CreateNewAccountBandwidthRate()
+	if ratio <= 0 {
+		ratio = 1
+	}
+	netCost := txSize * ratio
+
+	acct := statedb.GetAccount(sender)
+	netLimit := availableAccountNet(acct, dynProps)
+	if netLimit > 0 {
+		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), blockTime)
+		if recoveredUsage+netCost <= netLimit {
+			statedb.SetNetUsage(sender, recoveredUsage+netCost)
+			statedb.SetLatestConsumeTime(sender, blockTime)
+			return &BandwidthResult{NetUsage: netCost}, nil
+		}
+	}
+
+	fee := dynProps.CreateAccountFee()
+	if fee <= 0 {
+		// Some private chains may run with zero fee; allow the tx through
+		// rather than failing it on a zero-cost path.
+		return &BandwidthResult{}, nil
+	}
+	if err := statedb.SubBalance(sender, fee); err != nil {
+		return nil, fmt.Errorf("insufficient balance for create_account_fee: need %d sun", fee)
+	}
+	if dynProps.AllowBlackHoleOptimization() {
+		dynProps.AddBurnTrx(fee)
+	} else {
+		statedb.AddBalance(params.BlackholeAddress, fee)
+	}
+	dynProps.AddTotalCreateAccountCost(fee)
+	return &BandwidthResult{NetFee: fee}, nil
 }
 
 // extractSender extracts the owner address from the first contract of a transaction.

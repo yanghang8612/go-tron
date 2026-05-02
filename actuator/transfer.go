@@ -67,11 +67,15 @@ func (a *TransferActuator) Execute(ctx *Context) (*Result, error) {
 		if ctx.DynProps.AllowMultiSign() {
 			ctx.State.ApplyDefaultAccountPermissions(toAddr, ctx.DynProps)
 		}
+		// Actuator-level extra fee (proposal #12, default 0). Burned on top
+		// of whatever bandwidth processor already charged. java-tron does NOT
+		// increment total_create_account_cost here — that counter belongs to
+		// the bandwidth-side `create_account_fee` path
+		// (`core.consumeBandwidthForCreateNewAccount`).
 		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
 		if err := burnFee(ctx, ownerAddr, fee); err != nil {
 			return nil, err
 		}
-		ctx.DynProps.AddTotalCreateAccountCost(fee)
 	}
 	if err := ctx.State.SubBalance(ownerAddr, tc.Amount); err != nil {
 		return nil, err
