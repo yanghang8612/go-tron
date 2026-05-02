@@ -38,10 +38,14 @@ type ChainParameter struct {
 }
 
 type WitnessInfo struct {
-	Address   string `json:"address"`
-	VoteCount int64  `json:"voteCount"`
-	URL       string `json:"url"`
-	IsJobs    bool   `json:"isJobs"`
+	Address        string `json:"address"`
+	VoteCount      int64  `json:"voteCount"`
+	URL            string `json:"url"`
+	IsJobs         bool   `json:"isJobs"`
+	TotalProduced  int64  `json:"totalProduced,omitempty"`
+	TotalMissed    int64  `json:"totalMissed,omitempty"`
+	LatestBlockNum int64  `json:"latestBlockNum,omitempty"`
+	LatestSlotNum  int64  `json:"latestSlotNum,omitempty"`
 }
 
 type ProposalInfo struct {

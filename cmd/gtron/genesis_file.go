@@ -94,6 +94,14 @@ func loadGenesisFile(path string) (*params.Genesis, error) {
 	if _, ok := dp["maintenance_time_interval"]; !ok {
 		dp["maintenance_time_interval"] = 21600000
 	}
+	// java-tron's `Manager.initGenesis` schedules the first maintenance at
+	// `genesis_timestamp + maintenance_time_interval` (see java-tron
+	// `DynamicPropertiesStore.saveNextMaintenanceTime`). Without this,
+	// applyBlock's `NextMaintenanceTime() > 0` gate stays false forever and
+	// maintenance / reward-cycle rollover never runs.
+	if _, ok := dp["next_maintenance_time"]; !ok {
+		dp["next_maintenance_time"] = f.TimestampMs + dp["maintenance_time_interval"]
+	}
 
 	return &params.Genesis{
 		Config: &params.ChainConfig{

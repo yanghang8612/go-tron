@@ -367,10 +367,14 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 			continue
 		}
 		result = append(result, &tronapi.WitnessInfo{
-			Address:   hex.EncodeToString(addr[:]),
-			VoteCount: w.VoteCount(),
-			URL:       w.URL(),
-			IsJobs:    activeMap[addr],
+			Address:        hex.EncodeToString(addr[:]),
+			VoteCount:      w.VoteCount(),
+			URL:            w.URL(),
+			IsJobs:         activeMap[addr],
+			TotalProduced:  w.TotalProduced(),
+			TotalMissed:    w.TotalMissed(),
+			LatestBlockNum: w.LatestBlockNum(),
+			LatestSlotNum:  w.LatestSlotNum(),
 		})
 	}
 	return result, nil
