@@ -199,7 +199,7 @@ func (api *API) getAccount(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("{}"))
 		return
 	}
-	writeTronJSON(w, acc.Proto())
+	writeTronJSON(w, wireSortFrozenV2(acc.Proto()))
 }
 
 func (api *API) broadcastTransaction(w http.ResponseWriter, r *http.Request) {

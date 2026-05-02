@@ -266,16 +266,26 @@ pass "sync caught up to java-tron"
 # Pre-flow probes
 # ────────────────────────────────────────────────────────────────────
 
-# Probe whether allow_new_resource_model (proposal #51) is active on the chain.
-# V2 freeze/unfreeze/delegate are gated on this. Many of the standard private
-# chains run with V2 *disabled* (the default). Result: ALLOW_V2 = "1" or "0".
-probe_v2() {
+# Probe two gates that together pick the right freeze flow:
+#   FREEZE_V2_OPEN    — true once UNFREEZE_DELAY_DAYS > 0. Java-tron's
+#                       FreezeBalanceActuator rejects V1 freeze with
+#                       "freeze v2 is open, old freeze is closed", and
+#                       FreezeBalanceV2Actuator requires it to validate.
+#                       Proposal #41 (allowOptimizeStakingTime).
+#   ALLOW_NEW_RM      — true once allow_new_resource_model is active.
+#                       Gates whether TRON_POWER is a valid resource type
+#                       on V2 freeze, and switches vote validation from
+#                       getTronPower() to getAllTronPower(). Proposal #51.
+probe_param() {
+    # probe_param <key> — returns int value or 0 if absent.
     local resp
     resp=$(http_post "$JAVA_HTTP" "/wallet/getchainparameters" "{}")
-    json_field "next((p.get('value',0) for p in d.get('chainParameter',[]) if p.get('key')=='getAllowNewResourceModel'), 0)" "$resp"
+    json_field "next((p.get('value',0) for p in d.get('chainParameter',[]) if p.get('key')=='$1'), 0)" "$resp"
 }
-ALLOW_V2=$(probe_v2)
-echo "allow_new_resource_model = ${ALLOW_V2:-0}"
+FREEZE_V2_OPEN=$([ "$(probe_param getUnfreezeDelayDays)" -gt 0 ] && echo 1 || echo 0)
+ALLOW_NEW_RM=$(probe_param getAllowNewResourceModel)
+echo "freeze_v2_open  = $FREEZE_V2_OPEN  (UnfreezeDelayDays > 0)"
+echo "allow_new_rm    = ${ALLOW_NEW_RM:-0}  (AllowNewResourceModel)"
 
 # Pre-flow baseline: assert SR balance, total_create_account_cost, and
 # witness counters are byte-equal at the post-sync state. Catches any state
@@ -391,35 +401,53 @@ flow_vote() {
     skip_step "vote-witness" "deferred until after FreezeV2 (Flow 5) seeds TRON Power"
 }
 
-# ── Flow 4: Freeze (V2 if enabled, else V1 NET) ──────────────────
+# ── Flow 4: Freeze (V2 BANDWIDTH/TRON_POWER, else V1 NET) ────────
+#
+# Three regimes, gated by FREEZE_V2_OPEN and ALLOW_NEW_RM:
+#   !FREEZE_V2_OPEN              → V1 freeze BANDWIDTH (counts as TP).
+#   FREEZE_V2_OPEN, !ALLOW_NEW_RM → V2 freeze BANDWIDTH (still counts as TP
+#                                  via getTronPower() since vote validation
+#                                  uses getTronPower() under !ALLOW_NEW_RM).
+#   FREEZE_V2_OPEN, ALLOW_NEW_RM  → V2 freeze TRON_POWER (the only resource
+#                                  type that contributes to getAllTronPower()
+#                                  for vote validation).
 flow_freeze() {
     echo ""
     echo "=== Flow 4: Freeze (gives the SR TRON Power for voting) ==="
-    local unsigned endpoint body
-    if [ "${ALLOW_V2:-0}" = "1" ]; then
+    local unsigned endpoint body label
+    if [ "$FREEZE_V2_OPEN" = "1" ]; then
         endpoint="/wallet/freezebalancev2"
-        body="{\"owner_address\":\"$SR_ADDR_HEX\",\"frozen_balance\":5000000,\"resource\":\"TRON_POWER\"}"
+        if [ "${ALLOW_NEW_RM:-0}" = "1" ]; then
+            body="{\"owner_address\":\"$SR_ADDR_HEX\",\"frozen_balance\":5000000,\"resource\":\"TRON_POWER\"}"
+            label="V2 TRON_POWER"
+        else
+            body="{\"owner_address\":\"$SR_ADDR_HEX\",\"frozen_balance\":5000000,\"resource\":\"BANDWIDTH\"}"
+            label="V2 BANDWIDTH"
+        fi
     else
         # V1: freeze NET resource for 3 days (FROZEN_PERIOD_MIN). V1 freeze
         # of NET counts as TronPower in the V1 vote-weight calculation.
         endpoint="/wallet/freezebalance"
         body="{\"owner_address\":\"$SR_ADDR_HEX\",\"frozen_balance\":5000000,\"frozen_duration\":3,\"resource\":\"BANDWIDTH\"}"
+        label="V1 BANDWIDTH"
     fi
     unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "$endpoint" "$body")
     if ! echo "$unsigned" | grep -q '"raw_data"'; then
-        fail "freeze ($endpoint): createtransaction did not return raw_data"
+        fail "freeze ($label): createtransaction did not return raw_data"
         echo "      response: $unsigned" >&2
         return
     fi
     local incl
     incl=$(broadcast_and_confirm "$unsigned")
     if [ -z "$incl" ]; then
-        fail "freeze: broadcast or inclusion failed"
+        fail "freeze ($label): broadcast or inclusion failed"
         return
     fi
-    pass "freeze included at block #$incl ($endpoint)"
+    pass "freeze included at block #$incl ($label)"
 
-    if [ "${ALLOW_V2:-0}" = "1" ]; then
+    if [ "$FREEZE_V2_OPEN" = "1" ]; then
+        # frozenV2 entries sorted; type may be omitted by proto when 0
+        # (BANDWIDTH), so we default to 0 in the projection.
         assert_state_eq "SR frozenV2 entries" \
             "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
             "sorted([(e.get('amount',0), e.get('type',0)) for e in d.get('frozenV2',[])])"
