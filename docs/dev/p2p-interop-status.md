@@ -2,7 +2,7 @@
 
 Record of verified compatibility with the reference `io.github.tronprotocol/libp2p:2.2.7`.
 
-## ✅ VERIFIED (2026-04-12 / updated 2026-05-01)
+## ✅ VERIFIED (2026-04-12 / updated 2026-05-02)
 
 **go-tron successfully connects to a real java-tron node and completes the libp2p handshake.**
 
@@ -71,20 +71,69 @@ is DisconnectReason. These are two separate spaces — intentional in libp2p.
 - `NODE_ID_LEN` = 64
 - `Parameter.version` (HelloMessage.version) = 1
 
+## ✅ Cross-impl block sync against live java-tron private chain (2026-05-02)
+
+**End-to-end application-layer sync verified against a single-SR java-tron
+private chain.** This is the first time gtron has finished a real sync handshake
+against another implementation and stayed byte-identical through ongoing block
+production.
+
+Test setup: java-tron `FullNode.jar` running with the genesis at
+`/Users/asuka/Works/Tests/TVM/run/config.conf` (networkId=0, chain_id=9999,
+maintenance_time_interval=21600000ms, single SR). gtron started with
+`--genesis test/fixtures/cross-impl/java-tron-private.json` and
+`--seednode 127.0.0.1:18888` from a fresh datadir.
+
+Verified byte-identical vs java-tron at H=78179:
+- All 71 190 block hashes #1..#71 190 (spot-checked across the range; full
+  agreement on block sync inventory)
+- Active witness DPoS counters (`totalProduced`, `totalMissed`,
+  `latestBlockNum`, `latestSlotNum`) on the lone SR
+- Per-tx fee accounting on a TransferContract that creates a new account:
+  `fee=100 000`, `net_fee=100 000`, sender SR delta identical on both nodes
+- Bidirectional tx propagation: a TransferContract submitted to either node
+  reaches the other node's pool via P2P; receiving node's mined block
+  contains the tx; recipient balance and tx-info match on both sides
+
+Driving fix commits (chronological):
+- 1b323ed — `fix(net): SyncBlockChain summary + dedup + fetch throttle`
+  (ascending summary order, drop already-have ids, 3 msg/s rate limit on
+  outbound `FETCH_INV_DATA`)
+- 7122d3f — `fix(cmd,api): genesis loader inits next_maintenance_time +
+  expose witness counters` (mirror java-tron `Manager.initGenesis`;
+  `listwitnesses` now exposes the four counters above)
+- aa51ddf — `fix(net,core): cross-impl tx propagation works both directions`
+  (wrap outbound TRX in TRXS 0x03; route reads through `HeadStateRoot`
+  instead of empty `block.AccountStateRoot`; sync-finished trigger via
+  `HandleChainInventory` single-id response)
+- 906450a — `fix(core,actuator): create_account_fee parity with java-tron`
+  (dedicated bandwidth path bypassing free-quota and tx-byte fee, mirroring
+  `BandwidthProcessor.consumeForCreateNewAccount`; counter ownership moved
+  from actuator-level to bandwidth path)
+- 3d029f6 — `fix(core,state): totalMissed parity via state_flag DP key`
+  (replace the broken `previousHeadTimestamp >= NextMaintenanceTime`
+  heuristic with java-tron's explicit `state_flag` DP key, restoring
+  `+MAINTENANCE_SKIP_SLOTS` adjustment in `SlotForTime`)
+
+Reproduction:
+```bash
+# Start java-tron private chain (see java-tron-local.md Option 1, but with
+# the genesis from config.conf and networkId=0, chain_id=9999).
+JAVA_TRON_ADDR=127.0.0.1:18888 scripts/system_test_cross.sh
+```
+
 ## What's still not validated
 
-- **Full application-layer sync** — TRON Hello (0x20) received from java-tron
-  is confirmed; go-tron's `net/handler.go` implements the response and
-  SyncBlockChain path. End-to-end block exchange is exercised by
-  `scripts/system_test.sh` (2-node dev chain) but not yet against a real
-  java-tron mainnet/Nile node.
 - **Real-network block sync (G1)** — requires a java-tron node on mainnet or
-  Nile (networkID=11111 or 201910292). The local private test chain
-  (networkID=0) cannot be used: gtron defaults to networkID=11111 and the
-  libp2p hello would reject with DIFFERENT_VERSION. Even with a matching
-  network ID, genesis block hashes must match for TRON Hello validation to
-  pass. G1 validation is deferred to M0″ Phase 2 (requires operator with
-  mainnet-synced java-tron; see PLAN.md).
+  Nile (networkID=11111 or 201910292). The cross-impl smoke above covers a
+  private chain (networkID=0) but does NOT cover mainnet's longer history
+  or its proposal-driven fork activations. G1 validation is deferred to
+  M0″ Phase 2 (requires operator with mainnet-synced java-tron; see
+  PLAN.md).
 - **Testnet reachability** — live Nile/mainnet seeds appear unreachable from
   the test environment (TCP connects, first bytes received, but full sync
   not attempted yet).
+- **PBFT SR signing cross-impl** — gtron's PBFT 3-phase machine is in place
+  (M6b slice 2) but live byte-level cross-impl SR signing has not been
+  validated. Needs mainnet SR private key + java-tron quorum on the other
+  side.

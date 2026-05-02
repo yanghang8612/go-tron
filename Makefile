@@ -1,5 +1,6 @@
 .PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
-        conformance-replay conformance-replay-exit-gate txsign system-test-flows
+        conformance-replay conformance-replay-exit-gate txsign system-test-flows \
+        system-test-cross
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -70,3 +71,10 @@ txsign:
 # EXIT: non-zero if PASS < 30 or WARN > 4.
 system-test-flows: gtron txsign
 	@scripts/ci_system_test.sh
+
+# Cross-impl interop smoke: gtron <-> already-running java-tron private chain.
+# Requires JAVA_TRON_ADDR (default 127.0.0.1:18888) reachable; optional
+# JAVA_TRON_HTTP (default 127.0.0.1:8090) enables byte-level cross-checks.
+# See docs/dev/p2p-interop-status.md for the verified-against setup.
+system-test-cross: gtron
+	@scripts/system_test_cross.sh
