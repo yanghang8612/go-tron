@@ -136,3 +136,28 @@ func TestUnfreezeV2_TronPower_Validate(t *testing.T) {
 		t.Fatalf("unexpected error with fork active: %v", err)
 	}
 }
+
+// TestUnfreezeV2_Execute_DecrementsTotalWeight: V2 unfreeze must mirror
+// java-tron's UnfreezeBalanceV2Actuator.updateTotalResourceWeight by
+// decrementing total_{net,energy,tron_power}_weight. Without this, gtron
+// retains stale weight after unfreeze and continues to grant staked
+// bandwidth that is no longer backed.
+func TestUnfreezeV2_Execute_DecrementsTotalWeight(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(5)
+	seedAccount(statedb, owner, 100_000_000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 10_000_000)
+
+	tx := makeUnfreezeV2Tx(5, 4_000_000, corepb.ResourceCode_BANDWIDTH)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetTotalNetWeight(10) // pre-existing weight from prior freeze
+
+	if _, err := (&UnfreezeBalanceV2Actuator{}).Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// 10_000_000 → 6_000_000 sun → 10 → 6 TRX → delta -4.
+	if got := ctx.DynProps.TotalNetWeight(); got != 6 {
+		t.Errorf("total_net_weight: want 6 (10 - 4), got %d", got)
+	}
+}

@@ -167,3 +167,92 @@ func TestFreezeV2_Execute_InitializesOldTronPower(t *testing.T) {
 		t.Errorf("old_tron_power: want 300 (pre-freeze snapshot), got %d", got)
 	}
 }
+
+// TestFreezeV2_Execute_UpdatesTotalWeight: V2 freeze must update
+// total_{net,energy,tron_power}_weight to mirror java-tron's
+// FreezeBalanceV2Actuator.execute switch block. Without this, gtron's
+// availableAccountNet returns 0 for owner and falls to the create-account
+// fee / free-net path instead of consuming staked bandwidth — visible as a
+// cross-impl drift in SR balance over time.
+func TestFreezeV2_Execute_UpdatesTotalWeight(t *testing.T) {
+	cases := []struct {
+		name     string
+		resource corepb.ResourceCode
+		amount   int64
+		check    func(t *testing.T, ctx *Context)
+	}{
+		{
+			name:     "BANDWIDTH",
+			resource: corepb.ResourceCode_BANDWIDTH,
+			amount:   5_000_000, // 5 TRX → weight 5
+			check: func(t *testing.T, ctx *Context) {
+				if got := ctx.DynProps.TotalNetWeight(); got != 5 {
+					t.Errorf("total_net_weight: want 5, got %d", got)
+				}
+			},
+		},
+		{
+			name:     "ENERGY",
+			resource: corepb.ResourceCode_ENERGY,
+			amount:   3_000_000, // 3 TRX → weight 3
+			check: func(t *testing.T, ctx *Context) {
+				if got := ctx.DynProps.TotalEnergyWeight(); got != 3 {
+					t.Errorf("total_energy_weight: want 3, got %d", got)
+				}
+			},
+		},
+		{
+			name:     "TRON_POWER",
+			resource: corepb.ResourceCode_TRON_POWER,
+			amount:   7_000_000, // 7 TRX → weight 7
+			check: func(t *testing.T, ctx *Context) {
+				if got := ctx.DynProps.TotalTronPowerWeight(); got != 7 {
+					t.Errorf("total_tron_power_weight: want 7, got %d", got)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			statedb := setupStateDB(t)
+			owner := makeTestAddr(8)
+			seedAccount(statedb, owner, 100_000_000)
+
+			tx := makeFreezeV2Tx(8, tc.amount, tc.resource)
+			ctx := setupContext(t, statedb, tx)
+			ctx.DynProps.SetUnfreezeDelayDays(14)
+			ctx.DynProps.SetAllowNewResourceModel(true)
+
+			if _, err := (&FreezeBalanceV2Actuator{}).Execute(ctx); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			tc.check(t, ctx)
+		})
+	}
+}
+
+// TestFreezeV2_Execute_WeightDelta: a freeze that crosses an integer-TRX
+// boundary increments the total weight by the *difference* in TRX count,
+// not by frozenBalance/TRX_PRECISION. Mirrors java-tron's
+// (newFrozenWithDelegated/TRX - oldFrozenWithDelegated/TRX) formula.
+func TestFreezeV2_Execute_WeightDelta(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(9)
+	seedAccount(statedb, owner, 100_000_000)
+
+	// Pre-existing 999_999 sun (0.999... TRX → weight 0).
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 999_999)
+
+	tx := makeFreezeV2Tx(9, 1_000_001, corepb.ResourceCode_BANDWIDTH)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+
+	if _, err := (&FreezeBalanceV2Actuator{}).Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// Old: 999_999 sun → 0 TRX. New: 2_000_000 sun → 2 TRX. Delta = 2.
+	if got := ctx.DynProps.TotalNetWeight(); got != 2 {
+		t.Errorf("total_net_weight: want 2 (boundary crossed twice), got %d", got)
+	}
+}

@@ -109,12 +109,17 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 // delta is positive for freeze, negative for unfreeze (caller passes a
 // negative frozenBalance).
 func addV1ResourceWeight(dp *state.DynamicProperties, resource corepb.ResourceCode, frozenBalance int64) {
-	weight := frozenBalance / trxPrecisionActuator
 	// Under allow_new_reward java uses (newFrozenTotal/TRX - oldFrozenTotal/TRX)
 	// as the increment, which differs from frozenBalance/TRX only when the
 	// integer division truncates at the boundary. For the V1 path touched
 	// here that happens only on sub-TRX dust — which Validate already rejects
 	// (frozenBalance < 1_000_000). So the two paths are equivalent.
+	addResourceWeight(dp, resource, frozenBalance/trxPrecisionActuator)
+}
+
+// addResourceWeight applies weight to total_{net,energy,tron_power}_weight
+// based on resource type. Shared between V1 and V2 freeze paths.
+func addResourceWeight(dp *state.DynamicProperties, resource corepb.ResourceCode, weight int64) {
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
 		dp.AddTotalNetWeight(weight)
@@ -123,4 +128,17 @@ func addV1ResourceWeight(dp *state.DynamicProperties, resource corepb.ResourceCo
 	case corepb.ResourceCode_TRON_POWER:
 		dp.AddTotalTronPowerWeight(weight)
 	}
+}
+
+// frozenV2WithDelegatedWeight computes the V2 stake weight (in TRX) for a
+// resource, mirroring java-tron's accountCapsule.getFrozenV2BalanceWithDelegated
+// for BANDWIDTH/ENERGY and getTronPowerFrozenV2Balance for TRON_POWER (which
+// has no delegated leg). Used to compute (newWeight - oldWeight) when
+// freezing/unfreezing V2 stake.
+func frozenV2WithDelegatedWeight(s *state.StateDB, addr common.Address, resource corepb.ResourceCode) int64 {
+	balance := s.GetFrozenV2Amount(addr, resource)
+	if resource != corepb.ResourceCode_TRON_POWER {
+		balance += s.GetDelegatedFrozenV2(addr, resource)
+	}
+	return balance / trxPrecisionActuator
 }

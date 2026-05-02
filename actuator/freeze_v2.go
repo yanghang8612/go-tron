@@ -71,9 +71,16 @@ func (a *FreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
 	}
 
+	// total_{net,energy,tron_power}_weight tracks the (frozenV2+delegatedV2)/TRX
+	// share — read it before the mutation, then again after, and persist the
+	// delta. Mirrors java-tron's FreezeBalanceV2Actuator.execute switch block.
+	oldWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, fc.Resource)
 	if err := ctx.State.SubBalance(ownerAddr, fc.FrozenBalance); err != nil {
 		return nil, err
 	}
 	ctx.State.AddFreezeV2(ownerAddr, fc.Resource, fc.FrozenBalance)
+	newWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, fc.Resource)
+	addResourceWeight(ctx.DynProps, fc.Resource, newWeight-oldWeight)
+
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

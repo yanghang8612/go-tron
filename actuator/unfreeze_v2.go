@@ -75,7 +75,14 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
 	}
 
+	// Track the total_{net,energy,tron_power}_weight delta around the
+	// frozenV2 mutation, mirroring java-tron's
+	// UnfreezeBalanceV2Actuator.updateTotalResourceWeight.
+	oldWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, uc.Resource)
 	ctx.State.ReduceFreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance)
+	newWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, uc.Resource)
+	addResourceWeight(ctx.DynProps, uc.Resource, newWeight-oldWeight)
+
 	expireTime := ctx.BlockTime + ctx.DynProps.UnfreezeDelayDays()*86_400_000
 	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
 
