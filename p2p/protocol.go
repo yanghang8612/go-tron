@@ -6,6 +6,13 @@ const (
 	// Message type codes — match java-tron
 	MsgTx             byte = 0x01
 	MsgBlock          byte = 0x02
+	// MsgTrxs (TRXS, 0x03) carries a `protocol.Transactions` proto (a
+	// repeated Transaction list). java-tron's P2pEventHandlerImpl only
+	// dispatches TRXS to the transactions handler — single-TRX (0x01)
+	// messages from peers fall through to NO_SUCH_MESSAGE and trigger
+	// disconnect. Always wrap outbound tx data in TRXS even when the
+	// payload is a single transaction.
+	MsgTrxs           byte = 0x03
 	MsgInventory      byte = 0x06
 	MsgFetchInvData   byte = 0x07
 	MsgSyncBlockChain byte = 0x08

@@ -83,17 +83,30 @@ func (ss *SyncService) watchdog() {
 	}
 }
 
-// checkIsolation starts a sync if we are not already syncing, the chain head
-// has not advanced in over 60 s, and a better peer is available.
+// checkIsolation starts a sync if we are not already syncing and the chain
+// head has not advanced in over 30 s. Tries `BestSyncCandidate` first
+// (peer with strictly-higher advertised head) and falls back to any
+// handshaked peer — java-tron's `AdvService` does not advertise new
+// blocks via INVENTORY until it considers our peer "ready", so the
+// peer's cached headNum can lag arbitrarily behind reality. Polling
+// `BuildChainSummary` against any peer lets java-tron re-evaluate.
 func (ss *SyncService) checkIsolation() {
 	if ss.IsSyncing() || ss.chain == nil || ss.handler == nil {
 		return
 	}
-	if time.Since(ss.chain.LastInsertTime()) < 60*time.Second {
+	if time.Since(ss.chain.LastInsertTime()) < 30*time.Second {
 		return
 	}
-	if candidate := ss.handler.BestSyncCandidate(nil); candidate != nil {
-		log.Printf("Sync: chain stalled, starting sync with %s", candidate.ID())
+	candidate := ss.handler.BestSyncCandidate(nil)
+	if candidate == nil {
+		// Fall back: any handshaked peer. java-tron will respond with an
+		// empty CHAIN_INVENTORY if we're already at head, so this is cheap.
+		if peers := ss.handler.HandshakedPeers(); len(peers) > 0 {
+			candidate = peers[0]
+		}
+	}
+	if candidate != nil {
+		log.Printf("Sync: chain stalled, polling %s for updates", candidate.ID())
 		ss.StartSync(candidate)
 	}
 }
@@ -276,6 +289,17 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 
+	// java-tron sets `needSyncFromUs = false` on its peer record only when
+	// our summary's last block matches its head (lostBlockIds.size == 1).
+	// While needSyncFromUs is true, java-tron's InventoryMsgHandler drops
+	// every inbound INV — so our outbound TRX advertisements never reach
+	// the producer's mempool. Detect "we are at head" here (response is a
+	// single id we already have) and finish; otherwise continue fetching.
+	if len(ss.fetchList) == 0 && len(inv.Ids) == 1 && inv.RemainNum == 0 {
+		ss.finishSync()
+		return
+	}
+
 	log.Printf("Chain inventory: %d blocks to fetch, %d remaining", len(inv.Ids), inv.RemainNum)
 	ss.fetchNextBatch()
 }
@@ -284,14 +308,14 @@ func (ss *SyncService) fetchNextBatch() {
 	ss.mu.Lock()
 	if len(ss.fetchList) == 0 {
 		peer := ss.syncPeer
-		remainNum := ss.remainNum
 		ss.mu.Unlock()
-		// If more remain, request next chain inventory
-		if remainNum > 0 {
-			ss.sendSyncBlockChain(peer)
-		} else {
-			ss.finishSync()
-		}
+		// Always re-poll, even when remainNum == 0. java-tron may have
+		// produced new blocks while we were applying the previous batch;
+		// we need to keep sending SYNC_BLOCK_CHAIN until the response
+		// shrinks to 1 block (handled in HandleChainInventory). That
+		// transition flips java-tron's `needSyncFromUs` flag to false
+		// and lets our subsequent INV broadcasts through.
+		ss.sendSyncBlockChain(peer)
 		return
 	}
 

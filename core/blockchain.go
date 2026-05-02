@@ -582,6 +582,23 @@ func (bc *BlockChain) StateDB() *state.Database {
 	return bc.stateDB
 }
 
+// HeadStateRoot returns the post-apply state root of the canonical head
+// block. The block proto itself no longer carries `account_state_root`
+// (java-tron parity), so callers that want to open a StateDB at head
+// must use this helper rather than `block.AccountStateRoot()`.
+func (bc *BlockChain) HeadStateRoot() tcommon.Hash {
+	head := bc.CurrentBlock()
+	if root := rawdb.ReadBlockStateRoot(bc.db, head.Hash()); root != (tcommon.Hash{}) {
+		return root
+	}
+	if head.Number() == 0 {
+		return rawdb.ReadGenesisStateRoot(bc.db)
+	}
+	// Backwards-compat fallback for chain databases written before
+	// blockStateRootPrefix existed.
+	return head.AccountStateRoot()
+}
+
 // DB returns the underlying key-value store.
 func (bc *BlockChain) DB() ethdb.KeyValueStore {
 	return bc.db

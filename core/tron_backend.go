@@ -111,8 +111,7 @@ func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {
 }
 
 func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -151,8 +150,7 @@ func (b *TronBackend) PendingTransactionCount() int {
 }
 
 func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContract, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -166,7 +164,7 @@ func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContra
 
 func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -324,8 +322,7 @@ func (b *TronBackend) EstimateEnergy(owner, contract tcommon.Address, data []byt
 }
 
 func (b *TronBackend) GetAccountResource(addr tcommon.Address) (*tronapi.AccountResource, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -558,8 +555,7 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 }
 
 func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -593,8 +589,7 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 }
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -613,8 +608,7 @@ func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timesta
 }
 
 func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -631,8 +625,7 @@ func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.
 }
 
 func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -817,8 +810,7 @@ func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 }
 
 func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMessage, error) {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
@@ -1004,8 +996,7 @@ func (b *TronBackend) BlockNumber() uint64 {
 }
 
 func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return 0
@@ -1014,8 +1005,7 @@ func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
 }
 
 func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil
@@ -1024,8 +1014,7 @@ func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
 }
 
 func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
-	current := b.chain.CurrentBlock()
-	root := current.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return tcommon.Hash{}
@@ -1242,7 +1231,7 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	}
 
 	head := b.chain.CurrentBlock()
-	root := head.AccountStateRoot()
+	root := b.chain.HeadStateRoot()
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)

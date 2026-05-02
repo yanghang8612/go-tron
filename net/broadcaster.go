@@ -81,6 +81,10 @@ func (bs *BroadcastService) BroadcastBlockFrom(block *types.Block, origin *p2p.P
 }
 
 // BroadcastTx queues a transaction for the next spread flush (satisfies TxBroadcaster).
+// The inventory key is `tx.Hash()` (= SHA-256 of RawData = txID), matching
+// java-tron's `TransactionMessage.getMessageId()` override which returns
+// the rawData hash (not the full-tx hash that the base Message class
+// produces). Mismatch triggers NO_SUCH_MESSAGE and disconnect.
 func (bs *BroadcastService) BroadcastTx(tx *types.Transaction) {
 	bs.enqueue(corepb.Inventory_TRX, tx.Hash(), nil)
 }

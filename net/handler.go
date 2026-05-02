@@ -355,6 +355,8 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 		h.handleBlock(peer, payload)
 	case p2p.MsgTx:
 		h.handleTx(peer, payload)
+	case p2p.MsgTrxs:
+		h.handleTrxs(peer, payload)
 	case p2p.MsgInventory:
 		h.handleInventory(peer, payload)
 	case p2p.MsgPbftMsg:
@@ -391,12 +393,16 @@ func (h *TronHandler) handleFetchInvData(peer *p2p.Peer, payload []byte) {
 		}
 	case corepb.Inventory_TRX:
 		for _, id := range inv.Ids {
-			hash := tcommon.BytesToHash(id)
-			tx := h.pool.Get(hash)
+			tx := h.pool.Get(tcommon.BytesToHash(id))
 			if tx != nil {
-				data, err := proto.Marshal(tx.Proto())
+				// java-tron's P2pEventHandlerImpl only dispatches TRXS
+				// (0x03, batched). Single TRX (0x01) falls through to
+				// NO_SUCH_MESSAGE; wrap in Transactions even when sending
+				// just one.
+				batch := &corepb.Transactions{Transactions: []*corepb.Transaction{tx.Proto()}}
+				data, err := proto.Marshal(batch)
 				if err == nil {
-					peer.Send(p2p.MsgTx, data)
+					peer.Send(p2p.MsgTrxs, data)
 				}
 			}
 		}
@@ -453,6 +459,25 @@ func (h *TronHandler) handleTx(peer *p2p.Peer, payload []byte) {
 	}
 }
 
+// handleTrxs accepts a TRXS (0x03) batched transactions payload from a peer.
+// java-tron sends every tx — solo or batch — as TRXS, so this is the
+// primary inbound tx ingestion path on a cross-impl link.
+func (h *TronHandler) handleTrxs(peer *p2p.Peer, payload []byte) {
+	var batch corepb.Transactions
+	if err := proto.Unmarshal(payload, &batch); err != nil {
+		return
+	}
+	for _, pbTx := range batch.Transactions {
+		tx := types.NewTransactionFromPB(pbTx)
+		if err := h.pool.Add(tx); err != nil {
+			continue
+		}
+		if h.broadcaster != nil {
+			h.broadcaster.BroadcastTxFrom(tx, peer)
+		}
+	}
+}
+
 func (h *TronHandler) handleInventory(peer *p2p.Peer, payload []byte) {
 	var inv corepb.Inventory
 	if err := proto.Unmarshal(payload, &inv); err != nil {
@@ -471,8 +496,7 @@ func (h *TronHandler) handleInventory(peer *p2p.Peer, payload []byte) {
 		}
 	case corepb.Inventory_TRX:
 		for _, id := range inv.Ids {
-			hash := tcommon.BytesToHash(id)
-			if h.pool.Get(hash) == nil {
+			if h.pool.Get(tcommon.BytesToHash(id)) == nil {
 				needed = append(needed, id)
 			}
 		}
