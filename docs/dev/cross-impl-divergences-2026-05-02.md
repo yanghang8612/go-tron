@@ -129,25 +129,80 @@ Affected endpoints (likely all four):
 | D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal at 4 (then 5 on re-test) on both nodes. | `42c597f` |
 | listproposals.parameters wire format | **closed** — switched HTTP-side `ProposalInfo.Parameters` from `map[string]int64` to `[]ProposalParameterEntry` (sorted by key). gRPC unaffected (returns `corepb.Proposal` directly). | `7b202d4` |
 
-## Open follow-ups (out of scope for the parallel batch)
+## Follow-up D-1.b — 2,400-sun balance residual
 
-- **D-1.b 2,400-sun balance residual**: stable across flows, points at
-  `consume_user_resource_percent` origin-stake split (only relevant for
-  caller≠origin txs — not on the cross-impl chain's CreateSmartContract
-  history). Or tiny OUT_OF_TIME / REVERT branch difference in
-  `payEnergyBill`. Needs comparison of java-tron `ReceiptCapsule.java`
-  three-arg overload (line 201-239) with `actuator/energy_bill.go`.
-- **D-2.b 26-extra-maintenance-cycle bug**: under CD=OFF (the original
-  fixture state), gtron was firing `distributeLegacyStandby` 37 times in
-  ~66h instead of 11. Adding CD=ON to the fixture suppresses
-  `distributeLegacyStandby` so the bug no longer affects allowance, but
-  cycle-bound state (VI accumulation, brokerage snapshots, total_*
-  cycle counters) may still diverge. Needs separate investigation.
+Symptom (re-test at H=85582):
+- gtron:    `98_999_998_952_071_600` sun
+- java-tron: `98_999_998_952_074_000` sun
+- Δ = **2,400 sun** (gtron HIGHER), stable across new flows.
+
+Hypotheses, ranked:
+1. **`consume_user_resource_percent` origin-stake split** — agent's note
+   on `actuator/energy_bill.go` says: only the caller-pays branch is
+   wired; the three-arg `ReceiptCapsule.payEnergyBill(caller, origin,
+   percent)` overload (java-tron `ReceiptCapsule.java:201-239`) is
+   unimplemented. If this private chain ever ran a TRC-20-style call
+   (caller != origin contract owner), the origin's stake share leaked.
+2. **OUT_OF_TIME / REVERT branch difference** — java-tron routes the
+   bill differently when `result == OUT_OF_TIME`; gtron may not
+   distinguish. Same file `ReceiptCapsule.java:283-308`.
+3. **`energy_fee` proposal-update timing** — java-tron updates the
+   per-energy SUN price when proposal #28 (or its successor) activates
+   mid-chain; gtron may update at a different boundary.
+
+Probes (cheap, do these first):
+- List historical TVM txs on the chain: walk java-tron's HTTP
+  `gettransactioninfobyblocknum` for blocks 1..head (or the few
+  non-empty ones), filter `receipt.energy_fee > 0`, count and sum
+  `(caller, origin, energy_fee, result)` tuples. If sum ≈ 2,400 sun,
+  the residual is fully energy-fee-attributed; if not, look elsewhere.
+- Diff gtron vs java-tron on `getTransactionInfoById` for each TVM tx.
+  First mismatch on `receipt.energy_fee`, `receipt.result`, or
+  `receipt.origin_energy_usage` reveals the leaking branch.
+
+Files:
+- gtron: `actuator/energy_bill.go`, `actuator/vm_actuator.go`
+- java-tron: `chainbase/src/main/java/org/tron/core/capsule/ReceiptCapsule.java` (master)
+- Cross-check: `framework/src/main/java/org/tron/core/db/TransactionTrace.java::pay`
+
+## Follow-up D-2.b — extra `distributeLegacyStandby` fires
+
+Original symptom (under CD=OFF, before fixture fix):
+- Expected per chain age (66.6h, 11 cycles × 21,600,000 ms): 11 fires
+- Observed gtron allowance accumulation: 37 fires
+- Excess: 26 × 115,200,000,000 sun (`witness_standby_allowance`)
+
+Now masked: CD=ON suppresses `distributeLegacyStandby` so allowance
+no longer leaks. But the underlying maintenance-trigger bug may affect
+other cycle-bound state — VI accumulation (rawdb prefix `rvi-`),
+brokerage cycle snapshots, `total_*` cycle counters. Needs inspection
+before declaring cross-impl byte-equal across all reads.
+
+Probe ideas:
+- After a fresh run, scan gtron's rawdb under `rvi-` prefix; count
+  cycle slots with non-zero accumulators. Compare to expected 11.
+- Read gtron `core/blockchain.go::applyBlock` — find the maintenance
+  trigger (`if NextMaintenanceTime() > 0 && blockTime >= ...`). Step
+  through one cycle: does it fire exactly once, or does the trigger
+  re-fire because `next_maintenance_time` isn't advanced atomically?
+- Read `consensus/dpos/maintenance.go::DoMaintenance` — confirm it
+  calls `calcNextMaintenanceTime` exactly once per fire and persists
+  the new value before returning.
+- java-tron reference: `framework/.../db/Manager.java::processBlock`
+  near "maintenanceManager.applyBlock"; `MaintenanceManager.java::doMaintenance`.
+
+Files:
+- gtron: `core/blockchain.go`, `consensus/dpos/maintenance.go`,
+  `cmd/gtron/genesis_file.go::makeGenesis` (next_maintenance_time init)
+- java-tron: `framework/.../consensus/dpos/MaintenanceManager.java`
+
+## Other open items (out of scope for these follow-ups)
+
 - **V1 freeze cross-impl test failures**: with allowDelegateResource=1
   active on this chain, V1 freeze with empty receiver_address fails on
   java-tron with "receiver account does not exist". Likely a test
   script issue (need to omit or set receiver explicitly) rather than a
-  cross-impl divergence. Out of scope for D-1..D-3 batch.
+  cross-impl divergence.
 
 ## Re-run command
 
