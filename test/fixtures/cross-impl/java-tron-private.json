@@ -23,7 +23,36 @@
       "url": "http://test.io"
     }
   ],
+  "_committee_comment": "Mirrors the [committee] block in /Users/asuka/Works/Tests/TVM/run/config.conf. Without these flags, gtron starts with mainnet-defaults while java-tron starts with the committee-overridden values, producing a per-block reward divergence (D-2 in docs/dev/cross-impl-divergences-2026-05-02.md) and a fork of every other proposal-gated path. Keep this in lock-step with config.conf's committee block.",
   "dynamic_properties": {
-    "maintenance_time_interval": 21600000
+    "maintenance_time_interval": 21600000,
+    "allow_creation_of_contracts": 1,
+    "allow_multi_sign": 1,
+    "allow_delegate_resource": 1,
+    "allow_same_token_name": 1,
+    "allow_tvm_transfer_trc10": 1,
+    "allow_tvm_constantinople": 1,
+    "allow_tvm_solidity059": 1,
+    "allow_shielded_trc20_transaction": 1,
+    "allow_tvm_istanbul": 1,
+    "change_delegation": 1,
+    "allow_blackhole_optimization": 1,
+    "allow_tvm_vote": 1,
+    "unfreeze_delay_days": 14,
+    "allow_tvm_london": 1,
+    "allow_asset_optimization": 1,
+    "allow_new_reward": 1,
+    "memo_fee": 1000000,
+    "allow_delegate_optimization": 1,
+    "allow_dynamic_energy": 1,
+    "dynamic_energy_threshold": 50000,
+    "dynamic_energy_increase_factor": 2000,
+    "dynamic_energy_max_factor": 34000,
+    "allow_tvm_shanghai": 1,
+    "allow_old_reward_opt": 1,
+    "allow_energy_adjustment": 1,
+    "allow_strict_math": 1,
+    "allow_tvm_cancun": 1,
+    "allow_optimized_return_value_of_chain_id": 1
   }
 }
