@@ -80,7 +80,7 @@ var defaultProps = map[string]int64{
 	"state_flag":                                0,
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            5000,
-	"next_proposal_id":                          0,
+	"next_proposal_id":                          1,
 	"next_token_id":                             1_000_001,
 	"next_exchange_id":                          1,
 	"exchange_create_fee":                       1_024_000_000,

@@ -84,14 +84,29 @@ func TestProposalCreateExecute(t *testing.T) {
 		t.Fatalf("expected ContractRet=1")
 	}
 
-	p := rawdb.ReadProposal(db, 0)
+	// java-tron parity: first proposal_id == 1 (pre-increment of latest=0).
+	p := rawdb.ReadProposal(db, 1)
 	if p == nil {
-		t.Fatal("proposal not stored")
+		t.Fatal("proposal not stored at id=1")
 	}
-	if p.Proposer != owner || p.State != rawdb.ProposalStatePending {
+	if p.ID != 1 || p.Proposer != owner || p.State != rawdb.ProposalStatePending {
 		t.Fatalf("unexpected proposal: %+v", p)
 	}
-	if ctx.DynProps.NextProposalID() != 1 {
-		t.Fatalf("next_proposal_id not incremented")
+	if rawdb.ReadProposal(db, 0) != nil {
+		t.Fatal("no proposal should be stored at id=0")
+	}
+	if ctx.DynProps.NextProposalID() != 2 {
+		t.Fatalf("next_proposal_id=%d, want 2", ctx.DynProps.NextProposalID())
+	}
+
+	// Second proposal must get id=2; counter advances to 3.
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("second execute failed: %v", err)
+	}
+	if p2 := rawdb.ReadProposal(db, 2); p2 == nil || p2.ID != 2 {
+		t.Fatalf("second proposal not stored at id=2: %+v", p2)
+	}
+	if ctx.DynProps.NextProposalID() != 3 {
+		t.Fatalf("next_proposal_id=%d, want 3", ctx.DynProps.NextProposalID())
 	}
 }
