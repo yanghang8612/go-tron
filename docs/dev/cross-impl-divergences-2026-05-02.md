@@ -120,7 +120,31 @@ Affected endpoints (likely all four):
 - gRPC `wallet.Wallet/ListProposals`
 - gRPC `wallet.Wallet/GetProposalById`
 
-## Status
+## Status (2026-05-02 — end of day)
 
-All four open. None have a fix landed yet. Investigations dispatched
-2026-05-02 in parallel; this doc is the shared briefing.
+| # | status | fix commit |
+|---|---|---|
+| D-1 SR balance | **open** — investigation HIGH-confidence on H-VM (energy fee not deducted in `actuator/vm_actuator.go`); fix in flight | — |
+| D-2 SR allowance | **closed** — fixture missed the `committee` block from java-tron's config.conf, so gtron started with `change_delegation=0` while java-tron had it on. Adding all committee flags to the fixture made per-block allowance accumulator byte-equal. Allowance verified at 776,880,000,000 sun on both nodes at H=80925. | `52a78ad` |
+| D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal at 4 on both nodes. | `42c597f` |
+| listproposals.parameters wire format | **closed** — switched HTTP-side `ProposalInfo.Parameters` from `map[string]int64` to `[]ProposalParameterEntry` (sorted by key). gRPC unaffected (returns `corepb.Proposal` directly). | `7b202d4` |
+
+## Open follow-ups (out of scope for the parallel batch)
+
+- **D-2.b 26-extra-maintenance-cycle bug**: under CD=OFF (the original
+  fixture state), gtron was firing `distributeLegacyStandby` 37 times in
+  ~66h instead of 11. Adding CD=ON to the fixture suppresses
+  `distributeLegacyStandby` so the bug no longer affects allowance, but
+  cycle-bound state (VI accumulation, brokerage snapshots, total_*
+  cycle counters) may still diverge. Needs separate investigation.
+- **V1 freeze cross-impl test failures**: with allowDelegateResource=1
+  active on this chain, V1 freeze with empty receiver_address fails on
+  java-tron with "receiver account does not exist". Likely a test
+  script issue (need to omit or set receiver explicitly) rather than a
+  cross-impl divergence. Out of scope for D-1..D-3 batch.
+
+## Re-run command
+
+```bash
+make gtron && JAVA_TRON_HTTP=127.0.0.1:8090 make system-test-cross-flows
+```
