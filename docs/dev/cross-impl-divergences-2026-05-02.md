@@ -124,13 +124,19 @@ Affected endpoints (likely all four):
 
 | # | status | fix commit |
 |---|---|---|
-| D-1 SR balance | **open** — investigation HIGH-confidence on H-VM (energy fee not deducted in `actuator/vm_actuator.go`); fix in flight | — |
-| D-2 SR allowance | **closed** — fixture missed the `committee` block from java-tron's config.conf, so gtron started with `change_delegation=0` while java-tron had it on. Adding all committee flags to the fixture made per-block allowance accumulator byte-equal. Allowance verified at 776,880,000,000 sun on both nodes at H=80925. | `52a78ad` |
-| D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal at 4 on both nodes. | `42c597f` |
+| D-1 SR balance | **closed (with 2,400 sun residual)** — root cause was energy fee never debited from caller balance. New `actuator/PayEnergyBill` mirrors java-tron's `ReceiptCapsule.payEnergyBill`: drain stake-funded energy off `energy_usage`, multiply overage × `energy_fee`, SubBalance, route to `transaction_fee_pool` / `burn_trx_amount` / blackhole. Wired in `ApplyTransaction` post-Execute with snapshot rollback. Baseline gap closed from 16,915,000 sun → 2,400 sun (99.985%). The 2,400-sun residual is stable (doesn't grow with new flows) and is most likely the deferred `consume_user_resource_percent` origin-stake split, only relevant for caller≠origin TRC-20 triggers. | `952a3b3` |
+| D-2 SR allowance | **closed** — fixture missed the `committee` block from java-tron's config.conf, so gtron started with `change_delegation=0` while java-tron had it on. Adding all committee flags to the fixture made per-block allowance accumulator byte-equal. Allowance verified at 776,880,000,000 sun on both nodes at H=80925, and 821,587,200,000 sun at H=85582 after re-test. | `52a78ad` |
+| D-3 proposal_id off-by-one | **closed** — `next_proposal_id` DP key default was 0; java-tron's pre-increment from latest=0 yields 1 for first id. Bumped default to 1. Verified `latest_proposal_id` byte-equal at 4 (then 5 on re-test) on both nodes. | `42c597f` |
 | listproposals.parameters wire format | **closed** — switched HTTP-side `ProposalInfo.Parameters` from `map[string]int64` to `[]ProposalParameterEntry` (sorted by key). gRPC unaffected (returns `corepb.Proposal` directly). | `7b202d4` |
 
 ## Open follow-ups (out of scope for the parallel batch)
 
+- **D-1.b 2,400-sun balance residual**: stable across flows, points at
+  `consume_user_resource_percent` origin-stake split (only relevant for
+  caller≠origin txs — not on the cross-impl chain's CreateSmartContract
+  history). Or tiny OUT_OF_TIME / REVERT branch difference in
+  `payEnergyBill`. Needs comparison of java-tron `ReceiptCapsule.java`
+  three-arg overload (line 201-239) with `actuator/energy_bill.go`.
 - **D-2.b 26-extra-maintenance-cycle bug**: under CD=OFF (the original
   fixture state), gtron was firing `distributeLegacyStandby` 37 times in
   ~66h instead of 11. Adding CD=ON to the fixture suppresses
