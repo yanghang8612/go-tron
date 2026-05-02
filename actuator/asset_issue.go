@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/params"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -84,6 +85,20 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 			return errors.New("frozen supply total overflows int64")
 		}
 		frozenTotal += f.FrozenAmount
+
+		// VERSION_4_8_1 (master 44a4bc8263, v4.8.1 release): per-supply
+		// expire-time overflow gate. Mirror java-tron AssetIssueActuator
+		// exactly — including the silent-overflow `frozenDays *
+		// FROZEN_PERIOD` multiplication, since java's `long *` wraps and
+		// only the `addExact(startTime, frozenPeriod)` step throws.
+		if forks.PassVersion(ctx.DB, 34, ctx.BlockTime, ctx.DynProps.MaintenanceTimeInterval()) {
+			frozenPeriod := f.FrozenDays * params.FrozenPeriod
+			sum := c.StartTime + frozenPeriod
+			if (frozenPeriod > 0 && sum < c.StartTime) ||
+				(frozenPeriod < 0 && sum > c.StartTime) {
+				return errors.New("Start time and frozen days would cause expire time overflow")
+			}
+		}
 	}
 	if frozenTotal > c.TotalSupply {
 		return errors.New("frozen supply exceeds total supply")
