@@ -16,6 +16,12 @@ import (
 const (
 	maxChainInventorySize = 2000
 	maxFetchBatch         = 100
+
+	// minFetchInterval throttles outbound FETCH_INV_DATA to stay under
+	// java-tron's default rate limit of 3 msgs/s
+	// (`RateLimiterConfig.fetchInvData = 3.0`). We send slightly slower
+	// than 3/s to leave headroom for the peer's token bucket.
+	minFetchInterval = 350 * time.Millisecond
 )
 
 // syncFetchTimeout is how long to wait for a block response before failing over
@@ -32,6 +38,8 @@ type SyncService struct {
 	syncPeer   *p2p.Peer
 	fetchList  []types.BlockID // blocks to fetch from peer
 	remainNum  int64
+	inflight   int         // blocks requested but not yet received in the current batch
+	lastFetch  time.Time   // when we last sent FETCH_INV_DATA (for outbound throttling)
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
 
@@ -98,7 +106,13 @@ func (ss *SyncService) IsSyncing() bool {
 }
 
 // BuildChainSummary creates an exponentially-spaced list of block IDs
-// from our chain, used in SYNC_BLOCK_CHAIN messages.
+// from our chain, used in SYNC_BLOCK_CHAIN messages. The result is in
+// ascending order (oldest first, newest last) — matching java-tron's
+// `SyncService.getBlockChainSummary` convention. java-tron's
+// `SyncBlockChainMsgHandler.check` enforces
+// `summary[last].num >= peer.lastSyncBlockId.num`, so the summary must
+// end at our current head; sending it head-first triggers BAD_MESSAGE
+// after the first inventory exchange.
 func (ss *SyncService) BuildChainSummary() []types.BlockID {
 	head := ss.chain.CurrentBlock()
 	headNum := head.Number()
@@ -124,6 +138,10 @@ func (ss *SyncService) BuildChainSummary() []types.BlockID {
 		step *= 2
 	}
 
+	// Reverse to ascending order: java-tron expects oldest first.
+	for i, j := 0, len(summary)-1; i < j; i, j = i+1, j-1 {
+		summary[i], summary[j] = summary[j], summary[i]
+	}
 	return summary
 }
 
@@ -235,13 +253,20 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 
+	// Drop any ids we already have. java-tron's getLostBlockIds includes
+	// the un-fork point itself as the first id of every CHAIN_INVENTORY
+	// response, which after the first batch is a block we synced last
+	// round. Re-fetching it would hit java-tron's `syncBlockIdCache`
+	// dedup check and trigger BAD_PROTOCOL.
 	ss.mu.Lock()
-	ss.fetchList = nil
+	ss.fetchList = ss.fetchList[:0]
 	for _, bid := range inv.Ids {
-		ss.fetchList = append(ss.fetchList, types.BlockID{
-			Hash: tcommon.BytesToHash(bid.Hash),
-			Num:  uint64(bid.Number),
-		})
+		num := uint64(bid.Number)
+		hash := tcommon.BytesToHash(bid.Hash)
+		if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
+			continue
+		}
+		ss.fetchList = append(ss.fetchList, types.BlockID{Hash: hash, Num: num})
 	}
 	ss.remainNum = inv.RemainNum
 	ss.mu.Unlock()
@@ -275,9 +300,23 @@ func (ss *SyncService) fetchNextBatch() {
 		batch = batch[:maxFetchBatch]
 	}
 	ss.fetchList = ss.fetchList[len(batch):]
+	ss.inflight = len(batch)
 	peer := ss.syncPeer
+	now := time.Now()
+	earliest := ss.lastFetch.Add(minFetchInterval)
+	wait := earliest.Sub(now)
+	if wait < 0 {
+		wait = 0
+		ss.lastFetch = now
+	} else {
+		ss.lastFetch = earliest
+	}
 	ss.armFetchTimer()
 	ss.mu.Unlock()
+
+	if wait > 0 {
+		time.Sleep(wait)
+	}
 
 	var ids [][]byte
 	for _, bid := range batch {
@@ -307,6 +346,10 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.fetchTimer = nil
 	}
 	ss.fetchSeq++
+	if ss.inflight > 0 {
+		ss.inflight--
+	}
+	batchDone := ss.inflight == 0
 	ss.mu.Unlock()
 
 	if err := ss.chain.InsertBlock(block); err != nil {
@@ -320,8 +363,13 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 
 	log.Printf("Synced block #%d", block.Number())
 
-	// Check if we need more blocks
-	ss.fetchNextBatch()
+	// Only request the next batch when the current one is fully drained;
+	// otherwise we'd flood the peer with overlapping FETCH_INV_DATA requests
+	// (java-tron rate-limits FETCH_INV_DATA at 3/s and disconnects with
+	// BAD_PROTOCOL when exceeded).
+	if batchDone {
+		ss.fetchNextBatch()
+	}
 	return true
 }
 
@@ -331,6 +379,7 @@ func (ss *SyncService) doReset() {
 	ss.syncPeer = nil
 	ss.fetchList = nil
 	ss.remainNum = 0
+	ss.inflight = 0
 	ss.fetchSeq++
 	if ss.fetchTimer != nil {
 		ss.fetchTimer.Stop()

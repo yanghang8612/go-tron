@@ -45,13 +45,15 @@ func TestBuildChainSummaryMultipleBlocks(t *testing.T) {
 	ss := NewSyncService(bc, nil)
 	summary := ss.BuildChainSummary()
 
-	// First = head, last = genesis
-	if summary[0].Number() != 10 {
-		t.Fatalf("first summary entry should be head (#10), got #%d", summary[0].Number())
+	// Ascending order — java-tron's SyncBlockChainMsgHandler.check enforces
+	// summary[last].num >= peer.lastSyncBlockId.num, so the head must be
+	// last and genesis must be first.
+	if summary[0].Number() != 0 {
+		t.Fatalf("first summary entry should be genesis (#0), got #%d", summary[0].Number())
 	}
 	last := summary[len(summary)-1]
-	if last.Number() != 0 {
-		t.Fatalf("last summary entry should be genesis (#0), got #%d", last.Number())
+	if last.Number() != 10 {
+		t.Fatalf("last summary entry should be head (#10), got #%d", last.Number())
 	}
 }
 
