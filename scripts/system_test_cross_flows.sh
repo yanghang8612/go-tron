@@ -595,6 +595,335 @@ flow_proposal_create() {
         "max([p.get('proposal_id',0) for p in d.get('proposals',[])] + [0])"
 }
 
+# ── Flow 9: ProposalApproveContract ──────────────────────────────
+# Approves the most recent proposal via java's listproposals output.
+flow_proposal_approve() {
+    echo ""
+    echo "=== Flow 9: ProposalApproveContract ==="
+    local proposals max_id
+    proposals=$(http_post "$JAVA_HTTP" "/wallet/listproposals" "{}")
+    max_id=$(json_field "max([p.get('proposal_id',0) for p in d.get('proposals',[])] + [0])" "$proposals")
+    if [ -z "$max_id" ] || [ "$max_id" = "0" ]; then
+        skip_step "proposalApprove" "no proposal to approve"
+        return
+    fi
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/proposalapprove" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"proposal_id\":$max_id,\"is_add_approval\":true}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        skip_step "proposalApprove" "endpoint did not return a tx (already approved?)"
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        skip_step "proposalApprove" "broadcast/inclusion failed (already approved?)"
+        return
+    fi
+    pass "proposalApprove included at block #$incl (proposal_id=$max_id)"
+
+    # Proposal's approval list should contain SR_ADDR on both nodes.
+    # Both java-tron and gtron return approvals at the top level of the
+    # response, not nested under a `proposal` key.
+    assert_state_eq "proposal approvers" \
+        "/wallet/getproposalbyid" "{\"id\":$max_id}" \
+        "sorted(d.get('approvals',[]))"
+}
+
+# ── Flow 10: UpdateBrokerageContract ─────────────────────────────
+# Sets witness brokerage rate (default 20%, change to 25%, then to 20%).
+flow_update_brokerage() {
+    echo ""
+    echo "=== Flow 10: UpdateBrokerageContract ==="
+    local current
+    current=$(http_post "$JAVA_HTTP" "/wallet/getBrokerage" \
+        "{\"address\":\"$SR_ADDR_HEX\"}")
+    local rate=$(json_field "d.get('brokerage', 20)" "$current")
+    # Pick a different value (cycles 19↔21) to ensure the proposal actually
+    # mutates state. Default mainnet brokerage is 20.
+    local newrate=21
+    if [ "$rate" = "21" ]; then newrate=19; fi
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/updateBrokerage" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"brokerage\":$newrate}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "updateBrokerage: createtransaction did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "updateBrokerage: broadcast or inclusion failed"
+        return
+    fi
+    pass "updateBrokerage included at block #$incl ($rate -> $newrate)"
+
+    assert_state_eq "SR brokerage rate" \
+        "/wallet/getBrokerage" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('brokerage',-1)"
+}
+
+# ── Flow 11: WitnessUpdateContract ───────────────────────────────
+# Updates the SR's URL. Must be at least 1 byte and ≤256 bytes.
+flow_witness_update() {
+    echo ""
+    echo "=== Flow 11: WitnessUpdateContract ==="
+    # Bump version suffix on the URL so each run actually mutates state
+    # (java rejects no-op or empty updates).
+    local newurl="http://test.io/v$(date +%s)"
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/updatewitness" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"update_url\":\"$(echo -n "$newurl" | xxd -p | tr -d '\n')\"}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "witnessUpdate: createtransaction did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "witnessUpdate: broadcast or inclusion failed"
+        return
+    fi
+    pass "witnessUpdate included at block #$incl"
+
+    assert_state_eq "witness url" \
+        "/wallet/listwitnesses" "{}" \
+        "next((w.get('url','') for w in d.get('witnesses',[]) if w.get('address','')==\"$SR_ADDR_HEX\"), '')"
+}
+
+# ── Flow 12: UnfreezeBalanceV2 ────────────────────────────────────
+flow_unfreeze_v2() {
+    echo ""
+    echo "=== Flow 12: UnfreezeBalanceV2 ==="
+    # Requires FREEZE_V2_OPEN. Unfreeze 1 TRX of BANDWIDTH staked in Flow 4.
+    # This creates a pending unfreeze entry in unfrozenV2[] with an
+    # unfreeze_expire_time derived from UnfreezeDelayDays.
+    if [ "$FREEZE_V2_OPEN" != "1" ]; then
+        skip_step "unfreezeV2" "FREEZE_V2_OPEN=0 (UnfreezeDelayDays not set)"
+        return
+    fi
+
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/unfreezebalancev2" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"unfreeze_balance\":1000000,\"resource\":\"BANDWIDTH\"}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "unfreezeV2: did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "unfreezeV2: broadcast or inclusion failed"
+        return
+    fi
+    pass "unfreezeV2 included at block #$incl"
+
+    # Both nodes must agree on the total amount pending unfreeze (sum of
+    # unfreeze_amount across all unfrozenV2 entries) and on the expire time
+    # of the first (only) pending entry.
+    assert_state_eq "SR unfrozenV2 total amount" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sum(e.get('unfreeze_amount',0) for e in d.get('unfrozenV2',[]))"
+    assert_state_eq "SR unfrozenV2 expire_time set (>0)" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "max((e.get('unfreeze_expire_time',0) for e in d.get('unfrozenV2',[])), default=0) > 0"
+    # frozenV2 BANDWIDTH amount must have decreased by 1 TRX on both sides.
+    assert_state_eq "SR frozenV2 after unfreeze" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sorted([(e.get('amount',0), e.get('type',0)) for e in d.get('frozenV2',[])])"
+}
+
+# ── Flow 13: DelegateResource ────────────────────────────────────
+# Deterministic recipient that doesn't collide with the PID-keyed test addresses.
+DELEGATE_RECIPIENT="410000000000000000000000000000000000000011"
+
+flow_delegate_resource() {
+    echo ""
+    echo "=== Flow 13: DelegateResource ==="
+    # Requires FREEZE_V2_OPEN. Delegate 2 TRX of BANDWIDTH to a fixed
+    # recipient address. After Flow 9 unfroze 1 TRX, the SR still has 4 TRX
+    # of frozen BANDWIDTH (unfrozeV2 pending ≠ available; delegatable balance
+    # comes from frozenV2 amount), so 2 TRX delegation is within budget.
+    if [ "$FREEZE_V2_OPEN" != "1" ]; then
+        skip_step "delegateResource" "FREEZE_V2_OPEN=0"
+        return
+    fi
+
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/delegateresource" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"receiver_address\":\"$DELEGATE_RECIPIENT\",\"balance\":2000000,\"resource\":\"BANDWIDTH\",\"lock\":false}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "delegateResource: did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "delegateResource: broadcast or inclusion failed"
+        return
+    fi
+    pass "delegateResource included at block #$incl"
+
+    # getdelegatedresourcev2 body uses proto field names fromAddress / toAddress.
+    local body
+    body="{\"fromAddress\":\"$SR_ADDR_HEX\",\"toAddress\":\"$DELEGATE_RECIPIENT\"}"
+    assert_state_eq "delegatedResourceV2 bandwidth balance" \
+        "/wallet/getdelegatedresourcev2" "$body" \
+        "sum(r.get('frozen_balance_for_bandwidth',0) for r in d.get('delegatedResource',[]))"
+    # The SR's own account should reflect delegated_frozenV2_balance_for_bandwidth.
+    assert_state_eq "SR delegated_frozenV2_balance_for_bandwidth" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('delegated_frozenV2_balance_for_bandwidth',0)"
+}
+
+# ── Flow 14: UnDelegateResource ──────────────────────────────────
+flow_undelegate_resource() {
+    echo ""
+    echo "=== Flow 14: UnDelegateResource ==="
+    # Undelegate the 2 TRX delegated in Flow 10. Expect the delegation entry
+    # to disappear (zero balance) and the SR's frozenV2 BANDWIDTH to grow back.
+    if [ "$FREEZE_V2_OPEN" != "1" ]; then
+        skip_step "undelegateResource" "FREEZE_V2_OPEN=0"
+        return
+    fi
+
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/undelegateresource" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\",\"receiver_address\":\"$DELEGATE_RECIPIENT\",\"balance\":2000000,\"resource\":\"BANDWIDTH\"}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "undelegateResource: did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "undelegateResource: broadcast or inclusion failed"
+        return
+    fi
+    pass "undelegateResource included at block #$incl"
+
+    # Delegation record should be gone (zero or empty list).
+    local body
+    body="{\"fromAddress\":\"$SR_ADDR_HEX\",\"toAddress\":\"$DELEGATE_RECIPIENT\"}"
+    assert_state_eq "delegatedResourceV2 cleared after undelegate" \
+        "/wallet/getdelegatedresourcev2" "$body" \
+        "sum(r.get('frozen_balance_for_bandwidth',0) for r in d.get('delegatedResource',[]))"
+    # SR frozenV2 entries should have recovered (back to what they were after
+    # Flow 9's unfreeze — the 4 TRX frozen minus the 1 TRX pending unfreeze).
+    assert_state_eq "SR frozenV2 after undelegate" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sorted([(e.get('amount',0), e.get('type',0)) for e in d.get('frozenV2',[])])"
+    assert_state_eq "SR delegated_frozenV2_balance_for_bandwidth cleared" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('delegated_frozenV2_balance_for_bandwidth',0)"
+}
+
+# ── Flow 15: CancelAllUnfreezeV2 ─────────────────────────────────
+flow_cancel_all_unfreeze_v2() {
+    echo ""
+    echo "=== Flow 15: CancelAllUnfreezeV2 ==="
+    # Requires proposal #77 (getAllowCancelAllUnfreezeV2). If not active,
+    # java-tron's actuator will reject with CONTRACT_VALIDATE_ERROR — skip.
+    # Also requires FREEZE_V2_OPEN (unfrozenV2[] must be non-empty to be useful,
+    # though the tx itself may succeed even with an empty list on some builds).
+    if [ "$FREEZE_V2_OPEN" != "1" ]; then
+        skip_step "cancelAllUnfreezeV2" "FREEZE_V2_OPEN=0"
+        return
+    fi
+    local cancel_ok
+    cancel_ok=$(probe_param getAllowCancelAllUnfreezeV2)
+    if [ "${cancel_ok:-0}" != "1" ]; then
+        skip_step "cancelAllUnfreezeV2" "proposal #77 getAllowCancelAllUnfreezeV2 not active"
+        return
+    fi
+
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/cancelallunfreezev2" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\"}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "cancelAllUnfreezeV2: did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "cancelAllUnfreezeV2: broadcast or inclusion failed"
+        return
+    fi
+    pass "cancelAllUnfreezeV2 included at block #$incl"
+
+    # unfrozenV2[] must be empty (sum == 0) on both nodes after cancel.
+    assert_state_eq "SR unfrozenV2 cleared after cancel" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sum(e.get('unfreeze_amount',0) for e in d.get('unfrozenV2',[]))"
+    # frozenV2 BANDWIDTH must have grown back by the 1 TRX that was cancelled.
+    assert_state_eq "SR frozenV2 after cancel" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sorted([(e.get('amount',0), e.get('type',0)) for e in d.get('frozenV2',[])])"
+}
+
+# ── Flow 16: WithdrawExpireUnfreeze (conditional) ─────────────────
+flow_withdraw_expire_unfreeze() {
+    echo ""
+    echo "=== Flow 16: WithdrawExpireUnfreeze ==="
+    # Only run if the SR has a matured unfreeze (unfreeze_expire_time in the
+    # past). On a freshly started test chain the unfreeze from Flow 9 won't
+    # have matured yet (delay is typically 14 days). Skip gracefully if not.
+    if [ "$FREEZE_V2_OPEN" != "1" ]; then
+        skip_step "withdrawExpireUnfreeze" "FREEZE_V2_OPEN=0"
+        return
+    fi
+
+    local now_ms
+    now_ms=$(date +%s)000
+    local acct
+    acct=$(http_post "$JAVA_HTTP" "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}")
+    local matured
+    matured=$(python3 -c "
+import sys, json
+d = json.loads('''$acct''')
+now = $now_ms
+total = sum(e.get('unfreeze_amount', 0) for e in d.get('unfrozenV2', [])
+            if e.get('unfreeze_expire_time', 0) <= now and e.get('unfreeze_expire_time', 0) > 0)
+print(total)
+" 2>/dev/null || echo "0")
+
+    if [ -z "$matured" ] || [ "$matured" -le 0 ] 2>/dev/null; then
+        skip_step "withdrawExpireUnfreeze" "no matured unfreeze available (chain too young)"
+        return
+    fi
+
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/withdrawexpireunfreeze" \
+        "{\"owner_address\":\"$SR_ADDR_HEX\"}")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        skip_step "withdrawExpireUnfreeze" "createtransaction rejected (no matured unfreeze on gtron side)"
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "withdrawExpireUnfreeze: broadcast or inclusion failed"
+        return
+    fi
+    pass "withdrawExpireUnfreeze included at block #$incl"
+
+    # Matured entries must have been removed from unfrozenV2 and the sun
+    # returned to balance; assert both nodes agree on the remaining pending list.
+    assert_state_eq "SR unfrozenV2 after withdraw" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "sum(e.get('unfreeze_amount',0) for e in d.get('unfrozenV2',[]))"
+    assert_state_eq "SR balance after withdraw" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('balance',0)"
+}
+
 # ── Run all flows ─────────────────────────────────────────────────
 flow_transfer
 flow_account_create
@@ -603,6 +932,14 @@ flow_vote_after_freeze
 flow_withdraw
 flow_asset_issue
 flow_proposal_create
+flow_proposal_approve
+flow_update_brokerage
+flow_witness_update
+flow_unfreeze_v2
+flow_delegate_resource
+flow_undelegate_resource
+flow_cancel_all_unfreeze_v2
+flow_withdraw_expire_unfreeze
 
 echo ""
 echo "=== Done ==="

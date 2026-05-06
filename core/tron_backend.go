@@ -725,7 +725,14 @@ func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
 }
 
 func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
-	return rawdb.ReadWitnessBrokerage(b.chain.db, addr)
+	// java-tron's RpcApiService.getBrokerageInfoCommon reads at
+	// currentCycle, NOT at the base key (-1). Right after an UpdateBrokerage
+	// tx the rate is only visible to readers who consult the snapshot at
+	// the next maintenance — until then the cycle key holds the previous
+	// rate. Mirror that semantic here so cross-impl byte-equal holds.
+	dp := state.LoadDynamicProperties(b.chain.db)
+	cycle := dp.CurrentCycleNumber()
+	return int64(rawdb.ReadCycleBrokerage(b.chain.db, cycle, addr.Bytes()))
 }
 
 func (b *TronBackend) TotalTransaction() int64 {

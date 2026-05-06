@@ -68,6 +68,9 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/getcanwithdrawunfreezeamount", api.getCanWithdrawUnfreezeAmount)
 	mux.HandleFunc("/wallet/getavailableunfreezecount", api.getAvailableUnfreezeCount)
 	mux.HandleFunc("/wallet/getreward", api.getReward)
+	mux.HandleFunc("/wallet/getReward", api.getReward)
+	mux.HandleFunc("/wallet/getbrokerage", api.getBrokerage)
+	mux.HandleFunc("/wallet/getBrokerage", api.getBrokerage)
 
 	// Phase 10: pool and network queries
 	mux.HandleFunc("/wallet/gettransactionfrompending", api.getTransactionFromPending)
@@ -102,6 +105,7 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/wallet/updatewitness", api.updateWitness)
 	mux.HandleFunc("/wallet/withdrawbalance", api.withdrawBalance)
 	mux.HandleFunc("/wallet/updatebrokerage", api.updateBrokerage)
+	mux.HandleFunc("/wallet/updateBrokerage", api.updateBrokerage)
 	mux.HandleFunc("/wallet/freezebalance", api.freezeBalance)
 	mux.HandleFunc("/wallet/unfreezebalance", api.unfreezeBalance)
 	mux.HandleFunc("/wallet/freezebalancev2", api.freezeBalanceV2)
@@ -992,6 +996,29 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data, _ := json.Marshal(info)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+// getBrokerage returns the brokerage rate (0–100) for the given witness
+// address. Mirrors java-tron Wallet.getBrokerage so the cross-impl test
+// can hit both nodes via the same endpoint.
+func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
+	addrHex := r.URL.Query().Get("address")
+	if addrHex == "" {
+		var body struct {
+			Address string `json:"address"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		addrHex = body.Address
+	}
+	if addrHex == "" {
+		http.Error(w, "address required", http.StatusBadRequest)
+		return
+	}
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	rate := api.backend.GetBrokerageInfo(addr)
+	data, _ := json.Marshal(map[string]int64{"brokerage": rate})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
