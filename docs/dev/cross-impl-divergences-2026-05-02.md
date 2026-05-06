@@ -282,6 +282,79 @@ Files:
   script issue (need to omit or set receiver explicitly) rather than a
   cross-impl divergence.
 
+## D-7 / D-8 / D-9 (2026-05-03) — closed
+
+- **D-7 — Flow 9 proposal approvers JSON path**: the assertion expression
+  `d.get('proposal',{}).get('approvals',[])` always evaluated to `[]` on
+  both nodes (java-tron and gtron return approvals at the *top level*
+  of `getproposalbyid`). Fixed in `scripts/system_test_cross_flows.sh`
+  by switching to `d.get('approvals',[])`.
+
+- **D-8 — camelCase HTTP route aliases**: gtron lacked the camelCase
+  wallet routes that the cross-impl test (and SDKs targeting java-tron)
+  rely on. Added aliases in `internal/tronapi/api.go` for
+  `/wallet/getReward`, `/wallet/getBrokerage` (+ a `getBrokerage`
+  handler — none existed at all), and `/wallet/updateBrokerage`. After
+  one cross-flows run we discovered java-tron's `/wallet/getbrokerage`
+  *only* accepts the camelCase form (POST → 405 on the lowercase
+  alias), so the test script was switched to use the camelCase route
+  for both nodes.
+
+- **D-9 — WitnessUpdate URL not persisted**: `WitnessUpdateActuator`
+  only mutated the in-memory `s.witnesses` map via `StateDB.PutWitness`,
+  and `StateDB.Commit()` never persists witness records — so the URL
+  change was discarded after the block applied. Fix: write the URL
+  through `ctx.DB` (the fork-rewindable buffer in applyBlock; the disk
+  DB in BuildBlock), reading the existing record, mutating only the
+  `Url` field, and writing back. This preserves `VoteCount` and the
+  production counters that `dpos.ApplyBlockStatistics` writes via the
+  same buffer immediately after `ProcessBlock`. Added a sibling
+  `StateDB.SetWitnessURL` so the in-memory map mirrors the change
+  without resetting counters (java-tron `WitnessCapsule.setUrl`
+  parity).
+
+- **D-9b — WitnessCreate not persisted (drive-by)**: same root cause
+  as D-9. `WitnessCreateActuator` now writes the new witness record
+  *and* appends to the witness index via `ctx.DB`. `AppendWitnessIndex`
+  was widened to accept `Reader+Writer` so it works against both
+  `ethdb.KeyValueStore` (genesis) and `BufferedKVStore` (actuator).
+
+### Cross-flows verification (2026-05-03, H=96498)
+
+After D-7/D-8/D-9/D-9b the cross-flows assertions for proposal
+approvers, brokerage rate, and witness URL are all byte-equal:
+
+```
+PASS: proposal approvers (gtron=['417e5f...39395bdf'] java=['417e5f...39395bdf'])
+PASS: updateBrokerage included at block #96515 ( -> 21)
+PASS: witnessUpdate included at block #96516
+PASS: witness url (gtron=http://test.io/v1777772667 java=http://test.io/v1777772667)
+```
+
+After a re-run with the camelCase script fix, Flow 10's brokerage
+assertion surfaced a *second* D-8 divergence: gtron's `getBrokerage`
+HTTP returned `21` (the freshly-set rate) while java's returned the
+old snapshotted `20`. Java's `RpcApiService.getBrokerageInfoCommon`
+reads `delegationStore.getBrokerage(currentCycleNumber, addr)` — the
+*per-cycle snapshot* written at maintenance — not the base key
+(cycle=-1) where `UpdateBrokerageActuator` stores the current rate.
+The new rate becomes visible only after the next maintenance
+boundary copies it from base → cycle. Fixed `TronBackend.GetBrokerageInfo`
+in `core/tron_backend.go` to read `rawdb.ReadCycleBrokerage(db,
+currentCycle, addr)` to mirror java's semantic.
+
+One pre-existing baseline divergence remains:
+
+```
+FAIL: baseline: SR allowance — gtron=927410688000  java=927400491089
+```
+
+That's ~10.2M sun / ~1100 sun-per-block since the H=87740 byte-equal
+state captured by D-2's closed status. Not my touch — appears to be a
+new precision/rounding regression in the new-reward path while gtron
+is in sync-only mode (so #6 producer-side double-write does not
+apply). Tracked separately as **D-2.c**.
+
 ## Re-run command
 
 ```bash
