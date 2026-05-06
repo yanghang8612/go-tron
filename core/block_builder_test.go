@@ -5,6 +5,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -126,6 +127,106 @@ func TestBuildBlock_SkipsFailingTx(t *testing.T) {
 	}
 	if len(result.FailedTxIDs) != 1 {
 		t.Fatalf("expected 1 failed tx, got %d", len(result.FailedTxIDs))
+	}
+}
+
+// TestBuildThenInsert_NoDuplicateReward is the regression test for the
+// producer-side double-write of payBlockReward / applyRewardMaintenance.
+//
+// Before the fix, BuildBlock wrote cycleReward to bc.db directly; then
+// InsertBlock → applyBlock → ProcessBlock read that value from the buffer
+// (which falls through to disk) and added the reward again, doubling
+// cycleReward[N][witness] and witness allowance on every locally-produced block.
+//
+// With change_delegation=1 and the default 20% brokerage, a single block
+// reward of 32_000_000 SUN should produce:
+//
+//	witness allowance: int64(0.20 × 32_000_000) = 6_400_000 SUN
+//	cycle reward:      32_000_000 − 6_400_000 = 25_600_000 SUN
+//
+// Double-write would give 51_200_000 cycle reward and 12_800_000 allowance.
+func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testProcessorAddr(0x10)
+	const brokerage = 20 // 20% default
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		// Witness must appear in Accounts so statedb.AddAllowance finds the object.
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://sr1"},
+		},
+		DynamicProperties: map[string]int64{
+			"change_delegation":     1,
+			"next_maintenance_time": 9_000_000_000, // far in future; no maintenance
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-seed cycle brokerage for cycle 0 so payBlockReward sees the correct
+	// rate (mirrors what applyRewardMaintenance writes at maintenance boundary).
+	dp0 := state.LoadDynamicProperties(diskdb)
+	curCycle := dp0.CurrentCycleNumber()
+	rawdb.WriteCycleBrokerage(diskdb, curCycle, witnessAddr.Bytes(), brokerage)
+
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pool := txpool.New()
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	if err != nil {
+		t.Fatalf("BuildBlock: %v", err)
+	}
+	block := result.Block
+
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+
+	// Compute expected values accounting for both payBlockReward and
+	// payStandbyWitness. With 1 witness holding all 1000 votes:
+	//   payBlockReward(32M): voter gets 32M×0.8=25.6M, witness allowance +6.4M
+	//   payStandbyWitness(16M): that witness gets 16M; voter gets 16M×0.8=12.8M,
+	//                           witness allowance +3.2M
+	// Total: cycleReward = 38.4M, allowance = 9.6M.
+	// Under the old double-write: cycleReward = 76.8M, allowance = 19.2M.
+	dp := state.LoadDynamicProperties(diskdb)
+	payPerBlock := dp.WitnessPayPerBlock()         // 32_000_000
+	standbyPay := dp.Witness127PayPerBlock()        // 16_000_000 (single witness gets all)
+	brokerageRate := float64(brokerage) / 100.0
+	wantAllowance := int64(brokerageRate*float64(payPerBlock)) +
+		int64(brokerageRate*float64(standbyPay)) // 6_400_000 + 3_200_000 = 9_600_000
+	// voter portion: (1-brokerage%) of (payPerBlock + standbyPay)
+	wantCycleReward := (payPerBlock - int64(brokerageRate*float64(payPerBlock))) +
+		(standbyPay - int64(brokerageRate*float64(standbyPay))) // 25_600_000 + 12_800_000 = 38_400_000
+
+	// Read allowance from post-apply state.
+	headRoot := bc.HeadStateRoot()
+	postState, err := state.New(headRoot, bc.StateDB())
+	if err != nil {
+		t.Fatalf("open post state: %v", err)
+	}
+	gotAllowance := postState.GetAllowance(witnessAddr)
+	if gotAllowance != wantAllowance {
+		t.Errorf("witness allowance: got %d, want %d (double-write would give %d)",
+			gotAllowance, wantAllowance, wantAllowance*2)
+	}
+
+	// Read cycle reward from disk (flushed by applyBlock via bc.buffer).
+	gotCycleReward := rawdb.ReadCycleReward(diskdb, curCycle, witnessAddr.Bytes())
+	if gotCycleReward != wantCycleReward {
+		t.Errorf("cycleReward[%d][witness]: got %d, want %d (double-write would give %d)",
+			curCycle, gotCycleReward, wantCycleReward, wantCycleReward*2)
 	}
 }
 

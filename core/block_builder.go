@@ -8,6 +8,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -64,13 +65,23 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// Reset per-block energy accumulator.
 	dynProps.SetBlockEnergyUsage(0)
 
+	// Throwaway buffer: all rawdb-accumulator writes during block assembly
+	// (cycle rewards, brokerage snapshots, VI accumulations) go here and are
+	// never flushed to disk. The statedb still sees the full reward (correct
+	// account_state_root), and InsertBlock → applyBlock → ProcessBlock is
+	// the single canonical rawdb write path. Without this, BuildBlock would
+	// write to bc.db directly, then applyBlock would read those values and
+	// add again — doubling cycleReward[N][witness] and allowance.
+	buildBuf := blockbuffer.New(bc.db)
+	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
+
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction
 	var failedTxIDs []tcommon.Hash
 	blockNum := parent.Number() + 1
 
 	for _, tx := range pendingTxs {
-		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, bc.db, bc.ActiveWitnesses(), true)
+		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true)
 		if err != nil {
 			h := tx.Hash()
 			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)
@@ -84,8 +95,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	}
 
 	// Pay block reward to witness (brokerage-aware once change_delegation is on).
-	payBlockReward(bc.db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-	payStandbyWitness(bc.db, statedb, dynProps)
+	// Writes go through buildBuf (throwaway) so they don't reach disk here.
+	payBlockReward(buildBuf, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	payStandbyWitness(buildBuf, statedb, dynProps)
 
 	// Per-block adaptive energy limit adjustment.
 	if dynProps.AllowAdaptiveEnergy() {
@@ -97,9 +109,12 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, timestamp, allWitnesses)
-		applyRewardMaintenance(bc.db, statedb, dynProps)
+		// Writes go through buildBuf (throwaway); applyBlock's maintenance
+		// path is the canonical writer.
+		applyRewardMaintenance(buildBuf, statedb, dynProps)
 		newActive := dpos.SelectActiveWitnesses(allWitnesses)
-		bc.SetActiveWitnesses(newActive)
+		// Do NOT call bc.SetActiveWitnesses here — applyBlock sets it after
+		// apply, keeping the active set consistent with committed state.
 		if err := ProcessProposals(bc.db, dynProps, newActive, timestamp, bc.fc); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
