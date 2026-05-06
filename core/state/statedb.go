@@ -7,6 +7,7 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -362,6 +363,50 @@ func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
 	}
 	s.journalWitness(addr)
 	existing.Proto().Url = url
+}
+
+// witnessFlushKV is the narrow capability FlushWitnesses needs. The block
+// buffer (read+write layered store) and a plain ethdb.KeyValueStore both
+// satisfy this.
+type witnessFlushKV interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
+// FlushWitnesses persists the in-memory witness deltas (VoteCount, URL) onto
+// rawdb-stored witness records via db. Called by applyBlock between
+// ProcessBlock and ApplyBlockStatistics so VoteWitness / Unfreeze /
+// WitnessUpdate effects on VoteCount and URL survive across blocks —
+// StateDB.Commit only flushes accounts, never the witness map.
+//
+// Mirrors java-tron's pattern where VoteWitnessActuator writes to
+// VotesStore and MaintenanceManager.countVote drains it into WitnessStore;
+// the per-block merge here keeps the in-memory cache aligned with rawdb so
+// the next block's pre-load sees the updated VoteCount.
+func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
+	for addr, w := range s.witnesses {
+		if w == nil {
+			continue
+		}
+		stored := rawdb.ReadWitness(db, addr)
+		if stored == nil {
+			// Witness not yet persisted (e.g. WitnessCreateActuator
+			// already wrote it via ctx.DB earlier in this block, OR a
+			// new witness materialised purely in memory). Write the
+			// in-memory record so its VoteCount/URL land — counters
+			// default to 0, which ApplyBlockStatistics will populate
+			// when the witness produces or misses.
+			rawdb.WriteWitness(db, addr, w.Copy())
+			continue
+		}
+		// Merge: only override fields the in-memory record owns.
+		// TotalProduced / TotalMissed / LatestBlockNum / LatestSlotNum
+		// are written by ApplyBlockStatistics on the same buffer and
+		// must not be clobbered.
+		stored.SetVoteCount(w.VoteCount())
+		stored.Proto().Url = w.URL()
+		rawdb.WriteWitness(db, addr, stored)
+	}
 }
 
 // DynamicProperties returns the dynamic properties.

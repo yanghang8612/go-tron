@@ -291,11 +291,15 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// must be readable here. Slice 2 of the fork-rewind fix.
 	dynProps := state.LoadDynamicProperties(bc.buffer)
 
-	// Load witnesses into statedb for maintenance access.
-	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
+	// Load witnesses into statedb for maintenance access. Reads go through
+	// bc.buffer so that VoteCount/URL deltas persisted by previous blocks
+	// (via statedb.FlushWitnesses below) are visible even when those blocks
+	// haven't been flushed to bc.db yet — same layered-read consistency the
+	// DP load above relies on.
+	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(bc.db, addr)
+			w := rawdb.ReadWitness(bc.buffer, addr)
 			if w != nil {
 				statedb.PutWitness(addr, w.URL())
 				statedb.AddWitnessVoteCount(addr, w.VoteCount())
@@ -326,6 +330,15 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
+
+	// Drain the in-memory witness deltas (VoteCount from VoteWitness /
+	// UnfreezeBalance / contract URL changes) into bc.buffer BEFORE
+	// ApplyBlockStatistics. ApplyBlockStatistics reads the witness record
+	// from the buffer to bump TotalProduced/TotalMissed, then writes it
+	// back — so the merge order here ensures both the actuator-driven
+	// VoteCount and the consensus-driven counter updates land together
+	// instead of one overwriting the other. (D-2.c root-cause fix.)
+	statedb.FlushWitnesses(bc.buffer)
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
@@ -740,13 +753,15 @@ func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockN
 }
 
 // gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).
+// Reads from bc.buffer so witnesses created earlier in the current block
+// (WitnessCreateActuator writes to bc.buffer) are visible at maintenance.
 func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessVote {
-	addrs := rawdb.ReadWitnessIndex(bc.db)
+	addrs := rawdb.ReadWitnessIndex(bc.buffer)
 	var result []dpos.WitnessVote
 	for _, addr := range addrs {
 		w := statedb.GetWitness(addr)
 		if w == nil {
-			w = rawdb.ReadWitness(bc.db, addr)
+			w = rawdb.ReadWitness(bc.buffer, addr)
 		}
 		if w != nil {
 			result = append(result, dpos.WitnessVote{

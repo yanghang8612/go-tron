@@ -4,9 +4,11 @@ import (
 	"testing"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -177,6 +179,86 @@ func TestStateDBWitness(t *testing.T) {
 	}
 	if w.URL() != "http://example.com" {
 		t.Fatalf("witness url: want http://example.com, got %s", w.URL())
+	}
+}
+
+// TestStateDBFlushWitnesses_VoteCountDelta covers the D-2.c scenario: a
+// VoteWitness-style in-memory delta on a pre-existing witness must persist
+// to rawdb without clobbering production counters. Prior to the fix the
+// delta lived only in s.witnesses and was discarded after the block,
+// causing accumulateWitnessVi to use a stale VoteCount on every subsequent
+// maintenance.
+func TestStateDBFlushWitnesses_VoteCountDelta(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	addr := testAddr(1)
+
+	// Seed disk with a witness that already has counters from prior blocks.
+	pre := types.NewWitness(addr, "http://sr-a")
+	pre.SetVoteCount(100)
+	pre.SetTotalProduced(42)
+	pre.SetTotalMissed(7)
+	pre.SetLatestBlockNum(99)
+	pre.SetLatestSlotNum(101)
+	rawdb.WriteWitness(diskdb, addr, pre)
+
+	// Fresh statedb opens with disk-backed Database; pre-load picks up the
+	// existing record (VoteCount=100, URL set).
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(diskdb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.PutWitness(addr, pre.URL())
+	sdb.AddWitnessVoteCount(addr, pre.VoteCount())
+
+	// Simulate VoteWitnessActuator applying a +1 delta in-memory.
+	sdb.AddWitnessVoteCount(addr, 1)
+	if got := sdb.GetWitness(addr).VoteCount(); got != 101 {
+		t.Fatalf("in-memory VoteCount = %d, want 101", got)
+	}
+
+	// Flush: VoteCount must reach disk; counters must be preserved.
+	sdb.FlushWitnesses(diskdb)
+
+	post := rawdb.ReadWitness(diskdb, addr)
+	if post == nil {
+		t.Fatal("witness disappeared from disk after flush")
+	}
+	if post.VoteCount() != 101 {
+		t.Errorf("VoteCount = %d, want 101", post.VoteCount())
+	}
+	if post.URL() != "http://sr-a" {
+		t.Errorf("URL = %q, want http://sr-a", post.URL())
+	}
+	if post.TotalProduced() != 42 {
+		t.Errorf("TotalProduced = %d, want 42 (must not be clobbered)", post.TotalProduced())
+	}
+	if post.TotalMissed() != 7 {
+		t.Errorf("TotalMissed = %d, want 7 (must not be clobbered)", post.TotalMissed())
+	}
+	if post.LatestBlockNum() != 99 || post.LatestSlotNum() != 101 {
+		t.Errorf("Latest block/slot clobbered: got (%d,%d), want (99,101)",
+			post.LatestBlockNum(), post.LatestSlotNum())
+	}
+}
+
+// TestStateDBFlushWitnesses_FreshWitness covers the WitnessCreate path
+// where the in-memory record exists but rawdb has no entry yet. Flush
+// should write the in-memory record verbatim so counters default to zero.
+func TestStateDBFlushWitnesses_FreshWitness(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(2)
+	sdb.PutWitness(addr, "http://new-sr")
+	sdb.AddWitnessVoteCount(addr, 5)
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb.FlushWitnesses(diskdb)
+
+	post := rawdb.ReadWitness(diskdb, addr)
+	if post == nil {
+		t.Fatal("fresh witness must be written to disk on flush")
+	}
+	if post.URL() != "http://new-sr" || post.VoteCount() != 5 {
+		t.Fatalf("fresh witness fields wrong: url=%q votes=%d", post.URL(), post.VoteCount())
 	}
 }
 

@@ -47,11 +47,15 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	dynProps := state.LoadDynamicProperties(bc.db)
 
-	// Load witnesses into statedb for maintenance access
-	witnessAddrs := rawdb.ReadWitnessIndex(bc.db)
+	// Load witnesses into statedb for maintenance access. Reads go through
+	// bc.buffer to mirror applyBlock — the chain buffer holds VoteCount /
+	// URL deltas from blocks that haven't yet been flushed to disk, and we
+	// must see the same values applyBlock will see when it inserts the
+	// block we're about to build.
+	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(bc.db, addr)
+			w := rawdb.ReadWitness(bc.buffer, addr)
 			if w != nil {
 				statedb.PutWitness(addr, w.URL())
 				statedb.AddWitnessVoteCount(addr, w.VoteCount())
