@@ -143,5 +143,25 @@ Implement a persistent VoteCount update path:
 
 ## Status
 
-Unresolved. Fix requires a VotesStore-equivalent refactor (pending-vote
-accumulation deferred to end-of-block or maintenance). Not a 1-line change.
+**Fix landed (2026-05-06); cross-impl byte-equality pending verification.**
+Implementation via `state.StateDB.FlushWitnesses`,
+called from applyBlock between ProcessBlock and ApplyBlockStatistics.
+Field-scoped merge (only VoteCount + URL) so the counter writes from
+ApplyBlockStatistics on the same buffer remain authoritative. Witness
+pre-load + `gatherWitnessVotes` switched to bc.buffer so unflushed
+deltas survive across blocks.
+
+Smaller than the originally proposed VotesStore-equivalent refactor —
+java-tron defers VoteCount application to maintenance via VotesStore;
+gtron applies per-block here, which is sufficient because no consumer
+between vote-block and maintenance reads from rawdb (applyRewardMaintenance
+reads statedb.GetWitness, which always carries the live in-memory delta).
+
+**To declare closed**: bring up the live java-tron private chain
+(`/Users/asuka/Works/Tests/TVM/run/config.conf`) and re-run
+`make system-test-cross-flows`. Confirm SR allowance is byte-equal at
+H ≥ 96498 (where D-2.c surfaced) and that ≥4 maintenance cycles have
+elapsed past the post-fix sync — a smaller cycle window may show
+equality coincidentally without exercising the bug, so check the
+chain head and the `accumulateWitnessVi` cycle count before
+attributing the result to the fix.

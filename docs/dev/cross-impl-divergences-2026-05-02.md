@@ -355,6 +355,30 @@ new precision/rounding regression in the new-reward path while gtron
 is in sync-only mode (so #6 producer-side double-write does not
 apply). Tracked separately as **D-2.c**.
 
+### D-2.c — fix landed (2026-05-06); cross-impl re-run pending
+
+Root-caused in `docs/dev/d2c-investigation-2026-05-03.md`:
+`StateDB.Commit` only flushes the account map, never `s.witnesses`, so
+`VoteWitnessActuator`'s `AddWitnessVoteCount` lived only inside the
+originating block. `accumulateWitnessVi(cycle, voteCount)` at every
+subsequent maintenance read the genesis VoteCount=100 instead of
+java-tron's 101 (after Flow 5 Vote), inflating the per-vote VI delta
+by `1/100 − 1/101` and producing the ~10.2M sun / 8758-block drift.
+
+Fix: `state.StateDB.FlushWitnesses(buffer)` merges per-addr
+VoteCount + URL onto rawdb-stored witness records, called from
+`applyBlock` between `ProcessBlock` and `ApplyBlockStatistics` so the
+counter writes from the latter remain authoritative. Witness pre-load
+in `applyBlock` / `BuildBlock` and `gatherWitnessVotes` now read
+through `bc.buffer` so deltas from previous (unflushed) blocks survive
+across the chain head.
+
+Smaller than the originally proposed VotesStore-equivalent (java's
+deferred-to-maintenance model) because no go-tron consumer between
+the vote block and the next maintenance reads VoteCount from rawdb —
+`applyRewardMaintenance` reads `statedb.GetWitness`, which already
+carries the live in-memory delta within a single block.
+
 ## Re-run command
 
 ```bash
