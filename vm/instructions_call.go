@@ -11,7 +11,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	sz := size.Uint64()
 
 	if mcost := memoryExpansionCost(memory, offset.Uint64(), sz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -46,7 +46,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	sz := size.Uint64()
 
 	if mcost := memoryExpansionCost(memory, offset.Uint64(), sz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -54,7 +54,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 
 	words := toWordSize(sz)
 	hashCost := EnergySHA3Word * words
-	if !contract.UseEnergy(hashCost) {
+	if !interpreter.useEnergy(contract, hashCost) {
 		return nil, ErrOutOfEnergy
 	}
 
@@ -97,19 +97,19 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 			cost += EnergyCallNewAcct
 		}
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 
 	inSz := inSize.Uint64()
 	retSz := retSize.Uint64()
 	if mcost := memoryExpansionCost(memory, inOffset.Uint64(), inSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
 	if mcost := memoryExpansionCost(memory, retOffset.Uint64(), retSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -154,19 +154,19 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	addr := uint256ToAddress(&addrVal)
 	gas := energyVal.Uint64()
 
-	if !contract.UseEnergy(EnergyCall) {
+	if !interpreter.useEnergy(contract, EnergyCall) {
 		return nil, ErrOutOfEnergy
 	}
 
 	inSz := inSize.Uint64()
 	retSz := retSize.Uint64()
 	if mcost := memoryExpansionCost(memory, inOffset.Uint64(), inSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
 	if mcost := memoryExpansionCost(memory, retOffset.Uint64(), retSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -207,19 +207,19 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	addr := uint256ToAddress(&addrVal)
 	gas := energyVal.Uint64()
 
-	if !contract.UseEnergy(EnergyCall) {
+	if !interpreter.useEnergy(contract, EnergyCall) {
 		return nil, ErrOutOfEnergy
 	}
 
 	inSz := inSize.Uint64()
 	retSz := retSize.Uint64()
 	if mcost := memoryExpansionCost(memory, inOffset.Uint64(), inSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
 	if mcost := memoryExpansionCost(memory, retOffset.Uint64(), retSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -260,19 +260,19 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	addr := uint256ToAddress(&addrVal)
 	gas := energyVal.Uint64()
 
-	if !contract.UseEnergy(EnergyCall) {
+	if !interpreter.useEnergy(contract, EnergyCall) {
 		return nil, ErrOutOfEnergy
 	}
 
 	inSz := inSize.Uint64()
 	retSz := retSize.Uint64()
 	if mcost := memoryExpansionCost(memory, inOffset.Uint64(), inSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
 	if mcost := memoryExpansionCost(memory, retOffset.Uint64(), retSz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}

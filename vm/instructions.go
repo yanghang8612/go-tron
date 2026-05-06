@@ -90,7 +90,7 @@ func opExp(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Mem
 	base, exponent := stack.pop(), stack.peek()
 	byteLen := uint64(exponent.ByteLen())
 	cost := EnergyExp + EnergyExpByte*byteLen
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	exponent.Exp(&base, exponent)
@@ -244,14 +244,14 @@ func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	sz := size.Uint64()
 	off := offset.Uint64()
 	if cost := memoryExpansionCost(memory, off, sz); cost > 0 {
-		if !contract.UseEnergy(cost) {
+		if !interpreter.useEnergy(contract, cost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
 	memory.resize(off + sz)
 	words := toWordSize(sz)
 	cost := EnergySHA3 + EnergySHA3Word*words
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	data := memory.getCopy(int64(off), int64(sz))
@@ -328,7 +328,7 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(memOffset.Uint64() + size)
@@ -353,7 +353,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(memOffset.Uint64() + size)
@@ -375,11 +375,11 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	address := uint256ToAddress(&a)
 	size := length.Uint64()
 	words := toWordSize(size)
-	cost := EnergyCopy * words
+	cost := EnergyExtCodeCopy + EnergyCopy*words
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(memOffset.Uint64() + size)
@@ -409,7 +409,7 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 	if mcost := memoryExpansionCost(memory, memOffset.Uint64(), size); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(memOffset.Uint64() + size)
@@ -509,7 +509,7 @@ func opMload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	if mcost := memoryExpansionCost(memory, off, 32); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(off + 32)
@@ -530,7 +530,7 @@ func opMstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	if mcost := memoryExpansionCost(memory, off, 32); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(off + 32)
@@ -549,7 +549,7 @@ func opMstore8(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	if mcost := memoryExpansionCost(memory, off, 1); mcost > 0 {
 		cost += mcost
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 	memory.resize(off + 1)
@@ -582,7 +582,7 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	} else {
 		cost = EnergySstoreReset
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 
@@ -647,7 +647,7 @@ func makeLog(topicCount int) executionFunc {
 		if mcost := memoryExpansionCost(memory, offset.Uint64(), sz); mcost > 0 {
 			cost += mcost
 		}
-		if !contract.UseEnergy(cost) {
+		if !interpreter.useEnergy(contract, cost) {
 			return nil, ErrOutOfEnergy
 		}
 		memory.resize(offset.Uint64() + sz)
@@ -682,7 +682,7 @@ func opReturn(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	offset, size := stack.pop(), stack.pop()
 	sz := size.Uint64()
 	if mcost := memoryExpansionCost(memory, offset.Uint64(), sz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -694,7 +694,7 @@ func opRevert(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	offset, size := stack.pop(), stack.pop()
 	sz := size.Uint64()
 	if mcost := memoryExpansionCost(memory, offset.Uint64(), sz); mcost > 0 {
-		if !contract.UseEnergy(mcost) {
+		if !interpreter.useEnergy(contract, mcost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -710,7 +710,7 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	if !interpreter.tvm.StateDB.Exist(address) {
 		cost += EnergyCallNewAcct
 	}
-	if !contract.UseEnergy(cost) {
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 

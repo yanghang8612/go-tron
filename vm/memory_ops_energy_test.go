@@ -69,6 +69,53 @@ func TestMemoryOpsBaseEnergy_WithHigherLimitProposal(t *testing.T) {
 	}
 }
 
+// TestExtCodeCopyEnergy_MatchesJava verifies that EXTCODECOPY charges
+// EXT_CODE_COPY (20) + memDelta + 3*words, matching java-tron EnergyCost.
+//
+// Target address holds 4 bytes of code; the program copies those 4 bytes to
+// memory at offset 0 (1 word, triggering 3-word memory expansion = 3 energy).
+//
+// Expected:
+//   3*PUSH1 + PUSH20 + EXTCODECOPY + STOP
+//   = 9 + 3 + (20 + memDelta(32 bytes=1 word→3) + 3*1) + 0
+//   = 12 + 26 = 38
+func TestExtCodeCopyEnergy_MatchesJava(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetAddr := tcommon.Address{0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42}
+	sdb.SetCode(targetAddr, []byte{0x60, 0x01, 0x60, 0x02})
+
+	// PUSH1 0x04  PUSH1 0x00  PUSH1 0x00  PUSH20 <addr>  EXTCODECOPY  STOP
+	// Stack before EXTCODECOPY (top→bot): addr, memOffset=0, codeOffset=0, length=4
+	code := []byte{
+		byte(PUSH1), 0x04,
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(PUSH20),
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42,
+		byte(EXTCODECOPY),
+		byte(STOP),
+	}
+	const energyLimit = 100_000
+	tvm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, energyLimit)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	got := energyLimit - contract.Energy
+	if got != 38 {
+		t.Fatalf("EXTCODECOPY energy: want 38 (java-tron: 20+3+3+9+3), got %d", got)
+	}
+}
+
 // TestCopyOpsBaseEnergy_NoBaseTier covers CODECOPY / CALLDATACOPY /
 // RETURNDATACOPY: java-tron `getCodeCopyCost` etc. charge only
 // `memDelta + 3*words` — no per-op base tier even with proposal #65 active.

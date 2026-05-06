@@ -14,6 +14,14 @@ type Interpreter struct {
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
 	transient  map[uint256.Int]uint256.Int // transient storage for TLOAD/TSTORE (EIP-1153)
+
+	// Dynamic-energy state — reset at the top of each Run call.
+	// factor is the effective multiplier (DynamicEnergyFactorDecimal == 1.0×).
+	// rawEnergyUsed accumulates the unscaled (pre-penalty) cost of every op
+	// so we can feed the correct value into the ContractState feedback counter
+	// at the end of execution — mirroring java-tron VM.play's energyUsage.
+	factor        int64
+	rawEnergyUsed uint64
 }
 
 // NewInterpreter creates a new interpreter.
@@ -43,12 +51,16 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	// rawEnergyUsed tracks the unscaled opcode costs so we can commit
 	// them to the contract's ContractState.energy_usage counter at the
 	// end — that counter is the input to the next cycle's catchUp math.
-	var (
-		factor        int64 = types.DynamicEnergyFactorDecimal
-		rawEnergyUsed uint64
-	)
+	//
+	// Both are stored as Interpreter fields so that instruction functions
+	// (MLOAD, CODECOPY, SHA3, LOG, etc.) can call in.useEnergy() and have
+	// their costs participate in penalty and raw-usage accounting without
+	// any extra parameters — mirroring java-tron VM.play's single
+	// energy/energyUsage variables that getEnergyCost writes into.
+	in.factor = types.DynamicEnergyFactorDecimal
+	in.rawEnergyUsed = 0
 	if in.tvmConfig.DynamicEnergy {
-		factor = updateContractEnergyFactor(in.tvm, contract.Address)
+		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
 	}
 
 	for {
@@ -77,14 +89,11 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			return nil, ErrWriteProtection
 		}
 
-		// Charge static energy cost
+		// Charge static energy cost via useEnergy so that the factor and
+		// rawEnergyUsed accumulation are applied uniformly here and in all
+		// instruction-function callsites.
 		if operation.energyCost > 0 {
-			rawEnergyUsed += operation.energyCost
-			cost := operation.energyCost
-			if factor > types.DynamicEnergyFactorDecimal {
-				cost += applyDynamicEnergyPenalty(operation.energyCost, factor)
-			}
-			if !contract.UseEnergy(cost) {
+			if !in.useEnergy(contract, operation.energyCost) {
 				return nil, ErrOutOfEnergy
 			}
 		}
@@ -93,7 +102,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		ret, err := operation.execute(&pc, in, contract, mem, stack)
 		if err != nil {
 			if in.tvmConfig.DynamicEnergy {
-				recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}
 			return nil, err
 		}
@@ -101,7 +110,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// Terminal opcodes
 		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
 			if in.tvmConfig.DynamicEnergy {
-				recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}
 			if op == REVERT {
 				return ret, ErrExecutionReverted
@@ -113,9 +122,34 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	}
 
 	if in.tvmConfig.DynamicEnergy {
-		recordContractEnergyUsage(in.tvm, contract.Address, int64(rawEnergyUsed))
+		recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 	}
 	return nil, nil
+}
+
+// useEnergy is the single energy-spend point for all inline charges from
+// instruction functions (memExpansion, per-word copy, SHA3 word cost, LOG
+// data cost, etc.). It mirrors java-tron VM.play's pattern where
+// op.getEnergyCost(program) returns the full cost before the single
+// dynamic-energy penalty calculation.
+//
+// baseCost is the raw (pre-penalty) cost. It is added to rawEnergyUsed
+// unconditionally (mirrors energyUsage accumulation in java-tron VM.play).
+// If DynamicEnergy is active and factor > 1.0×, the penalty is applied
+// and the total scaled cost is debited from the contract.
+//
+// Returns false (out-of-energy) if the contract cannot pay. Callers must
+// propagate ErrOutOfEnergy on false return.
+func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
+	if baseCost == 0 {
+		return true
+	}
+	in.rawEnergyUsed += baseCost
+	cost := baseCost
+	if in.tvmConfig.DynamicEnergy && in.factor > types.DynamicEnergyFactorDecimal {
+		cost += applyDynamicEnergyPenalty(baseCost, in.factor)
+	}
+	return contract.UseEnergy(cost)
 }
 
 // makePush creates a PUSH instruction handler.
