@@ -355,7 +355,17 @@ new precision/rounding regression in the new-reward path while gtron
 is in sync-only mode (so #6 producer-side double-write does not
 apply). Tracked separately as **D-2.c**.
 
-### D-2.c — fix landed (2026-05-06); cross-impl re-run pending
+### D-2.c — closed (2026-05-06)
+
+Cross-impl re-run at H=101086: SR allowance byte-equal at
+974,499,901,781 sun on both nodes (Δ was 10.2M sun before the fix).
+All 22 flow assertions byte-equal including the post-VoteWitness one
+at block #101091. Flows 13/14 (Delegate/UnDelegateResource) fail with
+java-tron CONTRACT_VALIDATE_ERROR before broadcast — pre-existing
+script bug (receiver address doesn't exist), not a cross-impl
+divergence. Filed as a follow-up.
+
+
 
 Root-caused in `docs/dev/d2c-investigation-2026-05-03.md`:
 `StateDB.Commit` only flushes the account map, never `s.witnesses`, so

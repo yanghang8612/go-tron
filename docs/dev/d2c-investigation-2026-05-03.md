@@ -143,7 +143,13 @@ Implement a persistent VoteCount update path:
 
 ## Status
 
-**Fix landed (2026-05-06); cross-impl byte-equality pending verification.**
+**Closed (2026-05-06)** — verified via `make system-test-cross-flows`
+at H=101086: SR allowance byte-equal at 974,499,901,781 sun on both
+nodes (was 10.2M sun apart before the fix). All 22 flow assertions
+byte-equal; the two failing flows (Delegate/UnDelegateResource) are
+pre-existing script bugs (java-tron rejects the broadcast with
+CONTRACT_VALIDATE_ERROR before it touches gtron).
+
 Implementation via `state.StateDB.FlushWitnesses`,
 called from applyBlock between ProcessBlock and ApplyBlockStatistics.
 Field-scoped merge (only VoteCount + URL) so the counter writes from
@@ -157,11 +163,11 @@ gtron applies per-block here, which is sufficient because no consumer
 between vote-block and maintenance reads from rawdb (applyRewardMaintenance
 reads statedb.GetWitness, which always carries the live in-memory delta).
 
-**To declare closed**: bring up the live java-tron private chain
-(`/Users/asuka/Works/Tests/TVM/run/config.conf`) and re-run
-`make system-test-cross-flows`. Confirm SR allowance is byte-equal at
-H ≥ 96498 (where D-2.c surfaced) and that ≥4 maintenance cycles have
-elapsed past the post-fix sync — a smaller cycle window may show
-equality coincidentally without exercising the bug, so check the
-chain head and the `accumulateWitnessVi` cycle count before
-attributing the result to the fix.
+**Verification (2026-05-06)**: `make system-test-cross-flows`
+re-run from genesis with the live java-tron private chain
+(`/Users/asuka/Works/Tests/TVM/run/config.conf`). Both nodes synced to
+H=101086, ~13,346 blocks past the H=87740 byte-equal baseline that
+exposed D-2.c — well beyond the 4 maintenance cycles needed to
+re-trigger the original 10.2M-sun divergence. SR allowance came back
+identical (974,499,901,781 sun) on both nodes, with the
+post-VoteWitness assertion at block #101091 also byte-equal.
