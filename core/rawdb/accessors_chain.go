@@ -94,7 +94,15 @@ func ReadWitnessIndex(db ethdb.KeyValueReader) []common.Address {
 	return witnesses
 }
 
-func AppendWitnessIndex(db ethdb.KeyValueStore, addr common.Address) {
+// witnessIndexReadWriter composes the narrow capabilities AppendWitnessIndex
+// needs so callers can pass either an ethdb.KeyValueStore (genesis path) or
+// the buffered KV view from actuator.Context.DB (WitnessCreateActuator).
+type witnessIndexReadWriter interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
+func AppendWitnessIndex(db witnessIndexReadWriter, addr common.Address) {
 	existing := ReadWitnessIndex(db)
 	for _, w := range existing {
 		if w == addr {

@@ -37,6 +37,7 @@ func setupContext(t *testing.T, statedb *state.StateDB, tx *types.Transaction) *
 		Tx:          tx,
 		BlockTime:   1000000,
 		BlockNumber: 1,
+		DB:          ethrawdb.NewMemoryDatabase(),
 	}
 }
 

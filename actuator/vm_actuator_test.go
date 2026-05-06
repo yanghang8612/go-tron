@@ -49,6 +49,7 @@ func newTestContext(t *testing.T, contractType corepb.Transaction_Contract_Contr
 		Tx:          tx,
 		BlockTime:   1000,
 		BlockNumber: 1,
+		DB:          diskdb,
 	}
 }
 

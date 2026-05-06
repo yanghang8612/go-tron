@@ -340,9 +340,28 @@ func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 }
 
 // PutWitness stores a witness, journaling the previous state for revert.
+// The new record carries only the URL; counters reset to zero. Use
+// SetWitnessURL when updating an existing witness so that VoteCount /
+// production counters survive the URL change (java-tron parity).
 func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
 	s.journalWitness(addr)
 	s.witnesses[addr] = types.NewWitness(addr, url)
+}
+
+// SetWitnessURL updates the URL on the existing in-memory witness without
+// resetting VoteCount / production counters. Mirrors java-tron's
+// WitnessCapsule.setUrl semantics where only the URL field is mutated.
+func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
+	existing := s.witnesses[addr]
+	if existing == nil {
+		// No in-memory record — promote a fresh one. Caller is responsible
+		// for ensuring counters are loaded separately if needed.
+		s.journalWitness(addr)
+		s.witnesses[addr] = types.NewWitness(addr, url)
+		return
+	}
+	s.journalWitness(addr)
+	existing.Proto().Url = url
 }
 
 // DynamicProperties returns the dynamic properties.
