@@ -187,6 +187,10 @@ assert_state_eq() {
         pass "$desc (gtron=$gv java=$jv)"
     else
         fail "$desc — gtron=$gv  java=$jv"
+        if [ -n "$DEBUG_FAILED_RESPONSES" ]; then
+            echo "      gtron raw: $g" >&2
+            echo "      java  raw: $j" >&2
+        fi
     fi
 }
 

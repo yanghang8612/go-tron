@@ -76,13 +76,19 @@ type PeerInfo struct {
 }
 
 // DelegatedResourceInfo holds the delegation record between two addresses.
+//
+// Wire-format parity with java-tron's HTTP /wallet/getdelegatedresourcev2:
+// proto-style snake_case field names, with zero-valued amount/expire
+// fields elided so a record holding only BANDWIDTH delegation does NOT
+// emit a 0-valued frozen_balance_for_energy stub. The addresses stay
+// in every response (they identify the record).
 type DelegatedResourceInfo struct {
-	FromAddress               string `json:"fromAddress"`
-	ToAddress                 string `json:"toAddress"`
-	FrozenBalanceForBandwidth int64  `json:"frozenBalanceForBandwidth"`
-	FrozenBalanceForEnergy    int64  `json:"frozenBalanceForEnergy"`
-	ExpireTimeForBandwidth    int64  `json:"expireTimeForBandwidth"`
-	ExpireTimeForEnergy       int64  `json:"expireTimeForEnergy"`
+	FromAddress               string `json:"from"`
+	ToAddress                 string `json:"to"`
+	FrozenBalanceForBandwidth int64  `json:"frozen_balance_for_bandwidth,omitempty"`
+	FrozenBalanceForEnergy    int64  `json:"frozen_balance_for_energy,omitempty"`
+	ExpireTimeForBandwidth    int64  `json:"expire_time_for_bandwidth,omitempty"`
+	ExpireTimeForEnergy       int64  `json:"expire_time_for_energy,omitempty"`
 }
 
 // DelegationIndexInfo lists all addresses that addr has delegated resources to.
