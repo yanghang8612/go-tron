@@ -752,6 +752,24 @@ flow_delegate_resource() {
         return
     fi
 
+    # Bootstrap DELEGATE_RECIPIENT if it has no on-chain account yet.
+    # java-tron's DelegateResourceActuator (and gtron's mirror) validate
+    # that receiver_address is an existing account; on a fresh chain
+    # this address has never been seen, so a tiny Transfer materializes
+    # it. Idempotent on subsequent runs (the check short-circuits once
+    # the account exists).
+    local recipient_chk
+    recipient_chk=$(http_post "$JAVA_HTTP" "/wallet/getaccount" \
+        "{\"address\":\"$DELEGATE_RECIPIENT\"}")
+    if ! echo "$recipient_chk" | grep -q '"address"'; then
+        local bootstrap
+        bootstrap=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/createtransaction" \
+            "{\"owner_address\":\"$SR_ADDR_HEX\",\"to_address\":\"$DELEGATE_RECIPIENT\",\"amount\":1000000}")
+        if echo "$bootstrap" | grep -q '"raw_data"'; then
+            broadcast_and_confirm "$bootstrap" >/dev/null
+        fi
+    fi
+
     local unsigned
     unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/delegateresource" \
         "{\"owner_address\":\"$SR_ADDR_HEX\",\"receiver_address\":\"$DELEGATE_RECIPIENT\",\"balance\":2000000,\"resource\":\"BANDWIDTH\",\"lock\":false}")
