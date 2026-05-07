@@ -355,6 +355,28 @@ new precision/rounding regression in the new-reward path while gtron
 is in sync-only mode (so #6 producer-side double-write does not
 apply). Tracked separately as **D-2.c**.
 
+### D-10 — DelegatedResourceInfo wire format + Flow 13/14 receiver bootstrap (closed 2026-05-07)
+
+Flow 13 (DelegateResource) initially failed on both nodes with
+"receiver account does not exist" because the deterministic
+DELEGATE_RECIPIENT (`41…0011`) had never been touched on chain.
+Bootstrap fix in `scripts/system_test_cross_flows.sh`: send a 1-TRX
+Transfer to materialise the account if `/wallet/getaccount` returns no
+address field. Idempotent on re-runs.
+
+After that, Flow 13's `delegatedResourceV2 bandwidth balance` assertion
+exposed a real wire-format divergence — gtron emitted `fromAddress`,
+`toAddress`, `frozenBalanceForBandwidth`, … (Go camelCase), while
+java-tron emitted `from`, `to`, `frozen_balance_for_bandwidth`, …
+(proto snake_case). The on-chain record was identical (the SR-side
+counter `delegated_frozenV2_balance_for_bandwidth` was already
+byte-equal); the test's `r.get('frozen_balance_for_bandwidth', 0)`
+just couldn't find the field. Fix in `internal/tronapi/backend.go`
+switches `DelegatedResourceInfo` JSON tags to snake_case and elides
+zero-valued amount/expire fields with `omitempty` so a BANDWIDTH-only
+record matches java's "BANDWIDTH-only" output (no `…for_energy: 0`
+stub). Cross-impl run at H=123154: all 37 assertions PASS.
+
 ### D-2.c — closed (2026-05-06)
 
 Cross-impl re-run at H=101086: SR allowance byte-equal at
