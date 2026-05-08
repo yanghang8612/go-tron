@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 	"math"
-	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -34,9 +33,9 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	tokenID, err := strconv.ParseInt(string(c.AssetName), 10, 64)
+	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
 	if err != nil {
-		return errors.New("invalid token ID in asset_name")
+		return err
 	}
 	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
 	if asset == nil {
@@ -81,8 +80,14 @@ func (a *ParticipateAssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokenID, _ := strconv.ParseInt(string(c.AssetName), 10, 64)
+	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	if err != nil {
+		return nil, err
+	}
 	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
+	if asset == nil {
+		return nil, errors.New("token not found")
+	}
 	tokenAmount := c.Amount * int64(asset.Num) / int64(asset.TrxNum) // overflow already checked in Validate
 
 	buyer := common.BytesToAddress(c.OwnerAddress)
