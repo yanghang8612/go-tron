@@ -50,6 +50,25 @@ func TestGenesisToBlock(t *testing.T) {
 	}
 }
 
+// TestDefaultMainnetGenesis_HashByteEqual locks gtron's mainnet genesis
+// blockID against the live mainnet value. java-tron seed nodes drop our
+// connection at TRON Hello when the genesisBlockId we advertise differs.
+// Real mainnet blockID confirmed via wallet/getblockbynum {"num":0} on
+// 3.12.206.71:8088 (java-tron 4.8.1, 2026-05-08).
+func TestDefaultMainnetGenesis_HashByteEqual(t *testing.T) {
+	const wantHex = "00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc"
+	g := params.DefaultMainnetGenesis()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	block, err := GenesisToBlock(g, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHex := hex.EncodeToString(block.Hash().Bytes())
+	if gotHex != wantHex {
+		t.Fatalf("mainnet genesis blockID drift:\n  want: %s\n  got:  %s\n  (any change to params/mainnet.go genesis fields breaks java-tron P2P sync)", wantHex, gotHex)
+	}
+}
+
 func TestGenesisHashDeterministic(t *testing.T) {
 	genesis := &params.Genesis{
 		Config:    params.MainnetChainConfig,
