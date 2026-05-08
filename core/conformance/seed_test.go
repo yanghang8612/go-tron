@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -134,6 +135,55 @@ func TestLoadSeed_RawAccountRoundTrip(t *testing.T) {
 	}
 	if got.Proto().Allowance != 1_000_000 {
 		t.Fatalf("allowance lost: got %d", got.Proto().Allowance)
+	}
+}
+
+func TestLoadSeed_WitnessRoundTrip(t *testing.T) {
+	addr, _ := ParseAddress(mustAddr("e"))
+	w := corepb.Witness{
+		Address:        addr.Bytes(),
+		VoteCount:      555,
+		Url:            "http://sr1.example/v1",
+		TotalProduced:  42,
+		TotalMissed:    3,
+		IsJobs:         true,
+		LatestBlockNum: 88,
+		LatestSlotNum:  77,
+	}
+	wBytes, err := proto.Marshal(&w)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seed.json")
+	writeJSON(t, path, Seed{
+		Schema: SchemaVersion,
+		Witnesses: []SeedWitness{
+			{Address: mustAddr("e"), WitnessProto: base64.StdEncoding.EncodeToString(wBytes)},
+		},
+		ClosureAddresses: []string{mustAddr("e")},
+	})
+	loaded, err := LoadSeed(path)
+	if err != nil {
+		t.Fatalf("load seed with witness: %v", err)
+	}
+
+	got := rawdb.ReadWitness(loaded.DiskDB, addr)
+	if got == nil {
+		t.Fatal("witness missing in diskdb after LoadSeed")
+	}
+	if got.VoteCount() != 555 || got.TotalProduced() != 42 || got.TotalMissed() != 3 {
+		t.Fatalf("witness counters lost: vc=%d produced=%d missed=%d", got.VoteCount(), got.TotalProduced(), got.TotalMissed())
+	}
+	if !got.IsJobs() {
+		t.Fatal("witness IsJobs lost")
+	}
+	if got.URL() != "http://sr1.example/v1" {
+		t.Fatalf("witness URL lost: %q", got.URL())
+	}
+	if got.LatestBlockNum() != 88 || got.LatestSlotNum() != 77 {
+		t.Fatalf("witness latest block/slot lost: bn=%d sn=%d", got.LatestBlockNum(), got.LatestSlotNum())
 	}
 }
 

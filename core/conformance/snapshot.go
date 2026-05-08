@@ -28,6 +28,7 @@ type Snapshot struct {
 	Accounts       []SnapshotAccount           `json:"accounts,omitempty"`
 	ContractStates []SnapshotContractState     `json:"contractStates,omitempty"`
 	Code           []SnapshotCode              `json:"code,omitempty"`
+	Witnesses      []SeedWitness               `json:"witnesses,omitempty"`
 	DP             map[string]int64            `json:"dp"`
 	Closure        []string                    `json:"closure"` // 41-hex; matches range-wide closure
 	Extra          map[string]json.RawMessage  `json:"extra,omitempty"`
@@ -115,6 +116,22 @@ func LoadSnapshot(r io.Reader) (*Loaded, *Snapshot, error) {
 		sdb.SetCode(addr, code)
 	}
 
+	for _, sw := range snap.Witnesses {
+		addr, err := ParseAddress(sw.Address)
+		if err != nil {
+			return nil, nil, fmt.Errorf("witness %q: %w", sw.Address, err)
+		}
+		wBytes, err := base64.StdEncoding.DecodeString(sw.WitnessProto)
+		if err != nil {
+			return nil, nil, fmt.Errorf("witness %s: base64 decode: %w", sw.Address, err)
+		}
+		w, err := types.UnmarshalWitness(wBytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("witness %s: proto unmarshal: %w", sw.Address, err)
+		}
+		rawdb.WriteWitness(diskdb, addr, w)
+	}
+
 	for _, cs := range snap.ContractStates {
 		addr, err := ParseAddress(cs.Address)
 		if err != nil {
@@ -187,6 +204,18 @@ func DumpSnapshot(l *Loaded, blockNum uint64) (*Snapshot, error) {
 			snap.ContractStates = append(snap.ContractStates, SnapshotContractState{
 				Address:            hex.EncodeToString(a[:]),
 				ContractStateProto: base64.StdEncoding.EncodeToString(b),
+			})
+		}
+	}
+	for _, a := range l.Closure {
+		if w := rawdb.ReadWitness(l.DiskDB, a); w != nil {
+			b, err := w.Marshal()
+			if err != nil {
+				return nil, fmt.Errorf("marshal witness %s: %w", hex.EncodeToString(a[:]), err)
+			}
+			snap.Witnesses = append(snap.Witnesses, SeedWitness{
+				Address:      hex.EncodeToString(a[:]),
+				WitnessProto: base64.StdEncoding.EncodeToString(b),
 			})
 		}
 	}

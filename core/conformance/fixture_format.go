@@ -18,6 +18,7 @@ type Seed struct {
 	DynamicPropsHex  map[string]string `json:"dynamicPropertiesBytes,omitempty"`
 	Accounts         []SeedAccount     `json:"accounts"`
 	Contracts        []SeedContract    `json:"contracts"`
+	Witnesses        []SeedWitness     `json:"witnesses,omitempty"`
 	ClosureAddresses []string          `json:"closureAddresses"` // 41-prefixed hex
 }
 
@@ -37,6 +38,15 @@ type SeedContract struct {
 	Address string          `json:"address"`
 	CodeHex string          `json:"code"`
 	Raw     json.RawMessage `json:"raw,omitempty"`
+}
+
+// SeedWitness holds the full corepb.Witness proto for an SR address — DigestB
+// reads rawdb.ReadWitness independently of the Account record, so witness
+// counters (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/VoteCount/IsJobs/URL)
+// must travel through the seed/snapshot path explicitly.
+type SeedWitness struct {
+	Address      string `json:"address"`
+	WitnessProto string `json:"witnessProto"` // base64 of corepb.Witness
 }
 
 // OracleEntry is one line in oracle.ndjson — java-tron's state digest at the

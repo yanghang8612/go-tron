@@ -10,6 +10,8 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // TestSnapshotRoundTrip verifies the digest-algorithm-is-single-sourced
@@ -90,5 +92,47 @@ func TestSnapshotRoundTrip_PreservesContractState(t *testing.T) {
 	d1 := DigestB(reloaded.StateDB, reloaded.DiskDB, reloaded.Closure, reloaded.DynProps)
 	if d0 != d1 {
 		t.Fatalf("digest drift when contract present:\n  orig:     %x\n  reloaded: %x", d0, d1)
+	}
+}
+
+// TestSnapshotRoundTrip_PreservesWitness verifies that DigestB-relevant
+// witness counters (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/
+// VoteCount/IsJobs/URL) survive a Dump→JSON→Load cycle. Without explicit
+// witness handling this test fails because Snapshot has no witness field
+// and DigestB reads ReadWitness from a fresh diskdb that knows nothing.
+func TestSnapshotRoundTrip_PreservesWitness(t *testing.T) {
+	dir := t.TempDir()
+	witness := buildRangeFixture(t, dir, 1000)
+	loaded, err := LoadSeed(filepath.Join(dir, "seed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := types.NewWitness(witness, "http://sr1.example/v1")
+	w.SetTotalProduced(123)
+	w.SetTotalMissed(4)
+	w.SetLatestBlockNum(999)
+	w.SetLatestSlotNum(101)
+	w.SetVoteCount(7777)
+	w.SetIsJobs(true)
+	rawdb.WriteWitness(loaded.DiskDB, witness, w)
+
+	d0 := DigestB(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps)
+
+	snap, err := DumpSnapshot(loaded, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Witnesses) != 1 {
+		t.Fatalf("DumpSnapshot dropped witness: got %d, want 1", len(snap.Witnesses))
+	}
+	data, _ := json.Marshal(snap)
+	reloaded, _, err := LoadSnapshot(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1 := DigestB(reloaded.StateDB, reloaded.DiskDB, reloaded.Closure, reloaded.DynProps)
+	if d0 != d1 {
+		t.Fatalf("witness drift through snapshot round-trip:\n  orig:     %s\n  reloaded: %s", hex.EncodeToString(d0[:]), hex.EncodeToString(d1[:]))
 	}
 }
