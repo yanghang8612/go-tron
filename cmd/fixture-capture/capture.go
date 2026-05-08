@@ -263,15 +263,36 @@ func resolveClosure(ctx context.Context, cli *httpClient, cfg captureConfig) ([]
 
 // captureSeed snapshots state at start-1 for the closure. Returns the Seed
 // and the list of active-witness 41-hex addresses (for fixture.json).
+//
+// Same parallelism rationale as captureSnapshot: three independent HTTP
+// fetches run concurrently to stay under the 3s block budget.
 func captureSeed(ctx context.Context, cli *httpClient, startHeight uint64, closure []string, parallel int) (*conformance.Seed, []string, error) {
-	dp, err := cli.getChainParameters(ctx)
-	if err != nil {
-		return nil, nil, err
+	var (
+		dp        map[string]int64
+		witnesses []*corepb.Witness
+		accounts  map[string]*corepb.Account
+		contracts map[string]*contractBundle
+		dpErr     error
+		wErr      error
+		accErr    error
+	)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); dp, dpErr = cli.getChainParameters(ctx) }()
+	go func() { defer wg.Done(); witnesses, wErr = cli.listWitnesses(ctx) }()
+	go func() {
+		defer wg.Done()
+		accounts, contracts, accErr = fetchAccountsAndContracts(ctx, cli, closure, parallel)
+	}()
+	wg.Wait()
+	if dpErr != nil {
+		return nil, nil, dpErr
 	}
-
-	witnesses, err := cli.listWitnesses(ctx)
-	if err != nil {
-		return nil, nil, err
+	if wErr != nil {
+		return nil, nil, wErr
+	}
+	if accErr != nil {
+		return nil, nil, accErr
 	}
 	witnessByAddr := make(map[string]*corepb.Witness, len(witnesses))
 	var activeHex []string
@@ -281,11 +302,6 @@ func captureSeed(ctx context.Context, cli *httpClient, startHeight uint64, closu
 		if w.IsJobs {
 			activeHex = append(activeHex, ah)
 		}
-	}
-
-	accounts, contracts, err := fetchAccountsAndContracts(ctx, cli, closure, parallel)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	var seedAccounts []conformance.SeedAccount
@@ -338,23 +354,44 @@ func captureSeed(ctx context.Context, cli *httpClient, startHeight uint64, closu
 
 // captureSnapshot snapshots post-state for block h. Same shape as captureSeed
 // but emits the conformance.Snapshot wire form.
+//
+// Each remote HTTP call is ~1s over SOCKS5, and TRON's block time is 3s. If
+// the three independent fetches (chain params, witnesses, account closure)
+// ran sequentially the snapshot would routinely span >3s and the post-head
+// would have advanced past h+1, sampling state inconsistent with the block
+// we're snapshotting. We fire them concurrently so the wall time is
+// max(individual) instead of sum, keeping us inside the 3s budget.
 func captureSnapshot(ctx context.Context, cli *httpClient, blockNum uint64, closure []string, parallel int) (*conformance.Snapshot, error) {
-	dp, err := cli.getChainParameters(ctx)
-	if err != nil {
-		return nil, err
+	var (
+		dp        map[string]int64
+		witnesses []*corepb.Witness
+		accounts  map[string]*corepb.Account
+		contracts map[string]*contractBundle
+		dpErr     error
+		wErr      error
+		accErr    error
+	)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); dp, dpErr = cli.getChainParameters(ctx) }()
+	go func() { defer wg.Done(); witnesses, wErr = cli.listWitnesses(ctx) }()
+	go func() {
+		defer wg.Done()
+		accounts, contracts, accErr = fetchAccountsAndContracts(ctx, cli, closure, parallel)
+	}()
+	wg.Wait()
+	if dpErr != nil {
+		return nil, dpErr
 	}
-	witnesses, err := cli.listWitnesses(ctx)
-	if err != nil {
-		return nil, err
+	if wErr != nil {
+		return nil, wErr
+	}
+	if accErr != nil {
+		return nil, accErr
 	}
 	witnessByAddr := make(map[string]*corepb.Witness, len(witnesses))
 	for _, w := range witnesses {
 		witnessByAddr[hex.EncodeToString(w.Address)] = w
-	}
-
-	accounts, contracts, err := fetchAccountsAndContracts(ctx, cli, closure, parallel)
-	if err != nil {
-		return nil, err
 	}
 
 	snap := &conformance.Snapshot{

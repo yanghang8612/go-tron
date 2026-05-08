@@ -74,6 +74,27 @@
 
 **依赖**：Phase 1；java-tron 操作员访问。
 
+#### 2026-05-08 · live HTTP capture 路径的根本约束（已验证）
+
+`cmd/fixture-capture` 走 `--http=<远程 java-tron>` + 可选 SOCKS5 这条路径，已经构建并端到端跑通（2026-05-08 用 `http://3.12.206.71:8088` + `127.0.0.1:1088`）。引擎/格式/digest 全 OK，gtron-replay 在被喂正确 seed 时能立刻报真实分叉。
+
+但**这条路径不能产出可信主网语料**，原因：
+
+1. `wallet/getaccount` 只返回**当前 head 状态**——没有 `at-height` 变体。已实测：endpoint 接受 `block_num` 字段但**忽略**之（返回当前 head 的同一份数据）。
+2. 主网 3s 出块 + SOCKS5 单跳 ~1s/调用：closure size > ~60 个地址时单 block snapshot 就跨过下一个 slot，结果是「snapshot 里一半地址在 state(h) 一半在 state(h+k)」的内部不一致快照——digest 永远对不上。
+3. ProcessBlock 要求所有 tx 触及的 sender/receiver 在 seed 里有账户；典型 1-block 触及 ~400 唯一地址（372 txs × ~2 each），而 27-witness closure 只能让 ProcessBlock 在第 1 个非 witness sender 上报 `insufficient balance for create_account_fee`——不是真 bug，只是 closure 不全。
+
+加大 closure 让 ProcessBlock 能跑完 → snapshot 时长爆掉 → race 加剧。两端冲突。
+
+**结论**：live HTTP capture **本质上需要可控 java-tron 节点（能停、能取一致快照）**，跟 Phase 1 spec 写的 "rewind your mainnet java-tron to start-1" 完全一致——这条约束没法绕过。`cmd/fixture-capture` 留作备件，可在拥有"私链 / 已停 fullnode"的运维场景下跑（注意 `--start-auto-buffer` 与 listWitnesses + getChainParameters 已并行化，详见 `cmd/fixture-capture/capture.go::captureSeed/captureSnapshot`）。
+
+**剩下的现实选项**（按成本递增）：
+- 接受公开 HTTP endpoint 噪声，多跑、把 reproducible 分叉当信号——慢但零基础设施投入。
+- 找 archive endpoint 真支持 `at-height` 的（TronGrid 可能；待探）。
+- 自建本地 mainnet-synced java-tron（一次性 sync 4–7 天 → 之后能停可取一致快照）——这是 Phase 1 spec 的原始假设。
+
+`scripts/system_test_cross.sh` 的双节点 e2e 部分**不**受这一约束阻塞——它跑私链。已在 cross-impl slice 3 中验证过 4 SR / 71190 块全 byte-identical。差的是 mainnet 语料 + replay。
+
 ---
 
 ## M1 · 状态分叉杀手 — **P0，G1 必经**
