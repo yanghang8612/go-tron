@@ -41,6 +41,17 @@ func ParseHello(payload []byte) (*p2ppb.HelloMessage, error) {
 // ValidateHello checks the peer's hello message for compatibility.
 // Returns DisconnectReason_PEER_QUITING (value 0) on accept — this is the zero
 // value of the enum and means "no problem". Any other value indicates rejection.
+//
+// NOTE on timestamp: java-tron libp2p `HelloMessage.valid()` only validates
+// the From endpoint, NOT the timestamp (libp2p:HelloMessage.java:58-61). The
+// `NetworkTimeDiff` skew check belongs to keepalive Ping/Pong validation
+// (libp2p:PingMessage.java:31). Earlier versions of this function rejected
+// peers whose Hello timestamp was >1s behind ours, which was wrong on two
+// counts: (1) java-tron sets Hello.timestamp to channel.getStartTime() —
+// the TCP-accept time — so a busy seed's Hello can legitimately carry a
+// "stale" timestamp by several seconds; (2) java-tron itself never gates
+// on this field. Mainnet sync against the public seed list would 100%
+// fail on the first hello round-trip until we removed the check.
 func ValidateHello(peer *p2ppb.HelloMessage, ourNetworkID, ourVersion int32, now time.Time) p2ppb.DisconnectReason {
 	if peer == nil || peer.From == nil || len(peer.From.NodeId) != 64 {
 		return p2ppb.DisconnectReason_BAD_MESSAGE
@@ -50,14 +61,6 @@ func ValidateHello(peer *p2ppb.HelloMessage, ourNetworkID, ourVersion int32, now
 	}
 	if peer.Version != ourVersion {
 		return p2ppb.DisconnectReason_DIFFERENT_VERSION
-	}
-	peerTime := time.UnixMilli(peer.Timestamp)
-	skew := now.Sub(peerTime)
-	if skew < 0 {
-		skew = -skew
-	}
-	if skew > NetworkTimeDiff {
-		return p2ppb.DisconnectReason_PING_TIMEOUT // libp2p uses TIME_OUT; our enum has PING_TIMEOUT matching this semantic
 	}
 	return p2ppb.DisconnectReason_PEER_QUITING // "0" = accept
 }

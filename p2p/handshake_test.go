@@ -62,15 +62,25 @@ func TestValidateHelloVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestValidateHelloClockSkew(t *testing.T) {
+// TestValidateHelloIgnoresClockSkew locks down parity with java-tron libp2p
+// HelloMessage.valid() — which deliberately does NOT gate on timestamp. The
+// NetworkTimeDiff window applies only to keepalive Ping/Pong validation.
+// Earlier versions of ValidateHello rejected on >1s skew, which prevented
+// gtron from completing TRON Hello against any mainnet seed (java-tron sets
+// Hello.timestamp to channel.getStartTime() — the TCP-accept time — and busy
+// seeds routinely emit Hellos that look 1–4s "old" by wall-clock).
+func TestValidateHelloIgnoresClockSkew(t *testing.T) {
 	ep := makeEndpoint(nodeID64())
 	msg := BuildHelloMessage(ep, 1, 0)
-	// Peer timestamp is 10 seconds ahead of our time
+	// Peer timestamp 10s in the future — must still be accepted.
 	msg.Timestamp = time.Now().Add(10 * time.Second).UnixMilli()
-	reason := ValidateHello(msg, 1, 1, time.Now())
-	// Expect a time-related rejection (either PING_TIMEOUT or whatever we picked)
-	if reason == p2ppb.DisconnectReason_PEER_QUITING {
-		t.Fatalf("expected rejection due to clock skew, got accept")
+	if reason := ValidateHello(msg, 1, 1, time.Now()); reason != p2ppb.DisconnectReason_PEER_QUITING {
+		t.Fatalf("Hello with future timestamp must be accepted (java-tron parity); got %v", reason)
+	}
+	// Same in the past direction.
+	msg.Timestamp = time.Now().Add(-30 * time.Second).UnixMilli()
+	if reason := ValidateHello(msg, 1, 1, time.Now()); reason != p2ppb.DisconnectReason_PEER_QUITING {
+		t.Fatalf("Hello with stale timestamp must be accepted (java-tron parity); got %v", reason)
 	}
 }
 
