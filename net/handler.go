@@ -421,6 +421,17 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 		return
 	}
 
+	// During initial sync, drop adv-broadcast blocks. Inserting them moves
+	// KhaosDB's head far ahead of our actual canonical tip; the next eviction
+	// pass (effectiveHead - 1024) then erases the parents of the in-progress
+	// sync range, and every subsequent sync block fails with ErrUnlinkedBlock.
+	// java-tron's BlockMsgHandler is forgiving about this because its KhaosDB
+	// is much larger; gtron's tighter window can't tolerate the gap. Once
+	// sync completes (IsSyncing()==false), we accept adv blocks normally.
+	if h.syncService != nil && h.syncService.IsSyncing() {
+		return
+	}
+
 	// Otherwise it's a new block broadcast — try to insert
 	if err := h.chain.InsertBlock(block); err != nil {
 		return

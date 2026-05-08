@@ -377,12 +377,20 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	ss.mu.Unlock()
 
 	if err := ss.chain.InsertBlock(block); err != nil {
-		log.Printf("Sync: failed to insert block #%d: %v", block.Number(), err)
-		// Try without verify for sync (peer already validated)
-		if err2 := ss.chain.InsertBlockWithoutVerify(block); err2 != nil {
-			log.Printf("Sync: also failed InsertBlockWithoutVerify #%d: %v", block.Number(), err2)
-			return true
-		}
+		// Do NOT fall back to InsertBlockWithoutVerify — that path writes
+		// the block proto + advances the head pointer without applying
+		// state transitions, which silently produces a head-only chain
+		// where every account stays at its genesis balance and every
+		// witness counter freezes at the last successful applyBlock.
+		// Mainnet sync hit this when KhaosDB's 1024-block sliding window
+		// evicted parents under pressure (probably from concurrent adv
+		// blocks during initial sync), so 99.99% of "synced" blocks
+		// landed in the silent-fallback path. The next fetchNextBatch
+		// cycle will issue a SYNC_BLOCK_CHAIN from our true canonical
+		// head and refetch the orphaned range, which is the right
+		// recovery semantic.
+		log.Printf("Sync: failed to insert block #%d: %v (will retry)", block.Number(), err)
+		return true
 	}
 
 	log.Printf("Synced block #%d", block.Number())
