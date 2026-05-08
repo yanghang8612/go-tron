@@ -35,6 +35,62 @@ func makeTransferAssetTx(ownerByte, toByte byte, tokenID int64, amount int64) *t
 	return types.NewTransactionFromPB(pb)
 }
 
+// TestTransferAssetExecute_AssetNameAsLiteralName locks down the pre-fork
+// path (asset_name carrying the literal token NAME, not its numeric id).
+// Mainnet sync stalled at block 5584 — a TransferAssetContract whose
+// asset_name was "Bitcoin" — until resolveAssetNameOrID was added; before
+// that, ParseInt("Bitcoin") failed silently → tokenID=0 → "insufficient
+// balance" → sync wedged.
+func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
+	const tokenID = int64(1_000_004)
+	const tokenName = "Bitcoin"
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	to := makeTestAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(owner, tokenID, 21_000_000)
+
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte(tokenName)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte(tokenName), tokenID); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &contractpb.TransferAssetContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    to.Bytes(),
+		AssetName:    []byte(tokenName), // literal name, not numeric id
+		Amount:       100,
+	}
+	anyParam, _ := anypb.New(c)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{
+				{Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: anyParam},
+			},
+		},
+	})
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+
+	act := &TransferAssetActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate must accept literal name: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute must succeed with literal name: %v", err)
+	}
+	if got := statedb.GetTRC10Balance(owner, tokenID); got != 21_000_000-100 {
+		t.Errorf("owner balance after transfer: got %d want %d", got, 21_000_000-100)
+	}
+	if got := statedb.GetTRC10Balance(to, tokenID); got != 100 {
+		t.Errorf("recipient balance: got %d want 100", got)
+	}
+}
+
 func TestTransferAssetValidate_Success(t *testing.T) {
 	const tokenID = int64(1_000_001)
 	statedb := setupStateDB(t)

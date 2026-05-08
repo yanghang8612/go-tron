@@ -13,6 +13,26 @@ import (
 // TransferAssetActuator handles TRC10 token transfers (contract type 2).
 type TransferAssetActuator struct{}
 
+// resolveAssetNameOrID accepts the wire-format `asset_name` field which is
+// either a numeric token ID (post-AllowSameTokenName, e.g. "1000004") or a
+// literal token name (pre-fork, e.g. "Bitcoin"). Returns the resolved
+// token ID. Mirrors java-tron's TransferAssetActuator dual-path lookup.
+//
+// gtron originally only handled the numeric form, silently dropping the
+// ParseInt error in Execute and ending up with tokenID=0 → "insufficient
+// balance" on every pre-fork TRC10 transfer. Mainnet sync stalled at
+// block 5584 (a TransferAssetContract for asset_name="Bitcoin") because
+// of this.
+func resolveAssetNameOrID(ctx *Context, assetName []byte) (int64, error) {
+	if id, err := strconv.ParseInt(string(assetName), 10, 64); err == nil {
+		return id, nil
+	}
+	if id, ok := rawdb.ReadAssetNameIndex(ctx.DB, assetName); ok {
+		return id, nil
+	}
+	return 0, errors.New("invalid asset_name: not a numeric ID and no name index hit")
+}
+
 func (a *TransferAssetActuator) getContract(ctx *Context) (*contractpb.TransferAssetContract, error) {
 	contract := ctx.Tx.Contract()
 	if contract == nil {
@@ -33,9 +53,9 @@ func (a *TransferAssetActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	tokenID, err := strconv.ParseInt(string(c.AssetName), 10, 64)
+	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
 	if err != nil {
-		return errors.New("invalid token ID in asset_name")
+		return err
 	}
 	if rawdb.ReadAssetIssue(ctx.DB, tokenID) == nil {
 		return errors.New("token not found")
@@ -64,7 +84,10 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokenID, _ := strconv.ParseInt(string(c.AssetName), 10, 64)
+	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	if err != nil {
+		return nil, err
+	}
 	from := common.BytesToAddress(c.OwnerAddress)
 	to := common.BytesToAddress(c.ToAddress)
 
