@@ -23,13 +23,14 @@ func defaultDataDir() string {
 
 func makeConfig(ctx *cli.Context) *node.Config {
 	return &node.Config{
-		DataDir:     ctx.String("datadir"),
-		P2PPort:     ctx.Int("p2p.port"),
-		HTTPPort:    ctx.Int("http.port"),
-		JSONRPCPort: ctx.Int("jsonrpc.port"),
-		GRPCPort:    ctx.Int("grpc.port"),
-		SeedNodes:   ctx.StringSlice("seednode"),
-		MaxPeers:    ctx.Int("maxpeers"),
+		DataDir:      ctx.String("datadir"),
+		P2PPort:      ctx.Int("p2p.port"),
+		DiscoverPort: ctx.Int("discover.port"),
+		HTTPPort:     ctx.Int("http.port"),
+		JSONRPCPort:  ctx.Int("jsonrpc.port"),
+		GRPCPort:     ctx.Int("grpc.port"),
+		SeedNodes:    ctx.StringSlice("seednode"),
+		MaxPeers:     ctx.Int("maxpeers"),
 	}
 }
 

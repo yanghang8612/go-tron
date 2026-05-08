@@ -23,6 +23,7 @@ import (
 	tnet "github.com/tronprotocol/go-tron/net"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/p2p"
+	"github.com/tronprotocol/go-tron/p2p/discover"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -37,6 +38,11 @@ var (
 		Name:  "p2p.port",
 		Usage: "P2P listening port",
 		Value: 18888,
+	}
+	discoverPortFlag = &cli.IntFlag{
+		Name:  "discover.port",
+		Usage: "Kademlia discovery UDP port (0 → reuse --p2p.port)",
+		Value: 0,
 	}
 	httpPortFlag = &cli.IntFlag{
 		Name:  "http.port",
@@ -105,6 +111,7 @@ var app = &cli.App{
 	Flags: []cli.Flag{
 		dataDirFlag,
 		p2pPortFlag,
+		discoverPortFlag,
 		httpPortFlag,
 		jsonrpcPortFlag,
 		grpcPortFlag,
@@ -247,15 +254,37 @@ func gtron(ctx *cli.Context) error {
 		externalIP = "127.0.0.1"
 	}
 
+	// Construct Kademlia discovery service. The UDP port mirrors the TCP P2P
+	// port unless --discover.port was set explicitly. SetOnNewPeer is patched
+	// in below once p2pServer exists; AddPeer is the only callback the server
+	// surface exposes for new candidates.
+	discoverPort := cfg.DiscoverPort
+	if discoverPort == 0 {
+		discoverPort = cfg.P2PPort
+	}
+	discSvc, err := discover.NewService(
+		fmt.Sprintf(":%d", discoverPort), nodeID, networkID, nil,
+	)
+	if err != nil {
+		db.Close()
+		return fmt.Errorf("create discovery service: %w", err)
+	}
+
 	p2pServer := p2p.NewServer(p2p.ServerConfig{
 		ListenAddr: fmt.Sprintf(":%d", cfg.P2PPort),
 		MaxPeers:   cfg.MaxPeers,
 		SeedNodes:  cfg.SeedNodes,
+		Discovery:  discSvc,
 		NodeID:     nodeID,
 		NetworkID:  networkID,
 		ExternalIP: externalIP,
 		Port:       int32(cfg.P2PPort),
 	}, handler)
+	// onNewPeer fires on every pong, including from already-connected peers;
+	// swallow the resulting duplicate/per-IP-cap errors instead of logging.
+	discSvc.SetOnNewPeer(func(addr string) {
+		_ = p2pServer.AddPeer(addr)
+	})
 	handler.SetServer(p2pServer)
 	handler.StartKeepAlive()
 	syncService.Start()
