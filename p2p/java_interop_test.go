@@ -119,7 +119,9 @@ func TestJavaTronDiscoverPing(t *testing.T) {
 	// Capture pong via a callback into a channel.
 	pongRecv := make(chan string, 1)
 
-	svc, err := discover.NewService("127.0.0.1:0", nodeID, int32(networkID64), func(peerAddr string) {
+	// Bind to 0.0.0.0 so the kernel picks a routable source for the outbound
+	// ping — required when JAVA_TRON_ADDR points at a public seed.
+	svc, err := discover.NewService(":0", nodeID, int32(networkID64), func(peerAddr string) {
 		select {
 		case pongRecv <- peerAddr:
 		default:
@@ -171,14 +173,18 @@ func TestDiscoveryWireIn(t *testing.T) {
 	}
 
 	nodeID := discover.GenerateNodeID()
-	discSvc, err := discover.NewService("127.0.0.1:0", nodeID, int32(networkID64), nil)
+	// Bind to 0.0.0.0 (":0") so the kernel can pick a routable source IP
+	// for the outbound UDP ping. Binding to 127.0.0.1 would force a
+	// localhost source and fail with "can't assign requested address" when
+	// the seed is on the public internet.
+	discSvc, err := discover.NewService(":0", nodeID, int32(networkID64), nil)
 	if err != nil {
 		t.Fatalf("discover.NewService: %v", err)
 	}
 
 	h := &testHandler{}
 	srv := NewServer(ServerConfig{
-		ListenAddr: "127.0.0.1:0",
+		ListenAddr: ":0",
 		MaxPeers:   30,
 		// SeedNodes intentionally left empty — the bootstrap arrives via
 		// AddBootstrap() through the discovery service, mirroring how
