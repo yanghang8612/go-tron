@@ -193,6 +193,21 @@
 - `p2p/discover/table.go` 加入 15s ping timeout 驱逐 + candidate queue。
 - **退出**：长时间运行后 table 中不会出现大量 dead 节点；`table_test.go` 覆盖驱逐。
 
+### M3.5 · discovery 接入 production binary（**P1，2026-05-08 发现的 gap**）
+**背景**：`p2p/discover/` Kademlia 实现完整（FIND_NODE/NEIGHBOURS/Ping/Pong + 路由表 + 驱逐）且 `TestJavaTronDiscoverPing` 集成测试通过 java-tron 端验证。但 `cmd/gtron/main.go:250` 构造 `p2p.NewServer` 时没有传 `Discovery: discover.New(...)` —— 生产 binary 走 `p2p/server.go:109` 的 fallback 分支（"Dial seed nodes directly when discovery is disabled"），永远只连 `--seednode` 列表，找不到新 peer。
+
+**症状**：实测 19 个主网 seed 中只有 4 个被 dial（其余靠 discovery 才能发现），`net_peerCount` 长期停在 3-5。如果手动指定的 seed 全部下线，gtron 找不到新 peer，sync 中断。
+
+**修复**：
+1. 在 `cmd/gtron/main.go` `p2pServer := p2p.NewServer(...)` 之前构造 `discSvc, err := discover.New(udpAddr, networkID, nodeID)`，加入 `Discovery: discSvc` 字段。
+2. 加 `--discover.port` flag（默认与 `--p2p.port` 同值）；`discover.New` 的 UDP 监听走 `0.0.0.0:<port>`。
+3. 集成测试：起 gtron 不带 `--seednode`，仅用 `discover.AddBootstrap(...)` 引入 1 个 mainnet seed，断言 30s 后 `net_peerCount > 5`（discovery 发现新邻居）。
+4. 7×24h 长跑断言：杀掉所有手动 seed peer 后，gtron 仍能维持 `net_peerCount > 0`（靠 discovery 的 candidate queue 重连）。
+
+**退出**：上面 (3) 集成测试绿；TODO §2.3 "无 fork-recovery service" 之外的 P2P/Net 项全部覆盖。
+
+**依赖**：无；改动局限在 `cmd/gtron/main.go` 与 `p2p/server.go` 已有的 optional `Discovery` 字段。
+
 **退出**：7×24h 主网连接不需人工干预；cross 系统测试下 10 节点拓扑稳定。
 
 **依赖**：无；与 M1/M2 并行。
@@ -422,6 +437,7 @@ SR 出块/签名发送能力（G3 门）留待 M6b 实现。
 | M3.2 Adv/Relay | 完成 | 2026-04-26 | — | slice-1: batched INV spread (30ms ticker), immediate block flush, two-gen seen cache, BroadcastBlockFrom/BroadcastTxFrom origin exclusion, MAX_SPREAD_SIZE=1000 backpressure, block 3s expiry. Start/Stop lifecycle. 4 新测试。slice-2: per-IP inbound cap (MaxConnectionsWithSameIP=2, from ChannelManager.processPeer()); Server.stopOnce idempotent Stop; maintainLoop+maintainPeers() seed reconnect on disconnect (ConnPoolService.triggerConnect() equivalent). 2 新测试全绿。 |
 | M3.3 速率限制 | 完成 | 2026-04-26 | — | p2p/ratelimiter.go: 零依赖 token bucket。NewRateLimiter() 默认 SyncBlockChain=3/s, FetchInvData=3/s, Disconnect=1/s (java-tron clearParam 值)。handleProtocolMessage 检查 rl.Allow(code)，超限则 drop+log。4 率限测试全绿。 |
 | M3.4 discovery 驱逐 | 完成 | 2026-04-26 | — | Table.RemoveByAddr(ip,port)；evictTimedOutPings 现在在清理 pendingPings 的同时驱逐无响应节点；pendingPing struct 存储 sentAt+ip+port。service_test+table_test 新增 3 测试全绿。 |
+| M3.5 discovery 接入 production | 待办 | — | — | `p2p/discover/` 实现 + 集成测试均通，但 `cmd/gtron/main.go:250` 构造 `p2p.NewServer` 没传 `Discovery`，生产 binary 永远只连 `--seednode` 列表。详见 §M3.5 段；估 ~20 行改动。 |
 | M4 gRPC Wallet server | 完成 | 2026-04-26 | 已完成 | PR-A0~E 全部实现：proto codegen, 48个 bufconn tests全绿，`--grpc.port` flag，Wallet 只读/交易构建/广播/分页/价格 RPC，TronBackend 扩展 14 个新方法，system_test.sh 修复 grpc port 冲突。 |
 | M5.1 HTTP 补齐 | 完成（路由全部覆盖；wire-format 兼容性 gap 见 M9） | 2026-04-26 | — | PR-1~7 全部实现：api_account/api_tx/api_trc10/api_exchange/api_misc 5 个 cluster 文件，BuildContractTransaction 泛型构建器，GetProposalByID/ListProposalsPaginated/ValidateAddress，共 ~35 个端点，28 包全绿。**已知 gap（2026-04-27 系统测试）**：(a) 用 protojson.Unmarshal 直接解 contract proto 的 9 个 endpoint 把 hex bytes 当成 base64 → 见 M9.1；(b) `[]byte(stringField)` 对 7 个 endpoint silent corrupt → 见 M9.2；(c) freeze/delegate `resource` 字段不接受 string → M9.3；(d) `proposalCreate.parameters` 不接受 java-tron 数组形式 → M9.4。完整 catalog: docs/superpowers/specs/2026-04-27-system-test-findings.md。 |
 | M5.2 JSON-RPC 写路径 | 完成 | 2026-04-26 | — | PR-1~4 全部实现：eth_gasPrice/web3_sha3/net_listening/net_peerCount/eth_accounts，write方法返回-32601（与java-tron一致），eth_estimateGas，filter subsystem（eth_newFilter/newBlockFilter/uninstallFilter/getFilterChanges/getFilterLogs + FilterManager + BlockChain.AddBlockHook），28包全绿。 |
