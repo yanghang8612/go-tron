@@ -69,6 +69,58 @@ func TestDefaultMainnetGenesis_HashByteEqual(t *testing.T) {
 	}
 }
 
+// TestSetupGenesisBlock_NextMaintenanceTimeSeeded locks the
+// `Manager.initGenesis`-equivalent fix in core/genesis.go: when the genesis
+// config doesn't seed `next_maintenance_time` (mainnet/nile defaults), the
+// bootstrap layer must derive it from `genesis.Timestamp +
+// maintenance_time_interval`. Without this, the applyBlock gate
+// `NextMaintenanceTime() > 0` stays false forever, DoMaintenance never runs,
+// and every standby-witness allowance reward + active-set rotation silently
+// drops on the floor — observed empirically on a 37k-block mainnet sync
+// before the fix landed (2026-05-08).
+func TestSetupGenesisBlock_NextMaintenanceTimeSeeded(t *testing.T) {
+	genesis := params.DefaultMainnetGenesis()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	dp := state.LoadDynamicProperties(diskdb)
+	if dp.NextMaintenanceTime() <= 0 {
+		t.Fatalf("NextMaintenanceTime must be > 0 after genesis bootstrap (mainnet); got %d", dp.NextMaintenanceTime())
+	}
+	wantNext := genesis.Timestamp + dp.MaintenanceTimeInterval()
+	if dp.NextMaintenanceTime() != wantNext {
+		t.Fatalf("NextMaintenanceTime: got %d, want %d (= genesis.Timestamp + MaintenanceTimeInterval)",
+			dp.NextMaintenanceTime(), wantNext)
+	}
+}
+
+// TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit verifies that
+// when the genesis config DOES seed `next_maintenance_time`, the bootstrap
+// fallback does not clobber it.
+func TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit(t *testing.T) {
+	const explicit = int64(1700000000000)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: common.BytesToAddress([]byte{0x41, 1}), Balance: 1},
+		},
+		DynamicProperties: map[string]int64{
+			"maintenance_time_interval": 21600000,
+			"next_maintenance_time":     explicit,
+		},
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	dp := state.LoadDynamicProperties(diskdb)
+	if dp.NextMaintenanceTime() != explicit {
+		t.Fatalf("explicit next_maintenance_time clobbered: got %d, want %d", dp.NextMaintenanceTime(), explicit)
+	}
+}
+
 func TestGenesisHashDeterministic(t *testing.T) {
 	genesis := &params.Genesis{
 		Config:    params.MainnetChainConfig,

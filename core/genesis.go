@@ -89,6 +89,18 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 		for k, v := range genesis.DynamicProperties {
 			dp.Set(k, v)
 		}
+		// Mirror java-tron Manager.initGenesis: when next_maintenance_time
+		// isn't explicitly seeded, derive it from the genesis timestamp +
+		// maintenance interval. Without this the applyBlock gate
+		// `NextMaintenanceTime() > 0` stays false forever and DoMaintenance
+		// never runs — every standby-witness allowance reward and every
+		// active-set rotation silently drops on the floor. params/mainnet.go
+		// and params/nile.go intentionally omit this key (matching
+		// config.conf), so the fix has to live here at the bootstrap layer
+		// rather than in the params files.
+		if dp.NextMaintenanceTime() == 0 {
+			dp.SetNextMaintenanceTime(genesis.Timestamp + dp.MaintenanceTimeInterval())
+		}
 		dp.SetLatestBlockHeaderNumber(0)
 		dp.SetLatestBlockHeaderTimestamp(genesis.Timestamp)
 		dp.SetLatestBlockHeaderHash(block.Hash())
