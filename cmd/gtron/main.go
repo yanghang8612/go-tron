@@ -270,15 +270,30 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("create discovery service: %w", err)
 	}
 
+	// Built-in bootstrap nodes are fed into the discovery routing table so the
+	// node can find peers even when no --seednode is set or all of them are
+	// rate-limited. Skipped for private chains (--genesis / --dev) where the
+	// public bootstrap lists don't apply.
+	var bootstrapNodes []string
+	switch {
+	case ctx.String("genesis") != "" || ctx.Bool("dev"):
+		// private/dev chain — leave empty
+	case ctx.Bool("testnet"):
+		bootstrapNodes = params.NileBootstrapNodes
+	default:
+		bootstrapNodes = params.MainnetBootstrapNodes
+	}
+
 	p2pServer := p2p.NewServer(p2p.ServerConfig{
-		ListenAddr: fmt.Sprintf(":%d", cfg.P2PPort),
-		MaxPeers:   cfg.MaxPeers,
-		SeedNodes:  cfg.SeedNodes,
-		Discovery:  discSvc,
-		NodeID:     nodeID,
-		NetworkID:  networkID,
-		ExternalIP: externalIP,
-		Port:       int32(cfg.P2PPort),
+		ListenAddr:     fmt.Sprintf(":%d", cfg.P2PPort),
+		MaxPeers:       cfg.MaxPeers,
+		SeedNodes:      cfg.SeedNodes,
+		BootstrapNodes: bootstrapNodes,
+		Discovery:      discSvc,
+		NodeID:         nodeID,
+		NetworkID:      networkID,
+		ExternalIP:     externalIP,
+		Port:           int32(cfg.P2PPort),
 	}, handler)
 	// onNewPeer fires on every pong, including from already-connected peers;
 	// swallow the resulting duplicate/per-IP-cap errors instead of logging.

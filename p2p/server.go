@@ -28,12 +28,31 @@ var errDuplicatePeer = errors.New("duplicate peer")
 // errTooManyFromSameIP is returned when an inbound peer exceeds the per-IP cap.
 var errTooManyFromSameIP = errors.New("too many connections from same IP")
 
+// errDialThrottled is returned by AddPeer when the per-address dial throttle
+// is still in cooldown. Callers (maintainPeers, discovery's onNewPeer
+// callback) should silently swallow it instead of logging.
+var errDialThrottled = errors.New("dial throttled")
+
+// defaultDialThrottleInterval is the minimum gap between outbound dial
+// attempts to the same address. Picked to dampen the maintainCh thundering
+// herd without making transient drops take minutes to recover.
+const defaultDialThrottleInterval = 30 * time.Second
+
+// Discovery is the surface the Server uses from the Kademlia discovery service.
+// Real implementation: *discover.Service. Tests can substitute a fake.
+type Discovery interface {
+	Start()
+	Stop()
+	AddBootstrap(addrs []string)
+}
+
 // ServerConfig holds P2P server configuration.
 type ServerConfig struct {
-	ListenAddr string            // "host:port" to listen on
-	MaxPeers   int               // max peers allowed
-	SeedNodes  []string          // initial peers to dial
-	Discovery  *discover.Service // optional; nil = no discovery
+	ListenAddr     string    // "host:port" to listen on
+	MaxPeers       int       // max peers allowed
+	SeedNodes      []string  // explicit peers to dial (CLI --seednode)
+	BootstrapNodes []string  // built-in fallback peers fed into Discovery.AddBootstrap (e.g. params.MainnetBootstrapNodes)
+	Discovery      Discovery // optional; nil = no discovery
 
 	// Libp2p handshake parameters. NodeID must be 64 bytes. If NetworkID or
 	// Version is 0, defaults are applied (NetworkID=1, Version=Libp2pProtocolVersion).
@@ -46,19 +65,24 @@ type ServerConfig struct {
 	// MaxConnectionsWithSameIP caps inbound connections from a single remote IP.
 	// 0 → default (2), matching java-tron ChannelManager.processPeer().
 	MaxConnectionsWithSameIP int
+
+	// DialThrottleInterval is the minimum gap between outbound dial attempts
+	// to the same address. Zero ⇒ default (30s); negative ⇒ disabled.
+	DialThrottleInterval time.Duration
 }
 
 // Server manages TCP connections to peers.
 type Server struct {
-	config     ServerConfig
-	handler    Handler
-	listener   net.Listener
-	peers      map[string]*Peer
-	mu         sync.RWMutex
-	quit       chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
-	maintainCh chan struct{} // signals the maintain loop to reconnect now
+	config      ServerConfig
+	handler     Handler
+	listener    net.Listener
+	peers       map[string]*Peer
+	mu          sync.RWMutex
+	quit        chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+	maintainCh  chan struct{} // signals the maintain loop to reconnect now
+	dialLimiter *dialLimiter  // per-addr outbound dial throttle; nil ⇒ disabled
 }
 
 // NewServer creates a new P2P server.
@@ -79,12 +103,22 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 	if config.MaxConnectionsWithSameIP <= 0 {
 		config.MaxConnectionsWithSameIP = defaultMaxConnectionsWithSameIP
 	}
+	throttle := config.DialThrottleInterval
+	if throttle == 0 {
+		throttle = defaultDialThrottleInterval
+	}
+	var limiter *dialLimiter
+	if throttle > 0 {
+		limiter = newDialLimiter(throttle)
+	}
+
 	return &Server{
-		config:     config,
-		handler:    handler,
-		peers:      make(map[string]*Peer),
-		quit:       make(chan struct{}),
-		maintainCh: make(chan struct{}, 1),
+		config:      config,
+		handler:     handler,
+		peers:       make(map[string]*Peer),
+		quit:        make(chan struct{}),
+		maintainCh:  make(chan struct{}, 1),
+		dialLimiter: limiter,
 	}
 }
 
@@ -104,7 +138,9 @@ func (s *Server) Start() error {
 	// Start discovery service if configured
 	if s.config.Discovery != nil {
 		s.config.Discovery.Start()
-		s.config.Discovery.AddBootstrap(s.config.SeedNodes)
+		bootstrap := append([]string{}, s.config.SeedNodes...)
+		bootstrap = append(bootstrap, s.config.BootstrapNodes...)
+		s.config.Discovery.AddBootstrap(bootstrap)
 	} else {
 		// Dial seed nodes directly when discovery is disabled
 		for _, addr := range s.config.SeedNodes {
@@ -180,8 +216,13 @@ func (s *Server) Peers() []*Peer {
 	return result
 }
 
-// AddPeer dials a remote address and adds the peer.
+// AddPeer dials a remote address and adds the peer. Subject to the per-addr
+// dial throttle: returns errDialThrottled (a sentinel callers may swallow) if
+// a dial to addr was started in the past DialThrottleInterval.
 func (s *Server) AddPeer(addr string) error {
+	if s.dialLimiter != nil && !s.dialLimiter.Allow(addr) {
+		return errDialThrottled
+	}
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -388,7 +429,7 @@ func (s *Server) maintainPeers() {
 			continue
 		}
 		go func(a string) {
-			if err := s.AddPeer(a); err != nil {
+			if err := s.AddPeer(a); err != nil && !errors.Is(err, errDialThrottled) {
 				log.Printf("P2P: reconnect to seed %s: %v", a, err)
 			}
 		}(addr)

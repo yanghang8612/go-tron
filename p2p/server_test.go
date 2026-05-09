@@ -1,9 +1,38 @@
 package p2p
 
 import (
+	"errors"
+	"net"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// fakeDiscovery records calls into the Discovery surface so server tests can
+// assert what was forwarded without binding to *discover.Service's UDP path.
+type fakeDiscovery struct {
+	mu         sync.Mutex
+	added      []string
+	startCount atomic.Int32
+	stopCount  atomic.Int32
+}
+
+func (f *fakeDiscovery) Start() { f.startCount.Add(1) }
+func (f *fakeDiscovery) Stop()  { f.stopCount.Add(1) }
+func (f *fakeDiscovery) AddBootstrap(addrs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.added = append(f.added, addrs...)
+}
+func (f *fakeDiscovery) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]string(nil), f.added...)
+	sort.Strings(out)
+	return out
+}
 
 func TestServerStartStop(t *testing.T) {
 	h := &testHandler{}
@@ -164,4 +193,169 @@ func TestServerMaintainReconnectsToSeed(t *testing.T) {
 	// maintainPeers will try seedAddr (which is down); error is expected.
 	client.maintainPeers()
 	// No assertion needed — this just exercises the reconnect path without panic.
+}
+
+// TestServer_BootstrapNodesFedToDiscovery covers the M3.5 follow-up: built-in
+// bootstrap addresses (params.MainnetBootstrapNodes / NileBootstrapNodes) must
+// reach the Discovery routing table, not just the explicit --seednode flags.
+// Server.Start should call Discovery.AddBootstrap with the union of SeedNodes
+// and BootstrapNodes.
+func TestServer_BootstrapNodesFedToDiscovery(t *testing.T) {
+	fake := &fakeDiscovery{}
+	srv := NewServer(ServerConfig{
+		ListenAddr:     "127.0.0.1:0",
+		MaxPeers:       5,
+		SeedNodes:      []string{"1.1.1.1:11111"},
+		BootstrapNodes: []string{"3.3.3.3:33333", "2.2.2.2:22222"},
+		Discovery:      fake,
+	}, &testHandler{})
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	got := fake.snapshot()
+	want := []string{"1.1.1.1:11111", "2.2.2.2:22222", "3.3.3.3:33333"}
+	if len(got) != len(want) {
+		t.Fatalf("AddBootstrap got %v entries, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("AddBootstrap got %v, want %v (any order)", got, want)
+		}
+	}
+	if c := fake.startCount.Load(); c != 1 {
+		t.Fatalf("Discovery.Start() count = %d, want 1", c)
+	}
+}
+
+// TestServer_AddPeerThrottlesPerAddr covers the M3.5 follow-up: removePeer
+// fires maintainCh, which in turn dials every seed in parallel. Without a
+// per-address gate, a hiccup on a flaky seed list cascades into a session-wide
+// rate-limit ban. The limiter must admit exactly one outbound dial per
+// (addr, window).
+func TestServer_AddPeerThrottlesPerAddr(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	var accepted atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			conn.Close()
+		}
+	}()
+
+	srv := NewServer(ServerConfig{
+		ListenAddr:           "127.0.0.1:0",
+		MaxPeers:             5,
+		DialThrottleInterval: 200 * time.Millisecond,
+	}, &testHandler{})
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// Spam AddPeer to the same addr. Most should be throttled.
+	throttled := 0
+	for i := 0; i < 20; i++ {
+		err := srv.AddPeer(addr)
+		if errors.Is(err, errDialThrottled) {
+			throttled++
+		}
+	}
+	// Give any admitted dial time to land at the listener.
+	time.Sleep(50 * time.Millisecond)
+
+	if got := accepted.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 dial within throttle window, listener accepted %d", got)
+	}
+	if throttled != 19 {
+		t.Fatalf("expected 19 throttled denials, got %d", throttled)
+	}
+}
+
+// TestServer_AddPeerAdmitsAfterWindow verifies the throttle is per-window —
+// after the interval elapses, the limiter admits a fresh dial.
+func TestServer_AddPeerAdmitsAfterWindow(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	var accepted atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			conn.Close()
+		}
+	}()
+
+	srv := NewServer(ServerConfig{
+		ListenAddr:           "127.0.0.1:0",
+		MaxPeers:             5,
+		DialThrottleInterval: 30 * time.Millisecond,
+	}, &testHandler{})
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	_ = srv.AddPeer(addr)
+	if got := accepted.Load(); got != 1 {
+		// Connection might still be flying; give it a beat.
+		time.Sleep(20 * time.Millisecond)
+		if got2 := accepted.Load(); got2 != 1 {
+			t.Fatalf("expected 1 dial after first AddPeer, got %d", got2)
+		}
+	}
+
+	// Within window: throttled.
+	if !errors.Is(srv.AddPeer(addr), errDialThrottled) {
+		t.Fatal("expected second AddPeer to be throttled")
+	}
+
+	// After window: admitted.
+	time.Sleep(50 * time.Millisecond)
+	_ = srv.AddPeer(addr)
+	time.Sleep(20 * time.Millisecond)
+	if got := accepted.Load(); got != 2 {
+		t.Fatalf("expected 2 dials after window expired, got %d", got)
+	}
+}
+
+// TestServer_BootstrapNodesNilSeedSafe covers the case where BootstrapNodes is
+// non-nil but SeedNodes is empty (the production binary path when the user
+// passes no --seednode flags but mainnet/nile defaults are wired in).
+func TestServer_BootstrapNodesNilSeedSafe(t *testing.T) {
+	fake := &fakeDiscovery{}
+	srv := NewServer(ServerConfig{
+		ListenAddr:     "127.0.0.1:0",
+		MaxPeers:       5,
+		BootstrapNodes: []string{"4.4.4.4:44444"},
+		Discovery:      fake,
+	}, &testHandler{})
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	got := fake.snapshot()
+	if len(got) != 1 || got[0] != "4.4.4.4:44444" {
+		t.Fatalf("AddBootstrap got %v, want [4.4.4.4:44444]", got)
+	}
 }
