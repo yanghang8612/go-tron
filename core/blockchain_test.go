@@ -315,6 +315,85 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	}
 }
 
+// TestBlockChainInsertBlock_ProcessProposalsAtMaintenance locks the wiring
+// fix that hooks core.ProcessProposals into the per-block maintenance
+// boundary in applyBlock. Before this fix the function was defined but
+// never called: a Nile soak at h=860k had 4 proposals with 27 SR approvals
+// each stuck at `state=PENDING` and `allow_creation_of_contracts=0`,
+// keeping every TVM/actuator fork gate disabled forever (2026-05-09).
+//
+// Setup pre-populates the proposal store with a PENDING proposal that
+// would set DP key 9 (allow_creation_of_contracts) to 1, with the sole
+// active witness recorded as approver. Crossing the maintenance boundary
+// must flip the proposal to APPROVED and apply the DP change.
+func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testCoreAddr(10)
+	const interval = int64(21_600_000)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testCoreAddr(1), Balance: 100_000_000},
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://w1"},
+		},
+		DynamicProperties: map[string]int64{
+			"maintenance_time_interval": interval,
+			"next_maintenance_time":     interval,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed a PENDING proposal expiring before the maintenance boundary,
+	// approved by the sole active witness (= 100% > 70% threshold).
+	pendingProposal := &rawdb.Proposal{
+		ID:             1,
+		Proposer:       witnessAddr,
+		Parameters:     map[int64]int64{9: 1}, // allow_creation_of_contracts
+		CreateTime:     0,
+		ExpirationTime: interval - 1,
+		Approvals:      []tcommon.Address{witnessAddr},
+		State:          rawdb.ProposalStatePending,
+	}
+	if err := rawdb.WriteProposal(diskdb, 1, pendingProposal); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteProposalIndex(diskdb, []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cross the maintenance boundary in one block.
+	block := buildTestBlock(bc, witnessAddr, interval)
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatal(err)
+	}
+
+	got := rawdb.ReadProposal(diskdb, 1)
+	if got == nil {
+		t.Fatal("proposal #1 missing after maintenance")
+	}
+	if got.State != rawdb.ProposalStateApproved {
+		t.Fatalf("proposal #1 state: got %d, want APPROVED (%d)", got.State, rawdb.ProposalStateApproved)
+	}
+	dp := state.LoadDynamicProperties(diskdb)
+	if !dp.AllowCreationOfContracts() {
+		raw, _ := dp.Get("allow_creation_of_contracts")
+		t.Fatalf("allow_creation_of_contracts not set after proposal #1 applied (raw value=%d)", raw)
+	}
+}
+
 // TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary is the
 // regression test for D-2.b — under the original cross-impl fixture
 // (CD=OFF) gtron's distributeLegacyStandby fired 37 times in 11 cycles

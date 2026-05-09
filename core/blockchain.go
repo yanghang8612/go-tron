@@ -354,6 +354,19 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	wasMaintenanceBlock := false
 	var maintNewWitnesses []tcommon.Address
 	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
+		// Process expired proposals first — applies their parameter changes
+		// to DP (or marks them CANCELED). Mirrors java-tron MaintenanceManager
+		// → ConsensusService.applyBlock order: processProposals → updateWitness
+		// (vote tally + active set rotation) → reward. Without this, every
+		// proposal stays PENDING forever and downstream actuator / VM fork
+		// gates never activate — observed empirically on a Nile soak at
+		// h=860k where 4 proposals had 27 SR approvals each but `state =
+		// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
+		// Routes through bc.buffer per fork-rewind slice 3 so per-proposal
+		// state writes rewind on switchFork.
+		if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
+			return fmt.Errorf("process proposals: %w", err)
+		}
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
 		// Cycle brokerage / vote / VI writes go through bc.buffer so they
