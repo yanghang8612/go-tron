@@ -50,6 +50,25 @@ func TestGenesisToBlock(t *testing.T) {
 	}
 }
 
+// TestDefaultNileGenesis_HashByteEqual locks gtron's Nile genesis blockID
+// against the live Nile testnet value. Confirmed via wallet/getblockbynum
+// {"num":0} on https://nile.trongrid.io (2026-05-09). Source for the
+// underlying genesis fields: java-tron `nile/Nile` branch
+// `framework/src/main/resources/config-nile.conf`.
+func TestDefaultNileGenesis_HashByteEqual(t *testing.T) {
+	const wantHex = "0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc"
+	g := params.DefaultNileGenesis()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	block, err := GenesisToBlock(g, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHex := hex.EncodeToString(block.Hash().Bytes())
+	if gotHex != wantHex {
+		t.Fatalf("Nile genesis blockID drift:\n  want: %s\n  got:  %s\n  (any change to params/nile.go genesis fields breaks Nile P2P sync)", wantHex, gotHex)
+	}
+}
+
 // TestDefaultMainnetGenesis_HashByteEqual locks gtron's mainnet genesis
 // blockID against the live mainnet value. java-tron seed nodes drop our
 // connection at TRON Hello when the genesisBlockId we advertise differs.
