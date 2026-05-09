@@ -8,10 +8,43 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // trxPrecision is the SUN-per-TRX conversion used by resource weight math.
 const trxPrecision = 1_000_000
+
+// maxResultSizeInTx mirrors java-tron `Constant.MAX_RESULT_SIZE_IN_TX`
+// (= 64). Post-fork (supportVM), bandwidth charges add this constant to the
+// transaction's serialized size for every non-shielded contract, replacing
+// the size of the actual `ret` field stripped from the tx before sizing.
+const maxResultSizeInTx int64 = 64
+
+// txBandwidthSize returns the byte count java-tron charges as bandwidth for
+// `tx`, mirroring `BandwidthProcessor.consume` (chainbase/.../db/BandwidthProcessor.java:114-128).
+//
+// Pre-supportVM: full serialized size including the `ret` field (legacy).
+// Post-supportVM: serialized size with `ret` stripped, plus 64 bytes per
+// non-shielded contract. The asymmetry is what made gtron's pre-fix
+// VoteWitnessContract net_usage=239 vs nileex's 299: the empty `ret` slot
+// is 4 bytes on the wire, so stripping it (-4) and adding 64 (+64) yields
+// the +60 byte delta seen on every Nile non-shielded tx.
+func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
+	if !supportVM {
+		return int64(tx.Size())
+	}
+	stripped := proto.Clone(tx.Proto()).(*corepb.Transaction)
+	stripped.Ret = nil
+	size := int64(proto.Size(stripped))
+	if tx.Proto().RawData != nil {
+		for _, c := range tx.Proto().RawData.Contract {
+			if c.Type != corepb.Transaction_Contract_ShieldedTransferContract {
+				size += maxResultSizeInTx
+			}
+		}
+	}
+	return size
+}
 
 // BandwidthResult captures bandwidth consumption details.
 type BandwidthResult struct {
@@ -75,7 +108,7 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		return nil, fmt.Errorf("cannot determine sender")
 	}
 
-	txSize := int64(tx.Size())
+	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
 
 	if contractCreatesNewAccount(statedb, tx) {
 		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, blockTime)

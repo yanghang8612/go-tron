@@ -7,6 +7,48 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+// TestTxBandwidthSize_SupportVMFormula locks the java-tron BandwidthProcessor
+// asymmetry: pre-supportVM, the bandwidth size is the full tx serialized
+// size (including any `ret` field). Post-supportVM (allow_creation_of_contracts
+// = 1), `ret` is stripped and `MAX_RESULT_SIZE_IN_TX (= 64)` is added per
+// non-shielded contract.
+//
+// Empirical pinning case: Nile h=55000 / h=550000 VoteWitnessContract txs
+// reported `net_usage = 299` on java-tron vs `239` on pre-fix gtron. The
+// 60-byte gap = -4 (empty ret slot stripped) + 64 (constant added).
+func TestTxBandwidthSize_SupportVMFormula(t *testing.T) {
+	// 1-contract TransferContract; no Ret pre-populated. With ret empty,
+	// clearRet is a no-op for size, so supportVM size = legacy + 64.
+	tx := makeTestTransferTx(1, 2, 100)
+	legacy := txBandwidthSize(tx, false)
+	withVM := txBandwidthSize(tx, true)
+	if delta := withVM - legacy; delta != maxResultSizeInTx {
+		t.Fatalf("supportVM bandwidth delta: got +%d, want +%d (MAX_RESULT_SIZE_IN_TX)",
+			delta, maxResultSizeInTx)
+	}
+
+	// With a populated Ret entry, supportVM strips it before sizing then
+	// re-adds 64 — net delta from legacy is (64 − retEntrySize).
+	txWithRet := makeTestTransferTx(1, 2, 100)
+	txWithRet.Proto().Ret = []*corepb.Transaction_Result{{
+		Fee:         0,
+		Ret:         corepb.Transaction_Result_SUCESS,
+		ContractRet: corepb.Transaction_Result_SUCCESS,
+	}}
+	legacyWithRet := txBandwidthSize(txWithRet, false)
+	withVMRet := txBandwidthSize(txWithRet, true)
+	if withVMRet >= legacyWithRet+maxResultSizeInTx {
+		t.Fatalf("ret should be stripped under supportVM; legacy=%d, withVM=%d (delta should be < +64)",
+			legacyWithRet, withVMRet)
+	}
+	// Both VM-mode sizes (with vs without ret) must agree — clearRet
+	// neutralizes the populated ret entry.
+	if withVMRet != withVM {
+		t.Fatalf("clearRet did not neutralize populated ret: empty-ret=%d, populated-ret=%d",
+			withVM, withVMRet)
+	}
+}
+
 func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
