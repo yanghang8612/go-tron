@@ -122,6 +122,37 @@ Reproduction:
 JAVA_TRON_ADDR=127.0.0.1:18888 scripts/system_test_cross.sh
 ```
 
+### Fix: M3.5 follow-up — discovery wire-in completeness (2026-05-09)
+
+`cmd/gtron/main.go` constructed `discover.Service` correctly but
+`params.MainnetBootstrapNodes` (and Nile equivalent) were never read by any
+code path — discovery's routing table started empty, so peer discovery
+relied entirely on whatever was passed via `--seednode`. Combined with a
+thundering-herd in `p2p/server.go::maintainPeers` (every disconnect fired
+`maintainCh`, which retried every seed in parallel without a per-addr
+backoff), a flaky seed list could trip its session-wide rate-limit ban
+within minutes. Symptom: 0/5 manual seeds completed TRON-Hello, ~2884
+log lines / 5 minutes of "duplicate peer" + "read hello: EOF" noise.
+
+Fix `bb52bb7`:
+- New `p2p.Discovery` interface (`Start`, `Stop`, `AddBootstrap`); replaces
+  the concrete `*discover.Service` field on `ServerConfig` so tests can
+  substitute a fake.
+- New `ServerConfig.BootstrapNodes` field, fed from `params.{Mainnet,Nile}
+  BootstrapNodes` by `cmd/gtron/main.go` based on `--testnet`/`--genesis`/
+  `--dev` flags. `Server.Start` calls `Discovery.AddBootstrap` with the
+  union of `SeedNodes` and `BootstrapNodes`.
+- New `p2p.dialLimiter` (per-addr min interval, default 30s); `AddPeer`
+  returns sentinel `errDialThrottled` on throttle; `maintainPeers` swallows
+  it silently. Eliminates the `removePeer → maintainCh` cascade.
+
+After fix: same 5-min window emits ~5-10 log lines (one EOF per addr per
+30s when a remote rate-limits), `duplicate peer` count zero. The `M3.5`
+seed list (`MainnetBootstrapNodes`) was also expanded with two empirically
+verified live peers (`3.218.137.187:18888`, `34.237.210.82:18888`) that
+appear in mainnet `NEIGHBOURS` responses but not in java-tron's default
+config.conf.
+
 ## What's still not validated
 
 - **Real-network block sync (G1)** — requires a java-tron node on mainnet or
@@ -129,7 +160,8 @@ JAVA_TRON_ADDR=127.0.0.1:18888 scripts/system_test_cross.sh
   private chain (networkID=0) but does NOT cover mainnet's longer history
   or its proposal-driven fork activations. G1 validation is deferred to
   M0″ Phase 2 (requires operator with mainnet-synced java-tron; see
-  PLAN.md).
+  PLAN.md). A continuous mainnet soak (see `mainnet-soak.md`) covers the
+  natural-language G1 invariant in parallel.
 - **Testnet reachability** — live Nile/mainnet seeds appear unreachable from
   the test environment (TCP connects, first bytes received, but full sync
   not attempted yet).

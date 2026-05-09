@@ -13,7 +13,10 @@ import (
 const MainnetNetworkID int32 = 11111
 
 // MainnetBootstrapNodes is the list of TRON mainnet discovery seed nodes.
-// These are the java-tron default seed nodes from config.conf.
+// The first 12 are java-tron's default seeds from config.conf. The trailing
+// entries are mainnet peers verified by gtron's M3.5 sanity (2026-05-09) to
+// complete TRON-Hello reliably; they're not in java-tron's default list but
+// are observed advertising themselves through java-tron's NEIGHBOURS replies.
 var MainnetBootstrapNodes = []string{
 	"47.90.247.237:18888",
 	"47.90.214.128:18888",
@@ -27,6 +30,8 @@ var MainnetBootstrapNodes = []string{
 	"52.15.93.92:18888",
 	"34.220.77.106:18888",
 	"15.207.144.3:18888",
+	"3.218.137.187:18888",
+	"34.237.210.82:18888",
 }
 
 func hexToAddress(h string) common.Address {
