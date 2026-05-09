@@ -21,6 +21,14 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".gtron")
 }
 
+// resolveNetworkID returns the libp2p networkId derived from the genesis
+// configuration. genesis.Config.P2PVersion is the authoritative source:
+// 11111 for mainnet, 201910292 for Nile, and a custom value (often 0) for
+// private chains. Mirrors java-tron's `Parameter.nodeP2pVersion` resolution.
+func resolveNetworkID(g *params.Genesis) int32 {
+	return g.Config.P2PVersion
+}
+
 func makeConfig(ctx *cli.Context) *node.Config {
 	return &node.Config{
 		DataDir:      ctx.String("datadir"),

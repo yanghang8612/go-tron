@@ -188,10 +188,6 @@ func gtron(ctx *cli.Context) error {
 		fmt.Printf("Dev mode: single-witness genesis (witness=%x)\n", witnessAddr[:6])
 	}
 	if ctx.String("genesis") != "" {
-		// Custom-chain bootstrap: derive networkId from the file so the libp2p
-		// HelloMessage matches the peer (e.g. java-tron private chain runs at
-		// p2p.version=0).
-		cfg.NetworkID = genesis.Config.P2PVersion
 		fmt.Printf("Custom genesis: chain=%d p2p_version=%d witnesses=%d accounts=%d\n",
 			genesis.Config.ChainID, genesis.Config.P2PVersion,
 			len(genesis.Witnesses), len(genesis.Accounts))
@@ -241,13 +237,7 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("load node ID: %w", err)
 	}
 
-	// Resolve network ID: config override > params default. When --genesis
-	// is set, treat NetworkID==0 as explicit (some private chains run with
-	// java-tron's `p2p.version = 0`); otherwise fall back to mainnet.
-	networkID := cfg.NetworkID
-	if networkID == 0 && ctx.String("genesis") == "" {
-		networkID = params.MainnetNetworkID
-	}
+	networkID := resolveNetworkID(genesis)
 
 	externalIP := cfg.ExternalIP
 	if externalIP == "" {
