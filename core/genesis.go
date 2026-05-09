@@ -166,6 +166,22 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		txs = append(txs, tx)
 	}
 
+	// Mirror java-tron `Manager.initWitness`: every genesis witness gets an
+	// Account record (created with type=AssetIssue/balance=0 if absent) and
+	// `is_witness=true` flipped on that account. Without the account,
+	// statedb.AddAllowance silently no-ops on GR addresses
+	// (statedb.go: `if obj == nil { return }`), killing payBlockReward and
+	// distributeLegacyStandby for every GR witness. The account-state-root
+	// is not on the genesis header (java-tron parity), so this does not
+	// move the genesis block hash; it only changes the persisted post-
+	// genesis state root, which is the correct starting state for block #1.
+	for _, gw := range g.Witnesses {
+		if !statedb.AccountExists(gw.Address) {
+			statedb.CreateAccount(gw.Address, corepb.AccountType_AssetIssue)
+		}
+		statedb.SetIsWitness(gw.Address, true)
+	}
+
 	// Persist account state. The returned root does NOT go on the block
 	// header (java-tron parity), but it is needed by block #1's applyBlock
 	// to open the StateDB on the correct trie. Caller persists via

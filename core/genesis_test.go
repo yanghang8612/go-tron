@@ -114,6 +114,47 @@ func TestSetupGenesisBlock_NextMaintenanceTimeSeeded(t *testing.T) {
 	}
 }
 
+// TestSetupGenesisBlock_WitnessAccountsCreated locks java-tron `Manager
+// .initWitness` parity: every genesis witness must have an Account record
+// (created with AccountType=AssetIssue if absent) and IsWitness=true on
+// that account, after SetupGenesisBlock returns. Without this, AddAllowance
+// on a GR address silently no-ops (statedb.go: `if obj == nil { return }`),
+// killing payBlockReward and distributeLegacyStandby for every GR witness
+// — observed empirically before the fix landed (2026-05-09 follow-up to
+// the next_maintenance_time fix in 4a4188a). Reads through a fresh
+// state.New on the persisted state root to also verify the witness flags
+// survived the Commit, not just the in-memory bootstrap statedb.
+func TestSetupGenesisBlock_WitnessAccountsCreated(t *testing.T) {
+	genesis := params.DefaultMainnetGenesis()
+	if len(genesis.Witnesses) == 0 {
+		t.Fatalf("mainnet genesis has no witnesses; test fixture broken")
+	}
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	root := rawdb.ReadGenesisStateRoot(diskdb)
+	if root == (common.Hash{}) {
+		t.Fatalf("genesis state root not persisted")
+	}
+	sdb, err := state.New(root, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatalf("open state at genesis root: %v", err)
+	}
+
+	for _, gw := range genesis.Witnesses {
+		if !sdb.AccountExists(gw.Address) {
+			t.Errorf("witness %s: no Account record after genesis", gw.Address.Hex())
+			continue
+		}
+		if !sdb.IsWitness(gw.Address) {
+			t.Errorf("witness %s: account.IsWitness=false after genesis", gw.Address.Hex())
+		}
+	}
+}
+
 // TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit verifies that
 // when the genesis config DOES seed `next_maintenance_time`, the bootstrap
 // fallback does not clobber it.
