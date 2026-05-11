@@ -29,7 +29,7 @@ func TestWithdrawBalanceValidate(t *testing.T) {
 	// Missing account
 	tx := makeWithdrawBalanceTx(40)
 	act := &WithdrawBalanceActuator{}
-	ctx := &Context{State: statedb, Tx: tx, BlockTime: 200000}
+	ctx := &Context{State: statedb, Tx: tx, BlockTime: 200000, PrevBlockTime: 200000}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for missing account")
 	}
@@ -46,13 +46,13 @@ func TestWithdrawBalanceValidate(t *testing.T) {
 	statedb.SetLatestWithdrawTime(owner, 100000)
 
 	// Too recent withdraw
-	ctx = &Context{State: statedb, Tx: tx, BlockTime: 100000 + 86400000/2}
+	ctx = &Context{State: statedb, Tx: tx, BlockTime: 100000 + 86400000/2, PrevBlockTime: 100000 + 86400000/2}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for too recent withdraw")
 	}
 
 	// Success after cooldown
-	ctx = &Context{State: statedb, Tx: tx, BlockTime: 100000 + 86400000 + 1}
+	ctx = &Context{State: statedb, Tx: tx, BlockTime: 100000 + 86400000 + 1, PrevBlockTime: 100000 + 86400000 + 1}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestWithdrawBalanceExecute(t *testing.T) {
 	tx := makeWithdrawBalanceTx(40)
 	act := &WithdrawBalanceActuator{}
 	blockTime := int64(86400000 + 1)
-	ctx := &Context{State: statedb, Tx: tx, BlockTime: blockTime}
+	ctx := &Context{State: statedb, Tx: tx, BlockTime: blockTime, PrevBlockTime: blockTime}
 
 	result, err := act.Execute(ctx)
 	if err != nil {

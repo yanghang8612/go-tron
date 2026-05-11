@@ -74,7 +74,7 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	expireTimeMs := ctx.BlockTime + fc.FrozenDuration*86_400_000
+	expireTimeMs := ctx.PrevBlockTime + fc.FrozenDuration*86_400_000
 	delegated := len(fc.ReceiverAddress) > 0
 
 	if !delegated {

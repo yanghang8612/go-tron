@@ -41,7 +41,7 @@ func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {
 		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
 			hasExpired := false
 			for _, f := range acct.FrozenBandwidthList() {
-				if f.ExpireTime <= ctx.BlockTime {
+				if f.ExpireTime <= ctx.PrevBlockTime {
 					hasExpired = true
 					break
 				}
@@ -53,7 +53,7 @@ func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {
 			if acct.FrozenEnergyAmount() == 0 {
 				return errors.New("no frozen energy")
 			}
-			if acct.FrozenEnergyExpireTime() > ctx.BlockTime {
+			if acct.FrozenEnergyExpireTime() > ctx.PrevBlockTime {
 				return errors.New("frozen energy not expired")
 			}
 		default:
@@ -88,9 +88,9 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	if !delegated {
 		switch uc.Resource {
 		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
-			removed = ctx.State.UnfreezeV1Bandwidth(ownerAddr, ctx.BlockTime)
+			removed = ctx.State.UnfreezeV1Bandwidth(ownerAddr, ctx.PrevBlockTime)
 		case corepb.ResourceCode_ENERGY:
-			removed = ctx.State.UnfreezeV1Energy(ownerAddr, ctx.BlockTime)
+			removed = ctx.State.UnfreezeV1Energy(ownerAddr, ctx.PrevBlockTime)
 		}
 		ctx.State.AddBalance(ownerAddr, removed)
 	} else {

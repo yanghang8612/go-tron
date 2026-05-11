@@ -83,7 +83,7 @@ func (a *UnfreezeBalanceV2Actuator) Execute(ctx *Context) (*Result, error) {
 	newWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, uc.Resource)
 	addResourceWeight(ctx.DynProps, uc.Resource, newWeight-oldWeight)
 
-	expireTime := ctx.BlockTime + ctx.DynProps.UnfreezeDelayDays()*86_400_000
+	expireTime := ctx.PrevBlockTime + ctx.DynProps.UnfreezeDelayDays()*86_400_000
 	ctx.State.AddUnfreezeV2(ownerAddr, uc.Resource, uc.UnfreezeBalance, expireTime)
 
 	// AllowNewResourceModel: any V2 unfreeze consumes the legacy snapshot,

@@ -44,7 +44,7 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if proposal.State != rawdb.ProposalStatePending {
 		return errors.New("proposal is not pending")
 	}
-	if ctx.BlockTime >= proposal.ExpirationTime {
+	if ctx.PrevBlockTime >= proposal.ExpirationTime {
 		return errors.New("proposal has expired")
 	}
 	if proposal.Proposer != ownerAddr {

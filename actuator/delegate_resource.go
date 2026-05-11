@@ -74,7 +74,7 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// refresh owner's usage counter before their frozen pool shifts, so
 	// the sliding-window decay keeps tracking from the correct anchor.
 	// Passing transferUsage=0 just writes back the recovered value.
-	delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, 0, ctx.BlockTime)
+	delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, 0, ctx.PrevBlockTime)
 
 	// Subtract from owner's frozen balance
 	ctx.State.ReduceFreezeV2(ownerAddr, c.Resource, c.Balance)
@@ -92,12 +92,12 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 		if c.Resource == corepb.ResourceCode_BANDWIDTH {
 			dr.FrozenBalanceForBandwidth += c.Balance
 			if c.Lock {
-				dr.ExpireTimeForBandwidth = ctx.BlockTime + c.LockPeriod
+				dr.ExpireTimeForBandwidth = ctx.PrevBlockTime + c.LockPeriod
 			}
 		} else {
 			dr.FrozenBalanceForEnergy += c.Balance
 			if c.Lock {
-				dr.ExpireTimeForEnergy = ctx.BlockTime + c.LockPeriod
+				dr.ExpireTimeForEnergy = ctx.PrevBlockTime + c.LockPeriod
 			}
 		}
 		rawdb.WriteDelegatedResource(ctx.DB, ownerAddr, receiverAddr, dr)

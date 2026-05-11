@@ -61,7 +61,7 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestApplyTransaction_ValidationFails(t *testing.T) {
 
 	// No account seeded — validation should fail
 	tx := makeTestTransferTx(1, 2, 100)
-	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -184,7 +184,7 @@ func TestApplyTransaction_ReturnsResult(t *testing.T) {
 	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
 
 	tx := makeTestTransferTx(1, 2, 300_000)
-	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 1, nil, nil, true)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestApplyTransaction_ExchangeRejectedAfterFork(t *testing.T) {
 
 	tx := makeExchangeTransactionTx(1)
 	// blockTime well past the v33 HardForkTime ceiling.
-	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1, db, nil, false)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1_700_000_000_000, 1, db, nil, false)
 	if !errors.Is(err, ErrExchangeRejected) {
 		t.Fatalf("expected ErrExchangeRejected, got %v", err)
 	}
@@ -255,7 +255,7 @@ func TestApplyTransaction_ExchangePassesPreFork(t *testing.T) {
 	// No fork stats written → PassVersion returns false.
 
 	tx := makeExchangeTransactionTx(1)
-	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1, db, nil, false)
+	_, err := ApplyTransaction(statedb, dynProps, tx, 1_700_000_000_000, 1_700_000_000_000, 1, db, nil, false)
 	// The actuator can fail later for unrelated reasons (no exchange
 	// state seeded); the only thing we care about here is that the
 	// failure mode is NOT the v33 early reject.

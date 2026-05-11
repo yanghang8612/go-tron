@@ -198,12 +198,13 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 
 	act := &UnDelegateResourceActuator{}
 	ctx := &Context{
-		State:       statedb,
-		DynProps:    dp,
-		DB:          db,
-		Tx:          tx,
-		BlockTime:   5_000, // same time — no decay
-		BlockNumber: 100,
+		State:         statedb,
+		DynProps:      dp,
+		DB:            db,
+		Tx:            tx,
+		BlockTime:     5_000, // same time — no decay
+		PrevBlockTime: 5_000,
+		BlockNumber:   100,
 	}
 
 	if err := act.Validate(ctx); err != nil {

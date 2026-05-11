@@ -102,7 +102,7 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 // only staked bandwidth is consulted. On insufficient stake the path falls
 // back to the `create_account_fee` (default 100_000 SUN), bypassing the
 // free-bandwidth daily quota entirely.
-func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64) (*BandwidthResult, error) {
+func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64) (*BandwidthResult, error) {
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
 		return nil, fmt.Errorf("cannot determine sender")
@@ -111,26 +111,26 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
 
 	if contractCreatesNewAccount(statedb, tx) {
-		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, blockTime)
+		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, prevBlockTime)
 	}
 
 	acct := statedb.GetAccount(sender)
 	netLimit := availableAccountNet(acct, dynProps)
 	if netLimit > 0 {
-		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), blockTime)
+		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), prevBlockTime)
 		if recoveredUsage+txSize <= netLimit {
 			statedb.SetNetUsage(sender, recoveredUsage+txSize)
-			statedb.SetLatestConsumeTime(sender, blockTime)
+			statedb.SetLatestConsumeTime(sender, prevBlockTime)
 			return &BandwidthResult{NetUsage: txSize}, nil
 		}
 	}
 
 	// Try free bandwidth
 	freeLimit := dynProps.FreeNetLimit()
-	recoveredFreeUsage := recoverUsage(statedb.GetFreeNetUsage(sender), statedb.GetLatestConsumeFreeTime(sender), blockTime)
+	recoveredFreeUsage := recoverUsage(statedb.GetFreeNetUsage(sender), statedb.GetLatestConsumeFreeTime(sender), prevBlockTime)
 	if recoveredFreeUsage+txSize <= freeLimit {
 		statedb.SetFreeNetUsage(sender, recoveredFreeUsage+txSize)
-		statedb.SetLatestConsumeFreeTime(sender, blockTime)
+		statedb.SetLatestConsumeFreeTime(sender, prevBlockTime)
 		return &BandwidthResult{NetUsage: txSize}, nil
 	}
 
@@ -183,7 +183,7 @@ func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bo
 // applied per byte); on shortage the `create_account_fee` is taken from the
 // owner balance and either burned or sent to the blackhole — and
 // `total_create_account_cost` is incremented.
-func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, blockTime int64) (*BandwidthResult, error) {
+func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime int64) (*BandwidthResult, error) {
 	ratio := dynProps.CreateNewAccountBandwidthRate()
 	if ratio <= 0 {
 		ratio = 1
@@ -193,10 +193,10 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	acct := statedb.GetAccount(sender)
 	netLimit := availableAccountNet(acct, dynProps)
 	if netLimit > 0 {
-		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), blockTime)
+		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), prevBlockTime)
 		if recoveredUsage+netCost <= netLimit {
 			statedb.SetNetUsage(sender, recoveredUsage+netCost)
-			statedb.SetLatestConsumeTime(sender, blockTime)
+			statedb.SetLatestConsumeTime(sender, prevBlockTime)
 			return &BandwidthResult{NetUsage: netCost}, nil
 		}
 	}

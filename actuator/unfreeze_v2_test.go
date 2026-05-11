@@ -75,11 +75,12 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	// explicitly here so the test exercises the delayed-unfreeze path.
 	dp.Set("unfreeze_delay_days", 14)
 	ctx := &Context{
-		State:       statedb,
-		DynProps:    dp,
-		Tx:          tx,
-		BlockTime:   blockTime,
-		BlockNumber: 1,
+		State:         statedb,
+		DynProps:      dp,
+		Tx:            tx,
+		BlockTime:     blockTime,
+		PrevBlockTime: blockTime,
+		BlockNumber:   1,
 	}
 
 	result, err := act.Execute(ctx)

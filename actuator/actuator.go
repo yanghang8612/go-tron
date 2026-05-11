@@ -28,10 +28,22 @@ type BufferedKVStore interface {
 }
 
 type Context struct {
-	State           *state.StateDB
-	DynProps        *state.DynamicProperties
-	Tx              *types.Transaction
-	BlockTime       int64
+	State    *state.StateDB
+	DynProps *state.DynamicProperties
+	Tx       *types.Transaction
+	// BlockTime is the timestamp of the block currently being applied
+	// (matches the EVM's TIMESTAMP opcode, java-tron `block.getTimeStamp()`).
+	BlockTime int64
+	// PrevBlockTime is the chain head's timestamp at the moment this tx
+	// starts executing — i.e. the timestamp of the block *before* the one
+	// being applied. java-tron actuators read this via
+	// `chainBaseManager.getDynamicPropertiesStore().getLatestBlockHeaderTimestamp()`
+	// because `Manager.applyBlock` calls `processTransaction` *before*
+	// `updateDynamicProperties(block)`, so the DP value is still the prev
+	// block's timestamp during tx Execute. Consensus-affecting reads
+	// (freeze expiry, withdraw cooldown, proposal create_time, etc.) must
+	// use this field; only the VM's TIMESTAMP opcode reads `BlockTime`.
+	PrevBlockTime   int64
 	BlockNumber     uint64
 	DB              BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
 	ActiveWitnesses []common.Address // active witness set for governance checks

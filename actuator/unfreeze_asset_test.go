@@ -68,6 +68,7 @@ func setupUnfreezeCtx(t *testing.T, ownerByte byte, frozenAmount, frozenDays int
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = issueTime + blockTimeOffset
+	ctx.PrevBlockTime = ctx.BlockTime
 	return ctx
 }
 
@@ -143,6 +144,7 @@ func TestUnfreezeAssetExecute(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = issueTime + 2*testDayMs // 2 days: entry 0 eligible, entry 1 not
+	ctx.PrevBlockTime = ctx.BlockTime
 
 	act := &UnfreezeAssetActuator{}
 	result, err := act.Execute(ctx)

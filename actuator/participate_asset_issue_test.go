@@ -68,6 +68,7 @@ func makeTestICO(t *testing.T, buyerByte, issuerByte byte, trxNum, num int32, st
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = (startTime + endTime) / 2 // midpoint within ICO window
+	ctx.PrevBlockTime = ctx.BlockTime
 	return ctx
 }
 
@@ -81,7 +82,8 @@ func TestParticipateAssetValidate_Success(t *testing.T) {
 
 func TestParticipateAssetValidate_ICONotStarted(t *testing.T) {
 	ctx := makeTestICO(t, 1, 2, 1, 100, 5000, 10000) // window starts at 5000
-	ctx.BlockTime = 100                                 // before ICO
+	ctx.BlockTime = 100                              // before ICO
+	ctx.PrevBlockTime = ctx.BlockTime
 	act := &ParticipateAssetIssueActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error: ICO not started")
@@ -90,7 +92,8 @@ func TestParticipateAssetValidate_ICONotStarted(t *testing.T) {
 
 func TestParticipateAssetValidate_ICOEnded(t *testing.T) {
 	ctx := makeTestICO(t, 1, 2, 1, 100, 100, 500) // window ends at 500
-	ctx.BlockTime = 1000                             // after ICO
+	ctx.BlockTime = 1000                          // after ICO
+	ctx.PrevBlockTime = ctx.BlockTime
 	act := &ParticipateAssetIssueActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error: ICO ended")
@@ -137,6 +140,7 @@ func TestParticipateAssetExecute(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = 1000 // within window
+	ctx.PrevBlockTime = ctx.BlockTime
 
 	initialBuyerTRX := ctx.State.GetBalance(buyer)
 

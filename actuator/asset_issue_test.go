@@ -282,6 +282,7 @@ func activateV34(t *testing.T, ctx *Context) {
 	}
 	rawdb.WriteForkStats(ctx.DB, 34, stats)
 	ctx.BlockTime = 1_700_000_000_000 // well past 1596780000000
+	ctx.PrevBlockTime = ctx.BlockTime
 }
 
 // TestAssetIssueValidate_FrozenSupplyOverflow_GatedOff locks down replay

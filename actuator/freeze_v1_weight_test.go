@@ -93,11 +93,12 @@ func TestUnfreezeBalance_WeightDecrementBandwidth(t *testing.T) {
 	unfreezeTx := makeUnfreezeBalanceTx(4, corepb.ResourceCode_BANDWIDTH, nil)
 	uAct := &UnfreezeBalanceActuator{}
 	uCtx := &Context{
-		State:       statedb,
-		DynProps:    fCtx.DynProps,
-		Tx:          unfreezeTx,
-		BlockTime:   fCtx.BlockTime + 4*86_400_000, // 4 days later — past 3d expiry
-		BlockNumber: 2,
+		State:         statedb,
+		DynProps:      fCtx.DynProps,
+		Tx:            unfreezeTx,
+		BlockTime:     fCtx.BlockTime + 4*86_400_000, // 4 days later — past 3d expiry
+		PrevBlockTime: fCtx.BlockTime + 4*86_400_000,
+		BlockNumber:   2,
 	}
 	if _, err := uAct.Execute(uCtx); err != nil {
 		t.Fatalf("unfreeze execute: %v", err)
@@ -126,11 +127,12 @@ func TestUnfreezeBalance_WorksPostFork(t *testing.T) {
 	unfreezeTx := makeUnfreezeBalanceTx(5, corepb.ResourceCode_ENERGY, nil)
 	uAct := &UnfreezeBalanceActuator{}
 	uCtx := &Context{
-		State:       statedb,
-		DynProps:    fCtx.DynProps,
-		Tx:          unfreezeTx,
-		BlockTime:   fCtx.BlockTime + 4*86_400_000,
-		BlockNumber: 2,
+		State:         statedb,
+		DynProps:      fCtx.DynProps,
+		Tx:            unfreezeTx,
+		BlockTime:     fCtx.BlockTime + 4*86_400_000,
+		PrevBlockTime: fCtx.BlockTime + 4*86_400_000,
+		BlockNumber:   2,
 	}
 	if err := uAct.Validate(uCtx); err != nil {
 		t.Fatalf("unfreeze validate should succeed post-fork: %v", err)

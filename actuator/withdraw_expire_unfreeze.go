@@ -36,7 +36,7 @@ func (a *WithdrawExpireUnfreezeActuator) Validate(ctx *Context) error {
 	acc := ctx.State.GetAccount(ownerAddr)
 	hasExpired := false
 	for _, u := range acc.UnfrozenV2() {
-		if u.UnfreezeExpireTime <= ctx.BlockTime {
+		if u.UnfreezeExpireTime <= ctx.PrevBlockTime {
 			hasExpired = true
 			break
 		}
@@ -53,7 +53,7 @@ func (a *WithdrawExpireUnfreezeActuator) Execute(ctx *Context) (*Result, error) 
 		return nil, err
 	}
 	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
-	withdrawn := ctx.State.RemoveExpiredUnfreezeV2(ownerAddr, ctx.BlockTime)
+	withdrawn := ctx.State.RemoveExpiredUnfreezeV2(ownerAddr, ctx.PrevBlockTime)
 	ctx.State.AddBalance(ownerAddr, withdrawn)
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

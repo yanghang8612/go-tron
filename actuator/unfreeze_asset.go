@@ -30,7 +30,7 @@ func (a *UnfreezeAssetActuator) getContract(ctx *Context) (*contractpb.UnfreezeA
 func (a *UnfreezeAssetActuator) eligibleCount(ctx *Context, owner common.Address, tokenID int64, asset *contractpb.AssetIssueContract, issueTime int64) int {
 	count := 0
 	for i, f := range asset.FrozenSupply {
-		if issueTime+f.FrozenDays*dayMs > ctx.BlockTime {
+		if issueTime+f.FrozenDays*dayMs > ctx.PrevBlockTime {
 			continue
 		}
 		if ctx.State.IsFrozenClaimed(owner, tokenID, uint32(i)) {
@@ -85,7 +85,7 @@ func (a *UnfreezeAssetActuator) Execute(ctx *Context) (*Result, error) {
 	issueTime := rawdb.ReadAssetIssueTime(ctx.DB, tokenID)
 
 	for i, f := range asset.FrozenSupply {
-		if issueTime+f.FrozenDays*dayMs > ctx.BlockTime {
+		if issueTime+f.FrozenDays*dayMs > ctx.PrevBlockTime {
 			continue
 		}
 		if ctx.State.IsFrozenClaimed(owner, tokenID, uint32(i)) {

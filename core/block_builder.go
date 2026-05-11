@@ -84,8 +84,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	var failedTxIDs []tcommon.Hash
 	blockNum := parent.Number() + 1
 
+	// The block being built has not yet committed, so the chain head
+	// timestamp is the parent's — same value java-tron actuators see via
+	// LatestBlockHeaderTimestamp during processTransaction.
+	prevBlockTime := parent.Timestamp()
+
 	for _, tx := range pendingTxs {
-		result, err := ApplyTransaction(statedb, dynProps, tx, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true)
+		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true)
 		if err != nil {
 			h := tx.Hash()
 			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)

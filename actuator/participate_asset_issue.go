@@ -44,10 +44,10 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if c.Amount <= 0 {
 		return errors.New("amount must be positive")
 	}
-	if ctx.BlockTime < asset.StartTime {
+	if ctx.PrevBlockTime < asset.StartTime {
 		return errors.New("ICO has not started yet")
 	}
-	if ctx.BlockTime > asset.EndTime {
+	if ctx.PrevBlockTime > asset.EndTime {
 		return errors.New("ICO has ended")
 	}
 	if asset.TrxNum <= 0 || asset.Num <= 0 {

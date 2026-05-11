@@ -65,10 +65,10 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 		recovered := recoverEnergyUsage(
 			ctx.State.GetEnergyUsage(origin),
 			ctx.State.GetLatestConsumeTimeForEnergy(origin),
-			ctx.BlockTime,
+			ctx.PrevBlockTime,
 		)
 		ctx.State.SetEnergyUsage(origin, recovered+originUsage)
-		ctx.State.SetLatestConsumeTimeForEnergy(origin, ctx.BlockTime)
+		ctx.State.SetLatestConsumeTimeForEnergy(origin, ctx.PrevBlockTime)
 		// Receipt's origin_energy_usage carries the split share so SDKs
 		// see the same TransactionInfo as java-tron.
 		result.OriginEnergyUsage = originUsage
@@ -86,7 +86,7 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 		return nil
 	}
 
-	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, ctx.BlockTime)
+	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, ctx.PrevBlockTime)
 
 	stakeUsed := stakeLeft
 	if stakeUsed > usage {
@@ -101,10 +101,10 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 		recovered := recoverEnergyUsage(
 			ctx.State.GetEnergyUsage(caller),
 			ctx.State.GetLatestConsumeTimeForEnergy(caller),
-			ctx.BlockTime,
+			ctx.PrevBlockTime,
 		)
 		ctx.State.SetEnergyUsage(caller, recovered+stakeUsed)
-		ctx.State.SetLatestConsumeTimeForEnergy(caller, ctx.BlockTime)
+		ctx.State.SetLatestConsumeTimeForEnergy(caller, ctx.PrevBlockTime)
 	}
 
 	// proto field 1 (energy_usage) carries the stake-paid amount.
@@ -203,7 +203,7 @@ func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int
 	want := totalEnergy * percent / 100
 
 	originLimit := contract.OriginEnergyLimit
-	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.BlockTime)
+	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.PrevBlockTime)
 
 	cap := originStakeLeft
 	if originLimit > 0 && originLimit < cap {

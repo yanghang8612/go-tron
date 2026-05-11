@@ -32,12 +32,13 @@ func setupStateDB(t *testing.T) *state.StateDB {
 func setupContext(t *testing.T, statedb *state.StateDB, tx *types.Transaction) *Context {
 	t.Helper()
 	return &Context{
-		State:       statedb,
-		DynProps:    state.NewDynamicProperties(),
-		Tx:          tx,
-		BlockTime:   1000000,
-		BlockNumber: 1,
-		DB:          ethrawdb.NewMemoryDatabase(),
+		State:         statedb,
+		DynProps:      state.NewDynamicProperties(),
+		Tx:            tx,
+		BlockTime:     1000000,
+		PrevBlockTime: 1000000,
+		BlockNumber:   1,
+		DB:            ethrawdb.NewMemoryDatabase(),
 	}
 }
 

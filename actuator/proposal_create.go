@@ -51,8 +51,12 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.DynProps.SetNextProposalID(proposalID + 1)
 
 	// Expiration aligns to the first maintenance boundary strictly after
-	// (blockTime + proposalExpireTime), matching java-tron ProposalCreateActuator.
-	now3 := ctx.BlockTime + ctx.DynProps.ProposalExpireTime()
+	// (prevBlockTime + proposalExpireTime), matching java-tron
+	// ProposalCreateActuator. java reads getLatestBlockHeaderTimestamp()
+	// here, which during processTransaction still holds the previous
+	// block's timestamp (Manager.applyBlock runs updateDynamicProperties
+	// only *after* processTransaction).
+	now3 := ctx.PrevBlockTime + ctx.DynProps.ProposalExpireTime()
 	nextMaintenance := ctx.DynProps.NextMaintenanceTime()
 	interval := ctx.DynProps.MaintenanceTimeInterval()
 	var expirationTime int64
@@ -67,7 +71,7 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 		ID:             proposalID,
 		Proposer:       ownerAddr,
 		Parameters:     c.Parameters,
-		CreateTime:     ctx.BlockTime,
+		CreateTime:     ctx.PrevBlockTime,
 		ExpirationTime: expirationTime,
 		State:          rawdb.ProposalStatePending,
 	}

@@ -51,6 +51,7 @@ func TestUnDelegateResourceLocked(t *testing.T) {
 	ctx.DynProps.SetAllowDelegateResource(true)
 	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.BlockTime = 1000
+	ctx.PrevBlockTime = 1000
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	db := ethrawdb.NewMemoryDatabase()

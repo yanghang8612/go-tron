@@ -33,7 +33,7 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 		return errors.New("owner account does not exist")
 	}
 	lastWithdraw := ctx.State.GetLatestWithdrawTime(ownerAddr)
-	if ctx.BlockTime-lastWithdraw < withdrawCooldown {
+	if ctx.PrevBlockTime-lastWithdraw < withdrawCooldown {
 		return errors.New("withdraw too frequent")
 	}
 	// Must either have existing allowance OR a pending voter reward to
@@ -60,6 +60,6 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	allowance := ctx.State.GetAllowance(ownerAddr)
 	ctx.State.AddBalance(ownerAddr, allowance)
 	ctx.State.SetAllowance(ownerAddr, 0)
-	ctx.State.SetLatestWithdrawTime(ownerAddr, ctx.BlockTime)
+	ctx.State.SetLatestWithdrawTime(ownerAddr, ctx.PrevBlockTime)
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

@@ -47,7 +47,7 @@ func (a *ProposalApproveActuator) Validate(ctx *Context) error {
 	if proposal.State != rawdb.ProposalStatePending {
 		return errors.New("proposal is not pending")
 	}
-	if proposal.ExpirationTime <= ctx.BlockTime {
+	if proposal.ExpirationTime <= ctx.PrevBlockTime {
 		return errors.New("proposal has expired")
 	}
 	hasApproved := containsAddress(proposal.Approvals, ownerAddr)

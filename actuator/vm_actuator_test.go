@@ -44,12 +44,13 @@ func newTestContext(t *testing.T, contractType corepb.Transaction_Contract_Contr
 	dynProps.Set("energy_fee", 100)
 
 	return &Context{
-		State:       sdb,
-		DynProps:    dynProps,
-		Tx:          tx,
-		BlockTime:   1000,
-		BlockNumber: 1,
-		DB:          diskdb,
+		State:         sdb,
+		DynProps:      dynProps,
+		Tx:            tx,
+		BlockTime:     1000,
+		PrevBlockTime: 1000,
+		BlockNumber:   1,
+		DB:            diskdb,
 	}
 }
 

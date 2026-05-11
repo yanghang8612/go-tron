@@ -53,11 +53,12 @@ func newEnergyBillCtx(t *testing.T, owner tcommon.Address) *Context {
 	dp.Set("energy_fee", 100)
 
 	return &Context{
-		State:       sdb,
-		DynProps:    dp,
-		Tx:          tx,
-		BlockTime:   1_777_700_000_000,
-		BlockNumber: 80_000,
+		State:         sdb,
+		DynProps:      dp,
+		Tx:            tx,
+		BlockTime:     1_777_700_000_000,
+		PrevBlockTime: 1_777_700_000_000,
+		BlockNumber:   80_000,
 	}
 }
 

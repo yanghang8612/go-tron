@@ -55,14 +55,14 @@ func (a *UnDelegateResourceActuator) Validate(ctx *Context) error {
 		if dr.FrozenBalanceForBandwidth < c.Balance {
 			return errors.New("insufficient delegated bandwidth balance")
 		}
-		if dr.ExpireTimeForBandwidth > ctx.BlockTime {
+		if dr.ExpireTimeForBandwidth > ctx.PrevBlockTime {
 			return errors.New("delegation is still locked")
 		}
 	} else {
 		if dr.FrozenBalanceForEnergy < c.Balance {
 			return errors.New("insufficient delegated energy balance")
 		}
-		if dr.ExpireTimeForEnergy > ctx.BlockTime {
+		if dr.ExpireTimeForEnergy > ctx.PrevBlockTime {
 			return errors.New("delegation is still locked")
 		}
 	}
@@ -82,7 +82,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// compute the portion of it attributable to the undelegated amount.
 	// That transferUsage is deducted from the receiver and folded into the
 	// owner's usage so neither party gets a free ride.
-	transferUsage := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, ctx.BlockTime)
+	transferUsage := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, ctx.PrevBlockTime)
 
 	// Return to owner's frozen balance
 	ctx.State.AddFreezeV2(ownerAddr, c.Resource, c.Balance)
@@ -92,7 +92,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.SubAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
 
 	if transferUsage > 0 {
-		delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, transferUsage, ctx.BlockTime)
+		delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, transferUsage, ctx.PrevBlockTime)
 	}
 
 	// Update delegation record

@@ -109,6 +109,7 @@ func TestProposalCreateExpiration_NileProposal1Parity(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 	ctx.BlockTime = nileBlockTime
+	ctx.PrevBlockTime = nileBlockTime
 	ctx.DynProps.SetNextMaintenanceTime(nileNextMaintenance)
 	ctx.DynProps.Set("maintenance_time_interval", nileInterval)
 	ctx.DynProps.Set("proposal_expire_time", nileProposalExpire)
@@ -133,6 +134,58 @@ func TestProposalCreateExpiration_NileProposal1Parity(t *testing.T) {
 			p.ExpirationTime, expectedExpiration,
 			p.ExpirationTime-expectedExpiration,
 			(p.ExpirationTime-expectedExpiration)/3_600_000)
+	}
+}
+
+// TestProposalCreate_UsesPrevBlockTime locks in the
+// BlockTime-vs-PrevBlockTime semantic gap: java-tron stores
+// `create_time = getLatestBlockHeaderTimestamp()` during
+// processTransaction, which is the *previous* block's timestamp because
+// Manager.applyBlock advances the DP value only after processTransaction
+// returns. Pre-fix gtron stored the *current* block's timestamp,
+// producing a +3000ms (one Nile block) drift vs Nile-live's proposal #1.
+// Asserts both `create_time` and the expiration-computation input
+// (`now3 = prevBlockTime + proposal_expire_time`) consume PrevBlockTime
+// rather than BlockTime.
+func TestProposalCreate_UsesPrevBlockTime(t *testing.T) {
+	const (
+		prev int64 = 1_572_596_523_000
+		curr int64 = 1_572_596_526_000 // prev + 3000ms (one Nile slot)
+	)
+
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner[:],
+		Parameters:   map[int64]int64{9: 1},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalCreateContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.ActiveWitnesses = []tcommon.Address{owner}
+	ctx.BlockTime = curr
+	ctx.PrevBlockTime = prev
+	// Maintenance grid wide enough that the round math is deterministic
+	// and the only signal observable is which timestamp drives it.
+	ctx.DynProps.Set("maintenance_time_interval", int64(21_600_000))
+	ctx.DynProps.SetNextMaintenanceTime(prev + 1)
+	ctx.DynProps.Set("proposal_expire_time", int64(600_000))
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+
+	act := &ProposalCreateActuator{}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	p := rawdb.ReadProposal(ctx.DB, 1)
+	if p == nil {
+		t.Fatal("proposal not stored")
+	}
+	if p.CreateTime != prev {
+		t.Fatalf("create_time: got %d, want %d (PrevBlockTime); +%d ms drift "+
+			"means we accidentally read BlockTime",
+			p.CreateTime, prev, p.CreateTime-prev)
+	}
+	if p.CreateTime == curr {
+		t.Fatalf("create_time matched BlockTime=%d; actuator must read PrevBlockTime", curr)
 	}
 }
 

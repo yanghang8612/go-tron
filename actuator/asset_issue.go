@@ -91,7 +91,7 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 		// exactly — including the silent-overflow `frozenDays *
 		// FROZEN_PERIOD` multiplication, since java's `long *` wraps and
 		// only the `addExact(startTime, frozenPeriod)` step throws.
-		if forks.PassVersion(ctx.DB, 34, ctx.BlockTime, ctx.DynProps.MaintenanceTimeInterval()) {
+		if forks.PassVersion(ctx.DB, 34, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval()) {
 			frozenPeriod := f.FrozenDays * params.FrozenPeriod
 			sum := c.StartTime + frozenPeriod
 			if (frozenPeriod > 0 && sum < c.StartTime) ||
@@ -139,7 +139,7 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	if err := rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID); err != nil {
 		return nil, fmt.Errorf("write owner index: %w", err)
 	}
-	if err := rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.BlockTime); err != nil {
+	if err := rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.PrevBlockTime); err != nil {
 		return nil, fmt.Errorf("write issue time: %w", err)
 	}
 

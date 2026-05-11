@@ -29,14 +29,16 @@ var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 // The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
 	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
 	// activates. Mirrors java-tron Manager.processBlock's per-tx
 	// rejectExchangeTransaction call (master 45e3bf88ca). Pre-fork blocks
 	// retain replay safety because PassVersion returns false until the
-	// version-bitmap quorum is met.
+	// version-bitmap quorum is met. java-tron evaluates this gate against
+	// the prev block's timestamp (the DP value during processTransaction),
+	// so we pass prevBlockTime here for parity.
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
-		forks.PassVersion(db, 33, blockTime, dynProps.MaintenanceTimeInterval()) {
+		forks.PassVersion(db, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
 	}
 
@@ -50,6 +52,7 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		DynProps:        dynProps,
 		Tx:              tx,
 		BlockTime:       blockTime,
+		PrevBlockTime:   prevBlockTime,
 		BlockNumber:     blockNum,
 		DB:              db,
 		ActiveWitnesses: activeWitnesses,
@@ -61,7 +64,7 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		}
 	}
 
-	bwResult, err := consumeBandwidth(statedb, dynProps, tx, blockTime)
+	bwResult, err := consumeBandwidth(statedb, dynProps, tx, prevBlockTime)
 	if err != nil {
 		return nil, fmt.Errorf("bandwidth: %w", err)
 	}
@@ -168,12 +171,21 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
 
+	// Snapshot the chain head's timestamp before the tx loop. java-tron's
+	// Manager.applyBlock runs processTransaction *before*
+	// updateDynamicProperties(block), so during tx Execute the DP value
+	// LatestBlockHeaderTimestamp is still the *previous* block's timestamp.
+	// blockchain.go advances `LatestBlockHeaderTimestamp` only after this
+	// function returns, so reading the DP here yields the prev-block
+	// timestamp for the entire block.
+	prevBlockTime := dynProps.LatestBlockHeaderTimestamp()
+
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
 		// validate=false: txs in a committed block were validated at build/broadcast time;
 		// re-validating would fail for actuators that write rawdb indexes in Execute.
-		result, err := ApplyTransaction(statedb, dynProps, tx, block.Timestamp(), block.Number(), db, activeWitnesses, false)
+		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, false)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}
