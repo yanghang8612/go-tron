@@ -62,6 +62,80 @@ func TestProposalCreateEmptyParams(t *testing.T) {
 	}
 }
 
+// TestProposalCreateExpiration_NileProposal1Parity replays Nile-live's
+// proposal #1 fixture and asserts gtron's ProposalCreateActuator computes
+// the same expiration_time. Inputs are taken directly from
+// `nile.trongrid.io/wallet/getproposalbyid?id=1`:
+//
+//	create_time     = 1572596523000      (proposer's block timestamp)
+//	expiration_time = 1572597600000      (Oct 31 2019 14:00:00 UTC)
+//	parameters      = {9:1, 10:1}        (allow_creation_of_contracts +
+//	                                      remove_the_power_of_the_gr)
+//
+// The chain values at that block (from `config-nile.conf` and observable
+// at Nile h~5k) were:
+//
+//	proposal_expire_time      = 600000              (10 min)
+//	next_maintenance_time     = 1572576000000       (Oct 31 08:00 UTC)
+//	maintenance_time_interval = 21600000            (6h)
+//
+// java-tron ProposalCreateActuator computes:
+//
+//	now3       = blockTime + proposal_expire_time = 1572597123000
+//	round      = (now3 - nextMaintenance) / interval = 0
+//	expiration = nextMaintenance + (round+1)*interval = 1572597600000 ✓
+//
+// Pre-fix gtron defaulted `proposal_expire_time = 259_200_000` (3 days),
+// pushing the expiration ~12 maintenance cycles past creation. On the
+// gtron soak this materialized as proposal #1 expiration_time =
+// 1572868800000 (75h late); by then the active witness set had rotated
+// SR-only, so the 27 GR approvers no longer intersected and the proposal
+// settled CANCELED while Nile-live had it APPROVED. Diagnosed 2026-05-11.
+func TestProposalCreateExpiration_NileProposal1Parity(t *testing.T) {
+	const (
+		nileBlockTime         int64 = 1572596523000
+		nileNextMaintenance   int64 = 1572576000000
+		nileInterval          int64 = 21600000
+		nileProposalExpire    int64 = 600000
+		expectedExpiration    int64 = 1572597600000
+	)
+
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner[:],
+		Parameters:   map[int64]int64{9: 1, 10: 1},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalCreateContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.ActiveWitnesses = []tcommon.Address{owner}
+	ctx.BlockTime = nileBlockTime
+	ctx.DynProps.SetNextMaintenanceTime(nileNextMaintenance)
+	ctx.DynProps.Set("maintenance_time_interval", nileInterval)
+	ctx.DynProps.Set("proposal_expire_time", nileProposalExpire)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+
+	act := &ProposalCreateActuator{}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	p := rawdb.ReadProposal(ctx.DB, 1)
+	if p == nil {
+		t.Fatal("proposal #1 not stored")
+	}
+	if p.CreateTime != nileBlockTime {
+		t.Fatalf("create_time: got %d, want %d (Nile-live)", p.CreateTime, nileBlockTime)
+	}
+	if p.ExpirationTime != expectedExpiration {
+		t.Fatalf("expiration_time: got %d, want %d (Nile-live). "+
+			"delta=%d ms (%dh); a non-zero delta means proposal_expire_time "+
+			"or maintenance grid is off vs Nile.",
+			p.ExpirationTime, expectedExpiration,
+			p.ExpirationTime-expectedExpiration,
+			(p.ExpirationTime-expectedExpiration)/3_600_000)
+	}
+}
+
 func TestProposalCreateExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalCreateContract{

@@ -107,6 +107,16 @@ var defaultProps = map[string]int64{
 	"forbid_transfer_to_contract":              0,
 	"update_account_permission_fee":            100_000_000,
 	"total_sign_num":                           5,
+	// proposal_expire_time is mainnet-biased: java-tron's getter returns
+	// CommonParameter.proposalExpireTime when the DP store is empty, and
+	// mainnet config.conf:681 sets that to 259_200_000 (3 days). Nile's
+	// config-nile.conf:517 sets it to 600_000 (10 min) instead, so
+	// params/nile.go MUST override this at genesis — without that
+	// override the bare default leaks through, every proposal expires
+	// ~3 days past the maintenance boundary it should land on, and on
+	// Nile soak proposal #1 was processed ~12 cycles late against a
+	// rotated-out active witness set (CANCELED on gtron vs APPROVED on
+	// Nile-live — diagnosed 2026-05-11).
 	"proposal_expire_time":                     259_200_000,
 	"allow_shielded_transaction":               0,
 	"zen_token_id":                             1_000_016,

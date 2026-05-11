@@ -51,6 +51,9 @@ func DefaultNileGenesis() *Genesis {
 			"total_energy_current_limit":                50000000000,
 			"total_net_limit":                           43200000000,
 			"unfreeze_delay_days":                       14,
+			// Mirrors config-nile.conf::block.proposalExpireTime = 600000.
+			// Chain value, not the actuator-runtime default (which is 0).
+			"proposal_expire_time":                      600000,
 		},
 	}
 }

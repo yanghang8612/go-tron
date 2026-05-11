@@ -82,6 +82,9 @@ func DefaultMainnetGenesis() *Genesis {
 			"total_energy_current_limit":                50000000000,
 			"total_net_limit":                           43200000000,
 			"unfreeze_delay_days":                       14,
+			// mainnet's `proposal_expire_time = 259_200_000` (3 days, from
+			// config.conf:681) is already the gtron bare default — no
+			// override needed here. Nile overrides to 600_000 in nile.go.
 		},
 	}
 }
