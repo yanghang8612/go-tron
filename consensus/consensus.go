@@ -24,6 +24,7 @@ type ChainReader interface {
 type ChainHeaderWriter interface {
 	GetWitness(addr common.Address) *types.Witness
 	PutWitness(w *types.Witness)
+	AddWitnessVoteCount(addr common.Address, delta int64)
 	AddAllowance(addr common.Address, amount int64)
 	NextMaintenanceTime() int64
 	SetNextMaintenanceTime(t int64)
@@ -34,4 +35,21 @@ type ChainHeaderWriter interface {
 	// is on. When true, maintenance skips the legacy IncentiveManager.reward
 	// path (per-block payStandbyWitness handles standby pay instead).
 	ChangeDelegation() bool
+
+	// GenesisWitnesses returns the immutable list of {address, initial
+	// vote count} captured at genesis setup. Used by tryRemoveThePowerOfTheGr
+	// to subtract each GR's initial 100M vote stake when the corresponding
+	// DP flag fires.
+	GenesisWitnesses() []GenesisWitnessInfo
+	RemoveThePowerOfTheGr() int64
+	SetRemoveThePowerOfTheGr(v int64)
+}
+
+// GenesisWitnessInfo carries an immutable genesis witness record into the
+// consensus layer. Kept structurally identical to rawdb.GenesisWitness so the
+// adapter can forward without a translation step, while avoiding an import
+// cycle (rawdb depends on common; consensus stays primitive-only).
+type GenesisWitnessInfo struct {
+	Address   common.Address
+	VoteCount int64
 }

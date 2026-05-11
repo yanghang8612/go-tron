@@ -108,12 +108,18 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 	}
 
 	// Write witnesses
+	initialWitnesses := make([]rawdb.GenesisWitness, 0, len(genesis.Witnesses))
 	for _, gw := range genesis.Witnesses {
 		w := types.NewWitness(gw.Address, gw.URL)
 		w.SetVoteCount(gw.VoteCount)
 		rawdb.WriteWitness(db, gw.Address, w)
 		rawdb.AppendWitnessIndex(db, gw.Address)
+		initialWitnesses = append(initialWitnesses, rawdb.GenesisWitness{
+			Address:   gw.Address,
+			VoteCount: gw.VoteCount,
+		})
 	}
+	rawdb.WriteGenesisWitnesses(db, initialWitnesses)
 
 	return genesis.Config, block.Hash(), nil
 }

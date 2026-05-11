@@ -4,18 +4,21 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 )
 
 // mockChainHeaderWriter implements consensus.ChainHeaderWriter for testing.
 type mockChainHeaderWriter struct {
-	witnesses           map[common.Address]*types.Witness
-	allowances          map[common.Address]int64
-	witnessPayPerBlock  int64
-	witnessStandbyAllow int64
-	maintenanceInterval int64
-	nextMaintenanceTime int64
+	witnesses             map[common.Address]*types.Witness
+	allowances            map[common.Address]int64
+	witnessPayPerBlock    int64
+	witnessStandbyAllow   int64
+	maintenanceInterval   int64
+	nextMaintenanceTime   int64
+	genesisWitnesses      []consensus.GenesisWitnessInfo
+	removeThePowerOfTheGr int64
 }
 
 func newMockChainHeaderWriter() *mockChainHeaderWriter {
@@ -33,6 +36,13 @@ func (m *mockChainHeaderWriter) GetWitness(addr common.Address) *types.Witness {
 }
 func (m *mockChainHeaderWriter) PutWitness(w *types.Witness) {
 	m.witnesses[w.Address()] = w
+}
+func (m *mockChainHeaderWriter) AddWitnessVoteCount(addr common.Address, delta int64) {
+	w := m.witnesses[addr]
+	if w == nil {
+		return
+	}
+	w.SetVoteCount(w.VoteCount() + delta)
 }
 func (m *mockChainHeaderWriter) AddAllowance(addr common.Address, amount int64) {
 	m.allowances[addr] += amount
@@ -54,6 +64,15 @@ func (m *mockChainHeaderWriter) MaintenanceTimeInterval() int64 {
 }
 func (m *mockChainHeaderWriter) ChangeDelegation() bool {
 	return false
+}
+func (m *mockChainHeaderWriter) GenesisWitnesses() []consensus.GenesisWitnessInfo {
+	return m.genesisWitnesses
+}
+func (m *mockChainHeaderWriter) RemoveThePowerOfTheGr() int64 {
+	return m.removeThePowerOfTheGr
+}
+func (m *mockChainHeaderWriter) SetRemoveThePowerOfTheGr(v int64) {
+	m.removeThePowerOfTheGr = v
 }
 
 func TestDoMaintenance_DistributesAllowance(t *testing.T) {
@@ -110,9 +129,9 @@ func TestCalcNextMaintenanceTime(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := calcNextMaintenanceTime(tt.blockTime, tt.currentMaint, interval)
+			got := CalcNextMaintenanceTime(tt.blockTime, tt.currentMaint, interval)
 			if got != tt.want {
-				t.Errorf("calcNextMaintenanceTime(%d, %d, %d) = %d, want %d",
+				t.Errorf("CalcNextMaintenanceTime(%d, %d, %d) = %d, want %d",
 					tt.blockTime, tt.currentMaint, interval, got, tt.want)
 			}
 		})
@@ -159,5 +178,78 @@ func TestPayBlockReward(t *testing.T) {
 
 	if chain.allowances[addr] != 16000000 {
 		t.Errorf("allowance: got %d, want 16000000", chain.allowances[addr])
+	}
+}
+
+func TestTryRemoveThePowerOfTheGr_StripsGenesisInitialVotes(t *testing.T) {
+	chain := newMockChainHeaderWriter()
+	const initialGRVote = int64(100_000_000)
+	grAddr := common.BytesToAddress([]byte{0x41, 1})
+	srAddr := common.BytesToAddress([]byte{0x41, 2})
+
+	gr := types.NewWitness(grAddr, "gr")
+	gr.SetVoteCount(150_000_000) // initial 100M + 50M earned
+	chain.witnesses[grAddr] = gr
+
+	sr := types.NewWitness(srAddr, "sr")
+	sr.SetVoteCount(200_000_000) // pure community SR
+	chain.witnesses[srAddr] = sr
+
+	chain.genesisWitnesses = []consensus.GenesisWitnessInfo{
+		{Address: grAddr, VoteCount: initialGRVote},
+	}
+	chain.removeThePowerOfTheGr = 1
+
+	allWitnesses := []WitnessVote{
+		{Address: grAddr, Votes: 150_000_000},
+		{Address: srAddr, Votes: 200_000_000},
+	}
+	tryRemoveThePowerOfTheGr(chain, allWitnesses)
+
+	if got := chain.witnesses[grAddr].VoteCount(); got != 50_000_000 {
+		t.Errorf("GR voteCount: got %d, want 50_000_000", got)
+	}
+	if got := chain.witnesses[srAddr].VoteCount(); got != 200_000_000 {
+		t.Errorf("SR voteCount: got %d, want 200_000_000 (unchanged)", got)
+	}
+	if chain.removeThePowerOfTheGr != -1 {
+		t.Errorf("flag after strip: got %d, want -1", chain.removeThePowerOfTheGr)
+	}
+	if allWitnesses[0].Votes != 50_000_000 {
+		t.Errorf("in-memory GR votes: got %d, want 50_000_000", allWitnesses[0].Votes)
+	}
+	if allWitnesses[1].Votes != 200_000_000 {
+		t.Errorf("in-memory SR votes: got %d, want 200_000_000", allWitnesses[1].Votes)
+	}
+
+	// Second call must be a no-op.
+	tryRemoveThePowerOfTheGr(chain, allWitnesses)
+	if got := chain.witnesses[grAddr].VoteCount(); got != 50_000_000 {
+		t.Errorf("GR voteCount after no-op: got %d, want 50_000_000", got)
+	}
+	if chain.removeThePowerOfTheGr != -1 {
+		t.Errorf("flag after no-op: got %d, want -1", chain.removeThePowerOfTheGr)
+	}
+}
+
+func TestTryRemoveThePowerOfTheGr_FlagNotOneIsNoOp(t *testing.T) {
+	chain := newMockChainHeaderWriter()
+	grAddr := common.BytesToAddress([]byte{0x41, 1})
+	gr := types.NewWitness(grAddr, "gr")
+	gr.SetVoteCount(150_000_000)
+	chain.witnesses[grAddr] = gr
+	chain.genesisWitnesses = []consensus.GenesisWitnessInfo{
+		{Address: grAddr, VoteCount: 100_000_000},
+	}
+
+	for _, flag := range []int64{0, -1, 2} {
+		chain.removeThePowerOfTheGr = flag
+		tryRemoveThePowerOfTheGr(chain, nil)
+		if got := chain.witnesses[grAddr].VoteCount(); got != 150_000_000 {
+			t.Errorf("flag=%d: GR vote count mutated unexpectedly: got %d", flag, got)
+		}
+		if chain.removeThePowerOfTheGr != flag {
+			t.Errorf("flag=%d: flag mutated to %d", flag, chain.removeThePowerOfTheGr)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
@@ -35,9 +36,10 @@ type BlockChain struct {
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
 
-	genesisBlock    *types.Block
-	activeWitnesses atomic.Value // []tcommon.Address
-	fc              *forks.ForkController
+	genesisBlock     *types.Block
+	genesisWitnesses []consensus.GenesisWitnessInfo
+	activeWitnesses  atomic.Value // []tcommon.Address
+	fc               *forks.ForkController
 
 	khaosDB *KhaosDB
 
@@ -87,6 +89,13 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	bc.genesisBlock = rawdb.ReadBlock(db, 0)
 	if bc.genesisBlock == nil {
 		return nil, errors.New("genesis block not found in database")
+	}
+
+	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
+		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
+			Address:   gw.Address,
+			VoteCount: gw.VoteCount,
+		})
 	}
 
 	// Load head block
@@ -353,35 +362,64 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// Run maintenance if at boundary (before commit so allowances are included).
 	wasMaintenanceBlock := false
 	var maintNewWitnesses []tcommon.Address
-	if dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime() {
-		// Process expired proposals first — applies their parameter changes
-		// to DP (or marks them CANCELED). Mirrors java-tron MaintenanceManager
-		// → ConsensusService.applyBlock order: processProposals → updateWitness
-		// (vote tally + active set rotation) → reward. Without this, every
-		// proposal stays PENDING forever and downstream actuator / VM fork
-		// gates never activate — observed empirically on a Nile soak at
-		// h=860k where 4 proposals had 27 SR approvals each but `state =
-		// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
-		// Routes through bc.buffer per fork-rewind slice 3 so per-proposal
-		// state writes rewind on switchFork.
-		if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
-			return fmt.Errorf("process proposals: %w", err)
+	atBoundary := dynProps.NextMaintenanceTime() > 0 && block.Timestamp() >= dynProps.NextMaintenanceTime()
+	if atBoundary {
+		// java-tron parity (MaintenanceManager.applyBlock lines 62-75): when
+		// the first block crosses the genesis-seeded boundary, advance
+		// next_maintenance_time but skip doMaintenance entirely. Block #1
+		// must NOT pay legacy standby allowance, rotate the active set, run
+		// proposal processing, or accumulate cycle 0 VI — Nile's deployed
+		// chain depends on the GR set staying intact through block #1 and
+		// the first real maintenance running on block #2+ at the advanced
+		// grid. The state flag is still set per `flag` so the next block's
+		// missed-slot math sees this as a maintenance block.
+		if block.Number() == 1 {
+			interval := dynProps.MaintenanceTimeInterval()
+			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), interval)
+			dynProps.SetNextMaintenanceTime(nextMaint)
+			wasMaintenanceBlock = true
+		} else {
+			// Process expired proposals first — applies their parameter changes
+			// to DP (or marks them CANCELED). Mirrors java-tron MaintenanceManager
+			// → ConsensusService.applyBlock order: processProposals → updateWitness
+			// (vote tally + active set rotation) → reward. Without this, every
+			// proposal stays PENDING forever and downstream actuator / VM fork
+			// gates never activate — observed empirically on a Nile soak at
+			// h=860k where 4 proposals had 27 SR approvals each but `state =
+			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
+			// Routes through bc.buffer per fork-rewind slice 3 so per-proposal
+			// state writes rewind on switchFork.
+			if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
+				return fmt.Errorf("process proposals: %w", err)
+			}
+			allWitnesses := bc.gatherWitnessVotes(statedb)
+			dpos.DoMaintenance(&chainHeaderAdapter{
+				statedb:          statedb,
+				dynProps:         dynProps,
+				genesisWitnesses: bc.genesisWitnesses,
+			}, block.Timestamp(), allWitnesses)
+			// DoMaintenance may mutate witness VoteCount (tryRemoveThePowerOfTheGr
+			// strips the genesis-initial 100M from each GR). The earlier
+			// FlushWitnesses above ran before DoMaintenance, so those mutations
+			// would otherwise be lost — drain them into the buffer now.
+			statedb.FlushWitnesses(bc.buffer)
+			// Cycle brokerage / vote / VI writes go through bc.buffer so they
+			// rewind on switchFork (slice 2). Reads from rawdb inside
+			// applyRewardMaintenance also consult the buffer, so cross-block
+			// accumulators see in-flight values.
+			applyRewardMaintenance(bc.buffer, statedb, dynProps)
+			newActive := dpos.SelectActiveWitnesses(allWitnesses)
+			bc.SetActiveWitnesses(newActive)
+			wasMaintenanceBlock = true
+			maintNewWitnesses = newActive
 		}
-		allWitnesses := bc.gatherWitnessVotes(statedb)
-		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, block.Timestamp(), allWitnesses)
-		// Cycle brokerage / vote / VI writes go through bc.buffer so they
-		// rewind on switchFork (slice 2). Reads from rawdb inside
-		// applyRewardMaintenance also consult the buffer, so cross-block
-		// accumulators see in-flight values.
-		applyRewardMaintenance(bc.buffer, statedb, dynProps)
-		newActive := dpos.SelectActiveWitnesses(allWitnesses)
-		bc.SetActiveWitnesses(newActive)
-		wasMaintenanceBlock = true
-		maintNewWitnesses = newActive
 	}
 	// Record whether this block triggered maintenance; the next block will
 	// read this via `dynProps.StateFlag()` to decide whether to add the
-	// MAINTENANCE_SKIP_SLOTS offset when computing missed slots.
+	// MAINTENANCE_SKIP_SLOTS offset when computing missed slots. java-tron
+	// sets the state flag from `flag` regardless of blockNum (line 76), so
+	// a block-#1 boundary still flips the flag even though doMaintenance is
+	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
 	} else {
@@ -456,8 +494,10 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 
 	// Fire maintenance hooks first so the SRL PBFT message goes out before
 	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
-	// ordering (srPrePrepare at line 72, blockPrePrepare at line 81).
-	if wasMaintenanceBlock {
+	// ordering (srPrePrepare at line 72, blockPrePrepare at line 81). Block
+	// #1 advances the grid but doesn't run doMaintenance, so java skips
+	// srPrePrepare too (line 70 guard `if (blockNum != 1)`).
+	if wasMaintenanceBlock && block.Number() != 1 {
 		bc.maintHookMu.Lock()
 		mhooks := bc.maintHooks
 		bc.maintHookMu.Unlock()
@@ -686,8 +726,9 @@ func (bc *BlockChain) DynProps() *state.DynamicProperties {
 
 // chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
 type chainHeaderAdapter struct {
-	statedb  *state.StateDB
-	dynProps *state.DynamicProperties
+	statedb          *state.StateDB
+	dynProps         *state.DynamicProperties
+	genesisWitnesses []consensus.GenesisWitnessInfo
 }
 
 func (a *chainHeaderAdapter) GetWitness(addr tcommon.Address) *types.Witness {
@@ -697,6 +738,10 @@ func (a *chainHeaderAdapter) GetWitness(addr tcommon.Address) *types.Witness {
 func (a *chainHeaderAdapter) PutWitness(w *types.Witness) {
 	a.statedb.PutWitness(w.Address(), w.URL())
 	a.statedb.AddWitnessVoteCount(w.Address(), w.VoteCount())
+}
+
+func (a *chainHeaderAdapter) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
+	a.statedb.AddWitnessVoteCount(addr, delta)
 }
 
 func (a *chainHeaderAdapter) AddAllowance(addr tcommon.Address, amount int64) {
@@ -725,6 +770,18 @@ func (a *chainHeaderAdapter) ChangeDelegation() bool {
 
 func (a *chainHeaderAdapter) MaintenanceTimeInterval() int64 {
 	return a.dynProps.MaintenanceTimeInterval()
+}
+
+func (a *chainHeaderAdapter) GenesisWitnesses() []consensus.GenesisWitnessInfo {
+	return a.genesisWitnesses
+}
+
+func (a *chainHeaderAdapter) RemoveThePowerOfTheGr() int64 {
+	return a.dynProps.RemoveThePowerOfTheGr()
+}
+
+func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
+	a.dynProps.SetRemoveThePowerOfTheGr(v)
 }
 
 // updateSolidifiedBlock updates the per-witness latest-block cursor and

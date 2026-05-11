@@ -15,14 +15,46 @@ import (
 // The M1.5 new-reward path (VI accumulation + cycle rollover) is handled
 // separately by core.applyRewardMaintenance after this call returns.
 func DoMaintenance(chain consensus.ChainHeaderWriter, blockTime int64, allWitnesses []WitnessVote) {
+	tryRemoveThePowerOfTheGr(chain, allWitnesses)
+
 	sorted := SortWitnessesByVotes(allWitnesses)
 
 	if !chain.ChangeDelegation() {
 		distributeLegacyStandby(chain, sorted)
 	}
 
-	nextMaint := calcNextMaintenanceTime(blockTime, chain.NextMaintenanceTime(), chain.MaintenanceTimeInterval())
+	nextMaint := CalcNextMaintenanceTime(blockTime, chain.NextMaintenanceTime(), chain.MaintenanceTimeInterval())
 	chain.SetNextMaintenanceTime(nextMaint)
+}
+
+// tryRemoveThePowerOfTheGr ports java-tron
+// MaintenanceManager.tryRemoveThePowerOfTheGr. When the
+// REMOVE_THE_POWER_OF_THE_GR DP flag is set to 1 (by a successful proposal
+// activation in core.applyProposalSideEffects), this strips each genesis
+// representative's *initial* vote count from their current vote total and
+// flips the flag to -1 so it never fires again. Subtraction is applied to
+// both the persistent witness store (via the chain adapter) and the
+// in-memory `allWitnesses` slice — the latter so SelectActiveWitnesses and
+// distributeLegacyStandby downstream see the stripped totals, matching
+// java-tron's `tryRemove → countVote → updateWitness` ordering.
+func tryRemoveThePowerOfTheGr(chain consensus.ChainHeaderWriter, allWitnesses []WitnessVote) {
+	if chain.RemoveThePowerOfTheGr() != 1 {
+		return
+	}
+	for _, gw := range chain.GenesisWitnesses() {
+		w := chain.GetWitness(gw.Address)
+		if w == nil {
+			continue
+		}
+		chain.AddWitnessVoteCount(gw.Address, -gw.VoteCount)
+		for i := range allWitnesses {
+			if allWitnesses[i].Address == gw.Address {
+				allWitnesses[i].Votes -= gw.VoteCount
+				break
+			}
+		}
+	}
+	chain.SetRemoveThePowerOfTheGr(-1)
 }
 
 // distributeLegacyStandby mirrors java-tron's IncentiveManager.reward:
@@ -58,8 +90,11 @@ func distributeLegacyStandby(chain consensus.ChainHeaderWriter, sorted []Witness
 	}
 }
 
-// calcNextMaintenanceTime computes the next maintenance timestamp after blockTime.
-func calcNextMaintenanceTime(blockTime, currentMaint, interval int64) int64 {
+// CalcNextMaintenanceTime computes the next maintenance timestamp after blockTime.
+// Mirrors java-tron DynamicPropertiesStore.updateNextMaintenanceTime: the result
+// preserves `currentMaint mod interval`, so the maintenance grid alignment is
+// stable across cycles once seeded at genesis.
+func CalcNextMaintenanceTime(blockTime, currentMaint, interval int64) int64 {
 	if interval <= 0 {
 		return currentMaint
 	}

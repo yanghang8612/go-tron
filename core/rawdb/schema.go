@@ -60,6 +60,15 @@ var (
 	activeWitnessesKey = []byte("ActiveWitnesses")
 	witnessIndexKey    = []byte("WitnessIndex")
 
+	// genesisWitnessesKey holds the immutable {address, initial_vote_count}
+	// list from the chain's Genesis config. Required to faithfully port
+	// java-tron's tryRemoveThePowerOfTheGr, which subtracts each GR's
+	// *initial* vote count (not the current count after voting activity)
+	// when REMOVE_THE_POWER_OF_THE_GR fires. Written once at genesis setup
+	// and never mutated thereafter.
+	// Value: 4-byte big-endian count || N * (21B address || 8B BE vote count)
+	genesisWitnessesKey = []byte("GenesisWitnesses")
+
 	proposalIndexKey = []byte("propi")
 
 	delegationPrefix      = []byte("dr-")

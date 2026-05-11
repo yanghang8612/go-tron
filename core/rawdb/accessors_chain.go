@@ -113,6 +113,46 @@ func AppendWitnessIndex(db witnessIndexReadWriter, addr common.Address) {
 	WriteWitnessIndex(db, existing)
 }
 
+// GenesisWitness is the immutable {address, initial vote count} pair captured
+// at genesis. java-tron's tryRemoveThePowerOfTheGr subtracts the *initial*
+// vote count (not the current count after vote accumulation), so this list
+// is recorded once at genesis setup and never mutated.
+type GenesisWitness struct {
+	Address   common.Address
+	VoteCount int64
+}
+
+const genesisWitnessRecordLen = common.AddressLength + 8
+
+func WriteGenesisWitnesses(db ethdb.KeyValueWriter, witnesses []GenesisWitness) {
+	buf := make([]byte, 4+len(witnesses)*genesisWitnessRecordLen)
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(witnesses)))
+	for i, w := range witnesses {
+		off := 4 + i*genesisWitnessRecordLen
+		copy(buf[off:], w.Address.Bytes())
+		binary.BigEndian.PutUint64(buf[off+common.AddressLength:], uint64(w.VoteCount))
+	}
+	db.Put(genesisWitnessesKey, buf)
+}
+
+func ReadGenesisWitnesses(db ethdb.KeyValueReader) []GenesisWitness {
+	data, err := db.Get(genesisWitnessesKey)
+	if err != nil || len(data) < 4 {
+		return nil
+	}
+	count := int(binary.BigEndian.Uint32(data[:4]))
+	if len(data) < 4+count*genesisWitnessRecordLen {
+		return nil
+	}
+	out := make([]GenesisWitness, count)
+	for i := 0; i < count; i++ {
+		off := 4 + i*genesisWitnessRecordLen
+		out[i].Address = common.BytesToAddress(data[off : off+common.AddressLength])
+		out[i].VoteCount = int64(binary.BigEndian.Uint64(data[off+common.AddressLength : off+genesisWitnessRecordLen]))
+	}
+	return out
+}
+
 // ReadTotalTransactionCount returns the cumulative number of transactions ever
 // processed by this node. Returns 0 if the counter has not been written yet.
 // Non-consensus metric: not part of any state root or block hash.
