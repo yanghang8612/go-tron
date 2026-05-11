@@ -37,7 +37,14 @@ func DefaultNileGenesis() *Genesis {
 		},
 		Witnesses: nileWitnesses(),
 		DynamicProperties: map[string]int64{
-			"maintenance_time_interval":                 21600000,
+			// Nile bootstrap interval: config-nile.conf:516 sets this to
+			// 600_000 (10 min), not the mainnet default 21_600_000 (6h).
+			// Proposal #19589 later raised it to 21.6M and proposal #19597
+			// then dropped it to 1.8M (30 min, current Nile-live value).
+			// gtron must seed the bootstrap value here so the maintenance
+			// grid is 600k-aligned through the early chain history; the
+			// historical proposals will replay and advance it naturally.
+			"maintenance_time_interval":                 600000,
 			"account_upgrade_cost":                      9999000000,
 			"create_account_fee":                        100000,
 			"transaction_fee":                           10,

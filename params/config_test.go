@@ -48,3 +48,20 @@ func TestNileGenesis_ProposalExpireTimeOverride(t *testing.T) {
 		t.Fatalf("DefaultNileGenesis proposal_expire_time: got %d, want 600000 (config-nile.conf:517)", got)
 	}
 }
+
+// TestNileGenesis_MaintenanceTimeIntervalBootstrap locks the Nile
+// bootstrap interval at 600_000 ms (10 min) — config-nile.conf:516.
+// The mainnet default is 21_600_000 (6h). Proposals #19589 (2024-01)
+// raised the live value to 21.6M and #19597 (2024-03) then set it to
+// 1.8M (30 min, current Nile-live), so the chain only matches Nile
+// when bootstrapped at 600k and allowed to replay those proposals.
+func TestNileGenesis_MaintenanceTimeIntervalBootstrap(t *testing.T) {
+	g := DefaultNileGenesis()
+	got, ok := g.DynamicProperties["maintenance_time_interval"]
+	if !ok {
+		t.Fatal("DefaultNileGenesis.DynamicProperties missing maintenance_time_interval")
+	}
+	if got != 600000 {
+		t.Fatalf("DefaultNileGenesis maintenance_time_interval: got %d, want 600000 (config-nile.conf:516)", got)
+	}
+}
