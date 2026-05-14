@@ -155,6 +155,34 @@ func TestSetupGenesisBlock_WitnessAccountsCreated(t *testing.T) {
 	}
 }
 
+// TestSetupGenesisBlock_WitnessIsJobsSet locks java-tron Manager.initWitness
+// parity (Manager.java:725): every genesis witness's persisted WitnessCapsule
+// must have is_jobs=true after SetupGenesisBlock. gtron never calls SetIsJobs
+// on any other genesis path, so without this gRPC wallet.listwitnesses and the
+// conformance digest report is_jobs=false for every witness forever.
+func TestSetupGenesisBlock_WitnessIsJobsSet(t *testing.T) {
+	genesis := params.DefaultMainnetGenesis()
+	if len(genesis.Witnesses) == 0 {
+		t.Fatalf("mainnet genesis has no witnesses; test fixture broken")
+	}
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, gw := range genesis.Witnesses {
+		w := rawdb.ReadWitness(diskdb, gw.Address)
+		if w == nil {
+			t.Errorf("witness %s: no Witness record after genesis", gw.Address.Hex())
+			continue
+		}
+		if !w.IsJobs() {
+			t.Errorf("witness %s: IsJobs=false after genesis, want true", gw.Address.Hex())
+		}
+	}
+}
+
 // TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit verifies that
 // when the genesis config DOES seed `next_maintenance_time`, the bootstrap
 // fallback does not clobber it.

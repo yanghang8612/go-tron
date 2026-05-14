@@ -409,6 +409,10 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// accumulators see in-flight values.
 			applyRewardMaintenance(bc.buffer, statedb, dynProps)
 			newActive := dpos.SelectActiveWitnesses(allWitnesses)
+			// java-tron MaintenanceManager flips is_jobs after reward
+			// distribution, before the active set is swapped — bc.ActiveWitnesses()
+			// still holds the outgoing set here.
+			flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
 			bc.SetActiveWitnesses(newActive)
 			wasMaintenanceBlock = true
 			maintNewWitnesses = newActive
@@ -820,6 +824,57 @@ func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockN
 	if solidified >= dynProps.LatestSolidifiedBlockNum() {
 		dynProps.SetLatestSolidifiedBlockNum(solidified)
 	}
+}
+
+// witnessKV is the read+write capability flipWitnessIsJobs needs; both
+// *blockbuffer.Buffer and a plain ethdb store satisfy it.
+type witnessKV interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
+// flipWitnessIsJobs mirrors java-tron MaintenanceManager.applyBlock: when the
+// active witness set rotates at a maintenance boundary, clear is_jobs on every
+// outgoing member and set it on every incoming member. java-tron guards this
+// on order-independent set inequality of currentWits vs newWits, so an
+// unchanged cycle rewrites nothing. Writes go direct to the block buffer via
+// rawdb (not through statedb) because statedb.FlushWitnesses only merges
+// VoteCount and URL onto the stored record — is_jobs would be dropped.
+func flipWitnessIsJobs(db witnessKV, oldActive, newActive []tcommon.Address) {
+	if sameAddressSet(oldActive, newActive) {
+		return
+	}
+	for _, addr := range oldActive {
+		setWitnessIsJobs(db, addr, false)
+	}
+	for _, addr := range newActive {
+		setWitnessIsJobs(db, addr, true)
+	}
+}
+
+func setWitnessIsJobs(db witnessKV, addr tcommon.Address, v bool) {
+	w := rawdb.ReadWitness(db, addr)
+	if w == nil {
+		return
+	}
+	w.SetIsJobs(v)
+	rawdb.WriteWitness(db, addr, w)
+}
+
+func sameAddressSet(a, b []tcommon.Address) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[tcommon.Address]struct{}, len(a))
+	for _, x := range a {
+		set[x] = struct{}{}
+	}
+	for _, x := range b {
+		if _, ok := set[x]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).

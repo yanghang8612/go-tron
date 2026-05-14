@@ -112,6 +112,9 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 	for _, gw := range genesis.Witnesses {
 		w := types.NewWitness(gw.Address, gw.URL)
 		w.SetVoteCount(gw.VoteCount)
+		// java-tron Manager.initWitness flips is_jobs=true on every genesis
+		// witness; the maintenance-cycle rotation maintains it thereafter.
+		w.SetIsJobs(true)
 		rawdb.WriteWitness(db, gw.Address, w)
 		rawdb.AppendWitnessIndex(db, gw.Address)
 		initialWitnesses = append(initialWitnesses, rawdb.GenesisWitness{
