@@ -537,8 +537,11 @@ func TestSetAccountId(t *testing.T) {
 	srv := newTestServer(t, stub)
 	defer srv.Close()
 
+	// account_id hex-encodes "myid". Pre-fix the test silently parsed
+	// non-hex via the swallowed-error FromHex path; now we either
+	// hex-encode or set visible:true.
 	result := postJSON(t, srv.URL+"/wallet/setaccountid",
-		`{"owner_address":"4101","account_id":"myid"}`)
+		`{"owner_address":"4101","account_id":"6d796964"}`)
 	if _, ok := result["raw_data"]; !ok {
 		t.Fatalf("expected raw_data in response, got %v", result)
 	}

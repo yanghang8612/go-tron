@@ -350,20 +350,29 @@ func writeBlockJSON(w http.ResponseWriter, msg proto.Message) {
 }
 
 func (api *API) getContract(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("value")
-	if addrHex == "" {
+	addrStr := r.URL.Query().Get("value")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
-			Value string `json:"value"`
+			Value   string `json:"value"`
+			Visible bool   `json:"visible"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			addrHex = body.Value
+			addrStr = body.Value
+			if body.Visible {
+				visible = true
+			}
 		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "contract address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	sc, err := api.backend.GetContract(addr)
 	if err != nil || sc == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -379,31 +388,50 @@ func (api *API) triggerConstantContract(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		OwnerAddress    string `json:"owner_address"`
-		ContractAddress string `json:"contract_address"`
+		OwnerAddress     string `json:"owner_address"`
+		ContractAddress  string `json:"contract_address"`
 		FunctionSelector string `json:"function_selector"`
-		Parameter       string `json:"parameter"`
-		Data            string `json:"data"`
+		Parameter        string `json:"parameter"`
+		Data             string `json:"data"`
+		Visible          bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	contract := common.BytesToAddress(common.FromHex(body.ContractAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 
-	// Build calldata: if data is provided directly, use it;
-	// otherwise build from function_selector + parameter
+	// Build calldata: if data is provided directly, use it; otherwise
+	// build from function_selector + parameter. Calldata is always hex
+	// regardless of visible (java-tron parity: function_selector/parameter
+	// are explicitly hex on the wire).
 	var data []byte
 	if body.Data != "" {
-		data = common.FromHex(body.Data)
+		data, err = parseBytes(body.Data, false)
+		if err != nil {
+			httpFieldErr(w, "data", err)
+			return
+		}
 	} else if body.FunctionSelector != "" {
 		// Hash the function selector to get the 4-byte selector
 		selectorHash := common.Keccak256([]byte(body.FunctionSelector))
 		data = selectorHash[:4]
 		if body.Parameter != "" {
-			paramBytes := common.FromHex(body.Parameter)
+			paramBytes, err := parseBytes(body.Parameter, false)
+			if err != nil {
+				httpFieldErr(w, "parameter", err)
+				return
+			}
 			data = append(data, paramBytes...)
 		}
 	}
@@ -451,13 +479,22 @@ func (api *API) createTransaction(w http.ResponseWriter, r *http.Request) {
 		OwnerAddress string `json:"owner_address"`
 		ToAddress    string `json:"to_address"`
 		Amount       int64  `json:"amount"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	to := common.BytesToAddress(common.FromHex(body.ToAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	to, err := parseAddress(body.ToAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "to_address", err)
+		return
+	}
 	tx, err := api.backend.BuildTransferTransaction(owner, to, body.Amount)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -479,13 +516,24 @@ func (api *API) deployContract(w http.ResponseWriter, r *http.Request) {
 		CallValue                  int64  `json:"call_value"`
 		Name                       string `json:"name"`
 		ConsumeUserResourcePercent int64  `json:"consume_user_resource_percent"`
+		Visible                    bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	bytecode := common.FromHex(body.Bytecode)
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	// Bytecode is always hex regardless of visible — java-tron parity:
+	// the contract bytecode field is the only place that's strictly hex.
+	bytecode, err := parseBytes(body.Bytecode, false)
+	if err != nil {
+		httpFieldErr(w, "bytecode", err)
+		return
+	}
 	tx, err := api.backend.BuildDeployContractTransaction(owner, body.ABI, bytecode,
 		body.FeeLimit, body.CallValue, body.Name, body.ConsumeUserResourcePercent)
 	if err != nil {
@@ -508,22 +556,40 @@ func (api *API) triggerSmartContract(w http.ResponseWriter, r *http.Request) {
 		Data             string `json:"data"`
 		FeeLimit         int64  `json:"fee_limit"`
 		CallValue        int64  `json:"call_value"`
+		Visible          bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	contract := common.BytesToAddress(common.FromHex(body.ContractAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 
 	var data []byte
 	if body.Data != "" {
-		data = common.FromHex(body.Data)
+		data, err = parseBytes(body.Data, false)
+		if err != nil {
+			httpFieldErr(w, "data", err)
+			return
+		}
 	} else if body.FunctionSelector != "" {
 		selectorHash := common.Keccak256([]byte(body.FunctionSelector))
 		data = selectorHash[:4]
 		if body.Parameter != "" {
-			data = append(data, common.FromHex(body.Parameter)...)
+			paramBytes, err := parseBytes(body.Parameter, false)
+			if err != nil {
+				httpFieldErr(w, "parameter", err)
+				return
+			}
+			data = append(data, paramBytes...)
 		}
 	}
 
@@ -565,22 +631,40 @@ func (api *API) estimateEnergy(w http.ResponseWriter, r *http.Request) {
 		FunctionSelector string `json:"function_selector"`
 		Parameter        string `json:"parameter"`
 		Data             string `json:"data"`
+		Visible          bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	contract := common.BytesToAddress(common.FromHex(body.ContractAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 
 	var data []byte
 	if body.Data != "" {
-		data = common.FromHex(body.Data)
+		data, err = parseBytes(body.Data, false)
+		if err != nil {
+			httpFieldErr(w, "data", err)
+			return
+		}
 	} else if body.FunctionSelector != "" {
 		selectorHash := common.Keccak256([]byte(body.FunctionSelector))
 		data = selectorHash[:4]
 		if body.Parameter != "" {
-			data = append(data, common.FromHex(body.Parameter)...)
+			paramBytes, err := parseBytes(body.Parameter, false)
+			if err != nil {
+				httpFieldErr(w, "parameter", err)
+				return
+			}
+			data = append(data, paramBytes...)
 		}
 	}
 
@@ -613,7 +697,14 @@ func (api *API) getTransactionByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	hashBytes := common.FromHex(body.Value)
+	// tx hash is always hex on the wire — java-tron's HTTP doesn't support
+	// a visible variant for hashes. parseBytes still surfaces invalid-hex
+	// errors instead of routing them to a zero hash.
+	hashBytes, err := parseBytes(body.Value, false)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
 	tx, err := api.backend.GetTransactionByID(hash)
@@ -637,7 +728,11 @@ func (api *API) getTransactionInfoByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	hashBytes := common.FromHex(body.Value)
+	hashBytes, err := parseBytes(body.Value, false)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
 	info, err := api.backend.GetTransactionInfoByID(hash)
@@ -694,7 +789,11 @@ func (api *API) getBlockByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	hashBytes := common.FromHex(body.Value)
+	hashBytes, err := parseBytes(body.Value, false)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	var hash common.Hash
 	copy(hash[:], hashBytes)
 	block, err := api.backend.GetBlockByHash(hash)
@@ -742,20 +841,29 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("address")
-	if addrHex == "" {
+	addrStr := r.URL.Query().Get("address")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
 			Address string `json:"address"`
+			Visible bool   `json:"visible"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			addrHex = body.Address
+			addrStr = body.Address
+			if body.Visible {
+				visible = true
+			}
 		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
 	res, err := api.backend.GetAccountResource(addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -809,12 +917,17 @@ func (api *API) proposalCreate(w http.ResponseWriter, r *http.Request) {
 			Key   int64 `json:"key"`
 			Value int64 `json:"value"`
 		} `json:"parameters"`
+		Visible bool `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	params := make(map[int64]int64, len(body.Parameters))
 	for _, p := range body.Parameters {
 		params[p.Key] = p.Value
@@ -836,12 +949,17 @@ func (api *API) proposalApprove(w http.ResponseWriter, r *http.Request) {
 		OwnerAddress  string `json:"owner_address"`
 		ProposalID    int64  `json:"proposal_id"`
 		IsAddApproval bool   `json:"is_add_approval"`
+		Visible       bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	tx, err := api.backend.BuildProposalApproveTransaction(owner, body.ProposalID, body.IsAddApproval)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -858,12 +976,17 @@ func (api *API) proposalDelete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		ProposalID   int64  `json:"proposal_id"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	tx, err := api.backend.BuildProposalDeleteTransaction(owner, body.ProposalID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -890,13 +1013,22 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		FromAddress string `json:"fromAddress"`
 		ToAddress   string `json:"toAddress"`
+		Visible     bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FromAddress == "" || body.ToAddress == "" {
 		http.Error(w, "fromAddress and toAddress required", http.StatusBadRequest)
 		return
 	}
-	from := common.BytesToAddress(common.FromHex(body.FromAddress))
-	to := common.BytesToAddress(common.FromHex(body.ToAddress))
+	from, err := parseAddress(body.FromAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "fromAddress", err)
+		return
+	}
+	to, err := parseAddress(body.ToAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "toAddress", err)
+		return
+	}
 	info, err := api.backend.GetDelegatedResourceV2(from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -913,7 +1045,8 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value string `json:"value"`
+		Value   string `json:"value"`
+		Visible bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Value == "" {
@@ -923,7 +1056,11 @@ func (api *API) getDelegatedResourceAccountIndexV2(w http.ResponseWriter, r *htt
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(body.Value))
+	addr, err := parseAddress(body.Value, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	info, err := api.backend.GetDelegatedResourceAccountIndexV2(addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -939,12 +1076,17 @@ func (api *API) canDelegateResource(w http.ResponseWriter, r *http.Request) {
 		OwnerAddress string `json:"owner_address"`
 		Balance      int64  `json:"balance"`
 		Type         int32  `json:"type"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
 		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	addr, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	info, err := api.backend.CanDelegateResource(addr, body.Balance, corepb.ResourceCode(body.Type))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -959,12 +1101,17 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		Timestamp    int64  `json:"timestamp"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OwnerAddress == "" {
 		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(body.OwnerAddress))
+	addr, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	info, err := api.backend.GetCanWithdrawUnfreezeAmount(addr, body.Timestamp)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -976,19 +1123,28 @@ func (api *API) getCanWithdrawUnfreezeAmount(w http.ResponseWriter, r *http.Requ
 }
 
 func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("owner_address")
-	if addrHex == "" {
+	addrStr := r.URL.Query().Get("owner_address")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
 			OwnerAddress string `json:"owner_address"`
+			Visible      bool   `json:"visible"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		addrHex = body.OwnerAddress
+		addrStr = body.OwnerAddress
+		if body.Visible {
+			visible = true
+		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "owner_address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
 	info, err := api.backend.GetAvailableUnfreezeCount(addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1000,19 +1156,28 @@ func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request
 }
 
 func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("address")
-	if addrHex == "" {
+	addrStr := r.URL.Query().Get("address")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
 			Address string `json:"address"`
+			Visible bool   `json:"visible"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		addrHex = body.Address
+		addrStr = body.Address
+		if body.Visible {
+			visible = true
+		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
 	info, err := api.backend.GetReward(addr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1027,19 +1192,28 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 // address. Mirrors java-tron Wallet.getBrokerage so the cross-impl test
 // can hit both nodes via the same endpoint.
 func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("address")
-	if addrHex == "" {
+	addrStr := r.URL.Query().Get("address")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
 			Address string `json:"address"`
+			Visible bool   `json:"visible"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		addrHex = body.Address
+		addrStr = body.Address
+		if body.Visible {
+			visible = true
+		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
 	rate := api.backend.GetBrokerageInfo(addr)
 	data, _ := json.Marshal(map[string]int64{"brokerage": rate})
 	w.Header().Set("Content-Type", "application/json")
@@ -1147,7 +1321,8 @@ func (api *API) getAssetIssueByID(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value string `json:"value"`
+		Value   string `json:"value"`
+		Visible bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Value == "" {
@@ -1157,7 +1332,12 @@ func (api *API) getAssetIssueByName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	asset := api.backend.GetAssetIssueByName(common.FromHex(body.Value))
+	nameBytes, err := parseBytes(body.Value, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
+	asset := api.backend.GetAssetIssueByName(nameBytes)
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1210,6 +1390,7 @@ func (api *API) getPaginatedAssetIssueList(w http.ResponseWriter, r *http.Reques
 func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Address string `json:"address"`
+		Visible bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Address == "" {
@@ -1219,7 +1400,11 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(body.Address))
+	addr, err := parseAddress(body.Address, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
 	asset := api.backend.GetAssetIssueByAccount(addr)
 	if asset == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1231,7 +1416,8 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Value string `json:"value"`
+		Value   string `json:"value"`
+		Visible bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Value == "" {
@@ -1241,7 +1427,11 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value required", http.StatusBadRequest)
 		return
 	}
-	orderID := common.FromHex(body.Value)
+	orderID, err := parseBytes(body.Value, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
 	order := api.backend.GetMarketOrderByID(orderID)
 	if order == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1254,6 +1444,7 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Address string `json:"address"`
+		Visible bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.Address == "" {
@@ -1263,7 +1454,11 @@ func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(body.Address))
+	addr, err := parseAddress(body.Address, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
 	orders := api.backend.GetMarketOrdersByAccount(addr)
 	var list []map[string]any
 	for _, o := range orders {
@@ -1281,13 +1476,24 @@ func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SellTokenId string `json:"sell_token_id"`
 		BuyTokenId  string `json:"buy_token_id"`
+		Visible     bool   `json:"visible"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if body.SellTokenId == "" || body.BuyTokenId == "" {
 		http.Error(w, "sell_token_id and buy_token_id required", http.StatusBadRequest)
 		return
 	}
-	pl := api.backend.GetMarketPriceByPair(common.FromHex(body.SellTokenId), common.FromHex(body.BuyTokenId))
+	sell, err := parseBytes(body.SellTokenId, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "sell_token_id", err)
+		return
+	}
+	buy, err := parseBytes(body.BuyTokenId, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "buy_token_id", err)
+		return
+	}
+	pl := api.backend.GetMarketPriceByPair(sell, buy)
 	if pl == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

@@ -4,40 +4,66 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-// createAssetIssue accepts the AssetIssueContract fields as hex-encoded bytes.
+// createAssetIssue accepts AssetIssueContract fields under the request's
+// visibility (hex when visible=false, UTF-8 + Base58Check when visible=true).
 func (api *API) createAssetIssue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		OwnerAddress          string `json:"owner_address"`
-		Name                  string `json:"name"`
-		Abbr                  string `json:"abbr"`
-		TotalSupply           int64  `json:"total_supply"`
-		FrozenSupply          []struct {
+		OwnerAddress string `json:"owner_address"`
+		Name         string `json:"name"`
+		Abbr         string `json:"abbr"`
+		TotalSupply  int64  `json:"total_supply"`
+		FrozenSupply []struct {
 			FrozenAmount int64 `json:"frozen_amount"`
 			FrozenDays   int64 `json:"frozen_days"`
 		} `json:"frozen_supply"`
-		TrxNum                int32  `json:"trx_num"`
-		Precision             int32  `json:"precision"`
-		Num                   int32  `json:"num"`
-		StartTime             int64  `json:"start_time"`
-		EndTime               int64  `json:"end_time"`
-		VoteScore             int32  `json:"vote_score"`
-		Description           string `json:"description"`
-		URL                   string `json:"url"`
-		FreeAssetNetLimit     int64  `json:"free_asset_net_limit"`
-		PublicFreeAssetNetLimit int64 `json:"public_free_asset_net_limit"`
-		ID                    string `json:"id"`
+		TrxNum                  int32  `json:"trx_num"`
+		Precision               int32  `json:"precision"`
+		Num                     int32  `json:"num"`
+		StartTime               int64  `json:"start_time"`
+		EndTime                 int64  `json:"end_time"`
+		VoteScore               int32  `json:"vote_score"`
+		Description             string `json:"description"`
+		URL                     string `json:"url"`
+		FreeAssetNetLimit       int64  `json:"free_asset_net_limit"`
+		PublicFreeAssetNetLimit int64  `json:"public_free_asset_net_limit"`
+		ID                      string `json:"id"`
+		Visible                 bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	name, err := parseBytes(body.Name, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "name", err)
+		return
+	}
+	abbr, err := parseBytes(body.Abbr, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "abbr", err)
+		return
+	}
+	desc, err := parseBytes(body.Description, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "description", err)
+		return
+	}
+	url, err := parseBytes(body.URL, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "url", err)
 		return
 	}
 	frozen := make([]*contractpb.AssetIssueContract_FrozenSupply, 0, len(body.FrozenSupply))
@@ -48,9 +74,9 @@ func (api *API) createAssetIssue(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	c := &contractpb.AssetIssueContract{
-		OwnerAddress:            common.FromHex(body.OwnerAddress),
-		Name:                    common.FromHex(body.Name),
-		Abbr:                    common.FromHex(body.Abbr),
+		OwnerAddress:            owner.Bytes(),
+		Name:                    name,
+		Abbr:                    abbr,
 		TotalSupply:             body.TotalSupply,
 		FrozenSupply:            frozen,
 		TrxNum:                  body.TrxNum,
@@ -59,8 +85,8 @@ func (api *API) createAssetIssue(w http.ResponseWriter, r *http.Request) {
 		StartTime:               body.StartTime,
 		EndTime:                 body.EndTime,
 		VoteScore:               body.VoteScore,
-		Description:             common.FromHex(body.Description),
-		Url:                     common.FromHex(body.URL),
+		Description:             desc,
+		Url:                     url,
 		FreeAssetNetLimit:       body.FreeAssetNetLimit,
 		PublicFreeAssetNetLimit: body.PublicFreeAssetNetLimit,
 		Id:                      body.ID,
@@ -85,15 +111,31 @@ func (api *API) updateAsset(w http.ResponseWriter, r *http.Request) {
 		URL            string `json:"url"`
 		NewLimit       int64  `json:"new_limit"`
 		NewPublicLimit int64  `json:"new_public_limit"`
+		Visible        bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	desc, err := parseBytes(body.Description, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "description", err)
+		return
+	}
+	url, err := parseBytes(body.URL, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "url", err)
+		return
+	}
 	c := &contractpb.UpdateAssetContract{
-		OwnerAddress:   common.FromHex(body.OwnerAddress),
-		Description:    common.FromHex(body.Description),
-		Url:            common.FromHex(body.URL),
+		OwnerAddress:   owner.Bytes(),
+		Description:    desc,
+		Url:            url,
 		NewLimit:       body.NewLimit,
 		NewPublicLimit: body.NewPublicLimit,
 	}
@@ -108,15 +150,25 @@ func (api *API) updateAsset(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getAssetIssueListByName(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("value")
+	visible := r.URL.Query().Get("visible") == "true"
 	if name == "" {
 		var body struct {
-			Value string `json:"value"`
+			Value   string `json:"value"`
+			Visible bool   `json:"visible"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			name = body.Value
+			if body.Visible {
+				visible = true
+			}
 		}
 	}
-	asset := api.backend.GetAssetIssueByName(common.FromHex(name))
+	nameBytes, err := parseBytes(name, visible)
+	if err != nil {
+		httpFieldErr(w, "value", err)
+		return
+	}
+	asset := api.backend.GetAssetIssueByName(nameBytes)
 	var items []*contractpb.AssetIssueContract
 	if asset != nil {
 		items = []*contractpb.AssetIssueContract{asset}
@@ -132,13 +184,22 @@ func (api *API) clearABI(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		OwnerAddress    string `json:"owner_address"`
 		ContractAddress string `json:"contract_address"`
+		Visible         bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	owner := common.BytesToAddress(common.FromHex(body.OwnerAddress))
-	contract := common.BytesToAddress(common.FromHex(body.ContractAddress))
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 	c := &contractpb.ClearABIContract{
 		OwnerAddress:    owner[:],
 		ContractAddress: contract[:],
@@ -170,17 +231,28 @@ func (api *API) updateSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress              string `json:"owner_address"`
-		ContractAddress          string `json:"contract_address"`
-		ConsumeUserResourcePercent int64 `json:"consume_user_resource_percent"`
+		OwnerAddress               string `json:"owner_address"`
+		ContractAddress            string `json:"contract_address"`
+		ConsumeUserResourcePercent int64  `json:"consume_user_resource_percent"`
+		Visible                    bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 	c := &contractpb.UpdateSettingContract{
-		OwnerAddress:              common.FromHex(body.OwnerAddress),
-		ContractAddress:          common.FromHex(body.ContractAddress),
+		OwnerAddress:               owner.Bytes(),
+		ContractAddress:            contract.Bytes(),
 		ConsumeUserResourcePercent: body.ConsumeUserResourcePercent,
 	}
 	tx, err := api.backend.BuildContractTransaction(
@@ -198,17 +270,28 @@ func (api *API) updateEnergyLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerAddress     string `json:"owner_address"`
-		ContractAddress string `json:"contract_address"`
-		OriginEnergyLimit int64 `json:"origin_energy_limit"`
+		OwnerAddress      string `json:"owner_address"`
+		ContractAddress   string `json:"contract_address"`
+		OriginEnergyLimit int64  `json:"origin_energy_limit"`
+		Visible           bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	contract, err := parseAddress(body.ContractAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "contract_address", err)
+		return
+	}
 	c := &contractpb.UpdateEnergyLimitContract{
-		OwnerAddress:     common.FromHex(body.OwnerAddress),
-		ContractAddress: common.FromHex(body.ContractAddress),
+		OwnerAddress:      owner.Bytes(),
+		ContractAddress:   contract.Bytes(),
 		OriginEnergyLimit: body.OriginEnergyLimit,
 	}
 	tx, err := api.backend.BuildContractTransaction(

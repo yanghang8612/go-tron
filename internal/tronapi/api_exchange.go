@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -38,16 +37,32 @@ func (api *API) exchangeCreate(w http.ResponseWriter, r *http.Request) {
 		FirstTokenBalance  int64  `json:"first_token_balance"`
 		SecondTokenID      string `json:"second_token_id"`
 		SecondTokenBalance int64  `json:"second_token_balance"`
+		Visible            bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	first, err := parseBytes(body.FirstTokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "first_token_id", err)
+		return
+	}
+	second, err := parseBytes(body.SecondTokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "second_token_id", err)
+		return
+	}
 	c := &contractpb.ExchangeCreateContract{
-		OwnerAddress:       common.FromHex(body.OwnerAddress),
-		FirstTokenId:       common.FromHex(body.FirstTokenID),
+		OwnerAddress:       owner.Bytes(),
+		FirstTokenId:       first,
 		FirstTokenBalance:  body.FirstTokenBalance,
-		SecondTokenId:      common.FromHex(body.SecondTokenID),
+		SecondTokenId:      second,
 		SecondTokenBalance: body.SecondTokenBalance,
 	}
 	tx, err := api.backend.BuildContractTransaction(corepb.Transaction_Contract_ExchangeCreateContract, c, 0)
@@ -68,15 +83,26 @@ func (api *API) exchangeInject(w http.ResponseWriter, r *http.Request) {
 		ExchangeID   int64  `json:"exchange_id"`
 		TokenID      string `json:"token_id"`
 		Quant        int64  `json:"quant"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	tokenID, err := parseBytes(body.TokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "token_id", err)
+		return
+	}
 	c := &contractpb.ExchangeInjectContract{
-		OwnerAddress: common.FromHex(body.OwnerAddress),
+		OwnerAddress: owner.Bytes(),
 		ExchangeId:   body.ExchangeID,
-		TokenId:      common.FromHex(body.TokenID),
+		TokenId:      tokenID,
 		Quant:        body.Quant,
 	}
 	tx, err := api.backend.BuildContractTransaction(corepb.Transaction_Contract_ExchangeInjectContract, c, 0)
@@ -98,15 +124,26 @@ func (api *API) exchangeTransaction(w http.ResponseWriter, r *http.Request) {
 		TokenID      string `json:"token_id"`
 		Quant        int64  `json:"quant"`
 		Expected     int64  `json:"expected"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	tokenID, err := parseBytes(body.TokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "token_id", err)
+		return
+	}
 	c := &contractpb.ExchangeTransactionContract{
-		OwnerAddress: common.FromHex(body.OwnerAddress),
+		OwnerAddress: owner.Bytes(),
 		ExchangeId:   body.ExchangeID,
-		TokenId:      common.FromHex(body.TokenID),
+		TokenId:      tokenID,
 		Quant:        body.Quant,
 		Expected:     body.Expected,
 	}
@@ -128,15 +165,26 @@ func (api *API) exchangeWithdraw(w http.ResponseWriter, r *http.Request) {
 		ExchangeID   int64  `json:"exchange_id"`
 		TokenID      string `json:"token_id"`
 		Quant        int64  `json:"quant"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	tokenID, err := parseBytes(body.TokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "token_id", err)
+		return
+	}
 	c := &contractpb.ExchangeWithdrawContract{
-		OwnerAddress: common.FromHex(body.OwnerAddress),
+		OwnerAddress: owner.Bytes(),
 		ExchangeId:   body.ExchangeID,
-		TokenId:      common.FromHex(body.TokenID),
+		TokenId:      tokenID,
 		Quant:        body.Quant,
 	}
 	tx, err := api.backend.BuildContractTransaction(corepb.Transaction_Contract_ExchangeWithdrawContract, c, 0)
@@ -158,16 +206,32 @@ func (api *API) marketSellAsset(w http.ResponseWriter, r *http.Request) {
 		SellTokenQuantity int64  `json:"sell_token_quantity"`
 		BuyTokenID        string `json:"buy_token_id"`
 		BuyTokenQuantity  int64  `json:"buy_token_quantity"`
+		Visible           bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	sell, err := parseBytes(body.SellTokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "sell_token_id", err)
+		return
+	}
+	buy, err := parseBytes(body.BuyTokenID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "buy_token_id", err)
+		return
+	}
 	c := &contractpb.MarketSellAssetContract{
-		OwnerAddress:      common.FromHex(body.OwnerAddress),
-		SellTokenId:       common.FromHex(body.SellTokenID),
+		OwnerAddress:      owner.Bytes(),
+		SellTokenId:       sell,
 		SellTokenQuantity: body.SellTokenQuantity,
-		BuyTokenId:        common.FromHex(body.BuyTokenID),
+		BuyTokenId:        buy,
 		BuyTokenQuantity:  body.BuyTokenQuantity,
 	}
 	tx, err := api.backend.BuildContractTransaction(corepb.Transaction_Contract_MarketSellAssetContract, c, 0)
@@ -186,14 +250,25 @@ func (api *API) marketCancelOrder(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		OwnerAddress string `json:"owner_address"`
 		OrderID      string `json:"order_id"`
+		Visible      bool   `json:"visible"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	owner, err := parseAddress(body.OwnerAddress, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "owner_address", err)
+		return
+	}
+	orderID, err := parseBytes(body.OrderID, body.Visible)
+	if err != nil {
+		httpFieldErr(w, "order_id", err)
+		return
+	}
 	c := &contractpb.MarketCancelOrderContract{
-		OwnerAddress: common.FromHex(body.OwnerAddress),
-		OrderId:      common.FromHex(body.OrderID),
+		OwnerAddress: owner.Bytes(),
+		OrderId:      orderID,
 	}
 	tx, err := api.backend.BuildContractTransaction(corepb.Transaction_Contract_MarketCancelOrderContract, c, 0)
 	if err != nil {

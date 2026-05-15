@@ -4,11 +4,25 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
 )
+
+// itoa is a tiny shim around strconv.Itoa used by the JSON request
+// helpers to prefix field names with their list index (e.g.
+// `actives[2].keys[1].address`) so wallet authors can pinpoint a parse
+// failure inside a nested array.
+func itoa(i int) string { return strconv.Itoa(i) }
+
+// addressFieldErr wraps a sub-field error with a leading field tag so
+// nested callers (buildPermission → permission key parser) can produce
+// path-aware messages without losing the inner error.
+func addressFieldErr(field string, err error) error {
+	return fmt.Errorf("%s: %w", field, err)
+}
 
 // parseAddress decodes an address string from a HTTP request body. The wire
 // form depends on the body's `visible` flag — java-tron's convention is:
