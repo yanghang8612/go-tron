@@ -13,6 +13,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -618,16 +619,22 @@ func TestParticipateAssetIssue(t *testing.T) {
 		`{"owner_address":"4101","to_address":"4102","asset_name":"1000001","amount":100}`)
 }
 func TestCreateWitness(t *testing.T) {
+	// URL hex-encodes "https://witness.example.com". The handler used to
+	// silently accept non-hex via common.FromHex's swallowed error; the
+	// P0-2 audit flagged that path so the test must use real hex now.
 	testTxBuilder(t, "/wallet/createwitness",
-		`{"owner_address":"4101","url":"https://witness.example.com"}`)
+		`{"owner_address":"4101","url":"68747470733a2f2f7769746e6573732e6578616d706c652e636f6d"}`)
 }
 func TestVoteWitnessAccount(t *testing.T) {
 	testTxBuilder(t, "/wallet/votewitnessaccount",
 		`{"owner_address":"4101","votes":[{"vote_address":"4102","vote_count":100}]}`)
 }
 func TestUpdateWitness(t *testing.T) {
+	// update_url hex-encodes "https://updated.example.com". Same reason
+	// as TestCreateWitness: the FromHex silent-swallow path used to mask
+	// non-hex input.
 	testTxBuilder(t, "/wallet/updatewitness",
-		`{"owner_address":"4101","update_url":"https://updated.example.com"}`)
+		`{"owner_address":"4101","update_url":"68747470733a2f2f757064617465642e6578616d706c652e636f6d"}`)
 }
 func TestWithdrawBalance(t *testing.T) {
 	testTxBuilder(t, "/wallet/withdrawbalance",
@@ -668,6 +675,41 @@ func TestUndelegateResource(t *testing.T) {
 func TestWithdrawExpireUnfreeze(t *testing.T) {
 	testTxBuilder(t, "/wallet/withdrawexpireunfreeze",
 		`{"owner_address":"4101"}`)
+}
+
+// TestTransferAsset_VisibleBase58: end-to-end exercise of P1 visible=true
+// support. java-tron's HTTP API accepts Base58Check addresses + UTF-8
+// strings for `asset_name` when visible=true; gtron now does the same.
+// Pre-fix the request silently routed to addr(0) (the Base58Check string
+// isn't a valid hex address — hex.DecodeString errored, the error was
+// swallowed by common.FromHex, BytesToAddress promoted nil to zero).
+func TestTransferAsset_VisibleBase58(t *testing.T) {
+	owner := common.Address{0x41, 0x01}
+	to := common.Address{0x41, 0x02}
+	body := `{` +
+		`"owner_address":"` + crypto.AddressToBase58(owner) + `",` +
+		`"to_address":"` + crypto.AddressToBase58(to) + `",` +
+		`"asset_name":"1000001",` +
+		`"amount":100,` +
+		`"visible":true}`
+	testTxBuilder(t, "/wallet/transferasset", body)
+}
+
+// TestTransferAsset_RejectsBadHexOwner: the FromHex silent-swallow fix in
+// action — a typo'd owner now returns 400 instead of building a tx that
+// would later route to addr(0).
+func TestTransferAsset_RejectsBadHexOwner(t *testing.T) {
+	srv := newTestServer(t, &stubBackend{})
+	defer srv.Close()
+	body := `{"owner_address":"nothex","to_address":"4102","asset_name":"1000001","amount":100}`
+	resp, err := http.Post(srv.URL+"/wallet/transferasset", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-hex owner_address, got %d", resp.StatusCode)
+	}
 }
 
 // --- Tests: M5.1 PR-3 TRC10 + PR-4 ClearABI ---
