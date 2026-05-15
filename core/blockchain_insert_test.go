@@ -442,6 +442,154 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	// is uniform across `dp.dirty`.
 }
 
+// TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance pins the fork-rewind
+// fix for the active-witness set. Before the fix, SetActiveWitnesses wrote
+// straight to bc.db, bypassing the buffer: an orphan-branch maintenance block
+// that rotated the active set left bc.db (and the in-memory atomic) holding
+// the rotated set even after switchFork rewound everything else. java-tron
+// keeps the active set in a revoking store, so it must rewind with the rest of
+// consensus state.
+//
+// Setup: the on-disk active-witness list is seeded in a *different order* than
+// SelectActiveWitnesses computes from the witness vote store, so the first
+// maintenance crossing genuinely rotates the set (SetActiveWitnesses fires).
+// Chain A crosses the maintenance boundary; the longer chain B branches from
+// genesis (before the boundary) and never reaches it. After switchFork,
+// ActiveWitnesses() must equal the pre-maintenance seed, not the rotated set.
+func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	// Producer is the lowest-vote witness so it never lands at the
+	// floor(N*0.3)=0 solidified slot — solidified stays at 0, keeping orphan
+	// layers in memory so switchFork's DiscardBlock can rewind them.
+	wProd := testInsertAddr(1)
+	wHi := testInsertAddr(2)
+	wMid := testInsertAddr(3)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: wProd, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: wProd, VoteCount: 1, URL: "prod"},
+			{Address: wHi, VoteCount: 300, URL: "hi"},
+			{Address: wMid, VoteCount: 200, URL: "mid"},
+		},
+		DynamicProperties: map[string]int64{
+			// Maintenance boundary at ts=9000 → chain A block 3 crosses it,
+			// chain B (branching from genesis) tops out at block 4 ts<9000... no:
+			// see timestamps below — B is kept strictly below the boundary.
+			"next_maintenance_time": 9000,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed the on-disk active-witness list in an order that differs from what
+	// SelectActiveWitnesses (vote-descending: wHi, wMid, wProd) will compute,
+	// so the first maintenance run rotates the set. This write predates
+	// NewBlockChain, which loads it verbatim into the atomic.
+	preMaintSet := []tcommon.Address{wProd, wHi, wMid}
+	rawdb.WriteActiveWitnesses(diskdb, preMaintSet)
+
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bc.ActiveWitnesses(); len(got) != 3 || got[0] != wProd {
+		t.Fatalf("genesis active set not loaded from seed: %v", got)
+	}
+
+	// Chain A: blocks 1..3. Block 3 at ts=9000 crosses the maintenance
+	// boundary and rotates the active set via SetActiveWitnesses.
+	chainA := make([]*types.Block, 4)
+	chainA[0] = bc.genesisBlock
+	for i := 1; i <= 3; i++ {
+		parent := chainA[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: wProd.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("chain A block %d: %v", i, err)
+		}
+		chainA[i] = b
+	}
+	if bc.CurrentBlock().Number() != 3 {
+		t.Fatalf("after chain A: head = %d, want 3", bc.CurrentBlock().Number())
+	}
+
+	// The maintenance crossing must have rotated the active set to the
+	// vote-sorted order — otherwise the test isn't exercising the bug.
+	rotated := bc.ActiveWitnesses()
+	if len(rotated) != 3 || rotated[0] != wHi || rotated[1] != wMid || rotated[2] != wProd {
+		t.Fatalf("maintenance did not rotate active set as expected: got %v", rotated)
+	}
+
+	// Chain B: 4 blocks branching from genesis, all kept strictly below the
+	// ts=9000 maintenance boundary so chain B never runs maintenance. Offset
+	// timestamps (+1) give distinct block hashes.
+	chainB := make([]*types.Block, 5)
+	chainB[0] = bc.genesisBlock
+	for i := 1; i <= 4; i++ {
+		parent := chainB[i-1]
+		b := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i)*2000 + 1, // 2001,4001,6001,8001 < 9000
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: wProd.Bytes(),
+				},
+			},
+		})
+		chainB[i] = b
+	}
+
+	// Insert B1..B3 — competing branch, chain A still longer/equal, no switch.
+	for i := 1; i <= 3; i++ {
+		if err := bc.InsertBlock(chainB[i]); err != nil {
+			t.Fatalf("chain B block %d (pre-switch): %v", i, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainA[3].Hash() {
+		t.Fatal("chain B should not have triggered switchFork yet")
+	}
+
+	// Insert B4 — chain B strictly longer → switchFork rewinds across the
+	// maintenance boundary back to genesis, then replays B1..B4.
+	if err := bc.InsertBlock(chainB[4]); err != nil {
+		t.Fatalf("chain B block 4 (switch trigger): %v", err)
+	}
+	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
+		t.Fatal("after switchFork: head hash != chain B tip")
+	}
+
+	// The fix: ActiveWitnesses must have rewound to the pre-maintenance seed.
+	// Chain B never crossed the boundary, so no rotation should be in effect.
+	post := bc.ActiveWitnesses()
+	if len(post) != 3 || post[0] != wProd || post[1] != wHi || post[2] != wMid {
+		t.Fatalf("after switchFork: active set = %v, want pre-maintenance seed %v "+
+			"(orphan-branch rotation must rewind with the rest of consensus state)",
+			post, preMaintSet)
+	}
+
+	// The buffer-backed disk view must agree with the atomic.
+	if buffered := rawdb.ReadActiveWitnesses(bc.BufferedDB()); len(buffered) != 3 ||
+		buffered[0] != wProd || buffered[1] != wHi || buffered[2] != wMid {
+		t.Fatalf("after switchFork: buffered active set = %v, want %v", buffered, preMaintSet)
+	}
+}
+
 // TestFlushAtSolidified_SurvivesRestart verifies the slice-2 flush-at-
 // solidified policy: with a single active witness, solidified == head every
 // block (floor(1*0.3)=0 → solidified = nums[0] = the single witness's

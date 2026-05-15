@@ -273,17 +273,24 @@ func TestBlockChainActiveWitnesses(t *testing.T) {
 		t.Fatal("expected non-empty active witnesses")
 	}
 
+	// SetActiveWitnesses now writes through bc.buffer (rewind-safe path), so
+	// it must run inside an open buffer layer — mirror applyBlock's
+	// BeginBlock/CommitBlock bracket.
 	newList := []tcommon.Address{testCoreAddr(20), testCoreAddr(21)}
+	bc.buffer.BeginBlock(tcommon.Hash{0x1})
 	bc.SetActiveWitnesses(newList)
+	bc.buffer.CommitBlock()
 
 	got := bc.ActiveWitnesses()
 	if len(got) != 2 || got[0] != testCoreAddr(20) || got[1] != testCoreAddr(21) {
 		t.Fatalf("unexpected witnesses after set: %v", got)
 	}
 
-	persisted := rawdb.ReadActiveWitnesses(diskdb)
+	// Persisted through the buffer (not yet flushed to disk): visible via
+	// BufferedDB, absent from the bare disk store until a solidified flush.
+	persisted := rawdb.ReadActiveWitnesses(bc.BufferedDB())
 	if len(persisted) != 2 {
-		t.Fatalf("expected 2 persisted witnesses, got %d", len(persisted))
+		t.Fatalf("expected 2 buffered witnesses, got %d", len(persisted))
 	}
 }
 

@@ -272,6 +272,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
+			// SetActiveWitnesses may have mutated the in-memory atomic before
+			// the failure. The buffered disk write was just discarded with the
+			// layer, so reload the atomic from the rewound buffer to keep it
+			// consistent with the state this block never reached.
+			bc.reloadActiveWitnesses()
 		}
 	}()
 
@@ -626,6 +631,14 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 		bc.buffer.DiscardBlock(kb.block.Hash())
 	}
 
+	// An orphan-branch maintenance block may have called SetActiveWitnesses,
+	// mutating the in-memory atomic. Its buffered disk write was just dropped
+	// with the orphan layer above — reload the atomic from the rewound buffer
+	// so the active set rewinds with the rest of consensus state before the
+	// new branch is re-applied. (Without this the active set stays stale even
+	// though witness is_jobs and DP correctly rewound.)
+	bc.reloadActiveWitnesses()
+
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.db, lcaHash)
 	if numPtr != nil {
@@ -706,10 +719,32 @@ func (bc *BlockChain) ActiveWitnesses() []tcommon.Address {
 	return v.([]tcommon.Address)
 }
 
-// SetActiveWitnesses updates the active witness list in memory and persists it to the DB.
+// SetActiveWitnesses updates the active witness list in memory and persists it
+// through bc.buffer (the active applyBlock layer) — NOT straight to bc.db.
+// java-tron keeps the active set in a revoking store (WitnessScheduleStore
+// extends TronStoreWithRevoking), so it must rewind with the rest of consensus
+// state on a fork rewind across a maintenance boundary. Routing the write
+// through the buffer puts it in the same atomically-buffered, switchFork-
+// rewindable set as the witness is_jobs flips (see flipWitnessIsJobs). The
+// in-memory atomic is the fast read path for ActiveWitnesses(); switchFork and
+// the applyBlock error defer reload it from the buffer after a rewind.
+//
+// Must be called inside an open buffer layer (Buffer.Put panics otherwise) —
+// the sole production caller is applyBlock, after BeginBlock.
 func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
 	bc.activeWitnesses.Store(witnesses)
-	rawdb.WriteActiveWitnesses(bc.db, witnesses)
+	rawdb.WriteActiveWitnesses(bc.buffer, witnesses)
+}
+
+// reloadActiveWitnesses refreshes the in-memory active-witness atomic from the
+// buffer-backed view. Called after a rewind (switchFork's DiscardBlock loop or
+// the applyBlock error defer) so the atomic — which an orphan-branch
+// SetActiveWitnesses mutated — falls back to the rewound state. A nil result
+// (no value buffered or on disk) leaves the atomic untouched.
+func (bc *BlockChain) reloadActiveWitnesses() {
+	if reloaded := rawdb.ReadActiveWitnesses(bc.buffer); reloaded != nil {
+		bc.activeWitnesses.Store(reloaded)
+	}
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic properties.
