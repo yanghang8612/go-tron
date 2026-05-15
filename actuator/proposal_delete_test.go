@@ -14,16 +14,16 @@ func TestProposalDeleteValidate(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalDeleteContract{
 		OwnerAddress: owner[:],
-		ProposalId:   0,
+		ProposalId:   1,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 0, p)
-	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
+	p := &rawdb.Proposal{ID: 1, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
+	rawdb.WriteProposal(db, 1, p)
+	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -36,16 +36,16 @@ func TestProposalDeleteNotProposer(t *testing.T) {
 	other := tcommon.Address{0x41, 0x02}
 	c := &contractpb.ProposalDeleteContract{
 		OwnerAddress: owner[:],
-		ProposalId:   0,
+		ProposalId:   1,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: other, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 0, p)
-	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
+	p := &rawdb.Proposal{ID: 1, Proposer: other, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
+	rawdb.WriteProposal(db, 1, p)
+	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -57,16 +57,16 @@ func TestProposalDeleteExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalDeleteContract{
 		OwnerAddress: owner[:],
-		ProposalId:   0,
+		ProposalId:   1,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
-	p := &rawdb.Proposal{ID: 0, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 0, p)
-	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
+	p := &rawdb.Proposal{ID: 1, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
+	rawdb.WriteProposal(db, 1, p)
+	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
 	result, err := act.Execute(ctx)
@@ -77,7 +77,7 @@ func TestProposalDeleteExecute(t *testing.T) {
 		t.Fatalf("expected ContractRet=1")
 	}
 
-	got := rawdb.ReadProposal(db, 0)
+	got := rawdb.ReadProposal(db, 1)
 	if got.State != rawdb.ProposalStateCanceled {
 		t.Fatalf("expected CANCELED, got %d", got.State)
 	}

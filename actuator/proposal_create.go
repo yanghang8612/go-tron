@@ -47,8 +47,8 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	ownerAddr := common.BytesToAddress(c.OwnerAddress)
 
-	proposalID := ctx.DynProps.NextProposalID()
-	ctx.DynProps.SetNextProposalID(proposalID + 1)
+	proposalID := ctx.DynProps.LatestProposalNum() + 1
+	ctx.DynProps.SetLatestProposalNum(proposalID)
 
 	// Expiration aligns to the first maintenance boundary strictly after
 	// (prevBlockTime + proposalExpireTime), matching java-tron

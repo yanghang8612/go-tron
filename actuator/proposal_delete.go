@@ -34,7 +34,7 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if ctx.DB == nil {
 		return errors.New("database not available")
 	}
-	if c.ProposalId >= ctx.DynProps.NextProposalID() {
+	if c.ProposalId > ctx.DynProps.LatestProposalNum() {
 		return errors.New("proposal not found")
 	}
 	proposal := rawdb.ReadProposal(ctx.DB, c.ProposalId)

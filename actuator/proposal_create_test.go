@@ -222,18 +222,18 @@ func TestProposalCreateExecute(t *testing.T) {
 	if rawdb.ReadProposal(db, 0) != nil {
 		t.Fatal("no proposal should be stored at id=0")
 	}
-	if ctx.DynProps.NextProposalID() != 2 {
-		t.Fatalf("next_proposal_id=%d, want 2", ctx.DynProps.NextProposalID())
+	if ctx.DynProps.LatestProposalNum() != 1 {
+		t.Fatalf("latest_proposal_num=%d, want 1", ctx.DynProps.LatestProposalNum())
 	}
 
-	// Second proposal must get id=2; counter advances to 3.
+	// Second proposal must get id=2; counter advances to 2.
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("second execute failed: %v", err)
 	}
 	if p2 := rawdb.ReadProposal(db, 2); p2 == nil || p2.ID != 2 {
 		t.Fatalf("second proposal not stored at id=2: %+v", p2)
 	}
-	if ctx.DynProps.NextProposalID() != 3 {
-		t.Fatalf("next_proposal_id=%d, want 3", ctx.DynProps.NextProposalID())
+	if ctx.DynProps.LatestProposalNum() != 2 {
+		t.Fatalf("latest_proposal_num=%d, want 2", ctx.DynProps.LatestProposalNum())
 	}
 }

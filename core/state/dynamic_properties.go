@@ -80,7 +80,7 @@ var defaultProps = map[string]int64{
 	"state_flag":                                0,
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            5000,
-	"next_proposal_id":                          1,
+	"latest_proposal_num":                       0,
 	"next_token_id":                             1_000_001,
 	"next_exchange_id":                          1,
 	"exchange_create_fee":                       1_024_000_000,
@@ -745,12 +745,15 @@ func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
 	dp.hashDirty = true
 }
 
-func (dp *DynamicProperties) NextProposalID() int64 {
-	return dp.props["next_proposal_id"]
+// LatestProposalNum mirrors java-tron `DynamicPropertiesStore.LATEST_PROPOSAL_NUM`:
+// the most recently assigned proposal id. Genesis = 0; `ProposalCreate`
+// pre-increments to assign each new id.
+func (dp *DynamicProperties) LatestProposalNum() int64 {
+	return dp.props["latest_proposal_num"]
 }
 
-func (dp *DynamicProperties) SetNextProposalID(id int64) {
-	dp.Set("next_proposal_id", id)
+func (dp *DynamicProperties) SetLatestProposalNum(id int64) {
+	dp.Set("latest_proposal_num", id)
 }
 
 // NextTokenID returns the next token ID to assign (starts at 1_000_001).

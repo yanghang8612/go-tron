@@ -14,22 +14,22 @@ import (
 func setupProposalForApprove(t *testing.T, db ethdb.Database, proposer tcommon.Address) {
 	t.Helper()
 	p := &rawdb.Proposal{
-		ID:             0,
+		ID:             1,
 		Proposer:       proposer,
 		Parameters:     map[int64]int64{6: 200},
 		CreateTime:     500,
 		ExpirationTime: 500 + 259200000,
 		State:          rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	rawdb.WriteProposal(db, 1, p)
+	rawdb.WriteProposalIndex(db, []int64{1})
 }
 
 func TestProposalApproveValidate(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalApproveContract{
 		OwnerAddress:  owner[:],
-		ProposalId:    0,
+		ProposalId:    1,
 		IsAddApproval: true,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
@@ -39,7 +39,7 @@ func TestProposalApproveValidate(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
 	setupProposalForApprove(t, db, owner)
-	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
+	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -51,7 +51,7 @@ func TestProposalApproveExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalApproveContract{
 		OwnerAddress:  owner[:],
-		ProposalId:    0,
+		ProposalId:    1,
 		IsAddApproval: true,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
@@ -72,7 +72,7 @@ func TestProposalApproveExecute(t *testing.T) {
 		t.Fatalf("expected ContractRet=1")
 	}
 
-	p := rawdb.ReadProposal(db, 0)
+	p := rawdb.ReadProposal(db, 1)
 	if len(p.Approvals) != 1 || p.Approvals[0] != owner {
 		t.Fatalf("approval not recorded: %+v", p.Approvals)
 	}
@@ -82,7 +82,7 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ProposalApproveContract{
 		OwnerAddress:  owner[:],
-		ProposalId:    0,
+		ProposalId:    1,
 		IsAddApproval: true,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
@@ -92,11 +92,11 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	ctx.DB = db
 	p := &rawdb.Proposal{
-		ID: 0, ExpirationTime: 999999999, State: rawdb.ProposalStatePending,
+		ID: 1, ExpirationTime: 999999999, State: rawdb.ProposalStatePending,
 		Approvals: []tcommon.Address{owner},
 	}
-	rawdb.WriteProposal(db, 0, p)
-	ctx.DynProps.SetNextProposalID(1) // proposal 0 exists
+	rawdb.WriteProposal(db, 1, p)
+	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err == nil {
