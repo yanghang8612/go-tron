@@ -3,6 +3,7 @@ package types
 import (
 	"math"
 
+	"github.com/tronprotocol/go-tron/internal/math/strictmath"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -82,7 +83,11 @@ func (c *ContractState) Reset(latestCycle int64) {
 //     increaseFactor/decreaseDivision/precision)^cycleCount − precision).
 //
 // Returns true when the state was mutated (caller must persist).
-func (c *ContractState) CatchUpToCycle(newCycle, threshold, increaseFactor, maxFactor int64) bool {
+//
+// `useStrictMath` routes the decay pow through `strictmath.Pow` (java-tron
+// `StrictMath.pow` parity) after proposal #87 activates. See java-tron
+// `ContractStateCapsule.catchUpToCycle`.
+func (c *ContractState) CatchUpToCycle(newCycle, threshold, increaseFactor, maxFactor int64, useStrictMath bool) bool {
 	lastCycle := c.pb.UpdateCycle
 
 	if lastCycle == newCycle {
@@ -118,7 +123,12 @@ func (c *ContractState) CatchUpToCycle(newCycle, threshold, increaseFactor, maxF
 	// Decrease phase: compound decay over cycleCount quiet cycles.
 	// decreasePercent = (1 − increaseFactor / decreaseDivision / precision)^cycleCount
 	base := 1.0 - float64(increaseFactor)/float64(dynamicEnergyDecreaseDivision)/float64(precision)
-	decreasePercent := math.Pow(base, float64(cycleCount))
+	var decreasePercent float64
+	if useStrictMath {
+		decreasePercent = strictmath.Pow(base, float64(cycleCount))
+	} else {
+		decreasePercent = math.Pow(base, float64(cycleCount))
+	}
 	raw := int64(float64(c.pb.EnergyFactor+precision)*decreasePercent) - precision
 	if raw < 0 {
 		raw = 0

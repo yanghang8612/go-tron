@@ -242,7 +242,7 @@ func TestExchangeTransactionBasic(t *testing.T) {
 	// the actuator runs, so any drift is caught here.
 	ctx.State.AddBalance(ownerExchAddr, 200_000_000) // extra TRX to sell
 	trc10Before := ctx.State.GetTRC10Balance(ownerExchAddr, 1_000_001)
-	expectedReceive := newExchangeProcessor().exchange(1_000_000_000, 500_000, 100_000_000)
+	expectedReceive := newExchangeProcessor(false).exchange(1_000_000_000, 500_000, 100_000_000)
 
 	txC := &contractpb.ExchangeTransactionContract{
 		OwnerAddress: ownerExchAddr.Bytes(),

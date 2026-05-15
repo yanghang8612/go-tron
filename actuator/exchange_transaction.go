@@ -84,7 +84,7 @@ func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 	// Bancor quote — note this uses a throwaway processor since Validate must
 	// not mutate any persisted state (java calls exchangeCapsule.transaction(..)
 	// which mutates a local copy that is discarded on return).
-	anotherTokenQuant := newExchangeProcessor().exchange(sellBalance, buyBalance, c.Quant)
+	anotherTokenQuant := newExchangeProcessor(ctx.DynProps.AllowStrictMath()).exchange(sellBalance, buyBalance, c.Quant)
 	if anotherTokenQuant < c.Expected {
 		return errors.New("token required must greater than expected")
 	}
@@ -116,7 +116,7 @@ func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Fresh processor per execution — supply state is never shared.
-	receive := newExchangeProcessor().exchange(sellBalance, buyBalance, c.Quant)
+	receive := newExchangeProcessor(ctx.DynProps.AllowStrictMath()).exchange(sellBalance, buyBalance, c.Quant)
 	if receive < c.Expected {
 		return nil, errors.New("exchange transaction: receive amount below expected")
 	}

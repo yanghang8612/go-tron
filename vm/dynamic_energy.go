@@ -37,7 +37,7 @@ func updateContractEnergyFactor(tvm *TVM, addr tcommon.Address) int64 {
 	increaseFactor := dp.DynamicEnergyIncreaseFactor()
 	maxFactor := dp.DynamicEnergyMaxFactor()
 
-	if cs.CatchUpToCycle(currentCycle, threshold, increaseFactor, maxFactor) {
+	if cs.CatchUpToCycle(currentCycle, threshold, increaseFactor, maxFactor, dp.AllowStrictMath()) {
 		_ = rawdb.WriteContractState(tvm.DB, addr, cs)
 	}
 	return cs.EnergyFactor() + types.DynamicEnergyFactorDecimal

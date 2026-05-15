@@ -1,6 +1,10 @@
 package actuator
 
-import "math"
+import (
+	"math"
+
+	"github.com/tronprotocol/go-tron/internal/math/strictmath"
+)
 
 // exchangeProcessor implements the Bancor connector-weight pricing used by
 // java-tron's ExchangeProcessor (chainbase/.../ExchangeProcessor.java).
@@ -9,15 +13,27 @@ import "math"
 // (sell-side increases supply, buy-side decreases it), and must NOT be
 // shared across transactions.
 type exchangeProcessor struct {
-	supply int64
+	supply        int64
+	useStrictMath bool
 }
 
 // exchangeProcessorSupply matches java-tron ExchangeCapsule.supply (1e18).
 const exchangeProcessorSupply int64 = 1_000_000_000_000_000_000
 
-// newExchangeProcessor returns a fresh processor initialized to the canonical supply.
-func newExchangeProcessor() *exchangeProcessor {
-	return &exchangeProcessor{supply: exchangeProcessorSupply}
+// newExchangeProcessor returns a fresh processor initialized to the canonical
+// supply. After proposal #87 (`allow_strict_math`) activates, callers must
+// pass `useStrictMath=true` so the pow calls route through `strictmath.Pow`
+// (java-tron `StrictMath.pow` parity).
+func newExchangeProcessor(useStrictMath bool) *exchangeProcessor {
+	return &exchangeProcessor{supply: exchangeProcessorSupply, useStrictMath: useStrictMath}
+}
+
+// pow routes between math.Pow and strictmath.Pow per the gate.
+func (p *exchangeProcessor) pow(a, b float64) float64 {
+	if p.useStrictMath {
+		return strictmath.Pow(a, b)
+	}
+	return math.Pow(a, b)
 }
 
 // exchangeToSupply mints "supply" tokens from a sale of `quant` of the sell token.
@@ -26,7 +42,7 @@ func newExchangeProcessor() *exchangeProcessor {
 // (truncation toward zero).
 func (p *exchangeProcessor) exchangeToSupply(balance, quant int64) int64 {
 	newBalance := balance + quant
-	issued := -float64(p.supply) * (1.0 - math.Pow(1.0+float64(quant)/float64(newBalance), 0.0005))
+	issued := -float64(p.supply) * (1.0 - p.pow(1.0+float64(quant)/float64(newBalance), 0.0005))
 	out := int64(issued)
 	p.supply += out
 	return out
@@ -36,7 +52,7 @@ func (p *exchangeProcessor) exchangeToSupply(balance, quant int64) int64 {
 // Mirrors ExchangeProcessor.exchangeFromSupply.
 func (p *exchangeProcessor) exchangeFromSupply(balance, supplyQuant int64) int64 {
 	p.supply -= supplyQuant
-	exchangeBalance := float64(balance) * (math.Pow(1.0+float64(supplyQuant)/float64(p.supply), 2000.0) - 1.0)
+	exchangeBalance := float64(balance) * (p.pow(1.0+float64(supplyQuant)/float64(p.supply), 2000.0) - 1.0)
 	return int64(exchangeBalance)
 }
 

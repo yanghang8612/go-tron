@@ -7,7 +7,7 @@ import (
 func TestCatchUpToCycle_SameCycleNoOp(t *testing.T) {
 	cs := NewContractState(5)
 	cs.SetEnergyFactor(1000)
-	changed := cs.CatchUpToCycle(5, 100, 2000, 10000)
+	changed := cs.CatchUpToCycle(5, 100, 2000, 10000, false)
 	if changed {
 		t.Fatal("same cycle should be no-op")
 	}
@@ -21,7 +21,7 @@ func TestCatchUpToCycle_UninitializedResets(t *testing.T) {
 	cs.AddEnergyUsage(999)
 	cs.SetEnergyFactor(500)
 
-	if !cs.CatchUpToCycle(10, 100, 2000, 10000) {
+	if !cs.CatchUpToCycle(10, 100, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	if cs.UpdateCycle() != 10 {
@@ -40,7 +40,7 @@ func TestCatchUpToCycle_IncreaseAboveThreshold(t *testing.T) {
 	cs.SetEnergyFactor(5000)
 	cs.AddEnergyUsage(1_000_000)
 
-	if !cs.CatchUpToCycle(1001, 900_000, 2000, 10000) {
+	if !cs.CatchUpToCycle(1001, 900_000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	if cs.EnergyFactor() != 8000 {
@@ -60,7 +60,7 @@ func TestCatchUpToCycle_IncreaseClampedToMax(t *testing.T) {
 	cs.SetEnergyFactor(9000)
 	cs.AddEnergyUsage(500_000)
 
-	if !cs.CatchUpToCycle(101, 100_000, 2000, 10000) {
+	if !cs.CatchUpToCycle(101, 100_000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	// (9000+10000) * 1.2 = 22800; -10000 = 12800; clamped to 10000.
@@ -78,7 +78,7 @@ func TestCatchUpToCycle_DecreaseOverMultipleCycles(t *testing.T) {
 	cs.SetEnergyFactor(5000)
 	// No usage → skip increase branch.
 
-	if !cs.CatchUpToCycle(13, 100_000, 2000, 10000) {
+	if !cs.CatchUpToCycle(13, 100_000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	got := cs.EnergyFactor()
@@ -101,7 +101,7 @@ func TestCatchUpToCycle_IncreaseThenDecay(t *testing.T) {
 	cs.SetEnergyFactor(5000)
 	cs.AddEnergyUsage(1_000_000)
 
-	if !cs.CatchUpToCycle(13, 900_000, 2000, 10000) {
+	if !cs.CatchUpToCycle(13, 900_000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	got := cs.EnergyFactor()
@@ -115,7 +115,7 @@ func TestCatchUpToCycle_DecreaseFloorsAtZero(t *testing.T) {
 	cs.SetEnergyFactor(100) // tiny factor
 
 	// Very long quiet stretch — 1000 cycles of decay.
-	if !cs.CatchUpToCycle(1001, 100_000, 2000, 10000) {
+	if !cs.CatchUpToCycle(1001, 100_000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	if cs.EnergyFactor() < 0 {
@@ -129,7 +129,7 @@ func TestCatchUpToCycle_UsageAtThresholdNoIncrease(t *testing.T) {
 	cs.SetEnergyFactor(0)
 	cs.AddEnergyUsage(1000)
 
-	if !cs.CatchUpToCycle(6, 1000, 2000, 10000) {
+	if !cs.CatchUpToCycle(6, 1000, 2000, 10000, false) {
 		t.Fatal("expected mutation")
 	}
 	// No increase, 1 cycle of decay on factor=0 → stays 0.
