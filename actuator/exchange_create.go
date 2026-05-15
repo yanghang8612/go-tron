@@ -91,8 +91,8 @@ func (a *ExchangeCreateActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	exchangeID := ctx.DynProps.NextExchangeID()
-	ctx.DynProps.SetNextExchangeID(exchangeID + 1)
+	exchangeID := ctx.DynProps.LatestExchangeNum() + 1
+	ctx.DynProps.SetLatestExchangeNum(exchangeID)
 
 	ex := &corepb.Exchange{
 		ExchangeId:         exchangeID,

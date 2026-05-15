@@ -46,14 +46,14 @@ func TestAllowFlagSetAndGet(t *testing.T) {
 	}
 }
 
-func TestNextExchangeID(t *testing.T) {
+func TestLatestExchangeNum(t *testing.T) {
 	dp := NewDynamicProperties()
-	if dp.NextExchangeID() != 1 {
-		t.Fatalf("expected default 1, got %d", dp.NextExchangeID())
+	if dp.LatestExchangeNum() != 0 {
+		t.Fatalf("expected default 0, got %d", dp.LatestExchangeNum())
 	}
-	dp.SetNextExchangeID(5)
-	if dp.NextExchangeID() != 5 {
-		t.Fatalf("expected 5, got %d", dp.NextExchangeID())
+	dp.SetLatestExchangeNum(5)
+	if dp.LatestExchangeNum() != 5 {
+		t.Fatalf("expected 5, got %d", dp.LatestExchangeNum())
 	}
 }
 

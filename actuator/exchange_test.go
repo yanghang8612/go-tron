@@ -119,9 +119,9 @@ func TestExchangeCreateBasic(t *testing.T) {
 	if ex.FirstTokenBalance != 1_000_000_000 {
 		t.Fatalf("wrong FirstTokenBalance: %d", ex.FirstTokenBalance)
 	}
-	// next_exchange_id should be 2
-	if ctx.DynProps.NextExchangeID() != 2 {
-		t.Fatalf("expected next_exchange_id=2, got %d", ctx.DynProps.NextExchangeID())
+	// latest_exchange_num should be 1 after first ExchangeCreate
+	if ctx.DynProps.LatestExchangeNum() != 1 {
+		t.Fatalf("expected latest_exchange_num=1, got %d", ctx.DynProps.LatestExchangeNum())
 	}
 	// Owner should have paid fee (1024 TRX = 1,024,000,000 sun) + first token balance (1000 TRX)
 	expectedBalance := int64(3_000_000_000) - 1_000_000_000 - 1_024_000_000

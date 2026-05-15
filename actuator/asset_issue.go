@@ -125,9 +125,9 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	}
 	owner := common.BytesToAddress(c.OwnerAddress)
 
-	// Assign and increment token ID
-	tokenID := ctx.DynProps.NextTokenID()
-	ctx.DynProps.SetNextTokenID(tokenID + 1)
+	// Assign and increment token ID (java-tron AssetIssueActuator pre-increment)
+	tokenID := ctx.DynProps.TokenIdNum() + 1
+	ctx.DynProps.SetTokenIdNum(tokenID)
 	c.Id = strconv.FormatInt(tokenID, 10)
 
 	// Record the issued token on the issuer account (java-tron

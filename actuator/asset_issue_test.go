@@ -124,8 +124,8 @@ func TestAssetIssueExecute(t *testing.T) {
 	if ctx.State.GetBalance(owner) != 0 {
 		t.Fatalf("TRX balance after fee: expected 0, got %d", ctx.State.GetBalance(owner))
 	}
-	if ctx.DynProps.NextTokenID() != 1_000_002 {
-		t.Fatalf("next_token_id: want 1000002, got %d", ctx.DynProps.NextTokenID())
+	if ctx.DynProps.TokenIdNum() != 1_000_001 {
+		t.Fatalf("token_id_num: want 1000001, got %d", ctx.DynProps.TokenIdNum())
 	}
 
 	// java-tron's AssetIssueActuator records the issued token on the issuer

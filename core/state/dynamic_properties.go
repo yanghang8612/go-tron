@@ -81,8 +81,8 @@ var defaultProps = map[string]int64{
 	"allow_new_resource_model":                  0,
 	"free_net_limit":                            5000,
 	"latest_proposal_num":                       0,
-	"next_token_id":                             1_000_001,
-	"next_exchange_id":                          1,
+	"token_id_num":                              1_000_000,
+	"latest_exchange_num":                       0,
 	"exchange_create_fee":                       1_024_000_000,
 	"exchange_balance_limit":                    1_000_000_000_000_000,
 	"allow_same_token_name":                     0,
@@ -756,17 +756,19 @@ func (dp *DynamicProperties) SetLatestProposalNum(id int64) {
 	dp.Set("latest_proposal_num", id)
 }
 
-// NextTokenID returns the next token ID to assign (starts at 1_000_001).
-func (dp *DynamicProperties) NextTokenID() int64 { return dp.props["next_token_id"] }
+// TokenIdNum mirrors java-tron `DynamicPropertiesStore.TOKEN_ID_NUM`:
+// the most recently assigned TRC10 token id. Genesis = 1_000_000;
+// `AssetIssueActuator` pre-increments to assign each new id.
+func (dp *DynamicProperties) TokenIdNum() int64 { return dp.props["token_id_num"] }
 
-// SetNextTokenID updates the next token ID counter.
-func (dp *DynamicProperties) SetNextTokenID(id int64) { dp.Set("next_token_id", id) }
+func (dp *DynamicProperties) SetTokenIdNum(id int64) { dp.Set("token_id_num", id) }
 
-// NextExchangeID returns the next exchange ID to assign (starts at 1).
-func (dp *DynamicProperties) NextExchangeID() int64 { return dp.props["next_exchange_id"] }
+// LatestExchangeNum mirrors java-tron `DynamicPropertiesStore.LATEST_EXCHANGE_NUM`:
+// the most recently assigned exchange id. Genesis = 0;
+// `ExchangeCreateActuator` pre-increments to assign each new id.
+func (dp *DynamicProperties) LatestExchangeNum() int64 { return dp.props["latest_exchange_num"] }
 
-// SetNextExchangeID updates the next exchange ID counter.
-func (dp *DynamicProperties) SetNextExchangeID(id int64) { dp.Set("next_exchange_id", id) }
+func (dp *DynamicProperties) SetLatestExchangeNum(id int64) { dp.Set("latest_exchange_num", id) }
 
 // AssetIssueFee returns the fee (in SUN) required to issue a TRC10 token.
 func (dp *DynamicProperties) AssetIssueFee() int64 { return dp.props["asset_issue_fee"] }
