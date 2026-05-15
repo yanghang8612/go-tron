@@ -16,9 +16,13 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyblocknum", api.getSolidTxInfoByBlockNum)
 
 	// All other endpoints are identical to /wallet/ — re-register by reference.
+	// Block-by-hash and tx-by-hash lookups are state-independent (hash → block/tx
+	// already keyed in rawdb), so live and solid handlers return the same bytes.
 	mux.HandleFunc("/walletsolidity/getblockbyid", api.getBlockByID)
 	mux.HandleFunc("/walletsolidity/getblockbylimitnext", api.getBlockByLimitNext)
-	mux.HandleFunc("/walletsolidity/getaccount", api.getAccount)
+	// State-dependent endpoints route through the solid bound so the
+	// response reflects the post-solidified state, not live head.
+	mux.HandleFunc("/walletsolidity/getaccount", api.getSolidAccount)
 	mux.HandleFunc("/walletsolidity/getaccountbyid", api.getAccountById)
 	mux.HandleFunc("/walletsolidity/getaccountresource", api.getAccountResource)
 	mux.HandleFunc("/walletsolidity/getaccountnet", api.getAccountNet)
@@ -50,7 +54,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/walletpbft/getblockbyid", api.getBlockByID)
 	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getBlockByLimitNext)
-	mux.HandleFunc("/walletpbft/getaccount", api.getAccount)
+	mux.HandleFunc("/walletpbft/getaccount", api.getPbftAccount)
 	mux.HandleFunc("/walletpbft/getaccountbyid", api.getAccountById)
 	mux.HandleFunc("/walletpbft/getaccountresource", api.getAccountResource)
 	mux.HandleFunc("/walletpbft/getaccountnet", api.getAccountNet)
@@ -87,6 +91,16 @@ func (api *API) pbftBoundNum() uint64 {
 		return api.solidBoundNum()
 	}
 	return uint64(n)
+}
+
+// --- State-bounded variants ---
+
+func (api *API) getSolidAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccount(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccount(w, r, api.pbftBoundNum)
 }
 
 // --- Solid-block variants ---

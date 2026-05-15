@@ -37,6 +37,9 @@ type testBackend struct {
 func (b *testBackend) CurrentBlock() *types.Block                             { return b.block }
 func (b *testBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return b.block, nil }
 func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { return b.account, nil }
+func (b *testBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	return b.account, nil
+}
 func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error       { return nil }
 func (b *testBackend) GetNodeInfo() *tronapi.NodeInfo                          { return &tronapi.NodeInfo{} }
 func (b *testBackend) PendingTransactionCount() int                            { return 0 }

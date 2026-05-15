@@ -124,6 +124,12 @@ type Backend interface {
 	CurrentBlock() *types.Block
 	GetBlockByNumber(number uint64) (*types.Block, error)
 	GetAccount(addr common.Address) (*types.Account, error)
+	// GetAccountAt opens state at the post-apply root of the given block
+	// number and returns the account. Used by /walletsolidity/getaccount
+	// and /walletpbft/getaccount so they don't expose unsolidified state.
+	// Returns an error when the block is missing, its state root is
+	// missing, or the account doesn't exist at that height.
+	GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error)
 	BroadcastTransaction(tx *types.Transaction) error
 	GetNodeInfo() *NodeInfo
 	PendingTransactionCount() int

@@ -726,6 +726,28 @@ func (bc *BlockChain) StateDB() *state.Database {
 	return bc.stateDB
 }
 
+// StateRootAtBlock returns the post-apply state root for the block at the
+// given number, or the zero hash if either the block or its state root is
+// missing. Used by the solid / PBFT HTTP variants to open StateDB at the
+// solid / PBFT-confirmed head rather than the live head — without this,
+// /walletsolidity/getaccount returns live (possibly-reorgable) balances,
+// which is the bug the audit's "Solidity API isolation" P1 called out.
+func (bc *BlockChain) StateRootAtBlock(num uint64) tcommon.Hash {
+	block := bc.GetBlockByNumber(num)
+	if block == nil {
+		return tcommon.Hash{}
+	}
+	if root := rawdb.ReadBlockStateRoot(bc.db, block.Hash()); root != (tcommon.Hash{}) {
+		return root
+	}
+	if num == 0 {
+		return rawdb.ReadGenesisStateRoot(bc.db)
+	}
+	// Backwards-compat fallback for chain databases written before
+	// blockStateRootPrefix existed; matches HeadStateRoot's behaviour.
+	return block.AccountStateRoot()
+}
+
 // HeadStateRoot returns the post-apply state root of the canonical head
 // block. The block proto itself no longer carries `account_state_root`
 // (java-tron parity), so callers that want to open a StateDB at head

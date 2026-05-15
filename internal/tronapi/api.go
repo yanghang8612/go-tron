@@ -183,21 +183,44 @@ func (api *API) getBlockByNum(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAccount(w http.ResponseWriter, r *http.Request) {
-	addrHex := r.URL.Query().Get("address")
-	if addrHex == "" {
+	api.handleGetAccount(w, r, nil) // nil → live head
+}
+
+// handleGetAccount is the shared body for /wallet/, /walletsolidity/ and
+// /walletpbft/ getaccount variants. When boundFn is nil the handler reads
+// from the live head (matches the pre-isolation behaviour); when non-nil
+// it calls Backend.GetAccountAt at the returned block number — the audit's
+// "Solidity API isolation" fix routes all read endpoints this way.
+func (api *API) handleGetAccount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	addrStr := r.URL.Query().Get("address")
+	visible := r.URL.Query().Get("visible") == "true"
+	if addrStr == "" {
 		var body struct {
 			Address string `json:"address"`
+			Visible bool   `json:"visible"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			addrHex = body.Address
+			addrStr = body.Address
+			if body.Visible {
+				visible = true
+			}
 		}
 	}
-	if addrHex == "" {
+	if addrStr == "" {
 		http.Error(w, "address required", http.StatusBadRequest)
 		return
 	}
-	addr := common.BytesToAddress(common.FromHex(addrHex))
-	acc, err := api.backend.GetAccount(addr)
+	addr, err := parseAddress(addrStr, visible)
+	if err != nil {
+		httpFieldErr(w, "address", err)
+		return
+	}
+	var acc *types.Account
+	if boundFn != nil {
+		acc, err = api.backend.GetAccountAt(addr, boundFn())
+	} else {
+		acc, err = api.backend.GetAccount(addr)
+	}
 	if err != nil || acc == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

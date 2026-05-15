@@ -123,6 +123,25 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	return acc, nil
 }
 
+// GetAccountAt opens state at the post-apply root of `blockNum` so the
+// caller sees the account as of a specific block — used by the solid /
+// PBFT HTTP variants to keep their responses isolated from live state.
+func (b *TronBackend) GetAccountAt(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
+	root := b.chain.StateRootAtBlock(blockNum)
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("no state root for block %d", blockNum)
+	}
+	statedb, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state at block %d: %w", blockNum, err)
+	}
+	acc := statedb.GetAccount(addr)
+	if acc == nil {
+		return nil, fmt.Errorf("account not found at block %d", blockNum)
+	}
+	return acc, nil
+}
+
 func (b *TronBackend) BroadcastTransaction(tx *types.Transaction) error {
 	// Validate signature/permission against the head state before pool
 	// admission so a malformed user-submitted tx never reaches gossip.

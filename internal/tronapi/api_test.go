@@ -52,6 +52,9 @@ type stubBackend struct {
 func (s *stubBackend) CurrentBlock() *types.Block                             { return nil }
 func (s *stubBackend) GetBlockByNumber(n uint64) (*types.Block, error)        { return nil, nil }
 func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { return nil, nil }
+func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	return nil, nil
+}
 func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error       { return nil }
 func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                          { return &tronapi.NodeInfo{} }
 func (s *stubBackend) PendingTransactionCount() int                            { return 0 }
