@@ -23,8 +23,9 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	// State-dependent endpoints route through the solid bound so the
 	// response reflects the post-solidified state, not live head.
 	mux.HandleFunc("/walletsolidity/getaccount", api.getSolidAccount)
+	mux.HandleFunc("/walletsolidity/getaccountresource", api.getSolidAccountResource)
+	mux.HandleFunc("/walletsolidity/getreward", api.getSolidReward)
 	mux.HandleFunc("/walletsolidity/getaccountbyid", api.getAccountById)
-	mux.HandleFunc("/walletsolidity/getaccountresource", api.getAccountResource)
 	mux.HandleFunc("/walletsolidity/getaccountnet", api.getAccountNet)
 	mux.HandleFunc("/walletsolidity/listwitnesses", api.listWitnesses)
 	mux.HandleFunc("/walletsolidity/getchainparameters", api.getChainParameters)
@@ -41,7 +42,6 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listexchanges", api.listExchanges)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
-	mux.HandleFunc("/walletsolidity/getreward", api.getReward)
 	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateEnergy)
 	mux.HandleFunc("/walletsolidity/triggerconstantcontract", api.triggerConstantContract)
 }
@@ -55,8 +55,9 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getblockbyid", api.getBlockByID)
 	mux.HandleFunc("/walletpbft/getblockbylimitnext", api.getBlockByLimitNext)
 	mux.HandleFunc("/walletpbft/getaccount", api.getPbftAccount)
+	mux.HandleFunc("/walletpbft/getaccountresource", api.getPbftAccountResource)
+	mux.HandleFunc("/walletpbft/getreward", api.getPbftReward)
 	mux.HandleFunc("/walletpbft/getaccountbyid", api.getAccountById)
-	mux.HandleFunc("/walletpbft/getaccountresource", api.getAccountResource)
 	mux.HandleFunc("/walletpbft/getaccountnet", api.getAccountNet)
 	mux.HandleFunc("/walletpbft/listwitnesses", api.listWitnesses)
 	mux.HandleFunc("/walletpbft/getchainparameters", api.getChainParameters)
@@ -73,7 +74,6 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listexchanges", api.listExchanges)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getDelegatedResourceAccountIndexV2)
-	mux.HandleFunc("/walletpbft/getreward", api.getReward)
 	mux.HandleFunc("/walletpbft/estimateenergy", api.estimateEnergy)
 	mux.HandleFunc("/walletpbft/triggerconstantcontract", api.triggerConstantContract)
 }
@@ -101,6 +101,22 @@ func (api *API) getSolidAccount(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getPbftAccount(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccount(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidAccountResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountResource(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftAccountResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountResource(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidReward(w http.ResponseWriter, r *http.Request) {
+	api.handleGetReward(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftReward(w http.ResponseWriter, r *http.Request) {
+	api.handleGetReward(w, r, api.pbftBoundNum)
 }
 
 // --- Solid-block variants ---

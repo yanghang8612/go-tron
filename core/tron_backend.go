@@ -344,14 +344,25 @@ func (b *TronBackend) EstimateEnergy(owner, contract tcommon.Address, data []byt
 }
 
 func (b *TronBackend) GetAccountResource(addr tcommon.Address) (*tronapi.AccountResource, error) {
-	root := b.chain.HeadStateRoot()
+	return b.accountResourceAtRoot(addr, b.chain.HeadStateRoot())
+}
+
+// GetAccountResourceAt opens state at the post-apply root of the bound
+// block (solid or PBFT-confirmed) and returns the snapshot from there.
+func (b *TronBackend) GetAccountResourceAt(addr tcommon.Address, blockNum uint64) (*tronapi.AccountResource, error) {
+	root := b.chain.StateRootAtBlock(blockNum)
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("no state root for block %d", blockNum)
+	}
+	return b.accountResourceAtRoot(addr, root)
+}
+
+func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.AccountResource, error) {
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-
 	dynProps := state.LoadDynamicProperties(b.chain.db)
-
 	return &tronapi.AccountResource{
 		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
 		FreeNetLimit:     dynProps.FreeNetLimit(),
@@ -659,7 +670,20 @@ func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.
 }
 
 func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, error) {
-	root := b.chain.HeadStateRoot()
+	return b.rewardAtRoot(addr, b.chain.HeadStateRoot())
+}
+
+// GetRewardAt opens state at the bound block's root for the /walletsolidity/
+// and /walletpbft/ variants.
+func (b *TronBackend) GetRewardAt(addr tcommon.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
+	root := b.chain.StateRootAtBlock(blockNum)
+	if root == (tcommon.Hash{}) {
+		return nil, fmt.Errorf("no state root for block %d", blockNum)
+	}
+	return b.rewardAtRoot(addr, root)
+}
+
+func (b *TronBackend) rewardAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.RewardInfo, error) {
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)

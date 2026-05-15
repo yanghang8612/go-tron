@@ -841,6 +841,12 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountResource(w, r, nil)
+}
+
+// handleGetAccountResource is the shared body for /wallet/, /walletsolidity/
+// and /walletpbft/ getaccountresource variants. boundFn=nil reads live head.
+func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -864,7 +870,12 @@ func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	res, err := api.backend.GetAccountResource(addr)
+	var res *AccountResource
+	if boundFn != nil {
+		res, err = api.backend.GetAccountResourceAt(addr, boundFn())
+	} else {
+		res, err = api.backend.GetAccountResource(addr)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1156,6 +1167,10 @@ func (api *API) getAvailableUnfreezeCount(w http.ResponseWriter, r *http.Request
 }
 
 func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
+	api.handleGetReward(w, r, nil)
+}
+
+func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1178,7 +1193,12 @@ func (api *API) getReward(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	info, err := api.backend.GetReward(addr)
+	var info *RewardInfo
+	if boundFn != nil {
+		info, err = api.backend.GetRewardAt(addr, boundFn())
+	} else {
+		info, err = api.backend.GetReward(addr)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

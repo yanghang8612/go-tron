@@ -155,6 +155,14 @@ type Backend interface {
 
 	// Resource & chain queries
 	GetAccountResource(addr common.Address) (*AccountResource, error)
+	// GetAccountResourceAt opens state at the given block to compute the
+	// per-account net/energy usage figures, used by /walletsolidity/ and
+	// /walletpbft/ variants so the bandwidth view matches the bound's
+	// commit point rather than live head. The DP-derived limits
+	// (FreeNetLimit, TotalNetLimit, TotalEnergyLimit) still read from
+	// disk DP (effectively solid) since DynamicProperties only flushes
+	// on solidification.
+	GetAccountResourceAt(addr common.Address, blockNum uint64) (*AccountResource, error)
 	GetChainParameters() []ChainParameter
 	ListWitnesses() ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64
@@ -185,6 +193,9 @@ type Backend interface {
 
 	// Rewards
 	GetReward(addr common.Address) (*RewardInfo, error)
+	// GetRewardAt opens state at the given block so /walletsolidity/ and
+	// /walletpbft/getreward return the allowance as of the bound commit.
+	GetRewardAt(addr common.Address, blockNum uint64) (*RewardInfo, error)
 
 	// Transaction pool queries
 	GetTransactionFromPending(txID string) (*corepb.Transaction, error)

@@ -97,6 +97,12 @@ func (b *testBackend) BuildTriggerContractTransaction(owner, contract common.Add
 func (b *testBackend) EstimateEnergy(owner, contract common.Address, data []byte) (int64, error) {
 	return 0, nil
 }
+func (b *testBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
+	return nil, nil
+}
+func (b *testBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
 	return nil, nil
 }

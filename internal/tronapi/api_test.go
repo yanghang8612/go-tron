@@ -92,6 +92,9 @@ func (s *stubBackend) EstimateEnergy(owner, contract common.Address, data []byte
 func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
+func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
 func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
 func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
@@ -123,6 +126,9 @@ func (s *stubBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.A
 	return s.availableUnfreeze, nil
 }
 func (s *stubBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
+	return s.reward, nil
+}
+func (s *stubBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
 	return s.reward, nil
 }
 func (s *stubBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
