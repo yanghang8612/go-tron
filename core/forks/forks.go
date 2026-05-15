@@ -163,5 +163,8 @@ var proposalParamKey = map[int64]string{
 	89: "allow_tvm_blob",
 	92: "proposal_expire_time",
 	94: "allow_tvm_selfdestruct_restriction",
+	95: "allow_tvm_prague",
 	96: "allow_tvm_osaka",
+	97: "allow_harden_resource_calculation",
+	98: "allow_harden_exchange_calculation",
 }

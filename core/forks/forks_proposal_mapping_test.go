@@ -54,3 +54,21 @@ func TestProposalParamKey_UnknownReturnsEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestProposalParamKey_NewerProposalsMapped guards the recently-added
+// java-tron ProposalType entries (v4.8.x). These are not yet referenced
+// by gtron execution paths (no consumers in actuator/vm), but the
+// proposal-side-effect dispatcher must still drop the value into DP so
+// that mainnet activation isn't silently lost.
+func TestProposalParamKey_NewerProposalsMapped(t *testing.T) {
+	want := map[int64]string{
+		95: "allow_tvm_prague",
+		97: "allow_harden_resource_calculation",
+		98: "allow_harden_exchange_calculation",
+	}
+	for id, expect := range want {
+		if got := forks.ProposalParamKey(id); got != expect {
+			t.Errorf("ProposalParamKey(%d): got %q, want %q", id, got, expect)
+		}
+	}
+}
