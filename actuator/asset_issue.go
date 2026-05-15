@@ -129,6 +129,10 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.DynProps.SetNextTokenID(tokenID + 1)
 	c.Id = strconv.FormatInt(tokenID, 10)
 
+	// Record the issued token on the issuer account (java-tron
+	// AssetIssueActuator: setAssetIssuedName + setAssetIssuedID).
+	ctx.State.SetAssetIssued(owner, c.Name, c.Id)
+
 	// Persist metadata and indexes
 	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, c); err != nil {
 		return nil, fmt.Errorf("write asset: %w", err)

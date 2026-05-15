@@ -139,6 +139,20 @@ func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount in
 	obj.markDirty()
 }
 
+// SetAssetIssued records the issued TRC10 token's name and ID on the issuer
+// account, mirroring java-tron's AssetIssueActuator (accountCapsule
+// .setAssetIssuedName / .setAssetIssuedID). These fields are part of the
+// persisted account proto, so they must live in state — not be derived at
+// read time — or the conformance digest diverges at the issuance block.
+func (s *StateDB) SetAssetIssued(addr tcommon.Address, name []byte, id string) {
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	pb.AssetIssuedName = name
+	pb.AssetIssued_ID = []byte(id)
+	obj.markDirty()
+}
+
 // AddTRC10Balance credits amount TRC10 tokens to addr.
 func (s *StateDB) AddTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
 	s.SetTRC10Balance(addr, tokenID, s.GetTRC10Balance(addr, tokenID)+amount)

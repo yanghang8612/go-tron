@@ -126,6 +126,17 @@ func TestAssetIssueExecute(t *testing.T) {
 	if ctx.DynProps.NextTokenID() != 1_000_002 {
 		t.Fatalf("next_token_id: want 1000002, got %d", ctx.DynProps.NextTokenID())
 	}
+
+	// java-tron's AssetIssueActuator records the issued token on the issuer
+	// account itself (setAssetIssuedName / setAssetIssuedID). These live in
+	// the persisted account proto, so the conformance digest depends on them.
+	issuer := ctx.State.GetAccount(owner)
+	if string(issuer.Proto().GetAssetIssuedName()) != "MYTOKEN" {
+		t.Fatalf("asset_issued_name: want MYTOKEN, got %q", issuer.Proto().GetAssetIssuedName())
+	}
+	if string(issuer.Proto().GetAssetIssued_ID()) != "1000001" {
+		t.Fatalf("asset_issued_ID: want 1000001, got %q", issuer.Proto().GetAssetIssued_ID())
+	}
 }
 
 func TestAssetIssueValidate_NegativeFrozenAmount(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strconv"
 	"sync"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -120,10 +119,6 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	acc := statedb.GetAccount(addr)
 	if acc == nil {
 		return nil, fmt.Errorf("account not found")
-	}
-	// Populate asset_issued_ID from rawdb (stored by AssetIssueActuator, not in statedb).
-	if tokenID, ok := rawdb.ReadAssetOwnerIndex(b.chain.DB(), addr[:]); ok {
-		acc.Proto().AssetIssued_ID = []byte(strconv.FormatInt(tokenID, 10))
 	}
 	return acc, nil
 }
