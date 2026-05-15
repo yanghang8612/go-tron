@@ -36,31 +36,21 @@ func DefaultNileGenesis() *Genesis {
 			{Address: hexToAddress("412576ed42ef309f840211bae07c859ef1f2c2dabd"), Balance: -9223372036854775808, AccountName: "Blackhole"},
 		},
 		Witnesses: nileWitnesses(),
+		// Only genuinely chain-specific genesis values belong here. Every
+		// other DP key falls through to defaultProps, which matches
+		// java-tron's genesis init — config-nile.conf's committee section
+		// is byte-identical to mainnet's, so there is no other divergence
+		// (see docs/dev/dp-defaults-audit-2026-05-15.md).
 		DynamicProperties: map[string]int64{
-			// Nile bootstrap interval: config-nile.conf:516 sets this to
-			// 600_000 (10 min), not the mainnet default 21_600_000 (6h).
-			// Proposal #19589 later raised it to 21.6M and proposal #19597
-			// then dropped it to 1.8M (30 min, current Nile-live value).
-			// gtron must seed the bootstrap value here so the maintenance
-			// grid is 600k-aligned through the early chain history; the
-			// historical proposals will replay and advance it naturally.
-			"maintenance_time_interval":                 600000,
-			"account_upgrade_cost":                      9999000000,
-			"create_account_fee":                        100000,
-			"transaction_fee":                           10,
-			"asset_issue_fee":                           1024000000,
-			"witness_pay_per_block":                     16000000,
-			"witness_standby_allowance":                 115200000000,
-			"create_new_account_fee_in_system_contract": 0,
-			"create_new_account_bandwidth_rate":         1,
-			"energy_fee":                                100,
-			"max_cpu_time_of_one_tx":                    80,
-			"total_energy_current_limit":                50000000000,
-			"total_net_limit":                           43200000000,
-			"unfreeze_delay_days":                       14,
-			// Mirrors config-nile.conf::block.proposalExpireTime = 600000.
-			// Chain value, not the actuator-runtime default (which is 0).
-			"proposal_expire_time":                      600000,
+			// config-nile.conf block.maintenanceTimeInterval = 600_000
+			// (mainnet: 21_600_000). Proposals #19589/#19597 later raised
+			// then lowered it; gtron seeds the bootstrap value so the
+			// maintenance grid is 600k-aligned through early chain history
+			// and the historical proposals replay and advance it naturally.
+			"maintenance_time_interval": 600000,
+			// config-nile.conf block.proposalExpireTime = 600_000
+			// (mainnet: 259_200_000).
+			"proposal_expire_time": 600000,
 		},
 	}
 }

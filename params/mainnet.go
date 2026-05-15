@@ -67,25 +67,12 @@ func DefaultMainnetGenesis() *Genesis {
 			{Address: hexToAddress("4177944d19c052b73ee2286823aa83f8138cb7032f"), Balance: -9223372036854775808, AccountName: "Blackhole"},
 		},
 		Witnesses: mainnetWitnesses(),
-		DynamicProperties: map[string]int64{
-			"maintenance_time_interval":                 21600000,
-			"account_upgrade_cost":                      9999000000,
-			"create_account_fee":                        100000,
-			"transaction_fee":                           10,
-			"asset_issue_fee":                           1024000000,
-			"witness_pay_per_block":                     16000000,
-			"witness_standby_allowance":                 115200000000,
-			"create_new_account_fee_in_system_contract": 0,
-			"create_new_account_bandwidth_rate":         1,
-			"energy_fee":                                100,
-			"max_cpu_time_of_one_tx":                    80,
-			"total_energy_current_limit":                50000000000,
-			"total_net_limit":                           43200000000,
-			"unfreeze_delay_days":                       14,
-			// mainnet's `proposal_expire_time = 259_200_000` (3 days, from
-			// config.conf:681) is already the gtron bare default — no
-			// override needed here. Nile overrides to 600_000 in nile.go.
-		},
+		// Empty but non-nil: mainnet genesis DP is exactly defaultProps,
+		// verified against test/fixtures/00-genesis-dp-mainnet (java-tron
+		// genesis capture) — see docs/dev/dp-defaults-audit-2026-05-15.md.
+		// The map must stay non-nil: core/genesis.go only creates and
+		// flushes the DP store inside `if genesis.DynamicProperties != nil`.
+		DynamicProperties: map[string]int64{},
 	}
 }
 
