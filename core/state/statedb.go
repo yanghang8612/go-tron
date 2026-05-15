@@ -153,6 +153,20 @@ func (s *StateDB) SetAssetIssued(addr tcommon.Address, name []byte, id string) {
 	obj.markDirty()
 }
 
+// AddFrozenSupply appends frozen-supply entries to the account proto's
+// frozen_supply field. java-tron's AssetIssueActuator writes these onto the
+// issuer account when a TRC10 token is issued with a FrozenSupply list.
+func (s *StateDB) AddFrozenSupply(addr tcommon.Address, frozen []*corepb.Account_Frozen) {
+	if len(frozen) == 0 {
+		return
+	}
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	pb.FrozenSupply = append(pb.FrozenSupply, frozen...)
+	obj.markDirty()
+}
+
 // AddTRC10Balance credits amount TRC10 tokens to addr.
 func (s *StateDB) AddTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
 	s.SetTRC10Balance(addr, tokenID, s.GetTRC10Balance(addr, tokenID)+amount)

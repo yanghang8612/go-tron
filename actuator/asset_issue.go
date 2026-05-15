@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -147,15 +148,26 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, fmt.Errorf("write issue time: %w", err)
 	}
 
-	// Mint free supply to issuer (frozen supply is held until UnfreezeAsset)
+	// Mint free supply to issuer; the frozen portion is recorded on the
+	// account's frozen_supply list and held until UnfreezeAsset.
 	var frozenTotal int64
+	var frozenList []*corepb.Account_Frozen
 	for _, f := range c.FrozenSupply {
 		frozenTotal += f.FrozenAmount
+		// java-tron AssetIssueActuator: expireTime = startTime + frozenDays
+		// * FROZEN_PERIOD. The multiplication wraps silently in java's
+		// long arithmetic (the validate-time overflow gate already runs).
+		expireTime := c.StartTime + f.FrozenDays*params.FrozenPeriod
+		frozenList = append(frozenList, &corepb.Account_Frozen{
+			FrozenBalance: f.FrozenAmount,
+			ExpireTime:    expireTime,
+		})
 	}
 	freeAmount := c.TotalSupply - frozenTotal
 	if freeAmount > 0 {
 		ctx.State.SetTRC10Balance(owner, tokenID, freeAmount)
 	}
+	ctx.State.AddFrozenSupply(owner, frozenList)
 
 	fee := ctx.DynProps.AssetIssueFee()
 	if err := burnFee(ctx, owner, fee); err != nil {

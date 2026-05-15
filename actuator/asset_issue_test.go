@@ -8,6 +8,7 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -177,6 +178,25 @@ func TestAssetIssueExecute_WithFrozenSupply(t *testing.T) {
 	// Only the 800,000 free tokens are minted; 200,000 are frozen
 	if bal := ctx.State.GetTRC10Balance(owner, tokenID); bal != 800_000 {
 		t.Fatalf("TRC10 balance: want 800000 (free portion), got %d", bal)
+	}
+
+	// The frozen portion is recorded on the issuer account's frozen_supply
+	// list, matching java-tron AssetIssueActuator.
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		t.Fatal("owner account missing after execute")
+	}
+	fs := acct.Proto().GetFrozenSupply()
+	if len(fs) != 1 {
+		t.Fatalf("frozen_supply: want 1 entry, got %d", len(fs))
+	}
+	if fs[0].FrozenBalance != 200_000 {
+		t.Fatalf("frozen_supply[0] balance: want 200000, got %d", fs[0].FrozenBalance)
+	}
+	// expireTime = StartTime(1000) + FrozenDays(30) * FrozenPeriod
+	wantExpire := int64(1000) + 30*params.FrozenPeriod
+	if fs[0].ExpireTime != wantExpire {
+		t.Fatalf("frozen_supply[0] expire_time: want %d, got %d", wantExpire, fs[0].ExpireTime)
 	}
 }
 
