@@ -566,6 +566,193 @@ EOF
         "[(a.get('key',''), a.get('value',0)) for a in d.get('assetV2',[])]"
 }
 
+# ── Flow 7b: ExchangeCreate / Inject / Withdraw ───────────────────
+#
+# Bancor-style on-chain AMM. Pairs the TRC10 from flow_asset_issue with
+# TRX (`_`, hex 5f). java-tron's ExchangeCreateActuator pre-increments
+# latest_exchange_num and writes the new Exchange capsule keyed by it;
+# gtron must produce the byte-identical post-state.
+#
+# Token-id encoding: gtron's /wallet/exchange* endpoints take the *bytes*
+# field as a hex string (api_exchange.go applies common.FromHex). So:
+#   TRX            → "_"        → hex "5f"
+#   TRC10 id N     → "<N>"      → hex of ASCII digits, e.g. "1000001" → "31303030303031"
+EXCHANGE_TRX_HEX=$(printf '_' | xxd -p | tr -d '\n')   # 5f
+EXCHANGE_FIRST_BAL=1000000   # 1 TRX (sun)
+EXCHANGE_SECOND_BAL=1000     # 1000 TRC10 units
+
+# Snapshot of the SR's TRC10 id captured by flow_exchange_create; reused
+# by inject/withdraw to talk about the same pool.
+EXCHANGE_ASSET_ID=""
+EXCHANGE_ASSET_HEX=""
+EXCHANGE_ID=""
+
+flow_exchange_create() {
+    echo ""
+    echo "=== Flow 7b.1: ExchangeCreateContract ==="
+    # Read the SR's asset_issued_ID from java-tron. tronjson decodes that
+    # field as UTF-8 (the numeric token-id string, e.g. "1000001"); java's
+    # convertOutput does the same. If empty, the SR never issued a TRC10
+    # on this chain — skip the entire exchange suite.
+    local acct asset_id
+    acct=$(http_post "$JAVA_HTTP" "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}")
+    asset_id=$(json_field "d.get('asset_issued_ID','')" "$acct")
+    if [ -z "$asset_id" ] || [ "$asset_id" = "0" ]; then
+        skip_step "exchangeCreate" "SR has no asset_issued_ID (flow_asset_issue skipped/failed)"
+        return
+    fi
+    EXCHANGE_ASSET_ID="$asset_id"
+    EXCHANGE_ASSET_HEX=$(printf '%s' "$asset_id" | xxd -p | tr -d '\n')
+    echo "  pair: TRX(_) + TRC10 id=$asset_id (hex=$EXCHANGE_ASSET_HEX)"
+
+    # ExchangeCreate burns exchange_create_fee (1024 TRX on mainnet
+    # defaults) plus the TRX deposit. Sanity-skip if SR can't cover it.
+    local sr_bal fee
+    sr_bal=$(json_field "d.get('balance',0)" "$acct")
+    fee=$(http_post "$JAVA_HTTP" "/wallet/getchainparameters" "{}")
+    fee=$(json_field "next((p.get('value',0) for p in d.get('chainParameter',[]) if p.get('key')=='getExchangeCreateFee' or p.get('key')=='exchange_create_fee'), 1024000000)" "$fee")
+    local need=$((fee + EXCHANGE_FIRST_BAL))
+    if [ "$sr_bal" -lt "$need" ] 2>/dev/null; then
+        skip_step "exchangeCreate" "SR balance $sr_bal < need $need (fee $fee + TRX deposit $EXCHANGE_FIRST_BAL)"
+        return
+    fi
+
+    local body
+    body="{\"owner_address\":\"$SR_ADDR_HEX\",\"first_token_id\":\"$EXCHANGE_TRX_HEX\",\"first_token_balance\":$EXCHANGE_FIRST_BAL,\"second_token_id\":\"$EXCHANGE_ASSET_HEX\",\"second_token_balance\":$EXCHANGE_SECOND_BAL}"
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/exchangecreate" "$body")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "exchangeCreate: createtransaction did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "exchangeCreate: broadcast or inclusion failed"
+        return
+    fi
+    pass "exchangeCreate included at block #$incl"
+
+    # latest_exchange_num is the rename target of commit a8c241b. Both
+    # nodes must advance it symmetrically. Asserted via getchainparameters
+    # (both ends expose it under the snake_case key).
+    assert_state_eq "latest_exchange_num advanced" \
+        "/wallet/getchainparameters" "{}" \
+        "next((p.get('value',0) for p in d.get('chainParameter',[]) if p.get('key')=='latest_exchange_num'), -1)"
+
+    # listexchanges returns one entry per Exchange capsule. Capture the
+    # max exchange_id from java-tron to use as "our" id below — the chain
+    # may already carry exchanges from prior test runs.
+    local jlist
+    jlist=$(http_post "$JAVA_HTTP" "/wallet/listexchanges" "{}")
+    EXCHANGE_ID=$(json_field "max([e.get('exchange_id',0) for e in d.get('exchanges',[])] + [0])" "$jlist")
+    echo "  exchange_id=$EXCHANGE_ID"
+    if [ -z "$EXCHANGE_ID" ] || [ "$EXCHANGE_ID" = "0" ]; then
+        fail "exchangeCreate: tx included but listexchanges returned no entry"
+        return
+    fi
+
+    # 4-tuple match on the newly created pool. token_id fields are bytes
+    # → hex strings on both sides.
+    assert_state_eq "exchange[$EXCHANGE_ID] 4-tuple" \
+        "/wallet/listexchanges" "{}" \
+        "next(((e.get('first_token_id',''), e.get('first_token_balance',0), e.get('second_token_id',''), e.get('second_token_balance',0)) for e in d.get('exchanges',[]) if e.get('exchange_id',0)==$EXCHANGE_ID), None)"
+    # Creator address and create_time must also match.
+    assert_state_eq "exchange[$EXCHANGE_ID] creator+createtime" \
+        "/wallet/listexchanges" "{}" \
+        "next(((e.get('creator_address',''), e.get('create_time',0)) for e in d.get('exchanges',[]) if e.get('exchange_id',0)==$EXCHANGE_ID), None)"
+    # SR balance must reflect fee + TRX deposit; TRC10 balance must drop
+    # by EXCHANGE_SECOND_BAL.
+    assert_state_eq "SR balance after exchangeCreate" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('balance',0)"
+    assert_state_eq "SR TRC10 balance after exchangeCreate" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "[(a.get('key',''), a.get('value',0)) for a in d.get('assetV2',[])]"
+}
+
+# ExchangeInject deposits one side of the pair; the actuator computes the
+# matching amount of the other side from the current ratio and debits both
+# from the creator. For a 1_000_000:1_000 pool, injecting 100_000 sun TRX
+# pulls in floor(1000 * 100_000 / 1_000_000) = 100 TRC10.
+flow_exchange_inject() {
+    echo ""
+    echo "=== Flow 7b.2: ExchangeInjectContract ==="
+    if [ -z "$EXCHANGE_ID" ] || [ "$EXCHANGE_ID" = "0" ]; then
+        skip_step "exchangeInject" "no exchange from flow_exchange_create"
+        return
+    fi
+    local inject_quant=100000   # 0.1 TRX worth of liquidity (sun)
+    local body
+    body="{\"owner_address\":\"$SR_ADDR_HEX\",\"exchange_id\":$EXCHANGE_ID,\"token_id\":\"$EXCHANGE_TRX_HEX\",\"quant\":$inject_quant}"
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/exchangeinject" "$body")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "exchangeInject: createtransaction did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "exchangeInject: broadcast or inclusion failed"
+        return
+    fi
+    pass "exchangeInject included at block #$incl"
+
+    # Pool balances must have advanced symmetrically.
+    assert_state_eq "exchange[$EXCHANGE_ID] balances after inject" \
+        "/wallet/listexchanges" "{}" \
+        "next(((e.get('first_token_balance',0), e.get('second_token_balance',0)) for e in d.get('exchanges',[]) if e.get('exchange_id',0)==$EXCHANGE_ID), None)"
+    assert_state_eq "SR balance after exchangeInject" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('balance',0)"
+    assert_state_eq "SR TRC10 after exchangeInject" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "[(a.get('key',''), a.get('value',0)) for a in d.get('assetV2',[])]"
+}
+
+# ExchangeWithdraw returns proportional liquidity to the creator. Withdraw
+# 100_000 sun TRX → withdraws floor(other * quant / this) of the other side.
+# At a 1_100_000:1_100 pool, that's floor(1100 * 100_000 / 1_100_000) = 100
+# TRC10. The "Not precise enough" guard accepts this (exact ratio).
+flow_exchange_withdraw() {
+    echo ""
+    echo "=== Flow 7b.3: ExchangeWithdrawContract ==="
+    if [ -z "$EXCHANGE_ID" ] || [ "$EXCHANGE_ID" = "0" ]; then
+        skip_step "exchangeWithdraw" "no exchange from flow_exchange_create"
+        return
+    fi
+    local withdraw_quant=100000   # match inject quantity
+    local body
+    body="{\"owner_address\":\"$SR_ADDR_HEX\",\"exchange_id\":$EXCHANGE_ID,\"token_id\":\"$EXCHANGE_TRX_HEX\",\"quant\":$withdraw_quant}"
+    local unsigned
+    unsigned=$(http_post "127.0.0.1:$GTRON_HTTP" "/wallet/exchangewithdraw" "$body")
+    if ! echo "$unsigned" | grep -q '"raw_data"'; then
+        fail "exchangeWithdraw: createtransaction did not return raw_data"
+        echo "      response: $unsigned" >&2
+        return
+    fi
+    local incl
+    incl=$(broadcast_and_confirm "$unsigned")
+    if [ -z "$incl" ]; then
+        fail "exchangeWithdraw: broadcast or inclusion failed"
+        return
+    fi
+    pass "exchangeWithdraw included at block #$incl"
+
+    assert_state_eq "exchange[$EXCHANGE_ID] balances after withdraw" \
+        "/wallet/listexchanges" "{}" \
+        "next(((e.get('first_token_balance',0), e.get('second_token_balance',0)) for e in d.get('exchanges',[]) if e.get('exchange_id',0)==$EXCHANGE_ID), None)"
+    assert_state_eq "SR balance after exchangeWithdraw" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "d.get('balance',0)"
+    assert_state_eq "SR TRC10 after exchangeWithdraw" \
+        "/wallet/getaccount" "{\"address\":\"$SR_ADDR_HEX\"}" \
+        "[(a.get('key',''), a.get('value',0)) for a in d.get('assetV2',[])]"
+}
+
 # ── Flow 8: ProposalCreate ───────────────────────────────────────
 flow_proposal_create() {
     echo ""
@@ -953,6 +1140,9 @@ flow_freeze
 flow_vote_after_freeze
 flow_withdraw
 flow_asset_issue
+flow_exchange_create
+flow_exchange_inject
+flow_exchange_withdraw
 flow_proposal_create
 flow_proposal_approve
 flow_update_brokerage
