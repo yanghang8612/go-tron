@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -56,13 +57,33 @@ func marshalList(fd protoreflect.FieldDescriptor, list protoreflect.List) any {
 	return out
 }
 
+// marshalMap emits a proto map as a repeated [{key, value}] array. java-tron's
+// JsonFormat predates the proto map type and serializes map fields as their
+// underlying repeated MapEntry messages, so e.g. assetV2 is an array, not an
+// object. Entries are sorted by key for deterministic output.
 func marshalMap(fd protoreflect.FieldDescriptor, m protoreflect.Map) any {
-	out := make(map[string]any)
+	keyFD := fd.MapKey()
 	valFD := fd.MapValue()
+	type entry struct {
+		sortKey string
+		obj     map[string]any
+	}
+	entries := make([]entry, 0, m.Len())
 	m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
-		out[fmt.Sprint(k.Value().Interface())] = marshalSingular(valFD, v)
+		entries = append(entries, entry{
+			sortKey: fmt.Sprint(k.Value().Interface()),
+			obj: map[string]any{
+				"key":   marshalSingular(keyFD, k.Value()),
+				"value": marshalSingular(valFD, v),
+			},
+		})
 		return true
 	})
+	sort.Slice(entries, func(i, j int) bool { return entries[i].sortKey < entries[j].sortKey })
+	out := make([]any, len(entries))
+	for i, e := range entries {
+		out[i] = e.obj
+	}
 	return out
 }
 
@@ -72,6 +93,11 @@ func marshalSingular(fd protoreflect.FieldDescriptor, val protoreflect.Value) an
 		b := val.Bytes()
 		if len(b) == 0 {
 			return ""
+		}
+		// java-tron's Util.convertOutput decodes Account.asset_issued_ID from
+		// its raw bytes to a UTF-8 string; every other bytes field stays hex.
+		if fd.FullName() == "protocol.Account.asset_issued_ID" {
+			return string(b)
 		}
 		return hex.EncodeToString(b)
 
