@@ -512,6 +512,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
 
+	// Record this block in the TAPOS recent-block ring so future txs can
+	// reference it. java-tron's Manager.updateRecentBlock runs unconditionally
+	// at the head of pushBlockInner; doing it here (after the block is fully
+	// committed) preserves the same observable ordering: the next block's
+	// txs see this block's slot, and a fork-rewind that discards this block
+	// will write a different value into the same slot when the alternate
+	// branch's block #N applies — overwrite, not delete, matches java's
+	// ring semantics.
+	if err := rawdb.WriteTaposRef(bc.db, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write tapos ref: %w", err)
+	}
+
 	// Advance currentBlock before writing tx infos so that any caller
 	// unblocked by WriteTransactionInfo sees the new state root.
 	bc.currentBlock.Store(block)
@@ -807,7 +819,14 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	if err != nil {
 		return fmt.Errorf("open head state for tx validation: %w", err)
 	}
-	return ValidateTxEnvelope(tx, statedb)
+	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+		return err
+	}
+	// TAPOS reads the recent-block ring from rawdb (no state opening
+	// needed). Pool admission must reject txs that reference an unknown or
+	// reorg-evicted block — relaying them would only fail at the producer
+	// or peer's applyBlock step anyway.
+	return ValidateTAPOS(tx, bc.buffer)
 }
 
 // DynProps loads and returns a snapshot of the current dynamic properties.

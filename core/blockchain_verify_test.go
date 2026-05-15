@@ -276,10 +276,49 @@ func TestChain_ValidateTransaction_AcceptsOwnerSig(t *testing.T) {
 
 	ownerKey, owner := keyAndAddr(t)
 	_, recipient := keyAndAddr(t)
-	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	// Point ref_block at genesis (in the tapos ring after SetupGenesisBlock).
+	// Without this the chain-level path's TAPOS check rejects the tx.
+	refBytes, refHash := genesisTaposRef(t, bc)
+	tx := buildTransferTxWithRef(t, owner, recipient, 100, 0, refBytes, refHash, ownerKey)
 
 	if err := bc.ValidateTransaction(tx); err != nil {
 		t.Fatalf("expected accept, got %v", err)
+	}
+}
+
+// genesisTaposRef returns ref_block_bytes and ref_block_hash for a tx that
+// references genesis. Production wallets pick a recent block; for tests on
+// a 1-block chain only block #0 is available, so we point at that.
+func genesisTaposRef(t *testing.T, bc *BlockChain) ([]byte, []byte) {
+	t.Helper()
+	genesis := bc.GetBlockByNumber(0)
+	if genesis == nil {
+		t.Fatal("genesis block missing")
+	}
+	h := genesis.Hash()
+	return []byte{0, 0}, h[8:16]
+}
+
+// TestChain_ValidateTransaction_RejectsBadTapos: a syntactically correct
+// tx (good signature, real account) but with a TAPOS reference that
+// doesn't match any recent block must be rejected. Mirrors java-tron's
+// TaposException("different block hash") / ("No reference block found").
+func TestChain_ValidateTransaction_RejectsBadTapos(t *testing.T) {
+	bc, _, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	// Real ref_block_bytes (slot 0 is populated by genesis) but a wrong
+	// hash. Differentiates "slot empty" from "slot occupied but hash
+	// diverges" — the latter is the chain-fork shape worth catching.
+	wrongHash := []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}
+	tx := buildTransferTxWithRef(t, owner, recipient, 100, 0, []byte{0, 0}, wrongHash, ownerKey)
+
+	if err := bc.ValidateTransaction(tx); !errors.Is(err, ErrTaposHashMismatch) {
+		t.Fatalf("expected ErrTaposHashMismatch, got %v", err)
 	}
 }
 

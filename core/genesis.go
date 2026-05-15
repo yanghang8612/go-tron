@@ -82,6 +82,13 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 	// itself omits account_state_root for java-tron parity, so block #1's
 	// applyBlock falls back to this when current.Number()==0.
 	rawdb.WriteGenesisStateRoot(db, stateRoot)
+	// Seed the TAPOS recent-block ring with genesis so txs in block #1 that
+	// reference the genesis hash (the only legal target for the first tx
+	// wave) pass validation. java-tron Manager.initGenesis writes this slot
+	// alongside the genesis block itself.
+	if err := rawdb.WriteTaposRef(db, 0, block.Hash()); err != nil {
+		return nil, tcommon.Hash{}, fmt.Errorf("write genesis tapos ref: %w", err)
+	}
 
 	// Write dynamic properties
 	if genesis.DynamicProperties != nil {

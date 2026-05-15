@@ -74,6 +74,14 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		if err := ValidateTxEnvelope(tx, statedb); err != nil {
 			return nil, fmt.Errorf("validate envelope: %w", err)
 		}
+		// TAPOS read goes through the same buffered db that landed
+		// previous-block writes. When applyBlock is mid-replay for block
+		// N, this sees the ring as of block N-1 — which is exactly what
+		// java-tron uses for the tapos check (ref blocks must precede the
+		// referencing block).
+		if err := ValidateTAPOS(tx, db); err != nil {
+			return nil, fmt.Errorf("validate tapos: %w", err)
+		}
 	}
 
 	if validate {

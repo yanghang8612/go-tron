@@ -260,6 +260,17 @@ var (
 	// Value: BigInteger bytes (two's-complement big-endian, minimum bytes).
 	rewardViPrefix = []byte("rvi-")
 
+	// taposPrefix (tps-) maps to java-tron's RecentBlockStore (db name
+	// "recent-block"). Holds the recent 8-byte block-hash tails used for
+	// TAPOS (TransactionUtil.validateTapos). The key is the low 2 bytes of
+	// a block number — a 65536-slot ring is naturally bounded because each
+	// new block at the same lower-half number overwrites the previous
+	// occupant. java-tron's RecentBlockStore stores exactly this layout.
+	// Key:   tps- || refBlockBytes (2B = blockNum[6..7] big-endian)
+	// Value: 8-byte hash tail (block.Hash()[8..16], matching
+	//        TransactionCapsule.getRefBlockHash()).
+	taposPrefix = []byte("tps-")
+
 	// drAccIdxPrefix (drax-) maps to java-tron's
 	// DelegatedResourceAccountIndexStore (db name
 	// "DelegatedResourceAccountIndex"). Holds forward and reverse
@@ -540,6 +551,12 @@ func assetIssueTimeKey(tokenID int64) []byte {
 	copy(k, assetIssueTimePrefix)
 	binary.BigEndian.PutUint64(k[len(assetIssueTimePrefix):], uint64(tokenID))
 	return k
+}
+
+// taposKey builds a RecentBlockStore key from the 2-byte refBlockBytes
+// (low 16 bits of block number, big-endian).
+func taposKey(refBlockBytes []byte) []byte {
+	return append(append([]byte{}, taposPrefix...), refBlockBytes...)
 }
 
 func gcdInt64(a, b int64) int64 {
