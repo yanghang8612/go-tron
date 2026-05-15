@@ -6,19 +6,8 @@
 // gtron must match the same bit pattern for any chain replay that crosses
 // the activation height.
 //
-// This package currently delegates to Go's `math.Pow`. **That delegation
-// is NOT bit-identical to fdlibm** — Go's standard-library pow uses a
-// different algorithm. See `RED-3` in docs/dev/fork-audit-2026-05-15.md.
-//
-// TODO(red-3-port): port fdlibm `e_pow.c` to Go and validate bit-for-bit
-// against a Java oracle (`java.lang.StrictMath.pow`). Until that lands,
-// callers gated on this package will silently fork from java-tron for
-// inputs where Go's `math.Pow` and `StrictMath.pow` disagree.
+// `Pow` is implemented in `pow.go` as a direct port of OpenJDK's
+// `java.lang.FdLibm.Pow.compute` (which is itself a translation of the
+// fdlibm `e_pow.c` reference). It is validated bit-for-bit against a
+// Java `StrictMath.pow` oracle in `pow_test.go`.
 package strictmath
-
-import "math"
-
-// Pow returns a^b. Will be replaced with an fdlibm port once validated.
-func Pow(a, b float64) float64 {
-	return math.Pow(a, b)
-}
