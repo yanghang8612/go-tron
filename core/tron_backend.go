@@ -124,6 +124,13 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 }
 
 func (b *TronBackend) BroadcastTransaction(tx *types.Transaction) error {
+	// Validate signature/permission against the head state before pool
+	// admission so a malformed user-submitted tx never reaches gossip.
+	// Mirrors java-tron Wallet.broadcastTransaction → pushTransaction's
+	// validateSignature gate.
+	if err := b.chain.ValidateTransaction(tx); err != nil {
+		return err
+	}
 	if err := b.pool.Add(tx); err != nil {
 		return err
 	}

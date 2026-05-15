@@ -92,7 +92,7 @@ func BuildSyntheticRange(params SyntheticRangeParams) error {
 	entries := make([]OracleEntry, 0, len(blocks))
 	for _, blk := range blocks {
 		if _, err := core.ProcessBlock(loaded.StateDB, loaded.DynProps, blk, loaded.DiskDB,
-			[]tcommon.Address{witness}, 0); err != nil {
+			[]tcommon.Address{witness}, 0, false); err != nil {
 			return fmt.Errorf("ProcessBlock %d: %w", blk.Number(), err)
 		}
 		d := DigestB(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps)

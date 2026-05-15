@@ -209,6 +209,80 @@ func TestInsertBlock_RejectsForgedWitnessAddress(t *testing.T) {
 	}
 }
 
+// TestChain_RejectsBlockWithUnsignedTx: P0-2b chain-level test.
+// applyBlock must reject a block whose body contains a tx with no
+// signature, even if the block header itself was correctly signed by the
+// scheduled witness. Without the envelope-validation loop in applyBlock a
+// malicious peer can inject malformed txs through a legit-looking block.
+func TestChain_RejectsBlockWithUnsignedTx(t *testing.T) {
+	bc, key, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessAddr := bc.ActiveWitnesses()[0]
+
+	// Build a malformed transfer tx (no signature) bound for the chain.
+	_, recipient := keyAndAddr(t)
+	tx := buildTransferTx(t, witnessAddr, recipient, 100, 0 /* no signers */)
+
+	pool := txpool.New()
+	pool.Add(tx) // bypass envelope gate — pool.Add itself doesn't check
+	result, err := BuildBlock(bc, pool, witnessAddr, int64(params.BlockProducedInterval))
+	if err != nil {
+		t.Fatalf("BuildBlock: %v", err)
+	}
+	block := result.Block
+	if err := SignBlock(block, key); err != nil {
+		t.Fatal(err)
+	}
+
+	err = bc.InsertBlock(block)
+	if err == nil {
+		t.Fatal("expected InsertBlock to reject a block whose tx has no signature")
+	}
+	if !errors.Is(err, ErrNoSignature) {
+		t.Fatalf("expected ErrNoSignature for the empty-sig tx, got %v", err)
+	}
+}
+
+// TestChain_ValidateTransaction_RejectsBadSigner: the txpool admission gate
+// uses bc.ValidateTransaction; signing with a key that isn't in the owner's
+// default permission must yield ErrUnauthorizedSigner.
+func TestChain_ValidateTransaction_RejectsBadSigner(t *testing.T) {
+	bc, _, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, owner := keyAndAddr(t)
+	wrongKey, _ := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	tx := buildTransferTx(t, owner, recipient, 100, 0, wrongKey)
+
+	if err := bc.ValidateTransaction(tx); !errors.Is(err, ErrUnauthorizedSigner) {
+		t.Fatalf("expected ErrUnauthorizedSigner, got %v", err)
+	}
+}
+
+// TestChain_ValidateTransaction_AcceptsOwnerSig: matching default permission
+// → accept. Pairs with the rejection test above for the pool admission
+// gate. Production binaries (cmd/gtron) wire engine, so this is the live
+// behavior; tests that skip SetEngine bypass entirely.
+func TestChain_ValidateTransaction_AcceptsOwnerSig(t *testing.T) {
+	bc, _, err := setupVerifyChain(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+
+	if err := bc.ValidateTransaction(tx); err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+}
+
 // TestInsertBlock_AcceptsValidSignedBlock: positive control — the same chain
 // accepts a block signed by the scheduled witness's key, demonstrating that
 // the verification path is gated on signer identity and not unconditionally

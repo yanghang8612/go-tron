@@ -376,7 +376,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// `payBlockReward → AddCycleReward` write (gated on change_delegation)
 	// land in the active buffer layer. `switchFork` rewinds them on orphan
 	// discard. Slice 3 of the fork-rewind fix.
-	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp())
+	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil)
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
@@ -788,6 +788,26 @@ func (bc *BlockChain) reloadActiveWitnesses() {
 func (bc *BlockChain) NextMaintenanceTime() int64 {
 	dynProps := state.LoadDynamicProperties(bc.buffer)
 	return dynProps.NextMaintenanceTime()
+}
+
+// ValidateTransaction runs the tx-envelope checks (signature recovery,
+// permission lookup, weight summation, operation-bitmask) against the
+// current head state. Callers that admit user-supplied transactions —
+// HTTP/JSON-RPC backend, peer-tx gossip handler — invoke this before
+// pool.Add so a malformed tx never enters the txpool.
+//
+// Gated on bc.engine for symmetry with the applyBlock-side check: tests
+// that don't wire an engine accept unsigned txs into the pool without
+// fuss. Production binaries wire the engine and get full validation.
+func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
+	if bc.engine == nil {
+		return nil
+	}
+	statedb, err := state.New(bc.HeadStateRoot(), bc.stateDB)
+	if err != nil {
+		return fmt.Errorf("open head state for tx validation: %w", err)
+	}
+	return ValidateTxEnvelope(tx, statedb)
 }
 
 // DynProps loads and returns a snapshot of the current dynamic properties.

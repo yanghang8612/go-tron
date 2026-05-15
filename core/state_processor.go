@@ -22,14 +22,26 @@ var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 
 // ApplyTransaction executes a single transaction against the given state.
 // Returns the full actuator Result including fee, energy, net, and contract details.
-// When validate is true, act.Validate is called before Execute; set to false when
-// processing committed blocks (txs were validated at broadcast/build time, and some
-// actuators write rawdb indexes in Execute that would cause re-validation to fail).
+//
+// Validation flags:
+//   - validate         → run actuator.Validate before Execute (state preconditions)
+//   - validateEnvelope → run ValidateTxEnvelope (signature + permission) before
+//     anything mutates state. Runs inside the per-tx position rather than as a
+//     pre-block sweep so that the statedb reflects prior intra-block effects,
+//     matching java-tron Manager.processBlock's interleaved validation. The
+//     concrete case it covers: a single block holding an
+//     AccountPermissionUpdateContract followed by a TransferContract signed
+//     with the post-rotation keys — the transfer's signer is only present in
+//     the post-update permission set, so envelope check must see the
+//     just-mutated state.
+//
+// Both flags are independent so tests can keep validate=true / envelope=false
+// for unsigned-tx fixtures without sacrificing actuator coverage.
 //
 // The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
-func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate bool) (*actuator.Result, error) {
+func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
 	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
 	// activates. Mirrors java-tron Manager.processBlock's per-tx
 	// rejectExchangeTransaction call (master 45e3bf88ca). Pre-fork blocks
@@ -56,6 +68,12 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		BlockNumber:     blockNum,
 		DB:              db,
 		ActiveWitnesses: activeWitnesses,
+	}
+
+	if validateEnvelope {
+		if err := ValidateTxEnvelope(tx, statedb); err != nil {
+			return nil, fmt.Errorf("validate envelope: %w", err)
+		}
 	}
 
 	if validate {
@@ -163,11 +181,15 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 // for committing after any post-processing (e.g., maintenance).
 // Returns the TransactionInfos for all executed transactions.
 //
+// validateEnvelope toggles per-tx signature/permission verification inside
+// the tx loop. Production callers (BlockChain.applyBlock when the engine
+// is wired) pass true; test fixtures that bypass envelope checks pass false.
+//
 // The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix routes block-reward + actuator rawdb-direct writes through the buffer
 // so switchFork can rewind them on orphan-branch discard.
-func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64) ([]*corepb.TransactionInfo, error) {
+func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool) ([]*corepb.TransactionInfo, error) {
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
 
@@ -183,15 +205,14 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
-		// validate=true: replay must call actuator.Validate, matching java-tron's
-		// Manager.processBlock → processTransaction → actuator.validate(). The
-		// previous validate=false skip was defensive — but every actuator's
-		// Validate is read-only (no DP/state/rawdb writes; audited 2026-05-15),
-		// and skipping it caused malformed-but-syntactically-valid txs (failed
-		// preconditions, missing tokens, etc.) to be silently accepted on the
-		// replay path while production builds rejected them. Restoring this
-		// closes a replay-parity divergence flagged in the P0-2 audit.
-		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, true)
+		// validate=true: replay calls actuator.Validate (P0-2a). Every
+		// actuator's Validate is read-only (audited 2026-05-15) so re-running
+		// on replay matches java-tron Manager.processBlock parity.
+		//
+		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
+		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
+		// the post-rotation key).
+		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, true, validateEnvelope)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}

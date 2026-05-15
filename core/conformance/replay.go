@@ -84,7 +84,9 @@ func ReplayRange(ctx context.Context, cfg ReplayConfig) (*Report, error) {
 			return nil, fmt.Errorf("oracle/block height mismatch: oracle=%d block=%d", ent.BlockNum, blk.Number())
 		}
 
-		if _, procErr := core.ProcessBlock(sdb, dp, blk, db, cfg.ActiveWitnesses, cfg.GenesisTime); procErr != nil {
+		// validateEnvelope=false: conformance replay consumes pre-validated
+		// java-tron blocks; signatures have already been verified upstream.
+		if _, procErr := core.ProcessBlock(sdb, dp, blk, db, cfg.ActiveWitnesses, cfg.GenesisTime, false); procErr != nil {
 			div := &Divergence{
 				BlockNum:   blk.Number(),
 				FieldDiffs: []FieldDiff{{Field: "_processBlockError", Got: procErr.Error(), Want: "success"}},

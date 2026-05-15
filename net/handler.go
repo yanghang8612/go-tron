@@ -461,6 +461,13 @@ func (h *TronHandler) handleTx(peer *p2p.Peer, payload []byte) {
 		return
 	}
 	tx := types.NewTransactionFromPB(&pbTx)
+	// Drop peer-gossiped txs that fail signature/permission. Without this a
+	// malicious peer can flood the pool with malformed txs that the producer
+	// only finds out about when it tries to include them. Mirrors java-tron
+	// Manager.pushTransaction's validateSignature gate.
+	if err := h.chain.ValidateTransaction(tx); err != nil {
+		return
+	}
 	if err := h.pool.Add(tx); err != nil {
 		return
 	}
@@ -480,6 +487,9 @@ func (h *TronHandler) handleTrxs(peer *p2p.Peer, payload []byte) {
 	}
 	for _, pbTx := range batch.Transactions {
 		tx := types.NewTransactionFromPB(pbTx)
+		if err := h.chain.ValidateTransaction(tx); err != nil {
+			continue
+		}
 		if err := h.pool.Add(tx); err != nil {
 			continue
 		}

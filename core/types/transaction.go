@@ -2,10 +2,12 @@ package types
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -76,6 +78,34 @@ func (tx *Transaction) FeeLimit() int64 {
 
 func (tx *Transaction) Signatures() [][]byte {
 	return tx.pb.Signature
+}
+
+// ErrBadSignatureLength means a tx signature element wasn't the expected
+// 65 bytes (r ‖ s ‖ v). Returned by RecoverSigners.
+var ErrBadSignatureLength = errors.New("transaction: signature length != 65")
+
+// RecoverSigners returns the address recovered from each signature in
+// tx.Signatures, signing over the tx RawData hash. The order matches the
+// signature order; callers that need set semantics (e.g. weight summation
+// across distinct keys) must dedupe themselves.
+//
+// Signatures are 65 bytes (r ‖ s ‖ v=27|28) — the same format java-tron's
+// ECKey.signatureToAddress consumes.
+func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
+	hash := tx.Hash()
+	sigs := tx.Signatures()
+	addrs := make([]common.Address, 0, len(sigs))
+	for _, sig := range sigs {
+		if len(sig) != 65 {
+			return nil, ErrBadSignatureLength
+		}
+		pub, err := crypto.SigToPub(hash[:], sig)
+		if err != nil {
+			return nil, fmt.Errorf("transaction: recover signer: %w", err)
+		}
+		addrs = append(addrs, crypto.PubkeyToAddress(pub))
+	}
+	return addrs, nil
 }
 
 func (tx *Transaction) Size() int {

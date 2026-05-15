@@ -33,7 +33,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := core.ProcessBlock(loaded.StateDB, loaded.DynProps, blk, loaded.DiskDB, []tcommon.Address{witness}, 0); err != nil {
+	if _, err := core.ProcessBlock(loaded.StateDB, loaded.DynProps, blk, loaded.DiskDB, []tcommon.Address{witness}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 
