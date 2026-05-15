@@ -363,20 +363,32 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.mu.Unlock()
 		return false
 	}
-	// Cancel the fetch timeout and bump seq so any already-fired timer callback
-	// is a no-op.
-	if ss.fetchTimer != nil {
-		ss.fetchTimer.Stop()
-		ss.fetchTimer = nil
-	}
+	// Bump seq so any in-flight timer callback short-circuits. We stop the
+	// armed timer below but the callback may already be running on another
+	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
+	// rejects it.
 	ss.fetchSeq++
 	if ss.inflight > 0 {
 		ss.inflight--
 	}
 	batchDone := ss.inflight == 0
+	if ss.fetchTimer != nil {
+		ss.fetchTimer.Stop()
+		ss.fetchTimer = nil
+	}
+	// Re-arm the fetch timeout if blocks are still in flight. Without
+	// this a peer that delivers part of a batch and then stalls (network
+	// blip, JVM GC pause, deliberate misbehaviour) leaves the sync state
+	// machine wedged forever: batchDone stays false → fetchNextBatch
+	// never runs → onFetchTimeout never fires → the watchdog's
+	// IsSyncing() short-circuit keeps it from intervening either.
+	if !batchDone {
+		ss.armFetchTimer()
+	}
 	ss.mu.Unlock()
 
-	if err := ss.chain.InsertBlock(block); err != nil {
+	insertErr := ss.chain.InsertBlock(block)
+	if insertErr != nil {
 		// Do NOT fall back to InsertBlockWithoutVerify — that path writes
 		// the block proto + advances the head pointer without applying
 		// state transitions, which silently produces a head-only chain
@@ -386,19 +398,22 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		// evicted parents under pressure (probably from concurrent adv
 		// blocks during initial sync), so 99.99% of "synced" blocks
 		// landed in the silent-fallback path. The next fetchNextBatch
-		// cycle will issue a SYNC_BLOCK_CHAIN from our true canonical
-		// head and refetch the orphaned range, which is the right
-		// recovery semantic.
-		log.Printf("Sync: failed to insert block #%d: %v (will retry)", block.Number(), err)
-		return true
+		// cycle (below) will issue a SYNC_BLOCK_CHAIN from our true
+		// canonical head and refetch the orphaned range, which is the
+		// right recovery semantic.
+		log.Printf("Sync: failed to insert block #%d: %v (will retry)", block.Number(), insertErr)
+	} else {
+		log.Printf("Synced block #%d", block.Number())
 	}
-
-	log.Printf("Synced block #%d", block.Number())
 
 	// Only request the next batch when the current one is fully drained;
 	// otherwise we'd flood the peer with overlapping FETCH_INV_DATA requests
 	// (java-tron rate-limits FETCH_INV_DATA at 3/s and disconnects with
-	// BAD_PROTOCOL when exceeded).
+	// BAD_PROTOCOL when exceeded). Crucially this runs on BOTH success and
+	// insert-error paths — a failed insert on the last block of a batch
+	// must still kick the recovery cycle (sendSyncBlockChain from our
+	// canonical head) instead of leaving syncing=true and waiting on a
+	// watchdog tick that won't help.
 	if batchDone {
 		ss.fetchNextBatch()
 	}
