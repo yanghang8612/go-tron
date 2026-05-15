@@ -183,9 +183,15 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
-		// validate=false: txs in a committed block were validated at build/broadcast time;
-		// re-validating would fail for actuators that write rawdb indexes in Execute.
-		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, false)
+		// validate=true: replay must call actuator.Validate, matching java-tron's
+		// Manager.processBlock → processTransaction → actuator.validate(). The
+		// previous validate=false skip was defensive — but every actuator's
+		// Validate is read-only (no DP/state/rawdb writes; audited 2026-05-15),
+		// and skipping it caused malformed-but-syntactically-valid txs (failed
+		// preconditions, missing tokens, etc.) to be silently accepted on the
+		// replay path while production builds rejected them. Restoring this
+		// closes a replay-parity divergence flagged in the P0-2 audit.
+		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, true)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d: %w", i, err)
 		}
