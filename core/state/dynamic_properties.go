@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/params"
 )
 
 // BlockFilledSlotsNumber is the size of the BLOCK_FILLED_SLOTS rolling window
@@ -962,6 +963,16 @@ func (dp *DynamicProperties) MaxDelegateLockPeriod() int64 {
 }
 func (dp *DynamicProperties) SetMaxDelegateLockPeriod(v int64) {
 	dp.Set("max_delegate_lock_period", v)
+}
+
+// SupportMaxDelegateLockPeriod mirrors java-tron
+// `DynamicPropertiesStore.supportMaxDelegateLockPeriod`: contract-supplied
+// lockPeriod is honored only after proposal #78 (raises max_delegate_lock_period
+// above the bootstrap default of `DelegatePeriod/BlockProducedInterval` = 86400
+// blocks) AND proposal #70 (unfreeze_delay_days > 0) have both activated.
+func (dp *DynamicProperties) SupportMaxDelegateLockPeriod() bool {
+	return dp.MaxDelegateLockPeriod() > params.DelegatePeriod/params.BlockProducedInterval &&
+		dp.UnfreezeDelayDays() > 0
 }
 
 func (dp *DynamicProperties) MaxFeeLimit() int64 { return dp.props["max_fee_limit"] }
