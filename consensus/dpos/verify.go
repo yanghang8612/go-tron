@@ -35,8 +35,20 @@ func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 		return ErrInvalidTimestamp
 	}
 	genesisTime := chain.GenesisTimestamp()
-	if (block.Timestamp()-genesisTime)%int64(params.BlockProducedInterval) != 0 {
-		return ErrInvalidTimestamp
+	dp := chain.DynProps()
+	// mod-3000 alignment + slot==0 rejection were unconditional in early
+	// gtron but java-tron gates both on proposal #88 (`DposService.java:120,
+	// 134`). Pre-#88, java accepts misaligned timestamps and slot-0 blocks;
+	// gtron must do the same for replay parity. In practice real producers
+	// only mint aligned slots, so the loosening is theoretical.
+	if dp.ConsensusLogicOptimization() {
+		if block.Timestamp()%int64(params.BlockProducedInterval) != 0 {
+			return ErrInvalidTimestamp
+		}
+		isMaintenance := dp.StateFlag() == 1
+		if SlotForTime(block.Timestamp(), parent.Timestamp(), genesisTime, isMaintenance, int64(params.MaintenanceSkipSlots)) == 0 {
+			return ErrInvalidTimestamp
+		}
 	}
 
 	witness, err := recoverWitness(block)

@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -19,6 +20,7 @@ type ChainReader interface {
 	GenesisTimestamp() int64
 	ActiveWitnesses() []common.Address
 	NextMaintenanceTime() int64
+	DynProps() *state.DynamicProperties
 }
 
 type ChainHeaderWriter interface {

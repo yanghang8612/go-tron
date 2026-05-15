@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -13,6 +14,7 @@ type mockChainReader struct {
 	genesisTime  int64
 	witnesses    []common.Address
 	maintTime    int64
+	dp           *state.DynamicProperties
 }
 
 func (m *mockChainReader) CurrentBlock() *types.Block           { return m.currentBlock }
@@ -20,6 +22,12 @@ func (m *mockChainReader) GetBlockByNumber(uint64) *types.Block { return nil }
 func (m *mockChainReader) GenesisTimestamp() int64              { return m.genesisTime }
 func (m *mockChainReader) ActiveWitnesses() []common.Address    { return m.witnesses }
 func (m *mockChainReader) NextMaintenanceTime() int64           { return m.maintTime }
+func (m *mockChainReader) DynProps() *state.DynamicProperties {
+	if m.dp == nil {
+		m.dp = state.NewDynamicProperties()
+	}
+	return m.dp
+}
 
 func testEngineAddr(b byte) common.Address {
 	var addr common.Address
