@@ -635,11 +635,12 @@ flow_exchange_create() {
     pass "exchangeCreate included at block #$incl"
 
     # latest_exchange_num is the rename target of commit a8c241b. Both
-    # nodes must advance it symmetrically. Asserted via getchainparameters
-    # (both ends expose it under the snake_case key).
-    assert_state_eq "latest_exchange_num advanced" \
-        "/wallet/getchainparameters" "{}" \
-        "next((p.get('value',0) for p in d.get('chainParameter',[]) if p.get('key')=='latest_exchange_num'), -1)"
+    # nodes must advance it symmetrically — proxied via listexchanges
+    # count since java-tron's getchainparameters has a hand-written
+    # subset and omits this key.
+    assert_state_eq "exchange count after create" \
+        "/wallet/listexchanges" "{}" \
+        "len(d.get('exchanges',[]))"
 
     # listexchanges returns one entry per Exchange capsule. Capture the
     # max exchange_id from java-tron to use as "our" id below — the chain
