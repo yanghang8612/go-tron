@@ -160,7 +160,7 @@ config.conf.
   private chain (networkID=0) but does NOT cover mainnet's longer history
   or its proposal-driven fork activations. G1 validation is deferred to
   M0″ Phase 2 (requires operator with mainnet-synced java-tron; see
-  PLAN.md). A continuous mainnet soak (see `mainnet-soak.md`) covers the
+  PLAN.md). A continuous Nile soak (see `nile-soak.md`) covers the
   natural-language G1 invariant in parallel.
 - **Testnet reachability** — live Nile/mainnet seeds appear unreachable from
   the test environment (TCP connects, first bytes received, but full sync

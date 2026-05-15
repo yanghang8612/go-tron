@@ -1,8 +1,14 @@
-# Mainnet 7×24h soak
+# Nile 7×24h soak
 
-A long-running gtron mainnet sync used to demonstrate G1's natural-language
-exit ("持续同步 7×24h 无 state root 分叉"). Independent of the M0″ Phase 2
-fixture replay, which is the formal G1 准入 check.
+A long-running gtron Nile (testnet) sync used to demonstrate G1's
+natural-language exit ("持续同步 7×24h 无 state root 分叉"). Independent of
+the M0″ Phase 2 fixture replay, which is the formal G1 准入 check.
+
+The soak runs against Nile rather than mainnet — `run-gtron.sh` passes
+`--testnet` + Nile `--seednode`s, and `check-divergence.sh` compares against
+`nile.trongrid.io`. Nile's shorter history and faster cold sync make it a
+practical continuous-soak target; mainnet G1 validation still goes through
+M0″ Phase 2.
 
 ## Layout
 
@@ -16,7 +22,7 @@ fixture replay, which is the formal G1 准入 check.
 │   └── soak-monitor.log                    # one line every 5 min: ts h=<height> peers=<n> gtron=<bid> oracle=<bid> {MATCH|DIVERGE|UNKNOWN|gtron-down}
 └── scripts/
     ├── run-gtron.sh                        # gtron wrapper used by LaunchAgent
-    └── check-divergence.sh                 # per-tick comparison vs api.trongrid.io
+    └── check-divergence.sh                 # per-tick comparison vs nile.trongrid.io
 ```
 
 LaunchAgents (~/Library/LaunchAgents):
@@ -37,8 +43,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tronprotocol.gtron-s
 launchctl bootout gui/$(id -u)/com.tronprotocol.gtron-soak-monitor
 launchctl bootout gui/$(id -u)/com.tronprotocol.gtron-soak
 
-# Restart cleanly (NEW datadir; do this rarely — repeat restarts trip mainnet seed
-# rate-limits, see `reference_tron_mainnet_seeds.md`. 30+ min cooldown afterward).
+# Restart cleanly (NEW datadir; do this rarely — repeat restarts can trip seed
+# rate-limits. 30+ min cooldown afterward).
 launchctl bootout gui/$(id -u)/com.tronprotocol.gtron-soak
 rm -rf /Users/asuka/gtron-soak/datadir/* /Users/asuka/gtron-soak/logs/gtron.*.log
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tronprotocol.gtron-soak.plist
@@ -52,12 +58,13 @@ curl -s http://127.0.0.1:8090/wallet/getnowblock | jq -r '.block_header.raw_data
 
 ## Sync expectations
 
-Catch-up rate observed during M3.5 sanity (2026-05-09): one full TRON-Hello
-peer at ~200 blk/s. Mainnet head sits around #82.5M, so cold sync from
-genesis takes ~5 days. Plan for ≥ 5d catch-up + 7d steady-state.
+Nile's head is far lower than mainnet's, so cold sync from genesis is short.
+The 2026-05-15 restart reached h≈59k within the first hours, MATCH'ing
+`nile.trongrid.io` block IDs at every monitor tick. Plan for a brief
+catch-up + 7d steady-state.
 
 While catching up, `soak-monitor.log` will show
-`oracle=<api.trongrid.io blockID at gtron-head> gtron=<our blockID>`. MATCH
+`oracle=<nile.trongrid.io blockID at gtron-head> gtron=<our blockID>`. MATCH
 means historical block hashes are byte-identical (the G1 invariant).
 DIVERGE at any height is the alert: capture the height, archive the
 block, and add a divergence-allowlist entry or open a parity bug.
@@ -68,19 +75,18 @@ otherwise investigate (probably crashed, check `gtron.err.log`).
 
 ## Disk
 
-`/Users/asuka` has 315GB free as of 2026-05-09. java-tron mainnet datadir is
-1-2 TB; gtron uses Pebble (no Merkle-trie overhead) so likely smaller, but
-real numbers are unknown. Watch `du -sh /Users/asuka/gtron-soak/datadir`
-during the first day; if growth rate × remaining catch-up > 250 GB, stop and
-reconsider before filling the disk.
+Nile's datadir is small — observed ~472 MB at h≈59k on 2026-05-15. Disk
+pressure is not a concern for the Nile soak (mainnet would be a different
+story: java-tron mainnet datadir is 1-2 TB). Still worth a periodic
+`du -sh /Users/asuka/gtron-soak/datadir` glance.
 
 ## Known constraints
 
-- Mainnet seed-side rate limit per source IP: ~3-4 sync attempts in one session
+- Seed-side rate limit per source IP: ~3-4 sync attempts in one session
   trip a session-wide ban; 30+ minute cooldown of *no reconnect attempts* lifts
   it. The per-addr dial throttle in `p2p.Server` (commit `bb52bb7`) prevents
   the maintainCh thundering herd that previously caused this within minutes.
-- Discovery service routing table is seeded from
-  `params.MainnetBootstrapNodes` (12 entries) + the explicit `--seednode`
-  flags; dead seeds in either list don't break sync as long as one accepts
+- Discovery service routing table is seeded from `params.NileBootstrapNodes`
+  (`--testnet` selects the Nile list) + the explicit `--seednode` flags;
+  dead seeds in either list don't break sync as long as one accepts
   TRON-Hello.
