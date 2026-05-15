@@ -55,6 +55,17 @@ func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 	if err != nil {
 		return ErrInvalidSignature
 	}
+	// java-tron's Manager.pushBlock → validateSignature compares the
+	// recovered signer to BlockHeader.raw.witness_address (not the schedule).
+	// Without this, a producer with a leaked SR key could mint a block with
+	// the SR's address as the schedule-side witness while stamping a
+	// different attacker-controlled address into block.witness_address —
+	// applyBlock's downstream calls (payBlockReward, updateSolidifiedBlock,
+	// flipWitnessIsJobs) all key off block.WitnessAddress(), so the reward
+	// and is_jobs flip would route to the attacker.
+	if witness != block.WitnessAddress() {
+		return ErrInvalidSignature
+	}
 
 	slot := AbsoluteSlot(block.Timestamp(), genesisTime)
 	witnesses := chain.ActiveWitnesses()
@@ -62,7 +73,11 @@ func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 	if idx >= len(witnesses) {
 		return ErrInvalidWitness
 	}
-	if witnesses[idx] != witness {
+	// Match java-tron DposService.validBlock: compare the schedule against
+	// block.witness_address (transitively, since we just enforced signer ==
+	// block.witness_address). This phrasing yields the more intuitive
+	// ErrInvalidWitness when an SR mints in a slot that doesn't belong to it.
+	if witnesses[idx] != block.WitnessAddress() {
 		return ErrInvalidWitness
 	}
 	return nil

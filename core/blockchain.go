@@ -41,6 +41,14 @@ type BlockChain struct {
 	activeWitnesses  atomic.Value // []tcommon.Address
 	fc               *forks.ForkController
 
+	// engine validates block headers (signature, witness scheduling, timestamp
+	// alignment) when applyBlock runs. Wired post-construction via SetEngine
+	// because dpos.New(bc) requires bc to exist first. nil ⇒ header
+	// verification is skipped — used only by tests that build unsigned blocks
+	// to exercise the state-machine path in isolation. Every production
+	// callsite must call SetEngine before the first InsertBlock.
+	engine consensus.Engine
+
 	khaosDB *KhaosDB
 
 	// buffer holds rawdb-direct writes from applyBlock that must be
@@ -54,6 +62,15 @@ type BlockChain struct {
 
 	maintHookMu sync.Mutex
 	maintHooks  []func(*types.Block, []tcommon.Address) // fired after a maintenance block
+}
+
+// SetEngine wires the consensus engine used for header verification in
+// applyBlock. Must be called once, after NewBlockChain and before any
+// InsertBlock — typically `bc.SetEngine(dpos.New(bc))` in cmd/gtron. Tests
+// that bypass header verification (unsigned block builders, fork-rewind
+// state-machine fixtures) simply omit the call.
+func (bc *BlockChain) SetEngine(eng consensus.Engine) {
+	bc.engine = eng
 }
 
 // AddBlockHook registers a callback called after each successfully inserted block.
@@ -263,6 +280,25 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	current := bc.CurrentBlock()
+
+	// Header verification (signature recovery, scheduled-witness match, and
+	// post-fork timestamp alignment) runs here rather than at the top of
+	// InsertBlock because:
+	//   - applyBlock is the single chokepoint for state application from both
+	//     linear extension and switchFork's re-apply loop;
+	//   - bc.CurrentBlock() == block's actual parent at this point (the
+	//     re-apply loop advances current sequentially), so VerifyHeader's
+	//     parent-linkage and "ts > parent.ts" checks line up correctly even
+	//     during a fork rewind;
+	//   - bad blocks may briefly enter the KhaosDB mini-store but never reach
+	//     state — KhaosDB's size bound caps the DoS surface, and the orphan is
+	//     pruned by the caller on the returned error.
+	// Skipped when bc.engine is nil (test path; see SetEngine).
+	if bc.engine != nil {
+		if err := bc.engine.VerifyHeader(bc, block); err != nil {
+			return err
+		}
+	}
 
 	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
 	// writes (slice 1: witness statistics only) so that switchFork can drop

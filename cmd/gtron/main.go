@@ -217,8 +217,12 @@ func gtron(ctx *cli.Context) error {
 	// Create transaction pool
 	pool := txpool.New()
 
-	// Create DPoS engine
+	// Create DPoS engine and wire it into the chain for header verification
+	// in applyBlock (signature recovery, scheduled-witness match, post-fork
+	// timestamp alignment). Without SetEngine, applyBlock skips verification —
+	// fine for tests but not for production.
 	engine := dpos.New(bc)
+	bc.SetEngine(engine)
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
