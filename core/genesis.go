@@ -103,6 +103,12 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 		for k, v := range genesis.DynamicProperties {
 			dp.Set(k, v)
 		}
+		// Mirror java-tron Manager.initGenesis -> updateDynamicStoreByConfig:
+		// config-level Constantinople activation immediately makes ClearABI
+		// available in account permission operations.
+		if dp.AllowTvmConstantinople() {
+			dp.AddSystemContractAndSetPermission(int(corepb.Transaction_Contract_ClearABIContract))
+		}
 		// Mirror java-tron Manager.initGenesis: when next_maintenance_time
 		// isn't explicitly seeded, derive it from the genesis timestamp +
 		// maintenance interval. Without this the applyBlock gate

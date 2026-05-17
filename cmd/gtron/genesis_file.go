@@ -16,13 +16,14 @@ import (
 // genesisFile is the JSON schema for `--genesis <file>`. The shape is
 // documented in docs/superpowers/specs/2026-05-02-genesis-file-loader-design.md.
 type genesisFile struct {
-	ChainID           int64                       `json:"chain_id"`
-	P2PVersion        int32                       `json:"p2p_version"`
-	TimestampMs       int64                       `json:"timestamp_ms"`
-	ParentHash        string                      `json:"parent_hash"`
-	Accounts          []genesisFileAccount        `json:"accounts"`
-	Witnesses         []genesisFileWitness        `json:"witnesses"`
-	DynamicProperties map[string]int64            `json:"dynamic_properties"`
+	ChainID                int64                `json:"chain_id"`
+	P2PVersion             int32                `json:"p2p_version"`
+	BlockNumForEnergyLimit *int64               `json:"block_num_for_energy_limit"`
+	TimestampMs            int64                `json:"timestamp_ms"`
+	ParentHash             string               `json:"parent_hash"`
+	Accounts               []genesisFileAccount `json:"accounts"`
+	Witnesses              []genesisFileWitness `json:"witnesses"`
+	DynamicProperties      map[string]int64     `json:"dynamic_properties"`
 }
 
 type genesisFileAccount struct {
@@ -102,11 +103,16 @@ func loadGenesisFile(path string) (*params.Genesis, error) {
 	if _, ok := dp["next_maintenance_time"]; !ok {
 		dp["next_maintenance_time"] = f.TimestampMs + dp["maintenance_time_interval"]
 	}
+	blockNumForEnergyLimit := params.DefaultBlockNumForEnergyLimit
+	if f.BlockNumForEnergyLimit != nil {
+		blockNumForEnergyLimit = *f.BlockNumForEnergyLimit
+	}
 
 	return &params.Genesis{
 		Config: &params.ChainConfig{
-			ChainID:    f.ChainID,
-			P2PVersion: f.P2PVersion,
+			ChainID:                f.ChainID,
+			P2PVersion:             f.P2PVersion,
+			BlockNumForEnergyLimit: &blockNumForEnergyLimit,
 		},
 		Timestamp:         f.TimestampMs,
 		ParentHash:        parentHash,

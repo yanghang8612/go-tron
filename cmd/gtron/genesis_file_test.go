@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -44,5 +45,43 @@ func TestLoadGenesisFile_JavaTronPrivate(t *testing.T) {
 	id := block.ID()
 	if got := hex.EncodeToString(id.Hash[:]); got != wantHex {
 		t.Fatalf("genesis BlockID:\n  want %s\n  got  %s", wantHex, got)
+	}
+}
+
+func TestLoadGenesisFile_BlockNumForEnergyLimitAllowsZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "genesis.json")
+	if err := os.WriteFile(path, []byte(`{
+  "chain_id": 9999,
+  "p2p_version": 333,
+  "block_num_for_energy_limit": 0,
+  "timestamp_ms": 0,
+  "parent_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "accounts": [],
+  "witnesses": [],
+  "dynamic_properties": {}
+}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	g, err := loadGenesisFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := g.Config.EnergyLimitForkBlockNum(); got != 0 {
+		t.Fatalf("EnergyLimitForkBlockNum: got %d, want 0", got)
+	}
+}
+
+func TestLoadGenesisFile_SystemTestProposalExpireTime(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	g, err := loadGenesisFile(filepath.Join(repoRoot, "test/fixtures/system-test/genesis.json"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := g.DynamicProperties["maintenance_time_interval"]; got != 300_000 {
+		t.Fatalf("maintenance_time_interval: got %d, want 300000", got)
+	}
+	if got := g.DynamicProperties["proposal_expire_time"]; got != 300_000 {
+		t.Fatalf("proposal_expire_time: got %d, want 300000", got)
 	}
 }

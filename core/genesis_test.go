@@ -209,6 +209,30 @@ func TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit(t *testing.T) {
 	}
 }
 
+func TestSetupGenesisBlock_ConstantinopleConfigAddsClearABIOperation(t *testing.T) {
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: common.BytesToAddress([]byte{0x41, 1}), Balance: 1},
+		},
+		DynamicProperties: map[string]int64{
+			"allow_tvm_constantinople": 1,
+		},
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	dp := state.LoadDynamicProperties(diskdb)
+	if !dp.IsContractTypeAvailable(48) {
+		t.Fatal("ClearABIContract bit 48 not set in available_contract_type")
+	}
+	if dp.ActiveDefaultOperations()[48/8]&(1<<(48%8)) == 0 {
+		t.Fatal("ClearABIContract bit 48 not set in active_default_operations")
+	}
+}
+
 func TestGenesisHashDeterministic(t *testing.T) {
 	genesis := &params.Genesis{
 		Config:    params.MainnetChainConfig,
