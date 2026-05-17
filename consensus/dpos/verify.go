@@ -67,7 +67,25 @@ func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 		return ErrInvalidSignature
 	}
 
+	// Schedule slot for this block. java-tron's DposService.validBlock calls
+	// `dposSlot.getScheduledWitness(dposSlot.getSlot(timestamp))` where:
+	//   getSlot(ts)    = (ts - getTime(1)) / interval + 1
+	//   getTime(1)     = parent_aligned_time + interval * (1 + skip if parent_was_maintenance)
+	//   getScheduledWitness(slot) = activeWitnesses[(getAbSlot(parent.timestamp) + slot) % N]
+	// After substitution and cancelling intervals, the schedule index is
+	//   (parent_absSlot + (ts - parent_aligned)/interval - skip*isMaintenance) % N
+	// which equals AbsoluteSlot(ts) - skip*isMaintenance for aligned timestamps.
+	// The maintenance branch matters because after a maintenance block, java
+	// advances the wall clock by (1 + skip) slots before producing the next
+	// block, but the schedule index only advances by 1 — the skipped slots are
+	// NOT consumed by the rotation. Without the correction here, gtron rejects
+	// every block that follows a maintenance with ErrInvalidWitness once there
+	// are multiple SRs registered (the 1-SR fixture hid this because every idx
+	// resolves to the same witness).
 	slot := AbsoluteSlot(block.Timestamp(), genesisTime)
+	if dp.StateFlag() == 1 {
+		slot -= int64(params.MaintenanceSkipSlots)
+	}
 	witnesses := chain.ActiveWitnesses()
 	idx := WitnessIndex(slot, len(witnesses))
 	if idx >= len(witnesses) {
