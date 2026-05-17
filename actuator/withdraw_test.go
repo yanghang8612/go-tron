@@ -3,6 +3,8 @@ package actuator
 import (
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -55,6 +57,22 @@ func TestWithdrawBalanceValidate(t *testing.T) {
 	ctx = &Context{State: statedb, Tx: tx, BlockTime: 100000 + 86400000 + 1, PrevBlockTime: 100000 + 86400000 + 1}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithdrawBalanceValidate_GenesisWitnessRejected(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(40)
+	seedAccount(statedb, owner, 0)
+	statedb.SetAllowance(owner, 16_000_000)
+
+	tx := makeWithdrawBalanceTx(40)
+	ctx := &Context{State: statedb, Tx: tx, BlockTime: 86_400_001, PrevBlockTime: 86_400_001}
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	rawdb.WriteGenesisWitnesses(ctx.DB, []rawdb.GenesisWitness{{Address: owner, VoteCount: 1}})
+
+	if err := (&WithdrawBalanceActuator{}).Validate(ctx); err == nil {
+		t.Fatal("expected genesis witness withdraw to be rejected")
 	}
 }
 

@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -28,15 +27,18 @@ func (a *WitnessCreateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+	ownerAddr, err := checkedAddress(wc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ctx.State.GetWitness(ownerAddr) != nil {
+	if witnessExists(ctx, ownerAddr) {
 		return errors.New("witness already exists")
 	}
-	if len(wc.Url) == 0 {
-		return errors.New("witness URL is empty")
+	if !validBytesLen(wc.Url, 256, false) {
+		return errors.New("invalid witness URL")
 	}
 	fee := ctx.DynProps.AccountUpgradeCost()
 	if ctx.State.GetBalance(ownerAddr) < fee {
@@ -50,7 +52,10 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+	ownerAddr, err := checkedAddress(wc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	fee := ctx.DynProps.AccountUpgradeCost()
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err

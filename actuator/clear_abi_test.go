@@ -16,6 +16,7 @@ func TestClearABIValidate(t *testing.T) {
 		ContractAddress: contractAddr[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ClearABIContract, c, 0)
+	ctx.DynProps.SetAllowTvmConstantinople(true)
 	act := &ClearABIActuator{}
 
 	// Owner doesn't exist
@@ -50,6 +51,7 @@ func TestClearABINonOwner(t *testing.T) {
 		ContractAddress: contractAddr[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ClearABIContract, c, 0)
+	ctx.DynProps.SetAllowTvmConstantinople(true)
 	ctx.State.CreateAccount(other, corepb.AccountType_Normal)
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner[:],
@@ -69,6 +71,7 @@ func TestClearABIExecute(t *testing.T) {
 		ContractAddress: contractAddr[:],
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ClearABIContract, c, 0)
+	ctx.DynProps.SetAllowTvmConstantinople(true)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner[:],
@@ -89,5 +92,20 @@ func TestClearABIExecute(t *testing.T) {
 	}
 	if got.Abi != nil {
 		t.Fatal("ABI not cleared")
+	}
+}
+
+func TestClearABIValidate_ForkDisabled(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x21}
+	contractAddr := tcommon.Address{0x41, 0x22}
+	c := &contractpb.ClearABIContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ClearABIContract, c, 0)
+
+	act := &ClearABIActuator{}
+	if err := act.Validate(ctx); err == nil || err.Error() != "contract type error,unexpected type [ClearABIContract]" {
+		t.Fatalf("expected Constantinople gate error, got %v", err)
 	}
 }

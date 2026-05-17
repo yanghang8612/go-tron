@@ -27,12 +27,15 @@ func (a *ProposalApproveActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if !isActiveWitness(ownerAddr, ctx.ActiveWitnesses) {
-		return errors.New("owner is not an active witness")
+	if !witnessExists(ctx, ownerAddr) {
+		return errors.New("owner is not a witness")
 	}
 	if ctx.DB == nil {
 		return errors.New("database not available")
@@ -44,8 +47,8 @@ func (a *ProposalApproveActuator) Validate(ctx *Context) error {
 	if proposal == nil {
 		return errors.New("proposal not found")
 	}
-	if proposal.State != rawdb.ProposalStatePending {
-		return errors.New("proposal is not pending")
+	if proposal.State == rawdb.ProposalStateCanceled {
+		return errors.New("proposal is canceled")
 	}
 	if proposal.ExpirationTime <= ctx.PrevBlockTime {
 		return errors.New("proposal has expired")
@@ -65,7 +68,10 @@ func (a *ProposalApproveActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	if ctx.DB == nil {
 		return nil, errors.New("database not available")
 	}

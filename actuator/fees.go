@@ -5,8 +5,8 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // burnFee subtracts fee from owner's balance. When AllowBlackholeOptimization
@@ -49,53 +49,57 @@ func ownerOfContract(c *corepb.Transaction_Contract) common.Address {
 // ConsumeMultiSignFee charges multi_sign_fee for each contract owner when the
 // transaction carries more than one signature. Mirrors java-tron Manager.consumeMultiSignFee:
 // the fee is charged per-contract (not once per tx), matching the contract list loop there.
-func ConsumeMultiSignFee(ctx *Context) error {
+func ConsumeMultiSignFee(ctx *Context) (int64, error) {
 	if len(ctx.Tx.Signatures()) <= 1 {
-		return nil
+		return 0, nil
 	}
 	if !ctx.DynProps.AllowMultiSign() {
-		return nil
+		return 0, nil
 	}
 	fee := ctx.DynProps.MultiSignFee()
 	if fee <= 0 {
-		return nil
+		return 0, nil
 	}
 	rawData := ctx.Tx.Proto().RawData
 	if rawData == nil {
-		return nil
+		return 0, nil
 	}
+	var charged int64
 	for _, c := range rawData.Contract {
 		owner := ownerOfContract(c)
 		if owner == (common.Address{}) {
 			continue
 		}
 		if err := burnFee(ctx, owner, fee); err != nil {
-			return fmt.Errorf("multi-sign fee for %s: %w", owner.Hex(), err)
+			return charged, fmt.Errorf("multi-sign fee for %s: %w", owner.Hex(), err)
 		}
+		charged += fee
 	}
-	return nil
+	return charged, nil
 }
 
 // ConsumeMemoFee charges memo_fee for each contract owner when the transaction
 // carries a non-empty data memo. Mirrors java-tron Manager.consumeMemoFee:
 // the fee is charged per-contract (not once per tx), matching the contract list loop there.
-func ConsumeMemoFee(ctx *Context) error {
+func ConsumeMemoFee(ctx *Context) (int64, error) {
 	rawData := ctx.Tx.Proto().RawData
 	if rawData == nil || len(rawData.Data) == 0 {
-		return nil
+		return 0, nil
 	}
 	fee := ctx.DynProps.MemoFee()
 	if fee <= 0 {
-		return nil
+		return 0, nil
 	}
+	var charged int64
 	for _, c := range rawData.Contract {
 		owner := ownerOfContract(c)
 		if owner == (common.Address{}) {
 			continue
 		}
 		if err := burnFee(ctx, owner, fee); err != nil {
-			return fmt.Errorf("memo fee for %s: %w", owner.Hex(), err)
+			return charged, fmt.Errorf("memo fee for %s: %w", owner.Hex(), err)
 		}
+		charged += fee
 	}
-	return nil
+	return charged, nil
 }

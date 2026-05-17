@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // AssetIssueActuator handles TRC10 token issuance (contract type 6).
@@ -37,15 +38,39 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
-	if !ctx.State.AccountExists(owner) {
-		return errors.New("owner account does not exist")
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
 	}
-	if len(c.Name) == 0 {
-		return errors.New("token name is required")
+	if !validReadableBytes(c.Name, 32) {
+		return errors.New("invalid token name")
 	}
-	if len(c.Abbr) == 0 {
-		return errors.New("token abbreviation is required")
+	if ctx.DynProps.AllowSameTokenName() && strings.ToLower(string(c.Name)) == "trx" {
+		return errors.New("token name cannot be trx")
+	}
+	if c.Precision != 0 && ctx.DynProps.AllowSameTokenName() && (c.Precision < 0 || c.Precision > 6) {
+		return errors.New("precision cannot exceed 6")
+	}
+	if len(c.Abbr) > 0 && !validReadableBytes(c.Abbr, 5) {
+		return errors.New("invalid token abbreviation")
+	}
+	if !validBytesLen(c.Url, 256, false) {
+		return errors.New("invalid url")
+	}
+	if !validBytesLen(c.Description, 200, true) {
+		return errors.New("invalid description")
+	}
+	if c.StartTime == 0 {
+		return errors.New("start_time is required")
+	}
+	if c.EndTime == 0 {
+		return errors.New("end_time is required")
+	}
+	if c.EndTime <= c.StartTime {
+		return errors.New("end_time must be greater than start_time")
+	}
+	if c.StartTime <= ctx.DynProps.LatestBlockHeaderTimestamp() {
+		return errors.New("start_time must be greater than latest block header timestamp")
 	}
 	if c.TotalSupply <= 0 {
 		return errors.New("total supply must be positive")
@@ -56,11 +81,8 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if c.Num <= 0 {
 		return errors.New("num must be positive")
 	}
-	if c.StartTime >= c.EndTime {
-		return errors.New("start_time must be before end_time")
-	}
-	if c.Precision < 0 || c.Precision > 6 {
-		return errors.New("precision must be 0-6")
+	if c.PublicFreeAssetNetUsage != 0 {
+		return errors.New("public_free_asset_net_usage must be zero")
 	}
 	if int64(len(c.FrozenSupply)) > ctx.DynProps.MaxFrozenSupplyNumber() {
 		return errors.New("frozen supply count exceeds max_frozen_supply_number")
@@ -104,11 +126,18 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if frozenTotal > c.TotalSupply {
 		return errors.New("frozen supply exceeds total supply")
 	}
-	if ctx.State.GetBalance(owner) < ctx.DynProps.AssetIssueFee() {
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		return errors.New("owner account does not exist")
+	}
+	if len(acct.Proto().GetAssetIssuedName()) != 0 {
+		return errors.New("address has already issued a token")
+	}
+	if acct.Balance() < ctx.DynProps.AssetIssueFee() {
 		return errors.New("insufficient balance for asset issue fee")
 	}
 	if !forks.IsActive(forks.AllowSameTokenName, ctx.BlockNumber, ctx.DynProps) {
-		if _, ok := rawdb.ReadAssetNameIndex(ctx.DB, c.Name); ok {
+		if rawdb.ReadAssetIssueByName(ctx.DB, c.Name) != nil {
 			return errors.New("token name already exists")
 		}
 	}
@@ -123,23 +152,38 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 
 	// Assign and increment token ID (java-tron AssetIssueActuator pre-increment)
 	tokenID := ctx.DynProps.TokenIdNum() + 1
 	ctx.DynProps.SetTokenIdNum(tokenID)
 	c.Id = strconv.FormatInt(tokenID, 10)
+	legacyAsset := proto.Clone(c).(*contractpb.AssetIssueContract)
+	v2Asset := proto.Clone(c).(*contractpb.AssetIssueContract)
+	if !ctx.DynProps.AllowSameTokenName() {
+		v2Asset.Precision = 0
+	}
 
 	// Record the issued token on the issuer account (java-tron
 	// AssetIssueActuator: setAssetIssuedName + setAssetIssuedID).
 	ctx.State.SetAssetIssued(owner, c.Name, c.Id)
 
-	// Persist metadata and indexes
-	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, c); err != nil {
-		return nil, fmt.Errorf("write asset: %w", err)
+	// Persist metadata and indexes. Before AllowSameTokenName java-tron writes
+	// both the legacy name-keyed AssetIssueStore and the ID-keyed V2 store; the
+	// V2 copy has precision forced to 0.
+	if !ctx.DynProps.AllowSameTokenName() {
+		if err := rawdb.WriteAssetIssueByName(ctx.DB, c.Name, legacyAsset); err != nil {
+			return nil, fmt.Errorf("write legacy asset: %w", err)
+		}
+		if err := rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID); err != nil {
+			return nil, fmt.Errorf("write name index: %w", err)
+		}
 	}
-	if err := rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID); err != nil {
-		return nil, fmt.Errorf("write name index: %w", err)
+	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, v2Asset); err != nil {
+		return nil, fmt.Errorf("write asset: %w", err)
 	}
 	if err := rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID); err != nil {
 		return nil, fmt.Errorf("write owner index: %w", err)
@@ -164,8 +208,10 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 		})
 	}
 	freeAmount := c.TotalSupply - frozenTotal
-	if freeAmount > 0 {
+	if ctx.DynProps.AllowSameTokenName() {
 		ctx.State.SetTRC10Balance(owner, tokenID, freeAmount)
+	} else {
+		ctx.State.SetTRC10BalanceLegacyAndV2(owner, c.Name, tokenID, freeAmount)
 	}
 	ctx.State.AddFrozenSupply(owner, frozenList)
 
@@ -174,5 +220,5 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	return &Result{Fee: fee, AssetIssueID: c.Id, ContractRet: 1}, nil
 }

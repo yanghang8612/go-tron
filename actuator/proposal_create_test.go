@@ -25,6 +25,7 @@ func TestProposalCreateValidate(t *testing.T) {
 	}
 
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate failed: %v", err)
 	}
@@ -54,12 +55,102 @@ func TestProposalCreateEmptyParams(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalCreateContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
 	act := &ProposalCreateActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for empty parameters")
 	}
+}
+
+func TestProposalCreateUnknownParameter(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner[:],
+		Parameters:   map[int64]int64{4000: 1},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalCreateContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
+
+	act := &ProposalCreateActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for unknown proposal parameter")
+	}
+}
+
+func TestProposalCreateRejectsInvalidParameterValue(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		9: 2, // ALLOW_CREATION_OF_CONTRACTS only accepts 1 in java-tron.
+	})
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for invalid proposal parameter value")
+	}
+}
+
+func TestProposalCreateRejectsMissingParameterDependency(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		18: 1, // ALLOW_TVM_TRANSFER_TRC10 requires ALLOW_SAME_TOKEN_NAME first.
+	})
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for missing proposal dependency")
+	}
+
+	ctx.DynProps.SetAllowSameTokenName(true)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate after dependency activation failed: %v", err)
+	}
+}
+
+func TestProposalCreateRejectsParameterBeforeForkVersion(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		20: 1, // ALLOW_MULTI_SIGN requires VERSION_3_5 fork votes first.
+	})
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error before required fork version passes")
+	}
+
+	markProposalForkVersionPassed(t, ctx, 7)
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate after fork version passed failed: %v", err)
+	}
+}
+
+func TestProposalCreateValidatesParameterRange(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		0: 3 * 27 * 1000, // MAINTENANCE_TIME_INTERVAL lower bound.
+	})
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate failed for java-tron lower-bound value: %v", err)
+	}
+
+	ctx, act = newProposalCreateValidationContext(t, map[int64]int64{0: 3*27*1000 - 1})
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for maintenance interval below java-tron lower bound")
+	}
+}
+
+func newProposalCreateValidationContext(t *testing.T, params map[int64]int64) (*Context, *ProposalCreateActuator) {
+	t.Helper()
+	owner := makeTestAddr(1)
+	c := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner[:],
+		Parameters:   params,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalCreateContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
+	return ctx, &ProposalCreateActuator{}
+}
+
+func markProposalForkVersionPassed(t *testing.T, ctx *Context, version int32) {
+	t.Helper()
+	stats := make([]byte, 27)
+	for i := range stats {
+		stats[i] = 1
+	}
+	rawdb.WriteForkStats(ctx.DB, version, stats)
 }
 
 // TestProposalCreateExpiration_NileProposal1Parity replays Nile-live's
@@ -93,11 +184,11 @@ func TestProposalCreateEmptyParams(t *testing.T) {
 // settled CANCELED while Nile-live had it APPROVED. Diagnosed 2026-05-11.
 func TestProposalCreateExpiration_NileProposal1Parity(t *testing.T) {
 	const (
-		nileBlockTime         int64 = 1572596523000
-		nileNextMaintenance   int64 = 1572576000000
-		nileInterval          int64 = 21600000
-		nileProposalExpire    int64 = 600000
-		expectedExpiration    int64 = 1572597600000
+		nileBlockTime       int64 = 1572596523000
+		nileNextMaintenance int64 = 1572576000000
+		nileInterval        int64 = 21600000
+		nileProposalExpire  int64 = 600000
+		expectedExpiration  int64 = 1572597600000
 	)
 
 	owner := tcommon.Address{0x41, 0x01}

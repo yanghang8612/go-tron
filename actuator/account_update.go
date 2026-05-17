@@ -3,7 +3,7 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -26,23 +26,21 @@ func (a *AccountUpdateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	if len(c.AccountName) == 0 {
-		return errors.New("account name is empty")
+	if !validBytesLen(c.AccountName, 200, true) {
+		return errors.New("invalid accountName")
 	}
-	if len(c.AccountName) > 32 {
-		return errors.New("account name too long (max 32 bytes)")
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
 	}
-	for _, b := range c.AccountName {
-		if b < 0x20 || b > 0x7e {
-			return errors.New("account name must contain only printable ASCII characters")
-		}
-	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	if ctx.State.GetAccountName(ownerAddr) != "" && !ctx.DynProps.AllowUpdateAccountName() {
 		return errors.New("account name already set")
+	}
+	if ctx.DB != nil && rawdb.HasAccountNameIndex(ctx.DB, c.AccountName) && !ctx.DynProps.AllowUpdateAccountName() {
+		return errors.New("account name already exists")
 	}
 	return nil
 }
@@ -52,7 +50,15 @@ func (a *AccountUpdateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	ctx.State.SetAccountName(ownerAddr, string(c.AccountName))
+	if ctx.DB != nil {
+		if err := rawdb.WriteAccountNameIndex(ctx.DB, c.AccountName, ownerAddr[:]); err != nil {
+			return nil, err
+		}
+	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

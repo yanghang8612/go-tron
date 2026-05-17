@@ -2,9 +2,9 @@ package actuator
 
 import (
 	"errors"
+	"math"
 	"strconv"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -13,24 +13,52 @@ import (
 // TransferAssetActuator handles TRC10 token transfers (contract type 2).
 type TransferAssetActuator struct{}
 
-// resolveAssetNameOrID accepts the wire-format `asset_name` field which is
-// either a numeric token ID (post-AllowSameTokenName, e.g. "1000004") or a
-// literal token name (pre-fork, e.g. "Bitcoin"). Returns the resolved
-// token ID. Mirrors java-tron's TransferAssetActuator dual-path lookup.
-//
-// gtron originally only handled the numeric form, silently dropping the
-// ParseInt error in Execute and ending up with tokenID=0 → "insufficient
-// balance" on every pre-fork TRC10 transfer. Mainnet sync stalled at
-// block 5584 (a TransferAssetContract for asset_name="Bitcoin") because
-// of this.
+type resolvedAsset struct {
+	TokenID int64
+	Asset   *contractpb.AssetIssueContract
+}
+
+// resolveAssetNameOrID accepts the wire-format asset_name field. Before
+// AllowSameTokenName, java-tron treats it as the literal asset name and looks
+// in AssetIssueStore; after the fork, it treats it as the numeric token ID and
+// looks in AssetIssueV2Store. Numeric-looking pre-fork names must therefore
+// still resolve through the legacy name index instead of ParseInt.
 func resolveAssetNameOrID(ctx *Context, assetName []byte) (int64, error) {
+	if !ctx.DynProps.AllowSameTokenName() {
+		if asset := rawdb.ReadAssetIssueByName(ctx.DB, assetName); asset != nil {
+			id, err := strconv.ParseInt(asset.Id, 10, 64)
+			if err != nil {
+				return 0, errors.New("invalid legacy asset ID")
+			}
+			return id, nil
+		}
+		if id, ok := rawdb.ReadAssetNameIndex(ctx.DB, assetName); ok {
+			return id, nil
+		}
+		return 0, errors.New("invalid asset_name: no name index hit")
+	}
 	if id, err := strconv.ParseInt(string(assetName), 10, 64); err == nil {
 		return id, nil
 	}
-	if id, ok := rawdb.ReadAssetNameIndex(ctx.DB, assetName); ok {
-		return id, nil
+	return 0, errors.New("invalid asset_name: not a numeric ID")
+}
+
+func resolveAsset(ctx *Context, assetName []byte) (*resolvedAsset, error) {
+	tokenID, err := resolveAssetNameOrID(ctx, assetName)
+	if err != nil {
+		return nil, err
 	}
-	return 0, errors.New("invalid asset_name: not a numeric ID and no name index hit")
+	var asset *contractpb.AssetIssueContract
+	if !ctx.DynProps.AllowSameTokenName() {
+		asset = rawdb.ReadAssetIssueByName(ctx.DB, assetName)
+	}
+	if asset == nil {
+		asset = rawdb.ReadAssetIssue(ctx.DB, tokenID)
+	}
+	if asset == nil {
+		return nil, errors.New("token not found")
+	}
+	return &resolvedAsset{TokenID: tokenID, Asset: asset}, nil
 }
 
 func (a *TransferAssetActuator) getContract(ctx *Context) (*contractpb.TransferAssetContract, error) {
@@ -53,27 +81,43 @@ func (a *TransferAssetActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	asset, err := resolveAsset(ctx, c.AssetName)
 	if err != nil {
 		return err
 	}
-	if rawdb.ReadAssetIssue(ctx.DB, tokenID) == nil {
-		return errors.New("token not found")
-	}
+	tokenID := asset.TokenID
 	if c.Amount <= 0 {
 		return errors.New("transfer amount must be positive")
 	}
-	from := common.BytesToAddress(c.OwnerAddress)
-	to := common.BytesToAddress(c.ToAddress)
+	from, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
+	to, err := checkedAddress(c.ToAddress, "toAddress")
+	if err != nil {
+		return err
+	}
 	if from == to {
 		return errors.New("cannot transfer to self")
 	}
-	if ctx.State.GetTRC10Balance(from, tokenID) < c.Amount {
+	if !ctx.State.AccountExists(from) {
+		return errors.New("owner account does not exist")
+	}
+	if ctx.State.GetTRC10BalanceFinal(from, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) < c.Amount {
 		return errors.New("insufficient TRC10 balance")
 	}
-	if ctx.DynProps.ForbidTransferToContract() && ctx.State.AccountExists(to) {
-		if len(ctx.State.GetCode(to)) > 0 {
+	toAccount := ctx.State.GetAccount(to)
+	if toAccount != nil {
+		if ctx.DynProps.ForbidTransferToContract() && toAccount.Type() == corepb.AccountType_Contract {
 			return errors.New("cannot transfer TRC10 to a smart contract")
+		}
+		if ctx.State.GetTRC10BalanceFinal(to, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-c.Amount {
+			return errors.New("recipient TRC10 balance overflows int64")
+		}
+	} else {
+		fee := ctx.DynProps.CreateNewAccountFeeInSystemContract()
+		if ctx.State.GetBalance(from) < fee {
+			return errors.New("insufficient balance for create account fee")
 		}
 	}
 	return nil
@@ -84,15 +128,35 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	asset, err := resolveAsset(ctx, c.AssetName)
 	if err != nil {
 		return nil, err
 	}
-	from := common.BytesToAddress(c.OwnerAddress)
-	to := common.BytesToAddress(c.ToAddress)
+	tokenID := asset.TokenID
+	from, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	to, err := checkedAddress(c.ToAddress, "toAddress")
+	if err != nil {
+		return nil, err
+	}
 
 	fee := int64(0)
-	if !ctx.State.AccountExists(to) {
+	recipientExists := ctx.State.AccountExists(to)
+	if !recipientExists {
+		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
+	}
+	if ctx.State.GetTRC10BalanceFinal(from, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) < c.Amount {
+		return nil, errors.New("insufficient TRC10 balance")
+	}
+	if ctx.State.GetBalance(from) < fee {
+		return nil, errors.New("insufficient balance for create account fee")
+	}
+	if recipientExists && ctx.State.GetTRC10BalanceFinal(to, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-c.Amount {
+		return nil, errors.New("recipient TRC10 balance overflows int64")
+	}
+	if !recipientExists {
 		ctx.State.CreateAccountWithTime(to, corepb.AccountType_Normal, ctx.DynProps.LatestBlockHeaderTimestamp())
 		if ctx.DynProps.AllowMultiSign() {
 			ctx.State.ApplyDefaultAccountPermissions(to, ctx.DynProps)
@@ -100,16 +164,15 @@ func (a *TransferAssetActuator) Execute(ctx *Context) (*Result, error) {
 		// Actuator-level extra fee (proposal #12, default 0). java-tron does
 		// NOT increment total_create_account_cost here — see transfer.go for
 		// the rationale.
-		fee = ctx.DynProps.CreateNewAccountFeeInSystemContract()
 		if err := burnFee(ctx, from, fee); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := ctx.State.SubTRC10Balance(from, tokenID, c.Amount); err != nil {
+	if err := ctx.State.SubTRC10BalanceFinal(from, c.AssetName, tokenID, c.Amount, ctx.DynProps.AllowSameTokenName()); err != nil {
 		return nil, err
 	}
-	ctx.State.AddTRC10Balance(to, tokenID, c.Amount)
+	ctx.State.AddTRC10BalanceFinal(to, c.AssetName, tokenID, c.Amount, ctx.DynProps.AllowSameTokenName())
 
 	return &Result{Fee: fee, ContractRet: 1}, nil
 }

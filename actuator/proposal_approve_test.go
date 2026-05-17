@@ -34,6 +34,7 @@ func TestProposalApproveValidate(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
 	db := ethrawdb.NewMemoryDatabase()
@@ -56,6 +57,7 @@ func TestProposalApproveExecute(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
 	db := ethrawdb.NewMemoryDatabase()
@@ -87,6 +89,7 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
 	db := ethrawdb.NewMemoryDatabase()
@@ -101,5 +104,37 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for double approve")
+	}
+}
+
+func TestProposalApproveRejectsOnlyCanceledState(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ProposalApproveContract{
+		OwnerAddress:  owner[:],
+		ProposalId:    1,
+		IsAddApproval: true,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalApproveContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.PutWitness(owner, "http://w.com")
+	ctx.ActiveWitnesses = []tcommon.Address{owner}
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.DynProps.SetLatestProposalNum(1)
+	rawdb.WriteProposal(ctx.DB, 1, &rawdb.Proposal{
+		ID:             1,
+		ExpirationTime: 999999999,
+		State:          rawdb.ProposalStateApproved,
+	})
+
+	act := &ProposalApproveActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("approved state should not be rejected before expiration: %v", err)
+	}
+
+	p := rawdb.ReadProposal(ctx.DB, 1)
+	p.State = rawdb.ProposalStateCanceled
+	rawdb.WriteProposal(ctx.DB, 1, p)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected canceled proposal to be rejected")
 	}
 }

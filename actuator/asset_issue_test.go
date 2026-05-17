@@ -25,6 +25,7 @@ func makeAssetIssueContract(ownerByte byte, name string, totalSupply int64) *con
 		StartTime:    1000,
 		EndTime:      2000,
 		Precision:    0,
+		Url:          []byte("https://token.example"),
 	}
 }
 
@@ -50,7 +51,10 @@ func TestAssetIssueValidate_DuplicateName(t *testing.T) {
 	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee()*2)
-	if err := rawdb.WriteAssetNameIndex(db, []byte("MYTOKEN"), 999_999); err != nil {
+	if err := rawdb.WriteAssetIssueByName(db, []byte("MYTOKEN"), &contractpb.AssetIssueContract{
+		Name: []byte("MYTOKEN"),
+		Id:   "999999",
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,6 +113,9 @@ func TestAssetIssueExecute(t *testing.T) {
 	if result.ContractRet != 1 {
 		t.Fatal("expected ContractRet=1")
 	}
+	if result.AssetIssueID != "1000001" {
+		t.Fatalf("assetIssueID: want 1000001, got %q", result.AssetIssueID)
+	}
 
 	tokenID := int64(1_000_001)
 	asset := rawdb.ReadAssetIssue(db, tokenID)
@@ -117,6 +124,13 @@ func TestAssetIssueExecute(t *testing.T) {
 	}
 	if string(asset.Name) != "MYTOKEN" {
 		t.Fatalf("asset name: want MYTOKEN, got %s", asset.Name)
+	}
+	legacy := rawdb.ReadAssetIssueByName(db, []byte("MYTOKEN"))
+	if legacy == nil {
+		t.Fatal("legacy asset should be stored in name-keyed rawdb")
+	}
+	if ctx.State.GetTRC10BalanceByName(owner, []byte("MYTOKEN")) != 1_000_000 {
+		t.Fatalf("legacy TRC10 balance: want 1000000, got %d", ctx.State.GetTRC10BalanceByName(owner, []byte("MYTOKEN")))
 	}
 	if ctx.State.GetTRC10Balance(owner, tokenID) != 1_000_000 {
 		t.Fatalf("TRC10 balance: want 1000000, got %d", ctx.State.GetTRC10Balance(owner, tokenID))
@@ -137,6 +151,36 @@ func TestAssetIssueExecute(t *testing.T) {
 	}
 	if string(issuer.Proto().GetAssetIssued_ID()) != "1000001" {
 		t.Fatalf("asset_issued_ID: want 1000001, got %q", issuer.Proto().GetAssetIssued_ID())
+	}
+}
+
+func TestAssetIssueExecute_PreSameTokenNameV2PrecisionForcedZero(t *testing.T) {
+	owner := makeTestAddr(1)
+	c := makeAssetIssueContract(1, "PRETOKEN", 1_000_000)
+	c.Precision = 6
+	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
+	db := ethrawdb.NewMemoryDatabase()
+	ctx.DB = db
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
+	ctx.DynProps.SetAllowSameTokenName(false)
+
+	if _, err := (&AssetIssueActuator{}).Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	legacy := rawdb.ReadAssetIssueByName(db, []byte("PRETOKEN"))
+	if legacy == nil {
+		t.Fatal("legacy asset missing")
+	}
+	if legacy.Precision != 6 {
+		t.Fatalf("legacy precision: want 6, got %d", legacy.Precision)
+	}
+	v2 := rawdb.ReadAssetIssue(db, 1_000_001)
+	if v2 == nil {
+		t.Fatal("v2 asset missing")
+	}
+	if v2.Precision != 0 {
+		t.Fatalf("v2 precision before AllowSameTokenName: want 0, got %d", v2.Precision)
 	}
 }
 
@@ -259,6 +303,22 @@ func TestAssetIssueValidate_PublicFreeAssetNetLimitOutOfRange(t *testing.T) {
 	}
 }
 
+func TestAssetIssueValidate_AbbreviationMaxFiveBytes(t *testing.T) {
+	act := &AssetIssueActuator{}
+
+	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.Abbr = []byte("ABCDEF")
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err == nil {
+		t.Fatal("expected error for abbreviation longer than java-tron's 5 byte limit")
+	}
+
+	c = makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.Abbr = []byte("ABCDE")
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err != nil {
+		t.Fatalf("5 byte abbreviation should be valid: %v", err)
+	}
+}
+
 func TestAssetIssueValidate_FrozenDaysOutOfRange(t *testing.T) {
 	act := &AssetIssueActuator{}
 
@@ -365,8 +425,8 @@ func TestAssetIssueValidate_FrozenSupplyOverflow_PostFork(t *testing.T) {
 // startTime + max-allowed FrozenDays adds well under MaxInt64.
 func TestAssetIssueValidate_FrozenSupplyOverflow_PostForkNormalValues(t *testing.T) {
 	c := makeAssetIssueContract(1, "GOODTOKEN", 1_000_000)
-	c.StartTime = 1_700_000_000_000              // April 2026, ms epoch
-	c.EndTime = c.StartTime + 365*86_400_000     // 1y after start
+	c.StartTime = 1_700_000_000_000          // April 2026, ms epoch
+	c.EndTime = c.StartTime + 365*86_400_000 // 1y after start
 	c.FrozenSupply = []*contractpb.AssetIssueContract_FrozenSupply{
 		{FrozenAmount: 100, FrozenDays: 3652}, // ~10 years
 	}

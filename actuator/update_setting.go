@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -27,8 +26,14 @@ func (a *UpdateSettingActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
-	contractAddr := tcommon.BytesToAddress(c.ContractAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
+	contractAddr, err := checkedAddress(c.ContractAddress, "contractAddress")
+	if err != nil {
+		return err
+	}
 
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
@@ -37,7 +42,10 @@ func (a *UpdateSettingActuator) Validate(ctx *Context) error {
 	if meta == nil {
 		return errors.New("contract does not exist")
 	}
-	originAddr := tcommon.BytesToAddress(meta.OriginAddress)
+	originAddr, err := checkedAddress(meta.OriginAddress, "contract originAddress")
+	if err != nil {
+		return err
+	}
 	if originAddr != ownerAddr {
 		return errors.New("sender is not the contract origin")
 	}
@@ -52,7 +60,10 @@ func (a *UpdateSettingActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	contractAddr := tcommon.BytesToAddress(c.ContractAddress)
+	contractAddr, err := checkedAddress(c.ContractAddress, "contractAddress")
+	if err != nil {
+		return nil, err
+	}
 	raw := ctx.State.GetContract(contractAddr)
 	if raw == nil {
 		return nil, errors.New("contract not found")

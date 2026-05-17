@@ -45,13 +45,14 @@ func makeTestICO(t *testing.T, buyerByte, issuerByte byte, trxNum, num int32, st
 	issuer := makeTestAddr(issuerByte)
 
 	asset := &contractpb.AssetIssueContract{
-		Name:        []byte("ICOTOKEN"),
-		TotalSupply: 1_000_000_000,
-		TrxNum:      trxNum,
-		Num:         num,
-		StartTime:   startTime,
-		EndTime:     endTime,
-		Id:          strconv.FormatInt(participateTokenID, 10),
+		OwnerAddress: issuer.Bytes(),
+		Name:         []byte("ICOTOKEN"),
+		TotalSupply:  1_000_000_000,
+		TrxNum:       trxNum,
+		Num:          num,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		Id:           strconv.FormatInt(participateTokenID, 10),
 	}
 	db := ethrawdb.NewMemoryDatabase()
 	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
@@ -67,6 +68,7 @@ func makeTestICO(t *testing.T, buyerByte, issuerByte byte, trxNum, num int32, st
 
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.BlockTime = (startTime + endTime) / 2 // midpoint within ICO window
 	ctx.PrevBlockTime = ctx.BlockTime
 	return ctx
@@ -117,13 +119,14 @@ func TestParticipateAssetExecute(t *testing.T) {
 	buyer := makeTestAddr(1)
 	issuer := makeTestAddr(2)
 	asset := &contractpb.AssetIssueContract{
-		Name:        []byte("ICOTOKEN"),
-		TotalSupply: 10_000_000,
-		TrxNum:      1,
-		Num:         1,
-		StartTime:   500,
-		EndTime:     2000,
-		Id:          strconv.FormatInt(participateTokenID, 10),
+		OwnerAddress: issuer.Bytes(),
+		Name:         []byte("ICOTOKEN"),
+		TotalSupply:  10_000_000,
+		TrxNum:       1,
+		Num:          1,
+		StartTime:    500,
+		EndTime:      2000,
+		Id:           strconv.FormatInt(participateTokenID, 10),
 	}
 	db := ethrawdb.NewMemoryDatabase()
 	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
@@ -139,6 +142,7 @@ func TestParticipateAssetExecute(t *testing.T) {
 
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.BlockTime = 1000 // within window
 	ctx.PrevBlockTime = ctx.BlockTime
 
@@ -168,5 +172,73 @@ func TestParticipateAssetExecute(t *testing.T) {
 	// Issuer lost tokens
 	if got := ctx.State.GetTRC10Balance(issuer, participateTokenID); got != 9_000_000 {
 		t.Fatalf("issuer TRC10: want 9000000, got %d", got)
+	}
+}
+
+func TestParticipateAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *testing.T) {
+	const numericName = "123"
+	buyer := makeTestAddr(1)
+	issuer := makeTestAddr(2)
+	asset := &contractpb.AssetIssueContract{
+		OwnerAddress: issuer.Bytes(),
+		Name:         []byte(numericName),
+		TotalSupply:  10_000_000,
+		TrxNum:       1,
+		Num:          1,
+		StartTime:    500,
+		EndTime:      2000,
+		Id:           strconv.FormatInt(participateTokenID, 10),
+	}
+	db := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.WriteAssetIssueByName(db, []byte(numericName), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, 123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte(numericName), participateTokenID); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &contractpb.ParticipateAssetIssueContract{
+		OwnerAddress: buyer.Bytes(),
+		ToAddress:    issuer.Bytes(),
+		AssetName:    []byte(numericName),
+		Amount:       1_000_000,
+	}
+	anyParam, _ := anypb.New(c)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{
+				{Type: corepb.Transaction_Contract_ParticipateAssetIssueContract, Parameter: anyParam},
+			},
+		},
+	})
+	statedb := setupStateDB(t)
+	statedb.CreateAccount(buyer, corepb.AccountType_Normal)
+	statedb.CreateAccount(issuer, corepb.AccountType_Normal)
+	statedb.AddBalance(buyer, 100_000_000)
+	statedb.SetTRC10BalanceLegacyAndV2(issuer, []byte(numericName), participateTokenID, 10_000_000)
+
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	ctx.BlockTime = 1000
+	ctx.PrevBlockTime = ctx.BlockTime
+
+	act := &ParticipateAssetIssueActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate must resolve numeric-looking pre-fork name through name index: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute must use name-index token ID: %v", err)
+	}
+	if got := ctx.State.GetTRC10Balance(buyer, participateTokenID); got != 1_000_000 {
+		t.Fatalf("buyer name-index token balance: want 1000000, got %d", got)
+	}
+	if got := ctx.State.GetTRC10Balance(buyer, 123); got != 0 {
+		t.Fatalf("buyer parsed-ID token balance must stay zero, got %d", got)
 	}
 }

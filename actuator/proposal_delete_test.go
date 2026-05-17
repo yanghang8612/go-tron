@@ -82,3 +82,33 @@ func TestProposalDeleteExecute(t *testing.T) {
 		t.Fatalf("expected CANCELED, got %d", got.State)
 	}
 }
+
+func TestProposalDeleteRejectsOnlyCanceledState(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ProposalDeleteContract{
+		OwnerAddress: owner[:],
+		ProposalId:   1,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.DynProps.SetLatestProposalNum(1)
+	rawdb.WriteProposal(ctx.DB, 1, &rawdb.Proposal{
+		ID:             1,
+		Proposer:       owner,
+		ExpirationTime: 999999999,
+		State:          rawdb.ProposalStateApproved,
+	})
+
+	act := &ProposalDeleteActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("approved state should not be rejected before expiration: %v", err)
+	}
+
+	p := rawdb.ReadProposal(ctx.DB, 1)
+	p.State = rawdb.ProposalStateCanceled
+	rawdb.WriteProposal(ctx.DB, 1, p)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected canceled proposal to be rejected")
+	}
+}

@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -27,7 +26,10 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
@@ -41,8 +43,8 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if proposal == nil {
 		return errors.New("proposal not found")
 	}
-	if proposal.State != rawdb.ProposalStatePending {
-		return errors.New("proposal is not pending")
+	if proposal.State == rawdb.ProposalStateCanceled {
+		return errors.New("proposal is canceled")
 	}
 	if ctx.PrevBlockTime >= proposal.ExpirationTime {
 		return errors.New("proposal has expired")

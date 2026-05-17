@@ -8,16 +8,41 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
+func accountPermOps(bits ...int) []byte {
+	ops := make([]byte, 32)
+	for _, bit := range bits {
+		ops[bit/8] |= 1 << (bit % 8)
+	}
+	return ops
+}
+
+func accountOwnerPermission(addr tcommon.Address, threshold int64, keys ...*corepb.Key) *corepb.Permission {
+	if len(keys) == 0 {
+		keys = []*corepb.Key{{Address: addr[:], Weight: 1}}
+	}
+	return &corepb.Permission{
+		Type:      corepb.Permission_Owner,
+		Threshold: threshold,
+		Keys:      keys,
+	}
+}
+
+func accountActivePermission(addr tcommon.Address) *corepb.Permission {
+	return &corepb.Permission{
+		Type:       corepb.Permission_Active,
+		Id:         2,
+		Threshold:  1,
+		Keys:       []*corepb.Key{{Address: addr[:], Weight: 1}},
+		Operations: accountPermOps(1),
+	}
+}
+
 func TestAccountPermissionValidate(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.AccountPermissionUpdateContract{
 		OwnerAddress: owner[:],
-		Owner: &corepb.Permission{
-			Threshold: 1,
-			Keys: []*corepb.Key{
-				{Address: owner[:], Weight: 1},
-			},
-		},
+		Owner:        accountOwnerPermission(owner, 1),
+		Actives:      []*corepb.Permission{accountActivePermission(owner)},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
 	ctx.DynProps.SetAllowMultiSign(true)
@@ -31,6 +56,26 @@ func TestAccountPermissionValidate(t *testing.T) {
 	ctx.State.AddBalance(owner, 100_000_000) // cover UpdateAccountPermissionFee
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate failed: %v", err)
+	}
+}
+
+func TestAccountPermissionValidate_DoesNotRequireUpdateFee(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.AccountPermissionUpdateContract{
+		OwnerAddress: owner[:],
+		Owner:        accountOwnerPermission(owner, 1),
+		Actives:      []*corepb.Permission{accountActivePermission(owner)},
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
+	ctx.DynProps.SetAllowMultiSign(true)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+
+	act := &AccountPermissionUpdateActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate should match java-tron and not require update fee balance: %v", err)
+	}
+	if _, err := act.Execute(ctx); err == nil {
+		t.Fatal("execute should still fail when the update fee cannot be paid")
 	}
 }
 
@@ -53,12 +98,8 @@ func TestAccountPermissionThresholdExceedsWeight(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.AccountPermissionUpdateContract{
 		OwnerAddress: owner[:],
-		Owner: &corepb.Permission{
-			Threshold: 10,
-			Keys: []*corepb.Key{
-				{Address: owner[:], Weight: 1},
-			},
-		},
+		Owner:        accountOwnerPermission(owner, 10),
+		Actives:      []*corepb.Permission{accountActivePermission(owner)},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
 	ctx.DynProps.SetAllowMultiSign(true)
@@ -77,10 +118,7 @@ func TestAccountPermissionRejectsUnavailableContractType(t *testing.T) {
 	ops[48/8] |= 1 << (48 % 8)
 	c := &contractpb.AccountPermissionUpdateContract{
 		OwnerAddress: owner[:],
-		Owner: &corepb.Permission{
-			Threshold: 1,
-			Keys:      []*corepb.Key{{Address: owner[:], Weight: 1}},
-		},
+		Owner:        accountOwnerPermission(owner, 1),
 		Actives: []*corepb.Permission{{
 			Type:       corepb.Permission_Active,
 			Id:         2,
@@ -111,10 +149,7 @@ func TestAccountPermissionAcceptsAvailableContractType(t *testing.T) {
 	ops[1/8] |= 1 << (1 % 8)
 	c := &contractpb.AccountPermissionUpdateContract{
 		OwnerAddress: owner[:],
-		Owner: &corepb.Permission{
-			Threshold: 1,
-			Keys:      []*corepb.Key{{Address: owner[:], Weight: 1}},
-		},
+		Owner:        accountOwnerPermission(owner, 1),
 		Actives: []*corepb.Permission{{
 			Type:       corepb.Permission_Active,
 			Id:         2,
@@ -147,16 +182,7 @@ func TestAccountPermissionExecute(t *testing.T) {
 				{Address: key2[:], Weight: 1},
 			},
 		},
-		Actives: []*corepb.Permission{
-			{
-				Type:      corepb.Permission_Active,
-				Id:        2,
-				Threshold: 1,
-				Keys: []*corepb.Key{
-					{Address: owner[:], Weight: 1},
-				},
-			},
-		},
+		Actives: []*corepb.Permission{accountActivePermission(owner)},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountPermissionUpdateContract, c, 0)
 	ctx.DynProps.SetAllowMultiSign(true)

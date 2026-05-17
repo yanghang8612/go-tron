@@ -3,8 +3,8 @@ package actuator
 import (
 	"errors"
 	"fmt"
+	"math"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -33,55 +33,51 @@ func (a *AccountPermissionUpdateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
-	if !ctx.State.AccountExists(ownerAddr) {
-		return errors.New("owner account does not exist")
-	}
-	if c.Owner == nil {
-		return errors.New("owner permission is required")
-	}
-	if err := validatePermission(c.Owner); err != nil {
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
 		return err
 	}
-	if c.Witness != nil {
-		if ctx.State.GetWitness(ownerAddr) == nil {
-			return errors.New("witness permission requires witness account")
+	account := ctx.State.GetAccount(ownerAddr)
+	if account == nil {
+		return errors.New("ownerAddress account does not exist")
+	}
+	if c.Owner == nil {
+		return errors.New("owner permission is missed")
+	}
+	if account.IsWitness() {
+		if c.Witness == nil {
+			return errors.New("witness permission is missed")
 		}
-		if err := validatePermission(c.Witness); err != nil {
-			return err
-		}
-		if len(c.Witness.Keys) != 1 {
-			return errors.New("witness permission must have exactly 1 key")
-		}
+	} else if c.Witness != nil {
+		return errors.New("account isn't witness can't set witness permission")
+	}
+	if len(c.Actives) == 0 {
+		return errors.New("active permission is missed")
 	}
 	if len(c.Actives) > 8 {
-		return errors.New("too many active permissions (max 8)")
+		return errors.New("active permission is too many")
 	}
-	totalKeys := len(c.Owner.Keys)
-	if c.Witness != nil {
-		totalKeys += len(c.Witness.Keys)
+	if c.Owner.Type != corepb.Permission_Owner {
+		return errors.New("owner permission type is error")
 	}
-	for _, active := range c.Actives {
-		if err := validatePermission(active); err != nil {
+	if err := validatePermission(c.Owner, ctx.DynProps); err != nil {
+		return err
+	}
+	if account.IsWitness() {
+		if c.Witness.Type != corepb.Permission_Witness {
+			return errors.New("witness permission type is error")
+		}
+		if err := validatePermission(c.Witness, ctx.DynProps); err != nil {
 			return err
 		}
-		if len(active.Operations) > 0 && len(active.Operations) != 32 {
-			return errors.New("active permission operations must be exactly 32 bytes")
-		}
-		if len(active.Operations) == 32 {
-			if err := validateOperationsBits(active.Operations, ctx.DynProps); err != nil {
-				return err
-			}
-		}
-		totalKeys += len(active.Keys)
 	}
-	maxKeys := int(ctx.DynProps.TotalSignNum())
-	if totalKeys > maxKeys {
-		return errors.New("too many keys across all permissions")
-	}
-	fee := ctx.DynProps.UpdateAccountPermissionFee()
-	if ctx.State.GetBalance(ownerAddr) < fee {
-		return errors.New("insufficient balance for account permission update fee")
+	for _, active := range c.Actives {
+		if active == nil || active.Type != corepb.Permission_Active {
+			return errors.New("active permission type is error")
+		}
+		if err := validatePermission(active, ctx.DynProps); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -102,21 +98,60 @@ func validateOperationsBits(operations []byte, dp *state.DynamicProperties) erro
 	return nil
 }
 
-func validatePermission(p *corepb.Permission) error {
+func validatePermission(p *corepb.Permission, dp *state.DynamicProperties) error {
+	if p == nil {
+		return errors.New("permission is missed")
+	}
+	if len(p.Keys) > int(dp.TotalSignNum()) {
+		return fmt.Errorf("number of keys in permission should not be greater than %d", dp.TotalSignNum())
+	}
 	if len(p.Keys) == 0 {
-		return errors.New("permission must have at least 1 key")
+		return errors.New("key's count should be greater than 0")
+	}
+	if p.Type == corepb.Permission_Witness && len(p.Keys) != 1 {
+		return errors.New("Witness permission's key count should be 1")
 	}
 	if p.Threshold <= 0 {
-		return errors.New("permission threshold must be positive")
+		return errors.New("permission's threshold should be greater than 0")
+	}
+	if p.PermissionName != "" && len(p.PermissionName) > 32 {
+		return errors.New("permission's name is too long")
+	}
+	if p.ParentId != 0 {
+		return errors.New("permission's parent should be owner")
 	}
 	var totalWeight int64
+	seen := make(map[string]struct{}, len(p.Keys))
 	for _, k := range p.Keys {
+		if !validAddressBytes(k.Address) {
+			return errors.New("key is not a validate address")
+		}
+		key := string(k.Address)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("address should be distinct in permission %s", p.Type)
+		}
+		seen[key] = struct{}{}
+		if k.Weight <= 0 {
+			return errors.New("key's weight should be greater than 0")
+		}
+		if k.Weight > math.MaxInt64-totalWeight {
+			return errors.New("integer overflow")
+		}
 		totalWeight += k.Weight
 	}
 	if p.Threshold > totalWeight {
-		return errors.New("permission threshold exceeds total key weight")
+		return fmt.Errorf("sum of all key's weight should not be less than threshold in permission %s", p.Type)
 	}
-	return nil
+	if p.Type != corepb.Permission_Active {
+		if len(p.Operations) != 0 {
+			return fmt.Errorf("%s permission needn't operations", p.Type)
+		}
+		return nil
+	}
+	if len(p.Operations) == 0 || len(p.Operations) != state.ContractTypeBitmapBytes {
+		return errors.New("operations size must 32")
+	}
+	return validateOperationsBits(p.Operations, dp)
 }
 
 func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error) {
@@ -124,13 +159,14 @@ func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error)
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
-	fee := ctx.DynProps.UpdateAccountPermissionFee()
-	if fee > 0 {
-		if err := ctx.State.SubBalance(ownerAddr, fee); err != nil {
-			return nil, err
-		}
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
 	}
+	fee := ctx.DynProps.UpdateAccountPermissionFee()
 	ctx.State.SetPermissions(ownerAddr, c.Owner, c.Witness, c.Actives)
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
+		return nil, err
+	}
 	return &Result{Fee: fee, ContractRet: 1}, nil
 }

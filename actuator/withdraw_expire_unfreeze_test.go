@@ -76,6 +76,9 @@ func TestWithdrawExpireUnfreezeExecute(t *testing.T) {
 	if result.Fee != 0 {
 		t.Fatalf("fee: want 0, got %d", result.Fee)
 	}
+	if result.WithdrawExpireAmount != 300 {
+		t.Fatalf("withdraw_expire_amount: want 300, got %d", result.WithdrawExpireAmount)
+	}
 
 	if statedb.GetBalance(owner) != 1300 {
 		t.Fatalf("balance: want 1300, got %d", statedb.GetBalance(owner))

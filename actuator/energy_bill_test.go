@@ -51,6 +51,7 @@ func newEnergyBillCtx(t *testing.T, owner tcommon.Address) *Context {
 
 	dp := state.NewDynamicProperties()
 	dp.Set("energy_fee", 100)
+	dp.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
 
 	return &Context{
 		State:         sdb,
@@ -58,7 +59,51 @@ func newEnergyBillCtx(t *testing.T, owner tcommon.Address) *Context {
 		Tx:            tx,
 		BlockTime:     1_777_700_000_000,
 		PrevBlockTime: 1_777_700_000_000,
+		HeadSlot:      42,
+		HasHeadSlot:   true,
 		BlockNumber:   80_000,
+	}
+}
+
+func TestPayEnergyBill_PreEnergyLimitForkIgnoresStakeWhenFreezeV2Enabled(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x99, 0x09}
+	ctx := newEnergyBillCtx(t, owner)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit - 1)
+	ctx.DynProps.SetAllowTvmFreeze(true)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const initialBalance = int64(100_000_000)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, initialBalance)
+
+	const frozen = int64(10_000) * params.TRXPrecision
+	acct := ctx.State.GetAccount(owner)
+	acct.AddFrozenEnergy(frozen, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(10_000)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(50_000)
+
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime()); got < 50_000 {
+		t.Fatalf("availableAccountEnergyForBill = %d, want stake available before legacy receipt gate", got)
+	}
+
+	const energyUsed = int64(32_121)
+	expectedFee := energyUsed * 100
+	result := &Result{EnergyUsageTotal: energyUsed, ContractRet: 1}
+
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+	if result.EnergyUsed != 0 {
+		t.Errorf("EnergyUsed = %d, want 0 before ENERGY_LIMIT fork", result.EnergyUsed)
+	}
+	if result.EnergyFee != expectedFee {
+		t.Errorf("EnergyFee = %d, want %d", result.EnergyFee, expectedFee)
+	}
+	if got := ctx.State.GetBalance(owner); got != initialBalance-expectedFee {
+		t.Errorf("balance = %d, want %d", got, initialBalance-expectedFee)
+	}
+	if got := ctx.State.GetEnergyUsage(owner); got != 0 {
+		t.Errorf("energy_usage = %d, want 0", got)
 	}
 }
 
@@ -106,6 +151,12 @@ func TestPayEnergyBill_BurnTrx(t *testing.T) {
 	// Blackhole-account fallback must NOT be touched either.
 	if got := ctx.State.GetBalance(params.BlackholeAddress); got != 0 {
 		t.Errorf("blackhole balance = %d, want 0", got)
+	}
+	if got := ctx.State.GetLatestOperationTime(owner); got != ctx.PrevBlockTime {
+		t.Errorf("latest_opration_time = %d, want %d", got, ctx.PrevBlockTime)
+	}
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(owner); got != ctx.HeadSlot {
+		t.Errorf("latest_consume_time_for_energy = %d, want %d", got, ctx.HeadSlot)
 	}
 }
 
@@ -232,7 +283,7 @@ func TestPayEnergyBill_PureStakeNoBalanceDebit(t *testing.T) {
 	ctx.DynProps.SetTotalEnergyCurrentLimit(50_000)
 
 	// Sanity: helper should report >= 50_000 entitled.
-	got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.BlockTime)
+	got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime())
 	if got < 50_000 {
 		t.Fatalf("availableAccountEnergyForBill = %d, want >= 50000", got)
 	}
@@ -259,6 +310,9 @@ func TestPayEnergyBill_PureStakeNoBalanceDebit(t *testing.T) {
 	if got := ctx.State.GetEnergyUsage(owner); got != energyUsed {
 		t.Errorf("energy_usage = %d, want %d", got, energyUsed)
 	}
+	if got := ctx.State.GetLatestOperationTime(owner); got != ctx.PrevBlockTime {
+		t.Errorf("latest_opration_time = %d, want %d", got, ctx.PrevBlockTime)
+	}
 }
 
 // TestPayEnergyBill_PartialStakeOverage asserts the mixed path: stake
@@ -281,12 +335,12 @@ func TestPayEnergyBill_PartialStakeOverage(t *testing.T) {
 	ctx.DynProps.SetTotalEnergyWeight(1_000)
 	ctx.DynProps.SetTotalEnergyCurrentLimit(5_000)
 
-	got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.BlockTime)
+	got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime())
 	if got != 5_000 {
 		t.Fatalf("availableAccountEnergyForBill = %d, want 5000", got)
 	}
 
-	const energyUsed = int64(8_000)        // 5000 from stake, 3000 from balance
+	const energyUsed = int64(8_000) // 5000 from stake, 3000 from balance
 	const expectedStake = int64(5_000)
 	const expectedOverage = int64(3_000)
 	expectedFee := expectedOverage * 100
@@ -443,6 +497,12 @@ func TestPayEnergyBill_OriginSplit_HappyPath(t *testing.T) {
 	}
 	if got := ctx.State.GetEnergyUsage(origin); got != totalEnergy/2 {
 		t.Errorf("origin energy_usage = %d, want %d", got, totalEnergy/2)
+	}
+	if got := ctx.State.GetLatestOperationTime(caller); got != ctx.PrevBlockTime {
+		t.Errorf("caller latest_opration_time = %d, want %d", got, ctx.PrevBlockTime)
+	}
+	if got := ctx.State.GetLatestOperationTime(origin); got != ctx.PrevBlockTime {
+		t.Errorf("origin latest_opration_time = %d, want %d", got, ctx.PrevBlockTime)
 	}
 	// burn_trx_amount untouched since no balance debit happened.
 	if got := ctx.DynProps.BurnTrxAmount(); got != 0 {

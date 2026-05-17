@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -31,15 +30,18 @@ func (a *UpdateBrokerageActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
-	if !ctx.State.AccountExists(ownerAddr) {
-		return errors.New("owner account does not exist")
-	}
-	if ctx.State.GetWitness(ownerAddr) == nil {
-		return errors.New("owner is not a witness")
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
 	}
 	if c.Brokerage < 0 || c.Brokerage > 100 {
 		return errors.New("brokerage must be 0-100")
+	}
+	if !witnessExists(ctx, ownerAddr) {
+		return errors.New("owner is not a witness")
+	}
+	if !ctx.State.AccountExists(ownerAddr) {
+		return errors.New("owner account does not exist")
 	}
 	return nil
 }
@@ -49,7 +51,10 @@ func (a *UpdateBrokerageActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	if ctx.DB != nil {
 		rawdb.WriteWitnessBrokerage(ctx.DB, ownerAddr, int64(c.Brokerage))
 	}

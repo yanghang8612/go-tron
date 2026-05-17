@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"strconv"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -13,6 +14,7 @@ import (
 
 const unfreezeTokenID = int64(1_000_001)
 const testDayMs = int64(86_400_000) // use testDayMs to avoid conflict with dayMs in unfreeze_asset.go
+const unfreezeTokenIDString = "1000001"
 
 func makeUnfreezeAssetTx(ownerByte byte) *types.Transaction {
 	owner := makeTestAddr(ownerByte)
@@ -33,42 +35,41 @@ func makeUnfreezeAssetTx(ownerByte byte) *types.Transaction {
 	return types.NewTransactionFromPB(pb)
 }
 
-// setupUnfreezeCtx creates a context with:
-// - owner at ownerByte has issued a token with frozen_supply[0] = {frozenAmount, frozenDays}
-// - issue time stored in rawdb
-// - ctx.BlockTime = issueTime + blockTimeOffsetMs
+// setupUnfreezeCtx creates a context with owner at ownerByte holding one
+// account-level frozen_supply entry.
 func setupUnfreezeCtx(t *testing.T, ownerByte byte, frozenAmount, frozenDays int64, blockTimeOffset int64) *Context {
 	t.Helper()
 	owner := makeTestAddr(ownerByte)
 	issueTime := int64(1_000_000)
 
-	asset := &contractpb.AssetIssueContract{
-		Name:        []byte("FROZENTOKEN"),
-		TotalSupply: 1_000_000,
-		Id:          "1000001",
-		FrozenSupply: []*contractpb.AssetIssueContract_FrozenSupply{
-			{FrozenAmount: frozenAmount, FrozenDays: frozenDays},
-		},
-	}
 	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, unfreezeTokenID, asset); err != nil {
-		t.Fatal(err)
-	}
 	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], unfreezeTokenID); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssueTime(db, unfreezeTokenID, issueTime); err != nil {
+	asset := &contractpb.AssetIssueContract{Name: []byte("FROZENTOKEN"), Id: unfreezeTokenIDString}
+	if err := rawdb.WriteAssetIssueByName(db, []byte("FROZENTOKEN"), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, unfreezeTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte("FROZENTOKEN"), unfreezeTokenID); err != nil {
 		t.Fatal(err)
 	}
 
 	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetAssetIssued(owner, []byte("FROZENTOKEN"), unfreezeTokenIDString)
+	statedb.AddFrozenSupply(owner, []*corepb.Account_Frozen{
+		{FrozenBalance: frozenAmount, ExpireTime: issueTime + frozenDays*testDayMs},
+	})
 
 	tx := makeUnfreezeAssetTx(ownerByte)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = issueTime + blockTimeOffset
 	ctx.PrevBlockTime = ctx.BlockTime
+	ctx.DynProps.SetLatestBlockHeaderTimestamp(ctx.BlockTime)
 	return ctx
 }
 
@@ -117,34 +118,35 @@ func TestUnfreezeAssetExecute(t *testing.T) {
 	// Two frozen entries: entry 0 is past due, entry 1 is still locked.
 	owner := makeTestAddr(1)
 	issueTime := int64(1_000_000)
-	asset := &contractpb.AssetIssueContract{
-		Name:        []byte("FROZENTOKEN"),
-		TotalSupply: 1_000_000,
-		Id:          "1000001",
-		FrozenSupply: []*contractpb.AssetIssueContract_FrozenSupply{
-			{FrozenAmount: 100_000, FrozenDays: 1},  // entry 0: 1 day
-			{FrozenAmount: 200_000, FrozenDays: 30}, // entry 1: 30 days
-		},
-	}
 	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, unfreezeTokenID, asset); err != nil {
-		t.Fatal(err)
-	}
 	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], unfreezeTokenID); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssueTime(db, unfreezeTokenID, issueTime); err != nil {
+	asset := &contractpb.AssetIssueContract{Name: []byte("FROZENTOKEN"), Id: unfreezeTokenIDString}
+	if err := rawdb.WriteAssetIssueByName(db, []byte("FROZENTOKEN"), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, unfreezeTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte("FROZENTOKEN"), unfreezeTokenID); err != nil {
 		t.Fatal(err)
 	}
 
 	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetAssetIssued(owner, []byte("FROZENTOKEN"), unfreezeTokenIDString)
+	statedb.AddFrozenSupply(owner, []*corepb.Account_Frozen{
+		{FrozenBalance: 100_000, ExpireTime: issueTime + 1*testDayMs},
+		{FrozenBalance: 200_000, ExpireTime: issueTime + 30*testDayMs},
+	})
 
 	tx := makeUnfreezeAssetTx(1)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.BlockTime = issueTime + 2*testDayMs // 2 days: entry 0 eligible, entry 1 not
 	ctx.PrevBlockTime = ctx.BlockTime
+	ctx.DynProps.SetLatestBlockHeaderTimestamp(ctx.BlockTime)
 
 	act := &UnfreezeAssetActuator{}
 	result, err := act.Execute(ctx)
@@ -159,25 +161,71 @@ func TestUnfreezeAssetExecute(t *testing.T) {
 	if got := statedb.GetTRC10Balance(owner, unfreezeTokenID); got != 100_000 {
 		t.Fatalf("TRC10 balance: want 100000, got %d", got)
 	}
-	// Entry 0 marked claimed
-	if !statedb.IsFrozenClaimed(owner, unfreezeTokenID, 0) {
-		t.Fatal("entry 0 should be marked claimed")
+	remaining := statedb.GetAccount(owner).Proto().GetFrozenSupply()
+	if len(remaining) != 1 {
+		t.Fatalf("remaining frozen_supply: want 1, got %d", len(remaining))
 	}
-	// Entry 1 not claimed
-	if statedb.IsFrozenClaimed(owner, unfreezeTokenID, 1) {
-		t.Fatal("entry 1 should not be claimed yet")
+	if remaining[0].FrozenBalance != 200_000 {
+		t.Fatalf("remaining frozen balance: want 200000, got %d", remaining[0].FrozenBalance)
 	}
 }
 
-func TestUnfreezeAssetExecute_AlreadyClaimed(t *testing.T) {
-	// Entry already claimed — second call should find nothing to unfreeze
-	ctx := setupUnfreezeCtx(t, 1, 200_000, 1, 2*testDayMs)
+func TestUnfreezeAsset_PreSameTokenNameUsesIssuedName(t *testing.T) {
 	owner := makeTestAddr(1)
-	// Mark entry 0 as already claimed
-	ctx.State.SetFrozenClaimed(owner, unfreezeTokenID, 0)
+	issueTime := int64(1_000_000)
+	db := ethrawdb.NewMemoryDatabase()
+	asset := &contractpb.AssetIssueContract{Name: []byte("123"), Id: strconv.FormatInt(unfreezeTokenID, 10)}
+	if err := rawdb.WriteAssetIssueByName(db, []byte("123"), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, unfreezeTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, 123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte("123"), unfreezeTokenID); err != nil {
+		t.Fatal(err)
+	}
+
+	statedb := setupStateDB(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetAssetIssued(owner, []byte("123"), strconv.FormatInt(unfreezeTokenID, 10))
+	statedb.AddFrozenSupply(owner, []*corepb.Account_Frozen{
+		{FrozenBalance: 100_000, ExpireTime: issueTime + testDayMs},
+	})
+
+	tx := makeUnfreezeAssetTx(1)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	ctx.BlockTime = issueTime + 2*testDayMs
+	ctx.PrevBlockTime = ctx.BlockTime
+	ctx.DynProps.SetLatestBlockHeaderTimestamp(ctx.BlockTime)
+	ctx.DynProps.SetAllowSameTokenName(false)
 
 	act := &UnfreezeAssetActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate should use asset_issued_name before AllowSameTokenName: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute should credit name-index token ID: %v", err)
+	}
+	if got := statedb.GetTRC10Balance(owner, unfreezeTokenID); got != 100_000 {
+		t.Fatalf("name-index token balance: got %d want 100000", got)
+	}
+	if got := statedb.GetTRC10Balance(owner, 123); got != 0 {
+		t.Fatalf("parsed-ID token balance must stay zero, got %d", got)
+	}
+}
+
+func TestUnfreezeAssetExecute_NoRemainingExpiredSupply(t *testing.T) {
+	ctx := setupUnfreezeCtx(t, 1, 200_000, 1, 2*testDayMs)
+
+	act := &UnfreezeAssetActuator{}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
 	if err := act.Validate(ctx); err == nil {
-		t.Fatal("expected error: nothing to unfreeze (already claimed)")
+		t.Fatal("expected error: nothing left to unfreeze")
 	}
 }

@@ -3,9 +3,10 @@ package actuator
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -33,13 +34,30 @@ func (a *UpdateAssetActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
-	tokenID, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
-	if !ok {
-		return errors.New("no token issued by this address")
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
 	}
-	if rawdb.ReadAssetIssue(ctx.DB, tokenID) == nil {
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		return errors.New("owner account does not exist")
+	}
+	issued, err := issuedAssetRef(ctx, acct)
+	if err != nil {
+		return err
+	}
+	if !ctx.DynProps.AllowSameTokenName() {
+		if rawdb.ReadAssetIssueByName(ctx.DB, issued.Name) == nil {
+			return errors.New("token not found")
+		}
+	} else if rawdb.ReadAssetIssue(ctx.DB, issued.TokenID) == nil {
 		return errors.New("token not found")
+	}
+	if !validBytesLen(c.Url, 256, false) {
+		return errors.New("invalid url")
+	}
+	if !validBytesLen(c.Description, 200, true) {
+		return errors.New("invalid description")
 	}
 	oneDayNetLimit := ctx.DynProps.OneDayNetLimit()
 	if c.NewLimit < 0 || c.NewLimit >= oneDayNetLimit {
@@ -56,24 +74,77 @@ func (a *UpdateAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
-	tokenID, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
-	if !ok {
-		return nil, errors.New("no token issued by this address")
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
 	}
-	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	if asset == nil {
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		return nil, errors.New("owner account does not exist")
+	}
+	issued, err := issuedAssetRef(ctx, acct)
+	if err != nil {
+		return nil, err
+	}
+	v2Asset := rawdb.ReadAssetIssue(ctx.DB, issued.TokenID)
+	if v2Asset == nil {
 		return nil, errors.New("token not found")
 	}
 
-	asset.Description = c.Description
-	asset.Url = c.Url
-	asset.FreeAssetNetLimit = c.NewLimit
-	asset.PublicFreeAssetNetLimit = c.NewPublicLimit
+	v2Asset.Description = c.Description
+	v2Asset.Url = c.Url
+	v2Asset.FreeAssetNetLimit = c.NewLimit
+	v2Asset.PublicFreeAssetNetLimit = c.NewPublicLimit
 
-	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, asset); err != nil {
+	if !ctx.DynProps.AllowSameTokenName() {
+		legacyAsset := rawdb.ReadAssetIssueByName(ctx.DB, issued.Name)
+		if legacyAsset == nil {
+			return nil, errors.New("token not found")
+		}
+		legacyAsset.Description = c.Description
+		legacyAsset.Url = c.Url
+		legacyAsset.FreeAssetNetLimit = c.NewLimit
+		legacyAsset.PublicFreeAssetNetLimit = c.NewPublicLimit
+		if err := rawdb.WriteAssetIssueByName(ctx.DB, issued.Name, legacyAsset); err != nil {
+			return nil, fmt.Errorf("write updated legacy asset: %w", err)
+		}
+	}
+	if err := rawdb.WriteAssetIssue(ctx.DB, issued.TokenID, v2Asset); err != nil {
 		return nil, fmt.Errorf("write updated asset: %w", err)
 	}
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
+}
+
+type issuedAssetInfo struct {
+	Name    []byte
+	TokenID int64
+}
+
+func issuedAssetRef(ctx *Context, acct *types.Account) (*issuedAssetInfo, error) {
+	pb := acct.Proto()
+	tokenIDBytes := pb.GetAssetIssued_ID()
+	if len(tokenIDBytes) == 0 {
+		return nil, errors.New("owner account has not issued any asset")
+	}
+	tokenID, err := strconv.ParseInt(string(tokenIDBytes), 10, 64)
+	if err != nil {
+		return nil, errors.New("invalid issued asset ID")
+	}
+	if !ctx.DynProps.AllowSameTokenName() {
+		name := pb.GetAssetIssuedName()
+		if len(name) == 0 {
+			return nil, errors.New("owner account has not issued any asset")
+		}
+		return &issuedAssetInfo{Name: name, TokenID: tokenID}, nil
+	}
+	return &issuedAssetInfo{TokenID: tokenID}, nil
+}
+
+func issuedAssetTokenID(ctx *Context, acct *types.Account) (int64, error) {
+	issued, err := issuedAssetRef(ctx, acct)
+	if err != nil {
+		return 0, err
+	}
+	return issued.TokenID, nil
 }

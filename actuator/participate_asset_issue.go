@@ -4,8 +4,6 @@ import (
 	"errors"
 	"math"
 
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -33,21 +31,40 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	resolved, err := resolveAsset(ctx, c.AssetName)
 	if err != nil {
 		return err
 	}
-	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	if asset == nil {
-		return errors.New("token not found")
-	}
+	tokenID := resolved.TokenID
+	asset := resolved.Asset
 	if c.Amount <= 0 {
 		return errors.New("amount must be positive")
+	}
+	buyer, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
+	issuer, err := checkedAddress(c.ToAddress, "toAddress")
+	if err != nil {
+		return err
+	}
+	if buyer == issuer {
+		return errors.New("buyer and issuer must be different")
+	}
+	if !ctx.State.AccountExists(buyer) {
+		return errors.New("buyer account does not exist")
+	}
+	assetOwner, err := checkedAddress(asset.OwnerAddress, "asset ownerAddress")
+	if err != nil {
+		return err
+	}
+	if issuer != assetOwner {
+		return errors.New("asset is not issued by toAddress")
 	}
 	if ctx.PrevBlockTime < asset.StartTime {
 		return errors.New("ICO has not started yet")
 	}
-	if ctx.PrevBlockTime > asset.EndTime {
+	if ctx.PrevBlockTime >= asset.EndTime {
 		return errors.New("ICO has ended")
 	}
 	if asset.TrxNum <= 0 || asset.Num <= 0 {
@@ -61,16 +78,20 @@ func (a *ParticipateAssetIssueActuator) Validate(ctx *Context) error {
 	if tokenAmount <= 0 {
 		return errors.New("token amount rounds to zero")
 	}
-	buyer := common.BytesToAddress(c.OwnerAddress)
-	issuer := common.BytesToAddress(c.ToAddress)
-	if buyer == issuer {
-		return errors.New("buyer and issuer must be different")
-	}
 	if ctx.State.GetBalance(buyer) < c.Amount {
 		return errors.New("insufficient TRX balance")
 	}
-	if ctx.State.GetTRC10Balance(issuer, tokenID) < tokenAmount {
+	if !ctx.State.AccountExists(issuer) {
+		return errors.New("issuer account does not exist")
+	}
+	if ctx.State.GetBalance(issuer) > math.MaxInt64-c.Amount {
+		return errors.New("issuer balance overflows int64")
+	}
+	if ctx.State.GetTRC10BalanceFinal(issuer, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) < tokenAmount {
 		return errors.New("issuer has insufficient token supply")
+	}
+	if ctx.State.GetTRC10BalanceFinal(buyer, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-tokenAmount {
+		return errors.New("buyer TRC10 balance overflows int64")
 	}
 	return nil
 }
@@ -80,18 +101,31 @@ func (a *ParticipateAssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokenID, err := resolveAssetNameOrID(ctx, c.AssetName)
+	resolved, err := resolveAsset(ctx, c.AssetName)
 	if err != nil {
 		return nil, err
 	}
-	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	if asset == nil {
-		return nil, errors.New("token not found")
+	tokenID := resolved.TokenID
+	asset := resolved.Asset
+	if int64(asset.Num) > 0 && c.Amount > math.MaxInt64/int64(asset.Num) {
+		return nil, errors.New("token amount overflows int64")
 	}
 	tokenAmount := c.Amount * int64(asset.Num) / int64(asset.TrxNum) // overflow already checked in Validate
 
-	buyer := common.BytesToAddress(c.OwnerAddress)
-	issuer := common.BytesToAddress(c.ToAddress)
+	buyer, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	issuer, err := checkedAddress(c.ToAddress, "toAddress")
+	if err != nil {
+		return nil, err
+	}
+	if ctx.State.GetBalance(issuer) > math.MaxInt64-c.Amount {
+		return nil, errors.New("issuer balance overflows int64")
+	}
+	if ctx.State.GetTRC10BalanceFinal(buyer, c.AssetName, tokenID, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-tokenAmount {
+		return nil, errors.New("buyer TRC10 balance overflows int64")
+	}
 
 	// Buyer pays TRX; issuer receives TRX
 	if err := ctx.State.SubBalance(buyer, c.Amount); err != nil {
@@ -100,10 +134,10 @@ func (a *ParticipateAssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.AddBalance(issuer, c.Amount)
 
 	// Issuer gives tokens; buyer receives tokens
-	if err := ctx.State.SubTRC10Balance(issuer, tokenID, tokenAmount); err != nil {
+	if err := ctx.State.SubTRC10BalanceFinal(issuer, c.AssetName, tokenID, tokenAmount, ctx.DynProps.AllowSameTokenName()); err != nil {
 		return nil, err
 	}
-	ctx.State.AddTRC10Balance(buyer, tokenID, tokenAmount)
+	ctx.State.AddTRC10BalanceFinal(buyer, c.AssetName, tokenID, tokenAmount, ctx.DynProps.AllowSameTokenName())
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

@@ -17,6 +17,7 @@ func TestUpdateEnergyLimitValidate(t *testing.T) {
 		OriginEnergyLimit: 5_000_000,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateEnergyLimitContract, c, 0)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
 	act := &UpdateEnergyLimitActuator{}
 
 	// Owner doesn't exist
@@ -42,6 +43,27 @@ func TestUpdateEnergyLimitValidate(t *testing.T) {
 	}
 }
 
+func TestUpdateEnergyLimitBeforeGateRejected(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x11}
+	contractAddr := tcommon.Address{0x41, 0x12}
+	c := &contractpb.UpdateEnergyLimitContract{
+		OwnerAddress:      owner[:],
+		ContractAddress:   contractAddr[:],
+		OriginEnergyLimit: 5_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateEnergyLimitContract, c, 0)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit - 1)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress: owner[:],
+	})
+
+	act := &UpdateEnergyLimitActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error before energy limit update gate")
+	}
+}
+
 func TestUpdateEnergyLimitNonOwner(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x11}
 	other := tcommon.Address{0x41, 0x13}
@@ -52,6 +74,7 @@ func TestUpdateEnergyLimitNonOwner(t *testing.T) {
 		OriginEnergyLimit: 5_000_000,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateEnergyLimitContract, c, 0)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
 	ctx.State.CreateAccount(other, corepb.AccountType_Normal)
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner[:],
@@ -72,6 +95,7 @@ func TestUpdateEnergyLimitZeroRejected(t *testing.T) {
 		OriginEnergyLimit: 0,
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_UpdateEnergyLimitContract, c, 0)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
 		OriginAddress: owner[:],

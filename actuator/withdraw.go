@@ -1,9 +1,11 @@
 package actuator
 
 import (
+	"bytes"
 	"errors"
+	"math"
 
-	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -28,12 +30,22 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+	ownerAddr, err := checkedAddress(wc.OwnerAddress, "address")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
+	if ctx.DB != nil && isGenesisWitness(ctx, ownerAddr[:]) {
+		return errors.New("guard representative is not allowed to withdraw balance")
+	}
 	lastWithdraw := ctx.State.GetLatestWithdrawTime(ownerAddr)
-	if ctx.PrevBlockTime-lastWithdraw < withdrawCooldown {
+	cooldown := int64(withdrawCooldown)
+	if ctx.DynProps != nil {
+		cooldown = ctx.DynProps.WitnessAllowanceFrozenTime() * withdrawCooldown
+	}
+	if ctx.PrevBlockTime-lastWithdraw < cooldown {
 		return errors.New("withdraw too frequent")
 	}
 	// Must either have existing allowance OR a pending voter reward to
@@ -43,7 +55,19 @@ func (a *WithdrawBalanceActuator) Validate(ctx *Context) error {
 		queryReward(ctx.DB, ctx.State, ctx.DynProps, ownerAddr) <= 0 {
 		return errors.New("no allowance to withdraw")
 	}
+	if ctx.State.GetBalance(ownerAddr) > math.MaxInt64-ctx.State.GetAllowance(ownerAddr) {
+		return errors.New("integer overflow")
+	}
 	return nil
+}
+
+func isGenesisWitness(ctx *Context, owner []byte) bool {
+	for _, w := range rawdb.ReadGenesisWitnesses(ctx.DB) {
+		if bytes.Equal(w.Address[:], owner) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
@@ -51,7 +75,10 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(wc.OwnerAddress)
+	ownerAddr, err := checkedAddress(wc.OwnerAddress, "address")
+	if err != nil {
+		return nil, err
+	}
 
 	// Settle any pending voter reward into allowance first (no-op when
 	// change_delegation is off — voter rewards only apply on the new path).
@@ -61,5 +88,5 @@ func (a *WithdrawBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.AddBalance(ownerAddr, allowance)
 	ctx.State.SetAllowance(ownerAddr, 0)
 	ctx.State.SetLatestWithdrawTime(ownerAddr, ctx.PrevBlockTime)
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	return &Result{Fee: 0, WithdrawAmount: allowance, ContractRet: 1}, nil
 }

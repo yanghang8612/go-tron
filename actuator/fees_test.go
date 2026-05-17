@@ -78,8 +78,12 @@ func TestConsumeMultiSignFee_charged(t *testing.T) {
 	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.DynProps.SetMultiSignFee(multiSignFee)
 
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	charged, err := ConsumeMultiSignFee(ctx)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if charged != multiSignFee {
+		t.Fatalf("charged multi-sign fee: got %d, want %d", charged, multiSignFee)
 	}
 
 	got := statedb.GetBalance(owner)
@@ -100,7 +104,7 @@ func TestConsumeMultiSignFee_skipped_single_sig(t *testing.T) {
 	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.DynProps.SetMultiSignFee(1_000_000)
 
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	if _, err := ConsumeMultiSignFee(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -121,7 +125,7 @@ func TestConsumeMultiSignFee_skipped_flag_off(t *testing.T) {
 	ctx.DynProps.SetAllowMultiSign(false) // gate off
 	ctx.DynProps.SetMultiSignFee(1_000_000)
 
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	if _, err := ConsumeMultiSignFee(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -142,7 +146,7 @@ func TestConsumeMultiSignFee_zero_fee(t *testing.T) {
 	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.DynProps.SetMultiSignFee(0) // fee is 0 — no charge
 
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	if _, err := ConsumeMultiSignFee(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -165,8 +169,12 @@ func TestConsumeMemoFee_charged(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetMemoFee(memoFee)
 
-	if err := ConsumeMemoFee(ctx); err != nil {
+	charged, err := ConsumeMemoFee(ctx)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if charged != memoFee {
+		t.Fatalf("charged memo fee: got %d, want %d", charged, memoFee)
 	}
 
 	got := statedb.GetBalance(owner)
@@ -186,7 +194,7 @@ func TestConsumeMemoFee_skipped_empty_memo(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetMemoFee(500_000)
 
-	if err := ConsumeMemoFee(ctx); err != nil {
+	if _, err := ConsumeMemoFee(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -205,7 +213,7 @@ func TestConsumeMemoFee_skipped_zero_fee(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetMemoFee(0) // governance default — 0
 
-	if err := ConsumeMemoFee(ctx); err != nil {
+	if _, err := ConsumeMemoFee(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -233,13 +241,13 @@ func TestBurnTrxAmount_accumulates_on_blackhole_optimization(t *testing.T) {
 	ctx.DynProps.Set("allow_blackhole_optimization", 1)
 
 	// Charge multi-sign fee on tx1 (1_000_000 burned)
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	if _, err := ConsumeMultiSignFee(ctx); err != nil {
 		t.Fatalf("multi-sign fee: %v", err)
 	}
 
 	// Charge memo fee on tx2 — reuse owner, update tx in ctx
 	ctx.Tx = txMemo
-	if err := ConsumeMemoFee(ctx); err != nil {
+	if _, err := ConsumeMemoFee(ctx); err != nil {
 		t.Fatalf("memo fee: %v", err)
 	}
 
@@ -266,7 +274,7 @@ func TestBurnTrxAmount_zero_before_blackhole_optimization(t *testing.T) {
 	ctx.DynProps.SetMultiSignFee(1_000_000)
 	// allow_blackhole_optimization stays 0 (default) → pre-fork path
 
-	if err := ConsumeMultiSignFee(ctx); err != nil {
+	if _, err := ConsumeMultiSignFee(ctx); err != nil {
 		t.Fatalf("multi-sign fee: %v", err)
 	}
 

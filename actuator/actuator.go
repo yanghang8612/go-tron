@@ -43,10 +43,27 @@ type Context struct {
 	// block's timestamp during tx Execute. Consensus-affecting reads
 	// (freeze expiry, withdraw cooldown, proposal create_time, etc.) must
 	// use this field; only the VM's TIMESTAMP opcode reads `BlockTime`.
-	PrevBlockTime   int64
+	PrevBlockTime int64
+	// HeadSlot is the chain head slot at the moment this tx starts executing,
+	// i.e. java-tron's ResourceProcessor/EnergyProcessor `now`. Resource
+	// sliding-window fields (latest_consume_time*, public_net_time, TRC10
+	// asset net times) are denominated in slots, while operation/expiry times
+	// stay in milliseconds via PrevBlockTime.
+	HeadSlot        int64
+	HasHeadSlot     bool
 	BlockNumber     uint64
 	DB              BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
 	ActiveWitnesses []common.Address // active witness set for governance checks
+}
+
+func (ctx *Context) ResourceTime() int64 {
+	if ctx != nil && ctx.HasHeadSlot {
+		return ctx.HeadSlot
+	}
+	if ctx == nil {
+		return 0
+	}
+	return ctx.PrevBlockTime
 }
 
 // Result captures the outcome of an actuator's Execute() call. The energy
@@ -57,31 +74,44 @@ type Context struct {
 //   - EnergyUsageTotal: total VM energy consumed by the call (proto field 4).
 //     Set by VMActuator.executeCreate/executeTrigger.
 //   - EnergyUsed:       fraction of EnergyUsageTotal that was paid from the
-//                       caller's frozen-energy stake (proto field 1). 0 if
-//                       the entire bill was paid from balance. Set by
-//                       PayEnergyBill.
+//     caller's frozen-energy stake (proto field 1). 0 if
+//     the entire bill was paid from balance. Set by
+//     PayEnergyBill.
 //   - OriginEnergyUsage: fraction paid from the contract origin's frozen
-//                       energy under the consume_user_resource_percent split
-//                       (proto field 3). Currently always 0 (see
-//                       PayEnergyBill TODO).
+//     energy under the consume_user_resource_percent split
+//     (proto field 3). Set by PayEnergyBill when java-tron's origin/caller
+//     split applies.
 //   - EnergyFee:        balance-paid portion of the energy bill in SUN
-//                       (proto field 2). Set by PayEnergyBill.
+//     (proto field 2). Set by PayEnergyBill.
 //   - Fee:              total transaction fee in SUN. Sum of EnergyFee plus
-//                       any actuator-specific fees (asset issue, exchange
-//                       create, etc.). Bandwidth NetFee is *not* included
-//                       here — it's added in buildTransactionInfo.
+//     any actuator-specific fees (asset issue, exchange
+//     create, etc.). Bandwidth NetFee is *not* included
+//     here — it's added in buildTransactionInfo.
 type Result struct {
-	Fee               int64
-	EnergyUsageTotal  int64
-	EnergyUsed        int64
-	EnergyFee         int64
-	OriginEnergyUsage int64
-	NetUsage          int64
-	NetFee            int64
-	ContractResult    []byte
-	ContractAddress   []byte
-	Logs              []vm.Log
-	ContractRet       int32
+	Fee                           int64
+	EnergyUsageTotal              int64
+	EnergyUsed                    int64
+	EnergyFee                     int64
+	OriginEnergyUsage             int64
+	NetUsage                      int64
+	NetFee                        int64
+	NetFeeForBandwidth            bool
+	AssetIssueID                  string
+	WithdrawAmount                int64
+	UnfreezeAmount                int64
+	WithdrawExpireAmount          int64
+	CancelUnfreezeV2Amount        map[string]int64
+	ExchangeReceivedAmount        int64
+	ExchangeInjectAnotherAmount   int64
+	ExchangeWithdrawAnotherAmount int64
+	ShieldedTransactionFee        int64
+	ExchangeID                    int64
+	OrderID                       []byte
+	OrderDetails                  []*corepb.MarketOrderDetail
+	ContractResult                []byte
+	ContractAddress               []byte
+	Logs                          []vm.Log
+	ContractRet                   int32
 }
 
 type Actuator interface {
@@ -152,8 +182,6 @@ func CreateActuator(tx *types.Transaction) (Actuator, error) {
 		return &ParticipateAssetIssueActuator{}, nil
 	case corepb.Transaction_Contract_UpdateAssetContract:
 		return &UpdateAssetActuator{}, nil
-	case corepb.Transaction_Contract_VoteAssetContract:
-		return &VoteAssetActuator{}, nil
 	case corepb.Transaction_Contract_UnfreezeAssetContract:
 		return &UnfreezeAssetActuator{}, nil
 	case corepb.Transaction_Contract_MarketSellAssetContract:

@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -26,11 +25,20 @@ func (a *CreateAccountActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(ac.OwnerAddress)
+	ownerAddr, err := checkedAddress(ac.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	newAddr := common.BytesToAddress(ac.AccountAddress)
+	if ctx.State.GetBalance(ownerAddr) < ctx.DynProps.CreateNewAccountFeeInSystemContract() {
+		return errors.New("Validate CreateAccountActuator error, insufficient fee.")
+	}
+	newAddr, err := checkedAddress(ac.AccountAddress, "account address")
+	if err != nil {
+		return err
+	}
 	if ctx.State.AccountExists(newAddr) {
 		return errors.New("account already exists")
 	}
@@ -42,10 +50,21 @@ func (a *CreateAccountActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	newAddr := common.BytesToAddress(ac.AccountAddress)
+	ownerAddr, err := checkedAddress(ac.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	newAddr, err := checkedAddress(ac.AccountAddress, "account address")
+	if err != nil {
+		return nil, err
+	}
 	ctx.State.CreateAccountWithTime(newAddr, ac.Type, ctx.DynProps.LatestBlockHeaderTimestamp())
 	if ctx.DynProps.AllowMultiSign() {
 		ctx.State.ApplyDefaultAccountPermissions(newAddr, ctx.DynProps)
 	}
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	fee := ctx.DynProps.CreateNewAccountFeeInSystemContract()
+	if err := burnFee(ctx, ownerAddr, fee); err != nil {
+		return nil, err
+	}
+	return &Result{Fee: fee, ContractRet: 1}, nil
 }

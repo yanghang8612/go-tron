@@ -2,6 +2,8 @@ package actuator
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -17,19 +19,19 @@ import (
 // (chainbase/src/main/java/org/tron/core/capsule/ReceiptCapsule.java).
 // java has two overloads:
 //
-//  - 1-arg `payEnergyBill(account, usage, ...)` (line 260): drain
-//    account's stake-funded energy first; spill to balance-billed
-//    energy_fee at the per-SUN rate; route the fee to
-//    `transaction_fee_pool` / `burn_trx_amount` / blackhole based on DP
-//    flags. The OUT_OF_TIME exception skips the fee-pool path so the
-//    SR-time-budget overrun gets burned rather than rebated to the SR.
-//  - 3-arg `payEnergyBill(origin, caller, percent, originEnergyLimit, …)`
-//    (line 201): when caller != origin and the contract has
-//    `consume_user_resource_percent > 0`, split the bill — origin
-//    absorbs `percent%` of EnergyUsageTotal (capped by its stake-energy
-//    AND `origin_energy_limit`), the remainder bills the caller via
-//    the 1-arg path. Origin NEVER pays TRX from balance; if its stake
-//    can't cover its share, the shortfall flows back to caller.
+//   - 1-arg `payEnergyBill(account, usage, ...)` (line 260): drain
+//     account's stake-funded energy first; spill to balance-billed
+//     energy_fee at the per-SUN rate; route the fee to
+//     `transaction_fee_pool` / `burn_trx_amount` / blackhole based on DP
+//     flags. The OUT_OF_TIME exception skips the fee-pool path so the
+//     SR-time-budget overrun gets burned rather than rebated to the SR.
+//   - 3-arg `payEnergyBill(origin, caller, percent, originEnergyLimit, …)`
+//     (line 201): when caller != origin and the contract has
+//     `consume_user_resource_percent > 0`, split the bill — origin
+//     absorbs `percent%` of EnergyUsageTotal (capped by its stake-energy
+//     AND `origin_energy_limit`), the remainder bills the caller via
+//     the 1-arg path. Origin NEVER pays TRX from balance; if its stake
+//     can't cover its share, the shortfall flows back to caller.
 //
 // On the live cross-impl chain (`allow_blackhole_optimization` active),
 // the spill goes to `burn_trx_amount`. See
@@ -56,19 +58,13 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 	// 3-arg path: TriggerSmartContract with caller != origin and a
 	// non-zero ConsumeUserResourcePercent. Mirrors java's split.
 	origin, originUsage, callerUsage := splitOriginCallerUsage(ctx, caller, totalEnergy)
-	if originUsage > 0 {
+	if origin != (common.Address{}) {
 		// Bill origin against its stake-energy only. No balance debit.
 		// Mirrors `energyProcessor.useEnergy(origin, originUsage, now)` at
 		// ReceiptCapsule.java:235 — we already pre-capped originUsage by
 		// origin's available stake in splitOriginCallerUsage, so this
 		// never over-bills.
-		recovered := recoverEnergyUsage(
-			ctx.State.GetEnergyUsage(origin),
-			ctx.State.GetLatestConsumeTimeForEnergy(origin),
-			ctx.PrevBlockTime,
-		)
-		ctx.State.SetEnergyUsage(origin, recovered+originUsage)
-		ctx.State.SetLatestConsumeTimeForEnergy(origin, ctx.PrevBlockTime)
+		useEnergyForBill(ctx, origin, originUsage)
 		// Receipt's origin_energy_usage carries the split share so SDKs
 		// see the same TransactionInfo as java-tron.
 		result.OriginEnergyUsage = originUsage
@@ -81,12 +77,18 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 // caller's stake-funded energy, spill to balance, route the fee.
 func billCallerSide(ctx *Context, result *Result, caller common.Address, usage int64) error {
 	if usage <= 0 {
-		// All energy was absorbed by origin's stake (or the tx was a no-op).
-		// Nothing to bill on the caller side.
+		// All energy was absorbed by origin's stake. java-tron still routes
+		// through EnergyProcessor.useEnergy(caller, 0), refreshing the caller's
+		// recovered usage window and latest operation timestamp.
+		useEnergyForBill(ctx, caller, 0)
 		return nil
 	}
 
-	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, ctx.PrevBlockTime)
+	resourceTime := ctx.ResourceTime()
+	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, resourceTime)
+	if legacyVMReceiptEnergyLeftMode(ctx) {
+		stakeLeft = 0
+	}
 
 	stakeUsed := stakeLeft
 	if stakeUsed > usage {
@@ -97,15 +99,7 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 	// Mark the stake-funded portion against the caller's energy_usage.
 	// Mirrors EnergyProcessor.useEnergy: recovered_usage + stakeUsed,
 	// timestamp updated to `now`.
-	if stakeUsed > 0 {
-		recovered := recoverEnergyUsage(
-			ctx.State.GetEnergyUsage(caller),
-			ctx.State.GetLatestConsumeTimeForEnergy(caller),
-			ctx.PrevBlockTime,
-		)
-		ctx.State.SetEnergyUsage(caller, recovered+stakeUsed)
-		ctx.State.SetLatestConsumeTimeForEnergy(caller, ctx.PrevBlockTime)
-	}
+	useEnergyForBill(ctx, caller, stakeUsed)
 
 	// proto field 1 (energy_usage) carries the stake-paid amount.
 	result.EnergyUsed = stakeUsed
@@ -142,11 +136,6 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 	outOfTime := contractRet == corepb.Transaction_Result_OUT_OF_TIME
 
 	if ctx.DynProps.AllowTransactionFeePool() && !outOfTime {
-		// FOLLOW-UP: the per-block drain that returns this pool back to
-		// the witness's allowance (java Manager.payReward lines 1934-1944)
-		// is NOT yet implemented in core/reward.go. On any chain that
-		// activates `support_transaction_fee_pool`, the pool will grow
-		// without ever paying out — flagged in D-1 follow-up gaps.
 		ctx.DynProps.AddTransactionFeePool(bill)
 		return nil
 	}
@@ -156,6 +145,19 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 	}
 	ctx.State.AddBalance(params.BlackholeAddress, bill)
 	return nil
+}
+
+func useEnergyForBill(ctx *Context, addr common.Address, usage int64) {
+	resourceTime := ctx.ResourceTime()
+	recovered := recoverEnergyUsageForDP(
+		ctx.State.GetEnergyUsage(addr),
+		ctx.State.GetLatestConsumeTimeForEnergy(addr),
+		resourceTime,
+		ctx.DynProps,
+	)
+	ctx.State.SetEnergyUsage(addr, recovered+usage)
+	ctx.State.SetLatestConsumeTimeForEnergy(addr, resourceTime)
+	ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
 }
 
 // splitOriginCallerUsage decides the (origin, originUsage, callerUsage)
@@ -171,6 +173,9 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 //	callerUsage = totalEnergy - originUsage
 func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int64) (origin common.Address, originShare, callerShare int64) {
 	if ctx.Tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
+		return common.Address{}, 0, totalEnergy
+	}
+	if legacyVMReceiptEnergyLeftMode(ctx) {
 		return common.Address{}, 0, totalEnergy
 	}
 	c := ctx.Tx.Contract()
@@ -203,7 +208,7 @@ func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int
 	want := totalEnergy * percent / 100
 
 	originLimit := contract.OriginEnergyLimit
-	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.PrevBlockTime)
+	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.ResourceTime())
 
 	cap := originStakeLeft
 	if originLimit > 0 && originLimit < cap {
@@ -216,6 +221,20 @@ func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int
 		want = 0
 	}
 	return originAddr, want, totalEnergy - want
+}
+
+func legacyVMReceiptEnergyLeftMode(ctx *Context) bool {
+	if ctx == nil || ctx.DynProps == nil {
+		return false
+	}
+	// java-tron pre-ENERGY_LIMIT fork uses VMActuator's float-ratio energy
+	// limit path. That path does not populate ReceiptCapsule.callerEnergyLeft
+	// / originEnergyLeft, while ReceiptCapsule.payEnergyBill reads those
+	// fields whenever allowTvmFreeze or supportUnfreezeDelay is active. The
+	// effective stake-paid energy is therefore zero until the hard fork flips
+	// VMActuator to the fixed-ratio path.
+	return !energyLimitHardForkActive(ctx) &&
+		(ctx.DynProps.AllowTvmFreeze() || ctx.DynProps.SupportUnfreezeDelay())
 }
 
 // extractOwnerAddress mirrors core.extractSender but stays inside the
@@ -254,7 +273,7 @@ func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties
 	if limit <= 0 {
 		return 0
 	}
-	recovered := recoverEnergyUsage(s.GetEnergyUsage(addr), s.GetLatestConsumeTimeForEnergy(addr), now)
+	recovered := recoverEnergyUsageForDP(s.GetEnergyUsage(addr), s.GetLatestConsumeTimeForEnergy(addr), now, dp)
 	if recovered >= limit {
 		return 0
 	}
@@ -277,32 +296,86 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 		return 0
 	}
 	totalLimit := dp.TotalEnergyCurrentLimit()
+	harden := dp.AllowHardenResourceCalculation()
 
 	if dp.UnfreezeDelayDays() > 0 {
-		netWeight := float64(frozen) / float64(params.TRXPrecision)
-		return int64(netWeight * (float64(totalLimit) / float64(totalWeight)))
+		return calculateEnergyLimitV2(frozen, totalLimit, totalWeight, harden)
 	}
 	if frozen < params.TRXPrecision {
 		return 0
 	}
-	netWeight := frozen / params.TRXPrecision
-	return int64(float64(netWeight) * (float64(totalLimit) / float64(totalWeight)))
+	return calculateEnergyLimitV1(frozen, totalLimit, totalWeight, harden)
 }
 
 // recoverEnergyUsage applies the sliding-window recovery to a stored
 // energy_usage value. Identical math to core.recoverUsage (window =
 // 86_400_000ms = 1 day). Inlined to keep actuator -> core import-free.
 func recoverEnergyUsage(oldUsage, lastTime, now int64) int64 {
+	return recoverEnergyUsageWithHarden(oldUsage, lastTime, now, false)
+}
+
+func recoverEnergyUsageForDP(oldUsage, lastTime, now int64, dp *state.DynamicProperties) int64 {
+	return recoverEnergyUsageWithHarden(oldUsage, lastTime, now, dp != nil && dp.AllowHardenResourceCalculation())
+}
+
+func recoverEnergyUsageWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
+	windowSize := int64(params.WindowSizeSlots)
 	elapsed := now - lastTime
-	if elapsed >= int64(params.WindowSizeMs) {
+	if elapsed >= windowSize {
 		return 0
 	}
 	if elapsed <= 0 {
 		return oldUsage
 	}
-	remaining := int64(params.WindowSizeMs) - elapsed
-	return oldUsage * remaining / int64(params.WindowSizeMs)
+	remaining := windowSize - elapsed
+	if harden {
+		averageLastUsage := divideCeilBigInt(
+			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForEnergy)),
+			big.NewInt(windowSize),
+		)
+		decay := float64(remaining) / float64(windowSize)
+		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+		return bigMulDivInt64(averageLastUsage, windowSize, resourcePrecisionForEnergy)
+	}
+	return oldUsage * remaining / windowSize
+}
+
+const resourcePrecisionForEnergy = int64(1_000_000)
+
+func calculateEnergyLimitV1(frozen, totalLimit, totalWeight int64, harden bool) int64 {
+	weight := frozen / params.TRXPrecision
+	if !harden {
+		return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
+	}
+	return bigMulDivInt64(weight, totalLimit, totalWeight)
+}
+
+func calculateEnergyLimitV2(frozen, totalLimit, totalWeight int64, harden bool) int64 {
+	if !harden {
+		weight := float64(frozen) / float64(params.TRXPrecision)
+		return int64(weight * (float64(totalLimit) / float64(totalWeight)))
+	}
+	denominator := new(big.Int).Mul(big.NewInt(params.TRXPrecision), big.NewInt(totalWeight))
+	return bigMulDivBigInt64(big.NewInt(frozen), big.NewInt(totalLimit), denominator)
+}
+
+func divideCeilBigInt(numerator, denominator *big.Int) int64 {
+	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	if r.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	return q.Int64()
+}
+
+func bigMulDivInt64(a, b, c int64) int64 {
+	return bigMulDivBigInt64(big.NewInt(a), big.NewInt(b), big.NewInt(c))
+}
+
+func bigMulDivBigInt64(a, b, c *big.Int) int64 {
+	n := new(big.Int).Mul(a, b)
+	n.Quo(n, c)
+	return n.Int64()
 }

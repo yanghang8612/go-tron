@@ -2,13 +2,10 @@ package actuator
 
 import (
 	"errors"
+	"math"
 
-	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
-
-const dayMs = int64(86_400_000) // milliseconds per day
 
 // UnfreezeAssetActuator handles TRC10 frozen supply release (contract type 14).
 // Token issuers call this to claim pre-frozen supply after lock-up periods expire.
@@ -26,46 +23,36 @@ func (a *UnfreezeAssetActuator) getContract(ctx *Context) (*contractpb.UnfreezeA
 	return c, nil
 }
 
-// eligibleCount returns the number of frozen_supply entries that can be claimed.
-func (a *UnfreezeAssetActuator) eligibleCount(ctx *Context, owner common.Address, tokenID int64, asset *contractpb.AssetIssueContract, issueTime int64) int {
-	count := 0
-	for i, f := range asset.FrozenSupply {
-		if issueTime+f.FrozenDays*dayMs > ctx.PrevBlockTime {
-			continue
-		}
-		if ctx.State.IsFrozenClaimed(owner, tokenID, uint32(i)) {
-			continue
-		}
-		count++
-	}
-	return count
-}
-
 func (a *UnfreezeAssetActuator) Validate(ctx *Context) error {
-	if ctx.DB == nil {
-		return errors.New("DB not available")
-	}
 	c, err := a.getContract(ctx)
 	if err != nil {
 		return err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
-	tokenID, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
-	if !ok {
-		return errors.New("no token issued by this address")
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
 	}
-	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	if asset == nil {
-		return errors.New("token not found")
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		return errors.New("owner account does not exist")
 	}
-	if len(asset.FrozenSupply) == 0 {
-		return errors.New("token has no frozen supply")
+	if len(acct.Proto().GetFrozenSupply()) == 0 {
+		return errors.New("no frozen supply balance")
 	}
-	issueTime := rawdb.ReadAssetIssueTime(ctx.DB, tokenID)
-	if a.eligibleCount(ctx, owner, tokenID, asset, issueTime) == 0 {
-		return errors.New("no frozen supply is currently available to unfreeze")
+	if ctx.DynProps.AllowSameTokenName() {
+		if len(acct.Proto().GetAssetIssued_ID()) == 0 {
+			return errors.New("owner account has not issued any asset")
+		}
+	} else if len(acct.Proto().GetAssetIssuedName()) == 0 {
+		return errors.New("owner account has not issued any asset")
 	}
-	return nil
+	now := ctx.DynProps.LatestBlockHeaderTimestamp()
+	for _, frozen := range acct.Proto().GetFrozenSupply() {
+		if frozen.GetExpireTime() <= now {
+			return nil
+		}
+	}
+	return errors.New("no frozen supply is currently available to unfreeze")
 }
 
 func (a *UnfreezeAssetActuator) Execute(ctx *Context) (*Result, error) {
@@ -73,27 +60,31 @@ func (a *UnfreezeAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	owner := common.BytesToAddress(c.OwnerAddress)
-	tokenID, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:])
-	if !ok {
-		return nil, errors.New("no token issued by this address")
+	owner, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
 	}
-	asset := rawdb.ReadAssetIssue(ctx.DB, tokenID)
-	if asset == nil {
-		return nil, errors.New("token not found")
+	acct := ctx.State.GetAccount(owner)
+	if acct == nil {
+		return nil, errors.New("owner account does not exist")
 	}
-	issueTime := rawdb.ReadAssetIssueTime(ctx.DB, tokenID)
-
-	for i, f := range asset.FrozenSupply {
-		if issueTime+f.FrozenDays*dayMs > ctx.PrevBlockTime {
-			continue
-		}
-		if ctx.State.IsFrozenClaimed(owner, tokenID, uint32(i)) {
-			continue
-		}
-		ctx.State.AddTRC10Balance(owner, tokenID, f.FrozenAmount)
-		ctx.State.SetFrozenClaimed(owner, tokenID, uint32(i))
+	issued, err := issuedAssetRef(ctx, acct)
+	if err != nil {
+		return nil, err
 	}
+	tokenID := issued.TokenID
+	name := issued.Name
+	if ctx.DynProps.AllowSameTokenName() {
+		name = []byte(acct.Proto().GetAssetIssued_ID())
+	}
+	amount := ctx.State.RemoveExpiredFrozenSupply(owner, ctx.DynProps.LatestBlockHeaderTimestamp())
+	if amount <= 0 {
+		return nil, errors.New("no frozen supply is currently available to unfreeze")
+	}
+	if ctx.State.GetTRC10BalanceFinal(owner, name, tokenID, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-amount {
+		return nil, errors.New("TRC10 balance overflows int64")
+	}
+	ctx.State.AddTRC10BalanceFinal(owner, name, tokenID, amount, ctx.DynProps.AllowSameTokenName())
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

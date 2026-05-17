@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -27,15 +26,23 @@ func (a *ProposalCreateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if !isActiveWitness(ownerAddr, ctx.ActiveWitnesses) {
-		return errors.New("owner is not an active witness")
+	if !witnessExists(ctx, ownerAddr) {
+		return errors.New("owner is not a witness")
 	}
 	if len(c.Parameters) == 0 {
 		return errors.New("proposal parameters are empty")
+	}
+	for id, value := range c.Parameters {
+		if err := validateProposalParameter(ctx, id, value); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -45,7 +52,10 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 
 	proposalID := ctx.DynProps.LatestProposalNum() + 1
 	ctx.DynProps.SetLatestProposalNum(proposalID)
@@ -88,13 +98,4 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
-}
-
-func isActiveWitness(addr common.Address, actives []common.Address) bool {
-	for _, a := range actives {
-		if a == addr {
-			return true
-		}
-	}
-	return false
 }

@@ -49,10 +49,14 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 	to := makeTestAddr(2)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.CreateAccount(to, corepb.AccountType_Normal)
-	statedb.SetTRC10Balance(owner, tokenID, 21_000_000)
+	statedb.SetTRC10BalanceLegacyAndV2(owner, []byte(tokenName), tokenID, 21_000_000)
 
 	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte(tokenName)}); err != nil {
+	asset := &contractpb.AssetIssueContract{Name: []byte(tokenName), Id: strconv.FormatInt(tokenID, 10)}
+	if err := rawdb.WriteAssetIssueByName(db, []byte(tokenName), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteAssetNameIndex(db, []byte(tokenName), tokenID); err != nil {
@@ -91,6 +95,66 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 	}
 }
 
+func TestTransferAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *testing.T) {
+	const tokenID = int64(1_000_004)
+	const numericName = "123"
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	to := makeTestAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.SetTRC10BalanceLegacyAndV2(owner, []byte(numericName), tokenID, 21_000_000)
+
+	db := ethrawdb.NewMemoryDatabase()
+	asset := &contractpb.AssetIssueContract{Name: []byte(numericName), Id: strconv.FormatInt(tokenID, 10)}
+	if err := rawdb.WriteAssetIssueByName(db, []byte(numericName), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, 123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, []byte(numericName), tokenID); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &contractpb.TransferAssetContract{
+		OwnerAddress: owner.Bytes(),
+		ToAddress:    to.Bytes(),
+		AssetName:    []byte(numericName),
+		Amount:       100,
+	}
+	anyParam, _ := anypb.New(c)
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{
+				{Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: anyParam},
+			},
+		},
+	})
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+
+	act := &TransferAssetActuator{}
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate must resolve numeric-looking pre-fork name through name index: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("execute must use name-index token ID: %v", err)
+	}
+	if got := statedb.GetTRC10Balance(owner, tokenID); got != 21_000_000-100 {
+		t.Errorf("owner balance after transfer: got %d want %d", got, 21_000_000-100)
+	}
+	if got := statedb.GetTRC10Balance(to, tokenID); got != 100 {
+		t.Errorf("recipient balance for name-index token: got %d want 100", got)
+	}
+	if got := statedb.GetTRC10Balance(to, 123); got != 0 {
+		t.Errorf("recipient balance for parsed token ID must stay zero, got %d", got)
+	}
+}
+
 func TestTransferAssetValidate_Success(t *testing.T) {
 	const tokenID = int64(1_000_001)
 	statedb := setupStateDB(t)
@@ -108,6 +172,7 @@ func TestTransferAssetValidate_Success(t *testing.T) {
 	tx := makeTransferAssetTx(1, 2, tokenID, 100_000)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -122,6 +187,7 @@ func TestTransferAssetValidate_UnknownToken(t *testing.T) {
 	tx := makeTransferAssetTx(1, 2, 9_999_999, 100)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase() // empty DB — no token
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -144,6 +210,7 @@ func TestTransferAssetValidate_InsufficientBalance(t *testing.T) {
 	tx := makeTransferAssetTx(1, 2, tokenID, 100) // wants 100
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -168,6 +235,7 @@ func TestTransferAssetExecute_Success(t *testing.T) {
 	tx := makeTransferAssetTx(1, 2, tokenID, 300_000)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
 	result, err := act.Execute(ctx)
@@ -203,6 +271,7 @@ func TestTransferAssetExecute_CreateAccountFeeBurnedNotCounted(t *testing.T) {
 	tx := makeTransferAssetTx(1, 0xBB, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
 	balanceBefore := statedb.GetBalance(owner)
 
@@ -236,6 +305,7 @@ func TestTransferAssetExecute_CreatesRecipient(t *testing.T) {
 	tx := makeTransferAssetTx(1, 9, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
 	if _, err := act.Execute(ctx); err != nil {

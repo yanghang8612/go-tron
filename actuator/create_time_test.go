@@ -89,6 +89,7 @@ func TestTransferAssetExecute_StampsCreateTimeFromDynProps(t *testing.T) {
 	tx := makeTransferAssetTx(1, 52, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.DynProps.SetLatestBlockHeaderTimestamp(m115b_blockTS)
 
 	if _, err := (&TransferAssetActuator{}).Execute(ctx); err != nil {

@@ -102,6 +102,7 @@ func TestTransferAssetExecute_PostFork_LoadsDefaultPermissions(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
 	ctx.DynProps.SetAllowMultiSign(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	if _, err := (&TransferAssetActuator{}).Execute(ctx); err != nil {
 		t.Fatalf("execute failed: %v", err)

@@ -3,7 +3,7 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -37,12 +37,18 @@ func (a *SetAccountIdActuator) Validate(ctx *Context) error {
 			return errors.New("account id must contain only printable non-space ASCII characters")
 		}
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	if ctx.State.GetAccountId(ownerAddr) != "" {
 		return errors.New("account id already set")
+	}
+	if ctx.DB != nil && rawdb.HasAccountIdIndex(ctx.DB, c.AccountId) {
+		return errors.New("account id already exists")
 	}
 	return nil
 }
@@ -52,7 +58,15 @@ func (a *SetAccountIdActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	ctx.State.SetAccountId(ownerAddr, string(c.AccountId))
+	if ctx.DB != nil {
+		if err := rawdb.WriteAccountIdIndex(ctx.DB, c.AccountId, ownerAddr[:]); err != nil {
+			return nil, err
+		}
+	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

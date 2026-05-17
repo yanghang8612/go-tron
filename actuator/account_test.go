@@ -37,6 +37,7 @@ func TestCreateAccountValidate_Success(t *testing.T) {
 
 	tx := makeCreateAccountTx(1, 5)
 	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", 1_000_000)
 	act := &CreateAccountActuator{}
 
 	if err := act.Validate(ctx); err != nil {
@@ -65,14 +66,21 @@ func TestCreateAccountExecute(t *testing.T) {
 	newAddr := makeTestAddr(7)
 	tx := makeCreateAccountTx(1, 7)
 	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.Set("create_new_account_fee_in_system_contract", 1_000_000)
 	act := &CreateAccountActuator{}
 
-	_, err := act.Execute(ctx)
+	result, err := act.Execute(ctx)
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
 
 	if !statedb.AccountExists(newAddr) {
 		t.Fatal("new account should exist")
+	}
+	if result.Fee != 1_000_000 {
+		t.Fatalf("fee: want 1000000, got %d", result.Fee)
+	}
+	if got := statedb.GetBalance(makeTestAddr(1)); got != 9_000_000 {
+		t.Fatalf("owner balance: want 9000000, got %d", got)
 	}
 }

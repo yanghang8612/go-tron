@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -27,18 +26,18 @@ func (a *WitnessUpdateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ctx.State.GetWitness(ownerAddr) == nil {
+	if !witnessExists(ctx, ownerAddr) {
 		return errors.New("owner is not a witness")
 	}
-	if len(c.UpdateUrl) == 0 {
-		return errors.New("witness URL is empty")
-	}
-	if len(c.UpdateUrl) > 256 {
-		return errors.New("witness URL too long (max 256 bytes)")
+	if !validBytesLen(c.UpdateUrl, 256, false) {
+		return errors.New("invalid witness URL")
 	}
 	return nil
 }
@@ -48,7 +47,10 @@ func (a *WitnessUpdateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	url := string(c.UpdateUrl)
 
 	// Persist the URL change through ctx.DB. In applyBlock this is the
