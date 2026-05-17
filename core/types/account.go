@@ -23,20 +23,20 @@ func NewAccount(addr common.Address, accType corepb.AccountType) *Account {
 	}
 }
 
-func (a *Account) Proto() *corepb.Account  { return a.pb }
-func (a *Account) Address() common.Address  { return common.BytesToAddress(a.pb.Address) }
-func (a *Account) Balance() int64           { return a.pb.Balance }
-func (a *Account) SetBalance(b int64)       { a.pb.Balance = b }
-func (a *Account) Type() corepb.AccountType        { return a.pb.Type }
+func (a *Account) Proto() *corepb.Account              { return a.pb }
+func (a *Account) Address() common.Address             { return common.BytesToAddress(a.pb.Address) }
+func (a *Account) Balance() int64                      { return a.pb.Balance }
+func (a *Account) SetBalance(b int64)                  { a.pb.Balance = b }
+func (a *Account) Type() corepb.AccountType            { return a.pb.Type }
 func (a *Account) SetAccountType(t corepb.AccountType) { a.pb.Type = t }
-func (a *Account) IsWitness() bool                  { return a.pb.IsWitness }
-func (a *Account) SetIsWitness(v bool)      { a.pb.IsWitness = v }
-func (a *Account) CreateTime() int64        { return a.pb.CreateTime }
-func (a *Account) SetCreateTime(t int64)    { a.pb.CreateTime = t }
+func (a *Account) IsWitness() bool                     { return a.pb.IsWitness }
+func (a *Account) SetIsWitness(v bool)                 { a.pb.IsWitness = v }
+func (a *Account) CreateTime() int64                   { return a.pb.CreateTime }
+func (a *Account) SetCreateTime(t int64)               { a.pb.CreateTime = t }
 
 // AccountName accessors.
-func (a *Account) AccountName() string         { return string(a.pb.AccountName) }
-func (a *Account) SetAccountName(name string)  { a.pb.AccountName = []byte(name) }
+func (a *Account) AccountName() string        { return string(a.pb.AccountName) }
+func (a *Account) SetAccountName(name string) { a.pb.AccountName = []byte(name) }
 
 // FrozenV2 returns all FreezeV2 entries.
 func (a *Account) FrozenV2() []*corepb.Account_FreezeV2 {
@@ -107,6 +107,33 @@ func (a *Account) V1TronPowerFrozen() int64 {
 		return 0
 	}
 	return a.pb.TronPower.FrozenBalance
+}
+
+func (a *Account) V1TronPowerExpireTime() int64 {
+	if a.pb.TronPower == nil {
+		return 0
+	}
+	return a.pb.TronPower.ExpireTime
+}
+
+func (a *Account) AddV1TronPower(amount, expireTimeMs int64) {
+	if a.pb.TronPower == nil {
+		a.pb.TronPower = &corepb.Account_Frozen{
+			FrozenBalance: amount,
+			ExpireTime:    expireTimeMs,
+		}
+		return
+	}
+	a.pb.TronPower.FrozenBalance += amount
+	if expireTimeMs > a.pb.TronPower.ExpireTime {
+		a.pb.TronPower.ExpireTime = expireTimeMs
+	}
+}
+
+func (a *Account) ClearV1TronPower() int64 {
+	amount := a.V1TronPowerFrozen()
+	a.pb.TronPower = nil
+	return amount
 }
 
 // V2TronPowerFrozen returns the V2 TRON_POWER-resource-typed frozen balance.
@@ -205,19 +232,58 @@ func (a *Account) RemoveExpiredUnfreezeV2(now int64) int64 {
 }
 
 // Votes accessors.
-func (a *Account) Votes() []*corepb.Vote      { return a.pb.Votes }
+func (a *Account) Votes() []*corepb.Vote         { return a.pb.Votes }
 func (a *Account) SetVotes(votes []*corepb.Vote) { a.pb.Votes = votes }
-func (a *Account) ClearVotes()                { a.pb.Votes = nil }
+func (a *Account) ClearVotes()                   { a.pb.Votes = nil }
 
 // Bandwidth resource tracking.
-func (a *Account) NetUsage() int64                { return a.pb.NetUsage }
-func (a *Account) SetNetUsage(v int64)            { a.pb.NetUsage = v }
-func (a *Account) LatestConsumeTime() int64       { return a.pb.LatestConsumeTime }
-func (a *Account) SetLatestConsumeTime(t int64)   { a.pb.LatestConsumeTime = t }
-func (a *Account) FreeNetUsage() int64            { return a.pb.FreeNetUsage }
-func (a *Account) SetFreeNetUsage(v int64)        { a.pb.FreeNetUsage = v }
-func (a *Account) LatestConsumeFreeTime() int64   { return a.pb.LatestConsumeFreeTime }
+func (a *Account) NetUsage() int64                  { return a.pb.NetUsage }
+func (a *Account) SetNetUsage(v int64)              { a.pb.NetUsage = v }
+func (a *Account) LatestOperationTime() int64       { return a.pb.LatestOprationTime }
+func (a *Account) SetLatestOperationTime(t int64)   { a.pb.LatestOprationTime = t }
+func (a *Account) LatestConsumeTime() int64         { return a.pb.LatestConsumeTime }
+func (a *Account) SetLatestConsumeTime(t int64)     { a.pb.LatestConsumeTime = t }
+func (a *Account) FreeNetUsage() int64              { return a.pb.FreeNetUsage }
+func (a *Account) SetFreeNetUsage(v int64)          { a.pb.FreeNetUsage = v }
+func (a *Account) LatestConsumeFreeTime() int64     { return a.pb.LatestConsumeFreeTime }
 func (a *Account) SetLatestConsumeFreeTime(t int64) { a.pb.LatestConsumeFreeTime = t }
+
+func (a *Account) FreeAssetNetUsage(key string) int64 {
+	return a.pb.GetFreeAssetNetUsage()[key]
+}
+func (a *Account) SetFreeAssetNetUsage(key string, v int64) {
+	if a.pb.FreeAssetNetUsage == nil {
+		a.pb.FreeAssetNetUsage = make(map[string]int64)
+	}
+	a.pb.FreeAssetNetUsage[key] = v
+}
+func (a *Account) FreeAssetNetUsageV2(key string) int64 {
+	return a.pb.GetFreeAssetNetUsageV2()[key]
+}
+func (a *Account) SetFreeAssetNetUsageV2(key string, v int64) {
+	if a.pb.FreeAssetNetUsageV2 == nil {
+		a.pb.FreeAssetNetUsageV2 = make(map[string]int64)
+	}
+	a.pb.FreeAssetNetUsageV2[key] = v
+}
+func (a *Account) LatestAssetOperationTime(key string) int64 {
+	return a.pb.GetLatestAssetOperationTime()[key]
+}
+func (a *Account) SetLatestAssetOperationTime(key string, t int64) {
+	if a.pb.LatestAssetOperationTime == nil {
+		a.pb.LatestAssetOperationTime = make(map[string]int64)
+	}
+	a.pb.LatestAssetOperationTime[key] = t
+}
+func (a *Account) LatestAssetOperationTimeV2(key string) int64 {
+	return a.pb.GetLatestAssetOperationTimeV2()[key]
+}
+func (a *Account) SetLatestAssetOperationTimeV2(key string, t int64) {
+	if a.pb.LatestAssetOperationTimeV2 == nil {
+		a.pb.LatestAssetOperationTimeV2 = make(map[string]int64)
+	}
+	a.pb.LatestAssetOperationTimeV2[key] = t
+}
 
 // ensureAccountResource creates the AccountResource sub-message if it is nil.
 func (a *Account) ensureAccountResource() {
@@ -258,8 +324,8 @@ func (a *Account) LatestWithdrawTime() int64     { return a.pb.LatestWithdrawTim
 func (a *Account) SetLatestWithdrawTime(t int64) { a.pb.LatestWithdrawTime = t }
 
 // AccountId accessors.
-func (a *Account) AccountId() string       { return string(a.pb.AccountId) }
-func (a *Account) SetAccountId(id string)  { a.pb.AccountId = []byte(id) }
+func (a *Account) AccountId() string      { return string(a.pb.AccountId) }
+func (a *Account) SetAccountId(id string) { a.pb.AccountId = []byte(id) }
 
 // Permission accessors.
 func (a *Account) OwnerPermission() *corepb.Permission            { return a.pb.OwnerPermission }
@@ -371,6 +437,13 @@ func (a *Account) AddFrozenBandwidth(amount, expireTimeMs int64) {
 		FrozenBalance: amount,
 		ExpireTime:    expireTimeMs,
 	})
+}
+
+func (a *Account) SetFrozenBandwidth(amount, expireTimeMs int64) {
+	a.pb.Frozen = []*corepb.Account_Frozen{{
+		FrozenBalance: amount,
+		ExpireTime:    expireTimeMs,
+	}}
 }
 
 func (a *Account) TotalFrozenBandwidth() int64 {

@@ -39,13 +39,23 @@ func TestUnfreezeV1Bandwidth(t *testing.T) {
 	sdb.FreezeV1Bandwidth(addr, 300, 2_000_000)
 	sdb.FreezeV1Bandwidth(addr, 200, 5_000_000)
 
-	refunded := sdb.UnfreezeV1Bandwidth(addr, 3_000_000)
-	if refunded != 300 {
-		t.Fatalf("refunded: want 300, got %d", refunded)
-	}
 	obj := sdb.getStateObject(addr)
-	if got := obj.account.TotalFrozenBandwidth(); got != 200 {
-		t.Fatalf("remaining frozen: want 200, got %d", got)
+	if got := obj.account.TotalFrozenBandwidth(); got != 500 {
+		t.Fatalf("merged frozen bandwidth: want 500, got %d", got)
+	}
+	if list := obj.account.FrozenBandwidthList(); len(list) != 1 || list[0].ExpireTime != 5_000_000 {
+		t.Fatalf("bandwidth freeze should use one merged slot with latest expire, got %+v", list)
+	}
+	refunded := sdb.UnfreezeV1Bandwidth(addr, 3_000_000)
+	if refunded != 0 {
+		t.Fatalf("refunded before merged expiry: want 0, got %d", refunded)
+	}
+	refunded = sdb.UnfreezeV1Bandwidth(addr, 6_000_000)
+	if refunded != 500 {
+		t.Fatalf("refunded after merged expiry: want 500, got %d", refunded)
+	}
+	if got := obj.account.TotalFrozenBandwidth(); got != 0 {
+		t.Fatalf("remaining frozen: want 0, got %d", got)
 	}
 }
 

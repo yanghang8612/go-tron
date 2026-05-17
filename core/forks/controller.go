@@ -22,12 +22,17 @@ import (
 // serial. Reads (Pass) are protected by a mutex because audit-loop callers
 // (actuators, rpc) may race with producer updates.
 type ForkController struct {
-	db ethdb.KeyValueStore
+	db keyValueReadWriter
 	mu sync.RWMutex
 }
 
+type keyValueReadWriter interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 // NewForkController binds a controller to a KV store.
-func NewForkController(db ethdb.KeyValueStore) *ForkController {
+func NewForkController(db keyValueReadWriter) *ForkController {
 	return &ForkController{db: db}
 }
 
@@ -40,6 +45,9 @@ func NewForkController(db ethdb.KeyValueStore) *ForkController {
 // stored bitmap is nil or has a different length, it's reset to a fresh
 // zero slice of witnessCount.
 func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
+	if blockVersion < KnownVersions[0].Value {
+		return
+	}
 	if slot < 0 || slot >= witnessCount {
 		return
 	}

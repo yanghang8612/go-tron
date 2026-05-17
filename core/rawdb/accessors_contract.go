@@ -49,6 +49,10 @@ func WriteStorage(db ethdb.KeyValueWriter, addr common.Address, key common.Hash,
 	db.Put(storageKey(addr.Bytes(), key.Bytes()), value)
 }
 
+func DeleteStorage(db ethdb.KeyValueWriter, addr common.Address, key common.Hash) {
+	db.Delete(storageKey(addr.Bytes(), key.Bytes()))
+}
+
 func ReadStorage(db ethdb.KeyValueReader, addr common.Address, key common.Hash) []byte {
 	data, err := db.Get(storageKey(addr.Bytes(), key.Bytes()))
 	if err != nil {

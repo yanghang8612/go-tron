@@ -29,33 +29,41 @@ const (
 	AllowTvmBlob
 	AllowTvmCancun
 	AllowBlackholeOptimization
+	AllowTvmShanghai
+	AllowTvmSelfdestructRestriction
+	AllowTvmPrague
+	AllowTvmOsaka
 )
 
 // dynKey maps each AllowFlag to its DynamicProperties string key.
 var dynKey = map[AllowFlag]string{
-	AllowSameTokenName:       "allow_same_token_name",
-	AllowDelegateResource:    "allow_delegate_resource",
-	AllowAdaptiveEnergy:      "allow_adaptive_energy",
-	AllowMultiSign:           "allow_multi_sign",
-	AllowChangeDelegation:    "change_delegation",
-	AllowTvmTransferTrc10:    "allow_tvm_transfer_trc10",
-	AllowTvmConstantinople:   "allow_tvm_constantinople",
-	AllowTvmSolidity059:      "allow_tvm_solidity059",
-	AllowTvmIstanbul:         "allow_tvm_istanbul",
-	AllowMarketTransaction:   "allow_market_transaction",
-	AllowTvmFreeze:           "allow_tvm_freeze",
-	AllowTvmShieldedToken:    "allow_shielded_trc20_transaction", // alias: proposal #39 gates the VM shielded token precompiles
-	AllowTvmVote:             "allow_tvm_vote",
-	AllowPbft:                "allow_pbft",
-	AllowStakingV2:           "allow_new_resource_model", // alias: V2 staking rides the same proposal #62 as the state-layer V2 gate
-	AllowTvmLondon:           "allow_tvm_london",
-	AllowTvmCompatibleEvm:    "allow_tvm_compatible_evm",
-	AllowDynamicEnergy:       "allow_dynamic_energy",
-	AllowNewResourceModel:    "allow_new_resource_model",
-	AllowEnergyAdjustment:    "allow_energy_adjustment",
-	AllowTvmBlob:                 "allow_tvm_blob",
-	AllowTvmCancun:               "allow_tvm_cancun",
-	AllowBlackholeOptimization:   "allow_blackhole_optimization",
+	AllowSameTokenName:              "allow_same_token_name",
+	AllowDelegateResource:           "allow_delegate_resource",
+	AllowAdaptiveEnergy:             "allow_adaptive_energy",
+	AllowMultiSign:                  "allow_multi_sign",
+	AllowChangeDelegation:           "change_delegation",
+	AllowTvmTransferTrc10:           "allow_tvm_transfer_trc10",
+	AllowTvmConstantinople:          "allow_tvm_constantinople",
+	AllowTvmSolidity059:             "allow_tvm_solidity059",
+	AllowTvmIstanbul:                "allow_tvm_istanbul",
+	AllowMarketTransaction:          "allow_market_transaction",
+	AllowTvmFreeze:                  "allow_tvm_freeze",
+	AllowTvmShieldedToken:           "allow_shielded_trc20_transaction", // alias: proposal #39 gates the VM shielded token precompiles
+	AllowTvmVote:                    "allow_tvm_vote",
+	AllowPbft:                       "allow_pbft",
+	AllowStakingV2:                  "allow_new_resource_model", // alias: V2 staking rides the same proposal #62 as the state-layer V2 gate
+	AllowTvmLondon:                  "allow_tvm_london",
+	AllowTvmCompatibleEvm:           "allow_tvm_compatible_evm",
+	AllowDynamicEnergy:              "allow_dynamic_energy",
+	AllowNewResourceModel:           "allow_new_resource_model",
+	AllowEnergyAdjustment:           "allow_energy_adjustment",
+	AllowTvmBlob:                    "allow_tvm_blob",
+	AllowTvmCancun:                  "allow_tvm_cancun",
+	AllowBlackholeOptimization:      "allow_blackhole_optimization",
+	AllowTvmShanghai:                "allow_tvm_shanghai",
+	AllowTvmSelfdestructRestriction: "allow_tvm_selfdestruct_restriction",
+	AllowTvmPrague:                  "allow_tvm_prague",
+	AllowTvmOsaka:                   "allow_tvm_osaka",
 }
 
 // IsActive returns true if the flag is activated in the DynamicProperties.
@@ -76,7 +84,9 @@ func IsActive(flag AllowFlag, blockNum uint64, dp *state.DynamicProperties) bool
 // DynamicProperties key. Returns "" for unknown IDs.
 //
 // Authoritative source: the enum
-//   org.tron.core.utils.ProposalUtil.ProposalType
+//
+//	org.tron.core.utils.ProposalUtil.ProposalType
+//
 // in java-tron (actuator/src/main/java/...). Every ACTIVE entry there
 // (i.e. not commented out) must be present here, mapped to the go-tron
 // key with the same semantics.

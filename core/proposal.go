@@ -20,7 +20,11 @@ const version3_6_5 int32 = 9
 // (BuildBlock path) or `core/blockbuffer.Buffer` (applyBlock path) — slice 3
 // of the fork-rewind fix routes the per-proposal WriteProposal updates
 // through the buffer when invoked from `applyBlock`.
-func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
+func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, statedbOpt ...*state.StateDB) error {
+	var statedb *state.StateDB
+	if len(statedbOpt) > 0 {
+		statedb = statedbOpt[0]
+	}
 	activeCount := len(activeWitnesses)
 	ids := rawdb.ReadProposalIndex(db)
 	for _, id := range ids {
@@ -54,7 +58,7 @@ func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, active
 					dynProps.Set(name, p.Parameters[k])
 				}
 			}
-			applyProposalSideEffects(p, dynProps, fc, maintenanceTime)
+			applyProposalSideEffects(db, p, dynProps, fc, maintenanceTime, statedb)
 			p.State = rawdb.ProposalStateApproved
 		} else {
 			p.State = rawdb.ProposalStateCanceled
@@ -73,7 +77,7 @@ func paramIDToName(id int64) string {
 
 // applyProposalSideEffects handles java-tron ProposalService-style
 // activation hooks that go beyond setting a single DP key.
-func applyProposalSideEffects(p *rawdb.Proposal, dynProps *state.DynamicProperties, fc *forks.ForkController, maintenanceTime int64) {
+func applyProposalSideEffects(db kvReadWriter, p *rawdb.Proposal, dynProps *state.DynamicProperties, fc *forks.ForkController, maintenanceTime int64, statedb *state.StateDB) {
 	for paramID, value := range p.Parameters {
 		switch paramID {
 		case 3: // TRANSACTION_FEE — append entry to bandwidth price history
@@ -124,6 +128,10 @@ func applyProposalSideEffects(p *rawdb.Proposal, dynProps *state.DynamicProperti
 		case 77: // ALLOW_CANCEL_ALL_UNFREEZE_V2 → enables CancelAllUnfreezeV2 (59)
 			if value != 0 {
 				dynProps.AddSystemContractAndSetPermission(59)
+			}
+		case 95: // ALLOW_TVM_PRAGUE → deploy TIP-2935 BlockHashHistory contract
+			if value != 0 {
+				deployHistoryBlockHash(db, statedb, dynProps)
 			}
 		}
 	}

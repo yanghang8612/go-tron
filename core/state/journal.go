@@ -29,6 +29,8 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		if obj != nil {
 			obj.account = acc
 			obj.dirty = true
+			obj.deleted = false
+			obj.created = false
 		}
 	}
 }

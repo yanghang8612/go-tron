@@ -32,7 +32,9 @@ func padBitmapDefault(prefix []byte) string {
 // is 128 raw 0/1 bytes; available_contract_type is 32 bytes).
 // Price-history format: "timestamp1:price1,timestamp2:price2,..."
 // Default prices match java-tron DynamicPropertiesStore constants:
-//   DEFAULT_ENERGY_FEE = 100, DEFAULT_TRANSACTION_FEE = 10, MEMO_FEE = 0.
+//
+//	DEFAULT_ENERGY_FEE = 100, DEFAULT_TRANSACTION_FEE = 10, MEMO_FEE = 0.
+//
 // available_contract_type / active_default_operations: byte-for-byte the
 // java-tron defaults 7fff1fc0037e... / 7fff1fc0033e... padded to 32 bytes.
 var defaultStringProps = map[string]string{
@@ -65,49 +67,49 @@ var defaultProps = map[string]int64{
 	// Internal resource-weight counters (in TRX units, per java-tron
 	// DynamicPropertiesStore.addTotalNetWeight comment "The unit is trx").
 	// Default 0 — grown by freeze actuators, shrunk by unfreeze.
-	"total_net_weight":                          0,
-	"total_energy_weight":                       0,
-	"total_tron_power_weight":                   0,
-	"unfreeze_delay_days":                       0,
-	"latest_block_header_timestamp":             0,
-	"latest_block_header_number":                0,
-	"latest_solidified_block_num":               0,
-	"next_maintenance_time":                     0,
+	"total_net_weight":              0,
+	"total_energy_weight":           0,
+	"total_tron_power_weight":       0,
+	"unfreeze_delay_days":           0,
+	"latest_block_header_timestamp": 0,
+	"latest_block_header_number":    0,
+	"latest_solidified_block_num":   0,
+	"next_maintenance_time":         0,
 	// state_flag = 1 iff the most recently applied block triggered a
 	// maintenance pass. java-tron `DynamicPropertiesStore` stateFlag, written
 	// by `MaintenanceManager.applyBlock` and read by
 	// `DposSlot.getTime`/`StatisticManager.applyBlock` to know whether to add
 	// `MAINTENANCE_SKIP_SLOTS` when computing the slot of the current block.
-	"state_flag":                                0,
-	"allow_new_resource_model":                  0,
-	"free_net_limit":                            5000,
-	"latest_proposal_num":                       0,
-	"token_id_num":                              1_000_000,
-	"latest_exchange_num":                       0,
-	"exchange_create_fee":                       1_024_000_000,
-	"exchange_balance_limit":                    1_000_000_000_000_000,
-	"allow_same_token_name":                     0,
-	"allow_delegate_resource":                   0,
-	"allow_adaptive_energy":               0,
-	"allow_multi_sign":                          0,
-	"change_delegation":                   0,
-	"allow_tvm_transfer_trc10":                  0,
-	"allow_tvm_constantinople":                  0,
-	"allow_tvm_solidity059":                     0,
-	"allow_tvm_istanbul":                        0,
-	"allow_market_transaction":                  0,
-	"allow_tvm_freeze":                          0,
-	"allow_tvm_vote":           0,
-	"allow_pbft":               0,
-	"allow_tvm_london":                          0,
-	"allow_tvm_compatible_evm":                   0,
-	"allow_dynamic_energy":                      0,
-	"allow_tvm_blob":                            0,
-	"allow_tvm_cancun":                          0,
-	"allow_energy_adjustment":                   0,
-	"forbid_transfer_to_contract":              0,
-	"update_account_permission_fee":            100_000_000,
-	"total_sign_num":                           5,
+	"state_flag":                    0,
+	"allow_new_resource_model":      0,
+	"free_net_limit":                5000,
+	"latest_proposal_num":           0,
+	"token_id_num":                  1_000_000,
+	"latest_exchange_num":           0,
+	"exchange_create_fee":           1_024_000_000,
+	"exchange_balance_limit":        1_000_000_000_000_000,
+	"allow_same_token_name":         0,
+	"allow_delegate_resource":       0,
+	"allow_adaptive_energy":         0,
+	"allow_multi_sign":              0,
+	"change_delegation":             0,
+	"allow_tvm_transfer_trc10":      0,
+	"allow_tvm_constantinople":      0,
+	"allow_tvm_solidity059":         0,
+	"allow_tvm_istanbul":            0,
+	"allow_market_transaction":      0,
+	"allow_tvm_freeze":              0,
+	"allow_tvm_vote":                0,
+	"allow_pbft":                    0,
+	"allow_tvm_london":              0,
+	"allow_tvm_compatible_evm":      0,
+	"allow_dynamic_energy":          0,
+	"allow_tvm_blob":                0,
+	"allow_tvm_cancun":              0,
+	"allow_energy_adjustment":       0,
+	"forbid_transfer_to_contract":   0,
+	"update_account_permission_fee": 100_000_000,
+	"total_sign_num":                5,
 	// proposal_expire_time is mainnet-biased: java-tron's getter returns
 	// CommonParameter.proposalExpireTime when the DP store is empty, and
 	// mainnet config.conf:681 sets that to 259_200_000 (3 days). Nile's
@@ -118,12 +120,12 @@ var defaultProps = map[string]int64{
 	// Nile soak proposal #1 was processed ~12 cycles late against a
 	// rotated-out active witness set (CANCELED on gtron vs APPROVED on
 	// Nile-live — diagnosed 2026-05-11).
-	"proposal_expire_time":                     259_200_000,
-	"allow_shielded_transaction":               0,
-	"zen_token_id":                             1_000_016,
-	"total_shielded_pool_value":                0,
-	"shielded_transaction_fee":                 100_000,
-	"shielded_transaction_create_account_fee":  1_000_000,
+	"proposal_expire_time":                    259_200_000,
+	"allow_shielded_transaction":              0,
+	"zen_token_id":                            1_000_016,
+	"total_shielded_pool_value":               0,
+	"shielded_transaction_fee":                100_000,
+	"shielded_transaction_create_account_fee": 1_000_000,
 
 	// M1.1: chain parameters backfilled from java-tron mainnet fixture
 	// (test/fixtures/00-genesis-dp-mainnet/fixture.json). Defaults align
@@ -146,26 +148,31 @@ var defaultProps = map[string]int64{
 	"allow_higher_limit_for_max_cpu_time_of_one_tx": 0,
 	"allow_new_reward":                              0,
 	"allow_old_reward_opt":                          0,
-	"allow_blackhole_optimization":                     0,
+	"allow_blackhole_optimization":                  0,
 	"allow_optimized_return_value_of_chain_id":      0,
 	"allow_proto_filter_num":                        0,
 	"allow_shielded_trc20_transaction":              0,
 	"allow_strict_math":                             0,
 	"allow_transaction_fee_pool":                    0,
 	"allow_tvm_osaka":                               0,
+	"allow_tvm_prague":                              0,
+	"block_hash_history_installed":                  0,
 	"allow_tvm_selfdestruct_restriction":            0,
 	"allow_tvm_shanghai":                            0,
 	"allow_update_account_name":                     0,
+	"allow_harden_resource_calculation":             0,
+	"allow_harden_exchange_calculation":             0,
 	"consensus_logic_optimization":                  0,
 	"dynamic_energy_increase_factor":                0,
 	"dynamic_energy_max_factor":                     0,
 	"dynamic_energy_threshold":                      0,
 	"market_cancel_fee":                             0,
+	"market_quantity_limit":                         1_000_000_000_000_000,
 	"market_sell_fee":                               0,
 	"max_create_account_tx_size":                    1000,
 	"max_delegate_lock_period":                      86400,
 	"max_fee_limit":                                 1_000_000_000,
-	"burn_trx_amount":                                0,
+	"burn_trx_amount":                               0,
 	"memo_fee":                                      0,
 	"multi_sign_fee":                                1_000_000,
 	"remove_the_power_of_the_gr":                    0,
@@ -173,33 +180,33 @@ var defaultProps = map[string]int64{
 	// M1.6: storage market keys — initialized by java-tron DynamicPropertiesStore
 	// but never modified on mainnet (feature was never activated). Present for
 	// completeness so DP serializes identically to java-tron's initial state.
-	"total_storage_pool":          100_000_000_000_000, // 100 TRX in sun
-	"total_storage_tax":           0,
-	"total_storage_reserved":      137_438_953_472, // 128 GiB in bytes
-	"storage_exchange_tax_rate":   10,
+	"total_storage_pool":        100_000_000_000_000, // 100 TRX in sun
+	"total_storage_tax":         0,
+	"total_storage_reserved":    137_438_953_472, // 128 GiB in bytes
+	"storage_exchange_tax_rate": 10,
 
 	// §1.6: freeze/supply/bandwidth/accounting keys missing from earlier
 	// backfills. Defaults verified against java-tron DynamicPropertiesStore.
 	// The "done" flags track whether the one-time price-history loader has
 	// run (0 = not yet, 1 = done); default 0 matches java-tron's initial state.
-	"energy_price_history_done":    0,
-	"bandwidth_price_history_done": 0,
-	"max_frozen_time":              3,
-	"min_frozen_time":              3,
-	"max_frozen_supply_number":     10,
-	"max_frozen_supply_time":       3652,
-	"min_frozen_supply_time":       1,
+	"energy_price_history_done":     0,
+	"bandwidth_price_history_done":  0,
+	"max_frozen_time":               3,
+	"min_frozen_time":               3,
+	"max_frozen_supply_number":      10,
+	"max_frozen_supply_time":        3652,
+	"min_frozen_supply_time":        1,
 	"witness_allowance_frozen_time": 1,
-	"one_day_net_limit":            57_600_000_000,
-	"public_net_limit":             14_400_000_000,
-	"public_net_usage":             0,
-	"public_net_time":              0,
-	"transaction_fee_pool":         0,
-	"total_transaction_cost":       0,
-	"total_create_account_cost":    0,
-	"total_create_witness_cost":    0,
-	"block_filled_slots_index":     0,
-	"version_number":               0,
+	"one_day_net_limit":             57_600_000_000,
+	"public_net_limit":              14_400_000_000,
+	"public_net_usage":              0,
+	"public_net_time":               0,
+	"transaction_fee_pool":          0,
+	"total_transaction_cost":        0,
+	"total_create_account_cost":     0,
+	"total_create_witness_cost":     0,
+	"block_filled_slots_index":      0,
+	"version_number":                0,
 }
 
 // DynamicProperties holds runtime-adjustable chain parameters stored as key-value pairs.
@@ -646,7 +653,7 @@ func (dp *DynamicProperties) SetAllowPbft(v bool) {
 // layer and the secondary TRON_POWER resource checks inside FreezeV2/UnfreezeV2
 // actuators. They do NOT gate the top-level StakingV2 operations — that gate is
 // SupportUnfreezeDelay() (= unfreeze_delay_days > 0, proposal #70).
-func (dp *DynamicProperties) AllowStakingV2() bool { return dp.AllowNewResourceModel() }
+func (dp *DynamicProperties) AllowStakingV2() bool     { return dp.AllowNewResourceModel() }
 func (dp *DynamicProperties) SetAllowStakingV2(v bool) { dp.SetAllowNewResourceModel(v) }
 
 func (dp *DynamicProperties) AllowTvmLondon() bool {
@@ -855,6 +862,33 @@ func (dp *DynamicProperties) All() map[string]int64 {
 	return result
 }
 
+// Snapshot captures dynamic properties and dirty flags so transaction-scoped
+// validation/execution failures can roll back DP mutations together with
+// StateDB journal entries.
+func (dp *DynamicProperties) Snapshot() (map[string]int64, map[string]struct{}) {
+	props := make(map[string]int64, len(dp.props))
+	for k, v := range dp.props {
+		props[k] = v
+	}
+	dirty := make(map[string]struct{}, len(dp.dirty))
+	for k, v := range dp.dirty {
+		dirty[k] = v
+	}
+	return props, dirty
+}
+
+// Restore resets dynamic properties to a snapshot returned by Snapshot.
+func (dp *DynamicProperties) Restore(props map[string]int64, dirty map[string]struct{}) {
+	dp.props = make(map[string]int64, len(props))
+	for k, v := range props {
+		dp.props[k] = v
+	}
+	dp.dirty = make(map[string]struct{}, len(dirty))
+	for k, v := range dirty {
+		dp.dirty[k] = v
+	}
+}
+
 // ---------------------------------------------------------------------------
 // M1.1 backfilled accessors.
 //
@@ -951,6 +985,13 @@ func (dp *DynamicProperties) SetMarketSellFee(v int64) {
 	dp.Set("market_sell_fee", v)
 }
 
+func (dp *DynamicProperties) MarketQuantityLimit() int64 {
+	return dp.props["market_quantity_limit"]
+}
+func (dp *DynamicProperties) SetMarketQuantityLimit(v int64) {
+	dp.Set("market_quantity_limit", v)
+}
+
 func (dp *DynamicProperties) MaxCreateAccountTxSize() int64 {
 	return dp.props["max_create_account_tx_size"]
 }
@@ -975,7 +1016,7 @@ func (dp *DynamicProperties) SupportMaxDelegateLockPeriod() bool {
 		dp.UnfreezeDelayDays() > 0
 }
 
-func (dp *DynamicProperties) MaxFeeLimit() int64 { return dp.props["max_fee_limit"] }
+func (dp *DynamicProperties) MaxFeeLimit() int64     { return dp.props["max_fee_limit"] }
 func (dp *DynamicProperties) SetMaxFeeLimit(v int64) { dp.Set("max_fee_limit", v) }
 
 func (dp *DynamicProperties) BurnTrxAmount() int64 { return dp.props["burn_trx_amount"] }
@@ -989,10 +1030,10 @@ func (dp *DynamicProperties) AddBurnTrx(amount int64) {
 	dp.Set("burn_trx_amount", dp.props["burn_trx_amount"]+amount)
 }
 
-func (dp *DynamicProperties) MemoFee() int64 { return dp.props["memo_fee"] }
+func (dp *DynamicProperties) MemoFee() int64     { return dp.props["memo_fee"] }
 func (dp *DynamicProperties) SetMemoFee(v int64) { dp.Set("memo_fee", v) }
 
-func (dp *DynamicProperties) MultiSignFee() int64 { return dp.props["multi_sign_fee"] }
+func (dp *DynamicProperties) MultiSignFee() int64     { return dp.props["multi_sign_fee"] }
 func (dp *DynamicProperties) SetMultiSignFee(v int64) { dp.Set("multi_sign_fee", v) }
 
 func (dp *DynamicProperties) Witness127PayPerBlock() int64 {
@@ -1144,6 +1185,20 @@ func (dp *DynamicProperties) SetAllowTvmOsaka(v bool) {
 	boolSet(dp, "allow_tvm_osaka", v)
 }
 
+func (dp *DynamicProperties) AllowTvmPrague() bool {
+	return boolGet(dp, "allow_tvm_prague")
+}
+func (dp *DynamicProperties) SetAllowTvmPrague(v bool) {
+	boolSet(dp, "allow_tvm_prague", v)
+}
+
+func (dp *DynamicProperties) BlockHashHistoryInstalled() bool {
+	return boolGet(dp, "block_hash_history_installed")
+}
+func (dp *DynamicProperties) SetBlockHashHistoryInstalled(v bool) {
+	boolSet(dp, "block_hash_history_installed", v)
+}
+
 func (dp *DynamicProperties) AllowTvmSelfdestructRestriction() bool {
 	return boolGet(dp, "allow_tvm_selfdestruct_restriction")
 }
@@ -1170,6 +1225,20 @@ func (dp *DynamicProperties) ConsensusLogicOptimization() bool {
 }
 func (dp *DynamicProperties) SetConsensusLogicOptimization(v bool) {
 	boolSet(dp, "consensus_logic_optimization", v)
+}
+
+func (dp *DynamicProperties) AllowHardenResourceCalculation() bool {
+	return boolGet(dp, "allow_harden_resource_calculation")
+}
+func (dp *DynamicProperties) SetAllowHardenResourceCalculation(v bool) {
+	boolSet(dp, "allow_harden_resource_calculation", v)
+}
+
+func (dp *DynamicProperties) AllowHardenExchangeCalculation() bool {
+	return boolGet(dp, "allow_harden_exchange_calculation")
+}
+func (dp *DynamicProperties) SetAllowHardenExchangeCalculation(v bool) {
+	boolSet(dp, "allow_harden_exchange_calculation", v)
 }
 
 // RemoveThePowerOfTheGr mirrors java-tron's getRemoveThePowerOfTheGr,
@@ -1276,8 +1345,9 @@ func (dp *DynamicProperties) SetTransactionFeePool(v int64) {
 // DynamicPropertiesStore.addTransactionFeePool, which is invoked from
 // ReceiptCapsule.payEnergyBill (and BandwidthProcessor.consume*) whenever
 // `supportTransactionFeePool` is active and the contract result is not
-// OUT_OF_TIME. The pool is drained back to the witness's allowance once
-// per block in `Manager.payReward` (see core.payBlockReward TODO).
+// OUT_OF_TIME. Manager.payReward pays the block witness the current
+// transaction-fee-pool share once per block, then subtracts that share from
+// this property.
 func (dp *DynamicProperties) AddTransactionFeePool(amount int64) {
 	if amount <= 0 {
 		return
@@ -1290,6 +1360,12 @@ func (dp *DynamicProperties) TotalTransactionCost() int64 {
 }
 func (dp *DynamicProperties) SetTotalTransactionCost(v int64) {
 	dp.Set("total_transaction_cost", v)
+}
+func (dp *DynamicProperties) AddTotalTransactionCost(amount int64) {
+	if amount == 0 {
+		return
+	}
+	dp.Set("total_transaction_cost", dp.props["total_transaction_cost"]+amount)
 }
 
 func (dp *DynamicProperties) TotalCreateAccountCost() int64 {

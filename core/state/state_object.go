@@ -13,6 +13,7 @@ type stateObject struct {
 	account *types.Account
 	dirty   bool
 	deleted bool
+	created bool
 
 	// Contract fields
 	code              []byte                        // contract bytecode
@@ -37,6 +38,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		address: addr,
 		account: types.NewAccount(addr, corepb.AccountType_Normal),
 		dirty:   true,
+		created: true,
 		storage: make(map[tcommon.Hash]tcommon.Hash),
 	}
 }

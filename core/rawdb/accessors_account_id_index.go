@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -15,13 +16,13 @@ func WriteAccountIdIndex(db ethdb.KeyValueWriter, accountID []byte, owner []byte
 	if len(owner) == 0 {
 		return fmt.Errorf("account id index: empty owner")
 	}
-	return db.Put(accountIdIndexKey(accountID), owner)
+	return db.Put(accountIdIndexKey(bytes.ToLower(accountID)), owner)
 }
 
 // ReadAccountIdIndex returns the owner address registered for accountID, or
 // nil if none. Mirrors AccountIdIndexStore.get.
 func ReadAccountIdIndex(db ethdb.KeyValueReader, accountID []byte) []byte {
-	data, err := db.Get(accountIdIndexKey(accountID))
+	data, err := db.Get(accountIdIndexKey(bytes.ToLower(accountID)))
 	if err != nil || len(data) == 0 {
 		return nil
 	}
@@ -34,11 +35,11 @@ func ReadAccountIdIndex(db ethdb.KeyValueReader, accountID []byte) []byte {
 // Mirrors AccountIdIndexStore.has, used by SetAccountIdActuator's
 // uniqueness precheck.
 func HasAccountIdIndex(db ethdb.KeyValueReader, accountID []byte) bool {
-	ok, _ := db.Has(accountIdIndexKey(accountID))
+	ok, _ := db.Has(accountIdIndexKey(bytes.ToLower(accountID)))
 	return ok
 }
 
 // DeleteAccountIdIndex removes the mapping.
 func DeleteAccountIdIndex(db ethdb.KeyValueWriter, accountID []byte) error {
-	return db.Delete(accountIdIndexKey(accountID))
+	return db.Delete(accountIdIndexKey(bytes.ToLower(accountID)))
 }

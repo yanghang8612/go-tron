@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	headBlockKey            = []byte("LastBlock")
-	headSolidBlockKey       = []byte("LastSolidBlock")
+	headBlockKey             = []byte("LastBlock")
+	headSolidBlockKey        = []byte("LastSolidBlock")
 	totalTransactionCountKey = []byte("total-tx-count")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does
@@ -23,20 +23,21 @@ var (
 	// empty.
 	blockStateRootPrefix = []byte("bsr-")
 
-	blockPrefix     = []byte("b-")
-	blockHashPrefix = []byte("bh-")
-	txPrefix        = []byte("tx-")
-	txInfoPrefix    = []byte("ti-")
-	txInfoBlockPrefix = []byte("tib-")
-	accountPrefix   = []byte("a-")
+	blockPrefix              = []byte("b-")
+	blockHashPrefix          = []byte("bh-")
+	txPrefix                 = []byte("tx-")
+	txInfoPrefix             = []byte("ti-")
+	txInfoBlockPrefix        = []byte("tib-")
+	accountPrefix            = []byte("a-")
 	witnessPrefix            = []byte("w-")
 	witnessLatestBlockPrefix = []byte("wlb-") // per-witness latest produced block number
 	votesPrefix              = []byte("v-")
-	proposalPrefix  = []byte("p-")
-	codePrefix      = []byte("c-")
-	contractPrefix  = []byte("ct-")
-	storagePrefix   = []byte("s-")
-	dynPropPrefix   = []byte("dp-")
+	votesIndexKey            = []byte("v-index")
+	proposalPrefix           = []byte("p-")
+	codePrefix               = []byte("c-")
+	contractPrefix           = []byte("ct-")
+	storagePrefix            = []byte("s-")
+	dynPropPrefix            = []byte("dp-")
 
 	// witnessScheduleKey is the head sentinel for witness-schedule state.
 	// Kept for backwards compatibility with pre-M2 data; not written today.
@@ -75,10 +76,11 @@ var (
 	delegationIndexPrefix = []byte("dri-")
 	brokeragePrefix       = []byte("wb-")
 
-	assetPrefix          = []byte("ast-")   // tokenID big-endian 8B → AssetIssueContract proto bytes
-	assetNamePrefix      = []byte("astn-")  // token name bytes → tokenID big-endian 8B
-	assetOwnerPrefix     = []byte("asto-")  // owner address 21B → tokenID big-endian 8B
-	assetIssueTimePrefix = []byte("asti-")  // tokenID big-endian 8B → issue timestamp ms big-endian 8B
+	assetPrefix          = []byte("ast-")  // tokenID big-endian 8B → AssetIssueContract proto bytes (java AssetIssueV2Store)
+	assetLegacyPrefix    = []byte("astl-") // token name bytes → AssetIssueContract proto bytes (java AssetIssueStore)
+	assetNamePrefix      = []byte("astn-") // token name bytes → tokenID big-endian 8B
+	assetOwnerPrefix     = []byte("asto-") // owner address 21B → tokenID big-endian 8B
+	assetIssueTimePrefix = []byte("asti-") // tokenID big-endian 8B → issue timestamp ms big-endian 8B
 
 	// marketOrderPrefix (mo-) maps to java-tron's MarketOrderStore
 	// (db name "market-order"). Stores individual MarketOrder protos keyed
@@ -111,17 +113,17 @@ var (
 	// Covers the "market-pair-to-price" store in the M2 schema gap list.
 	marketPairToPricePrefix = []byte("mptop-")
 
-	exchangePrefix = []byte("ex-")
+	exchangePrefix   = []byte("ex-")
+	exchangeV2Prefix = []byte("ex2-")
 
 	nullifierPrefix        = []byte("nf-")
 	noteCommitmentPrefix   = []byte("nc-")
 	noteCommitmentCountKey = []byte("nccount")
 
 	// zkProofPrefix (zkp-) maps to java-tron's ZKProofStore (db "zkProof").
-	// Stores a seen-flag for each ZK proof to prevent replay attacks on
-	// shielded transactions (distinct from the nullifier used for double-spend).
-	// Key:   zkp- || proof bytes (opaque, 192 bytes for Groth16)
-	// Value: 0x01 (proof has been accepted once)
+	// Stores the cached proof-verification result for each shielded transaction.
+	// Key:   zkp- || transaction raw-data hash
+	// Value: 0x01 (proof accepted) or 0x00 (proof rejected)
 	// Gated on allow_shielded_transaction.
 	zkProofPrefix = []byte("zkp-")
 
@@ -172,6 +174,11 @@ var (
 	//   aa- || owner (21B) || tokenID (varint-style uint64 big-endian 8B)
 	// Value: big-endian int64 balance (matches Java's Longs.toByteArray).
 	accountAssetPrefix = []byte("aa-")
+
+	// accountNameIndexPrefix (ani-) maps to java-tron's AccountIndexStore
+	// (db name "account-index"). Reverse lookup from account_name bytes to
+	// the 21-byte owner address. Written by AccountUpdateContract and genesis.
+	accountNameIndexPrefix = []byte("ani-")
 
 	// accountIdIndexPrefix (aid-) maps to java-tron's
 	// AccountIdIndexStore (db name "accountid-index"). Reverse lookup
@@ -279,13 +286,15 @@ var (
 	// wallet answer "who delegated TO me" or "who have I delegated to"
 	// via prefix scans without walking the primary DelegatedResource
 	// store. The direction byte distinguishes V1/V2 × from/to:
+	//   0x00 legacy V1 aggregate (pre allow_delegate_optimization)
 	//   0x01 V1 from-anchor   (anchor=from, counterparty=to)
 	//   0x02 V1 to-anchor     (anchor=to,   counterparty=from)
 	//   0x03 V2 from-anchor   "
 	//   0x04 V2 to-anchor     "
-	// Key:   drax- || direction (1B) || anchor (21B) || counterparty (21B)
-	// Value: proto-encoded DelegatedResourceAccountIndex with `Account`
-	//        = counterparty and `Timestamp` = delegate/undelegate time.
+	// Key:   aggregate: drax- || 0x00 || account
+	//        directional: drax- || direction || anchor || counterparty
+	// Value: aggregate stores Account + FromAccounts/ToAccounts;
+	//        directional stores Account=counterparty + Timestamp.
 	drAccIdxPrefix = []byte("drax-")
 )
 
@@ -295,6 +304,7 @@ var (
 type drAccIdxDirection byte
 
 const (
+	DrAccIdxLegacy drAccIdxDirection = 0x00 // V1 aggregate record before proposal #69
 	DrAccIdxV1From drAccIdxDirection = 0x01 // V1: from-anchored  (anchor=from, counterparty=to)
 	DrAccIdxV1To   drAccIdxDirection = 0x02 // V1: to-anchored    (anchor=to,   counterparty=from)
 	DrAccIdxV2From drAccIdxDirection = 0x03 // V2: from-anchored
@@ -343,6 +353,10 @@ func witnessLatestBlockKey(addr []byte) []byte {
 	return append(append([]byte{}, witnessLatestBlockPrefix...), addr...)
 }
 
+func votesKey(addr []byte) []byte {
+	return append(append([]byte{}, votesPrefix...), addr...)
+}
+
 func dynPropKey(name string) []byte {
 	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
 }
@@ -367,6 +381,18 @@ func delegationKey(from, to []byte) []byte {
 	copy(k[len(delegationPrefix):], from)
 	copy(k[len(delegationPrefix)+len(from):], to)
 	return k
+}
+
+func delegationKeyV2(from, to []byte, locked bool) []byte {
+	k := make([]byte, 0, len(delegationPrefix)+1+len(from)+len(to))
+	k = append(k, delegationPrefix...)
+	if locked {
+		k = append(k, 0x02)
+	} else {
+		k = append(k, 0x01)
+	}
+	k = append(k, from...)
+	return append(k, to...)
 }
 
 func delegationIndexKey(from []byte) []byte {
@@ -433,10 +459,14 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 	return append(k, tb[:]...)
 }
 
-// accountIdIndexKey builds the accountid-index key. Mirrors java-tron's
-// AccountIdIndexStore — key is the raw account ID bytes (UTF-8).
+// accountIdIndexKey builds the accountid-index key. Callers pass the
+// lower-cased account ID, matching java-tron's AccountIdIndexStore.
 func accountIdIndexKey(accountID []byte) []byte {
 	return append(append([]byte{}, accountIdIndexPrefix...), accountID...)
+}
+
+func accountNameIndexKey(accountName []byte) []byte {
+	return append(append([]byte{}, accountNameIndexPrefix...), accountName...)
 }
 
 // accountTraceKey builds an account-trace key: prefix || owner (21B) ||
@@ -492,7 +522,9 @@ func balanceTraceKey(blockNum int64) []byte {
 }
 
 // rewardViKey builds the per-(cycle, witness) VI key. Format:
-//   rvi- || cycle big-endian 8B || '-' || addr
+//
+//	rvi- || cycle big-endian 8B || '-' || addr
+//
 // The "-vi" suffix is omitted — all non-sentinel keys in this store are VI
 // values, so the suffix adds no disambiguation value in go-tron's layout.
 func rewardViKey(cycle int64, addr []byte) []byte {
@@ -521,6 +553,10 @@ func drAccIdxKey(dir drAccIdxDirection, anchor, counterparty []byte) []byte {
 	return append(k, counterparty...)
 }
 
+func drAccIdxLegacyKey(account []byte) []byte {
+	return drAccIdxKey(DrAccIdxLegacy, account, nil)
+}
+
 // drAccIdxAnchorPrefix returns the byte prefix that iterates every
 // (counterparty, value) under a given direction+anchor — drax- ||
 // direction || anchor.
@@ -536,6 +572,10 @@ func assetKey(tokenID int64) []byte {
 	copy(k, assetPrefix)
 	binary.BigEndian.PutUint64(k[len(assetPrefix):], uint64(tokenID))
 	return k
+}
+
+func assetLegacyKey(name []byte) []byte {
+	return append(append([]byte{}, assetLegacyPrefix...), name...)
 }
 
 func assetNameKey(name []byte) []byte {
@@ -607,6 +647,13 @@ func exchangeKey(id int64) []byte {
 	k := make([]byte, len(exchangePrefix)+8)
 	copy(k, exchangePrefix)
 	binary.BigEndian.PutUint64(k[len(exchangePrefix):], uint64(id))
+	return k
+}
+
+func exchangeV2Key(id int64) []byte {
+	k := make([]byte, len(exchangeV2Prefix)+8)
+	copy(k, exchangeV2Prefix)
+	binary.BigEndian.PutUint64(k[len(exchangeV2Prefix):], uint64(id))
 	return k
 }
 

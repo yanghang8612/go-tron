@@ -89,6 +89,13 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 	if err := rawdb.WriteTaposRef(db, 0, block.Hash()); err != nil {
 		return nil, tcommon.Hash{}, fmt.Errorf("write genesis tapos ref: %w", err)
 	}
+	for _, ga := range genesis.Accounts {
+		if ga.AccountName != "" {
+			if err := rawdb.WriteAccountNameIndex(db, []byte(ga.AccountName), ga.Address[:]); err != nil {
+				return nil, tcommon.Hash{}, fmt.Errorf("write genesis account name index: %w", err)
+			}
+		}
+	}
 
 	// Write dynamic properties
 	if genesis.DynamicProperties != nil {

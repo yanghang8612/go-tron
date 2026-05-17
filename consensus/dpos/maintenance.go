@@ -7,10 +7,10 @@ import (
 )
 
 // DoMaintenance performs legacy maintenance-time operations:
-// 1. Distribute witness_standby_allowance pro-rata by votes to top-127
-//    witnesses (only when change_delegation is OFF — the per-block
-//    payStandbyWitness flow replaces this once the new path activates).
-// 2. Compute and set next maintenance time.
+//  1. Distribute witness_standby_allowance pro-rata by votes to top-127
+//     witnesses (only when change_delegation is OFF — the per-block
+//     payStandbyWitness flow replaces this once the new path activates).
+//  2. Compute and set next maintenance time.
 //
 // The M1.5 new-reward path (VI accumulation + cycle rollover) is handled
 // separately by core.applyRewardMaintenance after this call returns.
@@ -25,6 +25,14 @@ func DoMaintenance(chain consensus.ChainHeaderWriter, blockTime int64, allWitnes
 
 	nextMaint := CalcNextMaintenanceTime(blockTime, chain.NextMaintenanceTime(), chain.MaintenanceTimeInterval())
 	chain.SetNextMaintenanceTime(nextMaint)
+}
+
+func TryRemoveThePowerOfTheGr(chain consensus.ChainHeaderWriter, allWitnesses []WitnessVote) {
+	tryRemoveThePowerOfTheGr(chain, allWitnesses)
+}
+
+func DistributeLegacyStandby(chain consensus.ChainHeaderWriter, sorted []WitnessVote) {
+	distributeLegacyStandby(chain, sorted)
 }
 
 // tryRemoveThePowerOfTheGr ports java-tron

@@ -457,6 +457,25 @@ func TestContractStoragePersistsAcrossCommit(t *testing.T) {
 	}
 }
 
+func TestNewAccountIgnoresStaleFlatStorage(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	addr := testAddr(0x44)
+	key := tcommon.BytesToHash([]byte{0x01})
+	stale := tcommon.BytesToHash([]byte{0x99})
+	rawdb.WriteStorage(diskdb, addr, key, stale.Bytes())
+
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.GetOrCreateAccount(addr)
+
+	if got := sdb.GetState(addr, key); got != (tcommon.Hash{}) {
+		t.Fatalf("new account storage must be empty despite stale flat storage: got %x", got)
+	}
+}
+
 // ---- M11.5: ApplyDefaultAccountPermissions --------------------------------
 
 func TestApplyDefaultAccountPermissions_PopulatesBoth(t *testing.T) {

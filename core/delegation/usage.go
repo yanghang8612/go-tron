@@ -5,6 +5,8 @@
 package delegation
 
 import (
+	"math/big"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -94,22 +96,88 @@ func FoldUsageIntoOwner(statedb *state.StateDB, owner tcommon.Address, resource 
 	}
 }
 
-// RecoverUsageWindow applies the sliding-window linear decay go-tron uses
-// for resource usage (mirrors core.recoverUsage — duplicated here to
-// avoid import cycles).
+// AvailableFrozenV2ForDelegation returns the owner's self-frozen V2 balance
+// that can still be delegated after accounting for already-consumed resource
+// usage. This mirrors java-tron's DelegateResourceActuator.validate:
+//
+//	available = selfFrozenV2 - max(0, usageAsFrozenBalance
+//	    - ownV1Frozen - acquiredV1Delegation - acquiredV2Delegation)
+//
+// The usage recovery follows go-tron's existing resource timestamp model so
+// the check is consistent with bandwidth/energy charging in this codebase.
+func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resource corepb.ResourceCode, now int64) int64 {
+	acct := statedb.GetAccount(owner)
+	if acct == nil {
+		return 0
+	}
+
+	selfFrozen := acct.GetFrozenV2Amount(resource)
+	if selfFrozen <= 0 {
+		return 0
+	}
+
+	var usage, v1OwnFrozen, v1AcquiredFrozen, v2AcquiredFrozen, totalLimit, totalWeight int64
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		usage = RecoverUsageWindow(statedb.GetNetUsage(owner), statedb.GetLatestConsumeTime(owner), now)
+		v1OwnFrozen = acct.TotalFrozenBandwidth()
+		v1AcquiredFrozen = acct.AcquiredDelegatedFrozenBandwidth()
+		v2AcquiredFrozen = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+		totalLimit = dp.TotalNetLimit()
+		totalWeight = dp.TotalNetWeight()
+	case corepb.ResourceCode_ENERGY:
+		usage = RecoverUsageWindow(statedb.GetEnergyUsage(owner), statedb.GetLatestConsumeTimeForEnergy(owner), now)
+		v1OwnFrozen = acct.FrozenEnergyAmount()
+		v1AcquiredFrozen = acct.AcquiredDelegatedFrozenEnergy()
+		v2AcquiredFrozen = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+		totalLimit = dp.TotalEnergyCurrentLimit()
+		totalWeight = dp.TotalEnergyWeight()
+	default:
+		return 0
+	}
+
+	usageAsFrozen := resourceUsageToFrozenBalance(usage, totalLimit, totalWeight, dp.AllowHardenResourceCalculation())
+	v2Usage := usageAsFrozen - v1OwnFrozen - v1AcquiredFrozen - v2AcquiredFrozen
+	if v2Usage < 0 {
+		v2Usage = 0
+	}
+	available := selfFrozen - v2Usage
+	if available < 0 {
+		return 0
+	}
+	return available
+}
+
+// RecoverUsageWindow applies the sliding-window linear decay java-tron uses
+// for resource usage. `lastTime` and `now` are head-slot values, not
+// millisecond timestamps (duplicated here to avoid import cycles).
 func RecoverUsageWindow(oldUsage, lastTime, now int64) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
+	windowSize := int64(params.WindowSizeSlots)
 	elapsed := now - lastTime
-	if elapsed >= int64(params.WindowSizeMs) {
+	if elapsed >= windowSize {
 		return 0
 	}
 	if elapsed <= 0 {
 		return oldUsage
 	}
-	remaining := int64(params.WindowSizeMs) - elapsed
-	return oldUsage * remaining / int64(params.WindowSizeMs)
+	remaining := windowSize - elapsed
+	return oldUsage * remaining / windowSize
+}
+
+func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64, harden bool) int64 {
+	if usage <= 0 || totalLimit <= 0 || totalWeight <= 0 {
+		return 0
+	}
+	if !harden {
+		return int64(float64(usage) * float64(params.TRXPrecision) * (float64(totalWeight) / float64(totalLimit)))
+	}
+	n := new(big.Int).Mul(big.NewInt(usage), big.NewInt(params.TRXPrecision))
+	n.Mul(n, big.NewInt(totalWeight))
+	n.Quo(n, big.NewInt(totalLimit))
+	return n.Int64()
 }
 
 func totalBandwidthFrozen(acct *types.Account) int64 {

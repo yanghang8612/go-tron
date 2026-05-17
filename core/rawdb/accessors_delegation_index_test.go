@@ -79,6 +79,66 @@ func TestDrAccountIndex_UnDelegate(t *testing.T) {
 	}
 }
 
+func TestDrAccountIndex_LegacyDelegateAndUnDelegate(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	from := addr(0xa1)
+	to := addr(0xb2)
+
+	if err := WriteDrAccountIndexLegacyDelegate(db, from, to); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDrAccountIndexLegacyDelegate(db, from, to); err != nil {
+		t.Fatal(err)
+	}
+	fromRec := ReadDrAccountIndexLegacy(db, from)
+	if fromRec == nil || !bytes.Equal(fromRec.Account, from) || len(fromRec.ToAccounts) != 1 || !bytes.Equal(fromRec.ToAccounts[0], to) {
+		t.Fatalf("legacy from index wrong: %+v", fromRec)
+	}
+	toRec := ReadDrAccountIndexLegacy(db, to)
+	if toRec == nil || !bytes.Equal(toRec.Account, to) || len(toRec.FromAccounts) != 1 || !bytes.Equal(toRec.FromAccounts[0], from) {
+		t.Fatalf("legacy to index wrong: %+v", toRec)
+	}
+
+	if err := WriteDrAccountIndexLegacyUnDelegate(db, from, to); err != nil {
+		t.Fatal(err)
+	}
+	fromRec = ReadDrAccountIndexLegacy(db, from)
+	if fromRec == nil || len(fromRec.ToAccounts) != 0 {
+		t.Fatalf("legacy from should keep empty aggregate record, got %+v", fromRec)
+	}
+	toRec = ReadDrAccountIndexLegacy(db, to)
+	if toRec == nil || len(toRec.FromAccounts) != 0 {
+		t.Fatalf("legacy to should keep empty aggregate record, got %+v", toRec)
+	}
+}
+
+func TestDrAccountIndex_ConvertLegacyUsesListOrderAsTimestamp(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	from := addr(0xc1)
+	to1 := addr(0xd1)
+	to2 := addr(0xd2)
+	if err := WriteDrAccountIndexLegacyDelegate(db, from, to1); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDrAccountIndexLegacyDelegate(db, from, to2); err != nil {
+		t.Fatal(err)
+	}
+	if err := ConvertDrAccountIndexLegacy(db, from); err != nil {
+		t.Fatal(err)
+	}
+	if ReadDrAccountIndexLegacy(db, from) != nil {
+		t.Fatal("legacy aggregate should be deleted after convert")
+	}
+	rec1 := ReadDrAccountIndexEntry(db, DrAccIdxV1From, from, to1)
+	rec2 := ReadDrAccountIndexEntry(db, DrAccIdxV1From, from, to2)
+	if rec1 == nil || rec1.Timestamp != 1 || !bytes.Equal(rec1.Account, to1) {
+		t.Fatalf("converted first entry wrong: %+v", rec1)
+	}
+	if rec2 == nil || rec2.Timestamp != 2 || !bytes.Equal(rec2.Account, to2) {
+		t.Fatalf("converted second entry wrong: %+v", rec2)
+	}
+}
+
 func TestDrAccountIndex_Iterate(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	receiver := addr(0xaa)

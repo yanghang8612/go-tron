@@ -22,7 +22,7 @@ var activeProposalTypes = []int64{
 	65, 66, 67, 68, 69,
 	70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
 	81, 82, 83, 87, 88, 89,
-	92, 94, 96,
+	92, 94, 95, 96, 97, 98,
 }
 
 func TestProposalParamKey_AllActiveTypesMapped(t *testing.T) {

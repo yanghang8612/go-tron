@@ -68,3 +68,17 @@ func TestAccountIdIndex_DistinctIds(t *testing.T) {
 		t.Fatal("bob lookup wrong")
 	}
 }
+
+func TestAccountIdIndex_CaseInsensitive(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := bytes.Repeat([]byte{0xaa}, 21)
+	if err := WriteAccountIdIndex(db, []byte("AliceID1"), owner); err != nil {
+		t.Fatal(err)
+	}
+	if !HasAccountIdIndex(db, []byte("aliceid1")) {
+		t.Fatal("lower-case lookup missing")
+	}
+	if got := ReadAccountIdIndex(db, []byte("ALICEID1")); !bytes.Equal(got, owner) {
+		t.Fatalf("upper-case lookup: got %x, want %x", got, owner)
+	}
+}

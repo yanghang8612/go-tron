@@ -8,6 +8,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type marketPairPriceStore interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}
+
 // WriteMarketOrder stores a MarketOrder keyed by orderID.
 func WriteMarketOrder(db ethdb.KeyValueWriter, orderID []byte, order *corepb.MarketOrder) error {
 	data, err := proto.Marshal(order)
@@ -108,10 +113,17 @@ func WriteMarketPairPriceCount(db ethdb.KeyValueWriter, sellTokenID, buyTokenID 
 	_ = db.Put(marketPairToPriceKey(sellTokenID, buyTokenID), buf[:])
 }
 
+// DeleteMarketPairPriceCount removes the distinct-price counter for a token
+// pair, matching java-tron's MarketPairToPriceStore.delete when the last price
+// level is consumed.
+func DeleteMarketPairPriceCount(db ethdb.KeyValueWriter, sellTokenID, buyTokenID []byte) error {
+	return db.Delete(marketPairToPriceKey(sellTokenID, buyTokenID))
+}
+
 // IncrMarketPairPriceCount atomically adds delta to the price count for a
 // pair. Mirrors java-tron MarketPairToPriceStore.addNewPriceKey (increment)
 // and the symmetric decrement on order cancellation.
-func IncrMarketPairPriceCount(db ethdb.KeyValueStore, sellTokenID, buyTokenID []byte, delta int64) {
+func IncrMarketPairPriceCount(db marketPairPriceStore, sellTokenID, buyTokenID []byte, delta int64) {
 	cur := ReadMarketPairPriceCount(db, sellTokenID, buyTokenID)
 	WriteMarketPairPriceCount(db, sellTokenID, buyTokenID, cur+delta)
 }

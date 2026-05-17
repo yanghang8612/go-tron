@@ -56,23 +56,42 @@ func ReadNoteCommitment(db ethdb.KeyValueReader, index int64) []byte {
 	return data
 }
 
-// HasZKProof returns true if this ZK proof has already been accepted.
-// Used to prevent replay attacks on shielded transactions. Mirrors
-// java-tron ZKProofStore.has.
-func HasZKProof(db ethdb.KeyValueReader, proof []byte) bool {
-	ok, _ := db.Has(zkProofKey(proof))
+// HasZKProof returns true if this shielded transaction has a cached proof
+// result. Mirrors java-tron ZKProofStore.has.
+func HasZKProof(db ethdb.KeyValueReader, txID []byte) bool {
+	ok, _ := db.Has(zkProofKey(txID))
 	return ok
 }
 
-// WriteZKProof marks a ZK proof as accepted (replay prevention).
-// Mirrors java-tron ZKProofStore.put.
-func WriteZKProof(db ethdb.KeyValueWriter, proof []byte) error {
-	return db.Put(zkProofKey(proof), []byte{0x01})
+// ReadZKProofResult returns the cached proof-verification result for a
+// shielded transaction. The second return value is false when no record exists.
+func ReadZKProofResult(db ethdb.KeyValueReader, txID []byte) (bool, bool) {
+	data, err := db.Get(zkProofKey(txID))
+	if err != nil || len(data) == 0 {
+		return false, false
+	}
+	return data[0] == 0x01, true
 }
 
-// DeleteZKProof removes a ZK proof entry (used during state rollback).
-func DeleteZKProof(db ethdb.KeyValueWriter, proof []byte) error {
-	return db.Delete(zkProofKey(proof))
+// WriteZKProofResult stores the proof-verification result for a shielded
+// transaction. Mirrors java-tron ZKProofStore.put.
+func WriteZKProofResult(db ethdb.KeyValueWriter, txID []byte, ok bool) error {
+	value := byte(0x00)
+	if ok {
+		value = 0x01
+	}
+	return db.Put(zkProofKey(txID), []byte{value})
+}
+
+// WriteZKProof marks a shielded transaction proof as accepted. Kept as a
+// convenience wrapper for callers that only need the accepted state.
+func WriteZKProof(db ethdb.KeyValueWriter, txID []byte) error {
+	return WriteZKProofResult(db, txID, true)
+}
+
+// DeleteZKProof removes a cached proof entry (used during state rollback).
+func DeleteZKProof(db ethdb.KeyValueWriter, txID []byte) error {
+	return db.Delete(zkProofKey(txID))
 }
 
 // WriteIncrMerkleTree stores the IncrementalMerkleTree state keyed by the

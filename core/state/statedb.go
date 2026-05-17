@@ -127,6 +127,16 @@ func (s *StateDB) GetTRC10Balance(addr tcommon.Address, tokenID int64) int64 {
 	return obj.account.Proto().GetAssetV2()[strconv.FormatInt(tokenID, 10)]
 }
 
+// GetTRC10BalanceByName returns the legacy pre-AllowSameTokenName TRC10
+// balance stored in Account.asset keyed by token name.
+func (s *StateDB) GetTRC10BalanceByName(addr tcommon.Address, name []byte) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.Proto().GetAsset()[string(name)]
+}
+
 // SetTRC10Balance sets the TRC10 token balance in the account proto's AssetV2 map.
 func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
 	obj := s.GetOrCreateAccount(addr)
@@ -137,6 +147,64 @@ func (s *StateDB) SetTRC10Balance(addr tcommon.Address, tokenID int64, amount in
 	}
 	pb.AssetV2[strconv.FormatInt(tokenID, 10)] = amount
 	obj.markDirty()
+}
+
+// SetTRC10BalanceByName sets the legacy Account.asset balance keyed by token name.
+func (s *StateDB) SetTRC10BalanceByName(addr tcommon.Address, name []byte, amount int64) {
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	if pb.Asset == nil {
+		pb.Asset = make(map[string]int64)
+	}
+	pb.Asset[string(name)] = amount
+	obj.markDirty()
+}
+
+// SetTRC10BalanceLegacyAndV2 mirrors java-tron AccountCapsule.addAssetAmountV2
+// before AllowSameTokenName: the legacy Account.asset value is authoritative,
+// and Account.assetV2 is kept in lockstep under the token ID.
+func (s *StateDB) SetTRC10BalanceLegacyAndV2(addr tcommon.Address, name []byte, tokenID int64, amount int64) {
+	obj := s.GetOrCreateAccount(addr)
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	if pb.Asset == nil {
+		pb.Asset = make(map[string]int64)
+	}
+	if pb.AssetV2 == nil {
+		pb.AssetV2 = make(map[string]int64)
+	}
+	pb.Asset[string(name)] = amount
+	pb.AssetV2[strconv.FormatInt(tokenID, 10)] = amount
+	obj.markDirty()
+}
+
+func (s *StateDB) GetTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, allowSameTokenName bool) int64 {
+	if allowSameTokenName {
+		return s.GetTRC10Balance(addr, tokenID)
+	}
+	return s.GetTRC10BalanceByName(addr, name)
+}
+
+func (s *StateDB) AddTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) {
+	if allowSameTokenName {
+		s.AddTRC10Balance(addr, tokenID, amount)
+		return
+	}
+	current := s.GetTRC10BalanceByName(addr, name)
+	s.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, current+amount)
+}
+
+func (s *StateDB) SubTRC10BalanceFinal(addr tcommon.Address, name []byte, tokenID int64, amount int64, allowSameTokenName bool) error {
+	if allowSameTokenName {
+		return s.SubTRC10Balance(addr, tokenID, amount)
+	}
+	current := s.GetTRC10BalanceByName(addr, name)
+	if current < amount {
+		return ErrInsufficientBalance
+	}
+	s.SetTRC10BalanceLegacyAndV2(addr, name, tokenID, current-amount)
+	return nil
 }
 
 // SetAssetIssued records the issued TRC10 token's name and ID on the issuer
@@ -167,6 +235,30 @@ func (s *StateDB) AddFrozenSupply(addr tcommon.Address, frozen []*corepb.Account
 	obj.markDirty()
 }
 
+func (s *StateDB) RemoveExpiredFrozenSupply(addr tcommon.Address, now int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	pb := obj.account.Proto()
+	if len(pb.FrozenSupply) == 0 {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	var remaining []*corepb.Account_Frozen
+	var amount int64
+	for _, frozen := range pb.FrozenSupply {
+		if frozen.ExpireTime <= now {
+			amount += frozen.FrozenBalance
+			continue
+		}
+		remaining = append(remaining, frozen)
+	}
+	pb.FrozenSupply = remaining
+	obj.markDirty()
+	return amount
+}
+
 // AddTRC10Balance credits amount TRC10 tokens to addr.
 func (s *StateDB) AddTRC10Balance(addr tcommon.Address, tokenID int64, amount int64) {
 	s.SetTRC10Balance(addr, tokenID, s.GetTRC10Balance(addr, tokenID)+amount)
@@ -181,6 +273,33 @@ func (s *StateDB) SubTRC10Balance(addr tcommon.Address, tokenID int64, amount in
 	}
 	s.SetTRC10Balance(addr, tokenID, current-amount)
 	return nil
+}
+
+// TransferAllTRC10Balance moves every AssetV2 token balance from one account
+// to another, leaving explicit zero entries on the source account. This
+// mirrors java-tron MUtil.transferAllToken, used by SELFDESTRUCT.
+func (s *StateDB) TransferAllTRC10Balance(from, to tcommon.Address) {
+	fromObj := s.getStateObject(from)
+	if fromObj == nil || fromObj.account == nil {
+		return
+	}
+	fromPB := fromObj.account.Proto()
+	if len(fromPB.AssetV2) == 0 {
+		return
+	}
+	toObj := s.GetOrCreateAccount(to)
+	s.journalAccount(from, fromObj)
+	s.journalAccount(to, toObj)
+	toPB := toObj.account.Proto()
+	if toPB.AssetV2 == nil {
+		toPB.AssetV2 = make(map[string]int64)
+	}
+	for tokenID, amount := range fromPB.AssetV2 {
+		toPB.AssetV2[tokenID] += amount
+		fromPB.AssetV2[tokenID] = 0
+	}
+	fromObj.markDirty()
+	toObj.markDirty()
 }
 
 // IsFrozenClaimed returns whether frozen_supply entry at index has been claimed.
@@ -215,7 +334,7 @@ func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs i
 		return
 	}
 	s.journalAccount(addr, obj)
-	obj.account.AddFrozenBandwidth(amount, expireTimeMs)
+	obj.account.SetFrozenBandwidth(obj.account.TotalFrozenBandwidth()+amount, expireTimeMs)
 	obj.markDirty()
 }
 
@@ -238,6 +357,34 @@ func (s *StateDB) FreezeV1Energy(addr tcommon.Address, amount, expireTimeMs int6
 	s.journalAccount(addr, obj)
 	obj.account.AddFrozenEnergy(amount, expireTimeMs)
 	obj.markDirty()
+}
+
+func (s *StateDB) FreezeV1TronPower(addr tcommon.Address, amount, expireTimeMs int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.AddV1TronPower(amount, expireTimeMs)
+	obj.markDirty()
+}
+
+func (s *StateDB) UnfreezeV1TronPower(addr tcommon.Address, blockTimeMs int64) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	if obj.account.V1TronPowerExpireTime() > blockTimeMs {
+		return 0
+	}
+	amount := obj.account.V1TronPowerFrozen()
+	if amount == 0 {
+		return 0
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearV1TronPower()
+	obj.markDirty()
+	return amount
 }
 
 func (s *StateDB) UnfreezeV1Energy(addr tcommon.Address, blockTimeMs int64) int64 {
@@ -507,6 +654,25 @@ func (s *StateDB) CreateAccountWithTime(addr tcommon.Address, accountType corepb
 	obj.account.SetCreateTime(createTime)
 	obj.markDirty()
 	return obj.account
+}
+
+// ClearAcquiredDelegatedResource clears incoming delegated-resource fields.
+// java-tron's CREATE2 collision path uses this when an existing account is
+// upgraded to a contract account.
+func (s *StateDB) ClearAcquiredDelegatedResource(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	pb := obj.account.Proto()
+	pb.AcquiredDelegatedFrozenBalanceForBandwidth = 0
+	pb.AcquiredDelegatedFrozenV2BalanceForBandwidth = 0
+	if pb.AccountResource != nil {
+		pb.AccountResource.AcquiredDelegatedFrozenBalanceForEnergy = 0
+		pb.AccountResource.AcquiredDelegatedFrozenV2BalanceForEnergy = 0
+	}
+	obj.markDirty()
 }
 
 // IsWitness returns whether the account is marked as a witness.
@@ -799,6 +965,26 @@ func (s *StateDB) SetNetUsage(addr tcommon.Address, usage int64) {
 	obj.markDirty()
 }
 
+// GetLatestOperationTime returns the latest account operation timestamp.
+func (s *StateDB) GetLatestOperationTime(addr tcommon.Address) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestOperationTime()
+}
+
+// SetLatestOperationTime sets the latest account operation timestamp.
+func (s *StateDB) SetLatestOperationTime(addr tcommon.Address, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestOperationTime(t)
+	obj.markDirty()
+}
+
 // GetLatestConsumeTime returns the latest consume time for an account.
 func (s *StateDB) GetLatestConsumeTime(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)
@@ -856,6 +1042,78 @@ func (s *StateDB) SetLatestConsumeFreeTime(addr tcommon.Address, t int64) {
 	}
 	s.journalAccount(addr, obj)
 	obj.account.SetLatestConsumeFreeTime(t)
+	obj.markDirty()
+}
+
+func (s *StateDB) GetFreeAssetNetUsage(addr tcommon.Address, key string) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.FreeAssetNetUsage(key)
+}
+
+func (s *StateDB) SetFreeAssetNetUsage(addr tcommon.Address, key string, usage int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetFreeAssetNetUsage(key, usage)
+	obj.markDirty()
+}
+
+func (s *StateDB) GetFreeAssetNetUsageV2(addr tcommon.Address, key string) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.FreeAssetNetUsageV2(key)
+}
+
+func (s *StateDB) SetFreeAssetNetUsageV2(addr tcommon.Address, key string, usage int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetFreeAssetNetUsageV2(key, usage)
+	obj.markDirty()
+}
+
+func (s *StateDB) GetLatestAssetOperationTime(addr tcommon.Address, key string) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestAssetOperationTime(key)
+}
+
+func (s *StateDB) SetLatestAssetOperationTime(addr tcommon.Address, key string, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestAssetOperationTime(key, t)
+	obj.markDirty()
+}
+
+func (s *StateDB) GetLatestAssetOperationTimeV2(addr tcommon.Address, key string) int64 {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return 0
+	}
+	return obj.account.LatestAssetOperationTimeV2(key)
+}
+
+func (s *StateDB) SetLatestAssetOperationTimeV2(addr tcommon.Address, key string, t int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetLatestAssetOperationTimeV2(key, t)
 	obj.markDirty()
 }
 
@@ -944,22 +1202,37 @@ func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
 
 // GetState returns a storage value from a contract.
 func (s *StateDB) GetState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	v, _ := s.GetStateWithExist(addr, key)
+	return v
+}
+
+// GetStateWithExist returns a storage value and whether the java-tron
+// StorageRow exists. A present zero row can exist inside the same transaction
+// before commit; SSTORE energy accounting distinguishes that from a missing
+// row even though both read as zero.
+func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tcommon.Hash, bool) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
-		return tcommon.Hash{}
+		return tcommon.Hash{}, false
 	}
 	if v, ok := obj.storage[key]; ok {
-		return v
+		return v, true
+	}
+	if obj.created {
+		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
 	raw := rawdb.ReadStorage(s.db.DiskDB(), addr, key)
 	if len(raw) == 0 {
-		return tcommon.Hash{}
+		return tcommon.Hash{}, false
 	}
 	var h tcommon.Hash
 	copy(h[len(h)-len(raw):], raw)
+	if h == (tcommon.Hash{}) {
+		return tcommon.Hash{}, false
+	}
 	obj.storage[key] = h
-	return h
+	return h, true
 }
 
 // SetState sets a storage value on a contract.
@@ -1044,6 +1317,17 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 	obj.markSelfDestructed()
 }
 
+// DeleteAccount removes an account from the account trie on commit.
+func (s *StateDB) DeleteAccount(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.deleted = true
+	obj.markDirty()
+}
+
 // HasSelfDestructed returns whether the account has been self-destructed.
 func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 	obj := s.getStateObject(addr)
@@ -1065,7 +1349,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		stateObjects: make(map[tcommon.Address]*stateObject),
 		witnesses:    make(map[tcommon.Address]*types.Witness),
 		journal:      newJournal(),
-		dynProps:      s.dynProps,
+		dynProps:     s.dynProps,
 		originRoot:   s.originRoot,
 	}
 	for addr, obj := range s.stateObjects {
@@ -1077,6 +1361,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			address:           addr,
 			dirty:             obj.dirty,
 			deleted:           obj.deleted,
+			created:           obj.created,
 			code:              append([]byte{}, obj.code...),
 			codeHash:          obj.codeHash,
 			codeDirty:         obj.codeDirty,
@@ -1131,8 +1416,13 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.contractMetaDirty = false
 		}
 		for k, v := range obj.storage {
-			rawdb.WriteStorage(s.db.DiskDB(), addr, k, v.Bytes())
+			if v == (tcommon.Hash{}) {
+				rawdb.DeleteStorage(s.db.DiskDB(), addr, k)
+			} else {
+				rawdb.WriteStorage(s.db.DiskDB(), addr, k, v.Bytes())
+			}
 		}
+		obj.created = false
 		obj.dirty = false
 	}
 

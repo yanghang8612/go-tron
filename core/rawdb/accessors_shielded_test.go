@@ -11,39 +11,59 @@ import (
 
 func TestZKProof_HasWriteDelete(t *testing.T) {
 	db := memorydb.New()
-	proof := make([]byte, 192) // typical Groth16 proof size
-	proof[0] = 0xAB
-	proof[1] = 0xCD
+	txID := make([]byte, 32)
+	txID[0] = 0xAB
+	txID[1] = 0xCD
 
-	if HasZKProof(db, proof) {
+	if HasZKProof(db, txID) {
 		t.Fatal("expected absent before write")
 	}
+	if _, ok := ReadZKProofResult(db, txID); ok {
+		t.Fatal("expected no cached result before write")
+	}
 
-	if err := WriteZKProof(db, proof); err != nil {
+	if err := WriteZKProof(db, txID); err != nil {
 		t.Fatalf("WriteZKProof: %v", err)
 	}
-	if !HasZKProof(db, proof) {
+	if !HasZKProof(db, txID) {
 		t.Fatal("expected present after write")
 	}
+	if result, ok := ReadZKProofResult(db, txID); !ok || !result {
+		t.Fatalf("cached result: got (%v,%v), want (true,true)", result, ok)
+	}
 
-	if err := DeleteZKProof(db, proof); err != nil {
+	if err := DeleteZKProof(db, txID); err != nil {
 		t.Fatalf("DeleteZKProof: %v", err)
 	}
-	if HasZKProof(db, proof) {
+	if HasZKProof(db, txID) {
 		t.Fatal("expected absent after delete")
 	}
 }
 
-func TestZKProof_DifferentProofsDoNotCollide(t *testing.T) {
+func TestZKProof_DifferentTransactionsDoNotCollide(t *testing.T) {
 	db := memorydb.New()
-	proof1 := []byte("proof-one")
-	proof2 := []byte("proof-two")
+	txID1 := []byte("transaction-one")
+	txID2 := []byte("transaction-two")
 
-	if err := WriteZKProof(db, proof1); err != nil {
+	if err := WriteZKProof(db, txID1); err != nil {
 		t.Fatal(err)
 	}
-	if HasZKProof(db, proof2) {
-		t.Fatal("proof2 should not be present after writing proof1")
+	if HasZKProof(db, txID2) {
+		t.Fatal("txID2 should not be present after writing txID1")
+	}
+}
+
+func TestZKProof_FailedResultIsCached(t *testing.T) {
+	db := memorydb.New()
+	txID := []byte("failed-shielded-tx")
+	if err := WriteZKProofResult(db, txID, false); err != nil {
+		t.Fatal(err)
+	}
+	if !HasZKProof(db, txID) {
+		t.Fatal("failed result should still create a cache entry")
+	}
+	if result, ok := ReadZKProofResult(db, txID); !ok || result {
+		t.Fatalf("cached result: got (%v,%v), want (false,true)", result, ok)
 	}
 }
 

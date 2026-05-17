@@ -27,6 +27,28 @@ func TestWriteReadAssetIssue(t *testing.T) {
 	}
 }
 
+func TestWriteReadAssetIssueByName(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	c := &contractpb.AssetIssueContract{
+		Name:      []byte("MYTOKEN"),
+		Precision: 6,
+		Id:        "1000001",
+	}
+	if err := WriteAssetIssueByName(db, []byte("MYTOKEN"), c); err != nil {
+		t.Fatal(err)
+	}
+	got := ReadAssetIssueByName(db, []byte("MYTOKEN"))
+	if got == nil {
+		t.Fatal("expected legacy asset to be found")
+	}
+	if got.Precision != 6 {
+		t.Fatalf("precision: want 6, got %d", got.Precision)
+	}
+	if ReadAssetIssueByName(db, []byte("UNKNOWN")) != nil {
+		t.Fatal("expected nil for unknown legacy asset")
+	}
+}
+
 func TestReadAssetIssue_NotFound(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	if got := ReadAssetIssue(db, 9_999_999); got != nil {
@@ -97,6 +119,20 @@ func TestListAllAssets(t *testing.T) {
 	all := ListAllAssets(db)
 	if len(all) != 2 {
 		t.Fatalf("expected 2 assets, got %d", len(all))
+	}
+}
+
+func TestListAllLegacyAssets(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	if err := WriteAssetIssueByName(db, []byte("AAA"), &contractpb.AssetIssueContract{Name: []byte("AAA")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAssetIssueByName(db, []byte("BBB"), &contractpb.AssetIssueContract{Name: []byte("BBB")}); err != nil {
+		t.Fatal(err)
+	}
+	all := ListAllLegacyAssets(db)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 legacy assets, got %d", len(all))
 	}
 }
 

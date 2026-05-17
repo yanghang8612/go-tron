@@ -21,6 +21,18 @@ func TestSetGetTRC10Balance(t *testing.T) {
 	}
 }
 
+func TestSetTRC10BalanceLegacyAndV2(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(1)
+	sdb.SetTRC10BalanceLegacyAndV2(addr, []byte("MYTOKEN"), 1_000_001, 500_000)
+	if got := sdb.GetTRC10BalanceByName(addr, []byte("MYTOKEN")); got != 500_000 {
+		t.Fatalf("legacy asset balance: expected 500000, got %d", got)
+	}
+	if got := sdb.GetTRC10Balance(addr, 1_000_001); got != 500_000 {
+		t.Fatalf("assetV2 balance: expected 500000, got %d", got)
+	}
+}
+
 func TestAddSubTRC10Balance(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(1)

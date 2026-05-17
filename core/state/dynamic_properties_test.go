@@ -104,6 +104,10 @@ func TestDynamicProperties_FlushAndLoad(t *testing.T) {
 	dp.SetLatestSolidifiedBlockNum(99)
 	dp.SetNextMaintenanceTime(1700100000)
 	dp.Set("energy_fee", 200)
+	dp.SetAllowTvmPrague(true)
+	dp.SetBlockHashHistoryInstalled(true)
+	dp.SetAllowHardenResourceCalculation(true)
+	dp.SetAllowHardenExchangeCalculation(true)
 
 	h := common.HexToHash("deadbeef")
 	dp.SetLatestBlockHeaderHash(h)
@@ -126,6 +130,18 @@ func TestDynamicProperties_FlushAndLoad(t *testing.T) {
 	}
 	if got := loaded.EnergyFee(); got != 200 {
 		t.Errorf("after load EnergyFee: got %d, want 200", got)
+	}
+	if !loaded.AllowTvmPrague() {
+		t.Errorf("after load AllowTvmPrague: got false, want true")
+	}
+	if !loaded.BlockHashHistoryInstalled() {
+		t.Errorf("after load BlockHashHistoryInstalled: got false, want true")
+	}
+	if !loaded.AllowHardenResourceCalculation() {
+		t.Errorf("after load AllowHardenResourceCalculation: got false, want true")
+	}
+	if !loaded.AllowHardenExchangeCalculation() {
+		t.Errorf("after load AllowHardenExchangeCalculation: got false, want true")
 	}
 	if got := loaded.LatestBlockHeaderHash(); got != h {
 		t.Errorf("after load LatestBlockHeaderHash: got %v, want %v", got, h)

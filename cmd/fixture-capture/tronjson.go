@@ -33,6 +33,12 @@ func unmarshalTronJSON(data []byte, msg proto.Message) error {
 }
 
 func populateMessage(m protoreflect.Message, raw map[string]json.RawMessage) error {
+	if m.Descriptor().FullName() == "protocol.Transaction" {
+		if err := populateTransactionRawFromHex(m, raw); err != nil {
+			return err
+		}
+	}
+
 	// java-tron HTTP encodes google.protobuf.Any non-standardly: instead of
 	// putting raw proto bytes into Any.value (with @type), it inlines the
 	// inner message JSON under "value" and puts the type URL under "type_url".
@@ -56,6 +62,30 @@ func populateMessage(m protoreflect.Message, raw map[string]json.RawMessage) err
 			return fmt.Errorf("field %q: %w", k, err)
 		}
 	}
+	return nil
+}
+
+func populateTransactionRawFromHex(m protoreflect.Message, raw map[string]json.RawMessage) error {
+	rawHexValue, ok := raw["raw_data_hex"]
+	if !ok {
+		return nil
+	}
+	var rawHex string
+	if err := json.Unmarshal(rawHexValue, &rawHex); err != nil {
+		return fmt.Errorf("Transaction.raw_data_hex: %w", err)
+	}
+	rawBytes, err := hex.DecodeString(rawHex)
+	if err != nil {
+		return fmt.Errorf("Transaction.raw_data_hex decode: %w", err)
+	}
+	fd := m.Descriptor().Fields().ByName("raw_data")
+	if fd == nil {
+		return fmt.Errorf("Transaction: missing raw_data field")
+	}
+	if err := proto.Unmarshal(rawBytes, m.Mutable(fd).Message().Interface()); err != nil {
+		return fmt.Errorf("Transaction.raw_data_hex unmarshal: %w", err)
+	}
+	delete(raw, "raw_data")
 	return nil
 }
 

@@ -56,6 +56,10 @@ func TestIsActive_AllFlags(t *testing.T) {
 		{forks.AllowEnergyAdjustment, dp.SetAllowEnergyAdjustment},
 		{forks.AllowTvmBlob, dp.SetAllowTvmBlob},
 		{forks.AllowTvmCancun, dp.SetAllowTvmCancun},
+		{forks.AllowTvmShanghai, dp.SetAllowTvmShanghai},
+		{forks.AllowTvmSelfdestructRestriction, dp.SetAllowTvmSelfdestructRestriction},
+		{forks.AllowTvmPrague, dp.SetAllowTvmPrague},
+		{forks.AllowTvmOsaka, dp.SetAllowTvmOsaka},
 	}
 	for _, tc := range testCases {
 		tc.setter(true)

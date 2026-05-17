@@ -13,12 +13,13 @@ type VersionParam struct {
 // java-tron's Parameter.ForkBlockVersionEnum (common/.../Parameter.java).
 // Order matches upstream for reviewability.
 var KnownVersions = []VersionParam{
-	{6, 0, 0},  // VERSION_3_2_2
-	{7, 0, 0},  // VERSION_3_5
-	{8, 0, 0},  // VERSION_3_6
-	{9, 0, 0},  // VERSION_3_6_5
-	{10, 0, 0}, // VERSION_3_6_6
-	{16, 0, 0}, // VERSION_4_0
+	{5, 0, 0},               // ENERGY_LIMIT
+	{6, 0, 0},               // VERSION_3_2_2
+	{7, 0, 0},               // VERSION_3_5
+	{8, 0, 0},               // VERSION_3_6
+	{9, 0, 0},               // VERSION_3_6_5
+	{10, 0, 0},              // VERSION_3_6_6
+	{16, 0, 0},              // VERSION_4_0
 	{17, 1596780000000, 80}, // VERSION_4_0_1
 	{19, 1596780000000, 80}, // VERSION_4_1
 	{20, 1596780000000, 80}, // VERSION_4_1_2
