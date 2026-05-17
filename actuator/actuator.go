@@ -49,11 +49,16 @@ type Context struct {
 	// sliding-window fields (latest_consume_time*, public_net_time, TRC10
 	// asset net times) are denominated in slots, while operation/expiry times
 	// stay in milliseconds via PrevBlockTime.
-	HeadSlot        int64
-	HasHeadSlot     bool
-	BlockNumber     uint64
-	DB              BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
-	ActiveWitnesses []common.Address // active witness set for governance checks
+	HeadSlot    int64
+	HasHeadSlot bool
+	BlockNumber uint64
+	// EnergyLimitForkBlockNum mirrors java-tron's `enery.limit.block.num`.
+	// HasEnergyLimitForkBlockNum distinguishes an explicit 0 (active at
+	// genesis) from the zero value of older tests.
+	EnergyLimitForkBlockNum    int64
+	HasEnergyLimitForkBlockNum bool
+	DB                         BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
+	ActiveWitnesses            []common.Address // active witness set for governance checks
 }
 
 func (ctx *Context) ResourceTime() int64 {
@@ -93,6 +98,10 @@ type Result struct {
 	EnergyUsed                    int64
 	EnergyFee                     int64
 	OriginEnergyUsage             int64
+	CallerEnergyLeft              int64
+	OriginEnergyLeft              int64
+	HasCallerEnergyLeft           bool
+	HasOriginEnergyLeft           bool
 	NetUsage                      int64
 	NetFee                        int64
 	NetFeeForBandwidth            bool

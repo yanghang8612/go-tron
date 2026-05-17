@@ -15,6 +15,7 @@ import (
 
 const contractNameMaxLen = 32
 const vmMinTokenID = 1_000_000
+const creatorDefaultEnergyLimit = 1000 * 10_000
 
 // VMActuator handles CreateSmartContract (type 30) and TriggerSmartContract (type 31).
 type VMActuator struct{}
@@ -199,11 +200,8 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	bytecode := csc.NewContract.Bytecode
 	contractAddr := generateContractAddress(ctx.Tx, owner)
 
-	energyFee := ctx.DynProps.EnergyFee()
-	if energyFee <= 0 {
-		energyFee = 100
-	}
-	energyLimit := uint64(ctx.Tx.FeeLimit()) / uint64(energyFee)
+	result := &Result{}
+	energyLimit := uint64(accountEnergyLimit(ctx, owner, ctx.Tx.FeeLimit(), callValue, result))
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	tokenID := int64(0)
@@ -219,11 +217,9 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	energyUsed := energyLimit - energyLeft
 
-	result := &Result{
-		EnergyUsageTotal: int64(energyUsed),
-		ContractResult:   ret,
-		Logs:             evm.Logs,
-	}
+	result.EnergyUsageTotal = int64(energyUsed)
+	result.ContractResult = ret
+	result.Logs = evm.Logs
 
 	if vmErr != nil {
 		result.ContractRet = contractRetFromError(vmErr)
@@ -264,11 +260,8 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	callValue := tsc.CallValue
 	data := tsc.Data
 
-	energyFee := ctx.DynProps.EnergyFee()
-	if energyFee <= 0 {
-		energyFee = 100
-	}
-	energyLimit := uint64(ctx.Tx.FeeLimit()) / uint64(energyFee)
+	result := &Result{}
+	energyLimit := uint64(triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result))
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	tokenID := int64(0)
@@ -293,11 +286,9 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	energyUsed := energyLimit - energyLeft
 
-	result := &Result{
-		EnergyUsageTotal: int64(energyUsed),
-		ContractResult:   ret,
-		Logs:             evm.Logs,
-	}
+	result.EnergyUsageTotal = int64(energyUsed)
+	result.ContractResult = ret
+	result.Logs = evm.Logs
 
 	if vmErr != nil {
 		result.ContractRet = contractRetFromError(vmErr)
@@ -332,8 +323,197 @@ func validateVMTokenValueAndID(ctx *Context, tokenValue, tokenID int64) error {
 	return nil
 }
 
+func vmEnergyFee(ctx *Context) int64 {
+	if ctx == nil || ctx.DynProps == nil || ctx.DynProps.EnergyFee() <= 0 {
+		return 100
+	}
+	return ctx.DynProps.EnergyFee()
+}
+
+func accountEnergyLimit(ctx *Context, account common.Address, feeLimit, callValue int64, result *Result) int64 {
+	if energyLimitHardForkActive(ctx) {
+		return accountEnergyLimitWithFixRatio(ctx, account, feeLimit, callValue, result)
+	}
+	return accountEnergyLimitWithFloatRatio(ctx, account, feeLimit, callValue)
+}
+
+func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLimit, callValue int64, result *Result) int64 {
+	acct := ctx.State.GetAccount(account)
+	if acct == nil {
+		return 0
+	}
+	sunPerEnergy := vmEnergyFee(ctx)
+	leftFrozenEnergy := availableAccountEnergyForBill(ctx.State, ctx.DynProps, account, ctx.ResourceTime())
+	if result != nil && vmReceiptEnergyLeftMode(ctx) {
+		result.CallerEnergyLeft = leftFrozenEnergy
+		result.HasCallerEnergyLeft = true
+	}
+	if callValue < 0 {
+		callValue = 0
+	}
+	energyFromBalance := maxInt64(ctx.State.GetBalance(account)-callValue, 0) / sunPerEnergy
+	availableEnergy := leftFrozenEnergy + energyFromBalance
+	energyFromFeeLimit := feeLimit / sunPerEnergy
+	return minInt64(availableEnergy, energyFromFeeLimit)
+}
+
+func accountEnergyLimitWithFloatRatio(ctx *Context, account common.Address, feeLimit, callValue int64) int64 {
+	acct := ctx.State.GetAccount(account)
+	if acct == nil {
+		return 0
+	}
+	sunPerEnergy := vmEnergyFee(ctx)
+	leftFrozenEnergy := availableAccountEnergyForBill(ctx.State, ctx.DynProps, account, ctx.ResourceTime())
+	if callValue < 0 {
+		callValue = 0
+	}
+	energyFromBalance := maxInt64(ctx.State.GetBalance(account)-callValue, 0) / sunPerEnergy
+
+	totalFrozen := allFrozenBalanceForEnergy(acct)
+	var energyFromFeeLimit int64
+	if totalFrozen == 0 {
+		energyFromFeeLimit = feeLimit / sunPerEnergy
+	} else {
+		totalEnergyFromFreeze := calcAccountEnergyLimit(acct, ctx.DynProps)
+		leftBalanceForEnergyFreeze := energyFeeForFrozenBalance(totalFrozen, leftFrozenEnergy, totalEnergyFromFreeze)
+		if leftBalanceForEnergyFreeze >= feeLimit {
+			energyFromFeeLimit = bigMulDivInt64(totalEnergyFromFreeze, feeLimit, totalFrozen)
+		} else {
+			energyFromFeeLimit = leftFrozenEnergy + (feeLimit-leftBalanceForEnergyFreeze)/sunPerEnergy
+		}
+	}
+	return minInt64(leftFrozenEnergy+energyFromBalance, energyFromFeeLimit)
+}
+
+func triggerEnergyLimit(ctx *Context, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) int64 {
+	contract := ctx.State.GetContract(contractAddr)
+	if contract == nil {
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+	}
+	origin := common.BytesToAddress(contract.OriginAddress)
+	if origin == (common.Address{}) || origin == caller {
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+	}
+	if !ctx.State.AccountExists(origin) && ctx.DynProps.AllowTvmConstantinople() {
+		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
+	}
+	if energyLimitHardForkActive(ctx) {
+		return totalEnergyLimitWithFixRatio(ctx, origin, caller, contractAddr, feeLimit, callValue, result)
+	}
+	return totalEnergyLimitWithFloatRatio(ctx, origin, caller, contractAddr, feeLimit, callValue)
+}
+
+func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr common.Address, feeLimit, callValue int64, result *Result) int64 {
+	callerEnergyLimit := accountEnergyLimitWithFixRatio(ctx, caller, feeLimit, callValue, result)
+	if origin == caller {
+		return callerEnergyLimit
+	}
+	contract := ctx.State.GetContract(contractAddr)
+	if contract == nil {
+		return callerEnergyLimit
+	}
+
+	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
+	originPercent := 100 - userPercent
+	if originPercent <= 0 {
+		return callerEnergyLimit
+	}
+
+	originEnergyLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
+	if result != nil && vmReceiptEnergyLeftMode(ctx) {
+		result.OriginEnergyLeft = originEnergyLeft
+		result.HasOriginEnergyLeft = true
+	}
+
+	originLimit := contractOriginEnergyLimit(contract)
+	var originEnergyLimit int64
+	if userPercent <= 0 {
+		originEnergyLimit = minInt64(originEnergyLeft, originLimit)
+	} else {
+		originEnergyLimit = minInt64(
+			bigMulDivInt64(callerEnergyLimit, originPercent, userPercent),
+			minInt64(originEnergyLeft, originLimit),
+		)
+	}
+	return callerEnergyLimit + originEnergyLimit
+}
+
+func totalEnergyLimitWithFloatRatio(ctx *Context, origin, caller, contractAddr common.Address, feeLimit, callValue int64) int64 {
+	callerEnergyLimit := accountEnergyLimitWithFloatRatio(ctx, caller, feeLimit, callValue)
+	if origin == caller {
+		return callerEnergyLimit
+	}
+	creatorEnergyLimit := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
+	contract := ctx.State.GetContract(contractAddr)
+	if contract == nil {
+		return callerEnergyLimit
+	}
+	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
+	originPercent := 100 - userPercent
+	if userPercent > 0 && creatorEnergyLimit*userPercent > originPercent*callerEnergyLimit {
+		return bigMulDivInt64(callerEnergyLimit, 100, userPercent)
+	}
+	return callerEnergyLimit + creatorEnergyLimit
+}
+
+func allFrozenBalanceForEnergy(acct *types.Account) int64 {
+	if acct == nil {
+		return 0
+	}
+	frozen := acct.FrozenEnergyAmount()
+	frozen += acct.AcquiredDelegatedFrozenEnergy()
+	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
+	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+	return frozen
+}
+
+func energyFeeForFrozenBalance(energyFrozen, energyUsage, energyTotal int64) int64 {
+	if energyTotal <= 0 {
+		return 0
+	}
+	return bigMulDivInt64(energyFrozen, energyUsage, energyTotal)
+}
+
+func contractOriginEnergyLimit(contract *contractpb.SmartContract) int64 {
+	if contract == nil || contract.OriginEnergyLimit == 0 {
+		return creatorDefaultEnergyLimit
+	}
+	return contract.OriginEnergyLimit
+}
+
+func clampPercent(percent int64) int64 {
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func energyLimitHardForkActive(ctx *Context) bool {
-	return ctx.DynProps.LatestBlockHeaderNumber() >= blockNumForEnergyLimit
+	if ctx == nil || ctx.DynProps == nil {
+		return false
+	}
+	forkBlock := blockNumForEnergyLimit
+	if ctx.HasEnergyLimitForkBlockNum {
+		forkBlock = ctx.EnergyLimitForkBlockNum
+	}
+	return ctx.DynProps.LatestBlockHeaderNumber() >= forkBlock
 }
 
 func generateContractAddress(tx *types.Transaction, owner common.Address) common.Address {

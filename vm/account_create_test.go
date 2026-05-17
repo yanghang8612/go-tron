@@ -155,11 +155,10 @@ func TestCreateAccountWithTime_FromCALL_PreSolidity059(t *testing.T) {
 	}
 }
 
-// TestCreateAccountWithTime_FromCALLToken_TokenOnly locks the
-// `endowment > 0` gate from java Program.callToAddress: a pure TRC-10 token
-// transfer (TRX value == 0) MUST NOT trigger the auto-create-with-time path.
-// Going broader than java would inject create_time on accounts java leaves
-// with create_time=0 — wire divergence.
+// TestCreateAccountWithTime_FromCALLToken_TokenOnly locks java
+// Program.callToAddress: TRC-10 transfer uses tokenValue as the message
+// endowment, so Solidity059 creates the destination account before token
+// validation even when TRX value is zero.
 func TestCreateAccountWithTime_FromCALLToken_TokenOnly(t *testing.T) {
 	const fixedTS = int64(1_700_000_000_000)
 	const tokenID = int64(1_000_001)
@@ -183,11 +182,11 @@ func TestCreateAccountWithTime_FromCALLToken_TokenOnly(t *testing.T) {
 	if acc == nil {
 		t.Fatal("dest account should exist (auto-created via AddTRC10Balance)")
 	}
-	if acc.CreateTime() != 0 {
-		t.Fatalf("create_time on token-only transfer: got %d, want 0 (must mirror java's endowment>0 gate)", acc.CreateTime())
+	if acc.CreateTime() != fixedTS {
+		t.Fatalf("create_time on token-only transfer: got %d, want %d", acc.CreateTime(), fixedTS)
 	}
-	if acc.OwnerPermission() != nil {
-		t.Fatal("Owner permission must NOT be installed on token-only transfer")
+	if acc.OwnerPermission() == nil {
+		t.Fatal("Owner permission should be installed when AllowMultiSign is on")
 	}
 }
 

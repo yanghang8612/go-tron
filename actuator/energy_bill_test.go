@@ -407,9 +407,8 @@ func TestPayEnergyBill_InsufficientBalance(t *testing.T) {
 }
 
 // installOriginContract writes a SmartContract record to state at
-// `contractAddr` with the given `origin` deployer, percent, and limit.
-// Mirrors the java-tron contract metadata layout used by the 3-arg
-// payEnergyBill split.
+// `contractAddr` with the given `origin` deployer, user percent, and limit.
+// java-tron bills the origin for 100 - consume_user_resource_percent.
 func installOriginContract(t *testing.T, ctx *Context, contractAddr, origin tcommon.Address, percent, originLimit int64) {
 	t.Helper()
 	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
@@ -510,8 +509,8 @@ func TestPayEnergyBill_OriginSplit_HappyPath(t *testing.T) {
 	}
 }
 
-// TestPayEnergyBill_OriginSplit_OriginCappedByLimit: percent=80 wants
-// origin to cover 80%, but origin_energy_limit caps it lower; the
+// TestPayEnergyBill_OriginSplit_OriginCappedByLimit: user percent=80 leaves
+// 20% for origin, and origin_energy_limit caps that share; the
 // uncapped portion spills back to the caller's bill.
 func TestPayEnergyBill_OriginSplit_OriginCappedByLimit(t *testing.T) {
 	caller := tcommon.Address{0x41, 0xAA, 0x02}
@@ -586,9 +585,9 @@ func TestPayEnergyBill_OriginSplit_OriginCappedByStake(t *testing.T) {
 }
 
 // TestPayEnergyBill_OriginSplit_PercentZero: when the contract's
-// ConsumeUserResourcePercent is 0, java skips the split entirely —
-// caller pays everything regardless of caller != origin.
-func TestPayEnergyBill_OriginSplit_PercentZero(t *testing.T) {
+// ConsumeUserResourcePercent is 0, java bills the origin for up to
+// origin_energy_limit/frozen-energy and spills the rest to the caller.
+func TestPayEnergyBill_OriginSplit_PercentZeroBillsOrigin(t *testing.T) {
 	caller := tcommon.Address{0x41, 0xAA, 0x04}
 	origin := tcommon.Address{0x41, 0xBB, 0x04}
 	contractAddr := tcommon.Address{0x41, 0x02}
@@ -597,8 +596,41 @@ func TestPayEnergyBill_OriginSplit_PercentZero(t *testing.T) {
 	ctx.DynProps.SetAllowBlackHoleOptimization(true)
 
 	const totalEnergy = int64(5_000)
-	installOriginContract(t, ctx, contractAddr, origin, 0, 100_000)
-	stakeForEnergyBill(t, ctx, origin, totalEnergy*10) // origin has plenty; should still not be billed
+	const originLimit = int64(2_000)
+	installOriginContract(t, ctx, contractAddr, origin, 0, originLimit)
+	stakeForEnergyBill(t, ctx, origin, totalEnergy*10)
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	if result.OriginEnergyUsage != originLimit {
+		t.Errorf("OriginEnergyUsage = %d, want %d", result.OriginEnergyUsage, originLimit)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got != originLimit {
+		t.Errorf("origin energy_usage = %d, want %d", got, originLimit)
+	}
+	expectedCallerFee := (totalEnergy - originLimit) * 100
+	if result.EnergyFee != expectedCallerFee {
+		t.Errorf("EnergyFee = %d, want %d", result.EnergyFee, expectedCallerFee)
+	}
+}
+
+func TestPayEnergyBill_OriginSplit_PercentHundredBillsCaller(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x06}
+	origin := tcommon.Address{0x41, 0xBB, 0x06}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+
+	const totalEnergy = int64(5_000)
+	installOriginContract(t, ctx, contractAddr, origin, 100, 100_000)
+	stakeForEnergyBill(t, ctx, origin, totalEnergy*10)
 
 	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
 	ctx.State.AddBalance(caller, 100_000_000)
@@ -609,10 +641,10 @@ func TestPayEnergyBill_OriginSplit_PercentZero(t *testing.T) {
 	}
 
 	if result.OriginEnergyUsage != 0 {
-		t.Errorf("OriginEnergyUsage = %d, want 0 (percent=0 ⇒ no split)", result.OriginEnergyUsage)
+		t.Errorf("OriginEnergyUsage = %d, want 0", result.OriginEnergyUsage)
 	}
 	if got := ctx.State.GetEnergyUsage(origin); got != 0 {
-		t.Errorf("origin energy_usage = %d, want 0 (must not be billed)", got)
+		t.Errorf("origin energy_usage = %d, want 0", got)
 	}
 }
 

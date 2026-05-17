@@ -96,7 +96,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
-		result, err := ApplyTransactionWithResourceSlot(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true, false)
+		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
 		if err != nil {
 			h := tx.Hash()
 			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)

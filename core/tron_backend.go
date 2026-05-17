@@ -1364,13 +1364,15 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	}
 
 	ctx := &actuator.Context{
-		State:           statedb,
-		DynProps:        dynProps,
-		Tx:              tx,
-		BlockTime:       head.Timestamp(),
-		BlockNumber:     head.Number(),
-		DB:              b.chain.DB(),
-		ActiveWitnesses: b.chain.ActiveWitnesses(),
+		State:                      statedb,
+		DynProps:                   dynProps,
+		Tx:                         tx,
+		BlockTime:                  head.Timestamp(),
+		BlockNumber:                head.Number(),
+		EnergyLimitForkBlockNum:    b.chain.Config().EnergyLimitForkBlockNum(),
+		HasEnergyLimitForkBlockNum: true,
+		DB:                         b.chain.DB(),
+		ActiveWitnesses:            b.chain.ActiveWitnesses(),
 	}
 
 	return act.Validate(ctx)

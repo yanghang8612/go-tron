@@ -57,7 +57,7 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 
 	// 3-arg path: TriggerSmartContract with caller != origin and a
 	// non-zero ConsumeUserResourcePercent. Mirrors java's split.
-	origin, originUsage, callerUsage := splitOriginCallerUsage(ctx, caller, totalEnergy)
+	origin, originUsage, callerUsage := splitOriginCallerUsage(ctx, result, caller, totalEnergy)
 	if origin != (common.Address{}) {
 		// Bill origin against its stake-energy only. No balance debit.
 		// Mirrors `energyProcessor.useEnergy(origin, originUsage, now)` at
@@ -86,6 +86,9 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 
 	resourceTime := ctx.ResourceTime()
 	stakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, caller, resourceTime)
+	if vmReceiptEnergyLeftMode(ctx) && result.HasCallerEnergyLeft {
+		stakeLeft = result.CallerEnergyLeft
+	}
 	if legacyVMReceiptEnergyLeftMode(ctx) {
 		stakeLeft = 0
 	}
@@ -171,7 +174,7 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64) {
 //	originUsage = min(totalEnergy * percent / 100,
 //	                  min(originStakeLeft, originEnergyLimit))
 //	callerUsage = totalEnergy - originUsage
-func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int64) (origin common.Address, originShare, callerShare int64) {
+func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address, totalEnergy int64) (origin common.Address, originShare, callerShare int64) {
 	if ctx.Tx.ContractType() != corepb.Transaction_Contract_TriggerSmartContract {
 		return common.Address{}, 0, totalEnergy
 	}
@@ -196,19 +199,23 @@ func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int
 	if originAddr == (common.Address{}) || originAddr == caller {
 		return common.Address{}, 0, totalEnergy
 	}
-
-	percent := contract.ConsumeUserResourcePercent
-	if percent <= 0 {
+	if !ctx.State.AccountExists(originAddr) && ctx.DynProps.AllowTvmConstantinople() {
 		return common.Address{}, 0, totalEnergy
 	}
-	if percent > 100 {
-		percent = 100
+
+	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
+	originPercent := 100 - userPercent
+	if originPercent <= 0 {
+		return common.Address{}, 0, totalEnergy
 	}
 
-	want := totalEnergy * percent / 100
+	want := totalEnergy * originPercent / 100
 
-	originLimit := contract.OriginEnergyLimit
+	originLimit := contractOriginEnergyLimit(contract)
 	originStakeLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, originAddr, ctx.ResourceTime())
+	if vmReceiptEnergyLeftMode(ctx) && result != nil && result.HasOriginEnergyLeft {
+		originStakeLeft = result.OriginEnergyLeft
+	}
 
 	cap := originStakeLeft
 	if originLimit > 0 && originLimit < cap {
@@ -223,6 +230,13 @@ func splitOriginCallerUsage(ctx *Context, caller common.Address, totalEnergy int
 	return originAddr, want, totalEnergy - want
 }
 
+func vmReceiptEnergyLeftMode(ctx *Context) bool {
+	if ctx == nil || ctx.DynProps == nil {
+		return false
+	}
+	return ctx.DynProps.AllowTvmFreeze() || ctx.DynProps.SupportUnfreezeDelay()
+}
+
 func legacyVMReceiptEnergyLeftMode(ctx *Context) bool {
 	if ctx == nil || ctx.DynProps == nil {
 		return false
@@ -233,8 +247,7 @@ func legacyVMReceiptEnergyLeftMode(ctx *Context) bool {
 	// fields whenever allowTvmFreeze or supportUnfreezeDelay is active. The
 	// effective stake-paid energy is therefore zero until the hard fork flips
 	// VMActuator to the fixed-ratio path.
-	return !energyLimitHardForkActive(ctx) &&
-		(ctx.DynProps.AllowTvmFreeze() || ctx.DynProps.SupportUnfreezeDelay())
+	return !energyLimitHardForkActive(ctx) && vmReceiptEnergyLeftMode(ctx)
 }
 
 // extractOwnerAddress mirrors core.extractSender but stays inside the

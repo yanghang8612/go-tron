@@ -7,7 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const blockNumForEnergyLimit = 4_727_890
+const blockNumForEnergyLimit int64 = 4_727_890
 
 type UpdateEnergyLimitActuator struct{}
 
@@ -28,7 +28,7 @@ func (a *UpdateEnergyLimitActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	if ctx.DynProps.LatestBlockHeaderNumber() < blockNumForEnergyLimit {
+	if !energyLimitHardForkActive(ctx) {
 		return errors.New("energy limit update not yet enabled")
 	}
 	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")

@@ -426,9 +426,9 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	logSnap := tvm.LogSnapshot()
 
 	if value > 0 {
-		// Mirror java-tron `endowment > 0` gate: only auto-create on TRX
-		// value transfer, not on pure token transfer (Program.java:1081-1083).
-		// Precompile-targeted calls take a different java dispatch path
+		// Mirror java-tron `endowment > 0` gate for TRX value transfers
+		// (Program.java:1081-1083). Precompile-targeted calls take a
+		// different java dispatch path
 		// (OperationActions.java:1034-1042 → callToPrecompiledAddress) and
 		// don't materialize the destination account; skip the helper to
 		// preserve that wire format.
@@ -442,6 +442,13 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		tvm.StateDB.AddBalance(addr, value)
 	}
 	if tokenValue > 0 && tokenID > 0 {
+		if getPrecompile(addr, tvm.cfg) == nil {
+			tvm.maybeCreateNormalAccountForValueTransfer(addr)
+		}
+		if !tvm.StateDB.AccountExists(addr) {
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrInsufficientBalance
+		}
 		if err := tvm.StateDB.SubTRC10Balance(caller, tokenID, tokenValue); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance

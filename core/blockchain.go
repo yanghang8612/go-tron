@@ -381,10 +381,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	blockRoot := block.AccountStateRoot()
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
+	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	if blockRoot != (tcommon.Hash{}) {
-		txInfos, javaAccountStateRoot, err = ProcessBlockWithJavaAccountStateRoot(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil, current.AccountStateRoot())
+		txInfos, javaAccountStateRoot, err = ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, current.AccountStateRoot())
 	} else {
-		txInfos, err = ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil)
+		txInfos, err = ProcessBlockWithEnergyFork(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)

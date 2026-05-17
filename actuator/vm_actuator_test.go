@@ -185,6 +185,81 @@ func TestVMActuatorTriggerValidate(t *testing.T) {
 	}
 }
 
+func TestVMActuatorTriggerValidate_CustomEnergyLimitForkBlock(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+		CallTokenValue:  -1,
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000)
+	enableVM(ctx)
+	ctx.DynProps.SetAllowTvmTransferTrc10(true)
+	ctx.DynProps.SetLatestBlockHeaderNumber(0)
+	ctx.EnergyLimitForkBlockNum = 0
+	ctx.HasEnergyLimitForkBlockNum = true
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, []byte{0x00})
+
+	err := (&VMActuator{}).Validate(ctx)
+	if err == nil || err.Error() != "tokenValue must be >= 0" {
+		t.Fatalf("Validate error: got %v, want tokenValue must be >= 0", err)
+	}
+}
+
+func TestVMActuatorTriggerEnergyLimit_FixRatioCapsByBalanceAndOrigin(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x10}
+	origin := tcommon.Address{0x41, 0x20}
+	contractAddr := tcommon.Address{0x41, 0x30}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    caller[:],
+		ContractAddress: contractAddr[:],
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000_000)
+	enableVM(ctx)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
+	ctx.DynProps.SetAllowTvmFreeze(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetTotalEnergyWeight(1_000_000_000_000)
+	ctx.DynProps.Set("total_energy_current_limit", 1_000_000_000_000)
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+	ctx.State.AddFreezeV2(caller, corepb.ResourceCode_ENERGY, 3_253_937_000_000)
+
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(origin, corepb.ResourceCode_ENERGY, 20_000_000_000)
+
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:              origin[:],
+		ContractAddress:            contractAddr[:],
+		ConsumeUserResourcePercent: 0,
+		OriginEnergyLimit:          10_000,
+	})
+
+	result := &Result{}
+	got := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+	const want = int64(4_263_937)
+	if got != want {
+		t.Fatalf("triggerEnergyLimit = %d, want %d", got, want)
+	}
+	if !result.HasCallerEnergyLeft || result.CallerEnergyLeft != 3_253_937 {
+		t.Fatalf("caller energy left = (%v,%d), want (true,3253937)", result.HasCallerEnergyLeft, result.CallerEnergyLeft)
+	}
+	if !result.HasOriginEnergyLeft || result.OriginEnergyLeft != 20_000 {
+		t.Fatalf("origin energy left = (%v,%d), want (true,20000)", result.HasOriginEnergyLeft, result.OriginEnergyLeft)
+	}
+}
+
 func TestVMActuatorTriggerExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	contractAddr := tcommon.Address{0x41, 0x02}
