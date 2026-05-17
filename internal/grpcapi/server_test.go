@@ -24,14 +24,15 @@ const bufSize = 1 << 20
 
 // testBackend is a minimal stub implementation of tronapi.Backend for grpcapi tests.
 type testBackend struct {
-	block     *types.Block
-	blocks    []*types.Block // for range queries
-	account   *types.Account
-	tx        *corepb.Transaction
-	params    []tronapi.ChainParameter
-	contract  *contractpb.SmartContract
-	witnesses []*tronapi.WitnessInfo
-	nextMaint int64
+	block              *types.Block
+	blocks             []*types.Block // for range queries
+	account            *types.Account
+	tx                 *corepb.Transaction
+	params             []tronapi.ChainParameter
+	contract           *contractpb.SmartContract
+	witnesses          []*tronapi.WitnessInfo
+	nextMaint          int64
+	delegatedResources []*tronapi.DelegatedResourceInfo
 }
 
 func (b *testBackend) CurrentBlock() *types.Block                             { return b.block }
@@ -40,9 +41,9 @@ func (b *testBackend) GetAccount(addr common.Address) (*types.Account, error) { 
 func (b *testBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	return b.account, nil
 }
-func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error       { return nil }
-func (b *testBackend) GetNodeInfo() *tronapi.NodeInfo                          { return &tronapi.NodeInfo{} }
-func (b *testBackend) PendingTransactionCount() int                            { return 0 }
+func (b *testBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
+func (b *testBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
+func (b *testBackend) PendingTransactionCount() int                     { return 0 }
 func (b *testBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	return b.contract, nil
 }
@@ -120,9 +121,9 @@ func (b *testBackend) BuildProposalApproveTransaction(owner common.Address, prop
 func (b *testBackend) BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error)    { return nil, nil }
-func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) (*tronapi.DelegatedResourceInfo, error) {
-	return nil, nil
+func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
+func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return b.delegatedResources, nil
 }
 func (b *testBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
 	return nil, nil
@@ -140,11 +141,11 @@ func (b *testBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error
 func (b *testBackend) GetTransactionFromPending(txID string) (*corepb.Transaction, error) {
 	return nil, nil
 }
-func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error) { return nil, nil }
-func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                       { return nil, nil }
-func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract     { return nil }
+func (b *testBackend) GetTransactionListFromPending() ([]*corepb.Transaction, error)  { return nil, nil }
+func (b *testBackend) ListNodes() ([]*tronapi.PeerInfo, error)                        { return nil, nil }
+func (b *testBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract      { return nil }
 func (b *testBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract { return nil }
-func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract { return nil }
+func (b *testBackend) GetAssetIssueList() []*contractpb.AssetIssueContract            { return nil }
 func (b *testBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
 	return nil
 }
@@ -158,10 +159,10 @@ func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.Ma
 func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return nil
 }
-func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error)      { return nil, nil }
-func (b *testBackend) GetBrokerageInfo(addr common.Address) int64      { return 0 }
-func (b *testBackend) TotalTransaction() int64                         { return 0 }
-func (b *testBackend) GetBurnTrx() int64                               { return 0 }
+func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
+func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
+func (b *testBackend) TotalTransaction() int64                    { return 0 }
+func (b *testBackend) GetBurnTrx() int64                          { return 0 }
 func (b *testBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return nil, nil
 }

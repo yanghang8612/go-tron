@@ -5,9 +5,12 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // newTestBlockchain creates an in-memory BlockChain with a genesis block for testing.
@@ -89,6 +92,32 @@ func TestTronBackend_GetStorageAt(t *testing.T) {
 	_ = val // just verify no panic
 }
 
+func TestTronBackend_ListWitnessesIncludesPendingVotes(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	voter := testCoreAddr(1)
+	witness := testCoreAddr(2)
+	rawdb.WriteWitnessIndex(bc.db, []tcommon.Address{witness})
+	rawdb.WriteWitness(bc.db, witness, types.NewWitness(witness, "http://w"))
+	if err := rawdb.WriteVotes(bc.db, voter, &corepb.Votes{
+		Address: voter.Bytes(),
+		NewVotes: []*corepb.Vote{
+			{VoteAddress: witness.Bytes(), VoteCount: 123},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (&TronBackend{chain: bc}).ListWitnesses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].VoteCount != 123 {
+		t.Fatalf("pending VotesStore delta not reflected: %+v", got)
+	}
+}
+
 // TestTronBackend_GetTransactionByHash_NotFound verifies not-found returns nil.
 func TestTronBackend_GetTransactionByHash_NotFound(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
@@ -147,5 +176,42 @@ func TestProposalParametersToList_EmptyReturnsNonNil(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty slice, got %v", got)
+	}
+}
+
+func TestTronBackend_GetDelegatedResourceV2ReturnsSeparateBuckets(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	from := testCoreAddr(1)
+	to := testCoreAddr(2)
+	if err := rawdb.WriteDelegatedResourceV2(bc.db, from, to, false, &rawdb.DelegatedResource{
+		From:                      from,
+		To:                        to,
+		FrozenBalanceForBandwidth: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteDelegatedResourceV2(bc.db, from, to, true, &rawdb.DelegatedResource{
+		From:                   from,
+		To:                     to,
+		FrozenBalanceForEnergy: 200,
+		ExpireTimeForEnergy:    300,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (&TronBackend{chain: bc}).GetDelegatedResourceV2(from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected unlocked and locked resource records, got %d", len(got))
+	}
+	if got[0].FrozenBalanceForBandwidth != 100 || got[0].ExpireTimeForEnergy != 0 {
+		t.Fatalf("first record should be unlocked bucket, got %+v", got[0])
+	}
+	if got[1].FrozenBalanceForEnergy != 200 || got[1].ExpireTimeForEnergy != 300 {
+		t.Fatalf("second record should be locked bucket, got %+v", got[1])
 	}
 }

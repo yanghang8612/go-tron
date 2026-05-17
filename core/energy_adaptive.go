@@ -2,6 +2,7 @@ package core
 
 import (
 	"math"
+	"math/big"
 
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
@@ -32,6 +33,9 @@ func UpdateTotalEnergyAverageUsage(dp *state.DynamicProperties, genesisTimestamp
 	avgTime := dp.TotalEnergyAverageTime()
 
 	newAvg := increase(avgUsage, blockUsage, avgTime, now, adaptiveWindowSize)
+	if dp.AllowHardenResourceCalculation() {
+		newAvg = increaseHardened(avgUsage, blockUsage, avgTime, now, adaptiveWindowSize)
+	}
 
 	dp.SetTotalEnergyAverageUsage(newAvg)
 	dp.SetTotalEnergyAverageTime(now)
@@ -50,15 +54,19 @@ func UpdateAdaptiveTotalEnergyLimit(dp *state.DynamicProperties) {
 	baseLimit := dp.TotalEnergyLimit()
 
 	var result int64
+	harden := dp.AllowHardenResourceCalculation()
 	if avgUsage > targetLimit {
-		result = currentLimit * contractRateNumerator / contractRateDenominator
+		result = scaleByRate(currentLimit, contractRateNumerator, contractRateDenominator, harden)
 	} else {
-		result = currentLimit * expandRateNumerator / expandRateDenominator
+		result = scaleByRate(currentLimit, expandRateNumerator, expandRateDenominator, harden)
 	}
 
 	multiplier := dp.AdaptiveResourceLimitMultiplier()
 	floor := baseLimit
 	ceiling := baseLimit * multiplier
+	if harden {
+		ceiling = bigMulDivInt64(baseLimit, multiplier, 1)
+	}
 
 	if result < floor {
 		result = floor
@@ -90,10 +98,40 @@ func increase(lastUsage, usage, lastTime, now, windowSize int64) int64 {
 	return averageLastUsage * windowSize / resourcePrecision
 }
 
+func increaseHardened(lastUsage, usage, lastTime, now, windowSize int64) int64 {
+	averageLastUsage := divideCeilBig(
+		new(big.Int).Mul(big.NewInt(lastUsage), big.NewInt(resourcePrecision)),
+		big.NewInt(windowSize),
+	)
+	averageUsage := divideCeilBig(
+		new(big.Int).Mul(big.NewInt(usage), big.NewInt(resourcePrecision)),
+		big.NewInt(windowSize),
+	)
+
+	if lastTime != now {
+		if lastTime+windowSize > now {
+			delta := now - lastTime
+			decay := float64(windowSize-delta) / float64(windowSize)
+			averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+		} else {
+			averageLastUsage = 0
+		}
+	}
+
+	return bigMulDivInt64(averageLastUsage+averageUsage, windowSize, resourcePrecision)
+}
+
 func divideCeil(numerator, denominator int64) int64 {
 	result := numerator / denominator
 	if numerator%denominator > 0 {
 		result++
 	}
 	return result
+}
+
+func scaleByRate(value, numerator, denominator int64, harden bool) int64 {
+	if harden {
+		return bigMulDivInt64(value, numerator, denominator)
+	}
+	return value * numerator / denominator
 }

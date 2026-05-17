@@ -1,11 +1,40 @@
 package core
 
 import (
+	"strconv"
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/types/known/anypb"
 )
+
+const (
+	testBandwidthBlockTime = int64(3000)
+	testBandwidthHeadSlot  = int64(1)
+)
+
+func makeBandwidthTransferAssetTx(ownerByte, toByte byte, assetName []byte, amount int64) *types.Transaction {
+	c := &contractpb.TransferAssetContract{
+		OwnerAddress: testProcessorAddr(ownerByte).Bytes(),
+		ToAddress:    testProcessorAddr(toByte).Bytes(),
+		AssetName:    assetName,
+		Amount:       amount,
+	}
+	anyParam, _ := anypb.New(c)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{
+				{Type: corepb.Transaction_Contract_TransferAssetContract, Parameter: anyParam},
+			},
+		},
+	})
+}
 
 // TestTxBandwidthSize_SupportVMFormula locks the java-tron BandwidthProcessor
 // asymmetry: pre-supportVM, the bandwidth size is the full tx serialized
@@ -63,7 +92,7 @@ func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -71,8 +100,17 @@ func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 	if statedb.GetFreeNetUsage(sender) != txSize {
 		t.Fatalf("free net usage: want %d, got %d", txSize, statedb.GetFreeNetUsage(sender))
 	}
-	if statedb.GetLatestConsumeFreeTime(sender) != 3000 {
-		t.Fatalf("latest consume free time: want 3000, got %d", statedb.GetLatestConsumeFreeTime(sender))
+	if statedb.GetLatestConsumeFreeTime(sender) != testBandwidthHeadSlot {
+		t.Fatalf("latest consume free time: want %d, got %d", testBandwidthHeadSlot, statedb.GetLatestConsumeFreeTime(sender))
+	}
+	if statedb.GetLatestOperationTime(sender) != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, statedb.GetLatestOperationTime(sender))
+	}
+	if dynProps.PublicNetUsage() != txSize {
+		t.Fatalf("public net usage: want %d, got %d", txSize, dynProps.PublicNetUsage())
+	}
+	if dynProps.PublicNetTime() != testBandwidthHeadSlot {
+		t.Fatalf("public net time: want %d, got %d", testBandwidthHeadSlot, dynProps.PublicNetTime())
 	}
 }
 
@@ -93,7 +131,7 @@ func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -101,8 +139,98 @@ func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 	if statedb.GetNetUsage(sender) != txSize {
 		t.Fatalf("net usage: want %d, got %d", txSize, statedb.GetNetUsage(sender))
 	}
+	if statedb.GetLatestOperationTime(sender) != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, statedb.GetLatestOperationTime(sender))
+	}
 	if statedb.GetFreeNetUsage(sender) != 0 {
 		t.Fatalf("free net usage should be 0, got %d", statedb.GetFreeNetUsage(sender))
+	}
+}
+
+func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetTotalNetWeight(1)
+	dynProps.Set("unfreeze_delay_days", 14)
+
+	sender := testProcessorAddr(1)
+	receiver := testProcessorAddr(2)
+	issuer := testProcessorAddr(9)
+	statedb.CreateAccount(sender, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.CreateAccount(issuer, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(issuer, corepb.ResourceCode_BANDWIDTH, params.TRXPrecision)
+
+	const tokenID = int64(1_000_001)
+	tokenName := []byte("TOK")
+	asset := &contractpb.AssetIssueContract{
+		Id:                      strconv.FormatInt(tokenID, 10),
+		Name:                    tokenName,
+		OwnerAddress:            issuer.Bytes(),
+		FreeAssetNetLimit:       100_000,
+		PublicFreeAssetNetLimit: 100_000,
+	}
+	if err := rawdb.WriteAssetIssueByName(db, tokenName, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteAssetNameIndex(db, tokenName, tokenID); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := makeBandwidthTransferAssetTx(1, 2, tokenName, 100)
+	txSize := int64(tx.Size())
+
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, db)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+	if res.NetUsage != txSize || res.NetFee != 0 {
+		t.Fatalf("bandwidth result: got usage=%d fee=%d, want usage=%d fee=0", res.NetUsage, res.NetFee, txSize)
+	}
+	if got := statedb.GetFreeAssetNetUsage(sender, string(tokenName)); got != txSize {
+		t.Fatalf("free_asset_net_usage: want %d, got %d", txSize, got)
+	}
+	if got := statedb.GetFreeAssetNetUsageV2(sender, strconv.FormatInt(tokenID, 10)); got != txSize {
+		t.Fatalf("free_asset_net_usageV2: want %d, got %d", txSize, got)
+	}
+	if got := statedb.GetLatestAssetOperationTime(sender, string(tokenName)); got != testBandwidthHeadSlot {
+		t.Fatalf("latest_asset_operation_time: want %d, got %d", testBandwidthHeadSlot, got)
+	}
+	if got := statedb.GetLatestOperationTime(sender); got != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, got)
+	}
+	if got := statedb.GetNetUsage(issuer); got != txSize {
+		t.Fatalf("issuer net usage: want %d, got %d", txSize, got)
+	}
+	if got := statedb.GetLatestConsumeTime(issuer); got != testBandwidthHeadSlot {
+		t.Fatalf("issuer latest consume time: want %d, got %d", testBandwidthHeadSlot, got)
+	}
+	legacyAsset := rawdb.ReadAssetIssueByName(db, tokenName)
+	if legacyAsset == nil {
+		t.Fatal("legacy asset missing")
+	}
+	if got := legacyAsset.PublicFreeAssetNetUsage; got != txSize {
+		t.Fatalf("legacy public free asset usage: want %d, got %d", txSize, got)
+	}
+	if got := legacyAsset.PublicLatestFreeNetTime; got != testBandwidthHeadSlot {
+		t.Fatalf("legacy public latest free net time: want %d, got %d", testBandwidthHeadSlot, got)
+	}
+	v2Asset := rawdb.ReadAssetIssue(db, tokenID)
+	if v2Asset == nil {
+		t.Fatal("v2 asset missing")
+	}
+	if got := v2Asset.PublicFreeAssetNetUsage; got != txSize {
+		t.Fatalf("v2 public free asset usage: want %d, got %d", txSize, got)
+	}
+	if got := statedb.GetFreeNetUsage(sender); got != 0 {
+		t.Fatalf("sender free net usage should not be used, got %d", got)
+	}
+	if got := dynProps.TotalTransactionCost(); got != 0 {
+		t.Fatalf("total_transaction_cost should not change, got %d", got)
 	}
 }
 
@@ -116,13 +244,14 @@ func TestConsumeBandwidth_BurnTRX(t *testing.T) {
 	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
 
 	statedb.SetFreeNetUsage(sender, dynProps.FreeNetLimit())
-	statedb.SetLatestConsumeFreeTime(sender, 3000)
+	statedb.SetLatestConsumeFreeTime(sender, testBandwidthHeadSlot)
 
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
 	balBefore := statedb.GetBalance(sender)
-	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	blackholeBefore := statedb.GetBalance(params.BlackholeAddress)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -131,6 +260,90 @@ func TestConsumeBandwidth_BurnTRX(t *testing.T) {
 	balAfter := statedb.GetBalance(sender)
 	if balBefore-balAfter != expectedCost {
 		t.Fatalf("TRX burn: want %d, got %d", expectedCost, balBefore-balAfter)
+	}
+	if !res.NetFeeForBandwidth {
+		t.Fatal("NetFeeForBandwidth: want true")
+	}
+	if got := statedb.GetBalance(params.BlackholeAddress) - blackholeBefore; got != expectedCost {
+		t.Fatalf("blackhole balance delta: want %d, got %d", expectedCost, got)
+	}
+	if got := dynProps.TotalTransactionCost(); got != expectedCost {
+		t.Fatalf("total_transaction_cost: want %d, got %d", expectedCost, got)
+	}
+	if got := statedb.GetLatestOperationTime(sender); got != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, got)
+	}
+}
+
+func TestConsumeBandwidth_TransactionFeePool(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetAllowTransactionFeePool(true)
+
+	sender := testProcessorAddr(1)
+	statedb.CreateAccount(sender, corepb.AccountType_Normal)
+	statedb.AddBalance(sender, 10_000_000)
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+	statedb.SetFreeNetUsage(sender, dynProps.FreeNetLimit())
+	statedb.SetLatestConsumeFreeTime(sender, testBandwidthHeadSlot)
+
+	tx := makeTestTransferTx(1, 2, 100)
+	txSize := int64(tx.Size())
+
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+
+	expectedCost := txSize * dynProps.TransactionFee()
+	if got := dynProps.TransactionFeePool(); got != expectedCost {
+		t.Fatalf("transaction_fee_pool: want %d, got %d", expectedCost, got)
+	}
+	if got := dynProps.BurnTrxAmount(); got != 0 {
+		t.Fatalf("burn_trx_amount: want 0, got %d", got)
+	}
+	if got := statedb.GetBalance(params.BlackholeAddress); got != 0 {
+		t.Fatalf("blackhole balance: want 0, got %d", got)
+	}
+	if got := dynProps.TotalTransactionCost(); got != expectedCost {
+		t.Fatalf("total_transaction_cost: want %d, got %d", expectedCost, got)
+	}
+	if !res.NetFeeForBandwidth {
+		t.Fatal("NetFeeForBandwidth: want true")
+	}
+}
+
+func TestConsumeBandwidth_BlackholeOptimization(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetAllowBlackHoleOptimization(true)
+
+	sender := testProcessorAddr(1)
+	statedb.CreateAccount(sender, corepb.AccountType_Normal)
+	statedb.AddBalance(sender, 10_000_000)
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+	statedb.SetFreeNetUsage(sender, dynProps.FreeNetLimit())
+	statedb.SetLatestConsumeFreeTime(sender, testBandwidthHeadSlot)
+
+	tx := makeTestTransferTx(1, 2, 100)
+	txSize := int64(tx.Size())
+
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+
+	expectedCost := txSize * dynProps.TransactionFee()
+	if got := dynProps.BurnTrxAmount(); got != expectedCost {
+		t.Fatalf("burn_trx_amount: want %d, got %d", expectedCost, got)
+	}
+	if got := statedb.GetBalance(params.BlackholeAddress); got != 0 {
+		t.Fatalf("blackhole balance: want 0, got %d", got)
+	}
+	if got := dynProps.TransactionFeePool(); got != 0 {
+		t.Fatalf("transaction_fee_pool: want 0, got %d", got)
 	}
 }
 
@@ -144,10 +357,10 @@ func TestConsumeBandwidth_InsufficientBalance(t *testing.T) {
 	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
 
 	statedb.SetFreeNetUsage(sender, dynProps.FreeNetLimit())
-	statedb.SetLatestConsumeFreeTime(sender, 3000)
+	statedb.SetLatestConsumeFreeTime(sender, testBandwidthHeadSlot)
 
 	tx := makeTestTransferTx(1, 2, 0)
-	_, err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
 	if err == nil {
 		t.Fatal("expected error for insufficient balance to pay bandwidth")
 	}
@@ -169,12 +382,15 @@ func TestConsumeBandwidth_CreateNewAccount_Fee(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 
 	balBefore := statedb.GetBalance(sender)
-	res, err := consumeBandwidth(statedb, dynProps, tx, 3000)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
 	if res.NetFee != 100_000 {
 		t.Fatalf("NetFee: want 100000, got %d", res.NetFee)
+	}
+	if res.NetFeeForBandwidth {
+		t.Fatal("NetFeeForBandwidth: want false for create-account fee")
 	}
 	if balBefore-statedb.GetBalance(sender) != 100_000 {
 		t.Fatalf("owner balance change: want 100000, got %d",
@@ -183,5 +399,8 @@ func TestConsumeBandwidth_CreateNewAccount_Fee(t *testing.T) {
 	if dynProps.TotalCreateAccountCost() != 100_000 {
 		t.Fatalf("total_create_account_cost: want 100000, got %d",
 			dynProps.TotalCreateAccountCost())
+	}
+	if got := statedb.GetLatestOperationTime(sender); got != testBandwidthBlockTime {
+		t.Fatalf("latest operation time: want %d, got %d", testBandwidthBlockTime, got)
 	}
 }

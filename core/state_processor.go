@@ -42,6 +42,20 @@ var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
 func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, validate, validateEnvelope)
+}
+
+// ApplyTransactionWithResourceSlot executes a transaction with java-tron's
+// resource-window time (`head slot`) separated from millisecond timestamps.
+func ApplyTransactionWithResourceSlot(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, validate, validateEnvelope)
+}
+
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
+	if err := ValidateContractCount(tx); err != nil {
+		return nil, err
+	}
+
 	// Block-apply reject for ExchangeTransactionContract once VERSION_4_8_0_1
 	// activates. Mirrors java-tron Manager.processBlock's per-tx
 	// rejectExchangeTransaction call (master 45e3bf88ca). Pre-fork blocks
@@ -52,6 +66,9 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
 		forks.PassVersion(db, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
+	}
+	if err := ValidateTxCommon(tx, prevBlockTime); err != nil {
+		return nil, err
 	}
 
 	act, err := actuator.CreateActuator(tx)
@@ -65,6 +82,8 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		Tx:              tx,
 		BlockTime:       blockTime,
 		PrevBlockTime:   prevBlockTime,
+		HeadSlot:        headSlot,
+		HasHeadSlot:     hasHeadSlot,
 		BlockNumber:     blockNum,
 		DB:              db,
 		ActiveWitnesses: activeWitnesses,
@@ -90,22 +109,34 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		}
 	}
 
-	bwResult, err := consumeBandwidth(statedb, dynProps, tx, prevBlockTime)
+	txSnap := statedb.Snapshot()
+	dpProps, dpDirty := dynProps.Snapshot()
+	revertTx := func() {
+		statedb.RevertToSnapshot(txSnap)
+		dynProps.Restore(dpProps, dpDirty)
+	}
+
+	resourceTime := ctx.ResourceTime()
+	bwResult, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, resourceTime, db)
 	if err != nil {
+		revertTx()
 		return nil, fmt.Errorf("bandwidth: %w", err)
 	}
 
-	if err := actuator.ConsumeMultiSignFee(ctx); err != nil {
+	multiSignFee, err := actuator.ConsumeMultiSignFee(ctx)
+	if err != nil {
+		revertTx()
 		return nil, fmt.Errorf("multi-sign fee: %w", err)
 	}
-	if err := actuator.ConsumeMemoFee(ctx); err != nil {
+	memoFee, err := actuator.ConsumeMemoFee(ctx)
+	if err != nil {
+		revertTx()
 		return nil, fmt.Errorf("memo fee: %w", err)
 	}
 
-	snap := statedb.Snapshot()
 	result, err := act.Execute(ctx)
 	if err != nil {
-		statedb.RevertToSnapshot(snap)
+		revertTx()
 		return nil, fmt.Errorf("execute: %w", err)
 	}
 
@@ -120,18 +151,20 @@ func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	// java's BalanceInsufficientException re-throw at line 299 of
 	// ReceiptCapsule.java.
 	if err := actuator.PayEnergyBill(ctx, result); err != nil {
-		statedb.RevertToSnapshot(snap)
+		revertTx()
 		return nil, fmt.Errorf("pay energy bill: %w", err)
 	}
 
 	result.NetUsage = bwResult.NetUsage
 	result.NetFee = bwResult.NetFee
+	result.NetFeeForBandwidth = bwResult.NetFeeForBandwidth
+	result.Fee += multiSignFee + memoFee
 
 	return result, nil
 }
 
 // buildTransactionInfo constructs a TransactionInfo proto from the execution result.
-func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64) *corepb.TransactionInfo {
+func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
 	txID := tx.Hash()
 
 	// Receipt fields mirror java-tron `Protocol.ResourceReceipt`: EnergyUsage
@@ -154,6 +187,14 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			Result:            corepb.Transaction_ResultContractResult(result.ContractRet),
 		},
 	}
+	if supportTransactionFeePool {
+		if result.NetFeeForBandwidth {
+			info.PackingFee += result.NetFee
+		}
+		if corepb.Transaction_ResultContractResult(result.ContractRet) != corepb.Transaction_Result_OUT_OF_TIME {
+			info.PackingFee += result.EnergyFee
+		}
+	}
 
 	if len(result.ContractResult) > 0 {
 		info.ContractResult = [][]byte{result.ContractResult}
@@ -161,6 +202,42 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 
 	if len(result.ContractAddress) > 0 {
 		info.ContractAddress = result.ContractAddress
+	}
+	if result.AssetIssueID != "" {
+		info.AssetIssueID = result.AssetIssueID
+	}
+	if result.WithdrawAmount != 0 {
+		info.WithdrawAmount = result.WithdrawAmount
+	}
+	if result.UnfreezeAmount != 0 {
+		info.UnfreezeAmount = result.UnfreezeAmount
+	}
+	if result.WithdrawExpireAmount != 0 {
+		info.WithdrawExpireAmount = result.WithdrawExpireAmount
+	}
+	if len(result.CancelUnfreezeV2Amount) > 0 {
+		info.CancelUnfreezeV2Amount = result.CancelUnfreezeV2Amount
+	}
+	if result.ExchangeReceivedAmount != 0 {
+		info.ExchangeReceivedAmount = result.ExchangeReceivedAmount
+	}
+	if result.ExchangeInjectAnotherAmount != 0 {
+		info.ExchangeInjectAnotherAmount = result.ExchangeInjectAnotherAmount
+	}
+	if result.ExchangeWithdrawAnotherAmount != 0 {
+		info.ExchangeWithdrawAnotherAmount = result.ExchangeWithdrawAnotherAmount
+	}
+	if result.ShieldedTransactionFee != 0 {
+		info.ShieldedTransactionFee = result.ShieldedTransactionFee
+	}
+	if result.ExchangeID != 0 {
+		info.ExchangeId = result.ExchangeID
+	}
+	if len(result.OrderID) > 0 {
+		info.OrderId = result.OrderID
+	}
+	if len(result.OrderDetails) > 0 {
+		info.OrderDetails = result.OrderDetails
 	}
 
 	for _, l := range result.Logs {
@@ -198,6 +275,15 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 // fix routes block-reward + actuator rawdb-direct writes through the buffer
 // so switchFork can rewind them on orphan-branch discard.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool) ([]*corepb.TransactionInfo, error) {
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, validateEnvelope, nil)
+	return txInfos, err
+}
+
+func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, validateEnvelope, &parentAccountStateRoot)
+}
+
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot *tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
 
@@ -209,10 +295,19 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	// function returns, so reading the DP here yields the prev-block
 	// timestamp for the entire block.
 	prevBlockTime := dynProps.LatestBlockHeaderTimestamp()
+	prevBlockHeadSlot := HeadSlot(prevBlockTime, genesisTimestamp)
+
+	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
+	accountStateMark := statedb.JournalMark()
 
 	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
+		if dynProps.ConsensusLogicOptimization() {
+			if err := ValidateTxRetCount(tx); err != nil {
+				return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
+			}
+		}
 		// validate=true: replay calls actuator.Validate (P0-2a). Every
 		// actuator's Validate is read-only (audited 2026-05-15) so re-running
 		// on replay matches java-tron Manager.processBlock parity.
@@ -220,11 +315,11 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
-		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, block.Timestamp(), block.Number(), db, activeWitnesses, true, validateEnvelope)
+		result, err := ApplyTransactionWithResourceSlot(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, true, validateEnvelope)
 		if err != nil {
-			return nil, fmt.Errorf("tx %d: %w", i, err)
+			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
-		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp())
+		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
 
 		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsageTotal > 0 {
@@ -232,14 +327,14 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 	}
 
-	// Pay block reward to witness (and standby top-127 when change_delegation
-	// is active — the new-algorithm reward path goes through payBlockReward
-	// which splits by brokerage and accumulates the voter pool).
-	witnessAddr := block.WitnessAddress()
-	if witnessAddr != (tcommon.Address{}) {
-		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	var javaAccountStateRoot tcommon.Hash
+	if parentAccountStateRoot != nil {
+		var err error
+		javaAccountStateRoot, err = statedb.JavaAccountStateRoot(*parentAccountStateRoot, accountStateMark)
+		if err != nil {
+			return nil, tcommon.Hash{}, fmt.Errorf("account state root: %w", err)
+		}
 	}
-	payStandbyWitness(db, statedb, dynProps)
 
 	// Per-block adaptive energy limit adjustment.
 	if dynProps.AllowAdaptiveEnergy() {
@@ -247,5 +342,17 @@ func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		UpdateAdaptiveTotalEnergyLimit(dynProps)
 	}
 
-	return txInfos, nil
+	// Pay block reward to witness (and standby top-127 when change_delegation
+	// is active — the new-algorithm reward path goes through payBlockReward
+	// which splits by brokerage and accumulates the voter pool). java-tron
+	// runs this after adaptive-energy updates, then pays the transaction-fee
+	// pool reward from the same payReward path.
+	witnessAddr := block.WitnessAddress()
+	if witnessAddr != (tcommon.Address{}) {
+		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+		payStandbyWitness(db, statedb, dynProps)
+		payTransactionFeeReward(db, statedb, dynProps, witnessAddr)
+	}
+
+	return txInfos, javaAccountStateRoot, nil
 }

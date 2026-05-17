@@ -2,12 +2,16 @@ package core
 
 import (
 	"fmt"
+	"strconv"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -48,8 +52,14 @@ func txBandwidthSize(tx *types.Transaction, supportVM bool) int64 {
 
 // BandwidthResult captures bandwidth consumption details.
 type BandwidthResult struct {
-	NetUsage int64
-	NetFee   int64
+	NetUsage           int64
+	NetFee             int64
+	NetFeeForBandwidth bool
+}
+
+type bandwidthAssetStore interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
 }
 
 // availableAccountNet returns this account's share of the global bandwidth
@@ -78,19 +88,18 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 		return 0
 	}
 	totalLimit := dp.TotalNetLimit()
+	harden := dp.AllowHardenResourceCalculation()
 
 	// V2 formula (float-precision) is active once the unfreeze-delay proposal
 	// is set (proposal #70 on mainnet); otherwise fall back to V1 integer math
 	// which rejects sub-TRX balances.
 	if dp.UnfreezeDelayDays() > 0 {
-		netWeight := float64(frozen) / float64(trxPrecision)
-		return int64(netWeight * (float64(totalLimit) / float64(totalWeight)))
+		return calculateGlobalResourceLimitV2(frozen, totalLimit, totalWeight, harden)
 	}
 	if frozen < trxPrecision {
 		return 0
 	}
-	netWeight := frozen / trxPrecision
-	return int64(float64(netWeight) * (float64(totalLimit) / float64(totalWeight)))
+	return calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight, harden)
 }
 
 // consumeBandwidth charges bandwidth for a transaction.
@@ -102,7 +111,11 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 // only staked bandwidth is consulted. On insufficient stake the path falls
 // back to the `create_account_fee` (default 100_000 SUN), bypassing the
 // free-bandwidth daily quota entirely.
-func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64) (*BandwidthResult, error) {
+func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, db bandwidthAssetStore) (*BandwidthResult, error) {
+	return consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, HeadSlot(prevBlockTime, 0), db)
+}
+
+func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64, db bandwidthAssetStore) (*BandwidthResult, error) {
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
 		return nil, fmt.Errorf("cannot determine sender")
@@ -111,26 +124,42 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	txSize := txBandwidthSize(tx, dynProps.AllowCreationOfContracts())
 
 	if contractCreatesNewAccount(statedb, tx) {
-		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, prevBlockTime)
+		return consumeBandwidthForCreateNewAccount(statedb, dynProps, sender, txSize, prevBlockTime, resourceTime)
+	}
+
+	if tx.ContractType() == corepb.Transaction_Contract_TransferAssetContract {
+		ok, err := useAssetAccountNet(statedb, dynProps, db, tx, sender, txSize, prevBlockTime, resourceTime)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &BandwidthResult{NetUsage: txSize}, nil
+		}
 	}
 
 	acct := statedb.GetAccount(sender)
 	netLimit := availableAccountNet(acct, dynProps)
 	if netLimit > 0 {
-		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), prevBlockTime)
+		recoveredUsage := recoverUsageForDP(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), resourceTime, dynProps)
 		if recoveredUsage+txSize <= netLimit {
 			statedb.SetNetUsage(sender, recoveredUsage+txSize)
-			statedb.SetLatestConsumeTime(sender, prevBlockTime)
+			statedb.SetLatestConsumeTime(sender, resourceTime)
+			statedb.SetLatestOperationTime(sender, prevBlockTime)
 			return &BandwidthResult{NetUsage: txSize}, nil
 		}
 	}
 
 	// Try free bandwidth
 	freeLimit := dynProps.FreeNetLimit()
-	recoveredFreeUsage := recoverUsage(statedb.GetFreeNetUsage(sender), statedb.GetLatestConsumeFreeTime(sender), prevBlockTime)
-	if recoveredFreeUsage+txSize <= freeLimit {
+	recoveredFreeUsage := recoverUsageForDP(statedb.GetFreeNetUsage(sender), statedb.GetLatestConsumeFreeTime(sender), resourceTime, dynProps)
+	publicLimit := dynProps.PublicNetLimit()
+	recoveredPublicUsage := recoverUsageForDP(dynProps.PublicNetUsage(), dynProps.PublicNetTime(), resourceTime, dynProps)
+	if recoveredFreeUsage+txSize <= freeLimit && recoveredPublicUsage+txSize <= publicLimit {
 		statedb.SetFreeNetUsage(sender, recoveredFreeUsage+txSize)
-		statedb.SetLatestConsumeFreeTime(sender, prevBlockTime)
+		statedb.SetLatestConsumeFreeTime(sender, resourceTime)
+		statedb.SetLatestOperationTime(sender, prevBlockTime)
+		dynProps.SetPublicNetUsage(recoveredPublicUsage + txSize)
+		dynProps.SetPublicNetTime(resourceTime)
 		return &BandwidthResult{NetUsage: txSize}, nil
 	}
 
@@ -139,7 +168,25 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	if err := statedb.SubBalance(sender, cost); err != nil {
 		return nil, fmt.Errorf("insufficient balance to pay bandwidth: need %d sun", cost)
 	}
-	return &BandwidthResult{NetFee: cost}, nil
+	statedb.SetLatestOperationTime(sender, prevBlockTime)
+	routeBandwidthFee(statedb, dynProps, cost)
+	dynProps.AddTotalTransactionCost(cost)
+	return &BandwidthResult{NetFee: cost, NetFeeForBandwidth: true}, nil
+}
+
+func routeBandwidthFee(statedb *state.StateDB, dynProps *state.DynamicProperties, fee int64) {
+	if fee <= 0 {
+		return
+	}
+	if dynProps.AllowTransactionFeePool() {
+		dynProps.AddTransactionFeePool(fee)
+		return
+	}
+	if dynProps.AllowBlackHoleOptimization() {
+		dynProps.AddBurnTrx(fee)
+		return
+	}
+	statedb.AddBalance(params.BlackholeAddress, fee)
 }
 
 // contractCreatesNewAccount mirrors java-tron's
@@ -177,13 +224,132 @@ func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bo
 	return false
 }
 
+func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicProperties, db bandwidthAssetStore, tx *types.Transaction, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	contract := tx.Contract()
+	if contract == nil || contract.Parameter == nil {
+		return false, nil
+	}
+	c := &contractpb.TransferAssetContract{}
+	if err := contract.Parameter.UnmarshalTo(c); err != nil {
+		return false, fmt.Errorf("failed to unmarshal TransferAssetContract: %w", err)
+	}
+
+	asset, tokenID, err := resolveBandwidthAsset(dynProps, db, c.AssetName)
+	if err != nil {
+		return false, err
+	}
+	tokenIDStr := strconv.FormatInt(tokenID, 10)
+
+	recoveredPublicUsage := recoverUsageForDP(asset.PublicFreeAssetNetUsage, asset.PublicLatestFreeNetTime, resourceTime, dynProps)
+	if txSize > asset.PublicFreeAssetNetLimit-recoveredPublicUsage {
+		return false, nil
+	}
+
+	var freeUsage, latestAssetOperationTime int64
+	if dynProps.AllowSameTokenName() {
+		freeUsage = statedb.GetFreeAssetNetUsageV2(sender, tokenIDStr)
+		latestAssetOperationTime = statedb.GetLatestAssetOperationTimeV2(sender, tokenIDStr)
+	} else {
+		tokenName := string(c.AssetName)
+		freeUsage = statedb.GetFreeAssetNetUsage(sender, tokenName)
+		latestAssetOperationTime = statedb.GetLatestAssetOperationTime(sender, tokenName)
+	}
+	recoveredFreeAssetUsage := recoverUsageForDP(freeUsage, latestAssetOperationTime, resourceTime, dynProps)
+	if txSize > asset.FreeAssetNetLimit-recoveredFreeAssetUsage {
+		return false, nil
+	}
+
+	issuer := tcommon.BytesToAddress(asset.OwnerAddress)
+	issuerAccount := statedb.GetAccount(issuer)
+	if issuerAccount == nil {
+		return false, nil
+	}
+	issuerNetLimit := availableAccountNet(issuerAccount, dynProps)
+	recoveredIssuerUsage := recoverUsageForDP(statedb.GetNetUsage(issuer), statedb.GetLatestConsumeTime(issuer), resourceTime, dynProps)
+	if txSize > issuerNetLimit-recoveredIssuerUsage {
+		return false, nil
+	}
+
+	statedb.SetNetUsage(issuer, recoveredIssuerUsage+txSize)
+	statedb.SetLatestConsumeTime(issuer, resourceTime)
+	statedb.SetLatestOperationTime(sender, prevBlockTime)
+
+	newFreeAssetUsage := recoveredFreeAssetUsage + txSize
+	if dynProps.AllowSameTokenName() {
+		statedb.SetFreeAssetNetUsageV2(sender, tokenIDStr, newFreeAssetUsage)
+		statedb.SetLatestAssetOperationTimeV2(sender, tokenIDStr, resourceTime)
+	} else {
+		tokenName := string(c.AssetName)
+		statedb.SetFreeAssetNetUsage(sender, tokenName, newFreeAssetUsage)
+		statedb.SetLatestAssetOperationTime(sender, tokenName, resourceTime)
+		statedb.SetFreeAssetNetUsageV2(sender, tokenIDStr, newFreeAssetUsage)
+		statedb.SetLatestAssetOperationTimeV2(sender, tokenIDStr, resourceTime)
+	}
+
+	newPublicUsage := recoveredPublicUsage + txSize
+	if dynProps.AllowSameTokenName() {
+		asset.PublicFreeAssetNetUsage = newPublicUsage
+		asset.PublicLatestFreeNetTime = resourceTime
+		if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+			return false, err
+		}
+	} else {
+		if legacy := rawdb.ReadAssetIssueByName(db, c.AssetName); legacy != nil {
+			legacy.PublicFreeAssetNetUsage = newPublicUsage
+			legacy.PublicLatestFreeNetTime = resourceTime
+			if err := rawdb.WriteAssetIssueByName(db, c.AssetName, legacy); err != nil {
+				return false, err
+			}
+		}
+		if v2 := rawdb.ReadAssetIssue(db, tokenID); v2 != nil {
+			v2.PublicFreeAssetNetUsage = newPublicUsage
+			v2.PublicLatestFreeNetTime = resourceTime
+			if err := rawdb.WriteAssetIssue(db, tokenID, v2); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
+}
+
+func resolveBandwidthAsset(dynProps *state.DynamicProperties, db ethdb.KeyValueReader, assetName []byte) (*contractpb.AssetIssueContract, int64, error) {
+	if dynProps.AllowSameTokenName() {
+		tokenID, err := strconv.ParseInt(string(assetName), 10, 64)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid asset_name: not a numeric ID")
+		}
+		asset := rawdb.ReadAssetIssue(db, tokenID)
+		if asset == nil {
+			return nil, 0, fmt.Errorf("asset [%s] does not exist", assetName)
+		}
+		return asset, tokenID, nil
+	}
+	if asset := rawdb.ReadAssetIssueByName(db, assetName); asset != nil {
+		tokenID, err := strconv.ParseInt(asset.Id, 10, 64)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid legacy asset ID")
+		}
+		return asset, tokenID, nil
+	}
+	if tokenID, ok := rawdb.ReadAssetNameIndex(db, assetName); ok {
+		asset := rawdb.ReadAssetIssue(db, tokenID)
+		if asset != nil {
+			return asset, tokenID, nil
+		}
+	}
+	return nil, 0, fmt.Errorf("asset [%s] does not exist", assetName)
+}
+
 // consumeBandwidthForCreateNewAccount charges bandwidth for txs that
 // materialize a new account. java-tron `BandwidthProcessor` line 192-206:
 // only personal staked bandwidth is consulted (`createNewAccountBandwidthRate`
 // applied per byte); on shortage the `create_account_fee` is taken from the
 // owner balance and either burned or sent to the blackhole — and
 // `total_create_account_cost` is incremented.
-func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime int64) (*BandwidthResult, error) {
+func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state.DynamicProperties, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (*BandwidthResult, error) {
 	ratio := dynProps.CreateNewAccountBandwidthRate()
 	if ratio <= 0 {
 		ratio = 1
@@ -193,10 +359,11 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	acct := statedb.GetAccount(sender)
 	netLimit := availableAccountNet(acct, dynProps)
 	if netLimit > 0 {
-		recoveredUsage := recoverUsage(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), prevBlockTime)
+		recoveredUsage := recoverUsageForDP(statedb.GetNetUsage(sender), statedb.GetLatestConsumeTime(sender), resourceTime, dynProps)
 		if recoveredUsage+netCost <= netLimit {
 			statedb.SetNetUsage(sender, recoveredUsage+netCost)
-			statedb.SetLatestConsumeTime(sender, prevBlockTime)
+			statedb.SetLatestConsumeTime(sender, resourceTime)
+			statedb.SetLatestOperationTime(sender, prevBlockTime)
 			return &BandwidthResult{NetUsage: netCost}, nil
 		}
 	}
@@ -210,6 +377,7 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	if err := statedb.SubBalance(sender, fee); err != nil {
 		return nil, fmt.Errorf("insufficient balance for create_account_fee: need %d sun", fee)
 	}
+	statedb.SetLatestOperationTime(sender, prevBlockTime)
 	if dynProps.AllowBlackHoleOptimization() {
 		dynProps.AddBurnTrx(fee)
 	} else {

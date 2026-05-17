@@ -26,15 +26,15 @@ import (
 // Pre-set fields control what each new method returns.
 // All pre-existing methods return zero/nil values.
 type stubBackend struct {
-	delegatedResource *tronapi.DelegatedResourceInfo
-	delegationIndex   *tronapi.DelegationIndexInfo
-	canDelegate       *tronapi.CanDelegateInfo
-	canWithdraw       *tronapi.CanWithdrawUnfreezeInfo
-	availableUnfreeze *tronapi.AvailableUnfreezeCountInfo
-	reward            *tronapi.RewardInfo
-	pendingTx         *corepb.Transaction
-	pendingTxList     []*corepb.Transaction
-	nodes             []*tronapi.PeerInfo
+	delegatedResources []*tronapi.DelegatedResourceInfo
+	delegationIndex    *tronapi.DelegationIndexInfo
+	canDelegate        *tronapi.CanDelegateInfo
+	canWithdraw        *tronapi.CanWithdrawUnfreezeInfo
+	availableUnfreeze  *tronapi.AvailableUnfreezeCountInfo
+	reward             *tronapi.RewardInfo
+	pendingTx          *corepb.Transaction
+	pendingTxList      []*corepb.Transaction
+	nodes              []*tronapi.PeerInfo
 	// M5.1 PR-1
 	accountByID *types.Account
 	accountNet  *apipb.AccountNetMessage
@@ -55,9 +55,9 @@ func (s *stubBackend) GetAccount(addr common.Address) (*types.Account, error) { 
 func (s *stubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	return nil, nil
 }
-func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error       { return nil }
-func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                          { return &tronapi.NodeInfo{} }
-func (s *stubBackend) PendingTransactionCount() int                            { return 0 }
+func (s *stubBackend) BroadcastTransaction(tx *types.Transaction) error { return nil }
+func (s *stubBackend) GetNodeInfo() *tronapi.NodeInfo                   { return &tronapi.NodeInfo{} }
+func (s *stubBackend) PendingTransactionCount() int                     { return 0 }
 func (s *stubBackend) GetContract(addr common.Address) (*contractpb.SmartContract, error) {
 	return nil, nil
 }
@@ -95,7 +95,7 @@ func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountR
 func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
 }
-func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
+func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return nil }
 func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
 func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
 func (s *stubBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
@@ -110,8 +110,8 @@ func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, propo
 func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return s.proposals, nil }
 
 // --- New Phase 10 methods ---
-func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) (*tronapi.DelegatedResourceInfo, error) {
-	return s.delegatedResource, nil
+func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	return s.delegatedResources, nil
 }
 func (s *stubBackend) GetDelegatedResourceAccountIndexV2(addr common.Address) (*tronapi.DelegationIndexInfo, error) {
 	return s.delegationIndex, nil
@@ -169,10 +169,10 @@ func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.Ma
 func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return nil
 }
-func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error)    { return nil, nil }
-func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64    { return 0 }
-func (s *stubBackend) TotalTransaction() int64                       { return 0 }
-func (s *stubBackend) GetBurnTrx() int64                             { return 0 }
+func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
+func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
+func (s *stubBackend) TotalTransaction() int64                    { return 0 }
+func (s *stubBackend) GetBurnTrx() int64                          { return 0 }
 func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
@@ -325,10 +325,19 @@ func postJSON(t *testing.T, url, body string) map[string]interface{} {
 
 func TestGetDelegatedResourceV2WithData(t *testing.T) {
 	stub := &stubBackend{
-		delegatedResource: &tronapi.DelegatedResourceInfo{
-			FromAddress:            "4101",
-			ToAddress:              "4102",
-			FrozenBalanceForEnergy: 1000000,
+		delegatedResources: []*tronapi.DelegatedResourceInfo{
+			{
+				FromAddress:               "4101",
+				ToAddress:                 "4102",
+				FrozenBalanceForBandwidth: 1000000,
+				ExpireTimeForBandwidth:    0,
+			},
+			{
+				FromAddress:            "4101",
+				ToAddress:              "4102",
+				FrozenBalanceForEnergy: 1000000,
+				ExpireTimeForEnergy:    123456,
+			},
 		},
 	}
 	srv := newTestServer(t, stub)
@@ -337,13 +346,13 @@ func TestGetDelegatedResourceV2WithData(t *testing.T) {
 	result := postJSON(t, srv.URL+"/wallet/getdelegatedresourcev2",
 		`{"fromAddress":"4101","toAddress":"4102"}`)
 	list, ok := result["delegatedResource"].([]interface{})
-	if !ok || len(list) != 1 {
-		t.Fatalf("expected delegatedResource=[1 entry], got %v", result)
+	if !ok || len(list) != 2 {
+		t.Fatalf("expected delegatedResource=[2 entries], got %v", result)
 	}
 }
 
 func TestGetDelegatedResourceV2Empty(t *testing.T) {
-	stub := &stubBackend{} // delegatedResource is nil
+	stub := &stubBackend{} // delegatedResources is nil
 	srv := newTestServer(t, stub)
 	defer srv.Close()
 
@@ -593,8 +602,8 @@ func TestGetAccountByIdNotFound(t *testing.T) {
 func TestGetAccountNet(t *testing.T) {
 	stub := &stubBackend{
 		accountNet: &apipb.AccountNetMessage{
-			FreeNetUsed:  100,
-			FreeNetLimit: 1500,
+			FreeNetUsed:   100,
+			FreeNetLimit:  1500,
 			TotalNetLimit: 43200000000,
 		},
 	}

@@ -381,24 +381,28 @@ func (s *Server) GetDelegatedResourceV2(_ context.Context, in *apipb.DelegatedRe
 	}
 	from := common.BytesToAddress(in.FromAddress)
 	to := common.BytesToAddress(in.ToAddress)
-	info, err := s.backend.GetDelegatedResourceV2(from, to)
+	infos, err := s.backend.GetDelegatedResourceV2(from, to)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if info == nil {
+	if len(infos) == 0 {
 		return &apipb.DelegatedResourceList{}, nil
 	}
+	resources := make([]*corepb.DelegatedResource, 0, len(infos))
+	for range infos {
+		resources = append(resources, &corepb.DelegatedResource{
+			From: in.FromAddress,
+			To:   in.ToAddress,
+		})
+	}
+	for i, info := range infos {
+		resources[i].FrozenBalanceForBandwidth = info.FrozenBalanceForBandwidth
+		resources[i].FrozenBalanceForEnergy = info.FrozenBalanceForEnergy
+		resources[i].ExpireTimeForBandwidth = info.ExpireTimeForBandwidth
+		resources[i].ExpireTimeForEnergy = info.ExpireTimeForEnergy
+	}
 	return &apipb.DelegatedResourceList{
-		DelegatedResource: []*corepb.DelegatedResource{
-			{
-				From:                      in.FromAddress,
-				To:                        in.ToAddress,
-				FrozenBalanceForBandwidth: info.FrozenBalanceForBandwidth,
-				FrozenBalanceForEnergy:    info.FrozenBalanceForEnergy,
-				ExpireTimeForBandwidth:    info.ExpireTimeForBandwidth,
-				ExpireTimeForEnergy:       info.ExpireTimeForEnergy,
-			},
-		},
+		DelegatedResource: resources,
 	}, nil
 }
 
@@ -420,8 +424,8 @@ func (s *Server) GetDelegatedResourceAccountIndexV2(_ context.Context, in *apipb
 		toAccounts[i] = common.FromHex(a)
 	}
 	return &corepb.DelegatedResourceAccountIndex{
-		Account:     in.Value,
-		ToAccounts:  toAccounts,
+		Account:    in.Value,
+		ToAccounts: toAccounts,
 	}, nil
 }
 

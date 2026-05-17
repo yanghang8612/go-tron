@@ -5,6 +5,7 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -53,6 +54,7 @@ func TestBlockChain_InsertBlock_Transfer(t *testing.T) {
 	param, _ := anypb.New(tc)
 	txPB := &corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_TransferContract,
 				Parameter: param,
@@ -122,6 +124,65 @@ func TestBlockChain_InsertBlock_MultipleBlocks(t *testing.T) {
 
 	if bc.CurrentBlock().Number() != 3 {
 		t.Fatalf("current: got %d, want 3", bc.CurrentBlock().Number())
+	}
+}
+
+func TestBlockChain_InsertBlockUpdatesForkStats(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	w1 := testInsertAddr(1)
+	w2 := testInsertAddr(2)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: w1, Balance: 100_000_000},
+			{Address: w2, Balance: 100_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: w1, VoteCount: 1000, URL: "http://w1"},
+			{Address: w2, VoteCount: 1000, URL: "http://w2"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, witness := range []tcommon.Address{w1, w2} {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i + 1),
+					Timestamp:      1_600_000_000_000 + int64(i+1)*3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witness.Bytes(),
+					Version:        params.BlockVersion,
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("block %d: %v", i+1, err)
+		}
+	}
+
+	stats := rawdb.ReadForkStats(bc.buffer, 28)
+	if len(stats) != 2 {
+		t.Fatalf("v28 stats len: got %d, want 2", len(stats))
+	}
+	for i, got := range stats {
+		if got != forks.VoteUpgrade {
+			t.Fatalf("v28 stats slot %d: got %d, want upgrade", i, got)
+		}
+	}
+	if !bc.ForkController().Pass(28, bc.CurrentBlock().Timestamp(), bc.DynProps().MaintenanceTimeInterval()) {
+		t.Fatal("v28 should pass after both active witnesses produced v35 blocks")
 	}
 }
 
@@ -484,6 +545,17 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 		},
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteVotes(diskdb, wProd, &corepb.Votes{
+		Address: wProd.Bytes(),
+		OldVotes: []*corepb.Vote{
+			{VoteAddress: wHi.Bytes(), VoteCount: 1},
+		},
+		NewVotes: []*corepb.Vote{
+			{VoteAddress: wHi.Bytes(), VoteCount: 1},
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -907,6 +979,7 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 		StartTime:         1000,
 		EndTime:           2_000_000_000_000, // far future
 		Precision:         0,
+		Url:               []byte("https://forktkn.example"),
 		FreeAssetNetLimit: 0,
 	}
 	param, err := anypb.New(tokenContract)
@@ -915,6 +988,7 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 	}
 	txPB := &corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_AssetIssueContract,
 				Parameter: param,

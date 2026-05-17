@@ -57,6 +57,7 @@ func buildTransferTxWithRef(t *testing.T, owner, recipient tcommon.Address, amou
 	}
 	pbTx := &corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
+			Expiration:    60_000,
 			RefBlockBytes: refBytes,
 			RefBlockHash:  refHash,
 			Contract: []*corepb.Transaction_Contract{{
@@ -100,6 +101,53 @@ func TestValidateTxEnvelope_DefaultPermission_NewAccount(t *testing.T) {
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
 	if err := ValidateTxEnvelope(tx, statedb); err != nil {
 		t.Fatalf("expected accept, got %v", err)
+	}
+}
+
+func TestValidateTxEnvelope_RejectsContractCountNotEqualToOne(t *testing.T) {
+	statedb, _ := newValidatorState(t)
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	tx.Proto().RawData.Contract = append(tx.Proto().RawData.Contract, tx.Proto().RawData.Contract[0])
+
+	err := ValidateTxEnvelope(tx, statedb)
+	if !errors.Is(err, ErrContractSizeNotEqualToOne) {
+		t.Fatalf("expected ErrContractSizeNotEqualToOne, got %v", err)
+	}
+
+	dp := state.NewDynamicProperties()
+	_, err = ApplyTransaction(statedb, dp, tx, 0, 0, 0, nil, nil, false, false)
+	if !errors.Is(err, ErrContractSizeNotEqualToOne) {
+		t.Fatalf("ApplyTransaction expected ErrContractSizeNotEqualToOne, got %v", err)
+	}
+}
+
+func TestValidateTxCommon_ExpirationAndSize(t *testing.T) {
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	tx.Proto().RawData.Expiration = 1001
+	if err := ValidateTxCommon(tx, 1000); err != nil {
+		t.Fatalf("valid expiration rejected: %v", err)
+	}
+
+	tx.Proto().RawData.Expiration = 1000
+	if err := ValidateTxCommon(tx, 1000); !errors.Is(err, ErrTransactionExpiration) {
+		t.Fatalf("expected expired tx rejection, got %v", err)
+	}
+
+	tx.Proto().RawData.Expiration = 1000 + maximumTimeUntilExpiration + 1
+	if err := ValidateTxCommon(tx, 1000); !errors.Is(err, ErrTransactionExpiration) {
+		t.Fatalf("expected too-far expiration rejection, got %v", err)
+	}
+
+	tx.Proto().RawData.Expiration = 1001
+	tx.Proto().RawData.Data = make([]byte, int(transactionMaxByteSize))
+	if err := ValidateTxCommon(tx, 1000); !errors.Is(err, ErrTransactionTooLarge) {
+		t.Fatalf("expected oversized tx rejection, got %v", err)
 	}
 }
 

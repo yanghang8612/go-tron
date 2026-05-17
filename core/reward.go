@@ -55,6 +55,27 @@ func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPr
 	}
 }
 
+// transactionFeePoolPeriod mirrors java-tron Constant.TRANSACTION_FEE_POOL_PERIOD.
+// It is currently 1 block, but keep the constant explicit because Manager.payReward
+// computes the fee reward through this divisor before subtracting it from the pool.
+const transactionFeePoolPeriod int64 = 1
+
+// payTransactionFeeReward pays the current block producer its transaction-fee
+// pool share, then subtracts exactly that share from the dynamic-property pool.
+// java-tron's Manager.payReward runs this after the normal block reward and
+// standby reward whenever supportTransactionFeePool is active.
+func payTransactionFeeReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties, witness tcommon.Address) {
+	if !dp.AllowTransactionFeePool() {
+		return
+	}
+	pool := dp.TransactionFeePool()
+	reward := pool / transactionFeePoolPeriod
+	if reward != 0 {
+		payBlockReward(db, statedb, dp, witness, reward)
+	}
+	dp.SetTransactionFeePool(pool - reward)
+}
+
 // payStandbyWitness distributes the per-block WITNESS_127_PAY_PER_BLOCK
 // allowance pro-rata among the top-WitnessStandbyLength witnesses by vote
 // count, passing each share through payBlockReward (which applies
@@ -156,34 +177,23 @@ func accumulateWitnessVi(db kvReadWriter, cycle int64, addr []byte, voteCount in
 	rawdb.WriteWitnessVI(db, cycle, addr, new(big.Int).Add(preVi, delta))
 }
 
-// applyRewardMaintenance runs at the maintenance boundary after
-// dpos.DoMaintenance. It performs the two M1.5 pieces that belong to the
-// new reward path:
-//
-//  1. If the chain has entered the new-algorithm window
-//     (useNewRewardAlgorithm), accumulate per-cycle VI for every known
-//     witness. Mirrors MaintenanceManager.doMaintenance's VI loop.
-//  2. If change_delegation is on, increment current_cycle_number and
-//     snapshot each witness's current brokerage rate and vote count into
-//     DelegationStore under the new cycle number — this is the "current"
-//     data voters will read against during their next withdraw.
-//
-// Called from InsertBlock / BuildBlock under the same maintenance-trigger
-// condition as dpos.DoMaintenance.
-func applyRewardMaintenance(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
+// maintenanceWitnessVotes returns every known witness and its current
+// StateDB vote count. The in-memory StateDB is authoritative during
+// maintenance because tryRemoveThePowerOfTheGr and pending vote deltas may
+// have already mutated witnesses before the rawdb view is flushed.
+func maintenanceWitnessVotes(db kvReadWriter, statedb *state.StateDB) []struct {
+	addr  tcommon.Address
+	votes int64
+} {
 	witnessAddrs := rawdb.ReadWitnessIndex(db)
 	if len(witnessAddrs) == 0 {
-		return
+		return nil
 	}
 
-	// Load vote counts from the in-memory statedb first (authoritative
-	// during block processing) — fall back to the persisted witness on
-	// cold starts.
-	type wv struct {
+	ws := make([]struct {
 		addr  tcommon.Address
 		votes int64
-	}
-	ws := make([]wv, 0, len(witnessAddrs))
+	}, 0, len(witnessAddrs))
 	for _, a := range witnessAddrs {
 		w := statedb.GetWitness(a)
 		var votes int64
@@ -196,24 +206,56 @@ func applyRewardMaintenance(db kvReadWriter, statedb *state.StateDB, dp *state.D
 			}
 			votes = stored.VoteCount()
 		}
-		ws = append(ws, wv{a, votes})
+		ws = append(ws, struct {
+			addr  tcommon.Address
+			votes int64
+		}{a, votes})
 	}
+	return ws
+}
 
+// applyRewardVI mirrors the first reward step in java-tron
+// MaintenanceManager.doMaintenance: accumulate VI before VotesStore deltas are
+// folded into WitnessStore.
+func applyRewardVI(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
+	ws := maintenanceWitnessVotes(db, statedb)
+	if len(ws) == 0 {
+		return
+	}
 	curCycle := dp.CurrentCycleNumber()
-
 	if dp.UseNewRewardAlgorithm() {
 		for _, w := range ws {
 			accumulateWitnessVi(db, curCycle, w.addr.Bytes(), w.votes)
 		}
 	}
+}
 
-	if dp.ChangeDelegation() {
-		nextCycle := curCycle + 1
-		for _, w := range ws {
-			brokerage := rawdb.ReadWitnessBrokerage(db, w.addr)
-			rawdb.WriteCycleBrokerage(db, nextCycle, w.addr.Bytes(), int(brokerage))
-			rawdb.WriteCycleVote(db, nextCycle, w.addr.Bytes(), w.votes)
-		}
-		dp.SetCurrentCycleNumber(nextCycle)
+// applyRewardCycleSnapshot mirrors the final change_delegation step in
+// java-tron MaintenanceManager.doMaintenance: after pending vote deltas have
+// been applied, advance the cycle and snapshot brokerage/vote counts for the
+// new cycle.
+func applyRewardCycleSnapshot(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
+	if !dp.ChangeDelegation() {
+		return
 	}
+	ws := maintenanceWitnessVotes(db, statedb)
+	if len(ws) == 0 {
+		return
+	}
+
+	nextCycle := dp.CurrentCycleNumber() + 1
+	for _, w := range ws {
+		brokerage := rawdb.ReadWitnessBrokerage(db, w.addr)
+		rawdb.WriteCycleBrokerage(db, nextCycle, w.addr.Bytes(), int(brokerage))
+		rawdb.WriteCycleVote(db, nextCycle, w.addr.Bytes(), w.votes)
+	}
+	dp.SetCurrentCycleNumber(nextCycle)
+}
+
+// applyRewardMaintenance is retained for tests and standalone callers; the
+// block maintenance path uses the split helpers so VotesStore deltas can be
+// applied between VI accumulation and cycle snapshot, matching java-tron.
+func applyRewardMaintenance(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
+	applyRewardVI(db, statedb, dp)
+	applyRewardCycleSnapshot(db, statedb, dp)
 }

@@ -1,6 +1,9 @@
 package core
 
 import (
+	"math"
+	"math/big"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -26,16 +29,15 @@ func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) in
 		return 0
 	}
 	totalLimit := dp.TotalEnergyCurrentLimit()
+	harden := dp.AllowHardenResourceCalculation()
 
 	if dp.UnfreezeDelayDays() > 0 {
-		netWeight := float64(frozen) / float64(trxPrecision)
-		return int64(netWeight * (float64(totalLimit) / float64(totalWeight)))
+		return calculateGlobalResourceLimitV2(frozen, totalLimit, totalWeight, harden)
 	}
 	if frozen < trxPrecision {
 		return 0
 	}
-	netWeight := frozen / trxPrecision
-	return int64(float64(netWeight) * (float64(totalLimit) / float64(totalWeight)))
+	return calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight, harden)
 }
 
 // ResourceProcessor handles bandwidth and energy consumption/recovery.
@@ -80,16 +82,69 @@ func (r *ResourceProcessor) RecoverEnergy(addr tcommon.Address, now int64) {
 
 // recoverUsage computes new usage after sliding window recovery.
 func recoverUsage(oldUsage int64, lastTime int64, now int64) int64 {
+	return recoverUsageWithHarden(oldUsage, lastTime, now, false)
+}
+
+func recoverUsageForDP(oldUsage, lastTime, now int64, dp *state.DynamicProperties) int64 {
+	return recoverUsageWithHarden(oldUsage, lastTime, now, dp != nil && dp.AllowHardenResourceCalculation())
+}
+
+func recoverUsageWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
+	windowSize := int64(params.WindowSizeSlots)
 	elapsed := now - lastTime
-	if elapsed >= int64(params.WindowSizeMs) {
+	if elapsed >= windowSize {
 		return 0
 	}
 	if elapsed <= 0 {
 		return oldUsage
 	}
-	remaining := int64(params.WindowSizeMs) - elapsed
-	return oldUsage * remaining / int64(params.WindowSizeMs)
+	remaining := windowSize - elapsed
+	if harden {
+		averageLastUsage := divideCeilBig(
+			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecision)),
+			big.NewInt(windowSize),
+		)
+		decay := float64(remaining) / float64(windowSize)
+		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+		return bigMulDivInt64(averageLastUsage, windowSize, resourcePrecision)
+	}
+	return oldUsage * remaining / windowSize
+}
+
+func calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight int64, harden bool) int64 {
+	weight := frozen / trxPrecision
+	if !harden {
+		return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
+	}
+	return bigMulDivInt64(weight, totalLimit, totalWeight)
+}
+
+func calculateGlobalResourceLimitV2(frozen, totalLimit, totalWeight int64, harden bool) int64 {
+	if !harden {
+		weight := float64(frozen) / float64(trxPrecision)
+		return int64(weight * (float64(totalLimit) / float64(totalWeight)))
+	}
+	denominator := new(big.Int).Mul(big.NewInt(trxPrecision), big.NewInt(totalWeight))
+	return bigMulDivBigInt64(big.NewInt(frozen), big.NewInt(totalLimit), denominator)
+}
+
+func divideCeilBig(numerator, denominator *big.Int) int64 {
+	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	if r.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	return q.Int64()
+}
+
+func bigMulDivInt64(a, b, c int64) int64 {
+	return bigMulDivBigInt64(big.NewInt(a), big.NewInt(b), big.NewInt(c))
+}
+
+func bigMulDivBigInt64(a, b, c *big.Int) int64 {
+	n := new(big.Int).Mul(a, b)
+	n.Quo(n, c)
+	return n.Int64()
 }

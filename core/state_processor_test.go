@@ -4,8 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -43,6 +44,7 @@ func makeTestTransferTx(from, to byte, amount int64) *types.Transaction {
 	param, _ := anypb.New(tc)
 	return types.NewTransactionFromPB(&corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_TransferContract,
 				Parameter: param,
@@ -210,6 +212,7 @@ func makeExchangeTransactionTx(owner byte) *types.Transaction {
 	param, _ := anypb.New(tc)
 	return types.NewTransactionFromPB(&corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
+			Expiration: 1_700_000_060_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_ExchangeTransactionContract,
 				Parameter: param,
@@ -264,6 +267,37 @@ func TestApplyTransaction_ExchangePassesPreFork(t *testing.T) {
 	}
 }
 
+func TestProcessBlock_RejectsRetCountGreaterThanContractCountWhenOptimized(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetConsensusLogicOptimization(true)
+
+	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+	tx := makeTestTransferTx(1, 2, 1)
+	tx.Proto().Ret = []*corepb.Transaction_Result{
+		{Ret: corepb.Transaction_Result_SUCESS},
+		{Ret: corepb.Transaction_Result_SUCESS},
+	}
+
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    1,
+				Timestamp: 3000,
+			},
+		},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+
+	_, err := ProcessBlock(statedb, dynProps, block, nil, nil, 0, false)
+	if !errors.Is(err, ErrTransactionRetCount) {
+		t.Fatalf("expected ErrTransactionRetCount, got %v", err)
+	}
+}
+
 func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
@@ -308,5 +342,101 @@ func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 		if len(info.Id) == 0 {
 			t.Fatalf("txInfo[%d] has empty ID", i)
 		}
+	}
+}
+
+func TestBuildTransactionInfo_PackingFee(t *testing.T) {
+	tx := makeTestTransferTx(1, 2, 100)
+
+	result := &actuator.Result{
+		NetFee:             123,
+		NetFeeForBandwidth: true,
+		EnergyFee:          456,
+		ContractRet:        int32(corepb.Transaction_Result_SUCCESS),
+	}
+	info := buildTransactionInfo(tx, result, 1, 3000, true)
+	if info.PackingFee != 579 {
+		t.Fatalf("packingFee: got %d, want 579", info.PackingFee)
+	}
+
+	info = buildTransactionInfo(tx, result, 1, 3000, false)
+	if info.PackingFee != 0 {
+		t.Fatalf("packingFee without support_transaction_fee_pool: got %d, want 0", info.PackingFee)
+	}
+
+	result.NetFeeForBandwidth = false
+	info = buildTransactionInfo(tx, result, 1, 3000, true)
+	if info.PackingFee != 456 {
+		t.Fatalf("packingFee must exclude create-account net fee: got %d, want 456", info.PackingFee)
+	}
+
+	result.ContractRet = int32(corepb.Transaction_Result_OUT_OF_TIME)
+	info = buildTransactionInfo(tx, result, 1, 3000, true)
+	if info.PackingFee != 0 {
+		t.Fatalf("packingFee must exclude OUT_OF_TIME energy fee: got %d, want 0", info.PackingFee)
+	}
+}
+
+func TestApplyTransaction_IncludesMemoAndMultiSignFees(t *testing.T) {
+	statedb := newTestState(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowMultiSign(true)
+	dp.SetMultiSignFee(10)
+	dp.SetMemoFee(20)
+
+	owner := testProcessorAddr(1)
+	to := testProcessorAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1_000_000)
+
+	tx := makeTestTransferTx(1, 2, 100)
+	tx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	tx.Proto().RawData.Data = []byte("memo")
+
+	db := ethrawdb.NewMemoryDatabase()
+	result, err := ApplyTransaction(statedb, dp, tx, 0, 3000, 1, db, nil, true, false)
+	if err != nil {
+		t.Fatalf("ApplyTransaction: %v", err)
+	}
+	if result.Fee != 30 {
+		t.Fatalf("result fee: got %d, want 30", result.Fee)
+	}
+	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	if info.Fee != 30 {
+		t.Fatalf("transaction info fee: got %d, want 30", info.Fee)
+	}
+	if got := statedb.GetBalance(owner); got != 1_000_000-100-30 {
+		t.Fatalf("owner balance: got %d, want %d", got, int64(1_000_000-100-30))
+	}
+}
+
+func TestApplyTransaction_RollsBackPreExecutionFeesOnMemoFailure(t *testing.T) {
+	statedb := newTestState(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowMultiSign(true)
+	dp.SetMultiSignFee(100)
+	dp.SetMemoFee(100)
+	dp.SetAllowBlackHoleOptimization(true)
+
+	owner := testProcessorAddr(1)
+	to := testProcessorAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(to, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 150)
+
+	tx := makeTestTransferTx(1, 2, 1)
+	tx.Proto().Signature = [][]byte{make([]byte, 65), make([]byte, 65)}
+	tx.Proto().RawData.Data = []byte("memo")
+
+	db := ethrawdb.NewMemoryDatabase()
+	if _, err := ApplyTransaction(statedb, dp, tx, 0, 3000, 1, db, nil, true, false); err == nil {
+		t.Fatal("expected memo fee failure")
+	}
+	if got := statedb.GetBalance(owner); got != 150 {
+		t.Fatalf("owner balance should be rolled back, got %d want 150", got)
+	}
+	if got := dp.BurnTrxAmount(); got != 0 {
+		t.Fatalf("burn_trx_amount should be rolled back, got %d", got)
 	}
 }

@@ -88,12 +88,15 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// timestamp is the parent's — same value java-tron actuators see via
 	// LatestBlockHeaderTimestamp during processTransaction.
 	prevBlockTime := parent.Timestamp()
+	prevBlockHeadSlot := HeadSlot(prevBlockTime, bc.GenesisTimestamp())
+	writeHistoryBlockHash(statedb, dynProps, blockNum, parent.Hash())
+	accountStateMark := statedb.JournalMark()
 
 	for _, tx := range pendingTxs {
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
-		result, err := ApplyTransaction(statedb, dynProps, tx, prevBlockTime, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true, false)
+		result, err := ApplyTransactionWithResourceSlot(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), true, false)
 		if err != nil {
 			h := tx.Hash()
 			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)
@@ -106,10 +109,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		}
 	}
 
-	// Pay block reward to witness (brokerage-aware once change_delegation is on).
-	// Writes go through buildBuf (throwaway) so they don't reach disk here.
-	payBlockReward(buildBuf, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-	payStandbyWitness(buildBuf, statedb, dynProps)
+	var accountStateRoot tcommon.Hash
+	if dynProps.AllowAccountStateRoot() {
+		accountStateRoot, err = statedb.JavaAccountStateRoot(parent.AccountStateRoot(), accountStateMark)
+		if err != nil {
+			return nil, fmt.Errorf("account state root: %w", err)
+		}
+	}
 
 	// Per-block adaptive energy limit adjustment.
 	if dynProps.AllowAdaptiveEnergy() {
@@ -117,38 +123,63 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		UpdateAdaptiveTotalEnergyLimit(dynProps)
 	}
 
+	// Pay block reward to witness (brokerage-aware once change_delegation is on)
+	// and drain the transaction-fee pool share. Writes go through buildBuf
+	// (throwaway) so they don't reach disk here.
+	payBlockReward(buildBuf, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	payStandbyWitness(buildBuf, statedb, dynProps)
+	payTransactionFeeReward(buildBuf, statedb, dynProps, witnessAddr)
+
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		allWitnesses := bc.gatherWitnessVotes(statedb)
-		dpos.DoMaintenance(&chainHeaderAdapter{statedb: statedb, dynProps: dynProps}, timestamp, allWitnesses)
-		// Writes go through buildBuf (throwaway); applyBlock's maintenance
-		// path is the canonical writer.
-		applyRewardMaintenance(buildBuf, statedb, dynProps)
-		newActive := dpos.SelectActiveWitnesses(allWitnesses)
-		// Do NOT call bc.SetActiveWitnesses here — applyBlock sets it after
-		// apply, keeping the active set consistent with committed state.
-		if err := ProcessProposals(bc.db, dynProps, newActive, timestamp, bc.fc); err != nil {
+		if err := ProcessProposals(buildBuf, dynProps, bc.ActiveWitnesses(), timestamp, bc.fc, statedb); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
+		adapter := &chainHeaderAdapter{
+			statedb:          statedb,
+			dynProps:         dynProps,
+			genesisWitnesses: bc.genesisWitnesses,
+		}
+		allWitnesses := bc.gatherWitnessVotes(statedb)
+		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
+		applyRewardVI(buildBuf, statedb, dynProps)
+		hasPendingVotes := applyPendingVotes(buildBuf, statedb)
+		allWitnesses = bc.gatherWitnessVotes(statedb)
+		if hasPendingVotes {
+			sorted := dpos.SortWitnessesByVotes(allWitnesses)
+			if !dynProps.ChangeDelegation() {
+				dpos.DistributeLegacyStandby(adapter, sorted)
+			}
+		}
+		// Writes go through buildBuf (throwaway); applyBlock's maintenance
+		// path is the canonical writer.
+		applyRewardCycleSnapshot(buildBuf, statedb, dynProps)
+		nextMaint := dpos.CalcNextMaintenanceTime(timestamp, dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
+		dynProps.SetNextMaintenanceTime(nextMaint)
 	}
 
-	// Commit state to get the root
-	root, err := statedb.Commit()
+	// Commit state so the throwaway StateDB observes the same post-processing
+	// path as applyBlock. The full root is persisted only by InsertBlock;
+	// java-tron's block header carries the lightweight account-state root.
+	_, err = statedb.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("commit state: %w", err)
 	}
 
 	// Construct the block
+	raw := &corepb.BlockHeaderRaw{
+		Number:         int64(blockNum),
+		Timestamp:      timestamp,
+		ParentHash:     parent.Hash().Bytes(),
+		WitnessAddress: witnessAddr.Bytes(),
+		Version:        params.BlockVersion,
+	}
+	if dynProps.AllowAccountStateRoot() {
+		raw.AccountStateRoot = accountStateRoot.Bytes()
+	}
 	block := types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
-			RawData: &corepb.BlockHeaderRaw{
-				Number:           int64(blockNum),
-				Timestamp:        timestamp,
-				ParentHash:       parent.Hash().Bytes(),
-				WitnessAddress:   witnessAddr.Bytes(),
-				AccountStateRoot: root.Bytes(),
-				Version:          params.BlockVersion,
-			},
+			RawData: raw,
 		},
 		Transactions: appliedTxProtos,
 	})

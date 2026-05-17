@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -49,14 +50,44 @@ func TestBuildBlock_EmptyPool(t *testing.T) {
 	if block.WitnessAddress() != witnessAddr {
 		t.Fatalf("witness: want %x, got %x", witnessAddr, block.WitnessAddress())
 	}
-	if block.AccountStateRoot() == (tcommon.Hash{}) {
-		t.Fatal("expected non-empty state root")
+	if block.AccountStateRoot() != (tcommon.Hash{}) {
+		t.Fatalf("accountStateRoot should be empty before allow_account_state_root, got %x", block.AccountStateRoot())
 	}
 	if len(block.Transactions()) != 0 {
 		t.Fatalf("expected 0 transactions, got %d", len(block.Transactions()))
 	}
 	if got := block.Version(); got != params.BlockVersion {
 		t.Fatalf("block version: want %d, got %d", params.BlockVersion, got)
+	}
+}
+
+func TestBuildBlock_AccountStateRootEnabledEmptyPool(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testProcessorAddr(1), Balance: 10_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"allow_account_state_root": 1,
+		},
+	}
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := BuildBlock(bc, txpool.New(), testProcessorAddr(0xFF), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tcommon.Hash(ethtypes.EmptyRootHash)
+	if got := result.Block.AccountStateRoot(); got != want {
+		t.Fatalf("accountStateRoot: got %x, want empty trie root %x", got, want)
 	}
 }
 
@@ -201,8 +232,8 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	// Total: cycleReward = 38.4M, allowance = 9.6M.
 	// Under the old double-write: cycleReward = 76.8M, allowance = 19.2M.
 	dp := state.LoadDynamicProperties(diskdb)
-	payPerBlock := dp.WitnessPayPerBlock()         // 32_000_000
-	standbyPay := dp.Witness127PayPerBlock()        // 16_000_000 (single witness gets all)
+	payPerBlock := dp.WitnessPayPerBlock()   // 32_000_000
+	standbyPay := dp.Witness127PayPerBlock() // 16_000_000 (single witness gets all)
 	brokerageRate := float64(brokerage) / 100.0
 	wantAllowance := int64(brokerageRate*float64(payPerBlock)) +
 		int64(brokerageRate*float64(standbyPay)) // 6_400_000 + 3_200_000 = 9_600_000

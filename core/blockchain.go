@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 var (
@@ -93,12 +94,13 @@ func (bc *BlockChain) AddMaintenanceHook(fn func(*types.Block, []tcommon.Address
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
+	buffer := blockbuffer.New(db)
 	bc := &BlockChain{
 		db:      db,
 		stateDB: stateDB,
 		config:  config,
-		fc:      forks.NewForkController(db),
-		buffer:  blockbuffer.New(db),
+		fc:      forks.NewForkController(buffer),
+		buffer:  buffer,
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -376,7 +378,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// `payBlockReward → AddCycleReward` write (gated on change_delegation)
 	// land in the active buffer layer. `switchFork` rewinds them on orphan
 	// discard. Slice 3 of the fork-rewind fix.
-	txInfos, err := ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil)
+	blockRoot := block.AccountStateRoot()
+	var txInfos []*corepb.TransactionInfo
+	var javaAccountStateRoot tcommon.Hash
+	if blockRoot != (tcommon.Hash{}) {
+		txInfos, javaAccountStateRoot, err = ProcessBlockWithJavaAccountStateRoot(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil, current.AccountStateRoot())
+	} else {
+		txInfos, err = ProcessBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), bc.engine != nil)
+	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
 	}
@@ -430,33 +439,45 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Routes through bc.buffer per fork-rewind slice 3 so per-proposal
 			// state writes rewind on switchFork.
-			if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
+			if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc, statedb); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
-			allWitnesses := bc.gatherWitnessVotes(statedb)
-			dpos.DoMaintenance(&chainHeaderAdapter{
+			adapter := &chainHeaderAdapter{
 				statedb:          statedb,
 				dynProps:         dynProps,
 				genesisWitnesses: bc.genesisWitnesses,
-			}, block.Timestamp(), allWitnesses)
-			// DoMaintenance may mutate witness VoteCount (tryRemoveThePowerOfTheGr
-			// strips the genesis-initial 100M from each GR). The earlier
-			// FlushWitnesses above ran before DoMaintenance, so those mutations
-			// would otherwise be lost — drain them into the buffer now.
+			}
+			allWitnesses := bc.gatherWitnessVotes(statedb)
+			dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
+			// tryRemoveThePowerOfTheGr mutates witness VoteCount before the
+			// java-tron reward-VI step. The earlier FlushWitnesses ran before
+			// maintenance, so drain this mutation now.
 			statedb.FlushWitnesses(bc.buffer)
-			// Cycle brokerage / vote / VI writes go through bc.buffer so they
-			// rewind on switchFork (slice 2). Reads from rawdb inside
-			// applyRewardMaintenance also consult the buffer, so cross-block
-			// accumulators see in-flight values.
-			applyRewardMaintenance(bc.buffer, statedb, dynProps)
-			newActive := dpos.SelectActiveWitnesses(allWitnesses)
-			// java-tron MaintenanceManager flips is_jobs after reward
-			// distribution, before the active set is swapped — bc.ActiveWitnesses()
-			// still holds the outgoing set here.
-			flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
-			bc.SetActiveWitnesses(newActive)
+
+			// java-tron accumulates reward VI before VotesStore old/new deltas
+			// are folded into WitnessStore, then snapshots cycle vote counts
+			// after those deltas are applied.
+			applyRewardVI(bc.buffer, statedb, dynProps)
+			hasPendingVotes := applyPendingVotes(bc.buffer, statedb)
+			statedb.FlushWitnesses(bc.buffer)
+			allWitnesses = bc.gatherWitnessVotes(statedb)
+			if hasPendingVotes {
+				sorted := dpos.SortWitnessesByVotes(allWitnesses)
+				if !dynProps.ChangeDelegation() {
+					dpos.DistributeLegacyStandby(adapter, sorted)
+				}
+				newActive := dpos.SelectActiveWitnesses(allWitnesses)
+				// java-tron MaintenanceManager flips is_jobs after reward
+				// distribution, before the active set is swapped — bc.ActiveWitnesses()
+				// still holds the outgoing set here.
+				flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
+				bc.SetActiveWitnesses(newActive)
+				maintNewWitnesses = newActive
+			}
+			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
+			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
+			dynProps.SetNextMaintenanceTime(nextMaint)
 			wasMaintenanceBlock = true
-			maintNewWitnesses = newActive
 		}
 	}
 	// Record whether this block triggered maintenance; the next block will
@@ -467,8 +488,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
+		bc.fc.Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
 	} else {
 		dynProps.SetStateFlag(0)
+	}
+
+	// Verify state root if the block carries one (java-tron sets this on
+	// post-fork blocks via the AccountStateCallBack hook) before committing
+	// the full StateDB. Commit writes flat contract storage/code alongside
+	// trie nodes; doing it after this check keeps a rejected java-tron block
+	// from contaminating the parent state used by the next retry.
+	if blockRoot != (tcommon.Hash{}) && blockRoot != javaAccountStateRoot {
+		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, javaAccountStateRoot)
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).
@@ -477,15 +508,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("commit state: %w", err)
 	}
 
-	// Verify state root if the block carries one (java-tron sets this on
-	// post-fork blocks via the AccountStateCallBack hook); otherwise just
-	// trust our computed root. The root is persisted out-of-band — we do
-	// NOT mutate `block.AccountStateRoot()` because the block proto's
-	// content must round-trip byte-identical to what the wire delivered.
-	blockRoot := block.AccountStateRoot()
-	if blockRoot != (tcommon.Hash{}) && blockRoot != newRoot {
-		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, newRoot)
-	}
+	// The root is persisted out-of-band — we do NOT mutate
+	// `block.AccountStateRoot()` because the block proto's content must
+	// round-trip byte-identical to what the wire delivered.
 	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
 
 	// Update dynamic properties.
@@ -505,6 +530,12 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// total_create_witness_cost (from witness create), maintenance-touched
 	// keys, etc. — every dirty DP key.
 	dynProps.Flush(bc.buffer)
+
+	// java-tron's Manager.applyBlock persists the block after processing and
+	// then calls updateFork(block). At that point the current block's
+	// transactions have already been validated against the previous fork
+	// bitmap, while the next block observes this producer's version vote.
+	bc.updateFork(block)
 
 	// Persist block.
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
@@ -817,6 +848,21 @@ func (bc *BlockChain) reloadActiveWitnesses() {
 	}
 }
 
+func (bc *BlockChain) updateFork(block *types.Block) {
+	active := bc.ActiveWitnesses()
+	slot := -1
+	for i, witness := range active {
+		if witness == block.WitnessAddress() {
+			slot = i
+			break
+		}
+	}
+	if slot < 0 {
+		return
+	}
+	bc.fc.Update(block.Version(), slot, len(active))
+}
+
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic properties.
 // Reads through bc.buffer so unflushed maintenance updates are visible (slice 2).
 func (bc *BlockChain) NextMaintenanceTime() int64 {
@@ -836,6 +882,9 @@ func (bc *BlockChain) NextMaintenanceTime() int64 {
 func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	if bc.engine == nil {
 		return nil
+	}
+	if err := ValidateTxCommon(tx, bc.CurrentBlock().Timestamp()); err != nil {
+		return err
 	}
 	statedb, err := state.New(bc.HeadStateRoot(), bc.stateDB)
 	if err != nil {

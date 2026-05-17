@@ -1040,14 +1040,13 @@ func (api *API) getDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "toAddress", err)
 		return
 	}
-	info, err := api.backend.GetDelegatedResourceV2(from, to)
+	list, err := api.backend.GetDelegatedResourceV2(from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	list := []*DelegatedResourceInfo{}
-	if info != nil {
-		list = []*DelegatedResourceInfo{info}
+	if list == nil {
+		list = []*DelegatedResourceInfo{}
 	}
 	data, _ := json.Marshal(map[string]interface{}{"delegatedResource": list})
 	w.Header().Set("Content-Type", "application/json")

@@ -5,10 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/actuator"
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -32,7 +33,7 @@ type TxBroadcaster interface {
 type TronBackend struct {
 	chain       *BlockChain
 	pool        *txpool.TxPool
-	txBroadcast TxBroadcaster             // nil until wired from main
+	txBroadcast TxBroadcaster              // nil until wired from main
 	peersFunc   func() []*tronapi.PeerInfo // nil until wired from main
 
 	subsMu    sync.Mutex
@@ -383,22 +384,24 @@ func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
 }
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
-	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.db)
+	db := b.chain.BufferedDB()
+	witnessAddrs := rawdb.ReadWitnessIndex(db)
 	activeSet := b.chain.ActiveWitnesses()
 	activeMap := make(map[tcommon.Address]bool, len(activeSet))
 	for _, a := range activeSet {
 		activeMap[a] = true
 	}
+	pendingDeltas, _ := pendingVoteDeltas(db)
 
 	var result []*tronapi.WitnessInfo
 	for _, addr := range witnessAddrs {
-		w := rawdb.ReadWitness(b.chain.db, addr)
+		w := rawdb.ReadWitness(db, addr)
 		if w == nil {
 			continue
 		}
 		result = append(result, &tronapi.WitnessInfo{
 			Address:        hex.EncodeToString(addr[:]),
-			VoteCount:      w.VoteCount(),
+			VoteCount:      w.VoteCount() + pendingDeltas[addr],
 			URL:            w.URL(),
 			IsJobs:         activeMap[addr],
 			TotalProduced:  w.TotalProduced(),
@@ -572,11 +575,27 @@ func proposalParametersToList(m map[int64]int64) []tronapi.ProposalParameterEntr
 	return out
 }
 
-func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) (*tronapi.DelegatedResourceInfo, error) {
-	dr := rawdb.ReadDelegatedResource(b.chain.db, from, to)
-	if dr == nil {
-		return nil, nil
+func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	resources := make([]*tronapi.DelegatedResourceInfo, 0, 2)
+	for _, locked := range []bool{false, true} {
+		dr := rawdb.ReadDelegatedResourceV2(b.chain.db, from, to, locked)
+		if !nonEmptyDelegatedResource(dr) {
+			continue
+		}
+		resources = append(resources, delegatedResourceInfo(from, to, dr))
 	}
+	return resources, nil
+}
+
+func nonEmptyDelegatedResource(dr *rawdb.DelegatedResource) bool {
+	return dr != nil &&
+		(dr.FrozenBalanceForBandwidth != 0 ||
+			dr.FrozenBalanceForEnergy != 0 ||
+			dr.ExpireTimeForBandwidth != 0 ||
+			dr.ExpireTimeForEnergy != 0)
+}
+
+func delegatedResourceInfo(from, to tcommon.Address, dr *rawdb.DelegatedResource) *tronapi.DelegatedResourceInfo {
 	return &tronapi.DelegatedResourceInfo{
 		FromAddress:               hex.EncodeToString(from[:]),
 		ToAddress:                 hex.EncodeToString(to[:]),
@@ -584,7 +603,7 @@ func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) (*tronapi
 		FrozenBalanceForEnergy:    dr.FrozenBalanceForEnergy,
 		ExpireTimeForBandwidth:    dr.ExpireTimeForBandwidth,
 		ExpireTimeForEnergy:       dr.ExpireTimeForEnergy,
-	}, nil
+	}
 }
 
 func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (*tronapi.DelegationIndexInfo, error) {
@@ -723,18 +742,42 @@ func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
 }
 
 func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	id, ok := rawdb.ReadAssetNameIndex(b.chain.db, name)
-	if !ok {
-		return nil
+	dp := state.LoadDynamicProperties(b.chain.db)
+	if !dp.AllowSameTokenName() {
+		return rawdb.ReadAssetIssueByName(b.chain.db, name)
 	}
-	return rawdb.ReadAssetIssue(b.chain.db, id)
+	var match *contractpb.AssetIssueContract
+	for _, asset := range rawdb.ListAllAssets(b.chain.db) {
+		if string(asset.Name) != string(name) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = asset
+	}
+	if id, err := strconv.ParseInt(string(name), 10, 64); err == nil {
+		if asset := rawdb.ReadAssetIssue(b.chain.db, id); asset != nil {
+			if match != nil && match.Id != asset.Id {
+				return nil
+			}
+			match = asset
+		}
+	}
+	return match
 }
 
 func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
+	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+		return rawdb.ListAllLegacyAssets(b.chain.db)
+	}
 	return rawdb.ListAllAssets(b.chain.db)
 }
 
 func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
+	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+		return rawdb.ListLegacyAssetsPaginated(b.chain.db, offset, limit)
+	}
 	return rawdb.ListAssetsPaginated(b.chain.db, offset, limit)
 }
 
@@ -742,6 +785,11 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.A
 	id, ok := rawdb.ReadAssetOwnerIndex(b.chain.db, addr[:])
 	if !ok {
 		return nil
+	}
+	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+		if asset := rawdb.ReadAssetIssue(b.chain.db, id); asset != nil {
+			return rawdb.ReadAssetIssueByName(b.chain.db, asset.Name)
+		}
 	}
 	return rawdb.ReadAssetIssue(b.chain.db, id)
 }

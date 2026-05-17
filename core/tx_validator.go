@@ -8,6 +8,12 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	transactionMaxByteSize     int64 = 500 * 1024
+	maximumTimeUntilExpiration int64 = 24 * 60 * 60 * 1000
 )
 
 // Tx-envelope validation errors. They're separate from actuator.Validate
@@ -15,16 +21,20 @@ import (
 // permission/signature failure (always reject, no replay tolerance) from a
 // state-precondition failure (insufficient balance, missing token, etc.).
 var (
-	ErrNoContract               = errors.New("transaction has no contract")
-	ErrMissingOwnerAddress      = errors.New("contract has no owner address")
-	ErrNoSignature              = errors.New("transaction has no signature")
-	ErrTooManySignatures        = errors.New("transaction has more signatures than permission keys")
-	ErrPermissionNotFound       = errors.New("permission_id not configured on account")
-	ErrPermissionForbidsType    = errors.New("permission operations bitmask forbids this contract type")
-	ErrInsufficientWeight       = errors.New("signature weight below permission threshold")
-	ErrUnauthorizedSigner       = errors.New("signer not in permission key set")
+	ErrNoContract                  = errors.New("transaction has no contract")
+	ErrContractSizeNotEqualToOne   = errors.New("transaction contract size should be exactly 1")
+	ErrTransactionRetCount         = errors.New("transaction result count exceeds contract count")
+	ErrTransactionTooLarge         = errors.New("transaction size exceeds maximum")
+	ErrTransactionExpiration       = errors.New("transaction expiration out of range")
+	ErrMissingOwnerAddress         = errors.New("contract has no owner address")
+	ErrNoSignature                 = errors.New("transaction has no signature")
+	ErrTooManySignatures           = errors.New("transaction has more signatures than permission keys")
+	ErrPermissionNotFound          = errors.New("permission_id not configured on account")
+	ErrPermissionForbidsType       = errors.New("permission operations bitmask forbids this contract type")
+	ErrInsufficientWeight          = errors.New("signature weight below permission threshold")
+	ErrUnauthorizedSigner          = errors.New("signer not in permission key set")
 	ErrAccountPermUpdateNotByOwner = errors.New("AccountPermissionUpdateContract must be signed with Owner permission")
-	ErrInvalidTxSignature       = errors.New("invalid transaction signature")
+	ErrInvalidTxSignature          = errors.New("invalid transaction signature")
 )
 
 // ValidateTxEnvelope verifies the signature(s) on a transaction match the
@@ -44,10 +54,10 @@ var (
 // input) carry an owner_address on `transparent_from_address` and fall
 // through to the normal permission check.
 func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB) error {
-	pb := tx.Proto()
-	if pb == nil || pb.RawData == nil || len(pb.RawData.Contract) == 0 {
-		return ErrNoContract
+	if err := ValidateContractCount(tx); err != nil {
+		return err
 	}
+	pb := tx.Proto()
 	contract := pb.RawData.Contract[0]
 
 	ownerBytes, isShielded, err := extractContractOwner(contract)
@@ -143,6 +153,56 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB) error {
 		}
 	}
 	return ErrInsufficientWeight
+}
+
+func ValidateTxRetCount(tx *types.Transaction) error {
+	if err := ValidateContractCount(tx); err != nil {
+		return err
+	}
+	if len(tx.Proto().Ret) > len(tx.Proto().RawData.Contract) {
+		return ErrTransactionRetCount
+	}
+	return nil
+}
+
+func ValidateContractCount(tx *types.Transaction) error {
+	if tx == nil {
+		return ErrNoContract
+	}
+	pb := tx.Proto()
+	if pb == nil || pb.RawData == nil {
+		return ErrNoContract
+	}
+	switch len(pb.RawData.Contract) {
+	case 0:
+		return ErrNoContract
+	case 1:
+		return nil
+	default:
+		return ErrContractSizeNotEqualToOne
+	}
+}
+
+func ValidateTxCommon(tx *types.Transaction, headBlockTime int64) error {
+	if err := ValidateContractCount(tx); err != nil {
+		return err
+	}
+	pb := tx.Proto()
+	withoutRet := proto.Clone(pb).(*corepb.Transaction)
+	withoutRet.Ret = nil
+	generalBytesSize := int64(proto.Size(withoutRet)) + maxResultSizeInTx + maxResultSizeInTx
+	if generalBytesSize > transactionMaxByteSize {
+		return ErrTransactionTooLarge
+	}
+	if int64(tx.Size()) > transactionMaxByteSize {
+		return ErrTransactionTooLarge
+	}
+
+	expiration := tx.Expiration()
+	if expiration <= headBlockTime || expiration > headBlockTime+maximumTimeUntilExpiration {
+		return ErrTransactionExpiration
+	}
+	return nil
 }
 
 // extractContractOwner uses proto reflection to read the owner address from a

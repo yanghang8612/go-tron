@@ -105,6 +105,70 @@ func TestPayBlockReward_AccumulatesAcrossBlocks(t *testing.T) {
 	}
 }
 
+func TestPayTransactionFeeReward_LegacyFlat(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowTransactionFeePool(true)
+	dp.SetTransactionFeePool(1234)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	statedb.CreateAccount(addr, 0)
+
+	payTransactionFeeReward(db, statedb, dp, addr)
+
+	if got := statedb.GetAllowance(addr); got != 1234 {
+		t.Fatalf("legacy fee allowance: got %d, want 1234", got)
+	}
+	if got := dp.TransactionFeePool(); got != 0 {
+		t.Fatalf("transaction fee pool: got %d, want 0", got)
+	}
+	if got := rawdb.ReadCycleReward(db, 0, addr.Bytes()); got != 0 {
+		t.Fatalf("cycle reward: got %d, want 0", got)
+	}
+}
+
+func TestPayTransactionFeeReward_BrokerageSplit(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowTransactionFeePool(true)
+	dp.SetTransactionFeePool(1000)
+	dp.SetChangeDelegation(true)
+	dp.SetCurrentCycleNumber(5)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	statedb.CreateAccount(addr, 0)
+
+	payTransactionFeeReward(db, statedb, dp, addr)
+
+	if got := statedb.GetAllowance(addr); got != 200 {
+		t.Fatalf("witness fee allowance: got %d, want 200", got)
+	}
+	if got := rawdb.ReadCycleReward(db, 5, addr.Bytes()); got != 800 {
+		t.Fatalf("fee voter pool: got %d, want 800", got)
+	}
+	if got := dp.TransactionFeePool(); got != 0 {
+		t.Fatalf("transaction fee pool: got %d, want 0", got)
+	}
+}
+
+func TestPayTransactionFeeReward_Disabled(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetTransactionFeePool(1234)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	statedb.CreateAccount(addr, 0)
+
+	payTransactionFeeReward(db, statedb, dp, addr)
+
+	if got := statedb.GetAllowance(addr); got != 0 {
+		t.Fatalf("allowance: got %d, want 0", got)
+	}
+	if got := dp.TransactionFeePool(); got != 1234 {
+		t.Fatalf("transaction fee pool: got %d, want 1234", got)
+	}
+}
+
 func TestAccumulateWitnessVi_FirstReward(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	addr := []byte{0x41, 0x01}

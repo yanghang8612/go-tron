@@ -185,7 +185,7 @@ type Backend interface {
 	ListProposals() ([]*ProposalInfo, error)
 
 	// Delegation/resource queries (Stake 2.0)
-	GetDelegatedResourceV2(from, to common.Address) (*DelegatedResourceInfo, error)
+	GetDelegatedResourceV2(from, to common.Address) ([]*DelegatedResourceInfo, error)
 	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)
 	CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error)
 	GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error)
