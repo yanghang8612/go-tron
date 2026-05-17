@@ -6,10 +6,10 @@ type executionFunc func(pc *uint64, interpreter *Interpreter, contract *Contract
 // operation represents a single opcode's metadata.
 type operation struct {
 	execute    executionFunc
-	energyCost uint64 // static energy cost (0 means dynamic)
-	minStack   int    // minimum stack items required
-	maxStack   int    // maximum stack items after execution
-	writes     bool   // true if this opcode modifies state
+	energyCost uint64               // static energy cost (0 means dynamic)
+	minStack   int                  // minimum stack items required
+	maxStack   int                  // maximum stack items after execution
+	writes     bool                 // true if this opcode modifies state
 	enabledFn  func(TVMConfig) bool // nil means always enabled
 }
 
@@ -48,6 +48,7 @@ func newJumpTable() JumpTable {
 	tbl[SHL] = &operation{execute: opSHL, energyCost: EnergyVeryLow, minStack: 2, maxStack: 1023}
 	tbl[SHR] = &operation{execute: opSHR, energyCost: EnergyVeryLow, minStack: 2, maxStack: 1023}
 	tbl[SAR] = &operation{execute: opSAR, energyCost: EnergyVeryLow, minStack: 2, maxStack: 1023}
+	tbl[CLZ] = &operation{execute: opClz, energyCost: EnergyLow, minStack: 1, maxStack: 1024}
 
 	// SHA3
 	tbl[SHA3] = &operation{execute: opSHA3, minStack: 2, maxStack: 1023}
@@ -80,6 +81,8 @@ func newJumpTable() JumpTable {
 	tbl[CHAINID] = &operation{execute: opChainID, energyCost: EnergyBase, minStack: 0, maxStack: 1024}
 	tbl[SELFBALANCE] = &operation{execute: opSelfBalance, energyCost: EnergySelfBalance, minStack: 0, maxStack: 1024}
 	tbl[BASEFEE] = &operation{execute: opBaseFee, energyCost: EnergyBase, minStack: 0, maxStack: 1024}
+	tbl[BLOBHASH] = &operation{execute: opBlobHash, energyCost: EnergyVeryLow, minStack: 1, maxStack: 1024}
+	tbl[BLOBBASEFEE] = &operation{execute: opBlobBaseFee, energyCost: EnergyBase, minStack: 0, maxStack: 1024}
 
 	// Stack/Memory/Storage
 	tbl[POP] = &operation{execute: opPop, energyCost: EnergyBase, minStack: 1, maxStack: 1024}
@@ -168,11 +171,21 @@ func newJumpTable() JumpTable {
 	// London opcodes — require AllowTvmLondon
 	tbl[BASEFEE].enabledFn = func(c TVMConfig) bool { return c.London }
 
+	// Shanghai opcodes — require AllowTvmShanghai
+	tbl[PUSH0].enabledFn = func(c TVMConfig) bool { return c.Shanghai }
+
+	// Osaka opcodes — require AllowTvmOsaka
+	tbl[CLZ].enabledFn = func(c TVMConfig) bool { return c.Osaka }
+
 	// Cancun opcodes — require AllowTvmCancun (EIP-1153 transient storage)
 	tbl[TLOAD] = &operation{execute: opTLoad, energyCost: EnergyTLoad, minStack: 1, maxStack: 1024,
 		enabledFn: func(c TVMConfig) bool { return c.Cancun }}
 	tbl[TSTORE] = &operation{execute: opTStore, energyCost: EnergyTStore, minStack: 2, maxStack: 1022,
 		writes: true, enabledFn: func(c TVMConfig) bool { return c.Cancun }}
+	tbl[MCOPY] = &operation{execute: opMCopy, minStack: 3, maxStack: 1021,
+		enabledFn: func(c TVMConfig) bool { return c.Cancun }}
+	tbl[BLOBHASH].enabledFn = func(c TVMConfig) bool { return c.Blob }
+	tbl[BLOBBASEFEE].enabledFn = func(c TVMConfig) bool { return c.Blob }
 
 	// TRON extensions — TRC-10 token transfer (AllowTvmTransferTrc10)
 	transferTrc10 := func(c TVMConfig) bool { return c.TransferTrc10 }
@@ -201,8 +214,8 @@ func newJumpTable() JumpTable {
 
 	// TRON extensions — voting / rewards (AllowTvmVote)
 	vote := func(c TVMConfig) bool { return c.Vote }
-	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness, minStack: 4, maxStack: 1021,
-		writes: true, enabledFn: vote}
+	tbl[VOTEWITNESS] = &operation{execute: opVoteWitness, energyCost: EnergyVoteWitness,
+		minStack: 4, maxStack: 1021, writes: true, enabledFn: vote}
 	tbl[WITHDRAWREWARD] = &operation{execute: opWithdrawReward, energyCost: EnergyWithdrawReward,
 		minStack: 0, maxStack: 1024, writes: true, enabledFn: vote}
 

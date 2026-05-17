@@ -3,9 +3,9 @@ package vm
 import (
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -136,8 +136,8 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	code := []byte{
 		0x60, 0x01, // PUSH1 1
 		0x60, 0x02, // PUSH1 2
-		0x01,       // ADD
-		0x00,       // STOP
+		0x01, // ADD
+		0x00, // STOP
 	}
 	contract := NewContract(tcommon.Address{0x41, 0x00}, addr, 0, 100)
 	contract.SetCode(addr, code)
@@ -158,6 +158,48 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	updated := rawdb.ReadContractState(db, addr)
 	if updated.EnergyUsage() != 9 {
 		t.Fatalf("recorded usage: got %d, want 9", updated.EnergyUsage())
+	}
+}
+
+func TestInterpreter_DynamicEnergyNestedCallsRecordParentAndChildSeparately(t *testing.T) {
+	tvm, db, _ := newTestTVMWithDB(t)
+	parent := tcommon.Address{0x41, 0x31}
+	child := tcommon.Address{0x41, 0x32}
+
+	childCode := []byte{
+		byte(PUSH1), 0x01,
+		byte(PUSH1), 0x02,
+		byte(ADD),
+		byte(STOP),
+	}
+	tvm.StateDB.SetCode(child, childCode)
+
+	parentCode := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH1), 0x00, // value
+		byte(PUSH20),
+	}
+	parentCode = append(parentCode, child[1:]...)
+	parentCode = append(parentCode,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALL),
+		byte(STOP),
+	)
+
+	contract := NewContract(tcommon.Address{0x41, 0x00}, parent, 0, 100_000)
+	contract.SetCode(parent, parentCode)
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := rawdb.ReadContractState(db, parent).EnergyUsage(); got != 61 {
+		t.Fatalf("parent usage: got %d, want 61", got)
+	}
+	if got := rawdb.ReadContractState(db, child).EnergyUsage(); got != 9 {
+		t.Fatalf("child usage: got %d, want 9", got)
 	}
 }
 
@@ -220,7 +262,7 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		decimal uint64 = 10000
 	)
 	scaled := func(base uint64) uint64 {
-		return base*uint64(factor+int64(decimal))/decimal
+		return base * uint64(factor+int64(decimal)) / decimal
 	}
 
 	t.Run("MSTORE_memory_expansion", func(t *testing.T) {

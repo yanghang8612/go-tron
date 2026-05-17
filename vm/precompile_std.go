@@ -108,9 +108,15 @@ func (c *dataCopy) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) (
 
 type bigModExp struct {
 	istanbul bool
+	osaka    bool
 }
 
 func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+	return ret, used, err
+}
+
+func (c *bigModExp) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	var (
 		baseLen = new(big.Int).SetBytes(getInput(input, 0, 32)).Uint64()
 		expLen  = new(big.Int).SetBytes(getInput(input, 32, 32)).Uint64()
@@ -134,12 +140,15 @@ func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) 
 
 	cost := c.calcCost(baseLen, expLen, modLen, &expHead)
 	if energy < cost {
-		return nil, energy, ErrOutOfEnergy
+		return nil, energy, false, ErrOutOfEnergy
+	}
+	if c.osaka && (baseLen > 1024 || expLen > 1024 || modLen > 1024) {
+		return []byte{}, cost, false, nil
 	}
 
 	// Handle edge cases
 	if baseLen == 0 && modLen == 0 {
-		return []byte{}, cost, nil
+		return []byte{}, cost, true, nil
 	}
 
 	base := new(big.Int).SetBytes(getInput(data, 0, baseLen))
@@ -158,10 +167,13 @@ func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) 
 			copy(result[modLen-uint64(len(rb)):], rb)
 		}
 	}
-	return result, cost, nil
+	return result, cost, true, nil
 }
 
 func (c *bigModExp) calcCost(baseLen, expLen, modLen uint64, expHead *big.Int) uint64 {
+	if c.osaka {
+		return c.calcOsakaCost(baseLen, expLen, modLen, expHead)
+	}
 	maxLen := max64(baseLen, modLen)
 	multComplexity := berlinMultComplexity(maxLen)
 
@@ -176,6 +188,56 @@ func (c *bigModExp) calcCost(baseLen, expLen, modLen uint64, expHead *big.Int) u
 	}
 	gas /= 20
 	return gas
+}
+
+func (c *bigModExp) calcOsakaCost(baseLen, expLen, modLen uint64, expHead *big.Int) uint64 {
+	const minEnergy = uint64(500)
+	maxLen := max64(baseLen, modLen)
+	var multComplexity uint64
+	if maxLen <= 32 {
+		multComplexity = 16
+	} else {
+		words := (maxLen + 7) / 8
+		hi, square := bits.Mul64(words, words)
+		if hi != 0 {
+			return ^uint64(0)
+		}
+		hi, multComplexity = bits.Mul64(2, square)
+		if hi != 0 {
+			return ^uint64(0)
+		}
+	}
+
+	iterCount := c.osakaIterationCount(expLen, expHead)
+	hi, cost := bits.Mul64(multComplexity, iterCount)
+	if hi != 0 {
+		return ^uint64(0)
+	}
+	if cost < minEnergy {
+		return minEnergy
+	}
+	return cost
+}
+
+func (c *bigModExp) osakaIterationCount(expLen uint64, expHead *big.Int) uint64 {
+	var highestBit uint64
+	if expHead.Sign() != 0 {
+		highestBit = uint64(expHead.BitLen() - 1)
+	}
+	var iter uint64
+	if expLen <= 32 {
+		iter = highestBit
+	} else {
+		tail := expLen - 32
+		if tail > (^uint64(0)-highestBit)/16 {
+			return ^uint64(0)
+		}
+		iter = 16*tail + highestBit
+	}
+	if iter == 0 {
+		return 1
+	}
+	return iter
 }
 
 func (c *bigModExp) adjustedExpLen(expLen uint64, expHead *big.Int) uint64 {
@@ -226,18 +288,23 @@ type bn128Add struct {
 }
 
 func (c *bn128Add) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+	return ret, used, err
+}
+
+func (c *bn128Add) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	cost := uint64(500)
 	if c.istanbul {
 		cost = 150
 	}
 	if energy < cost {
-		return nil, energy, ErrOutOfEnergy
+		return nil, energy, false, ErrOutOfEnergy
 	}
 	ret, err := runBN128Add(input)
 	if err != nil {
-		return nil, cost, err
+		return []byte{}, cost, false, nil
 	}
-	return ret, cost, nil
+	return ret, cost, true, nil
 }
 
 func runBN128Add(input []byte) ([]byte, error) {
@@ -261,18 +328,23 @@ type bn128Mul struct {
 }
 
 func (c *bn128Mul) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+	return ret, used, err
+}
+
+func (c *bn128Mul) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	cost := uint64(40000)
 	if c.istanbul {
 		cost = 6000
 	}
 	if energy < cost {
-		return nil, energy, ErrOutOfEnergy
+		return nil, energy, false, ErrOutOfEnergy
 	}
 	ret, err := runBN128Mul(input)
 	if err != nil {
-		return nil, cost, err
+		return []byte{}, cost, false, nil
 	}
-	return ret, cost, nil
+	return ret, cost, true, nil
 }
 
 func runBN128Mul(input []byte) ([]byte, error) {
@@ -295,6 +367,11 @@ type bn128Pairing struct {
 }
 
 func (c *bn128Pairing) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+	return ret, used, err
+}
+
+func (c *bn128Pairing) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	var cost uint64
 	pairs := uint64(0)
 	if len(input) > 0 {
@@ -306,13 +383,13 @@ func (c *bn128Pairing) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint6
 		cost = 100000 + 80000*pairs
 	}
 	if energy < cost {
-		return nil, energy, ErrOutOfEnergy
+		return nil, energy, false, ErrOutOfEnergy
 	}
 	ret, err := runBN128Pairing(input)
 	if err != nil {
-		return nil, cost, err
+		return []byte{}, cost, false, nil
 	}
-	return ret, cost, nil
+	return ret, cost, true, nil
 }
 
 var (
@@ -362,4 +439,3 @@ func newBN128G2(blob []byte) (*bn256.G2, error) {
 	}
 	return p, nil
 }
-

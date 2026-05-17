@@ -49,9 +49,15 @@ func newTestContext(t *testing.T, contractType corepb.Transaction_Contract_Contr
 		Tx:            tx,
 		BlockTime:     1000,
 		PrevBlockTime: 1000,
+		HeadSlot:      1,
+		HasHeadSlot:   true,
 		BlockNumber:   1,
 		DB:            diskdb,
 	}
+}
+
+func enableVM(ctx *Context) {
+	ctx.DynProps.SetAllowCreationOfContracts(true)
 }
 
 func TestVMActuatorCreateValidate(t *testing.T) {
@@ -59,11 +65,13 @@ func TestVMActuatorCreateValidate(t *testing.T) {
 	csc := &contractpb.CreateSmartContract{
 		OwnerAddress: owner[:],
 		NewContract: &contractpb.SmartContract{
-			Bytecode: []byte{0x60, 0x00, 0x60, 0x00, 0xf3}, // PUSH1 0 PUSH1 0 RETURN
+			OriginAddress: owner[:],
+			Bytecode:      []byte{0x60, 0x00, 0x60, 0x00, 0xf3}, // PUSH1 0 PUSH1 0 RETURN
 		},
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_CreateSmartContract, csc, 1_000_000)
+	enableVM(ctx)
 
 	// Owner doesn't exist yet
 	act := &VMActuator{}
@@ -92,7 +100,7 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 		0x52,       // MSTORE
 		0x60, 0x20, // PUSH1 32
 		0x60, 0x00, // PUSH1 0
-		0xf3,       // RETURN
+		0xf3, // RETURN
 	}
 
 	// Init code: CODECOPY + RETURN
@@ -102,10 +110,10 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 		0x80,       // DUP1
 		0x60, 0x00, // placeholder codeOffset
 		0x60, 0x00, // PUSH1 0 (memOffset)
-		0x39,       // CODECOPY
+		0x39,             // CODECOPY
 		0x60, runtimeLen, // PUSH1 runtimeLen
 		0x60, 0x00, // PUSH1 0
-		0xf3,       // RETURN
+		0xf3, // RETURN
 	}
 	initCode[4] = byte(len(initCode))
 	bytecode := append(initCode, runtime...)
@@ -120,6 +128,7 @@ func TestVMActuatorCreateExecute(t *testing.T) {
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_CreateSmartContract, csc, 10_000_000)
+	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
 
@@ -147,6 +156,7 @@ func TestVMActuatorTriggerValidate(t *testing.T) {
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000)
+	enableVM(ctx)
 
 	act := &VMActuator{}
 
@@ -163,7 +173,11 @@ func TestVMActuatorTriggerValidate(t *testing.T) {
 		t.Fatal("expected error for non-existent contract")
 	}
 
-	// Set code on contract address to make it a contract
+	// Set contract metadata to make it a smart contract.
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
 	ctx.State.SetCode(contractAddr, []byte{0x00}) // STOP
 	err = act.Validate(ctx)
 	if err != nil {
@@ -191,8 +205,13 @@ func TestVMActuatorTriggerExecute(t *testing.T) {
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
 	ctx.State.SetCode(contractAddr, code)
 
 	act := &VMActuator{}
@@ -230,6 +249,7 @@ func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_CreateSmartContract, csc, 10_000_000)
+	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
 
@@ -256,6 +276,10 @@ func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 	if len(result.ContractAddress) == 0 {
 		t.Fatal("expected non-empty ContractAddress")
 	}
+	expectedAddress := generateContractAddress(ctx.Tx, owner)
+	if string(result.ContractAddress) != string(expectedAddress[:]) {
+		t.Fatalf("contract address: got %x, want %x", result.ContractAddress, expectedAddress[:])
+	}
 	t.Logf("EnergyUsageTotal=%d, ContractRet=%d, ContractAddr=%x",
 		result.EnergyUsageTotal, result.ContractRet, result.ContractAddress)
 }
@@ -276,8 +300,13 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	}
 
 	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
 	ctx.State.SetCode(contractAddr, code)
 
 	act := &VMActuator{}

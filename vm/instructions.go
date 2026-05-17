@@ -1,8 +1,11 @@
 package vm
 
 import (
+	"math/bits"
+
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -237,6 +240,22 @@ func opSAR(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Mem
 	return nil, nil
 }
 
+func opClz(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	word := stack.pop()
+	data := word.Bytes32()
+	count := 0
+	for _, b := range data {
+		if b == 0 {
+			count += 8
+			continue
+		}
+		count += bits.LeadingZeros8(b)
+		break
+	}
+	stack.push(uint256.NewInt(uint64(count)))
+	return nil, nil
+}
+
 // --- SHA3 ---
 
 func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
@@ -248,7 +267,7 @@ func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(off + sz)
+	resizeMemory(memory, off, sz)
 	words := toWordSize(sz)
 	cost := EnergySHA3 + EnergySHA3Word*words
 	if !interpreter.useEnergy(contract, cost) {
@@ -266,8 +285,7 @@ func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 // --- Environment ---
 
 func opAddress(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	var v uint256.Int
-	v.SetBytes(contract.Address[:])
+	v := addressToUint256(contract.Address)
 	stack.push(&v)
 	return nil, nil
 }
@@ -281,15 +299,13 @@ func opBalance(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 }
 
 func opOrigin(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	var v uint256.Int
-	v.SetBytes(interpreter.tvm.Origin[:])
+	v := addressToUint256(interpreter.tvm.Origin)
 	stack.push(&v)
 	return nil, nil
 }
 
 func opCaller(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	var v uint256.Int
-	v.SetBytes(contract.Caller[:])
+	v := addressToUint256(contract.Caller)
 	stack.push(&v)
 	return nil, nil
 }
@@ -331,7 +347,7 @@ func opCallDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
-	memory.resize(memOffset.Uint64() + size)
+	resizeMemory(memory, memOffset.Uint64(), size)
 	data := getDataSlice(contract.Input, dataOffset.Uint64(), size)
 	memory.set(memOffset.Uint64(), size, data)
 	return nil, nil
@@ -356,7 +372,7 @@ func opCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
-	memory.resize(memOffset.Uint64() + size)
+	resizeMemory(memory, memOffset.Uint64(), size)
 	data := getDataSlice(contract.Code, codeOffset.Uint64(), size)
 	memory.set(memOffset.Uint64(), size, data)
 	return nil, nil
@@ -382,7 +398,7 @@ func opExtCodeCopy(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
-	memory.resize(memOffset.Uint64() + size)
+	resizeMemory(memory, memOffset.Uint64(), size)
 	code := interpreter.tvm.StateDB.GetCode(address)
 	data := getDataSlice(code, codeOffset.Uint64(), size)
 	memory.set(memOffset.Uint64(), size, data)
@@ -412,7 +428,7 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
-	memory.resize(memOffset.Uint64() + size)
+	resizeMemory(memory, memOffset.Uint64(), size)
 	memory.set(memOffset.Uint64(), size, interpreter.returnData[dataOffset.Uint64():end])
 	return nil, nil
 }
@@ -436,9 +452,33 @@ func opGasPrice(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 
 // --- Block Information ---
 
+const (
+	blockHashHistoryWindow = uint64(256)
+	javaMaxInt             = uint64(1<<31 - 1)
+)
+
 func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	num := stack.peek()
-	num.Clear() // simplified — no block hash lookup in StateDB
+	index := javaMaxInt
+	if num.IsUint64() && !num.GtUint64(javaMaxInt) {
+		index = num.Uint64()
+	}
+
+	current := interpreter.tvm.BlockNumber
+	lower := uint64(0)
+	if current > blockHashHistoryWindow {
+		lower = current - blockHashHistoryWindow
+	}
+	if interpreter.tvm.DB == nil || index >= current || index < lower {
+		num.Clear()
+		return nil, nil
+	}
+	block := rawdb.ReadBlock(interpreter.tvm.DB, index)
+	if block == nil {
+		num.Clear()
+		return nil, nil
+	}
+	num.SetBytes(block.Hash().Bytes())
 	return nil, nil
 }
 
@@ -484,6 +524,17 @@ func opSelfBalance(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 }
 
 func opBaseFee(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	stack.push(uint256.NewInt(0))
+	return nil, nil
+}
+
+func opBlobHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	stack.pop()
+	stack.push(uint256.NewInt(0))
+	return nil, nil
+}
+
+func opBlobBaseFee(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	stack.push(uint256.NewInt(0))
 	return nil, nil
 }
@@ -557,6 +608,35 @@ func opMstore8(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	return nil, nil
 }
 
+func opMCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	dst, src, length := stack.pop(), stack.pop(), stack.pop()
+	size := length.Uint64()
+	dstOff := dst.Uint64()
+	srcOff := src.Uint64()
+	maxOff := dstOff
+	if srcOff > maxOff {
+		maxOff = srcOff
+	}
+
+	cost := EnergyVeryLow + EnergyCopy*toWordSize(size)
+	if mcost := memoryExpansionCost(memory, maxOff, size); mcost > 0 {
+		cost += mcost
+	}
+	if !interpreter.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
+	}
+	if size == 0 {
+		return nil, nil
+	}
+	end, carry := bits.Add64(maxOff, size, 0)
+	if carry != 0 {
+		return nil, ErrOutOfEnergy
+	}
+	memory.resize(end)
+	copy(memory.store[dstOff:dstOff+size], memory.store[srcOff:srcOff+size])
+	return nil, nil
+}
+
 func opSload(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	key := stack.peek()
 	var k tcommon.Hash
@@ -575,9 +655,9 @@ func opSstore(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	copy(k[:], kb[:])
 	copy(v[:], vb[:])
 
-	current := interpreter.tvm.StateDB.GetState(contract.Address, k)
+	_, exists := interpreter.tvm.StateDB.GetStateWithExist(contract.Address, k)
 	var cost uint64
-	if current == (tcommon.Hash{}) && v != (tcommon.Hash{}) {
+	if !exists && v != (tcommon.Hash{}) {
 		cost = EnergySstoreSet
 	} else {
 		cost = EnergySstoreReset
@@ -650,7 +730,7 @@ func makeLog(topicCount int) executionFunc {
 		if !interpreter.useEnergy(contract, cost) {
 			return nil, ErrOutOfEnergy
 		}
-		memory.resize(offset.Uint64() + sz)
+		resizeMemory(memory, offset.Uint64(), sz)
 
 		topics := make([][]byte, topicCount)
 		for i := 0; i < topicCount; i++ {
@@ -686,7 +766,7 @@ func opReturn(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(offset.Uint64() + sz)
+	resizeMemory(memory, offset.Uint64(), sz)
 	return memory.getCopy(int64(offset.Uint64()), int64(sz)), nil
 }
 
@@ -698,7 +778,7 @@ func opRevert(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(offset.Uint64() + sz)
+	resizeMemory(memory, offset.Uint64(), sz)
 	return memory.getCopy(int64(offset.Uint64()), int64(sz)), nil
 }
 
@@ -706,27 +786,55 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	beneficiary := stack.pop()
 	address := uint256ToAddress(&beneficiary)
 
-	cost := uint64(EnergySelfDestruct)
-	if !interpreter.tvm.StateDB.Exist(address) {
+	var cost uint64
+	if interpreter.tvmConfig.SelfdestructRestrict {
+		cost = EnergySelfDestruct
+	}
+	if (interpreter.tvmConfig.EnergyAdjustment || interpreter.tvmConfig.SelfdestructRestrict) && !interpreter.tvm.StateDB.Exist(address) {
 		cost += EnergyCallNewAcct
 	}
 	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 
+	interpreter.tvm.Nonce++
 	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
-	if balance > 0 {
-		// java-tron Program.suicide (Program.java:483) and suicide2 (555)
-		// call createAccountIfNotExist before transferring to a non-existent
-		// obtainer; the call is gated by allowTvmSolidity059 inside the
-		// helper. Mirror that here so SUICIDE-with-balance auto-create
-		// stamps create_time and (when AllowMultiSign is on) default
-		// permissions, matching RepositoryImpl.createNormalAccount.
-		interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
-		interpreter.tvm.StateDB.AddBalance(address, balance)
-		interpreter.tvm.StateDB.SubBalance(contract.Address, balance)
+	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
+	if oldSuicide && address == contract.Address {
+		blackhole := interpreter.tvm.blackholeAddress()
+		if balance > 0 {
+			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
+				return nil, err
+			}
+			if interpreter.tvmConfig.TransferTrc10 {
+				interpreter.tvm.StateDB.AddBalance(blackhole, balance)
+			}
+		}
+		if interpreter.tvmConfig.TransferTrc10 {
+			interpreter.tvm.StateDB.TransferAllTRC10Balance(contract.Address, blackhole)
+		}
+	} else if address != contract.Address {
+		if balance > 0 {
+			// java-tron Program.suicide (Program.java:483) and suicide2 (555)
+			// call createAccountIfNotExist before transferring to a non-existent
+			// obtainer; the call is gated by allowTvmSolidity059 inside the
+			// helper. Mirror that here so SUICIDE-with-balance auto-create
+			// stamps create_time and (when AllowMultiSign is on) default
+			// permissions, matching RepositoryImpl.createNormalAccount.
+			interpreter.tvm.maybeCreateNormalAccountForValueTransfer(address)
+			interpreter.tvm.StateDB.AddBalance(address, balance)
+			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
+				return nil, err
+			}
+		}
+		if interpreter.tvmConfig.TransferTrc10 {
+			interpreter.tvm.StateDB.TransferAllTRC10Balance(contract.Address, address)
+		}
 	}
-	interpreter.tvm.StateDB.SelfDestruct(contract.Address)
+	if oldSuicide {
+		interpreter.tvm.StateDB.SelfDestruct(contract.Address)
+		interpreter.tvm.StateDB.DeleteAccount(contract.Address)
+	}
 	return nil, nil
 }
 
@@ -738,6 +846,12 @@ func uint256ToAddress(v *uint256.Int) tcommon.Address {
 	copy(addr[1:], b[32-20:])
 	addr[0] = 0x41
 	return addr
+}
+
+func addressToUint256(addr tcommon.Address) uint256.Int {
+	var v uint256.Int
+	v.SetBytes(addr[1:])
+	return v
 }
 
 func getDataSlice(data []byte, offset, size uint64) []byte {

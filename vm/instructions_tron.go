@@ -6,12 +6,23 @@ package vm
 
 import (
 	"encoding/binary"
+	"errors"
+	"math/big"
+	"math/bits"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/delegation"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/reward"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
+
+const tvmTRXPrecision = int64(1_000_000)
+
+var errVoteWitnessMemoryLength = errors.New("TVM VoteWitness: memory array length do not match length parameter")
 
 // ── 0x5C TLOAD ────────────────────────────────────────────────────────────────
 
@@ -49,13 +60,43 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	tokenValue := int64(tokenValueWord.Uint64())
 	tokenID := int64(tokenIdWord.Uint64())
 
+	cost := uint64(EnergyCall)
+	if tokenValue > 0 {
+		cost += EnergyCallValueTx
+		if !in.tvm.StateDB.Exist(addr) {
+			cost += EnergyCallNewAcct
+		}
+	}
+	if !in.useEnergy(contract, cost) {
+		return nil, ErrOutOfEnergy
+	}
+
+	inSz := inSizeWord.Uint64()
+	retSz := retSizeWord.Uint64()
+	if mcost := memoryExpansionCost(mem, inOffsetWord.Uint64(), inSz); mcost > 0 {
+		if !in.useEnergy(contract, mcost) {
+			return nil, ErrOutOfEnergy
+		}
+	}
+	if mcost := memoryExpansionCost(mem, retOffsetWord.Uint64(), retSz); mcost > 0 {
+		if !in.useEnergy(contract, mcost) {
+			return nil, ErrOutOfEnergy
+		}
+	}
+	resizeMemory(mem, inOffsetWord.Uint64(), inSz)
+	resizeMemory(mem, retOffsetWord.Uint64(), retSz)
+
 	callEnergy := gas.Uint64()
-	if callEnergy > contract.Energy {
-		callEnergy = contract.Energy
+	available := contract.Energy - contract.Energy/64
+	if callEnergy > available {
+		callEnergy = available
 	}
 	contract.UseEnergy(callEnergy)
+	if tokenValue > 0 {
+		callEnergy += EnergyCallStipend
+	}
 
-	inputData := mem.getCopy(int64(inOffsetWord.Uint64()), int64(inSizeWord.Uint64()))
+	inputData := mem.getCopy(int64(inOffsetWord.Uint64()), int64(inSz))
 	ret, remaining, err := in.tvm.CallToken(
 		contract.Address, addr, inputData, callEnergy,
 		0 /*TRX value*/, tokenID, tokenValue,
@@ -63,14 +104,18 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	contract.Energy += remaining
 
 	retOffset := int64(retOffsetWord.Uint64())
-	retSize := int64(retSizeWord.Uint64())
+	retSize := int64(retSz)
 	if err == nil && len(ret) > 0 && retSize > 0 {
 		if int64(len(ret)) > retSize {
 			ret = ret[:retSize]
 		}
 		mem.set(uint64(retOffset), uint64(len(ret)), ret)
 	}
-	in.returnData = ret
+	if err == errPrecompileFailure {
+		in.returnData = nil
+	} else {
+		in.returnData = ret
+	}
 
 	result := uint256.NewInt(1)
 	if err != nil {
@@ -81,11 +126,11 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 }
 
 // ── 0xD1 TOKENBALANCE ─────────────────────────────────────────────────────────
-// Stack: addr, tokenId → balance
+// Stack top first: tokenId, addr → balance
 
 func opTokenBalance(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	addrWord := stack.pop()
 	tokenIdWord := stack.pop()
+	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
 	tokenID := int64(tokenIdWord.Uint64())
 
@@ -101,7 +146,7 @@ func opTokenBalance(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *S
 
 func opCallTokenValue(_ *uint64, _ *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	result := uint256.NewInt(0)
-	if contract.TokenValue > 0 {
+	if contract.TokenValue != 0 {
 		result.SetUint64(uint64(contract.TokenValue))
 	}
 	stack.push(result)
@@ -136,144 +181,560 @@ func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Sta
 }
 
 // ── 0xD5 FREEZE ───────────────────────────────────────────────────────────────
-// Stack: amount, duration (days), resourceType → success
+// Stack: receiverAddr, amount, resourceType → success
 // resourceType: 0=BANDWIDTH, 1=ENERGY
 
 func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	amountWord := stack.pop()
-	durationWord := stack.pop()
 	resourceWord := stack.pop()
+	amountWord := stack.pop()
+	receiverWord := stack.pop()
 
 	amount := int64(amountWord.Uint64())
-	durationDays := int64(durationWord.Uint64())
 	resourceType := int64(resourceWord.Uint64())
 	caller := contract.Address
+	receiver := uint256ToAddress(&receiverWord)
 
+	if in.tvm.cfg.StakingV2 || amount < tvmTRXPrecision || (resourceType != 0 && resourceType != 1) {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 
-	// Freeze expire = current block time + duration * 86400s (in ms)
+	durationDays := int64(3)
+	if in.tvm.DynProps != nil && in.tvm.DynProps.MinFrozenTime() > 0 {
+		durationDays = in.tvm.DynProps.MinFrozenTime()
+	}
 	expireMs := in.tvm.Timestamp + durationDays*86400_000
+	delegated := receiver != caller
+	if delegated && !in.tvm.StateDB.AccountExists(receiver) {
+		createTime := in.tvm.Timestamp
+		if in.tvm.DynProps != nil {
+			createTime = in.tvm.DynProps.LatestBlockHeaderTimestamp()
+		}
+		in.tvm.StateDB.CreateAccountWithTime(receiver, corepb.AccountType_Normal, createTime)
+		if in.tvm.DynProps != nil && in.tvm.DynProps.AllowMultiSign() {
+			in.tvm.StateDB.ApplyDefaultAccountPermissions(receiver, in.tvm.DynProps)
+		}
+	}
+	if delegated {
+		recvAccount := in.tvm.StateDB.GetAccount(receiver)
+		if recvAccount != nil && recvAccount.Type() == corepb.AccountType_Contract {
+			in.tvm.StateDB.AddBalance(caller, amount)
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+	}
 	switch resourceType {
 	case 0:
-		in.tvm.StateDB.FreezeV1Bandwidth(caller, amount, expireMs)
+		if delegated {
+			in.tvm.StateDB.FreezeV1DelegatedBandwidth(caller, receiver, amount)
+			if in.tvm.DB != nil {
+				dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+				if dr == nil {
+					dr = &rawdb.DelegatedResource{From: caller, To: receiver}
+				}
+				dr.FrozenBalanceForBandwidth += amount
+				dr.ExpireTimeForBandwidth = expireMs
+				_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+			}
+		} else {
+			in.tvm.StateDB.FreezeV1Bandwidth(caller, amount, expireMs)
+		}
 	case 1:
-		in.tvm.StateDB.FreezeV1Energy(caller, amount, expireMs)
-	default:
-		in.tvm.StateDB.AddBalance(caller, amount) // refund unknown type
-		stack.push(uint256.NewInt(0))
-		return nil, nil
+		if delegated {
+			in.tvm.StateDB.FreezeV1DelegatedEnergy(caller, receiver, amount)
+			if in.tvm.DB != nil {
+				dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+				if dr == nil {
+					dr = &rawdb.DelegatedResource{From: caller, To: receiver}
+				}
+				dr.FrozenBalanceForEnergy += amount
+				dr.ExpireTimeForEnergy = expireMs
+				_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+			}
+		} else {
+			in.tvm.StateDB.FreezeV1Energy(caller, amount, expireMs)
+		}
+	}
+	if resourceType == 0 {
+		tvmAddResourceWeight(in.tvm, corepb.ResourceCode_BANDWIDTH, amount/tvmTRXPrecision)
+	} else {
+		tvmAddResourceWeight(in.tvm, corepb.ResourceCode_ENERGY, amount/tvmTRXPrecision)
 	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
 
 // ── 0xD6 UNFREEZE ─────────────────────────────────────────────────────────────
-// Stack: resourceType, receiverAddr → unfrozenAmount
+// Stack: receiverAddr, resourceType → success
 
 func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	resourceWord := stack.pop()
-	_ = stack.pop() // receiver address (V1 unfreeze returns to owner)
+	receiverWord := stack.pop()
 
 	resourceType := int64(resourceWord.Uint64())
 	caller := contract.Address
+	receiver := uint256ToAddress(&receiverWord)
 
 	var unfrozen int64
-	switch resourceType {
-	case 0:
-		unfrozen = in.tvm.StateDB.UnfreezeV1Bandwidth(caller, in.tvm.Timestamp)
-	case 1:
-		unfrozen = in.tvm.StateDB.UnfreezeV1Energy(caller, in.tvm.Timestamp)
+	delegated := receiver != caller
+	if delegated {
+		if in.tvm.DB == nil {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+		if dr == nil {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		switch resourceType {
+		case 0:
+			if dr.FrozenBalanceForBandwidth <= 0 || dr.ExpireTimeForBandwidth > in.tvm.Timestamp {
+				stack.push(uint256.NewInt(0))
+				return nil, nil
+			}
+			unfrozen = dr.FrozenBalanceForBandwidth
+			dr.FrozenBalanceForBandwidth = 0
+			dr.ExpireTimeForBandwidth = 0
+			in.tvm.StateDB.UnfreezeV1DelegatedBandwidth(caller, receiver, unfrozen)
+		case 1:
+			if dr.FrozenBalanceForEnergy <= 0 || dr.ExpireTimeForEnergy > in.tvm.Timestamp {
+				stack.push(uint256.NewInt(0))
+				return nil, nil
+			}
+			unfrozen = dr.FrozenBalanceForEnergy
+			dr.FrozenBalanceForEnergy = 0
+			dr.ExpireTimeForEnergy = 0
+			in.tvm.StateDB.UnfreezeV1DelegatedEnergy(caller, receiver, unfrozen)
+		default:
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
+			_ = rawdb.DeleteDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+		} else {
+			_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+		}
+	} else {
+		switch resourceType {
+		case 0:
+			unfrozen = in.tvm.StateDB.UnfreezeV1Bandwidth(caller, in.tvm.Timestamp)
+		case 1:
+			unfrozen = in.tvm.StateDB.UnfreezeV1Energy(caller, in.tvm.Timestamp)
+		default:
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
 	}
 	if unfrozen > 0 {
 		in.tvm.StateDB.AddBalance(caller, unfrozen)
+		if resourceType == 0 {
+			tvmAddResourceWeight(in.tvm, corepb.ResourceCode_BANDWIDTH, -unfrozen/tvmTRXPrecision)
+		} else {
+			tvmAddResourceWeight(in.tvm, corepb.ResourceCode_ENERGY, -unfrozen/tvmTRXPrecision)
+		}
+		_ = updateTVMVotesAfterUnfreezeV1(in.tvm, caller)
 	}
 	result := uint256.NewInt(0)
-	result.SetUint64(uint64(unfrozen))
+	if unfrozen > 0 {
+		result.SetOne()
+	}
 	stack.push(result)
 	return nil, nil
 }
 
 // ── 0xD7 FREEZEEXPIRETIME ────────────────────────────────────────────────────
-// Stack: addr, resourceType → expireTimeMs
+// Stack: addr, resourceType → expireTimeSeconds
 
-func opFreezeExpireTime(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	addrWord := stack.pop()
+func opFreezeExpireTime(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	resourceWord := stack.pop()
+	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
 	resourceType := int64(resourceWord.Uint64())
 
-	expireMs := in.tvm.StateDB.GetFreezeV1ExpireTime(addr, resourceType)
+	var expireMs int64
+	if addr != contract.Address && in.tvm.DB != nil {
+		if dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, contract.Address, addr); dr != nil {
+			switch resourceType {
+			case 0:
+				expireMs = dr.ExpireTimeForBandwidth
+			case 1:
+				expireMs = dr.ExpireTimeForEnergy
+			}
+		}
+	} else {
+		expireMs = in.tvm.StateDB.GetFreezeV1ExpireTime(addr, resourceType)
+	}
 	result := uint256.NewInt(0)
-	result.SetUint64(uint64(expireMs))
+	result.SetUint64(uint64(expireMs / 1000))
 	stack.push(result)
 	return nil, nil
 }
 
 // ── 0xD8 VOTEWITNESS ──────────────────────────────────────────────────────────
-// Stack: witnessOffset, witnessCount, amountOffset, amountCount → success
-// Memory: witnessOffset points to array of 32-byte TRON addresses (right-aligned)
-//         amountOffset points to array of 32-byte vote amounts
+// Stack: witnessOffset, witnessCount, amountOffset, amountCount -> success
+// Memory: witnessOffset/amountOffset point to ABI arrays:
+//         [length word][32-byte element...]
 
 func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, stack *Stack) ([]byte, error) {
-	witnessOffsetWord := stack.pop()
-	witnessCountWord := stack.pop()
-	amountOffsetWord := stack.pop()
 	amountCountWord := stack.pop()
+	amountOffsetWord := stack.pop()
+	witnessCountWord := stack.pop()
+	witnessOffsetWord := stack.pop()
+
+	if cost := voteWitnessMemoryEnergyCost(in, mem, &witnessOffsetWord, &witnessCountWord, &amountOffsetWord, &amountCountWord); cost > 0 {
+		if !in.useEnergy(contract, cost) {
+			return nil, ErrOutOfEnergy
+		}
+	}
 
 	n := int64(witnessCountWord.Uint64())
-	if an := int64(amountCountWord.Uint64()); an < n {
-		n = an
+	amountN := int64(amountCountWord.Uint64())
+	if n != amountN {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
 	}
-	if n <= 0 || n > 30 {
+	wBase := int64(witnessOffsetWord.Uint64())
+	aBase := int64(amountOffsetWord.Uint64())
+	if got, ok := memoryArrayLength(mem, wBase); !ok || got != n {
+		return nil, errVoteWitnessMemoryLength
+	}
+	if got, ok := memoryArrayLength(mem, aBase); !ok || got != n {
+		return nil, errVoteWitnessMemoryLength
+	}
+	if n < 0 || n > 30 {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 
-	wBase := int64(witnessOffsetWord.Uint64())
-	aBase := int64(amountOffsetWord.Uint64())
 	caller := contract.Address
 
-	votes := make([]*corepb.Vote, 0, n)
+	const maxInt64 = int64(^uint64(0) >> 1)
+
+	voteSums := make(map[tcommon.Address]int64, n)
+	voteOrder := make([]tcommon.Address, 0, n)
+	var totalVotes int64
 	for i := int64(0); i < n; i++ {
-		wBytes := mem.getCopy(wBase+i*32, 32)
-		aBytes := mem.getCopy(aBase+i*32, 32)
+		wBytes := mem.getCopy(wBase+32+i*32, 32)
+		aBytes := mem.getCopy(aBase+32+i*32, 32)
 
 		var witnessAddr tcommon.Address
 		if len(wBytes) == 32 {
 			copy(witnessAddr[1:], wBytes[12:32])
 			witnessAddr[0] = 0x41
 		}
-		var amount int64
-		if len(aBytes) >= 8 {
-			amount = int64(binary.BigEndian.Uint64(aBytes[len(aBytes)-8:]))
+		if in.tvm.StateDB.GetWitness(witnessAddr) == nil {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
 		}
-		if amount <= 0 {
+		amount, ok := int64ExactFromWord(aBytes)
+		if !ok || amount < 0 {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		if amount == 0 {
 			continue
 		}
+		if totalVotes > maxInt64-amount {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		totalVotes += amount
+		if _, ok := voteSums[witnessAddr]; !ok {
+			voteOrder = append(voteOrder, witnessAddr)
+		}
+		if voteSums[witnessAddr] > maxInt64-amount {
+			stack.push(uint256.NewInt(0))
+			return nil, nil
+		}
+		voteSums[witnessAddr] += amount
+	}
+	if totalVotes > 0 && totalVotes > maxInt64/tvmTRXPrecision {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	var tronPower int64
+	if in.tvm.DynProps != nil && in.tvm.DynProps.SupportUnfreezeDelay() && in.tvm.DynProps.AllowNewResourceModel() {
+		tronPower = in.tvm.StateDB.GetAllTronPower(caller)
+	} else {
+		tronPower = in.tvm.StateDB.GetLegacyTronPower(caller)
+	}
+	if totalVotes*tvmTRXPrecision > tronPower {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+
+	votes := make([]*corepb.Vote, 0, len(voteOrder))
+	for _, witnessAddr := range voteOrder {
 		votes = append(votes, &corepb.Vote{
-			VoteAddress: witnessAddr[:],
-			VoteCount:   amount,
+			VoteAddress: witnessAddr.Bytes(),
+			VoteCount:   voteSums[witnessAddr],
 		})
 	}
 
-	// Subtract old vote tallies from the SR vote counts.
-	for _, v := range in.tvm.StateDB.GetVotes(caller) {
-		var wAddr tcommon.Address
-		copy(wAddr[:], v.VoteAddress)
-		in.tvm.StateDB.AddWitnessVoteCount(wAddr, -v.VoteCount)
+	tvmWithdrawReward(in.tvm, caller)
+	oldVotes := in.tvm.StateDB.GetVotes(caller)
+	if err := recordTVMPendingVotes(in.tvm, caller, oldVotes, votes); err != nil {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
 	}
-	for _, v := range votes {
-		var wAddr tcommon.Address
-		copy(wAddr[:], v.VoteAddress)
-		in.tvm.StateDB.AddWitnessVoteCount(wAddr, v.VoteCount)
+	if len(votes) == 0 {
+		in.tvm.StateDB.ClearVotes(caller)
+	} else {
+		in.tvm.StateDB.SetVotes(caller, votes)
 	}
-	in.tvm.StateDB.SetVotes(caller, votes)
 
 	stack.push(uint256.NewInt(1))
 	return nil, nil
+}
+
+func voteWitnessMemoryEnergyCost(in *Interpreter, mem *Memory, witnessOffset, witnessCount, amountOffset, amountCount *uint256.Int) uint64 {
+	includeLengthWord := in.tvmConfig.EnergyAdjustment || in.tvmConfig.Osaka
+	wEnd, ok := voteWitnessArrayEnd(witnessOffset, witnessCount, includeLengthWord)
+	if !ok {
+		return ^uint64(0)
+	}
+	aEnd, ok := voteWitnessArrayEnd(amountOffset, amountCount, includeLengthWord)
+	if !ok {
+		return ^uint64(0)
+	}
+	needed := wEnd
+	if aEnd > needed {
+		needed = aEnd
+	}
+	var oldSize uint64
+	if mem != nil {
+		oldSize = uint64(mem.len())
+	}
+	if oldSize >= needed {
+		return 0
+	}
+	return memoryEnergyCost(needed) - memoryEnergyCost(oldSize)
+}
+
+func voteWitnessArrayEnd(offset, count *uint256.Int, includeLengthWord bool) (uint64, bool) {
+	if !offset.IsUint64() || !count.IsUint64() {
+		return 0, false
+	}
+	hi, size := bits.Mul64(count.Uint64(), 32)
+	if hi != 0 {
+		return 0, false
+	}
+	if size == 0 && !includeLengthWord {
+		return 0, true
+	}
+	if includeLengthWord {
+		if size > ^uint64(0)-32 {
+			return 0, false
+		}
+		size += 32
+	}
+	off := offset.Uint64()
+	if off > ^uint64(0)-size {
+		return 0, false
+	}
+	return off + size, true
+}
+
+func memoryArrayLength(mem *Memory, offset int64) (int64, bool) {
+	if mem == nil || offset < 0 || offset+32 > int64(mem.len()) {
+		return 0, false
+	}
+	word := mem.getCopy(offset, 32)
+	for _, b := range word[:24] {
+		if b != 0 {
+			return 0, false
+		}
+	}
+	u := binary.BigEndian.Uint64(word[24:])
+	const maxInt64 = uint64(^uint64(0) >> 1)
+	if u > maxInt64 {
+		return 0, false
+	}
+	return int64(u), true
+}
+
+func int64ExactFromWord(word []byte) (int64, bool) {
+	if len(word) != 32 {
+		return 0, false
+	}
+	negative := word[24]&0x80 != 0
+	fill := byte(0)
+	if negative {
+		fill = 0xff
+	}
+	for _, b := range word[:24] {
+		if b != fill {
+			return 0, false
+		}
+	}
+	return int64(binary.BigEndian.Uint64(word[24:])), true
+}
+
+func cloneVMVotes(votes []*corepb.Vote) []*corepb.Vote {
+	if len(votes) == 0 {
+		return nil
+	}
+	out := make([]*corepb.Vote, 0, len(votes))
+	for _, vote := range votes {
+		if vote == nil {
+			continue
+		}
+		out = append(out, &corepb.Vote{
+			VoteAddress: append([]byte(nil), vote.VoteAddress...),
+			VoteCount:   vote.VoteCount,
+		})
+	}
+	return out
+}
+
+func recordTVMPendingVotes(tvm *TVM, owner tcommon.Address, oldVotes, newVotes []*corepb.Vote) error {
+	if tvm.DB == nil {
+		return nil
+	}
+	pending := rawdb.ReadVotes(tvm.DB, owner)
+	if pending == nil {
+		pending = &corepb.Votes{
+			Address:  owner.Bytes(),
+			OldVotes: cloneVMVotes(oldVotes),
+		}
+	}
+	pending.NewVotes = cloneVMVotes(newVotes)
+	return rawdb.WriteVotes(tvm.DB, owner, pending)
+}
+
+func validTVMStakeV2Resource(tvm *TVM, resource corepb.ResourceCode) bool {
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
+		return true
+	case corepb.ResourceCode_TRON_POWER:
+		return tvm.DynProps != nil && tvm.DynProps.AllowNewResourceModel()
+	default:
+		return false
+	}
+}
+
+func tvmFrozenV2WithDelegatedWeight(s interface {
+	GetFrozenV2Amount(tcommon.Address, corepb.ResourceCode) int64
+	GetDelegatedFrozenV2(tcommon.Address, corepb.ResourceCode) int64
+}, addr tcommon.Address, resource corepb.ResourceCode) int64 {
+	balance := s.GetFrozenV2Amount(addr, resource)
+	if resource != corepb.ResourceCode_TRON_POWER {
+		balance += s.GetDelegatedFrozenV2(addr, resource)
+	}
+	return balance / tvmTRXPrecision
+}
+
+func tvmAddResourceWeight(tvm *TVM, resource corepb.ResourceCode, delta int64) {
+	if tvm.DynProps == nil || delta == 0 {
+		return
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		tvm.DynProps.AddTotalNetWeight(delta)
+	case corepb.ResourceCode_ENERGY:
+		tvm.DynProps.AddTotalEnergyWeight(delta)
+	case corepb.ResourceCode_TRON_POWER:
+		tvm.DynProps.AddTotalTronPowerWeight(delta)
+	}
+}
+
+func tvmUnfreezingV2Count(account interface {
+	UnfrozenV2() []*corepb.Account_UnFreezeV2
+}, now int64) int {
+	if account == nil {
+		return 0
+	}
+	var count int
+	for _, u := range account.UnfrozenV2() {
+		if u.UnfreezeExpireTime > now {
+			count++
+		}
+	}
+	return count
+}
+
+func updateTVMVotesAfterUnfreezeV2(tvm *TVM, owner tcommon.Address, resource corepb.ResourceCode) error {
+	if tvm == nil || !tvm.cfg.Vote {
+		return nil
+	}
+	votes := tvm.StateDB.GetVotes(owner)
+	if len(votes) == 0 {
+		return nil
+	}
+	if tvm.DynProps != nil && tvm.DynProps.AllowNewResourceModel() {
+		account := tvm.StateDB.GetAccount(owner)
+		if account != nil && account.OldTronPowerIsInvalid() &&
+			(resource == corepb.ResourceCode_BANDWIDTH || resource == corepb.ResourceCode_ENERGY) {
+			return nil
+		}
+		if err := recordTVMPendingVotes(tvm, owner, votes, nil); err != nil {
+			return err
+		}
+		tvm.StateDB.ClearVotes(owner)
+		return nil
+	}
+
+	var totalVotes int64
+	for _, vote := range votes {
+		totalVotes += vote.VoteCount
+	}
+	if totalVotes == 0 {
+		return nil
+	}
+	ownedTronPower := tvm.StateDB.GetLegacyTronPower(owner)
+	if tvm.DynProps != nil && tvm.DynProps.AllowNewResourceModel() {
+		ownedTronPower = tvm.StateDB.GetAllTronPower(owner)
+	}
+	if totalVotes <= ownedTronPower/tvmTRXPrecision {
+		return nil
+	}
+	newVotes := make([]*corepb.Vote, 0, len(votes))
+	for _, vote := range votes {
+		newVoteCount := int64(float64(vote.VoteCount) / float64(totalVotes) * float64(ownedTronPower) / float64(tvmTRXPrecision))
+		if newVoteCount > 0 {
+			newVotes = append(newVotes, &corepb.Vote{
+				VoteAddress: append([]byte(nil), vote.VoteAddress...),
+				VoteCount:   newVoteCount,
+			})
+		}
+	}
+	if err := recordTVMPendingVotes(tvm, owner, votes, newVotes); err != nil {
+		return err
+	}
+	if len(newVotes) == 0 {
+		tvm.StateDB.ClearVotes(owner)
+		return nil
+	}
+	tvm.StateDB.SetVotes(owner, newVotes)
+	return nil
+}
+
+func updateTVMVotesAfterUnfreezeV1(tvm *TVM, owner tcommon.Address) error {
+	if tvm == nil || !tvm.cfg.Vote {
+		return nil
+	}
+	votes := tvm.StateDB.GetVotes(owner)
+	if len(votes) == 0 {
+		return nil
+	}
+	var usedTronPower int64
+	for _, vote := range votes {
+		usedTronPower += vote.VoteCount
+	}
+	if tvm.StateDB.GetLegacyTronPower(owner) >= usedTronPower*tvmTRXPrecision {
+		return nil
+	}
+	tvmWithdrawReward(tvm, owner)
+	if err := recordTVMPendingVotes(tvm, owner, votes, nil); err != nil {
+		return err
+	}
+	tvm.StateDB.ClearVotes(owner)
+	return nil
 }
 
 // ── 0xD9 WITHDRAWREWARD ───────────────────────────────────────────────────────
@@ -281,6 +742,17 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 
 func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	caller := contract.Address
+	if isTVMGenesisWitness(in.tvm, caller) {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	withdrawable := tvmQueryReward(in.tvm, caller)
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if withdrawable <= 0 || in.tvm.StateDB.GetBalance(caller) > maxInt64-withdrawable {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	tvmWithdrawReward(in.tvm, caller)
 	allowance := in.tvm.StateDB.GetAllowance(caller)
 	if allowance > 0 {
 		in.tvm.StateDB.AddBalance(caller, allowance)
@@ -293,6 +765,167 @@ func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory,
 	return nil, nil
 }
 
+func isTVMGenesisWitness(tvm *TVM, addr tcommon.Address) bool {
+	if tvm == nil || tvm.DB == nil {
+		return false
+	}
+	for _, witness := range rawdb.ReadGenesisWitnesses(tvm.DB) {
+		if witness.Address == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
+	if tvm == nil || !tvm.cfg.Vote || tvm.DB == nil || tvm.StateDB == nil || tvm.DynProps == nil {
+		return
+	}
+	currentCycle := tvm.DynProps.CurrentCycleNumber()
+	beginCycle := rawdb.ReadBeginCycle(tvm.DB, addr.Bytes())
+	endCycle := rawdb.ReadEndCycle(tvm.DB, addr.Bytes())
+	acct := tvm.StateDB.GetAccount(addr)
+	if acct == nil || beginCycle > currentCycle {
+		return
+	}
+	if beginCycle == currentCycle {
+		if snap := rawdb.ReadCycleAccountVote(tvm.DB, beginCycle, addr.Bytes()); snap != nil {
+			return
+		}
+	}
+	if beginCycle+1 == endCycle && beginCycle < currentCycle {
+		if votes := tvmReadSnapshotVotes(tvm.DB, beginCycle, addr); len(votes) > 0 {
+			tvmAdjustAllowance(tvm, addr, tvmComputeVoterReward(tvm.DB, votes, beginCycle, endCycle))
+		}
+		beginCycle++
+	}
+	endCycle = currentCycle
+
+	currentVotes := tvmVoteEntriesFromAccount(acct)
+	if len(currentVotes) == 0 {
+		rawdb.WriteBeginCycle(tvm.DB, addr.Bytes(), endCycle+1)
+		return
+	}
+	if beginCycle < endCycle {
+		tvmAdjustAllowance(tvm, addr, tvmComputeVoterReward(tvm.DB, currentVotes, beginCycle, endCycle))
+	}
+	rawdb.WriteBeginCycle(tvm.DB, addr.Bytes(), endCycle)
+	rawdb.WriteEndCycle(tvm.DB, addr.Bytes(), endCycle+1)
+	if snap := tvmMarshalAccountVote(acct); snap != nil {
+		rawdb.WriteCycleAccountVote(tvm.DB, endCycle, addr.Bytes(), snap)
+	}
+}
+
+func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
+	if tvm == nil || !tvm.cfg.Vote || tvm.DB == nil || tvm.StateDB == nil || tvm.DynProps == nil {
+		return 0
+	}
+	acct := tvm.StateDB.GetAccount(addr)
+	if acct == nil {
+		return 0
+	}
+	allowance := tvm.StateDB.GetAllowance(addr)
+	currentCycle := tvm.DynProps.CurrentCycleNumber()
+	beginCycle := rawdb.ReadBeginCycle(tvm.DB, addr.Bytes())
+	endCycle := rawdb.ReadEndCycle(tvm.DB, addr.Bytes())
+	if beginCycle > currentCycle {
+		return allowance
+	}
+
+	var pending int64
+	if beginCycle+1 == endCycle && beginCycle < currentCycle {
+		if votes := tvmReadSnapshotVotes(tvm.DB, beginCycle, addr); len(votes) > 0 {
+			pending += tvmComputeVoterReward(tvm.DB, votes, beginCycle, endCycle)
+		}
+		beginCycle++
+	}
+	endCycle = currentCycle
+	currentVotes := tvmVoteEntriesFromAccount(acct)
+	if len(currentVotes) == 0 {
+		return pending + allowance
+	}
+	if beginCycle < endCycle {
+		pending += tvmComputeVoterReward(tvm.DB, currentVotes, beginCycle, endCycle)
+	}
+	return pending + allowance
+}
+
+type tvmVoteAccount interface {
+	Votes() []*corepb.Vote
+	Proto() *corepb.Account
+}
+
+func tvmVoteEntriesFromAccount(acct tvmVoteAccount) []reward.VoteEntry {
+	if acct == nil {
+		return nil
+	}
+	votes := acct.Votes()
+	out := make([]reward.VoteEntry, 0, len(votes))
+	for _, vote := range votes {
+		out = append(out, reward.VoteEntry{
+			Witness: tcommon.BytesToAddress(vote.VoteAddress),
+			Count:   vote.VoteCount,
+		})
+	}
+	return out
+}
+
+func tvmReadSnapshotVotes(db ethdb.KeyValueReader, cycle int64, addr tcommon.Address) []reward.VoteEntry {
+	raw := rawdb.ReadCycleAccountVote(db, cycle, addr.Bytes())
+	if len(raw) == 0 {
+		return nil
+	}
+	snap := &corepb.Account{}
+	if err := proto.Unmarshal(raw, snap); err != nil {
+		return nil
+	}
+	out := make([]reward.VoteEntry, 0, len(snap.Votes))
+	for _, vote := range snap.Votes {
+		out = append(out, reward.VoteEntry{
+			Witness: tcommon.BytesToAddress(vote.VoteAddress),
+			Count:   vote.VoteCount,
+		})
+	}
+	return out
+}
+
+func tvmMarshalAccountVote(acct tvmVoteAccount) []byte {
+	if acct == nil {
+		return nil
+	}
+	raw, err := proto.Marshal(acct.Proto())
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func tvmComputeVoterReward(db ethdb.KeyValueReader, votes []reward.VoteEntry, beginCycle, endCycle int64) int64 {
+	if beginCycle >= endCycle {
+		return 0
+	}
+	var total int64
+	for _, vote := range votes {
+		beginVI := rawdb.ReadWitnessVI(db, beginCycle-1, vote.Witness.Bytes())
+		endVI := rawdb.ReadWitnessVI(db, endCycle-1, vote.Witness.Bytes())
+		delta := new(big.Int).Sub(endVI, beginVI)
+		if delta.Sign() <= 0 {
+			continue
+		}
+		share := new(big.Int).Mul(delta, big.NewInt(vote.Count))
+		share.Quo(share, reward.DecimalOfViReward)
+		total += share.Int64()
+	}
+	return total
+}
+
+func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {
+	if amount <= 0 {
+		return
+	}
+	tvm.StateDB.AddAllowance(addr, amount)
+}
+
 // ── 0xDA FREEZEBALANCEV2 ──────────────────────────────────────────────────────
 // Stack: amount, resourceType → success
 
@@ -303,11 +936,21 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	caller := contract.Address
 
+	if amount < tvmTRXPrecision || !validTVMStakeV2Resource(in.tvm, resource) {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
+		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
+	}
+	oldWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
 	if err := in.tvm.StateDB.SubBalance(caller, amount); err != nil {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
+	newWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
+	tvmAddResourceWeight(in.tvm, resource, newWeight-oldWeight)
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
@@ -322,14 +965,40 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	caller := contract.Address
 
+	if amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), in.tvm.Timestamp) >= 32 {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	frozen := in.tvm.StateDB.GetFrozenV2Amount(caller, resource)
 	if amount > frozen {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
+	tvmWithdrawReward(in.tvm, caller)
+	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, in.tvm.Timestamp)
+	if withdrawnExpired > 0 {
+		in.tvm.StateDB.AddBalance(caller, withdrawnExpired)
+	}
+	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
+		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
+	}
+	oldWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
-	expireMs := in.tvm.Timestamp + 14*86400_000 // 14-day unstaking delay
+	newWeight := tvmFrozenV2WithDelegatedWeight(in.tvm.StateDB, caller, resource)
+	tvmAddResourceWeight(in.tvm, resource, newWeight-oldWeight)
+	delayDays := int64(14)
+	if in.tvm.DynProps != nil && in.tvm.DynProps.UnfreezeDelayDays() > 0 {
+		delayDays = in.tvm.DynProps.UnfreezeDelayDays()
+	}
+	expireMs := in.tvm.Timestamp + delayDays*86400_000
 	in.tvm.StateDB.AddUnfreezeV2(caller, resource, amount, expireMs)
+	if err := updateTVMVotesAfterUnfreezeV2(in.tvm, caller, resource); err != nil {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
+		in.tvm.StateDB.InvalidateOldTronPower(caller)
+	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
@@ -379,7 +1048,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	}
 	// Refresh owner's usage before their frozen pool shifts. Mirrors
 	// java-tron Program.java:645 / DelegateResourceActuator.java:155.
-	delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, 0, in.tvm.Timestamp)
+	delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, 0, in.tvm.ResourceTime())
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)
@@ -407,12 +1076,13 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// Before balances shift, transfer the receiver's proportional usage
 	// back to the owner. Mirrors java-tron UnDelegateResourceActuator.execute.
 	dp := in.tvm.StateDB.DynamicProperties()
-	transfer := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, in.tvm.Timestamp)
+	resourceTime := in.tvm.ResourceTime()
+	transfer := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
 	if transfer > 0 {
-		delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, transfer, in.tvm.Timestamp)
+		delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, transfer, resourceTime)
 	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil

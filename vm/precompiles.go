@@ -13,6 +13,18 @@ type PrecompiledContract interface {
 	Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error)
 }
 
+type precompiledContractWithStatus interface {
+	RunWithStatus(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error)
+}
+
+func runPrecompile(tvm *TVM, p PrecompiledContract, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
+	if ps, ok := p.(precompiledContractWithStatus); ok {
+		return ps.RunWithStatus(tvm, caller, input, energy)
+	}
+	ret, used, err := p.Run(tvm, caller, input, energy)
+	return ret, used, err == nil, err
+}
+
 // addrFromUint constructs a TRON precompile address from a uint64 discriminant.
 //
 // TRON uses 21-byte addresses with 0x41 prefix. The CALL opcode converts a
@@ -44,7 +56,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	case addrFromUint(0x04):
 		return &dataCopy{}
 	case addrFromUint(0x05):
-		return &bigModExp{istanbul: cfg.Istanbul}
+		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka}
 	case addrFromUint(0x06):
 		return &bn128Add{istanbul: cfg.Istanbul}
 	case addrFromUint(0x07):
@@ -63,10 +75,21 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 		}
 
 	// ── Shielded token precompiles (AllowTvmShieldedToken) ───────────────
-	case addrFromUint(0x01000001), addrFromUint(0x01000002),
-		addrFromUint(0x01000003), addrFromUint(0x01000004):
+	case addrFromUint(0x01000001):
 		if cfg.ShieldedToken {
-			return &shieldedStub{}
+			return &verifyMintProof{}
+		}
+	case addrFromUint(0x01000002):
+		if cfg.ShieldedToken {
+			return &verifyTransferProof{}
+		}
+	case addrFromUint(0x01000003):
+		if cfg.ShieldedToken {
+			return &verifyBurnProof{}
+		}
+	case addrFromUint(0x01000004):
+		if cfg.ShieldedToken {
+			return &shieldedMerkleHash{}
 		}
 
 	// ── Voting precompiles (AllowTvmVote) ────────────────────────────────
@@ -149,6 +172,12 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	case addrFromUint(0x020009):
 		if cfg.Compatibility {
 			return &blake2F{}
+		}
+
+	// ── Osaka precompile (AllowTvmOsaka) ─────────────────────────────────
+	case addrFromUint(0x0100):
+		if cfg.Osaka {
+			return &p256Verify{}
 		}
 	}
 	return nil

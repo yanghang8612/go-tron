@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -188,6 +189,264 @@ func TestCreateAccountWithTime_FromCALLToken_TokenOnly(t *testing.T) {
 	if acc.OwnerPermission() != nil {
 		t.Fatal("Owner permission must NOT be installed on token-only transfer")
 	}
+}
+
+func TestCreateAtWithToken_TransfersAndExposesMessageToken(t *testing.T) {
+	const (
+		tokenID    = int64(1_000_002)
+		tokenValue = int64(7)
+		callValue  = int64(5)
+	)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	sdb.AddBalance(caller, 1_000_000)
+	sdb.AddTRC10Balance(caller, tokenID, 100)
+
+	code := []byte{
+		byte(CALLTOKENID), byte(PUSH1), 0x00, byte(SSTORE),
+		byte(CALLTOKENVALUE), byte(PUSH1), 0x01, byte(SSTORE),
+		byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN),
+	}
+	_, addr, _, err := tvm.CreateAtWithToken(caller, contractAddr, code, 1_000_000, callValue, tokenID, tokenValue)
+	if err != nil {
+		t.Fatalf("CreateAtWithToken: %v", err)
+	}
+	if addr != contractAddr {
+		t.Fatalf("contract address: got %x, want %x", addr, contractAddr)
+	}
+	if got := sdb.GetBalance(caller); got != 1_000_000-callValue {
+		t.Fatalf("caller balance: got %d", got)
+	}
+	if got := sdb.GetBalance(contractAddr); got != callValue {
+		t.Fatalf("contract balance: got %d", got)
+	}
+	if got := sdb.GetTRC10Balance(caller, tokenID); got != 100-tokenValue {
+		t.Fatalf("caller token balance: got %d", got)
+	}
+	if got := sdb.GetTRC10Balance(contractAddr, tokenID); got != tokenValue {
+		t.Fatalf("contract token balance: got %d", got)
+	}
+	if got := sdb.GetState(contractAddr, hashFromUint64(0)); got != hashFromUint64(uint64(tokenID)) {
+		t.Fatalf("slot0 token id: got %x", got)
+	}
+	if got := sdb.GetState(contractAddr, hashFromUint64(1)); got != hashFromUint64(uint64(tokenValue)) {
+		t.Fatalf("slot1 token value: got %x", got)
+	}
+}
+
+func TestCallTokenToExistingNoCodeChargesJavaNetCost(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.GetOrCreateAccount(dest)
+	sdb.AddTRC10Balance(caller, tokenID, 10)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+		byte(PUSH1), 0x01, // tokenValue
+		byte(PUSH20),
+	}
+	code = append(code, dest[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALLTOKEN),
+		byte(STOP),
+	)
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := sdb.GetTRC10Balance(caller, tokenID); got != 9 {
+		t.Fatalf("caller token balance: got %d", got)
+	}
+	if got := sdb.GetTRC10Balance(dest, tokenID); got != 1 {
+		t.Fatalf("dest token balance: got %d", got)
+	}
+	if got, want := uint64(100_000)-contract.Energy, uint64(6764); got != want {
+		t.Fatalf("energy used: got %d, want %d", got, want)
+	}
+}
+
+func TestCallTokenToExistingCodeSkipsJavaSurcharge(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.GetOrCreateAccount(dest)
+	sdb.AddTRC10Balance(caller, tokenID, 10)
+	sdb.SetCode(dest, []byte{byte(STOP)})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+		byte(PUSH1), 0x01, // tokenValue
+		byte(PUSH20),
+	}
+	code = append(code, dest[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALLTOKEN),
+		byte(STOP),
+	)
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := sdb.GetTRC10Balance(caller, tokenID); got != 9 {
+		t.Fatalf("caller token balance: got %d", got)
+	}
+	if got := sdb.GetTRC10Balance(dest, tokenID); got != 1 {
+		t.Fatalf("dest token balance: got %d", got)
+	}
+	if got, want := uint64(100_000)-contract.Energy, uint64(6764); got != want {
+		t.Fatalf("energy used: got %d, want %d", got, want)
+	}
+}
+
+func TestCallTokenToExistingCodeInsufficientBalanceSkipsJavaSurcharge(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.GetOrCreateAccount(dest)
+	sdb.SetCode(dest, []byte{byte(STOP)})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+		byte(PUSH1), 0x01, // tokenValue
+		byte(PUSH20),
+	}
+	code = append(code, dest[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALLTOKEN),
+		byte(STOP),
+	)
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := sdb.GetTRC10Balance(dest, tokenID); got != 0 {
+		t.Fatalf("dest token balance: got %d", got)
+	}
+	if got, want := uint64(100_000)-contract.Energy, uint64(6764); got != want {
+		t.Fatalf("energy used: got %d, want %d", got, want)
+	}
+}
+
+func TestCallTokenValueExposesNegativeMessageValue(t *testing.T) {
+	const tokenID = int64(1_001_127)
+	tokenValue := int64(-1000)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	contractAddr := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.SetCode(contractAddr, []byte{
+		byte(CALLTOKENVALUE),
+		byte(PUSH1), 0x00,
+		byte(SSTORE),
+		byte(STOP),
+	})
+
+	if _, _, err := tvm.CallToken(caller, contractAddr, nil, 100_000, 0, tokenID, tokenValue); err != nil {
+		t.Fatalf("CallToken: %v", err)
+	}
+	if got, want := sdb.GetState(contractAddr, hashFromUint64(0)), hashFromUint64(uint64(tokenValue)); got != want {
+		t.Fatalf("slot0 CALLTOKENVALUE: got %x, want %x", got, want)
+	}
+}
+
+func TestDelegateCallUsesCurrentContractBalanceForNestedTransfer(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+
+	owner := tcommon.Address{0x41, 0x01}
+	proxy := tcommon.Address{0x41, 0x02}
+	impl := tcommon.Address{0x41, 0x03}
+	user := tcommon.Address{0x41, 0x04}
+
+	sdb.GetOrCreateAccount(owner)
+	sdb.GetOrCreateAccount(user)
+	sdb.AddBalance(owner, 100)
+	sdb.AddBalance(proxy, 1000)
+
+	implCode := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH20),
+	}
+	implCode = append(implCode, user[1:]...)
+	implCode = append(implCode,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALL),
+		byte(STOP),
+	)
+	sdb.SetCode(impl, implCode)
+
+	proxyCode := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH20),
+	}
+	proxyCode = append(proxyCode, impl[1:]...)
+	proxyCode = append(proxyCode,
+		byte(PUSH2), 0x75, 0x30, // gas
+		byte(DELEGATECALL),
+		byte(STOP),
+	)
+
+	contract := NewContract(owner, proxy, 0, 100_000)
+	contract.SetCode(proxy, proxyCode)
+	if _, err := tvm.interpreter.Run(contract); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := sdb.GetBalance(owner); got != 100 {
+		t.Fatalf("owner balance: got %d, want 100", got)
+	}
+	if got := sdb.GetBalance(proxy); got != 999 {
+		t.Fatalf("proxy balance: got %d, want 999", got)
+	}
+	if got := sdb.GetBalance(user); got != 1 {
+		t.Fatalf("user balance: got %d, want 1", got)
+	}
+}
+
+func hashFromUint64(n uint64) tcommon.Hash {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], n)
+	return tcommon.BytesToHash(b[:])
 }
 
 // TestCreateAccountWithTime_FromCALL_PrecompileAddrUntouched locks the

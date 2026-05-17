@@ -2,7 +2,6 @@ package vm
 
 import (
 	"encoding/binary"
-	"errors"
 
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -42,25 +41,25 @@ func (c *ethRipemd160) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint6
 
 const blake2FInputLen = 213
 
-var (
-	errBlake2FBadLength = errors.New("blake2f: invalid input length (must be 213)")
-	errBlake2FBadFlag   = errors.New("blake2f: invalid final-block flag (must be 0 or 1)")
-)
-
 type blake2F struct{}
 
 func (c *blake2F) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+	ret, used, _, err := c.RunWithStatus(nil, tcommon.Address{}, input, energy)
+	return ret, used, err
+}
+
+func (c *blake2F) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, bool, error) {
 	if len(input) != blake2FInputLen {
-		return nil, energy, errBlake2FBadLength
+		return make([]byte, 32), 0, false, nil
 	}
 	if input[212] != 0 && input[212] != 1 {
-		return nil, energy, errBlake2FBadFlag
+		return make([]byte, 32), 0, false, nil
 	}
 
 	rounds := binary.BigEndian.Uint32(input[0:4])
 	cost := uint64(rounds)
 	if energy < cost {
-		return nil, energy, ErrOutOfEnergy
+		return nil, energy, false, ErrOutOfEnergy
 	}
 
 	final := input[212] == 1
@@ -83,5 +82,5 @@ func (c *blake2F) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([
 	for i, v := range h {
 		binary.LittleEndian.PutUint64(out[i*8:], v)
 	}
-	return out, cost, nil
+	return out, cost, true, nil
 }

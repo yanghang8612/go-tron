@@ -2,11 +2,19 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/vm"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm"
+	"google.golang.org/protobuf/proto"
 )
+
+const contractNameMaxLen = 32
+const vmMinTokenID = 1_000_000
 
 // VMActuator handles CreateSmartContract (type 30) and TriggerSmartContract (type 31).
 type VMActuator struct{}
@@ -14,43 +22,107 @@ type VMActuator struct{}
 // Validate checks basic smart contract transaction validity.
 func (a *VMActuator) Validate(ctx *Context) error {
 	ct := ctx.Tx.ContractType()
+	if !ctx.DynProps.AllowCreationOfContracts() {
+		return errors.New("vm work is off, need to be opened by the committee")
+	}
 
-	switch {
-	case ct == 30: // CreateSmartContract
+	switch ct {
+	case corepb.Transaction_Contract_CreateSmartContract:
 		csc, err := a.getCreateContract(ctx)
 		if err != nil {
 			return err
 		}
-		owner := common.BytesToAddress(csc.OwnerAddress)
+		owner, err := checkedAddress(csc.OwnerAddress, "ownerAddress")
+		if err != nil {
+			return err
+		}
 		if !ctx.State.AccountExists(owner) {
 			return errors.New("owner account does not exist")
 		}
 		if csc.NewContract == nil {
 			return errors.New("new_contract is nil")
 		}
-		if len(csc.NewContract.Bytecode) == 0 {
-			return errors.New("bytecode is empty")
+		origin, err := checkedAddress(csc.NewContract.OriginAddress, "originAddress")
+		if err != nil {
+			return err
 		}
-		if ctx.Tx.FeeLimit() <= 0 {
-			return errors.New("fee_limit must be positive")
+		if owner != origin {
+			return errors.New("ownerAddress is not equals originAddress")
+		}
+		if len(csc.NewContract.Name) > contractNameMaxLen {
+			return errors.New("contractName's length cannot be greater than 32")
+		}
+		percent := csc.NewContract.ConsumeUserResourcePercent
+		if percent < 0 || percent > 100 {
+			return errors.New("percent must be >= 0 and <= 100")
+		}
+		if err := validateVMFeeLimit(ctx); err != nil {
+			return err
+		}
+		if energyLimitHardForkActive(ctx) {
+			if csc.NewContract.CallValue < 0 {
+				return errors.New("callValue must be >= 0")
+			}
+			if csc.CallTokenValue < 0 {
+				return errors.New("tokenValue must be >= 0")
+			}
+			if csc.NewContract.OriginEnergyLimit <= 0 {
+				return errors.New("The originEnergyLimit must be > 0")
+			}
+		}
+		if err := validateVMTokenValueAndID(ctx, csc.CallTokenValue, csc.TokenId); err != nil {
+			return err
+		}
+		if csc.NewContract.CallValue > ctx.State.GetBalance(owner) {
+			return errors.New("balance is not sufficient")
+		}
+		if ctx.DynProps.AllowTvmTransferTrc10() && csc.CallTokenValue > 0 && ctx.State.GetTRC10Balance(owner, csc.TokenId) < csc.CallTokenValue {
+			return errors.New("assetBalance is not sufficient")
+		}
+		contractAddr := generateContractAddress(ctx.Tx, owner)
+		if ctx.State.AccountExists(contractAddr) {
+			return fmt.Errorf("trying to create a contract with existing contract address: %s", contractAddr.Hex())
 		}
 		return nil
 
-	case ct == 31: // TriggerSmartContract
+	case corepb.Transaction_Contract_TriggerSmartContract:
 		tsc, err := a.getTriggerContract(ctx)
 		if err != nil {
 			return err
 		}
-		owner := common.BytesToAddress(tsc.OwnerAddress)
+		owner, err := checkedAddress(tsc.OwnerAddress, "ownerAddress")
+		if err != nil {
+			return err
+		}
 		if !ctx.State.AccountExists(owner) {
 			return errors.New("owner account does not exist")
 		}
-		contractAddr := common.BytesToAddress(tsc.ContractAddress)
-		if !ctx.State.IsContract(contractAddr) {
-			return errors.New("contract does not exist")
+		contractAddr, err := checkedAddress(tsc.ContractAddress, "contractAddress")
+		if err != nil {
+			return err
 		}
-		if ctx.Tx.FeeLimit() <= 0 {
-			return errors.New("fee_limit must be positive")
+		if ctx.State.GetContract(contractAddr) == nil {
+			return errors.New("no contract or not a smart contract")
+		}
+		if err := validateVMFeeLimit(ctx); err != nil {
+			return err
+		}
+		if energyLimitHardForkActive(ctx) {
+			if tsc.CallValue < 0 {
+				return errors.New("callValue must be >= 0")
+			}
+			if tsc.CallTokenValue < 0 {
+				return errors.New("tokenValue must be >= 0")
+			}
+		}
+		if err := validateVMTokenValueAndID(ctx, tsc.CallTokenValue, tsc.TokenId); err != nil {
+			return err
+		}
+		if tsc.CallValue > ctx.State.GetBalance(owner) {
+			return errors.New("balance is not sufficient")
+		}
+		if ctx.DynProps.AllowTvmTransferTrc10() && tsc.CallTokenValue > 0 && ctx.State.GetTRC10Balance(owner, tsc.TokenId) < tsc.CallTokenValue {
+			return errors.New("assetBalance is not sufficient")
 		}
 		return nil
 
@@ -96,6 +168,18 @@ func contractRetFromError(err error) int32 {
 	}
 }
 
+func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
+	evm.HeadSlot = ctx.HeadSlot
+	evm.HasHeadSlot = ctx.HasHeadSlot
+	evm.SetDB(ctx.DB)
+	evm.SetRootTransactionID(ctx.Tx.Hash())
+	if ctx.DB != nil {
+		if blackhole := rawdb.ReadAccountNameIndex(ctx.DB, []byte("Blackhole")); len(blackhole) > 0 {
+			evm.SetBlackholeAddress(common.BytesToAddress(blackhole))
+		}
+	}
+}
+
 // executeCreate runs CreateSmartContract. It populates result.EnergyUsageTotal
 // with the full VM energy consumed; the on-chain balance debit and the
 // EnergyUsed/EnergyFee/Fee splits are deferred to PayEnergyBill, which the
@@ -107,9 +191,13 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	owner := common.BytesToAddress(csc.OwnerAddress)
+	owner, err := checkedAddress(csc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	callValue := csc.NewContract.CallValue
 	bytecode := csc.NewContract.Bytecode
+	contractAddr := generateContractAddress(ctx.Tx, owner)
 
 	energyFee := ctx.DynProps.EnergyFee()
 	if energyFee <= 0 {
@@ -118,10 +206,16 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	energyLimit := uint64(ctx.Tx.FeeLimit()) / uint64(energyFee)
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
+	tokenID := int64(0)
+	tokenValue := int64(0)
+	if cfg.TransferTrc10 {
+		tokenID = csc.TokenId
+		tokenValue = csc.CallTokenValue
+	}
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
-	evm.SetDB(ctx.DB)
+	configureTVMExecutionContext(evm, ctx)
 
-	ret, contractAddr, energyLeft, vmErr := evm.Create(owner, bytecode, energyLimit, callValue)
+	ret, contractAddr, energyLeft, vmErr := evm.CreateAtWithToken(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue)
 
 	energyUsed := energyLimit - energyLeft
 
@@ -139,8 +233,13 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	result.ContractRet = 1 // SUCCESS
 	result.ContractAddress = contractAddr[:]
 
-	sc := csc.NewContract
+	sc := proto.Clone(csc.NewContract).(*contractpb.SmartContract)
 	sc.ContractAddress = contractAddr[:]
+	if ctx.DynProps.AllowTvmCompatibleEvm() {
+		sc.Version = 1
+	} else {
+		sc.Version = 0
+	}
 	ctx.State.SetContract(contractAddr, sc)
 
 	return result, nil
@@ -154,8 +253,14 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	owner := common.BytesToAddress(tsc.OwnerAddress)
-	contractAddr := common.BytesToAddress(tsc.ContractAddress)
+	owner, err := checkedAddress(tsc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	contractAddr, err := checkedAddress(tsc.ContractAddress, "contractAddress")
+	if err != nil {
+		return nil, err
+	}
 	callValue := tsc.CallValue
 	data := tsc.Data
 
@@ -166,10 +271,25 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	energyLimit := uint64(ctx.Tx.FeeLimit()) / uint64(energyFee)
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
+	tokenID := int64(0)
+	tokenValue := int64(0)
+	if cfg.TransferTrc10 {
+		tokenID = tsc.TokenId
+		tokenValue = tsc.CallTokenValue
+	}
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
-	evm.SetDB(ctx.DB)
+	configureTVMExecutionContext(evm, ctx)
 
-	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, energyLimit, callValue)
+	var (
+		ret        []byte
+		energyLeft uint64
+		vmErr      error
+	)
+	if cfg.TransferTrc10 {
+		ret, energyLeft, vmErr = evm.CallToken(owner, contractAddr, data, energyLimit, callValue, tokenID, tokenValue)
+	} else {
+		ret, energyLeft, vmErr = evm.Call(owner, contractAddr, data, energyLimit, callValue)
+	}
 
 	energyUsed := energyLimit - energyLeft
 
@@ -186,6 +306,47 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	result.ContractRet = 1 // SUCCESS
 	return result, nil
+}
+
+func validateVMFeeLimit(ctx *Context) error {
+	feeLimit := ctx.Tx.FeeLimit()
+	if feeLimit < 0 || feeLimit > ctx.DynProps.MaxFeeLimit() {
+		return fmt.Errorf("feeLimit must be >= 0 and <= %d", ctx.DynProps.MaxFeeLimit())
+	}
+	return nil
+}
+
+func validateVMTokenValueAndID(ctx *Context, tokenValue, tokenID int64) error {
+	if ctx == nil || ctx.DynProps == nil {
+		return nil
+	}
+	if !ctx.DynProps.AllowTvmTransferTrc10() || !ctx.DynProps.AllowMultiSign() {
+		return nil
+	}
+	if tokenID <= vmMinTokenID && tokenID != 0 {
+		return fmt.Errorf("tokenId must be > %d", vmMinTokenID)
+	}
+	if tokenValue > 0 && tokenID == 0 {
+		return fmt.Errorf("invalid arguments with tokenValue = %d, tokenId = %d", tokenValue, tokenID)
+	}
+	return nil
+}
+
+func energyLimitHardForkActive(ctx *Context) bool {
+	return ctx.DynProps.LatestBlockHeaderNumber() >= blockNumForEnergyLimit
+}
+
+func generateContractAddress(tx *types.Transaction, owner common.Address) common.Address {
+	txHash := tx.Hash()
+	input := make([]byte, 0, len(txHash)+len(owner))
+	input = append(input, txHash[:]...)
+	input = append(input, owner[:]...)
+	hash := common.Keccak256(input)
+
+	var addr common.Address
+	addr[0] = owner[0]
+	copy(addr[1:], hash[12:])
+	return addr
 }
 
 func (a *VMActuator) getCreateContract(ctx *Context) (*contractpb.CreateSmartContract, error) {

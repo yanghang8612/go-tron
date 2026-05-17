@@ -63,3 +63,10 @@ func (m *Memory) resize(size uint64) {
 	copy(newStore, m.store)
 	m.store = newStore
 }
+
+func resizeMemory(m *Memory, offset, size uint64) {
+	if size == 0 {
+		return
+	}
+	m.resize(offset + size)
+}

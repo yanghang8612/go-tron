@@ -41,6 +41,11 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		mem          = newMemory()
 		stack        = newStack()
 	)
+	parentFactor, parentRawEnergyUsed := in.factor, in.rawEnergyUsed
+	defer func() {
+		in.factor = parentFactor
+		in.rawEnergyUsed = parentRawEnergyUsed
+	}()
 
 	// Fetch (and advance) the contract's dynamic-energy factor once at
 	// the start of execution. factor is the effective multiplier in
@@ -62,7 +67,6 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 	if in.tvmConfig.DynamicEnergy {
 		in.factor = updateContractEnergyFactor(in.tvm, contract.Address)
 	}
-
 	for {
 		if pc >= uint64(len(contract.Code)) {
 			break

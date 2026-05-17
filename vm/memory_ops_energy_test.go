@@ -76,9 +76,10 @@ func TestMemoryOpsBaseEnergy_WithHigherLimitProposal(t *testing.T) {
 // memory at offset 0 (1 word, triggering 3-word memory expansion = 3 energy).
 //
 // Expected:
-//   3*PUSH1 + PUSH20 + EXTCODECOPY + STOP
-//   = 9 + 3 + (20 + memDelta(32 bytes=1 word→3) + 3*1) + 0
-//   = 12 + 26 = 38
+//
+//	3*PUSH1 + PUSH20 + EXTCODECOPY + STOP
+//	= 9 + 3 + (20 + memDelta(32 bytes=1 word→3) + 3*1) + 0
+//	= 12 + 26 = 38
 func TestExtCodeCopyEnergy_MatchesJava(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := state.NewDatabase(diskdb)
@@ -124,9 +125,10 @@ func TestExtCodeCopyEnergy_MatchesJava(t *testing.T) {
 // (copy 4 bytes of code into memory at offset 0)
 //
 // Expected:
-//   3*PUSH1 + CODECOPY + STOP
-//   = 9 + (memDelta(32 bytes = 1 word) + 3*1) + 0
-//   = 9 + (3 + 3) = 15
+//
+//	3*PUSH1 + CODECOPY + STOP
+//	= 9 + (memDelta(32 bytes = 1 word) + 3*1) + 0
+//	= 9 + (3 + 3) = 15
 func TestCopyOpsBaseEnergy_NoBaseTier(t *testing.T) {
 	code := []byte{
 		byte(PUSH1), 0x04,
@@ -146,5 +148,31 @@ func TestCopyOpsBaseEnergy_NoBaseTier(t *testing.T) {
 	if gotProp != got {
 		t.Fatalf("CODECOPY cost must not change under proposal #65: default=%d, proposal-on=%d",
 			got, gotProp)
+	}
+}
+
+func TestCallZeroLengthMemoryDoesNotExpand(t *testing.T) {
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x80, // out offset: must not expand while size is zero
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x00, // call value
+		byte(PUSH1), 0x00, // call address
+		byte(PUSH1), 0x00, // call energy
+		byte(CALL),
+		byte(POP),
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x80,
+		byte(MSTORE),
+		byte(STOP),
+	}
+	got := runOps(t, code, TVMConfig{}, 100_000)
+	// Java EnergyCost.memNeeded returns zero when size is zero. The CALL
+	// therefore charges no memory growth for outOffset=0x80/outSize=0, and
+	// the following MSTORE must pay the full 0 -> 160 byte expansion.
+	const want = 84
+	if got != want {
+		t.Fatalf("CALL zero-length memory expansion: got %d want %d", got, want)
 	}
 }

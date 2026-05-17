@@ -15,7 +15,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(offset.Uint64() + sz)
+	resizeMemory(memory, offset.Uint64(), sz)
 
 	code := memory.getCopy(int64(offset.Uint64()), int64(sz))
 	val := int64(value.Uint64())
@@ -32,7 +32,7 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	if err != nil {
 		result.Clear()
 	} else {
-		result.SetBytes(addr[:])
+		result = addressToUint256(addr)
 	}
 	stack.push(&result)
 	interpreter.returnData = ret
@@ -50,7 +50,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(offset.Uint64() + sz)
+	resizeMemory(memory, offset.Uint64(), sz)
 
 	words := toWordSize(sz)
 	hashCost := EnergySHA3Word * words
@@ -74,7 +74,7 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	if err != nil {
 		result.Clear()
 	} else {
-		result.SetBytes(addr[:])
+		result = addressToUint256(addr)
 	}
 	stack.push(&result)
 	interpreter.returnData = ret
@@ -113,8 +113,8 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(inOffset.Uint64() + inSz)
-	memory.resize(retOffset.Uint64() + retSz)
+	resizeMemory(memory, inOffset.Uint64(), inSz)
+	resizeMemory(memory, retOffset.Uint64(), retSz)
 
 	available := contract.Energy - contract.Energy/64
 	if gas > available {
@@ -143,18 +143,27 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		}
 		memory.set(retOffset.Uint64(), copyLen, ret[:copyLen])
 	}
-	interpreter.returnData = ret
+	if err == errPrecompileFailure {
+		interpreter.returnData = nil
+	} else {
+		interpreter.returnData = ret
+	}
 	return nil, nil
 }
 
 // opCallCode: like CALL but executes code in caller's storage context.
 func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	energyVal, addrVal, _, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
+	energyVal, addrVal, value, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
 
 	addr := uint256ToAddress(&addrVal)
+	val := int64(value.Uint64())
 	gas := energyVal.Uint64()
 
-	if !interpreter.useEnergy(contract, EnergyCall) {
+	cost := uint64(EnergyCall)
+	if val > 0 {
+		cost += EnergyCallValueTx
+	}
+	if !interpreter.useEnergy(contract, cost) {
 		return nil, ErrOutOfEnergy
 	}
 
@@ -170,17 +179,20 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(inOffset.Uint64() + inSz)
-	memory.resize(retOffset.Uint64() + retSz)
+	resizeMemory(memory, inOffset.Uint64(), inSz)
+	resizeMemory(memory, retOffset.Uint64(), retSz)
 
 	available := contract.Energy - contract.Energy/64
 	if gas > available {
 		gas = available
 	}
 	contract.UseEnergy(gas)
+	if val > 0 {
+		gas += EnergyCallStipend
+	}
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, addr, input, gas)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int
@@ -195,7 +207,11 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		}
 		memory.set(retOffset.Uint64(), copyLen, ret[:copyLen])
 	}
-	interpreter.returnData = ret
+	if err == errPrecompileFailure {
+		interpreter.returnData = nil
+	} else {
+		interpreter.returnData = ret
+	}
 	return nil, nil
 }
 
@@ -223,8 +239,8 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(inOffset.Uint64() + inSz)
-	memory.resize(retOffset.Uint64() + retSz)
+	resizeMemory(memory, inOffset.Uint64(), inSz)
+	resizeMemory(memory, retOffset.Uint64(), retSz)
 
 	available := contract.Energy - contract.Energy/64
 	if gas > available {
@@ -233,7 +249,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOffset.Uint64()), int64(inSz))
-	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, addr, input, gas)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value)
 	contract.Energy += remainingEnergy
 
 	var success uint256.Int
@@ -248,7 +264,11 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		}
 		memory.set(retOffset.Uint64(), copyLen, ret[:copyLen])
 	}
-	interpreter.returnData = ret
+	if err == errPrecompileFailure {
+		interpreter.returnData = nil
+	} else {
+		interpreter.returnData = ret
+	}
 	return nil, nil
 }
 
@@ -276,8 +296,8 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 			return nil, ErrOutOfEnergy
 		}
 	}
-	memory.resize(inOffset.Uint64() + inSz)
-	memory.resize(retOffset.Uint64() + retSz)
+	resizeMemory(memory, inOffset.Uint64(), inSz)
+	resizeMemory(memory, retOffset.Uint64(), retSz)
 
 	available := contract.Energy - contract.Energy/64
 	if gas > available {
@@ -301,6 +321,10 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 		}
 		memory.set(retOffset.Uint64(), copyLen, ret[:copyLen])
 	}
-	interpreter.returnData = ret
+	if err == errPrecompileFailure {
+		interpreter.returnData = nil
+	} else {
+		interpreter.returnData = ret
+	}
 	return nil, nil
 }
