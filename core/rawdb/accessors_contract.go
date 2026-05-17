@@ -45,6 +45,10 @@ func ReadContract(db ethdb.KeyValueReader, addr common.Address) []byte {
 	return data
 }
 
+func DeleteContract(db ethdb.KeyValueWriter, addr common.Address) {
+	db.Delete(contractKey(addr.Bytes()))
+}
+
 func WriteStorage(db ethdb.KeyValueWriter, addr common.Address, key common.Hash, value []byte) {
 	db.Put(storageKey(addr.Bytes(), key.Bytes()), value)
 }

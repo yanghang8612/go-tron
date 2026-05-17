@@ -3,7 +3,11 @@ package state
 import (
 	"testing"
 
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -85,6 +89,78 @@ func TestStateDBSelfDestruct(t *testing.T) {
 	if !sdb.HasSelfDestructed(addr) {
 		t.Fatal("should be selfDestructed")
 	}
+}
+
+func TestDeleteAccountClearsPersistedContractCodeOnRecreate(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x44}
+	code := []byte{0x60, 0x00, 0x60, 0x00, 0xf3}
+	meta := &contractpb.SmartContract{
+		OriginAddress:   addr.Bytes(),
+		ContractAddress: addr.Bytes(),
+		Name:            "deleted",
+	}
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, code)
+	sdb.SetContract(addr, meta)
+	if err := rawdb.WriteContractABI(diskdb, addr.Bytes(), &contractpb.SmartContract_ABI{}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.GetCode(addr); string(got) != string(code) {
+		t.Fatalf("precondition code mismatch: got %x", got)
+	}
+	if got := sdb.GetContract(addr); got == nil || got.Name != "deleted" {
+		t.Fatalf("precondition contract meta mismatch: %+v", got)
+	}
+
+	sdb.DeleteAccount(addr)
+	sdb.CreateAccountWithTime(addr, corepb.AccountType_Normal, 12345)
+	if got := sdb.GetCode(addr); len(got) != 0 {
+		t.Fatalf("recreated normal account must not expose stale code before commit: %x", got)
+	}
+	if got := sdb.GetContract(addr); got != nil {
+		t.Fatalf("recreated normal account must not expose stale contract meta before commit: %+v", got)
+	}
+	root, err = sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sdb.GetCode(addr); len(got) != 0 {
+		t.Fatalf("stale code survived commit: %x", got)
+	}
+	if got := sdb.GetContract(addr); got != nil {
+		t.Fatalf("stale contract meta survived commit: %+v", got)
+	}
+	if rawdb.ReadContractABI(diskdb, addr.Bytes()) != nil {
+		t.Fatal("stale dedicated ABI survived commit")
+	}
+	if !sdb.AccountExists(addr) {
+		t.Fatal("recreated normal account should persist")
+	}
+	if sdb.GetAccount(addr).Type() != corepb.AccountType_Normal {
+		t.Fatalf("account type: got %v, want normal", sdb.GetAccount(addr).Type())
+	}
+
 }
 
 func TestStateDBExistEmpty(t *testing.T) {

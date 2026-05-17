@@ -26,12 +26,15 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 			return
 		}
 		obj := stateObjects[e.address]
-		if obj != nil {
+		if obj == nil {
+			obj = newStateObject(e.address, acc)
+			stateObjects[e.address] = obj
+		} else {
 			obj.account = acc
-			obj.dirty = true
-			obj.deleted = false
-			obj.created = false
 		}
+		obj.dirty = true
+		obj.deleted = false
+		obj.created = false
 	}
 }
 
@@ -72,11 +75,16 @@ type codeChange struct {
 
 func (e codeChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
-	if obj != nil {
-		obj.code = e.prevCode
-		obj.codeHash = e.prevHash
-		obj.codeDirty = true
+	if obj == nil {
+		if len(e.prevCode) == 0 {
+			return
+		}
+		obj = newEmptyStateObject(e.address)
+		stateObjects[e.address] = obj
 	}
+	obj.code = e.prevCode
+	obj.codeHash = e.prevHash
+	obj.codeDirty = true
 }
 
 // contractMetaChange records a contract metadata change for revert.
@@ -87,10 +95,15 @@ type contractMetaChange struct {
 
 func (e contractMetaChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
-	if obj != nil {
-		obj.contractMeta = e.prevMeta
-		obj.contractMetaDirty = e.prevMeta != nil
+	if obj == nil {
+		if e.prevMeta == nil {
+			return
+		}
+		obj = newEmptyStateObject(e.address)
+		stateObjects[e.address] = obj
 	}
+	obj.contractMeta = e.prevMeta
+	obj.contractMetaDirty = e.prevMeta != nil
 }
 
 // selfDestructChange records a self-destruct for revert.

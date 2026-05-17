@@ -81,6 +81,12 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 		prev:    nil,
 	})
 	obj = newEmptyStateObject(addr)
+	// Recreating an address after SELFDESTRUCT must not resurrect stale code
+	// or contract metadata from rawdb. java-tron deletes CodeStore and
+	// ContractStore alongside the account; keep that deletion intent on the
+	// new in-memory object until Commit removes the raw keys.
+	obj.codeDirty = true
+	obj.contractMetaDirty = true
 	s.stateObjects[addr] = obj
 	return obj
 }
@@ -1162,10 +1168,10 @@ func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
 // GetCode returns the contract bytecode at addr.
 func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	obj := s.getStateObject(addr)
-	if obj == nil {
+	if obj == nil || obj.deleted {
 		return nil
 	}
-	if len(obj.code) == 0 {
+	if len(obj.code) == 0 && !obj.codeDirty {
 		code := rawdb.ReadCode(s.db.DiskDB(), addr)
 		if len(code) > 0 {
 			obj.code = code
@@ -1194,7 +1200,7 @@ func (s *StateDB) GetCodeSize(addr tcommon.Address) int {
 // GetCodeHash returns the SHA256 hash of the contract bytecode.
 func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
 	obj := s.getStateObject(addr)
-	if obj == nil {
+	if obj == nil || obj.deleted {
 		return tcommon.Hash{}
 	}
 	return obj.codeHash
@@ -1250,10 +1256,10 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 // GetContract returns the contract metadata at addr.
 func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 	obj := s.getStateObject(addr)
-	if obj == nil {
+	if obj == nil || obj.deleted {
 		return nil
 	}
-	if obj.contractMeta == nil {
+	if obj.contractMeta == nil && !obj.contractMetaDirty {
 		data := rawdb.ReadContract(s.db.DiskDB(), addr)
 		if len(data) > 0 {
 			var sc contractpb.SmartContract
@@ -1323,7 +1329,26 @@ func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	prevCode := append([]byte(nil), s.GetCode(addr)...)
+	var prevMeta *contractpb.SmartContract
+	if meta := s.GetContract(addr); meta != nil {
+		prevMeta = proto.Clone(meta).(*contractpb.SmartContract)
+	}
 	s.journalAccount(addr, obj)
+	s.journal.append(codeChange{
+		address:  addr,
+		prevCode: prevCode,
+		prevHash: obj.codeHash,
+	})
+	s.journal.append(contractMetaChange{
+		address:  addr,
+		prevMeta: prevMeta,
+	})
+	obj.code = nil
+	obj.codeHash = tcommon.Hash{}
+	obj.codeDirty = true
+	obj.contractMeta = nil
+	obj.contractMetaDirty = true
 	obj.deleted = true
 	obj.markDirty()
 }
@@ -1393,6 +1418,11 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
 				return tcommon.Hash{}, err
 			}
+			rawdb.DeleteCode(s.db.DiskDB(), addr)
+			rawdb.DeleteContract(s.db.DiskDB(), addr)
+			if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+				return tcommon.Hash{}, err
+			}
 			obj.dirty = false
 			continue
 		}
@@ -1404,15 +1434,26 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			return tcommon.Hash{}, err
 		}
 		if obj.codeDirty {
-			rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
+			if len(obj.code) == 0 {
+				rawdb.DeleteCode(s.db.DiskDB(), addr)
+			} else {
+				rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
+			}
 			obj.codeDirty = false
 		}
-		if obj.contractMetaDirty && obj.contractMeta != nil {
-			metaBytes, err := proto.Marshal(obj.contractMeta)
-			if err != nil {
-				return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+		if obj.contractMetaDirty {
+			if obj.contractMeta == nil {
+				rawdb.DeleteContract(s.db.DiskDB(), addr)
+				if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+					return tcommon.Hash{}, err
+				}
+			} else {
+				metaBytes, err := proto.Marshal(obj.contractMeta)
+				if err != nil {
+					return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+				}
+				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
 			}
-			rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
 			obj.contractMetaDirty = false
 		}
 		for k, v := range obj.storage {
