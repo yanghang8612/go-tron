@@ -30,7 +30,6 @@ func accountOwnerPermission(addr tcommon.Address, threshold int64, keys ...*core
 func accountActivePermission(addr tcommon.Address) *corepb.Permission {
 	return &corepb.Permission{
 		Type:       corepb.Permission_Active,
-		Id:         2,
 		Threshold:  1,
 		Keys:       []*corepb.Key{{Address: addr[:], Weight: 1}},
 		Operations: accountPermOps(1),
@@ -176,6 +175,7 @@ func TestAccountPermissionExecute(t *testing.T) {
 		OwnerAddress: owner[:],
 		Owner: &corepb.Permission{
 			Type:      corepb.Permission_Owner,
+			Id:        99,
 			Threshold: 2,
 			Keys: []*corepb.Key{
 				{Address: owner[:], Weight: 1},
@@ -203,5 +203,20 @@ func TestAccountPermissionExecute(t *testing.T) {
 	}
 	if acc.OwnerPermission().Threshold != 2 {
 		t.Fatalf("expected threshold 2, got %d", acc.OwnerPermission().Threshold)
+	}
+	if acc.OwnerPermission().Id != 0 {
+		t.Fatalf("expected owner permission id 0, got %d", acc.OwnerPermission().Id)
+	}
+	if len(acc.ActivePermission()) != 1 {
+		t.Fatalf("expected 1 active permission, got %d", len(acc.ActivePermission()))
+	}
+	if got := acc.ActivePermission()[0].Id; got != 2 {
+		t.Fatalf("expected active permission id 2, got %d", got)
+	}
+	if c.Owner.Id != 99 {
+		t.Fatalf("execute mutated input owner permission id: got %d", c.Owner.Id)
+	}
+	if c.Actives[0].Id != 0 {
+		t.Fatalf("execute mutated input active permission id: got %d", c.Actives[0].Id)
 	}
 }

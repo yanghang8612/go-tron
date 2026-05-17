@@ -21,20 +21,19 @@ const (
 // permission/signature failure (always reject, no replay tolerance) from a
 // state-precondition failure (insufficient balance, missing token, etc.).
 var (
-	ErrNoContract                  = errors.New("transaction has no contract")
-	ErrContractSizeNotEqualToOne   = errors.New("transaction contract size should be exactly 1")
-	ErrTransactionRetCount         = errors.New("transaction result count exceeds contract count")
-	ErrTransactionTooLarge         = errors.New("transaction size exceeds maximum")
-	ErrTransactionExpiration       = errors.New("transaction expiration out of range")
-	ErrMissingOwnerAddress         = errors.New("contract has no owner address")
-	ErrNoSignature                 = errors.New("transaction has no signature")
-	ErrTooManySignatures           = errors.New("transaction has more signatures than permission keys")
-	ErrPermissionNotFound          = errors.New("permission_id not configured on account")
-	ErrPermissionForbidsType       = errors.New("permission operations bitmask forbids this contract type")
-	ErrInsufficientWeight          = errors.New("signature weight below permission threshold")
-	ErrUnauthorizedSigner          = errors.New("signer not in permission key set")
-	ErrAccountPermUpdateNotByOwner = errors.New("AccountPermissionUpdateContract must be signed with Owner permission")
-	ErrInvalidTxSignature          = errors.New("invalid transaction signature")
+	ErrNoContract                = errors.New("transaction has no contract")
+	ErrContractSizeNotEqualToOne = errors.New("transaction contract size should be exactly 1")
+	ErrTransactionRetCount       = errors.New("transaction result count exceeds contract count")
+	ErrTransactionTooLarge       = errors.New("transaction size exceeds maximum")
+	ErrTransactionExpiration     = errors.New("transaction expiration out of range")
+	ErrMissingOwnerAddress       = errors.New("contract has no owner address")
+	ErrNoSignature               = errors.New("transaction has no signature")
+	ErrTooManySignatures         = errors.New("transaction has more signatures than permission keys")
+	ErrPermissionNotFound        = errors.New("permission_id not configured on account")
+	ErrPermissionForbidsType     = errors.New("permission operations bitmask forbids this contract type")
+	ErrInsufficientWeight        = errors.New("signature weight below permission threshold")
+	ErrUnauthorizedSigner        = errors.New("signer not in permission key set")
+	ErrInvalidTxSignature        = errors.New("invalid transaction signature")
 )
 
 // ValidateTxEnvelope verifies the signature(s) on a transaction match the
@@ -108,14 +107,6 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB) error {
 			}
 			perm = types.MakeDefaultOwnerPermission(ownerAddr)
 		}
-	}
-
-	// AccountPermissionUpdate locks the signing-permission choice to Owner,
-	// matching java-tron's hard-coded guard. Without this an active key
-	// could rotate the owner key set, escalating privilege.
-	if contract.Type == corepb.Transaction_Contract_AccountPermissionUpdateContract &&
-		perm.Type != corepb.Permission_Owner {
-		return ErrAccountPermUpdateNotByOwner
 	}
 
 	if !types.OperationAllowed(perm, contract.Type) {

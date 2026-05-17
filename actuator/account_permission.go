@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 type AccountPermissionUpdateActuator struct{}
@@ -154,6 +155,30 @@ func validatePermission(p *corepb.Permission, dp *state.DynamicProperties) error
 	return validateOperationsBits(p.Operations, dp)
 }
 
+func clonePermissionWithID(p *corepb.Permission, id int32) *corepb.Permission {
+	if p == nil {
+		return nil
+	}
+	cp := proto.Clone(p).(*corepb.Permission)
+	cp.Id = id
+	return cp
+}
+
+func normalizeUpdatedPermissions(owner, witness *corepb.Permission, actives []*corepb.Permission, isWitness bool) (*corepb.Permission, *corepb.Permission, []*corepb.Permission) {
+	owner = clonePermissionWithID(owner, 0)
+	if isWitness {
+		witness = clonePermissionWithID(witness, 1)
+	} else {
+		witness = nil
+	}
+
+	activeCopies := make([]*corepb.Permission, 0, len(actives))
+	for i, active := range actives {
+		activeCopies = append(activeCopies, clonePermissionWithID(active, int32(i+2)))
+	}
+	return owner, witness, activeCopies
+}
+
 func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error) {
 	c, err := a.getContract(ctx)
 	if err != nil {
@@ -164,7 +189,10 @@ func (a *AccountPermissionUpdateActuator) Execute(ctx *Context) (*Result, error)
 		return nil, err
 	}
 	fee := ctx.DynProps.UpdateAccountPermissionFee()
-	ctx.State.SetPermissions(ownerAddr, c.Owner, c.Witness, c.Actives)
+	account := ctx.State.GetAccount(ownerAddr)
+	isWitness := account != nil && account.IsWitness()
+	owner, witness, actives := normalizeUpdatedPermissions(c.Owner, c.Witness, c.Actives, isWitness)
+	ctx.State.SetPermissions(ownerAddr, owner, witness, actives)
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
 	}

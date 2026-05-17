@@ -465,12 +465,11 @@ func TestValidateTxEnvelope_LegacyAccount_NoOwnerPermission(t *testing.T) {
 	}
 }
 
-// TestValidateTxEnvelope_AccountPermissionUpdate_MustUseOwner: the
-// AccountPermissionUpdateContract is privileged — only the Owner permission
-// can authorize it. Using an Active permission must be rejected even if all
-// other checks pass (signer is in active perm key set, operation bitmask
-// allows it, threshold met). Mirrors java-tron's hard-coded guard.
-func TestValidateTxEnvelope_AccountPermissionUpdate_MustUseOwner(t *testing.T) {
+// TestValidateTxEnvelope_AccountPermissionUpdate_ActivePermissionAllowed:
+// java-tron allows AccountPermissionUpdateContract to be authorized by an
+// Active permission when that permission's operations bitmap includes the
+// AccountPermissionUpdateContract type.
+func TestValidateTxEnvelope_AccountPermissionUpdate_ActivePermissionAllowed(t *testing.T) {
 	statedb, _ := newValidatorState(t)
 	_, owner := keyAndAddr(t)
 	delegateKey, delegate := keyAndAddr(t)
@@ -511,7 +510,7 @@ func TestValidateTxEnvelope_AccountPermissionUpdate_MustUseOwner(t *testing.T) {
 	sig, _ := crypto.Sign(hash[:], delegateKey)
 	tx.Proto().Signature = [][]byte{sig}
 
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrAccountPermUpdateNotByOwner) {
-		t.Fatalf("expected ErrAccountPermUpdateNotByOwner, got %v", err)
+	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+		t.Fatalf("expected active permission to authorize AccountPermissionUpdateContract, got %v", err)
 	}
 }
