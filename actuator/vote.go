@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -29,15 +28,19 @@ func (a *VoteWitnessActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(vc.OwnerAddress)
-	if !ctx.State.AccountExists(ownerAddr) {
-		return errors.New("owner account does not exist")
-	}
 	if len(vc.Votes) == 0 {
 		return errors.New("no votes provided")
 	}
 	if len(vc.Votes) > params.MaxVoteNumber {
 		return errors.New("too many votes")
+	}
+
+	ownerAddr, err := checkedAddress(vc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
+	if !ctx.State.AccountExists(ownerAddr) {
+		return errors.New("owner account does not exist")
 	}
 
 	var tronPower int64
@@ -48,21 +51,23 @@ func (a *VoteWitnessActuator) Validate(ctx *Context) error {
 	}
 	tronPower /= int64(params.TRXPrecision)
 	var totalVoteCount int64
-	seen := make(map[common.Address]bool)
 	for _, v := range vc.Votes {
-		targetAddr := common.BytesToAddress(v.VoteAddress)
-		if seen[targetAddr] {
-			return errors.New("duplicate vote target")
+		targetAddr, err := checkedAddress(v.VoteAddress, "voteAddress")
+		if err != nil {
+			return err
 		}
-		seen[targetAddr] = true
 		if v.VoteCount <= 0 {
 			return errors.New("vote count must be positive")
 		}
-		totalVoteCount += v.VoteCount
+		var ok bool
+		totalVoteCount, ok = checkedAddInt64(totalVoteCount, v.VoteCount)
+		if !ok {
+			return errors.New("vote count overflow")
+		}
 		if !ctx.State.AccountExists(targetAddr) {
 			return errors.New("vote target account does not exist")
 		}
-		if ctx.State.GetWitness(targetAddr) == nil {
+		if !witnessExists(ctx, targetAddr) {
 			return errors.New("vote target is not a witness")
 		}
 	}
@@ -77,7 +82,10 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := common.BytesToAddress(vc.OwnerAddress)
+	ownerAddr, err := checkedAddress(vc.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 
 	// Settle pending voter rewards BEFORE changing votes. Java-tron's
 	// VoteWitnessActuator.execute calls mortgageService.withdrawReward
@@ -94,12 +102,10 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
 	}
 
-	// Remove old votes from witnesses
+	// Store the epoch delta in VotesStore. java-tron does not mutate
+	// WitnessStore here; MaintenanceManager.countVote applies old/new
+	// vote deltas at the next maintenance boundary.
 	oldVotes := ctx.State.GetVotes(ownerAddr)
-	for _, v := range oldVotes {
-		targetAddr := common.BytesToAddress(v.VoteAddress)
-		ctx.State.AddWitnessVoteCount(targetAddr, -v.VoteCount)
-	}
 
 	// Set new votes on account
 	newVotes := make([]*corepb.Vote, len(vc.Votes))
@@ -109,13 +115,10 @@ func (a *VoteWitnessActuator) Execute(ctx *Context) (*Result, error) {
 			VoteCount:   v.VoteCount,
 		}
 	}
-	ctx.State.SetVotes(ownerAddr, newVotes)
-
-	// Add new votes to witnesses
-	for _, v := range vc.Votes {
-		targetAddr := common.BytesToAddress(v.VoteAddress)
-		ctx.State.AddWitnessVoteCount(targetAddr, v.VoteCount)
+	if err := recordPendingVotes(ctx, ownerAddr, oldVotes, newVotes); err != nil {
+		return nil, err
 	}
+	ctx.State.SetVotes(ownerAddr, newVotes)
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

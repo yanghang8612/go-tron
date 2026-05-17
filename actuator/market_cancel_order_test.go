@@ -48,6 +48,7 @@ func TestMarketCancelOrderValidate_NotOwner(t *testing.T) {
 	txSell := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 50)
 	ctxSell := setupContext(t, statedb, txSell)
 	ctxSell.DB = db
+	ctxSell.DynProps.SetAllowSameTokenName(true)
 	act := &MarketSellAssetActuator{}
 	if _, err := act.Execute(ctxSell); err != nil {
 		t.Fatalf("sell execute failed: %v", err)
@@ -121,6 +122,7 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	txSell := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 50)
 	ctxSell := setupContext(t, statedb, txSell)
 	ctxSell.DB = db
+	ctxSell.DynProps.SetAllowSameTokenName(true)
 	act := &MarketSellAssetActuator{}
 	if _, err := act.Execute(ctxSell); err != nil {
 		t.Fatalf("sell execute failed: %v", err)
@@ -143,6 +145,7 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	txCancel := makeMarketCancelTx(1, orderID)
 	ctxCancel := setupContext(t, statedb, txCancel)
 	ctxCancel.DB = db
+	ctxCancel.DynProps.SetAllowSameTokenName(true)
 
 	cancelAct := &MarketCancelOrderActuator{}
 	result, err := cancelAct.Execute(ctxCancel)
@@ -172,6 +175,10 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	if order.SellTokenQuantityReturn != 100 {
 		t.Fatalf("SellTokenQuantityReturn: want 100, got %d", order.SellTokenQuantityReturn)
 	}
+	mao := trawdb.ReadMarketAccountOrder(db, owner[:])
+	if mao.Count != 0 || len(mao.Orders) != 0 || mao.TotalCount != 1 {
+		t.Fatalf("market account order should retain only total_count after cancel, got %+v", mao)
+	}
 }
 
 // TestMarketCancelOrderExecute_RemovesFromBook places an order, cancels it,
@@ -189,6 +196,7 @@ func TestMarketCancelOrderExecute_RemovesFromBook(t *testing.T) {
 	txSell := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 50)
 	ctxSell := setupContext(t, statedb, txSell)
 	ctxSell.DB = db
+	ctxSell.DynProps.SetAllowSameTokenName(true)
 	act := &MarketSellAssetActuator{}
 	if _, err := act.Execute(ctxSell); err != nil {
 		t.Fatalf("sell execute failed: %v", err)
@@ -206,6 +214,7 @@ func TestMarketCancelOrderExecute_RemovesFromBook(t *testing.T) {
 	txCancel := makeMarketCancelTx(1, orderID)
 	ctxCancel := setupContext(t, statedb, txCancel)
 	ctxCancel.DB = db
+	ctxCancel.DynProps.SetAllowSameTokenName(true)
 
 	cancelAct := &MarketCancelOrderActuator{}
 	if _, err := cancelAct.Execute(ctxCancel); err != nil {
@@ -222,5 +231,8 @@ func TestMarketCancelOrderExecute_RemovesFromBook(t *testing.T) {
 	pl := trawdb.ReadMarketPriceList(db, []byte("1000001"), []byte("_"))
 	if pl != nil && len(pl.Prices) > 0 {
 		t.Fatalf("price list should be empty after cancel, got %d prices", len(pl.Prices))
+	}
+	if got := trawdb.ReadMarketPairPriceCount(db, []byte("1000001"), []byte("_")); got != 0 {
+		t.Fatalf("pair price count should be removed after cancel, got %d", got)
 	}
 }

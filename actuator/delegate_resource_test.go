@@ -96,6 +96,139 @@ func TestDelegateResourceExecute(t *testing.T) {
 	if dr == nil || dr.FrozenBalanceForBandwidth != 1000000 {
 		t.Fatalf("delegation record wrong: %+v", dr)
 	}
+	if unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false); unlocked == nil || unlocked.FrozenBalanceForBandwidth != 1000000 {
+		t.Fatalf("unlocked delegation bucket wrong: %+v", unlocked)
+	}
+	if locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true); locked != nil {
+		t.Fatalf("locked bucket should not exist for unlocked delegation: %+v", locked)
+	}
+}
+
+func TestDelegateResourceValidate_UsesRemainingFrozenOnly(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         2_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 2_000_000)
+	ctx.State.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
+
+	if err := (&DelegateResourceActuator{}).Validate(ctx); err != nil {
+		t.Fatalf("validate should use remaining frozen balance without subtracting already delegated again: %v", err)
+	}
+}
+
+func TestDelegateResourceValidate_RejectsConsumedBandwidthV2(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         5_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.Set("total_net_limit", 1_000)
+	ctx.DynProps.SetTotalNetWeight(10)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 10_000_000)
+	ctx.State.SetNetUsage(owner, 600)
+	ctx.State.SetLatestConsumeTime(owner, ctx.ResourceTime())
+
+	err := (&DelegateResourceActuator{}).Validate(ctx)
+	if err == nil {
+		t.Fatal("expected consumed bandwidth to reduce delegatable V2 balance")
+	}
+	if err.Error() != "delegateBalance must be less than or equal to available FreezeBandwidthV2 balance" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDelegateResourceValidate_AcquiredBandwidthShieldsSelfV2Usage(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         5_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.Set("total_net_limit", 1_000)
+	ctx.DynProps.SetTotalNetWeight(10)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 10_000_000)
+	ctx.State.AddAcquiredDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
+	ctx.State.SetNetUsage(owner, 600)
+	ctx.State.SetLatestConsumeTime(owner, ctx.ResourceTime())
+
+	if err := (&DelegateResourceActuator{}).Validate(ctx); err != nil {
+		t.Fatalf("acquired delegation should be consumed before self V2 balance: %v", err)
+	}
+}
+
+func TestDelegateResourceValidate_RejectsConsumedEnergyV2(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_ENERGY,
+		Balance:         5_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1_000)
+	ctx.DynProps.SetTotalEnergyWeight(10)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 10_000_000)
+	ctx.State.SetEnergyUsage(owner, 600)
+	ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.ResourceTime())
+
+	err := (&DelegateResourceActuator{}).Validate(ctx)
+	if err == nil {
+		t.Fatal("expected consumed energy to reduce delegatable V2 balance")
+	}
+	if err.Error() != "delegateBalance must be less than or equal to available FreezeEnergyV2 balance" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDelegateResourceValidate_RejectsContractReceiver(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         1_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Contract)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5_000_000)
+
+	if err := (&DelegateResourceActuator{}).Validate(ctx); err == nil {
+		t.Fatal("expected contract receiver to be rejected")
+	}
 }
 
 // setupLockedDelegateCtx is a helper that builds a ready-to-execute
@@ -161,6 +294,58 @@ func TestDelegateResource_LockPostFork_HonorsContract(t *testing.T) {
 	}
 }
 
+func TestDelegateResource_LockedAndUnlockedUseSeparateV2Buckets(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	db := ethrawdb.NewMemoryDatabase()
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract,
+		&contractpb.DelegateResourceContract{
+			OwnerAddress:    owner[:],
+			ReceiverAddress: receiver[:],
+			Resource:        corepb.ResourceCode_BANDWIDTH,
+			Balance:         1_000_000,
+		}, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetMaxDelegateLockPeriod(10_000_000)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5_000_000)
+	ctx.DB = db
+
+	act := &DelegateResourceActuator{}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("unlocked execute: %v", err)
+	}
+
+	ctx.Tx = newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract,
+		&contractpb.DelegateResourceContract{
+			OwnerAddress:    owner[:],
+			ReceiverAddress: receiver[:],
+			Resource:        corepb.ResourceCode_BANDWIDTH,
+			Balance:         2_000_000,
+			Lock:            true,
+			LockPeriod:      100,
+		}, 0).Tx
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("locked execute: %v", err)
+	}
+
+	unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false)
+	if unlocked == nil || unlocked.FrozenBalanceForBandwidth != 1_000_000 || unlocked.ExpireTimeForBandwidth != 0 {
+		t.Fatalf("unexpected unlocked bucket: %+v", unlocked)
+	}
+	locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true)
+	wantExpire := ctx.PrevBlockTime + 100*params.BlockProducedInterval
+	if locked == nil || locked.FrozenBalanceForBandwidth != 2_000_000 || locked.ExpireTimeForBandwidth != wantExpire {
+		t.Fatalf("unexpected locked bucket: %+v want expire %d", locked, wantExpire)
+	}
+	agg := rawdb.ReadDelegatedResource(db, owner, receiver)
+	if agg == nil || agg.FrozenBalanceForBandwidth != 3_000_000 || agg.ExpireTimeForBandwidth != wantExpire {
+		t.Fatalf("unexpected aggregate: %+v", agg)
+	}
+}
+
 // Post-fork Validate rejects lockPeriod outside [0, maxDelegateLockPeriod].
 func TestDelegateResource_LockPostFork_RejectsOutOfRange(t *testing.T) {
 	// 86402 blocks exceeds the maxDelegateLockPeriod (86401) below.
@@ -181,7 +366,7 @@ func TestDelegateResource_LockPostFork_RejectsShorterRemain(t *testing.T) {
 	ctx.DynProps.SetMaxDelegateLockPeriod(10_000_000)
 	// Pre-seed a prior locked delegation whose remaining time exceeds the new
 	// lockPeriod's duration: existingExpire - PrevBlockTime > 100*3000.
-	rawdb.WriteDelegatedResource(ctx.DB, owner, receiver, &rawdb.DelegatedResource{
+	rawdb.WriteDelegatedResourceV2(ctx.DB, owner, receiver, true, &rawdb.DelegatedResource{
 		From: owner, To: receiver,
 		FrozenBalanceForBandwidth: 1,
 		ExpireTimeForBandwidth:    ctx.PrevBlockTime + 1_000_000, // remain = 1_000_000ms ≫ 300_000ms

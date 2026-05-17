@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -35,15 +33,21 @@ func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	ex := rawdb.ReadExchange(ctx.DB, c.ExchangeId)
+	ex := readExchangeForCurrentFork(ctx, c.ExchangeId)
 	if ex == nil {
 		return errors.New("exchange not found")
 	}
 	// Token must belong to the exchange (java line 174-176).
+	if err := validateExchangeTokenID(ctx, c.TokenId, "token id"); err != nil {
+		return err
+	}
 	if !bytes.Equal(ex.FirstTokenId, c.TokenId) && !bytes.Equal(ex.SecondTokenId, c.TokenId) {
 		return errors.New("token is not in exchange")
 	}
@@ -72,7 +76,12 @@ func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 
 	// Pool balance cap (java line 191-197).
 	balanceLimit := ctx.DynProps.ExchangeBalanceLimit()
-	if sellBalance+c.Quant > balanceLimit {
+	harden := ctx.DynProps.AllowHardenExchangeCalculation()
+	newSellBalance, err := exchangeAdd(sellBalance, c.Quant, harden)
+	if err != nil {
+		return err
+	}
+	if newSellBalance > balanceLimit {
 		return fmt.Errorf("token balance must less than %d", balanceLimit)
 	}
 
@@ -84,7 +93,15 @@ func (a *ExchangeTransactionActuator) Validate(ctx *Context) error {
 	// Bancor quote — note this uses a throwaway processor since Validate must
 	// not mutate any persisted state (java calls exchangeCapsule.transaction(..)
 	// which mutates a local copy that is discarded on return).
-	anotherTokenQuant := newExchangeProcessor(ctx.DynProps.AllowStrictMath()).exchange(sellBalance, buyBalance, c.Quant)
+	anotherTokenQuant, err := exchangeQuote(sellBalance, buyBalance, c.Quant, ctx.DynProps.AllowStrictMath(), harden)
+	if err != nil {
+		return err
+	}
+	if harden {
+		if _, err := exchangeSub(buyBalance, anotherTokenQuant, true); err != nil {
+			return err
+		}
+	}
 	if anotherTokenQuant < c.Expected {
 		return errors.New("token required must greater than expected")
 	}
@@ -97,8 +114,11 @@ func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
-	ex := rawdb.ReadExchange(ctx.DB, c.ExchangeId)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	ex := readExchangeForCurrentFork(ctx, c.ExchangeId)
 	if ex == nil {
 		return nil, errors.New("exchange not found")
 	}
@@ -116,7 +136,11 @@ func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Fresh processor per execution — supply state is never shared.
-	receive := newExchangeProcessor(ctx.DynProps.AllowStrictMath()).exchange(sellBalance, buyBalance, c.Quant)
+	harden := ctx.DynProps.AllowHardenExchangeCalculation()
+	receive, err := exchangeQuote(sellBalance, buyBalance, c.Quant, ctx.DynProps.AllowStrictMath(), harden)
+	if err != nil {
+		return nil, err
+	}
 	if receive < c.Expected {
 		return nil, errors.New("exchange transaction: receive amount below expected")
 	}
@@ -129,14 +153,22 @@ func (a *ExchangeTransactionActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	if bytes.Equal(ex.FirstTokenId, c.TokenId) {
-		ex.FirstTokenBalance += c.Quant
-		ex.SecondTokenBalance -= receive
+		if ex.FirstTokenBalance, err = exchangeAdd(ex.FirstTokenBalance, c.Quant, harden); err != nil {
+			return nil, err
+		}
+		if ex.SecondTokenBalance, err = exchangeSub(ex.SecondTokenBalance, receive, harden); err != nil {
+			return nil, err
+		}
 	} else {
-		ex.SecondTokenBalance += c.Quant
-		ex.FirstTokenBalance -= receive
+		if ex.SecondTokenBalance, err = exchangeAdd(ex.SecondTokenBalance, c.Quant, harden); err != nil {
+			return nil, err
+		}
+		if ex.FirstTokenBalance, err = exchangeSub(ex.FirstTokenBalance, receive, harden); err != nil {
+			return nil, err
+		}
 	}
-	if err := rawdb.WriteExchange(ctx.DB, ex); err != nil {
+	if err := writeExchangeForCurrentFork(ctx, ex); err != nil {
 		return nil, err
 	}
-	return &Result{ContractRet: 1}, nil
+	return &Result{ExchangeReceivedAmount: receive, ContractRet: 1}, nil
 }

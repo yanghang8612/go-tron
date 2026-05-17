@@ -66,6 +66,7 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	owner := makeTestAddr(3)
 	seedAccount(statedb, owner, 1000)
 	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 500)
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, 200, 99_999)
 
 	blockTime := int64(100000)
 	tx := makeUnfreezeV2Tx(3, 200, corepb.ResourceCode_BANDWIDTH)
@@ -90,6 +91,9 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	if result.Fee != 0 {
 		t.Fatalf("fee: want 0, got %d", result.Fee)
 	}
+	if result.WithdrawExpireAmount != 200 {
+		t.Fatalf("withdraw_expire_amount: want 200, got %d", result.WithdrawExpireAmount)
+	}
 
 	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH); got != 300 {
 		t.Fatalf("frozen BW: want 300, got %d", got)
@@ -106,8 +110,8 @@ func TestUnfreezeV2Execute(t *testing.T) {
 	if unfrozen[0].UnfreezeExpireTime != expectedExpire {
 		t.Fatalf("expire time: want %d, got %d", expectedExpire, unfrozen[0].UnfreezeExpireTime)
 	}
-	if statedb.GetBalance(owner) != 1000 {
-		t.Fatalf("balance: want 1000, got %d", statedb.GetBalance(owner))
+	if statedb.GetBalance(owner) != 1200 {
+		t.Fatalf("balance: want 1200, got %d", statedb.GetBalance(owner))
 	}
 }
 

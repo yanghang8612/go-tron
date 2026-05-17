@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -59,27 +58,41 @@ func (a *DelegateResourceActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
-	receiverAddr := tcommon.BytesToAddress(c.ReceiverAddress)
-	if ownerAddr == receiverAddr {
-		return errors.New("cannot delegate to self")
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "address")
+	if err != nil {
+		return err
 	}
-	if c.Balance <= 0 {
-		return errors.New("delegation balance must be positive")
+	receiverAddr, err := checkedAddress(c.ReceiverAddress, "receiverAddress")
+	if err != nil {
+		return err
 	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if !ctx.State.AccountExists(receiverAddr) {
-		return errors.New("receiver account does not exist")
+	if c.Balance < int64(params.TRXPrecision) {
+		return errors.New("delegateBalance must be greater than or equal to 1 TRX")
 	}
 	if c.Resource != corepb.ResourceCode_BANDWIDTH && c.Resource != corepb.ResourceCode_ENERGY {
 		return errors.New("invalid resource type")
 	}
-	frozen := ctx.State.GetFrozenV2Amount(ownerAddr, c.Resource)
-	alreadyDelegated := ctx.State.GetDelegatedFrozenV2(ownerAddr, c.Resource)
-	available := frozen - alreadyDelegated
+	if ownerAddr == receiverAddr {
+		return errors.New("cannot delegate to self")
+	}
+	if !ctx.State.AccountExists(receiverAddr) {
+		return errors.New("receiver account does not exist")
+	}
+	receiver := ctx.State.GetAccount(receiverAddr)
+	if receiver != nil && receiver.Type() == corepb.AccountType_Contract {
+		return errors.New("Do not allow delegate resources to contract addresses")
+	}
+	available := delegation.AvailableFrozenV2ForDelegation(ctx.State, ctx.DynProps, ownerAddr, c.Resource, ctx.ResourceTime())
 	if available < c.Balance {
+		switch c.Resource {
+		case corepb.ResourceCode_BANDWIDTH:
+			return errors.New("delegateBalance must be less than or equal to available FreezeBandwidthV2 balance")
+		case corepb.ResourceCode_ENERGY:
+			return errors.New("delegateBalance must be less than or equal to available FreezeEnergyV2 balance")
+		}
 		return errors.New("insufficient frozen balance to delegate")
 	}
 
@@ -94,12 +107,7 @@ func (a *DelegateResourceActuator) Validate(ctx *Context) error {
 			return fmt.Errorf("the lock period of delegate resource cannot be less than 0 and cannot exceed %d!", maxLock)
 		}
 		if ctx.DB != nil {
-			// NOTE: gtron does not yet split locked/unlocked delegation
-			// entries (java-tron `DelegatedResourceCapsule.createDbKeyV2`).
-			// Until that lands we check the single entry, which over-rejects
-			// only when a prior unlocked delegate happens to have a later
-			// expire time — a window java-tron treats as a fresh start.
-			if dr := rawdb.ReadDelegatedResource(ctx.DB, ownerAddr, receiverAddr); dr != nil {
+			if dr := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, true); dr != nil {
 				var existingExpire int64
 				switch c.Resource {
 				case corepb.ResourceCode_BANDWIDTH:
@@ -122,14 +130,20 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
-	receiverAddr := tcommon.BytesToAddress(c.ReceiverAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "address")
+	if err != nil {
+		return nil, err
+	}
+	receiverAddr, err := checkedAddress(c.ReceiverAddress, "receiverAddress")
+	if err != nil {
+		return nil, err
+	}
 
 	// Mirrors java-tron DelegateResourceActuator.execute line 155:
 	// refresh owner's usage counter before their frozen pool shifts, so
 	// the sliding-window decay keeps tracking from the correct anchor.
 	// Passing transferUsage=0 just writes back the recovered value.
-	delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, 0, ctx.PrevBlockTime)
+	delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, 0, ctx.ResourceTime())
 
 	// Subtract from owner's frozen balance
 	ctx.State.ReduceFreezeV2(ownerAddr, c.Resource, c.Balance)
@@ -140,7 +154,12 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 
 	// Update delegation record in rawdb
 	if ctx.DB != nil {
-		dr := rawdb.ReadDelegatedResource(ctx.DB, ownerAddr, receiverAddr)
+		if err := rawdb.UnlockExpiredDelegatedResource(ctx.DB, ctx.DB, ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
+			return nil, err
+		}
+
+		locked := c.Lock
+		dr := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, locked)
 		if dr == nil {
 			dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
 		}
@@ -155,22 +174,26 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 		expireTime := ctx.PrevBlockTime + lockPeriodBlocks*params.BlockProducedInterval
 		if c.Resource == corepb.ResourceCode_BANDWIDTH {
 			dr.FrozenBalanceForBandwidth += c.Balance
-			if c.Lock {
+			if locked {
 				dr.ExpireTimeForBandwidth = expireTime
 			}
 		} else {
 			dr.FrozenBalanceForEnergy += c.Balance
-			if c.Lock {
+			if locked {
 				dr.ExpireTimeForEnergy = expireTime
 			}
 		}
-		rawdb.WriteDelegatedResource(ctx.DB, ownerAddr, receiverAddr, dr)
+		if err := rawdb.WriteDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, locked, dr); err != nil {
+			return nil, err
+		}
 
 		// Update delegation index
 		receivers := rawdb.ReadDelegationIndex(ctx.DB, ownerAddr)
 		if !containsAddress(receivers, receiverAddr) {
 			receivers = append(receivers, receiverAddr)
-			rawdb.WriteDelegationIndex(ctx.DB, ownerAddr, receivers)
+			if err := rawdb.WriteDelegationIndex(ctx.DB, ownerAddr, receivers); err != nil {
+				return nil, err
+			}
 		}
 	}
 

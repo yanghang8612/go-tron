@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/big"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -34,13 +31,22 @@ func (a *ExchangeCreateActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	// Cannot pair a token with itself (java line 188-190).
 	if bytes.Equal(c.FirstTokenId, c.SecondTokenId) {
 		return errors.New("cannot exchange same tokens")
+	}
+	if err := validateExchangeTokenID(ctx, c.FirstTokenId, "first token id"); err != nil {
+		return err
+	}
+	if err := validateExchangeTokenID(ctx, c.SecondTokenId, "second token id"); err != nil {
+		return err
 	}
 	if c.FirstTokenBalance <= 0 || c.SecondTokenBalance <= 0 {
 		return errors.New("token balance must greater than zero")
@@ -59,12 +65,21 @@ func (a *ExchangeCreateActuator) Validate(ctx *Context) error {
 	}
 	// Owner must have enough TRX for fee, plus any TRX they are committing to the pool.
 	fee := ctx.DynProps.ExchangeCreateFee()
+	harden := ctx.DynProps.AllowHardenExchangeCalculation()
 	trxNeeded := fee
 	if bytes.Equal(c.FirstTokenId, []byte("_")) {
-		trxNeeded = safeAdd(trxNeeded, c.FirstTokenBalance)
+		var err error
+		trxNeeded, err = exchangeAdd(trxNeeded, c.FirstTokenBalance, harden)
+		if err != nil {
+			return err
+		}
 	}
 	if bytes.Equal(c.SecondTokenId, []byte("_")) {
-		trxNeeded = safeAdd(trxNeeded, c.SecondTokenBalance)
+		var err error
+		trxNeeded, err = exchangeAdd(trxNeeded, c.SecondTokenBalance, harden)
+		if err != nil {
+			return err
+		}
 	}
 	if ctx.State.GetBalance(ownerAddr) < trxNeeded {
 		return errors.New("insufficient TRX for fee and token deposit")
@@ -78,7 +93,10 @@ func (a *ExchangeCreateActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	fee := ctx.DynProps.ExchangeCreateFee()
 
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
@@ -97,23 +115,24 @@ func (a *ExchangeCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ex := &corepb.Exchange{
 		ExchangeId:         exchangeID,
 		CreatorAddress:     c.OwnerAddress,
-		CreateTime:         ctx.BlockTime,
+		CreateTime:         ctx.DynProps.LatestBlockHeaderTimestamp(),
 		FirstTokenId:       c.FirstTokenId,
 		FirstTokenBalance:  c.FirstTokenBalance,
 		SecondTokenId:      c.SecondTokenId,
 		SecondTokenBalance: c.SecondTokenBalance,
 	}
-	if err := rawdb.WriteExchange(ctx.DB, ex); err != nil {
+	if err := writeExchangeForCurrentFork(ctx, ex); err != nil {
 		return nil, err
 	}
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	return &Result{Fee: fee, ExchangeID: exchangeID, ContractRet: 1}, nil
 }
 
-// safeAdd adds two int64 values, saturating at MaxInt64 on overflow.
-func safeAdd(a, b int64) int64 {
-	r := new(big.Int).Add(big.NewInt(a), big.NewInt(b))
-	if !r.IsInt64() {
-		return int64(^uint64(0) >> 1) // max int64
+func validateExchangeTokenID(ctx *Context, tokenID []byte, field string) error {
+	if !ctx.DynProps.AllowSameTokenName() || bytes.Equal(tokenID, []byte("_")) {
+		return nil
 	}
-	return r.Int64()
+	if !isNumericBytes(tokenID) {
+		return fmt.Errorf("%s is not a valid number", field)
+	}
+	return nil
 }

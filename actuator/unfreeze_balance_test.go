@@ -3,6 +3,7 @@ package actuator
 import (
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -82,6 +83,9 @@ func TestUnfreezeBalanceExecute_Bandwidth(t *testing.T) {
 	if result.Fee != 0 {
 		t.Fatalf("fee: want 0, got %d", result.Fee)
 	}
+	if result.UnfreezeAmount != 1_000_000 {
+		t.Fatalf("unfreeze amount: want 1000000, got %d", result.UnfreezeAmount)
+	}
 	// Balance should be restored: 9_000_000 + 1_000_000 = 10_000_000
 	if got := statedb.GetBalance(owner); got != 10_000_000 {
 		t.Fatalf("balance: want 10000000, got %d", got)
@@ -93,6 +97,27 @@ func TestUnfreezeBalanceExecute_Bandwidth(t *testing.T) {
 	// Frozen bandwidth should be cleared
 	if got := obj.TotalFrozenBandwidth(); got != 0 {
 		t.Fatalf("frozen bandwidth: want 0, got %d", got)
+	}
+}
+
+func TestUnfreezeBalanceExecute_ClearsVotes(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(31)
+	witness := makeTestAddr(32)
+	seedAccount(statedb, owner, 9_000_000)
+	statedb.CreateAccount(witness, corepb.AccountType_Normal)
+	statedb.SetVotes(owner, []*corepb.Vote{{VoteAddress: witness[:], VoteCount: 1}})
+	statedb.FreezeV1Bandwidth(owner, 1_000_000, 500_000)
+
+	tx := makeUnfreezeBalanceTx(31, corepb.ResourceCode_BANDWIDTH, nil)
+	act := &UnfreezeBalanceActuator{}
+	ctx := setupContext(t, statedb, tx)
+
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if votes := statedb.GetVotes(owner); len(votes) != 0 {
+		t.Fatalf("votes should be cleared after V1 unfreeze, got %v", votes)
 	}
 }
 
@@ -129,6 +154,39 @@ func TestUnfreezeBalanceExecute_Energy(t *testing.T) {
 	}
 }
 
+func TestUnfreezeBalanceExecute_TronPower(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(7)
+	seedAccount(statedb, owner, 7_000_000)
+	statedb.FreezeV1TronPower(owner, 3_000_000, 500_000)
+
+	tx := makeUnfreezeBalanceTx(7, corepb.ResourceCode_TRON_POWER, nil)
+	act := &UnfreezeBalanceActuator{}
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowNewResourceModel(true)
+	ctx.DynProps.SetTotalTronPowerWeight(3)
+
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	result, err := act.Execute(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Fee != 0 {
+		t.Fatalf("fee: want 0, got %d", result.Fee)
+	}
+	if got := statedb.GetBalance(owner); got != 10_000_000 {
+		t.Fatalf("balance: want 10000000, got %d", got)
+	}
+	if got := statedb.GetAccount(owner).V1TronPowerFrozen(); got != 0 {
+		t.Fatalf("V1 tron power frozen: want 0, got %d", got)
+	}
+	if got := ctx.DynProps.TotalTronPowerWeight(); got != 0 {
+		t.Fatalf("total tron power weight: want 0, got %d", got)
+	}
+}
+
 // TestUnfreezeBalanceExecute_Delegated tests that unfreezing a delegation restores balance
 // and clears the delegation.
 func TestUnfreezeBalanceExecute_Delegated(t *testing.T) {
@@ -144,6 +202,15 @@ func TestUnfreezeBalanceExecute_Delegated(t *testing.T) {
 	tx := makeUnfreezeBalanceTx(5, corepb.ResourceCode_BANDWIDTH, &receiverByte)
 	act := &UnfreezeBalanceActuator{}
 	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	if err := rawdb.WriteDelegatedResource(ctx.DB, owner, receiver, &rawdb.DelegatedResource{
+		From:                      owner,
+		To:                        receiver,
+		FrozenBalanceForBandwidth: 3_000_000,
+		ExpireTimeForBandwidth:    500_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := act.Execute(ctx)
 	if err != nil {

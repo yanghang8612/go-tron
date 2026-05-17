@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -16,7 +17,7 @@ import (
 const trxPrecisionTest = 1_000_000
 
 // ctxFor builds a Context usable by the transfer helpers. Only State +
-// DynProps + BlockTime are read.
+// DynProps + BlockTime are read; BlockTime carries the resource slot here.
 func ctxFor(statedb *state.StateDB, dp *state.DynamicProperties, now int64) *Context {
 	return &Context{State: statedb, DynProps: dp, BlockTime: now}
 }
@@ -32,11 +33,11 @@ func TestTransferUsageFromReceiver_ProRata(t *testing.T) {
 
 	// Receiver has 100 TRX acquired delegation, 0 own frozen. Total = 100 TRX.
 	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
-	// They've consumed 500 bandwidth at an earlier timestamp.
+	// They've consumed 500 bandwidth at an earlier resource slot.
 	statedb.SetNetUsage(receiver, 500)
-	statedb.SetLatestConsumeTime(receiver, 1_000_000)
+	statedb.SetLatestConsumeTime(receiver, 10)
 
-	ctx := ctxFor(statedb, dp, 1_000_000) // no time elapsed → no decay
+	ctx := ctxFor(statedb, dp, 10) // no time elapsed → no decay
 
 	// Undelegate 40 TRX — 40% of receiver's pool.
 	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
@@ -50,8 +51,8 @@ func TestTransferUsageFromReceiver_ProRata(t *testing.T) {
 	if got := statedb.GetNetUsage(receiver); got != 300 {
 		t.Fatalf("receiver usage after transfer: got %d, want 300", got)
 	}
-	if got := statedb.GetLatestConsumeTime(receiver); got != 1_000_000 {
-		t.Fatalf("receiver consume time: got %d, want 1000000", got)
+	if got := statedb.GetLatestConsumeTime(receiver); got != 10 {
+		t.Fatalf("receiver consume time: got %d, want 10", got)
 	}
 }
 
@@ -107,9 +108,9 @@ func TestTransferUsageFromReceiver_Energy(t *testing.T) {
 	seedAccount(statedb, receiver, 0)
 	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_ENERGY, 200*trxPrecisionTest)
 	statedb.SetEnergyUsage(receiver, 1000)
-	statedb.SetLatestConsumeTimeForEnergy(receiver, 5000)
+	statedb.SetLatestConsumeTimeForEnergy(receiver, 5)
 
-	ctx := ctxFor(statedb, dp, 5000)
+	ctx := ctxFor(statedb, dp, 5)
 
 	// Undelegate 50 TRX — 25% of receiver's 200 TRX energy pool.
 	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime)
@@ -128,17 +129,17 @@ func TestFoldUsageIntoOwner_AddsOnTopOfRecovered(t *testing.T) {
 	owner := makeTestAddr(0x11)
 	seedAccount(statedb, owner, 0)
 
-	// Owner had 400 usage at t=0; 12h later, window recovery leaves ~200.
+	// Owner had 400 usage at slot 0; half a resource window later, recovery
+	// leaves ~200.
 	statedb.SetNetUsage(owner, 400)
 	statedb.SetLatestConsumeTime(owner, 0)
 
-	// Jump forward half a window (43_200_000 ms = 12h).
-	now := int64(43_200_000)
+	now := int64(params.WindowSizeSlots / 2)
 	ctx := ctxFor(statedb, dp, now)
 
 	delegation.FoldUsageIntoOwner(ctx.State, owner, corepb.ResourceCode_BANDWIDTH, 100, ctx.BlockTime)
 
-	// Recovered = 400 × (86_400_000 - 43_200_000) / 86_400_000 = 200.
+	// Recovered = 400 × (window - halfWindow) / window = 200.
 	// + transferred 100 = 300.
 	if got := statedb.GetNetUsage(owner); got != 300 {
 		t.Fatalf("owner usage: got %d, want 300", got)
@@ -170,7 +171,7 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	// Owner has delegated 100 TRX worth of bandwidth to receiver.
 	statedb.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
 	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
-	rawdb.WriteDelegatedResource(db, owner, receiver, &rawdb.DelegatedResource{
+	rawdb.WriteDelegatedResourceV2(db, owner, receiver, false, &rawdb.DelegatedResource{
 		From:                      owner,
 		To:                        receiver,
 		FrozenBalanceForBandwidth: 100 * trxPrecisionTest,
@@ -178,7 +179,7 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 
 	// Receiver has used 600 bandwidth.
 	statedb.SetNetUsage(receiver, 600)
-	statedb.SetLatestConsumeTime(receiver, 5_000)
+	statedb.SetLatestConsumeTime(receiver, 5)
 
 	c := &contractpb.UnDelegateResourceContract{
 		OwnerAddress:    owner.Bytes(),
@@ -204,6 +205,8 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 		Tx:            tx,
 		BlockTime:     5_000, // same time — no decay
 		PrevBlockTime: 5_000,
+		HeadSlot:      5,
+		HasHeadSlot:   true,
 		BlockNumber:   100,
 	}
 
@@ -248,7 +251,7 @@ func TestRecoverUsageWindow_EdgeCases(t *testing.T) {
 		t.Fatalf("zero: got %d", got)
 	}
 	// Elapsed ≥ window → fully decayed.
-	if got := delegation.RecoverUsageWindow(500, 0, 86_400_000); got != 0 {
+	if got := delegation.RecoverUsageWindow(500, 0, int64(params.WindowSizeSlots)); got != 0 {
 		t.Fatalf("full window elapsed: got %d", got)
 	}
 	// Elapsed <= 0 → unchanged.
@@ -256,7 +259,7 @@ func TestRecoverUsageWindow_EdgeCases(t *testing.T) {
 		t.Fatalf("negative elapsed: got %d", got)
 	}
 	// Mid-window: half decay.
-	if got := delegation.RecoverUsageWindow(1000, 0, 43_200_000); got != 500 {
+	if got := delegation.RecoverUsageWindow(1000, 0, int64(params.WindowSizeSlots/2)); got != 500 {
 		t.Fatalf("half decay: got %d", got)
 	}
 }

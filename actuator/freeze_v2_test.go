@@ -31,7 +31,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	owner := makeTestAddr(1)
 
 	// Missing account
-	tx := makeFreezeV2Tx(1, 100, corepb.ResourceCode_BANDWIDTH)
+	tx := makeFreezeV2Tx(1, 1_000_000, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetUnfreezeDelayDays(14)
@@ -40,7 +40,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	}
 
 	// Create account with balance
-	seedAccount(statedb, owner, 1000)
+	seedAccount(statedb, owner, 10_000_000)
 
 	// Zero amount
 	tx = makeFreezeV2Tx(1, 0, corepb.ResourceCode_BANDWIDTH)
@@ -50,8 +50,16 @@ func TestFreezeV2Validate(t *testing.T) {
 		t.Fatal("expected error for zero amount")
 	}
 
+	// Sub-TRX amount
+	tx = makeFreezeV2Tx(1, 999_999, corepb.ResourceCode_BANDWIDTH)
+	ctx = setupContext(t, statedb, tx)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error for sub-TRX amount")
+	}
+
 	// Insufficient balance
-	tx = makeFreezeV2Tx(1, 5000, corepb.ResourceCode_BANDWIDTH)
+	tx = makeFreezeV2Tx(1, 50_000_000, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
 	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err == nil {
@@ -59,7 +67,7 @@ func TestFreezeV2Validate(t *testing.T) {
 	}
 
 	// Success
-	tx = makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
+	tx = makeFreezeV2Tx(1, 5_000_000, corepb.ResourceCode_BANDWIDTH)
 	ctx = setupContext(t, statedb, tx)
 	ctx.DynProps.SetUnfreezeDelayDays(14)
 	if err := act.Validate(ctx); err != nil {
@@ -70,9 +78,9 @@ func TestFreezeV2Validate(t *testing.T) {
 func TestFreezeV2Execute(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(1)
-	seedAccount(statedb, owner, 1000)
+	seedAccount(statedb, owner, 10_000_000)
 
-	tx := makeFreezeV2Tx(1, 500, corepb.ResourceCode_BANDWIDTH)
+	tx := makeFreezeV2Tx(1, 5_000_000, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetUnfreezeDelayDays(14)
@@ -85,11 +93,11 @@ func TestFreezeV2Execute(t *testing.T) {
 		t.Fatalf("fee: want 0, got %d", result.Fee)
 	}
 
-	if statedb.GetBalance(owner) != 500 {
-		t.Fatalf("balance: want 500, got %d", statedb.GetBalance(owner))
+	if statedb.GetBalance(owner) != 5_000_000 {
+		t.Fatalf("balance: want 5000000, got %d", statedb.GetBalance(owner))
 	}
-	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH); got != 500 {
-		t.Fatalf("frozen BW: want 500, got %d", got)
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH); got != 5_000_000 {
+		t.Fatalf("frozen BW: want 5000000, got %d", got)
 	}
 }
 
@@ -98,10 +106,10 @@ func TestFreezeV2Execute(t *testing.T) {
 func TestFreezeV2_TronPower_Validate(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(5)
-	seedAccount(statedb, owner, 1000)
+	seedAccount(statedb, owner, 10_000_000)
 	act := &FreezeBalanceV2Actuator{}
 
-	tx := makeFreezeV2Tx(5, 100, corepb.ResourceCode_TRON_POWER)
+	tx := makeFreezeV2Tx(5, 1_000_000, corepb.ResourceCode_TRON_POWER)
 
 	// Fork inactive: all V2 operations fail at the StakingV2 gate.
 	ctx := setupContext(t, statedb, tx)
@@ -125,10 +133,10 @@ func TestFreezeV2_TronPower_Validate(t *testing.T) {
 func TestFreezeV2_InvalidResource(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(6)
-	seedAccount(statedb, owner, 1000)
+	seedAccount(statedb, owner, 10_000_000)
 	act := &FreezeBalanceV2Actuator{}
 
-	tx := makeFreezeV2Tx(6, 100, corepb.ResourceCode(99))
+	tx := makeFreezeV2Tx(6, 1_000_000, corepb.ResourceCode(99))
 
 	// Fork inactive: rejected at the StakingV2 gate.
 	ctx := setupContext(t, statedb, tx)
@@ -149,10 +157,10 @@ func TestFreezeV2_InvalidResource(t *testing.T) {
 func TestFreezeV2_Execute_InitializesOldTronPower(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(7)
-	seedAccount(statedb, owner, 1000)
-	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 300)
+	seedAccount(statedb, owner, 10_000_000)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
 
-	tx := makeFreezeV2Tx(7, 200, corepb.ResourceCode_BANDWIDTH)
+	tx := makeFreezeV2Tx(7, 2_000_000, corepb.ResourceCode_BANDWIDTH)
 	act := &FreezeBalanceV2Actuator{}
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetAllowStakingV2(true)
@@ -163,8 +171,8 @@ func TestFreezeV2_Execute_InitializesOldTronPower(t *testing.T) {
 	}
 
 	acc := statedb.GetAccount(owner)
-	if got := acc.OldTronPower(); got != 300 {
-		t.Errorf("old_tron_power: want 300 (pre-freeze snapshot), got %d", got)
+	if got := acc.OldTronPower(); got != 3_000_000 {
+		t.Errorf("old_tron_power: want 3000000 (pre-freeze snapshot), got %d", got)
 	}
 }
 

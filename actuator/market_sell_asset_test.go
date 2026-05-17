@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	trawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -35,6 +36,15 @@ func makeMarketSellTx(ownerByte byte, sellTokenID []byte, sellQty int64, buyToke
 	return types.NewTransactionFromPB(pb)
 }
 
+func writeMarketAssetIssue(t *testing.T, db ethdb.KeyValueWriter, tokenID int64) {
+	t.Helper()
+	if err := trawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{
+		Id: "1000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMarketSellAssetValidate_Success tests that a TRC10 seller with sufficient balance passes.
 func TestMarketSellAssetValidate_Success(t *testing.T) {
 	const tokenID = int64(1_000_001)
@@ -46,11 +56,52 @@ func TestMarketSellAssetValidate_Success(t *testing.T) {
 	tx := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
+	writeMarketAssetIssue(t, ctx.DB, tokenID)
 
 	ctx.DynProps.SetAllowMarketTransaction(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate should pass: %v", err)
+	}
+}
+
+func TestMarketSellAssetValidate_TRXSellRequiresFeeAndSellQuantity(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 100)
+
+	tx := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	writeMarketAssetIssue(t, ctx.DB, tokenID)
+	ctx.DynProps.SetAllowMarketTransaction(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
+	ctx.DynProps.SetMarketSellFee(1)
+
+	act := &MarketSellAssetActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected error when TRX balance covers sell quantity or fee separately but not their sum")
+	}
+}
+
+func TestMarketSellAssetValidate_BuyTokenMustExist(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 1_000_000)
+
+	tx := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = ethrawdb.NewMemoryDatabase()
+	ctx.DynProps.SetAllowMarketTransaction(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
+
+	act := &MarketSellAssetActuator{}
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected missing buy token to fail validation")
 	}
 }
 
@@ -66,6 +117,7 @@ func TestMarketSellAssetValidate_InsufficientBalance(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.DynProps.SetAllowMarketTransaction(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -84,6 +136,7 @@ func TestMarketSellAssetValidate_SameToken(t *testing.T) {
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.DynProps.SetAllowMarketTransaction(true)
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &MarketSellAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -103,6 +156,7 @@ func TestMarketSellAssetExecute_NoMatch(t *testing.T) {
 	tx := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &MarketSellAssetActuator{}
 	result, err := act.Execute(ctx)
@@ -156,7 +210,7 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 	addrB := makeTestAddr(2)
 	statedb.CreateAccount(addrA, corepb.AccountType_Normal)
 	statedb.CreateAccount(addrB, corepb.AccountType_Normal)
-	statedb.AddBalance(addrA, 1_000_000)          // A has TRX
+	statedb.AddBalance(addrA, 1_000_000)           // A has TRX
 	statedb.SetTRC10Balance(addrB, tokenID, 1_000) // B has TRC10
 
 	db := ethrawdb.NewMemoryDatabase()
@@ -166,6 +220,7 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 	txA := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
 	ctxA := setupContext(t, statedb, txA)
 	ctxA.DB = db
+	ctxA.DynProps.SetAllowSameTokenName(true)
 	if _, err := act.Execute(ctxA); err != nil {
 		t.Fatalf("execute A failed: %v", err)
 	}
@@ -182,6 +237,7 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 	txB := makeMarketSellTx(2, []byte("1000001"), 200, []byte("_"), 100)
 	ctxB := setupContext(t, statedb, txB)
 	ctxB.DB = db
+	ctxB.DynProps.SetAllowSameTokenName(true)
 	if _, err := act.Execute(ctxB); err != nil {
 		t.Fatalf("execute B failed: %v", err)
 	}
@@ -208,6 +264,14 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 	}
 	if orderA.State != corepb.MarketOrder_INACTIVE {
 		t.Fatalf("A's order state: want INACTIVE, got %v", orderA.State)
+	}
+	maoA := trawdb.ReadMarketAccountOrder(db, addrA[:])
+	if maoA.Count != 0 || len(maoA.Orders) != 0 || maoA.TotalCount != 1 {
+		t.Fatalf("A market account order should retain only total_count after full fill, got %+v", maoA)
+	}
+	maoB := trawdb.ReadMarketAccountOrder(db, addrB[:])
+	if maoB.Count != 0 || len(maoB.Orders) != 0 || maoB.TotalCount != 1 {
+		t.Fatalf("B market account order should retain only total_count after full fill, got %+v", maoB)
 	}
 
 	// Order book for TRX->TRC10 should be empty (A consumed)
@@ -239,6 +303,7 @@ func TestMarketSellAssetExecute_PartialMatch(t *testing.T) {
 	txA := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
 	ctxA := setupContext(t, statedb, txA)
 	ctxA.DB = db
+	ctxA.DynProps.SetAllowSameTokenName(true)
 	if _, err := act.Execute(ctxA); err != nil {
 		t.Fatalf("execute A failed: %v", err)
 	}
@@ -251,6 +316,7 @@ func TestMarketSellAssetExecute_PartialMatch(t *testing.T) {
 	txB := makeMarketSellTx(2, []byte("1000001"), 400, []byte("_"), 200)
 	ctxB := setupContext(t, statedb, txB)
 	ctxB.DB = db
+	ctxB.DynProps.SetAllowSameTokenName(true)
 	if _, err := act.Execute(ctxB); err != nil {
 		t.Fatalf("execute B failed: %v", err)
 	}
@@ -281,5 +347,194 @@ func TestMarketSellAssetExecute_PartialMatch(t *testing.T) {
 	}
 	if orderB.SellTokenQuantityRemain != 200 {
 		t.Fatalf("B remaining: want 200, got %d", orderB.SellTokenQuantityRemain)
+	}
+}
+
+func TestMarketSellAssetExecute_ReturnsTakerRemainWhenBuyRoundsToZero(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+
+	maker1 := makeTestAddr(1)
+	maker2 := makeTestAddr(2)
+	taker := makeTestAddr(3)
+	statedb.CreateAccount(maker1, corepb.AccountType_Normal)
+	statedb.CreateAccount(maker2, corepb.AccountType_Normal)
+	statedb.CreateAccount(taker, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(maker1, tokenID, 100)
+	statedb.SetTRC10Balance(maker2, tokenID, 100)
+	statedb.AddBalance(taker, 7)
+
+	db := ethrawdb.NewMemoryDatabase()
+	act := &MarketSellAssetActuator{}
+	for _, owner := range []byte{1, 2} {
+		tx := makeMarketSellTx(owner, []byte("1000001"), 5, []byte("_"), 6)
+		ctx := setupContext(t, statedb, tx)
+		ctx.DB = db
+		ctx.DynProps.SetAllowSameTokenName(true)
+		if _, err := act.Execute(ctx); err != nil {
+			t.Fatalf("maker %d execute failed: %v", owner, err)
+		}
+	}
+
+	tx := makeMarketSellTx(3, []byte("_"), 7, []byte("1000001"), 5)
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
+	result, err := act.Execute(ctx)
+	if err != nil {
+		t.Fatalf("taker execute failed: %v", err)
+	}
+
+	if len(result.OrderDetails) != 1 {
+		t.Fatalf("order details: want 1 Java-compatible fill, got %d", len(result.OrderDetails))
+	}
+	if got := result.OrderDetails[0].FillSellQuantity; got != 6 {
+		t.Fatalf("first fill sell quantity: want 6, got %d", got)
+	}
+	if got := result.OrderDetails[0].FillBuyQuantity; got != 5 {
+		t.Fatalf("first fill buy quantity: want 5, got %d", got)
+	}
+	if got := statedb.GetBalance(maker1); got != 6 {
+		t.Fatalf("maker1 TRX balance: want 6, got %d", got)
+	}
+	if got := statedb.GetBalance(maker2); got != 0 {
+		t.Fatalf("maker2 TRX balance must not receive a zero-buy fill: want 0, got %d", got)
+	}
+	if got := statedb.GetBalance(taker); got != 1 {
+		t.Fatalf("taker TRX balance should get rounded remainder back: want 1, got %d", got)
+	}
+	if got := statedb.GetTRC10Balance(taker, tokenID); got != 5 {
+		t.Fatalf("taker TRC10 balance: want 5, got %d", got)
+	}
+
+	takerOrder := trawdb.ReadMarketOrder(db, result.OrderID)
+	if takerOrder == nil {
+		t.Fatal("taker order should be written")
+	}
+	if takerOrder.State != corepb.MarketOrder_INACTIVE {
+		t.Fatalf("taker order state: want INACTIVE, got %v", takerOrder.State)
+	}
+	if takerOrder.SellTokenQuantityRemain != 0 || takerOrder.SellTokenQuantityReturn != 1 {
+		t.Fatalf("taker rounded return: want remain=0 return=1, got remain=%d return=%d", takerOrder.SellTokenQuantityRemain, takerOrder.SellTokenQuantityReturn)
+	}
+
+	ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), trawdb.PriceKey(5, 6))
+	if ob == nil || len(ob.Head) == 0 {
+		t.Fatal("second maker order should remain active at the same price")
+	}
+	remainingMaker := trawdb.ReadMarketOrder(db, ob.Head)
+	if remainingMaker == nil {
+		t.Fatal("remaining maker order should exist")
+	}
+	if !bytes.Equal(remainingMaker.OwnerAddress, maker2[:]) || remainingMaker.State != corepb.MarketOrder_ACTIVE || remainingMaker.SellTokenQuantityRemain != 5 {
+		t.Fatalf("remaining maker order mismatch: owner=%x state=%v remain=%d", remainingMaker.OwnerAddress, remainingMaker.State, remainingMaker.SellTokenQuantityRemain)
+	}
+}
+
+func TestMarketSellAssetExecute_ReturnsMakerRemainWhenMakerReceiveRoundsToZero(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+
+	maker := makeTestAddr(1)
+	taker := makeTestAddr(2)
+	statedb.CreateAccount(maker, corepb.AccountType_Normal)
+	statedb.CreateAccount(taker, corepb.AccountType_Normal)
+	statedb.SetTRC10Balance(maker, tokenID, 100)
+	statedb.AddBalance(taker, 2)
+
+	db := ethrawdb.NewMemoryDatabase()
+	act := &MarketSellAssetActuator{}
+
+	txMaker := makeMarketSellTx(1, []byte("1000001"), 10, []byte("_"), 6)
+	ctxMaker := setupContext(t, statedb, txMaker)
+	ctxMaker.DB = db
+	ctxMaker.DynProps.SetAllowSameTokenName(true)
+	makerResult, err := act.Execute(ctxMaker)
+	if err != nil {
+		t.Fatalf("maker execute failed: %v", err)
+	}
+	makerOrder := trawdb.ReadMarketOrder(db, makerResult.OrderID)
+	if makerOrder == nil {
+		t.Fatal("maker order should exist")
+	}
+	makerOrder.SellTokenQuantityRemain = 1
+	if err := trawdb.WriteMarketOrder(db, makerResult.OrderID, makerOrder); err != nil {
+		t.Fatalf("write adjusted maker order: %v", err)
+	}
+
+	txTaker := makeMarketSellTx(2, []byte("_"), 2, []byte("1000001"), 1)
+	ctxTaker := setupContext(t, statedb, txTaker)
+	ctxTaker.DB = db
+	ctxTaker.DynProps.SetAllowSameTokenName(true)
+	takerResult, err := act.Execute(ctxTaker)
+	if err != nil {
+		t.Fatalf("taker execute failed: %v", err)
+	}
+
+	if len(takerResult.OrderDetails) != 0 {
+		t.Fatalf("zero maker receive must not create order detail, got %d", len(takerResult.OrderDetails))
+	}
+	if got := statedb.GetTRC10Balance(maker, tokenID); got != 91 {
+		t.Fatalf("maker TRC10 balance should get 1 remaining token back: want 91, got %d", got)
+	}
+	if got := statedb.GetBalance(maker); got != 0 {
+		t.Fatalf("maker TRX balance must not receive a rounded-zero fill: want 0, got %d", got)
+	}
+	if got := statedb.GetTRC10Balance(taker, tokenID); got != 0 {
+		t.Fatalf("taker TRC10 balance must not receive maker returned remain: want 0, got %d", got)
+	}
+
+	makerOrder = trawdb.ReadMarketOrder(db, makerResult.OrderID)
+	if makerOrder.State != corepb.MarketOrder_INACTIVE {
+		t.Fatalf("maker order state: want INACTIVE, got %v", makerOrder.State)
+	}
+	if makerOrder.SellTokenQuantityRemain != 0 || makerOrder.SellTokenQuantityReturn != 1 {
+		t.Fatalf("maker rounded return: want remain=0 return=1, got remain=%d return=%d", makerOrder.SellTokenQuantityRemain, makerOrder.SellTokenQuantityReturn)
+	}
+	mao := trawdb.ReadMarketAccountOrder(db, maker[:])
+	if mao.Count != 0 || len(mao.Orders) != 0 {
+		t.Fatalf("maker account order should remove inactive rounded order, got %+v", mao)
+	}
+	if ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), trawdb.PriceKey(10, 6)); ob != nil && len(ob.Head) > 0 {
+		t.Fatal("maker price level should be removed after rounded-zero inactive order")
+	}
+
+	takerOrder := trawdb.ReadMarketOrder(db, takerResult.OrderID)
+	if takerOrder == nil {
+		t.Fatal("taker remainder order should be written")
+	}
+	if takerOrder.State != corepb.MarketOrder_ACTIVE || takerOrder.SellTokenQuantityRemain != 2 {
+		t.Fatalf("taker order should remain active with full sell quantity, state=%v remain=%d", takerOrder.State, takerOrder.SellTokenQuantityRemain)
+	}
+}
+
+func TestMarketSellAssetExecute_TooManyMatchesFails(t *testing.T) {
+	const tokenID = int64(1_000_001)
+	statedb := setupStateDB(t)
+	maker := makeTestAddr(1)
+	taker := makeTestAddr(2)
+	statedb.CreateAccount(maker, corepb.AccountType_Normal)
+	statedb.CreateAccount(taker, corepb.AccountType_Normal)
+	statedb.AddBalance(maker, 100)
+	statedb.SetTRC10Balance(taker, tokenID, 100)
+
+	db := ethrawdb.NewMemoryDatabase()
+	act := &MarketSellAssetActuator{}
+	for i := 0; i <= maxMarketMatchNum; i++ {
+		tx := makeMarketSellTx(1, []byte("_"), 1, []byte("1000001"), 1)
+		ctx := setupContext(t, statedb, tx)
+		ctx.DB = db
+		ctx.DynProps.SetAllowSameTokenName(true)
+		if _, err := act.Execute(ctx); err != nil {
+			t.Fatalf("maker order %d failed: %v", i, err)
+		}
+	}
+
+	tx := makeMarketSellTx(2, []byte("1000001"), int64(maxMarketMatchNum+1), []byte("_"), int64(maxMarketMatchNum+1))
+	ctx := setupContext(t, statedb, tx)
+	ctx.DB = db
+	ctx.DynProps.SetAllowSameTokenName(true)
+	if _, err := act.Execute(ctx); err == nil {
+		t.Fatal("expected too many matches error")
 	}
 }

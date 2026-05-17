@@ -2,9 +2,11 @@ package actuator
 
 import (
 	"errors"
+	"math"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -12,6 +14,14 @@ import (
 // ShieldedTransferActuator handles shielded (Sapling) ZEN token transfers.
 // Stage 1: transparent state changes only; ZK proof verification is skipped.
 type ShieldedTransferActuator struct{}
+
+const (
+	zcEncCiphertextSize = 580
+	zcOutCiphertextSize = 80
+	zcElementSize       = 32
+	zcProofSize         = 192
+	zcSignatureSize     = 64
+)
 
 func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.ShieldedTransferContract, error) {
 	contract := ctx.Tx.Contract()
@@ -38,6 +48,9 @@ func (a *ShieldedTransferActuator) calcFee(ctx *Context, c *contractpb.ShieldedT
 }
 
 func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
+	if !ctx.DynProps.AllowSameTokenName() {
+		return errors.New("shielded transaction is not allowed before ALLOW_SAME_TOKEN_NAME")
+	}
 	if !ctx.DynProps.AllowShieldedTransaction() {
 		return errors.New("shielded transactions are not enabled")
 	}
@@ -52,39 +65,168 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 	hasFrom := len(c.TransparentFromAddress) > 0
 	hasTo := len(c.TransparentToAddress) > 0
 
-	if hasFrom && c.FromAmount <= 0 {
-		return errors.New("from_amount must be positive when transparent_from_address is set")
-	}
-	if hasTo && c.ToAmount <= 0 {
-		return errors.New("to_amount must be positive when transparent_to_address is set")
+	if hasFrom && len(c.SpendDescription) > 0 {
+		return errors.New("shielded transfer has more than one sender")
 	}
 	if !hasFrom && len(c.SpendDescription) == 0 {
-		return errors.New("shielded spend descriptions required when no transparent sender")
+		return errors.New("shielded transfer has no sender")
+	}
+	if len(c.SpendDescription) > 1 {
+		return errors.New("shielded transfer has too many spend notes")
+	}
+	if len(c.ReceiveDescription) == 0 {
+		return errors.New("shielded transfer has no output commitment")
+	}
+	if len(c.ReceiveDescription) > 2 {
+		return errors.New("shielded transfer has too many receivers")
+	}
+	if c.FromAmount < 0 {
+		return errors.New("from_amount must not be negative")
+	}
+	if c.ToAmount < 0 {
+		return errors.New("to_amount must not be negative")
+	}
+	if !hasFrom && c.FromAmount != 0 {
+		return errors.New("from_amount must be zero without transparent sender")
+	}
+	if !hasTo && c.ToAmount != 0 {
+		return errors.New("to_amount must be zero without transparent receiver")
+	}
+
+	var from common.Address
+	if hasFrom {
+		var err error
+		from, err = checkedAddress(c.TransparentFromAddress, "transparent_from_address")
+		if err != nil {
+			return err
+		}
+		if c.FromAmount <= 0 {
+			return errors.New("from_amount must be greater than 0")
+		}
+	}
+	var to common.Address
+	if hasTo {
+		var err error
+		to, err = checkedAddress(c.TransparentToAddress, "transparent_to_address")
+		if err != nil {
+			return err
+		}
+		if c.ToAmount <= 0 {
+			return errors.New("to_amount must be greater than 0")
+		}
+		if hasFrom && to == from {
+			return errors.New("can't transfer zen to yourself")
+		}
 	}
 
 	// Check for double spends
+	seenNullifiers := make(map[string]struct{}, len(c.SpendDescription))
 	for _, spend := range c.SpendDescription {
 		if len(spend.Nullifier) == 0 {
 			return errors.New("spend description missing nullifier")
 		}
+		key := string(spend.Nullifier)
+		if _, ok := seenNullifiers[key]; ok {
+			return errors.New("duplicate sapling nullifiers in this transaction")
+		}
+		seenNullifiers[key] = struct{}{}
+		if !rawdb.HasIncrMerkleTree(ctx.DB, spend.Anchor) {
+			return errors.New("Rt is invalid.")
+		}
 		if rawdb.HasNullifier(ctx.DB, spend.Nullifier) {
-			return errors.New("double spend: nullifier already used")
+			return errors.New("note has been spend in this transaction")
 		}
 	}
+	seenCommitments := make(map[string]struct{}, len(c.ReceiveDescription))
+	for _, recv := range c.ReceiveDescription {
+		if len(recv.NoteCommitment) == 0 {
+			return errors.New("receive description missing note commitment")
+		}
+		key := string(recv.NoteCommitment)
+		if _, ok := seenCommitments[key]; ok {
+			return errors.New("duplicate cm in receive_description")
+		}
+		seenCommitments[key] = struct{}{}
+	}
+
+	fee := a.calcFee(ctx, c)
 
 	// Check transparent sender has sufficient ZEN balance
 	if hasFrom {
-		from := common.BytesToAddress(c.TransparentFromAddress)
 		if !ctx.State.AccountExists(from) {
 			return errors.New("transparent sender account does not exist")
 		}
 		zenID := ctx.DynProps.ZenTokenID()
-		fee := a.calcFee(ctx, c)
-		if ctx.State.GetTRC10Balance(from, zenID) < c.FromAmount+fee {
+		if ctx.State.GetTRC10Balance(from, zenID) < c.FromAmount {
 			return errors.New("insufficient ZEN balance for shielded transfer")
+		}
+		if c.FromAmount <= fee {
+			return errors.New("fromAmount must be greater than fee")
+		}
+	}
+	if hasTo {
+		zenID := ctx.DynProps.ZenTokenID()
+		if ctx.State.GetTRC10Balance(to, zenID) > math.MaxInt64-c.ToAmount {
+			return errors.New("recipient ZEN balance overflow")
 		}
 	}
 
+	txID := ctx.Tx.Hash().Bytes()
+	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID); ok {
+		if cached {
+			return nil
+		}
+		return errors.New("record is fail, skip proof")
+	}
+	if err := validateShieldedProofShape(c); err != nil {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return err
+	}
+
+	delta, ok := checkedAddInt64(c.FromAmount, -c.ToAmount)
+	if !ok {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return errors.New("shielded pool value overflow")
+	}
+	delta, ok = checkedAddInt64(delta, -fee)
+	if !ok {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return errors.New("shielded pool value overflow")
+	}
+	newPool, ok := checkedAddInt64(ctx.DynProps.TotalShieldedPoolValue(), delta)
+	if !ok || newPool < 0 {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return errors.New("total shielded pool value can not below 0")
+	}
+
+	return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+}
+
+func validateShieldedProofShape(c *contractpb.ShieldedTransferContract) error {
+	for _, spend := range c.SpendDescription {
+		if len(spend.ValueCommitment) != zcElementSize ||
+			len(spend.Anchor) != zcElementSize ||
+			len(spend.Nullifier) != zcElementSize ||
+			len(spend.Rk) != zcElementSize ||
+			len(spend.Zkproof) != zcProofSize ||
+			len(spend.SpendAuthoritySignature) != zcSignatureSize {
+			return errors.New("librustzcashSaplingCheckSpend error")
+		}
+	}
+	for _, recv := range c.ReceiveDescription {
+		if len(recv.CEnc) != zcEncCiphertextSize || len(recv.COut) != zcOutCiphertextSize {
+			return errors.New("Cout or CEnc size error")
+		}
+		if len(recv.ValueCommitment) != zcElementSize ||
+			len(recv.NoteCommitment) != zcElementSize ||
+			len(recv.Epk) != zcElementSize ||
+			len(recv.Zkproof) != zcProofSize {
+			return errors.New("librustzcashSaplingCheckOutput error")
+		}
+	}
+	if len(c.BindingSignature) != zcSignatureSize {
+		return errors.New("librustzcashSaplingFinalCheck error")
+	}
 	return nil
 }
 
@@ -97,13 +239,18 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 	zenID := ctx.DynProps.ZenTokenID()
 	fee := a.calcFee(ctx, c)
 
-	// Deduct ZEN from transparent sender (fromAmount + fee)
+	// Deduct ZEN from transparent sender. The shielded fee is credited to
+	// Blackhole and removed from the pool adjustment, matching java-tron.
 	if len(c.TransparentFromAddress) > 0 {
-		from := common.BytesToAddress(c.TransparentFromAddress)
-		if err := ctx.State.SubTRC10Balance(from, zenID, c.FromAmount+fee); err != nil {
+		from, err := checkedAddress(c.TransparentFromAddress, "transparent_from_address")
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.State.SubTRC10Balance(from, zenID, c.FromAmount); err != nil {
 			return nil, err
 		}
 	}
+	ctx.State.AddTRC10Balance(params.BlackholeAddress, zenID, fee)
 
 	// Record spend nullifiers to prevent double-spend
 	for _, spend := range c.SpendDescription {
@@ -127,7 +274,10 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 
 	// Credit transparent receiver
 	if len(c.TransparentToAddress) > 0 {
-		to := common.BytesToAddress(c.TransparentToAddress)
+		to, err := checkedAddress(c.TransparentToAddress, "transparent_to_address")
+		if err != nil {
+			return nil, err
+		}
 		if !ctx.State.AccountExists(to) {
 			ctx.State.CreateAccountWithTime(to, corepb.AccountType_Normal, ctx.DynProps.LatestBlockHeaderTimestamp())
 			if ctx.DynProps.AllowMultiSign() {
@@ -143,5 +293,5 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 	// pool -= fee       (burned from pool)
 	ctx.DynProps.AdjustTotalShieldedPoolValue(c.FromAmount - c.ToAmount - fee)
 
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	return &Result{ShieldedTransactionFee: fee, ContractRet: 1}, nil
 }

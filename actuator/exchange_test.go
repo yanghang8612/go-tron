@@ -1,6 +1,7 @@
 package actuator
 
 import (
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -82,10 +83,19 @@ func setupExchangeCtx(t *testing.T, tx *types.Transaction) *Context {
 	t.Helper()
 	statedb := setupStateDB(t)
 	seedAccount(statedb, ownerExchAddr, 3_000_000_000)
-	statedb.SetTRC10Balance(ownerExchAddr, 1_000_001, 1_000_000)
+	statedb.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("1000001"), 1_000_001, 1_000_000)
 
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
+	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("1000001"), &contractpb.AssetIssueContract{
+		Name: []byte("1000001"),
+		Id:   "1000001",
+	}); err != nil {
+		t.Fatalf("WriteAssetIssueByName: %v", err)
+	}
+	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("1000001"), 1_000_001); err != nil {
+		t.Fatalf("WriteAssetNameIndex: %v", err)
+	}
 	return ctx
 }
 
@@ -130,6 +140,131 @@ func TestExchangeCreateBasic(t *testing.T) {
 	}
 }
 
+func TestExchangeCreatePreSameTokenNameWritesLegacyAndV2(t *testing.T) {
+	c := &contractpb.ExchangeCreateContract{
+		OwnerAddress:       ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("TOKEN"),
+		FirstTokenBalance:  100,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1_000_000,
+	}
+	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, c))
+	ctx.State.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("TOKEN"), 1_000_001, 1_000_000)
+	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("TOKEN"), &contractpb.AssetIssueContract{
+		Name: []byte("TOKEN"),
+		Id:   "1000001",
+	}); err != nil {
+		t.Fatalf("WriteAssetIssueByName: %v", err)
+	}
+	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("TOKEN"), 1_000_001); err != nil {
+		t.Fatalf("WriteAssetNameIndex: %v", err)
+	}
+
+	a := &ExchangeCreateActuator{}
+	if err := a.Validate(ctx); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := a.Execute(ctx); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	legacy := trawdb.ReadExchange(ctx.DB, 1)
+	if legacy == nil {
+		t.Fatal("legacy exchange not stored")
+	}
+	if string(legacy.FirstTokenId) != "TOKEN" {
+		t.Fatalf("legacy token id: got %q", legacy.FirstTokenId)
+	}
+	v2 := trawdb.ReadExchangeV2(ctx.DB, 1)
+	if v2 == nil {
+		t.Fatal("exchange-v2 not stored")
+	}
+	if string(v2.FirstTokenId) != "1000001" {
+		t.Fatalf("v2 token id: got %q", v2.FirstTokenId)
+	}
+}
+
+func TestExchangeCreatePreSameTokenNameNumericNameUsesNameIndex(t *testing.T) {
+	c := &contractpb.ExchangeCreateContract{
+		OwnerAddress:       ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("123"),
+		FirstTokenBalance:  100,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1_000_000,
+	}
+	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, c))
+	ctx.State.SetTRC10Balance(ownerExchAddr, 123, 0)
+	ctx.State.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("123"), 1_000_001, 1_000_000)
+	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("123"), &contractpb.AssetIssueContract{
+		Name: []byte("123"),
+		Id:   "1000001",
+	}); err != nil {
+		t.Fatalf("WriteAssetIssueByName: %v", err)
+	}
+	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("123"), 1_000_001); err != nil {
+		t.Fatalf("WriteAssetNameIndex: %v", err)
+	}
+
+	a := &ExchangeCreateActuator{}
+	if err := a.Validate(ctx); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := a.Execute(ctx); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if got := ctx.State.GetTRC10Balance(ownerExchAddr, 1_000_001); got != 1_000_000-100 {
+		t.Fatalf("name-index token balance: got %d want %d", got, 1_000_000-100)
+	}
+	if got := ctx.State.GetTRC10Balance(ownerExchAddr, 123); got != 0 {
+		t.Fatalf("parsed-ID token balance must stay zero, got %d", got)
+	}
+	legacy := trawdb.ReadExchange(ctx.DB, 1)
+	if legacy == nil || string(legacy.FirstTokenId) != "123" {
+		t.Fatalf("legacy exchange token id: %+v", legacy)
+	}
+	v2 := trawdb.ReadExchangeV2(ctx.DB, 1)
+	if v2 == nil || string(v2.FirstTokenId) != "1000001" {
+		t.Fatalf("v2 exchange token id: %+v", v2)
+	}
+}
+
+func TestExchangeTransactionAfterSameTokenNameReadsV2(t *testing.T) {
+	c := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: ownerExchAddr.Bytes(),
+		ExchangeId:   1,
+		TokenId:      []byte("1000001"),
+		Quant:        1,
+		Expected:     1,
+	}
+	ctx := setupExchangeCtx(t, makeExchangeTransactionTx(c))
+	ctx.DynProps.SetAllowSameTokenName(true)
+	if err := trawdb.WriteExchange(ctx.DB, &corepb.Exchange{
+		ExchangeId:         1,
+		CreatorAddress:     ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("TOKEN"),
+		FirstTokenBalance:  1_000,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1_000_000,
+	}); err != nil {
+		t.Fatalf("WriteExchange: %v", err)
+	}
+	if err := trawdb.WriteExchangeV2(ctx.DB, &corepb.Exchange{
+		ExchangeId:         1,
+		CreatorAddress:     ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("1000001"),
+		FirstTokenBalance:  1_000,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1_000_000,
+	}); err != nil {
+		t.Fatalf("WriteExchangeV2: %v", err)
+	}
+
+	if err := (&ExchangeTransactionActuator{}).Validate(ctx); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
 func TestExchangeInjectBasic(t *testing.T) {
 	// First create an exchange
 	createC := &contractpb.ExchangeCreateContract{
@@ -143,7 +278,7 @@ func TestExchangeInjectBasic(t *testing.T) {
 	(&ExchangeCreateActuator{}).Execute(ctx) //nolint
 
 	// Give owner more tokens for injection
-	ctx.State.AddBalance(ownerExchAddr, 500_000_000)    // +500 TRX
+	ctx.State.AddBalance(ownerExchAddr, 500_000_000) // +500 TRX
 	ctx.State.AddTRC10Balance(ownerExchAddr, 1_000_001, 500_000)
 
 	// Inject 200 TRX
@@ -274,5 +409,115 @@ func TestExchangeTransactionBasic(t *testing.T) {
 	}
 	if ex.SecondTokenBalance != 500_000-expectedReceive {
 		t.Fatalf("pool buy-side: got %d, want %d", ex.SecondTokenBalance, 500_000-expectedReceive)
+	}
+}
+
+func TestExchangeProcessorHardenedOverflow(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if _, err := safeExchange(maxInt64, 1_000_000, 1); err == nil {
+		t.Fatal("expected hardened exchange processor to reject balance+quant overflow")
+	}
+}
+
+func TestExchangeTransactionHardenedRejectsBalanceOverflow(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	c := &contractpb.ExchangeTransactionContract{
+		OwnerAddress: ownerExchAddr.Bytes(),
+		ExchangeId:   1,
+		TokenId:      []byte("_"),
+		Quant:        1,
+		Expected:     1,
+	}
+	ctx := setupExchangeCtx(t, makeExchangeTransactionTx(c))
+	ctx.DynProps.SetAllowHardenExchangeCalculation(true)
+	ctx.DynProps.Set("exchange_balance_limit", maxInt64)
+	trawdb.WriteExchange(ctx.DB, &corepb.Exchange{
+		ExchangeId:         1,
+		CreatorAddress:     ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("_"),
+		FirstTokenBalance:  maxInt64,
+		SecondTokenId:      []byte("1000001"),
+		SecondTokenBalance: 1_000_000,
+	})
+
+	if err := (&ExchangeTransactionActuator{}).Validate(ctx); err == nil {
+		t.Fatal("expected hardened exchange transaction to reject balance overflow")
+	}
+}
+
+func TestExchangeCreateRejectsNonNumericTokenIDAfterSameTokenName(t *testing.T) {
+	c := &contractpb.ExchangeCreateContract{
+		OwnerAddress:       ownerExchAddr.Bytes(),
+		FirstTokenId:       []byte("TOKEN"),
+		FirstTokenBalance:  1,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 1,
+	}
+	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, c))
+	ctx.DynProps.SetAllowSameTokenName(true)
+
+	err := (&ExchangeCreateActuator{}).Validate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "not a valid number") {
+		t.Fatalf("expected non-numeric token id rejection, got %v", err)
+	}
+}
+
+func TestExchangeOperationRejectsNonNumericTokenIDAfterSameTokenName(t *testing.T) {
+	tests := []struct {
+		name     string
+		tx       *types.Transaction
+		validate func(*Context) error
+	}{
+		{
+			name: "transaction",
+			tx: makeExchangeTransactionTx(&contractpb.ExchangeTransactionContract{
+				OwnerAddress: ownerExchAddr.Bytes(),
+				ExchangeId:   1,
+				TokenId:      []byte("TOKEN"),
+				Quant:        1,
+				Expected:     1,
+			}),
+			validate: (&ExchangeTransactionActuator{}).Validate,
+		},
+		{
+			name: "inject",
+			tx: makeExchangeInjectTx(&contractpb.ExchangeInjectContract{
+				OwnerAddress: ownerExchAddr.Bytes(),
+				ExchangeId:   1,
+				TokenId:      []byte("TOKEN"),
+				Quant:        1,
+			}),
+			validate: (&ExchangeInjectActuator{}).Validate,
+		},
+		{
+			name: "withdraw",
+			tx: makeExchangeWithdrawTx(&contractpb.ExchangeWithdrawContract{
+				OwnerAddress: ownerExchAddr.Bytes(),
+				ExchangeId:   1,
+				TokenId:      []byte("TOKEN"),
+				Quant:        1,
+			}),
+			validate: (&ExchangeWithdrawActuator{}).Validate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := setupExchangeCtx(t, tt.tx)
+			ctx.DynProps.SetAllowSameTokenName(true)
+			trawdb.WriteExchangeV2(ctx.DB, &corepb.Exchange{
+				ExchangeId:         1,
+				CreatorAddress:     ownerExchAddr.Bytes(),
+				FirstTokenId:       []byte("TOKEN"),
+				FirstTokenBalance:  1_000,
+				SecondTokenId:      []byte("_"),
+				SecondTokenBalance: 1_000,
+			})
+
+			err := tt.validate(ctx)
+			if err == nil || !strings.Contains(err.Error(), "not a valid number") {
+				t.Fatalf("expected non-numeric token id rejection, got %v", err)
+			}
+		})
 	}
 }

@@ -58,8 +58,9 @@ func TestFreezeBalance_RejectedPostFork(t *testing.T) {
 	act := &FreezeBalanceActuator{}
 	ctx := setupContext(t, statedb, tx)
 
-	// Activate the V2 resource model.
-	ctx.DynProps.Set("allow_new_resource_model", 1)
+	// Activate unfreeze-delay; java-tron closes old FreezeBalance only at
+	// this gate, not merely at allow_new_resource_model.
+	ctx.DynProps.SetUnfreezeDelayDays(14)
 
 	err := act.Validate(ctx)
 	if err == nil {

@@ -1,7 +1,10 @@
 package actuator
 
 import (
+	"errors"
 	"math"
+	"math/big"
+	"strconv"
 
 	"github.com/tronprotocol/go-tron/internal/math/strictmath"
 )
@@ -62,4 +65,121 @@ func (p *exchangeProcessor) exchangeFromSupply(balance, supplyQuant int64) int64
 func (p *exchangeProcessor) exchange(sellTokenBalance, buyTokenBalance, sellTokenQuant int64) int64 {
 	relay := p.exchangeToSupply(sellTokenBalance, sellTokenQuant)
 	return p.exchangeFromSupply(buyTokenBalance, relay)
+}
+
+func exchangeQuote(sellTokenBalance, buyTokenBalance, sellTokenQuant int64, useStrictMath, harden bool) (int64, error) {
+	if harden {
+		return safeExchange(sellTokenBalance, buyTokenBalance, sellTokenQuant)
+	}
+	return newExchangeProcessor(useStrictMath).exchange(sellTokenBalance, buyTokenBalance, sellTokenQuant), nil
+}
+
+func safeExchange(sellTokenBalance, buyTokenBalance, sellTokenQuant int64) (int64, error) {
+	relay, err := safeExchangeToSupply(sellTokenBalance, sellTokenQuant)
+	if err != nil {
+		return 0, err
+	}
+	return safeExchangeFromSupply(buyTokenBalance, relay)
+}
+
+func safeExchangeToSupply(balance, quant int64) (*big.Rat, error) {
+	newBalance, ok := checkedAddInt64(balance, quant)
+	if !ok {
+		return nil, errors.New("exchange balance overflows int64")
+	}
+	if newBalance == 0 {
+		return nil, errors.New("exchange balance division by zero")
+	}
+
+	div := roundRatScaleHalfUp(big.NewRat(quant, newBalance), 18)
+	base := new(big.Rat).Add(big.NewRat(1, 1), div)
+	powRat, err := ratFromFloat64Decimal(strictmath.Pow(ratToFloat64(base), 0.0005))
+	if err != nil {
+		return nil, err
+	}
+	oneMinusPow := new(big.Rat).Sub(big.NewRat(1, 1), powRat)
+	issued := new(big.Rat).Mul(big.NewRat(-exchangeProcessorSupply, 1), oneMinusPow)
+	return truncRatScale0Down(issued), nil
+}
+
+func safeExchangeFromSupply(balance int64, supplyQuant *big.Rat) (int64, error) {
+	div := roundRatScaleHalfUp(new(big.Rat).Quo(supplyQuant, big.NewRat(exchangeProcessorSupply, 1)), 18)
+	base := new(big.Rat).Add(big.NewRat(1, 1), div)
+	powRat, err := ratFromFloat64Decimal(strictmath.Pow(ratToFloat64(base), 2000.0))
+	if err != nil {
+		return 0, err
+	}
+	exchangeBalance := new(big.Rat).Mul(big.NewRat(balance, 1), new(big.Rat).Sub(powRat, big.NewRat(1, 1)))
+	return ratToInt64Trunc(truncRatScale0Down(exchangeBalance))
+}
+
+func roundRatScaleHalfUp(x *big.Rat, scale int) *big.Rat {
+	pow10 := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	scaled := new(big.Rat).Mul(x, new(big.Rat).SetInt(pow10))
+	num := new(big.Int).Set(scaled.Num())
+	den := new(big.Int).Set(scaled.Denom())
+	q, rem := new(big.Int), new(big.Int)
+	q.QuoRem(num, den, rem)
+	if rem.Sign() != 0 {
+		doubleRem := new(big.Int).Mul(new(big.Int).Abs(rem), big.NewInt(2))
+		if doubleRem.Cmp(den) >= 0 {
+			if scaled.Sign() >= 0 {
+				q.Add(q, big.NewInt(1))
+			} else {
+				q.Sub(q, big.NewInt(1))
+			}
+		}
+	}
+	return new(big.Rat).SetFrac(q, pow10)
+}
+
+func truncRatScale0Down(x *big.Rat) *big.Rat {
+	q := new(big.Int).Quo(x.Num(), x.Denom())
+	return new(big.Rat).SetInt(q)
+}
+
+func ratToInt64Trunc(x *big.Rat) (int64, error) {
+	q := new(big.Int).Quo(x.Num(), x.Denom())
+	if !q.IsInt64() {
+		return 0, errors.New("exchange result overflows int64")
+	}
+	return q.Int64(), nil
+}
+
+func ratToFloat64(x *big.Rat) float64 {
+	f, _ := new(big.Float).SetPrec(64).SetRat(x).Float64()
+	return f
+}
+
+func ratFromFloat64Decimal(v float64) (*big.Rat, error) {
+	r, ok := new(big.Rat).SetString(strconv.FormatFloat(v, 'g', -1, 64))
+	if !ok {
+		return nil, errors.New("failed to convert exchange float result")
+	}
+	return r, nil
+}
+
+func exchangeAdd(balance, delta int64, harden bool) (int64, error) {
+	if !harden {
+		return balance + delta, nil
+	}
+	next, ok := checkedAddInt64(balance, delta)
+	if !ok {
+		return 0, errors.New("exchange balance overflows int64")
+	}
+	return next, nil
+}
+
+func exchangeSub(balance, delta int64, harden bool) (int64, error) {
+	if !harden {
+		return balance - delta, nil
+	}
+	next, ok := checkedAddInt64(balance, -delta)
+	if !ok {
+		return 0, errors.New("exchange balance overflows int64")
+	}
+	if next < 0 {
+		return 0, errors.New("exchange balance must be >=0 after transaction")
+	}
+	return next, nil
 }

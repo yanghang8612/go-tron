@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"math/big"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -34,11 +32,14 @@ func (a *ExchangeInjectActuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	ex := rawdb.ReadExchange(ctx.DB, c.ExchangeId)
+	ex := readExchangeForCurrentFork(ctx, c.ExchangeId)
 	if ex == nil {
 		return errors.New("exchange not found")
 	}
@@ -60,6 +61,9 @@ func (a *ExchangeInjectActuator) Validate(ctx *Context) error {
 	}
 
 	// Compute the proportional other-side deposit using BigInt (java 201-219).
+	if err := validateExchangeTokenID(ctx, c.TokenId, "token id"); err != nil {
+		return err
+	}
 	var thisBalance, otherBalance int64
 	var otherTokenId []byte
 	firstIsThis := bytes.Equal(ex.FirstTokenId, c.TokenId)
@@ -84,9 +88,16 @@ func (a *ExchangeInjectActuator) Validate(ctx *Context) error {
 	}
 
 	// Balance-cap check for the post-injection pool (java 225-228).
+	harden := ctx.DynProps.AllowHardenExchangeCalculation()
 	balanceLimit := ctx.DynProps.ExchangeBalanceLimit()
-	newThisBalance := thisBalance + c.Quant
-	newOtherBalance := otherBalance + anotherTokenQuant
+	newThisBalance, err := exchangeAdd(thisBalance, c.Quant, harden)
+	if err != nil {
+		return err
+	}
+	newOtherBalance, err := exchangeAdd(otherBalance, anotherTokenQuant, harden)
+	if err != nil {
+		return err
+	}
 	if newThisBalance > balanceLimit || newOtherBalance > balanceLimit {
 		return fmt.Errorf("token balance must less than %d", balanceLimit)
 	}
@@ -110,8 +121,11 @@ func (a *ExchangeInjectActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
-	ex := rawdb.ReadExchange(ctx.DB, c.ExchangeId)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
+	ex := readExchangeForCurrentFork(ctx, c.ExchangeId)
 	if ex == nil {
 		return nil, errors.New("exchange not found")
 	}
@@ -128,6 +142,9 @@ func (a *ExchangeInjectActuator) Execute(ctx *Context) (*Result, error) {
 
 	anotherBig := new(big.Int).Mul(big.NewInt(otherBalance), big.NewInt(c.Quant))
 	anotherBig.Div(anotherBig, big.NewInt(thisBalance))
+	if !anotherBig.IsInt64() {
+		return nil, errors.New("the calculated token quant overflows int64")
+	}
 	otherQuant := anotherBig.Int64()
 
 	if err := deductToken(ctx, ownerAddr, c.TokenId, c.Quant); err != nil {
@@ -143,15 +160,28 @@ func (a *ExchangeInjectActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
+	harden := ctx.DynProps.AllowHardenExchangeCalculation()
 	if firstIsThis {
-		ex.FirstTokenBalance += c.Quant
-		ex.SecondTokenBalance += otherQuant
+		if ex.FirstTokenBalance, err = addExchangeBalance(ex.FirstTokenBalance, c.Quant, harden); err != nil {
+			return nil, err
+		}
+		if ex.SecondTokenBalance, err = addExchangeBalance(ex.SecondTokenBalance, otherQuant, harden); err != nil {
+			return nil, err
+		}
 	} else {
-		ex.SecondTokenBalance += c.Quant
-		ex.FirstTokenBalance += otherQuant
+		if ex.SecondTokenBalance, err = addExchangeBalance(ex.SecondTokenBalance, c.Quant, harden); err != nil {
+			return nil, err
+		}
+		if ex.FirstTokenBalance, err = addExchangeBalance(ex.FirstTokenBalance, otherQuant, harden); err != nil {
+			return nil, err
+		}
 	}
-	if err := rawdb.WriteExchange(ctx.DB, ex); err != nil {
+	if err := writeExchangeForCurrentFork(ctx, ex); err != nil {
 		return nil, err
 	}
-	return &Result{ContractRet: 1}, nil
+	return &Result{ExchangeInjectAnotherAmount: otherQuant, ContractRet: 1}, nil
+}
+
+func addExchangeBalance(balance, delta int64, harden bool) (int64, error) {
+	return exchangeAdd(balance, delta, harden)
 }

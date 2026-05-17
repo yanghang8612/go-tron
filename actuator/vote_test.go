@@ -3,6 +3,7 @@ package actuator
 import (
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -123,8 +124,45 @@ func TestVoteWitnessExecute(t *testing.T) {
 	}
 
 	updatedW := statedb.GetWitness(witness1)
-	if updatedW.VoteCount() != 50 {
-		t.Fatalf("witness vote count: want 50, got %d", updatedW.VoteCount())
+	if updatedW.VoteCount() != 0 {
+		t.Fatalf("witness vote count before maintenance: want 0, got %d", updatedW.VoteCount())
+	}
+	pending := rawdb.ReadVotes(ctx.DB, owner)
+	if pending == nil || len(pending.OldVotes) != 0 || len(pending.NewVotes) != 1 || pending.NewVotes[0].VoteCount != 50 {
+		t.Fatalf("pending votes not recorded like java-tron VotesStore: %+v", pending)
+	}
+}
+
+func TestVoteWitnessDuplicateTargetsAllowed(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(10)
+	witness := makeTestAddr(20)
+
+	seedAccount(statedb, owner, 0)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 100*int64(params.TRXPrecision))
+	statedb.CreateAccount(witness, corepb.AccountType_Normal)
+	statedb.PutWitness(witness, "http://test.com")
+
+	votes := []*contractpb.VoteWitnessContract_Vote{
+		{VoteAddress: witness.Bytes(), VoteCount: 40},
+		{VoteAddress: witness.Bytes(), VoteCount: 40},
+	}
+	tx := makeVoteTx(10, votes)
+	act := &VoteWitnessActuator{}
+	ctx := setupContext(t, statedb, tx)
+
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("duplicate vote targets should be accepted like java-tron: %v", err)
+	}
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := statedb.GetWitness(witness).VoteCount(); got != 0 {
+		t.Fatalf("witness vote count before maintenance: got %d, want 0", got)
+	}
+	pending := rawdb.ReadVotes(ctx.DB, owner)
+	if pending == nil || len(pending.NewVotes) != 2 {
+		t.Fatalf("duplicate vote targets should be retained in VotesStore: %+v", pending)
 	}
 }
 

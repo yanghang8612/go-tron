@@ -2,11 +2,12 @@ package actuator
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
-	"strconv"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
@@ -17,6 +18,11 @@ import (
 
 // MarketSellAssetActuator handles market sell asset transactions (contract type 52).
 type MarketSellAssetActuator struct{}
+
+const (
+	maxMarketActiveOrderNum = 100
+	maxMarketMatchNum       = 20
+)
 
 func (a *MarketSellAssetActuator) getContract(ctx *Context) (*contractpb.MarketSellAssetContract, error) {
 	contract := ctx.Tx.Contract()
@@ -40,9 +46,18 @@ func (a *MarketSellAssetActuator) Validate(ctx *Context) error {
 		return err
 	}
 
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
+	}
+	if !validMarketTokenID(c.SellTokenId) {
+		return errors.New("sellTokenId is not a valid number")
+	}
+	if !validMarketTokenID(c.BuyTokenId) {
+		return errors.New("buyTokenId is not a valid number")
 	}
 	if c.SellTokenQuantity <= 0 {
 		return errors.New("sell token quantity must be positive")
@@ -53,15 +68,35 @@ func (a *MarketSellAssetActuator) Validate(ctx *Context) error {
 	if bytes.Equal(c.SellTokenId, c.BuyTokenId) {
 		return errors.New("sell token and buy token must be different")
 	}
-
-	// Check owner has sufficient balance of sell token
-	if err := checkTokenBalance(ctx, ownerAddr, c.SellTokenId, c.SellTokenQuantity); err != nil {
-		return err
+	quantityLimit := ctx.DynProps.MarketQuantityLimit()
+	if c.SellTokenQuantity > quantityLimit || c.BuyTokenQuantity > quantityLimit {
+		return fmt.Errorf("token quantity must less than %d", quantityLimit)
 	}
-	// Check sufficient TRX balance for sell fee
+	if mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress); mao != nil && mao.Count >= maxMarketActiveOrderNum {
+		return errors.New("maximum number of active market orders exceeded")
+	}
+
 	fee := ctx.DynProps.MarketSellFee()
-	if ctx.State.GetBalance(ownerAddr) < fee {
-		return errors.New("insufficient balance for market sell fee")
+	if bytes.Equal(c.SellTokenId, []byte("_")) {
+		required, ok := checkedAddInt64(c.SellTokenQuantity, fee)
+		if !ok || ctx.State.GetBalance(ownerAddr) < required {
+			return errors.New("insufficient balance for market sell fee and sell quantity")
+		}
+	} else {
+		if ctx.State.GetBalance(ownerAddr) < fee {
+			return errors.New("insufficient balance for market sell fee")
+		}
+		if err := checkMarketTokenExists(ctx, c.SellTokenId, "No sellTokenId !"); err != nil {
+			return err
+		}
+		if err := checkTokenBalance(ctx, ownerAddr, c.SellTokenId, c.SellTokenQuantity); err != nil {
+			return err
+		}
+	}
+	if !bytes.Equal(c.BuyTokenId, []byte("_")) {
+		if err := checkMarketTokenExists(ctx, c.BuyTokenId, "No buyTokenId !"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -73,7 +108,10 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	fee := ctx.DynProps.MarketSellFee()
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
@@ -85,17 +123,14 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 2: Generate order ID
-	txHash := ctx.Tx.Hash()
-	input := make([]byte, 0, 21+32)
-	input = append(input, ownerAddr[:]...)
-	input = append(input, txHash[:]...)
-	orderID := generateOrderID(input)
+	mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress)
+	orderID := generateOrderID(c.OwnerAddress, c.SellTokenId, c.BuyTokenId, mao.TotalCount)
 
 	// Step 3: Create MarketOrder proto
 	order := &corepb.MarketOrder{
 		OrderId:                 orderID,
 		OwnerAddress:            c.OwnerAddress,
-		CreateTime:              ctx.BlockTime,
+		CreateTime:              ctx.DynProps.LatestBlockHeaderTimestamp(),
 		SellTokenId:             c.SellTokenId,
 		SellTokenQuantity:       c.SellTokenQuantity,
 		BuyTokenId:              c.BuyTokenId,
@@ -106,7 +141,7 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 4: Run matching engine
-	totalBuyReceived, err := matchOrder(ctx, order)
+	totalBuyReceived, orderDetails, err := matchOrder(ctx, order)
 	if err != nil {
 		return nil, err
 	}
@@ -134,21 +169,46 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 8: Update MarketAccountOrder
-	mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress)
-	mao.Orders = append(mao.Orders, orderID)
-	mao.Count++
 	mao.TotalCount++
+	if order.State == corepb.MarketOrder_ACTIVE {
+		mao.Orders = append(mao.Orders, orderID)
+		mao.Count++
+	}
 	if err := rawdb.WriteMarketAccountOrder(ctx.DB, c.OwnerAddress, mao); err != nil {
 		return nil, err
 	}
 
-	return &Result{Fee: fee, ContractRet: 1}, nil
+	return &Result{Fee: fee, OrderID: orderID, OrderDetails: orderDetails, ContractRet: 1}, nil
 }
 
-// generateOrderID creates a unique order ID by hashing owner address + tx hash.
-func generateOrderID(input []byte) []byte {
+// generateOrderID mirrors java-tron's MarketUtils.calculateOrderId:
+// owner || sellTokenId padded to 19 bytes || buyTokenId padded to 19 bytes || totalCount.
+func generateOrderID(owner, sellTokenID, buyTokenID []byte, totalCount int64) []byte {
+	const tokenIDLength = 19
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], uint64(totalCount))
+	input := make([]byte, len(owner)+tokenIDLength+tokenIDLength+len(count))
+	copy(input, owner)
+	copy(input[len(owner):], sellTokenID)
+	copy(input[len(owner)+tokenIDLength:], buyTokenID)
+	copy(input[len(owner)+tokenIDLength+tokenIDLength:], count[:])
 	h := tcommon.Keccak256(input)
 	return h[:]
+}
+
+func validMarketTokenID(tokenID []byte) bool {
+	if bytes.Equal(tokenID, []byte("_")) {
+		return true
+	}
+	if len(tokenID) == 0 {
+		return false
+	}
+	for _, c := range tokenID {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // checkTokenBalance verifies the owner has at least `amount` of the given tokenID.
@@ -159,12 +219,19 @@ func checkTokenBalance(ctx *Context, ownerAddr tcommon.Address, tokenID []byte, 
 		}
 		return nil
 	}
-	tid, err := strconv.ParseInt(string(tokenID), 10, 64)
+	tid, err := resolveAssetNameOrID(ctx, tokenID)
 	if err != nil {
 		return errors.New("invalid TRC10 token ID")
 	}
-	if ctx.State.GetTRC10Balance(ownerAddr, tid) < amount {
+	if ctx.State.GetTRC10BalanceFinal(ownerAddr, tokenID, tid, ctx.DynProps.AllowSameTokenName()) < amount {
 		return errors.New("insufficient TRC10 balance")
+	}
+	return nil
+}
+
+func checkMarketTokenExists(ctx *Context, tokenID []byte, msg string) error {
+	if _, err := resolveAsset(ctx, tokenID); err != nil {
+		return errors.New(msg)
 	}
 	return nil
 }
@@ -172,14 +239,20 @@ func checkTokenBalance(ctx *Context, ownerAddr tcommon.Address, tokenID []byte, 
 // transferToken credits amount of tokenID to addr.
 func transferToken(ctx *Context, addr tcommon.Address, tokenID []byte, amount int64) error {
 	if bytes.Equal(tokenID, []byte("_")) {
+		if ctx.State.GetBalance(addr) > math.MaxInt64-amount {
+			return errors.New("TRX balance overflows int64")
+		}
 		ctx.State.AddBalance(addr, amount)
 		return nil
 	}
-	tid, err := strconv.ParseInt(string(tokenID), 10, 64)
+	tid, err := resolveAssetNameOrID(ctx, tokenID)
 	if err != nil {
 		return errors.New("invalid TRC10 token ID")
 	}
-	ctx.State.AddTRC10Balance(addr, tid, amount)
+	if ctx.State.GetTRC10BalanceFinal(addr, tokenID, tid, ctx.DynProps.AllowSameTokenName()) > math.MaxInt64-amount {
+		return errors.New("TRC10 balance overflows int64")
+	}
+	ctx.State.AddTRC10BalanceFinal(addr, tokenID, tid, amount, ctx.DynProps.AllowSameTokenName())
 	return nil
 }
 
@@ -188,21 +261,22 @@ func deductToken(ctx *Context, addr tcommon.Address, tokenID []byte, amount int6
 	if bytes.Equal(tokenID, []byte("_")) {
 		return ctx.State.SubBalance(addr, amount)
 	}
-	tid, err := strconv.ParseInt(string(tokenID), 10, 64)
+	tid, err := resolveAssetNameOrID(ctx, tokenID)
 	if err != nil {
 		return errors.New("invalid TRC10 token ID")
 	}
-	return ctx.State.SubTRC10Balance(addr, tid, amount)
+	return ctx.State.SubTRC10BalanceFinal(addr, tokenID, tid, amount, ctx.DynProps.AllowSameTokenName())
 }
 
 // matchOrder runs the matching engine for the incoming order.
-// It returns the total amount of buy tokens received by the incoming order owner.
-func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
+// It returns the total amount of buy tokens received by the incoming order owner
+// and the java-tron-compatible MarketOrderDetail receipt entries.
+func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.MarketOrderDetail, error) {
 	// Get opposite price list: what's selling what we want to buy, for what we're selling
 	// Opposite: sellTokenId = incoming.BuyTokenId, buyTokenId = incoming.SellTokenId
 	oppPL := rawdb.ReadMarketPriceList(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId)
 	if oppPL == nil || len(oppPL.Prices) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	// Filter compatible prices.
@@ -241,7 +315,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 	}
 
 	if len(compatible) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	// Sort compatible prices descending by oppSell/oppBuy ratio (best price for us first)
@@ -255,8 +329,10 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 	})
 
 	var totalBuyReceived int64
+	var details []*corepb.MarketOrderDetail
 	// Track which prices were exhausted so we can remove them from the price list
 	exhaustedPrices := make(map[[16]byte]bool)
+	matchOrderCount := 0
 
 	for _, cp := range compatible {
 		if incoming.SellTokenQuantityRemain <= 0 {
@@ -280,6 +356,10 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 			}
 
 			nextID := bytes.Clone(existing.Next)
+			matchOrderCount++
+			if matchOrderCount > maxMarketMatchNum {
+				return 0, nil, fmt.Errorf("Too many matches. MAX_MATCH_NUM = %d", maxMarketMatchNum)
+			}
 
 			// Determine fill amounts
 			// existing.SellTokenQuantity is their sell (= our buy token)
@@ -295,69 +375,74 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 			bRemain := big.NewInt(incoming.SellTokenQuantityRemain)
 			bExist := big.NewInt(existing.SellTokenQuantityRemain)
 
-			// Check: existingRemain <= incomingRemain * pSell / pBuy
-			threshold := new(big.Int).Mul(bRemain, pSell)
-			threshold.Div(threshold, pBuy)
-
-			if bExist.Cmp(threshold) <= 0 {
-				// Full fill of existing order
-				fillBuy = existing.SellTokenQuantityRemain
-				// We need to give: fillBuy * pBuy / pSell
-				fillSell = new(big.Int).Mul(big.NewInt(fillBuy), pBuy).Div(
-					new(big.Int).Mul(big.NewInt(fillBuy), pBuy), pSell).Int64()
-			} else {
-				// Partial fill: we give all our remaining sell tokens
-				fillSell = incoming.SellTokenQuantityRemain
-				// We get: fillSell * pSell / pBuy
-				fillBuy = new(big.Int).Mul(big.NewInt(fillSell), pSell).Div(
-					new(big.Int).Mul(big.NewInt(fillSell), pSell), pBuy).Int64()
+			// Java first calculates how much the taker can buy at the maker price.
+			takerBuyRemain := new(big.Int).Mul(bRemain, pSell)
+			takerBuyRemain.Div(takerBuyRemain, pBuy)
+			if takerBuyRemain.Sign() == 0 {
+				if err := returnOrderSellRemain(ctx, incoming); err != nil {
+					return 0, nil, err
+				}
+				incoming.State = corepb.MarketOrder_INACTIVE
+				break
 			}
 
-			// Make sure we don't give more than we have
-			if fillSell > incoming.SellTokenQuantityRemain {
+			switch takerBuyRemain.Cmp(bExist) {
+			case 0:
+				// taker == maker
+				fillBuy = existing.SellTokenQuantityRemain
+				fillSell = new(big.Int).Mul(big.NewInt(fillBuy), pBuy).Div(
+					new(big.Int).Mul(big.NewInt(fillBuy), pBuy), pSell).Int64()
+			case -1:
+				// taker < maker: taker is fully consumed.
 				fillSell = incoming.SellTokenQuantityRemain
-				fillBuy = new(big.Int).Mul(big.NewInt(fillSell), pSell).Div(
-					new(big.Int).Mul(big.NewInt(fillSell), pSell), pBuy).Int64()
+				fillBuy = takerBuyRemain.Int64()
+			default:
+				// taker > maker: maker is fully consumed.
+				fillBuy = existing.SellTokenQuantityRemain
+				fillSell = new(big.Int).Mul(big.NewInt(fillBuy), pBuy).Div(
+					new(big.Int).Mul(big.NewInt(fillBuy), pBuy), pSell).Int64()
+				if fillSell == 0 {
+					if err := returnOrderSellRemain(ctx, existing); err != nil {
+						return 0, nil, err
+					}
+					existing.State = corepb.MarketOrder_INACTIVE
+					if err := deactivateMarketOrderHead(ctx, existing, ob, nextID, exhaustedPrices, pk); err != nil {
+						return 0, nil, err
+					}
+					if err := rawdb.WriteMarketOrder(ctx.DB, currentID, existing); err != nil {
+						return 0, nil, err
+					}
+					currentID = nextID
+					continue
+				}
 			}
 
 			// Transfer fillSell (our sell token) to the existing order's owner
 			existingOwner := tcommon.BytesToAddress(existing.OwnerAddress)
 			if err := transferToken(ctx, existingOwner, incoming.SellTokenId, fillSell); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 
 			// Update existing order's remaining
 			existing.SellTokenQuantityRemain -= fillBuy
 			incoming.SellTokenQuantityRemain -= fillSell
 			totalBuyReceived += fillBuy
+			details = append(details, &corepb.MarketOrderDetail{
+				MakerOrderId:     existing.OrderId,
+				TakerOrderId:     incoming.OrderId,
+				FillSellQuantity: fillSell,
+				FillBuyQuantity:  fillBuy,
+			})
 
 			if existing.SellTokenQuantityRemain <= 0 {
-				// Fully consumed: mark INACTIVE
-				existing.State = corepb.MarketOrder_INACTIVE
-				existing.Next = nil
-				existing.Prev = nil
-
-				// Remove from linked list: next becomes new head
-				if len(nextID) > 0 {
-					nextOrder := rawdb.ReadMarketOrder(ctx.DB, nextID)
-					if nextOrder != nil {
-						nextOrder.Prev = nil
-						if err := rawdb.WriteMarketOrder(ctx.DB, nextID, nextOrder); err != nil {
-							return 0, err
-						}
-					}
-					ob.Head = nextID
-				} else {
-					// No more orders at this price
-					ob.Head = nil
-					ob.Tail = nil
-					exhaustedPrices[pk] = true
+				if err := deactivateMarketOrderHead(ctx, existing, ob, nextID, exhaustedPrices, pk); err != nil {
+					return 0, nil, err
 				}
 			}
 
 			// Write updated existing order
 			if err := rawdb.WriteMarketOrder(ctx.DB, currentID, existing); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 
 			currentID = nextID
@@ -366,11 +451,14 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 		// Update order book for this price
 		if exhaustedPrices[pk] {
 			if err := rawdb.DeleteMarketOrderBook(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, pk); err != nil {
-				return 0, err
+				return 0, nil, err
+			}
+			if err := decrementMarketPairPriceCount(ctx, incoming.BuyTokenId, incoming.SellTokenId); err != nil {
+				return 0, nil, err
 			}
 		} else {
 			if err := rawdb.WriteMarketOrderBook(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, pk, ob); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 		}
 	}
@@ -386,11 +474,74 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, error) {
 		}
 		oppPL.Prices = remaining
 		if err := rawdb.WriteMarketPriceList(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, oppPL); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
 
-	return totalBuyReceived, nil
+	return totalBuyReceived, details, nil
+}
+
+func returnOrderSellRemain(ctx *Context, order *corepb.MarketOrder) error {
+	remain := order.SellTokenQuantityRemain
+	if remain <= 0 {
+		order.SellTokenQuantityRemain = 0
+		return nil
+	}
+	owner := tcommon.BytesToAddress(order.OwnerAddress)
+	if err := transferToken(ctx, owner, order.SellTokenId, remain); err != nil {
+		return err
+	}
+	order.SellTokenQuantityReturn = remain
+	order.SellTokenQuantityRemain = 0
+	return nil
+}
+
+func deactivateMarketOrderHead(ctx *Context, order *corepb.MarketOrder, ob *corepb.MarketOrderIdList, nextID []byte, exhaustedPrices map[[16]byte]bool, pk [16]byte) error {
+	order.State = corepb.MarketOrder_INACTIVE
+	order.Next = nil
+	order.Prev = nil
+	if err := removeMarketAccountOrder(ctx, order.OwnerAddress, order.OrderId); err != nil {
+		return err
+	}
+
+	if len(nextID) > 0 {
+		nextOrder := rawdb.ReadMarketOrder(ctx.DB, nextID)
+		if nextOrder != nil {
+			nextOrder.Prev = nil
+			if err := rawdb.WriteMarketOrder(ctx.DB, nextID, nextOrder); err != nil {
+				return err
+			}
+		}
+		ob.Head = nextID
+	} else {
+		ob.Head = nil
+		ob.Tail = nil
+		exhaustedPrices[pk] = true
+	}
+	return nil
+}
+
+func removeMarketAccountOrder(ctx *Context, owner []byte, orderID []byte) error {
+	mao := rawdb.ReadMarketAccountOrder(ctx.DB, owner)
+	for i, id := range mao.Orders {
+		if bytes.Equal(id, orderID) {
+			mao.Orders = append(mao.Orders[:i], mao.Orders[i+1:]...)
+			break
+		}
+	}
+	if mao.Count > 0 {
+		mao.Count--
+	}
+	return rawdb.WriteMarketAccountOrder(ctx.DB, owner, mao)
+}
+
+func decrementMarketPairPriceCount(ctx *Context, sellTokenID, buyTokenID []byte) error {
+	count := rawdb.ReadMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID)
+	if count <= 1 {
+		return rawdb.DeleteMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID)
+	}
+	rawdb.WriteMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID, count-1)
+	return nil
 }
 
 // addOrderToBook adds an order to the price list and linked list in the order book.
@@ -414,6 +565,7 @@ func addOrderToBook(ctx *Context, order *corepb.MarketOrder) error {
 		if err := rawdb.WriteMarketPriceList(ctx.DB, order.SellTokenId, order.BuyTokenId, pl); err != nil {
 			return err
 		}
+		rawdb.IncrMarketPairPriceCount(ctx.DB, order.SellTokenId, order.BuyTokenId, 1)
 	}
 
 	// Update linked list at this price key

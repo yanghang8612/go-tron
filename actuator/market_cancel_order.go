@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -38,7 +37,10 @@ func (a *MarketCancelOrderActuator) Validate(ctx *Context) error {
 	}
 
 	// 1. Owner exists
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
@@ -80,7 +82,10 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "ownerAddress")
+	if err != nil {
+		return nil, err
+	}
 	fee := ctx.DynProps.MarketCancelFee()
 	if err := burnFee(ctx, ownerAddr, fee); err != nil {
 		return nil, err
@@ -116,11 +121,7 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 6: Decrement account order Count
-	mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress)
-	if mao.Count > 0 {
-		mao.Count--
-	}
-	if err := rawdb.WriteMarketAccountOrder(ctx.DB, c.OwnerAddress, mao); err != nil {
+	if err := removeMarketAccountOrder(ctx, c.OwnerAddress, c.OrderId); err != nil {
 		return nil, err
 	}
 
@@ -190,6 +191,14 @@ func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]b
 		pl.Prices = remaining
 		if err := rawdb.WriteMarketPriceList(db, order.SellTokenId, order.BuyTokenId, pl); err != nil {
 			return err
+		}
+		count := rawdb.ReadMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId)
+		if count <= 1 {
+			if err := rawdb.DeleteMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId); err != nil {
+				return err
+			}
+		} else {
+			rawdb.WriteMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId, count-1)
 		}
 	} else {
 		// Write updated order book list back

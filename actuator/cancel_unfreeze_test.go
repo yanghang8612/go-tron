@@ -43,8 +43,10 @@ func TestCancelAllUnfreezeV2Execute(t *testing.T) {
 	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 0) // ensure entry exists
+	ctx.State.AddBalance(owner, 1000)
 	ctx.State.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 1000000, 999999)
 	ctx.State.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, 500000, 999999)
+	ctx.State.AddUnfreezeV2(owner, corepb.ResourceCode_TRON_POWER, 250000, 999)
 
 	act := &CancelAllUnfreezeV2Actuator{}
 	result, err := act.Execute(ctx)
@@ -53,6 +55,14 @@ func TestCancelAllUnfreezeV2Execute(t *testing.T) {
 	}
 	if result.ContractRet != 1 {
 		t.Fatal("expected ContractRet=1")
+	}
+	if result.WithdrawExpireAmount != 250000 {
+		t.Fatalf("withdraw_expire_amount: want 250000, got %d", result.WithdrawExpireAmount)
+	}
+	if result.CancelUnfreezeV2Amount["BANDWIDTH"] != 1000000 ||
+		result.CancelUnfreezeV2Amount["ENERGY"] != 500000 ||
+		result.CancelUnfreezeV2Amount["TRON_POWER"] != 0 {
+		t.Fatalf("cancel map mismatch: %+v", result.CancelUnfreezeV2Amount)
 	}
 
 	if ctx.State.UnfreezeV2Count(owner) != 0 {
@@ -63,5 +73,11 @@ func TestCancelAllUnfreezeV2Execute(t *testing.T) {
 	}
 	if ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY) != 500000 {
 		t.Fatalf("energy not re-frozen: %d", ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY))
+	}
+	if ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_TRON_POWER) != 0 {
+		t.Fatalf("expired tron power should not be re-frozen: %d", ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_TRON_POWER))
+	}
+	if got := ctx.State.GetBalance(owner); got != 251000 {
+		t.Fatalf("expired amount should be withdrawn to balance: got %d", got)
 	}
 }

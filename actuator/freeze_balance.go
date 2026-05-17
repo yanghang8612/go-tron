@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -28,38 +28,64 @@ func (a *FreezeBalanceActuator) getContract(ctx *Context) (*contractpb.FreezeBal
 }
 
 func (a *FreezeBalanceActuator) Validate(ctx *Context) error {
-	// Once the V2 resource model is active (proposal #62), V1 freeze is
-	// closed. Mirror java-tron's FreezeBalanceActuator.validate.
-	if forks.IsActive(forks.AllowNewResourceModel, ctx.BlockNumber, ctx.DynProps) {
-		return errors.New("freeze v2 is open, old freeze is closed")
-	}
 	fc, err := a.getContract(ctx)
 	if err != nil {
 		return err
 	}
-	ownerAddr := common.BytesToAddress(fc.OwnerAddress)
+	ownerAddr, err := checkedAddress(fc.OwnerAddress, "address")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
 	if fc.FrozenBalance < 1_000_000 {
 		return errors.New("frozen balance must be at least 1 TRX")
 	}
-	if fc.FrozenDuration < 3 {
-		return errors.New("frozen duration must be at least 3 days")
+	if fc.FrozenDuration < ctx.DynProps.MinFrozenTime() || fc.FrozenDuration > ctx.DynProps.MaxFrozenTime() {
+		return errors.New("frozen duration is out of range")
 	}
 	if ctx.State.GetBalance(ownerAddr) < fc.FrozenBalance {
 		return errors.New("insufficient balance")
 	}
-	if fc.Resource != corepb.ResourceCode_BANDWIDTH &&
-		fc.Resource != corepb.ResourceCode_ENERGY &&
-		fc.Resource != corepb.ResourceCode_TRON_POWER {
+	if acct := ctx.State.GetAccount(ownerAddr); acct != nil {
+		if len(acct.FrozenBandwidthList()) > 1 {
+			return errors.New("frozenCount must be 0 or 1")
+		}
+	}
+	switch fc.Resource {
+	case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_ENERGY:
+	case corepb.ResourceCode_TRON_POWER:
+		if !ctx.DynProps.AllowNewResourceModel() {
+			return errors.New("ResourceCode error, valid ResourceCode[BANDWIDTH、ENERGY]")
+		}
+		if len(fc.ReceiverAddress) > 0 {
+			return errors.New("TRON_POWER is not allowed to delegate to other accounts.")
+		}
+	default:
 		return errors.New("invalid resource type")
 	}
-	if len(fc.ReceiverAddress) > 0 {
-		receiverAddr := common.BytesToAddress(fc.ReceiverAddress)
+
+	if len(fc.ReceiverAddress) > 0 && ctx.DynProps.AllowDelegateResource() {
+		receiverAddr, err := checkedAddress(fc.ReceiverAddress, "receiverAddress")
+		if err != nil {
+			return err
+		}
+		if receiverAddr == ownerAddr {
+			return errors.New("receiverAddress must not be the same as ownerAddress")
+		}
 		if !ctx.State.AccountExists(receiverAddr) {
 			return errors.New("receiver account does not exist")
 		}
+		if ctx.DynProps.AllowTvmConstantinople() {
+			receiver := ctx.State.GetAccount(receiverAddr)
+			if receiver != nil && receiver.Type() == corepb.AccountType_Contract {
+				return errors.New("Do not allow delegate resources to contract addresses")
+			}
+		}
+	}
+	if ctx.DynProps.SupportUnfreezeDelay() {
+		return errors.New("freeze v2 is open, old freeze is closed")
 	}
 	return nil
 }
@@ -75,46 +101,78 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	expireTimeMs := ctx.PrevBlockTime + fc.FrozenDuration*86_400_000
-	delegated := len(fc.ReceiverAddress) > 0
+	if ctx.DynProps.AllowNewResourceModel() {
+		ctx.State.InitializeOldTronPowerIfNeeded(ownerAddr)
+	}
+	delegated := len(fc.ReceiverAddress) > 0 && ctx.DynProps.AllowDelegateResource() && fc.Resource != corepb.ResourceCode_TRON_POWER
+	oldWeight := v1FrozenResourceWeight(ctx.State, ownerAddr, fc.Resource)
+	var receiverAddr common.Address
+	if delegated {
+		receiverAddr = common.BytesToAddress(fc.ReceiverAddress)
+		oldWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, fc.Resource)
+	}
 
 	if !delegated {
 		switch fc.Resource {
-		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
+		case corepb.ResourceCode_BANDWIDTH:
 			ctx.State.FreezeV1Bandwidth(ownerAddr, fc.FrozenBalance, expireTimeMs)
 		case corepb.ResourceCode_ENERGY:
 			ctx.State.FreezeV1Energy(ownerAddr, fc.FrozenBalance, expireTimeMs)
+		case corepb.ResourceCode_TRON_POWER:
+			ctx.State.FreezeV1TronPower(ownerAddr, fc.FrozenBalance, expireTimeMs)
 		}
 	} else {
-		receiverAddr := common.BytesToAddress(fc.ReceiverAddress)
+		dr := rawdb.ReadDelegatedResourceLegacy(ctx.DB, ownerAddr, receiverAddr)
+		if dr == nil {
+			dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
+		}
 		switch fc.Resource {
-		case corepb.ResourceCode_BANDWIDTH, corepb.ResourceCode_TRON_POWER:
+		case corepb.ResourceCode_BANDWIDTH:
 			ctx.State.FreezeV1DelegatedBandwidth(ownerAddr, receiverAddr, fc.FrozenBalance)
+			dr.FrozenBalanceForBandwidth += fc.FrozenBalance
+			dr.ExpireTimeForBandwidth = expireTimeMs
 		case corepb.ResourceCode_ENERGY:
 			ctx.State.FreezeV1DelegatedEnergy(ownerAddr, receiverAddr, fc.FrozenBalance)
+			dr.FrozenBalanceForEnergy += fc.FrozenBalance
+			dr.ExpireTimeForEnergy = expireTimeMs
+		}
+		if err := rawdb.WriteDelegatedResource(ctx.DB, ownerAddr, receiverAddr, dr); err != nil {
+			return nil, err
+		}
+		if ctx.DynProps.AllowDelegateOptimization() {
+			if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, ownerAddr[:]); err != nil {
+				return nil, err
+			}
+			if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, receiverAddr[:]); err != nil {
+				return nil, err
+			}
+			if err := rawdb.WriteDrAccountIndexDelegate(ctx.DB, false, ownerAddr[:], receiverAddr[:], ctx.PrevBlockTime); err != nil {
+				return nil, err
+			}
+		} else if err := rawdb.WriteDrAccountIndexLegacyDelegate(ctx.DB, ownerAddr[:], receiverAddr[:]); err != nil {
+			return nil, err
 		}
 	}
 
-	// Weight accounting mirrors java-tron's FreezeBalanceActuator.addTotalWeight:
-	// under allow_new_reward the delta is net of this freeze, otherwise the
-	// full frozen amount in TRX is added. Delegated flows accumulate the same
-	// weight on the delegator's side (java tracks this via the delegator
-	// account's frozen list).
-	addV1ResourceWeight(ctx.DynProps, fc.Resource, fc.FrozenBalance)
+	newWeight := v1FrozenResourceWeight(ctx.State, ownerAddr, fc.Resource)
+	if delegated {
+		newWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, fc.Resource)
+	}
+	addV1ResourceWeight(ctx.DynProps, fc.Resource, fc.FrozenBalance, oldWeight, newWeight)
 
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }
 
-// addV1ResourceWeight adjusts total_{net,energy,tron_power}_weight for a V1
-// freeze of `frozenBalance` SUN. Handles both allow_new_reward paths. The
-// delta is positive for freeze, negative for unfreeze (caller passes a
-// negative frozenBalance).
-func addV1ResourceWeight(dp *state.DynamicProperties, resource corepb.ResourceCode, frozenBalance int64) {
-	// Under allow_new_reward java uses (newFrozenTotal/TRX - oldFrozenTotal/TRX)
-	// as the increment, which differs from frozenBalance/TRX only when the
-	// integer division truncates at the boundary. For the V1 path touched
-	// here that happens only on sub-TRX dust — which Validate already rejects
-	// (frozenBalance < 1_000_000). So the two paths are equivalent.
-	addResourceWeight(dp, resource, frozenBalance/trxPrecisionActuator)
+// addV1ResourceWeight mirrors java-tron's FreezeBalanceActuator.addTotalWeight:
+// before allow_new_reward the delta is this operation's amount / TRX; after
+// allow_new_reward it is the exact old/new total weight difference, preserving
+// fractional-TRX carry from prior freezes.
+func addV1ResourceWeight(dp *state.DynamicProperties, resource corepb.ResourceCode, frozenBalance, oldWeight, newWeight int64) {
+	weight := frozenBalance / trxPrecisionActuator
+	if dp.AllowNewReward() {
+		weight = newWeight - oldWeight
+	}
+	addResourceWeight(dp, resource, weight)
 }
 
 // addResourceWeight applies weight to total_{net,energy,tron_power}_weight
@@ -141,4 +199,36 @@ func frozenV2WithDelegatedWeight(s *state.StateDB, addr common.Address, resource
 		balance += s.GetDelegatedFrozenV2(addr, resource)
 	}
 	return balance / trxPrecisionActuator
+}
+
+func v1FrozenResourceWeight(s *state.StateDB, addr common.Address, resource corepb.ResourceCode) int64 {
+	acct := s.GetAccount(addr)
+	if acct == nil {
+		return 0
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		return acct.TotalFrozenBandwidth() / trxPrecisionActuator
+	case corepb.ResourceCode_ENERGY:
+		return acct.FrozenEnergyAmount() / trxPrecisionActuator
+	case corepb.ResourceCode_TRON_POWER:
+		return acct.V1TronPowerFrozen() / trxPrecisionActuator
+	default:
+		return 0
+	}
+}
+
+func v1AcquiredDelegatedWeight(s *state.StateDB, addr common.Address, resource corepb.ResourceCode) int64 {
+	acct := s.GetAccount(addr)
+	if acct == nil {
+		return 0
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		return acct.AcquiredDelegatedFrozenBandwidth() / trxPrecisionActuator
+	case corepb.ResourceCode_ENERGY:
+		return acct.AcquiredDelegatedFrozenEnergy() / trxPrecisionActuator
+	default:
+		return 0
+	}
 }

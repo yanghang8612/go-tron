@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	tcommon "github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -30,7 +29,10 @@ func (a *CancelAllUnfreezeV2Actuator) Validate(ctx *Context) error {
 	if err != nil {
 		return err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "address")
+	if err != nil {
+		return err
+	}
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
@@ -45,29 +47,52 @@ func (a *CancelAllUnfreezeV2Actuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	ownerAddr := tcommon.BytesToAddress(c.OwnerAddress)
+	ownerAddr, err := checkedAddress(c.OwnerAddress, "address")
+	if err != nil {
+		return nil, err
+	}
 	acc := ctx.State.GetAccount(ownerAddr)
 
-	// Sum pending unfreezes by resource type
-	var bwTotal, energyTotal int64
+	cancelled := map[string]int64{
+		"BANDWIDTH":  0,
+		"ENERGY":     0,
+		"TRON_POWER": 0,
+	}
+	var withdrawnExpired int64
+	refreeze := func(resource corepb.ResourceCode, amount int64) {
+		oldWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, resource)
+		ctx.State.AddFreezeV2(ownerAddr, resource, amount)
+		newWeight := frozenV2WithDelegatedWeight(ctx.State, ownerAddr, resource)
+		addResourceWeight(ctx.DynProps, resource, newWeight-oldWeight)
+	}
 	for _, u := range acc.UnfrozenV2() {
-		if u.Type == corepb.ResourceCode_BANDWIDTH {
-			bwTotal += u.UnfreezeAmount
-		} else {
-			energyTotal += u.UnfreezeAmount
+		if u.UnfreezeExpireTime <= ctx.PrevBlockTime {
+			withdrawnExpired += u.UnfreezeAmount
+			continue
+		}
+		switch u.Type {
+		case corepb.ResourceCode_BANDWIDTH:
+			cancelled["BANDWIDTH"] += u.UnfreezeAmount
+			refreeze(corepb.ResourceCode_BANDWIDTH, u.UnfreezeAmount)
+		case corepb.ResourceCode_ENERGY:
+			cancelled["ENERGY"] += u.UnfreezeAmount
+			refreeze(corepb.ResourceCode_ENERGY, u.UnfreezeAmount)
+		case corepb.ResourceCode_TRON_POWER:
+			cancelled["TRON_POWER"] += u.UnfreezeAmount
+			refreeze(corepb.ResourceCode_TRON_POWER, u.UnfreezeAmount)
 		}
 	}
-
-	// Re-freeze
-	if bwTotal > 0 {
-		ctx.State.AddFreezeV2(ownerAddr, corepb.ResourceCode_BANDWIDTH, bwTotal)
-	}
-	if energyTotal > 0 {
-		ctx.State.AddFreezeV2(ownerAddr, corepb.ResourceCode_ENERGY, energyTotal)
+	if withdrawnExpired > 0 {
+		ctx.State.AddBalance(ownerAddr, withdrawnExpired)
 	}
 
 	// Clear unfreeze queue
 	ctx.State.ClearUnfrozenV2(ownerAddr)
 
-	return &Result{Fee: 0, ContractRet: 1}, nil
+	return &Result{
+		Fee:                    0,
+		WithdrawExpireAmount:   withdrawnExpired,
+		CancelUnfreezeV2Amount: cancelled,
+		ContractRet:            1,
+	}, nil
 }
