@@ -625,6 +625,18 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		batch := ss.nextFetchBatchLocked(ps)
 		if len(batch) == 0 {
 			if !ps.done {
+				if ps.lastInventoryNum > ss.chain.CurrentBlock().Number() {
+					// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
+					// summary tail is below the last inventory tip it sent us
+					// on this peer (lastSyncNum > lastNum). Wait until the
+					// canonical head catches up before asking this peer for
+					// the next 2000-block window.
+					log.Trace("Sync peer waiting for local head",
+						"peer", ps.peer.ID(),
+						"head", ss.chain.CurrentBlock().Number(),
+						"inventoryTip", ps.lastInventoryNum)
+					continue
+				}
 				// Always re-poll once a peer's local queue drains. java-tron may
 				// have produced new blocks while we were applying the previous
 				// batch; the one-id inventory response is what marks sync done.

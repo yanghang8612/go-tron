@@ -92,6 +92,44 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	}
 }
 
+func TestMultiPeerSyncDoesNotRepollBeforeInventoryTipProcessed(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	peer, closePeer := testPeer(t, "window-peer")
+	defer closePeer()
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ := ss.addPeerStateLocked(peer)
+	ps.lastInventoryNum = 10
+	out := ss.fillFetchSlotsLocked(time.Now())
+	waiting := !ps.chainRequested
+	ss.mu.Unlock()
+
+	if len(out) != 0 || !waiting {
+		t.Fatalf("sent early sync request before local head caught up: out=%d waiting=%v", len(out), waiting)
+	}
+
+	caughtUp := makeChainWithBlocks(t, 10)
+	ss = NewSyncService(caughtUp, nil)
+	peer, closePeer = testPeer(t, "caught-up-peer")
+	defer closePeer()
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ps, _ = ss.addPeerStateLocked(peer)
+	ps.lastInventoryNum = 10
+	out = ss.fillFetchSlotsLocked(time.Now())
+	requested := ps.chainRequested
+	ss.mu.Unlock()
+
+	if len(out) != 1 || !out[0].chain || !requested {
+		t.Fatalf("did not request next window after local head caught up: out=%d chain=%v requested=%v",
+			len(out), len(out) == 1 && out[0].chain, requested)
+	}
+}
+
 func testPeer(t *testing.T, id string) (*p2p.Peer, func()) {
 	t.Helper()
 	c1, c2 := gnet.Pipe()
