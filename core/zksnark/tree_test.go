@@ -87,18 +87,29 @@ func TestEmptyRootsVector(t *testing.T) {
 // one-by-one and asserts the intermediate Merkle root matches the
 // java-tron reference root after each append.
 //
+// The vector targets a tree of DEPTH = 4 (16 leaves fill it), matching
+// java-tron's `MerkleTreeTest.testComplexTreePath` setup. Commitment
+// bytes are reversed before being fed into the tree: the JSON encodes
+// them in big-endian display but librustzcash takes little-endian field
+// elements (same convention as `ByteUtil.reverse` in the Java test).
+//
 // Initially fails for the same reason as TestEmptyRootsVector.
 func TestAppendCommitmentsVector(t *testing.T) {
+	const treeDepth = 4
 	cms := loadHexVector(t, "merkle_commitments_sapling.json", Depth)
 	want := loadHexVector(t, "merkle_roots_sapling.json", Depth)
 	if len(cms) != len(want) {
 		t.Fatalf("commitments=%d roots=%d, must match", len(cms), len(want))
 	}
 
-	tree := NewTree()
+	tree := NewTreeWithDepth(treeDepth)
 	for i, cm := range cms {
 		var leaf PedersenHash
-		copy(leaf[:], cm)
+		reversed := make([]byte, len(cm))
+		for j, b := range cm {
+			reversed[len(cm)-1-j] = b
+		}
+		copy(leaf[:], reversed)
 		if err := tree.Append(leaf); err != nil {
 			if errors.Is(err, ErrPedersenUnimplemented) {
 				t.Skipf("Pedersen backend not yet wired (Slice 2 deliverable): %v", err)

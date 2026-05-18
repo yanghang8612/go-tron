@@ -106,13 +106,33 @@ Without the Rust crate landed, `make gtron-sapling` will fail to link
 (`-lzksnark_capi: not found`). That's the expected error path; default
 builds are unaffected.
 
-### Toolchain caveat
+### Toolchain status (2026-05-19 verified)
 
-The crate is from 2019-era Rust: `rand = "0.4"`, `blake2-rfc` pinned to a
-specific git rev, `bellman`/`pairing` as path deps. A modern stable Rust
-may need a `rust-toolchain` pin or `cargo +<old version>` invocation —
-verify when you first run `make zksnark-deps` and document the working
-version here.
+The crate is from 2019-era Rust (`rand = "0.4"`, `blake2-rfc` pinned to
+a specific git rev, `bellman`/`pairing` as path deps). Stable Rust 1.95.0
+builds it with 15 warnings (mostly `shared reference to mutable static`
+on `SAPLING_*_PARAMS` — internal Rust API drift, not a behavior change).
+Build time: ~21s release.
+
+Output artifacts under `third_party/librustzcash/target/release/`:
+
+- `librustzcash.a` ≈ 2.4 MB (static lib used by cgo)
+- `librustzcash.dylib` ≈ 944 KB (dynamic lib)
+
+### Verification (2026-05-19)
+
+All 5 tests pass under `CGO_ENABLED=1 go test -tags=sapling`:
+
+| Test | What it checks |
+|---|---|
+| `TestEmptyRootsVector` | empty-tree root at each depth d ∈ [0, 32] matches the 33-entry java-tron vector |
+| `TestAppendCommitmentsVector` | Incremental tree at DEPTH=4 with 16 commitments: every intermediate root matches `merkle_roots_sapling.json` (commitments reversed before insert — matches `ByteUtil.reverse` in java's `MerkleTreeTest`) |
+| `TestCombineKnownDepth25` | `combine(25, a, b) = 61a50a55…` from `PedersenHashCapsule.main()` |
+| `TestProtoRoundTrip` | `IncrementalMerkleTree` proto wrapper preserves left/right/parents byte-for-byte through marshal+unmarshal |
+| `TestWfCheckCatchesBadShapes` | `WfCheck` rejects the three canonical non-canonical proto shapes |
+
+Default builds (no `-tags=sapling`) still skip the vector tests via
+`errors.Is(err, ErrPedersenUnimplemented)`.
 
 
 

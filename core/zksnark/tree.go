@@ -14,22 +14,42 @@ import (
 // Empty slots serialize as a PedersenHash with empty content (`len == 0`),
 // matching the proto default and java's `isPresent` semantics. We keep the
 // proto as the source of truth so round-trips through rawdb are byte-stable.
+//
+// Production code uses Depth (= 32). Test vectors from java-tron's
+// MerkleTreeTest exercise smaller depths via NewTreeWithDepth; mirrors
+// java's `IncrementalMerkleTreeContainer.setDEPTH` static mutator.
 type IncrementalMerkleTree struct {
-	pb *shieldpb.IncrementalMerkleTree
+	pb    *shieldpb.IncrementalMerkleTree
+	depth int
 }
 
-// NewTree returns an empty tree.
+// NewTree returns an empty tree at production depth (Depth = 32).
 func NewTree() *IncrementalMerkleTree {
-	return &IncrementalMerkleTree{pb: &shieldpb.IncrementalMerkleTree{}}
+	return &IncrementalMerkleTree{pb: &shieldpb.IncrementalMerkleTree{}, depth: Depth}
+}
+
+// NewTreeWithDepth returns an empty tree at a specific depth d ∈ [1, Depth].
+// Used by tests that exercise java-tron's reference vectors at smaller
+// depths.
+func NewTreeWithDepth(d int) *IncrementalMerkleTree {
+	return &IncrementalMerkleTree{pb: &shieldpb.IncrementalMerkleTree{}, depth: d}
 }
 
 // FromProto wraps an existing proto (may be nil, in which case an empty tree
-// is returned).
+// is returned). Defaults to production depth.
 func FromProto(pb *shieldpb.IncrementalMerkleTree) *IncrementalMerkleTree {
 	if pb == nil {
 		return NewTree()
 	}
-	return &IncrementalMerkleTree{pb: pb}
+	return &IncrementalMerkleTree{pb: pb, depth: Depth}
+}
+
+// FromProtoWithDepth wraps a proto with the given depth.
+func FromProtoWithDepth(pb *shieldpb.IncrementalMerkleTree, d int) *IncrementalMerkleTree {
+	if pb == nil {
+		return NewTreeWithDepth(d)
+	}
+	return &IncrementalMerkleTree{pb: pb, depth: d}
 }
 
 // Proto returns the underlying proto for serialization. The returned pointer
@@ -101,13 +121,13 @@ func (t *IncrementalMerkleTree) Size() int {
 	return n
 }
 
-// IsComplete reports whether the tree is full at Depth. Mirrors
-// IncrementalMerkleTreeContainer.isComplete.
+// IsComplete reports whether the tree is full at its configured depth.
+// Mirrors IncrementalMerkleTreeContainer.isComplete.
 func (t *IncrementalMerkleTree) IsComplete() bool {
 	if !t.leftIsPresent() || !t.rightIsPresent() {
 		return false
 	}
-	if len(t.pb.GetParents()) != Depth-1 {
+	if len(t.pb.GetParents()) != t.depth-1 {
 		return false
 	}
 	for _, p := range t.pb.GetParents() {
@@ -120,9 +140,9 @@ func (t *IncrementalMerkleTree) IsComplete() bool {
 
 // Append adds a new leaf. Mirrors IncrementalMerkleTreeContainer.append.
 //
-// Propagates errors from Combine, so until a Pedersen backend is wired this
-// returns ErrPedersenUnimplemented once the tree fills its left+right slot
-// and triggers a parent-level combine.
+// Propagates errors from Combine, so under the stub backend this returns
+// ErrPedersenUnimplemented once the tree fills its left+right slot and
+// triggers a parent-level combine.
 func (t *IncrementalMerkleTree) Append(leaf PedersenHash) error {
 	if t.IsComplete() {
 		return errors.New("zksnark: tree is full")
@@ -148,7 +168,7 @@ func (t *IncrementalMerkleTree) Append(leaf PedersenHash) error {
 	t.pb.Left = fromPedersenHash(leaf)
 	t.pb.Right = nil
 
-	for i := 0; i < Depth; i++ {
+	for i := 0; i < t.depth; i++ {
 		if i < len(t.pb.GetParents()) {
 			parent := t.pb.GetParents()[i]
 			if parentIsPresent(parent) {
@@ -214,7 +234,7 @@ func (t *IncrementalMerkleTree) Root() (PedersenHash, error) {
 		}
 		d++
 	}
-	for d < Depth {
+	for d < t.depth {
 		root, err = Combine(d, root, empties[d])
 		if err != nil {
 			return PedersenHash{}, err
