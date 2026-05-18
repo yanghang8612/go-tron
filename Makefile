@@ -5,20 +5,24 @@
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
 GOFLAGS =
+# Default to pure-Go builds. go-ethereum's cgo secp256k1 wrapper compiles a
+# vendored C lib and can stall on small servers; callers can override with
+# `make CGO_ENABLED=1 ...` when they explicitly want cgo.
+CGO_ENABLED ?= 0
 
 gtron:
-	$(GO) build $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron."
 	@echo "Run \"$(GOBIN)/gtron\" to launch."
 
 gtron-replay:
-	$(GO) build $(GOFLAGS) -o $(GOBIN)/gtron-replay ./cmd/gtron-replay
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/gtron-replay ./cmd/gtron-replay
 	@echo "Done building gtron-replay."
 
 all: gtron
 
 test:
-	$(GO) test ./... -count=1 -timeout 300s
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) test ./... -count=1 -timeout 300s
 
 lint:
 	golangci-lint run ./...
@@ -65,7 +69,7 @@ conformance-replay-exit-gate: gtron-replay
 
 # Build txsign utility.
 txsign:
-	$(GO) build $(GOFLAGS) -o $(GOBIN)/txsign ./cmd/txsign
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/txsign ./cmd/txsign
 
 # System test flows — builds binaries, starts dev node, runs HTTP flow tests.
 # EXIT: non-zero if PASS < 30 or WARN > 4.
