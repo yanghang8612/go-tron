@@ -2,11 +2,14 @@
 // Sapling shielded transactions: Pedersen hash primitives and the incremental
 // Merkle tree state machine that tracks commitment roots.
 //
-// Implementation status: the Pedersen hash backend is unimplemented in this
-// slice. See docs/dev/shielded-merkle-audit.md for the path choice that gates
-// Slice 2. Until a backend is wired, Combine and Uncommitted both return
-// ErrPedersenUnimplemented; downstream callers (IncrementalMerkleTree.Append /
-// Root, EmptyRoots) propagate that error.
+// The Pedersen hash backend is build-tag-gated:
+//
+//   - default (`!sapling`): pedersen_stub.go returns ErrPedersenUnimplemented
+//     so the package compiles everywhere and shielded tests skip.
+//   - `-tags=sapling`: pedersen_cgo.go links against a C-ABI build of the
+//     `librustzcash` Rust crate (the same crate java-tron's zksnark-java-sdk
+//     bundles via JNI). Requires CGO_ENABLED=1 and a built static lib —
+//     see docs/dev/shielded-merkle-audit.md.
 package zksnark
 
 import "errors"
@@ -23,32 +26,10 @@ const Depth = 32
 // serialize as an empty `content` (length 0).
 type PedersenHash [32]byte
 
-// ErrPedersenUnimplemented is returned by Combine / Uncommitted until a
-// backend lands. Downstream callers wrap it with their own context.
-var ErrPedersenUnimplemented = errors.New("zksnark: Pedersen hash backend not implemented (see docs/dev/shielded-merkle-audit.md)")
-
-// Combine returns librustzcashMerkleHash(depth, left, right). Mirrors
-// PedersenHashCapsule.combine.
-//
-// The reference implementation is the Rust `librustzcash` crate that
-// java-tron binds via JNI; there is no Java-side computation. Matching it
-// requires either binding the same crate via cgo or porting the
-// Jubjub/Pedersen primitives to Go. Until one of those lands this is a
-// stub returning ErrPedersenUnimplemented.
-func Combine(depth int, left, right PedersenHash) (PedersenHash, error) {
-	_ = depth
-	_ = left
-	_ = right
-	return PedersenHash{}, ErrPedersenUnimplemented
-}
-
-// Uncommitted returns the librustzcashTreeUncommitted constant — the value
-// of an empty leaf in the Sapling commitment tree.
-//
-// Same stub status as Combine.
-func Uncommitted() (PedersenHash, error) {
-	return PedersenHash{}, ErrPedersenUnimplemented
-}
+// ErrPedersenUnimplemented is returned by the stub backend (no `-tags=sapling`)
+// and by EmptyRoots when its primitives fail. Downstream callers wrap it with
+// their own context.
+var ErrPedersenUnimplemented = errors.New("zksnark: Pedersen hash backend not built (rebuild with -tags=sapling and a librustzcash static lib; see docs/dev/shielded-merkle-audit.md)")
 
 // EmptyRoots returns the array of empty subtree roots at each depth
 // d ∈ [0, Depth]. Mirrors EmptyMerkleRoots:

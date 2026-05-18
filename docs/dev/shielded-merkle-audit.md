@@ -39,17 +39,128 @@ These are imported verbatim from java-tron. We must NOT change them — wire-for
 | `vm/precompile_tron.go` | `shieldedMerkleHash`, `verifyMintProof`, `verifyTransferProof`, `verifyBurnProof` all return java-tron's failure payload until librustzcash equivalents are wired (their TODO comments say so verbatim). |
 | `core/zksnark/` | **New** — landing point for this work. |
 
-## Pedersen hash implementation — deferred
+## Pedersen hash implementation — Path A (CGO + librustzcash)
 
-java-tron calls `JLibrustzcash.librustzcashMerkleHash`/`librustzcashTreeUncommitted` via JNI into the Rust `librustzcash` crate. The native function is **the** source of truth — there is no Java implementation; the value must match the Rust output byte-for-byte.
+**Decision (2026-05-19)**: build-tag-gated CGO bindings to a C-ABI build
+of the Rust `librustzcash` crate. Default builds stay pure-Go and the
+shielded tests skip; `-tags=sapling` opt-in builds link the native code
+and the tests must pass.
 
-gtron's Makefile defaults to `CGO_ENABLED=0` (Makefile:11) so the build runs anywhere without a C toolchain. Wiring librustzcash adds a Rust toolchain dependency and a CGO requirement. Three feasible paths:
+### File layout
 
-1. **CGO + librustzcash** (preferred for exact parity). Add `cgo` build tag; `gtron` builds without it lose shielded-Merkle support and refuse shielded consensus replay. Requires Rust toolchain in CI.
-2. **Pure-Go Sapling/Jubjub/Pedersen port**. Multi-week cryptography effort. Risk: subtle field-arithmetic bugs producing wrong roots; vectors-only validation insufficient unless we cover every code path.
-3. **Operator bypass flag `--unsafe.skip-shielded-root-check`**. Default off; logs every skipped check. Plan-compliant temporary path; not a replacement for (1) or (2).
+```
+core/zksnark/
+├── pedersen.go         # types, ErrPedersenUnimplemented, EmptyRoots
+├── pedersen_stub.go    # //go:build !sapling — Combine/Uncommitted return ErrPedersenUnimplemented
+├── pedersen_cgo.go     # //go:build sapling   — cgo calls into libzksnark_capi
+├── zksnark_capi.h      # C header declaring zksnark_merkle_hash + zksnark_tree_uncommitted
+├── tree.go             # IncrementalMerkleTree (Append / Root / WfCheck / …)
+└── testdata/           # 4 java-tron JSON vectors
+```
 
-This decision is **escalated to the user**. Slice 2 begins only once chosen.
+### C ABI surface
+
+Two functions, declared in `zksnark_capi.h`:
+
+```c
+int32_t zksnark_merkle_hash(uint64_t depth,
+                            const uint8_t *a,
+                            const uint8_t *b,
+                            uint8_t *result);   // 0 on success
+void    zksnark_tree_uncommitted(uint8_t *result);
+```
+
+Bytes are 32-byte little-endian Jubjub field encoding (matches the
+librustzcash output exactly).
+
+### Build flow
+
+| Step | Status |
+|---|---|
+| `core/zksnark/pedersen_cgo.go` declares cgo directives + calls | ✅ landed |
+| `core/zksnark/zksnark_capi.h` declares the two C functions | ✅ landed |
+| `make zksnark-deps` placeholder that prints required steps | ✅ landed |
+| `make gtron-sapling` (`CGO_ENABLED=1 go build -tags=sapling`) | ✅ landed; needs lib to actually link |
+| **Pick Rust source location** (submodule / vendor / external) | open |
+| **Vendor / pull the Rust crate** + write Cargo C-ABI shim | open |
+| **CI: install Rust toolchain + run zksnark-deps + run sapling tests** | open |
+
+Without the Rust crate landed, `make gtron-sapling` will fail to link
+(`-lzksnark_capi: not found`). That's the expected error path; default
+builds are unaffected.
+
+### Rust source — TBD
+
+The advisor recommends locking the source to a specific commit before
+writing C-ABI code. Three sub-paths still open:
+
+1. **Submodule** → `tronprotocol/zksnark-java-sdk` (pin to a verified
+   commit). Mirrors java-tron exactly. `git clone --recursive` required.
+2. **Vendor snapshot** under `vendor/zksnark-capi/`. Single repo;
+   +1–2k LOC Rust; sync to upstream manual.
+3. **External `cargo install`** with a build-script env var pointing
+   at the resulting `.a`. Cleanest repo; CI/dev gate is high.
+
+
+
+java-tron calls `JLibrustzcash.librustzcashMerkleHash`/`librustzcashTreeUncommitted` via the [zksnark-java-sdk](https://github.com/tronprotocol/zksnark-java-sdk) JAR, which bundles a JNI binary (`libzksnarkjni.so` / `.jnilib`) wrapping the Rust `librustzcash` crate. The JNI symbols are not C-ABI callable from CGO — they require a JVM `JNIEnv*`. The Rust crate behind the JNI is **the** source of truth; values must match its output byte-for-byte.
+
+gtron's Makefile defaults to `CGO_ENABLED=0` ([Makefile:11](../../Makefile:11)) so the build runs anywhere without a C toolchain. Three feasible paths:
+
+### Path A — CGO + librustzcash (exact parity)
+
+Wire a non-JNI C ABI build of the same Rust crate java-tron uses. Add `//go:build sapling` tag; `gtron` builds without it lose shielded Merkle support. Sub-paths for Rust source:
+
+| Sub-path | Trade-off |
+|---|---|
+| Git submodule → `tronprotocol/zksnark-java-sdk` | Pinned commit; matches java-tron exactly; `git clone --recursive` required |
+| Vendor snapshot under `vendor/zksnark-capi/` | Single repo; +1–2k LOC Rust; sync to upstream manual |
+| External cargo install + env-var path | Cleanest repo; CI/dev gate is high |
+
+All three need Rust toolchain in CI. Setup cost ~2–3 days.
+
+### Path B — Pure-Go via jadeydi/jubjub
+
+Found in ecosystem scan (`pkg.go.dev` search): [`github.com/jadeydi/jubjub`](https://github.com/jadeydi/jubjub) (also the MixinNetwork fork) ships a pure-Go Jubjub curve and a Sapling-shaped Pedersen hash primitive:
+
+- Personalization `"Zcash_PH"` (Sapling spec)
+- 3-bit Bowe-Hopwood encoding with 63 chunks/generator, 5 generators
+- Returns a `JubjubPoint` (need `.x` for the 32-byte hash output)
+
+What's still missing if we adopt this:
+
+1. **Sapling `MerkleCRH^Sapling(depth, left, right)` wrapper** — encodes `(MERKLE_DEPTH - 1 - depth)` as 6 bits, concatenates with `left[0..255] || right[0..255]`, runs Pedersen, extracts the x-coordinate. ~50 LOC.
+2. **`Uncommitted^Sapling` constant** — the 32-byte Jubjub representation of integer 1 (`repr_J(1)`).
+3. **Parity verification** — validate against our 16+33 vectors. If any byte disagrees, fall back to Path A.
+
+Risks:
+- jadeydi/jubjub: 24 commits total, latest activity 2021. Unmaintained.
+- No public Sapling test-vector validation. Subtle EC arithmetic bug could pass our small vector set and break on production input.
+- Crypto code we ship would become gtron's responsibility forever.
+
+Setup cost ~1–2 days for the wrapper + validation. Wins only if vectors pass.
+
+### Path C — Operator bypass flag `--unsafe.skip-shielded-root-check`
+
+Default off; loud startup warning; logs every skipped check with block/tx/anchor. Plan-compliant tactical unblock for Nile sync; not a replacement for (A) or (B).
+
+### Path D — Defer shielded parity
+
+Drop this plan from the roadmap until CGO/build-policy priorities are clearer. Slice 1 deliverables stay (audit doc + interface + failing tests) as the eventual landing pad.
+
+The decision is **escalated to the user**. Slice 2 begins only once chosen.
+
+## Ecosystem scan — references
+
+- [`zcash/librustzcash`](https://github.com/zcash/librustzcash) — official Rust workspace; the Pedersen hash + MerkleCRH live here. Source of all test vectors. No public Go binding.
+- [`tronprotocol/zksnark-java-sdk`](https://github.com/tronprotocol/zksnark-java-sdk) — java-tron's bundled JNI wrapper; ships `libzksnarkjni.{so,jnilib}` for linux64/osx64/aarch64. Internal Rust source presumed forked from `zcash/librustzcash`.
+- [`jadeydi/jubjub`](https://github.com/jadeydi/jubjub) ([MixinNetwork fork](https://github.com/MixinNetwork/jubjub)) — pure-Go Jubjub + Sapling-shaped Pedersen primitive. No MerkleCRH wrapper. Last commit 2021.
+- [`gtank/jubjub`](https://github.com/gtank/jubjub) — pure-Go Jubjub for note decryption. No Pedersen hash exposed. Last commit January 2021.
+- Other Sapling-using chains (Penumbra, Namada, Aleo, Aztec) all keep crypto on the Rust side; no pure-Go reference impl found.
+
+## Out of scope for this plan
+
+The shielded **proof verification** precompiles (`verifyMintProof` / `verifyTransferProof` / `verifyBurnProof` at addresses `0x01000003`–`0x01000005`) and `shieldedMerkleHash` at `0x01000006` are separate axes that also depend on librustzcash. They currently return java-tron's failure payload ([vm/precompile_tron.go:380–437](../../vm/precompile_tron.go:380)). Wiring them is a follow-on plan, not part of Merkle-root parity.
 
 ## Test vectors
 

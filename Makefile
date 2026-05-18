@@ -1,6 +1,6 @@
 .PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
         conformance-replay conformance-replay-exit-gate txsign system-test-flows \
-        system-test-cross system-test-cross-flows
+        system-test-cross system-test-cross-flows zksnark-deps gtron-sapling
 
 GOBIN = $(shell pwd)/build/bin
 GO ?= go
@@ -89,3 +89,23 @@ system-test-cross: gtron
 # fixture genesis at /Users/asuka/Works/Tests/TVM/run/config.conf.
 system-test-cross-flows: gtron txsign
 	@scripts/system_test_cross_flows.sh
+
+# Build the librustzcash C-ABI static library that core/zksnark links against
+# under `-tags=sapling`. The Rust source location is not yet pinned; see
+# docs/dev/shielded-merkle-audit.md for the submodule / vendor / external
+# decision. Until then this target prints the required steps.
+zksnark-deps:
+	@echo "TODO: build libzksnark_capi.a from a librustzcash C ABI fork."
+	@echo "  1. Pick a Rust source path (submodule | vendor | external)."
+	@echo "  2. Build with cargo build --release --features cabi."
+	@echo "  3. Place libzksnark_capi.a under core/zksnark/ (or a path on LDFLAGS)."
+	@echo "See docs/dev/shielded-merkle-audit.md for details."
+	@exit 1
+
+# Sapling-enabled gtron build. Needs CGO_ENABLED=1 and zksnark-deps to have
+# placed libzksnark_capi.{a,so,dylib} on the linker path. Without those the
+# default `make gtron` build (pure-Go, no sapling tag) still works and
+# shielded tests skip.
+gtron-sapling:
+	CGO_ENABLED=1 $(GO) build -tags=sapling $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
+	@echo "Done building gtron with Sapling support."
