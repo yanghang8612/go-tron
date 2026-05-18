@@ -141,7 +141,8 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 			}
 		}
 		if len(allWitnesses) > 0 {
-			witnesses = dpos.SelectActiveWitnesses(allWitnesses)
+			dynProps := state.LoadDynamicProperties(db)
+			witnesses = dpos.SelectActiveWitnessesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())
 			rawdb.WriteActiveWitnesses(db, witnesses)
 		}
 	}
@@ -501,21 +502,25 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
 			applyRewardVI(bc.buffer, statedb, dynProps)
-			applyPendingVotes(bc.buffer, statedb)
+			hasPendingVotes := applyPendingVotes(bc.buffer, statedb)
 			statedb.FlushWitnesses(bc.buffer)
-			allWitnesses = bc.gatherWitnessVotes(statedb)
+			maintNewWitnesses = bc.ActiveWitnesses()
+			if hasPendingVotes {
+				allWitnesses = bc.gatherWitnessVotes(statedb)
 
-			sorted := dpos.SortWitnessesByVotes(allWitnesses)
-			if !dynProps.ChangeDelegation() {
-				dpos.DistributeLegacyStandby(adapter, sorted)
+				sortOpt := dynProps.ConsensusLogicOptimization()
+				sorted := dpos.SortWitnessesByVotesWithOptimization(allWitnesses, sortOpt)
+				if !dynProps.ChangeDelegation() {
+					dpos.DistributeLegacyStandby(adapter, sorted)
+				}
+				newActive := dpos.SelectActiveWitnessesWithOptimization(allWitnesses, sortOpt)
+				// java-tron MaintenanceManager flips is_jobs after reward
+				// distribution, before the active set is swapped — bc.ActiveWitnesses()
+				// still holds the outgoing set here.
+				flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
+				bc.SetActiveWitnesses(newActive)
+				maintNewWitnesses = newActive
 			}
-			newActive := dpos.SelectActiveWitnesses(allWitnesses)
-			// java-tron MaintenanceManager flips is_jobs after reward
-			// distribution, before the active set is swapped — bc.ActiveWitnesses()
-			// still holds the outgoing set here.
-			flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
-			bc.SetActiveWitnesses(newActive)
-			maintNewWitnesses = newActive
 
 			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
 			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())

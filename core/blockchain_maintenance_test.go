@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance is the
@@ -109,6 +110,15 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 		w := rawdb.ReadWitness(diskdb, witnessAddr(i))
 		w.SetIsJobs(seededActiveSet[witnessAddr(i)])
 		rawdb.WriteWitness(diskdb, witnessAddr(i), w)
+	}
+	// java-tron only runs updateWitness/reward/is_jobs rotation when the
+	// VotesStore has at least one record. Equal old/new votes keep witness
+	// balances unchanged while still exercising that maintenance branch.
+	if err := rawdb.WriteVotes(diskdb, testCoreAddr(200), &corepb.Votes{
+		OldVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
+		NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)

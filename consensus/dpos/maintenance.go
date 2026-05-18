@@ -1,7 +1,6 @@
 package dpos
 
 import (
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -108,19 +107,4 @@ func CalcNextMaintenanceTime(blockTime, currentMaint, interval int64) int64 {
 	}
 	round := (blockTime - currentMaint) / interval
 	return currentMaint + (round+1)*interval
-}
-
-// SelectActiveWitnesses returns the top N witnesses by vote count,
-// using deterministic tiebreaking via SortWitnessesByVotes.
-func SelectActiveWitnesses(allWitnesses []WitnessVote) []common.Address {
-	sorted := SortWitnessesByVotes(allWitnesses)
-	count := params.MaxActiveWitnessNum
-	if len(sorted) < count {
-		count = len(sorted)
-	}
-	result := make([]common.Address, count)
-	for i := 0; i < count; i++ {
-		result[i] = sorted[i].Address
-	}
-	return result
 }

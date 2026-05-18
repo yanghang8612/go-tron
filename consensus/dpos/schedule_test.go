@@ -1,6 +1,7 @@
 package dpos
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -39,4 +40,36 @@ func TestSortWitnesses(t *testing.T) {
 	if sorted[2].Votes != 100 {
 		t.Fatalf("expected lowest votes last, got %d", sorted[2].Votes)
 	}
+}
+
+func TestSortWitnessesPreOptimizationUsesJavaByteStringHash(t *testing.T) {
+	lowHashHighHex := mustScheduleTestAddress(t, "41ffffffffffffffffffffffffffffffffffffffff")
+	highHashLowHex := mustScheduleTestAddress(t, "410000000000000000000000000000000000000100")
+
+	witnesses := []WitnessVote{
+		{Address: lowHashHighHex, Votes: 100},
+		{Address: highHashLowHex, Votes: 100},
+	}
+
+	preOpt := SortWitnessesByVotesWithOptimization(witnesses, false)
+	if preOpt[0].Address != highHashLowHex {
+		t.Fatalf("pre-optimization tie-break: got %s, want %s", preOpt[0].Address.Hex(), highHashLowHex.Hex())
+	}
+
+	postOpt := SortWitnessesByVotesWithOptimization(witnesses, true)
+	if postOpt[0].Address != lowHashHighHex {
+		t.Fatalf("post-optimization tie-break: got %s, want %s", postOpt[0].Address.Hex(), lowHashHighHex.Hex())
+	}
+}
+
+func mustScheduleTestAddress(t *testing.T, s string) common.Address {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) != common.AddressLength {
+		t.Fatalf("address length: got %d, want %d", len(b), common.AddressLength)
+	}
+	return common.BytesToAddress(b)
 }
