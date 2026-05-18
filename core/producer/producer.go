@@ -2,11 +2,13 @@ package producer
 
 import (
 	"crypto/ecdsa"
-	"log"
+	"fmt"
 	"sync"
 	"time"
 
+	ethcommon "github.com/ethereum/go-ethereum/common"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -14,6 +16,8 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 )
+
+var log = gtronlog.NewModule("core/producer")
 
 // Producer drives block production on a DPoS schedule.
 type Producer struct {
@@ -47,14 +51,15 @@ func New(chain *core.BlockChain, pool *txpool.TxPool, engine *dpos.DPoS, witness
 func (p *Producer) Start() error {
 	p.wg.Add(1)
 	go p.loop()
-	log.Printf("Block producer started (witness=%x)", p.witnessAddr[:6])
+	log.Info("Block producer started",
+		"witness", fmt.Sprintf("%x", p.witnessAddr[:6]))
 	return nil
 }
 
 func (p *Producer) Stop() error {
 	close(p.quit)
 	p.wg.Wait()
-	log.Println("Block producer stopped")
+	log.Info("Block producer stopped")
 	return nil
 }
 
@@ -98,7 +103,7 @@ func (p *Producer) tryProduceBlock() {
 	scheduled, err := p.engine.GetScheduledWitness(headSlot)
 	if err != nil {
 		if !p.loggedWitnessErr {
-			log.Printf("Cannot get scheduled witness: %v", err)
+			log.Warn("Cannot get scheduled witness", "err", err)
 			p.loggedWitnessErr = true
 		}
 		return
@@ -112,13 +117,15 @@ func (p *Producer) tryProduceBlock() {
 	// java-tron consensus/dpos/StateManager.java:54-59 invoked from
 	// DposTask.produceBlock (DposTask.java:89-92).
 	if skip, rate := shouldSkipLowParticipation(p.chain); skip {
-		log.Printf("LOW_PARTICIPATION rate=%d threshold=%d, skipping slot",
-			rate, params.MinParticipationRate)
+		log.Warn("Skipping slot (low participation)",
+			"rate", rate, "threshold", params.MinParticipationRate)
 		return
 	}
 
+	produceStart := time.Now()
 	if err := p.produceBlock(p.witnessAddr, slotTimestamp); err != nil {
-		log.Printf("Failed to produce block: %v", err)
+		log.Warn("Failed to produce block",
+			"err", err, "elapsed", ethcommon.PrettyDuration(time.Since(produceStart)))
 		return
 	}
 
@@ -135,6 +142,7 @@ func shouldSkipLowParticipation(chain *core.BlockChain) (bool, int64) {
 }
 
 func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) error {
+	produceStart := time.Now()
 	result, err := core.BuildBlock(p.chain, p.pool, witnessAddr, timestamp)
 	if err != nil {
 		return err
@@ -144,7 +152,8 @@ func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) er
 	// Evict transactions that failed validation
 	if len(result.FailedTxIDs) > 0 {
 		p.pool.RemoveBatch(result.FailedTxIDs)
-		log.Printf("Evicted %d invalid transactions from pool", len(result.FailedTxIDs))
+		log.Debug("Evicted invalid transactions from pool",
+			"count", len(result.FailedTxIDs))
 	}
 
 	if err := core.SignBlock(block, p.witnessKey); err != nil {
@@ -163,8 +172,13 @@ func (p *Producer) produceBlock(witnessAddr tcommon.Address, timestamp int64) er
 		p.pool.RemoveBatch(hashes)
 	}
 
-	log.Printf("Produced block #%d at timestamp %d (%d txs)",
-		block.Number(), block.Timestamp(), len(block.Transactions()))
+	log.Info("Block produced",
+		"number", block.Number(),
+		"hash", block.Hash(),
+		"txs", len(block.Transactions()),
+		"witness", fmt.Sprintf("%x", witnessAddr[:6]),
+		"slot", timestamp,
+		"elapsed", ethcommon.PrettyDuration(time.Since(produceStart)))
 
 	if p.BlockCallback != nil {
 		p.BlockCallback(block)
