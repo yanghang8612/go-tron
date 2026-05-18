@@ -2,7 +2,7 @@ package net
 
 import (
 	"encoding/binary"
-	"log"
+	"fmt"
 	"sync"
 	"time"
 
@@ -164,7 +164,7 @@ func (h *TronHandler) OnPeerConnected(peer *p2p.Peer) {
 	hello := h.buildHello()
 	data, err := proto.Marshal(hello)
 	if err != nil {
-		log.Printf("Failed to marshal hello: %v", err)
+		log.Error("Failed to marshal hello", "peer", peer.ID(), "err", err)
 		peer.Stop()
 		return
 	}
@@ -268,7 +268,7 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	var hello corepb.HelloMessage
 	if err := proto.Unmarshal(payload, &hello); err != nil {
-		log.Printf("Peer %s: bad hello: %v", peer.ID(), err)
+		log.Warn("Bad hello", "peer", peer.ID(), "err", err)
 		h.disconnectPeer(peer, corepb.ReasonCode_BAD_PROTOCOL)
 		return
 	}
@@ -278,7 +278,7 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	genesisID := genesis.ID()
 	if hello.GenesisBlockId == nil ||
 		tcommon.BytesToHash(hello.GenesisBlockId.Hash) != genesisID.Hash {
-		log.Printf("Peer %s: genesis mismatch", peer.ID())
+		log.Warn("Genesis mismatch", "peer", peer.ID())
 		h.mu.Lock()
 		if ps := h.peers[peer.ID()]; ps != nil {
 			ps.connState = peerStateBad
@@ -302,10 +302,15 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 	}
 	h.mu.Unlock()
 
-	log.Printf("Peer %s handshaked (head=#%d)", peer.ID(), ps.headNum)
+	localHead := h.chain.CurrentBlock().Number()
+	log.Info("Peer handshaked",
+		"peer", peer.ID(),
+		"peerHead", ps.headNum,
+		"localHead", localHead,
+		"lag", int64(ps.headNum)-int64(localHead))
 
 	// Trigger sync if peer has more blocks
-	if h.syncService != nil && ps.headNum > h.chain.CurrentBlock().Number() {
+	if h.syncService != nil && ps.headNum > localHead {
 		h.syncService.StartSync(peer)
 	}
 }
@@ -313,7 +318,7 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	var msg corepb.DisconnectMessage
 	if err := proto.Unmarshal(payload, &msg); err == nil {
-		log.Printf("Peer %s disconnected: %v", peer.ID(), msg.Reason)
+		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
 	}
 	// Close the connection — readLoop will exit and call disconnect().
 	// Don't call peer.Stop() here: we're inside readLoop, Stop() would deadlock.
@@ -336,7 +341,9 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	ps := h.peers[peer.ID()]
 	h.mu.RUnlock()
 	if ps != nil && ps.rl != nil && !ps.rl.Allow(code) {
-		log.Printf("Rate limited: msg 0x%02x from %s", code, peer.ID())
+		log.Warn("Peer rate limited",
+			"peer", peer.ID(),
+			"code", fmt.Sprintf("0x%02x", code))
 		return
 	}
 
@@ -436,7 +443,7 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 	if err := h.chain.InsertBlock(block); err != nil {
 		return
 	}
-	log.Printf("Received block #%d from peer %s", block.Number(), peer.ID())
+	log.Debug("Block received", "number", block.Number(), "peer", peer.ID())
 
 	// Witness cheat detection runs only on the advertised-block path,
 	// matching java-tron `BlockMsgHandler.processAdvBlock` line 153 where

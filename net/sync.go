@@ -1,10 +1,10 @@
 package net
 
 import (
-	"log"
 	"sync"
 	"time"
 
+	ethcommon "github.com/ethereum/go-ethereum/common"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -21,6 +21,22 @@ const (
 // syncFetchTimeout is how long to wait for a block response before failing over
 // to another peer. Tests may override this.
 var syncFetchTimeout = 30 * time.Second
+
+// statsReportInterval is the cadence at which sync emits "Imported chain
+// segment" summary lines. Exposed as a var so tests can shrink it. Mirrors
+// geth's blockchain_insert.go:statsReportLimit.
+var statsReportInterval = 8 * time.Second
+
+// syncStats accumulates per-window throughput counters for the sync summary
+// line. Reset at every emit so the figures represent rolling-window rates.
+type syncStats struct {
+	startTime   time.Time     // window start
+	blocks      int           // blocks applied in window
+	txs         int           // tx count applied in window
+	execElapsed time.Duration // accumulated InsertBlock wall time
+	totalStart  time.Time     // session start (for "Sync complete" line)
+	totalBlocks int           // session-wide block count
+}
 
 // SyncService handles the block sync protocol.
 type SyncService struct {
@@ -48,6 +64,10 @@ type SyncService struct {
 	pausedAtNum  uint64
 	pausedAtTime time.Time
 	pausedErr    error
+
+	// stats accumulates per-window throughput counters used for the
+	// "Imported chain segment" summary line. Guarded by ss.mu.
+	stats syncStats
 
 	quit     chan struct{}
 	stopOnce sync.Once
@@ -112,7 +132,10 @@ func (ss *SyncService) checkIsolation() {
 		}
 	}
 	if candidate != nil {
-		log.Printf("Sync: chain stalled, polling %s for updates", candidate.ID())
+		log.Info("Polling peer (chain stalled)",
+			"peer", candidate.ID(),
+			"head", ss.chain.CurrentBlock().Number(),
+			"stalledFor", ethcommon.PrettyDuration(time.Since(ss.chain.LastInsertTime())))
 		ss.StartSync(candidate)
 	}
 }
@@ -209,9 +232,13 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	}
 	ss.syncing = true
 	ss.syncPeer = peer
+	now := time.Now()
+	ss.stats = syncStats{startTime: now, totalStart: now}
 	ss.mu.Unlock()
 
-	log.Printf("Starting sync with peer %s", peer.ID())
+	log.Info("Sync started",
+		"peer", peer.ID(),
+		"localHead", ss.chain.CurrentBlock().Number())
 	ss.sendSyncBlockChain(peer)
 }
 
@@ -346,7 +373,8 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 
-	log.Printf("Chain inventory: %d blocks to fetch, %d remaining", len(inv.Ids), inv.RemainNum)
+	log.Debug("Chain inventory received",
+		"blocks", len(inv.Ids), "remain", inv.RemainNum, "peer", peer.ID())
 	ss.fetchNextBatch()
 }
 
@@ -390,6 +418,7 @@ func (ss *SyncService) fetchNextBatch() {
 	}
 	data, _ := proto.Marshal(fetch)
 	peer.Send(p2p.MsgFetchInvData, data)
+	log.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
 }
 
 // HandleBlock processes a received block during sync.
@@ -432,7 +461,9 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	}
 	ss.mu.Unlock()
 
+	insertStart := time.Now()
 	insertErr := ss.chain.InsertBlock(block)
+	insertElapsed := time.Since(insertStart)
 	if insertErr != nil {
 		// Stop sync without disconnecting the peer. Recovery (re-attempting
 		// the same block from another peer) would just rediscover the same
@@ -440,7 +471,11 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		// peer-side given gtron is a re-impl racing toward java-tron parity.
 		// Keeping the peer connected preserves diagnostic state. Cleared
 		// only by process restart.
-		log.Printf("Sync: failed to insert block #%d: %v — pausing sync (peer kept connected; restart to resume)", block.Number(), insertErr)
+		log.Error("Sync paused",
+			"number", block.Number(),
+			"peer", peer.ID(),
+			"err", insertErr,
+			"hint", "restart to resume")
 		ss.mu.Lock()
 		ss.paused = true
 		ss.pausedAtNum = block.Number()
@@ -451,7 +486,31 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		return true
 	}
 
-	log.Printf("Synced block #%d", block.Number())
+	// Update sync stats and possibly emit the throttled "Imported chain
+	// segment" summary. The window is reset on every emit so each line
+	// represents a fresh rolling-window rate.
+	ss.mu.Lock()
+	ss.stats.blocks++
+	ss.stats.totalBlocks++
+	ss.stats.txs += len(block.Transactions())
+	ss.stats.execElapsed += insertElapsed
+	emit := time.Since(ss.stats.startTime) >= statsReportInterval ||
+		(batchDone && len(ss.fetchList) == 0 && ss.remainNum == 0)
+	var snap syncStats
+	if emit {
+		snap = ss.stats
+		ss.stats.startTime = time.Now()
+		ss.stats.blocks = 0
+		ss.stats.txs = 0
+		ss.stats.execElapsed = 0
+	}
+	remain := int64(len(ss.fetchList)) + ss.remainNum
+	syncPeer := ss.syncPeer
+	ss.mu.Unlock()
+
+	if emit {
+		ss.reportSegment(snap, block.Number(), remain, syncPeer)
+	}
 
 	// Only request the next batch when the current one is fully drained;
 	// otherwise we'd overlap FETCH_INV_DATA requests and lose the one-batch
@@ -460,6 +519,41 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.fetchNextBatch()
 	}
 	return true
+}
+
+// reportSegment emits the throttled "Imported chain segment" summary. Called
+// without ss.mu held.
+func (ss *SyncService) reportSegment(s syncStats, head uint64, remain int64, peer *p2p.Peer) {
+	elapsed := time.Since(s.startTime)
+	if elapsed <= 0 {
+		elapsed = 1
+	}
+	blocksPerSec := float64(s.blocks) * float64(time.Second) / float64(elapsed)
+	txsPerSec := float64(s.txs) * float64(time.Second) / float64(elapsed)
+
+	ctx := []any{
+		"blocks", s.blocks,
+		"txs", s.txs,
+		"elapsed", ethcommon.PrettyDuration(elapsed),
+		"blocks/s", round2(blocksPerSec),
+		"txs/s", round2(txsPerSec),
+		"head", head,
+		"remain", remain,
+	}
+	if blocksPerSec > 0 && remain > 0 {
+		etaSec := float64(remain) / blocksPerSec
+		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
+	}
+	if peer != nil {
+		ctx = append(ctx, "peer", peer.ID())
+	}
+	log.Info("Imported chain segment", ctx...)
+}
+
+func round2(f float64) float64 {
+	// Trim to 2 decimals for log readability without depending on a printf
+	// format directive (slog handlers print floats with full precision).
+	return float64(int64(f*100+0.5)) / 100
 }
 
 // doReset clears all sync state. Must be called with ss.mu held.
@@ -495,9 +589,13 @@ func (ss *SyncService) onFetchTimeout(seq uint64, stalePeer *p2p.Peer) {
 		ss.mu.Unlock()
 		return
 	}
+	inflight := ss.inflight
 	ss.doReset()
 	ss.mu.Unlock()
-	log.Printf("Sync: fetch timeout from %s; trying another peer", stalePeer.ID())
+	log.Warn("Fetch timeout, failing over",
+		"peer", stalePeer.ID(),
+		"timeout", ethcommon.PrettyDuration(syncFetchTimeout),
+		"inflight", inflight)
 	ss.tryFindSyncPeer(stalePeer)
 }
 
@@ -512,7 +610,7 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 	}
 	ss.doReset()
 	ss.mu.Unlock()
-	log.Printf("Sync: syncPeer %s disconnected; trying another peer", peer.ID())
+	log.Warn("Sync peer disconnected", "peer", peer.ID())
 	ss.tryFindSyncPeer(peer)
 }
 
@@ -529,7 +627,20 @@ func (ss *SyncService) tryFindSyncPeer(exclude *p2p.Peer) {
 
 func (ss *SyncService) finishSync() {
 	ss.mu.Lock()
+	totalBlocks := ss.stats.totalBlocks
+	totalStart := ss.stats.totalStart
 	ss.doReset()
 	ss.mu.Unlock()
-	log.Printf("Sync complete (head=#%d)", ss.chain.CurrentBlock().Number())
+
+	totalElapsed := time.Since(totalStart)
+	ctx := []any{
+		"head", ss.chain.CurrentBlock().Number(),
+		"totalBlocks", totalBlocks,
+		"totalElapsed", ethcommon.PrettyDuration(totalElapsed),
+	}
+	if totalElapsed > 0 && totalBlocks > 0 {
+		rate := float64(totalBlocks) * float64(time.Second) / float64(totalElapsed)
+		ctx = append(ctx, "avgBlocks/s", round2(rate))
+	}
+	log.Info("Sync complete", ctx...)
 }

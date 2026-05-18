@@ -32,7 +32,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -369,7 +368,7 @@ func (p *PbftProducer) OnBlockApplied(block *types.Block) {
 	for _, k := range keys {
 		payload, err := p.BuildBlockPrePrepareMsgWith(block, epoch, k)
 		if err != nil {
-			log.Printf("pbft-producer: build block PREPREPARE: %v", err)
+			log.Warn("PBFT block PREPREPARE build failed", "err", err)
 			continue
 		}
 		p.dispatch(payload)
@@ -394,7 +393,7 @@ func (p *PbftProducer) OnMaintenance(block *types.Block, newWitnesses []tcommon.
 	for _, k := range keys {
 		payload, err := p.BuildSrlPrePrepareMsg(newWitnesses, epoch, k)
 		if err != nil {
-			log.Printf("pbft-producer: build SRL PREPREPARE: %v", err)
+			log.Warn("PBFT SRL PREPREPARE build failed", "err", err)
 			continue
 		}
 		p.dispatch(payload)
@@ -417,7 +416,7 @@ func (p *PbftProducer) EmitPrepare(parent *corepb.PBFTMessage_Raw) {
 	for _, k := range keys {
 		payload, err := p.BuildPrepareMsgWith(parent, k)
 		if err != nil {
-			log.Printf("pbft-producer: build PREPARE: %v", err)
+			log.Warn("PBFT PREPARE build failed", "err", err)
 			continue
 		}
 		p.dispatch(payload)
@@ -440,7 +439,7 @@ func (p *PbftProducer) EmitCommit(parent *corepb.PBFTMessage_Raw) {
 	for _, k := range keys {
 		payload, err := p.BuildCommitMsgWith(parent, k)
 		if err != nil {
-			log.Printf("pbft-producer: build COMMIT: %v", err)
+			log.Warn("PBFT COMMIT build failed", "err", err)
 			continue
 		}
 		p.dispatch(payload)
