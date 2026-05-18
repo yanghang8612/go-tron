@@ -325,9 +325,9 @@ func TestInsertFailurePausesSync(t *testing.T) {
 		}
 	}()
 
-	// Bogus block — wrong parent hash so InsertBlock fails (KhaosDB rejects
-	// unknown parent).
-	badBlock := stubBlock(99, tcommon.Hash{1, 2, 3})
+	// Bogus next block — wrong parent hash so InsertBlock fails when the
+	// ordered sync buffer attempts to apply it.
+	badBlock := stubBlock(1, tcommon.Hash{1, 2, 3})
 
 	ss.mu.Lock()
 	ss.syncing = true
@@ -357,7 +357,7 @@ func TestInsertFailurePausesSync(t *testing.T) {
 	}
 
 	paused, atNum, _, err := ss.PausedStatus()
-	if !paused || atNum != 99 || err == nil {
+	if !paused || atNum != 1 || err == nil {
 		t.Fatalf("PausedStatus mismatch: paused=%v atNum=%d err=%v", paused, atNum, err)
 	}
 

@@ -3,6 +3,7 @@ package net
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -152,6 +153,42 @@ func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
 		return nil
 	}
 	return best.peer
+}
+
+// SyncCandidates returns handshaked peers ahead of our head, sorted by their
+// advertised head descending and excluding peers whose IDs are present in
+// exclude. It is used by SyncService to fan out java-tron-compatible 100-block
+// fetch batches across several peers.
+func (h *TronHandler) SyncCandidates(exclude map[string]struct{}, limit int) []*p2p.Peer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ourHead := h.chain.CurrentBlock().Number()
+	states := make([]*peerState, 0, len(h.peers))
+	for _, ps := range h.peers {
+		if ps.connState != peerStateHandshaked {
+			continue
+		}
+		if exclude != nil {
+			if _, skip := exclude[ps.peer.ID()]; skip {
+				continue
+			}
+		}
+		if ps.headNum <= ourHead {
+			continue
+		}
+		states = append(states, ps)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].headNum > states[j].headNum
+	})
+	if limit > 0 && len(states) > limit {
+		states = states[:limit]
+	}
+	peers := make([]*p2p.Peer, 0, len(states))
+	for _, ps := range states {
+		peers = append(peers, ps.peer)
+	}
+	return peers
 }
 
 // OnPeerConnected is called when a new TCP connection is established.

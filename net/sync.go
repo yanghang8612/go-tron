@@ -16,7 +16,12 @@ import (
 const (
 	maxChainInventorySize = 2000
 	maxFetchBatch         = 100
+	maxParallelSyncPeers  = 8
 )
+
+// minFetchRequestInterval stays just below java-tron's 3/s FETCH_INV_DATA
+// limiter while preserving a one-request-at-a-time contract per peer.
+const minFetchRequestInterval = 350 * time.Millisecond
 
 // syncFetchTimeout is how long to wait for a block response before failing over
 // to another peer. Tests may override this.
@@ -38,10 +43,48 @@ type syncStats struct {
 	totalBlocks int           // session-wide block count
 }
 
+type syncPeerState struct {
+	peer *p2p.Peer
+
+	fetchList []types.BlockID
+	remainNum int64
+
+	inflight   int
+	pending    map[tcommon.Hash]uint64
+	pendingIDs map[tcommon.Hash]types.BlockID
+
+	// requestedHashes mirrors java-tron's syncBlockIdCache rule: never ask the
+	// same peer for the same block hash twice, even after a timeout.
+	requestedHashes map[tcommon.Hash]struct{}
+
+	lastInventoryNum uint64
+	minFetchNum      uint64
+
+	fetchSeq        uint64
+	fetchTimer      *time.Timer
+	fetchDelayTimer *time.Timer
+	nextFetchAt     time.Time
+	chainRequested  bool
+	done            bool
+}
+
+type bufferedSyncBlock struct {
+	block *types.Block
+	peer  *p2p.Peer
+}
+
+type outboundSyncRequest struct {
+	peer   *p2p.Peer
+	blocks []types.BlockID
+	chain  bool
+}
+
 // SyncService handles the block sync protocol.
 type SyncService struct {
 	chain   *core.BlockChain
 	handler *TronHandler
+
+	insertMu sync.Mutex
 
 	mu         sync.Mutex
 	syncing    bool
@@ -52,6 +95,13 @@ type SyncService struct {
 	pending    map[tcommon.Hash]uint64
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
+
+	peers         map[string]*syncPeerState
+	requested     map[tcommon.Hash]string
+	retryList     []types.BlockID
+	blockBuffer   map[uint64]bufferedSyncBlock
+	bufferedHash  map[tcommon.Hash]struct{}
+	targetHeadNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
 	// StartSync / checkIsolation / tryFindSyncPeer all short-circuit; the
@@ -221,25 +271,167 @@ func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
 
 // StartSync initiates sync with a peer that has a higher head block.
 func (ss *SyncService) StartSync(peer *p2p.Peer) {
+	if peer == nil {
+		return
+	}
+	now := time.Now()
 	ss.mu.Lock()
 	if ss.paused {
 		ss.mu.Unlock()
 		return
 	}
-	if ss.syncing {
+	started := false
+	if !ss.syncing {
+		ss.initSessionLocked(now)
+		started = true
+	}
+	ps, added := ss.addPeerStateLocked(peer)
+	if !added {
 		ss.mu.Unlock()
 		return
 	}
-	ss.syncing = true
-	ss.syncPeer = peer
-	now := time.Now()
-	ss.stats = syncStats{startTime: now, totalStart: now}
+	ps.chainRequested = true
+	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
 
-	log.Info("Sync started",
-		"peer", peer.ID(),
-		"localHead", ss.chain.CurrentBlock().Number())
+	if started {
+		log.Info("Sync started",
+			"peer", peer.ID(),
+			"localHead", ss.chain.CurrentBlock().Number())
+	} else {
+		log.Info("Sync peer joined", "peer", peer.ID())
+	}
 	ss.sendSyncBlockChain(peer)
+	if started {
+		ss.joinAvailablePeers()
+	}
+}
+
+func (ss *SyncService) initSessionLocked(now time.Time) {
+	ss.syncing = true
+	ss.syncPeer = nil
+	ss.fetchList = nil
+	ss.remainNum = 0
+	ss.inflight = 0
+	ss.pending = nil
+	ss.fetchSeq = 0
+	ss.fetchTimer = nil
+	ss.peers = make(map[string]*syncPeerState)
+	ss.requested = make(map[tcommon.Hash]string)
+	ss.retryList = nil
+	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
+	ss.bufferedHash = make(map[tcommon.Hash]struct{})
+	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
+	ss.stats = syncStats{startTime: now, totalStart: now}
+}
+
+func (ss *SyncService) ensureSessionMapsLocked() {
+	if ss.peers == nil {
+		ss.peers = make(map[string]*syncPeerState)
+	}
+	if ss.requested == nil {
+		ss.requested = make(map[tcommon.Hash]string)
+	}
+	if ss.blockBuffer == nil {
+		ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
+	}
+	if ss.bufferedHash == nil {
+		ss.bufferedHash = make(map[tcommon.Hash]struct{})
+	}
+}
+
+func (ss *SyncService) addPeerStateLocked(peer *p2p.Peer) (*syncPeerState, bool) {
+	if peer == nil {
+		return nil, false
+	}
+	ss.ensureSessionMapsLocked()
+	if ps := ss.peers[peer.ID()]; ps != nil {
+		return ps, false
+	}
+	ps := &syncPeerState{
+		peer:            peer,
+		pending:         make(map[tcommon.Hash]uint64),
+		pendingIDs:      make(map[tcommon.Hash]types.BlockID),
+		requestedHashes: make(map[tcommon.Hash]struct{}),
+	}
+	ss.peers[peer.ID()] = ps
+	if ss.syncPeer == nil {
+		ss.syncPeer = peer
+	}
+	return ps, true
+}
+
+func (ss *SyncService) ensurePeerStateLocked(peer *p2p.Peer) *syncPeerState {
+	if peer == nil {
+		return nil
+	}
+	ss.ensureSessionMapsLocked()
+	if ps := ss.peers[peer.ID()]; ps != nil {
+		return ps
+	}
+	ps, _ := ss.addPeerStateLocked(peer)
+	if peer == ss.syncPeer {
+		ps.fetchList = append(ps.fetchList, ss.fetchList...)
+		ps.remainNum = ss.remainNum
+		ps.inflight = ss.inflight
+		if ss.pending != nil {
+			ps.pending = ss.pending
+			for h, n := range ss.pending {
+				bid := types.BlockID{Hash: h, Num: n}
+				ps.pendingIDs[h] = bid
+				ss.requested[h] = peer.ID()
+			}
+		}
+		ps.fetchSeq = ss.fetchSeq
+		ps.fetchTimer = ss.fetchTimer
+	}
+	return ps
+}
+
+func (ss *SyncService) mirrorLegacyLocked() {
+	if ss.syncPeer == nil {
+		ss.fetchList = nil
+		ss.remainNum = 0
+		ss.inflight = 0
+		ss.pending = nil
+		ss.fetchSeq = 0
+		ss.fetchTimer = nil
+		return
+	}
+	ps := ss.peers[ss.syncPeer.ID()]
+	if ps == nil {
+		ss.fetchList = nil
+		ss.remainNum = 0
+		ss.inflight = 0
+		ss.pending = nil
+		ss.fetchTimer = nil
+		return
+	}
+	ss.fetchList = ps.fetchList
+	ss.remainNum = ps.remainNum
+	ss.inflight = ps.inflight
+	ss.pending = ps.pending
+	ss.fetchSeq = ps.fetchSeq
+	ss.fetchTimer = ps.fetchTimer
+}
+
+func (ss *SyncService) joinAvailablePeers() {
+	if ss.handler == nil {
+		return
+	}
+	ss.mu.Lock()
+	need := maxParallelSyncPeers - len(ss.peers)
+	exclude := make(map[string]struct{}, len(ss.peers))
+	for id := range ss.peers {
+		exclude[id] = struct{}{}
+	}
+	ss.mu.Unlock()
+	if need <= 0 {
+		return
+	}
+	for _, peer := range ss.handler.SyncCandidates(exclude, need) {
+		ss.StartSync(peer)
+	}
 }
 
 func (ss *SyncService) sendSyncBlockChain(peer *p2p.Peer) {
@@ -312,13 +504,6 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 // HandleChainInventory processes CHAIN_INVENTORY from the sync peer.
 // Stores the block IDs to fetch, then starts fetching.
 func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
-	ss.mu.Lock()
-	if peer != ss.syncPeer {
-		ss.mu.Unlock()
-		return
-	}
-	ss.mu.Unlock()
-
 	var inv corepb.ChainInventory
 	if err := proto.Unmarshal(payload, &inv); err != nil {
 		return
@@ -339,7 +524,19 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	//      them into miniStore and InsertBlock's switchFork applies the
 	//      stretch in topological order, so refetching is never needed.
 	ss.mu.Lock()
-	ss.fetchList = ss.fetchList[:0]
+	if !ss.syncing {
+		ss.mu.Unlock()
+		return
+	}
+	ps := ss.peers[peer.ID()]
+	if ps == nil && peer == ss.syncPeer {
+		ps = ss.ensurePeerStateLocked(peer)
+	}
+	if ps == nil {
+		ss.mu.Unlock()
+		return
+	}
+	ps.chainRequested = false
 	headNum := ss.chain.CurrentBlock().Number()
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
@@ -352,14 +549,35 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		if ss.chain.HasBlockInKhaosDB(hash) {
 			continue
 		}
-		ss.fetchList = append(ss.fetchList, types.BlockID{Hash: hash, Num: num})
+		if _, ok := ss.bufferedHash[hash]; ok {
+			continue
+		}
+		if _, ok := ss.requested[hash]; ok {
+			continue
+		}
+		if _, ok := ps.requestedHashes[hash]; ok {
+			continue
+		}
+		ps.fetchList = append(ps.fetchList, types.BlockID{Hash: hash, Num: num})
 	}
-	ss.remainNum = inv.RemainNum
-	ss.mu.Unlock()
-
-	if len(inv.Ids) == 0 {
-		ss.finishSync()
-		return
+	ps.remainNum = inv.RemainNum
+	if len(inv.Ids) > 0 {
+		last := inv.Ids[len(inv.Ids)-1]
+		if last.Number > 0 {
+			ps.lastInventoryNum = uint64(last.Number)
+			if ps.lastInventoryNum > 2*maxChainInventorySize {
+				ps.minFetchNum = ps.lastInventoryNum - 2*maxChainInventorySize
+			} else {
+				ps.minFetchNum = 0
+			}
+			target := uint64(last.Number)
+			if inv.RemainNum > 0 {
+				target += uint64(inv.RemainNum)
+			}
+			if target > ss.targetHeadNum {
+				ss.targetHeadNum = target
+			}
+		}
 	}
 
 	// java-tron sets `needSyncFromUs = false` on its peer record only when
@@ -368,45 +586,159 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	// every inbound INV — so our outbound TRX advertisements never reach
 	// the producer's mempool. Detect "we are at head" here (response is a
 	// single id we already have) and finish; otherwise continue fetching.
-	if len(ss.fetchList) == 0 && len(inv.Ids) == 1 && inv.RemainNum == 0 {
-		ss.finishSync()
-		return
+	if len(inv.Ids) == 0 || (len(ps.fetchList) == 0 && len(inv.Ids) == 1 && inv.RemainNum == 0) {
+		ps.done = true
 	}
 
 	log.Debug("Chain inventory received",
-		"blocks", len(inv.Ids), "remain", inv.RemainNum, "peer", peer.ID())
-	ss.fetchNextBatch()
+		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
+	out := ss.fillFetchSlotsLocked(time.Now())
+	complete := ss.shouldFinishLocked()
+	ss.mirrorLegacyLocked()
+	ss.mu.Unlock()
+
+	ss.sendOutboundRequests(out)
+	if complete {
+		ss.finishSync()
+	}
 }
 
 func (ss *SyncService) fetchNextBatch() {
 	ss.mu.Lock()
-	if len(ss.fetchList) == 0 {
-		peer := ss.syncPeer
-		ss.mu.Unlock()
-		// Always re-poll, even when remainNum == 0. java-tron may have
-		// produced new blocks while we were applying the previous batch;
-		// we need to keep sending SYNC_BLOCK_CHAIN until the response
-		// shrinks to 1 block (handled in HandleChainInventory). That
-		// transition flips java-tron's `needSyncFromUs` flag to false
-		// and lets our subsequent INV broadcasts through.
-		ss.sendSyncBlockChain(peer)
+	if ss.syncPeer != nil {
+		ss.ensurePeerStateLocked(ss.syncPeer)
+	}
+	out := ss.fillFetchSlotsLocked(time.Now())
+	ss.mirrorLegacyLocked()
+	ss.mu.Unlock()
+	ss.sendOutboundRequests(out)
+}
+
+func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
+	ss.ensureSessionMapsLocked()
+	var out []outboundSyncRequest
+	for _, ps := range ss.peers {
+		if ps == nil || ps.peer == nil || ps.done || ps.chainRequested || ps.inflight > 0 {
+			continue
+		}
+		ss.assignRetryLocked(ps)
+		batch := ss.nextFetchBatchLocked(ps)
+		if len(batch) == 0 {
+			if !ps.done {
+				// Always re-poll once a peer's local queue drains. java-tron may
+				// have produced new blocks while we were applying the previous
+				// batch; the one-id inventory response is what marks sync done.
+				ps.chainRequested = true
+				out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
+			}
+			continue
+		}
+		if wait := time.Until(ps.nextFetchAt); wait > 0 {
+			ps.fetchList = append(batch, ps.fetchList...)
+			ss.armPeerDelayTimerLocked(ps, wait)
+			continue
+		}
+		ps.inflight = len(batch)
+		ps.pending = make(map[tcommon.Hash]uint64, len(batch))
+		ps.pendingIDs = make(map[tcommon.Hash]types.BlockID, len(batch))
+		for _, bid := range batch {
+			ps.pending[bid.Hash] = bid.Num
+			ps.pendingIDs[bid.Hash] = bid
+			ps.requestedHashes[bid.Hash] = struct{}{}
+			ss.requested[bid.Hash] = ps.peer.ID()
+		}
+		ps.nextFetchAt = now.Add(minFetchRequestInterval)
+		ss.armPeerFetchTimerLocked(ps)
+		out = append(out, outboundSyncRequest{peer: ps.peer, blocks: batch})
+	}
+	return out
+}
+
+func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
+	if len(ss.retryList) == 0 {
 		return
 	}
-
-	batch := ss.fetchList
-	if len(batch) > maxFetchBatch {
-		batch = batch[:maxFetchBatch]
+	keep := ss.retryList[:0]
+	for _, bid := range ss.retryList {
+		if ss.hasBlockOrRequestLocked(bid) {
+			continue
+		}
+		if !ps.canFetch(bid) {
+			keep = append(keep, bid)
+			continue
+		}
+		if _, ok := ps.requestedHashes[bid.Hash]; ok {
+			keep = append(keep, bid)
+			continue
+		}
+		ps.fetchList = append(ps.fetchList, bid)
 	}
-	ss.fetchList = ss.fetchList[len(batch):]
-	ss.inflight = len(batch)
-	ss.pending = make(map[tcommon.Hash]uint64, len(batch))
-	for _, bid := range batch {
-		ss.pending[bid.Hash] = bid.Num
-	}
-	peer := ss.syncPeer
-	ss.armFetchTimer()
-	ss.mu.Unlock()
+	ss.retryList = keep
+}
 
+func (ps *syncPeerState) canFetch(bid types.BlockID) bool {
+	if ps.lastInventoryNum == 0 {
+		return false
+	}
+	return bid.Num >= ps.minFetchNum && bid.Num <= ps.lastInventoryNum
+}
+
+func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
+	if len(ps.fetchList) == 0 {
+		return nil
+	}
+	batch := make([]types.BlockID, 0, maxFetchBatch)
+	remaining := ps.fetchList[:0]
+	for _, bid := range ps.fetchList {
+		if ss.hasBlockOrRequestLocked(bid) {
+			continue
+		}
+		if _, ok := ps.requestedHashes[bid.Hash]; ok {
+			continue
+		}
+		if len(batch) < maxFetchBatch {
+			batch = append(batch, bid)
+			continue
+		}
+		remaining = append(remaining, bid)
+	}
+	ps.fetchList = remaining
+	return batch
+}
+
+func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
+	if _, ok := ss.requested[bid.Hash]; ok {
+		return true
+	}
+	if _, ok := ss.bufferedHash[bid.Hash]; ok {
+		return true
+	}
+	headNum := ss.chain.CurrentBlock().Number()
+	if bid.Num <= headNum {
+		if existing := ss.chain.GetBlockByNumber(bid.Num); existing != nil && existing.Hash() == bid.Hash {
+			return true
+		}
+	}
+	return ss.chain.HasBlockInKhaosDB(bid.Hash)
+}
+
+func (ss *SyncService) sendOutboundRequests(out []outboundSyncRequest) {
+	for _, req := range out {
+		if req.peer == nil {
+			continue
+		}
+		if req.chain {
+			ss.sendSyncBlockChain(req.peer)
+			continue
+		}
+		ss.sendFetchBlocks(req.peer, req.blocks)
+	}
+}
+
+func (ss *SyncService) sendFetchBlocks(peer *p2p.Peer, batch []types.BlockID) {
+	if len(batch) == 0 {
+		return
+	}
 	var ids [][]byte
 	for _, bid := range batch {
 		h := bid.Hash
@@ -421,34 +753,69 @@ func (ss *SyncService) fetchNextBatch() {
 	log.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
 }
 
+func (ss *SyncService) armPeerDelayTimerLocked(ps *syncPeerState, wait time.Duration) {
+	if ps.fetchDelayTimer != nil {
+		ps.fetchDelayTimer.Stop()
+	}
+	peerID := ps.peer.ID()
+	ps.fetchDelayTimer = time.AfterFunc(wait, func() {
+		ss.onPeerFetchReady(peerID)
+	})
+}
+
+func (ss *SyncService) onPeerFetchReady(peerID string) {
+	ss.mu.Lock()
+	if !ss.syncing || ss.paused {
+		ss.mu.Unlock()
+		return
+	}
+	if ps := ss.peers[peerID]; ps != nil {
+		ps.fetchDelayTimer = nil
+	}
+	out := ss.fillFetchSlotsLocked(time.Now())
+	ss.mirrorLegacyLocked()
+	ss.mu.Unlock()
+	ss.sendOutboundRequests(out)
+}
+
 // HandleBlock processes a received block during sync.
 // Returns true if the block was consumed by sync, false if it should be handled as a broadcast.
 func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	ss.mu.Lock()
-	if !ss.syncing || peer != ss.syncPeer {
+	if !ss.syncing {
+		ss.mu.Unlock()
+		return false
+	}
+	ps := ss.peers[peer.ID()]
+	if ps == nil && peer == ss.syncPeer {
+		ps = ss.ensurePeerStateLocked(peer)
+	}
+	if ps == nil {
 		ss.mu.Unlock()
 		return false
 	}
 	blockHash := block.Hash()
 	blockNum := block.Number()
-	expectedNum, ok := ss.pending[blockHash]
+	expectedNum, ok := ps.pending[blockHash]
 	if !ok || expectedNum != blockNum {
 		ss.mu.Unlock()
 		return true
 	}
-	delete(ss.pending, blockHash)
+	delete(ps.pending, blockHash)
+	delete(ps.pendingIDs, blockHash)
+	delete(ss.requested, blockHash)
 	// Bump seq so any in-flight timer callback short-circuits. We stop the
 	// armed timer below but the callback may already be running on another
 	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
 	// rejects it.
-	ss.fetchSeq++
-	if ss.inflight > 0 {
-		ss.inflight--
+	ps.fetchSeq++
+	if ps.inflight > 0 {
+		ps.inflight--
 	}
-	batchDone := ss.inflight == 0
-	if ss.fetchTimer != nil {
-		ss.fetchTimer.Stop()
-		ss.fetchTimer = nil
+	batchDone := ps.inflight == 0
+	if ps.fetchTimer != nil {
+		ps.fetchTimer.Stop()
+		ps.fetchTimer = nil
 	}
 	// Re-arm the fetch timeout if blocks are still in flight. Without
 	// this a peer that delivers part of a batch and then stalls (network
@@ -457,68 +824,138 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	// never runs → onFetchTimeout never fires → the watchdog's
 	// IsSyncing() short-circuit keeps it from intervening either.
 	if !batchDone {
-		ss.armFetchTimer()
+		ss.armPeerFetchTimerLocked(ps)
 	}
-	ss.mu.Unlock()
-
-	insertStart := time.Now()
-	insertErr := ss.chain.InsertBlock(block)
-	insertElapsed := time.Since(insertStart)
-	if insertErr != nil {
-		// Stop sync without disconnecting the peer. Recovery (re-attempting
-		// the same block from another peer) would just rediscover the same
-		// failure when the root cause is gtron-side — far more likely than
-		// peer-side given gtron is a re-impl racing toward java-tron parity.
-		// Keeping the peer connected preserves diagnostic state. Cleared
-		// only by process restart.
-		log.Error("Sync paused",
-			"number", block.Number(),
-			"peer", peer.ID(),
-			"err", insertErr,
-			"hint", "restart to resume")
-		ss.mu.Lock()
-		ss.paused = true
-		ss.pausedAtNum = block.Number()
-		ss.pausedAtTime = time.Now()
-		ss.pausedErr = insertErr
-		ss.doReset()
-		ss.mu.Unlock()
-		return true
+	if blockNum > ss.chain.CurrentBlock().Number() {
+		if _, ok := ss.bufferedHash[blockHash]; !ok {
+			ss.blockBuffer[blockNum] = bufferedSyncBlock{block: block, peer: peer}
+			ss.bufferedHash[blockHash] = struct{}{}
+		}
 	}
-
-	// Update sync stats and possibly emit the throttled "Imported chain
-	// segment" summary. The window is reset on every emit so each line
-	// represents a fresh rolling-window rate.
-	ss.mu.Lock()
-	ss.stats.blocks++
-	ss.stats.totalBlocks++
-	ss.stats.txs += len(block.Transactions())
-	ss.stats.execElapsed += insertElapsed
-	emit := time.Since(ss.stats.startTime) >= statsReportInterval ||
-		(batchDone && len(ss.fetchList) == 0 && ss.remainNum == 0)
-	var snap syncStats
-	if emit {
-		snap = ss.stats
-		ss.stats.startTime = time.Now()
-		ss.stats.blocks = 0
-		ss.stats.txs = 0
-		ss.stats.execElapsed = 0
-	}
-	remain := int64(len(ss.fetchList)) + ss.remainNum
-	syncPeer := ss.syncPeer
-	ss.mu.Unlock()
-
-	if emit {
-		ss.reportSegment(snap, block.Number(), remain, syncPeer)
-	}
-
-	// Only request the next batch when the current one is fully drained;
-	// otherwise we'd overlap FETCH_INV_DATA requests and lose the one-batch
-	// backpressure java-tron keeps with syncBlockRequested/isSyncIdle.
+	var out []outboundSyncRequest
 	if batchDone {
-		ss.fetchNextBatch()
+		out = ss.fillFetchSlotsLocked(time.Now())
+	}
+	ss.mirrorLegacyLocked()
+	ss.mu.Unlock()
+
+	ss.drainBufferedBlocks()
+	if len(out) > 0 && ss.IsSyncing() && !ss.IsPaused() {
+		ss.sendOutboundRequests(out)
 	}
 	return true
+}
+
+func (ss *SyncService) drainBufferedBlocks() {
+	ss.insertMu.Lock()
+	defer ss.insertMu.Unlock()
+
+	var out []outboundSyncRequest
+	for {
+		ss.mu.Lock()
+		if !ss.syncing || ss.paused {
+			ss.mu.Unlock()
+			break
+		}
+		next := ss.chain.CurrentBlock().Number() + 1
+		buffered, ok := ss.blockBuffer[next]
+		if !ok {
+			out = append(out, ss.fillFetchSlotsLocked(time.Now())...)
+			complete := ss.shouldFinishLocked()
+			ss.mirrorLegacyLocked()
+			ss.mu.Unlock()
+			if complete {
+				ss.finishSync()
+			}
+			break
+		}
+		delete(ss.blockBuffer, next)
+		delete(ss.bufferedHash, buffered.block.Hash())
+		ss.mu.Unlock()
+
+		insertStart := time.Now()
+		insertErr := ss.chain.InsertBlock(buffered.block)
+		insertElapsed := time.Since(insertStart)
+		if insertErr != nil {
+			ss.pauseSync(buffered.peer, buffered.block.Number(), insertErr)
+			break
+		}
+
+		ss.mu.Lock()
+		ss.stats.blocks++
+		ss.stats.totalBlocks++
+		ss.stats.txs += len(buffered.block.Transactions())
+		ss.stats.execElapsed += insertElapsed
+		emit := time.Since(ss.stats.startTime) >= statsReportInterval
+		var snap syncStats
+		if emit {
+			snap = ss.stats
+			ss.stats.startTime = time.Now()
+			ss.stats.blocks = 0
+			ss.stats.txs = 0
+			ss.stats.execElapsed = 0
+		}
+		remain := ss.estimatedRemainLocked()
+		ss.mirrorLegacyLocked()
+		ss.mu.Unlock()
+
+		if emit {
+			ss.reportSegment(snap, buffered.block.Number(), remain, buffered.peer)
+		}
+	}
+	ss.sendOutboundRequests(out)
+}
+
+func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
+	peerID := "<nil>"
+	if peer != nil {
+		peerID = peer.ID()
+	}
+	log.Error("Sync paused",
+		"number", num,
+		"peer", peerID,
+		"err", err,
+		"hint", "restart to resume")
+	ss.mu.Lock()
+	ss.paused = true
+	ss.pausedAtNum = num
+	ss.pausedAtTime = time.Now()
+	ss.pausedErr = err
+	ss.doReset()
+	ss.mu.Unlock()
+}
+
+func (ss *SyncService) estimatedRemainLocked() int64 {
+	head := ss.chain.CurrentBlock().Number()
+	if ss.targetHeadNum > head {
+		return int64(ss.targetHeadNum - head)
+	}
+	remain := len(ss.retryList) + len(ss.blockBuffer)
+	for _, ps := range ss.peers {
+		remain += len(ps.fetchList) + ps.inflight
+		if ps.remainNum > 0 {
+			remain += int(ps.remainNum)
+		}
+	}
+	return int64(remain)
+}
+
+func (ss *SyncService) shouldFinishLocked() bool {
+	if !ss.syncing || ss.paused {
+		return false
+	}
+	if len(ss.retryList) != 0 || len(ss.blockBuffer) != 0 {
+		return false
+	}
+	for _, ps := range ss.peers {
+		if ps.chainRequested || ps.inflight != 0 || len(ps.fetchList) != 0 {
+			return false
+		}
+		if !ps.done {
+			return false
+		}
+	}
+	return ss.targetHeadNum == 0 || ss.chain.CurrentBlock().Number() >= ss.targetHeadNum
 }
 
 // reportSegment emits the throttled "Imported chain segment" summary. Called
@@ -558,6 +995,16 @@ func round2(f float64) float64 {
 
 // doReset clears all sync state. Must be called with ss.mu held.
 func (ss *SyncService) doReset() {
+	for _, ps := range ss.peers {
+		if ps.fetchTimer != nil {
+			ps.fetchTimer.Stop()
+			ps.fetchTimer = nil
+		}
+		if ps.fetchDelayTimer != nil {
+			ps.fetchDelayTimer.Stop()
+			ps.fetchDelayTimer = nil
+		}
+	}
 	ss.syncing = false
 	ss.syncPeer = nil
 	ss.fetchList = nil
@@ -569,49 +1016,140 @@ func (ss *SyncService) doReset() {
 		ss.fetchTimer.Stop()
 		ss.fetchTimer = nil
 	}
+	ss.peers = nil
+	ss.requested = nil
+	ss.retryList = nil
+	ss.blockBuffer = nil
+	ss.bufferedHash = nil
+	ss.targetHeadNum = 0
 }
 
 // armFetchTimer arms the fetch-response timeout. Must be called with ss.mu held.
 func (ss *SyncService) armFetchTimer() {
-	if ss.fetchTimer != nil {
-		ss.fetchTimer.Stop()
+	ps := ss.ensurePeerStateLocked(ss.syncPeer)
+	if ps == nil {
+		return
 	}
-	seq := ss.fetchSeq
-	stalePeer := ss.syncPeer
-	ss.fetchTimer = time.AfterFunc(syncFetchTimeout, func() {
-		ss.onFetchTimeout(seq, stalePeer)
+	ss.armPeerFetchTimerLocked(ps)
+	ss.mirrorLegacyLocked()
+}
+
+func (ss *SyncService) armPeerFetchTimerLocked(ps *syncPeerState) {
+	if ps.fetchTimer != nil {
+		ps.fetchTimer.Stop()
+	}
+	ps.fetchSeq++
+	seq := ps.fetchSeq
+	peerID := ps.peer.ID()
+	ps.fetchTimer = time.AfterFunc(syncFetchTimeout, func() {
+		ss.onFetchTimeout(seq, peerID)
 	})
 }
 
-func (ss *SyncService) onFetchTimeout(seq uint64, stalePeer *p2p.Peer) {
+func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	ss.mu.Lock()
-	if !ss.syncing || ss.fetchSeq != seq || ss.syncPeer != stalePeer {
+	ps := ss.peers[peerID]
+	if !ss.syncing || ps == nil || ps.fetchSeq != seq {
 		ss.mu.Unlock()
 		return
 	}
-	inflight := ss.inflight
-	ss.doReset()
+	stalePeer := ps.peer
+	inflight := ps.inflight
+	ss.removePeerStateLocked(peerID, true)
+	var out []outboundSyncRequest
+	if len(ss.peers) == 0 {
+		ss.doReset()
+	} else {
+		out = ss.fillFetchSlotsLocked(time.Now())
+		ss.mirrorLegacyLocked()
+	}
 	ss.mu.Unlock()
 	log.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
 		"timeout", ethcommon.PrettyDuration(syncFetchTimeout),
 		"inflight", inflight)
-	ss.tryFindSyncPeer(stalePeer)
+	if len(out) > 0 {
+		ss.sendOutboundRequests(out)
+		return
+	}
+	if !ss.IsSyncing() {
+		ss.tryFindSyncPeer(stalePeer)
+	}
 }
 
 // PeerDisconnected is called by the handler when a peer goes away. If that
 // peer is the active sync peer, the sync is aborted and we immediately try
 // to find a replacement.
 func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
+	if peer == nil {
+		return
+	}
 	ss.mu.Lock()
-	if !ss.syncing || ss.syncPeer != peer {
+	if !ss.syncing {
 		ss.mu.Unlock()
 		return
 	}
-	ss.doReset()
+	if ss.syncPeer != nil && ss.syncPeer.ID() == peer.ID() {
+		ss.ensurePeerStateLocked(peer)
+	}
+	if _, ok := ss.peers[peer.ID()]; !ok {
+		ss.mu.Unlock()
+		return
+	}
+	ss.removePeerStateLocked(peer.ID(), true)
+	var out []outboundSyncRequest
+	empty := len(ss.peers) == 0
+	if empty {
+		ss.doReset()
+	} else {
+		out = ss.fillFetchSlotsLocked(time.Now())
+		ss.mirrorLegacyLocked()
+	}
 	ss.mu.Unlock()
 	log.Warn("Sync peer disconnected", "peer", peer.ID())
-	ss.tryFindSyncPeer(peer)
+	if len(out) > 0 {
+		ss.sendOutboundRequests(out)
+	}
+	if empty {
+		ss.tryFindSyncPeer(peer)
+	}
+}
+
+func (ss *SyncService) removePeerStateLocked(peerID string, retry bool) {
+	ps := ss.peers[peerID]
+	if ps == nil {
+		return
+	}
+	if ps.fetchTimer != nil {
+		ps.fetchTimer.Stop()
+		ps.fetchTimer = nil
+	}
+	if ps.fetchDelayTimer != nil {
+		ps.fetchDelayTimer.Stop()
+		ps.fetchDelayTimer = nil
+	}
+	if retry {
+		for h, bid := range ps.pendingIDs {
+			delete(ss.requested, h)
+			if !ss.hasBlockOrRequestLocked(bid) {
+				ss.retryList = append(ss.retryList, bid)
+			}
+		}
+		for _, bid := range ps.fetchList {
+			if !ss.hasBlockOrRequestLocked(bid) {
+				ss.retryList = append(ss.retryList, bid)
+			}
+		}
+	}
+	delete(ss.peers, peerID)
+	if ss.syncPeer != nil && ss.syncPeer.ID() == peerID {
+		ss.syncPeer = nil
+		for _, next := range ss.peers {
+			ss.syncPeer = next.peer
+			break
+		}
+	}
+	ss.mirrorLegacyLocked()
 }
 
 // tryFindSyncPeer picks the best available peer (excluding the failed one) and
@@ -629,6 +1167,9 @@ func (ss *SyncService) finishSync() {
 	ss.mu.Lock()
 	totalBlocks := ss.stats.totalBlocks
 	totalStart := ss.stats.totalStart
+	if totalStart.IsZero() {
+		totalStart = time.Now()
+	}
 	ss.doReset()
 	ss.mu.Unlock()
 
