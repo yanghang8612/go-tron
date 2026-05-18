@@ -288,6 +288,23 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 		return falseResult, true
 	}
 
+	// Mirrors java-tron PrecompiledContracts.ValidateMultiSign + MUtil.checkCPUTime:
+	//
+	//   for each sig:
+	//     if executedSignList contains recoveredAddr:
+	//       if executedSignList contains (addr || sig): continue          // exact dup
+	//       MUtil.checkCPUTime()                                          // same addr, diff sig
+	//       // pre-4_7_1: no-op, fall through and ACCUMULATE again
+	//       // post-4_7_1: throws OutOfTimeException → precompile fails
+	//     accumulate weight
+	//
+	// Java's outer try/catch RETHROWS OutOfTimeException specifically
+	// (PrecompiledContracts.java:1106-1108), so it propagates as a VM
+	// failure rather than a precompile-returned-false result. We surface
+	// that as (nil, false) so vm/tvm.go:381 reverts state and produces
+	// errPrecompileFailure for the caller.
+	multiSigCheckV2 := tvm != nil && tvm.cfg.MultiSigCheckV2
+
 	var totalWeight int64
 	seenAddr := make(map[tcommon.Address]bool)
 	seenSig := make(map[string]bool)
@@ -298,8 +315,18 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 		}
 		merged := append(recovered.Bytes(), sig...)
 		mergedKey := string(merged)
-		if seenAddr[recovered] && seenSig[mergedKey] {
-			continue
+		if seenAddr[recovered] {
+			if seenSig[mergedKey] {
+				// Exact (addr, sig) duplicate — java's `continue`,
+				// independent of the fork gate.
+				continue
+			}
+			if multiSigCheckV2 {
+				// post-4_7_1: java throws OutOfTimeException.
+				return nil, false
+			}
+			// pre-4_7_1: fall through and re-accumulate weight, matching
+			// java's `MUtil.checkCPUTime()` no-op return.
 		}
 		weight := permissionWeight(perm, recovered)
 		if weight == 0 {

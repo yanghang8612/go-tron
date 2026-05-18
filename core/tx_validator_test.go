@@ -99,7 +99,7 @@ func TestValidateTxEnvelope_DefaultPermission_NewAccount(t *testing.T) {
 	_, recipient := keyAndAddr(t)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept, got %v", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestValidateTxEnvelope_RejectsContractCountNotEqualToOne(t *testing.T) {
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
 	tx.Proto().RawData.Contract = append(tx.Proto().RawData.Contract, tx.Proto().RawData.Contract[0])
 
-	err := ValidateTxEnvelope(tx, statedb)
+	err := ValidateTxEnvelope(tx, statedb, true)
 	if !errors.Is(err, ErrContractSizeNotEqualToOne) {
 		t.Fatalf("expected ErrContractSizeNotEqualToOne, got %v", err)
 	}
@@ -161,7 +161,7 @@ func TestValidateTxEnvelope_DefaultPermission_WrongKey(t *testing.T) {
 	wrongKey, _ := keyAndAddr(t)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 0, wrongKey)
-	err := ValidateTxEnvelope(tx, statedb)
+	err := ValidateTxEnvelope(tx, statedb, true)
 	if !errors.Is(err, ErrUnauthorizedSigner) {
 		t.Fatalf("expected ErrUnauthorizedSigner, got %v", err)
 	}
@@ -174,7 +174,7 @@ func TestValidateTxEnvelope_NoSignature(t *testing.T) {
 	_, recipient := keyAndAddr(t)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 0)
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrNoSignature) {
+	if err := ValidateTxEnvelope(tx, statedb, true); !errors.Is(err, ErrNoSignature) {
 		t.Fatalf("expected ErrNoSignature, got %v", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestValidateTxEnvelope_ExistingAccount_OwnerPermission(t *testing.T) {
 	statedb.ApplyDefaultAccountPermissions(owner, dp)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept, got %v", err)
 	}
 }
@@ -226,7 +226,7 @@ func TestValidateTxEnvelope_ActivePermission_AllowedOp(t *testing.T) {
 	_ = dp
 
 	tx := buildTransferTx(t, owner, recipient, 100, 2, delegateKey)
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept (delegate active perm), got %v", err)
 	}
 }
@@ -256,7 +256,7 @@ func TestValidateTxEnvelope_ActivePermission_ForbiddenOp(t *testing.T) {
 	)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 2, delegateKey)
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrPermissionForbidsType) {
+	if err := ValidateTxEnvelope(tx, statedb, true); !errors.Is(err, ErrPermissionForbidsType) {
 		t.Fatalf("expected ErrPermissionForbidsType, got %v", err)
 	}
 }
@@ -293,7 +293,7 @@ func TestValidateTxEnvelope_MultiSig_Pass(t *testing.T) {
 	)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 2, k1, k2)
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected accept (2 sigs ≥ threshold 2), got %v", err)
 	}
 }
@@ -330,15 +330,17 @@ func TestValidateTxEnvelope_MultiSig_InsufficientWeight(t *testing.T) {
 	)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 2, k1)
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrInsufficientWeight) {
+	if err := ValidateTxEnvelope(tx, statedb, true); !errors.Is(err, ErrInsufficientWeight) {
 		t.Fatalf("expected ErrInsufficientWeight, got %v", err)
 	}
 }
 
 // TestValidateTxEnvelope_DuplicateSigners_NoDoubleCount: same key signing
 // twice counts as one weight; threshold 2 with a single duplicated signer
-// must fail rather than passing on 1+1.
-func TestValidateTxEnvelope_DuplicateSigners_NoDoubleCount(t *testing.T) {
+// must fail. java-tron post-VERSION_4_7_1 throws "has signed twice" the
+// moment it sees the second signature from a1 (the dedup key is address);
+// we surface that as ErrDuplicateSignature.
+func TestValidateTxEnvelope_DuplicateSigners_PostV4_7_1_Rejected(t *testing.T) {
 	statedb, _ := newValidatorState(t)
 	_, owner := keyAndAddr(t)
 	k1, a1 := keyAndAddr(t)
@@ -365,12 +367,20 @@ func TestValidateTxEnvelope_DuplicateSigners_NoDoubleCount(t *testing.T) {
 		[]*corepb.Permission{active},
 	)
 
-	// Sign with k1 twice. Dedupe must keep weight at 1; threshold=2 fails.
+	// Sign with k1 twice. multiSigByAddress=true → second a1 is a duplicate.
 	tx := buildTransferTx(t, owner, recipient, 100, 2, k1, k1)
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrInsufficientWeight) {
-		t.Fatalf("expected ErrInsufficientWeight (duplicate signer can't double-count), got %v", err)
+	if err := ValidateTxEnvelope(tx, statedb, true); !errors.Is(err, ErrDuplicateSignature) {
+		t.Fatalf("expected ErrDuplicateSignature (post-4_7_1 has signed twice), got %v", err)
 	}
 }
+
+// Pre-VERSION_4_7_1 dedup-by-signature behaviour is not directly testable
+// from go's deterministic ECDSA: signing identical (key, hash) twice with
+// crypto.Sign yields byte-identical output, which dedup-by-sig correctly
+// treats as a duplicate. The pre-fork java case where the same address
+// signs twice with *distinct* signatures (non-deterministic k) would
+// require a fixture-loaded historical multi-sig tx — tracked separately
+// from this conformance pass.
 
 // TestValidateTxEnvelope_PermissionNotFound: contract names permission_id=2
 // but the account has only the default Owner+Active[0] (id=2 IS active[0]).
@@ -384,7 +394,7 @@ func TestValidateTxEnvelope_PermissionNotFound(t *testing.T) {
 	statedb.ApplyDefaultAccountPermissions(owner, dp)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 5, ownerKey)
-	if err := ValidateTxEnvelope(tx, statedb); !errors.Is(err, ErrPermissionNotFound) {
+	if err := ValidateTxEnvelope(tx, statedb, true); !errors.Is(err, ErrPermissionNotFound) {
 		t.Fatalf("expected ErrPermissionNotFound, got %v", err)
 	}
 }
@@ -412,7 +422,7 @@ func TestValidateTxEnvelope_PerTxInterleaving(t *testing.T) {
 	// Pre-rotation: a transfer signed with the new key must be rejected —
 	// recovered address isn't in the current Owner permission.
 	txPre := buildTransferTx(t, owner, recipient, 100, 0, newKey)
-	if err := ValidateTxEnvelope(txPre, statedb); !errors.Is(err, ErrUnauthorizedSigner) {
+	if err := ValidateTxEnvelope(txPre, statedb, true); !errors.Is(err, ErrUnauthorizedSigner) {
 		t.Fatalf("pre-rotation: expected ErrUnauthorizedSigner, got %v", err)
 	}
 
@@ -433,13 +443,13 @@ func TestValidateTxEnvelope_PerTxInterleaving(t *testing.T) {
 	// dependency — only the recovered signer matters) signed with newKey
 	// must now pass.
 	txPost := buildTransferTx(t, owner, recipient, 100, 0, newKey)
-	if err := ValidateTxEnvelope(txPost, statedb); err != nil {
+	if err := ValidateTxEnvelope(txPost, statedb, true); err != nil {
 		t.Fatalf("post-rotation: expected accept, got %v", err)
 	}
 
 	// And the old key, which was just rotated out, must now be rejected.
 	txOld := buildTransferTx(t, owner, recipient, 100, 0, oldKey)
-	if err := ValidateTxEnvelope(txOld, statedb); !errors.Is(err, ErrUnauthorizedSigner) {
+	if err := ValidateTxEnvelope(txOld, statedb, true); !errors.Is(err, ErrUnauthorizedSigner) {
 		t.Fatalf("old key after rotation: expected ErrUnauthorizedSigner, got %v", err)
 	}
 }
@@ -460,7 +470,7 @@ func TestValidateTxEnvelope_LegacyAccount_NoOwnerPermission(t *testing.T) {
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 
 	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("legacy account fallback: expected accept, got %v", err)
 	}
 }
@@ -510,7 +520,7 @@ func TestValidateTxEnvelope_AccountPermissionUpdate_ActivePermissionAllowed(t *t
 	sig, _ := crypto.Sign(hash[:], delegateKey)
 	tx.Proto().Signature = [][]byte{sig}
 
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	if err := ValidateTxEnvelope(tx, statedb, true); err != nil {
 		t.Fatalf("expected active permission to authorize AccountPermissionUpdateContract, got %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -203,8 +204,11 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 		energyLimit = 30_000_000 // default max energy for constant calls
 	}
 
-	cfg := vm.NewTVMConfig(current.Number(), b.chain.DynProps())
-	evm := vm.NewTVM(statedbCopy, b.chain.DynProps(), owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
+	dp := b.chain.DynProps()
+	cfg := vm.NewTVMConfig(current.Number(), dp)
+	cfg.MultiSigCheckV2 = forks.PassVersion(b.chain.buffer, 27,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
 
 	ret, energyLeft, vmErr := evm.Call(owner, contractAddr, data, uint64(energyLimit), 0)
 	energyUsed := energyLimit - int64(energyLeft)

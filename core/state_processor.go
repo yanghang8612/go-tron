@@ -97,7 +97,11 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	if validateEnvelope {
-		if err := ValidateTxEnvelope(tx, statedb); err != nil {
+		// VERSION_4_7_1 (value 27): java-tron swapped the multi-sig dedup
+		// key from raw signature bytes to recovered address. We mirror by
+		// passing the fork-pass result through.
+		multiSigByAddress := forks.PassVersion(db, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
+		if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
 			return nil, fmt.Errorf("validate envelope: %w", err)
 		}
 		// TAPOS read goes through the same buffered db that landed
@@ -338,9 +342,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
 
-		if dynProps.AllowAdaptiveEnergy() && result.EnergyUsageTotal > 0 {
-			dynProps.SetBlockEnergyUsage(dynProps.BlockEnergyUsage() + result.EnergyUsageTotal)
-		}
+		accumulateBlockEnergyUsage(dynProps, db, prevBlockTime, result)
 	}
 
 	var javaAccountStateRoot tcommon.Hash

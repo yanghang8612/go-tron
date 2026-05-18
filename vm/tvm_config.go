@@ -36,6 +36,16 @@ type TVMConfig struct {
 	// `supportUnfreezeDelay() && supportAllowNewResourceModel()` used in the
 	// TotalVoteCount precompile to select getAllTronPower() vs getTronPower().
 	NewResourceModelPower bool
+	// MultiSigCheckV2 is true once VERSION_4_7_1 SR vote passed. Currently
+	// consumed only by the 0x0a ValidateMultiSign precompile to switch its
+	// duplicate-signer behaviour: pre-fork it silently skipped exact-byte
+	// signature duplicates from the same address; post-fork it must report
+	// failure (java-tron MUtil.checkCPUTime → OutOfTimeException, which the
+	// precompile surfaces by returning false). This is NOT derived from an
+	// AllowFlag — VERSION_4_7_1 is a pure SR-version vote, no DP key — so
+	// it cannot be set by `NewTVMConfig`; the caller wires it via a direct
+	// `cfg.MultiSigCheckV2 = forks.PassVersion(db, 27, ...)`.
+	MultiSigCheckV2 bool
 }
 
 // NewTVMConfig builds a TVMConfig from the current DynamicProperties and block number.

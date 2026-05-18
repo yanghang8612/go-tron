@@ -938,7 +938,13 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	if err != nil {
 		return fmt.Errorf("open head state for tx validation: %w", err)
 	}
-	if err := ValidateTxEnvelope(tx, statedb); err != nil {
+	// VERSION_4_7_1 (value 27) swaps the multi-sig dedup key from raw
+	// signature bytes to recovered address. For pool admission we use the
+	// chain head's prev-block time + maintenance interval to evaluate it.
+	dynProps := bc.DynProps()
+	multiSigByAddress := forks.PassVersion(bc.buffer, 27,
+		dynProps.LatestBlockHeaderTimestamp(), dynProps.MaintenanceTimeInterval())
+	if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
 		return err
 	}
 	// TAPOS reads the recent-block ring from rawdb (no state opening

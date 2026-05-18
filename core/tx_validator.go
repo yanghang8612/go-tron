@@ -34,6 +34,7 @@ var (
 	ErrInsufficientWeight        = errors.New("signature weight below permission threshold")
 	ErrUnauthorizedSigner        = errors.New("signer not in permission key set")
 	ErrInvalidTxSignature        = errors.New("invalid transaction signature")
+	ErrDuplicateSignature        = errors.New("transaction has duplicate signer")
 )
 
 // ValidateTxEnvelope verifies the signature(s) on a transaction match the
@@ -52,7 +53,18 @@ var (
 // owner address and short-circuit. Mixed shielded txs (with transparent
 // input) carry an owner_address on `transparent_from_address` and fall
 // through to the normal permission check.
-func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB) error {
+//
+// `multiSigByAddress` selects the dedup key for repeated signers, mirroring
+// java-tron `TransactionCapsule.getCurrentWeight`:
+//   - true  (VERSION_4_7_1 passed): dedup by recovered address; the same
+//     address signing twice with different signatures collides.
+//   - false (pre-VERSION_4_7_1):    dedup by raw signature bytes; the same
+//     address may contribute multiple times if the signatures differ.
+// Either way, a duplicate aborts with ErrDuplicateSignature — java throws
+// "has signed twice". We always scan ALL signatures (no early return when
+// threshold is met) so a duplicate or unauthorized signer trailing a
+// satisfied threshold still rejects the tx.
+func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigByAddress bool) error {
 	if err := ValidateContractCount(tx); err != nil {
 		return err
 	}
@@ -126,24 +138,35 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB) error {
 		return ErrInvalidTxSignature
 	}
 
+	// Mirrors java-tron TransactionCapsule.getCurrentWeight: scan every
+	// signature, reject on duplicate, and never short-circuit once threshold
+	// is reached — a later unauthorized or duplicate signer still aborts.
 	var totalWeight int64
-	seen := make(map[tcommon.Address]struct{}, len(addrs))
-	for _, addr := range addrs {
-		if _, dup := seen[addr]; dup {
-			// Duplicate signer — java-tron counts each address once. Skip.
-			continue
+	seenAddr := make(map[tcommon.Address]struct{}, len(addrs))
+	seenSig := make(map[string]struct{}, len(sigs))
+	for i, addr := range addrs {
+		var dup bool
+		if multiSigByAddress {
+			_, dup = seenAddr[addr]
+		} else {
+			_, dup = seenSig[string(sigs[i])]
 		}
-		seen[addr] = struct{}{}
+		if dup {
+			return ErrDuplicateSignature
+		}
+		seenAddr[addr] = struct{}{}
+		seenSig[string(sigs[i])] = struct{}{}
+
 		w := types.KeyWeight(perm, addr)
 		if w == 0 {
 			return ErrUnauthorizedSigner
 		}
 		totalWeight += w
-		if totalWeight >= perm.Threshold {
-			return nil
-		}
 	}
-	return ErrInsufficientWeight
+	if totalWeight < perm.Threshold {
+		return ErrInsufficientWeight
+	}
+	return nil
 }
 
 func ValidateTxRetCount(tx *types.Transaction) error {

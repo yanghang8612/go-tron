@@ -17,6 +17,23 @@ var fixtureSkipList = map[string]string{
 	// keeping this list empty.)
 }
 
+// fixtureGetterTransform maps a java getter name to a function that
+// converts go-tron's raw DP value into the value the java
+// `/wallet/getchainparameters` HTTP API returns. java's Wallet.java
+// transforms a small set of keys at display time — the fixture captures
+// the API output, so the test must replay the same transformation
+// before comparing.
+//
+// Add a new entry whenever a getter is found in Wallet.java's
+// `addChainParameter` builder with a non-identity map (e.g. `/ (24 * 60)`).
+var fixtureGetterTransform = map[string]func(int64) int64{
+	// java Wallet.java:1268-1272 divides by 24*60 = 1440 so the API
+	// reports "minutes worth" rather than the raw "slots per day"
+	// stored in DP. The raw DP default is 14400 = 24 * 60 * 10 (see
+	// DynamicPropertiesStore.java:469); the API surfaces 10.
+	"getAdaptiveResourceLimitTargetRatio": func(v int64) int64 { return v / (24 * 60) },
+}
+
 // TestDynamicProperties_MatchMainnetFixture is the primary acceptance
 // gate for M1.1. It iterates every (key, value) pair in the 00-genesis-
 // dp-mainnet fixture and asserts the default DynamicProperties state
@@ -56,6 +73,9 @@ func TestDynamicProperties_MatchMainnetFixture(t *testing.T) {
 				goKey, javaKey, want)
 			missing++
 			continue
+		}
+		if xform, ok := fixtureGetterTransform[javaKey]; ok {
+			got = xform(got)
 		}
 		if got != want {
 			t.Errorf("DP[%s / %s]: got %d, want %d", javaKey, goKey, got, want)

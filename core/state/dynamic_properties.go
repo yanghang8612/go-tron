@@ -134,7 +134,11 @@ var defaultProps = map[string]int64{
 	// keys only ensure that initial state and governance proposals
 	// serialize to the same DB shape as java-tron.
 	"adaptive_resource_limit_multiplier":            1000,
-	"adaptive_resource_limit_target_ratio":          10,
+	// 14400 = 24 * 60 * 10; mirrors java-tron DynamicPropertiesStore.init()
+	// which seeds the genesis ratio at "one minute / 10 of total limit".
+	// total_energy_target_limit's default of 3_472_222 above is derived as
+	// 50_000_000_000 / 14400 — they must agree at genesis.
+	"adaptive_resource_limit_target_ratio":          14400,
 	"block_energy_usage":                            0,
 	"total_energy_average_time":                     0,
 	"current_cycle_number":                          0,
@@ -926,9 +930,9 @@ func (dp *DynamicProperties) SetAdaptiveResourceLimitTargetRatio(v int64) {
 
 func (dp *DynamicProperties) TotalEnergyLimit() int64 { return dp.props["total_energy_limit"] }
 
-// SetTotalEnergyLimit mirrors java-tron's saveTotalEnergyLimit2: updates the
-// base limit, recomputes targetLimit, and (only when adaptive energy is OFF)
-// also sets currentLimit to match.
+// SetTotalEnergyLimit mirrors java-tron's saveTotalEnergyLimit2 (proposal #19):
+// updates the base limit, recomputes targetLimit, and (only when adaptive
+// energy is OFF) also sets currentLimit to match.
 func (dp *DynamicProperties) SetTotalEnergyLimit(v int64) {
 	dp.Set("total_energy_limit", v)
 	ratio := dp.AdaptiveResourceLimitTargetRatio()
@@ -937,6 +941,19 @@ func (dp *DynamicProperties) SetTotalEnergyLimit(v int64) {
 	}
 	if !dp.AllowAdaptiveEnergy() {
 		dp.SetTotalEnergyCurrentLimit(v)
+	}
+}
+
+// SetTotalEnergyLimitV1 mirrors java-tron's deprecated saveTotalEnergyLimit
+// (proposal #17). Updates the base limit and recomputes targetLimit only;
+// does NOT touch currentLimit. #17 has been fork-locked since VERSION_3_2_2
+// (proposal validator rejects new #17 proposals on mainnet), so this
+// setter exists for early replay / private chains only.
+func (dp *DynamicProperties) SetTotalEnergyLimitV1(v int64) {
+	dp.Set("total_energy_limit", v)
+	ratio := dp.AdaptiveResourceLimitTargetRatio()
+	if ratio > 0 {
+		dp.SetTotalEnergyTargetLimit(v / ratio)
 	}
 }
 
@@ -1122,8 +1139,26 @@ func (dp *DynamicProperties) SetCurrentCycleNumber(v int64) {
 func (dp *DynamicProperties) NewRewardAlgorithmEffectiveCycle() int64 {
 	return dp.props["new_reward_algorithm_effective_cycle"]
 }
+
+// SetNewRewardAlgorithmEffectiveCycle writes v unconditionally.
+// Tests and rare migration paths use this; ordinary proposal application
+// MUST go through SaveNewRewardAlgorithmEffectiveCycle so the one-shot
+// guard mirrors java-tron.
 func (dp *DynamicProperties) SetNewRewardAlgorithmEffectiveCycle(v int64) {
 	dp.Set("new_reward_algorithm_effective_cycle", v)
+}
+
+// SaveNewRewardAlgorithmEffectiveCycle is the proposal-side entry point.
+// Mirrors java-tron DynamicPropertiesStore.saveNewRewardAlgorithmEffectiveCycle:
+// only writes (currentCycle+1) if the cycle is still Long.MAX_VALUE
+// (i.e. unset). Proposals #59 (ALLOW_TVM_VOTE) and #67 (ALLOW_NEW_REWARD)
+// both call this — whichever activates first locks the cycle, and the
+// second call is a no-op.
+func (dp *DynamicProperties) SaveNewRewardAlgorithmEffectiveCycle() {
+	if dp.NewRewardAlgorithmEffectiveCycle() != 9_223_372_036_854_775_807 {
+		return
+	}
+	dp.Set("new_reward_algorithm_effective_cycle", dp.CurrentCycleNumber()+1)
 }
 
 // UseNewRewardAlgorithm mirrors java-tron's useNewRewardAlgorithm:

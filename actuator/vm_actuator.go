@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -12,6 +13,16 @@ import (
 	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/proto"
 )
+
+// multiSigCheckV2Pass evaluates VERSION_4_7_1 against the per-tx context.
+// Returns false when DB or DynProps is missing (defensive — unit tests that
+// stub a Context without DB will not have the fork stats anyway).
+func multiSigCheckV2Pass(ctx *Context) bool {
+	if ctx == nil || ctx.DB == nil || ctx.DynProps == nil {
+		return false
+	}
+	return forks.PassVersion(ctx.DB, 27, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+}
 
 const contractNameMaxLen = 32
 const vmMinTokenID = 1_000_000
@@ -204,6 +215,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	energyLimit := uint64(accountEnergyLimit(ctx, owner, ctx.Tx.FeeLimit(), callValue, result))
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
+	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
@@ -264,6 +276,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	energyLimit := uint64(triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result))
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
+	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
