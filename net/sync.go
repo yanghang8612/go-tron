@@ -16,12 +16,6 @@ import (
 const (
 	maxChainInventorySize = 2000
 	maxFetchBatch         = 100
-
-	// minFetchInterval throttles outbound FETCH_INV_DATA to stay under
-	// java-tron's default rate limit of 3 msgs/s
-	// (`RateLimiterConfig.fetchInvData = 3.0`). We send slightly slower
-	// than 3/s to leave headroom for the peer's token bucket.
-	minFetchInterval = 350 * time.Millisecond
 )
 
 // syncFetchTimeout is how long to wait for a block response before failing over
@@ -40,7 +34,6 @@ type SyncService struct {
 	remainNum  int64
 	inflight   int // blocks requested but not yet received in the current batch
 	pending    map[tcommon.Hash]uint64
-	lastFetch  time.Time   // when we last sent FETCH_INV_DATA (for outbound throttling)
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
 
@@ -383,21 +376,8 @@ func (ss *SyncService) fetchNextBatch() {
 		ss.pending[bid.Hash] = bid.Num
 	}
 	peer := ss.syncPeer
-	now := time.Now()
-	earliest := ss.lastFetch.Add(minFetchInterval)
-	wait := earliest.Sub(now)
-	if wait < 0 {
-		wait = 0
-		ss.lastFetch = now
-	} else {
-		ss.lastFetch = earliest
-	}
 	ss.armFetchTimer()
 	ss.mu.Unlock()
-
-	if wait > 0 {
-		time.Sleep(wait)
-	}
 
 	var ids [][]byte
 	for _, bid := range batch {
@@ -474,9 +454,8 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	log.Printf("Synced block #%d", block.Number())
 
 	// Only request the next batch when the current one is fully drained;
-	// otherwise we'd flood the peer with overlapping FETCH_INV_DATA requests
-	// (java-tron rate-limits FETCH_INV_DATA at 3/s and disconnects with
-	// BAD_PROTOCOL when exceeded).
+	// otherwise we'd overlap FETCH_INV_DATA requests and lose the one-batch
+	// backpressure java-tron keeps with syncBlockRequested/isSyncIdle.
 	if batchDone {
 		ss.fetchNextBatch()
 	}
