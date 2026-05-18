@@ -251,6 +251,35 @@ func TestBigModExp(t *testing.T) {
 	}
 }
 
+func TestBigModExpZeroModulusMatchesJavaTron(t *testing.T) {
+	input := make([]byte, 96+3)
+	input[31] = 1 // baseLen = 1
+	input[63] = 1 // expLen = 1
+	input[95] = 1 // modLen = 1
+	input[96] = 2 // base = 2
+	input[97] = 1 // exp = 1
+	input[98] = 0 // mod = 0
+
+	for _, tc := range []struct {
+		name   string
+		p      *bigModExp
+		energy uint64
+	}{
+		{name: "legacy", p: &bigModExp{istanbul: true}, energy: 100000},
+		{name: "osaka", p: &bigModExp{osaka: true}, energy: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _, err := tc.p.Run(nullEVM(), zeroCaller, input, tc.energy)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(result) != 0 {
+				t.Fatalf("zero modulus should return empty payload like java-tron, got %x", result)
+			}
+		})
+	}
+}
+
 func TestBigModExpOsakaTIP7883MinimumCost(t *testing.T) {
 	p := &bigModExp{osaka: true}
 	input := make([]byte, 96+3)

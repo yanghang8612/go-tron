@@ -104,7 +104,8 @@ func (c *dataCopy) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) (
 
 // ── 0x05 BigModExp ────────────────────────────────────────────────────────────
 //
-// Energy formula uses EIP-2565 (Berlin/Istanbul), minimum 200.
+// Energy formula follows java-tron's legacy EIP-198-style pricing, with
+// TIP-7883 pricing when Osaka is active.
 
 type bigModExp struct {
 	istanbul bool
@@ -157,7 +158,7 @@ func (c *bigModExp) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energ
 
 	var result []byte
 	if mod.Sign() == 0 {
-		result = make([]byte, modLen)
+		result = []byte{}
 	} else {
 		r := new(big.Int).Exp(base, exp, mod)
 		// Left-pad result to modLen

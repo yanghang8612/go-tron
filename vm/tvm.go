@@ -248,6 +248,9 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.createInternalContractAccount(caller, contractAddr, isCreate2)
 	} else {
 		tvm.StateDB.GetOrCreateAccount(contractAddr)
+		if !tvm.cfg.Constantinople {
+			tvm.StateDB.SetCode(contractAddr, legacyCreateContractCode(code))
+		}
 	}
 	wasNew := tvm.newContracts[contractAddr]
 	tvm.newContracts[contractAddr] = true
@@ -290,11 +293,11 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		return nil, tcommon.Address{}, 0, err
 	}
 
-	if len(ret) > maxCodeSize {
+	if len(ret) != 0 && tvm.cfg.London && ret[0] == 0xEF {
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		return nil, tcommon.Address{}, 0, ErrContractCodeTooLarge
+		return nil, tcommon.Address{}, 0, ErrInvalidCode
 	}
 
 	depositCost := uint64(len(ret)) * EnergyCodeDeposit
@@ -305,8 +308,25 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		return nil, tcommon.Address{}, 0, ErrOutOfEnergy
 	}
 
-	tvm.StateDB.SetCode(contractAddr, ret)
+	if internal || tvm.cfg.Constantinople {
+		tvm.StateDB.SetCode(contractAddr, ret)
+	}
 	return ret, contractAddr, contract.Energy, nil
+}
+
+func legacyCreateContractCode(ops []byte) []byte {
+	for i := 0; i < len(ops); i++ {
+		op := OpCode(ops[i])
+		if op == RETURN && i+1 < len(ops) && OpCode(ops[i+1]) == STOP {
+			code := make([]byte, len(ops)-i-2)
+			copy(code, ops[i+2:])
+			return code
+		}
+		if op >= PUSH1 && op <= PUSH32 {
+			i += int(op-PUSH1) + 1
+		}
+	}
+	return make([]byte, 32)
 }
 
 func (tvm *TVM) createInternalContractAccount(origin, contractAddr tcommon.Address, isCreate2 bool) {

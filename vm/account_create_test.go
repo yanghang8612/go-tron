@@ -235,6 +235,96 @@ func TestCreateAtWithToken_TransfersAndExposesMessageToken(t *testing.T) {
 	}
 }
 
+func TestCreateAtWithToken_AllowsRuntimeCodeLargerThanEIP170(t *testing.T) {
+	const runtimeLen = 24_577
+	const runtimeLenHi = byte(runtimeLen >> 8)
+	const runtimeLenLo = byte(runtimeLen & 0xff)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	caller := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	runtime := bytes.Repeat([]byte{byte(STOP)}, runtimeLen)
+	initCode := []byte{
+		byte(PUSH2), runtimeLenHi, runtimeLenLo,
+		byte(PUSH1), 14,
+		byte(PUSH1), 0,
+		byte(CODECOPY),
+		byte(PUSH2), runtimeLenHi, runtimeLenLo,
+		byte(PUSH1), 0,
+		byte(RETURN),
+	}
+	bytecode := append(initCode, runtime...)
+
+	ret, addr, _, err := tvm.CreateAtWithToken(caller, contractAddr, bytecode, 10_000_000, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CreateAtWithToken: %v", err)
+	}
+	if addr != contractAddr {
+		t.Fatalf("contract address: got %x, want %x", addr, contractAddr)
+	}
+	if len(ret) != runtimeLen {
+		t.Fatalf("return code length: got %d, want %d", len(ret), runtimeLen)
+	}
+	if got := len(sdb.GetCode(contractAddr)); got != runtimeLen {
+		t.Fatalf("stored code length: got %d, want %d", got, runtimeLen)
+	}
+}
+
+func TestCreateAtWithToken_PreConstantinopleStoresLegacyPrecompiledCode(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: false}, nil)
+	caller := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x03}
+	legacyCode := []byte{byte(PUSH1), 0x2A, byte(PUSH1), 0x00, byte(SSTORE), byte(STOP)}
+
+	bytecode := []byte{
+		byte(PUSH1), 0,
+		byte(PUSH1), 0,
+		byte(RETURN),
+		byte(STOP),
+	}
+	bytecode = append(bytecode, legacyCode...)
+
+	ret, addr, _, err := tvm.CreateAtWithToken(caller, contractAddr, bytecode, 1_000_000, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("CreateAtWithToken: %v", err)
+	}
+	if addr != contractAddr {
+		t.Fatalf("contract address: got %x, want %x", addr, contractAddr)
+	}
+	if len(ret) != 0 {
+		t.Fatalf("constructor return length: got %d, want 0", len(ret))
+	}
+	if got := sdb.GetCode(contractAddr); !bytes.Equal(got, legacyCode) {
+		t.Fatalf("stored code: got %x, want %x", got, legacyCode)
+	}
+}
+
+func TestCreateAtWithToken_LondonRejectsEFPrefixRuntimeCode(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, London: true}, nil)
+	caller := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x04}
+
+	bytecode := []byte{
+		byte(PUSH1), 1,
+		byte(PUSH1), 12,
+		byte(PUSH1), 0,
+		byte(CODECOPY),
+		byte(PUSH1), 1,
+		byte(PUSH1), 0,
+		byte(RETURN),
+		0xEF,
+	}
+
+	_, _, _, err := tvm.CreateAtWithToken(caller, contractAddr, bytecode, 1_000_000, 0, 0, 0)
+	if err != ErrInvalidCode {
+		t.Fatalf("CreateAtWithToken error: got %v, want %v", err, ErrInvalidCode)
+	}
+	if got := sdb.GetCode(contractAddr); len(got) != 0 {
+		t.Fatalf("invalid EF-prefixed runtime code should not be stored, got %x", got)
+	}
+}
+
 func TestCallTokenToExistingNoCodeChargesJavaNetCost(t *testing.T) {
 	const tokenID = int64(1_000_002)
 
