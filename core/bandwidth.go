@@ -116,6 +116,10 @@ func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties,
 }
 
 func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64, db bandwidthAssetStore) (*BandwidthResult, error) {
+	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
+		return &BandwidthResult{}, nil
+	}
+
 	sender := extractSender(tx)
 	if sender == (tcommon.Address{}) {
 		return nil, fmt.Errorf("cannot determine sender")
@@ -387,21 +391,18 @@ func consumeBandwidthForCreateNewAccount(statedb *state.StateDB, dynProps *state
 	return &BandwidthResult{NetFee: fee}, nil
 }
 
-// extractSender extracts the owner address from the first contract of a transaction.
+// extractSender extracts the bandwidth payer from the first contract.
 func extractSender(tx *types.Transaction) tcommon.Address {
 	contract := tx.Contract()
 	if contract == nil {
 		return tcommon.Address{}
 	}
-	msg, err := contract.Parameter.UnmarshalNew()
+	owner, _, err := extractContractOwner(contract)
 	if err != nil {
 		return tcommon.Address{}
 	}
-	type ownerAddressGetter interface {
-		GetOwnerAddress() []byte
+	if len(owner) == 0 {
+		return tcommon.Address{}
 	}
-	if oag, ok := msg.(ownerAddressGetter); ok {
-		return tcommon.BytesToAddress(oag.GetOwnerAddress())
-	}
-	return tcommon.Address{}
+	return tcommon.BytesToAddress(owner)
 }

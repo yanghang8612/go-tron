@@ -36,6 +36,21 @@ func makeBandwidthTransferAssetTx(ownerByte, toByte byte, assetName []byte, amou
 	})
 }
 
+func makeBandwidthShieldedTransferTx(fromByte byte, amount int64) *types.Transaction {
+	c := &contractpb.ShieldedTransferContract{
+		TransparentFromAddress: testProcessorAddr(fromByte).Bytes(),
+		FromAmount:             amount,
+	}
+	anyParam, _ := anypb.New(c)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Contract: []*corepb.Transaction_Contract{
+				{Type: corepb.Transaction_Contract_ShieldedTransferContract, Parameter: anyParam},
+			},
+		},
+	})
+}
+
 // TestTxBandwidthSize_SupportVMFormula locks the java-tron BandwidthProcessor
 // asymmetry: pre-supportVM, the bandwidth size is the full tx serialized
 // size (including any `ret` field). Post-supportVM (allow_creation_of_contracts
@@ -75,6 +90,27 @@ func TestTxBandwidthSize_SupportVMFormula(t *testing.T) {
 	if withVMRet != withVM {
 		t.Fatalf("clearRet did not neutralize populated ret: empty-ret=%d, populated-ret=%d",
 			withVM, withVMRet)
+	}
+}
+
+func TestConsumeBandwidth_ShieldedTransferSkipped(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	tx := makeBandwidthShieldedTransferTx(1, 100)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	if err != nil {
+		t.Fatalf("consumeBandwidth failed: %v", err)
+	}
+	if res.NetUsage != 0 || res.NetFee != 0 || res.NetFeeForBandwidth {
+		t.Fatalf("bandwidth result: got usage=%d fee=%d feeForBandwidth=%v, want zero bill",
+			res.NetUsage, res.NetFee, res.NetFeeForBandwidth)
+	}
+	if got := statedb.GetFreeNetUsage(testProcessorAddr(1)); got != 0 {
+		t.Fatalf("shielded transfer should not consume free net, got %d", got)
+	}
+	if got := dynProps.PublicNetUsage(); got != 0 {
+		t.Fatalf("shielded transfer should not consume public net, got %d", got)
 	}
 }
 
