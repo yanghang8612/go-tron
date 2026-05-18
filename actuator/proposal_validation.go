@@ -8,20 +8,21 @@ import (
 )
 
 const (
-	proposalLongValue                    int64 = 100_000_000_000_000_000
-	proposalMaxSupply                    int64 = 100_000_000_000
-	proposalOneYearBlockNumbers          int64 = 10_512_000
-	proposalCreateAccountTxMinSize       int64 = 500
-	proposalCreateAccountTxMaxSize       int64 = 10_000
-	proposalMinExpireTime                int64 = 0
-	proposalMaxExpireTime                int64 = 31_536_003_000
-	proposalDynamicEnergyIncreaseMax     int64 = 10_000
-	proposalDynamicEnergyMaxFactorMax    int64 = 100_000
-	proposalMarketFeeMax                 int64 = 10_000_000_000
-	proposalMemoFeeMax                   int64 = 1_000_000_000
-	proposalTotalNetLimitMax             int64 = 1_000_000_000_000
-	proposalMaintenanceIntervalMinMillis int64 = 3 * 27 * 1000
-	proposalMaintenanceIntervalMaxMillis int64 = 24 * 3600 * 1000
+	proposalLongValue                    int64  = 100_000_000_000_000_000
+	proposalMaxSupply                    int64  = 100_000_000_000
+	proposalOneYearBlockNumbers          int64  = 10_512_000
+	proposalCreateAccountTxMinSize       int64  = 500
+	proposalCreateAccountTxMaxSize       int64  = 10_000
+	proposalMinExpireTime                int64  = 0
+	proposalMaxExpireTime                int64  = 31_536_003_000
+	proposalDynamicEnergyIncreaseMax     int64  = 10_000
+	proposalDynamicEnergyMaxFactorMax    int64  = 100_000
+	proposalMarketFeeMax                 int64  = 10_000_000_000
+	proposalMemoFeeMax                   int64  = 1_000_000_000
+	proposalTotalNetLimitMax             int64  = 1_000_000_000_000
+	proposalMaintenanceIntervalMinMillis int64  = 3 * 27 * 1000
+	proposalMaintenanceIntervalMaxMillis int64  = 24 * 3600 * 1000
+	proposalNileShieldedActivationBlock  uint64 = 1_628_391
 )
 
 func validateProposalParameter(ctx *Context, id, value int64) error {
@@ -69,6 +70,11 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 			return err
 		}
 		return validateProposalRequires(dp.AllowTvmTransferTrc10(), "allow_tvm_transfer_trc10", id)
+	case 27:
+		if ctx.BlockNumber != proposalNileShieldedActivationBlock {
+			return fmt.Errorf("bad chain parameter id %d", id)
+		}
+		return validateProposalOne(id, value)
 	case 29:
 		return validateProposalRange(id, value, 1, 10_000)
 	case 32:

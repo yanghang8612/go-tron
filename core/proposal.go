@@ -96,6 +96,8 @@ func paramIDToName(id int64) string {
 //	#21 ALLOW_ADAPTIVE_ENERGY       — :129-142 (also guards the
 //	                                   AdaptiveResourceLimitTargetRatio /
 //	                                   Multiplier side-effects)
+//	#27 ALLOW_SHIELDED_TRANSACTION  — Nile historical block 1,628,391 only;
+//	                                   guarded by getAllowShieldedTransaction()==0
 //	#44 ALLOW_MARKET_TRANSACTION    — :220-227 (also guards adding the
 //	                                   MarketSell/MarketCancel permission
 //	                                   bits 52/53)
@@ -105,6 +107,7 @@ var guardedParams = map[int64]struct{}{
 	10: {},
 	20: {},
 	21: {},
+	27: {},
 	44: {},
 	77: {},
 }
@@ -209,6 +212,13 @@ func applyProposalSideEffects(db kvReadWriter, p *rawdb.Proposal, dynProps *stat
 		case 26: // ALLOW_TVM_CONSTANTINOPLE → enables ClearABIContract (48)
 			if value != 0 {
 				dynProps.AddSystemContractAndSetPermission(48)
+			}
+		case 27: // ALLOW_SHIELDED_TRANSACTION → enables ShieldedTransferContract (51)
+			if !wasZero(27) {
+				break
+			}
+			if value != 0 {
+				dynProps.AddSystemContractAndSetPermission(51)
 			}
 		case 30: // ALLOW_CHANGE_DELEGATION → enables UpdateBrokerageContract (49)
 			// java's ProposalService.ALLOW_CHANGE_DELEGATION saves the flag

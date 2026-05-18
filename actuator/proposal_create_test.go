@@ -131,6 +131,27 @@ func TestProposalCreateValidatesParameterRange(t *testing.T) {
 	}
 }
 
+func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		27: 1, // ALLOW_SHIELDED_TRANSACTION, accepted by Nile at block 1,628,391 only.
+	})
+	ctx.BlockNumber = proposalNileShieldedActivationBlock
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate historical Nile proposal failed: %v", err)
+	}
+
+	ctx.BlockNumber = proposalNileShieldedActivationBlock - 1
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected historical shielded proposal to be rejected at a different block")
+	}
+
+	ctx, act = newProposalCreateValidationContext(t, map[int64]int64{27: 0})
+	ctx.BlockNumber = proposalNileShieldedActivationBlock
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected historical shielded proposal to require value 1")
+	}
+}
+
 func newProposalCreateValidationContext(t *testing.T, params map[int64]int64) (*Context, *ProposalCreateActuator) {
 	t.Helper()
 	owner := makeTestAddr(1)

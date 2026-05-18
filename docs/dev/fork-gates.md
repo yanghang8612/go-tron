@@ -47,6 +47,12 @@ The machinery behind each column:
 | `AllowStakingV2` → `AllowNewResourceModel` | `allow_new_resource_model` | Proposal #51 gates both state-layer V2 and VM V2 precompiles in java-tron; go-tron historically had two separate flags. Fixed in M1.3 Task 5. |
 | `AllowTvmShieldedToken` → `AllowShieldedTrc20Transaction` | `allow_shielded_trc20_transaction` | Proposal #39 gates shielded-TRC20 precompiles in java-tron; go-tron's historical naming was VM-centric. |
 
+## Historical Replay Exceptions
+
+| Proposal ID | DP key | Scope | Reason |
+|---|---|---|---|
+| 27 | `allow_shielded_transaction` | Nile block 1,628,391 only | Nile java-tron temporarily accepted `ALLOW_SHIELDED_TRANSACTION` at that exact height, then later commented the enum out again. go-tron keeps a height-locked validation path so replay matches Nile without reopening the retired proposal generally. |
+
 ## go-tron specific (no java-tron proposal)
 
 (none — the flags previously listed here were verified against

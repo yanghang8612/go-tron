@@ -182,6 +182,12 @@ func TestApplyProposalSideEffects_AddSystemContract(t *testing.T) {
 
 	// Proposal 26 (ALLOW_TVM_CONSTANTINOPLE) → bit 48
 	check(t, runProposal(26, 1, 1000), []int{48})
+	// Proposal 27 (ALLOW_SHIELDED_TRANSACTION) → bit 51 on Nile's historical activation.
+	dp := runProposal(27, 1, 1000)
+	check(t, dp, []int{51})
+	if !dp.AllowShieldedTransaction() {
+		t.Fatal("allow_shielded_transaction should be set after proposal 27")
+	}
 	// Proposal 30 (ALLOW_CHANGE_DELEGATION) → bit 49
 	check(t, runProposal(30, 1, 1000), []int{49})
 	// Proposal 44 (ALLOW_MARKET_TRANSACTION) → bits 52, 53

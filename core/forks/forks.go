@@ -91,10 +91,12 @@ func IsActive(flag AllowFlag, blockNum uint64, dp *state.DynamicProperties) bool
 // (i.e. not commented out) must be present here, mapped to the go-tron
 // key with the same semantics.
 //
-// Commented-out historical IDs in ProposalType (27, 28, 34, 42, 43, 58)
-// are intentionally absent — they were either never activated on mainnet
-// or have been retired. Do not add them back without re-reading the
-// corresponding proto / ProposalUtil comment.
+// Commented-out historical IDs in ProposalType are normally absent — they
+// were either never activated on mainnet or have been retired. ID 27 is the
+// exception: Nile accepted ALLOW_SHIELDED_TRANSACTION once at block 1,628,391
+// (java-tron commit `feat(proposal): open shielded transaction on 1628391`),
+// so replay must retain the mapping even though current java-tron comments it
+// out again.
 func ProposalParamKey(id int64) string {
 	return proposalParamKey[id]
 }
@@ -127,6 +129,7 @@ var proposalParamKey = map[int64]string{
 	24: "allow_proto_filter_num",
 	25: "allow_account_state_root",
 	26: "allow_tvm_constantinople",
+	27: "allow_shielded_transaction",
 	29: "adaptive_resource_limit_multiplier",
 	30: "change_delegation",
 	31: "witness_127_pay_per_block",

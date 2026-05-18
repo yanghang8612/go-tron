@@ -44,7 +44,7 @@ func TestProposalParamKey_UnknownReturnsEmpty(t *testing.T) {
 	cases := []int64{
 		// Historical IDs that were commented out in ProposalUtil.java and
 		// must not map to anything in go-tron.
-		27, 28, 34, 42, 43, 58,
+		28, 34, 42, 43, 58,
 		// Far outside the defined range.
 		1000, -1,
 	}
@@ -52,6 +52,17 @@ func TestProposalParamKey_UnknownReturnsEmpty(t *testing.T) {
 		if key := forks.ProposalParamKey(id); key != "" {
 			t.Errorf("ProposalParamKey(%d): got %q, want empty", id, key)
 		}
+	}
+}
+
+func TestProposalParamKey_HistoricalNileShieldedActivationMapped(t *testing.T) {
+	const id int64 = 27
+	const want = "allow_shielded_transaction"
+	if got := forks.ProposalParamKey(id); got != want {
+		t.Fatalf("ProposalParamKey(%d): got %q, want %q", id, got, want)
+	}
+	if _, ok := state.NewDynamicProperties().Get(want); !ok {
+		t.Fatalf("ProposalParamKey(%d): key %q missing from DynamicProperties defaults", id, want)
 	}
 }
 
