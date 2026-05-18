@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/producer"
@@ -102,6 +103,20 @@ var (
 		Usage: "gRPC Wallet service port (0 = disabled)",
 		Value: 50051,
 	}
+	verbosityFlag = &cli.IntFlag{
+		Name:  "verbosity",
+		Usage: "Log verbosity (0=Crit 1=Error 2=Warn 3=Info 4=Debug 5=Trace)",
+		Value: 3,
+	}
+	logFormatFlag = &cli.StringFlag{
+		Name:  "log.format",
+		Usage: "Log output format: terminal|json|logfmt",
+		Value: "terminal",
+	}
+	logFileFlag = &cli.StringFlag{
+		Name:  "log.file",
+		Usage: "Optional log file path; records are tee'd to this file in JSON",
+	}
 )
 
 var app = &cli.App{
@@ -125,6 +140,12 @@ var app = &cli.App{
 		genesisFileFlag,
 		seednodeFlag,
 		maxpeersFlag,
+		verbosityFlag,
+		logFormatFlag,
+		logFileFlag,
+	},
+	Before: func(ctx *cli.Context) error {
+		return log.Setup(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"))
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
