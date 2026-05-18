@@ -303,19 +303,25 @@ func TestAssetIssueValidate_PublicFreeAssetNetLimitOutOfRange(t *testing.T) {
 	}
 }
 
-func TestAssetIssueValidate_AbbreviationMaxFiveBytes(t *testing.T) {
+func TestAssetIssueValidate_AbbreviationUsesAssetNameLimit(t *testing.T) {
 	act := &AssetIssueActuator{}
 
 	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
 	c.Abbr = []byte("ABCDEF")
-	if err := act.Validate(makeAssetIssueCtx(t, c)); err == nil {
-		t.Fatal("expected error for abbreviation longer than java-tron's 5 byte limit")
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err != nil {
+		t.Fatalf("6 byte abbreviation should be valid: %v", err)
 	}
 
 	c = makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
-	c.Abbr = []byte("ABCDE")
+	c.Abbr = []byte("12345678901234567890123456789012")
 	if err := act.Validate(makeAssetIssueCtx(t, c)); err != nil {
-		t.Fatalf("5 byte abbreviation should be valid: %v", err)
+		t.Fatalf("32 byte abbreviation should be valid: %v", err)
+	}
+
+	c = makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
+	c.Abbr = []byte("123456789012345678901234567890123")
+	if err := act.Validate(makeAssetIssueCtx(t, c)); err == nil {
+		t.Fatal("expected error for abbreviation longer than java-tron's asset name limit")
 	}
 }
 

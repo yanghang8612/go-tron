@@ -51,7 +51,9 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 	if c.Precision != 0 && ctx.DynProps.AllowSameTokenName() && (c.Precision < 0 || c.Precision > 6) {
 		return errors.New("precision cannot exceed 6")
 	}
-	if len(c.Abbr) > 0 && !validReadableBytes(c.Abbr, 5) {
+	// java-tron AssetIssueActuator validates abbr with validAssetName, which
+	// allows the same 32-byte readable range as the token name.
+	if len(c.Abbr) > 0 && !validReadableBytes(c.Abbr, 32) {
 		return errors.New("invalid token abbreviation")
 	}
 	if !validBytesLen(c.Url, 256, false) {
