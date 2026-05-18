@@ -76,7 +76,22 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	if !strings.Contains(out, "Imported chain segment") {
 		t.Fatalf("expected 'Imported chain segment' summary line, got:\n%s", out)
 	}
-	for _, k := range []string{"blocks=", "txs=", "elapsed=", "blocks/s=", "head=", "peer="} {
+	for _, k := range []string{
+		"blocks=",
+		"txs=",
+		"elapsed=",
+		"execElapsed=",
+		"bufferWaitElapsed=",
+		"blocks/s=",
+		"head=",
+		"blockBuffer=",
+		"requested=",
+		"retryList=",
+		"peer=",
+		"peerState=",
+		"inflight=",
+		"fetchList=",
+	} {
 		if !strings.Contains(out, k) {
 			t.Errorf("missing key %q in summary line:\n%s", k, out)
 		}

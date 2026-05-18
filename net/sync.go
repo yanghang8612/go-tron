@@ -1,6 +1,9 @@
 package net
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,12 +38,20 @@ var statsReportInterval = 8 * time.Second
 // syncStats accumulates per-window throughput counters for the sync summary
 // line. Reset at every emit so the figures represent rolling-window rates.
 type syncStats struct {
-	startTime   time.Time     // window start
-	blocks      int           // blocks applied in window
-	txs         int           // tx count applied in window
-	execElapsed time.Duration // accumulated InsertBlock wall time
-	totalStart  time.Time     // session start (for "Sync complete" line)
-	totalBlocks int           // session-wide block count
+	startTime         time.Time     // window start
+	blocks            int           // blocks applied in window
+	txs               int           // tx count applied in window
+	execElapsed       time.Duration // accumulated InsertBlock wall time
+	bufferWaitElapsed time.Duration // accumulated time waiting for the next contiguous buffered block
+	totalStart        time.Time     // session start (for "Sync complete" line)
+	totalBlocks       int           // session-wide block count
+}
+
+type syncDiagnostics struct {
+	blockBufferLen int
+	requestedLen   int
+	retryListLen   int
+	peerState      string
 }
 
 type syncPeerState struct {
@@ -118,6 +129,9 @@ type SyncService struct {
 	// stats accumulates per-window throughput counters used for the
 	// "Imported chain segment" summary line. Guarded by ss.mu.
 	stats syncStats
+
+	bufferWaitStart time.Time
+	bufferWaitNum   uint64
 
 	quit     chan struct{}
 	stopOnce sync.Once
@@ -323,6 +337,8 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
 	ss.stats = syncStats{startTime: now, totalStart: now}
+	ss.bufferWaitStart = time.Time{}
+	ss.bufferWaitNum = 0
 }
 
 func (ss *SyncService) ensureSessionMapsLocked() {
@@ -864,6 +880,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 	var out []outboundSyncRequest
 	for {
+		now := time.Now()
 		ss.mu.Lock()
 		if !ss.syncing || ss.paused {
 			ss.mu.Unlock()
@@ -872,7 +889,8 @@ func (ss *SyncService) drainBufferedBlocks() {
 		next := ss.chain.CurrentBlock().Number() + 1
 		buffered, ok := ss.blockBuffer[next]
 		if !ok {
-			out = append(out, ss.fillFetchSlotsLocked(time.Now())...)
+			ss.beginBufferWaitLocked(next, now)
+			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			complete := ss.shouldFinishLocked()
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
@@ -881,6 +899,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 			}
 			break
 		}
+		ss.stats.bufferWaitElapsed += ss.endBufferWaitLocked(next, now)
 		delete(ss.blockBuffer, next)
 		delete(ss.bufferedHash, buffered.block.Hash())
 		ss.mu.Unlock()
@@ -900,22 +919,47 @@ func (ss *SyncService) drainBufferedBlocks() {
 		ss.stats.execElapsed += insertElapsed
 		emit := time.Since(ss.stats.startTime) >= statsReportInterval
 		var snap syncStats
+		var diag syncDiagnostics
 		if emit {
 			snap = ss.stats
+			diag = ss.snapshotDiagnosticsLocked()
 			ss.stats.startTime = time.Now()
 			ss.stats.blocks = 0
 			ss.stats.txs = 0
 			ss.stats.execElapsed = 0
+			ss.stats.bufferWaitElapsed = 0
 		}
 		remain := ss.estimatedRemainLocked()
 		ss.mirrorLegacyLocked()
 		ss.mu.Unlock()
 
 		if emit {
-			ss.reportSegment(snap, buffered.block.Number(), remain, buffered.peer)
+			ss.reportSegment(snap, diag, buffered.block.Number(), remain, buffered.peer)
 		}
 	}
 	ss.sendOutboundRequests(out)
+}
+
+func (ss *SyncService) beginBufferWaitLocked(next uint64, now time.Time) {
+	if ss.bufferWaitStart.IsZero() || ss.bufferWaitNum != next {
+		ss.bufferWaitStart = now
+		ss.bufferWaitNum = next
+	}
+}
+
+func (ss *SyncService) endBufferWaitLocked(next uint64, now time.Time) time.Duration {
+	if ss.bufferWaitStart.IsZero() || ss.bufferWaitNum != next {
+		ss.bufferWaitStart = time.Time{}
+		ss.bufferWaitNum = 0
+		return 0
+	}
+	elapsed := now.Sub(ss.bufferWaitStart)
+	ss.bufferWaitStart = time.Time{}
+	ss.bufferWaitNum = 0
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
 }
 
 func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
@@ -970,9 +1014,36 @@ func (ss *SyncService) shouldFinishLocked() bool {
 	return ss.targetHeadNum == 0 || ss.chain.CurrentBlock().Number() >= ss.targetHeadNum
 }
 
+func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
+	diag := syncDiagnostics{
+		blockBufferLen: len(ss.blockBuffer),
+		requestedLen:   len(ss.requested),
+		retryListLen:   len(ss.retryList),
+	}
+	if len(ss.peers) == 0 {
+		return diag
+	}
+	ids := make([]string, 0, len(ss.peers))
+	for id := range ss.peers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		ps := ss.peers[id]
+		if ps == nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s{inflight=%d fetchList=%d pending=%d remain=%d chainRequested=%t done=%t}",
+			id, ps.inflight, len(ps.fetchList), len(ps.pending), ps.remainNum, ps.chainRequested, ps.done))
+	}
+	diag.peerState = strings.Join(parts, ";")
+	return diag
+}
+
 // reportSegment emits the throttled "Imported chain segment" summary. Called
 // without ss.mu held.
-func (ss *SyncService) reportSegment(s syncStats, head uint64, remain int64, peer *p2p.Peer) {
+func (ss *SyncService) reportSegment(s syncStats, diag syncDiagnostics, head uint64, remain int64, peer *p2p.Peer) {
 	elapsed := time.Since(s.startTime)
 	if elapsed <= 0 {
 		elapsed = 1
@@ -984,10 +1055,15 @@ func (ss *SyncService) reportSegment(s syncStats, head uint64, remain int64, pee
 		"blocks", s.blocks,
 		"txs", s.txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),
+		"execElapsed", ethcommon.PrettyDuration(s.execElapsed),
+		"bufferWaitElapsed", ethcommon.PrettyDuration(s.bufferWaitElapsed),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
 		"head", head,
 		"remain", remain,
+		"blockBuffer", diag.blockBufferLen,
+		"requested", diag.requestedLen,
+		"retryList", diag.retryListLen,
 	}
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
@@ -995,6 +1071,9 @@ func (ss *SyncService) reportSegment(s syncStats, head uint64, remain int64, pee
 	}
 	if peer != nil {
 		ctx = append(ctx, "peer", peer.ID())
+	}
+	if diag.peerState != "" {
+		ctx = append(ctx, "peerState", diag.peerState)
 	}
 	log.Info("Imported chain segment", ctx...)
 }
@@ -1034,6 +1113,8 @@ func (ss *SyncService) doReset() {
 	ss.blockBuffer = nil
 	ss.bufferedHash = nil
 	ss.targetHeadNum = 0
+	ss.bufferWaitStart = time.Time{}
+	ss.bufferWaitNum = 0
 }
 
 // armFetchTimer arms the fetch-response timeout. Must be called with ss.mu held.
