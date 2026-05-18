@@ -20,9 +20,9 @@ import (
 type peerConnState uint8
 
 const (
-	peerStateInit      peerConnState = iota // connected, no hello yet
-	peerStateHandshaked                     // hello exchanged successfully
-	peerStateBad                            // hard failure (e.g. genesis mismatch)
+	peerStateInit       peerConnState = iota // connected, no hello yet
+	peerStateHandshaked                      // hello exchanged successfully
+	peerStateBad                             // hard failure (e.g. genesis mismatch)
 )
 
 // peerState tracks per-peer protocol state.
@@ -43,9 +43,9 @@ type TronHandler struct {
 	mu    sync.RWMutex
 	peers map[string]*peerState // peer id → state
 
-	syncService *SyncService
-	broadcaster *BroadcastService
-	pbftHandler *PbftHandler
+	syncService  *SyncService
+	broadcaster  *BroadcastService
+	pbftHandler  *PbftHandler
 	pbftDataSync *PbftDataSyncHandler
 
 	// cheatDetector watches advertised blocks for double-signing by a
@@ -428,7 +428,7 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 	// java-tron's BlockMsgHandler is forgiving about this because its KhaosDB
 	// is much larger; gtron's tighter window can't tolerate the gap. Once
 	// sync completes (IsSyncing()==false), we accept adv blocks normally.
-	if h.syncService != nil && h.syncService.IsSyncing() {
+	if h.syncService != nil && (h.syncService.IsSyncing() || h.syncService.IsPaused()) {
 		return
 	}
 

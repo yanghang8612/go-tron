@@ -38,7 +38,8 @@ type SyncService struct {
 	syncPeer   *p2p.Peer
 	fetchList  []types.BlockID // blocks to fetch from peer
 	remainNum  int64
-	inflight   int         // blocks requested but not yet received in the current batch
+	inflight   int // blocks requested but not yet received in the current batch
+	pending    map[tcommon.Hash]uint64
 	lastFetch  time.Time   // when we last sent FETCH_INV_DATA (for outbound throttling)
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
@@ -377,6 +378,10 @@ func (ss *SyncService) fetchNextBatch() {
 	}
 	ss.fetchList = ss.fetchList[len(batch):]
 	ss.inflight = len(batch)
+	ss.pending = make(map[tcommon.Hash]uint64, len(batch))
+	for _, bid := range batch {
+		ss.pending[bid.Hash] = bid.Num
+	}
 	peer := ss.syncPeer
 	now := time.Now()
 	earliest := ss.lastFetch.Add(minFetchInterval)
@@ -415,6 +420,14 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.mu.Unlock()
 		return false
 	}
+	blockHash := block.Hash()
+	blockNum := block.Number()
+	expectedNum, ok := ss.pending[blockHash]
+	if !ok || expectedNum != blockNum {
+		ss.mu.Unlock()
+		return true
+	}
+	delete(ss.pending, blockHash)
 	// Bump seq so any in-flight timer callback short-circuits. We stop the
 	// armed timer below but the callback may already be running on another
 	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
@@ -477,6 +490,7 @@ func (ss *SyncService) doReset() {
 	ss.fetchList = nil
 	ss.remainNum = 0
 	ss.inflight = 0
+	ss.pending = nil
 	ss.fetchSeq++
 	if ss.fetchTimer != nil {
 		ss.fetchTimer.Stop()

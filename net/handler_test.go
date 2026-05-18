@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/tronprotocol/go-tron/params"
+	"google.golang.org/protobuf/proto"
 )
 
 func makeTestChain(t *testing.T) *core.BlockChain {
@@ -30,6 +31,29 @@ func makeTestChain(t *testing.T) *core.BlockChain {
 		t.Fatal(err)
 	}
 	return bc
+}
+
+func TestHandleBlockDropsBroadcastWhileSyncPaused(t *testing.T) {
+	bc := makeTestChain(t)
+	handler := NewTronHandler(bc, txpool.New(), nil)
+	syncSvc := NewSyncService(bc, handler)
+	handler.SetSyncService(syncSvc)
+
+	syncSvc.mu.Lock()
+	syncSvc.paused = true
+	syncSvc.mu.Unlock()
+
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	payload, err := proto.Marshal(block.Proto())
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+
+	handler.handleBlock(p2p.NewPeer(nil, "paused-peer", false, nil), payload)
+
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("paused sync should drop block broadcasts; head=%d, want 0", got)
+	}
 }
 
 func TestHandshakeSuccess(t *testing.T) {

@@ -58,20 +58,27 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	defer c2.Close()
 	peer := p2p.NewPeer(c1, "partial-peer", false, nil)
 
+	parent := bc.CurrentBlock().Hash()
+	first := stubBlock(1, parent)
+	second := stubBlock(2, first.Hash())
+
 	// Simulate: a batch of 2 blocks was requested. Set up the state the
 	// way fetchNextBatch would have left it.
 	ss.mu.Lock()
 	ss.syncing = true
 	ss.syncPeer = peer
 	ss.inflight = 2
+	ss.pending = map[tcommon.Hash]uint64{
+		first.Hash():  first.Number(),
+		second.Hash(): second.Number(),
+	}
 	ss.armFetchTimer()
 	ss.mu.Unlock()
 
 	// Peer delivers only block 1 of the batch and then goes silent. The
 	// HandleBlock path used to stop the timer without re-arming — leaving
 	// inflight=1 and no timer.
-	parent := bc.CurrentBlock().Hash()
-	consumed := ss.HandleBlock(peer, stubBlock(1, parent))
+	consumed := ss.HandleBlock(peer, first)
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}
@@ -93,6 +100,48 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if ss.IsSyncing() {
 		t.Fatal("sync should have aborted after fetch timeout on partial batch")
+	}
+}
+
+func TestUnrequestedSyncPeerBlockDoesNotPauseOrDrainBatch(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "unexpected-sync-peer", false, nil)
+
+	parent := bc.CurrentBlock().Hash()
+	requested := stubBlock(1, parent)
+	unrequested := stubBlock(99, tcommon.Hash{1, 2, 3})
+
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.syncPeer = peer
+	ss.inflight = 1
+	ss.pending = map[tcommon.Hash]uint64{requested.Hash(): requested.Number()}
+	ss.mu.Unlock()
+
+	consumed := ss.HandleBlock(peer, unrequested)
+	if !consumed {
+		t.Fatal("unexpected block from sync peer should be consumed and dropped")
+	}
+	if ss.IsPaused() {
+		t.Fatal("unrequested block should not trigger sticky pause")
+	}
+	if !ss.IsSyncing() {
+		t.Fatal("unrequested block should not reset active sync")
+	}
+	ss.mu.Lock()
+	inflight := ss.inflight
+	_, stillPending := ss.pending[requested.Hash()]
+	ss.mu.Unlock()
+	if inflight != 1 || !stillPending {
+		t.Fatalf("unrequested block drained requested batch: inflight=%d stillPending=%v", inflight, stillPending)
+	}
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("unrequested block was inserted, head=%d", got)
 	}
 }
 
@@ -276,16 +325,18 @@ func TestInsertFailurePausesSync(t *testing.T) {
 		}
 	}()
 
+	// Bogus block — wrong parent hash so InsertBlock fails (KhaosDB rejects
+	// unknown parent).
+	badBlock := stubBlock(99, tcommon.Hash{1, 2, 3})
+
 	ss.mu.Lock()
 	ss.syncing = true
 	ss.syncPeer = peer
 	ss.inflight = 1
 	ss.fetchList = nil
+	ss.pending = map[tcommon.Hash]uint64{badBlock.Hash(): badBlock.Number()}
 	ss.mu.Unlock()
 
-	// Bogus block — wrong parent hash so InsertBlock fails (KhaosDB rejects
-	// unknown parent).
-	badBlock := stubBlock(99, tcommon.Hash{1, 2, 3})
 	consumed := ss.HandleBlock(peer, badBlock)
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
