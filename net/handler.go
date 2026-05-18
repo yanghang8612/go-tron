@@ -343,6 +343,7 @@ func (h *TronHandler) handleProtocolMessage(peer *p2p.Peer, code byte, payload [
 	if ps != nil && ps.rl != nil && !ps.rl.Allow(code) {
 		log.Warn("Peer rate limited",
 			"peer", peer.ID(),
+			"msg", p2p.MsgName(code),
 			"code", fmt.Sprintf("0x%02x", code))
 		return
 	}

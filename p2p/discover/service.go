@@ -3,15 +3,17 @@ package discover
 import (
 	"crypto/rand"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"sync"
 	"time"
 
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	discoverpb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+var log = gtronlog.NewModule("p2p/discover")
 
 const (
 	discoverCycle   = 7200 * time.Millisecond // libp2p KademliaOptions.DISCOVER_CYCLE
@@ -124,7 +126,7 @@ func (s *Service) AddBootstrap(addrs []string) {
 		}
 		go func(ua *net.UDPAddr, ep *discoverpb.Endpoint) {
 			if err := s.sendPingAndTrack(ua, ep); err != nil {
-				log.Printf("discover: ping seed %s failed: %v", ua, err)
+				log.Debug("Seed ping failed", "addr", ua.String(), "err", err)
 			}
 		}(udpAddr, remoteEP)
 	}
@@ -155,7 +157,7 @@ func (s *Service) readLoop() {
 			case <-s.quit:
 				return
 			default:
-				log.Printf("discover: read error: %v", err)
+				log.Debug("Discover read error", "err", err)
 				continue
 			}
 		}
@@ -186,7 +188,7 @@ func (s *Service) handlePacket(data []byte, from *net.UDPAddr) {
 
 		// Reply with pong; echo the Version field (networkId) from the ping
 		if err := s.conn.SendPong(from, s.localEP, ping.Version); err != nil {
-			log.Printf("discover: pong failed: %v", err)
+			log.Debug("Pong send failed", "addr", from.String(), "err", err)
 		}
 		s.table.Add(sender)
 
@@ -344,7 +346,8 @@ func (s *Service) evictTimedOutPings() {
 
 	for _, p := range expired {
 		if n := s.table.RemoveByAddr(p.ip, p.port); n > 0 {
-			log.Printf("discover: evicted dead node %s:%d (no pong in %v)", p.ip, p.port, pingTimeout)
+			log.Debug("Evicted dead node",
+				"ip", p.ip.String(), "port", p.port, "timeout", pingTimeout)
 		}
 	}
 }

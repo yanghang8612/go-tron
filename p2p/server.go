@@ -3,7 +3,6 @@ package p2p
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -129,7 +128,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.listener = ln
-	log.Printf("P2P listening on %s", ln.Addr().String())
+	log.Info("P2P listening", "addr", ln.Addr().String())
 
 	s.wg.Add(2)
 	go s.acceptLoop()
@@ -146,7 +145,7 @@ func (s *Server) Start() error {
 		for _, addr := range s.config.SeedNodes {
 			go func(addr string) {
 				if err := s.AddPeer(addr); err != nil {
-					log.Printf("Failed to connect to seed %s: %v", addr, err)
+					log.Debug("Seed dial failed", "addr", addr, "err", err)
 				}
 			}(addr)
 		}
@@ -180,7 +179,7 @@ func (s *Server) Stop() error {
 	}
 
 	s.wg.Wait()
-	log.Println("P2P server stopped")
+	log.Info("P2P server stopped")
 	return nil
 }
 
@@ -298,13 +297,13 @@ func (s *Server) acceptLoop() {
 			case <-s.quit:
 				return
 			default:
-				log.Printf("P2P accept error: %v", err)
+				log.Warn("P2P accept error", "err", err)
 				continue
 			}
 		}
 		addr := conn.RemoteAddr().String()
 		if err := s.addPeerConn(conn, addr, true); err != nil {
-			log.Printf("Reject peer %s: %v", addr, err)
+			log.Debug("Peer rejected", "addr", addr, "err", err)
 			conn.Close()
 		}
 	}
@@ -430,7 +429,7 @@ func (s *Server) maintainPeers() {
 		}
 		go func(a string) {
 			if err := s.AddPeer(a); err != nil && !errors.Is(err, errDialThrottled) {
-				log.Printf("P2P: reconnect to seed %s: %v", a, err)
+				log.Debug("Seed reconnect failed", "addr", a, "err", err)
 			}
 		}(addr)
 	}

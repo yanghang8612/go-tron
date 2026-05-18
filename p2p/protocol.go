@@ -62,3 +62,49 @@ type Handler interface {
 	OnPeerDisconnected(p *Peer)
 	OnMessage(p *Peer, code byte, payload []byte)
 }
+
+// MsgName returns the protocol-message name for a 1-byte type code. Falls back
+// to an empty string for unknown codes; callers should include the raw byte
+// separately.
+func MsgName(code byte) string {
+	switch code {
+	case MsgTx:
+		return "TX"
+	case MsgBlock:
+		return "BLOCK"
+	case MsgTrxs:
+		return "TRXS"
+	case MsgInventory:
+		return "INVENTORY"
+	case MsgFetchInvData:
+		return "FETCH_INV_DATA"
+	case MsgSyncBlockChain:
+		return "SYNC_BLOCK_CHAIN"
+	case MsgChainInventory:
+		return "CHAIN_INVENTORY"
+	case MsgHello:
+		return "HELLO"
+	case MsgDisconnect:
+		return "DISCONNECT"
+	case MsgPing:
+		return "PING"
+	case MsgPong:
+		return "PONG"
+	case MsgPbftCommitMsg:
+		return "PBFT_COMMIT_MSG"
+	case MsgPbftMsg:
+		return "PBFT_MSG"
+	case MsgLibp2pHello:
+		return "P2P_HELLO"
+	case MsgLibp2pStatus:
+		return "P2P_STATUS"
+	case MsgLibp2pDisconnect:
+		return "P2P_DISCONNECT"
+	case MsgLibp2pKeepAlivePing:
+		return "P2P_KEEPALIVE_PING"
+	case MsgLibp2pKeepAlivePong:
+		return "P2P_KEEPALIVE_PONG"
+	default:
+		return ""
+	}
+}
