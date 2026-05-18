@@ -143,13 +143,11 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
 		applyRewardVI(buildBuf, statedb, dynProps)
-		hasPendingVotes := applyPendingVotes(buildBuf, statedb)
+		applyPendingVotes(buildBuf, statedb)
 		allWitnesses = bc.gatherWitnessVotes(statedb)
-		if hasPendingVotes {
-			sorted := dpos.SortWitnessesByVotes(allWitnesses)
-			if !dynProps.ChangeDelegation() {
-				dpos.DistributeLegacyStandby(adapter, sorted)
-			}
+		sorted := dpos.SortWitnessesByVotes(allWitnesses)
+		if !dynProps.ChangeDelegation() {
+			dpos.DistributeLegacyStandby(adapter, sorted)
 		}
 		// Writes go through buildBuf (throwaway); applyBlock's maintenance
 		// path is the canonical writer.

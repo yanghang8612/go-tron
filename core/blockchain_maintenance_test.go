@@ -9,7 +9,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
-	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance is the
@@ -84,18 +83,6 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteVotes(diskdb, witnessAddr(0), &corepb.Votes{
-		Address: witnessAddr(0).Bytes(),
-		OldVotes: []*corepb.Vote{
-			{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1},
-		},
-		NewVotes: []*corepb.Vote{
-			{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	// Seed the persisted active set to [0..25] ∪ {27} — witness #27 occupies
 	// the slot that the vote ranking assigns to witness #26. NewBlockChain
 	// honours a non-empty persisted active set verbatim (it only derives the

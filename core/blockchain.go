@@ -501,22 +501,22 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
 			applyRewardVI(bc.buffer, statedb, dynProps)
-			hasPendingVotes := applyPendingVotes(bc.buffer, statedb)
+			applyPendingVotes(bc.buffer, statedb)
 			statedb.FlushWitnesses(bc.buffer)
 			allWitnesses = bc.gatherWitnessVotes(statedb)
-			if hasPendingVotes {
-				sorted := dpos.SortWitnessesByVotes(allWitnesses)
-				if !dynProps.ChangeDelegation() {
-					dpos.DistributeLegacyStandby(adapter, sorted)
-				}
-				newActive := dpos.SelectActiveWitnesses(allWitnesses)
-				// java-tron MaintenanceManager flips is_jobs after reward
-				// distribution, before the active set is swapped — bc.ActiveWitnesses()
-				// still holds the outgoing set here.
-				flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
-				bc.SetActiveWitnesses(newActive)
-				maintNewWitnesses = newActive
+
+			sorted := dpos.SortWitnessesByVotes(allWitnesses)
+			if !dynProps.ChangeDelegation() {
+				dpos.DistributeLegacyStandby(adapter, sorted)
 			}
+			newActive := dpos.SelectActiveWitnesses(allWitnesses)
+			// java-tron MaintenanceManager flips is_jobs after reward
+			// distribution, before the active set is swapped — bc.ActiveWitnesses()
+			// still holds the outgoing set here.
+			flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
+			bc.SetActiveWitnesses(newActive)
+			maintNewWitnesses = newActive
+
 			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
 			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 			dynProps.SetNextMaintenanceTime(nextMaint)
