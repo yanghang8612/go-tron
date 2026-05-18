@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -17,9 +18,9 @@ import (
 // they need writeLoop to actually flush frames to the pipe.
 type nopHandler struct{}
 
-func (nopHandler) OnPeerConnected(*p2p.Peer)            {}
-func (nopHandler) OnPeerDisconnected(*p2p.Peer)         {}
-func (nopHandler) OnMessage(*p2p.Peer, byte, []byte)    {}
+func (nopHandler) OnPeerConnected(*p2p.Peer)         {}
+func (nopHandler) OnPeerDisconnected(*p2p.Peer)      {}
+func (nopHandler) OnMessage(*p2p.Peer, byte, []byte) {}
 
 // stubBlock builds a minimal block at the given number/parent. The block
 // won't actually insert (parent hash won't match a real chain head) — the
@@ -182,6 +183,58 @@ func TestChainInventorySkipsKhaosDBOrphans(t *testing.T) {
 			nums = append(nums, b.Num)
 		}
 		t.Fatalf("orphans leaked into fetchList after HandleChainInventory: %v (would trigger BAD_PROTOCOL on next FETCH_INV_DATA)", nums)
+	}
+}
+
+func TestChainInventoryFetchesStaleFutureDiskBlocks(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+	defer ss.Stop()
+
+	stale := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteBlock(bc.DB(), stale); err != nil {
+		t.Fatalf("write stale block body: %v", err)
+	}
+	if got := bc.GetBlockByNumber(1); got != nil {
+		t.Fatal("stale block body above current head should not be canonical")
+	}
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "stale-future-peer", false, nopHandler{})
+	peer.Start()
+	defer peer.Stop()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := c2.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.syncPeer = peer
+	ss.mu.Unlock()
+
+	payload, err := proto.Marshal(&corepb.ChainInventory{
+		Ids: []*corepb.ChainInventory_BlockId{{
+			Hash:   stale.Hash().Bytes(),
+			Number: int64(stale.Number()),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal inv: %v", err)
+	}
+
+	ss.HandleChainInventory(peer, payload)
+
+	ss.mu.Lock()
+	inflight := ss.inflight
+	ss.mu.Unlock()
+	if inflight != 1 {
+		t.Fatalf("stale future disk block was not requested: inflight=%d, want 1", inflight)
 	}
 }
 

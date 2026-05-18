@@ -1186,8 +1186,8 @@ func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 // TestGracefulShutdown_DropsLayersAboveSolidified exercises the harder
 // branch of slice-3 sub-task C: when applyBlock leaves layers above the
 // solidified line in memory, Close must flush only up to solidified and
-// drop the higher layers. After restart, the disk-side image reflects
-// the solidified-line state — NOT the unflushed in-memory state.
+// drop the higher layers. After restart, the canonical head reflects the
+// solidified-line state — NOT the unflushed in-memory state.
 //
 // 3 active witnesses (where only one produces) keeps solidified at 0
 // across every applyBlock — same configuration as the slice-2 reorg test.
@@ -1251,25 +1251,91 @@ func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
 	}
 
 	// Restart: disk-side state reflects ZERO post-applyBlock counters,
-	// because none of the 5 layers were flushed. This documents the
-	// trade-off: clean shutdown above solidified loses the post-block
-	// counters. Recovery: re-sync the missing range from peers.
+	// because none of the 5 layers were flushed. The persisted head also
+	// stays at the flushed state so sync refetches and re-applies the
+	// missing range from peers.
 	sdb2 := state.NewDatabase(diskdb)
 	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	// Block bodies are persisted in applyBlock (rawdb.WriteBlock is direct,
-	// not through the buffer), so head still advances. This is consistent
-	// with java-tron, where Manager.pushBlock writes the block before the
-	// session-tracked DP/witness mutations.
-	if got := bc2.CurrentBlock().Number(); got != 5 {
-		t.Fatalf("restart: head = %d, want 5", got)
+	if got := bc2.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("restart: head = %d, want 0", got)
+	}
+	if got := bc2.GetBlockByNumber(5); got != nil {
+		t.Fatal("stale block body above recovered head should not be returned as canonical")
 	}
 	// Witness counter NOT on disk — was only ever in the dropped buffer.
 	w := rawdb.ReadWitness(diskdb, witnessAddr)
 	if w != nil && w.TotalProduced() != 0 {
 		t.Fatalf("disk-side TotalProduced = %d, want 0 "+
 			"(layers above solidified were dropped on Close)", w.TotalProduced())
+	}
+}
+
+func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var block5 *types.Block
+	for i := 1; i <= 5; i++ {
+		b := buildTestBlock(bc, witnessAddr, int64(i)*3000)
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+		if i == 5 {
+			block5 = b
+		}
+	}
+	if err := bc.flushBufferUpToSolidified(2); err != nil {
+		t.Fatalf("flush up to 2: %v", err)
+	}
+	if got := state.LoadDynamicProperties(diskdb).LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("disk latest_block_header_number = %d, want 2", got)
+	}
+
+	// Simulate a database produced by the old direct-head write path: the
+	// block body and LastBlock point past the latest flushed DP state.
+	rawdb.WriteHeadBlockHash(diskdb, block5.Hash())
+
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("restart recovered head = %d, want 2", got)
+	}
+	headHash := rawdb.ReadHeadBlockHash(diskdb)
+	headNum := rawdb.ReadBlockNumber(diskdb, headHash)
+	if headNum == nil || *headNum != 2 {
+		t.Fatalf("disk LastBlock not repaired: num=%v hash=%x", headNum, headHash)
+	}
+	if got := bc2.GetBlockByNumber(5); got != nil {
+		t.Fatal("stale block body above recovered head should not be returned as canonical")
 	}
 }

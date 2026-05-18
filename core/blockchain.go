@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -117,23 +118,9 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 		})
 	}
 
-	// Load head block
-	headHash := rawdb.ReadHeadBlockHash(db)
-	if headHash == (tcommon.Hash{}) {
-		bc.currentBlock.Store(bc.genesisBlock)
-	} else {
-		num := rawdb.ReadBlockNumber(db, headHash)
-		if num == nil {
-			bc.currentBlock.Store(bc.genesisBlock)
-		} else {
-			block := rawdb.ReadBlock(db, *num)
-			if block == nil {
-				bc.currentBlock.Store(bc.genesisBlock)
-			} else {
-				bc.currentBlock.Store(block)
-			}
-		}
-	}
+	head := loadStoredHeadBlock(db, bc.genesisBlock)
+	head = recoverHeadToAppliedState(db, head, bc.genesisBlock)
+	bc.currentBlock.Store(head)
 
 	// Initialize KhaosDB with the current head.
 	bc.khaosDB = NewKhaosDB()
@@ -165,6 +152,49 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	return bc, nil
 }
 
+func loadStoredHeadBlock(db ethdb.KeyValueReader, genesis *types.Block) *types.Block {
+	headHash := rawdb.ReadHeadBlockHash(db)
+	if headHash == (tcommon.Hash{}) {
+		return genesis
+	}
+	num := rawdb.ReadBlockNumber(db, headHash)
+	if num == nil {
+		return genesis
+	}
+	block := rawdb.ReadBlock(db, *num)
+	if block == nil {
+		return genesis
+	}
+	return block
+}
+
+func recoverHeadToAppliedState(db ethdb.KeyValueStore, head, genesis *types.Block) *types.Block {
+	if head == nil {
+		return genesis
+	}
+	dynProps := state.LoadDynamicProperties(db)
+	appliedNum := dynProps.LatestBlockHeaderNumber()
+	if appliedNum < 0 || uint64(appliedNum) >= head.Number() {
+		return head
+	}
+
+	recovered := rawdb.ReadBlock(db, uint64(appliedNum))
+	if recovered == nil {
+		log.Printf("BlockChain startup: disk head #%d is ahead of applied state #%d, but recovery block is missing; keeping disk head",
+			head.Number(), appliedNum)
+		return head
+	}
+	if appliedHash := dynProps.LatestBlockHeaderHash(); appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
+		log.Printf("BlockChain startup: disk head #%d is ahead of applied state #%d, but recovery hash mismatches (dp=%x block=%x); keeping disk head",
+			head.Number(), appliedNum, appliedHash, recovered.Hash())
+		return head
+	}
+
+	rawdb.WriteHeadBlockHash(db, recovered.Hash())
+	log.Printf("BlockChain startup: recovered head from #%d to applied state #%d", head.Number(), recovered.Number())
+	return recovered
+}
+
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
@@ -172,6 +202,9 @@ func (bc *BlockChain) CurrentBlock() *types.Block {
 
 // GetBlockByNumber retrieves a block by its number.
 func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
+	if current := bc.CurrentBlock(); current != nil && number > current.Number() {
+		return nil
+	}
 	return rawdb.ReadBlock(bc.db, number)
 }
 
@@ -179,6 +212,9 @@ func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	num := rawdb.ReadBlockNumber(bc.db, hash)
 	if num == nil {
+		return nil
+	}
+	if current := bc.CurrentBlock(); current != nil && *num > current.Number() {
 		return nil
 	}
 	return rawdb.ReadBlock(bc.db, *num)
@@ -548,7 +584,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
 		return fmt.Errorf("write block: %w", err)
 	}
-	rawdb.WriteHeadBlockHash(bc.db, block.Hash())
+	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
 	// Record this block in the TAPOS recent-block ring so future txs can
 	// reference it. java-tron's Manager.updateRecentBlock runs unconditionally

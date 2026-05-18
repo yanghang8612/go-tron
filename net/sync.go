@@ -160,7 +160,11 @@ func (ss *SyncService) BuildChainSummary() []types.BlockID {
 
 // FindCommonBlock finds the highest block in peerSummary that exists in our chain.
 func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
+	headNum := ss.chain.CurrentBlock().Number()
 	for _, bid := range peerSummary {
+		if bid.Number() > headNum {
+			continue
+		}
 		block := ss.chain.GetBlockByNumber(bid.Number())
 		if block != nil && block.ID().Hash == bid.Hash {
 			return bid.Number()
@@ -282,11 +286,14 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	//      stretch in topological order, so refetching is never needed.
 	ss.mu.Lock()
 	ss.fetchList = ss.fetchList[:0]
+	headNum := ss.chain.CurrentBlock().Number()
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
 		hash := tcommon.BytesToHash(bid.Hash)
-		if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
-			continue
+		if num <= headNum {
+			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
+				continue
+			}
 		}
 		if ss.chain.HasBlockInKhaosDB(hash) {
 			continue
