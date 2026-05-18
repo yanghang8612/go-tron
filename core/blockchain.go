@@ -3,14 +3,15 @@ package core
 import (
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
@@ -22,11 +23,37 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+var log = gtronlog.NewModule("core/chain")
+
 var (
 	ErrKnownBlock    = errors.New("block already known")
 	ErrInvalidParent = errors.New("parent block not found")
 	ErrInvalidNumber = errors.New("invalid block number")
 )
+
+// applyStats accumulates per-phase wall-clock time inside applyBlock.
+// Each phase's duration is captured by calling mark(&stats.<phase>) at the
+// phase boundary; the previous-mark cursor is updated in place.
+type applyStats struct {
+	last        time.Time
+	validate    time.Duration
+	execute     time.Duration
+	maintenance time.Duration
+	commit      time.Duration
+	dpUpdate    time.Duration
+	persist     time.Duration
+	hooks       time.Duration
+}
+
+// mark accumulates the elapsed time since the previous mark into *phase and
+// advances the cursor. Accumulation (rather than assignment) lets a phase be
+// split across non-contiguous code blocks — e.g. persist runs both before
+// and after the hook callbacks.
+func (s *applyStats) mark(phase *time.Duration) {
+	now := time.Now()
+	*phase += now.Sub(s.last)
+	s.last = now
+}
 
 // BlockChain manages the canonical chain and provides block insertion.
 type BlockChain struct {
@@ -181,18 +208,20 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, head, genesis *types.Bloc
 
 	recovered := rawdb.ReadBlock(db, uint64(appliedNum))
 	if recovered == nil {
-		log.Printf("BlockChain startup: disk head #%d is ahead of applied state #%d, but recovery block is missing; keeping disk head",
-			head.Number(), appliedNum)
+		log.Warn("Head recovery: block missing, keeping disk head",
+			"diskHead", head.Number(), "appliedState", appliedNum)
 		return head
 	}
 	if appliedHash := dynProps.LatestBlockHeaderHash(); appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
-		log.Printf("BlockChain startup: disk head #%d is ahead of applied state #%d, but recovery hash mismatches (dp=%x block=%x); keeping disk head",
-			head.Number(), appliedNum, appliedHash, recovered.Hash())
+		log.Warn("Head recovery: hash mismatch, keeping disk head",
+			"diskHead", head.Number(), "appliedState", appliedNum,
+			"dpHash", appliedHash, "blockHash", recovered.Hash())
 		return head
 	}
 
 	rawdb.WriteHeadBlockHash(db, recovered.Hash())
-	log.Printf("BlockChain startup: recovered head from #%d to applied state #%d", head.Number(), recovered.Number())
+	log.Info("Head recovered to applied state",
+		"from", head.Number(), "to", recovered.Number())
 	return recovered
 }
 
@@ -326,6 +355,33 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	current := bc.CurrentBlock()
 
+	stats := applyStats{last: time.Now()}
+	applyStart := stats.last
+	defer func() {
+		if retErr != nil {
+			return
+		}
+		total := time.Since(applyStart)
+		log.Trace("Block applied",
+			"number", block.Number(),
+			"hash", block.Hash(),
+			"txs", len(block.Transactions()),
+			"validate", ethcommon.PrettyDuration(stats.validate),
+			"execute", ethcommon.PrettyDuration(stats.execute),
+			"maintenance", ethcommon.PrettyDuration(stats.maintenance),
+			"commit", ethcommon.PrettyDuration(stats.commit),
+			"dpUpdate", ethcommon.PrettyDuration(stats.dpUpdate),
+			"persist", ethcommon.PrettyDuration(stats.persist),
+			"hooks", ethcommon.PrettyDuration(stats.hooks),
+			"total", ethcommon.PrettyDuration(total),
+		)
+		log.Debug("Block applied",
+			"number", block.Number(),
+			"txs", len(block.Transactions()),
+			"elapsed", ethcommon.PrettyDuration(total),
+		)
+	}()
+
 	// Header verification (signature recovery, scheduled-witness match, and
 	// post-fork timestamp alignment) runs here rather than at the top of
 	// InsertBlock because:
@@ -344,6 +400,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			return err
 		}
 	}
+	stats.mark(&stats.validate)
 
 	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
 	// writes (slice 1: witness statistics only) so that switchFork can drop
@@ -452,6 +509,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
 	dpos.ApplyBlockStatistics(bc.buffer, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
+	stats.mark(&stats.execute)
 
 	// Run maintenance if at boundary (before commit so allowances are included).
 	wasMaintenanceBlock := false
@@ -540,6 +598,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	} else {
 		dynProps.SetStateFlag(0)
 	}
+	stats.mark(&stats.maintenance)
 
 	// Verify state root if the block carries one (java-tron sets this on
 	// post-fork blocks via the AccountStateCallBack hook) before committing
@@ -560,6 +619,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
 	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
+	stats.mark(&stats.commit)
 
 	// Update dynamic properties.
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
@@ -584,6 +644,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// transactions have already been validated against the previous fork
 	// bitmap, while the next block observes this producer's version vote.
 	bc.updateFork(block)
+	stats.mark(&stats.dpUpdate)
 
 	// Persist block.
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
@@ -627,6 +688,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
 	}
+	stats.mark(&stats.persist)
 
 	// Fire maintenance hooks first so the SRL PBFT message goes out before
 	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
@@ -648,6 +710,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	for _, h := range hooks {
 		h(block)
 	}
+	stats.mark(&stats.hooks)
 
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
@@ -660,6 +723,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
 		return fmt.Errorf("flush buffer up to solidified: %w", err)
 	}
+	stats.mark(&stats.persist)
 	return nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"fmt"
-	"log"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
@@ -99,7 +98,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
 		if err != nil {
 			h := tx.Hash()
-			log.Printf("BuildBlock: skipping tx %x: %v", h[:8], err)
+			log.Debug("Skipping tx in build", "tx", fmt.Sprintf("%x", h[:8]), "err", err)
 			failedTxIDs = append(failedTxIDs, h)
 			continue // skip failing transactions
 		}
