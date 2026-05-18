@@ -26,6 +26,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	blocksPath := flag.String("blocks", "", "path to blocks.bin (varint-prefixed Block protos)")
 	extrasFlag := flag.String("standby-witnesses", "", "comma-separated 41-hex addresses to merge into the closure; pass the top-127 witness set at StartBlock-1 when change_delegation is active on mainnet")
 	flag.Parse()

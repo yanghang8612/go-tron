@@ -137,6 +137,20 @@ const (
 	LevelCrit  = gethlog.LevelCrit
 )
 
+// SetupCLI installs a sensible default logger for standalone CLI utilities
+// that don't expose a --verbosity flag: terminal output on stderr at Info
+// level. Must be called from main() before any log emission, otherwise the
+// geth default (DiscardHandler) drops every record — including Crit, whose
+// os.Exit(1) would then leave the user with no diagnostic.
+//
+// Tests should NOT call this. They install their own handler via SetDefault
+// when they need to capture records.
+func SetupCLI() {
+	// Cannot fail with these arguments — Setup only errors on bad verbosity,
+	// unknown format, or unopenable file.
+	_ = Setup(3, "terminal", "")
+}
+
 // Setup configures the global root logger. Safe to call multiple times (each
 // call replaces the previous handler).
 //

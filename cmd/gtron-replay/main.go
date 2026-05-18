@@ -21,6 +21,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	rangeDir := flag.String("range", "", "path to test/fixtures/mainnet-blocks/<name>")
 	exitGate := flag.Bool("exit-gate", false, "fail if allowlist has hits or stale entries")
 	verbose := flag.Bool("verbose", false, "print C-digest diffs on failure")

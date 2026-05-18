@@ -28,6 +28,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	datadir := flag.String("datadir", "/tmp/gtron-mainnet-test", "gtron datadir (contains gtron/chaindata)")
 	addrHex := flag.String("addr", "", "41-hex address to trace (e.g. 41061e3f4e108d8aaf5cd75b499f811ae30ed04b77)")
 	from := flag.Uint64("from", 0, "start block number")

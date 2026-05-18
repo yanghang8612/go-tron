@@ -23,6 +23,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	flag.Parse()
 
 	dir := filepath.Join("test", "fixtures", "mainnet-blocks", "smoke")

@@ -29,6 +29,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	input := flag.String("input", "", "snapshot JSON path; default stdin")
 	mode := flag.String("mode", "B", "B = DigestB only; BC = DigestB + DigestC")
 	flag.Parse()

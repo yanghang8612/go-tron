@@ -29,6 +29,7 @@ import (
 )
 
 func main() {
+	log.SetupCLI()
 	httpURL := flag.String("http", "", "java-tron HTTP base URL, e.g. http://1.2.3.4:8088")
 	socks5 := flag.String("socks5", "", "optional SOCKS5 proxy host:port (e.g. 127.0.0.1:1088)")
 	rangeName := flag.String("range", "", "range name, e.g. range-maintenance")
