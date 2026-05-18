@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,10 +18,10 @@ import (
 	"syscall"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/conformance"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func run(cfg captureConfig) error {
@@ -40,7 +39,9 @@ func run(cfg captureConfig) error {
 		return fmt.Errorf("probe head: %w", err)
 	}
 	head := uint64(nowBlk.BlockHeader.RawData.Number)
-	log.Printf("current head=%d witness=%x", head, nowBlk.BlockHeader.RawData.WitnessAddress)
+	log.Info("Current head",
+		"head", head,
+		"witness", fmt.Sprintf("%x", nowBlk.BlockHeader.RawData.WitnessAddress))
 
 	var start uint64
 	if cfg.startExplicit > 0 {
@@ -49,14 +50,16 @@ func run(cfg captureConfig) error {
 		start = head + uint64(cfg.startAutoBuffer)
 	}
 	end := start + uint64(cfg.count) - 1
-	log.Printf("range %s: capturing [%d..%d] (%d blocks); seed at %d", cfg.rangeName, start, end, cfg.count, start-1)
+	log.Info("Capturing range",
+		"range", cfg.rangeName, "start", start, "end", end,
+		"count", cfg.count, "seed", start-1)
 
 	// 2. Resolve closure (active or full-candidate set).
 	closure, err := resolveClosure(ctx, cli, cfg)
 	if err != nil {
 		return fmt.Errorf("closure: %w", err)
 	}
-	log.Printf("closure size: %d address(es)", len(closure))
+	log.Info("Closure resolved", "size", len(closure))
 
 	rangeDir := filepath.Join(cfg.outRoot, cfg.rangeName)
 	if err := os.MkdirAll(rangeDir, 0o755); err != nil {
@@ -70,7 +73,7 @@ func run(cfg captureConfig) error {
 	// 1529891469000; provide via --genesis-time-override when needed.
 	genesisTime, err := readGenesisTime(ctx, cli)
 	if err != nil {
-		log.Printf("WARN: genesis time unavailable (%v); defaulting to 0 (mainnet)", err)
+		log.Warn("Genesis time unavailable, defaulting to mainnet (0)", "err", err)
 		genesisTime = 0
 	}
 
@@ -78,7 +81,7 @@ func run(cfg captureConfig) error {
 	if err := waitForHead(ctx, cli, start-1); err != nil {
 		return fmt.Errorf("wait for head=%d: %w", start-1, err)
 	}
-	log.Printf("head reached start-1 (%d), capturing seed", start-1)
+	log.Info("Head reached start-1, capturing seed", "head", start-1)
 	seed, activeWitnessesAtStart, err := captureSeed(ctx, cli, start, closure, cfg.parallel)
 	if err != nil {
 		return fmt.Errorf("captureSeed: %w", err)
@@ -110,7 +113,7 @@ func run(cfg captureConfig) error {
 		if err := waitForHead(ctx, cli, h); err != nil {
 			return fmt.Errorf("wait for h=%d: %w", h, err)
 		}
-		log.Printf("h=%d reached", h)
+		log.Info("Height reached", "h", h)
 
 		block, err := cli.getBlockByNum(ctx, h)
 		if err != nil {
@@ -136,7 +139,8 @@ func run(cfg captureConfig) error {
 		if err == nil {
 			postHead := uint64(nowBlk.BlockHeader.RawData.Number)
 			if postHead > h+1 {
-				log.Printf("WARN: head jumped past h+1 during h=%d snapshot (post=%d); state may be inconsistent", h, postHead)
+				log.Warn("Head jumped past h+1 during snapshot; state may be inconsistent",
+					"h", h, "postHead", postHead)
 			}
 		}
 
@@ -176,7 +180,7 @@ func run(cfg captureConfig) error {
 	if err := writeJSONFile(filepath.Join(rangeDir, "divergence-allowlist.json"), []conformance.AllowlistEntry{}); err != nil {
 		return fmt.Errorf("write divergence-allowlist.json: %w", err)
 	}
-	log.Printf("range %s captured: %s/", cfg.rangeName, rangeDir)
+	log.Info("Range captured", "range", cfg.rangeName, "dir", rangeDir)
 	return nil
 }
 
@@ -201,7 +205,7 @@ func waitForHead(ctx context.Context, cli *httpClient, target uint64) error {
 			}
 			// Log every ~6s while waiting.
 			if time.Now().Unix()%6 == 0 {
-				log.Printf("waiting head=%d → target=%d (Δ=%d)", h, target, target-h)
+				log.Info("Waiting for head", "head", h, "target", target, "delta", target-h)
 			}
 		}
 		select {

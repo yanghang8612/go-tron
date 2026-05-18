@@ -13,10 +13,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/conformance"
 )
 
@@ -54,7 +54,7 @@ func main() {
 
 	rep, err := conformance.ReplayRange(context.Background(), cfg)
 	if err != nil {
-		log.Printf("replay error: %v", err)
+		log.Error("Replay error", "err", err)
 		os.Exit(3)
 	}
 

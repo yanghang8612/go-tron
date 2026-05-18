@@ -4,15 +4,17 @@ import (
 	"container/list"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/types"
 )
+
+var log = gtronlog.NewModule("consensus/dpos")
 
 // witnessHexKey formats a witness address as lowercase hex without "0x"
 // prefix. Mirrors java-tron `ByteArray.toHexString(witnessAddress)` used as
@@ -197,8 +199,12 @@ func (d *CheatDetector) recordCheatLocked(witness common.Address, num uint64, pr
 	// Use witness[:] / hash[:] to format the underlying bytes; common.Address
 	// and common.Hash both implement Stringer that returns hex, which would
 	// then be hex-encoded again by %x.
-	log.Printf("witness cheat detected: addr=%x num=%d prev=%x new=%x times=%d",
-		witness[:], num, prevHash[:], newHash[:], info.Times)
+	log.Warn("Witness cheat detected",
+		"witness", fmt.Sprintf("%x", witness[:]),
+		"number", num,
+		"prevHash", fmt.Sprintf("%x", prevHash[:]),
+		"newHash", fmt.Sprintf("%x", newHash[:]),
+		"times", info.Times)
 }
 
 // putHistoryLocked inserts a new history entry, evicting the oldest insertion

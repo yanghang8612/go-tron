@@ -14,17 +14,16 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
-
-	tcommon "github.com/tronprotocol/go-tron/common"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,31 +34,31 @@ func main() {
 	to := flag.Uint64("to", 0, "end block number (0=head)")
 	flag.Parse()
 	if *addrHex == "" {
-		log.Fatalf("--addr is required")
+		log.Crit("--addr is required")
 	}
 	addrBytes, err := hex.DecodeString(*addrHex)
 	if err != nil || len(addrBytes) != 21 {
-		log.Fatalf("--addr must be 21-byte 41-prefixed hex")
+		log.Crit("--addr must be 21-byte 41-prefixed hex")
 	}
 	target := tcommon.BytesToAddress(addrBytes)
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
 	if _, err := os.Stat(dbPath); err != nil {
-		log.Fatalf("datadir %s: %v", dbPath, err)
+		log.Crit("datadir not accessible", "path", dbPath, "err", err)
 	}
 	db, err := rawdb.NewPebbleDB(dbPath, 256, 500)
 	if err != nil {
-		log.Fatalf("open pebble: %v", err)
+		log.Crit("open pebble", "err", err)
 	}
 	defer db.Close()
 
 	headHash := rawdb.ReadHeadBlockHash(db)
 	if headHash == (tcommon.Hash{}) {
-		log.Fatalf("no head block in %s", dbPath)
+		log.Crit("no head block", "path", dbPath)
 	}
 	headNum := rawdb.ReadBlockNumber(db, headHash)
 	if headNum == nil {
-		log.Fatalf("head block hash %x has no number entry", headHash[:])
+		log.Crit("head block has no number entry", "hash", fmt.Sprintf("%x", headHash[:]))
 	}
 	end := *to
 	if end == 0 || end > *headNum {
@@ -98,7 +97,7 @@ func main() {
 	stateDB := state.NewDatabase(rawdb.WrapKeyValueStore(db))
 	statedb, err := state.New(headRoot, stateDB)
 	if err != nil {
-		log.Fatalf("open statedb at root %x: %v", headRoot[:], err)
+		log.Crit("open statedb", "root", fmt.Sprintf("%x", headRoot[:]), "err", err)
 	}
 	if !statedb.AccountExists(target) {
 		fmt.Printf("account %x DOES NOT EXIST in our state\n", target.Bytes())

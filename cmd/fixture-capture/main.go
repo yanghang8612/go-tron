@@ -23,13 +23,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
+
+	"github.com/tronprotocol/go-tron/common/log"
 )
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-
 	httpURL := flag.String("http", "", "java-tron HTTP base URL, e.g. http://1.2.3.4:8088")
 	socks5 := flag.String("socks5", "", "optional SOCKS5 proxy host:port (e.g. 127.0.0.1:1088)")
 	rangeName := flag.String("range", "", "range name, e.g. range-maintenance")
@@ -62,7 +61,7 @@ func main() {
 		outRoot:           *out,
 		parallel:          *parallel,
 	}); err != nil {
-		log.Fatalf("capture failed: %v", err)
+		log.Crit("capture failed", "err", err)
 	}
 }
 

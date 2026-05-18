@@ -3,10 +3,10 @@ package grpcapi
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 
 	"github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
@@ -17,6 +17,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+var log = gtronlog.NewModule("grpcapi")
 
 // Server implements the gRPC Wallet service as a thin adapter over tronapi.Backend.
 // Unimplemented methods return codes.Unimplemented via the embedded stub.
@@ -44,10 +46,10 @@ func (s *Server) Start() error {
 	apipb.RegisterWalletSolidityServer(s.grpc, NewSolidityServer(s.backend))
 	go func() {
 		if err := s.grpc.Serve(ln); err != nil {
-			log.Printf("gRPC server stopped: %v", err)
+			log.Warn("gRPC server stopped", "err", err)
 		}
 	}()
-	log.Printf("gRPC listening on %s", s.addr)
+	log.Info("gRPC listening", "addr", s.addr)
 	return nil
 }
 

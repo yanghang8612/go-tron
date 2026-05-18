@@ -22,14 +22,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/conformance"
 )
 
 func main() {
-	log.SetFlags(0)
 	input := flag.String("input", "", "snapshot JSON path; default stdin")
 	mode := flag.String("mode", "B", "B = DigestB only; BC = DigestB + DigestC")
 	flag.Parse()
@@ -43,7 +42,7 @@ func main() {
 	if *input != "" {
 		f, err := os.Open(*input)
 		if err != nil {
-			log.Fatalf("open %s: %v", *input, err)
+			log.Crit("open input", "path", *input, "err", err)
 		}
 		defer f.Close()
 		r = f
@@ -51,7 +50,7 @@ func main() {
 
 	loaded, snap, err := conformance.LoadSnapshot(r)
 	if err != nil {
-		log.Fatalf("load snapshot: %v", err)
+		log.Crit("load snapshot", "err", err)
 	}
 
 	d := conformance.DigestB(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps)

@@ -16,27 +16,26 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/conformance"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
 func main() {
-	log.SetFlags(0)
 	blocksPath := flag.String("blocks", "", "path to blocks.bin (varint-prefixed Block protos)")
 	extrasFlag := flag.String("standby-witnesses", "", "comma-separated 41-hex addresses to merge into the closure; pass the top-127 witness set at StartBlock-1 when change_delegation is active on mainnet")
 	flag.Parse()
 	if *blocksPath == "" {
-		log.Fatal("--blocks is required")
+		log.Crit("--blocks is required")
 	}
 
 	blocks, err := readAllBlocks(*blocksPath)
 	if err != nil {
-		log.Fatalf("read blocks: %v", err)
+		log.Crit("read blocks", "err", err)
 	}
 
 	var extras []tcommon.Address
@@ -48,7 +47,7 @@ func main() {
 			}
 			a, err := conformance.ParseAddress(h)
 			if err != nil {
-				log.Fatalf("standby-witnesses %q: %v", h, err)
+				log.Crit("standby-witnesses parse failed", "addr", h, "err", err)
 			}
 			extras = append(extras, a)
 		}
@@ -56,7 +55,7 @@ func main() {
 
 	addrs, unhandled, err := conformance.ComputeClosure(blocks, extras)
 	if err != nil {
-		log.Fatalf("compute closure: %v", err)
+		log.Crit("compute closure", "err", err)
 	}
 
 	hexes := make([]string, 0, len(addrs))

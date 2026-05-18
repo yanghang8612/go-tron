@@ -14,16 +14,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/conformance"
 )
 
 func main() {
-	log.SetFlags(0)
 	flag.Parse()
 
 	dir := filepath.Join("test", "fixtures", "mainnet-blocks", "smoke")
@@ -33,7 +32,7 @@ func main() {
 
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		log.Fatalf("abs %s: %v", dir, err)
+		log.Crit("abs path", "dir", dir, "err", err)
 	}
 
 	params := conformance.SyntheticRangeParams{
@@ -47,13 +46,13 @@ func main() {
 		CapturedAt: "2026-04-17T00:00:00Z",
 	}
 	if err := conformance.BuildSyntheticRange(params); err != nil {
-		log.Fatalf("build synthetic range: %v", err)
+		log.Crit("build synthetic range", "err", err)
 	}
 	fmt.Printf("smoke corpus written: %s\n", absDir)
 	// Sanity: files exist.
 	for _, f := range []string{"seed.json", "blocks.bin", "oracle.ndjson", "divergence-allowlist.json", "fixture.json"} {
 		if _, err := os.Stat(filepath.Join(absDir, f)); err != nil {
-			log.Fatalf("missing: %v", err)
+			log.Crit("expected file missing", "file", f, "err", err)
 		}
 	}
 }
