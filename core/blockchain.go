@@ -184,6 +184,12 @@ func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
 	return rawdb.ReadBlock(bc.db, *num)
 }
 
+// HasBlockInKhaosDB reports whether KhaosDB holds the block in either the
+// linked store or the unlinked-orphan store.
+func (bc *BlockChain) HasBlockInKhaosDB(hash tcommon.Hash) bool {
+	return bc.khaosDB.ContainsBlock(hash)
+}
+
 // GenesisTimestamp returns the genesis block timestamp.
 func (bc *BlockChain) GenesisTimestamp() int64 {
 	return bc.genesisBlock.Timestamp()

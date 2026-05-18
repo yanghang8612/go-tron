@@ -266,17 +266,29 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 
-	// Drop any ids we already have. java-tron's getLostBlockIds includes
-	// the un-fork point itself as the first id of every CHAIN_INVENTORY
-	// response, which after the first batch is a block we synced last
-	// round. Re-fetching it would hit java-tron's `syncBlockIdCache`
-	// dedup check and trigger BAD_PROTOCOL.
+	// Drop any ids we already hold. java-tron tracks every block id it has
+	// sent us in `syncBlockIdCache` and treats a repeat FETCH_INV_DATA for
+	// the same id as a protocol violation (BAD_PROTOCOL → peer drop). Two
+	// classes of repeats need to be filtered:
+	//
+	//   1. The un-fork point id, which java-tron's getLostBlockIds always
+	//      returns as the first id of CHAIN_INVENTORY — on every batch
+	//      after the first this is a block we already committed.
+	//   2. Blocks we received past a parent gap and parked in KhaosDB's
+	//      miniUnlinkedStore. They are not on the canonical chain (the
+	//      rawdb check below would miss them) but we already hold them; if
+	//      their gap parent later arrives, KhaosDB.promoteUnlinked cascades
+	//      them into miniStore and InsertBlock's switchFork applies the
+	//      stretch in topological order, so refetching is never needed.
 	ss.mu.Lock()
 	ss.fetchList = ss.fetchList[:0]
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
 		hash := tcommon.BytesToHash(bid.Hash)
 		if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
+			continue
+		}
+		if ss.chain.HasBlockInKhaosDB(hash) {
 			continue
 		}
 		ss.fetchList = append(ss.fetchList, types.BlockID{Hash: hash, Num: num})

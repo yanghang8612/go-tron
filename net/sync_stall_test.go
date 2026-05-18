@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // nopHandler is the minimum p2p.Handler that lets a Peer.Start() / Stop()
@@ -91,6 +92,96 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if ss.IsSyncing() {
 		t.Fatal("sync should have aborted after fetch timeout on partial batch")
+	}
+}
+
+// TestChainInventorySkipsKhaosDBOrphans verifies HandleChainInventory's
+// dedup filter drops block IDs we already buffer as orphans in KhaosDB.
+// Without the filter step a subsequent FETCH_INV_DATA would re-request
+// blocks java-tron has already sent us, triggering its syncBlockIdCache
+// check → BAD_PROTOCOL disconnect → loss of every peer. The orphans
+// themselves do not need refetching: once the gap parent arrives KhaosDB
+// promoteUnlinked cascades them into miniStore and InsertBlock's
+// switchFork applies the stretch in topological order.
+func TestChainInventorySkipsKhaosDBOrphans(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	// Plant orphans into KhaosDB.miniUnlinkedStore by InsertBlock'ing
+	// blocks with bogus parents. KhaosDB.Push sees the missing parent and
+	// stashes them in the unlinked store; InsertBlock returns
+	// ErrUnlinkedBlock which we ignore.
+	const orphanCount = 11
+	orphanHashes := make([]tcommon.Hash, 0, orphanCount)
+	for i := 0; i < orphanCount; i++ {
+		b := stubBlock(int64(200+i), tcommon.Hash{0xde, 0xad, byte(i)})
+		_ = bc.InsertBlock(b)
+		orphanHashes = append(orphanHashes, b.Hash())
+	}
+	for _, h := range orphanHashes {
+		if !bc.HasBlockInKhaosDB(h) {
+			t.Fatalf("orphan %x missing from KhaosDB after InsertBlock", h)
+		}
+	}
+
+	// Wire a peer the SyncService will accept as syncPeer, draining
+	// outbound frames so fetchNextBatch's FETCH_INV_DATA write doesn't
+	// block on the pipe.
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	peer := p2p.NewPeer(c1, "inv-orphan-peer", false, nopHandler{})
+	peer.Start()
+	defer peer.Stop()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := c2.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	ss.mu.Lock()
+	ss.syncing = true
+	ss.syncPeer = peer
+	ss.mu.Unlock()
+
+	// Build an inventory with exactly maxFetchBatch (100) gap entries
+	// followed by the orphan IDs. After the filter drops the orphans,
+	// fetchList has 100 gap entries → fetchNextBatch pops all of them in a
+	// single batch → fetchList ends empty. Without the fix the orphans
+	// stay in fetchList (101..111 entries total; first 100 popped, 11 left
+	// behind) — that's the failing-assertion shape.
+	ids := make([]*corepb.ChainInventory_BlockId, 0, maxFetchBatch+orphanCount)
+	for n := int64(101); n <= 100+maxFetchBatch; n++ {
+		gapHash := tcommon.Hash{0x9a, byte(n), byte(n >> 8)}
+		ids = append(ids, &corepb.ChainInventory_BlockId{
+			Hash:   gapHash[:],
+			Number: n,
+		})
+	}
+	for i, h := range orphanHashes {
+		ids = append(ids, &corepb.ChainInventory_BlockId{
+			Hash:   h[:],
+			Number: int64(200 + i),
+		})
+	}
+	payload, err := proto.Marshal(&corepb.ChainInventory{Ids: ids, RemainNum: 1000})
+	if err != nil {
+		t.Fatalf("marshal inv: %v", err)
+	}
+
+	ss.HandleChainInventory(peer, payload)
+
+	ss.mu.Lock()
+	leaked := append([]types.BlockID(nil), ss.fetchList...)
+	ss.mu.Unlock()
+	if len(leaked) != 0 {
+		nums := make([]uint64, 0, len(leaked))
+		for _, b := range leaked {
+			nums = append(nums, b.Num)
+		}
+		t.Fatalf("orphans leaked into fetchList after HandleChainInventory: %v (would trigger BAD_PROTOCOL on next FETCH_INV_DATA)", nums)
 	}
 }
 
