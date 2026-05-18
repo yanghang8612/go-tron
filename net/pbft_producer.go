@@ -343,7 +343,7 @@ func (p *PbftProducer) canSend() bool {
 	if !p.allowPBFT() {
 		return false
 	}
-	if p.sync != nil && p.sync.IsSyncing() {
+	if p.sync != nil && (p.sync.IsSyncing() || p.sync.IsPaused()) {
 		return false
 	}
 	return p.IsLocalSR()

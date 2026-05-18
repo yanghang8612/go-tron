@@ -43,6 +43,18 @@ type SyncService struct {
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
 	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
 
+	// Sticky pause set on any InsertBlock failure during sync. Once set,
+	// StartSync / checkIsolation / tryFindSyncPeer all short-circuit; the
+	// SyncBlockChain handler still serves outbound peers. The peer that
+	// delivered the bad block is NOT disconnected — gtron is the more
+	// likely culprit than a peer (re-impl racing toward parity), so we keep
+	// the connection so the operator can diagnose without losing peer
+	// state. Cleared only by process restart.
+	paused       bool
+	pausedAtNum  uint64
+	pausedAtTime time.Time
+	pausedErr    error
+
 	quit     chan struct{}
 	stopOnce sync.Once
 }
@@ -91,7 +103,7 @@ func (ss *SyncService) watchdog() {
 // peer's cached headNum can lag arbitrarily behind reality. Polling
 // `BuildChainSummary` against any peer lets java-tron re-evaluate.
 func (ss *SyncService) checkIsolation() {
-	if ss.IsSyncing() || ss.chain == nil || ss.handler == nil {
+	if ss.IsSyncing() || ss.IsPaused() || ss.chain == nil || ss.handler == nil {
 		return
 	}
 	if time.Since(ss.chain.LastInsertTime()) < 30*time.Second {
@@ -116,6 +128,23 @@ func (ss *SyncService) IsSyncing() bool {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	return ss.syncing
+}
+
+// IsPaused reports whether sync has been stopped by a prior InsertBlock failure.
+// While paused, no new sync starts and the watchdog skips its kick — but peers
+// stay connected and inbound SYNC_BLOCK_CHAIN requests are still served.
+func (ss *SyncService) IsPaused() bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.paused
+}
+
+// PausedStatus returns the pause flag along with the block number, time, and
+// error captured when the pause was triggered. Intended for status reporting.
+func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, err error) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.paused, ss.pausedAtNum, ss.pausedAtTime, ss.pausedErr
 }
 
 // BuildChainSummary creates an exponentially-spaced list of block IDs
@@ -176,6 +205,10 @@ func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
 // StartSync initiates sync with a peer that has a higher head block.
 func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	ss.mu.Lock()
+	if ss.paused {
+		ss.mu.Unlock()
+		return
+	}
 	if ss.syncing {
 		ss.mu.Unlock()
 		return
@@ -408,31 +441,29 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 
 	insertErr := ss.chain.InsertBlock(block)
 	if insertErr != nil {
-		// Do NOT fall back to InsertBlockWithoutVerify — that path writes
-		// the block proto + advances the head pointer without applying
-		// state transitions, which silently produces a head-only chain
-		// where every account stays at its genesis balance and every
-		// witness counter freezes at the last successful applyBlock.
-		// Mainnet sync hit this when KhaosDB's 1024-block sliding window
-		// evicted parents under pressure (probably from concurrent adv
-		// blocks during initial sync), so 99.99% of "synced" blocks
-		// landed in the silent-fallback path. The next fetchNextBatch
-		// cycle (below) will issue a SYNC_BLOCK_CHAIN from our true
-		// canonical head and refetch the orphaned range, which is the
-		// right recovery semantic.
-		log.Printf("Sync: failed to insert block #%d: %v (will retry)", block.Number(), insertErr)
-	} else {
-		log.Printf("Synced block #%d", block.Number())
+		// Stop sync without disconnecting the peer. Recovery (re-attempting
+		// the same block from another peer) would just rediscover the same
+		// failure when the root cause is gtron-side — far more likely than
+		// peer-side given gtron is a re-impl racing toward java-tron parity.
+		// Keeping the peer connected preserves diagnostic state. Cleared
+		// only by process restart.
+		log.Printf("Sync: failed to insert block #%d: %v — pausing sync (peer kept connected; restart to resume)", block.Number(), insertErr)
+		ss.mu.Lock()
+		ss.paused = true
+		ss.pausedAtNum = block.Number()
+		ss.pausedAtTime = time.Now()
+		ss.pausedErr = insertErr
+		ss.doReset()
+		ss.mu.Unlock()
+		return true
 	}
+
+	log.Printf("Synced block #%d", block.Number())
 
 	// Only request the next batch when the current one is fully drained;
 	// otherwise we'd flood the peer with overlapping FETCH_INV_DATA requests
 	// (java-tron rate-limits FETCH_INV_DATA at 3/s and disconnects with
-	// BAD_PROTOCOL when exceeded). Crucially this runs on BOTH success and
-	// insert-error paths — a failed insert on the last block of a batch
-	// must still kick the recovery cycle (sendSyncBlockChain from our
-	// canonical head) instead of leaving syncing=true and waiting on a
-	// watchdog tick that won't help.
+	// BAD_PROTOCOL when exceeded).
 	if batchDone {
 		ss.fetchNextBatch()
 	}

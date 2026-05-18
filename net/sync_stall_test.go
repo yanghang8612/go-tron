@@ -238,19 +238,18 @@ func TestChainInventoryFetchesStaleFutureDiskBlocks(t *testing.T) {
 	}
 }
 
-// TestLastBlockInsertFailureRecovers checks the second stall shape: when
-// the final block of a batch fails to insert, the original code returned
-// early before the batchDone check, leaving syncing=true forever (and the
-// watchdog short-circuits on IsSyncing()). The fix runs the batchDone path
-// regardless of insert outcome — fetchNextBatch with an empty fetchList
-// sends SYNC_BLOCK_CHAIN, polling for the missing range from our true
-// canonical head.
-func TestLastBlockInsertFailureRecovers(t *testing.T) {
+// TestInsertFailurePausesSync covers the failed-insert path: when InsertBlock
+// returns an error, sync must stop sticky (paused) without disconnecting the
+// peer. The previous "retry via fetchNextBatch" recovery path was removed —
+// retrying the same block from the same/another peer in gtron almost always
+// rediscovers the same bug locally (gtron is a re-impl; our state is the more
+// likely culprit than a malicious peer), so retrying burns peer budget for
+// no recovery. Pausing keeps the peer connection so an operator can diagnose.
+// Clears only on process restart.
+func TestInsertFailurePausesSync(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
 
-	// Start a real peer so peer.Send actually flushes to the pipe. Without
-	// Start the message would sit in the write buffer and never reach c2.
 	c1, c2 := gnet.Pipe()
 	defer c1.Close()
 	defer c2.Close()
@@ -258,9 +257,8 @@ func TestLastBlockInsertFailureRecovers(t *testing.T) {
 	peer.Start()
 	defer peer.Stop()
 
-	// Drain outbound frames on c2 so the writeLoop doesn't block. Just
-	// signal on the channel that at least one frame arrived — we don't
-	// need to parse content.
+	// Drain outbound frames so peer.writeLoop doesn't block. We assert
+	// later that NO frame is sent on the failure path.
 	gotFrame := make(chan struct{}, 8)
 	go func() {
 		buf := make([]byte, 4096)
@@ -282,24 +280,40 @@ func TestLastBlockInsertFailureRecovers(t *testing.T) {
 	ss.syncing = true
 	ss.syncPeer = peer
 	ss.inflight = 1
-	ss.fetchList = nil // empty → fetchNextBatch will sendSyncBlockChain
+	ss.fetchList = nil
 	ss.mu.Unlock()
 
-	// A bogus block — wrong parent hash so InsertBlock fails (KhaosDB
-	// rejects unknown parent).
+	// Bogus block — wrong parent hash so InsertBlock fails (KhaosDB rejects
+	// unknown parent).
 	badBlock := stubBlock(99, tcommon.Hash{1, 2, 3})
 	consumed := ss.HandleBlock(peer, badBlock)
 	if !consumed {
-		t.Fatal("HandleBlock should have consumed the block")
+		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}
 
-	// fetchNextBatch with an empty fetchList writes a SYNC_BLOCK_CHAIN
-	// frame. If HandleBlock returned early on insert failure (pre-fix
-	// behaviour) the pipe stays silent and the select hits its deadline.
+	// Sync must be paused, not syncing, and not have sent any outbound
+	// frame (no SYNC_BLOCK_CHAIN retry, no FETCH_INV_DATA).
+	if !ss.IsPaused() {
+		t.Fatal("InsertBlock failure should have paused sync")
+	}
+	if ss.IsSyncing() {
+		t.Fatal("InsertBlock failure should have cleared syncing")
+	}
 	select {
 	case <-gotFrame:
-		// Good: recovery cycle started.
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("HandleBlock did not trigger fetchNextBatch on the batch's last-block insert failure (stall shape)")
+		t.Fatal("paused sync must not send any outbound frame")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	paused, atNum, _, err := ss.PausedStatus()
+	if !paused || atNum != 99 || err == nil {
+		t.Fatalf("PausedStatus mismatch: paused=%v atNum=%d err=%v", paused, atNum, err)
+	}
+
+	// Once paused, StartSync must be a no-op even if a fresh sync candidate
+	// shows up.
+	ss.StartSync(peer)
+	if ss.IsSyncing() {
+		t.Fatal("StartSync should short-circuit while paused")
 	}
 }
