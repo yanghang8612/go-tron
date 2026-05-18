@@ -191,6 +191,55 @@ The decision is **escalated to the user**. Slice 2 begins only once chosen.
 - [`gtank/jubjub`](https://github.com/gtank/jubjub) — pure-Go Jubjub for note decryption. No Pedersen hash exposed. Last commit January 2021.
 - Other Sapling-using chains (Penumbra, Namada, Aleo, Aztec) all keep crypto on the Rust side; no pure-Go reference impl found.
 
+## Datadir recovery for pre-Merkle synced nodes
+
+Nodes that synced Nile (or any Sapling-enabled chain) past
+`ALLOW_SHIELDED_TRANSACTION` activation on a binary **without** Merkle root
+support have committed blocks where the shielded receive commitments never
+landed in the incremental Merkle tree. Their `LAST_TREE`/`CURRENT_TREE`
+sentinels and `imt-<root>` entries are empty. A subsequent spend (e.g.
+Nile block `1,685,793`) will fail with `Rt is invalid.` because the
+spend's anchor isn't in the rawdb anchor store — even after rebuilding
+with `-tags=sapling`.
+
+A binary upgrade alone is **not enough**. The Merkle tree state must be
+reconstructed by re-applying every shielded block from activation forward.
+
+### Recommended recovery: roll back and re-sync
+
+1. **Stop the node.**
+2. **Pick a recovery point**: the first block before
+   `ALLOW_SHIELDED_TRANSACTION` activation. For Nile this is block
+   `1,628,390` (activation lands at `1,628,391`).
+3. **Roll the datadir back** to that height. The cleanest path is to
+   drop the chain DB and re-sync from a known-clean snapshot or from
+   another node. There is **no in-place rewind** that preserves only
+   the Merkle state — the consensus-state-root chain is woven through
+   every block, and partial rewinds risk silent state drift.
+4. **Re-sync with the sapling-enabled binary** (`make gtron-sapling`).
+   As each shielded block is applied, the lifecycle hooks in
+   `BlockChain.applyBlock` will repopulate `LAST_TREE` and the
+   `imt-<root>` anchor store.
+5. **Verify** by inspecting `rawdb.ReadLastMerkleTree(db)` once past
+   the first shielded block; the tree should have a non-empty `Left`
+   slot. The anchor used by the first post-activation spend should be
+   recoverable via `rawdb.HasIncrMerkleTree(db, anchor)`.
+
+### Why not just scan historical blocks and rebuild offline?
+
+This is technically possible — walk forward from the activation block,
+extract `ShieldedTransferContract.receive_description[].note_commitment`
+from each tx, replay them through `core/zksnark.MerkleContainer` —
+but it duplicates the lifecycle logic that `applyBlock` runs and risks
+divergence under future changes. Re-sync uses the same code path as
+normal block application, which keeps reconstruction and runtime
+consistent.
+
+If an operator absolutely cannot re-sync (multi-day snapshot rebuild,
+sensitive data, etc.), a one-shot rebuild tool can be written by reusing
+`MerkleContainer.AppendCommitment` and `SaveCurrentAsBest` against a
+historical-block iterator. Not provided by default.
+
 ## Out of scope for this plan
 
 The shielded **proof verification** precompiles (`verifyMintProof` / `verifyTransferProof` / `verifyBurnProof` at addresses `0x01000003`–`0x01000005`) and `shieldedMerkleHash` at `0x01000006` are separate axes that also depend on librustzcash. They currently return java-tron's failure payload ([vm/precompile_tron.go:380–437](../../vm/precompile_tron.go:380)). Wiring them is a follow-on plan, not part of Merkle-root parity.

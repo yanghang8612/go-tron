@@ -137,6 +137,24 @@ var (
 	// Value: proto-encoded shield_contract.IncrementalMerkleTree
 	incrMerkleTreePrefix = []byte("imt-")
 
+	// incrMerkleLastTreeKey / incrMerkleCurrentTreeKey mirror java-tron's
+	// MerkleContainer "LAST_TREE" / "CURRENT_TREE" sentinels. They live in
+	// the imt- namespace; the 13/16-byte sentinel keys cannot collide with
+	// the 36-byte (imt- || 32-byte root) entries above.
+	// - last:    best snapshot after the most recent block (anchor source)
+	// - current: mutable working copy reset at block start, advanced per
+	//            shielded receive, promoted to last on block success
+	incrMerkleLastTreeKey    = []byte("imt-LAST_TREE")
+	incrMerkleCurrentTreeKey = []byte("imt-CURRENT_TREE")
+
+	// merkleTreeIndexPrefix maps block number → 32-byte merkle root.
+	// Mirrors java-tron's MerkleTreeIndexStore. Used by wallet APIs to
+	// reconstruct historical trees; not consulted on the spend-validation
+	// hot path (that lookup is keyed by root via incrMerkleTreePrefix).
+	// Key:   mti- || big-endian uint64 block number
+	// Value: 32-byte commitment tree root
+	merkleTreeIndexPrefix = []byte("mti-")
+
 	// forkStatsPrefix stores per-block-version SR vote bitmaps.
 	// Key:   forkStatsPrefix || big-endian int32 version
 	// Value: byte slice of length == active witness count; index = slot,
@@ -673,5 +691,12 @@ func noteCommitmentKey(index int64) []byte {
 	k := make([]byte, len(noteCommitmentPrefix)+8)
 	copy(k, noteCommitmentPrefix)
 	binary.BigEndian.PutUint64(k[len(noteCommitmentPrefix):], uint64(index))
+	return k
+}
+
+func merkleTreeIndexKey(blockNum int64) []byte {
+	k := make([]byte, len(merkleTreeIndexPrefix)+8)
+	copy(k, merkleTreeIndexPrefix)
+	binary.BigEndian.PutUint64(k[len(merkleTreeIndexPrefix):], uint64(blockNum))
 	return k
 }

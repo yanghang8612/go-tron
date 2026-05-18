@@ -155,3 +155,102 @@ func TestIncrMerkleTree_MultipleRoots(t *testing.T) {
 		}
 	}
 }
+
+// ---- MerkleContainer LAST_TREE / CURRENT_TREE / blocknum-index tests --
+
+func TestLastMerkleTree_RoundTrip(t *testing.T) {
+	db := memorydb.New()
+
+	if got := ReadLastMerkleTree(db); got != nil {
+		t.Fatalf("expected nil before write, got %v", got)
+	}
+	tree := &shieldpb.IncrementalMerkleTree{
+		Left: &shieldpb.PedersenHash{Content: []byte("best-left")},
+	}
+	if err := WriteLastMerkleTree(db, tree); err != nil {
+		t.Fatalf("WriteLastMerkleTree: %v", err)
+	}
+	got := ReadLastMerkleTree(db)
+	if got == nil || got.Left == nil || string(got.Left.Content) != "best-left" {
+		t.Fatalf("ReadLastMerkleTree mismatch: %v", got)
+	}
+}
+
+func TestCurrentMerkleTree_RoundTripAndDelete(t *testing.T) {
+	db := memorydb.New()
+
+	if got := ReadCurrentMerkleTree(db); got != nil {
+		t.Fatalf("expected nil before write, got %v", got)
+	}
+	tree := &shieldpb.IncrementalMerkleTree{
+		Right: &shieldpb.PedersenHash{Content: []byte("current-right")},
+	}
+	if err := WriteCurrentMerkleTree(db, tree); err != nil {
+		t.Fatalf("WriteCurrentMerkleTree: %v", err)
+	}
+	got := ReadCurrentMerkleTree(db)
+	if got == nil || got.Right == nil || string(got.Right.Content) != "current-right" {
+		t.Fatalf("ReadCurrentMerkleTree mismatch: %v", got)
+	}
+
+	if err := DeleteCurrentMerkleTree(db); err != nil {
+		t.Fatalf("DeleteCurrentMerkleTree: %v", err)
+	}
+	if got := ReadCurrentMerkleTree(db); got != nil {
+		t.Fatalf("expected nil after delete, got %v", got)
+	}
+}
+
+func TestMerkleTreeRootByBlock_RoundTrip(t *testing.T) {
+	db := memorydb.New()
+	const blockNum = int64(1_685_793)
+	root := make([]byte, 32)
+	root[0] = 0x9a
+	root[31] = 0xbc
+
+	if got := ReadMerkleTreeRootByBlock(db, blockNum); got != nil {
+		t.Fatalf("expected nil before write, got %x", got)
+	}
+	if err := WriteMerkleTreeRootByBlock(db, blockNum, root); err != nil {
+		t.Fatalf("WriteMerkleTreeRootByBlock: %v", err)
+	}
+	got := ReadMerkleTreeRootByBlock(db, blockNum)
+	if string(got) != string(root) {
+		t.Fatalf("root mismatch: got %x, want %x", got, root)
+	}
+
+	// Distinct block numbers do not collide.
+	other := int64(1_628_391)
+	if got := ReadMerkleTreeRootByBlock(db, other); got != nil {
+		t.Fatalf("unrelated blockNum collided: %x", got)
+	}
+
+	if err := DeleteMerkleTreeRootByBlock(db, blockNum); err != nil {
+		t.Fatalf("DeleteMerkleTreeRootByBlock: %v", err)
+	}
+	if got := ReadMerkleTreeRootByBlock(db, blockNum); got != nil {
+		t.Fatalf("expected nil after delete, got %x", got)
+	}
+}
+
+// Sanity: the "LAST_TREE"/"CURRENT_TREE" sentinels live inside the imt-
+// namespace but must not be picked up by a root-keyed lookup. A 32-byte
+// root whose hex spells "LAST_TREE..." is structurally impossible to
+// collide because the sentinel keys are 13/16 bytes — but verify the
+// negative case to lock the invariant.
+func TestMerkleSentinels_DoNotCollideWithRoots(t *testing.T) {
+	db := memorydb.New()
+	last := &shieldpb.IncrementalMerkleTree{
+		Left: &shieldpb.PedersenHash{Content: []byte("sentinel")},
+	}
+	if err := WriteLastMerkleTree(db, last); err != nil {
+		t.Fatal(err)
+	}
+	// 32-byte root that, when hex-encoded, starts with "LAST_TREE": the
+	// raw-byte key would be "imt-LAST_TREE" || padding (45 bytes total),
+	// which can't collide with the 13-byte sentinel.
+	root := []byte("LAST_TREE\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	if HasIncrMerkleTree(db, root) {
+		t.Fatal("root lookup hit the LAST_TREE sentinel — namespace bug")
+	}
+}

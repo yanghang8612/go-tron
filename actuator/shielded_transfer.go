@@ -2,10 +2,12 @@ package actuator
 
 import (
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -262,13 +264,28 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 		}
 	}
 
-	// Record note commitments (Merkle tree position tracking for Stage 2)
+	// Record note commitments. Two stores are updated:
+	//   1. AppendNoteCommitment writes the sequential cm index store
+	//      (java-tron's NoteCommitmentStore — used by wallet APIs).
+	//   2. MerkleContainer.AppendCommitment appends to the Sapling
+	//      incremental commitment tree (CURRENT_TREE) so the next block's
+	//      spend anchors can be validated.
+	//
+	// The tree state was reset from LAST_TREE before tx execution (see
+	// BlockChain.applyBlock) and is promoted back into LAST_TREE after
+	// the tx loop succeeds.
+	merkle := zksnark.NewMerkleContainer(ctx.DB)
 	for _, recv := range c.ReceiveDescription {
 		if len(recv.NoteCommitment) == 0 {
 			continue
 		}
 		if err := rawdb.AppendNoteCommitment(ctx.DB, recv.NoteCommitment); err != nil {
 			return nil, err
+		}
+		var cm zksnark.PedersenHash
+		copy(cm[:], recv.NoteCommitment)
+		if err := merkle.AppendCommitment(cm); err != nil {
+			return nil, fmt.Errorf("append commitment to merkle tree: %w", err)
 		}
 	}
 

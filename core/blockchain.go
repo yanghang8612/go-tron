@@ -19,6 +19,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -443,6 +444,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// must be readable here. Slice 2 of the fork-rewind fix.
 	dynProps := state.LoadDynamicProperties(bc.buffer)
 
+	// Sapling commitment-tree lifecycle: before the tx loop, copy LAST_TREE
+	// into CURRENT_TREE so shielded receives append onto a fresh working copy.
+	// Mirrors java-tron Manager.processBlock → MerkleContainer.resetCurrentMerkleTree.
+	// Skipped when the block carries no shielded contracts — between shielded
+	// blocks CURRENT_TREE is never read, so we save the buffer write.
+	hasShielded := blockContainsShieldedTransfer(block)
+	if hasShielded {
+		if err := zksnark.NewMerkleContainer(bc.buffer).ResetCurrent(); err != nil {
+			return fmt.Errorf("reset shielded merkle tree: %w", err)
+		}
+	}
+
 	// Load witnesses into statedb for maintenance access. Reads go through
 	// bc.buffer so that VoteCount/URL deltas persisted by previous blocks
 	// (via statedb.FlushWitnesses below) are visible even when those blocks
@@ -489,6 +502,17 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
+	}
+
+	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum. Runs
+	// only when the block actually contained shielded contracts so the
+	// blockNum→root index stays sparse and we skip a Pedersen tree-root
+	// recompute on blocks that didn't touch the tree.
+	// Mirrors java-tron Manager.processBlock → MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree.
+	if hasShielded {
+		if err := zksnark.NewMerkleContainer(bc.buffer).SaveCurrentAsBest(int64(block.Number())); err != nil {
+			return fmt.Errorf("save shielded merkle tree: %w", err)
+		}
 	}
 
 	// Drain the in-memory witness deltas (VoteCount from VoteWitness /
@@ -1025,6 +1049,19 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 // solidified-flush boundary.
 func (bc *BlockChain) DynProps() *state.DynamicProperties {
 	return state.LoadDynamicProperties(bc.buffer)
+}
+
+// blockContainsShieldedTransfer reports whether any tx in the block is a
+// ShieldedTransferContract. Used by applyBlock to gate the Sapling
+// commitment-tree reset/save lifecycle so blocks without shielded receives
+// don't churn CURRENT_TREE / LAST_TREE.
+func blockContainsShieldedTransfer(block *types.Block) bool {
+	for _, tx := range block.Transactions() {
+		if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
+			return true
+		}
+	}
+	return false
 }
 
 // chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
