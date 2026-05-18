@@ -102,6 +102,40 @@ func TestContainerSaveRequiresPedersen(t *testing.T) {
 	}
 }
 
+// TestContainerSaveReusesPreviousRootWhenTreeUnchanged covers the common
+// no-shielded-receive block path: java-tron still records blockNum→root every
+// block, but an unchanged CURRENT_TREE can reuse the previous block's root
+// without recomputing Pedersen hashes.
+func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	best := NewTree()
+	if err := best.Append(PedersenHash{0x11}); err != nil {
+		t.Fatalf("seed best: %v", err)
+	}
+	if err := rawdb.WriteLastMerkleTree(db, best.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	root := make([]byte, len(PedersenHash{}))
+	root[0] = 0xaa
+	if err := rawdb.WriteIncrMerkleTree(db, root, best.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteMerkleTreeRootByBlock(db, 10, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+	if err := c.SaveCurrentAsBest(11); err != nil {
+		t.Fatalf("SaveCurrentAsBest should reuse previous root without Pedersen: %v", err)
+	}
+	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
+		t.Fatalf("block 11 root: got %x, want %x", got, root)
+	}
+}
+
 // TestContainerAnchorExists covers the spend-validation path: a previously
 // saved root is reported as a valid anchor; an unrelated root is not.
 //

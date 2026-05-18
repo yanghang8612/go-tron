@@ -10,9 +10,9 @@ import (
 )
 
 // TestBlockContainsShieldedTransfer pins the helper used by applyBlock to
-// gate the Sapling commitment-tree reset/save lifecycle hooks. False on
-// transparent-only blocks and on empty blocks; true as soon as a single
-// ShieldedTransferContract is present.
+// reject shielded blocks clearly when the binary was built without the Sapling
+// Pedersen backend. False on transparent-only blocks and on empty blocks; true
+// as soon as a single ShieldedTransferContract is present.
 func TestBlockContainsShieldedTransfer(t *testing.T) {
 	transferAny, err := anypb.New(&contractpb.TransferContract{})
 	if err != nil {

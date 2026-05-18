@@ -12,7 +12,10 @@
 //     see docs/dev/shielded-merkle-audit.md.
 package zksnark
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // Depth is the Sapling commitment-tree depth used by java-tron. Mirrors
 // IncrementalMerkleTreeContainer.DEPTH.
@@ -31,6 +34,12 @@ type PedersenHash [32]byte
 // their own context.
 var ErrPedersenUnimplemented = errors.New("zksnark: Pedersen hash backend not built (rebuild with -tags=sapling and a librustzcash static lib; see docs/dev/shielded-merkle-audit.md)")
 
+var (
+	emptyRootsOnce sync.Once
+	emptyRoots     [Depth + 1]PedersenHash
+	emptyRootsErr  error
+)
+
 // EmptyRoots returns the array of empty subtree roots at each depth
 // d ∈ [0, Depth]. Mirrors EmptyMerkleRoots:
 //
@@ -40,18 +49,21 @@ var ErrPedersenUnimplemented = errors.New("zksnark: Pedersen hash backend not bu
 // Returns the first error encountered; callers should treat any non-nil
 // error as a missing backend.
 func EmptyRoots() ([Depth + 1]PedersenHash, error) {
-	var out [Depth + 1]PedersenHash
-	u, err := Uncommitted()
-	if err != nil {
-		return out, err
-	}
-	out[0] = u
-	for d := 1; d <= Depth; d++ {
-		c, err := Combine(d-1, out[d-1], out[d-1])
+	emptyRootsOnce.Do(func() {
+		u, err := Uncommitted()
 		if err != nil {
-			return out, err
+			emptyRootsErr = err
+			return
 		}
-		out[d] = c
-	}
-	return out, nil
+		emptyRoots[0] = u
+		for d := 1; d <= Depth; d++ {
+			c, err := Combine(d-1, emptyRoots[d-1], emptyRoots[d-1])
+			if err != nil {
+				emptyRootsErr = err
+				return
+			}
+			emptyRoots[d] = c
+		}
+	})
+	return emptyRoots, emptyRootsErr
 }

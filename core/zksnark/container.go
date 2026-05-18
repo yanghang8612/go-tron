@@ -3,6 +3,7 @@ package zksnark
 import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"google.golang.org/protobuf/proto"
 )
 
 // DB is the read+write capability MerkleContainer needs from rawdb-or-buffer.
@@ -79,6 +80,17 @@ func (c *MerkleContainer) AppendCommitment(cm PedersenHash) error {
 // Mirrors java-tron's `MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree`.
 func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 	cur := c.GetCurrent()
+	if last := rawdb.ReadLastMerkleTree(c.db); last != nil && proto.Equal(cur.Proto(), last) {
+		if root := rawdb.ReadMerkleTreeRootByBlock(c.db, blockNum-1); len(root) == len(PedersenHash{}) {
+			if err := rawdb.WriteLastMerkleTree(c.db, cur.Proto()); err != nil {
+				return err
+			}
+			if err := rawdb.WriteIncrMerkleTree(c.db, root, cur.Proto()); err != nil {
+				return err
+			}
+			return rawdb.WriteMerkleTreeRootByBlock(c.db, blockNum, root)
+		}
+	}
 	root, err := cur.MerkleTreeKey()
 	if err != nil {
 		return err

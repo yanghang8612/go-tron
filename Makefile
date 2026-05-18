@@ -1,4 +1,4 @@
-.PHONY: gtron gtron-replay all test lint proto clean fixtures fixtures-list \
+.PHONY: gtron gtron-replay all test test-sapling lint proto clean fixtures fixtures-list \
         conformance-replay conformance-replay-exit-gate txsign system-test-flows \
         system-test-cross system-test-cross-flows zksnark-deps gtron-sapling
 
@@ -23,6 +23,9 @@ all: gtron
 
 test:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO) test ./... -count=1 -timeout 300s
+
+test-sapling:
+	CGO_ENABLED=1 $(GO) test -tags='sapling gofuzz' ./... -count=1 -timeout 300s
 
 lint:
 	golangci-lint run ./...
@@ -113,10 +116,10 @@ zksnark-deps:
 	cd third_party/librustzcash && cargo build --release --manifest-path librustzcash/Cargo.toml
 	@echo "Built third_party/librustzcash/target/release/librustzcash.{a,so,dylib}"
 
-# Sapling-enabled gtron build. Needs CGO_ENABLED=1 and zksnark-deps to have
-# placed libzksnark_capi.{a,so,dylib} on the linker path. Without those the
-# default `make gtron` build (pure-Go, no sapling tag) still works and
-# shielded tests skip.
+# Sapling-enabled gtron build. Needs CGO_ENABLED=1 for the librustzcash C ABI,
+# but forces go-ethereum onto its pure-Go secp256k1/ecrecover path with the
+# `gofuzz` tag. Without this tag, go-ethereum compiles vendored libsecp256k1
+# when cgo is on, which is slow and has stalled on small build servers.
 gtron-sapling:
-	CGO_ENABLED=1 $(GO) build -tags=sapling $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
+	CGO_ENABLED=1 $(GO) build -tags='sapling gofuzz' $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron with Sapling support."

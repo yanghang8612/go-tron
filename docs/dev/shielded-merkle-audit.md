@@ -42,9 +42,11 @@ These are imported verbatim from java-tron. We must NOT change them — wire-for
 ## Pedersen hash implementation — Path A (CGO + librustzcash)
 
 **Decision (2026-05-19)**: build-tag-gated CGO bindings to a C-ABI build
-of the Rust `librustzcash` crate. Default builds stay pure-Go and the
-shielded tests skip; `-tags=sapling` opt-in builds link the native code
-and the tests must pass.
+of the Rust `librustzcash` crate. Default builds stay pure-Go and fail
+clearly once shielded transactions are observable. Sapling builds use
+`-tags='sapling gofuzz'`: `sapling` enables the Rust C ABI, while `gofuzz`
+forces go-ethereum onto its pure-Go secp256k1/ecrecover implementation even
+though `CGO_ENABLED=1`.
 
 **Rust source**: git submodule `third_party/librustzcash` →
 [`tronprotocol/librustzcash`](https://github.com/tronprotocol/librustzcash)
@@ -56,7 +58,8 @@ On fresh clone:
 ```
 git submodule update --init --recursive
 make zksnark-deps          # cargo build --release inside the submodule
-make gtron-sapling         # CGO_ENABLED=1 go build -tags=sapling
+make gtron-sapling         # CGO_ENABLED=1 go build -tags='sapling gofuzz'
+make test-sapling          # CGO_ENABLED=1 go test -tags='sapling gofuzz' ./...
 ```
 
 ### File layout
@@ -97,14 +100,15 @@ return `void` — neither flags errors.
 | `core/zksnark/pedersen_cgo.go` declares cgo directives + calls | ✅ landed |
 | `core/zksnark/zksnark_capi.h` declares the two C functions | ✅ landed |
 | `make zksnark-deps` placeholder that prints required steps | ✅ landed |
-| `make gtron-sapling` (`CGO_ENABLED=1 go build -tags=sapling`) | ✅ landed; needs lib to actually link |
-| **Pick Rust source location** (submodule / vendor / external) | open |
-| **Vendor / pull the Rust crate** + write Cargo C-ABI shim | open |
+| `make gtron-sapling` (`CGO_ENABLED=1 go build -tags='sapling gofuzz'`) | ✅ landed; statically links `librustzcash.a` |
+| **Pick Rust source location** (submodule / vendor / external) | ✅ submodule |
+| **Vendor / pull the Rust crate** + write Cargo C-ABI shim | ✅ uses upstream C ABI from `tronprotocol/librustzcash` |
+| `make test-sapling` (`CGO_ENABLED=1 go test -tags='sapling gofuzz'`) | ✅ landed |
 | **CI: install Rust toolchain + run zksnark-deps + run sapling tests** | open |
 
-Without the Rust crate landed, `make gtron-sapling` will fail to link
-(`-lzksnark_capi: not found`). That's the expected error path; default
-builds are unaffected.
+Without the Rust static archive, `make gtron-sapling` will fail to link.
+That's the expected error path; default builds are unaffected but cannot
+process shielded-enabled chains.
 
 ### Toolchain status (2026-05-19 verified)
 
@@ -119,9 +123,12 @@ Output artifacts under `third_party/librustzcash/target/release/`:
 - `librustzcash.a` ≈ 2.4 MB (static lib used by cgo)
 - `librustzcash.dylib` ≈ 944 KB (dynamic lib)
 
+`core/zksnark/pedersen_cgo.go` links the `.a` archive directly so the
+resulting `gtron` binary does not depend on a workspace-local dylib/so path.
+
 ### Verification (2026-05-19)
 
-All 5 tests pass under `CGO_ENABLED=1 go test -tags=sapling`:
+All 5 tests pass under `CGO_ENABLED=1 go test -tags='sapling gofuzz'`:
 
 | Test | What it checks |
 |---|---|
@@ -132,13 +139,14 @@ All 5 tests pass under `CGO_ENABLED=1 go test -tags=sapling`:
 | `TestWfCheckCatchesBadShapes` | `WfCheck` rejects the three canonical non-canonical proto shapes |
 
 Default builds (no `-tags=sapling`) still skip the vector tests via
-`errors.Is(err, ErrPedersenUnimplemented)`.
+`errors.Is(err, ErrPedersenUnimplemented)` and reject shielded-enabled block
+application with the same sentinel error.
 
 
 
 java-tron calls `JLibrustzcash.librustzcashMerkleHash`/`librustzcashTreeUncommitted` via the [zksnark-java-sdk](https://github.com/tronprotocol/zksnark-java-sdk) JAR, which bundles a JNI binary (`libzksnarkjni.so` / `.jnilib`) wrapping the Rust `librustzcash` crate. The JNI symbols are not C-ABI callable from CGO — they require a JVM `JNIEnv*`. The Rust crate behind the JNI is **the** source of truth; values must match its output byte-for-byte.
 
-gtron's Makefile defaults to `CGO_ENABLED=0` ([Makefile:11](../../Makefile:11)) so the build runs anywhere without a C toolchain. Three feasible paths:
+gtron's Makefile defaults to `CGO_ENABLED=0` ([Makefile:11](../../Makefile:11)) so the build runs anywhere without a C toolchain. The Sapling target turns cgo on only for librustzcash and uses go-ethereum's `gofuzz` build tag to keep secp256k1/ecrecover pure Go. Historical options considered:
 
 ### Path A — CGO + librustzcash (exact parity)
 
@@ -217,8 +225,8 @@ reconstructed by re-applying every shielded block from activation forward.
    the Merkle state — the consensus-state-root chain is woven through
    every block, and partial rewinds risk silent state drift.
 4. **Re-sync with the sapling-enabled binary** (`make gtron-sapling`).
-   As each shielded block is applied, the lifecycle hooks in
-   `BlockChain.applyBlock` will repopulate `LAST_TREE` and the
+   As each block is applied, the lifecycle hooks in `BlockChain.applyBlock`
+   will repopulate `LAST_TREE`, the dense block-number root index, and the
    `imt-<root>` anchor store.
 5. **Verify** by inspecting `rawdb.ReadLastMerkleTree(db)` once past
    the first shielded block; the tree should have a non-empty `Left`

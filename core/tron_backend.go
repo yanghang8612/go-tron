@@ -10,11 +10,13 @@ import (
 
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
@@ -1343,6 +1345,9 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 		// Unsupported contract type — skip validation, allow broadcast.
 		return nil
 	}
+	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract && !zksnark.Available() {
+		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
+	}
 
 	head := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()
@@ -1351,15 +1356,19 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 		return fmt.Errorf("open state: %w", err)
 	}
 
-	dynProps := state.LoadDynamicProperties(b.chain.DB())
+	validationBuf := blockbuffer.New(b.chain.buffer)
+	validationBuf.BeginBlock(tcommon.Hash{})
+	defer validationBuf.DiscardActive()
+
+	dynProps := state.LoadDynamicProperties(b.chain.buffer)
 
 	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing step.
 	// Actuators that check ctx.State.GetWitness (witness_update, vote, brokerage, etc.)
 	// will fail "owner is not a witness" without this.
-	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.DB())
+	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(b.chain.DB(), addr)
+			w := rawdb.ReadWitness(b.chain.buffer, addr)
 			if w != nil {
 				statedb.PutWitness(addr, w.URL())
 				statedb.AddWitnessVoteCount(addr, w.VoteCount())
@@ -1375,7 +1384,7 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 		BlockNumber:                head.Number(),
 		EnergyLimitForkBlockNum:    b.chain.Config().EnergyLimitForkBlockNum(),
 		HasEnergyLimitForkBlockNum: true,
-		DB:                         b.chain.DB(),
+		DB:                         validationBuf,
 		ActiveWitnesses:            b.chain.ActiveWitnesses(),
 	}
 

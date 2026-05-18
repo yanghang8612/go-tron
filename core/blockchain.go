@@ -444,13 +444,17 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// must be readable here. Slice 2 of the fork-rewind fix.
 	dynProps := state.LoadDynamicProperties(bc.buffer)
 
-	// Sapling commitment-tree lifecycle: before the tx loop, copy LAST_TREE
-	// into CURRENT_TREE so shielded receives append onto a fresh working copy.
-	// Mirrors java-tron Manager.processBlock → MerkleContainer.resetCurrentMerkleTree.
-	// Skipped when the block carries no shielded contracts — between shielded
-	// blocks CURRENT_TREE is never read, so we save the buffer write.
-	hasShielded := blockContainsShieldedTransfer(block)
-	if hasShielded {
+	// Sapling commitment-tree lifecycle: java-tron resets CURRENT_TREE from
+	// LAST_TREE before every block, then saves CURRENT_TREE as best after the
+	// tx loop. Default pure-Go builds don't have the Pedersen backend needed
+	// to compute roots; fail clearly once the chain can observe shielded txs
+	// instead of silently producing an unusable anchor store.
+	shieldedMerkleAvailable := zksnark.Available()
+	if !shieldedMerkleAvailable &&
+		(dynProps.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)) {
+		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
+	}
+	if shieldedMerkleAvailable {
 		if err := zksnark.NewMerkleContainer(bc.buffer).ResetCurrent(); err != nil {
 			return fmt.Errorf("reset shielded merkle tree: %w", err)
 		}
@@ -504,12 +508,12 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("process block: %w", err)
 	}
 
-	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum. Runs
-	// only when the block actually contained shielded contracts so the
-	// blockNum→root index stays sparse and we skip a Pedersen tree-root
-	// recompute on blocks that didn't touch the tree.
+	// Promote CURRENT_TREE to LAST_TREE + index by root + blockNum after
+	// every block, matching java-tron Manager.processBlock. This keeps the
+	// MerkleTreeIndexStore-equivalent dense for wallet/voucher lookups even
+	// across blocks that do not append receive commitments.
 	// Mirrors java-tron Manager.processBlock → MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree.
-	if hasShielded {
+	if shieldedMerkleAvailable {
 		if err := zksnark.NewMerkleContainer(bc.buffer).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
@@ -1016,6 +1020,9 @@ func (bc *BlockChain) NextMaintenanceTime() int64 {
 // that don't wire an engine accept unsigned txs into the pool without
 // fuss. Production binaries wire the engine and get full validation.
 func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
+	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract && !zksnark.Available() {
+		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
+	}
 	if bc.engine == nil {
 		return nil
 	}

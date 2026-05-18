@@ -4,7 +4,7 @@ package zksnark
 
 /*
 #cgo CFLAGS: -I${SRCDIR}
-#cgo LDFLAGS: -L${SRCDIR}/../../third_party/librustzcash/target/release -lrustzcash -ldl -lm
+#cgo LDFLAGS: ${SRCDIR}/../../third_party/librustzcash/target/release/librustzcash.a -ldl -lm
 
 #include <stddef.h>
 #include "zksnark_capi.h"
@@ -12,6 +12,12 @@ package zksnark
 import "C"
 
 import "unsafe"
+
+// Available reports whether the Sapling Pedersen backend is linked into this
+// binary.
+func Available() bool {
+	return true
+}
 
 // Combine wraps librustzcash_merkle_hash. The Rust crate at
 // third_party/librustzcash must be built via `make zksnark-deps` (or

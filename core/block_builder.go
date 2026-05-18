@@ -44,7 +44,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		return nil, fmt.Errorf("open state: %w", err)
 	}
 
-	dynProps := state.LoadDynamicProperties(bc.db)
+	dynProps := state.LoadDynamicProperties(bc.buffer)
 
 	// Load witnesses into statedb for maintenance access. Reads go through
 	// bc.buffer to mirror applyBlock — the chain buffer holds VoteCount /
@@ -70,12 +70,14 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Throwaway buffer: all rawdb-accumulator writes during block assembly
 	// (cycle rewards, brokerage snapshots, VI accumulations) go here and are
-	// never flushed to disk. The statedb still sees the full reward (correct
-	// account_state_root), and InsertBlock → applyBlock → ProcessBlock is
-	// the single canonical rawdb write path. Without this, BuildBlock would
-	// write to bc.db directly, then applyBlock would read those values and
-	// add again — doubling cycleReward[N][witness] and allowance.
-	buildBuf := blockbuffer.New(bc.db)
+	// never flushed to disk. Reads fall through to bc.buffer first so pending
+	// but not-yet-solidified writes from prior blocks (including shielded
+	// Merkle anchors) are visible during block assembly. The statedb still sees
+	// the full reward (correct account_state_root), and InsertBlock → applyBlock
+	// → ProcessBlock is the single canonical rawdb write path. Without this,
+	// BuildBlock would write to bc.db directly, then applyBlock would read those
+	// values and add again — doubling cycleReward[N][witness] and allowance.
+	buildBuf := blockbuffer.New(bc.buffer)
 	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
 
 	// Execute transactions, collecting successful ones
