@@ -46,6 +46,19 @@ of the Rust `librustzcash` crate. Default builds stay pure-Go and the
 shielded tests skip; `-tags=sapling` opt-in builds link the native code
 and the tests must pass.
 
+**Rust source**: git submodule `third_party/librustzcash` →
+[`tronprotocol/librustzcash`](https://github.com/tronprotocol/librustzcash)
+branch `release_vm_zksnarks_4.0`. Same upstream `tronprotocol/zksnark-java-sdk`
+pulls in via its own submodule, so we match java-tron exactly.
+
+On fresh clone:
+
+```
+git submodule update --init --recursive
+make zksnark-deps          # cargo build --release inside the submodule
+make gtron-sapling         # CGO_ENABLED=1 go build -tags=sapling
+```
+
 ### File layout
 
 ```
@@ -60,18 +73,22 @@ core/zksnark/
 
 ### C ABI surface
 
-Two functions, declared in `zksnark_capi.h`:
+The upstream `third_party/librustzcash/librustzcash/include/librustzcash.h`
+wraps its declarations in `extern "C" {` *without* a `__cplusplus` guard —
+so it isn't C-callable as-is. We re-declare just the two symbols we need
+in our own `zksnark_capi.h` with proper guards. Upstream signatures
+([source](https://github.com/tronprotocol/librustzcash/blob/release_vm_zksnarks_4.0/librustzcash/include/librustzcash.h)):
 
 ```c
-int32_t zksnark_merkle_hash(uint64_t depth,
-                            const uint8_t *a,
-                            const uint8_t *b,
-                            uint8_t *result);   // 0 on success
-void    zksnark_tree_uncommitted(uint8_t *result);
+void librustzcash_merkle_hash(size_t depth,
+                              const unsigned char *a,
+                              const unsigned char *b,
+                              unsigned char *result);
+void librustzcash_tree_uncommitted(unsigned char *result);
 ```
 
-Bytes are 32-byte little-endian Jubjub field encoding (matches the
-librustzcash output exactly).
+Buffers are 32 bytes. `depth` must not exceed 62 (we use ≤ 32). Both
+return `void` — neither flags errors.
 
 ### Build flow
 
@@ -89,17 +106,13 @@ Without the Rust crate landed, `make gtron-sapling` will fail to link
 (`-lzksnark_capi: not found`). That's the expected error path; default
 builds are unaffected.
 
-### Rust source — TBD
+### Toolchain caveat
 
-The advisor recommends locking the source to a specific commit before
-writing C-ABI code. Three sub-paths still open:
-
-1. **Submodule** → `tronprotocol/zksnark-java-sdk` (pin to a verified
-   commit). Mirrors java-tron exactly. `git clone --recursive` required.
-2. **Vendor snapshot** under `vendor/zksnark-capi/`. Single repo;
-   +1–2k LOC Rust; sync to upstream manual.
-3. **External `cargo install`** with a build-script env var pointing
-   at the resulting `.a`. Cleanest repo; CI/dev gate is high.
+The crate is from 2019-era Rust: `rand = "0.4"`, `blake2-rfc` pinned to a
+specific git rev, `bellman`/`pairing` as path deps. A modern stable Rust
+may need a `rust-toolchain` pin or `cargo +<old version>` invocation —
+verify when you first run `make zksnark-deps` and document the working
+version here.
 
 
 

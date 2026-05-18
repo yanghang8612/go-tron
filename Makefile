@@ -90,17 +90,28 @@ system-test-cross: gtron
 system-test-cross-flows: gtron txsign
 	@scripts/system_test_cross_flows.sh
 
-# Build the librustzcash C-ABI static library that core/zksnark links against
-# under `-tags=sapling`. The Rust source location is not yet pinned; see
-# docs/dev/shielded-merkle-audit.md for the submodule / vendor / external
-# decision. Until then this target prints the required steps.
+# Build the librustzcash static lib (libRustzcash.a + librustzcash.{so,dylib})
+# that core/zksnark/pedersen_cgo.go links against under `-tags=sapling`. The
+# Rust source lives in third_party/librustzcash as a git submodule
+# (tronprotocol/librustzcash, branch release_vm_zksnarks_4.0). On fresh clone
+# the submodule must be initialised first:
+#
+#   git submodule update --init --recursive
+#
+# The crate is from 2019-era Rust (rand 0.4, blake2-rfc git rev); a recent
+# stable toolchain may need a pinned older `rust-toolchain` or `cargo +1.65`.
+# See docs/dev/shielded-merkle-audit.md for the verified Rust version.
 zksnark-deps:
-	@echo "TODO: build libzksnark_capi.a from a librustzcash C ABI fork."
-	@echo "  1. Pick a Rust source path (submodule | vendor | external)."
-	@echo "  2. Build with cargo build --release --features cabi."
-	@echo "  3. Place libzksnark_capi.a under core/zksnark/ (or a path on LDFLAGS)."
-	@echo "See docs/dev/shielded-merkle-audit.md for details."
-	@exit 1
+	@if [ ! -f third_party/librustzcash/Cargo.toml ]; then \
+		echo "third_party/librustzcash submodule missing — run \`git submodule update --init --recursive\` first."; \
+		exit 1; \
+	fi
+	@command -v cargo >/dev/null 2>&1 || { \
+		echo "cargo not found. Install Rust toolchain: https://rustup.rs"; \
+		exit 1; \
+	}
+	cd third_party/librustzcash && cargo build --release --manifest-path librustzcash/Cargo.toml
+	@echo "Built third_party/librustzcash/target/release/librustzcash.{a,so,dylib}"
 
 # Sapling-enabled gtron build. Needs CGO_ENABLED=1 and zksnark-deps to have
 # placed libzksnark_capi.{a,so,dylib} on the linker path. Without those the

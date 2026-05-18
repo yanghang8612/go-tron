@@ -1,0 +1,4 @@
+[submodule "third_party/librustzcash"]
+	path = third_party/librustzcash
+	url = https://github.com/tronprotocol/librustzcash.git
+	branch = release_vm_zksnarks_4.0

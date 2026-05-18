@@ -4,38 +4,33 @@ package zksnark
 
 /*
 #cgo CFLAGS: -I${SRCDIR}
-#cgo LDFLAGS: -lzksnark_capi
+#cgo LDFLAGS: -L${SRCDIR}/../../third_party/librustzcash/target/release -lrustzcash -ldl -lm
 
-#include <stdint.h>
+#include <stddef.h>
 #include "zksnark_capi.h"
 */
 import "C"
 
-import (
-	"errors"
-	"unsafe"
-)
+import "unsafe"
 
-// Combine wraps zksnark_merkle_hash from librustzcash. See zksnark_capi.h for
-// the C ABI contract. The Rust crate must be built into a static or shared
-// `libzksnark_capi` that exports the symbols declared in the header.
+// Combine wraps librustzcash_merkle_hash. The Rust crate at
+// third_party/librustzcash must be built via `make zksnark-deps` (or
+// `cargo build --release` inside third_party/librustzcash/librustzcash)
+// before this can link.
 func Combine(depth int, left, right PedersenHash) (PedersenHash, error) {
 	var out PedersenHash
-	rc := C.zksnark_merkle_hash(
-		C.uint64_t(depth),
-		(*C.uint8_t)(unsafe.Pointer(&left[0])),
-		(*C.uint8_t)(unsafe.Pointer(&right[0])),
-		(*C.uint8_t)(unsafe.Pointer(&out[0])),
+	C.librustzcash_merkle_hash(
+		C.size_t(depth),
+		(*C.uchar)(unsafe.Pointer(&left[0])),
+		(*C.uchar)(unsafe.Pointer(&right[0])),
+		(*C.uchar)(unsafe.Pointer(&out[0])),
 	)
-	if rc != 0 {
-		return PedersenHash{}, errors.New("zksnark: librustzcash merkle_hash rejected input")
-	}
 	return out, nil
 }
 
-// Uncommitted wraps zksnark_tree_uncommitted from librustzcash.
+// Uncommitted wraps librustzcash_tree_uncommitted.
 func Uncommitted() (PedersenHash, error) {
 	var out PedersenHash
-	C.zksnark_tree_uncommitted((*C.uint8_t)(unsafe.Pointer(&out[0])))
+	C.librustzcash_tree_uncommitted((*C.uchar)(unsafe.Pointer(&out[0])))
 	return out, nil
 }
