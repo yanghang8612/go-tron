@@ -8,9 +8,12 @@
 //   - simplified write-op signature: `AncientWriteOp` is gtron-local and
 //     only exposes `AppendRaw` since slice 1 of the chain-freezer stores
 //     pre-encoded protobuf / raw-byte blobs
-//   - public `Has`, `AncientCount(kind)` helpers added so the gtron-side
-//     `AncientReader` interface can be implemented without poking at the
-//     internal `items` atomic
+//   - public `HasAncient`, `AncientCount(kind)` helpers added so the gtron-side
+//     `AncientReader` interface can be implemented without callers reaching
+//     into private fields. `AncientCount` reads the per-table `items` atomic
+//     (the same field `Retrieve` consults) instead of `f.head`, so the count
+//     stays consistent with what `Retrieve` will serve if a `TruncateHead`
+//     loop is interrupted partway through.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -226,14 +229,19 @@ func (f *Freezer) Ancients() (uint64, error) {
 
 // AncientCount returns the number of items stored in the named table.
 //
-// Slice-1 callers want a kind-keyed count; geth's `Ancients()` returns the
-// global count (all tables agree by invariant) and `AncientSize` returns
-// bytes. This wraps `Ancients()` after sanity-checking the table exists.
+// Slice-1 callers want a kind-keyed count. We read the per-table `items`
+// atomic directly (the same field `Retrieve` uses as its authority) rather
+// than the global `f.head` because `TruncateHead` updates each table in a
+// loop before re-storing `f.head`: a partial failure mid-loop would leave
+// `f.head` ahead of one of the tables, and a kind-keyed query that returned
+// the global value would then disagree with what `Retrieve(kind, ...)`
+// actually serves. Reading the per-table atomic closes that window.
 func (f *Freezer) AncientCount(kind string) (uint64, error) {
-	if _, ok := f.tables[kind]; !ok {
+	table, ok := f.tables[kind]
+	if !ok {
 		return 0, errUnknownTable
 	}
-	return f.head.Load(), nil
+	return table.items.Load(), nil
 }
 
 // HasAncient returns true if the named table has an entry at the given number.
