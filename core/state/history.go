@@ -84,11 +84,18 @@ type LiveStateHistoryReader struct {
 	live LiveAccountReader
 }
 
-// NewLiveStateHistoryReader wraps a (live-account reader, disk KV reader)
-// pair as a HistoryReader that returns live state for any block. `live`
-// resolves accounts via the trie; `db` serves storage and code from
-// flat-state.
-func NewLiveStateHistoryReader(live LiveAccountReader, db ethdb.KeyValueReader) *LiveStateHistoryReader {
+// NewLiveStateHistoryReader wraps a (disk KV reader, live-account reader)
+// pair as a HistoryReader that returns live state for any block. `db` serves
+// storage and code from flat-state; `live` resolves accounts via the trie.
+//
+// `live` may be nil — in that case `AccountAt` returns nil (degraded
+// "no account exists" semantics) but storage and code reads continue to
+// function. This is the same nil tolerance as PersistentHistoryReader so
+// the two readers share an interface contract.
+//
+// Parameter order is (db, live) to match NewPersistentHistoryReader and
+// keep call sites consistent across both reader types.
+func NewLiveStateHistoryReader(db ethdb.KeyValueReader, live LiveAccountReader) *LiveStateHistoryReader {
 	return &LiveStateHistoryReader{db: db, live: live}
 }
 
@@ -154,6 +161,10 @@ var (
 //	The reader takes an ethdb.KeyValueReader. For archive queries the chain
 //	should hand it `bc.db` (the disk store). Mid-apply / mid-fork reads via
 //	bc.buffer are out of scope here — slice 4 deals with that interaction.
+//
+// TODO(slice-4): buffer-tip reads — when blockNum is within the unflushed
+// bc.buffer layers, reads must consult the buffer above disk. See plan
+// docs/superpowers/plans/2026-05-19-state-history-index.md Slice 4.
 //
 // The headNum parameter is the chain's current head as of reader
 // construction. When blockNum >= headNum the reader short-circuits to a
@@ -393,6 +404,13 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 			// was changed; pre-block code is these bytes". A non-nil empty
 			// slice means "pre-block had no code" — represent as nil here
 			// so callers see the same shape as a never-had-code account.
+			//
+			// NOTE: len(CodePre)==0 && CodePre!=nil is currently unreachable
+			// under the slice-2 capture path (history_capture.go only allocates
+			// CodePre when len(prevCode)>0, and proto3 bytes round-trips
+			// nil/empty identically). Kept as a future-safe defensive branch
+			// in case a downstream capture path produces an explicit-empty
+			// pre-image.
 			if len(delta.CodePre) == 0 {
 				code = nil
 			} else {

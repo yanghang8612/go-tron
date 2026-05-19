@@ -206,8 +206,6 @@ func TestPersistentHistoryReader_NeverModified(t *testing.T) {
 		s.AddBalance(driver, 1)
 	})
 	for n := uint64(2); n <= 5; n++ {
-		bn := n
-		_ = bn
 		f.applyBlock(tcommon.Hash{byte(n)}, func(s *StateDB) {
 			s.AddBalance(driver, 1)
 		})
@@ -290,8 +288,6 @@ func TestPersistentHistoryReader_CacheHit(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0x60)
 	for n := uint64(1); n <= 5; n++ {
-		bn := n
-		_ = bn
 		f.applyBlock(tcommon.Hash{byte(n)}, func(s *StateDB) {
 			s.AddBalance(addr, int64(n)*100)
 		})
