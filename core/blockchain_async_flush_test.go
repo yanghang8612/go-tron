@@ -175,7 +175,7 @@ func TestAsyncFlush_InlineFallbackOnQueueFull(t *testing.T) {
 	bc.chainmu.Lock()
 	bc.flushQueue = make(chan uint64, flushQueueCap)
 	for i := 0; i < flushQueueCap; i++ {
-		bc.flushPendingWg.Add(1)
+		bc.flushPending.post()
 		bc.flushQueue <- uint64(b1.Number())
 	}
 
@@ -201,7 +201,7 @@ func TestAsyncFlush_InlineFallbackOnQueueFull(t *testing.T) {
 	bc.chainmu.Lock()
 	for len(bc.flushQueue) > 0 {
 		<-bc.flushQueue
-		bc.flushPendingWg.Done()
+		bc.flushPending.done()
 	}
 	bc.flushQueue = nil
 	bc.flushErr.Store(nil)
@@ -295,7 +295,7 @@ func TestAsyncFlush_RunFlushCutoffPreservesExistingError(t *testing.T) {
 
 	// Run a successful flush — runFlushCutoff should not displace the
 	// recorded error.
-	bc.flushPendingWg.Add(1)
+	bc.flushPending.post()
 	bc.runFlushCutoff(0) // cutoff 0 → flushBufferUpToSolidified returns nil
 	bc.WaitForFlushSettled()
 

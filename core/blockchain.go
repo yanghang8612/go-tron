@@ -136,17 +136,19 @@ type BlockChain struct {
 	// only the worker and an inline fallback ever call FlushUpTo, and
 	// Close serialises against both).
 	//
-	// flushPendingWg tracks in-flight cutoffs so tests (and Close) can
-	// deterministically wait for the queue to drain. flushWorkerWg tracks
-	// the worker goroutine's lifetime so Close can join it after closing
-	// the channel.
+	// flushPending counts in-flight cutoffs so callers (Close, tests,
+	// switchFork, external observers via WaitForFlushSettled) can wait for
+	// the queue to drain. The cond-var design tolerates concurrent post
+	// (from applyBlock) and wait (from anywhere), which sync.WaitGroup
+	// forbids. flushWorkerWg tracks the worker goroutine's lifetime so
+	// Close can join it after closing the channel.
 	//
 	// flushErr is set fail-fast when an async flush returns an error; the
 	// next applyBlock surfaces it before doing any work. Mirrors today's
 	// sync error severity — a write failure at this layer corrupts the
 	// chain regardless of timing.
 	flushQueue     chan uint64
-	flushPendingWg sync.WaitGroup
+	flushPending   *flushBarrier
 	flushWorkerWg  sync.WaitGroup
 	flushErr       atomic.Pointer[error]
 
@@ -198,6 +200,55 @@ func (bc *BlockChain) AddMaintenanceHook(fn func(*types.Block, []tcommon.Address
 	bc.maintHookMu.Unlock()
 }
 
+// flushBarrier counts in-flight async flushes and supports concurrent
+// post (Add) + wait (Wait), which sync.WaitGroup explicitly forbids
+// ("Add called concurrently with Wait" panics). postFlush runs on the
+// chainmu-holding applyBlock path; WaitForFlushSettled is exported for
+// external observers who must not need to coordinate against the writer.
+// The cond-var design lets both proceed independently without races.
+type flushBarrier struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	pending int
+}
+
+func newFlushBarrier() *flushBarrier {
+	b := &flushBarrier{}
+	b.cond = sync.NewCond(&b.mu)
+	return b
+}
+
+func (b *flushBarrier) post() {
+	b.mu.Lock()
+	b.pending++
+	b.mu.Unlock()
+}
+
+func (b *flushBarrier) done() {
+	b.mu.Lock()
+	b.pending--
+	if b.pending == 0 {
+		b.cond.Broadcast()
+	}
+	b.mu.Unlock()
+}
+
+func (b *flushBarrier) wait() {
+	b.mu.Lock()
+	for b.pending > 0 {
+		b.cond.Wait()
+	}
+	b.mu.Unlock()
+}
+
+// flushQueueCap caps the in-flight async-flush cutoffs the worker will
+// buffer ahead of itself. Steady state is one post per applyBlock; the
+// queue exists only to smooth out micro-bursts (e.g. a sync replay that
+// applies several blocks before the worker schedules in). When the queue
+// is full, applyBlock falls back to an inline flush — backpressure
+// guarantees a flush is never lost.
+const flushQueueCap = 8
+
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
 	buffer := blockbuffer.New(db)
@@ -206,12 +257,14 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	// so every chain read falls through to the hot KV store unchanged.
 	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 	bc := &BlockChain{
-		db:      db,
-		chaindb: chaindb,
-		stateDB: stateDB,
-		config:  config,
-		fc:      forks.NewForkController(buffer),
-		buffer:  buffer,
+		db:           db,
+		chaindb:      chaindb,
+		stateDB:      stateDB,
+		config:       config,
+		fc:           forks.NewForkController(buffer),
+		buffer:       buffer,
+		flushQueue:   make(chan uint64, flushQueueCap),
+		flushPending: newFlushBarrier(),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -982,7 +1035,7 @@ func (bc *BlockChain) startFlushWorker() {
 // We still log so operators see the failure when it happens, not only when
 // the next block tries to advance.
 func (bc *BlockChain) runFlushCutoff(cutoff uint64) {
-	defer bc.flushPendingWg.Done()
+	defer bc.flushPending.done()
 	if err := bc.flushBufferUpToSolidified(int64(cutoff)); err != nil {
 		wrapped := fmt.Errorf("flush buffer up to solidified: %w", err)
 		// First failure wins. A later flush attempt that also fails (e.g.
@@ -1009,7 +1062,7 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 		return nil
 	}
 	cutoff := uint64(solidified)
-	bc.flushPendingWg.Add(1)
+	bc.flushPending.post()
 	select {
 	case bc.flushQueue <- cutoff:
 		return nil
@@ -1039,12 +1092,11 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 // regardless of flush state. See the InsertBlock godoc for the precise
 // return-time guarantees.
 //
-// Cheap to call when the queue is empty (one sync.WaitGroup.Wait on a
-// zero counter). Close drives the same drain plus a final synchronous
-// flush, so a Close caller does not need to call WaitForFlushSettled
-// first.
+// Cheap to call when the queue is empty (one mutex acquire on a zero
+// counter). Close drives the same drain plus a final synchronous flush,
+// so a Close caller does not need to call WaitForFlushSettled first.
 func (bc *BlockChain) WaitForFlushSettled() {
-	bc.flushPendingWg.Wait()
+	bc.flushPending.wait()
 }
 
 // Close performs a graceful shutdown of the BlockChain: it acquires
@@ -1088,6 +1140,16 @@ func (bc *BlockChain) Close() error {
 // tip, then re-applies the new branch on top of LCA state.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) switchFork(newHead *types.Block) error {
+	// Drain any in-flight async flushes before rewinding buffer layers.
+	// Without this, the worker may still be holding solidified-but-not-yet-
+	// flushed layers in bc.buffer when DiscardBlock runs; DiscardBlock would
+	// pop them, silently losing finalised state — violating the "forks must
+	// not pop past solidified" invariant the synchronous flush used to
+	// enforce by emptying those layers out of the buffer before applyBlock
+	// returned. We wait on the chainmu-holding caller's path; the flush
+	// worker holds only the buffer's internal mu, so this can't deadlock.
+	bc.flushPending.wait()
+
 	currentHash := bc.CurrentBlock().Hash()
 	newBranch, oldBranch, err := bc.khaosDB.GetBranch(newHead.Hash(), currentHash)
 	if err != nil {
