@@ -29,25 +29,6 @@ const (
 	minFetchRequestInterval = tsync.MinFetchRequestInterval
 )
 
-// syncStats accumulates per-window throughput counters for the sync summary
-// line. Reset at every emit so the figures represent rolling-window rates.
-type syncStats struct {
-	startTime         time.Time     // window start
-	blocks            int           // blocks applied in window
-	txs               int           // tx count applied in window
-	execElapsed       time.Duration // accumulated InsertBlock wall time
-	bufferWaitElapsed time.Duration // accumulated time waiting for the next contiguous buffered block
-	totalStart        time.Time     // session start (for "Sync complete" line)
-	totalBlocks       int           // session-wide block count
-
-	// applyStats is the per-phase wall-clock breakdown reported by
-	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
-	// every block applied in the window lets the summary line tell us *which*
-	// phase is the bottleneck — without this breakdown, execElapsed alone is
-	// opaque and "Imported chain segment" can only say "execution is slow".
-	applyStats core.ApplyStats
-}
-
 type syncDiagnostics struct {
 	blockBufferLen int
 	requestedLen   int
@@ -129,8 +110,16 @@ type SyncService struct {
 	pause *tsync.PauseGate
 
 	// stats accumulates per-window throughput counters used for the
-	// "Imported chain segment" summary line. Guarded by ss.mu.
-	stats syncStats
+	// "Imported chain segment" summary line. Owns its own mutex; lock
+	// order is ss.mu (outer) → stats.mu (inner) when both are held.
+	// onApplyStats is the only writer that does NOT also hold ss.mu —
+	// stats.mu serializes its own state so the off-sync producer path
+	// is safe.
+	stats *tsync.Stats
+
+	// watchdog runs the periodic isolation check. Owns its own goroutine
+	// and ticker; Start/Stop fan-out launches and joins it.
+	watchdog *tsync.Watchdog
 
 	bufferWaitStart time.Time
 	bufferWaitNum   uint64
@@ -139,14 +128,30 @@ type SyncService struct {
 	stopOnce sync.Once
 }
 
+// chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
+// a CurrentBlockNum accessor that unwraps CurrentBlock().Number() — keeps
+// net/sync free of core/types imports.
+type chainStatusAdapter struct{ chain *core.BlockChain }
+
+func (a chainStatusAdapter) LastInsertTime() time.Time { return a.chain.LastInsertTime() }
+func (a chainStatusAdapter) CurrentBlockNum() uint64   { return a.chain.CurrentBlock().Number() }
+
 // NewSyncService creates a new sync service.
 func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	ss := &SyncService{
 		chain:   chain,
 		handler: handler,
 		pause:   tsync.NewPauseGate(),
+		stats:   tsync.NewStats(),
 		quit:    make(chan struct{}),
 	}
+	ss.watchdog = tsync.NewWatchdog(
+		chainStatusAdapter{chain: chain},
+		watchdogPeerSource{handler: handler},
+		ss.pause,
+		ss,
+		watchdogLog,
+	)
 	// Subscribe to per-block phase breakdowns so the throttled "Imported chain
 	// segment" line can show validate/execute/maintenance/stateCommit/dpUpdate/
 	// persist/hooks alongside the existing execElapsed total.
@@ -154,80 +159,62 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	return ss
 }
 
+// watchdogPeerSource adapts a possibly-nil *TronHandler to tsync.PeerSource;
+// when handler is nil (unit-test scaffold) the adapter reports no peers so
+// checkIsolation short-circuits without dereferencing.
+type watchdogPeerSource struct{ handler *TronHandler }
+
+func (w watchdogPeerSource) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
+	if w.handler == nil {
+		return nil
+	}
+	return w.handler.BestSyncCandidate(exclude)
+}
+
+func (w watchdogPeerSource) HandshakedPeers() []*p2p.Peer {
+	if w.handler == nil {
+		return nil
+	}
+	return w.handler.HandshakedPeers()
+}
+
+// watchdogLog mirrors the pre-refactor "Polling peer (chain stalled)" Info
+// line emitted from checkIsolation. Routed through the net package logger so
+// the module=net tag stays consistent across all sync log lines.
+func watchdogLog(peer *p2p.Peer, head uint64, stalledFor time.Duration) {
+	log.Info("Polling peer (chain stalled)",
+		"peer", peer.ID(),
+		"head", head,
+		"stalledFor", ethcommon.PrettyDuration(stalledFor))
+}
+
 // onApplyStats folds one block's per-phase wall-clock breakdown into the
 // rolling window. Fires synchronously from applyBlock on the importing
 // goroutine — during sync that is drainBufferedBlocks; during normal
-// operation it is the broadcast/producer path. ss.mu is briefly held to keep
-// the accumulators consistent with the existing ss.stats.execElapsed update
-// site at drainBufferedBlocks.
+// operation it is the broadcast/producer path. Stats owns its own mutex
+// so no ss.mu acquisition here; this matters because the producer path
+// may invoke applyBlock from a goroutine that already holds the producer
+// lock, and we don't want to deadlock with any future ss.mu holder.
 func (ss *SyncService) onApplyStats(_ *types.Block, s core.ApplyStats) {
-	ss.mu.Lock()
-	ss.stats.applyStats.Validate += s.Validate
-	ss.stats.applyStats.Execute += s.Execute
-	ss.stats.applyStats.Maintenance += s.Maintenance
-	ss.stats.applyStats.StateCommit += s.StateCommit
-	ss.stats.applyStats.DPUpdate += s.DPUpdate
-	ss.stats.applyStats.Persist += s.Persist
-	ss.stats.applyStats.Hooks += s.Hooks
-	ss.mu.Unlock()
+	ss.stats.AddApplyBlock(s)
 }
 
 // Start launches the isolation watchdog goroutine.
 func (ss *SyncService) Start() {
-	go ss.watchdog()
+	if ss.watchdog != nil {
+		ss.watchdog.Start()
+	}
 }
 
 // Stop shuts down the sync service and cancels any in-progress sync.
 func (ss *SyncService) Stop() {
+	if ss.watchdog != nil {
+		ss.watchdog.Stop()
+	}
 	ss.stopOnce.Do(func() { close(ss.quit) })
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
-}
-
-// watchdog fires every 30 s and triggers a sync if the chain appears isolated.
-func (ss *SyncService) watchdog() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			ss.checkIsolation()
-		case <-ss.quit:
-			return
-		}
-	}
-}
-
-// checkIsolation starts a sync if we are not already syncing and the chain
-// head has not advanced in over 30 s. Tries `BestSyncCandidate` first
-// (peer with strictly-higher advertised head) and falls back to any
-// handshaked peer — java-tron's `AdvService` does not advertise new
-// blocks via INVENTORY until it considers our peer "ready", so the
-// peer's cached headNum can lag arbitrarily behind reality. Polling
-// `BuildChainSummary` against any peer lets java-tron re-evaluate.
-func (ss *SyncService) checkIsolation() {
-	if ss.IsSyncing() || ss.IsPaused() || ss.chain == nil || ss.handler == nil {
-		return
-	}
-	if time.Since(ss.chain.LastInsertTime()) < 30*time.Second {
-		return
-	}
-	candidate := ss.handler.BestSyncCandidate(nil)
-	if candidate == nil {
-		// Fall back: any handshaked peer. java-tron will respond with an
-		// empty CHAIN_INVENTORY if we're already at head, so this is cheap.
-		if peers := ss.handler.HandshakedPeers(); len(peers) > 0 {
-			candidate = peers[0]
-		}
-	}
-	if candidate != nil {
-		log.Info("Polling peer (chain stalled)",
-			"peer", candidate.ID(),
-			"head", ss.chain.CurrentBlock().Number(),
-			"stalledFor", ethcommon.PrettyDuration(time.Since(ss.chain.LastInsertTime())))
-		ss.StartSync(candidate)
-	}
 }
 
 // IsSyncing returns whether sync is in progress.
@@ -317,7 +304,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
-	ss.stats = syncStats{startTime: now, totalStart: now}
+	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
 }
@@ -880,10 +867,11 @@ func (ss *SyncService) drainBufferedBlocks() {
 			}
 			break
 		}
-		ss.stats.bufferWaitElapsed += ss.endBufferWaitLocked(next, now)
+		bufferWait := ss.endBufferWaitLocked(next, now)
 		delete(ss.blockBuffer, next)
 		delete(ss.bufferedHash, buffered.block.Hash())
 		ss.mu.Unlock()
+		ss.stats.AddBufferWait(bufferWait)
 
 		insertStart := time.Now()
 		insertErr := ss.chain.InsertBlock(buffered.block)
@@ -893,23 +881,22 @@ func (ss *SyncService) drainBufferedBlocks() {
 			break
 		}
 
+		// RecordBlock atomically (under stats.mu) appends this block's drain
+		// counters and decides whether the window has elapsed. Combining the
+		// two preserves the pre-refactor invariant where the producer path's
+		// onApplyStats hook could not race with the count++/snapshot/reset
+		// trio that lived in one ss.mu critical section.
+		snap, emit := ss.stats.RecordBlock(
+			len(buffered.block.Transactions()),
+			insertElapsed,
+			time.Now(),
+			tsync.StatsReportInterval,
+		)
+
 		ss.mu.Lock()
-		ss.stats.blocks++
-		ss.stats.totalBlocks++
-		ss.stats.txs += len(buffered.block.Transactions())
-		ss.stats.execElapsed += insertElapsed
-		emit := time.Since(ss.stats.startTime) >= tsync.StatsReportInterval
-		var snap syncStats
 		var diag syncDiagnostics
 		if emit {
-			snap = ss.stats
 			diag = ss.snapshotDiagnosticsLocked()
-			ss.stats.startTime = time.Now()
-			ss.stats.blocks = 0
-			ss.stats.txs = 0
-			ss.stats.execElapsed = 0
-			ss.stats.bufferWaitElapsed = 0
-			ss.stats.applyStats = core.ApplyStats{}
 		}
 		remain := ss.estimatedRemainLocked()
 		ss.mirrorLegacyLocked()
@@ -1027,32 +1014,32 @@ func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
 
 // reportSegment emits the throttled "Imported chain segment" summary. Called
 // without ss.mu held.
-func (ss *SyncService) reportSegment(s syncStats, diag syncDiagnostics, head uint64, remain int64, peer *p2p.Peer) {
-	elapsed := time.Since(s.startTime)
+func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, head uint64, remain int64, peer *p2p.Peer) {
+	elapsed := time.Since(s.StartTime)
 	if elapsed <= 0 {
 		elapsed = 1
 	}
-	blocksPerSec := float64(s.blocks) * float64(time.Second) / float64(elapsed)
-	txsPerSec := float64(s.txs) * float64(time.Second) / float64(elapsed)
+	blocksPerSec := float64(s.Blocks) * float64(time.Second) / float64(elapsed)
+	txsPerSec := float64(s.Txs) * float64(time.Second) / float64(elapsed)
 
 	ctx := []any{
-		"blocks", s.blocks,
-		"txs", s.txs,
+		"blocks", s.Blocks,
+		"txs", s.Txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),
-		"execElapsed", ethcommon.PrettyDuration(s.execElapsed),
-		"bufferWaitElapsed", ethcommon.PrettyDuration(s.bufferWaitElapsed),
+		"execElapsed", ethcommon.PrettyDuration(s.ExecElapsed),
+		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
 		// Per-phase wall-clock breakdown — sums across every block in the
 		// window. Together with execElapsed (which is wall time between
 		// drainBufferedBlocks reading the buffer slot and seeing InsertBlock
 		// return) these tell you which phase is the bottleneck. Maintenance
 		// is usually 0; if it's non-trivial the window crossed a 6-hour grid.
-		"validate", ethcommon.PrettyDuration(s.applyStats.Validate),
-		"execute", ethcommon.PrettyDuration(s.applyStats.Execute),
-		"maintenance", ethcommon.PrettyDuration(s.applyStats.Maintenance),
-		"stateCommit", ethcommon.PrettyDuration(s.applyStats.StateCommit),
-		"dpUpdate", ethcommon.PrettyDuration(s.applyStats.DPUpdate),
-		"persist", ethcommon.PrettyDuration(s.applyStats.Persist),
-		"hooks", ethcommon.PrettyDuration(s.applyStats.Hooks),
+		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
+		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
+		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
+		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
+		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
+		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
+		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
 		"head", head,
@@ -1253,12 +1240,12 @@ func (ss *SyncService) tryFindSyncPeer(exclude *p2p.Peer) {
 }
 
 func (ss *SyncService) finishSync() {
-	ss.mu.Lock()
-	totalBlocks := ss.stats.totalBlocks
-	totalStart := ss.stats.totalStart
+	totalBlocks := ss.stats.TotalBlocks()
+	totalStart := ss.stats.TotalStart()
 	if totalStart.IsZero() {
 		totalStart = time.Now()
 	}
+	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
 

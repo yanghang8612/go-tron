@@ -41,11 +41,10 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	peer := p2p.NewPeer(c1, "summary-peer", false, nil)
 
 	now := time.Now()
+	ss.stats.InitSession(now)
 	ss.mu.Lock()
 	ss.syncing = true
 	ss.syncPeer = peer
-	ss.stats.startTime = now
-	ss.stats.totalStart = now
 	ss.inflight = 1
 	ss.armFetchTimer()
 	ss.mu.Unlock()
