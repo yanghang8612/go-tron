@@ -11,7 +11,11 @@
 
 package rawdb
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
+)
 
 // ErrNotInAncient is returned by AncientReader implementations when the
 // requested item is not (or no longer) frozen — callers should fall back
@@ -62,9 +66,14 @@ type AncientWriter interface {
 // gtron only stores pre-encoded blobs (proto.Marshal output or raw 32-byte
 // state roots), so we omit geth's RLP-encoding `Append` overload — slice-2
 // callers always go through `AppendRaw`.
-type AncientWriteOp interface {
-	AppendRaw(kind string, number uint64, item []byte) error
-}
+//
+// Defined as a type alias to `freezer.AncientWriteOp` (not a separately-named
+// interface) so that `*freezer.Freezer.ModifyAncients`'s callback signature
+// — `func(freezer.AncientWriteOp) error` — is assignable to
+// `AncientWriter.ModifyAncients`'s `func(AncientWriteOp) error`. Without the
+// alias the two function types differ nominally even though the method sets
+// match, and slice-3's freezing goroutine would need an awkward shim.
+type AncientWriteOp = freezer.AncientWriteOp
 
 // NoopAncient is an AncientReader that always reports "no entries".
 // Used by tests and by configurations that disable the freezer entirely;
