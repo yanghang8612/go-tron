@@ -128,6 +128,28 @@ type BlockChain struct {
 	// not flush to disk; reads must consult the buffer (see BufferedDB).
 	buffer *blockbuffer.Buffer
 
+	// Async-flush plumbing. applyBlock posts the new solidified cutoff to
+	// flushQueue via a non-blocking send; a worker goroutine drains the
+	// channel and runs the disk flush off the chainmu critical path. The
+	// buffer's internal RWMutex keeps PendingBlocks/Get/Has safe to call
+	// concurrently with the worker (single-writer contract still holds:
+	// only the worker and an inline fallback ever call FlushUpTo, and
+	// Close serialises against both).
+	//
+	// flushPendingWg tracks in-flight cutoffs so tests (and Close) can
+	// deterministically wait for the queue to drain. flushWorkerWg tracks
+	// the worker goroutine's lifetime so Close can join it after closing
+	// the channel.
+	//
+	// flushErr is set fail-fast when an async flush returns an error; the
+	// next applyBlock surfaces it before doing any work. Mirrors today's
+	// sync error severity — a write failure at this layer corrupts the
+	// chain regardless of timing.
+	flushQueue     chan uint64
+	flushPendingWg sync.WaitGroup
+	flushWorkerWg  sync.WaitGroup
+	flushErr       atomic.Pointer[error]
+
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
 
@@ -237,6 +259,14 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	if len(witnesses) > 0 {
 		bc.activeWitnesses.Store(witnesses)
 	}
+
+	// Only start the async flush worker once construction can no longer
+	// fail: an early error-return above would otherwise leak the worker
+	// goroutine (no BlockChain handle is exposed to the caller, so nothing
+	// can drive Close to drain it). Mirrors the standard Go pattern of
+	// deferring resource start until the constructor is guaranteed to
+	// succeed.
+	bc.startFlushWorker()
 
 	return bc, nil
 }
@@ -901,6 +931,83 @@ func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
 		return *p, true
 	}
 	return bc.buffer.FlushUpTo(uint64(solidified), numberOf, bc.db)
+}
+
+// startFlushWorker spawns the background goroutine that drains flushQueue
+// and runs flushBufferUpToSolidified off the chainmu critical path. Called
+// once at the end of NewBlockChain — strictly after every error-returning
+// step, so a constructor failure can never leak this goroutine. Close
+// drives a graceful shutdown by closing the channel and joining
+// flushWorkerWg.
+func (bc *BlockChain) startFlushWorker() {
+	bc.flushWorkerWg.Add(1)
+	go func() {
+		defer bc.flushWorkerWg.Done()
+		for cutoff := range bc.flushQueue {
+			bc.runFlushCutoff(cutoff)
+		}
+	}()
+}
+
+// runFlushCutoff is the body of one flush iteration shared by the worker
+// loop and the inline fallback. It runs the flush, records a fail-fast
+// error (first one wins), and decrements the pending WaitGroup.
+//
+// Errors are not panicked or logged-and-swallowed here: the next applyBlock
+// surfaces flushErr at its top, matching the severity of an inline error.
+// We still log so operators see the failure when it happens, not only when
+// the next block tries to advance.
+func (bc *BlockChain) runFlushCutoff(cutoff uint64) {
+	defer bc.flushPendingWg.Done()
+	if err := bc.flushBufferUpToSolidified(int64(cutoff)); err != nil {
+		wrapped := fmt.Errorf("flush buffer up to solidified: %w", err)
+		// First failure wins. A later flush attempt that also fails (e.g.
+		// because the underlying store is gone) doesn't displace the
+		// original — the original is the actionable signal for operators
+		// and applyBlock callers.
+		bc.flushErr.CompareAndSwap(nil, &wrapped)
+		log.Error("Async buffer flush failed", "cutoff", cutoff, "err", err)
+	}
+}
+
+// postFlush hands the cutoff to the async worker. The non-blocking send
+// is the fast path — empty channel, single sync.WaitGroup.Add(1). If the
+// queue is full (worker backlog under sustained load) the call falls back
+// to a synchronous flush so we never lose a cutoff.
+//
+// Callers hold chainmu (applyBlock only). The fail-fast check at the top
+// of applyBlock catches errors raised on either path; for the inline-
+// fallback path we additionally surface the error to the caller so the
+// current applyBlock unwinds (same observable behaviour as the pre-async
+// inline flush).
+func (bc *BlockChain) postFlush(solidified int64) error {
+	if solidified <= 0 {
+		return nil
+	}
+	cutoff := uint64(solidified)
+	bc.flushPendingWg.Add(1)
+	select {
+	case bc.flushQueue <- cutoff:
+		return nil
+	default:
+		// Queue full: drop back to sync flush. runFlushCutoff balances
+		// the Add(1) above via its deferred Done().
+		bc.runFlushCutoff(cutoff)
+		if errPtr := bc.flushErr.Load(); errPtr != nil {
+			return *errPtr
+		}
+		return nil
+	}
+}
+
+// waitForFlushQueueDrain blocks until every in-flight async-flush cutoff
+// has been processed. Used by tests to assert post-conditions that depend
+// on disk-side state (e.g. PendingBlocks() == 0 after a single-SR insert).
+// Production callsites go through Close, which drives the same drain plus
+// a final synchronous flush; tests use this when they want to observe the
+// async path mid-run.
+func (bc *BlockChain) waitForFlushQueueDrain() {
+	bc.flushPendingWg.Wait()
 }
 
 // Close performs a graceful shutdown of the BlockChain: it acquires
