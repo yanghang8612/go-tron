@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
-	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -68,6 +68,15 @@ type PbftHandler struct {
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+
+	// pbftActive sticks at true once AllowPbft flips on. The PBFT activation
+	// flag is monotonic — once a proposal sets allow_pbft=1 the chain cannot
+	// turn it off — so a one-shot atomic is sufficient and lets allowPBFT()
+	// skip the DB read on every inbound PBFT message. Pre-activation we fall
+	// through to a *single* buffered point read on the AllowPbft DP key
+	// rather than the previous state.LoadDynamicProperties full scan, which
+	// burned ~3.6% of CPU at h≈1.9M (per the inbound-PBFT-message profile).
+	pbftActive atomic.Bool
 }
 
 // SetProducer wires the SR-side producer; once set, this handler will trigger
@@ -161,9 +170,22 @@ func evictCacheTTL(cache []pbftCachedMsg, now time.Time) []pbftCachedMsg {
 }
 
 func (h *PbftHandler) allowPBFT() bool {
-	headNum := h.chain.CurrentBlock().Number()
-	dp := state.LoadDynamicProperties(h.db)
-	return forks.IsActive(forks.AllowPbft, headNum, dp)
+	if h.pbftActive.Load() {
+		return true
+	}
+	// One buffered point read on the AllowPbft key — versus the previous
+	// LoadDynamicProperties full scan that this hot path used to do on every
+	// inbound PBFT message. The buffer overlay surfaces the activation write
+	// before solidified-flush lands it on disk (mainnet 27-SR DPoS keeps a
+	// ~19-block window between head and solidified). Once active, the atomic
+	// short-circuits every future call. Note that forks.IsActive(AllowPbft,
+	// ...) reduces to `dp.Get("allow_pbft") != 0` — blockNum is unused —
+	// so the direct int compare is semantically identical.
+	if h.chain.BufferedDPInt64("allow_pbft") >= 1 {
+		h.pbftActive.Store(true)
+		return true
+	}
+	return false
 }
 
 // pbftSigToAddress recovers the SR address from a PBFT signature.

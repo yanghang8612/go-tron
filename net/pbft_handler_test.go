@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -374,5 +375,94 @@ func TestPbftIsSwitch(t *testing.T) {
 	h.smMu.Unlock()
 	if stillIn {
 		t.Error("expected preVotes to be cleared after remove(no)")
+	}
+}
+
+// makePbftHandlerNoActivation builds a PbftHandler whose chain has allow_pbft
+// absent on disk — so allowPBFT() must take the slow path and return false
+// until the key is written. Unlike makePbftHandlerForTest this skips the
+// dp.Flush(allow_pbft=1) step.
+func makePbftHandlerNoActivation(t *testing.T) (*PbftHandler, *core.BlockChain, ethdb.KeyValueStore) {
+	t.Helper()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+	}
+	core.SetupGenesisBlock(diskdb, genesis)
+	bc, err := core.NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewPbftHandler(bc, bc.DB(), nil, nil)
+	return h, bc, diskdb
+}
+
+// TestAllowPBFT_StickyAtomic_FastPathSkipsDB locks in the perf invariant
+// behind the AllowPbft sticky-atomic cache: every inbound PBFT message used
+// to fan out to state.LoadDynamicProperties (a full DP prefix scan, ~3.6%
+// of CPU at h≈1.9M per the inbound-message profile); now a one-shot atomic
+// short-circuits once allow_pbft has been observed >=1, and the slow path
+// is replaced by a single BufferedDPInt64 point read.
+//
+// The test walks the slow path → activation → fast-path transition end to
+// end, then asserts the strongest fast-path property: after activation, even
+// regressing the disk image (writing allow_pbft=0) must NOT cause allowPBFT
+// to flip back to false. The sticky atomic is the only thing that keeps it
+// true; a regression that drops or wires it wrong would surface here.
+func TestAllowPBFT_StickyAtomic_FastPathSkipsDB(t *testing.T) {
+	h, _, diskdb := makePbftHandlerNoActivation(t)
+
+	// (a) Slow path before activation: allow_pbft absent on disk → buffer
+	//     read returns 0 → allowPBFT must return false and leave the atomic
+	//     unset.
+	if h.allowPBFT() {
+		t.Fatal("allowPBFT() = true before allow_pbft activation, want false")
+	}
+	if h.pbftActive.Load() {
+		t.Fatal("pbftActive cached as true before activation")
+	}
+
+	// (b) Activate allow_pbft on disk (mirrors what a successful proposal
+	//     write through bc.buffer would land on the solidified flush). The
+	//     buffer overlay sees the disk value on miss.
+	dp := state.LoadDynamicProperties(diskdb)
+	dp.Set("allow_pbft", 1)
+	dp.Flush(diskdb)
+
+	if !h.allowPBFT() {
+		t.Fatal("allowPBFT() = false after allow_pbft=1 written to disk, want true")
+	}
+	if !h.pbftActive.Load() {
+		t.Fatal("pbftActive not cached as true after first true return from slow path")
+	}
+
+	// (c) Regress disk state to allow_pbft=0 — a state the buffered point
+	//     read alone would compute as not-active. The sticky atomic must
+	//     hold the gate open.
+	dp = state.LoadDynamicProperties(diskdb)
+	dp.Set("allow_pbft", 0)
+	dp.Flush(diskdb)
+
+	// Sanity check: the underlying buffered read must now report 0 so
+	// the assertion below is meaningful (if the buffer still reported >=1,
+	// the test wouldn't be exercising the sticky behaviour).
+	if h.chain.BufferedDPInt64("allow_pbft") != 0 {
+		t.Fatalf("test precondition broken: BufferedDPInt64(allow_pbft) after deactivation = %d, want 0", h.chain.BufferedDPInt64("allow_pbft"))
+	}
+	if !h.allowPBFT() {
+		t.Fatal("allowPBFT() flipped to false after disk deactivation — sticky atomic regressed")
+	}
+
+	// (d) Contract assertion: allowPBFT() must not touch h.db. Nil-out the
+	//     db field so any read against it would panic; if the fast path is
+	//     wired correctly we never reach the slow path and never touch h.db.
+	//     Documents the contract going forward — future refactors that
+	//     reintroduce a state.LoadDynamicProperties(h.db) call on this hot
+	//     path would fail this test loudly.
+	h.db = nil
+	if !h.allowPBFT() {
+		t.Fatal("allowPBFT() returned false after h.db nil-out — fast path is reading h.db")
 	}
 }
