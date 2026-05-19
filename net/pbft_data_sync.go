@@ -11,6 +11,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/p2p"
@@ -182,16 +183,25 @@ func (h *PbftDataSyncHandler) allowPBFT() bool {
 	return false
 }
 
-// readDPInt64 fetches a single DynamicProperties key as a big-endian int64.
-// Returns 0 when the key is absent or malformed. Equivalent to the per-key
-// branch inside state.LoadDynamicProperties, but without the surrounding
+// readDPInt64 fetches a single DynamicProperties key as a big-endian int64,
+// falling back to the state package's default when the key is absent or
+// malformed. Equivalent to the per-key branch inside state.LoadDynamicProperties
+// (which seeds defaults before applying DB overrides) without the surrounding
 // 133-key scan.
+//
+// The fallback is load-bearing: mainnet genesis ships an empty
+// DynamicProperties map and dp.Flush only persists keys that were Set'd, so
+// keys whose defaults are non-zero (e.g. maintenance_time_interval = 21_600_000)
+// stay absent on disk indefinitely. Without the fallback, a callsite like
+// the PBFT SRL epoch lookup would compute `nextMaint - 0` instead of
+// `nextMaint - 21_600_000` and silently miss every cached SR-list result.
 func readDPInt64(db ethdb.KeyValueReader, name string) int64 {
 	data := rawdb.ReadDynamicProperty(db, name)
-	if len(data) != 8 {
-		return 0
+	if len(data) == 8 {
+		return int64(binary.BigEndian.Uint64(data))
 	}
-	return int64(binary.BigEndian.Uint64(data))
+	def, _ := state.DefaultDPInt64(name)
+	return def
 }
 
 func (h *PbftDataSyncHandler) evictStaleNoLock() {

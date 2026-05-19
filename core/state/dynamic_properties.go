@@ -286,6 +286,23 @@ func (dp *DynamicProperties) Get(key string) (int64, bool) {
 	return v, ok
 }
 
+// DefaultDPInt64 returns the int64 default for a DynamicProperties key. The
+// second return is false when the key is not part of the defaults set —
+// callers that need to distinguish "unknown key" from "zero default" should
+// check it; callers that just want the value can ignore the bool.
+//
+// This is exported so hot-path callers can do single-key rawdb point reads
+// and still fall back to the same defaults that LoadDynamicProperties would
+// have applied, without paying for the 133-key scan. Mainnet genesis ships
+// many DP keys absent (DynamicProperties is an empty map), so an absent-key
+// lookup must NOT be silently treated as zero: e.g. `maintenance_time_interval`
+// defaults to 21_600_000, and treating it as 0 would silently corrupt epoch
+// math in callers like the PBFT SRL lookup.
+func DefaultDPInt64(key string) (int64, bool) {
+	v, ok := defaultProps[key]
+	return v, ok
+}
+
 // Set sets a value and marks the key dirty.
 func (dp *DynamicProperties) Set(key string, value int64) {
 	dp.props[key] = value
