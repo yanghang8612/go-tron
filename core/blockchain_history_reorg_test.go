@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -595,7 +596,10 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 	// 1000 sweeps over four goroutines is plenty to land at least one
 	// post-reorg pass under any scheduler.
 	for readsDone.Load() < 1000 {
-		// Spin briefly; readers bump readsDone on every AccountAt.
+		// Yield so reader/writer goroutines stay scheduled under
+		// GOMAXPROCS=1 + -race; the spin would otherwise hog the test
+		// goroutine on shared runners.
+		runtime.Gosched()
 	}
 	stop.Store(true)
 	wg.Wait()
@@ -608,6 +612,10 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 		// output documents that the slice-3 walk-atomicity window was
 		// exercised. A future slice tightening the reader's lock or
 		// adding a retry path would drive this to zero.
+		//
+		// TODO(slice-5): if reader gains walk-atomicity (snapshot or
+		// retry path), convert this t.Logf to a t.Errorf and assert
+		// partialReads == 0 — the count is currently only diagnostic.
 		t.Logf("observed %d partial-walk reads during in-flight reorg "+
 			"(slice-3 NewIterator+Get is not walk-atomic; tracked as a "+
 			"known limitation outside slice 4 scope)", got)
