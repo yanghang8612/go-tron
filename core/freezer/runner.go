@@ -118,6 +118,11 @@ func Default() Config {
 //     zero extra margin is reorg-safe). The production 128-block margin is
 //     applied only via Default(); leaving an explicit 0 untouched here lets
 //     callers — and the missing-block test — drive a true zero margin.
+// WIRING CONTRACT: applyDefaults deliberately does NOT default MarginBlocks
+// (an explicit 0 is a valid "freeze up to solidified" choice). The
+// production 128-block cushion lives in Default(). The cmd/gtron config
+// loader MUST therefore start from Default() and overlay operator values —
+// starting from a zero-value Config{} would silently run with margin 0.
 func (c Config) applyDefaults() Config {
 	if c.Interval <= 0 {
 		c.Interval = defaultInterval
@@ -249,6 +254,10 @@ type Runner struct {
 	lastPassDuration atomic.Int64 // nanoseconds
 	pebbleSizeAfter  atomic.Uint64
 
+	// reconciled guards the once-per-process crash-leftover sweep in
+	// onePass. See the reconciliation block there.
+	reconciled atomic.Bool
+
 	// pauseCtx wraps the quit channel for callers that prefer a Context
 	// API. Sealed only when Stop is called.
 	pauseCtx    context.Context
@@ -379,6 +388,31 @@ func (r *Runner) OnePass() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Startup reconciliation (once per process). A crash that landed
+	// between Phase 2 (ancient Sync) and Phase 3 (Pebble DeleteRange) of a
+	// prior pass leaves blocks [x, freezeFromN) durably in ancient but
+	// with their hot `b-`/`tib-` rows still in Pebble. No later pass would
+	// ever revisit them — passes only delete the range they just froze
+	// ([freezeFromN, cap)) — so the frozen-but-undeleted rows would leak
+	// disk space forever. Detect the condition cheaply (the highest frozen
+	// block's hot row still present) and sweep [0, freezeFromN) once. The
+	// expensive DeleteRange+Compact only runs when a crash actually left
+	// rows behind; the clean-restart path pays a single Get.
+	if freezeFromN > 0 && !r.reconciled.Swap(true) {
+		if len(r.chain.ReadBlockRaw(freezeFromN-1)) > 0 {
+			leftoverHi := freezeFromN - 1
+			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
+				return 0, err
+			}
+			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
+			if err := r.chain.DB().Compact(start, limit); err != nil {
+				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
+					"to", leftoverHi, "err", err)
+			}
+			log.Info("Freezer: swept crash-leftover hot rows", "upTo", leftoverHi)
+		}
+	}
+
 	if freezeTo < freezeFromN {
 		return 0, nil
 	}
@@ -427,10 +461,12 @@ func (r *Runner) OnePass() (uint64, error) {
 		return 0, err
 	}
 
-	// Phase 2: explicit fsync. ModifyAncients fsyncs internally on commit
-	// but the explicit call is the contract guarantee — if the runner is
-	// ever pointed at a freezer that decouples commit from fsync (e.g. a
-	// performance-tuned variant), this still does the right thing.
+	// Phase 2: explicit fsync. This is the durability barrier, NOT
+	// belt-and-braces: freezerTableBatch.commit() only fsyncs periodically
+	// (every ~30s past freezerTableFlushThreshold), so without this call a
+	// Phase-3 Pebble delete could outrun the ancient write to stable
+	// storage — exactly the ordering the crash-recovery contract forbids.
+	// Do not remove.
 	if err := r.freezer.Sync(); err != nil {
 		return 0, err
 	}

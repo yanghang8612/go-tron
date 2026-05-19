@@ -503,6 +503,81 @@ func TestOnePass_CrashRecovery(t *testing.T) {
 	}
 }
 
+// TestOnePass_CrashBetweenSyncAndDelete is the real crash-interleaving
+// regression: a prior pass died after Phase 2 (ancient Sync) but before
+// Phase 3 (Pebble DeleteRange), leaving blocks durably in ancient with
+// their hot `b-`/`tib-` rows still in Pebble. Because passes only delete
+// the range they freeze ([freezeFromN, cap)), no later pass would ever
+// revisit those rows — they would leak disk space forever. The runner's
+// once-per-process startup reconciliation must sweep them.
+func TestOnePass_CrashBetweenSyncAndDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fc := newFakeChain()
+	for n := uint64(0); n < 100; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(80)
+
+	f, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	// Simulate Phase 1+2 of a pass that then crashed: append blocks 0..9
+	// to ancient and fsync, but DO NOT delete their Pebble rows.
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < 10; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("simulate frozen append: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	// Crash state precondition: ancient holds 0..9, Pebble still holds b-5.
+	if v, err := fc.db.Get(blockKVKey(5)); err != nil || len(v) == 0 {
+		t.Fatal("precondition: b-5 should still be in Pebble (delete never ran)")
+	}
+
+	// Restart: a fresh runner over the same freezer. Its first pass must
+	// reconcile the crash leftover before doing new work.
+	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
+		Enabled:      true,
+		MarginBlocks: 8,
+		BatchBlocks:  10,
+	})
+	if _, err := r.OnePass(); err != nil {
+		t.Fatalf("OnePass after crash: %v", err)
+	}
+
+	// The leftover frozen rows b-0..b-9 must be gone from Pebble now.
+	for n := uint64(0); n < 10; n++ {
+		if v, err := fc.db.Get(blockKVKey(n)); err == nil && len(v) > 0 {
+			t.Fatalf("crash leftover b-%d still in Pebble after reconciliation", n)
+		}
+	}
+	// And ancient must not have grown duplicates for 0..9 — resume skips them.
+	if got, _ := f.AncientCount(rawdbAncientBlocks); got < 10 {
+		t.Fatalf("ancient count regressed: %d", got)
+	}
+	if got, err := f.Ancient(rawdbAncientBlocks, 5); err != nil || string(got) != string(blockBytes(5)) {
+		t.Fatalf("ancient block #5 corrupted after reconciliation: %x err=%v", got, err)
+	}
+}
+
 // TestRunner_StartStop: lifecycle plumbing. Idempotent stop + goroutine
 // cleanup.
 func TestRunner_StartStop(t *testing.T) {
