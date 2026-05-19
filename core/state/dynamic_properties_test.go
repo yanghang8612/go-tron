@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -548,6 +549,79 @@ func TestAddSystemContractAndSetPermission_Idempotent(t *testing.T) {
 	if string(active1) != string(active2) {
 		t.Error("ActiveDefaultOperations changed on second add (must be idempotent)")
 	}
+}
+
+// readerOnly hides a *memorydb.Database's Iteratee implementation so we can
+// force LoadDynamicProperties down the fallback per-key path even though the
+// underlying store would normally support prefix scans. Used by the
+// equivalence test below.
+type readerOnly struct{ inner ethdb.KeyValueReader }
+
+func (r *readerOnly) Get(key []byte) ([]byte, error) { return r.inner.Get(key) }
+func (r *readerOnly) Has(key []byte) (bool, error)   { return r.inner.Has(key) }
+
+// TestLoadDynamicProperties_PrefixScanMatchesPerKey asserts the new prefix-
+// scan fast path returns a DynamicProperties value equal to the legacy
+// per-key fallback. Important: the fast path skipped 133 point Gets per
+// applyBlock, but if it accidentally drops a key (e.g. the
+// latest_block_header_hash special case, or a future stringProp default)
+// every downstream consumer silently sees the in-memory default instead.
+//
+// Verify by writing a non-trivial DP image, then loading via both paths and
+// deep-comparing every public field that LoadDynamicProperties is responsible
+// for.
+func TestLoadDynamicProperties_PrefixScanMatchesPerKey(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dp := NewDynamicProperties()
+
+	// Mix of int props, the hash slot, and string props so the test covers
+	// every branch of applyLoadedDPValue.
+	dp.SetLatestBlockHeaderNumber(1234567)
+	dp.SetLatestBlockHeaderTimestamp(1700000000)
+	dp.SetNextMaintenanceTime(1700100000)
+	dp.Set("energy_fee", 420)
+	dp.SetAllowPbft(true)
+	dp.SetLatestBlockHeaderHash(common.HexToHash("0xfeedbeef"))
+	dp.SetString("energy_price_history", "0:100,1700000000:140")
+	dp.Flush(db)
+
+	fast := LoadDynamicProperties(db)
+	slow := LoadDynamicProperties(&readerOnly{inner: db})
+
+	if !dpEqual(t, fast, slow) {
+		t.Fatal("prefix-scan and per-key LoadDynamicProperties paths diverged — see logged diffs")
+	}
+}
+
+// dpEqual diffs every property that LoadDynamicProperties is allowed to
+// populate. Returns true iff a == b across the union of known DP keys.
+// Reports diffs via t.Errorf rather than panicking so all mismatches surface
+// in one test run.
+func dpEqual(t *testing.T, a, b *DynamicProperties) bool {
+	t.Helper()
+	ok := true
+	for k, def := range defaultProps {
+		va, _ := a.Get(k)
+		vb, _ := b.Get(k)
+		if va != vb {
+			t.Errorf("int prop %q diverged: fast=%d slow=%d (default=%d)", k, va, vb, def)
+			ok = false
+		}
+	}
+	for k := range defaultStringProps {
+		va, _ := a.GetString(k)
+		vb, _ := b.GetString(k)
+		if va != vb {
+			t.Errorf("string prop %q diverged: fast=%q slow=%q", k, va, vb)
+			ok = false
+		}
+	}
+	if a.LatestBlockHeaderHash() != b.LatestBlockHeaderHash() {
+		t.Errorf("latest_block_header_hash diverged: fast=%x slow=%x",
+			a.LatestBlockHeaderHash(), b.LatestBlockHeaderHash())
+		ok = false
+	}
+	return ok
 }
 
 func TestSetAvailableContractType_LengthMismatchPanics(t *testing.T) {

@@ -240,9 +240,30 @@ func NewDynamicProperties() *DynamicProperties {
 	return dp
 }
 
-// LoadDynamicProperties creates a DynamicProperties with defaults, overriding from DB.
+// LoadDynamicProperties creates a DynamicProperties with defaults, overriding
+// from DB.
+//
+// Fast path: when db implements ethdb.Iteratee a single prefix scan over
+// "dp-*" replaces the historical 133 point Gets (one per key in
+// defaultProps + defaultStringProps + the latest_block_header_hash record).
+// A profile on Nile at h≈890k showed the per-key path dominating CPU at 46%
+// of total samples — every call into Pebble.Get → Iterator.First → Iterator
+// teardown, ~133 times per applyBlock, plus every PBFT hook + tron_backend
+// RPC handler doing the same. The single scan is O(rows) on Pebble's
+// sorted L0/Ln structure and reuses one iterator.
+//
+// Slow path: when db is a bare ethdb.KeyValueReader without iteration (rare
+// — used only by callers that hand in a custom reader without the disk store
+// behind it) we fall through to the original per-key Gets so we never
+// silently drop reads.
 func LoadDynamicProperties(db ethdb.KeyValueReader) *DynamicProperties {
 	dp := NewDynamicProperties()
+	if iter, ok := db.(ethdb.Iteratee); ok {
+		rawdb.IterateDynamicProperties(iter, func(name string, value []byte) {
+			applyLoadedDPValue(dp, name, value)
+		})
+		return dp
+	}
 	for k := range defaultProps {
 		data := rawdb.ReadDynamicProperty(db, k)
 		if len(data) == 8 {
@@ -260,6 +281,28 @@ func LoadDynamicProperties(db ethdb.KeyValueReader) *DynamicProperties {
 		dp.latestBlockHeaderHash = common.BytesToHash(hashData)
 	}
 	return dp
+}
+
+// applyLoadedDPValue routes one (name, value) pair from a DP prefix scan
+// into the appropriate field on dp. Unknown names — keys the chain wrote
+// that aren't part of the defaults set — are silently dropped, matching the
+// pre-existing per-key path which only ever read the known default names.
+func applyLoadedDPValue(dp *DynamicProperties, name string, value []byte) {
+	if _, ok := defaultProps[name]; ok {
+		if len(value) == 8 {
+			dp.props[name] = int64(binary.BigEndian.Uint64(value))
+		}
+		return
+	}
+	if _, ok := defaultStringProps[name]; ok {
+		if len(value) > 0 {
+			dp.stringProps[name] = string(value)
+		}
+		return
+	}
+	if name == "latest_block_header_hash" && len(value) == common.HashLength {
+		dp.latestBlockHeaderHash = common.BytesToHash(value)
+	}
 }
 
 // Flush writes only dirty props to db as 8-byte big-endian, then clears dirty state.

@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -41,6 +42,27 @@ func ReadDynamicProperty(db ethdb.KeyValueReader, name string) []byte {
 		return nil
 	}
 	return data
+}
+
+// IterateDynamicProperties invokes fn for every persisted DynamicProperties
+// key-value pair the underlying iterator can see. Callers that need many DP
+// keys in a single pass (state.LoadDynamicProperties) use this in place of
+// N point Gets — a profile on Nile at h≈890k showed 133 Gets per applyBlock
+// dominating CPU at 46% of total samples.
+//
+// The visible name (the part after the "dp-" key prefix) is passed
+// unprefixed so callers can route by name without re-parsing. fn must not
+// retain the slice arguments past the call; the iterator owns them. Stops
+// silently on iterator error (no return) — the caller cannot distinguish
+// "no DP rows" from "iteration broke", which mirrors the pre-existing
+// per-key path that silently dropped failing Gets.
+func IterateDynamicProperties(db ethdb.Iteratee, fn func(name string, value []byte)) {
+	it := db.NewIterator(dynPropPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		name := string(bytes.TrimPrefix(it.Key(), dynPropPrefix))
+		fn(name, it.Value())
+	}
 }
 
 // WriteActiveWitnesses stores the active witness list as length-prefixed addresses.
