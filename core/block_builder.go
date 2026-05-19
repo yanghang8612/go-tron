@@ -31,8 +31,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	parent := bc.CurrentBlock()
 
 	// Open StateDB from parent's state root (side store keyed by block
-	// hash; falls back to the genesis state root for block #1).
-	parentRoot := rawdb.ReadBlockStateRoot(bc.db, parent.Hash())
+	// hash; falls back to the genesis state root for block #1). Goes
+	// through bc.chaindb so frozen blocks transparently resolve through
+	// the freezer's `state_roots` table.
+	parentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, parent.Hash())
 	if parentRoot == (tcommon.Hash{}) && parent.Number() == 0 {
 		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
 	}

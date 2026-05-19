@@ -90,6 +90,7 @@ func (s *applyStats) mark(phase *time.Duration) {
 // BlockChain manages the canonical chain and provides block insertion.
 type BlockChain struct {
 	db      ethdb.KeyValueStore
+	chaindb *rawdb.ChainDB // composite (db + freezer reader); slice-2 freezer plumbing
 	stateDB *state.Database
 	config  *params.ChainConfig
 
@@ -169,8 +170,13 @@ func (bc *BlockChain) AddMaintenanceHook(fn func(*types.Block, []tcommon.Address
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
 	buffer := blockbuffer.New(db)
+	// Slice 2 of the freezer plan: every chain accessor takes *ChainDB.
+	// Until slice 3 attaches a real freezer, the ancient reader is a no-op
+	// so every chain read falls through to the hot KV store unchanged.
+	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 	bc := &BlockChain{
 		db:      db,
+		chaindb: chaindb,
 		stateDB: stateDB,
 		config:  config,
 		fc:      forks.NewForkController(buffer),
@@ -179,7 +185,7 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	// Load genesis
-	bc.genesisBlock = rawdb.ReadBlock(db, 0)
+	bc.genesisBlock = rawdb.ReadBlock(chaindb, 0)
 	if bc.genesisBlock == nil {
 		return nil, errors.New("genesis block not found in database")
 	}
@@ -191,8 +197,8 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 		})
 	}
 
-	head := loadStoredHeadBlock(db, bc.genesisBlock)
-	head = recoverHeadToAppliedState(db, head, bc.genesisBlock)
+	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
+	head = recoverHeadToAppliedState(db, chaindb, head, bc.genesisBlock)
 	bc.currentBlock.Store(head)
 
 	// Initialize KhaosDB with the current head.
@@ -226,23 +232,23 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 	return bc, nil
 }
 
-func loadStoredHeadBlock(db ethdb.KeyValueReader, genesis *types.Block) *types.Block {
-	headHash := rawdb.ReadHeadBlockHash(db)
+func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Block {
+	headHash := rawdb.ReadHeadBlockHash(chaindb)
 	if headHash == (tcommon.Hash{}) {
 		return genesis
 	}
-	num := rawdb.ReadBlockNumber(db, headHash)
+	num := rawdb.ReadBlockNumber(chaindb, headHash)
 	if num == nil {
 		return genesis
 	}
-	block := rawdb.ReadBlock(db, *num)
+	block := rawdb.ReadBlock(chaindb, *num)
 	if block == nil {
 		return genesis
 	}
 	return block
 }
 
-func recoverHeadToAppliedState(db ethdb.KeyValueStore, head, genesis *types.Block) *types.Block {
+func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, head, genesis *types.Block) *types.Block {
 	if head == nil {
 		return genesis
 	}
@@ -252,7 +258,7 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, head, genesis *types.Bloc
 		return head
 	}
 
-	recovered := rawdb.ReadBlock(db, uint64(appliedNum))
+	recovered := rawdb.ReadBlock(chaindb, uint64(appliedNum))
 	if recovered == nil {
 		log.Warn("Head recovery: block missing, keeping disk head",
 			"diskHead", head.Number(), "appliedState", appliedNum)
@@ -281,19 +287,19 @@ func (bc *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 	if current := bc.CurrentBlock(); current != nil && number > current.Number() {
 		return nil
 	}
-	return rawdb.ReadBlock(bc.db, number)
+	return rawdb.ReadBlock(bc.chaindb, number)
 }
 
 // GetBlockByHash retrieves a block by its hash.
 func (bc *BlockChain) GetBlockByHash(hash tcommon.Hash) *types.Block {
-	num := rawdb.ReadBlockNumber(bc.db, hash)
+	num := rawdb.ReadBlockNumber(bc.chaindb, hash)
 	if num == nil {
 		return nil
 	}
 	if current := bc.CurrentBlock(); current != nil && *num > current.Number() {
 		return nil
 	}
-	return rawdb.ReadBlock(bc.db, *num)
+	return rawdb.ReadBlock(bc.chaindb, *num)
 }
 
 // HasBlockInKhaosDB reports whether KhaosDB holds the block in either the
@@ -450,7 +456,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// VerifyHeader so the buffer-overlay dp can be threaded into header
 	// verification, removing the redundant LoadDynamicProperties that
 	// chain.DynProps() used to perform inside VerifyHeader.
-	parentRoot := rawdb.ReadBlockStateRoot(bc.db, current.Hash())
+	parentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
 	if parentRoot == (tcommon.Hash{}) && current.Number() == 0 {
 		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
 	}
@@ -879,7 +885,7 @@ func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
 		return nil
 	}
 	numberOf := func(h tcommon.Hash) (uint64, bool) {
-		p := rawdb.ReadBlockNumber(bc.db, h)
+		p := rawdb.ReadBlockNumber(bc.chaindb, h)
 		if p == nil {
 			return 0, false
 		}
@@ -970,9 +976,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.reloadActiveWitnesses()
 
 	var lcaBlock *types.Block
-	numPtr := rawdb.ReadBlockNumber(bc.db, lcaHash)
+	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
 	if numPtr != nil {
-		lcaBlock = rawdb.ReadBlock(bc.db, *numPtr)
+		lcaBlock = rawdb.ReadBlock(bc.chaindb, *numPtr)
 	}
 	if lcaBlock == nil {
 		return fmt.Errorf("LCA block %x not found in DB", lcaHash)
@@ -1019,7 +1025,7 @@ func (bc *BlockChain) StateRootAtBlock(num uint64) tcommon.Hash {
 	if block == nil {
 		return tcommon.Hash{}
 	}
-	if root := rawdb.ReadBlockStateRoot(bc.db, block.Hash()); root != (tcommon.Hash{}) {
+	if root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash()); root != (tcommon.Hash{}) {
 		return root
 	}
 	if num == 0 {
@@ -1036,7 +1042,7 @@ func (bc *BlockChain) StateRootAtBlock(num uint64) tcommon.Hash {
 // must use this helper rather than `block.AccountStateRoot()`.
 func (bc *BlockChain) HeadStateRoot() tcommon.Hash {
 	head := bc.CurrentBlock()
-	if root := rawdb.ReadBlockStateRoot(bc.db, head.Hash()); root != (tcommon.Hash{}) {
+	if root := rawdb.ReadBlockStateRoot(bc.chaindb, head.Hash()); root != (tcommon.Hash{}) {
 		return root
 	}
 	if head.Number() == 0 {
@@ -1050,6 +1056,20 @@ func (bc *BlockChain) HeadStateRoot() tcommon.Hash {
 // DB returns the underlying key-value store.
 func (bc *BlockChain) DB() ethdb.KeyValueStore {
 	return bc.db
+}
+
+// ChainDB returns the composite chain database (hot KV store + ancient
+// reader). Callers that need to read chain accessors migrated by the
+// slice-2 freezer work (`rawdb.ReadBlock`, `rawdb.ReadBlockNumber`,
+// `rawdb.ReadTransactionInfo*`, `rawdb.ReadBlockStateRoot`) should use
+// this handle so frozen blocks fall through to the ancient store.
+//
+// Reads on the freezer pass under no chain mutex — the freezer is
+// append-only and threadsafe. Slice-2 ships with a `NoopAncient` reader,
+// so behavior is byte-identical to a plain KV until slice 3 attaches a
+// real `*freezer.Freezer`.
+func (bc *BlockChain) ChainDB() *rawdb.ChainDB {
+	return bc.chaindb
 }
 
 // BufferedDB returns a read-only view that consults the in-memory

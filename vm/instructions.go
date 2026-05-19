@@ -473,7 +473,13 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 		num.Clear()
 		return nil, nil
 	}
-	block := rawdb.ReadBlock(interpreter.tvm.DB, index)
+	// opBlockHash reads at most 256 blocks back from current. The freezer
+	// margin (default 128 blocks below solidified) is much deeper than this
+	// window, so any block this opcode resolves is guaranteed to still be
+	// hot. Read directly via rawdb.ReadBlockKV to keep `tvm.DB` narrow
+	// (KVReadWriter — also used for contract-state writes) and avoid
+	// widening every TVM call site.
+	block := rawdb.ReadBlockKV(interpreter.tvm.DB, index)
 	if block == nil {
 		num.Clear()
 		return nil, nil

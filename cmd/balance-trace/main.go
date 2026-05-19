@@ -52,12 +52,19 @@ func main() {
 		log.Crit("open pebble", "err", err)
 	}
 	defer db.Close()
+	// Slice 2 of the freezer plan: chain readers take *ChainDB. The
+	// balance-trace CLI opens raw Pebble; until slice 3 ships a freezer
+	// reader we wrap with NoopAncient so reads behave identically to the
+	// pre-slice-2 KV-only path. NOTE: this means balance-trace will silently
+	// miss frozen blocks once slice 3 begins deleting from Pebble — tracked
+	// as a slice-3 follow-up in the audit doc.
+	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 
 	headHash := rawdb.ReadHeadBlockHash(db)
 	if headHash == (tcommon.Hash{}) {
 		log.Crit("no head block", "path", dbPath)
 	}
-	headNum := rawdb.ReadBlockNumber(db, headHash)
+	headNum := rawdb.ReadBlockNumber(chaindb, headHash)
 	if headNum == nil {
 		log.Crit("head block has no number entry", "hash", fmt.Sprintf("%x", headHash[:]))
 	}
@@ -69,7 +76,7 @@ func main() {
 
 	hits := 0
 	for h := *from; h <= end; h++ {
-		blk := rawdb.ReadBlock(db, h)
+		blk := rawdb.ReadBlock(chaindb, h)
 		if blk == nil {
 			continue
 		}
@@ -91,7 +98,7 @@ func main() {
 	}
 
 	fmt.Printf("\n--- final state view ---\n")
-	headRoot := rawdb.ReadBlockStateRoot(db, headHash)
+	headRoot := rawdb.ReadBlockStateRoot(chaindb, headHash)
 	if headRoot == (tcommon.Hash{}) {
 		headRoot = rawdb.ReadGenesisStateRoot(db)
 	}

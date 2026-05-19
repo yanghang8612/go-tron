@@ -229,11 +229,11 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 }
 
 func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transaction, error) {
-	blockNum := rawdb.ReadTransactionIndex(b.chain.db, txHash[:])
+	blockNum := rawdb.ReadTransactionIndex(b.chain.chaindb, txHash[:])
 	if blockNum == nil {
 		return nil, fmt.Errorf("transaction not found")
 	}
-	block := rawdb.ReadBlock(b.chain.db, *blockNum)
+	block := rawdb.ReadBlock(b.chain.chaindb, *blockNum)
 	if block == nil {
 		return nil, fmt.Errorf("block %d not found", *blockNum)
 	}
@@ -246,7 +246,7 @@ func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transacti
 }
 
 func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	info := rawdb.ReadTransactionInfo(b.chain.db, txHash[:])
+	info := rawdb.ReadTransactionInfo(b.chain.chaindb, txHash[:])
 	if info == nil {
 		return nil, fmt.Errorf("transaction info not found")
 	}
@@ -254,7 +254,7 @@ func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.Trans
 }
 
 func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
-	infos := rawdb.ReadTransactionInfosByBlock(b.chain.db, blockNum)
+	infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, blockNum)
 	return infos, nil
 }
 
@@ -1140,7 +1140,7 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
 	// Use TransactionInfo to locate the block, then find the tx within it.
-	info := rawdb.ReadTransactionInfo(b.chain.db, hash[:])
+	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
 	if info == nil {
 		return nil, nil, 0, nil // not found
 	}
@@ -1157,7 +1157,7 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 }
 
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	info := rawdb.ReadTransactionInfo(b.chain.db, hash[:])
+	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
 	return info, nil // nil info = not found (not an error)
 }
 
@@ -1236,7 +1236,7 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 			continue
 		}
 		blockHash := block.Hash()
-		infos := rawdb.ReadTransactionInfosByBlock(b.chain.db, num)
+		infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, num)
 
 		logIndex := uint64(0)
 
