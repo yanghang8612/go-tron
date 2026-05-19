@@ -17,7 +17,7 @@ import (
 func makeHistoryFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{gcmodeFlag, configFileFlag}
+	app.Flags = []cli.Flag{gcmodeFlag, historyEnabledFlag, configFileFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -178,5 +178,63 @@ func TestApplyHistoryConfig_GcmodeFullDoesNotAutoEnable(t *testing.T) {
 	}
 	if cfg.HistoryEnabled {
 		t.Error("--gcmode=full unexpectedly turned on HistoryEnabled")
+	}
+}
+
+// TestApplyHistoryConfig_FullModeEnabledIsReachable is the regression for the
+// slice-5 spec-review escalation: full-mode pruning was operationally
+// unreachable because nothing flipped HistoryEnabled on outside archive mode.
+// `--history.enabled` (or [history] enabled = true) is the canonical opt-in;
+// combined with the default full mode it yields a captured-and-pruned index.
+func TestApplyHistoryConfig_FullModeEnabledIsReachable(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "full", "--history.enabled"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeFull {
+		t.Errorf("mode = %q, want full", got)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("--history.enabled did not turn on HistoryEnabled in full mode")
+	}
+}
+
+// TestApplyHistoryConfig_EnabledViaTOML covers the [history] enabled key.
+func TestApplyHistoryConfig_EnabledViaTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gtron.toml")
+	if err := os.WriteFile(path, []byte("[history]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	ctx := makeHistoryFlagSet(t, []string{"--config", path})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("[history] enabled = true did not turn on HistoryEnabled")
+	}
+	// TOML enable + default full mode = pruned-history node.
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeFull {
+		t.Errorf("mode = %q, want full", got)
+	}
+}
+
+// TestApplyHistoryConfig_CLIEnabledOverridesTOMLDisabled pins the precedence:
+// an explicit --history.enabled beats [history] enabled = false.
+func TestApplyHistoryConfig_CLIEnabledOverridesTOMLDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gtron.toml")
+	if err := os.WriteFile(path, []byte("[history]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	ctx := makeHistoryFlagSet(t, []string{"--config", path, "--history.enabled"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if !cfg.HistoryEnabled {
+		t.Fatal("CLI --history.enabled should override TOML enabled=false")
 	}
 }

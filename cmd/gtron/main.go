@@ -134,9 +134,13 @@ var (
 		Usage: "State History Index retention: full (prune to last prune_window blocks) | archive (keep forever)",
 		Value: params.HistoryModeFull,
 	}
+	historyEnabledFlag = &cli.BoolFlag{
+		Name:  "history.enabled",
+		Usage: "Turn on the State History Index capture path. Required to actually populate (and, in full mode, prune) the index; archive mode implies it.",
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
-		Usage: "Path to a TOML config file (currently understood: [history] mode, prune_window)",
+		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
 	}
 )
 
@@ -167,6 +171,7 @@ var app = &cli.App{
 		logFormatFlag,
 		logFileFlag,
 		gcmodeFlag,
+		historyEnabledFlag,
 		configFileFlag,
 	},
 	Before: func(ctx *cli.Context) error {

@@ -25,19 +25,25 @@ import (
 // section-parser keeps the dep tree clean.
 //
 // applyHistoryConfig also turns HistoryEnabled on whenever the operator
-// has explicitly asked for archive mode — running an archive node with
-// the capture path disabled would silently produce an empty index. The
-// reverse (mode=full, HistoryEnabled left false) is the zero-cost
-// default; operators who want full mode pruning of an actively-captured
-// index must opt into HistoryEnabled too. The function returns an error
-// only when the TOML file exists but is malformed.
+// has explicitly asked for archive mode (an archive node with the capture
+// path disabled would silently produce an empty index) OR has explicitly
+// opted in via --history.enabled / [history] enabled. Full mode is inert
+// without one of those: the pruner Lifecycle only registers when
+// HistoryEnabled && mode==full, so `--gcmode=full --history.enabled` is
+// the canonical way to run a pruned-history node. Plain full mode with no
+// opt-in stays the zero-cost default (no capture, no pruning).
+//
+// Precedence for the enable toggle: --history.enabled CLI flag (when set)
+// overrides [history] enabled TOML, which overrides the archive-implied
+// default. The function returns an error only when the TOML file exists
+// but is malformed.
 func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 	if cfg == nil {
 		return nil
 	}
 
 	// Step 1: load [history] from the TOML config file when present.
-	tomlMode, tomlWindow, tomlPresent, err := loadHistoryTOML(ctx.String("config"))
+	tomlMode, tomlWindow, tomlEnabled, tomlPresent, err := loadHistoryTOML(ctx.String("config"))
 	if err != nil {
 		return err
 	}
@@ -47,6 +53,9 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 		}
 		if tomlWindow > 0 {
 			cfg.HistoryPruneWindow = tomlWindow
+		}
+		if tomlEnabled != nil {
+			cfg.HistoryEnabled = *tomlEnabled
 		}
 	}
 
@@ -61,13 +70,17 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 		}
 		cfg.HistoryMode = mode
 	}
+	if ctx.IsSet("history.enabled") {
+		cfg.HistoryEnabled = ctx.Bool("history.enabled")
+	}
 
-	// Step 3: archive mode implicitly turns on the capture path.
-	// Without HistoryEnabled the on-disk index stays empty and a
-	// future archive-query RPC would silently return live state for
-	// every blockNum — surprising and consensus-irrelevant but
-	// operationally broken. We flip it on automatically so the
-	// archive mode the operator asked for actually materialises.
+	// Step 3: archive mode implicitly turns on the capture path even when
+	// the operator didn't pass --history.enabled. Without HistoryEnabled
+	// the on-disk index stays empty and an archive-query RPC would
+	// silently return live state for every blockNum — operationally
+	// broken. An explicit --history.enabled=false in archive mode is
+	// contradictory; archive wins (the index the operator asked to keep
+	// forever must actually be captured).
 	if cfg.EffectiveHistoryMode() == params.HistoryModeArchive {
 		cfg.HistoryEnabled = true
 	}
@@ -96,28 +109,30 @@ func normaliseHistoryMode(s string) (string, error) {
 // is ignored (not an error) so a richer TOML in the same file (added by
 // a future slice) doesn't break this loader.
 //
-// Returns (mode, window, present, err):
+// Returns (mode, window, enabled, present, err):
 //   - present=false when path is empty or the file has no [history]
 //     section
 //   - mode is the literal value before normalisation; the caller runs
 //     normaliseHistoryMode after applying CLI precedence
 //   - window is the parsed prune_window (uint64); 0 means "absent"
+//   - enabled is a tri-state *bool: nil means the key was absent (leave
+//     cfg.HistoryEnabled untouched), non-nil carries the explicit value
 //
-// The narrow contract avoids pulling in a TOML library for two scalars.
+// The narrow contract avoids pulling in a TOML library for three scalars.
 // A future slice that needs deeply-nested config can swap this for a
 // real parser without changing the call site.
-func loadHistoryTOML(path string) (string, uint64, bool, error) {
+func loadHistoryTOML(path string) (string, uint64, *bool, bool, error) {
 	if path == "" {
-		return "", 0, false, nil
+		return "", 0, nil, false, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// A missing config file is not an error when --config
 			// wasn't strictly required (typical CLI ergonomics).
-			return "", 0, false, nil
+			return "", 0, nil, false, nil
 		}
-		return "", 0, false, fmt.Errorf("config: open %s: %w", path, err)
+		return "", 0, nil, false, fmt.Errorf("config: open %s: %w", path, err)
 	}
 	defer f.Close()
 
@@ -126,10 +141,11 @@ func loadHistoryTOML(path string) (string, uint64, bool, error) {
 	sawSection := false
 	var mode string
 	var window uint64
+	var enabled *bool
 	for lineNum := 1; scanner.Scan(); lineNum++ {
 		line := strings.TrimSpace(scanner.Text())
 		// Strip trailing comments. Quotes within keys are not supported
-		// — slice 5's TOML schema is two scalars, no string values
+		// — slice 5's TOML schema is scalars, no string values
 		// containing '#'.
 		if idx := strings.Index(line, "#"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
@@ -150,7 +166,7 @@ func loadHistoryTOML(path string) (string, uint64, bool, error) {
 		}
 		eq := strings.IndexByte(line, '=')
 		if eq < 0 {
-			return "", 0, false, fmt.Errorf("config %s:%d: expected key = value in [history]", path, lineNum)
+			return "", 0, nil, false, fmt.Errorf("config %s:%d: expected key = value in [history]", path, lineNum)
 		}
 		key := strings.TrimSpace(line[:eq])
 		value := strings.TrimSpace(line[eq+1:])
@@ -163,9 +179,15 @@ func loadHistoryTOML(path string) (string, uint64, bool, error) {
 		case "prune_window":
 			n, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return "", 0, false, fmt.Errorf("config %s:%d: prune_window: %w", path, lineNum, err)
+				return "", 0, nil, false, fmt.Errorf("config %s:%d: prune_window: %w", path, lineNum, err)
 			}
 			window = n
+		case "enabled":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", 0, nil, false, fmt.Errorf("config %s:%d: enabled: %w", path, lineNum, err)
+			}
+			enabled = &b
 		default:
 			// Unknown keys in [history] are ignored rather than
 			// rejected so a forward-compatible TOML written by a
@@ -173,16 +195,16 @@ func loadHistoryTOML(path string) (string, uint64, bool, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", 0, false, fmt.Errorf("config %s: %w", path, err)
+		return "", 0, nil, false, fmt.Errorf("config %s: %w", path, err)
 	}
 	if mode != "" {
 		normalised, err := normaliseHistoryMode(mode)
 		if err != nil {
-			return "", 0, false, fmt.Errorf("config %s: %w", path, err)
+			return "", 0, nil, false, fmt.Errorf("config %s: %w", path, err)
 		}
 		mode = normalised
 	}
-	return mode, window, sawSection, nil
+	return mode, window, enabled, sawSection, nil
 }
 
 // trimMatching removes a matching pair of surrounding quote runes. Used
