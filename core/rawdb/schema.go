@@ -838,7 +838,7 @@ func historyAddrInverseKey(addr []byte, blockNum uint64) []byte {
 	return append(k, nb[:]...)
 }
 
-// historyAddrInversePrefix returns the prefix that scopes a range scan to
+// historyAddrInverseAddrPrefix returns the prefix that scopes a range scan to
 // "every block-touch row for this addr": sh-i-a- || addr.
 func historyAddrInverseAddrPrefix(addr []byte) []byte {
 	k := make([]byte, 0, len(shAddrInversePrefix)+len(addr))

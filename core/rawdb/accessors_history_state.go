@@ -154,6 +154,12 @@ func ReadHistoryMeta(db ethdb.KeyValueReader, blockNum uint64) *historypb.StateH
 	return &meta
 }
 
+// HasHistoryMeta reports whether a per-block StateHistoryMeta row exists.
+func HasHistoryMeta(db ethdb.KeyValueReader, blockNum uint64) bool {
+	ok, _ := db.Has(historyMetaKey(blockNum))
+	return ok
+}
+
 // DeleteHistoryMeta removes the per-block StateHistoryMeta record. Used by
 // the pruner and by switchFork's rollback path.
 func DeleteHistoryMeta(db ethdb.KeyValueWriter, blockNum uint64) error {
@@ -264,6 +270,13 @@ func ReadHistoryConfig(db ethdb.KeyValueReader) (*historypb.HistoryConfig, error
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// HasHistoryConfig reports whether the singleton HistoryConfig sentinel
+// has been written.
+func HasHistoryConfig(db ethdb.KeyValueReader) bool {
+	ok, _ := db.Has(historyConfigKey())
+	return ok
 }
 
 // DeleteHistoryConfig removes the HistoryConfig sentinel. Used by the
