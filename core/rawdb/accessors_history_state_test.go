@@ -555,3 +555,112 @@ func TestHistoryConfig_NilWriteRejected(t *testing.T) {
 		t.Fatal("expected error writing nil HistoryConfig")
 	}
 }
+
+// ---- Range delete by block prefix ---------------------------------------
+
+// TestHistory_RangeDeleteByBlockPrefix locks in the helper signatures that
+// Slice 5's pruner will drive: a per-block prefix scan over sh-a- / sh-s-
+// and a direct sh-m- delete, applied for every block strictly below the
+// cutoff. The body uses an iterate-collect-delete loop rather than a true
+// range-delete; Slice 5 will swap that for a batched implementation. The
+// inverse-index rows (sh-i-a-, sh-i-s-) live in a separate namespace and
+// MUST survive this scan — Slice 5 will prune them via their own addr/slot
+// scans.
+func TestHistory_RangeDeleteByBlockPrefix(t *testing.T) {
+	db := memorydb.New()
+	var addrA, addrB tcommon.Address
+	addrA[0], addrA[20] = 0x41, 0xAA
+	addrB[0], addrB[20] = 0x41, 0xBB
+	var slot1, slot2 tcommon.Hash
+	slot1[31] = 0x01
+	slot2[31] = 0x02
+
+	const lo, hi, cutoff uint64 = 100, 110, 105
+
+	// Populate: AccountDelta rows for two addrs, SlotDelta rows for addrA
+	// at two slots, StateHistoryMeta rows, plus inverse-index rows that
+	// MUST survive the prune.
+	for n := lo; n <= hi; n++ {
+		for _, a := range []tcommon.Address{addrA, addrB} {
+			if err := WriteAccountDelta(db, n, a, &historypb.AccountDelta{ExistedPre: true}); err != nil {
+				t.Fatalf("WriteAccountDelta(%d): %v", n, err)
+			}
+			if err := WriteAddrInverse(db, a, n); err != nil {
+				t.Fatalf("WriteAddrInverse(%d): %v", n, err)
+			}
+		}
+		for _, s := range []tcommon.Hash{slot1, slot2} {
+			if err := WriteSlotDelta(db, n, addrA, s, tcommon.Hash{}); err != nil {
+				t.Fatalf("WriteSlotDelta(%d): %v", n, err)
+			}
+			if err := WriteSlotInverse(db, addrA, s, n); err != nil {
+				t.Fatalf("WriteSlotInverse(%d): %v", n, err)
+			}
+		}
+		if err := WriteHistoryMeta(db, n, &historypb.StateHistoryMeta{SchemaVer: HistorySchemaVersion}); err != nil {
+			t.Fatalf("WriteHistoryMeta(%d): %v", n, err)
+		}
+	}
+
+	// Prune every row strictly below cutoff using the per-block prefix
+	// helpers. Collect-then-delete: memorydb's iterator snapshots keys
+	// but it's still cleaner to release before mutating.
+	for n := lo; n < cutoff; n++ {
+		collect := func(prefix []byte) [][]byte {
+			it := db.NewIterator(prefix, nil)
+			defer it.Release()
+			var keys [][]byte
+			for it.Next() {
+				keys = append(keys, append([]byte{}, it.Key()...))
+			}
+			return keys
+		}
+		for _, k := range collect(historyAccountBlockPrefix(n)) {
+			if err := db.Delete(k); err != nil {
+				t.Fatalf("delete sh-a- key at block %d: %v", n, err)
+			}
+		}
+		for _, k := range collect(historySlotBlockPrefix(n)) {
+			if err := db.Delete(k); err != nil {
+				t.Fatalf("delete sh-s- key at block %d: %v", n, err)
+			}
+		}
+		if err := DeleteHistoryMeta(db, n); err != nil {
+			t.Fatalf("DeleteHistoryMeta(%d): %v", n, err)
+		}
+	}
+
+	// Rows below cutoff must be gone; rows at and above must remain.
+	for n := lo; n <= hi; n++ {
+		expectPresent := n >= cutoff
+		for _, a := range []tcommon.Address{addrA, addrB} {
+			if got := HasAccountDelta(db, n, a); got != expectPresent {
+				t.Errorf("AccountDelta(block=%d, addr=%x) present=%v, want %v", n, a[:4], got, expectPresent)
+			}
+		}
+		for _, s := range []tcommon.Hash{slot1, slot2} {
+			if got := HasSlotDelta(db, n, addrA, s); got != expectPresent {
+				t.Errorf("SlotDelta(block=%d, slot=%x) present=%v, want %v", n, s[:4], got, expectPresent)
+			}
+		}
+		if got := ReadHistoryMeta(db, n) != nil; got != expectPresent {
+			t.Errorf("HistoryMeta(block=%d) present=%v, want %v", n, got, expectPresent)
+		}
+	}
+
+	// Inverse-index rows live in a separate namespace; this prune path
+	// MUST leave them intact. Slice 5 will sweep them via per-addr /
+	// per-(addr,slot) scans.
+	for n := lo; n <= hi; n++ {
+		for _, a := range []tcommon.Address{addrA, addrB} {
+			if !HasAddrInverse(db, a, n) {
+				t.Errorf("AddrInverse(addr=%x, block=%d) was incorrectly pruned", a[:4], n)
+			}
+		}
+		for _, s := range []tcommon.Hash{slot1, slot2} {
+			if !HasSlotInverse(db, addrA, s, n) {
+				t.Errorf("SlotInverse(slot=%x, block=%d) was incorrectly pruned", s[:4], n)
+			}
+		}
+	}
+}

@@ -15,17 +15,12 @@ import (
 // "history index is fresh / disabled".
 var ErrHistoryConfigAbsent = errors.New("rawdb: history config absent")
 
-// All sh-* writers take the composite ethdb.KeyValueWriter+Reader interface
-// (KVRW alias below) — not the concrete Pebble store — so they route
-// through core/blockbuffer.Buffer in slice 2 and stay fork-rewindable when
-// switchFork discards layers.
-
-// KVRW is the read+write capability that buffer-aware writers need. Both
-// the on-disk store and core/blockbuffer.Buffer satisfy this.
-type KVRW interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-}
+// Every accessor in this file takes the narrow ethdb.KeyValueWriter /
+// ethdb.KeyValueReader / ethdb.Iteratee interfaces — never a concrete
+// Pebble store — so the same code path works against both the on-disk
+// database and core/blockbuffer.Buffer. That buffer-routability is what
+// keeps history rows fork-rewindable when switchFork discards layers in
+// slice 2 and beyond.
 
 // ---- Account delta (sh-a-) ------------------------------------------------
 
