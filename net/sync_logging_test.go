@@ -10,17 +10,18 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
 // TestSync_BatchSummaryReportedOnInterval drives a stream of blocks through
-// HandleBlock with statsReportInterval temporarily shrunk to 50ms, then
+// HandleBlock with StatsReportInterval temporarily shrunk to 50ms, then
 // asserts the throttled "Imported chain segment" summary line is emitted at
 // least once with the expected fields.
 func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
-	oldInterval := statsReportInterval
-	statsReportInterval = 50 * time.Millisecond
-	defer func() { statsReportInterval = oldInterval }()
+	oldInterval := tsync.StatsReportInterval
+	tsync.StatsReportInterval = 50 * time.Millisecond
+	defer func() { tsync.StatsReportInterval = oldInterval }()
 
 	var buf bytes.Buffer
 	prev := gtronlog.Root()

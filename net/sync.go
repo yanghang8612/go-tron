@@ -11,29 +11,22 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/types"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
 
+// Slice 1 of the SyncService refactor moved these tunables into
+// net/sync/constants.go. The lowercase aliases here keep call sites and
+// tests under net/ untouched until later slices migrate them.
 const (
-	maxChainInventorySize = 2000
-	maxFetchBatch         = 100
-	maxParallelSyncPeers  = 8
+	maxChainInventorySize   = tsync.MaxChainInventorySize
+	maxFetchBatch           = tsync.MaxFetchBatch
+	maxParallelSyncPeers    = tsync.MaxParallelSyncPeers
+	minFetchRequestInterval = tsync.MinFetchRequestInterval
 )
-
-// minFetchRequestInterval stays just below java-tron's 3/s FETCH_INV_DATA
-// limiter while preserving a one-request-at-a-time contract per peer.
-const minFetchRequestInterval = 350 * time.Millisecond
-
-// syncFetchTimeout is how long to wait for a block response before failing over
-// to another peer. Tests may override this.
-var syncFetchTimeout = 30 * time.Second
-
-// statsReportInterval is the cadence at which sync emits "Imported chain
-// segment" summary lines. Exposed as a var so tests can shrink it. Mirrors
-// geth's blockchain_insert.go:statsReportLimit.
-var statsReportInterval = 8 * time.Second
 
 // syncStats accumulates per-window throughput counters for the sync summary
 // line. Reset at every emit so the figures represent rolling-window rates.
@@ -112,7 +105,7 @@ type SyncService struct {
 	inflight   int // blocks requested but not yet received in the current batch
 	pending    map[tcommon.Hash]uint64
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
-	fetchTimer *time.Timer // fires if no block arrives within syncFetchTimeout
+	fetchTimer *time.Timer // fires if no block arrives within tsync.SyncFetchTimeout
 
 	peers         map[string]*syncPeerState
 	requested     map[tcommon.Hash]string
@@ -258,59 +251,19 @@ func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, 
 	return ss.paused, ss.pausedAtNum, ss.pausedAtTime, ss.pausedErr
 }
 
-// BuildChainSummary creates an exponentially-spaced list of block IDs
-// from our chain, used in SYNC_BLOCK_CHAIN messages. The result is in
-// ascending order (oldest first, newest last) — matching java-tron's
-// `SyncService.getBlockChainSummary` convention. java-tron's
-// `SyncBlockChainMsgHandler.check` enforces
-// `summary[last].num >= peer.lastSyncBlockId.num`, so the summary must
-// end at our current head; sending it head-first triggers BAD_MESSAGE
-// after the first inventory exchange.
+// BuildChainSummary returns the exponentially-spaced summary of our
+// chain used in SYNC_BLOCK_CHAIN messages. Slice 1 of the SyncService
+// refactor moved the implementation to net/sync/downloader; the wrapper
+// stays on SyncService so external tests / call sites under net/ keep
+// using the method form until slice 4 migrates them.
 func (ss *SyncService) BuildChainSummary() []types.BlockID {
-	head := ss.chain.CurrentBlock()
-	headNum := head.Number()
-
-	var summary []types.BlockID
-	step := uint64(1)
-	num := headNum
-
-	for {
-		block := ss.chain.GetBlockByNumber(num)
-		if block != nil {
-			summary = append(summary, block.ID())
-		}
-		if num == 0 {
-			break
-		}
-		if num < step {
-			num = 0
-		} else {
-			num -= step
-		}
-		// Double step each time for exponential backoff
-		step *= 2
-	}
-
-	// Reverse to ascending order: java-tron expects oldest first.
-	for i, j := 0, len(summary)-1; i < j; i, j = i+1, j-1 {
-		summary[i], summary[j] = summary[j], summary[i]
-	}
-	return summary
+	return syncdl.BuildChainSummary(ss.chain)
 }
 
-// FindCommonBlock finds the highest block in peerSummary that exists in our chain.
+// FindCommonBlock finds the highest block in peerSummary that exists in our
+// chain. Wrapper for slice-1 compatibility; see syncdl.FindCommonBlock.
 func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
-	headNum := ss.chain.CurrentBlock().Number()
-	for _, bid := range peerSummary {
-		if bid.Number() > headNum {
-			continue
-		}
-		block := ss.chain.GetBlockByNumber(bid.Number())
-		if block != nil && block.ID().Hash == bid.Hash {
-			return bid.Number()
-		}
-	}
-	return 0 // fallback to genesis
+	return syncdl.FindCommonBlock(ss.chain, peerSummary)
 }
 
 // StartSync initiates sync with a peer that has a higher head block.
@@ -947,7 +900,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 		ss.stats.totalBlocks++
 		ss.stats.txs += len(buffered.block.Transactions())
 		ss.stats.execElapsed += insertElapsed
-		emit := time.Since(ss.stats.startTime) >= statsReportInterval
+		emit := time.Since(ss.stats.startTime) >= tsync.StatsReportInterval
 		var snap syncStats
 		var diag syncDiagnostics
 		if emit {
@@ -1177,7 +1130,7 @@ func (ss *SyncService) armPeerFetchTimerLocked(ps *syncPeerState) {
 	ps.fetchSeq++
 	seq := ps.fetchSeq
 	peerID := ps.peer.ID()
-	ps.fetchTimer = time.AfterFunc(syncFetchTimeout, func() {
+	ps.fetchTimer = time.AfterFunc(tsync.SyncFetchTimeout, func() {
 		ss.onFetchTimeout(seq, peerID)
 	})
 }
@@ -1202,7 +1155,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	ss.mu.Unlock()
 	log.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
-		"timeout", ethcommon.PrettyDuration(syncFetchTimeout),
+		"timeout", ethcommon.PrettyDuration(tsync.SyncFetchTimeout),
 		"inflight", inflight)
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)

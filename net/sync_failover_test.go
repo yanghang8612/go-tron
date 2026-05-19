@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tronprotocol/go-tron/core/txpool"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
@@ -73,9 +74,9 @@ func TestPeerDisconnectedIgnoresNonSyncPeer(t *testing.T) {
 // TestFetchTimeoutAbortsSyncState verifies that when the fetch timer fires
 // (simulated with a very short timeout) the sync state is cleared.
 func TestFetchTimeoutAbortsSyncState(t *testing.T) {
-	old := syncFetchTimeout
-	syncFetchTimeout = 50 * time.Millisecond
-	defer func() { syncFetchTimeout = old }()
+	old := tsync.SyncFetchTimeout
+	tsync.SyncFetchTimeout = 50 * time.Millisecond
+	defer func() { tsync.SyncFetchTimeout = old }()
 
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
@@ -184,9 +185,9 @@ func TestSyncPeerDisconnectFailover(t *testing.T) {
 // responding (simulated via a very short timeout), sync aborts and retries.
 func TestSyncFetchTimeoutFailover(t *testing.T) {
 	// Override timeout so the test doesn't take 30 seconds.
-	old := syncFetchTimeout
-	syncFetchTimeout = 300 * time.Millisecond
-	defer func() { syncFetchTimeout = old }()
+	old := tsync.SyncFetchTimeout
+	tsync.SyncFetchTimeout = 300 * time.Millisecond
+	defer func() { tsync.SyncFetchTimeout = old }()
 
 	// A has 20 blocks; B has 0. C also has 20 blocks as a fallback.
 	bcA := makeChainWithBlocks(t, 20)
