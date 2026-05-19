@@ -285,3 +285,231 @@ func HasHistoryConfig(db ethdb.KeyValueReader) bool {
 func DeleteHistoryConfig(db ethdb.KeyValueWriter) error {
 	return db.Delete(historyConfigKey())
 }
+
+// ---- Pruning helpers (Slice 5) -------------------------------------------
+//
+// These accessors give the background pruner (core/historyprune) a way to
+// drop history rows without re-implementing key construction. Keeping the
+// key layout opaque outside the rawdb package preserves the option to
+// change it later behind a HistorySchemaVersion bump.
+
+// PruneHistoryBlockRange deletes every sh-m-, sh-a-, sh-s- row whose
+// embedded blockNum falls in [lo, hi]. Inverse-index rows (sh-i-a-,
+// sh-i-s-) are NOT touched here — their keys are addr-first so a
+// blockNum-range delete is impossible without scanning. Use
+// PruneAddrInverseBelow / PruneSlotInverseBelow for those.
+//
+// Implementation: builds the half-open key bounds for each prefix and
+// issues a single DeleteRange per prefix. Pebble turns these into range
+// tombstones, which are O(1) on the write path and lazily reaped during
+// compaction. Memory-backed test stores (memorydb, blockbuffer) also
+// implement DeleteRange so the same code path serves tests.
+//
+// hi is INCLUSIVE so a caller wanting "everything strictly below cutoff"
+// passes (lo, cutoff-1). Returns silently when lo > hi (no rows to drop).
+func PruneHistoryBlockRange(db ethdb.KeyValueRangeDeleter, lo, hi uint64) error {
+	if lo > hi {
+		return nil
+	}
+	// DeleteRange end key is exclusive; build (hi+1) explicitly, with the
+	// uint64 wraparound guarded by a special-case for hi == MaxUint64.
+	endBlock := hi + 1
+	type rangePair struct {
+		start, end []byte
+	}
+	pairs := []rangePair{
+		// sh-m- block range.
+		{
+			start: historyMetaKey(lo),
+			// Build (prefix || endBlock) when hi < MaxUint64; otherwise
+			// step to the next byte after the prefix to terminate scan.
+			end: shMetaEndKey(endBlock, hi),
+		},
+		// sh-a- per-block prefix range.
+		{
+			start: historyAccountBlockPrefix(lo),
+			end:   shAccountEndKey(endBlock, hi),
+		},
+		// sh-s- per-block prefix range.
+		{
+			start: historySlotBlockPrefix(lo),
+			end:   shSlotEndKey(endBlock, hi),
+		},
+	}
+	for _, p := range pairs {
+		if err := db.DeleteRange(p.start, p.end); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// shMetaEndKey / shAccountEndKey / shSlotEndKey synthesize the exclusive
+// upper bound for a [lo, hi] block range. The normal case is just the
+// per-block key at (hi+1). The MaxUint64 corner is exceedingly unlikely
+// (chain would have to reach 2^64 blocks) but handled defensively so the
+// pruner can take an arbitrary hi without overflow.
+func shMetaEndKey(endBlock, hi uint64) []byte {
+	if hi == ^uint64(0) {
+		return bytePlusOne(shMetaPrefix)
+	}
+	return historyMetaKey(endBlock)
+}
+
+func shAccountEndKey(endBlock, hi uint64) []byte {
+	if hi == ^uint64(0) {
+		return bytePlusOne(shAccountPrefix)
+	}
+	return historyAccountBlockPrefix(endBlock)
+}
+
+func shSlotEndKey(endBlock, hi uint64) []byte {
+	if hi == ^uint64(0) {
+		return bytePlusOne(shSlotPrefix)
+	}
+	return historySlotBlockPrefix(endBlock)
+}
+
+// bytePlusOne returns the lexicographically smallest key strictly greater
+// than every key with `prefix` as a prefix. Used as an exclusive upper
+// bound when DeleteRange has to clear the entire prefix.
+func bytePlusOne(prefix []byte) []byte {
+	out := make([]byte, len(prefix))
+	copy(out, prefix)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i] < 0xFF {
+			out[i]++
+			return out[:i+1]
+		}
+	}
+	// All-0xFF prefix: caller must guard. Returning nil would mean
+	// "delete to end of keyspace"; the rawdb call sites all use
+	// prefixes starting with "sh-" (ASCII), so this branch is dead.
+	return nil
+}
+
+// PruneAddrInverseBelow scans sh-i-a- rows and deletes those whose
+// embedded blockNum is strictly less than cutoff. At most batchLimit rows
+// are deleted per call; the iterator stops early and the (deleted, more)
+// return values let the pruner reschedule itself.
+//
+// The scan is full-prefix because the key layout puts addr BEFORE
+// blockNum — there is no cheap range bound that maps to "blockNum < N
+// across every addr". Callers should run this on a longer cadence than
+// the per-block prune (every Nth pass) to amortise the cost.
+//
+// batchLimit == 0 disables the cap — useful for tests; production callers
+// should always pass a finite cap.
+func PruneAddrInverseBelow(db ethdb.KeyValueStore, cutoff uint64, batchLimit int) (deleted int, more bool, err error) {
+	return pruneInverseBelow(db, shAddrInversePrefix, addrInverseBlockNum, cutoff, batchLimit)
+}
+
+// PruneSlotInverseBelow is the slot-inverse counterpart to
+// PruneAddrInverseBelow.
+func PruneSlotInverseBelow(db ethdb.KeyValueStore, cutoff uint64, batchLimit int) (deleted int, more bool, err error) {
+	return pruneInverseBelow(db, shSlotInversePrefix, slotInverseBlockNum, cutoff, batchLimit)
+}
+
+// addrInverseBlockNum / slotInverseBlockNum extract the trailing blockNum
+// from an inverse-index key. They differ from the exported
+// AddrInverseBlockNum / SlotInverseBlockNum only in that the unexported
+// pair is used inside this file by pruneInverseBelow so we don't pay the
+// length-check redundantly on every scanned row.
+func addrInverseBlockNum(key []byte) (uint64, bool) {
+	return AddrInverseBlockNum(key)
+}
+
+func slotInverseBlockNum(key []byte) (uint64, bool) {
+	return SlotInverseBlockNum(key)
+}
+
+// pruneInverseBelow is the shared implementation for the two inverse
+// scanners. It iterates the prefix, accumulates rows below the cutoff
+// into a batch, and writes the batch when batchLimit is hit (or at the
+// end of scan).
+//
+// We accumulate into a Batch rather than calling db.Delete on every key
+// because each Delete on Pebble is a separate WAL write; a Batch
+// coalesces them and the freezer-side compaction sees one merge instead
+// of N. The returned `more` is true when the scan stopped at the limit;
+// callers reschedule another pass.
+func pruneInverseBelow(
+	db ethdb.KeyValueStore,
+	prefix []byte,
+	blockNumFn func([]byte) (uint64, bool),
+	cutoff uint64,
+	batchLimit int,
+) (int, bool, error) {
+	if cutoff == 0 {
+		// Nothing to prune below block 0.
+		return 0, false, nil
+	}
+	batch := db.NewBatch()
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+
+	deleted := 0
+	more := false
+	for it.Next() {
+		key := it.Key()
+		blockNum, ok := blockNumFn(key)
+		if !ok {
+			// Malformed key — skip silently. Slice 5 has no way to
+			// surface "this row's key shape is wrong"; the audit doc
+			// records the invariant.
+			continue
+		}
+		if blockNum >= cutoff {
+			continue
+		}
+		// Copy: iterator key bytes are only valid until the next Next().
+		k := make([]byte, len(key))
+		copy(k, key)
+		if err := batch.Delete(k); err != nil {
+			return deleted, false, err
+		}
+		deleted++
+		if batchLimit > 0 && deleted >= batchLimit {
+			more = true
+			break
+		}
+	}
+	if err := it.Error(); err != nil {
+		return deleted, false, err
+	}
+	if batch.ValueSize() == 0 {
+		return deleted, more, nil
+	}
+	if err := batch.Write(); err != nil {
+		return deleted, false, err
+	}
+	return deleted, more, nil
+}
+
+// HistoryDiskSize iterates every sh-* prefix and returns the cumulative
+// (key + value) byte count. This is approximate — Pebble's on-disk
+// footprint after compression and block-overhead deduction will be
+// smaller — but accurate enough for the prune progress / unbounded-growth
+// detection metrics in Slice 5.
+//
+// Cost: a single iterator pass over the sh- namespace. On a populated
+// archive this can be expensive; metrics callers cache the result.
+func HistoryDiskSize(db ethdb.Iteratee) uint64 {
+	var size uint64
+	prefixes := [][]byte{
+		shMetaPrefix,
+		shAccountPrefix,
+		shSlotPrefix,
+		shAddrInversePrefix,
+		shSlotInversePrefix,
+		shConfigKey,
+	}
+	for _, p := range prefixes {
+		it := db.NewIterator(p, nil)
+		for it.Next() {
+			size += uint64(len(it.Key()) + len(it.Value()))
+		}
+		it.Release()
+	}
+	return size
+}

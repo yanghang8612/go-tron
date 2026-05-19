@@ -19,9 +19,40 @@ type ChainConfig struct {
 	// operators opt in via node config; the gate is independent of any
 	// java-tron proposal, so flipping it never affects consensus.
 	HistoryEnabled bool
+	// HistoryMode is the retention policy for State History Index rows
+	// captured by applyBlock. "full" prunes rows older than HistoryPruneWindow
+	// blocks (the default — recent-tip-only archive coverage); "archive"
+	// keeps every row forever. Slice 5's background pruner consults this
+	// field at construction time and skips registration entirely in archive
+	// mode so history grows linearly with chain length.
+	//
+	// Ignored when HistoryEnabled is false (no rows to prune, no archive to
+	// keep).
+	HistoryMode string
+	// HistoryPruneWindow is the number of recent blocks of state history
+	// retained in "full" mode. Rows for blocks below (solidified - window)
+	// become eligible for deletion by the background pruner. The default
+	// (HistoryDefaultPruneWindow) is sized at 27 maintenance rounds × ~1K
+	// slots per round, generous enough to cover the reorg horizon and a
+	// day-or-two wallet-tx grace window. Ignored in archive mode.
+	HistoryPruneWindow uint64
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
+
+// History retention modes for ChainConfig.HistoryMode. "full" prunes; any
+// other value (typically "archive") disables the pruner and keeps every
+// row. The CLI / TOML loaders normalise unknown values upstream.
+const (
+	HistoryModeFull    = "full"
+	HistoryModeArchive = "archive"
+)
+
+// HistoryDefaultPruneWindow is the default retention window for "full"
+// mode. 27_648 ≈ 27 maintenance rounds × 1024 slots per round — covers the
+// reorg horizon with a generous wallet-tx grace window. See the spec's
+// Pruning section for the sizing rationale.
+const HistoryDefaultPruneWindow uint64 = 27 * 1024
 
 func chainConfigInt64(v int64) *int64 { return &v }
 
@@ -30,6 +61,33 @@ func (c *ChainConfig) EnergyLimitForkBlockNum() int64 {
 		return *c.BlockNumForEnergyLimit
 	}
 	return DefaultBlockNumForEnergyLimit
+}
+
+// EffectiveHistoryMode returns the resolved retention mode: blank /
+// unrecognised values normalise to HistoryModeFull so the pruner is
+// always wired in by default. Archive operators must opt in explicitly
+// via "archive".
+func (c *ChainConfig) EffectiveHistoryMode() string {
+	if c == nil || c.HistoryMode == "" {
+		return HistoryModeFull
+	}
+	switch c.HistoryMode {
+	case HistoryModeArchive:
+		return HistoryModeArchive
+	default:
+		return HistoryModeFull
+	}
+}
+
+// EffectiveHistoryPruneWindow returns the active full-mode retention
+// window. Zero (the field default for unconfigured chains) falls back to
+// HistoryDefaultPruneWindow so test fixtures and dev chains get the same
+// safety margin without per-test boilerplate.
+func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
+	if c == nil || c.HistoryPruneWindow == 0 {
+		return HistoryDefaultPruneWindow
+	}
+	return c.HistoryPruneWindow
 }
 
 var MainnetChainConfig = &ChainConfig{

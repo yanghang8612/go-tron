@@ -664,3 +664,183 @@ func TestHistory_RangeDeleteByBlockPrefix(t *testing.T) {
 		}
 	}
 }
+
+// ---- Slice-5 prune helpers ----------------------------------------------
+
+// TestPruneHistoryBlockRange exercises the single-call range delete that
+// the pruner drives once per pass. Plant five blocks of rows, ask for
+// (lo=2, hi=3), and assert exactly blocks 2 and 3 disappear. The
+// inverse-index rows (addr-first key layout) MUST survive — those live
+// in a separate sweep.
+func TestPruneHistoryBlockRange(t *testing.T) {
+	db := memorydb.New()
+	var addr tcommon.Address
+	addr[0], addr[20] = 0x41, 0xAA
+	var slot tcommon.Hash
+	slot[31] = 0x01
+
+	for n := uint64(1); n <= 5; n++ {
+		if err := WriteHistoryMeta(db, n, &historypb.StateHistoryMeta{SchemaVer: HistorySchemaVersion}); err != nil {
+			t.Fatalf("meta(%d): %v", n, err)
+		}
+		if err := WriteAccountDelta(db, n, addr, &historypb.AccountDelta{ExistedPre: true}); err != nil {
+			t.Fatalf("acct(%d): %v", n, err)
+		}
+		if err := WriteSlotDelta(db, n, addr, slot, tcommon.Hash{}); err != nil {
+			t.Fatalf("slot(%d): %v", n, err)
+		}
+		if err := WriteAddrInverse(db, addr, n); err != nil {
+			t.Fatalf("addrinv(%d): %v", n, err)
+		}
+		if err := WriteSlotInverse(db, addr, slot, n); err != nil {
+			t.Fatalf("slotinv(%d): %v", n, err)
+		}
+	}
+
+	if err := PruneHistoryBlockRange(db, 2, 3); err != nil {
+		t.Fatalf("PruneHistoryBlockRange: %v", err)
+	}
+
+	for n := uint64(1); n <= 5; n++ {
+		expect := !(n == 2 || n == 3)
+		if HasHistoryMeta(db, n) != expect {
+			t.Errorf("HistoryMeta(%d) present=%v want=%v", n, HasHistoryMeta(db, n), expect)
+		}
+		if HasAccountDelta(db, n, addr) != expect {
+			t.Errorf("AccountDelta(%d) present=%v want=%v", n, HasAccountDelta(db, n, addr), expect)
+		}
+		if HasSlotDelta(db, n, addr, slot) != expect {
+			t.Errorf("SlotDelta(%d) present=%v want=%v", n, HasSlotDelta(db, n, addr, slot), expect)
+		}
+		// Inverse rows untouched.
+		if !HasAddrInverse(db, addr, n) {
+			t.Errorf("AddrInverse(%d) incorrectly pruned", n)
+		}
+		if !HasSlotInverse(db, addr, slot, n) {
+			t.Errorf("SlotInverse(%d) incorrectly pruned", n)
+		}
+	}
+}
+
+// TestPruneHistoryBlockRange_EmptyRange asserts the no-op corner: lo > hi
+// is a silent zero-op rather than an error.
+func TestPruneHistoryBlockRange_EmptyRange(t *testing.T) {
+	db := memorydb.New()
+	if err := PruneHistoryBlockRange(db, 5, 3); err != nil {
+		t.Fatalf("empty range: %v", err)
+	}
+}
+
+// TestPruneAddrInverseBelow exercises the addr-first inverse-index
+// sweep. Plant rows for two addrs at blocks {1, 5, 10}; ask for cutoff=6.
+// Both addrs' rows at blocks {1, 5} must disappear; block 10 stays.
+func TestPruneAddrInverseBelow(t *testing.T) {
+	db := memorydb.New()
+	var addrA, addrB tcommon.Address
+	addrA[0], addrA[20] = 0x41, 0xAA
+	addrB[0], addrB[20] = 0x41, 0xBB
+	for _, a := range []tcommon.Address{addrA, addrB} {
+		for _, n := range []uint64{1, 5, 10} {
+			if err := WriteAddrInverse(db, a, n); err != nil {
+				t.Fatalf("WriteAddrInverse(%x, %d): %v", a[:4], n, err)
+			}
+		}
+	}
+
+	deleted, more, err := PruneAddrInverseBelow(db, 6, 0 /* no cap */)
+	if err != nil {
+		t.Fatalf("PruneAddrInverseBelow: %v", err)
+	}
+	// 2 addrs × 2 rows below cutoff = 4 deletions.
+	if deleted != 4 {
+		t.Errorf("deleted=%d, want 4", deleted)
+	}
+	if more {
+		t.Error("more=true for an uncapped scan over a fully-eligible range")
+	}
+	for _, a := range []tcommon.Address{addrA, addrB} {
+		for _, n := range []uint64{1, 5} {
+			if HasAddrInverse(db, a, n) {
+				t.Errorf("sh-i-a-(%x, %d) survived prune", a[:4], n)
+			}
+		}
+		if !HasAddrInverse(db, a, 10) {
+			t.Errorf("sh-i-a-(%x, 10) wrongly deleted (above cutoff)", a[:4])
+		}
+	}
+}
+
+// TestPruneAddrInverseBelow_BatchLimit asserts batchLimit caps deletions
+// and reports more=true so the caller can re-issue.
+func TestPruneAddrInverseBelow_BatchLimit(t *testing.T) {
+	db := memorydb.New()
+	var addr tcommon.Address
+	addr[0], addr[20] = 0x41, 0xAA
+	// 50 rows below cutoff, all eligible.
+	for n := uint64(1); n <= 50; n++ {
+		if err := WriteAddrInverse(db, addr, n); err != nil {
+			t.Fatalf("WriteAddrInverse(%d): %v", n, err)
+		}
+	}
+
+	deleted, more, err := PruneAddrInverseBelow(db, 100, 10)
+	if err != nil {
+		t.Fatalf("PruneAddrInverseBelow: %v", err)
+	}
+	if deleted != 10 {
+		t.Errorf("deleted=%d, want 10", deleted)
+	}
+	if !more {
+		t.Error("more=false but only 10/50 rows pruned")
+	}
+}
+
+// TestPruneSlotInverseBelow is the slot-key counterpart.
+func TestPruneSlotInverseBelow(t *testing.T) {
+	db := memorydb.New()
+	var addr tcommon.Address
+	addr[0], addr[20] = 0x41, 0xAA
+	var slot1, slot2 tcommon.Hash
+	slot1[31], slot2[31] = 0x01, 0x02
+	for _, s := range []tcommon.Hash{slot1, slot2} {
+		for _, n := range []uint64{2, 4, 8} {
+			if err := WriteSlotInverse(db, addr, s, n); err != nil {
+				t.Fatalf("WriteSlotInverse: %v", err)
+			}
+		}
+	}
+
+	deleted, _, err := PruneSlotInverseBelow(db, 5, 0)
+	if err != nil {
+		t.Fatalf("PruneSlotInverseBelow: %v", err)
+	}
+	// 2 slots × 2 rows below cutoff = 4.
+	if deleted != 4 {
+		t.Errorf("deleted=%d, want 4", deleted)
+	}
+	for _, s := range []tcommon.Hash{slot1, slot2} {
+		if !HasSlotInverse(db, addr, s, 8) {
+			t.Errorf("sh-i-s-(slot=%x, 8) wrongly pruned", s[:4])
+		}
+		if HasSlotInverse(db, addr, s, 4) {
+			t.Errorf("sh-i-s-(slot=%x, 4) survived prune", s[:4])
+		}
+	}
+}
+
+// TestHistoryDiskSize sanity-checks the size accountant: an empty
+// store reports 0, and a single AccountDelta increments the count.
+func TestHistoryDiskSize(t *testing.T) {
+	db := memorydb.New()
+	if got := HistoryDiskSize(db); got != 0 {
+		t.Errorf("empty store size=%d, want 0", got)
+	}
+	var addr tcommon.Address
+	addr[0], addr[20] = 0x41, 0xAA
+	if err := WriteAccountDelta(db, 7, addr, &historypb.AccountDelta{ExistedPre: true}); err != nil {
+		t.Fatalf("WriteAccountDelta: %v", err)
+	}
+	if got := HistoryDiskSize(db); got == 0 {
+		t.Error("post-write size still 0")
+	}
+}
