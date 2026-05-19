@@ -297,7 +297,13 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	// that witness allowance equals exactly 11 × WitnessPayPerBlock.
 	// If switchFork opened applyBlock from the wrong parent root, allowance
 	// would carry chain-A's accumulated rewards too (21 blocks × rate).
-	stateRoot := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), bc.CurrentBlock().Hash())
+	//
+	// switchFork drains the in-flight async-flush queue at its prologue, but
+	// the re-apply loop that follows enqueues fresh cutoffs for each block
+	// in the new branch. Wait for those to settle before reading diskdb so
+	// the test observes the post-reorg state, not a partial flush.
+	bc.WaitForFlushSettled()
+	stateRoot := rawdb.ReadBlockStateRoot(bc.chaindb, bc.CurrentBlock().Hash())
 	statedb, err := state.New(stateRoot, sdb)
 	if err != nil {
 		t.Fatalf("open state after fork switch: %v", err)

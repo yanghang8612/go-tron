@@ -94,7 +94,12 @@ func (b *TronBackend) CurrentBlock() *types.Block {
 }
 
 func (b *TronBackend) SolidifiedBlockNum() uint64 {
-	dp := state.LoadDynamicProperties(b.chain.DB())
+	// Read through the buffer overlay so the answer reflects the latest
+	// applied block, not just whatever the async flush worker has drained
+	// to disk. Without this, a single-SR chain (solidified == head) would
+	// return the previous block's solidified number after a successful
+	// InsertBlock until the worker catches up.
+	dp := b.chain.DynProps()
 	n := dp.LatestSolidifiedBlockNum()
 	if n < 0 {
 		return 0
@@ -835,7 +840,9 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
 }
 
 func (b *TronBackend) TotalTransaction() int64 {
-	return rawdb.ReadTotalTransactionCount(b.chain.db)
+	// Read through the buffer overlay so the counter reflects the latest
+	// applied block before the async flush worker has drained it to disk.
+	return rawdb.ReadTotalTransactionCount(b.chain.BufferedDB())
 }
 
 func (b *TronBackend) GetBurnTrx() int64 {
