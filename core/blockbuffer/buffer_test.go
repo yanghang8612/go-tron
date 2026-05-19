@@ -3,11 +3,42 @@ package blockbuffer
 import (
 	"bytes"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
+
+// blockingWriter is an ethdb.KeyValueWriter whose first Put blocks until a
+// release channel is closed, simulating slow disk I/O mid-flush. Used to
+// hold FlushUpTo inside its critical section deterministically.
+type blockingWriter struct {
+	started chan struct{} // closed when the first Put is entered
+	release chan struct{} // Put returns once this is closed
+	once    sync.Once
+	puts    atomic.Int32
+}
+
+func newBlockingWriter() *blockingWriter {
+	return &blockingWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (w *blockingWriter) Put(key, value []byte) error {
+	w.puts.Add(1)
+	w.once.Do(func() {
+		close(w.started)
+		<-w.release
+	})
+	return nil
+}
+
+func (w *blockingWriter) Delete(key []byte) error { return nil }
 
 func bufHash(b byte) common.Hash {
 	var h common.Hash
@@ -637,5 +668,124 @@ func TestBuffer_SatisfiesEthdbInterfaces(t *testing.T) {
 	// Sanity: ErrNotFound is non-nil.
 	if errors.Is(nil, ErrNotFound) {
 		t.Fatal("ErrNotFound check broken")
+	}
+}
+
+// TestBuffer_FlushUpToDoesNotBlockReaders is the regression guard for the
+// lock-free flush fix. Before the fix, FlushUpTo held b.mu (write lock) for
+// the FULL duration of disk I/O, so a concurrent reader — the
+// LoadDynamicProperties(bc.buffer) path every applyBlock runs in its prologue
+// — blocked until the flush finished (the ~2x slowdown in the single-SR
+// maintenance test). Now FlushUpTo only holds b.mu briefly to snapshot and to
+// drop layers; the disk I/O runs lock-free, so a reader must proceed even
+// while a flush is parked mid-write.
+func TestBuffer_FlushUpToDoesNotBlockReaders(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("dp-k1"), []byte("v1"))
+	b.CommitBlock()
+
+	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
+	w := newBlockingWriter()
+
+	flushDone := make(chan struct{})
+	go func() {
+		_ = b.FlushUpTo(1, numberOf, w)
+		close(flushDone)
+	}()
+
+	// Wait until FlushUpTo is mid-Put. With the lock-free fix this is during
+	// the disk I/O phase, holding only flushMu — not b.mu.
+	<-w.started
+
+	// A reader on the buffer (same lock the DP scan takes) must NOT block.
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = b.Get([]byte("dp-k1"))
+		close(readDone)
+	}()
+
+	select {
+	case <-readDone:
+		// Expected: reader proceeds concurrently with the in-flight flush.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Get blocked while FlushUpTo was mid-I/O — lock-free flush regressed")
+	}
+
+	close(w.release)
+	<-flushDone
+}
+
+// TestBuffer_FlushUpToDoesNotBlockIterator is the NewIterator analogue — the
+// exact call the DP scan makes (LoadDynamicProperties -> IterateDynamicProperties
+// -> Buffer.NewIterator). It must proceed concurrently with an in-flight flush.
+func TestBuffer_FlushUpToDoesNotBlockIterator(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("dp-k1"), []byte("v1"))
+	b.CommitBlock()
+
+	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
+	w := newBlockingWriter()
+
+	flushDone := make(chan struct{})
+	go func() {
+		_ = b.FlushUpTo(1, numberOf, w)
+		close(flushDone)
+	}()
+	<-w.started
+
+	iterDone := make(chan struct{})
+	go func() {
+		it := b.NewIterator([]byte("dp-"), nil)
+		it.Release()
+		close(iterDone)
+	}()
+
+	select {
+	case <-iterDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("NewIterator blocked while FlushUpTo was mid-I/O — lock-free flush regressed")
+	}
+
+	close(w.release)
+	<-flushDone
+}
+
+// TestBuffer_FlushUpToPreservesConcurrentCommit verifies the count-based drop
+// is correct when CommitBlock appends a new layer during the lock-free I/O
+// window: only the flushed prefix is removed, the freshly-committed tail layer
+// survives and remains readable.
+func TestBuffer_FlushUpToPreservesConcurrentCommit(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("dp-old"), []byte("v1"))
+	b.CommitBlock()
+
+	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
+	w := newBlockingWriter()
+
+	flushDone := make(chan struct{})
+	go func() {
+		_ = b.FlushUpTo(1, numberOf, w)
+		close(flushDone)
+	}()
+	<-w.started // flush is mid-I/O on layer 1, holding only flushMu
+
+	// Append a new committed layer while the flush is in flight.
+	b.BeginBlock(bufHash(2))
+	b.Put([]byte("dp-new"), []byte("v2"))
+	b.CommitBlock()
+
+	close(w.release)
+	<-flushDone
+
+	// Layer 1 was flushed + dropped; layer 2 (committed mid-flush) survives.
+	mustGet(t, b, []byte("dp-new"), []byte("v2"))
+	if pending := b.PendingBlocks(); len(pending) != 1 || pending[0] != bufHash(2) {
+		t.Fatalf("after flush: pending = %v, want [hash2]", pending)
 	}
 }

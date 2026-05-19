@@ -71,10 +71,18 @@ func newLayer(hash common.Hash) *layer {
 // model — the lock is added in slice 2 because the buffer is now read by
 // callers outside chainmu (BlockChain.DynProps for RPC, etc.).
 type Buffer struct {
-	base   ethdb.KeyValueReader
-	mu     sync.RWMutex
-	layers []*layer
-	active *layer
+	base ethdb.KeyValueReader
+	mu   sync.RWMutex
+	// flushMu serializes FlushUpTo/Flush calls against each other so the
+	// snapshot→disk-I/O→drop phases of two concurrent flushers can't
+	// interleave (double-flush / double-drop). It is held across the whole
+	// flush, but mu is released during the disk I/O so readers
+	// (Get/Has/NewIterator — the LoadDynamicProperties path) proceed
+	// concurrently. FlushUpTo callers are the async-flush worker, the
+	// inline fallback, and Close; only one runs the body at a time.
+	flushMu sync.Mutex
+	layers  []*layer
+	active  *layer
 }
 
 // New creates a Buffer that falls through reads to base.
@@ -260,6 +268,11 @@ func (b *Buffer) Delete(key []byte) error {
 // (e.g. forced shutdown). Slice 2's stable-flush policy uses FlushUpTo
 // instead.
 func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
+	// Serialize against FlushUpTo via flushMu. This path keeps b.mu for the
+	// whole drain (it's the unused nuclear shutdown helper, not the hot
+	// async path), but must not interleave with a concurrent FlushUpTo.
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, l := range b.layers {
@@ -292,45 +305,85 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 //
 // FlushUpTo is idempotent: a second call with the same cutoff (and no new
 // blocks added in between) drops zero layers.
+//
+// Locking: the disk I/O (numberOf lookups + flushLayer writes) runs WITHOUT
+// holding b.mu, so concurrent readers — most importantly the
+// LoadDynamicProperties(buffer) scan that every applyBlock runs in its
+// prologue — are not blocked by an in-flight flush. This is safe because
+// committed layers are immutable once CommitBlock promotes them: their
+// write/delete maps are never mutated again, only the slice that holds them
+// is. We therefore:
+//
+//  1. briefly RLock to snapshot the layer pointers,
+//  2. run numberOf + flushLayer lock-free on that snapshot,
+//  3. briefly Lock to drop the flushed prefix.
+//
+// flushMu serializes flushers against each other; DiscardBlock (the only
+// other path that removes front layers) cannot run concurrently because
+// switchFork drains the async-flush queue before rewinding. CommitBlock may
+// append new layers at the tail during step 2 — they sit after the flushed
+// prefix and are preserved by the count-based drop in step 3.
 func (b *Buffer) FlushUpTo(
 	cutoff uint64,
 	numberOf func(common.Hash) (uint64, bool),
 	w ethdb.KeyValueWriter,
 ) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.layers) == 0 {
+	b.flushMu.Lock()
+	defer b.flushMu.Unlock()
+
+	// Step 1: snapshot the committed-layer pointers under a brief read lock.
+	b.mu.RLock()
+	snapshot := make([]*layer, len(b.layers))
+	copy(snapshot, b.layers)
+	b.mu.RUnlock()
+	if len(snapshot) == 0 {
 		return nil
 	}
-	flushedThrough := -1
-	for i, l := range b.layers {
+
+	// Step 2: lock-free disk I/O. Layers are immutable post-commit, so
+	// reading blockHash + write/delete maps without b.mu is race-free, and
+	// readers can RLock concurrently.
+	flushed := 0
+	for _, l := range snapshot {
 		n, ok := numberOf(l.blockHash)
 		if !ok || n > cutoff {
 			break
 		}
 		if err := flushLayer(l, w); err != nil {
+			// Drop whatever we already flushed before surfacing the error,
+			// so a retry doesn't re-write those layers.
+			b.dropFlushedPrefix(flushed)
 			return err
 		}
-		flushedThrough = i
+		flushed++
 	}
-	if flushedThrough < 0 {
+	if flushed == 0 {
 		return nil
 	}
-	// Drop layers [0..flushedThrough] inclusive.
-	keep := flushedThrough + 1
-	if keep >= len(b.layers) {
-		for i := range b.layers {
-			b.layers[i] = nil
-		}
-		b.layers = b.layers[:0]
-		return nil
+
+	// Step 3: drop the flushed prefix under the write lock.
+	b.dropFlushedPrefix(flushed)
+	return nil
+}
+
+// dropFlushedPrefix removes the first n layers under the write lock. n is the
+// count of already-flushed front layers; CommitBlock-appended tail layers are
+// preserved. Guarded against a shrunk slice defensively, though the flushMu +
+// no-concurrent-DiscardBlock invariants make that impossible.
+func (b *Buffer) dropFlushedPrefix(n int) {
+	if n <= 0 {
+		return
 	}
-	copy(b.layers, b.layers[keep:])
-	for i := len(b.layers) - keep; i < len(b.layers); i++ {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n > len(b.layers) {
+		n = len(b.layers)
+	}
+	copy(b.layers, b.layers[n:])
+	for i := len(b.layers) - n; i < len(b.layers); i++ {
 		b.layers[i] = nil
 	}
-	b.layers = b.layers[:len(b.layers)-keep]
-	return nil
+	b.layers = b.layers[:len(b.layers)-n]
 }
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
