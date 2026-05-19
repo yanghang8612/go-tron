@@ -20,7 +20,8 @@ import (
 
 // Slice 1 of the SyncService refactor moved these tunables into
 // net/sync/constants.go. The lowercase aliases here keep call sites and
-// tests under net/ untouched until later slices migrate them.
+// tests under net/ untouched until Slice 6 deletes net/sync.go entirely;
+// at that point every remaining reference moves to tsync.* directly.
 const (
 	maxChainInventorySize   = tsync.MaxChainInventorySize
 	maxFetchBatch           = tsync.MaxFetchBatch
