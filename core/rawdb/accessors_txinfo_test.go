@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestWriteReadTransactionInfo(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 
 	txID := bytes.Repeat([]byte{0xAB}, 32)
 	info := &corepb.TransactionInfo{
@@ -42,7 +41,7 @@ func TestWriteReadTransactionInfo(t *testing.T) {
 }
 
 func TestReadTransactionInfo_NotFound(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 	got := ReadTransactionInfo(db, bytes.Repeat([]byte{0x00}, 32))
 	if got != nil {
 		t.Fatal("expected nil for missing key")
@@ -50,7 +49,7 @@ func TestReadTransactionInfo_NotFound(t *testing.T) {
 }
 
 func TestWriteReadTransactionInfosByBlock(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 
 	infos := []*corepb.TransactionInfo{
 		{Id: bytes.Repeat([]byte{0x01}, 32), Fee: 100, BlockNumber: 5, BlockTimeStamp: 15000},
@@ -72,7 +71,7 @@ func TestWriteReadTransactionInfosByBlock(t *testing.T) {
 }
 
 func TestReadTransactionInfosByBlock_NotFound(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 	got := ReadTransactionInfosByBlock(db, 999)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 infos, got %d", len(got))
@@ -80,7 +79,7 @@ func TestReadTransactionInfosByBlock_NotFound(t *testing.T) {
 }
 
 func TestWriteReadTransactionIndex(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 
 	txHash := bytes.Repeat([]byte{0xCC}, 32)
 	WriteTransactionIndex(db, txHash, 42)
@@ -95,7 +94,7 @@ func TestWriteReadTransactionIndex(t *testing.T) {
 }
 
 func TestReadTransactionIndex_NotFound(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	db := NewMemoryChainDB()
 	got := ReadTransactionIndex(db, bytes.Repeat([]byte{0x00}, 32))
 	if got != nil {
 		t.Fatal("expected nil for missing tx index")

@@ -276,7 +276,7 @@ func TestSetupGenesisBlock(t *testing.T) {
 	}
 
 	// Verify genesis block is stored
-	block := rawdb.ReadBlock(diskdb, 0)
+	block := rawdb.ReadBlock(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), 0)
 	if block == nil {
 		t.Fatal("genesis block not found in DB")
 	}

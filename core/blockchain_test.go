@@ -131,7 +131,7 @@ func TestBlockChainInsertBlock(t *testing.T) {
 		t.Fatalf("current block number: want 1, got %d", bc.CurrentBlock().Number())
 	}
 
-	stored := rawdb.ReadBlock(diskdb, 1)
+	stored := rawdb.ReadBlock(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), 1)
 	if stored == nil {
 		t.Fatal("block 1 not stored")
 	}
@@ -672,7 +672,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	//    allowance. Block reward also accrues, so the strict invariant is
 	//    "allowance < standbyAllowance" (block reward is 16M sun, well under
 	//    115.2G).
-	stateRoot := rawdb.ReadBlockStateRoot(diskdb, bc.CurrentBlock().Hash())
+	stateRoot := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), bc.CurrentBlock().Hash())
 	statedb, err := state.New(stateRoot, sdb)
 	if err != nil {
 		t.Fatalf("open post-block#1 state: %v", err)

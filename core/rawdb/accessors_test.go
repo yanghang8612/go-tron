@@ -9,7 +9,7 @@ import (
 )
 
 func TestWriteReadBlock(t *testing.T) {
-	db := NewMemoryDatabase()
+	chaindb := NewMemoryChainDB()
 	pb := &corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{
@@ -19,9 +19,9 @@ func TestWriteReadBlock(t *testing.T) {
 		},
 	}
 	block := types.NewBlockFromPB(pb)
-	WriteBlock(db, block)
+	WriteBlock(chaindb, block)
 
-	got := ReadBlock(db, block.Number())
+	got := ReadBlock(chaindb, block.Number())
 	if got == nil {
 		t.Fatal("block not found")
 	}
@@ -31,16 +31,16 @@ func TestWriteReadBlock(t *testing.T) {
 }
 
 func TestWriteReadBlockByHash(t *testing.T) {
-	db := NewMemoryDatabase()
+	chaindb := NewMemoryChainDB()
 	pb := &corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
 			RawData: &corepb.BlockHeaderRaw{Number: 10},
 		},
 	}
 	block := types.NewBlockFromPB(pb)
-	WriteBlock(db, block)
+	WriteBlock(chaindb, block)
 
-	num := ReadBlockNumber(db, block.Hash())
+	num := ReadBlockNumber(chaindb, block.Hash())
 	if num == nil {
 		t.Fatal("hash->number mapping not found")
 	}

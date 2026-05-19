@@ -297,7 +297,7 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	// that witness allowance equals exactly 11 × WitnessPayPerBlock.
 	// If switchFork opened applyBlock from the wrong parent root, allowance
 	// would carry chain-A's accumulated rewards too (21 blocks × rate).
-	stateRoot := rawdb.ReadBlockStateRoot(diskdb, bc.CurrentBlock().Hash())
+	stateRoot := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), bc.CurrentBlock().Hash())
 	statedb, err := state.New(stateRoot, sdb)
 	if err != nil {
 		t.Fatalf("open state after fork switch: %v", err)
@@ -1331,7 +1331,7 @@ func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
 		t.Fatalf("restart recovered head = %d, want 2", got)
 	}
 	headHash := rawdb.ReadHeadBlockHash(diskdb)
-	headNum := rawdb.ReadBlockNumber(diskdb, headHash)
+	headNum := rawdb.ReadBlockNumber(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), headHash)
 	if headNum == nil || *headNum != 2 {
 		t.Fatalf("disk LastBlock not repaired: num=%v hash=%x", headNum, headHash)
 	}
