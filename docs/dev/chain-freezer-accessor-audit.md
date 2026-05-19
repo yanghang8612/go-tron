@@ -90,7 +90,7 @@ the ancient reader for a real `*freezer.Freezer`.
 | `core/genesis.go` | 54 | `rawdb.ReadBlock(db, 0)` | helper accepts `*ChainDB`; call sites that have raw KV wrap with `NoopAncient` |
 | `core/tron_backend.go` | 232, 236, 249, 257, 1143, 1160, 1239 | `rawdb.Read*(b.chain.db, …)` | `rawdb.Read*(b.chain.chaindb, …)` |
 | `cmd/balance-trace/main.go` | 60, 72, 94 | `rawdb.Read*(db, …)` (raw Pebble store) | `rawdb.Read*(rawdb.NewChainDB(db, rawdb.NoopAncient{}), …)` |
-| `vm/instructions.go` | 476 | `rawdb.ReadBlock(interpreter.tvm.DB, index)` | wraps `tvm.DB` as a transient `*ChainDB` with `NoopAncient`; safe because `opBlockHash`'s 256-block window sits above the 128-block freezer margin |
+| `vm/instructions.go` | 482 | `rawdb.ReadBlock(interpreter.tvm.DB, index)` | switched to dedicated `rawdb.ReadBlockKV` (KV-only; never consults ancient). Safe because `opBlockHash`'s 256-block window sits above the freezer margin so any frozen lookup would land in cold storage anyway. |
 
 ### Test-side migration
 
