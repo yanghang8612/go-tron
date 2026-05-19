@@ -303,7 +303,16 @@ func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, d
 	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, &parentAccountStateRoot)
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot *tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot *tcommon.Hash) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+	blockSnap := statedb.Snapshot()
+	dpProps, dpDirty := dynProps.Snapshot()
+	defer func() {
+		if err != nil {
+			statedb.RevertToSnapshot(blockSnap)
+			dynProps.Restore(dpProps, dpDirty)
+		}
+	}()
+
 	// Reset per-block energy accumulator (matches java-tron Manager.processBlock).
 	dynProps.SetBlockEnergyUsage(0)
 
@@ -319,8 +328,6 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
-
-	var txInfos []*corepb.TransactionInfo
 
 	for i, tx := range block.Transactions() {
 		if dynProps.ConsensusLogicOptimization() {
@@ -339,15 +346,16 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
+		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
+			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
+		}
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
 
 		accumulateBlockEnergyUsage(dynProps, db, prevBlockTime, result)
 	}
 
-	var javaAccountStateRoot tcommon.Hash
 	if parentAccountStateRoot != nil {
-		var err error
 		javaAccountStateRoot, err = statedb.JavaAccountStateRoot(*parentAccountStateRoot, accountStateMark)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("account state root: %w", err)

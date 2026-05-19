@@ -24,6 +24,8 @@ var (
 	ErrNoContract                = errors.New("transaction has no contract")
 	ErrContractSizeNotEqualToOne = errors.New("transaction contract size should be exactly 1")
 	ErrTransactionRetCount       = errors.New("transaction result count exceeds contract count")
+	ErrTransactionRetMissing     = errors.New("transaction vm result missing")
+	ErrTransactionRetMismatch    = errors.New("transaction vm result mismatch")
 	ErrTransactionTooLarge       = errors.New("transaction size exceeds maximum")
 	ErrTransactionExpiration     = errors.New("transaction expiration out of range")
 	ErrMissingOwnerAddress       = errors.New("contract has no owner address")
@@ -60,6 +62,7 @@ var (
 //     address signing twice with different signatures collides.
 //   - false (pre-VERSION_4_7_1):    dedup by raw signature bytes; the same
 //     address may contribute multiple times if the signatures differ.
+//
 // Either way, a duplicate aborts with ErrDuplicateSignature — java throws
 // "has signed twice". We always scan ALL signatures (no early return when
 // threshold is met) so a duplicate or unauthorized signer trailing a
@@ -183,6 +186,27 @@ func ValidateTxRetCount(tx *types.Transaction) error {
 	}
 	if len(tx.Proto().Ret) > len(tx.Proto().RawData.Contract) {
 		return ErrTransactionRetCount
+	}
+	return nil
+}
+
+func ValidateTxVMContractRet(tx *types.Transaction, actual corepb.Transaction_ResultContractResult) error {
+	if err := ValidateContractCount(tx); err != nil {
+		return err
+	}
+	switch tx.ContractType() {
+	case corepb.Transaction_Contract_CreateSmartContract, corepb.Transaction_Contract_TriggerSmartContract:
+	default:
+		return nil
+	}
+
+	ret := tx.Proto().Ret
+	if len(ret) == 0 {
+		return fmt.Errorf("%w: tx %s", ErrTransactionRetMissing, tx.Hash())
+	}
+	expected := ret[0].GetContractRet()
+	if expected != actual {
+		return fmt.Errorf("%w: tx %s expected %s actual %s", ErrTransactionRetMismatch, tx.Hash(), expected, actual)
 	}
 	return nil
 }

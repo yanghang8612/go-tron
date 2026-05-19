@@ -298,6 +298,62 @@ func TestProcessBlock_RejectsRetCountGreaterThanContractCountWhenOptimized(t *te
 	}
 }
 
+func TestProcessBlock_RejectsVMContractRetMismatch(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+	dynProps.SetAllowCreationOfContracts(true)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(2)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 100_000_000)
+	statedb.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner.Bytes(),
+		ContractAddress: contractAddr.Bytes(),
+	})
+	statedb.SetCode(contractAddr, []byte{0x00}) // STOP
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner.Bytes(),
+		ContractAddress: contractAddr.Bytes(),
+	}
+	param, err := anypb.New(tsc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			FeeLimit:   10_000_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TriggerSmartContract,
+				Parameter: param,
+			}},
+		},
+		Ret: []*corepb.Transaction_Result{{
+			ContractRet: corepb.Transaction_Result_REVERT,
+		}},
+	})
+
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    1,
+				Timestamp: 3000,
+			},
+		},
+		Transactions: []*corepb.Transaction{tx.Proto()},
+	})
+
+	_, err = ProcessBlock(statedb, dynProps, block, nil, nil, 0, false)
+	if !errors.Is(err, ErrTransactionRetMismatch) {
+		t.Fatalf("expected ErrTransactionRetMismatch, got %v", err)
+	}
+	if got := statedb.GetBalance(owner); got != 100_000_000 {
+		t.Fatalf("failed block must roll back state: owner balance got %d, want 100000000", got)
+	}
+}
+
 func TestProcessBlock_ReturnsTransactionInfos(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
