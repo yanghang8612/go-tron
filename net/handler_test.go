@@ -1,6 +1,7 @@
 package net
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,9 +40,7 @@ func TestHandleBlockDropsBroadcastWhileSyncPaused(t *testing.T) {
 	syncSvc := NewSyncService(bc, handler)
 	handler.SetSyncService(syncSvc)
 
-	syncSvc.mu.Lock()
-	syncSvc.paused = true
-	syncSvc.mu.Unlock()
+	syncSvc.pause.Enter(0, fmt.Errorf("test pause"))
 
 	block := stubBlock(1, bc.CurrentBlock().Hash())
 	payload, err := proto.Marshal(block.Proto())

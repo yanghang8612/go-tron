@@ -121,11 +121,12 @@ type SyncService struct {
 	// delivered the bad block is NOT disconnected — gtron is the more
 	// likely culprit than a peer (re-impl racing toward parity), so we keep
 	// the connection so the operator can diagnose without losing peer
-	// state. Cleared only by process restart.
-	paused       bool
-	pausedAtNum  uint64
-	pausedAtTime time.Time
-	pausedErr    error
+	// state. Cleared only by process restart. The gate owns its own
+	// mutex; lock order is always ss.mu (outer) → pause.mu (inner) when
+	// both are held. Read sites (onPeerFetchReady, drainBufferedBlocks,
+	// shouldFinishLocked) hold ss.mu and then call Paused(); Enter is
+	// called outside ss.mu so write paths never nest.
+	pause *tsync.PauseGate
 
 	// stats accumulates per-window throughput counters used for the
 	// "Imported chain segment" summary line. Guarded by ss.mu.
@@ -143,6 +144,7 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	ss := &SyncService{
 		chain:   chain,
 		handler: handler,
+		pause:   tsync.NewPauseGate(),
 		quit:    make(chan struct{}),
 	}
 	// Subscribe to per-block phase breakdowns so the throttled "Imported chain
@@ -239,17 +241,13 @@ func (ss *SyncService) IsSyncing() bool {
 // While paused, no new sync starts and the watchdog skips its kick — but peers
 // stay connected and inbound SYNC_BLOCK_CHAIN requests are still served.
 func (ss *SyncService) IsPaused() bool {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	return ss.paused
+	return ss.pause.Paused()
 }
 
 // PausedStatus returns the pause flag along with the block number, time, and
 // error captured when the pause was triggered. Intended for status reporting.
 func (ss *SyncService) PausedStatus() (paused bool, atNum uint64, at time.Time, err error) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	return ss.paused, ss.pausedAtNum, ss.pausedAtTime, ss.pausedErr
+	return ss.pause.Status()
 }
 
 // BuildChainSummary returns the exponentially-spaced summary of our
@@ -272,12 +270,11 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	if peer == nil {
 		return
 	}
-	now := time.Now()
-	ss.mu.Lock()
-	if ss.paused {
-		ss.mu.Unlock()
+	if ss.pause.Paused() {
 		return
 	}
+	now := time.Now()
+	ss.mu.Lock()
 	started := false
 	if !ss.syncing {
 		ss.initSessionLocked(now)
@@ -777,7 +774,7 @@ func (ss *SyncService) armPeerDelayTimerLocked(ps *syncPeerState, wait time.Dura
 
 func (ss *SyncService) onPeerFetchReady(peerID string) {
 	ss.mu.Lock()
-	if !ss.syncing || ss.paused {
+	if !ss.syncing || ss.pause.Paused() {
 		ss.mu.Unlock()
 		return
 	}
@@ -866,7 +863,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 	for {
 		now := time.Now()
 		ss.mu.Lock()
-		if !ss.syncing || ss.paused {
+		if !ss.syncing || ss.pause.Paused() {
 			ss.mu.Unlock()
 			break
 		}
@@ -957,11 +954,13 @@ func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 		"peer", peerID,
 		"err", err,
 		"hint", "restart to resume")
+	// Latch the gate outside ss.mu: lock order is ss.mu (outer) →
+	// pause.mu (inner) elsewhere, and Enter is sticky so the brief
+	// window between Enter and the doReset() that follows is fine —
+	// new sync attempts will already short-circuit on the gate while
+	// callers blocked on ss.mu wait their turn.
+	ss.pause.Enter(num, err)
 	ss.mu.Lock()
-	ss.paused = true
-	ss.pausedAtNum = num
-	ss.pausedAtTime = time.Now()
-	ss.pausedErr = err
 	ss.doReset()
 	ss.mu.Unlock()
 }
@@ -982,7 +981,7 @@ func (ss *SyncService) estimatedRemainLocked() int64 {
 }
 
 func (ss *SyncService) shouldFinishLocked() bool {
-	if !ss.syncing || ss.paused {
+	if !ss.syncing || ss.pause.Paused() {
 		return false
 	}
 	if len(ss.retryList) != 0 || len(ss.blockBuffer) != 0 {
