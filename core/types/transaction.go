@@ -80,26 +80,32 @@ func (tx *Transaction) Signatures() [][]byte {
 	return tx.pb.Signature
 }
 
-// ErrBadSignatureLength means a tx signature element wasn't the expected
-// 65 bytes (r ‖ s ‖ v). Returned by RecoverSigners.
-var ErrBadSignatureLength = errors.New("transaction: signature length != 65")
+// ErrBadSignatureLength means a tx signature element was shorter than the
+// canonical 65 bytes (r ‖ s ‖ v). Returned by RecoverSigners.
+var ErrBadSignatureLength = errors.New("transaction: signature length < 65")
 
 // RecoverSigners returns the address recovered from each signature in
 // tx.Signatures, signing over the tx RawData hash. The order matches the
 // signature order; callers that need set semantics (e.g. weight summation
 // across distinct keys) must dedupe themselves.
 //
-// Signatures are 65 bytes (r ‖ s ‖ v=27|28) — the same format java-tron's
-// ECKey.signatureToAddress consumes.
+// Canonical signatures are 65 bytes (r ‖ s ‖ v) — the same format java-tron's
+// ECKey.signatureToAddress consumes. java's Rsv.fromSignature takes [0:32],
+// [32:64], [64] and silently ignores anything past byte 65; checkWeight only
+// rejects sig.size() < 65 (TransactionCapsule.checkWeight). Historical Nile
+// txs (e.g. 8cc541fdad2c576291387462a9ec9f50594b13f05fa03b7d7916f348649a4909
+// at block 1,793,761) carry 66-byte payloads with trailing 0x02 from an old
+// SDK; refusing them desyncs from java. Match the parity rule: require
+// len(sig) >= 65, recover from sig[:65].
 func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
 	hash := tx.Hash()
 	sigs := tx.Signatures()
 	addrs := make([]common.Address, 0, len(sigs))
 	for _, sig := range sigs {
-		if len(sig) != 65 {
+		if len(sig) < 65 {
 			return nil, ErrBadSignatureLength
 		}
-		pub, err := crypto.SigToPub(hash[:], sig)
+		pub, err := crypto.SigToPub(hash[:], sig[:65])
 		if err != nil {
 			return nil, fmt.Errorf("transaction: recover signer: %w", err)
 		}

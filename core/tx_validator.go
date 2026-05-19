@@ -141,21 +141,29 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	// Mirrors java-tron TransactionCapsule.getCurrentWeight: scan every
 	// signature, reject on duplicate, and never short-circuit once threshold
 	// is reached — a later unauthorized or duplicate signer still aborts.
+	//
+	// Pre-VERSION_4_7_1 java dedups by the canonical r||s||v projection of
+	// the signature (getBase64FromByteString → Rsv.fromSignature on bytes
+	// [0:65]); trailing bytes past v don't affect the dedup key. Use sig[:65]
+	// to stay equivalent — the historical Nile tx that motivated this carries
+	// 66-byte sigs with a stray trailing byte, and a naive string(sigs[i])
+	// key would silently accept duplicates that java rejects.
 	var totalWeight int64
 	seenAddr := make(map[tcommon.Address]struct{}, len(addrs))
 	seenSig := make(map[string]struct{}, len(sigs))
 	for i, addr := range addrs {
+		sigKey := string(sigs[i][:65])
 		var dup bool
 		if multiSigByAddress {
 			_, dup = seenAddr[addr]
 		} else {
-			_, dup = seenSig[string(sigs[i])]
+			_, dup = seenSig[sigKey]
 		}
 		if dup {
 			return ErrDuplicateSignature
 		}
 		seenAddr[addr] = struct{}{}
-		seenSig[string(sigs[i])] = struct{}{}
+		seenSig[sigKey] = struct{}{}
 
 		w := types.KeyWeight(perm, addr)
 		if w == 0 {

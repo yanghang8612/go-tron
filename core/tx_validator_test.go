@@ -382,6 +382,53 @@ func TestValidateTxEnvelope_DuplicateSigners_PostV4_7_1_Rejected(t *testing.T) {
 // require a fixture-loaded historical multi-sig tx — tracked separately
 // from this conformance pass.
 
+// TestValidateTxEnvelope_DedupAcrossTrailingBytes: pre-VERSION_4_7_1 java
+// dedups by base64(canonical r||s||v); the same r||s||v with two different
+// trailing-byte tails (the Nile 66-byte historical shape) must collide.
+// Regression guard for the dedup key change in ValidateTxEnvelope.
+func TestValidateTxEnvelope_DedupAcrossTrailingBytes(t *testing.T) {
+	statedb, _ := newValidatorState(t)
+	ownerKey, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+
+	// 2-key Owner permission, threshold 2, so a single signer is below
+	// threshold and only a duplicate signature could trip a (broken) dedup.
+	_, peer := keyAndAddr(t)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.SetPermissions(owner,
+		&corepb.Permission{
+			Type:      corepb.Permission_Owner,
+			Id:        0,
+			Threshold: 2,
+			Keys: []*corepb.Key{
+				{Address: owner.Bytes(), Weight: 1},
+				{Address: peer.Bytes(), Weight: 1},
+			},
+		},
+		nil,
+		nil,
+	)
+
+	tx := buildTransferTx(t, owner, recipient, 100, 0, ownerKey)
+	canon := tx.Proto().Signature[0]
+	if len(canon) != 65 {
+		t.Fatalf("base sig should be 65 bytes, got %d", len(canon))
+	}
+	// Two sigs with identical r||s||v but distinct trailing bytes — what
+	// the Nile historical tx shape looks like. A correct dedup key strips
+	// the tail; a naive string(sig) key would treat these as distinct and
+	// silently sum their weights to clear the threshold.
+	sigA := append([]byte{}, canon...)
+	sigA = append(sigA, 0x01)
+	sigB := append([]byte{}, canon...)
+	sigB = append(sigB, 0x02)
+	tx.Proto().Signature = [][]byte{sigA, sigB}
+
+	if err := ValidateTxEnvelope(tx, statedb, false); !errors.Is(err, ErrDuplicateSignature) {
+		t.Fatalf("expected ErrDuplicateSignature for r||s||v collision across trailing bytes, got %v", err)
+	}
+}
+
 // TestValidateTxEnvelope_PermissionNotFound: contract names permission_id=2
 // but the account has only the default Owner+Active[0] (id=2 IS active[0]).
 // Make permission_id=5 to actually miss.
