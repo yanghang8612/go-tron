@@ -489,6 +489,57 @@ func TestHistoryConfig_Delete(t *testing.T) {
 	}
 }
 
+// ---- Backfill resume cursor (sh-bf-cursor-) -------------------------------
+
+func TestHistoryBackfillCursor_RoundTrip(t *testing.T) {
+	db := memorydb.New()
+
+	if _, ok := ReadHistoryBackfillCursor(db); ok {
+		t.Fatal("expected no cursor on a fresh db")
+	}
+
+	if err := WriteHistoryBackfillCursor(db, 123456); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := ReadHistoryBackfillCursor(db)
+	if !ok {
+		t.Fatal("expected cursor present after write")
+	}
+	if got != 123456 {
+		t.Errorf("cursor = %d, want 123456", got)
+	}
+
+	// Overwrite advances the cursor.
+	if err := WriteHistoryBackfillCursor(db, 123457); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReadHistoryBackfillCursor(db); got != 123457 {
+		t.Errorf("cursor after overwrite = %d, want 123457", got)
+	}
+
+	// Cursor==0 is a valid value distinct from "absent" (the presence flag
+	// disambiguates), though the backfill loop never persists 0.
+	if err := WriteHistoryBackfillCursor(db, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := ReadHistoryBackfillCursor(db); !ok || got != 0 {
+		t.Errorf("cursor=0 round-trip: got=%d ok=%v, want 0/true", got, ok)
+	}
+}
+
+func TestHistoryBackfillCursor_Delete(t *testing.T) {
+	db := memorydb.New()
+	if err := WriteHistoryBackfillCursor(db, 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteHistoryBackfillCursor(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadHistoryBackfillCursor(db); ok {
+		t.Fatal("expected no cursor after delete")
+	}
+}
+
 // TestHistorySentinel_NoCollision verifies sh-cfg- does not collide with
 // any structurally-possible sh-a- / sh-m- / sh-s- key. The sh-cfg- key is
 // exactly the 7-byte byte slice "sh-cfg-"; the namespace segments differ
