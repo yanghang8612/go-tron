@@ -505,12 +505,23 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// tx loop. Default pure-Go builds don't have the Pedersen backend needed
 	// to compute roots; fail clearly once the chain can observe shielded txs
 	// instead of silently producing an unusable anchor store.
+	//
+	// Gate the Reset/Save pair on whether shielded txs are actually possible
+	// for this block — either the chain has activated AllowShieldedTransaction
+	// or the block carries a shielded transfer. Pre-activation the work is
+	// pure waste: GetBest() returns the empty tree (LAST_TREE has never been
+	// written), Reset writes a marshalled-empty proto whose len==0 so the next
+	// ReadLastMerkleTree treats it as absent again, and SaveCurrentAsBest's
+	// fast-path therefore never fires — so every block was paying a cgocall
+	// into librustzcash to hash an empty tree. Profile on a Nile soak showed
+	// this loop burning ~20% of CPU at h≈890k. Once a proposal activates
+	// shielded, the gate flips on and the regular path resumes.
+	shieldedActive := dynProps.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)
 	shieldedMerkleAvailable := zksnark.Available()
-	if !shieldedMerkleAvailable &&
-		(dynProps.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)) {
+	if !shieldedMerkleAvailable && shieldedActive {
 		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
 	}
-	if shieldedMerkleAvailable {
+	if shieldedMerkleAvailable && shieldedActive {
 		if err := zksnark.NewMerkleContainer(bc.buffer).ResetCurrent(); err != nil {
 			return fmt.Errorf("reset shielded merkle tree: %w", err)
 		}
@@ -569,7 +580,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// MerkleTreeIndexStore-equivalent dense for wallet/voucher lookups even
 	// across blocks that do not append receive commitments.
 	// Mirrors java-tron Manager.processBlock → MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree.
-	if shieldedMerkleAvailable {
+	//
+	// Gated on shieldedActive for the same reason as ResetCurrent above —
+	// pre-activation this loop computes the root of the empty tree (a cgocall
+	// into librustzcash) every block and immediately discards it.
+	if shieldedMerkleAvailable && shieldedActive {
 		if err := zksnark.NewMerkleContainer(bc.buffer).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
