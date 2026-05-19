@@ -13,6 +13,12 @@ type ChainConfig struct {
 	// Java-tron config key: enery.limit.block.num.
 	// A nil pointer means the java-tron default.
 	BlockNumForEnergyLimit *int64
+	// HistoryEnabled toggles the State History Index (SHI) capture path.
+	// false (the default) leaves applyBlock and StateDB on the zero-overhead
+	// fast path — no per-mutation accounting, no per-block flush. Archive
+	// operators opt in via node config; the gate is independent of any
+	// java-tron proposal, so flipping it never affects consensus.
+	HistoryEnabled bool
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890

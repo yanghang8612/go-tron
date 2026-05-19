@@ -494,6 +494,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
 	}
+	// Flip the SHI capture flag for this block. Without this the StateDB's
+	// AccumulateHistory short-circuits and no rows land in bc.buffer.
+	if bc.config.HistoryEnabled {
+		statedb.SetHistoryEnabled(true)
+	}
 
 	// Load dynamic properties through the buffer so that DP keys written by
 	// pending (not-yet-flushed) layers are visible to this applyBlock — e.g.
@@ -715,6 +720,19 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// from contaminating the parent state used by the next retry.
 	if blockRoot != (tcommon.Hash{}) && blockRoot != javaAccountStateRoot {
 		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, javaAccountStateRoot)
+	}
+
+	// State History Index (SHI) capture. Walks the per-block journal and
+	// flushes pre-block account / slot / code / contract-meta deltas to
+	// bc.buffer so switchFork's DiscardBlock rewinds them along with the
+	// other buffered writes for this layer. Must run BEFORE statedb.Commit,
+	// which truncates the journal; the belt-and-braces config gate here
+	// skips the function call entirely on non-archive operators (StateDB
+	// also short-circuits internally, this guard just avoids the call cost).
+	if bc.config.HistoryEnabled {
+		if err := statedb.AccumulateHistory(bc.buffer, block.Number(), block.Hash()); err != nil {
+			return fmt.Errorf("accumulate state history: %w", err)
+		}
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).

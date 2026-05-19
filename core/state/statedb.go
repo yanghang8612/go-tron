@@ -39,6 +39,16 @@ type StateDB struct {
 	// the root passed to New). It is used as the parent root when updating the
 	// triedb so that the hashdb reference graph is correct across multiple blocks.
 	originRoot ethcommon.Hash
+
+	// historyEnabled toggles the State History Index capture path
+	// (AccumulateHistory). Off by default; applyBlock turns it on via
+	// SetHistoryEnabled when params.ChainConfig.HistoryEnabled is true.
+	// Mutating SetState / SetCode / journalAccount themselves do NOT branch on
+	// this flag — the per-block journal already records every pre-mutation
+	// value needed by AccumulateHistory, so the only place the gate matters
+	// is the final flush (and the no-op early return there keeps the cost
+	// to a single bool check per block for non-archive nodes).
+	historyEnabled bool
 }
 
 // New creates a StateDB from the given state root.
@@ -1369,13 +1379,14 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		return nil, err
 	}
 	cp := &StateDB{
-		db:           s.db,
-		trie:         tr,
-		stateObjects: make(map[tcommon.Address]*stateObject),
-		witnesses:    make(map[tcommon.Address]*types.Witness),
-		journal:      newJournal(),
-		dynProps:     s.dynProps,
-		originRoot:   s.originRoot,
+		db:             s.db,
+		trie:           tr,
+		stateObjects:   make(map[tcommon.Address]*stateObject),
+		witnesses:      make(map[tcommon.Address]*types.Witness),
+		journal:        newJournal(),
+		dynProps:       s.dynProps,
+		originRoot:     s.originRoot,
+		historyEnabled: s.historyEnabled,
 	}
 	for addr, obj := range s.stateObjects {
 		var metaCopy *contractpb.SmartContract
