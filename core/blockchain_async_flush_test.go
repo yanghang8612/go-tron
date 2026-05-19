@@ -49,7 +49,7 @@ func newAsyncFlushChain(t *testing.T, witnessAddr tcommon.Address) (*BlockChain,
 
 // TestAsyncFlush_DrainsViaWorker asserts the happy path: applyBlock can
 // return before the worker has finished the disk-side flush. After
-// waitForFlushQueueDrain returns the buffer is empty and on-disk state
+// WaitForFlushSettled returns the buffer is empty and on-disk state
 // reflects the writes — equivalent to what the previous synchronous
 // flush guaranteed at applyBlock-return time.
 func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
@@ -65,7 +65,7 @@ func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 	}
 
 	// After the worker drains, the buffer is empty.
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 	if got := len(bc.buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("after drain: buffer holds %d layers, want 0", got)
 	}
@@ -161,7 +161,7 @@ func TestAsyncFlush_InlineFallbackOnQueueFull(t *testing.T) {
 	if err := bc.InsertBlock(b1); err != nil {
 		t.Fatalf("setup block 1: %v", err)
 	}
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 
 	// Stop the worker so it stops competing for channel slots.
 	bc.chainmu.Lock()
@@ -224,7 +224,7 @@ func TestAsyncFlush_NoDoubleFlushCrash(t *testing.T) {
 			t.Fatalf("block %d: %v", i, err)
 		}
 	}
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 
 	// Now explicitly re-post the same cutoff several times. The buffer
 	// has no layers left, FlushUpTo is a no-op, but the WaitGroup
@@ -234,7 +234,7 @@ func TestAsyncFlush_NoDoubleFlushCrash(t *testing.T) {
 			t.Fatalf("repeat postFlush #%d: %v", i, err)
 		}
 	}
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 
 	if got := len(bc.buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("after repeated postFlush: buffer holds %d layers, want 0", got)
@@ -260,7 +260,7 @@ func TestAsyncFlush_FailFastOnNextApplyBlock(t *testing.T) {
 	if err := bc.InsertBlock(b1); err != nil {
 		t.Fatalf("setup block 1: %v", err)
 	}
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 
 	// Simulate a worker-recorded error.
 	injected := errors.New("simulated flush failure")
@@ -297,7 +297,7 @@ func TestAsyncFlush_RunFlushCutoffPreservesExistingError(t *testing.T) {
 	// recorded error.
 	bc.flushPendingWg.Add(1)
 	bc.runFlushCutoff(0) // cutoff 0 → flushBufferUpToSolidified returns nil
-	bc.waitForFlushQueueDrain()
+	bc.WaitForFlushSettled()
 
 	if errPtr := bc.flushErr.Load(); errPtr == nil || !errors.Is(*errPtr, injected) {
 		t.Fatalf("flushErr displaced by successful flush: got %v", errPtr)

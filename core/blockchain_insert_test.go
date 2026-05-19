@@ -714,8 +714,9 @@ func TestFlushAtSolidified_SurvivesRestart(t *testing.T) {
 		}
 		// After every block, all prior layers should be flushed (single-SR:
 		// solidified == head). The just-committed block itself was solidified
-		// during applyBlock, so its layer is also flushed by the time
-		// flushBufferUpToSolidified returns.
+		// during applyBlock; the flush runs asynchronously on the worker so
+		// wait for the queue to drain before observing the buffer state.
+		bc.WaitForFlushSettled()
 		if got := len(bc.buffer.PendingBlocks()); got != 0 {
 			t.Fatalf("after block %d: buffer holds %d layers, want 0 (solidified=head should flush)", i, got)
 		}
@@ -1140,8 +1141,10 @@ func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 	}
 
 	// Pre-Close sanity: with 1 SR, solidified == head, so flush is automatic
-	// per applyBlock and the buffer is already empty. Close should be a no-op
-	// in this configuration (idempotent).
+	// per applyBlock and the buffer ends up empty once the async worker
+	// drains. Close should be a no-op-on-buffer in this configuration
+	// (idempotent), so wait for the queue to drain before observing.
+	bc.WaitForFlushSettled()
 	if got := len(bc.buffer.PendingBlocks()); got != 0 {
 		t.Fatalf("pre-Close: buffer holds %d layers, want 0 (solidified=head)", got)
 	}

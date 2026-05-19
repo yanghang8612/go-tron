@@ -351,6 +351,7 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	if err := bc.InsertBlock(block1); err != nil {
 		t.Fatal(err)
 	}
+	bc.WaitForFlushSettled()
 
 	dynProps := state.LoadDynamicProperties(diskdb)
 	if dynProps.NextMaintenanceTime() != 6000 {
@@ -362,6 +363,7 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	if err := bc.InsertBlock(block2); err != nil {
 		t.Fatal(err)
 	}
+	bc.WaitForFlushSettled()
 
 	dynProps = state.LoadDynamicProperties(diskdb)
 	if dynProps.NextMaintenanceTime() <= 6000 {
@@ -440,6 +442,7 @@ func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
 	if err := bc.InsertBlock(block); err != nil {
 		t.Fatal(err)
 	}
+	bc.WaitForFlushSettled()
 
 	got := rawdb.ReadProposal(diskdb, 1)
 	if got == nil {
@@ -648,6 +651,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	if err := bc.InsertBlock(block1); err != nil {
 		t.Fatalf("InsertBlock(block#1): %v", err)
 	}
+	bc.WaitForFlushSettled()
 
 	// 1. Grid still advances per java's updateNextMaintenanceTime formula.
 	dp := state.LoadDynamicProperties(diskdb)
@@ -733,6 +737,7 @@ func TestSolidifiedBlockSingleSR(t *testing.T) {
 			t.Fatalf("block %d: %v", i, err)
 		}
 	}
+	bc.WaitForFlushSettled()
 
 	want := uint64(numBlocks)
 	got := uint64(state.LoadDynamicProperties(diskdb).LatestSolidifiedBlockNum())

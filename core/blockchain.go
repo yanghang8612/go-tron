@@ -396,6 +396,30 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 // head longer than the current canonical tip and on a different branch, switchFork
 // is invoked to rewind and replay state on top of the lowest common ancestor.
 // This mirrors java-tron Manager.pushBlock.
+//
+// Visibility guarantees on a successful return:
+//
+//   - State for the inserted block is in the BlockChain's buffer overlay:
+//     reads through bc.DynProps(), bc.BufferedDPInt64(), bc.BufferedDB() and
+//     any accessor that consults bc.buffer see the applied state.
+//   - bc.CurrentBlock() has advanced to the inserted block.
+//   - Block bytes (rawdb.WriteBlock + WriteTaposRef) and tx-info records
+//     are persisted to disk.
+//
+// NOT guaranteed at return time:
+//
+//   - The buffer flush at the new solidified line runs on a background
+//     worker (postFlush → flushBufferUpToSolidified). Disk-side counters
+//     written into the buffer — dynamic properties, witness statistics,
+//     fork-vote tallies — are visible through bc.buffer but may not yet
+//     be on disk. On mainnet (27 SRs) the solidified line itself lags
+//     head by ≥19 blocks, so any direct-disk reader was already observing
+//     stale data; the async flush adds a few extra milliseconds on top.
+//
+// Callers that need synchronous disk-side visibility — typically tests
+// or external observers reading bc.DB() directly — must call
+// bc.WaitForFlushSettled() before reading. Production code reading
+// through the buffer overlay is unaffected.
 func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	if block == nil {
 		return errors.New("block is nil")
@@ -1000,13 +1024,26 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 	}
 }
 
-// waitForFlushQueueDrain blocks until every in-flight async-flush cutoff
-// has been processed. Used by tests to assert post-conditions that depend
-// on disk-side state (e.g. PendingBlocks() == 0 after a single-SR insert).
-// Production callsites go through Close, which drives the same drain plus
-// a final synchronous flush; tests use this when they want to observe the
-// async path mid-run.
-func (bc *BlockChain) waitForFlushQueueDrain() {
+// WaitForFlushSettled blocks until every in-flight async-flush cutoff
+// posted by applyBlock has finished draining to disk.
+//
+// Call this only when you need synchronous disk-side visibility — typically
+// tests, or production observers that read bc.DB() directly (e.g. a CLI
+// dump, an external indexer that opened the same Pebble store read-only,
+// or a graceful-shutdown path that needs the on-disk image to reflect
+// every applied block before swapping in a new database handle).
+//
+// Production code reading through bc.buffer / bc.DynProps() /
+// bc.BufferedDPInt64() / other accessors that consult the buffer overlay
+// does NOT need this — the overlay serves the latest applied state
+// regardless of flush state. See the InsertBlock godoc for the precise
+// return-time guarantees.
+//
+// Cheap to call when the queue is empty (one sync.WaitGroup.Wait on a
+// zero counter). Close drives the same drain plus a final synchronous
+// flush, so a Close caller does not need to call WaitForFlushSettled
+// first.
+func (bc *BlockChain) WaitForFlushSettled() {
 	bc.flushPendingWg.Wait()
 }
 

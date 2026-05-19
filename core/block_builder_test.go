@@ -223,6 +223,9 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	if err := bc.InsertBlock(block); err != nil {
 		t.Fatalf("InsertBlock: %v", err)
 	}
+	// The flush from applyBlock runs asynchronously; wait before reading
+	// disk-side counters (cycleReward) below.
+	bc.WaitForFlushSettled()
 
 	// Compute expected values accounting for both payBlockReward and
 	// payStandbyWitness. With 1 witness holding all 1000 votes:
