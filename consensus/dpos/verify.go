@@ -6,6 +6,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
@@ -20,7 +21,20 @@ var (
 	ErrInvalidSignature   = errors.New("invalid block signature")
 )
 
+// VerifyHeader is the back-compat entry point that loads dp via
+// chain.DynProps() (which reads through the buffer overlay). Hot-path callers
+// inside applyBlock should call VerifyHeaderWithDynProps directly with a dp
+// they have already loaded to avoid a redundant LoadDynamicProperties pass.
 func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
+	return VerifyHeaderWithDynProps(chain, block, chain.DynProps())
+}
+
+// VerifyHeaderWithDynProps verifies a block header against the supplied
+// dynamic-properties snapshot. The caller owns the load — applyBlock reads dp
+// from the buffer overlay once and threads it here, removing the duplicate
+// LoadDynamicProperties that the chain.DynProps() fallback in VerifyHeader
+// would otherwise perform.
+func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, dp *state.DynamicProperties) error {
 	parent := chain.CurrentBlock()
 	if parent == nil {
 		return errors.New("parent block not found")
@@ -35,7 +49,6 @@ func VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 		return ErrInvalidTimestamp
 	}
 	genesisTime := chain.GenesisTimestamp()
-	dp := chain.DynProps()
 	// mod-3000 alignment + slot==0 rejection were unconditional in early
 	// gtron but java-tron gates both on proposal #88 (`DposService.java:120,
 	// 134`). Pre-#88, java accepts misaligned timestamps and slot-0 blocks;

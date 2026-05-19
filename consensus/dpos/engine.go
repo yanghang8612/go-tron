@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -21,6 +22,14 @@ func New(chain consensus.ChainReader) *DPoS {
 
 func (d *DPoS) VerifyHeader(chain consensus.ChainReader, block *types.Block) error {
 	return VerifyHeader(chain, block)
+}
+
+// VerifyHeaderWithDynProps lets hot-path callers (applyBlock) thread an
+// already-loaded dynamic-properties snapshot through verification, avoiding
+// the redundant LoadDynamicProperties that the chain.DynProps() fallback in
+// VerifyHeader would perform.
+func (d *DPoS) VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, dp *state.DynamicProperties) error {
+	return VerifyHeaderWithDynProps(chain, block, dp)
 }
 
 func (d *DPoS) GetScheduledWitness(slot int64) (common.Address, error) {

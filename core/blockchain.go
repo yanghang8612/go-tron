@@ -440,47 +440,16 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}()
 
-	// Header verification (signature recovery, scheduled-witness match, and
-	// post-fork timestamp alignment) runs here rather than at the top of
-	// InsertBlock because:
-	//   - applyBlock is the single chokepoint for state application from both
-	//     linear extension and switchFork's re-apply loop;
-	//   - bc.CurrentBlock() == block's actual parent at this point (the
-	//     re-apply loop advances current sequentially), so VerifyHeader's
-	//     parent-linkage and "ts > parent.ts" checks line up correctly even
-	//     during a fork rewind;
-	//   - bad blocks may briefly enter the KhaosDB mini-store but never reach
-	//     state — KhaosDB's size bound caps the DoS surface, and the orphan is
-	//     pruned by the caller on the returned error.
-	// Skipped when bc.engine is nil (test path; see SetEngine).
-	if bc.engine != nil {
-		if err := bc.engine.VerifyHeader(bc, block); err != nil {
-			return err
-		}
-	}
-	stats.mark(&stats.Validate)
-
-	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
-	// writes (slice 1: witness statistics only) so that switchFork can drop
-	// the orphan-branch layers via DiscardBlock. On any error path the
-	// active layer is discarded; on success it is promoted via CommitBlock.
-	bc.buffer.BeginBlock(block.Hash())
-	defer func() {
-		if retErr != nil {
-			bc.buffer.DiscardActive()
-			// SetActiveWitnesses may have mutated the in-memory atomic before
-			// the failure. The buffered disk write was just discarded with the
-			// layer, so reload the atomic from the rewound buffer to keep it
-			// consistent with the state this block never reached.
-			bc.reloadActiveWitnesses()
-		}
-	}()
-
 	// Open StateDB from parent's state root. State roots live in a side
 	// store keyed by block hash, not on the block proto, so blocks coming
 	// in from java-tron (which has empty account_state_root) round-trip
 	// without losing wire-format identity. Genesis falls back to the
 	// dedicated post-genesis-state-root key.
+	//
+	// This block (parentRoot + statedb + dp load) is hoisted above
+	// VerifyHeader so the buffer-overlay dp can be threaded into header
+	// verification, removing the redundant LoadDynamicProperties that
+	// chain.DynProps() used to perform inside VerifyHeader.
 	parentRoot := rawdb.ReadBlockStateRoot(bc.db, current.Hash())
 	if parentRoot == (tcommon.Hash{}) && current.Number() == 0 {
 		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
@@ -504,7 +473,49 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// pending (not-yet-flushed) layers are visible to this applyBlock — e.g.
 	// `current_cycle_number` advanced by an unflushed maintenance boundary
 	// must be readable here. Slice 2 of the fork-rewind fix.
+	//
+	// Loading here (before BeginBlock) is safe: BeginBlock just stacks a new
+	// empty layer; no DP writes happen until ProcessBlock runs. The load also
+	// feeds VerifyHeaderWithDynProps below, replacing the redundant
+	// chain.DynProps() scan that the legacy VerifyHeader entry point would
+	// otherwise perform on the same buffer.
 	dynProps := state.LoadDynamicProperties(bc.buffer)
+
+	// Header verification (signature recovery, scheduled-witness match, and
+	// post-fork timestamp alignment) runs here rather than at the top of
+	// InsertBlock because:
+	//   - applyBlock is the single chokepoint for state application from both
+	//     linear extension and switchFork's re-apply loop;
+	//   - bc.CurrentBlock() == block's actual parent at this point (the
+	//     re-apply loop advances current sequentially), so VerifyHeader's
+	//     parent-linkage and "ts > parent.ts" checks line up correctly even
+	//     during a fork rewind;
+	//   - bad blocks may briefly enter the KhaosDB mini-store but never reach
+	//     state — KhaosDB's size bound caps the DoS surface, and the orphan is
+	//     pruned by the caller on the returned error.
+	// Skipped when bc.engine is nil (test path; see SetEngine).
+	if bc.engine != nil {
+		if err := bc.engine.VerifyHeaderWithDynProps(bc, block, dynProps); err != nil {
+			return err
+		}
+	}
+	stats.mark(&stats.Validate)
+
+	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
+	// writes (slice 1: witness statistics only) so that switchFork can drop
+	// the orphan-branch layers via DiscardBlock. On any error path the
+	// active layer is discarded; on success it is promoted via CommitBlock.
+	bc.buffer.BeginBlock(block.Hash())
+	defer func() {
+		if retErr != nil {
+			bc.buffer.DiscardActive()
+			// SetActiveWitnesses may have mutated the in-memory atomic before
+			// the failure. The buffered disk write was just discarded with the
+			// layer, so reload the atomic from the rewound buffer to keep it
+			// consistent with the state this block never reached.
+			bc.reloadActiveWitnesses()
+		}
+	}()
 
 	// Sapling commitment-tree lifecycle: java-tron resets CURRENT_TREE from
 	// LAST_TREE before every block, then saves CURRENT_TREE as best after the

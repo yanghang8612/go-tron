@@ -8,6 +8,13 @@ import (
 
 type Engine interface {
 	VerifyHeader(chain ChainReader, header *types.Block) error
+	// VerifyHeaderWithDynProps verifies a block header against the given
+	// dynamic-properties snapshot. The caller (typically applyBlock) is
+	// responsible for loading dp from the buffer-overlay reader; this avoids
+	// the duplicate LoadDynamicProperties that the chain.DynProps() fallback
+	// would otherwise perform. Engines that don't take a dp shortcut may
+	// delegate to VerifyHeader internally.
+	VerifyHeaderWithDynProps(chain ChainReader, header *types.Block, dp *state.DynamicProperties) error
 	GetScheduledWitness(slot int64) (common.Address, error)
 	IsInMaintenance(timestamp int64) bool
 	DoMaintenance(chain ChainHeaderWriter) error
