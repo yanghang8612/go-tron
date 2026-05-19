@@ -44,6 +44,15 @@ type Backend interface {
 	GetCode(addr common.Address) []byte
 	GetStorageAt(addr common.Address, slot common.Hash) common.Hash
 
+	// Archive state — the value AS OF the end of blockNum, reconstructed via
+	// the State History Index. Callers pass the resolved block number (the
+	// handler turns "latest"/"earliest"/"pending"/hex into a number first).
+	// On a node not synced with --history.enabled, a query for a block older
+	// than head returns an error; a query at head resolves from live state.
+	GetBalanceAt(addr common.Address, blockNum uint64) (int64, error) // SUN; handler multiplies by 1e12
+	GetCodeAt(addr common.Address, blockNum uint64) ([]byte, error)
+	GetStorageAtBlock(addr common.Address, slot common.Hash, blockNum uint64) (common.Hash, error)
+
 	// Transaction queries
 	GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error)
 	GetTransactionInfo(hash common.Hash) (*corepb.TransactionInfo, error)

@@ -42,7 +42,7 @@ type rpcRequest struct {
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	Result  interface{}     `json:"result"`       // must be present on success, even if null
+	Result  interface{}     `json:"result"` // must be present on success, even if null
 	Error   *rpcError       `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id"`
 }
@@ -417,13 +417,43 @@ func (api *API) ethBlockNumber(_ json.RawMessage) (interface{}, error) {
 func (api *API) ethSyncing(_ json.RawMessage) (interface{}, error) {
 	return false, nil
 }
+
+// resolveBlockArg parses the optional block-tag argument at params[idx]
+// (defaulting to "latest" when absent) and resolves the latest/pending
+// sentinel to the current head number. Returns (blockNum, isLatest, err):
+// isLatest lets callers take the live read path (and skip the archive
+// reader) when the request targets head.
+func (api *API) resolveBlockArg(p []string, idx int) (uint64, bool, error) {
+	tag := "latest"
+	if len(p) > idx && p[idx] != "" {
+		tag = p[idx]
+	}
+	num, err := parseBlockParam(tag)
+	if err != nil {
+		return 0, false, err
+	}
+	if num == ^uint64(0) { // "latest"/"pending" sentinel
+		return api.backend.BlockNumber(), true, nil
+	}
+	return num, false, nil
+}
+
 func (api *API) ethGetBalance(params json.RawMessage) (interface{}, error) {
 	var p []string
 	if err := json.Unmarshal(params, &p); err != nil || len(p) < 1 {
 		return nil, fmt.Errorf("invalid params")
 	}
 	addr := common.BytesToAddress(common.FromHex(p[0]))
-	balSUN := api.backend.GetBalance(addr)
+	blockNum, isLatest, err := api.resolveBlockArg(p, 1)
+	if err != nil {
+		return nil, err
+	}
+	var balSUN int64
+	if isLatest {
+		balSUN = api.backend.GetBalance(addr)
+	} else if balSUN, err = api.backend.GetBalanceAt(addr, blockNum); err != nil {
+		return nil, err
+	}
 	// Multiply by 1e12 using big.Int to avoid int64 overflow for large balances.
 	wei := new(big.Int).Mul(big.NewInt(balSUN), big.NewInt(1_000_000_000_000))
 	return fmt.Sprintf("0x%x", wei), nil
@@ -438,7 +468,18 @@ func (api *API) ethGetCode(params json.RawMessage) (interface{}, error) {
 		return nil, fmt.Errorf("invalid params")
 	}
 	addr := common.BytesToAddress(common.FromHex(p[0]))
-	return hexBytes(api.backend.GetCode(addr)), nil
+	blockNum, isLatest, err := api.resolveBlockArg(p, 1)
+	if err != nil {
+		return nil, err
+	}
+	if isLatest {
+		return hexBytes(api.backend.GetCode(addr)), nil
+	}
+	code, err := api.backend.GetCodeAt(addr, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	return hexBytes(code), nil
 }
 func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 	var p []string
@@ -452,7 +493,18 @@ func (api *API) ethGetStorageAt(params json.RawMessage) (interface{}, error) {
 		slotBytes = slotBytes[len(slotBytes)-32:]
 	}
 	copy(slot[32-len(slotBytes):], slotBytes)
-	val := api.backend.GetStorageAt(addr, slot)
+	blockNum, isLatest, err := api.resolveBlockArg(p, 2)
+	if err != nil {
+		return nil, err
+	}
+	if isLatest {
+		val := api.backend.GetStorageAt(addr, slot)
+		return hexBytes(val[:]), nil
+	}
+	val, err := api.backend.GetStorageAtBlock(addr, slot, blockNum)
+	if err != nil {
+		return nil, err
+	}
 	return hexBytes(val[:]), nil
 }
 func (api *API) ethCall(params json.RawMessage) (interface{}, error) {

@@ -218,6 +218,16 @@ func WriteBlockStateRoot(db ethdb.KeyValueWriter, blockHash, root common.Hash) {
 	db.Put(blockStateRootKey(blockHash.Bytes()), root.Bytes())
 }
 
+// DeleteBlockStateRoot removes the hash-keyed post-apply state root for the
+// given block. After this, ReadBlockStateRoot falls through to the freezer
+// (frozen blocks) or returns the zero hash, and TronBackend.GetAccountAt
+// reconstructs the account from the State History Index instead of opening
+// a StateDB at the (now-absent) root. State-history-aware pruning and tests
+// that simulate a pruned state root use this.
+func DeleteBlockStateRoot(db ethdb.KeyValueWriter, blockHash common.Hash) {
+	db.Delete(blockStateRootKey(blockHash.Bytes()))
+}
+
 // ancientStateRoots names the freezer table holding the 32-byte
 // post-apply state root for each frozen block, keyed by block number.
 // The KV side of the index remains hash-keyed (`bsr-<hash>`); the

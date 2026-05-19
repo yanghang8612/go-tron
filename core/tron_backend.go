@@ -132,13 +132,44 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	return acc, nil
 }
 
-// GetAccountAt opens state at the post-apply root of `blockNum` so the
-// caller sees the account as of a specific block — used by the solid /
-// PBFT HTTP variants to keep their responses isolated from live state.
+// GetAccountAt returns the account as of the post-apply state of `blockNum`.
+//
+// Fast path (unchanged): when the block's committed state root is still on
+// disk — always true for the recent solid / PBFT-confirmed heights the
+// /walletsolidity/ and /walletpbft/ variants query — it opens a StateDB at
+// that root. This keeps those responses isolated from live state.
+//
+// Archive fallback (slice 7): when the root is absent (pruned by full-mode
+// gcmode, but the block is older than head) it reconstructs the account from
+// the State History Index instead of erroring — this is the TRON-flavored
+// equivalent of java-tron's archive /walletsolidity/getaccount serving any
+// past block. The fallback requires the node to have captured history; on a
+// non-archive node it returns ErrArchiveHistoryDisabled rather than a
+// generic "no state root" error so operators get an actionable message.
+//
+// Both paths return a "not found" error for an address that didn't exist at
+// that height, preserving the existing handler contract (which renders that
+// as an empty `{}` body).
 func (b *TronBackend) GetAccountAt(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
 	root := b.chain.StateRootAtBlock(blockNum)
 	if root == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("no state root for block %d", blockNum)
+		// State root pruned (or never written). Reconstruct via history if
+		// the node is an archive node; otherwise the answer is unrecoverable.
+		reader, headNum, err := b.historyReaderAt()
+		if err != nil {
+			return nil, err
+		}
+		if err := b.requireArchive(blockNum, headNum); err != nil {
+			return nil, err
+		}
+		acc, err := reader.AccountAt(addr, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("reconstruct account at block %d: %w", blockNum, err)
+		}
+		if acc == nil {
+			return nil, fmt.Errorf("account not found at block %d", blockNum)
+		}
+		return acc, nil
 	}
 	statedb, err := state.New(root, b.chain.StateDB())
 	if err != nil {
@@ -1143,6 +1174,105 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 		return tcommon.Hash{}
 	}
 	return statedb.GetState(addr, slot)
+}
+
+// ErrArchiveHistoryDisabled is returned by the *At archive-query methods
+// when the caller asks for a historical block (blockNum < head) on a node
+// that wasn't synced with --history.enabled. Such a node has no sh-* rows
+// on disk, so the historical answer is unrecoverable; rather than silently
+// returning the live value (which would be wrong for any block < head) the
+// backend surfaces this clear error. Queries AT head are still served from
+// live state and never hit this path.
+var ErrArchiveHistoryDisabled = fmt.Errorf("archive history not available: node not running with --history.enabled")
+
+// historyReaderAt builds a single-use PersistentHistoryReader for one
+// archive query and reports the chain head number it was constructed
+// against. The reader walks history rows newest-first from head down to the
+// requested block, so its `db` and `live` baseline must agree on "head":
+//
+//   - db = b.chain.buffer — the buffer overlay sees sh-* rows for blocks
+//     applied but not yet flushed to disk (head can lead the flushed/
+//     solidified boundary by ~19 blocks on mainnet DPoS), matching the
+//     fork-rewind-safe reader the slice-4 tests exercise.
+//   - live = StateDB opened at HeadStateRoot — the MPT account view at the
+//     current head, the same baseline the live GetBalance/GetCode reads use.
+//
+// The caller is responsible for the HistoryEnabled gate (see
+// requireArchive); this helper only assembles the reader.
+func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, error) {
+	headNum := b.chain.CurrentBlock().Number()
+	root := b.chain.HeadStateRoot()
+	live, err := state.New(root, b.chain.StateDB())
+	if err != nil {
+		return nil, 0, fmt.Errorf("open head state: %w", err)
+	}
+	return state.NewPersistentHistoryReader(b.chain.buffer, live, headNum), headNum, nil
+}
+
+// requireArchive enforces the HistoryEnabled gate for a query bound to
+// blockNum. A query at or beyond head is always allowed (it resolves from
+// live state). A query for a strictly-older block requires the node to have
+// been capturing history; otherwise it returns ErrArchiveHistoryDisabled.
+func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
+	if blockNum >= headNum {
+		return nil
+	}
+	if !b.chain.Config().HistoryEnabled {
+		return ErrArchiveHistoryDisabled
+	}
+	return nil
+}
+
+// GetBalanceAt returns addr's TRX balance (in SUN) as it stood at the end of
+// blockNum, reconstructed via the State History Index. blockNum >= head
+// reads live state; an older block on a non-archive node returns
+// ErrArchiveHistoryDisabled. A non-existent account at that height returns
+// (0, nil) — matching the live GetBalance "no account ⇒ 0" convention.
+func (b *TronBackend) GetBalanceAt(addr tcommon.Address, blockNum uint64) (int64, error) {
+	reader, headNum, err := b.historyReaderAt()
+	if err != nil {
+		return 0, err
+	}
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return 0, err
+	}
+	acc, err := reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return 0, err
+	}
+	if acc == nil {
+		return 0, nil
+	}
+	return acc.Balance(), nil
+}
+
+// GetCodeAt returns addr's contract bytecode as of the end of blockNum.
+// Same gating as GetBalanceAt. Returns (nil, nil) for an account that had
+// no code (or did not exist) at that height.
+func (b *TronBackend) GetCodeAt(addr tcommon.Address, blockNum uint64) ([]byte, error) {
+	reader, headNum, err := b.historyReaderAt()
+	if err != nil {
+		return nil, err
+	}
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return nil, err
+	}
+	return reader.CodeAt(addr, blockNum)
+}
+
+// GetStorageAtBlock returns the value of (addr, slot) as of the end of
+// blockNum. Same gating as GetBalanceAt. Returns the zero hash for an empty
+// slot or a non-existent account at that height. Named GetStorageAtBlock
+// (not GetStorageAt) so it doesn't collide with the live single-arg reader.
+func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, error) {
+	reader, headNum, err := b.historyReaderAt()
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return tcommon.Hash{}, err
+	}
+	return reader.StorageAt(addr, slot, blockNum)
 }
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
