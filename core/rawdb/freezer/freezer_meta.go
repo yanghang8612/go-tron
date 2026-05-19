@@ -2,7 +2,14 @@
 // Copyright 2026 The go-tron Authors
 //
 // Vendored from go-ethereum/core/rawdb/freezer_meta.go and adapted for
-// gtron's package layout.
+// gtron's package layout. Material changes from upstream:
+//   - package rename (rawdb -> freezer)
+//   - logger swap (geth log -> gtron's common/log facade)
+//   - decodeV2: upstream's broken `log.Error("Invalid flushOffset %d in
+//     freezer metadata", o.Offset, "file", file.Name())` (a format-string
+//     call passed key/value pairs as positional args) is converted to a
+//     structured `gtronlog.Error(...)` with explicit `offset` and `file`
+//     fields. The message no longer contains a stray `%d` verb.
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
