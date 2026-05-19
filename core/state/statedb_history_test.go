@@ -339,6 +339,7 @@ func BenchmarkAccumulateHistory_Disabled(b *testing.B) {
 	sdb.AddBalance(addr, 1000)
 	sdb.SetState(addr, tcommon.Hash{0x01}, tcommon.Hash{0x02})
 	buf := memorydb.New()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = sdb.AccumulateHistory(buf, uint64(i), tcommon.Hash{})

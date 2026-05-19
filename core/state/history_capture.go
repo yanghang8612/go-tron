@@ -84,10 +84,14 @@ func (s *StateDB) AccumulateHistory(buf ethdb.KeyValueWriter, blockNum uint64, b
 		prevCode []byte
 	}
 
-	firstAcc := make(map[tcommon.Address]accSeen)
-	firstCode := make(map[tcommon.Address]codeSeen)
-	firstMeta := make(map[tcommon.Address]metaSeen)
-	firstSlot := make(map[tcommon.Address]map[tcommon.Hash]tcommon.Hash)
+	// Size hint: at most one entry per journal record. Worst case is every
+	// entry being a distinct (address, *) — over-allocates slightly but
+	// avoids growth-related rehashes on archive-heavy blocks.
+	hint := len(s.journal.entries)
+	firstAcc := make(map[tcommon.Address]accSeen, hint)
+	firstCode := make(map[tcommon.Address]codeSeen, hint)
+	firstMeta := make(map[tcommon.Address]metaSeen, hint)
+	firstSlot := make(map[tcommon.Address]map[tcommon.Hash]tcommon.Hash, hint)
 
 	for _, entry := range s.journal.entries {
 		switch e := entry.(type) {

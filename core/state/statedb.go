@@ -325,10 +325,19 @@ func (s *StateDB) IsFrozenClaimed(addr tcommon.Address, tokenID int64, index uin
 }
 
 // SetFrozenClaimed marks frozen_supply entry at index as claimed.
+//
+// Pre-warms the storage cache via GetState so that SetState's journal entry
+// records the real disk pre-value (not zero). Callers in production today
+// (UnfreezeSupplyActuator) already pre-warm via IsFrozenClaimed, but the
+// pre-warm here defends against future direct callers and keeps this
+// function structurally aligned with writeHistoryBlockHash's fix — both
+// are direct-SetState paths bypassing the TVM's opSload pre-warm.
 func (s *StateDB) SetFrozenClaimed(addr tcommon.Address, tokenID int64, index uint32) {
+	slot := trc10FrozenClaimedSlot(tokenID, index)
+	_ = s.GetState(addr, slot)
 	var v tcommon.Hash
 	v[31] = 0x01
-	s.SetState(addr, trc10FrozenClaimedSlot(tokenID, index), v)
+	s.SetState(addr, slot, v)
 }
 
 // AddFreezeV2 adds a freeze entry for the given resource type.
@@ -1373,6 +1382,12 @@ func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 }
 
 // Copy creates a deep copy of the StateDB for read-only execution.
+//
+// NOTE: the journal is NOT copied — `cp.journal` is a fresh empty journal.
+// Any AccumulateHistory call on the copy therefore only captures mutations
+// performed after Copy; the source StateDB's accumulated history is invisible
+// to the copy. Production uses Copy only for read-only VM execution (eth_call
+// / debug_traceCall snapshots), where AccumulateHistory is never invoked.
 func (s *StateDB) Copy() (*StateDB, error) {
 	tr, err := s.db.OpenTrie(s.originRoot)
 	if err != nil {
