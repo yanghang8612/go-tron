@@ -252,8 +252,12 @@ func (p *Pruner) Stop() error {
 	return nil
 }
 
-// Stats returns a copy of the current pruner counters. Safe for
-// concurrent callers.
+// Stats returns a best-effort snapshot of pruner progress. Individual
+// fields are read atomically but the snapshot as a whole is NOT
+// consistent — a concurrent PrunePass may advance some counters between
+// reads (e.g. BlocksPruned and LastPrunedBlock can momentarily disagree).
+// Suitable for metrics display; do not assert cross-field invariants on
+// the result.
 func (p *Pruner) Stats() Stats {
 	var inverseAt time.Time
 	if t := p.lastInverseAt.Load(); t > 0 {
@@ -357,13 +361,25 @@ func (p *Pruner) PrunePass() error {
 		}
 		p.passesSinceInverse = 0
 		p.lastInverseAt.Store(time.Now().UnixNano())
-	}
 
-	// Sample disk size at the end of the pass so the metric reflects
-	// the post-prune footprint, not the pre-prune one.
-	p.historyDiskBytes.Store(rawdb.HistoryDiskSize(p.chain.DB()))
+		// Sample disk size on the same (infrequent) cadence as the
+		// inverse sweep — HistoryDiskSize is a full five-prefix iterator
+		// scan (~hundreds of K rows on a 27k-block window), so calling it
+		// every pass would compete with Pebble compaction. Co-locating it
+		// with the inverse sweep bounds it to ~once per InverseFreshIfWithin.
+		p.historyDiskBytes.Store(rawdb.HistoryDiskSize(p.chain.DB()))
+	}
 	return nil
 }
+
+// maxInverseDrainRounds bounds how many batched delete rounds a single
+// inverse sweep issues per namespace. Without it, a backlog larger than
+// InverseBatchSize/2 would linger until the next InversePassEvery tick
+// (~100 min default); with it, a sweep drains up to maxInverseDrainRounds ×
+// (InverseBatchSize/2) rows before yielding, catching up in O(1) sweeps
+// under heavy write load while keeping each underlying delete call's I/O
+// rate unchanged.
+const maxInverseDrainRounds = 4
 
 func (p *Pruner) runInverseSweep(cutoff uint64) error {
 	// Two namespaces, same batch budget — split so a busy addr-inverse
@@ -372,15 +388,23 @@ func (p *Pruner) runInverseSweep(cutoff uint64) error {
 	if half <= 0 {
 		half = p.cfg.InverseBatchSize
 	}
-	addrDeleted, _, err := rawdb.PruneAddrInverseBelow(p.chain.DB(), cutoff, half)
-	if err != nil {
-		return err
+	var total int
+	for _, prune := range []func(uint64, int) (int, bool, error){
+		func(c uint64, n int) (int, bool, error) { return rawdb.PruneAddrInverseBelow(p.chain.DB(), c, n) },
+		func(c uint64, n int) (int, bool, error) { return rawdb.PruneSlotInverseBelow(p.chain.DB(), c, n) },
+	} {
+		for round := 0; round < maxInverseDrainRounds; round++ {
+			deleted, more, err := prune(cutoff, half)
+			total += deleted
+			if err != nil {
+				return err
+			}
+			if !more {
+				break
+			}
+		}
 	}
-	slotDeleted, _, err := rawdb.PruneSlotInverseBelow(p.chain.DB(), cutoff, half)
-	if err != nil {
-		return err
-	}
-	p.inverseRowsPruned.Add(uint64(addrDeleted + slotDeleted))
+	p.inverseRowsPruned.Add(uint64(total))
 	return nil
 }
 

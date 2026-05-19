@@ -844,3 +844,36 @@ func TestHistoryDiskSize(t *testing.T) {
 		t.Error("post-write size still 0")
 	}
 }
+
+// TestBytePlusOne pins the prefix-successor helper used to build the
+// exclusive DeleteRange upper bound. The all-0xFF case must panic rather
+// than return nil (a nil end key deletes to the end of the keyspace —
+// silent catastrophe for a future binary-prefix caller).
+func TestBytePlusOne(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{"ascii prefix", []byte("sh-m-"), []byte("sh-m.")}, // '-' (0x2d) -> '.' (0x2e)
+		{"interior 0xFF carry", []byte{0x73, 0x68, 0xFF}, []byte{0x73, 0x69}},
+		{"trailing 0xFF only", []byte{0x01, 0xFF}, []byte{0x02}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := bytePlusOne(tc.in)
+			if !bytes.Equal(got, tc.want) {
+				t.Fatalf("bytePlusOne(%x) = %x, want %x", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("all 0xFF panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic on all-0xFF prefix, got none")
+			}
+		}()
+		_ = bytePlusOne([]byte{0xFF, 0xFF, 0xFF})
+	})
+}

@@ -382,10 +382,12 @@ func bytePlusOne(prefix []byte) []byte {
 			return out[:i+1]
 		}
 	}
-	// All-0xFF prefix: caller must guard. Returning nil would mean
-	// "delete to end of keyspace"; the rawdb call sites all use
-	// prefixes starting with "sh-" (ASCII), so this branch is dead.
-	return nil
+	// All-0xFF prefix has no successor in the key space. This branch is
+	// dead for the current sh-* ASCII prefixes, but panic loudly rather
+	// than return nil: a nil end key makes DeleteRange clear to the end
+	// of the keyspace, so a future caller passing a binary prefix would
+	// otherwise trigger a silent catastrophic delete.
+	panic("rawdb.bytePlusOne: all-0xFF prefix has no successor (would delete to end of keyspace)")
 }
 
 // PruneAddrInverseBelow scans sh-i-a- rows and deletes those whose
