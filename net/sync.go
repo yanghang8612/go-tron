@@ -123,9 +123,6 @@ type SyncService struct {
 
 	bufferWaitStart time.Time
 	bufferWaitNum   uint64
-
-	quit     chan struct{}
-	stopOnce sync.Once
 }
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -143,7 +140,6 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 		handler: handler,
 		pause:   tsync.NewPauseGate(),
 		stats:   tsync.NewStats(),
-		quit:    make(chan struct{}),
 	}
 	ss.watchdog = tsync.NewWatchdog(
 		chainStatusAdapter{chain: chain},
@@ -211,7 +207,6 @@ func (ss *SyncService) Stop() {
 	if ss.watchdog != nil {
 		ss.watchdog.Stop()
 	}
-	ss.stopOnce.Do(func() { close(ss.quit) })
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()

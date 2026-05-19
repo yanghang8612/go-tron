@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"sync"
 	"time"
 
 	"github.com/tronprotocol/go-tron/p2p"
@@ -75,6 +76,10 @@ type Watchdog struct {
 	// poll fires. Defaults to DefaultStallThreshold.
 	StallThreshold time.Duration
 
+	// mu guards Start/Stop's mutation of quit/done. Without it, Stop()
+	// then Start() from another goroutine (or Lifecycle fan-out reorders)
+	// would race on these pointer fields under -race.
+	mu   sync.Mutex
 	quit chan struct{}
 	done chan struct{}
 }
@@ -96,40 +101,47 @@ func NewWatchdog(chain ChainStatus, peers PeerSource, pause PauseStatus, starter
 // Start launches the watchdog goroutine. Idempotent — calling Start twice
 // without an intervening Stop is a no-op on the second call.
 func (w *Watchdog) Start() {
+	w.mu.Lock()
 	if w.quit != nil {
+		w.mu.Unlock()
 		return
 	}
 	w.quit = make(chan struct{})
 	w.done = make(chan struct{})
-	go w.loop()
+	quit, done := w.quit, w.done
+	w.mu.Unlock()
+	go w.loop(quit, done)
 }
 
 // Stop signals the goroutine to exit and waits for it to acknowledge.
 // Safe to call multiple times; Stop on an unstarted watchdog is a no-op.
 func (w *Watchdog) Stop() {
-	if w.quit == nil {
+	w.mu.Lock()
+	quit, done := w.quit, w.done
+	if quit == nil {
+		w.mu.Unlock()
 		return
 	}
+	w.quit, w.done = nil, nil
+	w.mu.Unlock()
 	select {
-	case <-w.quit:
-		// already stopped
+	case <-quit:
+		// already closed by a concurrent Stop; fall through to wait.
 	default:
-		close(w.quit)
+		close(quit)
 	}
-	<-w.done
-	w.quit = nil
-	w.done = nil
+	<-done
 }
 
-func (w *Watchdog) loop() {
-	defer close(w.done)
+func (w *Watchdog) loop(quit, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(w.Interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			w.checkIsolation()
-		case <-w.quit:
+		case <-quit:
 			return
 		}
 	}

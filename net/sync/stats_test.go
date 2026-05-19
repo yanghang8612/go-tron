@@ -263,3 +263,60 @@ func TestStats_Concurrent(t *testing.T) {
 		t.Fatalf("ApplyStats.Validate=%v, want %v", snap.ApplyStats.Validate, wantElapsed)
 	}
 }
+
+// TestStats_RecordBlock pins the emit-boundary contract of RecordBlock —
+// the central novel API for slice 3 (combines count++ and the
+// window-elapsed snapshot+reset under one Stats.mu critical section so the
+// producer-path onApplyStats hook can never observe a half-counted window).
+func TestStats_RecordBlock(t *testing.T) {
+	const interval = 100 * time.Millisecond
+	base := time.Now()
+
+	t.Run("within window counts but does not emit", func(t *testing.T) {
+		s := NewStats()
+		s.InitSession(base)
+		snap, emit := s.RecordBlock(3, 5*time.Millisecond, base.Add(time.Millisecond), interval)
+		if emit {
+			t.Fatalf("expected no emit within window, got %+v", snap)
+		}
+		cur := s.CurrentSnapshot()
+		if cur.Blocks != 1 || cur.Txs != 3 || cur.TotalBlocks != 1 {
+			t.Fatalf("counters after 1 block: Blocks=%d Txs=%d TotalBlocks=%d, want 1/3/1",
+				cur.Blocks, cur.Txs, cur.TotalBlocks)
+		}
+	})
+
+	t.Run("past window emits pre-reset snapshot then resets window", func(t *testing.T) {
+		s := NewStats()
+		s.InitSession(base)
+		s.RecordBlock(2, time.Millisecond, base.Add(time.Millisecond), interval)
+		s.RecordBlock(4, 2*time.Millisecond, base.Add(2*time.Millisecond), interval)
+		emitAt := base.Add(interval + time.Millisecond)
+		snap, emit := s.RecordBlock(1, 3*time.Millisecond, emitAt, interval)
+		if !emit {
+			t.Fatal("expected emit past window")
+		}
+		// Snapshot carries the full pre-reset window: 3 blocks, 7 txs.
+		if snap.Blocks != 3 || snap.Txs != 7 {
+			t.Fatalf("emit snapshot: Blocks=%d Txs=%d, want 3/7", snap.Blocks, snap.Txs)
+		}
+		cur := s.CurrentSnapshot()
+		if cur.Blocks != 0 || cur.Txs != 0 {
+			t.Fatalf("window not reset after emit: Blocks=%d Txs=%d", cur.Blocks, cur.Txs)
+		}
+		if cur.TotalBlocks != 3 {
+			t.Fatalf("TotalBlocks must persist across emit: got %d, want 3", cur.TotalBlocks)
+		}
+		if !cur.StartTime.Equal(emitAt) {
+			t.Fatalf("new window StartTime: got %v, want %v", cur.StartTime, emitAt)
+		}
+	})
+
+	t.Run("zero StartTime never emits", func(t *testing.T) {
+		s := NewStats()
+		// No InitSession → StartTime is zero; even a far-future now must not emit.
+		if _, emit := s.RecordBlock(1, time.Millisecond, base.Add(time.Hour), interval); emit {
+			t.Fatal("RecordBlock must not emit when StartTime is zero (no session)")
+		}
+	})
+}
