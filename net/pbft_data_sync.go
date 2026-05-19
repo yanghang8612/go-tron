@@ -2,15 +2,15 @@ package net
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
-	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/p2p"
@@ -37,6 +37,17 @@ type PbftDataSyncHandler struct {
 
 	chain *core.BlockChain
 	db    ethdb.KeyValueStore
+
+	// pbftActive sticks at true once AllowPbft flips on. The PBFT activation
+	// flag is monotonic — once a proposal sets allow_pbft=1 the chain cannot
+	// turn it off — so a one-shot atomic is sufficient and lets allowPBFT()
+	// skip the DB read on every post-activation block. Pre-activation we
+	// fall through to a *single* point Get on the AllowPbft DP key rather
+	// than the previous full state.LoadDynamicProperties scan (which fired
+	// ~133 Pebble Gets per block hook and was empirically the dominant cost
+	// of the BlockHook fan-out — Nile soak at h≈890k showed hooks=1s/8s of
+	// wall time, almost all of it here).
+	pbftActive atomic.Bool
 }
 
 // NewPbftDataSyncHandler creates a handler. It must be wired into BlockChain's
@@ -95,10 +106,12 @@ func (h *PbftDataSyncHandler) ProcessOnBlock(block *types.Block) {
 	h.mu.Lock()
 	entry := h.cache[int64(block.Number())]
 	if entry == nil {
-		// Try epoch key (SRL messages use epoch as viewN)
-		dp := state.LoadDynamicProperties(h.db)
-		epoch := dp.NextMaintenanceTime() - dp.MaintenanceTimeInterval()
-		entry = h.cache[epoch]
+		// Try epoch key (SRL messages use epoch as viewN). Reading the two
+		// DP keys directly avoids state.LoadDynamicProperties, which would
+		// otherwise scan ~133 keys just to compute one epoch number.
+		nextMaint := readDPInt64(h.db, "next_maintenance_time")
+		interval := readDPInt64(h.db, "maintenance_time_interval")
+		entry = h.cache[nextMaint-interval]
 	}
 	h.mu.Unlock()
 
@@ -156,9 +169,29 @@ func (h *PbftDataSyncHandler) validPbftSign(rawBytes []byte, sigs [][]byte, witn
 }
 
 func (h *PbftDataSyncHandler) allowPBFT() bool {
-	headNum := h.chain.CurrentBlock().Number()
-	dp := state.LoadDynamicProperties(h.db)
-	return forks.IsActive(forks.AllowPbft, headNum, dp)
+	if h.pbftActive.Load() {
+		return true
+	}
+	// One point Get on the AllowPbft key — versus the previous
+	// LoadDynamicProperties full scan. Once active, the atomic short-circuits
+	// every future call.
+	if readDPInt64(h.db, "allow_pbft") >= 1 {
+		h.pbftActive.Store(true)
+		return true
+	}
+	return false
+}
+
+// readDPInt64 fetches a single DynamicProperties key as a big-endian int64.
+// Returns 0 when the key is absent or malformed. Equivalent to the per-key
+// branch inside state.LoadDynamicProperties, but without the surrounding
+// 133-key scan.
+func readDPInt64(db ethdb.KeyValueReader, name string) int64 {
+	data := rawdb.ReadDynamicProperty(db, name)
+	if len(data) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(data))
 }
 
 func (h *PbftDataSyncHandler) evictStaleNoLock() {
