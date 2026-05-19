@@ -63,7 +63,7 @@ func TestInsertBlock_PhaseTimings(t *testing.T) {
 		"validate=",
 		"execute=",
 		"maintenance=",
-		"commit=",
+		"stateCommit=",
 		"dpUpdate=",
 		"persist=",
 		"hooks=",

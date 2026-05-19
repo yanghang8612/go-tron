@@ -45,6 +45,13 @@ type syncStats struct {
 	bufferWaitElapsed time.Duration // accumulated time waiting for the next contiguous buffered block
 	totalStart        time.Time     // session start (for "Sync complete" line)
 	totalBlocks       int           // session-wide block count
+
+	// applyStats is the per-phase wall-clock breakdown reported by
+	// BlockChain.applyBlock via the AddApplyStatsHook callback. Summing across
+	// every block applied in the window lets the summary line tell us *which*
+	// phase is the bottleneck — without this breakdown, execElapsed alone is
+	// opaque and "Imported chain segment" can only say "execution is slow".
+	applyStats core.ApplyStats
 }
 
 type syncDiagnostics struct {
@@ -139,11 +146,34 @@ type SyncService struct {
 
 // NewSyncService creates a new sync service.
 func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
-	return &SyncService{
+	ss := &SyncService{
 		chain:   chain,
 		handler: handler,
 		quit:    make(chan struct{}),
 	}
+	// Subscribe to per-block phase breakdowns so the throttled "Imported chain
+	// segment" line can show validate/execute/maintenance/stateCommit/dpUpdate/
+	// persist/hooks alongside the existing execElapsed total.
+	chain.AddApplyStatsHook(ss.onApplyStats)
+	return ss
+}
+
+// onApplyStats folds one block's per-phase wall-clock breakdown into the
+// rolling window. Fires synchronously from applyBlock on the importing
+// goroutine — during sync that is drainBufferedBlocks; during normal
+// operation it is the broadcast/producer path. ss.mu is briefly held to keep
+// the accumulators consistent with the existing ss.stats.execElapsed update
+// site at drainBufferedBlocks.
+func (ss *SyncService) onApplyStats(_ *types.Block, s core.ApplyStats) {
+	ss.mu.Lock()
+	ss.stats.applyStats.Validate += s.Validate
+	ss.stats.applyStats.Execute += s.Execute
+	ss.stats.applyStats.Maintenance += s.Maintenance
+	ss.stats.applyStats.StateCommit += s.StateCommit
+	ss.stats.applyStats.DPUpdate += s.DPUpdate
+	ss.stats.applyStats.Persist += s.Persist
+	ss.stats.applyStats.Hooks += s.Hooks
+	ss.mu.Unlock()
 }
 
 // Start launches the isolation watchdog goroutine.
@@ -928,6 +958,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 			ss.stats.txs = 0
 			ss.stats.execElapsed = 0
 			ss.stats.bufferWaitElapsed = 0
+			ss.stats.applyStats = core.ApplyStats{}
 		}
 		remain := ss.estimatedRemainLocked()
 		ss.mirrorLegacyLocked()
@@ -1057,6 +1088,18 @@ func (ss *SyncService) reportSegment(s syncStats, diag syncDiagnostics, head uin
 		"elapsed", ethcommon.PrettyDuration(elapsed),
 		"execElapsed", ethcommon.PrettyDuration(s.execElapsed),
 		"bufferWaitElapsed", ethcommon.PrettyDuration(s.bufferWaitElapsed),
+		// Per-phase wall-clock breakdown — sums across every block in the
+		// window. Together with execElapsed (which is wall time between
+		// drainBufferedBlocks reading the buffer slot and seeing InsertBlock
+		// return) these tell you which phase is the bottleneck. Maintenance
+		// is usually 0; if it's non-trivial the window crossed a 6-hour grid.
+		"validate", ethcommon.PrettyDuration(s.applyStats.Validate),
+		"execute", ethcommon.PrettyDuration(s.applyStats.Execute),
+		"maintenance", ethcommon.PrettyDuration(s.applyStats.Maintenance),
+		"stateCommit", ethcommon.PrettyDuration(s.applyStats.StateCommit),
+		"dpUpdate", ethcommon.PrettyDuration(s.applyStats.DPUpdate),
+		"persist", ethcommon.PrettyDuration(s.applyStats.Persist),
+		"hooks", ethcommon.PrettyDuration(s.applyStats.Hooks),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
 		"head", head,

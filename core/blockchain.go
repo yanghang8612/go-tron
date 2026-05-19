@@ -32,18 +32,48 @@ var (
 	ErrInvalidNumber = errors.New("invalid block number")
 )
 
-// applyStats accumulates per-phase wall-clock time inside applyBlock.
-// Each phase's duration is captured by calling mark(&stats.<phase>) at the
-// phase boundary; the previous-mark cursor is updated in place.
+// ApplyStats reports per-phase wall-clock time spent inside applyBlock.
+//
+// Subscribers should treat ApplyStats as read-only. The fields are exported so
+// callers (sync summary line, future metrics surface) can aggregate without
+// reaching back into core internals.
+//
+//   - Validate: header verification (signature recovery, scheduled-witness
+//     match, post-fork timestamp alignment) plus parent linkage.
+//   - Execute: transaction execution + reward + BLOCK_FILLED_SLOTS update.
+//     Includes the in-memory state mutations; does NOT include the trie
+//     commit (that lives in StateCommit).
+//   - Maintenance: doMaintenance work on cycle boundaries (proposals, vote
+//     tally, active-set rotation, reward VI). Zero on non-maintenance blocks.
+//   - StateCommit: statedb.Commit — trie.Update for every dirty account +
+//     TrieDB.Update/Commit for hash-based trie node writes. Empirically the
+//     dominant phase as state grows.
+//   - DPUpdate: dynamic-properties writes (latest_block_header_*,
+//     solidified, fork-vote tally) into the buffer.
+//   - Persist: WriteBlock + WriteTaposRef + tx info persist + the final
+//     buffer flushBufferUpToSolidified that lands committed layers on disk.
+//   - Hooks: post-apply callback fan-out (PBFT, broadcaster, etc.).
+type ApplyStats struct {
+	Validate    time.Duration
+	Execute     time.Duration
+	Maintenance time.Duration
+	StateCommit time.Duration
+	DPUpdate    time.Duration
+	Persist     time.Duration
+	Hooks       time.Duration
+}
+
+// Total returns the sum of every phase.
+func (s ApplyStats) Total() time.Duration {
+	return s.Validate + s.Execute + s.Maintenance + s.StateCommit + s.DPUpdate + s.Persist + s.Hooks
+}
+
+// applyStats is the in-flight accumulator used by applyBlock. The mark cursor
+// is advanced at phase boundaries; the snapshot is published to subscribers
+// only on the success path.
 type applyStats struct {
-	last        time.Time
-	validate    time.Duration
-	execute     time.Duration
-	maintenance time.Duration
-	commit      time.Duration
-	dpUpdate    time.Duration
-	persist     time.Duration
-	hooks       time.Duration
+	last time.Time
+	ApplyStats
 }
 
 // mark accumulates the elapsed time since the previous mark into *phase and
@@ -92,6 +122,9 @@ type BlockChain struct {
 
 	maintHookMu sync.Mutex
 	maintHooks  []func(*types.Block, []tcommon.Address) // fired after a maintenance block
+
+	applyStatsHookMu sync.Mutex
+	applyStatsHooks  []func(*types.Block, ApplyStats) // fired after each successful applyBlock with per-phase wall-clock breakdown
 }
 
 // SetEngine wires the consensus engine used for header verification in
@@ -108,6 +141,17 @@ func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
 	bc.blockHookMu.Lock()
 	bc.blockHooks = append(bc.blockHooks, fn)
 	bc.blockHookMu.Unlock()
+}
+
+// AddApplyStatsHook registers a callback invoked after each successful
+// applyBlock with the per-phase wall-clock breakdown. Subscribers must treat
+// the ApplyStats value as read-only and return quickly; callbacks run on the
+// applyBlock goroutine, holding bc.chainmu. Used by the sync summary line and
+// the metrics surface.
+func (bc *BlockChain) AddApplyStatsHook(fn func(*types.Block, ApplyStats)) {
+	bc.applyStatsHookMu.Lock()
+	bc.applyStatsHooks = append(bc.applyStatsHooks, fn)
+	bc.applyStatsHookMu.Unlock()
 }
 
 // AddMaintenanceHook registers a callback fired after each successfully
@@ -367,13 +411,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			"number", block.Number(),
 			"hash", block.Hash(),
 			"txs", len(block.Transactions()),
-			"validate", ethcommon.PrettyDuration(stats.validate),
-			"execute", ethcommon.PrettyDuration(stats.execute),
-			"maintenance", ethcommon.PrettyDuration(stats.maintenance),
-			"commit", ethcommon.PrettyDuration(stats.commit),
-			"dpUpdate", ethcommon.PrettyDuration(stats.dpUpdate),
-			"persist", ethcommon.PrettyDuration(stats.persist),
-			"hooks", ethcommon.PrettyDuration(stats.hooks),
+			"validate", ethcommon.PrettyDuration(stats.Validate),
+			"execute", ethcommon.PrettyDuration(stats.Execute),
+			"maintenance", ethcommon.PrettyDuration(stats.Maintenance),
+			"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
+			"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
+			"persist", ethcommon.PrettyDuration(stats.Persist),
+			"hooks", ethcommon.PrettyDuration(stats.Hooks),
 			"total", ethcommon.PrettyDuration(total),
 		)
 		log.Debug("Block applied",
@@ -381,6 +425,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			"txs", len(block.Transactions()),
 			"elapsed", ethcommon.PrettyDuration(total),
 		)
+		// Publish the per-phase breakdown to subscribers (sync summary line,
+		// metrics surface). Snapshot the hook slice under the mutex; invoke
+		// without holding it so a slow subscriber can't wedge applyBlock.
+		bc.applyStatsHookMu.Lock()
+		hooks := bc.applyStatsHooks
+		bc.applyStatsHookMu.Unlock()
+		if len(hooks) > 0 {
+			snap := stats.ApplyStats
+			for _, h := range hooks {
+				h(block, snap)
+			}
+		}
 	}()
 
 	// Header verification (signature recovery, scheduled-witness match, and
@@ -401,7 +457,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			return err
 		}
 	}
-	stats.mark(&stats.validate)
+	stats.mark(&stats.Validate)
 
 	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
 	// writes (slice 1: witness statistics only) so that switchFork can drop
@@ -537,7 +593,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
 	dpos.ApplyBlockStatistics(bc.buffer, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
-	stats.mark(&stats.execute)
+	stats.mark(&stats.Execute)
 
 	// Run maintenance if at boundary (before commit so allowances are included).
 	wasMaintenanceBlock := false
@@ -626,7 +682,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	} else {
 		dynProps.SetStateFlag(0)
 	}
-	stats.mark(&stats.maintenance)
+	stats.mark(&stats.Maintenance)
 
 	// Verify state root if the block carries one (java-tron sets this on
 	// post-fork blocks via the AccountStateCallBack hook) before committing
@@ -647,7 +703,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// `block.AccountStateRoot()` because the block proto's content must
 	// round-trip byte-identical to what the wire delivered.
 	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
-	stats.mark(&stats.commit)
+	stats.mark(&stats.StateCommit)
 
 	// Update dynamic properties.
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
@@ -672,7 +728,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// transactions have already been validated against the previous fork
 	// bitmap, while the next block observes this producer's version vote.
 	bc.updateFork(block)
-	stats.mark(&stats.dpUpdate)
+	stats.mark(&stats.DPUpdate)
 
 	// Persist block.
 	if err := rawdb.WriteBlock(bc.db, block); err != nil {
@@ -716,7 +772,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
 	}
-	stats.mark(&stats.persist)
+	stats.mark(&stats.Persist)
 
 	// Fire maintenance hooks first so the SRL PBFT message goes out before
 	// the block PREPREPARE — matches java-tron MaintenanceManager.applyBlock
@@ -738,7 +794,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	for _, h := range hooks {
 		h(block)
 	}
-	stats.mark(&stats.hooks)
+	stats.mark(&stats.Hooks)
 
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
@@ -751,7 +807,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
 		return fmt.Errorf("flush buffer up to solidified: %w", err)
 	}
-	stats.mark(&stats.persist)
+	stats.mark(&stats.Persist)
 	return nil
 }
 
