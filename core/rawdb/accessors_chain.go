@@ -218,12 +218,35 @@ func WriteBlockStateRoot(db ethdb.KeyValueWriter, blockHash, root common.Hash) {
 	db.Put(blockStateRootKey(blockHash.Bytes()), root.Bytes())
 }
 
+// ancientStateRoots names the freezer table holding the 32-byte
+// post-apply state root for each frozen block, keyed by block number.
+// The KV side of the index remains hash-keyed (`bsr-<hash>`); the
+// num-keyed ancient is reached via the two-step
+// `bh-<hash>` → num → `state_roots[num]` fall-through encoded in
+// `ReadBlockStateRoot`.
+const ancientStateRoots = "state_roots"
+
 // ReadBlockStateRoot returns the post-apply state root for the given
 // block hash, or the zero hash if not stored.
-func ReadBlockStateRoot(db ethdb.KeyValueReader, blockHash common.Hash) common.Hash {
-	data, err := db.Get(blockStateRootKey(blockHash.Bytes()))
-	if err != nil {
+//
+// The KV side is the source of truth for live (still-hot) blocks; the
+// freezer holds the same value keyed by num for frozen blocks. On a KV
+// miss we resolve `hash → num` (`bh-<hash>` is intentionally kept hot by
+// the slice-1 freezer spec) and probe the `state_roots` ancient table.
+// Paying the extra `Get(bh-<hash>)` only on the miss path keeps the
+// hot-block read path single-Get.
+func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
+	if data, err := db.Get(blockStateRootKey(blockHash.Bytes())); err == nil {
+		return common.BytesToHash(data)
+	}
+	// KV miss: try the freezer via the still-hot bh-<hash> reverse index.
+	numBytes, err := db.Get(blockHashKey(blockHash.Bytes()))
+	if err != nil || len(numBytes) != 8 {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	num := binary.BigEndian.Uint64(numBytes)
+	if data, ok := readAncient(db, ancientStateRoots, num); ok {
+		return common.BytesToHash(data)
+	}
+	return common.Hash{}
 }

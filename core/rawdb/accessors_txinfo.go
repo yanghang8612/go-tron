@@ -8,6 +8,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ancientTxInfos names the freezer table holding marshalled
+// `corepb.TransactionRet` blobs keyed by block number (the same payload
+// `tib-<num>` stores in Pebble).
+const ancientTxInfos = "tx_infos"
+
 // WriteTransactionInfo stores a single TransactionInfo indexed by txID.
 func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) {
 	data, err := proto.Marshal(info)
@@ -17,8 +22,10 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 	db.Put(txInfoKey(txID), data)
 }
 
-// ReadTransactionInfo retrieves a TransactionInfo by txID.
-func ReadTransactionInfo(db ethdb.KeyValueReader, txID []byte) *corepb.TransactionInfo {
+// ReadTransactionInfo retrieves a TransactionInfo by txID. The per-tx index
+// stays hot per the slice-1 freezer spec, so this accessor reads only from
+// Pebble; the `*ChainDB` parameter exists for signature uniformity.
+func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	data, err := db.Get(txInfoKey(txID))
 	if err != nil {
 		return nil
@@ -46,8 +53,17 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 	db.Put(txInfoBlockKey(blockNum), data)
 }
 
-// ReadTransactionInfosByBlock retrieves all TransactionInfos for a block number.
-func ReadTransactionInfosByBlock(db ethdb.KeyValueReader, blockNum uint64) []*corepb.TransactionInfo {
+// ReadTransactionInfosByBlock retrieves all TransactionInfos for a block
+// number. Consults the freezer first when the requested block is below
+// the ancient cutoff; falls back to `tib-<num>` in Pebble otherwise.
+func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.TransactionInfo {
+	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
+		ret := &corepb.TransactionRet{}
+		if err := proto.Unmarshal(data, ret); err != nil {
+			return nil
+		}
+		return ret.Transactioninfo
+	}
 	data, err := db.Get(txInfoBlockKey(blockNum))
 	if err != nil {
 		return nil
@@ -66,8 +82,10 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 	db.Put(txKey(txHash), num)
 }
 
-// ReadTransactionIndex retrieves the block number for a tx hash.
-func ReadTransactionIndex(db ethdb.KeyValueReader, txHash []byte) *uint64 {
+// ReadTransactionIndex retrieves the block number for a tx hash. The tx
+// reverse index stays hot per the slice-1 freezer spec, so this accessor
+// reads only from Pebble.
+func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
 	data, err := db.Get(txKey(txHash))
 	if err != nil || len(data) != 8 {
 		return nil

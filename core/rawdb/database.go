@@ -35,6 +35,17 @@ func NewMemoryDatabase() ethdb.KeyValueStore {
 	return memorydb.New()
 }
 
+// NewMemoryChainDB returns a `*ChainDB` backed by an in-memory KV store and
+// a `NoopAncient` reader. Slice 2's accessor migration changed
+// `core/rawdb` chain readers from `ethdb.KeyValueReader` to `*ChainDB`; this
+// helper lets every existing test that previously called
+// `NewMemoryDatabase()` keep its byte-identical behavior by simply switching
+// to `NewMemoryChainDB()`. With the noop ancient, `AncientCount` is always
+// zero so every read falls through to the embedded KV store.
+func NewMemoryChainDB() *ChainDB {
+	return NewChainDB(memorydb.New(), NoopAncient{})
+}
+
 // WrapKeyValueStore wraps an ethdb.KeyValueStore into a full ethdb.Database.
 func WrapKeyValueStore(db ethdb.KeyValueStore) ethdb.Database {
 	return ethrawdb.NewDatabase(db)
