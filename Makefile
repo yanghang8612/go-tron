@@ -35,6 +35,7 @@ proto:
 	cd proto && protoc --go_out=. --go_opt=paths=source_relative \
 		core/Tron.proto \
 		core/Discover.proto \
+		core/historystate/historystate.proto \
 		core/contract/*.proto
 	cd proto && protoc \
 		--proto_path=. \
