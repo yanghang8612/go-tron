@@ -423,6 +423,154 @@ func TestBuffer_FlushUpTo_KeepsHigherLayersRewindable(t *testing.T) {
 	}
 }
 
+// drainIterator walks a buffer iterator to completion and returns the
+// resulting (key, value) pairs as a slice of two-element string slices. The
+// helper exists because every iterator test wants the same compact view of
+// the snapshot, and the ethdb.Iterator API is verbose at the use-site.
+func drainIterator(t *testing.T, b *Buffer, prefix, start []byte) [][2]string {
+	t.Helper()
+	it := b.NewIterator(prefix, start)
+	defer it.Release()
+	var out [][2]string
+	for it.Next() {
+		out = append(out, [2]string{string(it.Key()), string(it.Value())})
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	return out
+}
+
+// NewIterator on an empty buffer with no base writes returns no entries.
+func TestBuffer_NewIterator_Empty(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	if got := drainIterator(t, b, nil, nil); len(got) != 0 {
+		t.Fatalf("expected 0 entries, got %v", got)
+	}
+}
+
+// NewIterator surfaces base-only keys sorted, prefix-filtered.
+func TestBuffer_NewIterator_BaseOnly(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-allow_pbft"), []byte{0, 0, 0, 0, 0, 0, 0, 1})
+	base.Put([]byte("dp-zen_token_id"), []byte{0, 0, 0, 0, 0, 0, 0, 7})
+	base.Put([]byte("other-key"), []byte("x"))
+
+	b := New(base)
+	got := drainIterator(t, b, []byte("dp-"), nil)
+	want := [][2]string{
+		{"dp-allow_pbft", "\x00\x00\x00\x00\x00\x00\x00\x01"},
+		{"dp-zen_token_id", "\x00\x00\x00\x00\x00\x00\x00\x07"},
+	}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// NewIterator merges overlay-only keys (no disk hit) into the result.
+func TestBuffer_NewIterator_OverlayOnly(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("dp-current_cycle_number"), []byte("42"))
+	b.CommitBlock()
+
+	got := drainIterator(t, b, []byte("dp-"), nil)
+	want := [][2]string{{"dp-current_cycle_number", "42"}}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Active-layer writes override committed-layer values, which override base.
+// The iterator must reflect Get's priority ordering for overlapping keys.
+func TestBuffer_NewIterator_LayerOverride(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-allow_pbft"), []byte("base"))
+
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	b.Put([]byte("dp-allow_pbft"), []byte("committed"))
+	b.CommitBlock()
+	b.BeginBlock(bufHash(2))
+	b.Put([]byte("dp-allow_pbft"), []byte("active"))
+
+	got := drainIterator(t, b, []byte("dp-"), nil)
+	want := [][2]string{{"dp-allow_pbft", "active"}}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A tombstone in any layer suppresses the base value for that key. This is
+// the same contract Get/Has have — the iterator must not silently leak
+// deleted entries.
+func TestBuffer_NewIterator_TombstoneSuppressesBase(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-foo"), []byte("base-foo"))
+	base.Put([]byte("dp-bar"), []byte("base-bar"))
+
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	b.Delete([]byte("dp-foo"))
+	b.CommitBlock()
+
+	got := drainIterator(t, b, []byte("dp-"), nil)
+	want := [][2]string{{"dp-bar", "base-bar"}}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// `start` skips keys lexicographically smaller than it. Verify the iterator
+// honors the parameter alongside the prefix filter.
+func TestBuffer_NewIterator_StartParameter(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-a"), []byte("a"))
+	base.Put([]byte("dp-m"), []byte("m"))
+	base.Put([]byte("dp-z"), []byte("z"))
+
+	b := New(base)
+	got := drainIterator(t, b, []byte("dp-"), []byte("dp-m"))
+	want := [][2]string{
+		{"dp-m", "m"},
+		{"dp-z", "z"},
+	}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Release nils the snapshot so subsequent Next/Key calls are no-ops. Mostly
+// a smoke check that we don't panic after release.
+func TestBuffer_NewIterator_Release(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-a"), []byte("a"))
+	b := New(base)
+	it := b.NewIterator([]byte("dp-"), nil)
+	if !it.Next() {
+		t.Fatal("expected at least one entry")
+	}
+	it.Release()
+	if it.Next() {
+		t.Fatal("Next after Release should return false")
+	}
+	if k := it.Key(); k != nil {
+		t.Fatalf("Key after Release: got %v, want nil", k)
+	}
+}
+
+func equalEntries(a, b [][2]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i][0] != b[i][0] || a[i][1] != b[i][1] {
+			return false
+		}
+	}
+	return true
+}
+
 // Buffer satisfies the ethdb.KeyValueReader and Writer interfaces in shape.
 func TestBuffer_SatisfiesEthdbInterfaces(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())

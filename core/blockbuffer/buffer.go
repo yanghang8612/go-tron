@@ -21,7 +21,10 @@
 package blockbuffer
 
 import (
+	"bytes"
 	"errors"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -342,4 +345,174 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 		}
 	}
 	return nil
+}
+
+// NewIterator returns an iterator over the buffer view: every key whose bytes
+// start with prefix and are >= start, ordered lexicographically. Overlay
+// semantics match Get — the active layer wins over committed layers (newest
+// first) which in turn override the base reader; tombstones mask base keys.
+//
+// Implementation snapshots the relevant entries at construction time so the
+// returned iterator does not have to hold any locks while iterating. This is
+// the right shape for prefix-bounded scans of small key sets (DP map at ~133
+// keys); a streaming/merging iterator would only matter for unbounded scans.
+//
+// Implements ethdb.Iteratee so a *Buffer can be substituted anywhere a disk
+// store is expected — most importantly, state.LoadDynamicProperties can
+// recognize it and replace its 133 point Gets per applyBlock with one scan.
+func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
+	pfx := string(prefix)
+	startStr := string(start)
+
+	b.mu.RLock()
+	// Step 1: collect the overlay newest-first. The first time we see a key
+	// wins; older layers are masked. `seen` tracks both writes and deletes so
+	// a Delete in a newer layer suppresses the value in an older layer (and
+	// in the base).
+	type overlayOp struct {
+		value   []byte
+		deleted bool
+	}
+	overlay := make(map[string]overlayOp)
+	matches := func(k string) bool {
+		if pfx != "" && !strings.HasPrefix(k, pfx) {
+			return false
+		}
+		if startStr != "" && k < startStr {
+			return false
+		}
+		return true
+	}
+	walk := func(l *layer) {
+		if l == nil {
+			return
+		}
+		for k, v := range l.writes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := overlay[k]; set {
+				continue
+			}
+			overlay[k] = overlayOp{value: append([]byte(nil), v...)}
+		}
+		for k := range l.deletes {
+			if !matches(k) {
+				continue
+			}
+			if _, set := overlay[k]; set {
+				continue
+			}
+			overlay[k] = overlayOp{deleted: true}
+		}
+	}
+	walk(b.active)
+	for i := len(b.layers) - 1; i >= 0; i-- {
+		walk(b.layers[i])
+	}
+	b.mu.RUnlock()
+
+	// Step 2: pull base keys that match the prefix/start window. Disk keys
+	// that the overlay shadows are dropped here; overlay keys not present on
+	// disk are merged in afterwards.
+	type kv struct{ key, value []byte }
+	var entries []kv
+	if b.base != nil {
+		if iter, ok := b.base.(ethdb.Iteratee); ok {
+			it := iter.NewIterator(prefix, start)
+			for it.Next() {
+				k := string(it.Key())
+				if op, masked := overlay[k]; masked {
+					if !op.deleted {
+						entries = append(entries, kv{
+							key:   append([]byte(nil), it.Key()...),
+							value: op.value,
+						})
+					}
+					delete(overlay, k)
+					continue
+				}
+				entries = append(entries, kv{
+					key:   append([]byte(nil), it.Key()...),
+					value: append([]byte(nil), it.Value()...),
+				})
+			}
+			err := it.Error()
+			it.Release()
+			if err != nil {
+				return &bufferIterator{err: err}
+			}
+		}
+		// If the base does not implement Iteratee, only the overlay is
+		// surfaced. This matches the contract that NewIterator on a reader
+		// with no iteration support cannot synthesize one.
+	}
+	// Step 3: overlay-only keys (no disk hit). Tombstones for non-existent
+	// disk keys contribute nothing.
+	for k, op := range overlay {
+		if op.deleted {
+			continue
+		}
+		entries = append(entries, kv{
+			key:   []byte(k),
+			value: op.value,
+		})
+	}
+
+	// Step 4: sort ascending by key. The disk leg arrives already sorted; the
+	// overlay leg is map-order. One sort.Slice on the combined list is
+	// cleaner than maintaining a merge-cursor for small N.
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) < 0
+	})
+	out := make([]bufferIteratorEntry, len(entries))
+	for i, e := range entries {
+		out[i] = bufferIteratorEntry{key: e.key, value: e.value}
+	}
+	return &bufferIterator{entries: out, idx: -1}
+}
+
+// bufferIterator is a snapshot iterator returned by Buffer.NewIterator.
+// Holds no locks. Key/Value buffers are owned by the iterator; callers must
+// not mutate them (mirrors the ethdb.Iterator contract).
+type bufferIterator struct {
+	entries []bufferIteratorEntry
+	idx     int
+	err     error
+}
+
+type bufferIteratorEntry struct {
+	key, value []byte
+}
+
+func (it *bufferIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+	if it.idx+1 >= len(it.entries) {
+		return false
+	}
+	it.idx++
+	return true
+}
+
+func (it *bufferIterator) Error() error { return it.err }
+
+func (it *bufferIterator) Key() []byte {
+	if it.idx < 0 || it.idx >= len(it.entries) {
+		return nil
+	}
+	return it.entries[it.idx].key
+}
+
+func (it *bufferIterator) Value() []byte {
+	if it.idx < 0 || it.idx >= len(it.entries) {
+		return nil
+	}
+	return it.entries[it.idx].value
+}
+
+func (it *bufferIterator) Release() {
+	it.entries = nil
+	it.idx = 0
 }
