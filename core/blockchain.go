@@ -517,7 +517,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// into librustzcash to hash an empty tree. Profile on a Nile soak showed
 	// this loop burning ~20% of CPU at h≈890k. Once a proposal activates
 	// shielded, the gate flips on and the regular path resumes.
-	shieldedActive := dynProps.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)
+	//
+	// The gate is shared across both call sites here and after ProcessBlock
+	// via shouldMaintainShieldedMerkleTree; drift between them would silently
+	// desynchronise the LAST_TREE / MerkleTreeIndexStore density invariant.
+	shieldedActive := shouldMaintainShieldedMerkleTree(dynProps, block)
 	shieldedMerkleAvailable := zksnark.Available()
 	if !shieldedMerkleAvailable && shieldedActive {
 		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
@@ -584,7 +588,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	//
 	// Gated on shieldedActive for the same reason as ResetCurrent above —
 	// pre-activation this loop computes the root of the empty tree (a cgocall
-	// into librustzcash) every block and immediately discards it.
+	// into librustzcash) every block and immediately discards it. Reuse the
+	// local computed via shouldMaintainShieldedMerkleTree above; do not
+	// re-inline the AllowShieldedTransaction / blockContainsShieldedTransfer
+	// disjunction here — drift between the two call sites would silently
+	// break the java-tron LAST_TREE / MerkleTreeIndexStore density invariant.
 	if shieldedMerkleAvailable && shieldedActive {
 		if err := zksnark.NewMerkleContainer(bc.buffer).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
@@ -1163,6 +1171,17 @@ func blockContainsShieldedTransfer(block *types.Block) bool {
 		}
 	}
 	return false
+}
+
+// shouldMaintainShieldedMerkleTree reports whether this block needs the
+// Sapling commitment-tree lifecycle (ResetCurrent before tx execution,
+// SaveCurrentAsBest after). Mirrors java-tron's implicit gate — chain has
+// activated AllowShieldedTransaction, or the block carries a shielded
+// transfer. Centralised so the call sites in applyBlock cannot drift: a
+// mismatched pair would silently desync LAST_TREE / MerkleTreeIndexStore
+// from java-tron's invariant of one entry per post-activation block.
+func shouldMaintainShieldedMerkleTree(dp *state.DynamicProperties, block *types.Block) bool {
+	return dp.AllowShieldedTransaction() || blockContainsShieldedTransfer(block)
 }
 
 // chainHeaderAdapter adapts StateDB + DynProps to consensus.ChainHeaderWriter.
