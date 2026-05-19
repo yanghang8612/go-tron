@@ -385,3 +385,134 @@ func TestFreezerTableSnappyMismatch(t *testing.T) {
 		t.Fatalf("expected empty-table read failure when extension/config disagree")
 	}
 }
+
+// TestFlushOffsetTracking exercises repairIndex's `size > flushOffset` branch:
+// the index file contains entries above the persisted flushOffset (simulating a
+// host crash after `freezerTableBatch.commit()` wrote data + index but before
+// `doSync()` advanced the on-disk flushOffset). On reopen, repairIndex must
+// detect the discrepancy, truncate the index back to flushOffset, and surface
+// only the items that were synced before the crash.
+//
+// Adapted from upstream go-ethereum's TestTailTruncationCrash (a clean port of
+// upstream's TestFlushOffsetTracking would not hit the repair path — that test
+// only checks the in-memory flushOffset value, never reopens).
+func TestFlushOffsetTracking(t *testing.T) {
+	t.Parallel()
+	name := fmt.Sprintf("flushoffset-%d", rand.Uint64())
+	dir := t.TempDir()
+
+	// Use a generous shard size so all writes go into a single .rdat file —
+	// keeps the assertions about index size simple (no advanceHead-triggered
+	// flushOffset bumps in the middle).
+	tab, err := newTable(dir,
+		name,
+		metrics.NewInactiveMeter(),
+		metrics.NewInactiveMeter(),
+		metrics.NewGauge(),
+		8192,
+		freezerTableConfig{noSnappy: true},
+		false)
+	if err != nil {
+		t.Fatalf("newTable: %v", err)
+	}
+
+	// Phase 1: write 5 items and force a sync. The synced state has
+	//   - items = 5
+	//   - index file size = 6 * indexEntrySize (1 header + 5 entries)
+	//   - flushOffset = 6 * indexEntrySize (matches index size)
+	writeChunks(t, tab, 5, 15)
+	if err := tab.Sync(); err != nil {
+		t.Fatalf("sync after first batch: %v", err)
+	}
+	syncedSize := int64(6) * indexEntrySize
+	if got := tab.metadata.flushOffset; got != syncedSize {
+		t.Fatalf("post-sync flushOffset: want %d, got %d", syncedSize, got)
+	}
+
+	// Phase 2: write 5 more items via batch.commit() WITHOUT calling Sync().
+	// This is exactly what freezerTableBatch.commit() does between auto-sync
+	// thresholds (uncommitted < 512 and lastSync within 30s). Index file
+	// grows to 11 entries (66 bytes) but flushOffset is still 36.
+	batch := tab.newBatch()
+	for i := 5; i < 10; i++ {
+		if err := batch.AppendRaw(uint64(i), getChunk(15, i)); err != nil {
+			t.Fatalf("AppendRaw(%d): %v", i, err)
+		}
+	}
+	if err := batch.commit(); err != nil {
+		t.Fatalf("batch.commit (no sync): %v", err)
+	}
+	// Verify precondition: index size > flushOffset.
+	stat, err := tab.index.Stat()
+	if err != nil {
+		t.Fatalf("index stat: %v", err)
+	}
+	unsyncedSize := int64(11) * indexEntrySize
+	if stat.Size() != unsyncedSize {
+		t.Fatalf("post-commit index size: want %d, got %d", unsyncedSize, stat.Size())
+	}
+	if tab.metadata.flushOffset != syncedSize {
+		t.Fatalf("post-commit flushOffset moved: want %d, got %d", syncedSize, tab.metadata.flushOffset)
+	}
+	if stat.Size() <= tab.metadata.flushOffset {
+		t.Fatalf("precondition violated: index size %d must exceed flushOffset %d", stat.Size(), tab.metadata.flushOffset)
+	}
+
+	// Phase 3: simulate the crash. Re-persist the stale flushOffset to make
+	// sure the on-disk meta file holds the pre-batch value (it already does,
+	// but this guards against future code that might lazily defer the meta
+	// write), then leak `tab` and reopen via newTable. Following upstream's
+	// TestTailTruncationCrash idiom — calling tab.Close() here would trigger
+	// doSync, which would advance the on-disk flushOffset to the current
+	// index size and defeat the test.
+	if err := tab.metadata.setFlushOffset(syncedSize, true); err != nil {
+		t.Fatalf("re-persist stale flushOffset: %v", err)
+	}
+
+	tab2, err := newTable(dir,
+		name,
+		metrics.NewInactiveMeter(),
+		metrics.NewInactiveMeter(),
+		metrics.NewGauge(),
+		8192,
+		freezerTableConfig{noSnappy: true},
+		false)
+	if err != nil {
+		t.Fatalf("reopen after simulated crash: %v", err)
+	}
+	t.Cleanup(func() { _ = tab2.Close() })
+
+	// Repair should have truncated the index back to the synced size, so the
+	// table reports only the 5 items that survived the crash.
+	if got := tab2.items.Load(); got != 5 {
+		t.Fatalf("items after crash recovery: want 5, got %d", got)
+	}
+	if got := tab2.metadata.flushOffset; got != syncedSize {
+		t.Fatalf("flushOffset after recovery: want %d, got %d", syncedSize, got)
+	}
+	stat2, err := tab2.index.Stat()
+	if err != nil {
+		t.Fatalf("post-repair index stat: %v", err)
+	}
+	if stat2.Size() != syncedSize {
+		t.Fatalf("index size after repair: want %d, got %d", syncedSize, stat2.Size())
+	}
+
+	// Items 0..4 are still retrievable (they were synced before the crash).
+	for i := 0; i < 5; i++ {
+		got, err := tab2.Retrieve(uint64(i))
+		if err != nil {
+			t.Fatalf("post-recovery Retrieve(%d): %v", i, err)
+		}
+		want := getChunk(15, i)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("post-recovery item %d: %x != %x", i, got, want)
+		}
+	}
+	// Items 5..9 must be gone — their index entries were torn off.
+	for i := 5; i < 10; i++ {
+		if _, err := tab2.Retrieve(uint64(i)); err != errOutOfBounds {
+			t.Fatalf("post-recovery Retrieve(%d): want errOutOfBounds, got %v", i, err)
+		}
+	}
+}
