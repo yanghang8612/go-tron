@@ -3,6 +3,7 @@ package net
 import (
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"encoding/binary"
 	"testing"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -201,6 +202,145 @@ func TestPbftDataSync_SRLEpochUsesDefaultInterval(t *testing.T) {
 
 	if got := rawdb.ReadSrSignData(bc.DB(), 0); got == nil {
 		t.Fatal("expected WriteSrSignData via SRL epoch lookup, got nil — readDPInt64 fallback to defaultProps regressed")
+	}
+}
+
+// TestPbftDataSync_SRLEpochUsesBufferedDP locks the buffer-overlay reroute
+// of the PBFT BlockHook's DP reads. The hook fires synchronously from
+// BlockChain.applyBlock after each successful block — at that moment
+// bc.buffer still holds the just-applied block's DP writes, because
+// bc.buffer.FlushUpTo(solidified, ...) only persists layers up to the
+// solidified boundary (which lags head by ~19 blocks on mainnet 27-SR DPoS).
+//
+// Reading the DP keys directly off h.db inside the hook therefore sees a
+// stale image, by up to that ~19-block window. The worst-case symptom is a
+// maintenance-boundary block: applyBlock writes the advanced
+// next_maintenance_time into bc.buffer, PBFT SRL commit messages arriving
+// over the wire cache themselves under the NEW epoch, and the hook —
+// reading the OLD next_maintenance_time off disk — looks up the wrong
+// epoch and silently drops every cached SR-list signature.
+//
+// Scenario:
+//   - Genesis seeds next_maintenance_time=3000 (Set'd → lands on disk via
+//     dp.Flush) plus the default maintenance_time_interval=21_600_000
+//     (NOT Set'd → stays in-memory only, matching mainnet's empty-map
+//     genesis).
+//   - Block #1 has timestamp 3000, so applyBlock crosses the boundary and
+//     calls dp.SetNextMaintenanceTime(3000 + 21_600_000) = 21_603_000.
+//     That write goes through bc.buffer; solidified is still 0, so
+//     flushBufferUpToSolidified is a no-op and the new value never
+//     reaches disk.
+//   - An SRL commit message is cached at viewN = 21_603_000 - 21_600_000
+//     = 3000, the epoch a buffered read computes.
+//   - ProcessOnBlock(block1) must see the cached entry. A disk read of
+//     next_maintenance_time would still return 3000, the old value, and
+//     compute epoch = -21_597_000 — missing the cache and dropping the
+//     SRL signature on the floor.
+func TestPbftDataSync_SRLEpochUsesBufferedDP(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	// Two genesis witnesses — single-witness chains compute solidified=1
+	// after block #1 (the 30%-quantile lands on the only witness's height),
+	// which drains the buffer back to disk before the assertion below can
+	// observe the buffer/disk delta. A second witness that has not yet
+	// produced keeps the quantile at 0 → solidified stays 0 → no flush.
+	witnessKey, _ := ethcrypto.GenerateKey()
+	witnessAddr := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	idleKey, _ := ethcrypto.GenerateKey()
+	idleAddr := crypto.PubkeyToAddress(&idleKey.PublicKey)
+
+	const oldNextMaint = int64(3000)
+	const interval = int64(21_600_000) // default; intentionally NOT in the map
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 2, URL: "http://w1"},
+			{Address: idleAddr, VoteCount: 1, URL: "http://w2"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": oldNextMaint,
+		},
+	}
+	_, genesisHash, err := core.SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := core.NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Flip allow_pbft on disk so allowPBFT() short-circuits — what matters
+	// here is the SRL epoch computation, not gate activation.
+	dp := state.LoadDynamicProperties(diskdb)
+	dp.Set("allow_pbft", 1)
+	dp.Flush(diskdb)
+
+	h := NewPbftDataSyncHandler(bc, bc.DB())
+
+	// Apply block #1 with timestamp == oldNextMaint to cross the boundary.
+	// applyBlock will call dp.SetNextMaintenanceTime(3000 + 21_600_000)
+	// and route the write through bc.buffer.
+	block1 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         1,
+				Timestamp:      oldNextMaint,
+				ParentHash:     genesisHash.Bytes(),
+				WitnessAddress: witnessAddr.Bytes(),
+			},
+		},
+	})
+	// InsertBlock (not InsertBlockWithoutVerify) is required: the
+	// "WithoutVerify" path is a test shortcut that writes the block
+	// straight to disk and skips applyBlock entirely. The buffer-vs-disk
+	// delta this test depends on is only produced when applyBlock runs
+	// (it routes DP writes through bc.buffer and flushes only up to
+	// solidified). Verification is fine here because bc.engine is nil.
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("InsertBlock(block1): %v", err)
+	}
+
+	// Precondition: disk still holds the OLD next_maintenance_time. If
+	// this ever changes — e.g. solidified-flush logic widens — the test
+	// no longer exercises the buffer/disk delta and must be reworked.
+	rawDisk := rawdb.ReadDynamicProperty(bc.DB(), "next_maintenance_time")
+	if len(rawDisk) != 8 {
+		t.Fatalf("test precondition broken: next_maintenance_time absent on disk after block #1")
+	}
+	if got := int64(binary.BigEndian.Uint64(rawDisk)); got != oldNextMaint {
+		t.Fatalf("test precondition broken: disk next_maintenance_time = %d, want unchanged %d (solidified-flush is no longer gated by solidified=0?)", got, oldNextMaint)
+	}
+
+	// The fix: BufferedDPInt64 sees the new buffered value.
+	const newNextMaint = oldNextMaint + interval
+	if got := bc.BufferedDPInt64("next_maintenance_time"); got != newNextMaint {
+		t.Fatalf("BufferedDPInt64(next_maintenance_time) = %d, want %d", got, newNextMaint)
+	}
+
+	// 19 SR witnesses for the SRL signature quorum.
+	keys := make([]*ecdsa.PrivateKey, 19)
+	addrs := make([]tcommon.Address, 19)
+	for i := range keys {
+		k, _ := ethcrypto.GenerateKey()
+		keys[i] = k
+		addrs[i] = crypto.PubkeyToAddress(&k.PublicKey)
+	}
+	rawdb.WriteShuffledWitnesses(bc.DB(), addrs)
+
+	// Cache the SRL result under the BUFFERED epoch. The fix must compute
+	// this same number; the broken disk-only path computes oldNextMaint -
+	// interval = -21_597_000 and misses the cache.
+	bufferedEpoch := newNextMaint - interval
+	payload, _ := buildCommitResult(t, keys, bufferedEpoch, corepb.PBFTMessage_SRL)
+	h.HandleCommitMsg(nil, payload)
+
+	h.ProcessOnBlock(block1)
+
+	if got := rawdb.ReadSrSignData(bc.DB(), 0); got == nil {
+		t.Fatal("expected WriteSrSignData via buffered next_maintenance_time, got nil — BlockHook still reading stale disk DP image")
 	}
 }
 

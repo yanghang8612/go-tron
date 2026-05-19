@@ -2,7 +2,6 @@ package net
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,7 +10,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/p2p"
@@ -43,11 +41,11 @@ type PbftDataSyncHandler struct {
 	// flag is monotonic — once a proposal sets allow_pbft=1 the chain cannot
 	// turn it off — so a one-shot atomic is sufficient and lets allowPBFT()
 	// skip the DB read on every post-activation block. Pre-activation we
-	// fall through to a *single* point Get on the AllowPbft DP key rather
-	// than the previous full state.LoadDynamicProperties scan (which fired
-	// ~133 Pebble Gets per block hook and was empirically the dominant cost
-	// of the BlockHook fan-out — Nile soak at h≈890k showed hooks=1s/8s of
-	// wall time, almost all of it here).
+	// fall through to a *single* buffered point read on the AllowPbft DP
+	// key rather than the previous full state.LoadDynamicProperties scan
+	// (which fired ~133 Pebble Gets per block hook and was empirically the
+	// dominant cost of the BlockHook fan-out — Nile soak at h≈890k showed
+	// hooks=1s/8s of wall time, almost all of it here).
 	pbftActive atomic.Bool
 }
 
@@ -108,10 +106,15 @@ func (h *PbftDataSyncHandler) ProcessOnBlock(block *types.Block) {
 	entry := h.cache[int64(block.Number())]
 	if entry == nil {
 		// Try epoch key (SRL messages use epoch as viewN). Reading the two
-		// DP keys directly avoids state.LoadDynamicProperties, which would
-		// otherwise scan ~133 keys just to compute one epoch number.
-		nextMaint := readDPInt64(h.db, "next_maintenance_time")
-		interval := readDPInt64(h.db, "maintenance_time_interval")
+		// DP keys through the buffer overlay avoids state.LoadDynamicProperties
+		// (which would otherwise scan ~133 keys just to compute one epoch
+		// number) while still seeing this block's just-applied DP writes —
+		// on a maintenance-boundary block the new next_maintenance_time
+		// lives in bc.buffer for ~19 blocks before solidified-flush lands
+		// it on disk; a bare disk read would compute the previous epoch
+		// and silently miss the SRL result cached under the new one.
+		nextMaint := h.chain.BufferedDPInt64("next_maintenance_time")
+		interval := h.chain.BufferedDPInt64("maintenance_time_interval")
 		entry = h.cache[nextMaint-interval]
 	}
 	h.mu.Unlock()
@@ -173,35 +176,16 @@ func (h *PbftDataSyncHandler) allowPBFT() bool {
 	if h.pbftActive.Load() {
 		return true
 	}
-	// One point Get on the AllowPbft key — versus the previous
-	// LoadDynamicProperties full scan. Once active, the atomic short-circuits
-	// every future call.
-	if readDPInt64(h.db, "allow_pbft") >= 1 {
+	// One buffered point read on the AllowPbft key — versus the previous
+	// LoadDynamicProperties full scan. The buffer overlay surfaces the
+	// activation write before solidified-flush lands it on disk (mainnet
+	// 27-SR DPoS keeps a ~19-block window between head and solidified).
+	// Once active, the atomic short-circuits every future call.
+	if h.chain.BufferedDPInt64("allow_pbft") >= 1 {
 		h.pbftActive.Store(true)
 		return true
 	}
 	return false
-}
-
-// readDPInt64 fetches a single DynamicProperties key as a big-endian int64,
-// falling back to the state package's default when the key is absent or
-// malformed. Equivalent to the per-key branch inside state.LoadDynamicProperties
-// (which seeds defaults before applying DB overrides) without the surrounding
-// 133-key scan.
-//
-// The fallback is load-bearing: mainnet genesis ships an empty
-// DynamicProperties map and dp.Flush only persists keys that were Set'd, so
-// keys whose defaults are non-zero (e.g. maintenance_time_interval = 21_600_000)
-// stay absent on disk indefinitely. Without the fallback, a callsite like
-// the PBFT SRL epoch lookup would compute `nextMaint - 0` instead of
-// `nextMaint - 21_600_000` and silently miss every cached SR-list result.
-func readDPInt64(db ethdb.KeyValueReader, name string) int64 {
-	data := rawdb.ReadDynamicProperty(db, name)
-	if len(data) == 8 {
-		return int64(binary.BigEndian.Uint64(data))
-	}
-	def, _ := state.DefaultDPInt64(name)
-	return def
 }
 
 func (h *PbftDataSyncHandler) evictStaleNoLock() {

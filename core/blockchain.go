@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -1020,6 +1021,28 @@ func (bc *BlockChain) DB() ethdb.KeyValueStore {
 // policy.
 func (bc *BlockChain) BufferedDB() ethdb.KeyValueReader {
 	return bc.buffer
+}
+
+// BufferedDPInt64 reads a single DynamicProperties int64 key through the
+// in-memory buffer overlay so DP changes from prior blocks not yet flushed
+// to disk are visible. Falls back to state.DefaultDPInt64 when the key is
+// absent in both buffer and disk, mirroring the per-key branch in
+// state.LoadDynamicProperties.
+//
+// Hot callers (PBFT BlockHook) use this in place of a bare
+// rawdb.ReadDynamicProperty(bc.db, ...) so they see the just-applied
+// block's DP writes — the buffer is flushed only up to the solidified
+// boundary, which on mainnet 27-SR DPoS lags head by ~19 blocks. A
+// maintenance-boundary write of next_maintenance_time lands in the buffer
+// immediately; a disk-only reader would compute the old epoch and silently
+// miss SRL commit results cached under the new one.
+func (bc *BlockChain) BufferedDPInt64(name string) int64 {
+	data := rawdb.ReadDynamicProperty(bc.buffer, name)
+	if len(data) == 8 {
+		return int64(binary.BigEndian.Uint64(data))
+	}
+	def, _ := state.DefaultDPInt64(name)
+	return def
 }
 
 // ActiveWitnesses returns the current active witness list.
