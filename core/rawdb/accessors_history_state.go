@@ -286,6 +286,38 @@ func DeleteHistoryConfig(db ethdb.KeyValueWriter) error {
 	return db.Delete(historyConfigKey())
 }
 
+// ---- Backfill resume cursor (sh-bf-cursor-) -------------------------------
+//
+// The Slice 6 backfill tool persists the highest block whose history rows it
+// has already re-derived. On `--resume` it reads this value and continues at
+// cursor+1. Stored as a bare big-endian uint64 (no proto) — it is a single
+// scalar that never needs schema evolution, so the proto round-trip cost is
+// unwarranted.
+
+// WriteHistoryBackfillCursor persists the last-completed backfill block.
+func WriteHistoryBackfillCursor(db ethdb.KeyValueWriter, blockNum uint64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], blockNum)
+	return db.Put(historyBackfillCursorKey(), buf[:])
+}
+
+// ReadHistoryBackfillCursor returns the last-completed backfill block and a
+// presence flag. found=false means no backfill has run (or the cursor was
+// cleared) — callers start from their requested --from in that case.
+func ReadHistoryBackfillCursor(db ethdb.KeyValueReader) (uint64, bool) {
+	data, err := db.Get(historyBackfillCursorKey())
+	if err != nil || len(data) != 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(data), true
+}
+
+// DeleteHistoryBackfillCursor removes the backfill resume cursor. Used by
+// tests and by an operator who wants a `--resume` to start fresh.
+func DeleteHistoryBackfillCursor(db ethdb.KeyValueWriter) error {
+	return db.Delete(historyBackfillCursorKey())
+}
+
 // ---- Pruning helpers (Slice 5) -------------------------------------------
 //
 // These accessors give the background pruner (core/historyprune) a way to

@@ -378,6 +378,16 @@ var (
 	// makes collision with sh-a-/sh-m-/etc impossible regardless of
 	// addr/blockNum content (length differs and segment differs).
 	shConfigKey = []byte("sh-cfg-")
+
+	// shBackfillCursorKey is the singleton resume cursor for the Slice 6
+	// operator-recovery backfill tool. It holds the big-endian uint64 of
+	// the last block whose history rows the backfill has re-derived, so a
+	// `gtron history backfill --resume` picks up at cursor+1 after an
+	// interrupt. Kept separate from HistoryConfig.FirstBlock (which the
+	// live writer and the pruner own) so backfill progress can't be
+	// confused with prune progress. Distinct "-bf-cursor-" segment avoids
+	// collision with the sh-a-/sh-m-/sh-cfg- families.
+	shBackfillCursorKey = []byte("sh-bf-cursor-")
 )
 
 // HistorySchemaVersion is the on-disk format version for the State
@@ -869,4 +879,9 @@ func historySlotInverseSlotPrefix(addr []byte, slot []byte) []byte {
 // historyConfigKey returns the singleton HistoryConfig key.
 func historyConfigKey() []byte {
 	return append([]byte{}, shConfigKey...)
+}
+
+// historyBackfillCursorKey returns the singleton backfill resume-cursor key.
+func historyBackfillCursorKey() []byte {
+	return append([]byte{}, shBackfillCursorKey...)
 }
