@@ -30,6 +30,23 @@ type StateDB struct {
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
 
+	// dirtyWitnesses tracks addresses whose VoteCount or URL changed in
+	// the current block. FlushWitnesses iterates this set instead of the
+	// full witnesses map so no-op blocks (the common case — no VoteWitness
+	// or WitnessUpdate tx) skip the rawdb Read+Write entirely.
+	//
+	// Population: every mutator that changes VoteCount or URL marks dirty
+	// (PutWitness, SetWitnessURL, AddWitnessVoteCount). Preload via
+	// LoadWitness does NOT mark dirty — it just hydrates the in-memory
+	// cache from rawdb.
+	//
+	// Revert: the set is deliberately NOT cleared by RevertToSnapshot.
+	// Flushing a witness whose net change is zero costs one Read+Write but
+	// is correctness-preserving (the stored counters round-trip unchanged).
+	// Precise clearing would require walking the journal to undo dirty
+	// marks per change — the saved IO doesn't justify the complexity.
+	dirtyWitnesses map[tcommon.Address]struct{}
+
 	journal   *journal
 	snapshots []int // journal length at each snapshot
 
@@ -58,13 +75,14 @@ func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 		return nil, err
 	}
 	return &StateDB{
-		db:           db,
-		trie:         tr,
-		stateObjects: make(map[tcommon.Address]*stateObject),
-		witnesses:    make(map[tcommon.Address]*types.Witness),
-		journal:      newJournal(),
-		dynProps:     NewDynamicProperties(),
-		originRoot:   ethcommon.Hash(root),
+		db:             db,
+		trie:           tr,
+		stateObjects:   make(map[tcommon.Address]*stateObject),
+		witnesses:      make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses: make(map[tcommon.Address]struct{}),
+		journal:        newJournal(),
+		dynProps:       NewDynamicProperties(),
+		originRoot:     ethcommon.Hash(root),
 	}, nil
 }
 
@@ -540,18 +558,41 @@ func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 	return s.witnesses[addr]
 }
 
+// LoadWitness hydrates the in-memory witness cache from a rawdb-backed
+// record without marking the address dirty or appending to the journal.
+// Preload paths (applyBlock, BuildBlock, RPC validation) call this once
+// per block to mirror WitnessStore into the StateDB so actuators that
+// read GetWitness see the up-to-date VoteCount / URL.
+//
+// Stores a deep copy of w so the in-memory map does not alias the
+// caller's record (the caller typically discards w after this call, but
+// subsequent mutations would otherwise leak back into the rawdb-returned
+// pointer).
+func (s *StateDB) LoadWitness(w *types.Witness) {
+	if w == nil {
+		return
+	}
+	s.witnesses[w.Address()] = w.Copy()
+}
+
 // PutWitness stores a witness, journaling the previous state for revert.
 // The new record carries only the URL; counters reset to zero. Use
 // SetWitnessURL when updating an existing witness so that VoteCount /
 // production counters survive the URL change (java-tron parity).
+//
+// Marks the address dirty so FlushWitnesses persists it. For preload
+// from rawdb use LoadWitness instead.
 func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
 	s.journalWitness(addr)
 	s.witnesses[addr] = types.NewWitness(addr, url)
+	s.dirtyWitnesses[addr] = struct{}{}
 }
 
 // SetWitnessURL updates the URL on the existing in-memory witness without
 // resetting VoteCount / production counters. Mirrors java-tron's
 // WitnessCapsule.setUrl semantics where only the URL field is mutated.
+//
+// Marks the address dirty so FlushWitnesses persists it.
 func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
 	existing := s.witnesses[addr]
 	if existing == nil {
@@ -559,10 +600,12 @@ func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
 		// for ensuring counters are loaded separately if needed.
 		s.journalWitness(addr)
 		s.witnesses[addr] = types.NewWitness(addr, url)
+		s.dirtyWitnesses[addr] = struct{}{}
 		return
 	}
 	s.journalWitness(addr)
 	existing.Proto().Url = url
+	s.dirtyWitnesses[addr] = struct{}{}
 }
 
 // witnessFlushKV is the narrow capability FlushWitnesses needs. The block
@@ -583,9 +626,19 @@ type witnessFlushKV interface {
 // VotesStore and MaintenanceManager.countVote drains it into WitnessStore;
 // the per-block merge here keeps the in-memory cache aligned with rawdb so
 // the next block's pre-load sees the updated VoteCount.
+//
+// Only addresses in s.dirtyWitnesses are flushed: a no-op block (no
+// VoteWitness, no WitnessUpdate, no Unfreeze touching votes) does zero
+// rawdb Reads or Writes. The dirty set is cleared at the end so a
+// subsequent applyBlock on the same StateDB instance starts clean.
 func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
-	for addr, w := range s.witnesses {
+	for addr := range s.dirtyWitnesses {
+		w := s.witnesses[addr]
 		if w == nil {
+			// Witness was created and then reverted within this block.
+			// The dirty mark survived (RevertToSnapshot deliberately
+			// does not clear the set — see field doc), but there is
+			// nothing to write.
 			continue
 		}
 		stored := rawdb.ReadWitness(db, addr)
@@ -607,6 +660,7 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 		stored.Proto().Url = w.URL()
 		rawdb.WriteWitness(db, addr, stored)
 	}
+	clear(s.dirtyWitnesses)
 }
 
 // DynamicProperties returns the dynamic properties.
@@ -627,6 +681,14 @@ func (s *StateDB) Snapshot() int {
 }
 
 // RevertToSnapshot reverts state changes to the given snapshot.
+//
+// NOTE: s.dirtyWitnesses is deliberately NOT cleared here. A witness mark
+// can outlive its mutation when an actuator reverts — FlushWitnesses will
+// then do a Read+Write that round-trips the unchanged stored fields. The
+// IO cost (~one Pebble read+write per reverted witness, capped at the
+// number of witnesses touched in the block) is far cheaper than the
+// journal walk a precise undo would require. See the dirtyWitnesses
+// field doc for the design rationale.
 func (s *StateDB) RevertToSnapshot(id int) {
 	if id >= len(s.snapshots) {
 		return
@@ -909,7 +971,8 @@ func (s *StateDB) ClearVotes(addr tcommon.Address) {
 	obj.markDirty()
 }
 
-// AddWitnessVoteCount adds delta to a witness's vote count.
+// AddWitnessVoteCount adds delta to a witness's vote count. Marks the
+// address dirty so FlushWitnesses persists the new VoteCount.
 func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
 	w := s.witnesses[addr]
 	if w == nil {
@@ -917,6 +980,7 @@ func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
 	}
 	s.journalWitness(addr)
 	w.SetVoteCount(w.VoteCount() + delta)
+	s.dirtyWitnesses[addr] = struct{}{}
 }
 
 // GetAllowance returns the witness reward allowance.
@@ -1398,6 +1462,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		trie:           tr,
 		stateObjects:   make(map[tcommon.Address]*stateObject),
 		witnesses:      make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses: make(map[tcommon.Address]struct{}),
 		journal:        newJournal(),
 		dynProps:       s.dynProps,
 		originRoot:     s.originRoot,

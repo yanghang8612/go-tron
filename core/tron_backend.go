@@ -1365,14 +1365,15 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing step.
 	// Actuators that check ctx.State.GetWitness (witness_update, vote, brokerage, etc.)
 	// will fail "owner is not a witness" without this.
+	//
+	// LoadWitness mirrors the rawdb record without marking dirty — preload is
+	// a cache hydration, not a mutation. Real witness changes from this
+	// RPC-driven validation path go through PutWitness / SetWitnessURL /
+	// AddWitnessVoteCount, which mark dirty for FlushWitnesses.
 	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(b.chain.buffer, addr)
-			if w != nil {
-				statedb.PutWitness(addr, w.URL())
-				statedb.AddWitnessVoteCount(addr, w.VoteCount())
-			}
+			statedb.LoadWitness(rawdb.ReadWitness(b.chain.buffer, addr))
 		}
 	}
 

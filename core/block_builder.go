@@ -51,14 +51,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// URL deltas from blocks that haven't yet been flushed to disk, and we
 	// must see the same values applyBlock will see when it inserts the
 	// block we're about to build.
+	//
+	// Uses LoadWitness (not PutWitness+AddWitnessVoteCount) so this hydration
+	// pass does not mark witnesses dirty — see applyBlock for the rationale.
 	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(bc.buffer, addr)
-			if w != nil {
-				statedb.PutWitness(addr, w.URL())
-				statedb.AddWitnessVoteCount(addr, w.VoteCount())
-			}
+			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
 		}
 	}
 

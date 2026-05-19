@@ -553,14 +553,16 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// (via statedb.FlushWitnesses below) are visible even when those blocks
 	// haven't been flushed to bc.db yet — same layered-read consistency the
 	// DP load above relies on.
+	//
+	// LoadWitness (vs PutWitness+AddWitnessVoteCount) deliberately does NOT
+	// mark the addresses dirty: this is a hydration of in-memory cache from
+	// rawdb, not a mutation. Actuators that actually change VoteCount or URL
+	// downstream mark dirty via PutWitness / SetWitnessURL /
+	// AddWitnessVoteCount, so FlushWitnesses only persists the genuine deltas.
 	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
-			w := rawdb.ReadWitness(bc.buffer, addr)
-			if w != nil {
-				statedb.PutWitness(addr, w.URL())
-				statedb.AddWitnessVoteCount(addr, w.VoteCount())
-			}
+			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
 		}
 	}
 
