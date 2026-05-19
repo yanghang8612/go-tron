@@ -88,6 +88,15 @@ func (s *applyStats) mark(phase *time.Duration) {
 }
 
 // BlockChain manages the canonical chain and provides block insertion.
+//
+// db vs chaindb split (freezer slice-2): every WRITE goes through bc.db
+// directly — writes never touch ancient. READS of chain data that has
+// ancient fall-through (ReadBlock, ReadBlockStateRoot, tx-info accessors)
+// go through bc.chaindb so frozen blocks resolve transparently. Reads of
+// non-frozen state (DP, genesis state root, witness store, etc.) stay on
+// bc.db because their accessors take ethdb.KeyValueReader, not *ChainDB.
+// New code adding a rawdb.Read* call must pick bc.chaindb iff the
+// accessor's signature is *ChainDB-typed (i.e. has ancient fall-through).
 type BlockChain struct {
 	db      ethdb.KeyValueStore
 	chaindb *rawdb.ChainDB // composite (db + freezer reader); slice-2 freezer plumbing
