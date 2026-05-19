@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/historyprune"
 	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -128,6 +129,15 @@ var (
 		Name:  "log.file",
 		Usage: "Optional log file path; records are tee'd to this file in JSON",
 	}
+	gcmodeFlag = &cli.StringFlag{
+		Name:  "gcmode",
+		Usage: "State History Index retention: full (prune to last prune_window blocks) | archive (keep forever)",
+		Value: params.HistoryModeFull,
+	}
+	configFileFlag = &cli.StringFlag{
+		Name:  "config",
+		Usage: "Path to a TOML config file (currently understood: [history] mode, prune_window)",
+	}
 )
 
 var app = &cli.App{
@@ -156,6 +166,8 @@ var app = &cli.App{
 		verbosityFlag,
 		logFormatFlag,
 		logFileFlag,
+		gcmodeFlag,
+		configFileFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.Setup(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"))
@@ -238,6 +250,16 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		db.Close()
 		return fmt.Errorf("setup genesis: %w", err)
+	}
+
+	// Apply operator-supplied State History Index retention settings
+	// (--gcmode / [history] in --config). Done after SetupGenesisBlock
+	// because it returns a pointer into genesis.Config we now mutate.
+	// HistoryMode is operator-level (not consensus-relevant) so this
+	// mutation is safe.
+	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
+		db.Close()
+		return err
 	}
 
 	// Create blockchain
@@ -374,6 +396,20 @@ func gtron(ctx *cli.Context) error {
 	}
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)
+
+	// State History Index pruner: only registered when the chain is in
+	// "full" retention mode AND history capture is on. Archive mode
+	// skips registration entirely so the index grows linearly (and so
+	// the operator can confirm intent via gtron logs at start time).
+	if chainConfig.HistoryEnabled && chainConfig.EffectiveHistoryMode() == params.HistoryModeFull {
+		pruner := historyprune.New(newPrunerChainSource(bc), historyprune.PrunerConfig{
+			Window: chainConfig.EffectiveHistoryPruneWindow(),
+		})
+		stack.RegisterLifecycle(pruner)
+		fmt.Printf("History pruner enabled (window=%d blocks)\n", chainConfig.EffectiveHistoryPruneWindow())
+	} else if chainConfig.HistoryEnabled {
+		fmt.Println("History capture enabled in archive mode (no pruning)")
+	}
 
 	// Start block producer only when --witness is explicitly set.
 	// A node can join a dev chain with --dev --witness.key (for genesis) without
