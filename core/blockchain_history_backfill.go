@@ -271,15 +271,25 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 	// historical tx in block n would be judged expired against a
 	// far-future head time and the replay would fail wholesale. Live
 	// applyBlock(n) sees DP still holding n-1's header (it advances the
-	// header only after processing), so mirror that snapshot here. The
-	// non-header DP fields (proposal/energy params) still reflect HEAD —
-	// that's the documented maintenance/flat-KV caveat, which affects
-	// boundary-crossing parity but does not block replay the way a stale
-	// timestamp does.
-	if parent := bc.GetBlockByNumber(n - 1); parent != nil {
-		dynProps.SetLatestBlockHeaderTimestamp(parent.Timestamp())
-		dynProps.SetLatestBlockHeaderNumber(int64(parent.Number()))
-		dynProps.SetLatestBlockHeaderHash(parent.Hash())
+	// header only after processing), so mirror that snapshot here.
+	//
+	// This rewinds only the HEADER fields. The rest of DP (proposal/energy
+	// params AND the fork-version vote bitmaps that core/forks resolves
+	// Pass(version) from) still reflects HEAD: a fork gate that is ON at
+	// HEAD but was OFF at block n makes ProcessBlock take the post-fork
+	// path and can touch a *different set* of accounts than the live
+	// capture did, drifting the sh-* row set (per-row pre-values stay
+	// trie-correct). That's the documented maintenance/flat-KV caveat
+	// above — backfill is byte-faithful only for ranges with no
+	// maintenance boundary or fork activation between n and HEAD; the
+	// header rewind is the bounded fix for the universal expiration
+	// blocker, not a general as-of-n DP reconstruction (which isn't
+	// recoverable from disk).
+	parentBlock := bc.GetBlockByNumber(n - 1)
+	if parentBlock != nil {
+		dynProps.SetLatestBlockHeaderTimestamp(parentBlock.Timestamp())
+		dynProps.SetLatestBlockHeaderNumber(int64(parentBlock.Number()))
+		dynProps.SetLatestBlockHeaderHash(parentBlock.Hash())
 	}
 
 	// Hydrate witnesses for the reward/standby paths inside ProcessBlock.
@@ -300,8 +310,8 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	blockRoot := block.AccountStateRoot()
 	parentAccountStateRoot := tcommon.Hash{}
-	if parent := bc.GetBlockByNumber(n - 1); parent != nil {
-		parentAccountStateRoot = parent.AccountStateRoot()
+	if parentBlock != nil {
+		parentAccountStateRoot = parentBlock.AccountStateRoot()
 	}
 	if blockRoot != (tcommon.Hash{}) {
 		_, _, err = ProcessBlockWithJavaAccountStateRootAndEnergyFork(
