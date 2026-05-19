@@ -190,6 +190,7 @@ var app = &cli.App{
 			Flags:  []cli.Flag{dataDirFlag, testnetFlag, genesisFileFlag},
 			Action: initCmd,
 		},
+		historyCommand,
 	},
 }
 
