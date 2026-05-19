@@ -29,16 +29,43 @@ type stubBackend struct {
 	logs        []*jsonrpc.RPCLog
 	gasPrice    int64
 	peerCount   int
+
+	// Archive-query stubs: when atErr is non-nil the *At methods return it
+	// (used to exercise the history-disabled gate at the handler layer).
+	// Otherwise they return the at* values, letting a test assert the
+	// handler routed to the archive path rather than the live one.
+	atErr     error
+	balanceAt int64
+	codeAt    []byte
+	storageAt common.Hash
 }
 
-func (s *stubBackend) ChainID() int64      { return s.chainID }
-func (s *stubBackend) BlockNumber() uint64  { return s.blockNumber }
+func (s *stubBackend) ChainID() int64                       { return s.chainID }
+func (s *stubBackend) BlockNumber() uint64                  { return s.blockNumber }
 func (s *stubBackend) GetBalance(addr common.Address) int64 { return s.balance }
 func (s *stubBackend) GetCode(addr common.Address) []byte   { return s.code }
 func (s *stubBackend) GetStorageAt(addr common.Address, slot common.Hash) common.Hash {
 	return s.storage
 }
-func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error) { return s.block, nil }
+func (s *stubBackend) GetBalanceAt(addr common.Address, blockNum uint64) (int64, error) {
+	if s.atErr != nil {
+		return 0, s.atErr
+	}
+	return s.balanceAt, nil
+}
+func (s *stubBackend) GetCodeAt(addr common.Address, blockNum uint64) ([]byte, error) {
+	if s.atErr != nil {
+		return nil, s.atErr
+	}
+	return s.codeAt, nil
+}
+func (s *stubBackend) GetStorageAtBlock(addr common.Address, slot common.Hash, blockNum uint64) (common.Hash, error) {
+	if s.atErr != nil {
+		return common.Hash{}, s.atErr
+	}
+	return s.storageAt, nil
+}
+func (s *stubBackend) GetBlockByNumber(num uint64) (*types.Block, error)     { return s.block, nil }
 func (s *stubBackend) GetBlockByHash(hash common.Hash) (*types.Block, error) { return s.block, nil }
 func (s *stubBackend) GetTransactionByHash(hash common.Hash) (*corepb.Transaction, *types.Block, int, error) {
 	return s.tx, s.txBlock, s.txIndex, nil
