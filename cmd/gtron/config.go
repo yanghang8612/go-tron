@@ -37,6 +37,8 @@ func makeConfig(ctx *cli.Context) *node.Config {
 		HTTPPort:     ctx.Int("http.port"),
 		JSONRPCPort:  ctx.Int("jsonrpc.port"),
 		GRPCPort:     ctx.Int("grpc.port"),
+		PProfPort:    ctx.Int("pprof.port"),
+		PProfAddr:    ctx.String("pprof.addr"),
 		SeedNodes:    ctx.StringSlice("seednode"),
 		MaxPeers:     ctx.Int("maxpeers"),
 	}

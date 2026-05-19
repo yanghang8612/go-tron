@@ -8,9 +8,15 @@ type Config struct {
 	DiscoverPort int
 	HTTPPort     int
 	JSONRPCPort  int
-	GRPCPort     int      // gRPC Wallet service port; 0 = disabled
-	SeedNodes    []string // "host:port" entries for initial peer discovery
-	MaxPeers     int      // max simultaneous peers, default 30
+	GRPCPort     int // gRPC Wallet service port; 0 = disabled
+	// PProfPort enables the runtime debug/pprof HTTP server when > 0. Default
+	// off — pprof exposes process internals and is not authenticated.
+	PProfPort int
+	// PProfAddr is the bind address for the pprof endpoint. Defaults to
+	// "127.0.0.1" so remote profiling is opt-in.
+	PProfAddr string
+	SeedNodes []string // "host:port" entries for initial peer discovery
+	MaxPeers  int      // max simultaneous peers, default 30
 
 	// NetworkID matches the value java-tron peers send in HelloMessage. Defaults
 	// to 1 (libp2p default). Mainnet/Nile should override via params.

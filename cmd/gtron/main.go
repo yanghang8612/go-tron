@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/internal/debugapi"
 	"github.com/tronprotocol/go-tron/internal/grpcapi"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
@@ -103,6 +104,16 @@ var (
 		Usage: "gRPC Wallet service port (0 = disabled)",
 		Value: 50051,
 	}
+	pprofPortFlag = &cli.IntFlag{
+		Name:  "pprof.port",
+		Usage: "HTTP port for pprof + debug endpoints (0 = disabled)",
+		Value: 0,
+	}
+	pprofAddrFlag = &cli.StringFlag{
+		Name:  "pprof.addr",
+		Usage: "Bind address for the pprof endpoint (defaults to 127.0.0.1)",
+		Value: "127.0.0.1",
+	}
 	verbosityFlag = &cli.IntFlag{
 		Name:  "verbosity",
 		Usage: "Log verbosity (0=Crit 1=Error 2=Warn 3=Info 4=Debug 5=Trace)",
@@ -130,6 +141,8 @@ var app = &cli.App{
 		httpPortFlag,
 		jsonrpcPortFlag,
 		grpcPortFlag,
+		pprofPortFlag,
+		pprofAddrFlag,
 		testnetFlag,
 		witnessFlag,
 		witnessKeyFlag,
@@ -351,6 +364,13 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(jrpcServer)
 	if cfg.GRPCPort > 0 {
 		stack.RegisterLifecycle(grpcServer)
+	}
+	if cfg.PProfPort > 0 {
+		addr := cfg.PProfAddr
+		if addr == "" {
+			addr = "127.0.0.1"
+		}
+		stack.RegisterLifecycle(debugapi.NewServer(fmt.Sprintf("%s:%d", addr, cfg.PProfPort)))
 	}
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)
