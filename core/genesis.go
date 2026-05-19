@@ -53,6 +53,9 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 	// Check if genesis already exists. Genesis is always in the hot KV
 	// (it is never frozen), but the slice-2 accessor signature is
 	// `*ChainDB`-typed, so wrap with NoopAncient at the call site.
+	// SetupGenesisBlock intentionally takes `ethdb.KeyValueStore` rather
+	// than `*rawdb.ChainDB` because it runs before NewBlockChain
+	// constructs bc.chaindb; the local wrap is the cleanest bridge.
 	storedBlock := rawdb.ReadBlock(rawdb.NewChainDB(db, rawdb.NoopAncient{}), 0)
 	if storedBlock != nil {
 		storedHash := storedBlock.Hash()

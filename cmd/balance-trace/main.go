@@ -55,9 +55,12 @@ func main() {
 	// Slice 2 of the freezer plan: chain readers take *ChainDB. The
 	// balance-trace CLI opens raw Pebble; until slice 3 ships a freezer
 	// reader we wrap with NoopAncient so reads behave identically to the
-	// pre-slice-2 KV-only path. NOTE: this means balance-trace will silently
-	// miss frozen blocks once slice 3 begins deleting from Pebble — tracked
-	// as a slice-3 follow-up in the audit doc.
+	// pre-slice-2 KV-only path.
+	//
+	// TODO(slice-3): once the freezer goroutine starts deleting from
+	// Pebble, this tool will silently miss frozen blocks. Either teach
+	// it to open the ancient store too, or fail loudly when the freezer
+	// is present on disk. Tracked in docs/dev/chain-freezer-accessor-audit.md.
 	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
 
 	headHash := rawdb.ReadHeadBlockHash(db)
