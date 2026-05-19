@@ -521,8 +521,16 @@ func TestBuffer_NewIterator_TombstoneSuppressesBase(t *testing.T) {
 	}
 }
 
-// `start` skips keys lexicographically smaller than it. Verify the iterator
-// honors the parameter alongside the prefix filter.
+// `start` skips keys lexicographically smaller than the lower bound. ethdb's
+// contract is that `start` is RELATIVE to `prefix` (memorydb computes
+// `st := string(append(prefix, start...))`), so calling
+// `NewIterator([]byte("dp-"), []byte("m"))` should yield every dp-key >= "dp-m"
+// — NOT every key >= "m".
+//
+// Earlier this test passed `start=[]byte("dp-m")` (caller pre-prepending the
+// prefix), which matched a buggy implementation that compared overlay keys
+// against bare `start`. That made `NewIterator("dp-", "m")` drop every
+// `dp-*` entry because `"dp-..." < "m"`. Codex caught the inversion.
 func TestBuffer_NewIterator_StartParameter(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	base.Put([]byte("dp-a"), []byte("a"))
@@ -530,13 +538,55 @@ func TestBuffer_NewIterator_StartParameter(t *testing.T) {
 	base.Put([]byte("dp-z"), []byte("z"))
 
 	b := New(base)
-	got := drainIterator(t, b, []byte("dp-"), []byte("dp-m"))
+	got := drainIterator(t, b, []byte("dp-"), []byte("m"))
 	want := [][2]string{
 		{"dp-m", "m"},
 		{"dp-z", "z"},
 	}
 	if !equalEntries(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Regression test for the overlay-start bug: prefix-only entries that sit
+// inside the [prefix+start, prefix\xff) range must still surface (writes) or
+// mask base (tombstones), even when prefix < start in byte order. With the
+// pre-fix implementation `NewIterator([]byte("dp-"), []byte("m"))` saw the
+// active layer's overlay key `dp-zen_token_id` compared against bare "m" and
+// dropped (because "d" < "m"), and a tombstone on `dp-zen_token_id` likewise
+// failed to mask the base value. This test pins the corrected semantics.
+func TestBuffer_NewIterator_StartHonoredForOverlay(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	base.Put([]byte("dp-allow_pbft"), []byte("base"))
+	base.Put([]byte("dp-zen_token_id"), []byte("base-zen"))
+
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+	// Overlay write at "dp-zen_token_id" — must override the base value when
+	// start=m places "dp-zen_token_id" inside the range.
+	b.Put([]byte("dp-zen_token_id"), []byte("overlay-zen"))
+	// Overlay tombstone outside the [dp-m,) window — must NOT mask
+	// "dp-allow_pbft" because the iterator is bounded.
+	b.Delete([]byte("dp-allow_pbft"))
+	b.CommitBlock()
+
+	got := drainIterator(t, b, []byte("dp-"), []byte("m"))
+	want := [][2]string{
+		{"dp-zen_token_id", "overlay-zen"},
+	}
+	if !equalEntries(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	// And a complementary case: with start in the dp-allow_pbft window, the
+	// tombstone must mask the base entry, demonstrating overlay & base
+	// suppression both still work when the lower bound is inside the prefix.
+	gotFull := drainIterator(t, b, []byte("dp-"), nil)
+	wantFull := [][2]string{
+		{"dp-zen_token_id", "overlay-zen"},
+	}
+	if !equalEntries(gotFull, wantFull) {
+		t.Fatalf("with start=nil expected only overlay-zen (tombstone masks base allow_pbft), got %q", gotFull)
 	}
 }
 

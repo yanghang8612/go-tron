@@ -362,7 +362,15 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 // recognize it and replace its 133 point Gets per applyBlock with one scan.
 func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 	pfx := string(prefix)
-	startStr := string(start)
+	// ethdb.Iteratee contract: `start` is RELATIVE to `prefix`. The absolute
+	// lower bound is therefore `prefix + start`, matching what
+	// ethdb/memorydb does:
+	//   st := string(append(prefix, start...))
+	// Comparing overlay keys against bare `start` would incorrectly drop
+	// every overlay entry whose key happens to sort before `start` even
+	// though it sits in the `prefix` range — and worse, tombstones in that
+	// window would also be skipped, so masked base keys would leak through.
+	lo := string(prefix) + string(start)
 
 	b.mu.RLock()
 	// Step 1: collect the overlay newest-first. The first time we see a key
@@ -378,7 +386,7 @@ func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 		if pfx != "" && !strings.HasPrefix(k, pfx) {
 			return false
 		}
-		if startStr != "" && k < startStr {
+		if k < lo {
 			return false
 		}
 		return true
