@@ -63,7 +63,15 @@ func writeHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicProper
 		return
 	}
 	slot := (blockNum - 1) % historyServeWindow
-	statedb.SetState(historyStorageAddress, uint64ToDataWord(slot), parentHash)
+	slotKey := uint64ToDataWord(slot)
+	// Pre-warm the storage cache so that the SetState journal entry captures
+	// the real disk pre-value rather than zero. The TVM normally pre-warms
+	// via opSload before opSstore; this direct write path bypasses that.
+	// Without this pre-warm, once the BlockHashHistory ring wraps
+	// (block ≥ 8192), the State History Index would record zero pre-values
+	// for ring slots instead of the prior-cycle hash.
+	_ = statedb.GetState(historyStorageAddress, slotKey)
+	statedb.SetState(historyStorageAddress, slotKey, parentHash)
 }
 
 func uint64ToDataWord(v uint64) tcommon.Hash {
