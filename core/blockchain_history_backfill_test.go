@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"sort"
 	"testing"
@@ -333,5 +334,41 @@ func TestBackfill_RefusesUnreconstructible(t *testing.T) {
 	rows := snapshotHistoryRows(t, bfDB)
 	if len(rows) != 0 {
 		t.Errorf("unreconstructible backfill wrote %d rows; guard should refuse before writing", len(rows))
+	}
+}
+
+// TestBackfill_FarHeadDoesNotExpireHistoricalTxs is the regression for the
+// stale-DP-timestamp bug. ValidateTxCommon rejects a tx when
+// expiration <= prevBlockTime, and ProcessBlock derives prevBlockTime from
+// dynProps.LatestBlockHeaderTimestamp(). Backfill loads DP from disk
+// (bc.db), which on a production node carries the FAR-future head timestamp;
+// without rewinding DP to the block's PARENT header, every historical tx is
+// judged expired against that head time and the whole replay fails.
+//
+// The other backfill tests miss this because the single-witness fixture
+// keeps solidified=0, so DP never flushes to disk and backfill reads a zero
+// timestamp — a fixture blind spot. Here we persist a real far-head
+// timestamp to model production: block-1's tx expires at ts(3000)+1000=4000
+// and block-2's at 7000, both <= the seeded head 9000, so absent the
+// parent-DP rewind ValidateTxCommon would reject blocks 1 and 2.
+func TestBackfill_FarHeadDoesNotExpireHistoricalTxs(t *testing.T) {
+	bfDB, bfBC := buildAndInsertChain(t, false, defaultBackfillChain)
+	to := uint64(len(defaultBackfillChain))
+
+	const farHeadTS = int64(9000) // == block 3's ts; > blocks 1 & 2 tx expirations
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(farHeadTS))
+	rawdb.WriteDynamicProperty(bfDB, "latest_block_header_timestamp", buf[:])
+
+	if err := bfBC.BackfillHistory(1, to, false, nil); err != nil {
+		t.Fatalf("BackfillHistory under a far disk-head timestamp: %v\n"+
+			"(the parent-DP rewind must keep historical txs valid; without it "+
+			"ValidateTxCommon rejects every tx whose expiration <= head ts)", err)
+	}
+	bfBC.WaitForFlushSettled()
+
+	rows := snapshotHistoryRows(t, bfDB)
+	if len(rows) == 0 {
+		t.Fatal("backfill under far head produced no rows — historical txs were rejected")
 	}
 }

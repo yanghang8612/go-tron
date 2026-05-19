@@ -263,6 +263,25 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 	// disk state without being mutable on disk.
 	dynProps := state.LoadDynamicProperties(scratch)
 
+	// Rewind the DP header fields to the PARENT block (n-1). ProcessBlock
+	// derives prevBlockTime from dynProps.LatestBlockHeaderTimestamp()
+	// (state_processor.go) and feeds it to ValidateTxCommon's expiration
+	// check (expiration <= prevBlockTime → expired). The DP loaded from
+	// disk carries the HEAD timestamp, so without this rewind every
+	// historical tx in block n would be judged expired against a
+	// far-future head time and the replay would fail wholesale. Live
+	// applyBlock(n) sees DP still holding n-1's header (it advances the
+	// header only after processing), so mirror that snapshot here. The
+	// non-header DP fields (proposal/energy params) still reflect HEAD —
+	// that's the documented maintenance/flat-KV caveat, which affects
+	// boundary-crossing parity but does not block replay the way a stale
+	// timestamp does.
+	if parent := bc.GetBlockByNumber(n - 1); parent != nil {
+		dynProps.SetLatestBlockHeaderTimestamp(parent.Timestamp())
+		dynProps.SetLatestBlockHeaderNumber(int64(parent.Number()))
+		dynProps.SetLatestBlockHeaderHash(parent.Hash())
+	}
+
 	// Hydrate witnesses for the reward/standby paths inside ProcessBlock.
 	// Read-only LoadWitness (does not mark dirty) — backfill never flushes
 	// witnesses, so this only feeds the in-block reward computation.
