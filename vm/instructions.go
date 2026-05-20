@@ -419,10 +419,15 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 	if err != nil {
 		return nil, err
 	}
-	end := dataOffset.Uint64() + size
-	if end > uint64(len(interpreter.returnData)) {
+	if !dataOffset.IsUint64() {
 		return nil, ErrReturnDataOutOfBounds
 	}
+	dataStart := dataOffset.Uint64()
+	returnDataSize := uint64(len(interpreter.returnData))
+	if dataStart > returnDataSize || size > returnDataSize-dataStart {
+		return nil, ErrReturnDataOutOfBounds
+	}
+	end := dataStart + size
 	words := toWordSize(size)
 	// java-tron `EnergyCost.getReturnDataCopyCost` charges only memDelta +
 	// copy energy — no per-op base tier. Mirror that exactly.
@@ -431,7 +436,7 @@ func opReturnDataCopy(pc *uint64, interpreter *Interpreter, contract *Contract, 
 		return nil, ErrOutOfEnergy
 	}
 	resizeMemory(memory, off, size)
-	memory.set(off, size, interpreter.returnData[dataOffset.Uint64():end])
+	memory.set(off, size, interpreter.returnData[dataStart:end])
 	return nil, nil
 }
 

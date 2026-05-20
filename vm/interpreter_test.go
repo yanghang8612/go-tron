@@ -162,6 +162,39 @@ func TestInterpreterRevert(t *testing.T) {
 	}
 }
 
+func TestReturnDataCopyRejectsOffsetSizeOverflow(t *testing.T) {
+	evm := newTestEVM(t)
+	evm.interpreter.returnData = []byte{0x01, 0x02, 0x03, 0x04}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100_000)
+	stack := newStack()
+	stack.push(uint256.NewInt(2)) // length
+	var dataOffset uint256.Int
+	dataOffset.SetUint64(^uint64(0))
+	stack.push(&dataOffset)
+	stack.push(uint256.NewInt(0)) // memory offset
+
+	_, err := opReturnDataCopy(nil, evm.interpreter, contract, newMemory(), stack)
+	if !errors.Is(err, ErrReturnDataOutOfBounds) {
+		t.Fatalf("RETURNDATACOPY error: got %v, want %v", err, ErrReturnDataOutOfBounds)
+	}
+}
+
+func TestReturnDataCopyRejectsNonUint64OffsetEvenWithZeroLength(t *testing.T) {
+	evm := newTestEVM(t)
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100_000)
+	stack := newStack()
+	stack.push(uint256.NewInt(0)) // length
+	var dataOffset uint256.Int
+	dataOffset.SetBytes([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	stack.push(&dataOffset)
+	stack.push(uint256.NewInt(0)) // memory offset
+
+	_, err := opReturnDataCopy(nil, evm.interpreter, contract, newMemory(), stack)
+	if !errors.Is(err, ErrReturnDataOutOfBounds) {
+		t.Fatalf("RETURNDATACOPY error: got %v, want %v", err, ErrReturnDataOutOfBounds)
+	}
+}
+
 func TestInterpreterWriteProtection(t *testing.T) {
 	evm := newTestEVM(t)
 
