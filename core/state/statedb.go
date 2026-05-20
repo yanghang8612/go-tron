@@ -1246,6 +1246,19 @@ func (s *StateDB) SetLatestConsumeTimeForEnergy(addr tcommon.Address, t int64) {
 	obj.markDirty()
 }
 
+// SetEnergyWindow sets the per-account energy recovery window (raw field +
+// optimized flag) for an account. Mirrors java-tron's
+// setNewWindowSize / setNewWindowSizeV2 persistence.
+func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized bool) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetEnergyWindow(raw, optimized)
+	obj.markDirty()
+}
+
 // --- Contract support ---
 
 // GetCode returns the contract bytecode at addr.

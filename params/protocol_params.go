@@ -23,6 +23,10 @@ const (
 	BlockVersion = 35 // VERSION_4_8_2, mirrors java-tron ChainConstant.BLOCK_VERSION
 	WindowSizeMs               = 86_400_000
 	WindowSizeSlots            = WindowSizeMs / BlockProducedInterval
+	// WindowSizePrecision scales the per-account resource recovery window when
+	// it is stored in "optimized" (V2) form. Mirrors java-tron
+	// ChainConstant.WINDOW_SIZE_PRECISION.
+	WindowSizePrecision = 1000
 	// MinParticipationRate is the minimum recent block-fill percentage a
 	// witness requires to keep producing. When the rolling
 	// BLOCK_FILLED_SLOTS rate drops below this, witnesses skip their slot

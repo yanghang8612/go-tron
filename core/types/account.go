@@ -2,6 +2,7 @@ package types
 
 import (
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -315,6 +316,72 @@ func (a *Account) LatestConsumeTimeForEnergy() int64 {
 func (a *Account) SetLatestConsumeTimeForEnergy(t int64) {
 	a.ensureAccountResource()
 	a.pb.AccountResource.LatestConsumeTimeForEnergy = t
+}
+
+// Per-account energy recovery window. Mirrors java-tron AccountCapsule's
+// getWindowSize / getWindowSizeV2 / setNewWindowSize / setNewWindowSizeV2 for
+// the ENERGY resource. The raw field is energy_window_size; when
+// energy_window_optimized is set the raw value is stored in V2 units
+// (slots * WindowSizePrecision).
+
+// RawEnergyWindowSize returns the stored field verbatim (0 when never written).
+func (a *Account) RawEnergyWindowSize() int64 {
+	return a.pb.GetAccountResource().GetEnergyWindowSize()
+}
+
+// EnergyWindowOptimized reports whether the window is stored in V2 units.
+func (a *Account) EnergyWindowOptimized() bool {
+	return a.pb.GetAccountResource().GetEnergyWindowOptimized()
+}
+
+// EnergyWindowSize returns the window in slots (java getWindowSize(ENERGY)).
+func (a *Account) EnergyWindowSize() int64 {
+	raw := a.pb.GetAccountResource().GetEnergyWindowSize()
+	if raw == 0 {
+		return params.WindowSizeSlots
+	}
+	if a.pb.GetAccountResource().GetEnergyWindowOptimized() {
+		if raw < params.WindowSizePrecision {
+			return params.WindowSizeSlots
+		}
+		return raw / params.WindowSizePrecision
+	}
+	return raw
+}
+
+// EnergyWindowSizeV2 returns the window in V2 units (java getWindowSizeV2(ENERGY)).
+func (a *Account) EnergyWindowSizeV2() int64 {
+	raw := a.pb.GetAccountResource().GetEnergyWindowSize()
+	if raw == 0 {
+		return params.WindowSizeSlots * params.WindowSizePrecision
+	}
+	if a.pb.GetAccountResource().GetEnergyWindowOptimized() {
+		return raw
+	}
+	return raw * params.WindowSizePrecision
+}
+
+// SetNewEnergyWindowSize sets the raw window (V1 form; leaves the optimized
+// flag untouched). Mirrors setNewWindowSize(ENERGY, v).
+func (a *Account) SetNewEnergyWindowSize(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.EnergyWindowSize = v
+}
+
+// SetNewEnergyWindowSizeV2 sets the raw window and marks it optimized (V2).
+// Mirrors setNewWindowSizeV2(ENERGY, v).
+func (a *Account) SetNewEnergyWindowSizeV2(v int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.EnergyWindowSize = v
+	a.pb.AccountResource.EnergyWindowOptimized = true
+}
+
+// SetEnergyWindow sets the raw window and optimized flag together (used by the
+// StateDB setter to persist a computed window).
+func (a *Account) SetEnergyWindow(raw int64, optimized bool) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.EnergyWindowSize = raw
+	a.pb.AccountResource.EnergyWindowOptimized = optimized
 }
 
 // Allowance (witness rewards) accessors.

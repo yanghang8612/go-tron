@@ -64,7 +64,7 @@ func PayEnergyBill(ctx *Context, result *Result) error {
 		// ReceiptCapsule.java:235 — we already pre-capped originUsage by
 		// origin's available stake in splitOriginCallerUsage, so this
 		// never over-bills.
-		useEnergyForBill(ctx, origin, originUsage)
+		useEnergyForBill(ctx, origin, originUsage, contractSucceeded(result))
 		// Receipt's origin_energy_usage carries the split share so SDKs
 		// see the same TransactionInfo as java-tron.
 		result.OriginEnergyUsage = originUsage
@@ -80,7 +80,7 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 		// All energy was absorbed by origin's stake. java-tron still routes
 		// through EnergyProcessor.useEnergy(caller, 0), refreshing the caller's
 		// recovered usage window and latest operation timestamp.
-		useEnergyForBill(ctx, caller, 0)
+		useEnergyForBill(ctx, caller, 0, contractSucceeded(result))
 		return nil
 	}
 
@@ -102,7 +102,7 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 	// Mark the stake-funded portion against the caller's energy_usage.
 	// Mirrors EnergyProcessor.useEnergy: recovered_usage + stakeUsed,
 	// timestamp updated to `now`.
-	useEnergyForBill(ctx, caller, stakeUsed)
+	useEnergyForBill(ctx, caller, stakeUsed, contractSucceeded(result))
 
 	// proto field 1 (energy_usage) carries the stake-paid amount.
 	result.EnergyUsed = stakeUsed
@@ -150,16 +150,62 @@ func billCallerSide(ctx *Context, result *Result, caller common.Address, usage i
 	return nil
 }
 
-func useEnergyForBill(ctx *Context, addr common.Address, usage int64) {
-	resourceTime := ctx.ResourceTime()
-	recovered := recoverEnergyUsageForDP(
-		ctx.State.GetEnergyUsage(addr),
-		ctx.State.GetLatestConsumeTimeForEnergy(addr),
-		resourceTime,
-		ctx.DynProps,
-	)
-	ctx.State.SetEnergyUsage(addr, recovered+usage)
-	ctx.State.SetLatestConsumeTimeForEnergy(addr, resourceTime)
+// useEnergyForBill settles `usage` energy against addr's stake-funded
+// energy_usage and (in the V2 regime) the per-account recovery window.
+//
+// `success` selects java's settle shape. On a SUCCESSFUL contract result java
+// commits the VMActuator pre-charge and TransactionTrace.resetAccountUsage
+// restores the pre-merge (R, W_R), so EnergyProcessor.useEnergy settles in two
+// steps: recover (decay + window shrink), then add `usage` at lastTime==now. On
+// REVERT/exception/OOE the pre-charge is discarded (VMActuator.java:234-250
+// never commits rootRepository) and resetAccountUsage is skipped, so useEnergy
+// settles single-step over the ORIGINAL usage/time. The two shapes differ by up
+// to one unit of energy_usage and a few of windowSize (java-verified), so the
+// gate is consensus-relevant.
+// contractSucceeded reports whether the VM result is a clean success (no
+// exception, no revert). Mirrors java TransactionTrace's
+// `getException() == null && !isRevert()` gate — only then does java commit the
+// pre-charge and run resetAccountUsage (the two-step settle).
+func contractSucceeded(result *Result) bool {
+	return result != nil && result.ContractRet == int32(corepb.Transaction_Result_SUCCESS)
+}
+
+func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bool) {
+	now := ctx.ResourceTime()
+	dp := ctx.DynProps
+	oldUsage := ctx.State.GetEnergyUsage(addr)
+	oldTime := ctx.State.GetLatestConsumeTimeForEnergy(addr)
+
+	if dp == nil || !dp.SupportUnfreezeDelay() {
+		// Pre-Stake-2.0: global-window recovery, no per-account window. Mirrors
+		// java EnergyProcessor.useEnergy's static-increase branch.
+		recovered := recoverEnergyUsageForDP(oldUsage, oldTime, now, dp)
+		ctx.State.SetEnergyUsage(addr, recovered+usage)
+		ctx.State.SetLatestConsumeTimeForEnergy(addr, now)
+		ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
+		return
+	}
+
+	harden := dp.AllowHardenResourceCalculation()
+	cancelAllV2 := dp.SupportCancelAllUnfreezeV2()
+
+	var rawWindow int64
+	var optimized bool
+	if acct := ctx.State.GetAccount(addr); acct != nil {
+		rawWindow, optimized = acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized()
+	}
+
+	var finalUsage int64
+	if success {
+		r, rw, opt := computeEnergyIncrease(rawWindow, optimized, oldUsage, 0, oldTime, now, harden, cancelAllV2)
+		finalUsage, rawWindow, optimized = computeEnergyIncrease(rw, opt, r, usage, now, now, harden, cancelAllV2)
+	} else {
+		finalUsage, rawWindow, optimized = computeEnergyIncrease(rawWindow, optimized, oldUsage, usage, oldTime, now, harden, cancelAllV2)
+	}
+
+	ctx.State.SetEnergyUsage(addr, finalUsage)
+	ctx.State.SetEnergyWindow(addr, rawWindow, optimized)
+	ctx.State.SetLatestConsumeTimeForEnergy(addr, now)
 	ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
 }
 
@@ -286,11 +332,31 @@ func availableAccountEnergyForBill(s *state.StateDB, dp *state.DynamicProperties
 	if limit <= 0 {
 		return 0
 	}
-	recovered := recoverEnergyUsageForDP(s.GetEnergyUsage(addr), s.GetLatestConsumeTimeForEnergy(addr), now, dp)
+	recovered := recoveredEnergyUsage(s, dp, acct, addr, now)
 	if recovered >= limit {
 		return 0
 	}
 	return limit - recovered
+}
+
+// recoveredEnergyUsage returns the caller's energy_usage decayed to `now`.
+// In the V2 regime it mirrors java EnergyProcessor.getAccountLeftEnergyFromFreeze
+// -> recovery(), which is the scaled increase over the PER-ACCOUNT window;
+// computeEnergyIncrease with usage==0 reproduces it exactly (the recomputed
+// window is discarded — recovery does not persist it). This keeps limit-time
+// recovery consistent with the settle path. Pre-Stake-2.0 keeps the prior
+// global-window behavior.
+func recoveredEnergyUsage(s *state.StateDB, dp *state.DynamicProperties, acct *types.Account, addr common.Address, now int64) int64 {
+	oldUsage := s.GetEnergyUsage(addr)
+	oldTime := s.GetLatestConsumeTimeForEnergy(addr)
+	if dp == nil || !dp.SupportUnfreezeDelay() {
+		return recoverEnergyUsageForDP(oldUsage, oldTime, now, dp)
+	}
+	recovered, _, _ := computeEnergyIncrease(
+		acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized(),
+		oldUsage, 0, oldTime, now,
+		dp.AllowHardenResourceCalculation(), dp.SupportCancelAllUnfreezeV2())
+	return recovered
 }
 
 // calcAccountEnergyLimit mirrors java-tron's
