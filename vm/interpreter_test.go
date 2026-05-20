@@ -82,8 +82,27 @@ func TestInterpreterInvalidJump(t *testing.T) {
 	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
 
 	_, err := evm.interpreter.Run(contract)
-	if err != ErrInvalidJump {
+	if !errors.Is(err, ErrInvalidJump) {
 		t.Fatalf("expected ErrInvalidJump, got %v", err)
+	}
+	if got := err.Error(); got != "Operation with pc isn't 'JUMPDEST': PC[16];" {
+		t.Fatalf("invalid jump message: got %q", got)
+	}
+}
+
+func TestInterpreterStackUnderflowMessageMatchesJava(t *testing.T) {
+	evm := newTestEVM(t)
+
+	code := []byte{byte(POP)}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	_, err := evm.interpreter.Run(contract)
+	if !errors.Is(err, ErrStackUnderflow) {
+		t.Fatalf("expected ErrStackUnderflow, got %v", err)
+	}
+	if got := err.Error(); got != "Expected stack size 1 but actual 0;" {
+		t.Fatalf("stack underflow message: got %q", got)
 	}
 }
 
@@ -115,8 +134,11 @@ func TestInterpreterStackOverflowPrecedesExecution(t *testing.T) {
 			contract.SetCode(tcommon.Address{0x41, 0x02}, code)
 
 			_, err := evm.interpreter.Run(contract)
-			if err != ErrStackOverflow {
+			if !errors.Is(err, ErrStackOverflow) {
 				t.Fatalf("expected ErrStackOverflow, got %v", err)
+			}
+			if got := err.Error(); got != "Expected: overflow 1024 elements stack limit" {
+				t.Fatalf("stack overflow message: got %q", got)
 			}
 			wantEnergy := energyLimit - uint64(stackLimit)*EnergyVeryLow
 			if contract.Energy != wantEnergy {

@@ -27,6 +27,17 @@ var (
 	errPrecompileFailure     = errors.New("precompile returned failure")
 )
 
+type invalidJumpError struct {
+	pc uint64
+}
+
+type stackUnderflowError struct {
+	expected int
+	actual   int
+}
+
+type stackOverflowError struct{}
+
 type outOfMemoryError struct {
 	op OpCode
 }
@@ -54,6 +65,30 @@ func (e outOfEnergyError) Is(target error) bool {
 	return target == ErrOutOfEnergy
 }
 
+func (e invalidJumpError) Error() string {
+	return fmt.Sprintf("Operation with pc isn't 'JUMPDEST': PC[%d];", e.pc)
+}
+
+func (e invalidJumpError) Is(target error) bool {
+	return target == ErrInvalidJump
+}
+
+func (e stackUnderflowError) Error() string {
+	return fmt.Sprintf("Expected stack size %d but actual %d;", e.expected, e.actual)
+}
+
+func (e stackUnderflowError) Is(target error) bool {
+	return target == ErrStackUnderflow
+}
+
+func (e stackOverflowError) Error() string {
+	return "Expected: overflow 1024 elements stack limit"
+}
+
+func (e stackOverflowError) Is(target error) bool {
+	return target == ErrStackOverflow
+}
+
 func (e outOfMemoryError) Error() string {
 	name := opNameForError(e.op)
 	return fmt.Sprintf("Out of Memory when '%s' operation executing", name)
@@ -65,6 +100,18 @@ func (e outOfMemoryError) Is(target error) bool {
 
 func newOutOfMemoryError(op OpCode) error {
 	return outOfMemoryError{op: op}
+}
+
+func newInvalidJumpError(pc uint64) error {
+	return invalidJumpError{pc: pc}
+}
+
+func newStackUnderflowError(expected, actual int) error {
+	return stackUnderflowError{expected: expected, actual: actual}
+}
+
+func newStackOverflowError() error {
+	return stackOverflowError{}
 }
 
 func newOutOfEnergyError(op OpCode, contract *Contract, opEnergy, penaltyEnergy uint64, hasPenalty bool) error {

@@ -91,10 +91,10 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 
 		// Stack validation
 		if stack.len() < operation.minStack {
-			return nil, ErrStackUnderflow
+			return nil, newStackUnderflowError(operation.minStack, stack.len())
 		}
 		if stack.len()-operation.minStack+operationStackReturns(op, operation) > stackLimit {
-			return nil, ErrStackOverflow
+			return nil, newStackOverflowError()
 		}
 
 		// Static mode check

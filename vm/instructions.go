@@ -687,7 +687,7 @@ func opJump(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	pos := stack.pop()
 	dest := pos.Uint64()
 	if !contract.IsValidJumpdest(dest) {
-		return nil, ErrInvalidJump
+		return nil, newInvalidJumpError(dest)
 	}
 	*pc = dest - 1
 	return nil, nil
@@ -698,7 +698,7 @@ func opJumpi(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 	if !cond.IsZero() {
 		dest := pos.Uint64()
 		if !contract.IsValidJumpdest(dest) {
-			return nil, ErrInvalidJump
+			return nil, newInvalidJumpError(dest)
 		}
 		*pc = dest - 1
 	}
