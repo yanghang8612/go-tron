@@ -59,6 +59,10 @@ type Context struct {
 	HasEnergyLimitForkBlockNum bool
 	DB                         BufferedKVStore  // rawdb access for governance/brokerage; buffer-aware on InsertBlock
 	ActiveWitnesses            []common.Address // active witness set for governance checks
+	// TrustTransactionRet is true only when replaying a signed block. Pending
+	// transactions carry unsigned Ret data, so producers and txpool validation
+	// must ignore it.
+	TrustTransactionRet bool
 }
 
 func (ctx *Context) ResourceTime() int64 {

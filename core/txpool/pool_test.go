@@ -97,6 +97,25 @@ func TestTxPool_RejectsExchangeTransaction(t *testing.T) {
 	}
 }
 
+func TestTxPool_AddStripsRet(t *testing.T) {
+	pool := New()
+	tx := makeTx(1, 100)
+	tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_OUT_OF_TIME,
+	}}
+	hash := tx.Hash()
+
+	if err := pool.Add(tx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(tx.Proto().Ret); got != 0 {
+		t.Fatalf("ret count after Add: got %d, want 0", got)
+	}
+	if got := tx.Hash(); got != hash {
+		t.Fatalf("hash changed after stripping ret: got %x want %x", got, hash)
+	}
+}
+
 func TestTxPool_Remove(t *testing.T) {
 	pool := New()
 	tx := makeTx(1, 100)

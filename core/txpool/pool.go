@@ -46,6 +46,9 @@ func (pool *TxPool) Add(tx *types.Transaction) error {
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract {
 		return ErrExchangeRejected
 	}
+	if tx.Proto() != nil {
+		tx.Proto().Ret = nil
+	}
 
 	hash := tx.Hash()
 

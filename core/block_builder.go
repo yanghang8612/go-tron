@@ -105,7 +105,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 			failedTxIDs = append(failedTxIDs, h)
 			continue // skip failing transactions
 		}
-		appliedTxProtos = append(appliedTxProtos, tx.Proto())
+		txPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
+		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
+		appliedTxProtos = append(appliedTxProtos, txPB)
 		accumulateBlockEnergyUsage(dynProps, buildBuf, prevBlockTime, result)
 	}
 

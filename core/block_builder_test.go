@@ -13,6 +13,8 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestBuildBlock_EmptyPool(t *testing.T) {
@@ -121,6 +123,78 @@ func TestBuildBlock_WithTransactions(t *testing.T) {
 
 	if len(result.Block.Transactions()) != 1 {
 		t.Fatalf("expected 1 transaction, got %d", len(result.Block.Transactions()))
+	}
+}
+
+func TestBuildBlock_IgnoresPendingTransactionRet(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	owner := testProcessorAddr(1)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: owner, Balance: 100_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"allow_creation_of_contracts": 1,
+		},
+	}
+	SetupGenesisBlock(diskdb, genesis)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	csc := &contractpb.CreateSmartContract{
+		OwnerAddress: owner.Bytes(),
+		NewContract: &contractpb.SmartContract{
+			OriginAddress: owner.Bytes(),
+			Name:          "RetProbe",
+			Bytecode:      []byte{0x60, 0x00, 0x60, 0x00, 0xf3},
+		},
+	}
+	param, err := anypb.New(csc)
+	if err != nil {
+		t.Fatalf("anypb.New: %v", err)
+	}
+	tx := types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			FeeLimit:   10_000_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_CreateSmartContract,
+				Parameter: param,
+			}},
+		},
+	})
+
+	pool := txpool.New()
+	if err := pool.Add(tx); err != nil {
+		t.Fatalf("pool.Add: %v", err)
+	}
+	tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_OUT_OF_TIME,
+	}}
+
+	result, err := BuildBlock(bc, pool, testProcessorAddr(0xFF), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txs := result.Block.Transactions()
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(txs))
+	}
+	ret := txs[0].Proto().GetRet()
+	if len(ret) != 1 {
+		t.Fatalf("ret count: got %d, want 1", len(ret))
+	}
+	if got := ret[0].GetContractRet(); got != corepb.Transaction_Result_SUCCESS {
+		t.Fatalf("contractRet: got %s, want SUCCESS", got)
+	}
+	if got := txs[0].Proto().GetRet()[0].GetRet(); got != corepb.Transaction_Result_SUCESS {
+		t.Fatalf("ret code: got %s, want SUCESS", got)
 	}
 }
 

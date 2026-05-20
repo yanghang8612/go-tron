@@ -473,6 +473,7 @@ func TestVMActuatorTriggerReplayOutOfTime(t *testing.T) {
 	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
 		ContractRet: corepb.Transaction_Result_OUT_OF_TIME,
 	}}
+	ctx.TrustTransactionRet = true
 	enableVM(ctx)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 100_000_000)

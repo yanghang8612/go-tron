@@ -43,20 +43,20 @@ var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
 func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, validate, validateEnvelope)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, validate, validateEnvelope, false)
 }
 
 // ApplyTransactionWithResourceSlot executes a transaction with java-tron's
 // resource-window time (`head slot`) separated from millisecond timestamps.
 func ApplyTransactionWithResourceSlot(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, validate, validateEnvelope)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, validate, validateEnvelope, false)
 }
 
 func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, validate, validateEnvelope)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, validate, validateEnvelope, false)
 }
 
-func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, validate, validateEnvelope bool) (*actuator.Result, error) {
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, validate, validateEnvelope bool, trustTransactionRet bool) (*actuator.Result, error) {
 	if err := ValidateContractCount(tx); err != nil {
 		return nil, err
 	}
@@ -94,6 +94,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		HasEnergyLimitForkBlockNum: true,
 		DB:                         db,
 		ActiveWitnesses:            activeWitnesses,
+		TrustTransactionRet:        trustTransactionRet,
 	}
 
 	if validateEnvelope {
@@ -280,6 +281,50 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 	return info
 }
 
+func buildTransactionResult(result *actuator.Result) *corepb.Transaction_Result {
+	ret := &corepb.Transaction_Result{
+		Ret:         corepb.Transaction_Result_SUCESS,
+		ContractRet: corepb.Transaction_ResultContractResult(result.ContractRet),
+	}
+	if result.AssetIssueID != "" {
+		ret.AssetIssueID = result.AssetIssueID
+	}
+	if result.WithdrawAmount != 0 {
+		ret.WithdrawAmount = result.WithdrawAmount
+	}
+	if result.UnfreezeAmount != 0 {
+		ret.UnfreezeAmount = result.UnfreezeAmount
+	}
+	if result.WithdrawExpireAmount != 0 {
+		ret.WithdrawExpireAmount = result.WithdrawExpireAmount
+	}
+	if len(result.CancelUnfreezeV2Amount) > 0 {
+		ret.CancelUnfreezeV2Amount = result.CancelUnfreezeV2Amount
+	}
+	if result.ExchangeReceivedAmount != 0 {
+		ret.ExchangeReceivedAmount = result.ExchangeReceivedAmount
+	}
+	if result.ExchangeInjectAnotherAmount != 0 {
+		ret.ExchangeInjectAnotherAmount = result.ExchangeInjectAnotherAmount
+	}
+	if result.ExchangeWithdrawAnotherAmount != 0 {
+		ret.ExchangeWithdrawAnotherAmount = result.ExchangeWithdrawAnotherAmount
+	}
+	if result.ShieldedTransactionFee != 0 {
+		ret.ShieldedTransactionFee = result.ShieldedTransactionFee
+	}
+	if result.ExchangeID != 0 {
+		ret.ExchangeId = result.ExchangeID
+	}
+	if len(result.OrderID) > 0 {
+		ret.OrderId = result.OrderID
+	}
+	if len(result.OrderDetails) > 0 {
+		ret.OrderDetails = result.OrderDetails
+	}
+	return ret
+}
+
 func isVMContractType(contractType corepb.Transaction_Contract_ContractType) bool {
 	return contractType == corepb.Transaction_Contract_CreateSmartContract ||
 		contractType == corepb.Transaction_Contract_TriggerSmartContract
@@ -362,7 +407,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
-		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, true, validateEnvelope)
+		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, true, validateEnvelope, true)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}

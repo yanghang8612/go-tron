@@ -197,7 +197,7 @@ func runtimeMessageFromError(err error) []byte {
 }
 
 func expectedContractRet(ctx *Context) (corepb.Transaction_ResultContractResult, bool) {
-	if ctx == nil || ctx.Tx == nil || ctx.Tx.Proto() == nil || len(ctx.Tx.Proto().Ret) == 0 {
+	if ctx == nil || !ctx.TrustTransactionRet || ctx.Tx == nil || ctx.Tx.Proto() == nil || len(ctx.Tx.Proto().Ret) == 0 {
 		return corepb.Transaction_Result_DEFAULT, false
 	}
 	return ctx.Tx.Proto().Ret[0].GetContractRet(), true
