@@ -1221,19 +1221,34 @@ def diff(a, b, path=""):
     return []
 
 started = dt.datetime.now(dt.timezone.utc).isoformat()
-java_head = head(java_port)
+java_snapshot_head = head(java_port)
 gtron_head = head(gtron_port)
-compare_head = min(java_head, gtron_head)
+
+catchup_started = time.time()
+catchup_deadline = catchup_started + 180
+while gtron_head < java_snapshot_head and time.time() < catchup_deadline:
+    time.sleep(3)
+    gtron_head = head(gtron_port)
+
+catchup_wait_seconds = int(time.time() - catchup_started)
+java_current_head = head(java_port)
+compare_head = min(java_snapshot_head, gtron_head)
 
 summary = {
     "started_at": started,
-    "java_head": java_head,
+    "java_head": java_snapshot_head,
+    "java_current_head": java_current_head,
     "gtron_head": gtron_head,
+    "catchup_wait_seconds": catchup_wait_seconds,
     "compared_head": compare_head,
+    "head_lag_blocks": max(0, java_snapshot_head - gtron_head),
     "compared_blocks": 0,
     "java_transactions": 0,
+    "java_tail_blocks": 0,
+    "java_tail_transactions": 0,
     "compared_tx_infos": 0,
     "missing_tx_infos": 0,
+    "missing_tail_tx_infos": 0,
     "mismatched_tx_infos": 0,
     "block_id_mismatches": 0,
     "block_tx_mismatches": 0,
@@ -1322,13 +1337,55 @@ with mismatch_path.open("w") as mismatches:
                     "diffs": nd,
                 }, ensure_ascii=False, sort_keys=True) + "\n")
 
+    for num in range(compare_head + 1, java_snapshot_head + 1):
+        jb = block_by_num(java_port, num)
+        jtxs = jb.get("transactions") or []
+        summary["java_tail_blocks"] += 1
+        summary["java_tail_transactions"] += len(jtxs)
+        summary["java_transactions"] += len(jtxs)
+
+        j_block_id = jb.get("blockID") or ""
+        mismatches.write(json.dumps({
+            "block": num,
+            "kind": "missing_gtron_tail_block",
+            "java": j_block_id,
+            "gtron_head": gtron_head,
+            "java_transactions": len(jtxs),
+        }, sort_keys=True) + "\n")
+
+        for idx, jtx in enumerate(jtxs):
+            txid = jtx.get("txID") or ""
+            if not txid:
+                continue
+            ji = tx_info(java_port, txid)
+            contract = (jtx.get("raw_data", {}).get("contract") or [{}])[0]
+            value = (contract.get("parameter") or {}).get("value") or {}
+            summary["missing_tx_infos"] += 1
+            summary["missing_tail_tx_infos"] += 1
+            mismatches.write(json.dumps({
+                "block": num,
+                "tx_index": idx,
+                "txid": txid,
+                "contract_type": contract.get("type"),
+                "contract_address": value.get("contract_address"),
+                "owner_address": value.get("owner_address"),
+                "data_selector": (value.get("data") or "")[:8],
+                "kind": "missing_gtron_tail_receipt",
+                "gtron_head": gtron_head,
+                "java_present": bool(ji),
+                "gtron_present": False,
+                "java_receipt": norm_receipt(ji) if ji else {},
+                "java_result": (ji.get("result") or "SUCESS") if ji else "",
+            }, ensure_ascii=False, sort_keys=True) + "\n")
+
 summary["diff_paths"] = dict(path_counts.most_common())
 summary["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
 summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 print(json.dumps(summary, indent=2, sort_keys=True))
 if (
-    summary["missing_tx_infos"]
+    summary["head_lag_blocks"]
+    or summary["missing_tx_infos"]
     or summary["mismatched_tx_infos"]
     or summary["block_id_mismatches"]
     or summary["block_tx_mismatches"]
