@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/txpool"
+	"github.com/tronprotocol/go-tron/core/types"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
@@ -97,6 +99,42 @@ func TestFetchTimeoutAbortsSyncState(t *testing.T) {
 
 	if ss.IsSyncing() {
 		t.Fatal("expected sync to be aborted after fetch timeout")
+	}
+}
+
+func TestFetchTimeoutWithStalledRetriesRestartsSession(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	c1, c2 := gnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	stale := p2p.NewPeer(c1, "stale-peer", false, nil)
+
+	d1, d2 := gnet.Pipe()
+	defer d1.Close()
+	defer d2.Close()
+	remaining := p2p.NewPeer(d1, "done-peer", false, nil)
+
+	missing := types.BlockID{Hash: tcommon.Hash{0xaa, 0xbb}, Num: 50}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	staleState, _ := ss.addPeerStateLocked(stale)
+	remainingState, _ := ss.addPeerStateLocked(remaining)
+	staleState.inflight = 1
+	staleState.fetchSeq = 7
+	staleState.pending = map[tcommon.Hash]uint64{missing.Hash: missing.Num}
+	staleState.pendingIDs = map[tcommon.Hash]types.BlockID{missing.Hash: missing}
+	staleState.requestedHashes[missing.Hash] = struct{}{}
+	ss.requested[missing.Hash] = stale.ID()
+	remainingState.done = true
+	ss.mu.Unlock()
+
+	ss.onFetchTimeout(7, stale.ID())
+
+	if ss.IsSyncing() {
+		t.Fatal("stalled retry list should reset the sync session instead of leaving syncing=true")
 	}
 }
 

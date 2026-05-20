@@ -581,11 +581,21 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	log.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
-	complete := ss.shouldFinishLocked()
-	ss.mirrorLegacyLocked()
+	restart := len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
+	complete := false
+	if restart {
+		ss.doReset()
+	} else {
+		complete = ss.shouldFinishLocked()
+		ss.mirrorLegacyLocked()
+	}
 	ss.mu.Unlock()
 
 	ss.sendOutboundRequests(out)
+	if restart {
+		ss.tryFindSyncPeer(nil)
+		return
+	}
 	if complete {
 		ss.finishSync()
 	}
@@ -1023,6 +1033,21 @@ func (ss *SyncService) shouldFinishLocked() bool {
 	return ss.targetHeadNum == 0 || ss.chain.CurrentBlock().Number() >= ss.targetHeadNum
 }
 
+func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
+	if !ss.syncing || ss.pause.Paused() || len(ss.retryList) == 0 || len(ss.blockBuffer) != 0 {
+		return false
+	}
+	for _, ps := range ss.peers {
+		if ps == nil {
+			continue
+		}
+		if ps.chainRequested || ps.inflight != 0 || len(ps.fetchList) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
 	diag := syncDiagnostics{
 		blockBufferLen: len(ss.blockBuffer),
@@ -1172,11 +1197,18 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	inflight := ps.inflight
 	ss.removePeerStateLocked(peerID, true)
 	var out []outboundSyncRequest
+	restart := false
 	if len(ss.peers) == 0 {
 		ss.doReset()
+		restart = true
 	} else {
 		out = ss.fillFetchSlotsLocked(time.Now())
-		ss.mirrorLegacyLocked()
+		restart = len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
+		if restart {
+			ss.doReset()
+		} else {
+			ss.mirrorLegacyLocked()
+		}
 	}
 	ss.mu.Unlock()
 	log.Warn("Fetch timeout, failing over",
@@ -1187,7 +1219,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		ss.sendOutboundRequests(out)
 		return
 	}
-	if !ss.IsSyncing() {
+	if restart || !ss.IsSyncing() {
 		ss.tryFindSyncPeer(stalePeer)
 	}
 }
@@ -1213,19 +1245,26 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 	}
 	ss.removePeerStateLocked(peer.ID(), true)
 	var out []outboundSyncRequest
+	restart := false
 	empty := len(ss.peers) == 0
 	if empty {
 		ss.doReset()
+		restart = true
 	} else {
 		out = ss.fillFetchSlotsLocked(time.Now())
-		ss.mirrorLegacyLocked()
+		restart = len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
+		if restart {
+			ss.doReset()
+		} else {
+			ss.mirrorLegacyLocked()
+		}
 	}
 	ss.mu.Unlock()
 	log.Warn("Sync peer disconnected", "peer", peer.ID())
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)
 	}
-	if empty {
+	if restart || empty {
 		ss.tryFindSyncPeer(peer)
 	}
 }
