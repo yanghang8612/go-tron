@@ -151,6 +151,14 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 // that height, preserving the existing handler contract (which renders that
 // as an empty `{}` body).
 func (b *TronBackend) GetAccountAt(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
+	// Reject blocks past head up front. A future block has no committed state
+	// root, so it would fall into the history-reader branch below — where
+	// requireArchive and the reader both treat blockNum >= headNum as "serve
+	// live" and would silently return the head account for a block that does
+	// not exist yet. Pre-slice-7 this errored; preserve that contract.
+	if head := b.chain.CurrentBlock(); head != nil && blockNum > head.Number() {
+		return nil, fmt.Errorf("block %d is beyond current head %d", blockNum, head.Number())
+	}
 	root := b.chain.StateRootAtBlock(blockNum)
 	if root == (tcommon.Hash{}) {
 		// State root pruned (or never written). Reconstruct via history if
@@ -1194,14 +1202,24 @@ var ErrArchiveHistoryDisabled = fmt.Errorf("archive history not available: node 
 //     applied but not yet flushed to disk (head can lead the flushed/
 //     solidified boundary by ~19 blocks on mainnet DPoS), matching the
 //     fork-rewind-safe reader the slice-4 tests exercise.
-//   - live = StateDB opened at HeadStateRoot — the MPT account view at the
-//     current head, the same baseline the live GetBalance/GetCode reads use.
+//   - live = StateDB opened at the head's committed state root — the MPT
+//     account view the reader rolls deltas back from, the same baseline the
+//     live GetBalance/GetCode reads use.
+//
+// headNum and the live root are tied to a single head number rather than
+// read independently. Calling CurrentBlock().Number() and HeadStateRoot()
+// separately lets a concurrent InsertBlock advance the head between the two
+// loads, pairing headNum=N with the root of block N+1; because the reader
+// only rolls deltas back to headNum, that newer base would leave block
+// N+1's writes un-rolled-back and corrupt an older-block answer.
+// StateRootAtBlock(headNum) resolves the root for that exact number, so the
+// baseline and the threshold can no longer skew.
 //
 // The caller is responsible for the HistoryEnabled gate (see
 // requireArchive); this helper only assembles the reader.
 func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, error) {
 	headNum := b.chain.CurrentBlock().Number()
-	root := b.chain.HeadStateRoot()
+	root := b.chain.StateRootAtBlock(headNum)
 	live, err := state.New(root, b.chain.StateDB())
 	if err != nil {
 		return nil, 0, fmt.Errorf("open head state: %w", err)

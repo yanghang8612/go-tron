@@ -158,13 +158,15 @@ var (
 //
 // Buffer awareness:
 //
-//	The reader takes an ethdb.KeyValueReader. For archive queries the chain
-//	should hand it `bc.db` (the disk store). Mid-apply / mid-fork reads via
-//	bc.buffer are out of scope here — slice 4 deals with that interaction.
-//
-// TODO(slice-4): buffer-tip reads — when blockNum is within the unflushed
-// bc.buffer layers, reads must consult the buffer above disk. See plan
-// docs/superpowers/plans/2026-05-19-state-history-index.md Slice 4.
+//	The reader takes an ethdb.KeyValueReader that should be the chain's
+//	buffer-aware view (bc.buffer), NOT the bare disk store. sh-* delta rows
+//	for recent (unflushed) blocks live only in the in-memory buffer layers
+//	until they flush past the solidified line; the buffer's NewIterator
+//	merges those layers over disk and masks tombstones, so a buffer-backed
+//	reader sees the logically-complete row set and transparently falls
+//	through to disk for flushed rows. The production archive-query path
+//	(core.TronBackend.historyReaderAt) wires bc.buffer for exactly this
+//	reason. Passing the bare disk store would miss recent history.
 //
 // The headNum parameter is the chain's current head as of reader
 // construction. When blockNum >= headNum the reader short-circuits to a
