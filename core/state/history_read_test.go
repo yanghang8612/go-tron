@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // historyFixture spins up an in-memory disk store and a StateDB that
@@ -224,6 +226,48 @@ func TestPersistentHistoryReader_NeverModified(t *testing.T) {
 		if got := acc.Balance(); got != 99 {
 			t.Errorf("AccountAt(never, %d).Balance() = %d, want 99", n, got)
 		}
+	}
+}
+
+func TestPersistentHistoryReader_MissingSlotDeltaErrors(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x40)
+	slot := tcommon.Hash{0x01, 0x02, 0x03}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.GetOrCreateAccount(contract)
+		s.SetState(contract, slot, tcommon.Hash{0x01})
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SetState(contract, slot, tcommon.Hash{0x02})
+	})
+	if err := rawdb.DeleteSlotDelta(f.disk, 2, contract, slot); err != nil {
+		t.Fatalf("DeleteSlotDelta: %v", err)
+	}
+
+	_, err := f.reader().StorageAt(contract, slot, 1)
+	if !errors.Is(err, ErrHistoryDeltaMissing) {
+		t.Fatalf("StorageAt missing forward slot delta error = %v, want %v", err, ErrHistoryDeltaMissing)
+	}
+}
+
+func TestPersistentHistoryReader_MissingAccountDeltaErrors(t *testing.T) {
+	f := newHistoryFixture(t)
+	acct := testAddr(0x41)
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(acct, 1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(acct, 1)
+	})
+	if err := rawdb.DeleteAccountDelta(f.disk, 2, acct); err != nil {
+		t.Fatalf("DeleteAccountDelta: %v", err)
+	}
+
+	_, err := f.reader().AccountAt(acct, 1)
+	if !errors.Is(err, ErrHistoryDeltaMissing) {
+		t.Fatalf("AccountAt missing forward account delta error = %v, want %v", err, ErrHistoryDeltaMissing)
 	}
 }
 

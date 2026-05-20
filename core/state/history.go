@@ -1,6 +1,9 @@
 package state
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -8,6 +11,12 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
+
+var ErrHistoryDeltaMissing = errors.New("history inverse index references missing forward delta")
+
+func missingHistoryDelta(kind string, blockNum uint64) error {
+	return fmt.Errorf("%w: kind=%s block=%d", ErrHistoryDeltaMissing, kind, blockNum)
+}
 
 // HistoryReader is the read-side API for archive-mode state history queries.
 // It returns the state of an account / storage slot / contract code as it
@@ -320,12 +329,7 @@ func (r *PersistentHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.H
 	for i := len(futures) - 1; i >= 0; i-- {
 		preVal, found := rawdb.ReadSlotDelta(r.db, futures[i], addr, slot)
 		if !found {
-			// Inverse-index says the slot was modified at futures[i] but
-			// the forward delta is missing. That's an internal
-			// inconsistency we don't try to paper over — leave the
-			// candidate as-is and surface a corrupted-state read at
-			// higher layers if it ever matters in practice.
-			continue
+			return tcommon.Hash{}, missingHistoryDelta("slot", futures[i])
 		}
 		candidate = preVal
 	}
@@ -377,8 +381,7 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 	for i := len(futures) - 1; i >= 0; i-- {
 		delta := rawdb.ReadAccountDelta(r.db, futures[i], addr)
 		if delta == nil {
-			// Same inverse-index/delta inconsistency story as StorageAt.
-			continue
+			return accountCacheEntry{}, missingHistoryDelta("account", futures[i])
 		}
 		if !delta.ExistedPre {
 			// Account didn't exist pre-block M. Code likewise gone.
