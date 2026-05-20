@@ -150,6 +150,7 @@ type BlockChain struct {
 	flushQueue    chan uint64
 	flushPending  *flushBarrier
 	flushWorkerWg sync.WaitGroup
+	flushClosed   bool
 	flushErr      atomic.Pointer[error]
 
 	blockHookMu sync.Mutex
@@ -1066,6 +1067,13 @@ func (bc *BlockChain) postFlush(solidified int64) error {
 	}
 	cutoff := uint64(solidified)
 	bc.flushPending.post()
+	if bc.flushClosed || bc.flushQueue == nil {
+		bc.runFlushCutoff(cutoff)
+		if errPtr := bc.flushErr.Load(); errPtr != nil {
+			return *errPtr
+		}
+		return nil
+	}
 	select {
 	case bc.flushQueue <- cutoff:
 		return nil
@@ -1128,6 +1136,7 @@ func (bc *BlockChain) Close() error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	bc.WaitForFlushSettled()
+	bc.stopFlushWorkerLocked()
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("close: async buffer flush failed: %w", *errPtr)
 	}
@@ -1141,6 +1150,17 @@ func (bc *BlockChain) Close() error {
 	// straight through to disk.
 	bc.buffer.Discard()
 	return nil
+}
+
+// stopFlushWorkerLocked closes the async worker channel and joins the worker.
+// Callers must hold chainmu and must have waited for pending flushes first, so
+// no producer can be racing a send into the channel.
+func (bc *BlockChain) stopFlushWorkerLocked() {
+	if bc.flushQueue != nil && !bc.flushClosed {
+		close(bc.flushQueue)
+		bc.flushClosed = true
+	}
+	bc.flushWorkerWg.Wait()
 }
 
 // switchFork rewinds the canonical chain to the LCA of newHead and the current

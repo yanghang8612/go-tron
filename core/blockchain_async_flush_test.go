@@ -130,6 +130,30 @@ func TestAsyncFlush_CloseDrainsPending(t *testing.T) {
 	}
 }
 
+func TestAsyncFlush_CloseStopsWorker(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	bc, _ := newAsyncFlushChain(t, witnessAddr)
+
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !bc.flushClosed {
+		t.Fatal("Close did not mark flush worker closed")
+	}
+	select {
+	case _, ok := <-bc.flushQueue:
+		if ok {
+			t.Fatal("flushQueue yielded a value after Close")
+		}
+	default:
+		t.Fatal("flushQueue is still open after Close")
+	}
+
+	if err := bc.Close(); err != nil {
+		t.Fatalf("second Close should be idempotent: %v", err)
+	}
+}
+
 // TestAsyncFlush_InlineFallbackOnQueueFull pins the backpressure
 // guarantee: when the channel buffer is full, postFlush takes the
 // synchronous path so a flush is never lost.
