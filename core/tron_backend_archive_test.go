@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
+	historypb "github.com/tronprotocol/go-tron/proto/core/historystate"
 )
 
 // Slice 7 of the State History Index: archive-query RPC surface.
@@ -234,6 +235,52 @@ func TestArchiveQuery_GetAccountAtPrunedRootNoHistory(t *testing.T) {
 	rawdb.DeleteBlockStateRoot(bc.db, b2.Hash())
 	if _, err := b.GetAccountAt(testInsertAddr(2), 2); !errors.Is(err, ErrArchiveHistoryDisabled) {
 		t.Errorf("GetAccountAt with pruned root + history disabled: err = %v, want ErrArchiveHistoryDisabled", err)
+	}
+}
+
+func TestArchiveQuery_PruneFloorRejectsUnavailableHistory(t *testing.T) {
+	b, witness, recipient := archiveBackend(t)
+	bc := b.chain
+
+	const numBlocks = 6
+	parent := bc.genesisBlock.Hash()
+	var block2 *types.Block
+	for n := int64(1); n <= numBlocks; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		if n == 2 {
+			block2 = blk
+		}
+	}
+
+	if err := rawdb.PruneHistoryBlockRange(bc.db, 1, 3); err != nil {
+		t.Fatalf("PruneHistoryBlockRange: %v", err)
+	}
+	if err := rawdb.WriteHistoryConfig(bc.db, &historypb.HistoryConfig{
+		Mode:       0,
+		FirstBlock: 4,
+		LastBlock:  numBlocks,
+		SchemaVer:  rawdb.HistorySchemaVersion,
+	}); err != nil {
+		t.Fatalf("WriteHistoryConfig: %v", err)
+	}
+	rawdb.DeleteBlockStateRoot(bc.db, block2.Hash())
+
+	if _, err := b.GetBalanceAt(recipient, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
+		t.Fatalf("GetBalanceAt below prune floor: err = %v, want ErrArchiveHistoryPruned", err)
+	}
+	if _, err := b.GetCodeAt(recipient, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
+		t.Fatalf("GetCodeAt below prune floor: err = %v, want ErrArchiveHistoryPruned", err)
+	}
+	var slot tcommon.Hash
+	if _, err := b.GetStorageAtBlock(recipient, slot, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
+		t.Fatalf("GetStorageAtBlock below prune floor: err = %v, want ErrArchiveHistoryPruned", err)
+	}
+	if _, err := b.GetAccountAt(recipient, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
+		t.Fatalf("GetAccountAt below prune floor with pruned root: err = %v, want ErrArchiveHistoryPruned", err)
 	}
 }
 

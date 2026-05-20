@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1193,6 +1194,13 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 // live state and never hit this path.
 var ErrArchiveHistoryDisabled = fmt.Errorf("archive history not available: node not running with --history.enabled")
 
+// ErrArchiveHistoryPruned is returned when a historical query asks for a block
+// below the local State History Index retention floor. In full mode the pruner
+// deletes sh-* rows below HistoryConfig.FirstBlock, so reconstructing those
+// heights would silently skip required rollback deltas and return an
+// unverifiable state.
+var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested block")
+
 // historyReaderAt builds a single-use PersistentHistoryReader for one
 // archive query and reports the chain head number it was constructed
 // against. The reader walks history rows newest-first from head down to the
@@ -1237,6 +1245,17 @@ func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
 	}
 	if !b.chain.Config().HistoryEnabled {
 		return ErrArchiveHistoryDisabled
+	}
+	cfg, err := rawdb.ReadHistoryConfig(b.chain.buffer)
+	if err == nil {
+		if cfg.FirstBlock > 0 && blockNum < cfg.FirstBlock {
+			return fmt.Errorf("%w: requested=%d first_available=%d",
+				ErrArchiveHistoryPruned, blockNum, cfg.FirstBlock)
+		}
+		return nil
+	}
+	if !errors.Is(err, rawdb.ErrHistoryConfigAbsent) {
+		return fmt.Errorf("read history config: %w", err)
 	}
 	return nil
 }
