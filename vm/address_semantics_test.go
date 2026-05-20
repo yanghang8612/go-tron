@@ -176,6 +176,43 @@ func TestCreate2CollisionConsumesChildEnergyAndReturnsZero(t *testing.T) {
 	}
 }
 
+func TestCreate2CanRecreateSelfDestructedContractAfterTransactionBoundary(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	caller := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
+	code := []byte{byte(PUSH1), 0x00, byte(PUSH1), 0x00, byte(RETURN)}
+	var salt [32]byte
+	salt[30], salt[31] = 0x12, 0x32
+
+	_, addr, _, err := tvm.Create2(caller, code, 1_000_000, 0, salt)
+	if err != nil {
+		t.Fatalf("initial Create2: %v", err)
+	}
+	sdb.FinalizeTransaction()
+
+	sdb.SelfDestruct(addr)
+	sdb.FinalizeTransaction()
+	if sdb.AccountExists(addr) {
+		t.Fatal("selfdestructed contract should be absent after transaction boundary")
+	}
+
+	_, recreated, remaining, err := tvm.Create2(caller, code, 1_000_000, 0, salt)
+	if err != nil {
+		t.Fatalf("recreate after selfdestruct: %v", err)
+	}
+	if recreated != addr {
+		t.Fatalf("recreated address: got %s want %s", recreated.Hex(), addr.Hex())
+	}
+	if remaining == 0 {
+		t.Fatal("recreate should not consume all energy as a collision")
+	}
+	if !sdb.AccountExists(addr) {
+		t.Fatal("recreated contract should exist")
+	}
+	if sdb.HasSelfDestructed(addr) {
+		t.Fatal("recreated contract should clear the selfdestruct marker")
+	}
+}
+
 func TestCreate2StoresInternalContractMetadata(t *testing.T) {
 	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
 	rootTxID := tcommon.HexToHash("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")

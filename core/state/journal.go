@@ -13,8 +13,11 @@ type journalChange interface {
 
 // accountChange records the previous account state for revert.
 type accountChange struct {
-	address tcommon.Address
-	prev    []byte // serialized Account protobuf before mutation, nil if account didn't exist
+	address          tcommon.Address
+	prev             []byte // serialized Account protobuf before mutation, nil if account didn't exist
+	prevDeleted      bool
+	prevCreated      bool
+	prevSelfDestruct bool
 }
 
 func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
@@ -33,8 +36,9 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 			obj.account = acc
 		}
 		obj.dirty = true
-		obj.deleted = false
-		obj.created = false
+		obj.deleted = e.prevDeleted
+		obj.created = e.prevCreated
+		obj.selfDestructed = e.prevSelfDestruct
 	}
 }
 

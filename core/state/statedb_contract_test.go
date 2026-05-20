@@ -164,6 +164,55 @@ func TestStateDBSelfDestructDeletesAccountAtCommit(t *testing.T) {
 	}
 }
 
+func TestStateDBFinalizeTransactionDeletesSelfDestructForNextTx(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x44}
+	code := []byte{0x60, 0x00, 0x60, 0x00, 0xf3}
+	meta := &contractpb.SmartContract{
+		OriginAddress:   addr.Bytes(),
+		ContractAddress: addr.Bytes(),
+		Name:            "finalize-selfdestruct",
+	}
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, code)
+	sdb.SetContract(addr, meta)
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	sdb.SelfDestruct(addr)
+	sdb.FinalizeTransaction()
+	if sdb.AccountExists(addr) {
+		t.Fatal("selfdestructed account should be absent after transaction boundary")
+	}
+	if got := sdb.GetCodeSize(addr); got != 0 {
+		t.Fatalf("code should be hidden after transaction boundary: got size %d", got)
+	}
+	if sdb.GetContract(addr) != nil {
+		t.Fatal("contract metadata should be hidden after transaction boundary")
+	}
+
+	snap := sdb.Snapshot()
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, []byte{0x00})
+	sdb.RevertToSnapshot(snap)
+	if sdb.AccountExists(addr) {
+		t.Fatal("reverting a later recreate should restore the pending delete")
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if sdb.AccountExists(addr) {
+		t.Fatal("pending delete should survive commit after later recreate revert")
+	}
+}
+
 func TestDeleteAccountClearsPersistedContractCodeOnRecreate(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)

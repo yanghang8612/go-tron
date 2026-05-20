@@ -103,11 +103,10 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	if obj != nil && !obj.deleted {
 		return obj
 	}
-	// Journal a nil-prev entry so revert can delete this new account.
-	s.journal.append(accountChange{
-		address: addr,
-		prev:    nil,
-	})
+	// Journal the pre-create shape so revert can restore either a truly
+	// missing account or a pending-delete object from an earlier tx in the
+	// same block.
+	s.journalAccount(addr, obj)
 	obj = newEmptyStateObject(addr)
 	// Recreating an address after SELFDESTRUCT must not resurrect stale code
 	// or contract metadata from rawdb. java-tron deletes CodeStore and
@@ -709,6 +708,9 @@ func (s *StateDB) FinalizeTransaction() {
 			if v == (tcommon.Hash{}) {
 				obj.storageExists[k] = false
 			}
+		}
+		if obj.selfDestructed && !obj.deleted {
+			s.DeleteAccount(obj.address)
 		}
 	}
 }
@@ -1877,8 +1879,11 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 		prev, _ = obj.account.Marshal()
 	}
 	s.journal.append(accountChange{
-		address: addr,
-		prev:    prev,
+		address:          addr,
+		prev:             prev,
+		prevDeleted:      obj != nil && obj.deleted,
+		prevCreated:      obj != nil && obj.created,
+		prevSelfDestruct: obj != nil && obj.selfDestructed,
 	})
 }
 
