@@ -3,6 +3,7 @@ package vm
 import (
 	"testing"
 
+	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -31,6 +32,76 @@ func stakingInput(words ...[]byte) []byte {
 
 func stakingWordAt(out []byte, idx int) int64 {
 	return int64FromWord(out[idx*32 : (idx+1)*32])
+}
+
+func stakingOpcodeStack(receiver tcommon.Address, resource corepb.ResourceCode, amount *uint256.Int) *Stack {
+	receiverWord := addressToUint256(receiver)
+	stack := newStack()
+	stack.push(&receiverWord)
+	stack.push(uint256.NewInt(uint64(resource)))
+	stack.push(amount)
+	return stack
+}
+
+func TestDelegateResourceOpcodeRejectsAmountOutOfLongRange(t *testing.T) {
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := stakingPrecompileAddr(0x41)
+	receiver := stakingPrecompileAddr(0x42)
+	statedb.CreateAccount(caller, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(caller, corepb.ResourceCode_BANDWIDTH, 100_000_000)
+
+	var tooLarge uint256.Int
+	tooLarge.SetUint64(uint64(1) << 63)
+	stack := stakingOpcodeStack(receiver, corepb.ResourceCode_BANDWIDTH, &tooLarge)
+	contract := NewContract(caller, caller, 0, 100_000)
+
+	if _, err := opDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opDelegateResource error: %v", err)
+	}
+	if got := stack.pop(); !got.IsZero() {
+		t.Fatalf("delegate result: got %s, want 0", got.String())
+	}
+	if got := statedb.GetFrozenV2Amount(caller, corepb.ResourceCode_BANDWIDTH); got != 100_000_000 {
+		t.Fatalf("caller frozen changed: got %d", got)
+	}
+	if got := statedb.GetDelegatedFrozenV2(caller, corepb.ResourceCode_BANDWIDTH); got != 0 {
+		t.Fatalf("caller delegated changed: got %d", got)
+	}
+	if got := statedb.GetAccount(receiver).AcquiredDelegatedFrozenV2BalanceForBandwidth(); got != 0 {
+		t.Fatalf("receiver acquired changed: got %d", got)
+	}
+}
+
+func TestUnDelegateResourceOpcodeRejectsAmountOutOfLongRange(t *testing.T) {
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := stakingPrecompileAddr(0x43)
+	receiver := stakingPrecompileAddr(0x44)
+	statedb.CreateAccount(caller, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.AddDelegatedFrozenV2(caller, corepb.ResourceCode_BANDWIDTH, 100_000_000)
+	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100_000_000)
+
+	var tooLarge uint256.Int
+	tooLarge.SetUint64(uint64(1) << 63)
+	stack := stakingOpcodeStack(receiver, corepb.ResourceCode_BANDWIDTH, &tooLarge)
+	contract := NewContract(caller, caller, 0, 100_000)
+
+	if _, err := opUnDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opUnDelegateResource error: %v", err)
+	}
+	if got := stack.pop(); !got.IsZero() {
+		t.Fatalf("undelegate result: got %s, want 0", got.String())
+	}
+	if got := statedb.GetDelegatedFrozenV2(caller, corepb.ResourceCode_BANDWIDTH); got != 100_000_000 {
+		t.Fatalf("caller delegated changed: got %d", got)
+	}
+	if got := statedb.GetFrozenV2Amount(caller, corepb.ResourceCode_BANDWIDTH); got != 0 {
+		t.Fatalf("caller frozen changed: got %d", got)
+	}
+	if got := statedb.GetAccount(receiver).AcquiredDelegatedFrozenV2BalanceForBandwidth(); got != 100_000_000 {
+		t.Fatalf("receiver acquired changed: got %d", got)
+	}
 }
 
 func TestStakingV2AvailableUnfreezeCountsOnlyUnexpired(t *testing.T) {

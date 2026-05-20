@@ -1062,7 +1062,11 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
-	amount := int64(amountWord.Uint64())
+	amount, ok := uint256ToInt64Exact(&amountWord)
+	if !ok || amount < tvmTRXPrecision {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
@@ -1089,7 +1093,11 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
-	amount := int64(amountWord.Uint64())
+	amount, ok := uint256ToInt64Exact(&amountWord)
+	if !ok || amount <= 0 {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
