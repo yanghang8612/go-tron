@@ -1,0 +1,14 @@
+{
+  "name": "net_version",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "net_version",
+    "params": []
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "728126428"
+  }
+}

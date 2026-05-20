@@ -1,0 +1,16 @@
+{
+  "name": "eth_uninstallFilter_unknown",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_uninstallFilter",
+    "params": [
+      "0xffffffffffffffffffffffffffffffff"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": false
+  }
+}

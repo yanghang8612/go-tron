@@ -1,0 +1,14 @@
+{
+  "name": "eth_newBlockFilter",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_newBlockFilter",
+    "params": []
+  },
+  "response_pattern": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result_regex": "^0x[0-9a-f]{32}$"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "eth_getCode",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x4101020304050607080900010203040506070809",
+      "latest"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x6080604052"
+  }
+}

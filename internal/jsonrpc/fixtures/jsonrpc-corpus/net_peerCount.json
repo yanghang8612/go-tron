@@ -1,0 +1,14 @@
+{
+  "name": "net_peerCount",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "net_peerCount",
+    "params": []
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x3"
+  }
+}

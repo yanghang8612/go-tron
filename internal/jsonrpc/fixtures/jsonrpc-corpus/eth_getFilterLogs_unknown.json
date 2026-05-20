@@ -1,0 +1,20 @@
+{
+  "name": "eth_getFilterLogs_unknown",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getFilterLogs",
+    "params": [
+      "0xffffffffffffffffffffffffffffffff"
+    ]
+  },
+  "response": {
+    "error": {
+      "code": -32603,
+      "message": "filter not found"
+    },
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": null
+  }
+}

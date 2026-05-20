@@ -1,0 +1,14 @@
+{
+  "name": "eth_gasPrice",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_gasPrice",
+    "params": []
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x1a4"
+  }
+}

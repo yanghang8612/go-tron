@@ -1,0 +1,14 @@
+{
+  "name": "eth_syncing",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_syncing",
+    "params": []
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": false
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "eth_signTransaction",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_signTransaction",
+    "params": [
+      {}
+    ]
+  },
+  "response": {
+    "error": {
+      "code": -32601,
+      "message": "the method eth_signTransaction does not exist/is not available"
+    },
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": null
+  }
+}

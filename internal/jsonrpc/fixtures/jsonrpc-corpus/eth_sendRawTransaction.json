@@ -1,0 +1,20 @@
+{
+  "name": "eth_sendRawTransaction",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_sendRawTransaction",
+    "params": [
+      "0xdeadbeef"
+    ]
+  },
+  "response": {
+    "error": {
+      "code": -32601,
+      "message": "the method eth_sendRawTransaction does not exist/is not available"
+    },
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": null
+  }
+}

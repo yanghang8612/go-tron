@@ -1,0 +1,14 @@
+{
+  "name": "web3_clientVersion",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "web3_clientVersion",
+    "params": []
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "go-tron/v0.3.0-dev"
+  }
+}

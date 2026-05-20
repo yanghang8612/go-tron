@@ -1,0 +1,37 @@
+{
+  "name": "eth_getLogs",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getLogs",
+    "params": [
+      {
+        "address": "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0",
+        "fromBlock": "0x0",
+        "toBlock": "latest",
+        "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        ]
+      }
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": [
+      {
+        "address": "0xa0b0c0d0e0f000102030405060708090a0b0c0d0",
+        "blockHash": "0x0000000000000064524e207f2a2ceae5c1d814fb378a66cd03d3bb00945a573a",
+        "blockNumber": "0x64",
+        "data": "0x01020304",
+        "logIndex": "0x0",
+        "removed": false,
+        "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        ],
+        "transactionHash": "0x94b5700b3a7b2ce5c44c97825508194d88dcb107ba073414bca708780a920f09",
+        "transactionIndex": "0x0"
+      }
+    ]
+  }
+}

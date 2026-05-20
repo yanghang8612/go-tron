@@ -1,0 +1,18 @@
+{
+  "name": "eth_getStorageAt",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x4101020304050607080900010203040506070809",
+      "0x0",
+      "latest"
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "eth_estimateGas",
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "eth_estimateGas",
+    "params": [
+      {
+        "data": "0x70a08231",
+        "to": "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0"
+      }
+    ]
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": "0x0"
+  }
+}
