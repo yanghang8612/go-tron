@@ -25,8 +25,8 @@ func TestStateObjectCodeStorage(t *testing.T) {
 	if !obj.dirty {
 		t.Fatal("expected dirty after setCode")
 	}
-	if obj.codeHash == (tcommon.Hash{}) {
-		t.Fatal("expected non-empty codeHash")
+	if obj.codeHash != tcommon.Keccak256(code) {
+		t.Fatalf("codeHash: got %x, want %x", obj.codeHash, tcommon.Keccak256(code))
 	}
 }
 

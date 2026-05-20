@@ -17,7 +17,7 @@ type stateObject struct {
 
 	// Contract fields
 	code              []byte                        // contract bytecode
-	codeHash          tcommon.Hash                  // SHA256 hash of the code
+	codeHash          tcommon.Hash                  // Keccak-256 hash of the code
 	codeDirty         bool                          // true if code was modified
 	contractMeta      *contractpb.SmartContract     // contract metadata
 	contractMetaDirty bool                          // true if contractMeta was modified
@@ -53,7 +53,7 @@ func (s *stateObject) Account() *types.Account { return s.account }
 func (s *stateObject) setCode(code []byte) {
 	s.code = make([]byte, len(code))
 	copy(s.code, code)
-	s.codeHash = tcommon.Sha256(code)
+	s.codeHash = tcommon.Keccak256(code)
 	s.codeDirty = true
 	s.markDirty()
 }

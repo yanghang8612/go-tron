@@ -31,8 +31,18 @@ func TestStateDBCodeMethods(t *testing.T) {
 	if size := sdb.GetCodeSize(addr); size != len(code) {
 		t.Fatalf("code size mismatch: got %d, want %d", size, len(code))
 	}
-	if hash := sdb.GetCodeHash(addr); hash == (tcommon.Hash{}) {
-		t.Fatal("expected non-empty code hash")
+	if hash := sdb.GetCodeHash(addr); hash != tcommon.Keccak256(code) {
+		t.Fatalf("code hash: got %x, want %x", hash, tcommon.Keccak256(code))
+	}
+}
+
+func TestStateDBCodeHashForExistingEmptyAccount(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x01}
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	if hash := sdb.GetCodeHash(addr); hash != tcommon.Keccak256(nil) {
+		t.Fatalf("empty account code hash: got %x, want %x", hash, tcommon.Keccak256(nil))
 	}
 }
 

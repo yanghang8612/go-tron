@@ -1271,7 +1271,7 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 		code := rawdb.ReadCode(s.db.DiskDB(), addr)
 		if len(code) > 0 {
 			obj.code = code
-			obj.codeHash = tcommon.Sha256(code)
+			obj.codeHash = tcommon.Keccak256(code)
 		}
 	}
 	return obj.code
@@ -1293,13 +1293,21 @@ func (s *StateDB) GetCodeSize(addr tcommon.Address) int {
 	return len(s.GetCode(addr))
 }
 
-// GetCodeHash returns the SHA256 hash of the contract bytecode.
+// GetCodeHash returns the java-tron EXTCODEHASH value for an existing account:
+// Keccak-256(code) for contracts and Keccak-256(empty) for existing accounts
+// without contract code. Missing accounts return zero.
 func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
 	obj := s.getStateObject(addr)
 	if obj == nil || obj.deleted {
 		return tcommon.Hash{}
 	}
-	return obj.codeHash
+	if obj.codeHash != (tcommon.Hash{}) {
+		return obj.codeHash
+	}
+	if len(s.GetCode(addr)) > 0 {
+		return obj.codeHash
+	}
+	return tcommon.Keccak256(nil)
 }
 
 // GetState returns a storage value from a contract.
