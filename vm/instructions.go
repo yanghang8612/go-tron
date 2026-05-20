@@ -819,7 +819,16 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 
 	interpreter.tvm.Nonce++
 	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
-	interpreter.tvm.addInternalTransaction(contract.Address, address, balance, nil, "suicide", 0, 0)
+	var tokenInfo map[string]int64
+	if account := interpreter.tvm.StateDB.GetAccount(contract.Address); account != nil {
+		if assets := account.Proto().GetAssetV2(); len(assets) > 0 {
+			tokenInfo = make(map[string]int64, len(assets))
+			for tokenID, amount := range assets {
+				tokenInfo[tokenID] = amount
+			}
+		}
+	}
+	interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
 	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
 	if oldSuicide && address == contract.Address {
 		blackhole := interpreter.tvm.blackholeAddress()

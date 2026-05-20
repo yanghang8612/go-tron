@@ -223,7 +223,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	}
 
 	input := memory.getCopy(int64(inOff), int64(inSz))
-	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val, val)
 	contract.Energy += remainingEnergy
 	if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
 		return nil, err
@@ -289,7 +289,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOff), int64(inSz))
-	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value)
+	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value, 0)
 	contract.Energy += remainingEnergy
 	if err == ErrTransferFailed || err == ErrTokenTransferFailed {
 		return nil, err

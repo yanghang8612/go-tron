@@ -697,9 +697,11 @@ func TestDelegateCallUsesCurrentContractBalanceForNestedTransfer(t *testing.T) {
 		byte(STOP),
 	)
 
-	contract := NewContract(owner, proxy, 0, 100_000)
+	tvm.RootTxID = tcommon.BytesToHash([]byte("root"))
+	contract := NewContract(owner, proxy, 2, 100_000)
+	contract.InternalTxHash = tvm.RootTxID
 	contract.SetCode(proxy, proxyCode)
-	if _, err := tvm.interpreter.Run(contract); err != nil {
+	if _, err := tvm.runContract(contract); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -711,6 +713,12 @@ func TestDelegateCallUsesCurrentContractBalanceForNestedTransfer(t *testing.T) {
 	}
 	if got := sdb.GetBalance(user); got != 1 {
 		t.Fatalf("user balance: got %d, want 1", got)
+	}
+	if len(tvm.InternalTransactions) < 1 {
+		t.Fatal("missing delegate internal transaction")
+	}
+	if got := tvm.InternalTransactions[0].CallValueInfo[0].CallValue; got != 0 {
+		t.Fatalf("delegate internal transaction value: got %d, want 0", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"sort"
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -93,6 +94,14 @@ func (tvm *TVM) currentInternalTxHash() tcommon.Hash {
 }
 
 func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenID, tokenValue int64) *corepb.InternalTransaction {
+	var tokenInfo map[string]int64
+	if tokenID > 0 {
+		tokenInfo = map[string]int64{strconv.FormatInt(tokenID, 10): tokenValue}
+	}
+	return tvm.addInternalTransactionWithTokenInfo(caller, transferTo, value, data, note, tokenInfo)
+}
+
+func (tvm *TVM) addInternalTransactionWithTokenInfo(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenInfo map[string]int64) *corepb.InternalTransaction {
 	parentHash := tvm.currentInternalTxHash()
 	receiveAddress := transferTo.Bytes()
 	if note == "create" {
@@ -120,11 +129,18 @@ func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value
 		}},
 		Note: []byte(note),
 	}
-	if tokenID > 0 {
-		it.CallValueInfo = append(it.CallValueInfo, &corepb.InternalTransaction_CallValueInfo{
-			TokenId:   strconv.FormatInt(tokenID, 10),
-			CallValue: tokenValue,
-		})
+	if len(tokenInfo) > 0 {
+		tokenIDs := make([]string, 0, len(tokenInfo))
+		for tokenID := range tokenInfo {
+			tokenIDs = append(tokenIDs, tokenID)
+		}
+		sort.Strings(tokenIDs)
+		for _, tokenID := range tokenIDs {
+			it.CallValueInfo = append(it.CallValueInfo, &corepb.InternalTransaction_CallValueInfo{
+				TokenId:   tokenID,
+				CallValue: tokenInfo[tokenID],
+			})
+		}
 	}
 	tvm.InternalTransactions = append(tvm.InternalTransactions, it)
 	return it
@@ -734,7 +750,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 // caller and storage/address context. java-tron keeps these separate:
 // DELEGATECALL uses the parent caller plus the current contract context,
 // while CALLCODE uses the current contract for both.
-func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte, energy uint64, value int64) ([]byte, uint64, error) {
+func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte, energy uint64, value int64, internalValue int64) ([]byte, uint64, error) {
 	if tvm.Depth >= maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
@@ -757,7 +773,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	internalTxSnap := tvm.InternalTransactionSnapshot()
 	var internalTx *corepb.InternalTransaction
 	if tvm.Depth > 0 {
-		internalTx = tvm.addInternalTransaction(context, context, value, input, "call", 0, 0)
+		internalTx = tvm.addInternalTransaction(context, context, internalValue, input, "call", 0, 0)
 	}
 	code := tvm.StateDB.GetCode(addr)
 	if len(code) == 0 {
