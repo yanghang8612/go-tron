@@ -42,7 +42,7 @@ func TestStateObjectContractStorage(t *testing.T) {
 		t.Fatalf("expected empty storage, got %x", got)
 	}
 
-	obj.setStorage(key, val)
+	obj.setStorage(key, val, true)
 	got = obj.getStorage(key)
 	if got != val {
 		t.Fatalf("storage mismatch: got %x, want %x", got, val)

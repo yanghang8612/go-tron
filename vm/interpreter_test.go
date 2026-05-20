@@ -204,6 +204,42 @@ func TestSstoreCostUsesStorageRowExistence(t *testing.T) {
 	}
 }
 
+func TestSstoreCostAfterTransactionBoundaryTreatsZeroRowAsMissing(t *testing.T) {
+	evm := newTestEVM(t)
+	addr := tcommon.Address{0x41, 0x02}
+
+	zeroCode := []byte{
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(SSTORE),
+		byte(STOP),
+	}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, addr, 0, 100000)
+	contract.SetCode(addr, zeroCode)
+	if _, err := evm.interpreter.Run(contract); err != nil {
+		t.Fatalf("zero SSTORE run error: %v", err)
+	}
+
+	evm.StateDB.FinalizeTransaction()
+
+	setCode := []byte{
+		byte(PUSH1), 0x09,
+		byte(PUSH1), 0x00,
+		byte(SSTORE),
+		byte(STOP),
+	}
+	contract = NewContract(tcommon.Address{0x41, 0x01}, addr, 0, 100000)
+	contract.SetCode(addr, setCode)
+	if _, err := evm.interpreter.Run(contract); err != nil {
+		t.Fatalf("set SSTORE run error: %v", err)
+	}
+	got := uint64(100000 - contract.Energy)
+	want := uint64(2*EnergyVeryLow + EnergySstoreSet)
+	if got != want {
+		t.Fatalf("SSTORE after tx boundary energy: got %d, want %d", got, want)
+	}
+}
+
 func TestInterpreterChainIDRequiresIstanbul(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := state.NewDatabase(diskdb)

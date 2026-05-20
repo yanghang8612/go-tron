@@ -371,6 +371,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
+		statedb.FinalizeTransaction()
 
 		accumulateBlockEnergyUsage(dynProps, db, prevBlockTime, result)
 	}

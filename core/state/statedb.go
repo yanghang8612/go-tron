@@ -698,6 +698,21 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	s.snapshots = s.snapshots[:id]
 }
 
+// FinalizeTransaction mirrors java-tron's rootRepository.commit() boundary for
+// storage-row existence. java-tron keeps a zero StorageRow visible inside the
+// executing transaction, then commit() deletes it before the next transaction.
+// StateDB commits only once per block, so keep the zero value cached for the
+// eventual disk delete but make later SSTORE cost checks see the row as absent.
+func (s *StateDB) FinalizeTransaction() {
+	for _, obj := range s.stateObjects {
+		for k, v := range obj.storage {
+			if v == (tcommon.Hash{}) {
+				obj.storageExists[k] = false
+			}
+		}
+	}
+}
+
 // AccountExists returns whether an account exists (non-nil and not deleted).
 func (s *StateDB) AccountExists(addr tcommon.Address) bool {
 	obj := s.getStateObject(addr)
@@ -1326,7 +1341,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	if v, ok := obj.storage[key]; ok {
-		return v, true
+		return v, obj.storageExists[key]
 	}
 	if obj.created {
 		return tcommon.Hash{}, false
@@ -1342,19 +1357,24 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	obj.storage[key] = h
+	obj.storageExists[key] = true
 	return h, true
 }
 
 // SetState sets a storage value on a contract.
 func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 	obj := s.GetOrCreateAccount(addr)
-	prev := obj.getStorage(key)
+	prev, prevExists, _ := obj.getStorageWithExist(key)
+	if _, cached := obj.storage[key]; !cached {
+		prev, prevExists = s.GetStateWithExist(addr, key)
+	}
 	s.journal.append(storageChange{
-		address: addr,
-		key:     key,
-		prev:    prev,
+		address:    addr,
+		key:        key,
+		prev:       prev,
+		prevExists: prevExists,
 	})
-	obj.setStorage(key, value)
+	obj.setStorage(key, value, true)
 }
 
 // GetContract returns the contract metadata at addr.
@@ -1520,6 +1540,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			contractMeta:      metaCopy,
 			contractMetaDirty: obj.contractMetaDirty,
 			storage:           make(map[tcommon.Hash]tcommon.Hash),
+			storageExists:     make(map[tcommon.Hash]bool),
 			selfDestructed:    obj.selfDestructed,
 		}
 		if obj.account != nil {
@@ -1529,6 +1550,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		}
 		for k, v := range obj.storage {
 			newObj.storage[k] = v
+			newObj.storageExists[k] = obj.storageExists[k]
 		}
 		cp.stateObjects[addr] = newObj
 	}

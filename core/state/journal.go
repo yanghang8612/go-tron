@@ -54,15 +54,23 @@ func (e witnessChange) revert(_ map[tcommon.Address]*stateObject, witnesses map[
 
 // storageChange records a single storage slot change for revert.
 type storageChange struct {
-	address tcommon.Address
-	key     tcommon.Hash
-	prev    tcommon.Hash
+	address    tcommon.Address
+	key        tcommon.Hash
+	prev       tcommon.Hash
+	prevExists bool
 }
 
 func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
 	obj := stateObjects[e.address]
 	if obj != nil {
-		obj.storage[e.key] = e.prev
+		if e.prev == (tcommon.Hash{}) && !e.prevExists {
+			delete(obj.storage, e.key)
+			delete(obj.storageExists, e.key)
+		} else {
+			obj.storage[e.key] = e.prev
+			obj.storageExists[e.key] = e.prevExists
+		}
+		obj.markDirty()
 	}
 }
 

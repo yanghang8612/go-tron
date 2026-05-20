@@ -22,24 +22,27 @@ type stateObject struct {
 	contractMeta      *contractpb.SmartContract     // contract metadata
 	contractMetaDirty bool                          // true if contractMeta was modified
 	storage           map[tcommon.Hash]tcommon.Hash // dirty contract storage
+	storageExists     map[tcommon.Hash]bool         // java-tron StorageRow existence for cached slots
 	selfDestructed    bool
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 	return &stateObject{
-		address: addr,
-		account: acc,
-		storage: make(map[tcommon.Hash]tcommon.Hash),
+		address:       addr,
+		account:       acc,
+		storage:       make(map[tcommon.Hash]tcommon.Hash),
+		storageExists: make(map[tcommon.Hash]bool),
 	}
 }
 
 func newEmptyStateObject(addr tcommon.Address) *stateObject {
 	return &stateObject{
-		address: addr,
-		account: types.NewAccount(addr, corepb.AccountType_Normal),
-		dirty:   true,
-		created: true,
-		storage: make(map[tcommon.Hash]tcommon.Hash),
+		address:       addr,
+		account:       types.NewAccount(addr, corepb.AccountType_Normal),
+		dirty:         true,
+		created:       true,
+		storage:       make(map[tcommon.Hash]tcommon.Hash),
+		storageExists: make(map[tcommon.Hash]bool),
 	}
 }
 
@@ -62,8 +65,17 @@ func (s *stateObject) getStorage(key tcommon.Hash) tcommon.Hash {
 	return s.storage[key]
 }
 
-func (s *stateObject) setStorage(key, value tcommon.Hash) {
+func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool, bool) {
+	value, cached := s.storage[key]
+	if !cached {
+		return tcommon.Hash{}, false, false
+	}
+	return value, s.storageExists[key], true
+}
+
+func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 	s.storage[key] = value
+	s.storageExists[key] = exists
 	s.markDirty()
 }
 
