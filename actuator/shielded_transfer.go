@@ -42,6 +42,12 @@ var historicalShieldedProofCompatEntries = []historicalShieldedProofCompat{
 		txHash:      common.HexToHash("c3739ddc0909642006876309440c3733d0bcda66500f958cbc7090d984676f68"),
 		contractRet: corepb.Transaction_Result_SUCCESS,
 	},
+	{
+		genesisHash: params.NileGenesisHash,
+		blockNumber: 1_685_793,
+		txHash:      common.HexToHash("d43de24389ee218b53452153403ac78590bc1e96391522ed5f80306a2f811a80"),
+		contractRet: corepb.Transaction_Result_SUCCESS,
+	},
 }
 
 func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.ShieldedTransferContract, error) {
