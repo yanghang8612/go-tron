@@ -120,14 +120,11 @@ func TestApplyHistoryConfig_CLIOverridesTOML(t *testing.T) {
 	}
 }
 
-func TestApplyHistoryConfig_TOMLMissingFileIsNoOp(t *testing.T) {
+func TestApplyHistoryConfig_TOMLMissingFileErrors(t *testing.T) {
 	ctx := makeHistoryFlagSet(t, []string{"--config", "/definitely/not/a/real/path.toml"})
 	cfg := &params.ChainConfig{}
-	if err := applyHistoryConfig(ctx, cfg); err != nil {
-		t.Fatalf("applyHistoryConfig (missing file): %v", err)
-	}
-	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeFull {
-		t.Errorf("missing config: mode = %q, want default %q", got, params.HistoryModeFull)
+	if err := applyHistoryConfig(ctx, cfg); err == nil {
+		t.Fatal("expected error for explicit missing --config")
 	}
 }
 

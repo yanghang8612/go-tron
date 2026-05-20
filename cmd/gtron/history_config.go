@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -117,6 +116,8 @@ func normaliseHistoryMode(s string) (string, error) {
 //   - window is the parsed prune_window (uint64); 0 means "absent"
 //   - enabled is a tri-state *bool: nil means the key was absent (leave
 //     cfg.HistoryEnabled untouched), non-nil carries the explicit value
+//   - a non-empty path must exist; an explicit --config typo is a hard
+//     startup error rather than a silent fallback to defaults
 //
 // The narrow contract avoids pulling in a TOML library for three scalars.
 // A future slice that needs deeply-nested config can swap this for a
@@ -127,11 +128,6 @@ func loadHistoryTOML(path string) (string, uint64, *bool, bool, error) {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// A missing config file is not an error when --config
-			// wasn't strictly required (typical CLI ergonomics).
-			return "", 0, nil, false, nil
-		}
 		return "", 0, nil, false, fmt.Errorf("config: open %s: %w", path, err)
 	}
 	defer f.Close()
