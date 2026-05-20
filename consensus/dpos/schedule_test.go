@@ -28,6 +28,25 @@ func TestGetScheduledWitness(t *testing.T) {
 	}
 }
 
+func TestGetScheduledWitness_MaintenanceSkipDoesNotAdvanceRotation(t *testing.T) {
+	witnesses := []common.Address{
+		common.BytesToAddress([]byte{0x41, 1}),
+		common.BytesToAddress([]byte{0x41, 2}),
+		common.BytesToAddress([]byte{0x41, 3}),
+	}
+
+	// Matches java-tron DposSlot.getScheduledWitness: the previous
+	// maintenance block makes getSlot/getTime skip two wall-clock slots, but
+	// the witness index still uses getAbSlot(head) + relativeSlot.
+	const genesisTime = int64(0)
+	const headTimestamp = int64(6000)
+
+	addr := GetScheduledWitness(1, headTimestamp, genesisTime, witnesses, true, 2)
+	if addr != witnesses[0] {
+		t.Fatalf("maintenance slot 1: expected witness[0], got %s", addr.Hex())
+	}
+}
+
 func TestSortWitnesses(t *testing.T) {
 	w1 := WitnessVote{Address: common.BytesToAddress([]byte{0x41, 0xaa}), Votes: 100}
 	w2 := WitnessVote{Address: common.BytesToAddress([]byte{0x41, 0xbb}), Votes: 200}

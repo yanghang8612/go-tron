@@ -12,14 +12,14 @@ type WitnessVote struct {
 	Votes   int64
 }
 
-func GetScheduledWitness(slot int64, headTimestamp, genesisTime int64, activeWitnesses []common.Address, isMaintenance bool, maintenanceSkipSlots int64) common.Address {
+func GetScheduledWitness(slot int64, headTimestamp, genesisTime int64, activeWitnesses []common.Address, _ bool, _ int64) common.Address {
 	if len(activeWitnesses) == 0 {
 		return common.Address{}
 	}
+	// java-tron DposSlot.getScheduledWitness adds only the relative slot to
+	// the current absolute slot. Maintenance skip slots delay getTime/getSlot,
+	// but they do not advance the witness rotation a second time here.
 	currentAbsSlot := AbsoluteSlot(headTimestamp, genesisTime) + slot
-	if isMaintenance {
-		currentAbsSlot += maintenanceSkipSlots
-	}
 	idx := WitnessIndex(currentAbsSlot, len(activeWitnesses))
 	return activeWitnesses[idx]
 }

@@ -84,7 +84,7 @@ func (p *Producer) tryProduceBlock() {
 	interval := int64(params.BlockProducedInterval)
 
 	// Align to slot boundary relative to genesis
-	slotTimestamp := ((now - genesisTime) / interval) * interval + genesisTime
+	slotTimestamp := ((now-genesisTime)/interval)*interval + genesisTime
 
 	// Check duplicate production
 	currentSlot := dpos.AbsoluteSlot(slotTimestamp, genesisTime)
@@ -93,9 +93,7 @@ func (p *Producer) tryProduceBlock() {
 	}
 
 	// Check if this is our slot
-	head := p.chain.CurrentBlock()
-	headSlot := dpos.SlotForTime(slotTimestamp, head.Timestamp(), genesisTime,
-		p.engine.IsInMaintenance(head.Timestamp()), params.MaintenanceSkipSlots)
+	headSlot := productionSlotForTimestamp(p.chain, slotTimestamp)
 	if headSlot <= 0 {
 		return
 	}
@@ -130,6 +128,13 @@ func (p *Producer) tryProduceBlock() {
 	}
 
 	p.lastProducedSlot = currentSlot
+}
+
+func productionSlotForTimestamp(chain *core.BlockChain, timestamp int64) int64 {
+	head := chain.CurrentBlock()
+	wasMaintenance := chain.DynProps().StateFlag() == 1
+	return dpos.SlotForTime(timestamp, head.Timestamp(), chain.GenesisTimestamp(),
+		wasMaintenance, params.MaintenanceSkipSlots)
 }
 
 // shouldSkipLowParticipation reports whether the network's recent block-fill

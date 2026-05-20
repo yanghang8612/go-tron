@@ -135,6 +135,32 @@ func TestApplyBlockStatistics_OneMissed(t *testing.T) {
 	}
 }
 
+func TestApplyBlockStatistics_MaintenanceSkipDoesNotShiftMissedWitness(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dp := state.NewDynamicProperties()
+	witnesses := []common.Address{statAddr(1), statAddr(2), statAddr(3)}
+
+	const genesisTs = int64(0)
+	const prevTime = int64(6000)
+	const blockTime = int64(18000)
+
+	ApplyBlockStatistics(db, dp,
+		makeBlock(2, blockTime, witnesses[1]), prevTime, witnesses, genesisTs, true)
+
+	wMissed := rawdb.ReadWitness(db, witnesses[0])
+	if wMissed == nil {
+		t.Fatalf("expected witness[0] to be charged for the skipped post-maintenance slot")
+	}
+	if wMissed.TotalMissed() != 1 {
+		t.Fatalf("witness[0] TotalMissed: got %d, want 1", wMissed.TotalMissed())
+	}
+	for _, addr := range witnesses[1:] {
+		if w := rawdb.ReadWitness(db, addr); w != nil && w.TotalMissed() != 0 {
+			t.Fatalf("witness %s TotalMissed: got %d, want 0", addr.Hex(), w.TotalMissed())
+		}
+	}
+}
+
 func TestApplyBlockStatistics_Block1Skip(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dp := state.NewDynamicProperties()

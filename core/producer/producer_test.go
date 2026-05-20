@@ -24,6 +24,13 @@ func testAddr(b byte) tcommon.Address {
 
 func setupTestChain(t *testing.T, witnessAddr tcommon.Address) (*core.BlockChain, *txpool.TxPool, *dpos.DPoS) {
 	t.Helper()
+	return setupTestChainWithDynamicProperties(t, witnessAddr, map[string]int64{
+		"next_maintenance_time": 21600000,
+	})
+}
+
+func setupTestChainWithDynamicProperties(t *testing.T, witnessAddr tcommon.Address, dynamicProperties map[string]int64) (*core.BlockChain, *txpool.TxPool, *dpos.DPoS) {
+	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
 
@@ -36,9 +43,7 @@ func setupTestChain(t *testing.T, witnessAddr tcommon.Address) (*core.BlockChain
 		Witnesses: []params.GenesisWitness{
 			{Address: witnessAddr, VoteCount: 1000, URL: "http://test"},
 		},
-		DynamicProperties: map[string]int64{
-			"next_maintenance_time": 21600000,
-		},
+		DynamicProperties: dynamicProperties,
 	}
 
 	_, _, err := core.SetupGenesisBlock(diskdb, genesis)
@@ -108,6 +113,35 @@ func TestProducer_StartStop(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	p.Stop()
+}
+
+func TestProductionSlotForTimestampAfterMaintenanceSkip(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	witnessAddr := crypto.PubkeyToAddress(&key.PublicKey)
+	bc, pool, engine := setupTestChainWithDynamicProperties(t, witnessAddr, map[string]int64{
+		"maintenance_time_interval": 6000,
+		"next_maintenance_time":     6000,
+	})
+	p := New(bc, pool, engine, key)
+
+	if err := p.produceBlock(witnessAddr, int64(params.BlockProducedInterval)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.produceBlock(witnessAddr, 2*int64(params.BlockProducedInterval)); err != nil {
+		t.Fatal(err)
+	}
+	if got := bc.DynProps().StateFlag(); got != 1 {
+		t.Fatalf("state_flag after maintenance block: got %d, want 1", got)
+	}
+
+	for _, ts := range []int64{9000, 12000} {
+		if got := productionSlotForTimestamp(bc, ts); got != 0 {
+			t.Fatalf("timestamp %d should still be inside maintenance skip, got slot %d", ts, got)
+		}
+	}
+	if got := productionSlotForTimestamp(bc, 15000); got != 1 {
+		t.Fatalf("first post-maintenance production slot: got %d, want 1", got)
+	}
 }
 
 // seedFilledSlots writes a 128-byte BLOCK_FILLED_SLOTS ring with `filled`
