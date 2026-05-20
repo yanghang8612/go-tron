@@ -209,6 +209,30 @@ func TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit(t *testing.T) {
 	}
 }
 
+func TestSetupGenesisBlock_EnergyFeeSeedsPriceHistory(t *testing.T) {
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: common.BytesToAddress([]byte{0x41, 1}), Balance: 1},
+		},
+		DynamicProperties: map[string]int64{
+			"energy_fee": 420,
+		},
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	dp := state.LoadDynamicProperties(diskdb)
+	if got := dp.EnergyFee(); got != 420 {
+		t.Fatalf("energy_fee: got %d, want 420", got)
+	}
+	if got := dp.EnergyPriceHistory(); got != "0:420" {
+		t.Fatalf("energy_price_history: got %q, want %q", got, "0:420")
+	}
+}
+
 func TestSetupGenesisBlock_ConstantinopleConfigAddsClearABIOperation(t *testing.T) {
 	genesis := &params.Genesis{
 		Config:    params.MainnetChainConfig,

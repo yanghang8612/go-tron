@@ -108,6 +108,9 @@ func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params
 		for k, v := range genesis.DynamicProperties {
 			dp.Set(k, v)
 		}
+		if energyFee, ok := genesis.DynamicProperties["energy_fee"]; ok {
+			dp.SetEnergyPriceHistory(fmt.Sprintf("0:%d", energyFee))
+		}
 		// Mirror java-tron Manager.initGenesis -> updateDynamicStoreByConfig:
 		// config-level Constantinople activation immediately makes ClearABI
 		// available in account permission operations.

@@ -86,6 +86,9 @@
   "dynamic_properties": {
     "maintenance_time_interval": 300000,
     "proposal_expire_time": 300000,
+    "energy_fee": 420,
+    "max_create_account_tx_size": 1500,
+    "max_fee_limit": 15000000000,
     "allow_creation_of_contracts": 1,
     "allow_multi_sign": 1,
     "allow_delegate_resource": 1,

@@ -124,16 +124,18 @@ belong to TRON's CI environment:
 - dailyBuild XML excludes for tests that require unavailable infra
 - serial dailyBuild block neutralized
 
-Before dailyBuild starts, the harness creates and approves one governance
-proposal so java-tron has the same runtime parameters expected by the tests:
+The dailyBuild governance parameters are seeded at genesis in both fixtures:
 
 - `getEnergyFee = 420`
 - `getMaxCreateAccountTxSize = 1500`
 - `getMaxFeeLimit = 15000000000`
 
-The fixture uses `maintenance_time_interval = 300000` and
-`proposal_expire_time = 300000`, so the proposal executes in minutes instead of
-the mainnet 6-hour maintenance cycle.
+The script still keeps the proposal bootstrap as a fallback: if the java-tron
+jar does not support `genesis.block.dynamicProperties`, or the runtime values
+do not match, it creates and approves one proposal before dailyBuild starts. The
+fixture uses `maintenance_time_interval = 300000` and
+`proposal_expire_time = 300000`, so that fallback executes in minutes instead
+of the mainnet 6-hour maintenance cycle.
 
 ## Fixture notes
 
@@ -146,6 +148,10 @@ Important fixture properties:
 - `chain_id = 9999`
 - `block_num_for_energy_limit = 0`, so energy-limit behavior is active from
   genesis for this private chain.
+- `energy_fee = 420`, `max_create_account_tx_size = 1500`, and
+  `max_fee_limit = 15000000000` are genesis-seeded dailyBuild governance
+  parameters. They must match `genesis.block.dynamicProperties` in
+  `java-tron.conf`.
 - 27 `mainWitness.keyNN` accounts are active witnesses and have corresponding
   private keys in java-tron's `localwitness` list.
 - 5 `witness.keyN` accounts are registered as lower-vote witnesses and also
@@ -212,4 +218,3 @@ for p in root.glob('TEST-*.xml'):
 print(f'tests={tests} failures={failures} errors={errors} skipped={skipped}')
 PY
 ```
-

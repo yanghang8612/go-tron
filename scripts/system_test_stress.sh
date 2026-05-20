@@ -28,6 +28,8 @@
 # without dropping out of sync.  A background watchdog tails both nodes'
 # `/wallet/getnowblock` every 10 s and aborts if gtron falls behind by
 # more than DRIFT_LIMIT (default 50) for 2 minutes straight.
+# Stage C also walks every java-tron transaction after dailyBuild and compares
+# its `/wallet/gettransactioninfobyid` result against gtron's synced receipt.
 #
 # Stages:
 #   --stage=A   sync-only smoke (genesis-hash assert + 60 s sync watch). No tests.
@@ -93,13 +95,10 @@ GTRON_HTTP=28190
 GTRON_GRPC=50171
 GTRON_JSONRPC=28546
 
-# The checked-out system-test dailyBuild mutates maxFeeLimit to 1.5B and ships
-# a permissions bitmap that assumes several governance proposals have already
-# executed on the target chain. This harness starts java-tron from a fresh
-# local config, where DynamicPropertiesStore initializes max_fee_limit to 1B
-# and only adds ClearABI (48) from config-level Constantinople activation.
-# Normalize the staged copy so the first dailyBuild wave tests node behavior
-# instead of rejecting transactions at environment validation.
+# The checked-out system-test dailyBuild ships config values that assume a CI
+# chain with several governance parameters already active. The local fixtures
+# seed those parameters at genesis when the paired java-tron patch is present;
+# the proposal bootstrap below remains as a fallback for older jars.
 DAILYBUILD_MAX_FEE_LIMIT=15000000000
 DAILYBUILD_OPERATIONS="7fff1fc0037e0100000000000000000000000000000000000000000000000000"
 DAILYBUILD_ENERGY_FEE=420
@@ -940,7 +939,7 @@ wait_chain_parameter() {
 
 bootstrap_dailybuild_chain_params() {
     [[ "$BOOTSTRAP_DAILYBUILD_PARAMS" == "1" ]] || return 0
-    log "=== Bootstrap dailyBuild chain parameters via governance ==="
+    log "=== Verify/bootstrap dailyBuild chain parameters ==="
 
     local current_energy current_create_size current_max_fee
     current_energy=$(chain_parameter_value "getEnergyFee")
@@ -1074,6 +1073,271 @@ run_stage_C() {
     log "  ✓ stage C green"
 }
 
+compare_receipt_parity() {
+    log "=== Stage C: receipt parity (java-tron vs gtron) ==="
+    wait_initial_sync
+    mkdir -p "$WORK_DIR/receipt-parity"
+    python3 - "$JAVA_HTTP" "$GTRON_HTTP" "$WORK_DIR/receipt-parity" <<'PY'
+import collections
+import datetime as dt
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+java_port, gtron_port, out_dir = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+out_dir.mkdir(parents=True, exist_ok=True)
+mismatch_path = out_dir / "mismatches.jsonl"
+summary_path = out_dir / "summary.json"
+
+def post(port, path, payload, retries=5, timeout=5):
+    body = json.dumps(payload).encode()
+    url = f"http://127.0.0.1:{port}{path}"
+    last = None
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+            if not data:
+                return {}
+            return json.loads(data.decode())
+        except (OSError, urllib.error.HTTPError, json.JSONDecodeError) as e:
+            last = e
+            time.sleep(0.3 * (i + 1))
+    raise RuntimeError(f"POST {url} failed after {retries} retries: {last}")
+
+def head(port):
+    block = post(port, "/wallet/getnowblock", {})
+    return int(block.get("block_header", {}).get("raw_data", {}).get("number", 0) or 0)
+
+def block_by_num(port, num):
+    return post(port, "/wallet/getblockbynum", {"num": num}, retries=8)
+
+def tx_info(port, txid):
+    return post(port, "/wallet/gettransactioninfobyid", {"value": txid}, retries=8)
+
+def as_int(v):
+    if v is None or v == "":
+        return 0
+    if isinstance(v, bool):
+        return int(v)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v
+
+def norm_str(v):
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.lower()
+    return v
+
+def clean(v):
+    if isinstance(v, dict):
+        out = {}
+        for k, val in sorted(v.items()):
+            cv = clean(val)
+            if cv in ("", None, [], {}):
+                continue
+            out[k] = cv
+        return out
+    if isinstance(v, list):
+        return [clean(x) for x in v]
+    if isinstance(v, str):
+        return v.lower()
+    return v
+
+def norm_receipt(info):
+    r = info.get("receipt") or {}
+    return {
+        "energy_usage": as_int(r.get("energy_usage")),
+        "energy_fee": as_int(r.get("energy_fee")),
+        "origin_energy_usage": as_int(r.get("origin_energy_usage")),
+        "energy_usage_total": as_int(r.get("energy_usage_total")),
+        "net_usage": as_int(r.get("net_usage")),
+        "net_fee": as_int(r.get("net_fee")),
+        "result": r.get("result") or "DEFAULT",
+        "energy_penalty_total": as_int(r.get("energy_penalty_total")),
+    }
+
+def norm_info(info):
+    return {
+        "id": norm_str(info.get("id")),
+        "fee": as_int(info.get("fee")),
+        "blockNumber": as_int(info.get("blockNumber")),
+        "blockTimeStamp": as_int(info.get("blockTimeStamp")),
+        "contractResult": [norm_str(x) for x in info.get("contractResult", [])],
+        "contract_address": norm_str(info.get("contract_address")),
+        "receipt": norm_receipt(info),
+        "log": clean(info.get("log", [])),
+        "result": info.get("result") or "SUCESS",
+        "resMessage": norm_str(info.get("resMessage")),
+        "assetIssueID": info.get("assetIssueID") or "",
+        "withdraw_amount": as_int(info.get("withdraw_amount")),
+        "unfreeze_amount": as_int(info.get("unfreeze_amount")),
+        "internal_transactions": clean(info.get("internal_transactions", [])),
+        "exchange_received_amount": as_int(info.get("exchange_received_amount")),
+        "exchange_inject_another_amount": as_int(info.get("exchange_inject_another_amount")),
+        "exchange_withdraw_another_amount": as_int(info.get("exchange_withdraw_another_amount")),
+        "exchange_id": as_int(info.get("exchange_id")),
+        "shielded_transaction_fee": as_int(info.get("shielded_transaction_fee")),
+        "orderId": norm_str(info.get("orderId")),
+        "orderDetails": clean(info.get("orderDetails", [])),
+        "packingFee": as_int(info.get("packingFee")),
+        "withdraw_expire_amount": as_int(info.get("withdraw_expire_amount")),
+        "cancel_unfreezeV2_amount": clean(info.get("cancel_unfreezeV2_amount", [])),
+    }
+
+def short(v):
+    s = json.dumps(v, ensure_ascii=False, sort_keys=True)
+    return s if len(s) <= 512 else s[:509] + "..."
+
+def diff(a, b, path=""):
+    if type(a) is not type(b):
+        return [{"path": path or "$", "java": short(a), "gtron": short(b)}]
+    if isinstance(a, dict):
+        out = []
+        for k in sorted(set(a) | set(b)):
+            out.extend(diff(a.get(k), b.get(k), f"{path}.{k}" if path else k))
+        return out
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return [{"path": (path or "$") + ".length", "java": len(a), "gtron": len(b)}]
+        out = []
+        for i, (x, y) in enumerate(zip(a, b)):
+            out.extend(diff(x, y, f"{path}[{i}]"))
+        return out
+    if a != b:
+        return [{"path": path or "$", "java": short(a), "gtron": short(b)}]
+    return []
+
+started = dt.datetime.now(dt.timezone.utc).isoformat()
+java_head = head(java_port)
+gtron_head = head(gtron_port)
+compare_head = min(java_head, gtron_head)
+
+summary = {
+    "started_at": started,
+    "java_head": java_head,
+    "gtron_head": gtron_head,
+    "compared_head": compare_head,
+    "compared_blocks": 0,
+    "java_transactions": 0,
+    "compared_tx_infos": 0,
+    "missing_tx_infos": 0,
+    "mismatched_tx_infos": 0,
+    "block_id_mismatches": 0,
+    "block_tx_mismatches": 0,
+    "diff_paths": {},
+}
+
+path_counts = collections.Counter()
+
+with mismatch_path.open("w") as mismatches:
+    for num in range(compare_head + 1):
+        jb = block_by_num(java_port, num)
+        gb = block_by_num(gtron_port, num)
+        summary["compared_blocks"] += 1
+
+        j_block_id = jb.get("blockID") or ""
+        g_block_id = gb.get("blockID") or ""
+        if j_block_id and g_block_id and j_block_id != g_block_id:
+            summary["block_id_mismatches"] += 1
+            mismatches.write(json.dumps({
+                "block": num,
+                "kind": "block_id",
+                "java": j_block_id,
+                "gtron": g_block_id,
+            }, sort_keys=True) + "\n")
+
+        jtxs = jb.get("transactions") or []
+        gtxs = gb.get("transactions") or []
+        summary["java_transactions"] += len(jtxs)
+        if len(jtxs) != len(gtxs):
+            summary["block_tx_mismatches"] += 1
+            mismatches.write(json.dumps({
+                "block": num,
+                "kind": "block_tx_count",
+                "java": len(jtxs),
+                "gtron": len(gtxs),
+            }, sort_keys=True) + "\n")
+
+        for idx, jtx in enumerate(jtxs):
+            txid = jtx.get("txID") or ""
+            gtx = gtxs[idx] if idx < len(gtxs) else {}
+            if txid and gtx.get("txID") and txid != gtx.get("txID"):
+                summary["block_tx_mismatches"] += 1
+                mismatches.write(json.dumps({
+                    "block": num,
+                    "tx_index": idx,
+                    "kind": "block_tx_id",
+                    "java": txid,
+                    "gtron": gtx.get("txID"),
+                }, sort_keys=True) + "\n")
+            if not txid:
+                continue
+
+            ji = tx_info(java_port, txid)
+            gi = tx_info(gtron_port, txid)
+            if not ji and not gi:
+                continue
+            if not ji or not gi:
+                summary["missing_tx_infos"] += 1
+                mismatches.write(json.dumps({
+                    "block": num,
+                    "tx_index": idx,
+                    "txid": txid,
+                    "kind": "missing_tx_info",
+                    "java_present": bool(ji),
+                    "gtron_present": bool(gi),
+                }, sort_keys=True) + "\n")
+                continue
+
+            summary["compared_tx_infos"] += 1
+            nd = diff(norm_info(ji), norm_info(gi))
+            if nd:
+                summary["mismatched_tx_infos"] += 1
+                for d in nd:
+                    path_counts[d["path"]] += 1
+                contract = (jtx.get("raw_data", {}).get("contract") or [{}])[0]
+                value = (contract.get("parameter") or {}).get("value") or {}
+                mismatches.write(json.dumps({
+                    "block": num,
+                    "tx_index": idx,
+                    "txid": txid,
+                    "contract_type": contract.get("type"),
+                    "contract_address": value.get("contract_address"),
+                    "owner_address": value.get("owner_address"),
+                    "data_selector": (value.get("data") or "")[:8],
+                    "kind": "transaction_info",
+                    "diffs": nd,
+                }, ensure_ascii=False, sort_keys=True) + "\n")
+
+summary["diff_paths"] = dict(path_counts.most_common())
+summary["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+print(json.dumps(summary, indent=2, sort_keys=True))
+if (
+    summary["missing_tx_infos"]
+    or summary["mismatched_tx_infos"]
+    or summary["block_id_mismatches"]
+    or summary["block_tx_mismatches"]
+):
+    sys.exit(1)
+PY
+    log "  ✓ receipt parity green"
+}
+
 # ── Main ─────────────────────────────────────────────────────────
 preflight
 if (( GTRON_ONLY )); then
@@ -1146,6 +1410,7 @@ case "$STAGE" in
     C)
         bootstrap_dailybuild_chain_params
         run_stage_C
+        compare_receipt_parity
         ;;
 esac
 

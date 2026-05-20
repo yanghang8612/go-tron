@@ -479,6 +479,7 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 
 	// Otherwise it's a new block broadcast — try to insert
 	if err := h.chain.InsertBlock(block); err != nil {
+		log.Warn("Block insert failed", "number", block.Number(), "peer", peer.ID(), "err", err)
 		return
 	}
 	log.Debug("Block received", "number", block.Number(), "peer", peer.ID())
