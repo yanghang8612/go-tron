@@ -242,7 +242,7 @@ func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value
 	contractAddr := tvm.createAddress(tvm.Nonce)
 	tvm.Nonce++
 
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, false)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, false, nil)
 }
 
 // CreateAt deploys a top-level contract at a caller-supplied address. TRON
@@ -253,7 +253,7 @@ func (tvm *TVM) CreateAt(caller, contractAddr tcommon.Address, code []byte, ener
 	if tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, false, false)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, false, false, nil)
 }
 
 // CreateAtWithToken deploys a top-level contract with TRC-10 message context.
@@ -264,7 +264,17 @@ func (tvm *TVM) CreateAtWithToken(caller, contractAddr tcommon.Address, code []b
 	if tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
-	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false)
+	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, nil)
+}
+
+// CreateAtWithTokenAndContract deploys a top-level contract after preloading
+// the SmartContract metadata that java-tron exposes during constructor
+// execution.
+func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, contractMeta *contractpb.SmartContract) ([]byte, tcommon.Address, uint64, error) {
+	if tvm.Depth >= maxCallDepth {
+		return nil, tcommon.Address{}, energy, ErrDepthExceeded
+	}
+	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, contractMeta)
 }
 
 // Create2 deploys a new contract with a deterministic address.
@@ -285,7 +295,7 @@ func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, valu
 	copy(contractAddr[1:], hash[12:32])
 
 	tvm.Nonce++
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil)
 }
 
 func (tvm *TVM) createAddress(nonce uint64) tcommon.Address {
@@ -310,7 +320,7 @@ func keccak256(data []byte) [32]byte {
 	return out
 }
 
-func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool) ([]byte, tcommon.Address, uint64, error) {
+func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract) ([]byte, tcommon.Address, uint64, error) {
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
@@ -338,7 +348,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	if internal {
 		tvm.createInternalContractAccount(caller, contractAddr, isCreate2)
 	} else {
-		tvm.StateDB.GetOrCreateAccount(contractAddr)
+		tvm.createExternalContractAccount(caller, contractAddr, contractMeta)
 		if !tvm.cfg.Constantinople {
 			tvm.StateDB.SetCode(contractAddr, legacyCreateContractCode(code))
 		}
@@ -452,6 +462,25 @@ func (tvm *TVM) createInternalContractAccount(origin, contractAddr tcommon.Addre
 		meta.TrxHash = tvm.RootTxID.Bytes()
 	}
 	tvm.StateDB.SetContract(contractAddr, meta)
+}
+
+func (tvm *TVM) createExternalContractAccount(origin, contractAddr tcommon.Address, contractMeta *contractpb.SmartContract) {
+	tvm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	if contractMeta == nil {
+		contractMeta = &contractpb.SmartContract{
+			OriginAddress:              origin.Bytes(),
+			ContractAddress:            contractAddr.Bytes(),
+			ConsumeUserResourcePercent: 100,
+		}
+		if tvm.cfg.Compatibility {
+			contractMeta.Version = 1
+		}
+	}
+	if contractMeta.ContractAddress == nil {
+		contractMeta.ContractAddress = contractAddr.Bytes()
+	}
+	tvm.StateDB.SetAccountName(contractAddr, contractMeta.GetName())
+	tvm.StateDB.SetContract(contractAddr, contractMeta)
 }
 
 func (tvm *TVM) restoreNewContractMark(addr tcommon.Address, wasNew bool) {

@@ -188,9 +188,8 @@ func opCallTokenId(_ *uint64, _ *Interpreter, contract *Contract, _ *Memory, sta
 func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
-	code := in.tvm.StateDB.GetCode(addr)
 	result := uint256.NewInt(0)
-	if len(code) > 0 {
+	if in.tvm.StateDB.GetContract(addr) != nil {
 		result.SetOne()
 	}
 	stack.push(result)

@@ -265,9 +265,18 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
 	configureTVMExecutionContext(evm, ctx)
 
-	ret, createdAddr, energyLeft, vmErr := evm.CreateAtWithToken(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue)
+	sc := proto.Clone(csc.NewContract).(*contractpb.SmartContract)
+	sc.ContractAddress = contractAddr[:]
+	if ctx.DynProps.AllowTvmCompatibleEvm() {
+		sc.Version = 1
+	} else {
+		sc.Version = 0
+	}
+
+	ret, createdAddr, energyLeft, vmErr := evm.CreateAtWithTokenAndContract(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue, sc)
 	if !createdAddr.IsEmpty() {
 		contractAddr = createdAddr
+		sc.ContractAddress = contractAddr[:]
 	}
 
 	energyUsed := energyLimit - energyLeft
@@ -286,13 +295,6 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	result.ContractRet = 1 // SUCCESS
 
-	sc := proto.Clone(csc.NewContract).(*contractpb.SmartContract)
-	sc.ContractAddress = contractAddr[:]
-	if ctx.DynProps.AllowTvmCompatibleEvm() {
-		sc.Version = 1
-	} else {
-		sc.Version = 0
-	}
 	ctx.State.SetContract(contractAddr, sc)
 
 	return result, nil

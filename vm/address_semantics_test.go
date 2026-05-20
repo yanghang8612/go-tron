@@ -10,6 +10,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func TestEnvironmentAddressOpcodesUseTwentyByteWords(t *testing.T) {
@@ -100,6 +101,41 @@ func TestCreate2AddressMatchesJavaFormula(t *testing.T) {
 	want := mustAddressFromHex(t, "418c8494edfa05ddfebe8e7b11cede2610dfbb3efc")
 	if addr != want {
 		t.Fatalf("CREATE2 address: got %s want %s", addr.Hex(), want.Hex())
+	}
+}
+
+func TestCreateConstructorIsContractSeesPendingMetadata(t *testing.T) {
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Solidity059: true}, nil)
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	code := []byte{
+		byte(ADDRESS),
+		byte(ISCONTRACT),
+		byte(PUSH1), 0x00,
+		byte(MSTORE),
+		byte(PUSH1), 0x20,
+		byte(PUSH1), 0x00,
+		byte(RETURN),
+	}
+	meta := &contractpb.SmartContract{
+		Name:                       "testIsContract",
+		OriginAddress:              owner.Bytes(),
+		ContractAddress:            contractAddr.Bytes(),
+		ConsumeUserResourcePercent: 100,
+	}
+
+	ret, addr, _, err := tvm.CreateAtWithTokenAndContract(owner, contractAddr, code, 1_000_000, 0, 0, 0, meta)
+	if err != nil {
+		t.Fatalf("CreateAtWithTokenAndContract: %v", err)
+	}
+	if addr != contractAddr {
+		t.Fatalf("contract address: got %s want %s", addr.Hex(), contractAddr.Hex())
+	}
+	if len(ret) != 32 || ret[31] != 1 {
+		t.Fatalf("constructor isContract return: got %x, want 1", ret)
+	}
+	if tvm.StateDB.GetContract(contractAddr) == nil {
+		t.Fatal("contract metadata should be visible after create")
 	}
 }
 
