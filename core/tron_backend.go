@@ -1235,12 +1235,16 @@ func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64,
 	return state.NewPersistentHistoryReader(b.chain.buffer, live, headNum), headNum, nil
 }
 
-// requireArchive enforces the HistoryEnabled gate for a query bound to
-// blockNum. A query at or beyond head is always allowed (it resolves from
-// live state). A query for a strictly-older block requires the node to have
-// been capturing history; otherwise it returns ErrArchiveHistoryDisabled.
+// requireArchive enforces the block range and HistoryEnabled gates for a query
+// bound to blockNum. A query at head is served from live state. A query past
+// head has no committed state and must fail instead of silently returning head.
+// A query for a strictly-older block requires the node to have been capturing
+// history; otherwise it returns ErrArchiveHistoryDisabled.
 func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
-	if blockNum >= headNum {
+	if blockNum > headNum {
+		return fmt.Errorf("block %d is beyond current head %d", blockNum, headNum)
+	}
+	if blockNum == headNum {
 		return nil
 	}
 	if !b.chain.Config().HistoryEnabled {

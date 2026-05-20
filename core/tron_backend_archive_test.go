@@ -88,11 +88,10 @@ func TestArchiveQuery_BalanceAtBlock(t *testing.T) {
 		t.Errorf("head balance = %d, want %d", headGot, want[numBlocks])
 	}
 
-	// A block number past head also resolves to the live value (no rollback).
-	if futureGot, err := b.GetBalanceAt(recipient, numBlocks+100); err != nil {
-		t.Fatalf("GetBalanceAt(recipient, head+100): %v", err)
-	} else if futureGot != want[numBlocks] {
-		t.Errorf("GetBalanceAt(recipient, head+100) = %d, want %d", futureGot, want[numBlocks])
+	// A block number past head has no committed state; it must not silently
+	// resolve to the live value.
+	if _, err := b.GetBalanceAt(recipient, numBlocks+100); err == nil {
+		t.Fatal("GetBalanceAt(recipient, head+100) returned nil error")
 	}
 
 	// Independent oracle cross-check: the history reader (rollback over
@@ -354,8 +353,39 @@ func TestArchiveQuery_GatedOnHistoryEnabled(t *testing.T) {
 	if _, err := b.GetBalanceAt(recipient, head); err != nil {
 		t.Errorf("GetBalanceAt(recipient, head) with history disabled: %v", err)
 	}
-	// And a block past head likewise resolves live (>= head short-circuit).
-	if _, err := b.GetBalanceAt(recipient, head+50); err != nil {
-		t.Errorf("GetBalanceAt(recipient, head+50) with history disabled: %v", err)
+	// A block past head must fail before the history-enabled gate; returning
+	// live state here would make an explicit future block indistinguishable
+	// from "latest".
+	if _, err := b.GetBalanceAt(recipient, head+50); err == nil {
+		t.Error("GetBalanceAt(recipient, head+50) returned nil error")
+	}
+}
+
+func TestArchiveQuery_FutureBlockRejected(t *testing.T) {
+	b, witness, recipient := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+	}
+	future := bc.CurrentBlock().Number() + 1
+
+	if _, err := b.GetAccountAt(recipient, future); err == nil {
+		t.Fatal("GetAccountAt future block returned nil error")
+	}
+	if _, err := b.GetBalanceAt(recipient, future); err == nil {
+		t.Fatal("GetBalanceAt future block returned nil error")
+	}
+	if _, err := b.GetCodeAt(recipient, future); err == nil {
+		t.Fatal("GetCodeAt future block returned nil error")
+	}
+	var slot tcommon.Hash
+	if _, err := b.GetStorageAtBlock(recipient, slot, future); err == nil {
+		t.Fatal("GetStorageAtBlock future block returned nil error")
 	}
 }
