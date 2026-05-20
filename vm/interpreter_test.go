@@ -265,7 +265,7 @@ func TestTimestampOpcodeReturnsSeconds(t *testing.T) {
 
 func TestGasPriceOpcodeReturnsEnergyFeeForVersionOneCompatibilityContract(t *testing.T) {
 	evm, sdb, dp := newTestTVMForCreate(t, TVMConfig{Compatibility: true}, nil)
-	dp.SetEnergyFee(420)
+	dp.Set("energy_fee", 420)
 	addr := tcommon.Address{0x41, 0x02}
 	sdb.CreateAccount(addr, corepb.AccountType_Contract)
 	sdb.SetContract(addr, &contractpb.SmartContract{
