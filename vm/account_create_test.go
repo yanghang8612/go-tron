@@ -31,6 +31,86 @@ func newTestTVMForCreate(t *testing.T, cfg TVMConfig, dpInit func(*state.Dynamic
 	return tvm, stateDB, dp
 }
 
+func expectedInternalTxHash(parent tcommon.Hash, receiveAddress, data []byte, value int64, nonce uint64) tcommon.Hash {
+	var valueBytes [8]byte
+	binary.BigEndian.PutUint64(valueBytes[:], uint64(value))
+	raw := make([]byte, 0, len(parent)+len(receiveAddress)+len(data)+len(valueBytes)+8)
+	raw = append(raw, parent[:]...)
+	raw = append(raw, receiveAddress...)
+	raw = append(raw, data...)
+	raw = append(raw, valueBytes[:]...)
+	var nonceBytes [8]byte
+	binary.BigEndian.PutUint64(nonceBytes[:], nonce)
+	raw = append(raw, nonceBytes[:]...)
+	return tcommon.Keccak256(raw)
+}
+
+func TestInternalTransactionRecordedForNestedCallToEmptyAccount(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	root := tcommon.HexToHash("010203")
+	tvm.SetRootTransactionID(root)
+	tvm.Depth = 1
+	tvm.internalTxHashStack = append(tvm.internalTxHashStack, root)
+
+	caller := tcommon.Address{0x41, 0x01}
+	target := tcommon.Address{0x41, 0x02}
+	input := []byte{0xaa, 0xbb}
+	sdb.CreateAccount(caller, 0)
+	sdb.CreateAccount(target, 0)
+	sdb.AddBalance(caller, 100)
+
+	if _, _, err := tvm.Call(caller, target, input, 1_000_000, 7); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if len(tvm.InternalTransactions) != 1 {
+		t.Fatalf("internal transactions: got %d, want 1", len(tvm.InternalTransactions))
+	}
+	it := tvm.InternalTransactions[0]
+	wantHash := expectedInternalTxHash(root, target.Bytes(), input, 7, 1)
+	if string(it.Hash) != string(wantHash.Bytes()) {
+		t.Fatalf("internal tx hash: got %x, want %x", it.Hash, wantHash.Bytes())
+	}
+	if string(it.CallerAddress) != string(caller.Bytes()) {
+		t.Fatalf("caller: got %x, want %x", it.CallerAddress, caller.Bytes())
+	}
+	if string(it.TransferToAddress) != string(target.Bytes()) {
+		t.Fatalf("transferTo: got %x, want %x", it.TransferToAddress, target.Bytes())
+	}
+	if len(it.CallValueInfo) != 1 || it.CallValueInfo[0].CallValue != 7 {
+		t.Fatalf("callValueInfo: got %+v, want one TRX value 7", it.CallValueInfo)
+	}
+	if string(it.Note) != "call" {
+		t.Fatalf("note: got %q, want call", it.Note)
+	}
+	if it.Rejected {
+		t.Fatal("internal transaction should not be rejected")
+	}
+}
+
+func TestInternalTransactionRejectedWhenNestedCallReverts(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	root := tcommon.HexToHash("0a0b0c")
+	tvm.SetRootTransactionID(root)
+	tvm.Depth = 1
+	tvm.internalTxHashStack = append(tvm.internalTxHashStack, root)
+
+	caller := tcommon.Address{0x41, 0x01}
+	target := tcommon.Address{0x41, 0x02}
+	sdb.CreateAccount(caller, 0)
+	sdb.CreateAccount(target, 0)
+	sdb.SetCode(target, []byte{0x60, 0x00, 0x60, 0x00, 0xfd}) // REVERT(0, 0)
+
+	if _, _, err := tvm.Call(caller, target, nil, 1_000_000, 0); err != ErrExecutionReverted {
+		t.Fatalf("Call error: got %v, want ErrExecutionReverted", err)
+	}
+	if len(tvm.InternalTransactions) != 1 {
+		t.Fatalf("internal transactions: got %d, want 1", len(tvm.InternalTransactions))
+	}
+	if !tvm.InternalTransactions[0].Rejected {
+		t.Fatal("internal transaction should be rejected")
+	}
+}
+
 // TestCreateAccountWithTime_FromCALLWithValue verifies that VM CALL with TRX
 // value to a non-existent address auto-creates the destination account with
 // `Account.create_time = dp.LatestBlockHeaderTimestamp()` and (when
@@ -316,9 +396,12 @@ func TestCreateAtWithToken_LondonRejectsEFPrefixRuntimeCode(t *testing.T) {
 		0xEF,
 	}
 
-	_, _, _, err := tvm.CreateAtWithToken(caller, contractAddr, bytecode, 1_000_000, 0, 0, 0)
+	ret, _, _, err := tvm.CreateAtWithToken(caller, contractAddr, bytecode, 1_000_000, 0, 0, 0)
 	if err != ErrInvalidCode {
 		t.Fatalf("CreateAtWithToken error: got %v, want %v", err, ErrInvalidCode)
+	}
+	if string(ret) != string([]byte{0xEF}) {
+		t.Fatalf("contract result: got %x, want ef", ret)
 	}
 	if got := sdb.GetCode(contractAddr); len(got) != 0 {
 		t.Fatalf("invalid EF-prefixed runtime code should not be stored, got %x", got)
@@ -446,6 +529,105 @@ func TestCallTokenToExistingCodeInsufficientBalanceSkipsJavaSurcharge(t *testing
 	}
 	if got, want := uint64(100_000)-contract.Energy, uint64(6764); got != want {
 		t.Fatalf("energy used: got %d, want %d", got, want)
+	}
+}
+
+func TestCallTokenToSelfReturnsTransferFailed(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	sdb.GetOrCreateAccount(caller)
+	sdb.AddTRC10Balance(caller, tokenID, 10)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+		byte(PUSH1), 0x01, // tokenValue
+		byte(PUSH20),
+	}
+	code = append(code, caller[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALLTOKEN),
+		byte(STOP),
+	)
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != ErrTokenTransferFailed {
+		t.Fatalf("Run error: got %v, want %v", err, ErrTokenTransferFailed)
+	}
+	if got := sdb.GetTRC10Balance(caller, tokenID); got != 10 {
+		t.Fatalf("caller token balance changed: got %d", got)
+	}
+}
+
+func TestCallValueToSelfReturnsTransferFailed(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	sdb.GetOrCreateAccount(caller)
+	sdb.AddBalance(caller, 10)
+
+	if _, _, err := tvm.Call(caller, caller, nil, 100_000, 1); err != ErrTransferFailed {
+		t.Fatalf("Call error: got %v, want %v", err, ErrTransferFailed)
+	}
+}
+
+func TestCallTokenValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.AddTRC10Balance(caller, tokenID, 10)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // retSize
+		byte(PUSH1), 0x00, // retOffset
+		byte(PUSH1), 0x00, // inSize
+		byte(PUSH1), 0x00, // inOffset
+		byte(PUSH3), 0x0f, 0x42, 0x42, // tokenId = 1000002
+		byte(PUSH8), 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Long.MAX_VALUE + 1
+		byte(PUSH20),
+	}
+	code = append(code, dest[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x27, 0x10, // gas
+		byte(CALLTOKEN),
+		byte(STOP),
+	)
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != ErrEndowmentOutOfRange {
+		t.Fatalf("Run error: got %v, want %v", err, ErrEndowmentOutOfRange)
+	}
+}
+
+func TestCallTokenToSelfInsufficientBalanceReturnsCallFailure(t *testing.T) {
+	const tokenID = int64(1_000_002)
+
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	sdb.GetOrCreateAccount(caller)
+
+	if _, _, err := tvm.CallToken(caller, caller, nil, 100_000, 0, tokenID, 1); err != ErrInsufficientBalance {
+		t.Fatalf("CallToken error: got %v, want %v", err, ErrInsufficientBalance)
+	}
+}
+
+func TestCallValueToSelfInsufficientBalanceReturnsCallFailure(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	sdb.GetOrCreateAccount(caller)
+
+	if _, _, err := tvm.Call(caller, caller, nil, 100_000, 1); err != ErrInsufficientBalance {
+		t.Fatalf("Call error: got %v, want %v", err, ErrInsufficientBalance)
 	}
 }
 

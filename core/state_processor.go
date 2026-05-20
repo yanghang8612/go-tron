@@ -177,6 +177,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 // buildTransactionInfo constructs a TransactionInfo proto from the execution result.
 func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockNum uint64, blockTime int64, supportTransactionFeePool bool) *corepb.TransactionInfo {
 	txID := tx.Hash()
+	isVMContract := isVMContractType(tx.ContractType())
 
 	// Receipt fields mirror java-tron `Protocol.ResourceReceipt`: EnergyUsage
 	// is the stake-funded portion only (proto field 1), EnergyUsageTotal is
@@ -195,8 +196,10 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			EnergyUsageTotal:  result.EnergyUsageTotal,
 			NetUsage:          result.NetUsage,
 			NetFee:            result.NetFee,
-			Result:            corepb.Transaction_ResultContractResult(result.ContractRet),
 		},
+	}
+	if isVMContract {
+		info.Receipt.Result = corepb.Transaction_ResultContractResult(result.ContractRet)
 	}
 	if supportTransactionFeePool {
 		if result.NetFeeForBandwidth {
@@ -207,8 +210,10 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 		}
 	}
 
-	if len(result.ContractResult) > 0 {
+	if result.ContractResultPresent || len(result.ContractResult) > 0 {
 		info.ContractResult = [][]byte{result.ContractResult}
+	} else if !isVMContract && result.ContractRet == int32(corepb.Transaction_Result_SUCCESS) {
+		info.ContractResult = [][]byte{{}}
 	}
 
 	if len(result.ContractAddress) > 0 {
@@ -253,7 +258,7 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 
 	for _, l := range result.Logs {
 		pbLog := &corepb.TransactionInfo_Log{
-			Address: l.Address[:],
+			Address: transactionInfoLogAddress(l.Address),
 			Data:    l.Data,
 		}
 		for _, topic := range l.Topics {
@@ -261,15 +266,30 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 		}
 		info.Log = append(info.Log, pbLog)
 	}
+	if len(result.InternalTransactions) > 0 {
+		info.InternalTransactions = append(info.InternalTransactions, result.InternalTransactions...)
+	}
 
 	if result.ContractRet > 1 {
 		info.Result = corepb.TransactionInfo_FAILED
-		if result.ContractRet == 2 && len(result.ContractResult) > 0 {
-			info.ResMessage = result.ContractResult
+		if len(result.ResMessage) > 0 {
+			info.ResMessage = result.ResMessage
 		}
 	}
 
 	return info
+}
+
+func isVMContractType(contractType corepb.Transaction_Contract_ContractType) bool {
+	return contractType == corepb.Transaction_Contract_CreateSmartContract ||
+		contractType == corepb.Transaction_Contract_TriggerSmartContract
+}
+
+func transactionInfoLogAddress(addr tcommon.Address) []byte {
+	if addr[0] == tcommon.AddressPrefixMainnet || addr[0] == tcommon.AddressPrefixTestnet {
+		return append([]byte(nil), addr[1:]...)
+	}
+	return addr.Bytes()
 }
 
 // ProcessBlock executes all transactions in a block and pays the block reward.

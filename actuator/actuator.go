@@ -118,9 +118,12 @@ type Result struct {
 	OrderID                       []byte
 	OrderDetails                  []*corepb.MarketOrderDetail
 	ContractResult                []byte
+	ContractResultPresent         bool
 	ContractAddress               []byte
 	Logs                          []vm.Log
+	InternalTransactions          []*corepb.InternalTransaction
 	ContractRet                   int32
+	ResMessage                    []byte
 }
 
 type Actuator interface {

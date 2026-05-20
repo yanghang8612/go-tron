@@ -158,26 +158,62 @@ func (a *VMActuator) Execute(ctx *Context) (*Result, error) {
 }
 
 func contractRetFromError(err error) int32 {
-	switch err {
-	case vm.ErrExecutionReverted:
+	switch {
+	case errors.Is(err, vm.ErrExecutionReverted):
 		return 2 // REVERT
-	case vm.ErrInvalidJump:
+	case errors.Is(err, vm.ErrOutOfMemory):
+		return 4 // OUT_OF_MEMORY
+	case errors.Is(err, vm.ErrAlreadyTimeOut):
+		return 11 // OUT_OF_TIME
+	case errors.Is(err, vm.ErrTransferFailed), errors.Is(err, vm.ErrTokenTransferFailed), errors.Is(err, vm.ErrEndowmentOutOfRange):
+		return 14 // TRANSFER_FAILED
+	case errors.Is(err, vm.ErrInvalidJump):
 		return 3 // BAD_JUMP_DESTINATION
-	case vm.ErrOutOfEnergy:
+	case errors.Is(err, vm.ErrOutOfEnergy):
 		return 10 // OUT_OF_ENERGY
-	case vm.ErrStackUnderflow:
+	case errors.Is(err, vm.ErrStackUnderflow):
 		return 6 // STACK_TOO_SMALL
-	case vm.ErrStackOverflow:
+	case errors.Is(err, vm.ErrStackOverflow):
 		return 7 // STACK_TOO_LARGE
-	case vm.ErrWriteProtection:
+	case errors.Is(err, vm.ErrWriteProtection):
 		return 8 // ILLEGAL_OPERATION
-	case vm.ErrDepthExceeded:
+	case errors.Is(err, vm.ErrDepthExceeded):
 		return 9 // STACK_OVERFLOW
-	case vm.ErrContractCodeTooLarge, vm.ErrInvalidCode:
+	case errors.Is(err, vm.ErrContractCodeTooLarge), errors.Is(err, vm.ErrInvalidCode):
 		return 15 // INVALID_CODE
 	default:
 		return 13 // UNKNOWN
 	}
+}
+
+func runtimeMessageFromError(err error) []byte {
+	if err == nil {
+		return nil
+	}
+	if err == vm.ErrExecutionReverted {
+		return []byte("REVERT opcode executed")
+	}
+	return []byte(err.Error())
+}
+
+func expectedContractRet(ctx *Context) (corepb.Transaction_ResultContractResult, bool) {
+	if ctx == nil || ctx.Tx == nil || ctx.Tx.Proto() == nil || len(ctx.Tx.Proto().Ret) == 0 {
+		return corepb.Transaction_Result_DEFAULT, false
+	}
+	return ctx.Tx.Proto().Ret[0].GetContractRet(), true
+}
+
+func isReplayOutOfTime(ctx *Context) bool {
+	ret, ok := expectedContractRet(ctx)
+	return ok && ret == corepb.Transaction_Result_OUT_OF_TIME
+}
+
+func setReplayOutOfTimeResult(result *Result, energyLimit uint64) {
+	result.EnergyUsageTotal = int64(energyLimit)
+	result.ContractRet = int32(corepb.Transaction_Result_OUT_OF_TIME)
+	result.ContractResult = []byte{}
+	result.ContractResultPresent = true
+	result.ResMessage = runtimeMessageFromError(vm.ErrAlreadyTimeOut)
 }
 
 func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
@@ -211,8 +247,12 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	bytecode := csc.NewContract.Bytecode
 	contractAddr := generateContractAddress(ctx.Tx, owner)
 
-	result := &Result{}
+	result := &Result{ContractAddress: contractAddr[:]}
 	energyLimit := uint64(accountEnergyLimit(ctx, owner, ctx.Tx.FeeLimit(), callValue, result))
+	if isReplayOutOfTime(ctx) {
+		setReplayOutOfTimeResult(result, energyLimit)
+		return result, nil
+	}
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
@@ -225,21 +265,26 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 	evm := vm.NewTVM(ctx.State, ctx.DynProps, owner, ctx.BlockNumber, ctx.BlockTime, common.Address{}, 1, cfg)
 	configureTVMExecutionContext(evm, ctx)
 
-	ret, contractAddr, energyLeft, vmErr := evm.CreateAtWithToken(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue)
+	ret, createdAddr, energyLeft, vmErr := evm.CreateAtWithToken(owner, contractAddr, bytecode, energyLimit, callValue, tokenID, tokenValue)
+	if !createdAddr.IsEmpty() {
+		contractAddr = createdAddr
+	}
 
 	energyUsed := energyLimit - energyLeft
 
 	result.EnergyUsageTotal = int64(energyUsed)
 	result.ContractResult = ret
+	result.ContractResultPresent = true
 	result.Logs = evm.Logs
+	result.InternalTransactions = evm.InternalTransactions
 
 	if vmErr != nil {
 		result.ContractRet = contractRetFromError(vmErr)
+		result.ResMessage = runtimeMessageFromError(vmErr)
 		return result, nil
 	}
 
 	result.ContractRet = 1 // SUCCESS
-	result.ContractAddress = contractAddr[:]
 
 	sc := proto.Clone(csc.NewContract).(*contractpb.SmartContract)
 	sc.ContractAddress = contractAddr[:]
@@ -273,7 +318,12 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 	data := tsc.Data
 
 	result := &Result{}
+	result.ContractAddress = contractAddr[:]
 	energyLimit := uint64(triggerEnergyLimit(ctx, owner, contractAddr, ctx.Tx.FeeLimit(), callValue, result))
+	if isReplayOutOfTime(ctx) {
+		setReplayOutOfTimeResult(result, energyLimit)
+		return result, nil
+	}
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
@@ -301,10 +351,13 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	result.EnergyUsageTotal = int64(energyUsed)
 	result.ContractResult = ret
+	result.ContractResultPresent = true
 	result.Logs = evm.Logs
+	result.InternalTransactions = evm.InternalTransactions
 
 	if vmErr != nil {
 		result.ContractRet = contractRetFromError(vmErr)
+		result.ResMessage = runtimeMessageFromError(vmErr)
 		return result, nil
 	}
 

@@ -11,6 +11,8 @@ type Contract struct {
 	CodeAddr tcommon.Address // code source address (differs for DELEGATECALL)
 	Input    []byte          // calldata
 
+	InternalTxHash tcommon.Hash // java-tron parent hash for nested internal txs
+
 	// TRC-10 token transfer (for CALLTOKEN opcode)
 	TokenID    int64 // TRC-10 token ID (0 = none)
 	TokenValue int64 // TRC-10 token amount

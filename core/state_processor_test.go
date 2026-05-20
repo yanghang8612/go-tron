@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -47,6 +48,24 @@ func makeTestTransferTx(from, to byte, amount int64) *types.Transaction {
 			Expiration: 60_000,
 			Contract: []*corepb.Transaction_Contract{{
 				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: param,
+			}},
+		},
+	})
+}
+
+func makeTestTriggerTx(owner byte, contractAddr tcommon.Address, data []byte) *types.Transaction {
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    testProcessorAddr(owner).Bytes(),
+		ContractAddress: contractAddr.Bytes(),
+		Data:            data,
+	}
+	param, _ := anypb.New(tsc)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TriggerSmartContract,
 				Parameter: param,
 			}},
 		},
@@ -430,6 +449,98 @@ func TestBuildTransactionInfo_PackingFee(t *testing.T) {
 	info = buildTransactionInfo(tx, result, 1, 3000, true)
 	if info.PackingFee != 0 {
 		t.Fatalf("packingFee must exclude OUT_OF_TIME energy fee: got %d, want 0", info.PackingFee)
+	}
+}
+
+func TestBuildTransactionInfo_IncludesEmptyVMContractResult(t *testing.T) {
+	contractAddr := testProcessorAddr(2)
+	tx := makeTestTriggerTx(1, contractAddr, nil)
+	result := &actuator.Result{
+		ContractRet:           int32(corepb.Transaction_Result_OUT_OF_TIME),
+		ContractResult:        []byte{},
+		ContractResultPresent: true,
+		ResMessage:            []byte("Already Time Out"),
+	}
+
+	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	if len(info.ContractResult) != 1 {
+		t.Fatalf("contractResult entries: got %d, want 1", len(info.ContractResult))
+	}
+	if len(info.ContractResult[0]) != 0 {
+		t.Fatalf("contractResult[0] length: got %d, want 0", len(info.ContractResult[0]))
+	}
+	if got := info.Receipt.Result; got != corepb.Transaction_Result_OUT_OF_TIME {
+		t.Fatalf("receipt result: got %s, want OUT_OF_TIME", got)
+	}
+	if got := string(info.ResMessage); got != "Already Time Out" {
+		t.Fatalf("resMessage: got %q", got)
+	}
+}
+
+func TestBuildTransactionInfo_NonVMReceiptShapeMatchesJavaTron(t *testing.T) {
+	tx := makeTestTransferTx(1, 2, 100)
+	result := &actuator.Result{
+		ContractRet: int32(corepb.Transaction_Result_SUCCESS),
+	}
+
+	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	if got := info.Receipt.Result; got != corepb.Transaction_Result_DEFAULT {
+		t.Fatalf("receipt result: got %s, want DEFAULT", got)
+	}
+	if len(info.ContractResult) != 1 {
+		t.Fatalf("contractResult entries: got %d, want 1", len(info.ContractResult))
+	}
+	if len(info.ContractResult[0]) != 0 {
+		t.Fatalf("contractResult[0] length: got %d, want 0", len(info.ContractResult[0]))
+	}
+}
+
+func TestBuildTransactionInfo_VMReceiptAndLogShapeMatchesJavaTron(t *testing.T) {
+	contractAddr := testProcessorAddr(2)
+	tx := makeTestTriggerTx(1, contractAddr, []byte{0x12, 0x34})
+	result := &actuator.Result{
+		ContractRet:           int32(corepb.Transaction_Result_SUCCESS),
+		ContractResultPresent: true,
+		ContractResult:        []byte{0xab},
+		ContractAddress:       contractAddr.Bytes(),
+		Logs: []vm.Log{{
+			Address: contractAddr,
+			Data:    []byte{0xcd},
+			Topics:  [][]byte{{0x01}},
+		}},
+		InternalTransactions: []*corepb.InternalTransaction{{
+			Hash:              []byte{0x01},
+			CallerAddress:     testProcessorAddr(1).Bytes(),
+			TransferToAddress: contractAddr.Bytes(),
+			CallValueInfo: []*corepb.InternalTransaction_CallValueInfo{{
+				CallValue: 7,
+			}},
+			Note: []byte("call"),
+		}},
+	}
+
+	info := buildTransactionInfo(tx, result, 1, 3000, false)
+	if got := info.Receipt.Result; got != corepb.Transaction_Result_SUCCESS {
+		t.Fatalf("receipt result: got %s, want SUCCESS", got)
+	}
+	if len(info.ContractResult) != 1 || string(info.ContractResult[0]) != string([]byte{0xab}) {
+		t.Fatalf("contractResult: got %x, want ab", info.ContractResult)
+	}
+	if string(info.ContractAddress) != string(contractAddr.Bytes()) {
+		t.Fatalf("contract_address: got %x, want %x", info.ContractAddress, contractAddr.Bytes())
+	}
+	if len(info.Log) != 1 {
+		t.Fatalf("logs: got %d, want 1", len(info.Log))
+	}
+	wantLogAddress := contractAddr.Bytes()[1:]
+	if string(info.Log[0].Address) != string(wantLogAddress) {
+		t.Fatalf("log address: got %x, want %x", info.Log[0].Address, wantLogAddress)
+	}
+	if len(info.InternalTransactions) != 1 {
+		t.Fatalf("internal_transactions: got %d, want 1", len(info.InternalTransactions))
+	}
+	if string(info.InternalTransactions[0].Note) != "call" {
+		t.Fatalf("internal transaction note: got %q, want call", info.InternalTransactions[0].Note)
 	}
 }
 

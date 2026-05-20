@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -31,25 +32,27 @@ type KVReadWriter interface {
 
 // TVM is the top-level TVM execution context.
 type TVM struct {
-	StateDB          *state.StateDB
-	DB               KVReadWriter // rawdb access (e.g., ContractState for dynamic energy)
-	DynProps         *state.DynamicProperties
-	Origin           tcommon.Address // tx.origin
-	BlockNumber      uint64
-	Timestamp        int64
-	HeadSlot         int64
-	HasHeadSlot      bool
-	Coinbase         tcommon.Address // block producer
-	ChainID          int64
-	Depth            int    // call depth
-	Nonce            uint64 // java-tron Program nonce for internal transactions
-	RootTxID         tcommon.Hash
-	BlackholeAddress tcommon.Address
-	Logs             []Log // accumulated log events from this execution
+	StateDB              *state.StateDB
+	DB                   KVReadWriter // rawdb access (e.g., ContractState for dynamic energy)
+	DynProps             *state.DynamicProperties
+	Origin               tcommon.Address // tx.origin
+	BlockNumber          uint64
+	Timestamp            int64
+	HeadSlot             int64
+	HasHeadSlot          bool
+	Coinbase             tcommon.Address // block producer
+	ChainID              int64
+	Depth                int    // call depth
+	Nonce                uint64 // java-tron Program nonce for internal transactions
+	RootTxID             tcommon.Hash
+	BlackholeAddress     tcommon.Address
+	Logs                 []Log // accumulated log events from this execution
+	InternalTransactions []*corepb.InternalTransaction
 
-	cfg          TVMConfig
-	interpreter  *Interpreter
-	newContracts map[tcommon.Address]bool
+	cfg                 TVMConfig
+	interpreter         *Interpreter
+	newContracts        map[tcommon.Address]bool
+	internalTxHashStack []tcommon.Hash
 }
 
 func (tvm *TVM) LogSnapshot() int {
@@ -58,6 +61,73 @@ func (tvm *TVM) LogSnapshot() int {
 
 func (tvm *TVM) RevertLogs(snapshot int) {
 	tvm.Logs = tvm.Logs[:snapshot]
+}
+
+func (tvm *TVM) InternalTransactionSnapshot() int {
+	return len(tvm.InternalTransactions)
+}
+
+func (tvm *TVM) rejectInternalTransactionsFrom(snapshot int) {
+	for i := snapshot; i < len(tvm.InternalTransactions); i++ {
+		tvm.InternalTransactions[i].Rejected = true
+	}
+}
+
+func (tvm *TVM) runContract(contract *Contract) ([]byte, error) {
+	if contract.InternalTxHash.IsEmpty() {
+		contract.InternalTxHash = tvm.RootTxID
+	}
+	tvm.internalTxHashStack = append(tvm.internalTxHashStack, contract.InternalTxHash)
+	tvm.Depth++
+	ret, err := tvm.interpreter.Run(contract)
+	tvm.Depth--
+	tvm.internalTxHashStack = tvm.internalTxHashStack[:len(tvm.internalTxHashStack)-1]
+	return ret, err
+}
+
+func (tvm *TVM) currentInternalTxHash() tcommon.Hash {
+	if n := len(tvm.internalTxHashStack); n > 0 {
+		return tvm.internalTxHashStack[n-1]
+	}
+	return tvm.RootTxID
+}
+
+func (tvm *TVM) addInternalTransaction(caller, transferTo tcommon.Address, value int64, data []byte, note string, tokenID, tokenValue int64) *corepb.InternalTransaction {
+	parentHash := tvm.currentInternalTxHash()
+	receiveAddress := transferTo.Bytes()
+	if note == "create" {
+		receiveAddress = nil
+	}
+
+	var valueBytes [8]byte
+	binary.BigEndian.PutUint64(valueBytes[:], uint64(value))
+	raw := make([]byte, 0, len(parentHash)+len(receiveAddress)+len(data)+len(valueBytes))
+	raw = append(raw, parentHash[:]...)
+	raw = append(raw, receiveAddress...)
+	raw = append(raw, data...)
+	raw = append(raw, valueBytes[:]...)
+
+	var nonceBytes [8]byte
+	binary.BigEndian.PutUint64(nonceBytes[:], tvm.Nonce)
+	hash := tcommon.Keccak256(append(raw, nonceBytes[:]...))
+
+	it := &corepb.InternalTransaction{
+		Hash:              hash.Bytes(),
+		CallerAddress:     caller.Bytes(),
+		TransferToAddress: transferTo.Bytes(),
+		CallValueInfo: []*corepb.InternalTransaction_CallValueInfo{{
+			CallValue: value,
+		}},
+		Note: []byte(note),
+	}
+	if tokenID > 0 {
+		it.CallValueInfo = append(it.CallValueInfo, &corepb.InternalTransaction_CallValueInfo{
+			TokenId:   strconv.FormatInt(tokenID, 10),
+			CallValue: tokenValue,
+		})
+	}
+	tvm.InternalTransactions = append(tvm.InternalTransactions, it)
+	return it
 }
 
 func (tvm *TVM) ResourceTime() int64 {
@@ -227,6 +297,7 @@ func keccak256(data []byte) [32]byte {
 func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool) ([]byte, tcommon.Address, uint64, error) {
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
+	internalTxSnap := tvm.InternalTransactionSnapshot()
 
 	if value > 0 && tvm.StateDB.GetBalance(caller) < value {
 		tvm.RevertLogs(logSnap)
@@ -239,6 +310,10 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		return nil, tcommon.Address{}, energy, ErrInsufficientBalance
 	}
 	if tvm.StateDB.AccountExists(contractAddr) && tvm.StateDB.IsContract(contractAddr) {
+		if internal {
+			tvm.addInternalTransaction(caller, contractAddr, value, code, "create", 0, 0)
+			tvm.rejectInternalTransactionsFrom(internalTxSnap)
+		}
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
 		return nil, tcommon.Address{}, 0, ErrContractAlreadyExists
@@ -274,16 +349,25 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.StateDB.AddTRC10Balance(contractAddr, tokenID, tokenValue)
 	}
 
+	var internalTx *corepb.InternalTransaction
+	if internal {
+		internalTx = tvm.addInternalTransaction(caller, contractAddr, value, code, "create", 0, 0)
+	}
+
 	contract := NewContract(caller, contractAddr, value, energy)
+	if internalTx != nil {
+		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
+	} else {
+		contract.InternalTxHash = tvm.RootTxID
+	}
 	contract.TokenID = tokenID
 	contract.TokenValue = tokenValue
 	contract.SetCode(contractAddr, code)
 
-	tvm.Depth++
-	ret, err := tvm.interpreter.Run(contract)
-	tvm.Depth--
+	ret, err := tvm.runContract(contract)
 
 	if err != nil {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
@@ -294,14 +378,16 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	}
 
 	if len(ret) != 0 && tvm.cfg.London && ret[0] == 0xEF {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		return nil, tcommon.Address{}, 0, ErrInvalidCode
+		return ret, tcommon.Address{}, 0, ErrInvalidCode
 	}
 
 	depositCost := uint64(len(ret)) * EnergyCodeDeposit
 	if !contract.UseEnergy(depositCost) {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
@@ -372,6 +458,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
+	internalTxSnap := tvm.InternalTransactionSnapshot()
 
 	if value > 0 {
 		// java-tron Program.callToAddress (Program.java:1081-1083):
@@ -382,6 +469,16 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		// guard with the same precompile check to preserve wire format.
 		if getPrecompile(addr, tvm.cfg) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
+		}
+		if tvm.StateDB.GetBalance(caller) < value {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrInsufficientBalance
+		}
+		if caller == addr {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrTransferFailed
 		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
@@ -410,26 +507,37 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	if tvm.Depth > 0 {
 		tvm.Nonce++
 	}
+	var internalTx *corepb.InternalTransaction
+	if tvm.Depth > 0 {
+		internalTx = tvm.addInternalTransaction(caller, addr, value, input, "call", 0, 0)
+	}
 	code := tvm.StateDB.GetCode(addr)
 	if len(code) == 0 {
 		return nil, energy, nil
 	}
 
 	contract := NewContract(caller, addr, value, energy)
+	if internalTx != nil {
+		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
+	} else {
+		contract.InternalTxHash = tvm.RootTxID
+	}
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
-	tvm.Depth++
-	ret, err := tvm.interpreter.Run(contract)
-	tvm.Depth--
+	ret, err := tvm.runContract(contract)
 
 	tvm.interpreter.returnData = ret
 
 	if err != nil {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err
+		}
+		if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+			return nil, contract.Energy, err
 		}
 		return nil, 0, err
 	}
@@ -444,6 +552,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
+	internalTxSnap := tvm.InternalTransactionSnapshot()
 
 	if value > 0 {
 		// Mirror java-tron `endowment > 0` gate for TRX value transfers
@@ -455,6 +564,16 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		if getPrecompile(addr, tvm.cfg) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
 		}
+		if tvm.StateDB.GetBalance(caller) < value {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrInsufficientBalance
+		}
+		if caller == addr {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrTransferFailed
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
@@ -464,6 +583,16 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	if tokenValue > 0 && tokenID > 0 {
 		if getPrecompile(addr, tvm.cfg) == nil {
 			tvm.maybeCreateNormalAccountForValueTransfer(addr)
+		}
+		if tvm.StateDB.GetTRC10Balance(caller, tokenID) < tokenValue {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrInsufficientBalance
+		}
+		if caller == addr {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, energy, ErrTokenTransferFailed
 		}
 		if !tvm.StateDB.AccountExists(addr) {
 			tvm.StateDB.RevertToSnapshot(snap)
@@ -496,28 +625,47 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	if tvm.Depth > 0 {
 		tvm.Nonce++
 	}
+	var internalTx *corepb.InternalTransaction
+	if tvm.Depth > 0 {
+		callValue := value
+		internalTokenID := int64(0)
+		internalTokenValue := int64(0)
+		if tokenID > 0 {
+			callValue = 0
+			internalTokenID = tokenID
+			internalTokenValue = tokenValue
+		}
+		internalTx = tvm.addInternalTransaction(caller, addr, callValue, input, "call", internalTokenID, internalTokenValue)
+	}
 	code := tvm.StateDB.GetCode(addr)
 	if len(code) == 0 {
 		return nil, energy, nil
 	}
 
 	contract := NewContract(caller, addr, value, energy)
+	if internalTx != nil {
+		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
+	} else {
+		contract.InternalTxHash = tvm.RootTxID
+	}
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 	contract.TokenID = tokenID
 	contract.TokenValue = tokenValue
 
-	tvm.Depth++
-	ret, err := tvm.interpreter.Run(contract)
-	tvm.Depth--
+	ret, err := tvm.runContract(contract)
 
 	tvm.interpreter.returnData = ret
 
 	if err != nil {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err
+		}
+		if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+			return nil, contract.Energy, err
 		}
 		return nil, 0, err
 	}
@@ -545,27 +693,39 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	if tvm.Depth > 0 {
 		tvm.Nonce++
 	}
+	internalTxSnap := tvm.InternalTransactionSnapshot()
+	var internalTx *corepb.InternalTransaction
+	if tvm.Depth > 0 {
+		internalTx = tvm.addInternalTransaction(caller, addr, 0, input, "call", 0, 0)
+	}
 	code := tvm.StateDB.GetCode(addr)
 	if len(code) == 0 {
 		return nil, energy, nil
 	}
 
 	contract := NewContract(caller, addr, 0, energy)
+	if internalTx != nil {
+		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
+	} else {
+		contract.InternalTxHash = tvm.RootTxID
+	}
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
 	prevReadOnly := tvm.interpreter.readOnly
 	tvm.interpreter.readOnly = true
 
-	tvm.Depth++
-	ret, err := tvm.interpreter.Run(contract)
-	tvm.Depth--
+	ret, err := tvm.runContract(contract)
 
 	tvm.interpreter.readOnly = prevReadOnly
 	tvm.interpreter.returnData = ret
 
 	if err != nil && err != ErrExecutionReverted {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		return nil, 0, err
+	}
+	if err == ErrExecutionReverted {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 	}
 	return ret, contract.Energy, err
 }
@@ -594,23 +754,35 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	if tvm.Depth > 0 {
 		tvm.Nonce++
 	}
+	internalTxSnap := tvm.InternalTransactionSnapshot()
+	var internalTx *corepb.InternalTransaction
+	if tvm.Depth > 0 {
+		internalTx = tvm.addInternalTransaction(context, context, value, input, "call", 0, 0)
+	}
 	code := tvm.StateDB.GetCode(addr)
 	if len(code) == 0 {
 		return nil, energy, nil
 	}
 
 	contract := NewContract(caller, context, value, energy)
+	if internalTx != nil {
+		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
+	} else {
+		contract.InternalTxHash = tvm.RootTxID
+	}
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
-	tvm.Depth++
-	ret, err := tvm.interpreter.Run(contract)
-	tvm.Depth--
+	ret, err := tvm.runContract(contract)
 
 	tvm.interpreter.returnData = ret
 
 	if err != nil && err != ErrExecutionReverted {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		return nil, 0, err
+	}
+	if err == ErrExecutionReverted {
+		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 	}
 	return ret, contract.Energy, err
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -359,6 +360,53 @@ func TestVMActuatorCreateExecute_ExtendedResult(t *testing.T) {
 		result.EnergyUsageTotal, result.ContractRet, result.ContractAddress)
 }
 
+func TestVMActuatorCreateInvalidCodeKeepsJavaTronReceiptFields(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	bytecode := []byte{
+		byte(vm.PUSH1), 1,
+		byte(vm.PUSH1), 12,
+		byte(vm.PUSH1), 0,
+		byte(vm.CODECOPY),
+		byte(vm.PUSH1), 1,
+		byte(vm.PUSH1), 0,
+		byte(vm.RETURN),
+		0xEF,
+	}
+	csc := &contractpb.CreateSmartContract{
+		OwnerAddress: owner[:],
+		NewContract: &contractpb.SmartContract{
+			OriginAddress: owner[:],
+			Bytecode:      bytecode,
+			Name:          "BadCode",
+		},
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_CreateSmartContract, csc, 10_000_000)
+	enableVM(ctx)
+	ctx.DynProps.SetAllowTvmConstantinople(true)
+	ctx.DynProps.SetAllowTvmLondon(true)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+
+	result, err := (&VMActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ContractRet != int32(corepb.Transaction_Result_INVALID_CODE) {
+		t.Fatalf("contract ret: got %d, want INVALID_CODE", result.ContractRet)
+	}
+	if string(result.ContractResult) != string([]byte{0xEF}) {
+		t.Fatalf("contract result: got %x, want ef", result.ContractResult)
+	}
+	wantAddress := generateContractAddress(ctx.Tx, owner)
+	if string(result.ContractAddress) != string(wantAddress[:]) {
+		t.Fatalf("contract address: got %x, want %x", result.ContractAddress, wantAddress[:])
+	}
+	if got := string(result.ResMessage); got != vm.ErrInvalidCode.Error() {
+		t.Fatalf("resMessage: got %q, want %q", got, vm.ErrInvalidCode.Error())
+	}
+}
+
 func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	contractAddr := tcommon.Address{0x41, 0x02}
@@ -395,6 +443,9 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1 (SUCCESS), got %d", result.ContractRet)
 	}
+	if string(result.ContractAddress) != string(contractAddr[:]) {
+		t.Fatalf("contract address: got %x, want %x", result.ContractAddress, contractAddr[:])
+	}
 	if len(result.Logs) != 1 {
 		t.Fatalf("expected 1 log, got %d", len(result.Logs))
 	}
@@ -403,6 +454,77 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 	}
 	t.Logf("EnergyUsageTotal=%d, Logs=%d, ContractResult=%x",
 		result.EnergyUsageTotal, len(result.Logs), result.ContractResult)
+}
+
+func TestVMActuatorTriggerReplayOutOfTime(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	code := []byte{
+		0x60, 0x42, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3,
+	}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_OUT_OF_TIME,
+	}}
+	enableVM(ctx)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, code)
+
+	result, err := (&VMActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ContractRet != int32(corepb.Transaction_Result_OUT_OF_TIME) {
+		t.Fatalf("ContractRet: got %d, want OUT_OF_TIME", result.ContractRet)
+	}
+	if result.EnergyUsageTotal != 100_000 {
+		t.Fatalf("EnergyUsageTotal: got %d, want full energy limit 100000", result.EnergyUsageTotal)
+	}
+	if !result.ContractResultPresent || len(result.ContractResult) != 0 {
+		t.Fatalf("contract result: present=%v len=%d, want present empty", result.ContractResultPresent, len(result.ContractResult))
+	}
+	if got := string(result.ResMessage); got != "Already Time Out" {
+		t.Fatalf("resMessage: got %q", got)
+	}
+	if len(result.Logs) != 0 {
+		t.Fatalf("replay OUT_OF_TIME must not execute contract code, got %d logs", len(result.Logs))
+	}
+}
+
+func TestContractRetFromTransferFailed(t *testing.T) {
+	if got := contractRetFromError(vm.ErrAlreadyTimeOut); got != int32(corepb.Transaction_Result_OUT_OF_TIME) {
+		t.Fatalf("already timeout ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrOutOfMemory); got != int32(corepb.Transaction_Result_OUT_OF_MEMORY) {
+		t.Fatalf("out of memory ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrTransferFailed); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
+		t.Fatalf("TRX transfer failed ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrTokenTransferFailed); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
+		t.Fatalf("TRC10 transfer failed ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrEndowmentOutOfRange); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
+		t.Fatalf("endowment overflow ret: got %d", got)
+	}
+	if got := string(runtimeMessageFromError(vm.ErrTokenTransferFailed)); got != "transfer trc10 failed: Cannot transfer asset to yourself." {
+		t.Fatalf("TRC10 transfer failed message: got %q", got)
+	}
+	if got := string(runtimeMessageFromError(vm.ErrEndowmentOutOfRange)); got != "endowment out of long range" {
+		t.Fatalf("endowment overflow message: got %q", got)
+	}
 }
 
 func TestCreateActuatorVMTypes(t *testing.T) {
