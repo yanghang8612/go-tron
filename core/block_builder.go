@@ -108,6 +108,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB := proto.Clone(tx.Proto()).(*corepb.Transaction)
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
+		statedb.FinalizeTransaction()
 		accumulateBlockEnergyUsage(dynProps, buildBuf, prevBlockTime, result)
 	}
 

@@ -198,6 +198,84 @@ func TestBuildBlock_IgnoresPendingTransactionRet(t *testing.T) {
 	}
 }
 
+func TestBuildBlock_FinalizesSelfDestructBetweenTransactions(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	owner := testProcessorAddr(1)
+	contractAddr := testProcessorAddr(0x80)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: owner, Balance: 100_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"allow_creation_of_contracts":        1,
+			"allow_tvm_selfdestruct_restriction": 0,
+		},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := rawdb.ReadGenesisStateRoot(diskdb)
+	statedb, err := state.New(root, sdb)
+	if err != nil {
+		t.Fatalf("open genesis state: %v", err)
+	}
+	statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	statedb.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner.Bytes(),
+		ContractAddress: contractAddr.Bytes(),
+		Name:            "SelfDestruct",
+	})
+	code := append([]byte{0x73}, owner.Bytes()[1:]...)
+	code = append(code, 0xff)
+	statedb.SetCode(contractAddr, code)
+	newRoot, err := statedb.Commit()
+	if err != nil {
+		t.Fatalf("commit seeded contract: %v", err)
+	}
+	if got := rawdb.ReadCode(diskdb, contractAddr); len(got) == 0 {
+		t.Fatal("seeded code missing")
+	}
+	rawdb.WriteGenesisStateRoot(diskdb, newRoot)
+	rawdb.WriteBlockStateRoot(diskdb, genesisHash, newRoot)
+
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx1 := makeTestTriggerTx(1, contractAddr, nil)
+	tx1.Proto().RawData.Timestamp = 1
+	tx1.Proto().RawData.FeeLimit = 10_000_000
+	tx2 := makeTestTriggerTx(1, contractAddr, nil)
+	tx2.Proto().RawData.Timestamp = 2
+	tx2.Proto().RawData.FeeLimit = 10_000_000
+
+	pool := txpool.New()
+	if err := pool.Add(tx1); err != nil {
+		t.Fatalf("pool.Add tx1: %v", err)
+	}
+	if err := pool.Add(tx2); err != nil {
+		t.Fatalf("pool.Add tx2: %v", err)
+	}
+
+	result, err := BuildBlock(bc, pool, testProcessorAddr(0xFF), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Block.Transactions()); got != 1 {
+		t.Fatalf("included txs: got %d, want 1", got)
+	}
+	if got := len(result.FailedTxIDs); got != 1 {
+		t.Fatalf("failed txs: got %d, want 1", got)
+	}
+}
+
 func TestBuildBlock_SkipsFailingTx(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
