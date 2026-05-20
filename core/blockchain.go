@@ -981,12 +981,12 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
 	bc.buffer.CommitBlock()
 
-	// Flush every layer at or below the new solidified-block number to
-	// disk, oldest-first. Layers above solidified stay in memory and remain
+	// Hand every layer at or below the new solidified-block number to the
+	// async flusher. Layers above solidified stay in memory and remain
 	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
 	// invariant that Manager.eraseBlock can never pop past solidified.
-	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
-		return fmt.Errorf("flush buffer up to solidified: %w", err)
+	if err := bc.postFlush(dynProps.LatestSolidifiedBlockNum()); err != nil {
+		return err
 	}
 	stats.mark(&stats.Persist)
 	return nil

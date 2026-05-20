@@ -91,6 +91,48 @@ func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 	}
 }
 
+func TestAsyncFlush_InsertBlockPostsToWorkerQueue(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	bc, _ := newAsyncFlushChain(t, witnessAddr)
+
+	// Stop the real worker, then install an unconsumed queue. If InsertBlock
+	// still flushes synchronously, this queue stays empty and the buffer is
+	// already drained. If the real path uses postFlush, the cutoff lands here.
+	bc.chainmu.Lock()
+	close(bc.flushQueue)
+	bc.flushClosed = true
+	bc.chainmu.Unlock()
+	bc.flushWorkerWg.Wait()
+
+	bc.chainmu.Lock()
+	bc.flushQueue = make(chan uint64, flushQueueCap)
+	bc.flushClosed = false
+	bc.chainmu.Unlock()
+
+	b1 := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.InsertBlock(b1); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+
+	var cutoff uint64
+	select {
+	case cutoff = <-bc.flushQueue:
+		if cutoff != b1.Number() {
+			t.Fatalf("queued cutoff = %d, want %d", cutoff, b1.Number())
+		}
+	default:
+		t.Fatal("InsertBlock did not post a flush cutoff to the worker queue")
+	}
+	if got := len(bc.buffer.PendingBlocks()); got == 0 {
+		t.Fatal("buffer was flushed synchronously; expected async worker to own the flush")
+	}
+
+	bc.runFlushCutoff(cutoff)
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 // TestAsyncFlush_CloseDrainsPending verifies that Close finishes any
 // in-flight flushes and runs the final synchronous flush. Even if the
 // worker has fallen arbitrarily far behind, Close synchronously catches
