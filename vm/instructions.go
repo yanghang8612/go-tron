@@ -628,6 +628,9 @@ func opMstore8(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 func opMCopy(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	dst, src, length := stack.pop(), stack.pop(), stack.pop()
 	if length.IsZero() {
+		if !interpreter.useEnergy(contract, EnergyVeryLow) {
+			return nil, ErrOutOfEnergy
+		}
 		return nil, nil
 	}
 	if !dst.IsUint64() || !src.IsUint64() || !length.IsUint64() {

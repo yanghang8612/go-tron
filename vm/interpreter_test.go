@@ -404,6 +404,25 @@ func TestInterpreterMCopyWorksWithCancun(t *testing.T) {
 	}
 }
 
+func TestInterpreterMCopyZeroLengthChargesVeryLow(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Cancun: true})
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, []byte{
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(PUSH1), 0x00,
+		byte(MCOPY),
+		byte(STOP),
+	})
+
+	if _, err := evm.interpreter.Run(contract); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := uint64(100000) - contract.Energy; got != 3*EnergyVeryLow+EnergyVeryLow {
+		t.Fatalf("MCOPY zero-length energy: got %d, want PUSHes plus MCOPY very low", got)
+	}
+}
+
 func TestInterpreterBlobOpcodesReturnZeroWithBlobFork(t *testing.T) {
 	for _, tc := range []struct {
 		name string
