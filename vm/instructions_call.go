@@ -21,7 +21,10 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 	resizeMemory(memory, off, sz)
 
 	code := memory.getCopy(int64(off), int64(sz))
-	val := int64(value.Uint64())
+	val, valueOK := uint256ToInt64Exact(&value)
+	if !valueOK {
+		return nil, ErrEndowmentOutOfRange
+	}
 
 	energyForCall := contract.Energy - contract.Energy/64
 	contract.UseEnergy(energyForCall)
@@ -65,7 +68,10 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	}
 
 	code := memory.getCopy(int64(off), int64(sz))
-	val := int64(value.Uint64())
+	val, valueOK := uint256ToInt64Exact(&value)
+	if !valueOK {
+		return nil, ErrEndowmentOutOfRange
+	}
 	salt := saltVal.Bytes32()
 
 	energyForCall := contract.Energy - contract.Energy/64

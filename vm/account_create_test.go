@@ -609,6 +609,51 @@ func TestCallTokenValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	}
 }
 
+func TestCreateValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+
+	code := []byte{
+		byte(PUSH1), 0x00, // size
+		byte(PUSH1), 0x00, // offset
+		byte(PUSH8), 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Long.MAX_VALUE + 1
+		byte(CREATE),
+		byte(STOP),
+	}
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != ErrEndowmentOutOfRange {
+		t.Fatalf("Run error: got %v, want %v", err, ErrEndowmentOutOfRange)
+	}
+	if tvm.Nonce != 0 {
+		t.Fatalf("nonce after failed CREATE: got %d, want 0", tvm.Nonce)
+	}
+}
+
+func TestCreate2ValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+
+	code := []byte{
+		byte(PUSH1), 0x00, // salt
+		byte(PUSH1), 0x00, // size
+		byte(PUSH1), 0x00, // offset
+		byte(PUSH8), 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Long.MAX_VALUE + 1
+		byte(CREATE2),
+		byte(STOP),
+	}
+	contract := NewContract(caller, caller, 0, 100_000)
+	contract.SetCode(caller, code)
+
+	if _, err := tvm.interpreter.Run(contract); err != ErrEndowmentOutOfRange {
+		t.Fatalf("Run error: got %v, want %v", err, ErrEndowmentOutOfRange)
+	}
+	if tvm.Nonce != 0 {
+		t.Fatalf("nonce after failed CREATE2: got %d, want 0", tvm.Nonce)
+	}
+}
+
 func TestCallTokenToSelfInsufficientBalanceReturnsCallFailure(t *testing.T) {
 	const tokenID = int64(1_000_002)
 
