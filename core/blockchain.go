@@ -147,10 +147,10 @@ type BlockChain struct {
 	// next applyBlock surfaces it before doing any work. Mirrors today's
 	// sync error severity — a write failure at this layer corrupts the
 	// chain regardless of timing.
-	flushQueue     chan uint64
-	flushPending   *flushBarrier
-	flushWorkerWg  sync.WaitGroup
-	flushErr       atomic.Pointer[error]
+	flushQueue    chan uint64
+	flushPending  *flushBarrier
+	flushWorkerWg sync.WaitGroup
+	flushErr      atomic.Pointer[error]
 
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
@@ -522,6 +522,9 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	current := bc.CurrentBlock()
+	if errPtr := bc.flushErr.Load(); errPtr != nil {
+		return fmt.Errorf("async buffer flush failed: %w", *errPtr)
+	}
 
 	stats := applyStats{last: time.Now()}
 	applyStart := stats.last
@@ -1124,6 +1127,10 @@ func (bc *BlockChain) WaitForFlushSettled() {
 func (bc *BlockChain) Close() error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	bc.WaitForFlushSettled()
+	if errPtr := bc.flushErr.Load(); errPtr != nil {
+		return fmt.Errorf("close: async buffer flush failed: %w", *errPtr)
+	}
 	dynProps := state.LoadDynamicProperties(bc.buffer)
 	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
 		return fmt.Errorf("close: flush up to solidified: %w", err)
