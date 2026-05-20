@@ -80,21 +80,31 @@ func TestVerifyHeader_PostFork_RejectsMisalignedTimestamp(t *testing.T) {
 	}
 }
 
-// Slot==0 path: with a non-3000-aligned genesis time, there exist
-// timestamps that are absolute-mod-3000 aligned but still fall before
-// firstSlotTime (= genesisTime + 3000). Pre-fork java accepts these and
-// reaches signature recovery; post-fork java rejects.
+// Slot==0 path. To exercise Check C (slot==0) in isolation, the scenario must
+// pass the ungated Check B (abs-slot ordering) first. After a maintenance
+// block, getTime(1) is pushed out by MaintenanceSkipSlots (=2), so a block one
+// abs-slot past the parent (Check B ok) can still fall before the first
+// schedulable slot ⇒ SlotForTime returns 0. This needs a non-genesis parent
+// (number ≥ 1) carrying the maintenance state-flag — the earlier genesis-offset
+// construction put the block in the parent's own abs-slot, which Check B now
+// (correctly, matching java) rejects before Check C is reached.
+//
+// Pre-fork (ConsensusLogicOptimization=false): Check C is skipped, so a slot==0
+// block proceeds past the timestamp gates to signature recovery and fails
+// there. Mirrors java before proposal #88.
 func TestVerifyHeader_PreFork_AcceptsSlotZero(t *testing.T) {
-	const gts = 1500 // genesis not aligned to BlockProducedInterval
+	parent := buildBlock(1, 3000, [32]byte{}) // number ≥ 1, abs-slot 1
+	dp := state.NewDynamicProperties()
+	dp.SetStateFlag(1) // parent was a maintenance block
 	chain := &mockChainReader{
-		currentBlock: genesisAt(gts),
-		genesisTime:  gts,
-		dp:           state.NewDynamicProperties(),
+		currentBlock: parent,
+		genesisTime:  0,
+		dp:           dp,
 	}
-	// firstSlotTime = SlotTime(1, gts, gts, false, …) = gts + 3000 = 4500.
-	// Block timestamp 3000 is > parent (gts=1500), mod-3000-aligned, but
-	// 3000 < 4500 ⇒ SlotForTime returns 0.
-	block := buildBlock(1, 3000, chain.currentBlock.Hash())
+	// firstSlotTime = SlotTime(1, 3000, 0, maint, skip=2) = 3000 + 3000*3 = 12000.
+	// block ts 6000: abs-slot 2 > parent abs-slot 1 (Check B passes), and
+	// 6000 < 12000 ⇒ SlotForTime returns 0.
+	block := buildBlock(2, 6000, parent.Hash())
 
 	err := VerifyHeader(chain, block)
 	if errors.Is(err, ErrInvalidTimestamp) {
@@ -106,17 +116,39 @@ func TestVerifyHeader_PreFork_AcceptsSlotZero(t *testing.T) {
 }
 
 func TestVerifyHeader_PostFork_RejectsSlotZero(t *testing.T) {
-	const gts = 1500
+	parent := buildBlock(1, 3000, [32]byte{})
 	dp := state.NewDynamicProperties()
 	dp.SetConsensusLogicOptimization(true)
+	dp.SetStateFlag(1)
 	chain := &mockChainReader{
-		currentBlock: genesisAt(gts),
-		genesisTime:  gts,
+		currentBlock: parent,
+		genesisTime:  0,
 		dp:           dp,
 	}
 
-	block := buildBlock(1, 3000, chain.currentBlock.Hash())
+	block := buildBlock(2, 6000, parent.Hash())
 	if err := VerifyHeader(chain, block); !errors.Is(err, ErrInvalidTimestamp) {
 		t.Fatalf("expected ErrInvalidTimestamp (slot==0 reject), got %v", err)
+	}
+}
+
+// TestVerifyHeader_RejectsSameAbsSlot pins java DposService.validBlock's ungated
+// Check B (bSlot <= hSlot). A mod-3000-misaligned block whose timestamp is
+// strictly greater than its parent's but lands in the SAME absolute slot must
+// be rejected. The earlier blockTime<=parentTime guard accepted it (4000 >
+// 3000) while java rejected it (getAbSlot(4000)==getAbSlot(3000)==1) — the
+// latent fork vector this check closes. Pre-fork (CLO off) so Check A's
+// mod-3000 gate does not mask it.
+func TestVerifyHeader_RejectsSameAbsSlot(t *testing.T) {
+	parent := buildBlock(1, 3000, [32]byte{}) // abs-slot 1
+	chain := &mockChainReader{
+		currentBlock: parent,
+		genesisTime:  0,
+		dp:           state.NewDynamicProperties(), // CLO false
+	}
+	// block ts 4000: abs-slot (4000-0)/3000 = 1, same as parent's abs-slot 1.
+	block := buildBlock(2, 4000, parent.Hash())
+	if err := VerifyHeader(chain, block); !errors.Is(err, ErrInvalidTimestamp) {
+		t.Fatalf("expected ErrInvalidTimestamp (same abs-slot as parent), got %v", err)
 	}
 }

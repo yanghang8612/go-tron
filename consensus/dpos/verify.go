@@ -45,15 +45,36 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 	if block.ParentHash() != parent.Hash() {
 		return ErrInvalidParentHash
 	}
-	if block.Timestamp() <= parent.Timestamp() {
+	genesisTime := chain.GenesisTimestamp()
+	// [java DposService.validBlock:126-131 — Check B, UNGATED] the block's
+	// absolute slot must be strictly after the parent's. java computes
+	// bSlot = getAbSlot(blockTs), hSlot = getAbSlot(parentTs) where
+	// getAbSlot(t) = (t - genesis) / interval, and rejects bSlot <= hSlot.
+	// This subsumes a plain blockTime <= parentTime monotonicity guard AND
+	// additionally rejects a mod-3000-misaligned block that lands in the
+	// parent's abs-slot (only reachable pre-#88, when misaligned timestamps
+	// pass Check A). The earlier raw-timestamp compare missed that same-slot
+	// case — a misaligned block with blockTime > parentTime but the same
+	// abs-slot was accepted here while java rejected it, a latent fork vector.
+	if AbsoluteSlot(block.Timestamp(), genesisTime) <= AbsoluteSlot(parent.Timestamp(), genesisTime) {
 		return ErrInvalidTimestamp
 	}
-	genesisTime := chain.GenesisTimestamp()
 	// mod-3000 alignment + slot==0 rejection were unconditional in early
 	// gtron but java-tron gates both on proposal #88 (`DposService.java:120,
 	// 134`). Pre-#88, java accepts misaligned timestamps and slot-0 blocks;
 	// gtron must do the same for replay parity. In practice real producers
 	// only mint aligned slots, so the loosening is theoretical.
+	//
+	// NOTE: java's validBlock additionally returns true immediately when the
+	// parent is genesis (number 0), skipping Checks A–D for block 1. gtron
+	// deliberately does NOT replicate that bypass: it runs the full check set
+	// for block 1 too. This is stricter than java but safe — the canonical
+	// block 1 is always well-formed (aligned, scheduled witness, valid sig) so
+	// it passes both, and gtron rejects only malformed block-1s that never
+	// appear on the real chain. Matching java's bypass would weaken block-1
+	// validation (e.g. drop the witness-schedule check that
+	// TestInsertBlock_RejectsUnscheduledWitness pins) for zero real-world
+	// parity benefit. Tracked as V-1 in docs/dev/cross-impl-audit-2026-05-19.md.
 	if dp.ConsensusLogicOptimization() {
 		if block.Timestamp()%int64(params.BlockProducedInterval) != 0 {
 			return ErrInvalidTimestamp
