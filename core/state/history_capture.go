@@ -4,8 +4,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	historypb "github.com/tronprotocol/go-tron/proto/core/historystate"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	historypb "github.com/tronprotocol/go-tron/proto/core/historystate"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -99,9 +99,14 @@ func (s *StateDB) AccumulateHistory(buf ethdb.KeyValueWriter, blockNum uint64, b
 			if _, seen := firstAcc[e.address]; seen {
 				continue
 			}
+			existedPre := e.prev != nil && !e.prevDeleted
+			var protoPre []byte
+			if existedPre {
+				protoPre = e.prev
+			}
 			firstAcc[e.address] = accSeen{
-				existedPre: e.prev != nil,
-				protoPre:   e.prev,
+				existedPre: existedPre,
+				protoPre:   protoPre,
 			}
 		case codeChange:
 			if _, seen := firstCode[e.address]; seen {
