@@ -87,6 +87,9 @@ func TestShieldedTransferValidateTransparentFrom(t *testing.T) {
 
 	// Fund account properly: fromAmount(500k) + fee(100k) = 600k
 	ctx.State.SetTRC10Balance(owner, zenTokenID, 600_000)
+	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), true); err != nil {
+		t.Fatal(err)
+	}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("validate should pass: %v", err)
 	}
@@ -194,7 +197,7 @@ func TestShieldedTransferValidateRejectsOutputProofShape(t *testing.T) {
 	}
 }
 
-func TestShieldedTransferValidateCachesProofSuccess(t *testing.T) {
+func TestShieldedTransferValidateRejectsUnverifiedProof(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	c := &contractpb.ShieldedTransferContract{
 		TransparentFromAddress: owner[:],
@@ -206,12 +209,29 @@ func TestShieldedTransferValidateCachesProofSuccess(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetTRC10Balance(owner, zenTokenID, 1_000_000)
 
-	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
-		t.Fatalf("validate should pass: %v", err)
+	if err := (&ShieldedTransferActuator{}).Validate(ctx); err == nil {
+		t.Fatal("expected proof verification rejection")
 	}
 	txID := ctx.Tx.Hash()
-	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID.Bytes()); !ok || !cached {
-		t.Fatalf("successful proof cache: got (%v,%v), want (true,true)", cached, ok)
+	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID.Bytes()); !ok || cached {
+		t.Fatalf("failed proof cache: got (%v,%v), want (false,true)", cached, ok)
+	}
+}
+
+func TestShieldedTransferValidateCachedProofSuccess(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	c := &contractpb.ShieldedTransferContract{
+		TransparentFromAddress: owner[:],
+		FromAmount:             500_000,
+		ReceiveDescription:     []*contractpb.ReceiveDescription{shieldedReceive([]byte("cm1"))},
+		BindingSignature:       make([]byte, zcSignatureSize),
+	}
+	ctx := setupShieldedCtx(t, c)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.SetTRC10Balance(owner, zenTokenID, 1_000_000)
+
+	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), true); err != nil {
+		t.Fatal(err)
 	}
 	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
 		t.Fatalf("cached validate should pass: %v", err)

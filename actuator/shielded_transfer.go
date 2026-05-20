@@ -1,9 +1,11 @@
 package actuator
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -11,10 +13,11 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // ShieldedTransferActuator handles shielded (Sapling) ZEN token transfers.
-// Stage 1: transparent state changes only; ZK proof verification is skipped.
 type ShieldedTransferActuator struct{}
 
 const (
@@ -185,20 +188,30 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 		return err
 	}
 
-	delta, ok := checkedAddInt64(c.FromAmount, -c.ToAmount)
+	valueBalance, ok := checkedAddInt64(c.ToAmount, -c.FromAmount)
 	if !ok {
 		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
 		return errors.New("shielded pool value overflow")
 	}
-	delta, ok = checkedAddInt64(delta, -fee)
+	valueBalance, ok = checkedAddInt64(valueBalance, fee)
 	if !ok {
 		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
 		return errors.New("shielded pool value overflow")
 	}
-	newPool, ok := checkedAddInt64(ctx.DynProps.TotalShieldedPoolValue(), delta)
+	newPool, ok := checkedAddInt64(ctx.DynProps.TotalShieldedPoolValue(), -valueBalance)
 	if !ok || newPool < 0 {
 		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
 		return errors.New("total shielded pool value can not below 0")
+	}
+
+	signHash, err := shieldedTransactionSignHash(ctx, c)
+	if err != nil {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return err
+	}
+	if err := zksnark.VerifyShieldedTransfer(c, valueBalance, signHash); err != nil {
+		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		return err
 	}
 
 	return rawdb.WriteZKProofResult(ctx.DB, txID, true)
@@ -230,6 +243,43 @@ func validateShieldedProofShape(c *contractpb.ShieldedTransferContract) error {
 		return errors.New("librustzcashSaplingFinalCheck error")
 	}
 	return nil
+}
+
+func shieldedTransactionSignHash(ctx *Context, c *contractpb.ShieldedTransferContract) ([]byte, error) {
+	if ctx == nil || ctx.Tx == nil || ctx.Tx.Proto() == nil || ctx.Tx.Proto().RawData == nil {
+		return nil, errors.New("transaction raw data missing")
+	}
+	signContract := &contractpb.ShieldedTransferContract{
+		TransparentFromAddress: c.TransparentFromAddress,
+		FromAmount:             c.FromAmount,
+		ReceiveDescription:     c.ReceiveDescription,
+		TransparentToAddress:   c.TransparentToAddress,
+		ToAmount:               c.ToAmount,
+	}
+	for _, spend := range c.SpendDescription {
+		cloned := proto.Clone(spend).(*contractpb.SpendDescription)
+		cloned.SpendAuthoritySignature = nil
+		signContract.SpendDescription = append(signContract.SpendDescription, cloned)
+	}
+	param, err := anypb.New(signContract)
+	if err != nil {
+		return nil, err
+	}
+	raw := proto.Clone(ctx.Tx.Proto().RawData).(*corepb.TransactionRaw)
+	raw.Contract = []*corepb.Transaction_Contract{{
+		Type:      corepb.Transaction_Contract_ShieldedTransferContract,
+		Parameter: param,
+	}}
+	rawBytes, err := proto.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	tokenHash := sha256.Sum256([]byte(strconv.FormatInt(ctx.DynProps.ZenTokenID(), 10)))
+	merged := make([]byte, 0, len(tokenHash)+len(rawBytes))
+	merged = append(merged, tokenHash[:]...)
+	merged = append(merged, rawBytes...)
+	sum := sha256.Sum256(merged)
+	return sum[:], nil
 }
 
 func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {

@@ -17,6 +17,7 @@
 #define GTRON_ZKSNARK_CAPI_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -36,6 +37,37 @@ void librustzcash_merkle_hash(size_t depth,
 // librustzcash_tree_uncommitted writes the 32-byte Uncommitted^Sapling
 // constant to `result`. The Sapling spec defines this as repr_J(1).
 void librustzcash_tree_uncommitted(unsigned char *result);
+
+void librustzcash_init_zksnark_params(const unsigned char *spend_path,
+                                      size_t spend_path_len,
+                                      const char *spend_hash,
+                                      const unsigned char *output_path,
+                                      size_t output_path_len,
+                                      const char *output_hash);
+
+void *librustzcash_sapling_verification_ctx_init(void);
+
+bool librustzcash_sapling_check_spend(void *ctx,
+                                      const unsigned char *cv,
+                                      const unsigned char *anchor,
+                                      const unsigned char *nullifier,
+                                      const unsigned char *rk,
+                                      const unsigned char *zkproof,
+                                      const unsigned char *spendAuthSig,
+                                      const unsigned char *sighashValue);
+
+bool librustzcash_sapling_check_output(void *ctx,
+                                       const unsigned char *cv,
+                                       const unsigned char *cm,
+                                       const unsigned char *ephemeralKey,
+                                       const unsigned char *zkproof);
+
+bool librustzcash_sapling_final_check(void *ctx,
+                                      int64_t valueBalance,
+                                      const unsigned char *bindingSig,
+                                      const unsigned char *sighashValue);
+
+void librustzcash_sapling_verification_ctx_free(void *ctx);
 
 #ifdef __cplusplus
 }
