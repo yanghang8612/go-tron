@@ -12,9 +12,11 @@ import (
 	"github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/historyprune"
 	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -142,6 +144,25 @@ var (
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
 	}
+	freezerDisableFlag = &cli.BoolFlag{
+		Name:  "freezer.disable",
+		Usage: "Disable background freezing; existing ancient data remains readable",
+	}
+	freezerIntervalFlag = &cli.DurationFlag{
+		Name:  "freezer.interval",
+		Usage: "Interval between chain freezer passes",
+		Value: defaultFreezerInterval(),
+	}
+	freezerMarginFlag = &cli.Uint64Flag{
+		Name:  "freezer.margin",
+		Usage: "Blocks to keep hot below the solidified line",
+		Value: defaultFreezerMargin(),
+	}
+	freezerBatchFlag = &cli.Uint64Flag{
+		Name:  "freezer.batch",
+		Usage: "Maximum blocks frozen per freezer pass",
+		Value: defaultFreezerBatch(),
+	}
 )
 
 var app = &cli.App{
@@ -173,6 +194,10 @@ var app = &cli.App{
 		gcmodeFlag,
 		historyEnabledFlag,
 		configFileFlag,
+		freezerDisableFlag,
+		freezerIntervalFlag,
+		freezerMarginFlag,
+		freezerBatchFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.Setup(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"))
@@ -208,7 +233,18 @@ func initCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	config, hash, err := core.SetupGenesisBlock(db, genesis)
+	ancientReader := rawdb.AncientReader(rawdb.NoopAncient{})
+	ancientPath := ancientDataDir(cfg.DataDir)
+	if info, err := os.Stat(ancientPath); err == nil && info.IsDir() {
+		fz, err := rawdbfreezer.NewFreezer(ancientPath, "", false, freezerTableSize, chainfreezer.FreezerTableSet())
+		if err != nil {
+			return fmt.Errorf("open freezer: %w", err)
+		}
+		defer fz.Close()
+		ancientReader = rawdb.NewFreezerReader(fz)
+	}
+
+	config, hash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
 		return fmt.Errorf("setup genesis: %w", err)
 	}
@@ -250,11 +286,31 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
+	var ancientStore *rawdbfreezer.Freezer
+	closeStores := func() {
+		if ancientStore != nil {
+			_ = ancientStore.Close()
+			ancientStore = nil
+		}
+		_ = db.Close()
+	}
+
+	freezerCfg := makeFreezerConfig(ctx)
+	ancientReader := rawdb.AncientReader(rawdb.NoopAncient{})
+	ancientPath := ancientDataDir(cfg.DataDir)
+	if shouldOpenFreezer(ancientPath, freezerCfg) {
+		ancientStore, err = rawdbfreezer.NewFreezer(ancientPath, "", false, freezerTableSize, chainfreezer.FreezerTableSet())
+		if err != nil {
+			closeStores()
+			return fmt.Errorf("open freezer: %w", err)
+		}
+		ancientReader = rawdb.NewFreezerReader(ancientStore)
+	}
 
 	// Setup genesis (idempotent)
-	chainConfig, _, err := core.SetupGenesisBlock(db, genesis)
+	chainConfig, _, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
-		db.Close()
+		closeStores()
 		return fmt.Errorf("setup genesis: %w", err)
 	}
 
@@ -264,15 +320,15 @@ func gtron(ctx *cli.Context) error {
 	// HistoryMode is operator-level (not consensus-relevant) so this
 	// mutation is safe.
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
-		db.Close()
+		closeStores()
 		return err
 	}
 
 	// Create blockchain
 	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
-	bc, err := core.NewBlockChain(db, sdb, chainConfig)
+	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
 	if err != nil {
-		db.Close()
+		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
 	}
 
@@ -322,7 +378,7 @@ func gtron(ctx *cli.Context) error {
 		fmt.Sprintf(":%d", discoverPort), nodeID, networkID, nil,
 	)
 	if err != nil {
-		db.Close()
+		closeStores()
 		return fmt.Errorf("create discovery service: %w", err)
 	}
 
@@ -384,7 +440,7 @@ func gtron(ctx *cli.Context) error {
 	// Create node and register services
 	stack, err := node.New(cfg)
 	if err != nil {
-		db.Close()
+		closeStores()
 		return err
 	}
 	stack.RegisterLifecycle(p2pServer)
@@ -417,6 +473,17 @@ func gtron(ctx *cli.Context) error {
 		fmt.Println("History capture enabled in archive mode (no pruning)")
 	}
 
+	if ancientStore != nil && freezerCfg.Enabled {
+		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
+		if freezerRunner != nil {
+			stack.RegisterLifecycle(freezerRunner)
+			fmt.Printf("Chain freezer enabled (ancient=%s margin=%d batch=%d interval=%s)\n",
+				ancientPath, freezerCfg.MarginBlocks, freezerCfg.BatchBlocks, freezerCfg.Interval)
+		}
+	} else if ancientStore != nil {
+		fmt.Printf("Chain freezer disabled; existing ancient data readable (ancient=%s)\n", ancientPath)
+	}
+
 	// Start block producer only when --witness is explicitly set.
 	// A node can join a dev chain with --dev --witness.key (for genesis) without
 	// producing blocks by omitting --witness.
@@ -428,7 +495,7 @@ func gtron(ctx *cli.Context) error {
 			var err error
 			key, err = parseWitnessKey(ctx)
 			if err != nil {
-				db.Close()
+				closeStores()
 				return fmt.Errorf("witness key: %w", err)
 			}
 		}
@@ -465,7 +532,7 @@ func gtron(ctx *cli.Context) error {
 		if path := ctx.String("witness.keys-file"); path != "" {
 			extra, err := parseWitnessKeysFile(path)
 			if err != nil {
-				db.Close()
+				closeStores()
 				return fmt.Errorf("witness keys file: %w", err)
 			}
 			srKeys = append(srKeys, extra...)
@@ -480,7 +547,7 @@ func gtron(ctx *cli.Context) error {
 
 	// Start
 	if err := stack.Start(); err != nil {
-		db.Close()
+		closeStores()
 		return err
 	}
 
@@ -502,7 +569,7 @@ func gtron(ctx *cli.Context) error {
 	if err := bc.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "blockchain close: %v\n", err)
 	}
-	db.Close()
+	closeStores()
 	return nil
 }
 

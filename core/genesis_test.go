@@ -6,7 +6,9 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/common"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
@@ -318,6 +320,50 @@ func TestSetupGenesisBlock(t *testing.T) {
 	}
 	if config2.ChainID != config.ChainID {
 		t.Fatal("config mismatch")
+	}
+}
+
+func TestSetupGenesisBlockWithAncientFindsFrozenGenesis(t *testing.T) {
+	genesis := params.DefaultMainnetGenesis()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatalf("setup genesis: %v", err)
+	}
+	blockRaw := rawdb.ReadBlockRaw(diskdb, 0)
+	if len(blockRaw) == 0 {
+		t.Fatal("genesis block raw bytes missing before freeze")
+	}
+
+	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	defer fz.Close()
+	if _, err := fz.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
+		if err := op.AppendRaw("bodies", 0, blockRaw); err != nil {
+			return err
+		}
+		if err := op.AppendRaw("tx_infos", 0, nil); err != nil {
+			return err
+		}
+		return op.AppendRaw("state_roots", 0, nil)
+	}); err != nil {
+		t.Fatalf("append ancient genesis: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(diskdb, 0, 0); err != nil {
+		t.Fatalf("delete hot genesis: %v", err)
+	}
+	if got := rawdb.ReadBlock(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), 0); got != nil {
+		t.Fatal("test setup failed: hot genesis still readable without ancient")
+	}
+
+	_, gotHash, err := SetupGenesisBlockWithAncient(diskdb, rawdb.NewFreezerReader(fz), genesis)
+	if err != nil {
+		t.Fatalf("SetupGenesisBlockWithAncient: %v", err)
+	}
+	if gotHash != genesisHash {
+		t.Fatalf("genesis hash = %x, want %x", gotHash, genesisHash)
 	}
 }
 

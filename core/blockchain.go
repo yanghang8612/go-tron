@@ -252,11 +252,18 @@ const flushQueueCap = 8
 
 // NewBlockChain creates a new BlockChain, loading head from DB.
 func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig) (*BlockChain, error) {
+	return NewBlockChainWithAncient(db, stateDB, config, rawdb.NoopAncient{})
+}
+
+// NewBlockChainWithAncient creates a BlockChain with an explicit ancient
+// reader. Production startup passes the freezer reader here so block and
+// transaction-info accessors can transparently fall through to frozen data.
+func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig, ancient rawdb.AncientReader) (*BlockChain, error) {
 	buffer := blockbuffer.New(db)
-	// Slice 2 of the freezer plan: every chain accessor takes *ChainDB.
-	// Until slice 3 attaches a real freezer, the ancient reader is a no-op
-	// so every chain read falls through to the hot KV store unchanged.
-	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	if ancient == nil {
+		ancient = rawdb.NoopAncient{}
+	}
+	chaindb := rawdb.NewChainDB(db, ancient)
 	bc := &BlockChain{
 		db:           db,
 		chaindb:      chaindb,

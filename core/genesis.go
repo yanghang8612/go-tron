@@ -43,20 +43,29 @@ var genesisOwnerAddress = []byte("0x000000000000000000000")
 // SetupGenesisBlock writes the genesis block and chain config to the database
 // if they don't exist. Returns the chain config and genesis hash.
 func SetupGenesisBlock(db ethdb.KeyValueStore, genesis *params.Genesis) (*params.ChainConfig, tcommon.Hash, error) {
+	return SetupGenesisBlockWithAncient(db, rawdb.NoopAncient{}, genesis)
+}
+
+// SetupGenesisBlockWithAncient is SetupGenesisBlock with an explicit ancient
+// reader. Runtime startup uses it so a datadir whose genesis block has already
+// been moved into the freezer still validates idempotently on restart.
+func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientReader, genesis *params.Genesis) (*params.ChainConfig, tcommon.Hash, error) {
 	if genesis == nil {
 		return nil, tcommon.Hash{}, errors.New("genesis is nil")
 	}
 	if genesis.Config == nil {
 		return nil, tcommon.Hash{}, errGenesisNoConfig
 	}
+	if ancient == nil {
+		ancient = rawdb.NoopAncient{}
+	}
 
-	// Check if genesis already exists. Genesis is always in the hot KV
-	// (it is never frozen), but the slice-2 accessor signature is
-	// `*ChainDB`-typed, so wrap with NoopAncient at the call site.
+	// Check if genesis already exists. Runtime startup may find it in
+	// ancient after the freezer has run, so use the supplied ChainDB view.
 	// SetupGenesisBlock intentionally takes `ethdb.KeyValueStore` rather
 	// than `*rawdb.ChainDB` because it runs before NewBlockChain
 	// constructs bc.chaindb; the local wrap is the cleanest bridge.
-	storedBlock := rawdb.ReadBlock(rawdb.NewChainDB(db, rawdb.NoopAncient{}), 0)
+	storedBlock := rawdb.ReadBlock(rawdb.NewChainDB(db, ancient), 0)
 	if storedBlock != nil {
 		storedHash := storedBlock.Hash()
 

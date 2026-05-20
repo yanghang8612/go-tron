@@ -66,6 +66,10 @@ func chainDataDir(dataDir string) string {
 	return filepath.Join(dataDir, "gtron", "chaindata")
 }
 
+func ancientDataDir(dataDir string) string {
+	return filepath.Join(dataDir, "gtron", "ancient")
+}
+
 func parseWitnessKey(ctx *cli.Context) (*ecdsa.PrivateKey, error) {
 	hexKey := ctx.String("witness.key")
 	if hexKey == "" {
