@@ -1,9 +1,11 @@
 package vm
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -148,6 +150,23 @@ func TestCopyOpsBaseEnergy_NoBaseTier(t *testing.T) {
 	if gotProp != got {
 		t.Fatalf("CODECOPY cost must not change under proposal #65: default=%d, proposal-on=%d",
 			got, gotProp)
+	}
+}
+
+func TestCallDataCopyOverMemoryLimitReturnsOutOfMemoryBeforeEnergy(t *testing.T) {
+	evm := newTestEVM(t)
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 1)
+	stack := newStack()
+	stack.push(uint256.NewInt(tvmMemoryLimit + 1))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+
+	_, err := opCallDataCopy(nil, evm.interpreter, contract, newMemory(), stack)
+	if !errors.Is(err, ErrOutOfMemory) {
+		t.Fatalf("CALLDATACOPY over memory limit: got %v, want ErrOutOfMemory", err)
+	}
+	if contract.Energy != 1 {
+		t.Fatalf("OUT_OF_MEMORY must be raised before energy charging: got remaining %d", contract.Energy)
 	}
 }
 

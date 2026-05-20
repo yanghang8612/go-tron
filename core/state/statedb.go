@@ -1412,6 +1412,21 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	prevCode := append([]byte(nil), s.GetCode(addr)...)
+	var prevMeta *contractpb.SmartContract
+	if meta := s.GetContract(addr); meta != nil {
+		prevMeta = proto.Clone(meta).(*contractpb.SmartContract)
+	}
+	s.journalAccount(addr, obj)
+	s.journal.append(codeChange{
+		address:  addr,
+		prevCode: prevCode,
+		prevHash: obj.codeHash,
+	})
+	s.journal.append(contractMetaChange{
+		address:  addr,
+		prevMeta: prevMeta,
+	})
 	s.journal.append(selfDestructChange{
 		address: addr,
 		prev:    obj.selfDestructed,
@@ -1518,7 +1533,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		if !obj.dirty {
 			continue
 		}
-		if obj.deleted {
+		if obj.deleted || obj.selfDestructed {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
 				return tcommon.Hash{}, err
 			}
@@ -1527,6 +1542,13 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
 				return tcommon.Hash{}, err
 			}
+			obj.deleted = true
+			obj.selfDestructed = false
+			obj.code = nil
+			obj.codeHash = tcommon.Hash{}
+			obj.codeDirty = false
+			obj.contractMeta = nil
+			obj.contractMetaDirty = false
 			obj.dirty = false
 			continue
 		}

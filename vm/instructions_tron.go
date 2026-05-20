@@ -20,7 +20,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const tvmTRXPrecision = int64(1_000_000)
+const (
+	tvmTRXPrecision = int64(1_000_000)
+	tvmMemoryLimit  = uint64(3 * 1024 * 1024)
+)
 
 var errVoteWitnessMemoryLength = errors.New("TVM VoteWitness: memory array length do not match length parameter")
 
@@ -57,11 +60,12 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	retSizeWord := stack.pop()
 
 	addr := uint256ToAddress(&addrWord)
-	tokenValue := int64(tokenValueWord.Uint64())
+	tokenValueNonZero := !tokenValueWord.IsZero()
+	tokenValue, tokenValueOK := uint256ToInt64Exact(&tokenValueWord)
 	tokenID := int64(tokenIdWord.Uint64())
 
 	cost := uint64(EnergyCall)
-	if tokenValue > 0 {
+	if tokenValueNonZero {
 		cost += EnergyCallValueTx
 		if !in.tvm.StateDB.Exist(addr) {
 			cost += EnergyCallNewAcct
@@ -71,20 +75,26 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, ErrOutOfEnergy
 	}
 
-	inSz := inSizeWord.Uint64()
-	retSz := retSizeWord.Uint64()
-	if mcost := memoryExpansionCost(mem, inOffsetWord.Uint64(), inSz); mcost > 0 {
-		if !in.useEnergy(contract, mcost) {
+	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
+	if err != nil {
+		return nil, err
+	}
+	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
+	if err != nil {
+		return nil, err
+	}
+	if inMemCost > 0 {
+		if !in.useEnergy(contract, inMemCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
-	if mcost := memoryExpansionCost(mem, retOffsetWord.Uint64(), retSz); mcost > 0 {
-		if !in.useEnergy(contract, mcost) {
+	if retMemCost > 0 {
+		if !in.useEnergy(contract, retMemCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
-	resizeMemory(mem, inOffsetWord.Uint64(), inSz)
-	resizeMemory(mem, retOffsetWord.Uint64(), retSz)
+	resizeMemory(mem, inOff, inSz)
+	resizeMemory(mem, retOff, retSz)
 
 	callEnergy := gas.Uint64()
 	available := contract.Energy - contract.Energy/64
@@ -92,18 +102,25 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		callEnergy = available
 	}
 	contract.UseEnergy(callEnergy)
-	if tokenValue > 0 {
+	if tokenValueNonZero {
 		callEnergy += EnergyCallStipend
 	}
+	if !tokenValueOK {
+		contract.Energy += callEnergy
+		return nil, ErrEndowmentOutOfRange
+	}
 
-	inputData := mem.getCopy(int64(inOffsetWord.Uint64()), int64(inSz))
+	inputData := mem.getCopy(int64(inOff), int64(inSz))
 	ret, remaining, err := in.tvm.CallToken(
 		contract.Address, addr, inputData, callEnergy,
 		0 /*TRX value*/, tokenID, tokenValue,
 	)
 	contract.Energy += remaining
+	if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+		return nil, err
+	}
 
-	retOffset := int64(retOffsetWord.Uint64())
+	retOffset := int64(retOff)
 	retSize := int64(retSz)
 	if err == nil && len(ret) > 0 && retSize > 0 {
 		if int64(len(ret)) > retSize {
@@ -386,10 +403,17 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	witnessCountWord := stack.pop()
 	witnessOffsetWord := stack.pop()
 
-	if cost := voteWitnessMemoryEnergyCost(in, mem, &witnessOffsetWord, &witnessCountWord, &amountOffsetWord, &amountCountWord); cost > 0 {
+	cost, needed, err := voteWitnessMemoryEnergyCost(in, mem, &witnessOffsetWord, &witnessCountWord, &amountOffsetWord, &amountCountWord)
+	if err != nil {
+		return nil, err
+	}
+	if cost > 0 {
 		if !in.useEnergy(contract, cost) {
 			return nil, ErrOutOfEnergy
 		}
+	}
+	if needed > 0 && mem != nil && uint64(mem.len()) < needed {
+		mem.resize(needed)
 	}
 
 	n := int64(witnessCountWord.Uint64())
@@ -492,28 +516,31 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	return nil, nil
 }
 
-func voteWitnessMemoryEnergyCost(in *Interpreter, mem *Memory, witnessOffset, witnessCount, amountOffset, amountCount *uint256.Int) uint64 {
+func voteWitnessMemoryEnergyCost(in *Interpreter, mem *Memory, witnessOffset, witnessCount, amountOffset, amountCount *uint256.Int) (uint64, uint64, error) {
 	includeLengthWord := in.tvmConfig.EnergyAdjustment || in.tvmConfig.Osaka
 	wEnd, ok := voteWitnessArrayEnd(witnessOffset, witnessCount, includeLengthWord)
 	if !ok {
-		return ^uint64(0)
+		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
 	}
 	aEnd, ok := voteWitnessArrayEnd(amountOffset, amountCount, includeLengthWord)
 	if !ok {
-		return ^uint64(0)
+		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
 	}
 	needed := wEnd
 	if aEnd > needed {
 		needed = aEnd
+	}
+	if needed > tvmMemoryLimit {
+		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
 	}
 	var oldSize uint64
 	if mem != nil {
 		oldSize = uint64(mem.len())
 	}
 	if oldSize >= needed {
-		return 0
+		return 0, needed, nil
 	}
-	return memoryEnergyCost(needed) - memoryEnergyCost(oldSize)
+	return memoryEnergyCost(needed) - memoryEnergyCost(oldSize), needed, nil
 }
 
 func voteWitnessArrayEnd(offset, count *uint256.Int, includeLengthWord bool) (uint64, bool) {

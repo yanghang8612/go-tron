@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -217,5 +218,58 @@ func TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks(t *testing.T) {
 	}
 	if err := run(TVMConfig{Vote: true, Osaka: true}, 5); err != ErrOutOfEnergy {
 		t.Fatalf("Osaka zero-length arrays should charge 64 bytes of memory, got %v", err)
+	}
+}
+
+func TestVoteWitnessOpcodeMemoryLimit(t *testing.T) {
+	tvm, _, _ := newVoteRewardTVM(t)
+	caller := voteRewardAddr(0x42)
+	tvm.interpreter.tvmConfig = TVMConfig{Vote: true, EnergyAdjustment: true}
+
+	mem := newMemory()
+	stack := newStack()
+	stack.push(uint256.NewInt(3*1024*1024 - 31))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+	contract := NewContract(caller, caller, 0, 100_000_000)
+
+	_, err := opVoteWitness(nil, tvm.interpreter, contract, mem, stack)
+	if !errors.Is(err, ErrOutOfMemory) {
+		t.Fatalf("voteWitness memory limit error: got %v, want ErrOutOfMemory", err)
+	}
+	want := "Out of Memory when 'VOTEWITNESS' operation executing"
+	if got := err.Error(); got != want {
+		t.Fatalf("error message: got %q, want %q", got, want)
+	}
+}
+
+func TestVoteWitnessOpcodeExpandsMemoryAtLimit(t *testing.T) {
+	tvm, _, _ := newVoteRewardTVM(t)
+	caller := voteRewardAddr(0x43)
+	tvm.interpreter.tvmConfig = TVMConfig{Vote: true, EnergyAdjustment: true}
+
+	mem := newMemory()
+	stack := newStack()
+	stack.push(uint256.NewInt(tvmMemoryLimit - 32))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+	stack.push(uint256.NewInt(0))
+	contract := NewContract(caller, caller, 0, 100_000_000)
+
+	_, err := opVoteWitness(nil, tvm.interpreter, contract, mem, stack)
+	if err != nil {
+		t.Fatalf("voteWitness at memory limit: %v", err)
+	}
+	result := stack.pop()
+	if got := result.Uint64(); got != 1 {
+		t.Fatalf("voteWitness result: got %d, want 1", got)
+	}
+	if got := mem.len(); got != int(tvmMemoryLimit) {
+		t.Fatalf("memory size: got %d, want %d", got, tvmMemoryLimit)
+	}
+	wantEnergy := uint64(100_000_000) - memoryEnergyCost(tvmMemoryLimit)
+	if got := contract.Energy; got != wantEnergy {
+		t.Fatalf("remaining energy: got %d, want %d", got, wantEnergy)
 	}
 }

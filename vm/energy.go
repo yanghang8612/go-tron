@@ -1,5 +1,7 @@
 package vm
 
+import "github.com/holiman/uint256"
+
 // Energy cost tiers — aligned with java-tron EnergyCost.java.
 const (
 	EnergyZero         uint64 = 0
@@ -88,4 +90,39 @@ func memoryExpansionCost(mem *Memory, offset, size uint64) uint64 {
 	newCost := memoryEnergyCost(newSize)
 	oldCost := memoryEnergyCost(uint64(mem.len()))
 	return newCost - oldCost
+}
+
+func checkedMemoryExpansionCost(mem *Memory, offset, size uint64, op OpCode) (uint64, error) {
+	if size == 0 {
+		return 0, nil
+	}
+	if offset > tvmMemoryLimit || size > tvmMemoryLimit || offset > tvmMemoryLimit-size {
+		return 0, newOutOfMemoryError(op)
+	}
+	return memoryExpansionCost(mem, offset, size), nil
+}
+
+func checkedMemoryExpansionCostWords(mem *Memory, offset, size *uint256.Int, op OpCode) (uint64, uint64, uint64, error) {
+	if size.IsZero() {
+		return offset.Uint64(), 0, 0, nil
+	}
+	if !offset.IsUint64() || !size.IsUint64() {
+		return 0, 0, 0, newOutOfMemoryError(op)
+	}
+	off := offset.Uint64()
+	sz := size.Uint64()
+	cost, err := checkedMemoryExpansionCost(mem, off, sz, op)
+	return off, sz, cost, err
+}
+
+func checkedMemoryExpansionCostFixed(mem *Memory, offset *uint256.Int, size uint64, op OpCode) (uint64, uint64, error) {
+	if size == 0 {
+		return offset.Uint64(), 0, nil
+	}
+	if !offset.IsUint64() {
+		return 0, 0, newOutOfMemoryError(op)
+	}
+	off := offset.Uint64()
+	cost, err := checkedMemoryExpansionCost(mem, off, size, op)
+	return off, cost, err
 }

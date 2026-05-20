@@ -91,6 +91,69 @@ func TestStateDBSelfDestruct(t *testing.T) {
 	}
 }
 
+func TestStateDBSelfDestructDeletesAccountAtCommit(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x34}
+	code := []byte{0x60, 0x2a, 0x60, 0x00, 0x52, 0x00}
+	meta := &contractpb.SmartContract{
+		OriginAddress:   addr.Bytes(),
+		ContractAddress: addr.Bytes(),
+		Name:            "selfdestructed",
+	}
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, code)
+	sdb.SetContract(addr, meta)
+	if err := rawdb.WriteContractABI(diskdb, addr.Bytes(), &contractpb.SmartContract_ABI{}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.SelfDestruct(addr)
+	if !sdb.AccountExists(addr) {
+		t.Fatal("selfdestruct should not hide account before commit")
+	}
+	if got := sdb.GetCode(addr); string(got) != string(code) {
+		t.Fatalf("selfdestruct should not hide code before commit: got %x", got)
+	}
+	if got := sdb.GetContract(addr); got == nil || got.Name != "selfdestructed" {
+		t.Fatalf("selfdestruct should not hide contract meta before commit: %+v", got)
+	}
+
+	root, err = sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdb.AccountExists(addr) {
+		t.Fatal("selfdestructed account survived commit")
+	}
+	if got := sdb.GetCode(addr); len(got) != 0 {
+		t.Fatalf("selfdestructed code survived commit: %x", got)
+	}
+	if got := sdb.GetContract(addr); got != nil {
+		t.Fatalf("selfdestructed contract meta survived commit: %+v", got)
+	}
+	if rawdb.ReadContractABI(diskdb, addr.Bytes()) != nil {
+		t.Fatal("selfdestructed dedicated ABI survived commit")
+	}
+}
+
 func TestDeleteAccountClearsPersistedContractCodeOnRecreate(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)

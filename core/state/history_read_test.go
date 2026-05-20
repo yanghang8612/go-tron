@@ -374,14 +374,10 @@ func TestPersistentHistoryReader_AccountDeletedThenRecreated(t *testing.T) {
 	}
 
 	// Block 7: destroy addr. Mirror the gtron VM flow (opSelfDestruct in
-	// vm/instructions.go) which calls both SelfDestruct (records the
-	// selfDestructChange entry) and DeleteAccount (records the
-	// accountChange + codeChange entries the SHI capture path actually
-	// consumes; also flips obj.deleted=true so Commit drops the trie
-	// row).
+	// vm/instructions.go), which marks the account self-destructed and
+	// defers the real account/code deletion until Commit.
 	f.applyBlock(tcommon.Hash{0x07}, func(s *StateDB) {
 		s.SelfDestruct(addr)
-		s.DeleteAccount(addr)
 	})
 
 	// Block 8: addr is untouched.
@@ -563,7 +559,7 @@ func TestPersistentHistoryReader_SparseInverseIndexSeek(t *testing.T) {
 // TestPersistentHistoryReader_CacheHit to verify the per-request cache
 // absorbs repeated reads.
 type countingDB struct {
-	readerDB readerDB
+	readerDB  readerDB
 	iterCalls int64
 }
 
@@ -581,4 +577,3 @@ var (
 	_ ethdb.KeyValueReader = (*countingDB)(nil)
 	_ ethdb.Iteratee       = (*countingDB)(nil)
 )
-

@@ -87,6 +87,9 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		if stack.len() < operation.minStack {
 			return nil, ErrStackUnderflow
 		}
+		if stack.len()-operation.minStack+operationStackReturns(op, operation) > stackLimit {
+			return nil, ErrStackOverflow
+		}
 
 		// Static mode check
 		if in.readOnly && operation.writes {
@@ -129,6 +132,35 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 	}
 	return nil, nil
+}
+
+func operationStackReturns(op OpCode, operation *operation) int {
+	if op >= PUSH0 && op <= PUSH32 {
+		return 1
+	}
+	if op >= DUP1 && op <= DUP16 {
+		return operation.minStack + 1
+	}
+	if op >= SWAP1 && op <= SWAP16 {
+		return operation.minStack
+	}
+	switch op {
+	case ADD, MUL, SUB, DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD, EXP, SIGNEXTEND,
+		LT, GT, SLT, SGT, EQ, ISZERO, AND, OR, XOR, NOT, BYTE, SHL, SHR, SAR, CLZ,
+		SHA3, ADDRESS, BALANCE, ORIGIN, CALLER, CALLVALUE, CALLDATALOAD,
+		CALLDATASIZE,
+		CODESIZE, GASPRICE, EXTCODESIZE, RETURNDATASIZE, EXTCODEHASH, BLOCKHASH,
+		COINBASE, TIMESTAMP, NUMBER, DIFFICULTY, GASLIMIT, CHAINID, SELFBALANCE,
+		BASEFEE, BLOBHASH, BLOBBASEFEE, MLOAD, SLOAD, PC, MSIZE, GAS, TLOAD,
+		CALLTOKEN, TOKENBALANCE, CALLTOKENVALUE, CALLTOKENID, ISCONTRACT, FREEZE,
+		UNFREEZE, FREEZEEXPIRETIME, VOTEWITNESS, WITHDRAWREWARD, FREEZEBALANCEV2,
+		UNFREEZEBALANCEV2, CANCELALLUNFREEZEV2, WITHDRAWEXPIREUNFREEZE,
+		DELEGATERESOURCE, UNDELEGATERESOURCE, CREATE, CREATE2, CALL, CALLCODE,
+		DELEGATECALL, STATICCALL:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // useEnergy is the single energy-spend point for all inline charges from

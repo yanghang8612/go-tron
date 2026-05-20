@@ -82,6 +82,45 @@ func TestInterpreterInvalidJump(t *testing.T) {
 	}
 }
 
+func TestInterpreterStackOverflowPrecedesExecution(t *testing.T) {
+	tests := []struct {
+		name string
+		op   OpCode
+	}{
+		{name: "push", op: PUSH1},
+		{name: "dup", op: DUP1},
+		{name: "address", op: ADDRESS},
+		{name: "calldatasize", op: CALLDATASIZE},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evm := newTestEVM(t)
+			code := make([]byte, 0, stackLimit*2+3)
+			for i := 0; i < stackLimit; i++ {
+				code = append(code, byte(PUSH1), 0x00)
+			}
+			if tt.op == PUSH1 {
+				code = append(code, byte(PUSH1), 0x10, byte(JUMP))
+			} else {
+				code = append(code, byte(tt.op))
+			}
+
+			const energyLimit = uint64(stackLimit)*EnergyVeryLow + 1000
+			contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, energyLimit)
+			contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+			_, err := evm.interpreter.Run(contract)
+			if err != ErrStackOverflow {
+				t.Fatalf("expected ErrStackOverflow, got %v", err)
+			}
+			wantEnergy := energyLimit - uint64(stackLimit)*EnergyVeryLow
+			if contract.Energy != wantEnergy {
+				t.Fatalf("overflow opcode charged energy: got remaining %d, want %d", contract.Energy, wantEnergy)
+			}
+		})
+	}
+}
+
 func TestInterpreterRevert(t *testing.T) {
 	evm := newTestEVM(t)
 
@@ -429,8 +468,50 @@ func TestSelfDestructSelfTransfersToBlackholeBeforeRestriction(t *testing.T) {
 	if got := evm.StateDB.GetTRC10Balance(blackhole, 1_000_017); got != 7 {
 		t.Fatalf("blackhole token: got %d, want 7", got)
 	}
+	if !evm.StateDB.AccountExists(contractAddr) {
+		t.Fatal("contract account should remain visible until transaction commit")
+	}
+	if !evm.StateDB.HasSelfDestructed(contractAddr) {
+		t.Fatal("contract account should be marked for deletion before selfdestruct restriction")
+	}
+	if _, err := evm.StateDB.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
 	if evm.StateDB.AccountExists(contractAddr) {
-		t.Fatal("contract account should be deleted before selfdestruct restriction")
+		t.Fatal("contract account should be deleted at commit")
+	}
+}
+
+func TestSelfDestructKeepsCodeVisibleUntilCommit(t *testing.T) {
+	evm := newTestEVM(t)
+	contractAddr := tcommon.Address{0x41, 0x88}
+	beneficiary := tcommon.Address{0x41, 0x89}
+	code := []byte{byte(PUSH1), 0x2a, byte(PUSH1), 0x00, byte(MSTORE), byte(STOP)}
+	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.SetCode(contractAddr, code)
+
+	contract := NewContract(tcommon.Address{0x41, 0x02}, contractAddr, 0, 100_000)
+	stack := newStack()
+	word := addressToUint256(beneficiary)
+	stack.push(&word)
+
+	if _, err := opSelfDestruct(nil, evm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opSelfDestruct: %v", err)
+	}
+	if got := evm.StateDB.GetCodeSize(contractAddr); got != len(code) {
+		t.Fatalf("code should remain visible until commit: got size %d want %d", got, len(code))
+	}
+	if !evm.StateDB.IsContract(contractAddr) {
+		t.Fatal("selfdestructed contract should remain callable until commit")
+	}
+	if _, err := evm.StateDB.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if got := evm.StateDB.GetCodeSize(contractAddr); got != 0 {
+		t.Fatalf("code should be deleted at commit: got size %d", got)
+	}
+	if evm.StateDB.AccountExists(contractAddr) {
+		t.Fatal("account should be deleted at commit")
 	}
 }
 
