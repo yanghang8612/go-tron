@@ -212,9 +212,12 @@ stage_system_test() {
     # Use python for a robust HOCON-like rewrite (we only touch ip.list / host.list
     # values, leaving everything else — foundationAccount, witness, mainWitness,
     # commitData, defaultParameter — untouched).
-    python3 - "$TESTNG_CONF" "$JAVA_HTTP" "$JAVA_GRPC" "$JAVA_SOLIDITY_GRPC" "$JAVA_SOLIDITY_HTTP" "$JAVA_JSONRPC" "$TRON_SOLC" "$DAILYBUILD_MAX_FEE_LIMIT" "$DAILYBUILD_OPERATIONS" <<'PY'
-import re, sys
-path, http, grpc, sol_grpc, sol_http, jrpc, solc, max_fee_limit, operations = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8], sys.argv[9]
+    python3 - "$TESTNG_CONF" "$JAVA_HTTP" "$JAVA_GRPC" "$JAVA_SOLIDITY_GRPC" "$JAVA_SOLIDITY_HTTP" "$JAVA_JSONRPC" "$TRON_SOLC" "$DAILYBUILD_MAX_FEE_LIMIT" "$DAILYBUILD_OPERATIONS" "$WORK_DIR" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+path, http, grpc, sol_grpc, sol_http, jrpc, solc, max_fee_limit, operations, work_dir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8], sys.argv[9], sys.argv[10]
+database_path = str(Path(work_dir) / "javatron" / "output-directory" / "database")
 with open(path) as f: src = f.read()
 
 # Each ip.list block: from `<name> = {` containing `ip.list = [...]` through the
@@ -253,7 +256,7 @@ for name, spec in blocks.items():
 # CI-server path.
 src = re.sub(
     r'leveldbParams\s*=\s*\{[^{}]*\}',
-    f'leveldbParams = {{\n    databasePath = "/tmp/system-test-stress/javatron/output-directory/database"\n}}',
+    f'leveldbParams = {{\n    databasePath = {json.dumps(database_path)}\n}}',
     src, count=1
 )
 
