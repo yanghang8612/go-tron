@@ -28,6 +28,22 @@ const (
 	zcSignatureSize     = 64
 )
 
+type historicalShieldedProofCompat struct {
+	genesisHash common.Hash
+	blockNumber uint64
+	txHash      common.Hash
+	contractRet corepb.Transaction_ResultContractResult
+}
+
+var historicalShieldedProofCompatEntries = []historicalShieldedProofCompat{
+	{
+		genesisHash: params.NileGenesisHash,
+		blockNumber: 1_685_186,
+		txHash:      common.HexToHash("c3739ddc0909642006876309440c3733d0bcda66500f958cbc7090d984676f68"),
+		contractRet: corepb.Transaction_Result_SUCCESS,
+	},
+}
+
 func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.ShieldedTransferContract, error) {
 	contract := ctx.Tx.Contract()
 	if contract == nil {
@@ -176,10 +192,14 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 		}
 	}
 
-	txID := ctx.Tx.Hash().Bytes()
+	txHash := ctx.Tx.Hash()
+	txID := txHash.Bytes()
 	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID); ok {
 		if cached {
 			return nil
+		}
+		if isHistoricalShieldedProofCompatAllowed(ctx, txHash) {
+			return rawdb.WriteZKProofResult(ctx.DB, txID, true)
 		}
 		return errors.New("record is fail, skip proof")
 	}
@@ -210,11 +230,41 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 		return err
 	}
 	if err := zksnark.VerifyShieldedTransfer(c, valueBalance, signHash); err != nil {
+		if isHistoricalShieldedProofCompatAllowed(ctx, txHash) {
+			return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+		}
 		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
 		return err
 	}
 
 	return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+}
+
+func isHistoricalShieldedProofCompatAllowed(ctx *Context, txHash common.Hash) bool {
+	entry, ok := findHistoricalShieldedProofCompat(ctx, txHash)
+	if !ok {
+		return false
+	}
+	if ret, ok := expectedContractRet(ctx); ok && ret != entry.contractRet {
+		return false
+	}
+	return true
+}
+
+func findHistoricalShieldedProofCompat(ctx *Context, txHash common.Hash) (historicalShieldedProofCompat, bool) {
+	if ctx == nil {
+		return historicalShieldedProofCompat{}, false
+	}
+	genesisHash := ctx.GenesisHash
+	if genesisHash == (common.Hash{}) && ctx.DB != nil {
+		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
+	}
+	for _, entry := range historicalShieldedProofCompatEntries {
+		if ctx.BlockNumber == entry.blockNumber && txHash == entry.txHash && genesisHash == entry.genesisHash {
+			return entry, true
+		}
+	}
+	return historicalShieldedProofCompat{}, false
 }
 
 func validateShieldedProofShape(c *contractpb.ShieldedTransferContract) error {
