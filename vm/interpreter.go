@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"errors"
+
 	"github.com/holiman/uint256"
 
 	"github.com/tronprotocol/go-tron/core/types"
@@ -14,6 +16,8 @@ type Interpreter struct {
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
 	transient  map[uint256.Int]uint256.Int // transient storage for TLOAD/TSTORE (EIP-1153)
+	currentOp  OpCode
+	energyErr  error
 
 	// Dynamic-energy state — reset at the top of each Run call.
 	// factor is the effective multiplier (DynamicEnergyFactorDecimal == 1.0×).
@@ -77,6 +81,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		if operation == nil {
 			return nil, ErrInvalidCode
 		}
+		in.currentOp = op
+		in.energyErr = nil
 
 		// Fork gate
 		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
@@ -101,7 +107,7 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		// instruction-function callsites.
 		if operation.energyCost > 0 {
 			if !in.useEnergy(contract, operation.energyCost) {
-				return nil, ErrOutOfEnergy
+				return nil, in.outOfEnergyError()
 			}
 		}
 
@@ -110,6 +116,9 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		if err != nil {
 			if in.tvmConfig.DynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
+			}
+			if errors.Is(err, ErrOutOfEnergy) {
+				return nil, in.outOfEnergyError()
 			}
 			return nil, err
 		}
@@ -182,10 +191,25 @@ func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 	}
 	in.rawEnergyUsed += baseCost
 	cost := baseCost
+	penalty := uint64(0)
+	hasPenalty := false
 	if in.tvmConfig.DynamicEnergy && in.factor > types.DynamicEnergyFactorDecimal {
-		cost += applyDynamicEnergyPenalty(baseCost, in.factor)
+		hasPenalty = true
+		penalty = applyDynamicEnergyPenalty(baseCost, in.factor)
+		cost += penalty
 	}
-	return contract.UseEnergy(cost)
+	if contract.UseEnergy(cost) {
+		return true
+	}
+	in.energyErr = newOutOfEnergyError(in.currentOp, contract, baseCost, penalty, hasPenalty)
+	return false
+}
+
+func (in *Interpreter) outOfEnergyError() error {
+	if in.energyErr != nil {
+		return in.energyErr
+	}
+	return ErrOutOfEnergy
 }
 
 // makePush creates a PUSH instruction handler.

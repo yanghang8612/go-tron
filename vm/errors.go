@@ -31,11 +31,31 @@ type outOfMemoryError struct {
 	op OpCode
 }
 
-func (e outOfMemoryError) Error() string {
-	name := opCodeNames[e.op]
-	if name == "" {
-		name = fmt.Sprintf("0x%02x", byte(e.op))
+type outOfEnergyError struct {
+	op            OpCode
+	invokeLimit   uint64
+	opEnergy      uint64
+	penaltyEnergy uint64
+	usedEnergy    uint64
+	hasPenalty    bool
+}
+
+func (e outOfEnergyError) Error() string {
+	name := opNameForError(e.op)
+	if e.hasPenalty {
+		return fmt.Sprintf("Not enough energy for '%s' operation executing: curInvokeEnergyLimit[%d], curOpEnergy[%d], penaltyEnergy[%d], usedEnergy[%d]",
+			name, e.invokeLimit, e.opEnergy, e.penaltyEnergy, e.usedEnergy)
 	}
+	return fmt.Sprintf("Not enough energy for '%s' operation executing: curInvokeEnergyLimit[%d], curOpEnergy[%d], usedEnergy[%d]",
+		name, e.invokeLimit, e.opEnergy, e.usedEnergy)
+}
+
+func (e outOfEnergyError) Is(target error) bool {
+	return target == ErrOutOfEnergy
+}
+
+func (e outOfMemoryError) Error() string {
+	name := opNameForError(e.op)
 	return fmt.Sprintf("Out of Memory when '%s' operation executing", name)
 }
 
@@ -45,4 +65,23 @@ func (e outOfMemoryError) Is(target error) bool {
 
 func newOutOfMemoryError(op OpCode) error {
 	return outOfMemoryError{op: op}
+}
+
+func newOutOfEnergyError(op OpCode, contract *Contract, opEnergy, penaltyEnergy uint64, hasPenalty bool) error {
+	return outOfEnergyError{
+		op:            op,
+		invokeLimit:   contract.Energy + contract.EnergyUsed,
+		opEnergy:      opEnergy,
+		penaltyEnergy: penaltyEnergy,
+		usedEnergy:    contract.EnergyUsed,
+		hasPenalty:    hasPenalty,
+	}
+}
+
+func opNameForError(op OpCode) string {
+	name := opCodeNames[op]
+	if name == "" {
+		name = fmt.Sprintf("0x%02x", byte(op))
+	}
+	return name
 }

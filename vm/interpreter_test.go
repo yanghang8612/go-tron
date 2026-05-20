@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -64,8 +65,12 @@ func TestInterpreterOutOfEnergy(t *testing.T) {
 	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
 
 	_, err := evm.interpreter.Run(contract)
-	if err != ErrOutOfEnergy {
+	if !errors.Is(err, ErrOutOfEnergy) {
 		t.Fatalf("expected ErrOutOfEnergy, got %v", err)
+	}
+	want := "Not enough energy for 'PUSH1' operation executing: curInvokeEnergyLimit[2], curOpEnergy[3], usedEnergy[0]"
+	if err.Error() != want {
+		t.Fatalf("out of energy message: got %q, want %q", err.Error(), want)
 	}
 }
 
@@ -383,7 +388,7 @@ func TestSelfDestructEnergyCostFollowsJavaForks(t *testing.T) {
 			stack.push(&word)
 
 			_, err := opSelfDestruct(nil, evm.interpreter, contract, nil, stack)
-			if err != tc.wantErr {
+			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("opSelfDestruct error: got %v, want %v", err, tc.wantErr)
 			}
 		})
