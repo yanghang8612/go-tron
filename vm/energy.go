@@ -56,7 +56,7 @@ const (
 	EnergyUnDelegateResource     uint64 = 10000
 	EnergyVoteWitness            uint64 = 30000
 	EnergyWithdrawReward         uint64 = 20000
-	EnergyIsContract             uint64 = 100 // checking code existence
+	EnergyIsContract             uint64 = EnergyBalance
 	EnergyTokenBalance           uint64 = 20  // same as BALANCE
 	EnergyTLoad                  uint64 = 100 // EIP-1153 transient storage
 	EnergyTStore                 uint64 = 100

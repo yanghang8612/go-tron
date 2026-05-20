@@ -139,6 +139,12 @@ func TestCreateConstructorIsContractSeesPendingMetadata(t *testing.T) {
 	}
 }
 
+func TestIsContractEnergyMatchesJavaBalanceCost(t *testing.T) {
+	if EnergyIsContract != EnergyBalance {
+		t.Fatalf("ISCONTRACT energy: got %d, want BALANCE cost %d", EnergyIsContract, EnergyBalance)
+	}
+}
+
 func TestCreate2CollisionConsumesChildEnergyAndReturnsZero(t *testing.T) {
 	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
 	caller := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
