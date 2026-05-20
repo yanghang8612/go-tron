@@ -159,13 +159,23 @@ trap cleanup EXIT
 # ── Preflight ────────────────────────────────────────────────────
 preflight() {
     log "=== Preflight ==="
+    local need_java_launch=1
+    local need_system_test=0
+    if (( GTRON_ONLY )); then
+        need_java_launch=0
+    elif [[ "$STAGE" != "A" ]]; then
+        need_system_test=1
+    fi
+
     [[ -x "$GTRON"             ]] || { (cd "$BASEDIR" && make gtron) >/dev/null || fail "build gtron"; }
     [[ -f "$GTRON_GENESIS"     ]] || fail "missing $GTRON_GENESIS"
-    [[ -f "$JAVA_TRON_CONF"    ]] || fail "missing $JAVA_TRON_CONF"
-    [[ -f "$JAVA_TRON_JAR"     ]] || fail "missing JAVA_TRON_JAR=$JAVA_TRON_JAR"
-    [[ -d "$SYSTEM_TEST_DIR"   ]] || fail "missing SYSTEM_TEST_DIR=$SYSTEM_TEST_DIR"
-    [[ -x "$JT_JAVA_HOME/bin/java" ]] || fail "missing JT_JAVA_HOME=$JT_JAVA_HOME (need JDK 17 for arm64 java-tron)"
-    if [[ "$STAGE" != "A" ]]; then
+    if (( need_java_launch )); then
+        [[ -f "$JAVA_TRON_CONF"    ]] || fail "missing $JAVA_TRON_CONF"
+        [[ -f "$JAVA_TRON_JAR"     ]] || fail "missing JAVA_TRON_JAR=$JAVA_TRON_JAR"
+        [[ -x "$JT_JAVA_HOME/bin/java" ]] || fail "missing JT_JAVA_HOME=$JT_JAVA_HOME (need JDK 17 for arm64 java-tron)"
+    fi
+    if (( need_system_test )); then
+        [[ -d "$SYSTEM_TEST_DIR"   ]] || fail "missing SYSTEM_TEST_DIR=$SYSTEM_TEST_DIR"
         [[ -x "$SYSTEM_TEST_DIR/gradlew" ]] || fail "system-test gradlew missing"
         [[ -x "$GRADLE_JAVA_HOME/bin/java" ]] || fail "missing GRADLE_JAVA_HOME=$GRADLE_JAVA_HOME (need JDK 8 for Gradle 6.3)"
     fi
@@ -174,22 +184,31 @@ preflight() {
     # optional — just warn if missing.
     if [[ -x "$TRON_SOLC" ]]; then
         log "TRON solc    = $TRON_SOLC ($("$TRON_SOLC" --version 2>&1 | sed -n 's/^Version: //p'))"
-    elif [[ "$STAGE" == "C" ]]; then
+    elif (( need_system_test )) && [[ "$STAGE" == "C" ]]; then
         fail "missing TRON_SOLC=$TRON_SOLC. Download with: curl -sfL -o \"\$TRON_SOLC\" https://github.com/tronprotocol/solidity/releases/download/tv_0.8.26/solc-macos && chmod +x \"\$TRON_SOLC\""
     else
         log "TRON solc    = (not configured — only stage C needs it)"
     fi
     log "gtron        = $GTRON"
-    if [[ "$STAGE" == "C" && "$BOOTSTRAP_DAILYBUILD_PARAMS" == "1" && ! -x "$TXSIGN" ]]; then
+    if (( need_system_test )) && [[ "$STAGE" == "C" && "$BOOTSTRAP_DAILYBUILD_PARAMS" == "1" && ! -x "$TXSIGN" ]]; then
         log "building txsign helper for dailyBuild proposal bootstrap"
         (cd "$BASEDIR" && go build -o "$TXSIGN" ./cmd/txsign)
     fi
-    log "java-tron jar = $JAVA_TRON_JAR"
-    log "system-test  = $SYSTEM_TEST_DIR"
+    if (( need_java_launch )); then
+        log "java-tron jar = $JAVA_TRON_JAR"
+        log "JT_JAVA_HOME = $JT_JAVA_HOME"
+    else
+        log "java-tron jar = (not needed for --gtron-only)"
+        log "JT_JAVA_HOME = (not needed for --gtron-only)"
+    fi
+    if (( need_system_test )); then
+        log "system-test  = $SYSTEM_TEST_DIR"
+        log "GRADLE_JAVA_HOME = $GRADLE_JAVA_HOME"
+    else
+        log "system-test  = (not needed for this run)"
+    fi
     log "work dir     = $WORK_DIR"
     log "stage        = $STAGE"
-    log "JT_JAVA_HOME = $JT_JAVA_HOME"
-    [[ "$STAGE" != "A" ]] && log "GRADLE_JAVA_HOME = $GRADLE_JAVA_HOME" || true
 }
 
 # ── Stage system-test (copy + patch testng.conf) ─────────────────
@@ -1451,7 +1470,9 @@ if (( GTRON_ONLY )); then
     sleep infinity
 fi
 
-stage_system_test
+if [[ "$STAGE" != "A" ]]; then
+    stage_system_test
+fi
 stage_java_tron
 stage_gtron
 launch_java_tron
