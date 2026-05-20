@@ -824,7 +824,9 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		if assets := account.Proto().GetAssetV2(); len(assets) > 0 {
 			tokenInfo = make(map[string]int64, len(assets))
 			for tokenID, amount := range assets {
-				tokenInfo[tokenID] = amount
+				if amount != 0 {
+					tokenInfo[tokenID] = amount
+				}
 			}
 		}
 	}

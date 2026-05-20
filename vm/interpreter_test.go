@@ -474,6 +474,7 @@ func TestSelfDestructSelfTransfersToBlackholeBeforeRestriction(t *testing.T) {
 	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	evm.StateDB.AddBalance(contractAddr, 1_000)
 	evm.StateDB.SetTRC10Balance(contractAddr, 1_000_017, 7)
+	evm.StateDB.SetTRC10Balance(contractAddr, 1_000_018, 0)
 
 	contract := NewContract(tcommon.Address{0x41, 0x02}, contractAddr, 0, 100_000)
 	stack := newStack()
