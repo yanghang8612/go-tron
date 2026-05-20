@@ -316,11 +316,11 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 	if blockRoot != (tcommon.Hash{}) {
 		_, _, err = ProcessBlockWithJavaAccountStateRootAndEnergyFork(
 			statedb, dynProps, block, scratch, bc.ActiveWitnesses(),
-			bc.GenesisTimestamp(), energyLimitForkBlockNum, false, parentAccountStateRoot)
+			bc.GenesisTimestamp(), energyLimitForkBlockNum, false, parentAccountStateRoot, bc.effectiveGenesisHash())
 	} else {
 		_, err = ProcessBlockWithEnergyFork(
 			statedb, dynProps, block, scratch, bc.ActiveWitnesses(),
-			bc.GenesisTimestamp(), energyLimitForkBlockNum, false)
+			bc.GenesisTimestamp(), energyLimitForkBlockNum, false, bc.effectiveGenesisHash())
 	}
 	if err != nil {
 		return fmt.Errorf("backfill: replay block %d: %w", n, err)

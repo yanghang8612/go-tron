@@ -72,6 +72,23 @@ func makeTestTriggerTx(owner byte, contractAddr tcommon.Address, data []byte) *t
 	})
 }
 
+func makeTestProposalCreateTx(owner tcommon.Address, params map[int64]int64) *types.Transaction {
+	pc := &contractpb.ProposalCreateContract{
+		OwnerAddress: owner.Bytes(),
+		Parameters:   params,
+	}
+	param, _ := anypb.New(pc)
+	return types.NewTransactionFromPB(&corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_ProposalCreateContract,
+				Parameter: param,
+			}},
+		},
+	})
+}
+
 func TestApplyTransaction_Transfer(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
@@ -163,6 +180,43 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 	reward := dynProps.WitnessPayPerBlock()
 	if got := statedb.GetAllowance(witnessAddr); got != reward {
 		t.Fatalf("witness reward: got %d, want %d", got, reward)
+	}
+}
+
+func TestProcessBlock_PassesGenesisHashToProposalValidation(t *testing.T) {
+	const nileShieldedActivationBlock int64 = 1_628_391
+	nileGenesisHash := tcommon.HexToHash("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
+
+	run := func(genesisHash tcommon.Hash) error {
+		diskdb := ethrawdb.NewMemoryDatabase()
+		statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), state.NewDatabase(diskdb))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dynProps := state.NewDynamicProperties()
+		owner := testProcessorAddr(1)
+		statedb.CreateAccount(owner, corepb.AccountType_Normal)
+		statedb.PutWitness(owner, "http://w.com")
+
+		tx := makeTestProposalCreateTx(owner, map[int64]int64{27: 1})
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:    nileShieldedActivationBlock,
+					Timestamp: 3_000,
+				},
+			},
+			Transactions: []*corepb.Transaction{tx.Proto()},
+		})
+		_, err = ProcessBlock(statedb, dynProps, block, diskdb, []tcommon.Address{owner}, 0, false, genesisHash)
+		return err
+	}
+
+	if err := run(tcommon.Hash{}); err == nil {
+		t.Fatal("expected id 27 proposal to fail without the Nile genesis hash")
+	}
+	if err := run(nileGenesisHash); err != nil {
+		t.Fatalf("Nile historical id 27 proposal rejected: %v", err)
 	}
 }
 

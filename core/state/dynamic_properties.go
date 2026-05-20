@@ -133,7 +133,7 @@ var defaultProps = map[string]int64{
 	// reward / dynamic-energy *behaviour* is not yet implemented — these
 	// keys only ensure that initial state and governance proposals
 	// serialize to the same DB shape as java-tron.
-	"adaptive_resource_limit_multiplier":            1000,
+	"adaptive_resource_limit_multiplier": 1000,
 	// 14400 = 24 * 60 * 10; mirrors java-tron DynamicPropertiesStore.init()
 	// which seeds the genesis ratio at "one minute / 10 of total limit".
 	// total_energy_target_limit's default of 3_472_222 above is derived as
@@ -238,6 +238,35 @@ func NewDynamicProperties() *DynamicProperties {
 		dp.stringProps[k] = v
 	}
 	return dp
+}
+
+// Copy returns a deep copy of the DynamicProperties object, including dirty
+// flags. Callers can mutate the copy without changing the original.
+func (dp *DynamicProperties) Copy() *DynamicProperties {
+	if dp == nil {
+		return nil
+	}
+	out := &DynamicProperties{
+		props:                 make(map[string]int64, len(dp.props)),
+		dirty:                 make(map[string]struct{}, len(dp.dirty)),
+		stringProps:           make(map[string]string, len(dp.stringProps)),
+		stringDirty:           make(map[string]struct{}, len(dp.stringDirty)),
+		latestBlockHeaderHash: dp.latestBlockHeaderHash,
+		hashDirty:             dp.hashDirty,
+	}
+	for k, v := range dp.props {
+		out.props[k] = v
+	}
+	for k, v := range dp.dirty {
+		out.dirty[k] = v
+	}
+	for k, v := range dp.stringProps {
+		out.stringProps[k] = v
+	}
+	for k, v := range dp.stringDirty {
+		out.stringDirty[k] = v
+	}
+	return out
 }
 
 // LoadDynamicProperties creates a DynamicProperties with defaults, overriding

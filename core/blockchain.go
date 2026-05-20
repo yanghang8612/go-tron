@@ -110,6 +110,8 @@ type BlockChain struct {
 	genesisBlock     *types.Block
 	genesisWitnesses []consensus.GenesisWitnessInfo
 	activeWitnesses  atomic.Value // []tcommon.Address
+	dynPropsCache    atomic.Value // *state.DynamicProperties; canonical head snapshot
+	standbyPayCache  *standbyWitnessPaySet
 	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
@@ -281,6 +283,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	if bc.genesisBlock == nil {
 		return nil, errors.New("genesis block not found in database")
 	}
+	bc.storeDynPropsCache(state.LoadDynamicProperties(buffer))
 
 	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -612,7 +615,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// feeds VerifyHeaderWithDynProps below, replacing the redundant
 	// chain.DynProps() scan that the legacy VerifyHeader entry point would
 	// otherwise perform on the same buffer.
-	dynProps := state.LoadDynamicProperties(bc.buffer)
+	dynProps := bc.cachedDynProps()
 
 	// Header verification (signature recovery, scheduled-witness match, and
 	// post-fork timestamp alignment) runs here rather than at the top of
@@ -681,24 +684,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}
 
-	// Load witnesses into statedb for maintenance access. Reads go through
-	// bc.buffer so that VoteCount/URL deltas persisted by previous blocks
-	// (via statedb.FlushWitnesses below) are visible even when those blocks
-	// haven't been flushed to bc.db yet — same layered-read consistency the
-	// DP load above relies on.
-	//
-	// LoadWitness (vs PutWitness+AddWitnessVoteCount) deliberately does NOT
-	// mark the addresses dirty: this is a hydration of in-memory cache from
-	// rawdb, not a mutation. Actuators that actually change VoteCount or URL
-	// downstream mark dirty via PutWitness / SetWitnessURL /
-	// AddWitnessVoteCount, so FlushWitnesses only persists the genuine deltas.
-	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
-	for _, addr := range witnessAddrs {
-		if statedb.GetWitness(addr) == nil {
-			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
-		}
-	}
-
 	// Capture old-head timestamp BEFORE ProcessBlock; needed by ApplyBlockStatistics
 	// to compute slot offset against the chain head as it stood pre-insert
 	// (matches java-tron StatisticManager.applyBlock semantics).
@@ -722,10 +707,15 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
+	var standbyPaySet *standbyWitnessPaySet
+	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
+		standbyPaySet = bc.cachedStandbyPaySet(statedb)
+	}
 	if blockRoot != (tcommon.Hash{}) {
-		txInfos, javaAccountStateRoot, err = ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, current.AccountStateRoot())
+		parentRoot := current.AccountStateRoot()
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
 	} else {
-		txInfos, err = ProcessBlockWithEnergyFork(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -790,6 +780,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			dynProps.SetNextMaintenanceTime(nextMaint)
 			wasMaintenanceBlock = true
 		} else {
+			bc.loadWitnessesIntoState(statedb)
 			// Process expired proposals first — applies their parameter changes
 			// to DP (or marks them CANCELED). Mirrors java-tron MaintenanceManager
 			// → ConsensusService.applyBlock order: processProposals → updateWitness
@@ -842,6 +833,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
 			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 			dynProps.SetNextMaintenanceTime(nextMaint)
+			bc.invalidateStandbyPayCache()
 			wasMaintenanceBlock = true
 		}
 	}
@@ -960,6 +952,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
 	}
+	bc.storeDynPropsCache(dynProps)
 	stats.mark(&stats.Persist)
 
 	// Fire maintenance hooks first so the SRL PBFT message goes out before
@@ -1223,6 +1216,8 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// new branch is re-applied. (Without this the active set stays stale even
 	// though witness is_jobs and DP correctly rewound.)
 	bc.reloadActiveWitnesses()
+	bc.reloadDynPropsCache()
+	bc.invalidateStandbyPayCache()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
@@ -1387,6 +1382,58 @@ func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
 func (bc *BlockChain) reloadActiveWitnesses() {
 	if reloaded := rawdb.ReadActiveWitnesses(bc.buffer); reloaded != nil {
 		bc.activeWitnesses.Store(reloaded)
+	}
+}
+
+func (bc *BlockChain) cachedDynProps() *state.DynamicProperties {
+	if v := bc.dynPropsCache.Load(); v != nil {
+		if dp, ok := v.(*state.DynamicProperties); ok && dp != nil {
+			return dp.Copy()
+		}
+	}
+	return state.LoadDynamicProperties(bc.buffer)
+}
+
+func (bc *BlockChain) storeDynPropsCache(dp *state.DynamicProperties) {
+	if dp != nil {
+		bc.dynPropsCache.Store(dp.Copy())
+	}
+}
+
+func (bc *BlockChain) reloadDynPropsCache() {
+	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer))
+}
+
+func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {
+	if bc.config != nil && bc.config.GenesisHash != (tcommon.Hash{}) {
+		return bc.config.GenesisHash
+	}
+	if bc.genesisBlock != nil {
+		return bc.genesisBlock.Hash()
+	}
+	return tcommon.Hash{}
+}
+
+func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB) *standbyWitnessPaySet {
+	if bc.standbyPayCache == nil {
+		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb)
+	}
+	return bc.standbyPayCache
+}
+
+func (bc *BlockChain) invalidateStandbyPayCache() {
+	bc.standbyPayCache = nil
+}
+
+// loadWitnessesIntoState hydrates witness records for maintenance-only code
+// that mutates vote counts through StateDB. Ordinary replay does lazy rawdb
+// lookups instead, avoiding a full witness scan on every block.
+func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
+	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
+	for _, addr := range witnessAddrs {
+		if statedb.GetWitness(addr) == nil {
+			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
+		}
 	}
 }
 

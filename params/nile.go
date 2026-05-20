@@ -2,7 +2,8 @@ package params
 
 // NileNetworkID is the HelloMessage.networkId value for Nile testnet.
 // Source: java-tron `nile/Nile` branch `framework/src/main/resources/config-nile.conf`
-//     p2p { version = 201910292 }
+//
+//	p2p { version = 201910292 }
 const NileNetworkID int32 = 201910292
 
 // ShastaNetworkID is the HelloMessage.networkId value for Shasta testnet.
@@ -24,6 +25,11 @@ var NileBootstrapNodes = []string{
 // `0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc` and
 // Nile java-tron seeds drop the connection at TRON Hello.
 var NileParentHash = mustHashFromHex("e58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f")
+
+// NileGenesisHash is the live Nile genesis blockID. Keep it on ChainConfig so
+// historical chain-specific proposal gates do not depend on a datadir that may
+// have been initialized by an older go-tron build.
+var NileGenesisHash = mustHashFromHex("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
 
 func DefaultNileGenesis() *Genesis {
 	return &Genesis{

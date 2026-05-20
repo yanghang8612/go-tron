@@ -102,6 +102,7 @@ var MainnetChainConfig = &ChainConfig{
 
 var NileChainConfig = &ChainConfig{
 	ChainID:                3448148188,
+	GenesisHash:            NileGenesisHash,
 	P2PVersion:             201910292,
 	P2PPort:                18888,
 	HTTPPort:               8090,
