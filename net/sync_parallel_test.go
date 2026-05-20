@@ -92,6 +92,60 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	}
 }
 
+func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	peerA, closeA := testPeer(t, "fork-a")
+	defer closeA()
+	peerB, closeB := testPeer(t, "fork-b")
+	defer closeB()
+
+	parent := bc.CurrentBlock().Hash()
+	blockA1 := forkedStubBlock(1, parent, 0xa1)
+	blockA2 := forkedStubBlock(2, blockA1.Hash(), 0xa2)
+	blockB1 := forkedStubBlock(1, parent, 0xb1)
+	blockB2 := forkedStubBlock(2, blockB1.Hash(), 0xb2)
+	if blockA1.Hash() == blockB1.Hash() || blockA2.Hash() == blockB2.Hash() {
+		t.Fatal("test setup expected distinct fork hashes at the same heights")
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.addPeerStateLocked(peerA)
+	ss.addPeerStateLocked(peerB)
+	ss.mu.Unlock()
+
+	ss.HandleChainInventory(peerA, testChainInventoryFromBlocks(t, blockA1, blockA2))
+	ss.HandleChainInventory(peerB, testChainInventoryFromBlocks(t, blockB1, blockB2))
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	psA := ss.peers[peerA.ID()]
+	psB := ss.peers[peerB.ID()]
+	if psA == nil || psB == nil {
+		t.Fatalf("missing peer state: a=%v b=%v", psA, psB)
+	}
+	if psA.inflight != 2 {
+		t.Fatalf("peer A inflight=%d, want 2", psA.inflight)
+	}
+	if psB.inflight != 0 || len(psB.fetchList) != 0 {
+		t.Fatalf("peer B conflicting fork was not filtered: inflight=%d fetchList=%d", psB.inflight, len(psB.fetchList))
+	}
+	if len(ss.requested) != 2 {
+		t.Fatalf("requested=%d, want only peer A's two blocks", len(ss.requested))
+	}
+	if ss.blockPath[1] != blockA1.Hash() || ss.blockPath[2] != blockA2.Hash() {
+		t.Fatalf("sync path changed away from peer A fork")
+	}
+	if _, ok := ss.requested[blockB1.Hash()]; ok {
+		t.Fatal("conflicting block #1 from peer B was requested")
+	}
+	if _, ok := ss.requested[blockB2.Hash()]; ok {
+		t.Fatal("conflicting block #2 from peer B was requested")
+	}
+}
+
 func TestMultiPeerSyncDoesNotRepollBeforeInventoryTipProcessed(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
@@ -156,6 +210,37 @@ func testChainInventoryPayload(t *testing.T, start, count int64, remain int64) [
 	return payload
 }
 
+func testChainInventoryFromBlocks(t *testing.T, blocks ...*types.Block) []byte {
+	t.Helper()
+	ids := make([]*corepb.ChainInventory_BlockId, 0, len(blocks))
+	for _, block := range blocks {
+		bid := block.ID()
+		ids = append(ids, &corepb.ChainInventory_BlockId{
+			Hash:   bid.Hash[:],
+			Number: int64(bid.Num),
+		})
+	}
+	payload, err := proto.Marshal(&corepb.ChainInventory{Ids: ids})
+	if err != nil {
+		t.Fatalf("marshal chain inventory: %v", err)
+	}
+	return payload
+}
+
+func forkedStubBlock(num int64, parent tcommon.Hash, salt byte) *types.Block {
+	return types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:         num,
+				Timestamp:      num * 3000,
+				ParentHash:     parent[:],
+				WitnessAddress: []byte{salt},
+			},
+			WitnessSignature: make([]byte, 65),
+		},
+	})
+}
+
 func assertPendingRange(t *testing.T, label string, pending map[tcommon.Hash]uint64, min, max uint64) {
 	t.Helper()
 	if len(pending) != int(max-min+1) {
@@ -169,6 +254,7 @@ func assertPendingRange(t *testing.T, label string, pending map[tcommon.Hash]uin
 }
 
 func markPendingLocked(ss *SyncService, ps *syncPeerState, bid types.BlockID) {
+	ss.reserveBlockPathLocked(bid)
 	ps.inflight = 1
 	ps.pending = map[tcommon.Hash]uint64{bid.Hash: bid.Num}
 	ps.pendingIDs = map[tcommon.Hash]types.BlockID{bid.Hash: bid}

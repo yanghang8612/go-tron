@@ -94,6 +94,7 @@ type SyncService struct {
 	retryList     []types.BlockID
 	blockBuffer   map[uint64]bufferedSyncBlock
 	bufferedHash  map[tcommon.Hash]struct{}
+	blockPath     map[uint64]tcommon.Hash
 	targetHeadNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
@@ -298,6 +299,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.retryList = nil
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
+	ss.blockPath = make(map[uint64]tcommon.Hash)
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
@@ -316,6 +318,9 @@ func (ss *SyncService) ensureSessionMapsLocked() {
 	}
 	if ss.bufferedHash == nil {
 		ss.bufferedHash = make(map[tcommon.Hash]struct{})
+	}
+	if ss.blockPath == nil {
+		ss.blockPath = make(map[uint64]tcommon.Hash)
 	}
 }
 
@@ -537,7 +542,11 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		if _, ok := ps.requestedHashes[hash]; ok {
 			continue
 		}
-		ps.fetchList = append(ps.fetchList, types.BlockID{Hash: hash, Num: num})
+		bid := types.BlockID{Hash: hash, Num: num}
+		if !ss.reserveBlockPathLocked(bid) {
+			continue
+		}
+		ps.fetchList = append(ps.fetchList, bid)
 	}
 	ps.remainNum = inv.RemainNum
 	if len(inv.Ids) > 0 {
@@ -662,6 +671,9 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 			keep = append(keep, bid)
 			continue
 		}
+		if !ss.reserveBlockPathLocked(bid) {
+			continue
+		}
 		ps.fetchList = append(ps.fetchList, bid)
 	}
 	ss.retryList = keep
@@ -684,6 +696,9 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 		if ss.hasBlockOrRequestLocked(bid) {
 			continue
 		}
+		if !ss.reserveBlockPathLocked(bid) {
+			continue
+		}
 		if _, ok := ps.requestedHashes[bid.Hash]; ok {
 			continue
 		}
@@ -698,6 +713,9 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
+	if ss.blockPathConflictsLocked(bid) {
+		return true
+	}
 	if _, ok := ss.requested[bid.Hash]; ok {
 		return true
 	}
@@ -711,6 +729,25 @@ func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
 		}
 	}
 	return ss.chain.HasBlockInKhaosDB(bid.Hash)
+}
+
+func (ss *SyncService) blockPathConflictsLocked(bid types.BlockID) bool {
+	if ss.blockPath == nil {
+		return false
+	}
+	hash, ok := ss.blockPath[bid.Num]
+	return ok && hash != bid.Hash
+}
+
+func (ss *SyncService) reserveBlockPathLocked(bid types.BlockID) bool {
+	if ss.blockPathConflictsLocked(bid) {
+		return false
+	}
+	if ss.blockPath == nil {
+		ss.blockPath = make(map[uint64]tcommon.Hash)
+	}
+	ss.blockPath[bid.Num] = bid.Hash
+	return true
 }
 
 func (ss *SyncService) sendOutboundRequests(out []outboundSyncRequest) {
@@ -818,7 +855,13 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		ss.armPeerFetchTimerLocked(ps)
 	}
 	if blockNum > ss.chain.CurrentBlock().Number() {
-		if _, ok := ss.bufferedHash[blockHash]; !ok {
+		bid := types.BlockID{Hash: blockHash, Num: blockNum}
+		if existing, ok := ss.blockBuffer[blockNum]; ok {
+			if existing.block.Hash() != blockHash {
+				log.Debug("Dropping conflicting buffered sync block",
+					"number", blockNum, "hash", blockHash, "kept", existing.block.Hash(), "peer", peer.ID())
+			}
+		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
 			ss.blockBuffer[blockNum] = bufferedSyncBlock{block: block, peer: peer}
 			ss.bufferedHash[blockHash] = struct{}{}
 		}
@@ -1090,6 +1133,7 @@ func (ss *SyncService) doReset() {
 	ss.retryList = nil
 	ss.blockBuffer = nil
 	ss.bufferedHash = nil
+	ss.blockPath = nil
 	ss.targetHeadNum = 0
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
