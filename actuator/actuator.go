@@ -52,6 +52,10 @@ type Context struct {
 	HeadSlot    int64
 	HasHeadSlot bool
 	BlockNumber uint64
+	// GenesisHash identifies the chain for narrow historical exceptions.
+	// Production block processing can derive it from DB when this is zero;
+	// tests may set it explicitly when they do not materialize genesis.
+	GenesisHash common.Hash
 	// EnergyLimitForkBlockNum mirrors java-tron's `enery.limit.block.num`.
 	// HasEnergyLimitForkBlockNum distinguishes an explicit 0 (active at
 	// genesis) from the zero value of older tests.
