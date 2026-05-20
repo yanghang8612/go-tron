@@ -448,7 +448,13 @@ func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 }
 
 func opGasPrice(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(0))
+	price := uint64(0)
+	if interpreter.tvmConfig.Compatibility && interpreter.tvm.DynProps != nil {
+		if meta := interpreter.tvm.StateDB.GetContract(contract.Address); meta != nil && meta.GetVersion() == 1 {
+			price = uint64(interpreter.tvm.DynProps.EnergyFee())
+		}
+	}
+	stack.push(uint256.NewInt(price))
 	return nil, nil
 }
 
@@ -498,7 +504,7 @@ func opCoinbase(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 }
 
 func opTimestamp(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := uint256.NewInt(uint64(interpreter.tvm.Timestamp))
+	v := uint256.NewInt(uint64(interpreter.tvm.Timestamp / 1000))
 	stack.push(v)
 	return nil, nil
 }
