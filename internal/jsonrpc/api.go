@@ -368,6 +368,14 @@ func hexBytes(b []byte) string {
 	return fmt.Sprintf("0x%x", b)
 }
 
+// hexHash formats a 32-byte hash as "0x"+64-hex.
+//
+// Do NOT use fmt.Sprintf("0x%x", h) for a common.Hash: %x on an operand that
+// implements fmt.Stringer calls String() first (which for common.Hash already
+// returns the 64-char hex), then hex-encodes THAT string — yielding a wrong
+// 128-char "0x3030…" value. Formatting via Hex() (a plain string) avoids it.
+func hexHash(h common.Hash) string { return "0x" + h.Hex() }
+
 // hex20 formats a byte slice's last 20 bytes as "0x<40 hex chars>".
 func hex20(b []byte) string {
 	if len(b) < 20 {
@@ -782,8 +790,8 @@ func txToRPC(tx *corepb.Transaction, hash common.Hash, block *types.Block, index
 	}
 
 	result := map[string]interface{}{
-		"hash":             fmt.Sprintf("0x%x", hash),
-		"blockHash":        fmt.Sprintf("0x%x", block.Hash()),
+		"hash":             hexHash(hash),
+		"blockHash":        hexHash(block.Hash()),
 		"blockNumber":      hexUint64(block.Number()),
 		"transactionIndex": hexUint64(uint64(index)),
 		"from":             from,
@@ -862,18 +870,18 @@ func receiptToRPC(hash common.Hash, tx *corepb.Transaction, info *corepb.Transac
 			"topics":           topics,
 			"data":             hexBytes(l.Data),
 			"blockNumber":      hexUint64(block.Number()),
-			"transactionHash":  fmt.Sprintf("0x%x", hash),
+			"transactionHash":  hexHash(hash),
 			"transactionIndex": hexUint64(uint64(index)),
-			"blockHash":        fmt.Sprintf("0x%x", block.Hash()),
+			"blockHash":        hexHash(block.Hash()),
 			"logIndex":         hexUint64(uint64(li)),
 			"removed":          false,
 		})
 	}
 
 	return map[string]interface{}{
-		"transactionHash":   fmt.Sprintf("0x%x", hash),
+		"transactionHash":   hexHash(hash),
 		"transactionIndex":  hexUint64(uint64(index)),
-		"blockHash":         fmt.Sprintf("0x%x", block.Hash()),
+		"blockHash":         hexHash(block.Hash()),
 		"blockNumber":       hexUint64(block.Number()),
 		"from":              from,
 		"to":                toAddr,
@@ -901,7 +909,7 @@ func blockToRPC(b *types.Block, fullTx bool) map[string]interface{} {
 	} else {
 		hashes := make([]string, len(txs))
 		for i, tx := range txs {
-			hashes[i] = fmt.Sprintf("0x%x", tx.Hash())
+			hashes[i] = hexHash(tx.Hash())
 		}
 		transactions = hashes
 	}
@@ -909,8 +917,8 @@ func blockToRPC(b *types.Block, fullTx bool) map[string]interface{} {
 	witnessAddr := b.WitnessAddress()
 
 	return map[string]interface{}{
-		"hash":             fmt.Sprintf("0x%x", b.Hash()),
-		"parentHash":       fmt.Sprintf("0x%x", b.ParentHash()),
+		"hash":             hexHash(b.Hash()),
+		"parentHash":       hexHash(b.ParentHash()),
 		"number":           hexUint64(b.Number()),
 		"timestamp":        hexUint64(uint64(b.Timestamp() / 1000)), // ms → s
 		"miner":            fmt.Sprintf("0x%x", witnessAddr[:]),
@@ -924,7 +932,7 @@ func blockToRPC(b *types.Block, fullTx bool) map[string]interface{} {
 		"sha3Uncles":       "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
 		"logsBloom":        "0x" + zeroBloom(),
 		"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-		"stateRoot":        fmt.Sprintf("0x%x", b.AccountStateRoot()),
+		"stateRoot":        hexHash(b.AccountStateRoot()),
 		"receiptsRoot":     "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
 		"uncles":           []string{},
 		"transactions":     transactions,
