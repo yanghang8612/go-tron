@@ -19,6 +19,7 @@ type Contract struct {
 
 	Energy     uint64 // remaining energy
 	EnergyUsed uint64 // energy consumed so far
+	Version    int32  // java-tron SmartContract.version for this code frame
 
 	jumpdests map[uint64]bool // cached valid JUMPDEST positions
 }

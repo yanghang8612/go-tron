@@ -26,11 +26,11 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		return nil, ErrEndowmentOutOfRange
 	}
 
-	energyForCall := contract.Energy - contract.Energy/64
+	energyForCall := interpreter.tvm.adjustedCreateEnergy(contract)
 	contract.UseEnergy(energyForCall)
 
-	ret, addr, remainingEnergy, err := interpreter.tvm.Create(
-		contract.Address, code, energyForCall, val,
+	ret, addr, remainingEnergy, err := interpreter.tvm.createWithVersion(
+		contract.Address, code, energyForCall, val, contract.Version,
 	)
 	contract.Energy += remainingEnergy
 
@@ -74,11 +74,11 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	}
 	salt := saltVal.Bytes32()
 
-	energyForCall := contract.Energy - contract.Energy/64
+	energyForCall := interpreter.tvm.adjustedCreateEnergy(contract)
 	contract.UseEnergy(energyForCall)
 
-	ret, addr, remainingEnergy, err := interpreter.tvm.Create2(
-		contract.Address, code, energyForCall, val, salt,
+	ret, addr, remainingEnergy, err := interpreter.tvm.create2WithVersion(
+		contract.Address, code, energyForCall, val, salt, contract.Version,
 	)
 	contract.Energy += remainingEnergy
 
@@ -139,10 +139,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	resizeMemory(memory, inOff, inSz)
 	resizeMemory(memory, retOff, retSz)
 
-	available := contract.Energy - contract.Energy/64
-	if gas > available {
-		gas = available
-	}
+	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 
 	if valueNonZero {
@@ -219,10 +216,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	resizeMemory(memory, inOff, inSz)
 	resizeMemory(memory, retOff, retSz)
 
-	available := contract.Energy - contract.Energy/64
-	if gas > available {
-		gas = available
-	}
+	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 	if valueNonZero {
 		gas += EnergyCallStipend
@@ -292,10 +286,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	resizeMemory(memory, inOff, inSz)
 	resizeMemory(memory, retOff, retSz)
 
-	available := contract.Energy - contract.Energy/64
-	if gas > available {
-		gas = available
-	}
+	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOff), int64(inSz))
@@ -358,10 +349,7 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	resizeMemory(memory, inOff, inSz)
 	resizeMemory(memory, retOff, retSz)
 
-	available := contract.Energy - contract.Energy/64
-	if gas > available {
-		gas = available
-	}
+	gas = interpreter.tvm.adjustedCallEnergy(contract, gas)
 	contract.UseEnergy(gas)
 
 	input := memory.getCopy(int64(inOff), int64(inSz))

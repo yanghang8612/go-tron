@@ -454,10 +454,8 @@ func opExtCodeHash(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 
 func opGasPrice(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	price := uint64(0)
-	if interpreter.tvmConfig.Compatibility && interpreter.tvm.DynProps != nil {
-		if meta := interpreter.tvm.StateDB.GetContract(contract.Address); meta != nil && meta.GetVersion() == 1 {
-			price = uint64(interpreter.tvm.DynProps.EnergyFee())
-		}
+	if interpreter.tvmConfig.Compatibility && interpreter.tvm.DynProps != nil && contract.Version == 1 {
+		price = uint64(interpreter.tvm.DynProps.EnergyFee())
 	}
 	stack.push(uint256.NewInt(price))
 	return nil, nil

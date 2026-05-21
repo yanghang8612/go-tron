@@ -414,6 +414,7 @@ func TestGasPriceOpcodeReturnsEnergyFeeForVersionOneCompatibilityContract(t *tes
 
 	code := []byte{byte(GASPRICE), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}
 	contract := NewContract(tcommon.Address{0x41, 0x01}, addr, 0, 100000)
+	contract.Version = 1
 	contract.SetCode(addr, code)
 
 	ret, err := evm.interpreter.Run(contract)
@@ -423,6 +424,75 @@ func TestGasPriceOpcodeReturnsEnergyFeeForVersionOneCompatibilityContract(t *tes
 	got := new(uint256.Int).SetBytes(ret).Uint64()
 	if got != 420 {
 		t.Fatalf("gasprice: got %d, want energy fee", got)
+	}
+}
+
+func TestLegacyContractCallForwardsAllRemainingEnergy(t *testing.T) {
+	evm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Compatibility: true}, nil)
+	parent := tcommon.Address{0x41, 0x21}
+	child := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(parent)
+	sdb.GetOrCreateAccount(child)
+	sdb.SetContract(parent, &contractpb.SmartContract{ContractAddress: parent.Bytes(), Version: 0})
+	sdb.SetContract(child, &contractpb.SmartContract{ContractAddress: child.Bytes(), Version: 0})
+	sdb.SetCode(child, []byte{0xfe})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x00, // value
+		byte(PUSH20),
+	}
+	code = append(code, child[1:]...)
+	code = append(code,
+		byte(PUSH2), 0xff, 0xff, // requested energy exceeds remaining
+		byte(CALL),
+		byte(ISZERO),
+		byte(STOP),
+	)
+	contract := NewContract(tcommon.Address{0x41, 0x01}, parent, 0, 1_000)
+	contract.Version = 0
+	contract.SetCode(parent, code)
+
+	_, err := evm.interpreter.Run(contract)
+	if !errors.Is(err, ErrOutOfEnergy) {
+		t.Fatalf("legacy contract should spend all remaining energy in CALL, got %v", err)
+	}
+}
+
+func TestVersionOneContractCallKeepsSixtyFourthEnergy(t *testing.T) {
+	evm, sdb, _ := newTestTVMForCreate(t, TVMConfig{Compatibility: true}, nil)
+	parent := tcommon.Address{0x41, 0x21}
+	child := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(parent)
+	sdb.GetOrCreateAccount(child)
+	sdb.SetContract(parent, &contractpb.SmartContract{ContractAddress: parent.Bytes(), Version: 1})
+	sdb.SetContract(child, &contractpb.SmartContract{ContractAddress: child.Bytes(), Version: 1})
+	sdb.SetCode(child, []byte{0xfe})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x00, // value
+		byte(PUSH20),
+	}
+	code = append(code, child[1:]...)
+	code = append(code,
+		byte(PUSH2), 0xff, 0xff, // requested energy exceeds remaining
+		byte(CALL),
+		byte(ISZERO),
+		byte(STOP),
+	)
+	contract := NewContract(tcommon.Address{0x41, 0x01}, parent, 0, 1_000)
+	contract.Version = 1
+	contract.SetCode(parent, code)
+
+	if _, err := evm.interpreter.Run(contract); err != nil {
+		t.Fatalf("version-1 contract should retain 1/64 energy after CALL, got %v", err)
 	}
 }
 

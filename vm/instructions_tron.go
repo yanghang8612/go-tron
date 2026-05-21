@@ -101,10 +101,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	resizeMemory(mem, retOff, retSz)
 
 	callEnergy := gas.Uint64()
-	available := contract.Energy - contract.Energy/64
-	if callEnergy > available {
-		callEnergy = available
-	}
+	callEnergy = in.tvm.adjustedCallEnergy(contract, callEnergy)
 	contract.UseEnergy(callEnergy)
 	if tokenValueNonZero {
 		callEnergy += EnergyCallStipend

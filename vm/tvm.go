@@ -86,6 +86,42 @@ func (tvm *TVM) runContract(contract *Contract) ([]byte, error) {
 	return ret, err
 }
 
+func (tvm *TVM) contractVersion(addr tcommon.Address) int32 {
+	if meta := tvm.StateDB.GetContract(addr); meta != nil {
+		return meta.GetVersion()
+	}
+	return 0
+}
+
+func (tvm *TVM) defaultCreateVersion(caller tcommon.Address) int32 {
+	if meta := tvm.StateDB.GetContract(caller); meta != nil {
+		return meta.GetVersion()
+	}
+	if tvm.cfg.Compatibility {
+		return 1
+	}
+	return 0
+}
+
+func (tvm *TVM) adjustedCallEnergy(contract *Contract, requested uint64) uint64 {
+	available := contract.Energy
+	if tvm.cfg.Compatibility && contract.Version == 1 {
+		available -= available / 64
+	}
+	if requested > available {
+		return available
+	}
+	return requested
+}
+
+func (tvm *TVM) adjustedCreateEnergy(contract *Contract) uint64 {
+	available := contract.Energy
+	if tvm.cfg.Compatibility && contract.Version == 1 {
+		available -= available / 64
+	}
+	return available
+}
+
 func (tvm *TVM) currentInternalTxHash() tcommon.Hash {
 	if n := len(tvm.internalTxHashStack); n > 0 {
 		return tvm.internalTxHashStack[n-1]
@@ -242,7 +278,18 @@ func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value
 	contractAddr := tvm.createAddress(tvm.Nonce)
 	tvm.Nonce++
 
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, false, nil)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, false, nil, tvm.defaultCreateVersion(caller))
+}
+
+func (tvm *TVM) createWithVersion(caller tcommon.Address, code []byte, energy uint64, value int64, version int32) ([]byte, tcommon.Address, uint64, error) {
+	if tvm.Depth >= maxCallDepth {
+		return nil, tcommon.Address{}, energy, ErrDepthExceeded
+	}
+
+	contractAddr := tvm.createAddress(tvm.Nonce)
+	tvm.Nonce++
+
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, false, nil, version)
 }
 
 // CreateAt deploys a top-level contract at a caller-supplied address. TRON
@@ -253,7 +300,7 @@ func (tvm *TVM) CreateAt(caller, contractAddr tcommon.Address, code []byte, ener
 	if tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, false, false, nil)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, false, false, nil, 0)
 }
 
 // CreateAtWithToken deploys a top-level contract with TRC-10 message context.
@@ -264,7 +311,7 @@ func (tvm *TVM) CreateAtWithToken(caller, contractAddr tcommon.Address, code []b
 	if tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
-	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, nil)
+	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, nil, 0)
 }
 
 // CreateAtWithTokenAndContract deploys a top-level contract after preloading
@@ -274,7 +321,7 @@ func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Addres
 	if tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
-	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, contractMeta)
+	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, contractMeta, 0)
 }
 
 // Create2 deploys a new contract with a deterministic address.
@@ -295,7 +342,27 @@ func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, valu
 	copy(contractAddr[1:], hash[12:32])
 
 	tvm.Nonce++
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil)
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil, tvm.defaultCreateVersion(caller))
+}
+
+func (tvm *TVM) create2WithVersion(caller tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte, version int32) ([]byte, tcommon.Address, uint64, error) {
+	if tvm.Depth >= maxCallDepth {
+		return nil, tcommon.Address{}, energy, ErrDepthExceeded
+	}
+
+	codeHash := keccak256(code)
+	var buf []byte
+	buf = append(buf, caller[:]...)
+	buf = append(buf, salt[:]...)
+	buf = append(buf, codeHash[:]...)
+	hash := keccak256(buf)
+
+	var contractAddr tcommon.Address
+	contractAddr[0] = 0x41
+	copy(contractAddr[1:], hash[12:32])
+
+	tvm.Nonce++
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil, version)
 }
 
 func (tvm *TVM) createAddress(nonce uint64) tcommon.Address {
@@ -320,7 +387,7 @@ func keccak256(data []byte) [32]byte {
 	return out
 }
 
-func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract) ([]byte, tcommon.Address, uint64, error) {
+func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, internal bool, isCreate2 bool, contractMeta *contractpb.SmartContract, contractVersion int32) ([]byte, tcommon.Address, uint64, error) {
 	snap := tvm.StateDB.Snapshot()
 	logSnap := tvm.LogSnapshot()
 	internalTxSnap := tvm.InternalTransactionSnapshot()
@@ -346,7 +413,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	}
 
 	if internal {
-		tvm.createInternalContractAccount(caller, contractAddr, isCreate2)
+		tvm.createInternalContractAccount(caller, contractAddr, isCreate2, contractVersion)
 	} else {
 		tvm.createExternalContractAccount(caller, contractAddr, contractMeta)
 		if !tvm.cfg.Constantinople {
@@ -381,6 +448,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 	}
 
 	contract := NewContract(caller, contractAddr, value, energy)
+	contract.Version = tvm.contractVersion(contractAddr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
 	} else {
@@ -441,7 +509,7 @@ func legacyCreateContractCode(ops []byte) []byte {
 	return make([]byte, 32)
 }
 
-func (tvm *TVM) createInternalContractAccount(origin, contractAddr tcommon.Address, isCreate2 bool) {
+func (tvm *TVM) createInternalContractAccount(origin, contractAddr tcommon.Address, isCreate2 bool, contractVersion int32) {
 	existed := tvm.StateDB.AccountExists(contractAddr)
 	tvm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
 	if existed {
@@ -456,7 +524,7 @@ func (tvm *TVM) createInternalContractAccount(origin, contractAddr tcommon.Addre
 		ConsumeUserResourcePercent: 100,
 	}
 	if tvm.cfg.Compatibility {
-		meta.Version = 1
+		meta.Version = contractVersion
 	}
 	if isCreate2 {
 		meta.TrxHash = tvm.RootTxID.Bytes()
@@ -562,6 +630,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	}
 
 	contract := NewContract(caller, addr, value, energy)
+	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
 	} else {
@@ -688,6 +757,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	}
 
 	contract := NewContract(caller, addr, value, energy)
+	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
 	} else {
@@ -749,6 +819,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	}
 
 	contract := NewContract(caller, addr, 0, energy)
+	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
 	} else {
@@ -813,6 +884,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	}
 
 	contract := NewContract(caller, context, value, energy)
+	contract.Version = tvm.contractVersion(addr)
 	if internalTx != nil {
 		contract.InternalTxHash = tcommon.BytesToHash(internalTx.Hash)
 	} else {
