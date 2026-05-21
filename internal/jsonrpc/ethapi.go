@@ -47,10 +47,14 @@ func parseCallValue(s string) int64 {
 // resolveBlockArg "default to latest" behavior.
 type EthAPI struct {
 	backend Backend
+	filters *FilterManager
 }
 
-// NewEthAPI builds an EthAPI over the given backend.
-func NewEthAPI(backend Backend) *EthAPI { return &EthAPI{backend: backend} }
+// NewEthAPI builds an EthAPI over the given backend and filter manager (the
+// latter backs the eth_*Filter methods).
+func NewEthAPI(backend Backend, filters *FilterManager) *EthAPI {
+	return &EthAPI{backend: backend, filters: filters}
+}
 
 // resolveBlock mirrors api.resolveBlockArg for the framework methods: a nil or
 // empty block tag means "latest" (live read path), otherwise the parsed block
@@ -267,10 +271,9 @@ type logFilterArgs struct {
 	Topics    json.RawMessage `json:"topics"`
 }
 
-// GetLogs serves eth_getLogs. It resolves the block range (or blockHash),
-// address set, and topic matrix into a LogFilter and delegates to the backend.
-// A nil result is normalized to an empty array, matching the legacy handler.
-func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
+// toLogFilter converts the polymorphic eth filter object into a LogFilter,
+// resolving block tags against head. Shared by eth_getLogs and eth_newFilter.
+func (e *EthAPI) toLogFilter(filterObj logFilterArgs) (LogFilter, error) {
 	filter := LogFilter{}
 
 	if filterObj.BlockHash != "" {
@@ -281,7 +284,7 @@ func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
 		if filterObj.FromBlock != "" {
 			n, err := parseBlockParam(filterObj.FromBlock)
 			if err != nil {
-				return nil, fmt.Errorf("invalid fromBlock: %w", err)
+				return filter, fmt.Errorf("invalid fromBlock: %w", err)
 			}
 			if n == ^uint64(0) {
 				n = e.backend.BlockNumber()
@@ -291,7 +294,7 @@ func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
 		if filterObj.ToBlock != "" {
 			n, err := parseBlockParam(filterObj.ToBlock)
 			if err != nil {
-				return nil, fmt.Errorf("invalid toBlock: %w", err)
+				return filter, fmt.Errorf("invalid toBlock: %w", err)
 			}
 			if n == ^uint64(0) {
 				n = e.backend.BlockNumber()
@@ -340,12 +343,61 @@ func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
 		}
 	}
 
+	return filter, nil
+}
+
+// GetLogs serves eth_getLogs. A nil result is normalized to an empty array,
+// matching the legacy handler.
+func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
+	filter, err := e.toLogFilter(filterObj)
+	if err != nil {
+		return nil, err
+	}
 	logs, err := e.backend.GetLogs(filter)
 	if err != nil {
 		return nil, err
 	}
 	if logs == nil {
 		logs = []*RPCLog{}
+	}
+	return logs, nil
+}
+
+// NewFilter serves eth_newFilter: install a log filter and return its id.
+func (e *EthAPI) NewFilter(filterObj logFilterArgs) (string, error) {
+	lf, err := e.toLogFilter(filterObj)
+	if err != nil {
+		return "", err
+	}
+	return e.filters.NewLogFilter(lf)
+}
+
+// NewBlockFilter serves eth_newBlockFilter: install a block filter, return id.
+func (e *EthAPI) NewBlockFilter() (string, error) {
+	return e.filters.NewBlockFilter()
+}
+
+// UninstallFilter serves eth_uninstallFilter: remove a filter by id, reporting
+// whether it existed.
+func (e *EthAPI) UninstallFilter(id string) bool {
+	return e.filters.UninstallFilter(id)
+}
+
+// GetFilterChanges serves eth_getFilterChanges: new items since the last poll.
+// An unknown filter id is an error (matching the legacy "filter not found").
+func (e *EthAPI) GetFilterChanges(id string) (interface{}, error) {
+	result, ok := e.filters.GetFilterChanges(id)
+	if !ok {
+		return nil, fmt.Errorf("filter not found")
+	}
+	return result, nil
+}
+
+// GetFilterLogs serves eth_getFilterLogs: all logs matching a log filter id.
+func (e *EthAPI) GetFilterLogs(id string) (interface{}, error) {
+	logs, ok := e.filters.GetFilterLogs(id)
+	if !ok {
+		return nil, fmt.Errorf("filter not found")
 	}
 	return logs, nil
 }

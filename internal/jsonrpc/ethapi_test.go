@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -18,7 +19,13 @@ import (
 // postParity fires one JSON-RPC request at url and asserts the response
 // "result" equals wantResult (compared as raw JSON), failing on any JSON-RPC
 // error. Shared by the eth framework-parity tests.
-func postParity(t *testing.T, url, body, wantResult string) {
+type rpcErrObj struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// postRPC fires one JSON-RPC request and returns the parsed result and error.
+func postRPC(t *testing.T, url, body string) (json.RawMessage, *rpcErrObj) {
 	t.Helper()
 	resp, err := http.Post(url, "application/json", strings.NewReader(body))
 	if err != nil {
@@ -26,22 +33,26 @@ func postParity(t *testing.T, url, body, wantResult string) {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-
 	var got struct {
 		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+		Error  *rpcErrObj      `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decode %q: %v", raw, err)
 	}
-	if got.Error != nil {
-		t.Fatalf("unexpected JSON-RPC error: %+v", got.Error)
+	return got.Result, got.Error
+}
+
+// postParity asserts the request yields wantResult (compared semantically) with
+// no JSON-RPC error.
+func postParity(t *testing.T, url, body, wantResult string) {
+	t.Helper()
+	result, errObj := postRPC(t, url, body)
+	if errObj != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", errObj)
 	}
-	if !jsonSemanticEqual(got.Result, []byte(wantResult)) {
-		t.Fatalf("result mismatch:\n got = %s\nwant = %s", got.Result, wantResult)
+	if !jsonSemanticEqual(result, []byte(wantResult)) {
+		t.Fatalf("result mismatch:\n got = %s\nwant = %s", result, wantResult)
 	}
 }
 
@@ -63,8 +74,9 @@ func jsonSemanticEqual(a, b []byte) bool {
 // fresh framework server and returns its test HTTP endpoint.
 func ethParityServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	be := newFreezeBackend()
 	srv := rpc.NewServer()
-	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(newFreezeBackend())); err != nil {
+	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(be, jsonrpc.NewFilterManager(be))); err != nil {
 		t.Fatalf("RegisterName: %v", err)
 	}
 	t.Cleanup(srv.Stop)
@@ -198,4 +210,45 @@ func TestEthAPI_GetLogsFrameworkParity(t *testing.T) {
 	ts := ethParityServer(t)
 	req, wantResult := loadCorpusCase(t, "eth_getLogs")
 	postParity(t, ts.URL, req, wantResult)
+}
+
+// TestEthAPI_FilterFrameworkParity proves the stateful filter methods dispatch
+// through the framework. newFilter/newBlockFilter return random ids (matched by
+// pattern, as the corpus does); uninstall/getFilterChanges/getFilterLogs are
+// exercised against a never-installed id (deterministic false / not-found).
+func TestEthAPI_FilterFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	idRE := regexp.MustCompile(`^0x[0-9a-f]{32}$`)
+	const unknownID = "0xdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	assertID := func(t *testing.T, body string) {
+		t.Helper()
+		result, errObj := postRPC(t, ts.URL, body)
+		if errObj != nil {
+			t.Fatalf("unexpected error: %+v", errObj)
+		}
+		var id string
+		if err := json.Unmarshal(result, &id); err != nil || !idRE.MatchString(id) {
+			t.Fatalf("filter id %s does not match %s (err=%v)", result, idRE, err)
+		}
+	}
+
+	t.Run("newFilter", func(t *testing.T) {
+		assertID(t, `{"jsonrpc":"2.0","id":1,"method":"eth_newFilter","params":[{"fromBlock":"0x0","toBlock":"latest"}]}`)
+	})
+	t.Run("newBlockFilter", func(t *testing.T) {
+		assertID(t, `{"jsonrpc":"2.0","id":1,"method":"eth_newBlockFilter","params":[]}`)
+	})
+	t.Run("uninstallFilter_unknown", func(t *testing.T) {
+		postParity(t, ts.URL,
+			`{"jsonrpc":"2.0","id":1,"method":"eth_uninstallFilter","params":["`+unknownID+`"]}`, `false`)
+	})
+	for _, m := range []string{"eth_getFilterChanges", "eth_getFilterLogs"} {
+		t.Run(m+"_unknown", func(t *testing.T) {
+			if _, errObj := postRPC(t, ts.URL,
+				`{"jsonrpc":"2.0","id":1,"method":"`+m+`","params":["`+unknownID+`"]}`); errObj == nil {
+				t.Fatalf("%s on unknown id: expected JSON-RPC error, got none", m)
+			}
+		})
+	}
 }
