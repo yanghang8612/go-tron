@@ -40,8 +40,7 @@ type TVMConfig struct {
 	// consumed only by the 0x0a ValidateMultiSign precompile to switch its
 	// duplicate-signer behaviour: pre-fork it silently skipped exact-byte
 	// signature duplicates from the same address; post-fork it must report
-	// failure (java-tron MUtil.checkCPUTime → OutOfTimeException, which the
-	// precompile surfaces by returning false). This is NOT derived from an
+	// failure (java-tron MUtil.checkCPUTime → OutOfTimeException). This is NOT derived from an
 	// AllowFlag — VERSION_4_7_1 is a pure SR-version vote, no DP key — so
 	// it cannot be set by `NewTVMConfig`; the caller wires it via a direct
 	// `cfg.MultiSigCheckV2 = forks.PassVersion(db, 27, ...)`.

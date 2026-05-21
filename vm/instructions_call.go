@@ -103,6 +103,10 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	val, valueOK := uint256ToInt64Exact(&value)
 	gas := energyVal.Uint64()
 
+	if interpreter.readOnly && valueNonZero {
+		return nil, ErrWriteProtection
+	}
+
 	cost := uint64(EnergyCall)
 	if valueNonZero {
 		cost += EnergyCallValueTx
@@ -152,7 +156,7 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 	input := memory.getCopy(int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.Call(contract.Address, addr, input, gas, val)
 	contract.Energy += remainingEnergy
-	if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+	if shouldPropagateCallError(err) {
 		return nil, err
 	}
 
@@ -231,7 +235,7 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 	input := memory.getCopy(int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Address, contract.Address, addr, input, gas, val, val)
 	contract.Energy += remainingEnergy
-	if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+	if shouldPropagateCallError(err) {
 		return nil, err
 	}
 
@@ -297,7 +301,7 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	input := memory.getCopy(int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.DelegateCall(contract.Caller, contract.Address, addr, input, gas, contract.Value, 0)
 	contract.Energy += remainingEnergy
-	if err == ErrTransferFailed || err == ErrTokenTransferFailed {
+	if shouldPropagateCallError(err) {
 		return nil, err
 	}
 
@@ -363,6 +367,9 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 	input := memory.getCopy(int64(inOff), int64(inSz))
 	ret, remainingEnergy, err := interpreter.tvm.StaticCall(contract.Address, addr, input, gas)
 	contract.Energy += remainingEnergy
+	if shouldPropagateCallError(err) {
+		return nil, err
+	}
 
 	var success uint256.Int
 	if err == nil {

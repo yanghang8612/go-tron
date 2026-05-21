@@ -542,6 +542,15 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	if got := contractRetFromError(vm.ErrOutOfMemory); got != int32(corepb.Transaction_Result_OUT_OF_MEMORY) {
 		t.Fatalf("out of memory ret: got %d", got)
 	}
+	if got := contractRetFromError(vm.ErrPrecompiledContract); got != int32(corepb.Transaction_Result_PRECOMPILED_CONTRACT) {
+		t.Fatalf("precompiled contract ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrJVMStackOverflow); got != int32(corepb.Transaction_Result_JVM_STACK_OVER_FLOW) {
+		t.Fatalf("JVM stack overflow ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrWriteProtection); got != int32(corepb.Transaction_Result_UNKNOWN) {
+		t.Fatalf("static call modification ret: got %d", got)
+	}
 	if got := contractRetFromError(vm.ErrTransferFailed); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
 		t.Fatalf("TRX transfer failed ret: got %d", got)
 	}

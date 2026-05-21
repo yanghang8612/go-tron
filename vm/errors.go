@@ -10,7 +10,7 @@ var (
 	ErrStackOverflow         = errors.New("stack overflow")
 	ErrStackUnderflow        = errors.New("stack underflow")
 	ErrInvalidJump           = errors.New("invalid jump destination")
-	ErrWriteProtection       = errors.New("write protection")
+	ErrWriteProtection       = errors.New("Attempt to call a state modifying opcode inside STATICCALL")
 	ErrReturnDataOutOfBounds = errors.New("return data out of bounds")
 	ErrDepthExceeded         = errors.New("max call depth exceeded")
 	ErrInsufficientBalance   = errors.New("insufficient balance for transfer")
@@ -21,10 +21,13 @@ var (
 	ErrExecutionReverted     = errors.New("execution reverted")
 	ErrAlreadyTimeOut        = errors.New("Already Time Out")
 	ErrOutOfMemory           = errors.New("out of memory")
+	ErrJVMStackOverflow      = errors.New("StackOverflowError:  exceed default JVM stack size!")
+	ErrPrecompiledContract   = errors.New("precompiled contract error")
 	ErrEndowmentOutOfRange   = errors.New("endowment out of long range")
 	ErrTransferFailed        = errors.New("transfer trx failed: Cannot transfer TRX to yourself.")
 	ErrTokenTransferFailed   = errors.New("transfer trc10 failed: Cannot transfer asset to yourself.")
 	errPrecompileFailure     = errors.New("precompile returned failure")
+	errExecutionFailed       = errors.New("execution failed")
 )
 
 type invalidJumpError struct {
@@ -128,6 +131,29 @@ func newStackUnderflowError(expected, actual int) error {
 
 func newStackOverflowError() error {
 	return stackOverflowError{}
+}
+
+func isFatalVMError(err error) bool {
+	return errors.Is(err, ErrAlreadyTimeOut) || errors.Is(err, ErrJVMStackOverflow)
+}
+
+func isTransferFailure(err error) bool {
+	return errors.Is(err, ErrTransferFailed) ||
+		errors.Is(err, ErrTokenTransferFailed) ||
+		errors.Is(err, ErrEndowmentOutOfRange)
+}
+
+func shouldPropagateCallError(err error) bool {
+	return isFatalVMError(err) ||
+		errors.Is(err, ErrPrecompiledContract) ||
+		isTransferFailure(err)
+}
+
+func childCallFailure(err error) error {
+	if isFatalVMError(err) {
+		return err
+	}
+	return errExecutionFailed
 }
 
 func newOutOfEnergyError(op OpCode, contract *Contract, opEnergy, penaltyEnergy uint64, hasPenalty bool) error {

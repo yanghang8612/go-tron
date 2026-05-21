@@ -64,6 +64,10 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	tokenValue, tokenValueOK := uint256ToInt64Exact(&tokenValueWord)
 	tokenID := int64(tokenIdWord.Uint64())
 
+	if in.readOnly && tokenValueNonZero {
+		return nil, ErrWriteProtection
+	}
+
 	cost := uint64(EnergyCall)
 	if tokenValueNonZero {
 		cost += EnergyCallValueTx
@@ -116,7 +120,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		0 /*TRX value*/, tokenID, tokenValue,
 	)
 	contract.Energy += remaining
-	if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
+	if shouldPropagateCallError(err) {
 		return nil, err
 	}
 

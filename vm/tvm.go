@@ -581,10 +581,10 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err
 		}
-		if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
-			return nil, contract.Energy, err
+		if tvm.Depth == 0 {
+			return nil, 0, err
 		}
-		return nil, 0, err
+		return nil, 0, childCallFailure(err)
 	}
 	return ret, contract.Energy, nil
 }
@@ -709,10 +709,10 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		if err == ErrExecutionReverted {
 			return ret, contract.Energy, err
 		}
-		if err == ErrTransferFailed || err == ErrTokenTransferFailed || err == ErrEndowmentOutOfRange {
-			return nil, contract.Energy, err
+		if tvm.Depth == 0 {
+			return nil, 0, err
 		}
-		return nil, 0, err
+		return nil, 0, childCallFailure(err)
 	}
 	return ret, contract.Energy, nil
 }
@@ -767,7 +767,10 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 
 	if err != nil && err != ErrExecutionReverted {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
-		return nil, 0, err
+		if tvm.Depth == 0 {
+			return nil, 0, err
+		}
+		return nil, 0, childCallFailure(err)
 	}
 	if err == ErrExecutionReverted {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
@@ -824,7 +827,10 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 
 	if err != nil && err != ErrExecutionReverted {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
-		return nil, 0, err
+		if tvm.Depth == 0 {
+			return nil, 0, err
+		}
+		return nil, 0, childCallFailure(err)
 	}
 	if err == ErrExecutionReverted {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)

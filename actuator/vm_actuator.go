@@ -163,6 +163,8 @@ func contractRetFromError(err error) int32 {
 		return 2 // REVERT
 	case errors.Is(err, vm.ErrOutOfMemory):
 		return 4 // OUT_OF_MEMORY
+	case errors.Is(err, vm.ErrPrecompiledContract):
+		return 5 // PRECOMPILED_CONTRACT
 	case errors.Is(err, vm.ErrAlreadyTimeOut):
 		return 11 // OUT_OF_TIME
 	case errors.Is(err, vm.ErrTransferFailed), errors.Is(err, vm.ErrTokenTransferFailed), errors.Is(err, vm.ErrEndowmentOutOfRange):
@@ -175,12 +177,12 @@ func contractRetFromError(err error) int32 {
 		return 6 // STACK_TOO_SMALL
 	case errors.Is(err, vm.ErrStackOverflow):
 		return 7 // STACK_TOO_LARGE
-	case errors.Is(err, vm.ErrWriteProtection):
-		return 8 // ILLEGAL_OPERATION
 	case errors.Is(err, vm.ErrInvalidOpCode):
 		return 8 // ILLEGAL_OPERATION
 	case errors.Is(err, vm.ErrDepthExceeded):
 		return 9 // STACK_OVERFLOW
+	case errors.Is(err, vm.ErrJVMStackOverflow):
+		return 12 // JVM_STACK_OVER_FLOW
 	case errors.Is(err, vm.ErrContractCodeTooLarge), errors.Is(err, vm.ErrInvalidCode):
 		return 15 // INVALID_CODE
 	default:

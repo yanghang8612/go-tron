@@ -150,7 +150,7 @@ func newJumpTable() JumpTable {
 	tbl[SELFDESTRUCT] = &operation{execute: opSelfDestruct, minStack: 1, maxStack: 1024, writes: true}
 	tbl[CREATE] = &operation{execute: opCreate, energyCost: EnergyCreate, minStack: 3, maxStack: 1022, writes: true}
 	tbl[CREATE2] = &operation{execute: opCreate2, energyCost: EnergyCreate, minStack: 4, maxStack: 1021, writes: true}
-	tbl[CALL] = &operation{execute: opCall, minStack: 7, maxStack: 1018, writes: true}
+	tbl[CALL] = &operation{execute: opCall, minStack: 7, maxStack: 1018}
 	tbl[CALLCODE] = &operation{execute: opCallCode, minStack: 7, maxStack: 1018}
 	tbl[DELEGATECALL] = &operation{execute: opDelegateCall, minStack: 6, maxStack: 1019}
 	tbl[STATICCALL] = &operation{execute: opStaticCall, minStack: 6, maxStack: 1019}
@@ -190,7 +190,7 @@ func newJumpTable() JumpTable {
 	// TRON extensions — TRC-10 token transfer (AllowTvmTransferTrc10)
 	transferTrc10 := func(c TVMConfig) bool { return c.TransferTrc10 }
 	tbl[CALLTOKEN] = &operation{execute: opCallToken, minStack: 8, maxStack: 1017,
-		writes: true, enabledFn: transferTrc10}
+		enabledFn: transferTrc10}
 	tbl[TOKENBALANCE] = &operation{execute: opTokenBalance, energyCost: EnergyTokenBalance,
 		minStack: 2, maxStack: 1023, enabledFn: transferTrc10}
 	tbl[CALLTOKENVALUE] = &operation{execute: opCallTokenValue, energyCost: EnergyBase,

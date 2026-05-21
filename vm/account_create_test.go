@@ -577,6 +577,41 @@ func TestCallValueToSelfReturnsTransferFailed(t *testing.T) {
 	}
 }
 
+func TestChildCallVMFailureDoesNotPropagateToParent(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	parent := tcommon.Address{0x41, 0x21}
+	child := tcommon.Address{0x41, 0x22}
+	sdb.GetOrCreateAccount(caller)
+	sdb.GetOrCreateAccount(parent)
+	sdb.GetOrCreateAccount(child)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x00, // value
+		byte(PUSH20),
+	}
+	code = append(code, child[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x03, 0xe8, // energy
+		byte(CALL),
+		byte(STOP),
+	)
+	sdb.SetCode(parent, code)
+	sdb.SetCode(child, []byte{0xfe})
+
+	_, remaining, err := tvm.Call(caller, parent, nil, 100_000, 0)
+	if err != nil {
+		t.Fatalf("Call error: got %v, want nil", err)
+	}
+	if remaining == 0 {
+		t.Fatal("expected parent call to retain remaining energy")
+	}
+}
+
 func TestCallTokenValueOutOfLongRangeReturnsTransferFailed(t *testing.T) {
 	const tokenID = int64(1_000_002)
 

@@ -225,25 +225,28 @@ func (c *validateMultiSign) RunWithStatus(tvm *TVM, _ tcommon.Address, input []b
 		return nil, energy, false, ErrOutOfEnergy
 	}
 
-	ret, success := c.executeWithStatus(tvm, input)
+	ret, success, err := c.executeWithStatus(tvm, input)
+	if err != nil {
+		return nil, cost, false, err
+	}
 	return ret, cost, success, nil
 }
 
 func (c *validateMultiSign) execute(tvm *TVM, input []byte) []byte {
-	ret, _ := c.executeWithStatus(tvm, input)
+	ret, _, _ := c.executeWithStatus(tvm, input)
 	return ret
 }
 
-func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, bool) {
+func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, bool, error) {
 	falseResult := make([]byte, 32)
 	trueResult := make([]byte, 32)
 	trueResult[31] = 1
 
 	if len(input) < 128 {
-		return falseResult, true
+		return falseResult, true, nil
 	}
 	if tvm != nil && tvm.cfg.Osaka && !validAbiEncoding(input, 5, 5) {
-		return nil, false
+		return nil, false, nil
 	}
 
 	// word[0]: owner address
@@ -268,24 +271,24 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	var sigs [][]byte
 	if tvm != nil && tvm.cfg.SelfdestructRestrict {
 		if int(parseUint64FromWord(input, sigsOffset)) > maxMultiSignSize {
-			return falseResult, true
+			return falseResult, true, nil
 		}
 		sigs = parseFixed65SigArray(input, sigsOffset)
 	} else {
 		sigs = parseBytesArray(input, sigsOffset)
 	}
 	if len(sigs) == 0 || len(sigs) > maxMultiSignSize {
-		return falseResult, true
+		return falseResult, true, nil
 	}
 
 	acc := tvm.StateDB.GetAccount(ownerAddr)
 	if acc == nil {
-		return falseResult, true
+		return falseResult, true, nil
 	}
 
 	perm := permissionByID(acc, permID)
 	if perm == nil {
-		return falseResult, true
+		return falseResult, true, nil
 	}
 
 	// Mirrors java-tron PrecompiledContracts.ValidateMultiSign + MUtil.checkCPUTime:
@@ -300,9 +303,7 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	//
 	// Java's outer try/catch RETHROWS OutOfTimeException specifically
 	// (PrecompiledContracts.java:1106-1108), so it propagates as a VM
-	// failure rather than a precompile-returned-false result. We surface
-	// that as (nil, false) so vm/tvm.go:381 reverts state and produces
-	// errPrecompileFailure for the caller.
+	// failure rather than a precompile-returned-false result.
 	multiSigCheckV2 := tvm != nil && tvm.cfg.MultiSigCheckV2
 
 	var totalWeight int64
@@ -311,7 +312,7 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	for _, sig := range sigs {
 		recovered := recoverTronAddr(sig, hash[:])
 		if recovered == (tcommon.Address{}) {
-			return falseResult, true
+			return falseResult, true, nil
 		}
 		merged := append(recovered.Bytes(), sig...)
 		mergedKey := string(merged)
@@ -323,14 +324,14 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 			}
 			if multiSigCheckV2 {
 				// post-4_7_1: java throws OutOfTimeException.
-				return nil, false
+				return nil, false, ErrAlreadyTimeOut
 			}
 			// pre-4_7_1: fall through and re-accumulate weight, matching
 			// java's `MUtil.checkCPUTime()` no-op return.
 		}
 		weight := permissionWeight(perm, recovered)
 		if weight == 0 {
-			return falseResult, true // wrong signer
+			return falseResult, true, nil // wrong signer
 		}
 		totalWeight += weight
 		seenSig[mergedKey] = true
@@ -338,9 +339,9 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	}
 
 	if totalWeight >= perm.GetThreshold() {
-		return trueResult, true
+		return trueResult, true, nil
 	}
-	return falseResult, true
+	return falseResult, true, nil
 }
 
 // permissionByID returns the permission with the given ID from the account.

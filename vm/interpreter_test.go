@@ -224,6 +224,59 @@ func TestInterpreterWriteProtection(t *testing.T) {
 	if err != ErrWriteProtection {
 		t.Fatalf("expected ErrWriteProtection, got %v", err)
 	}
+	if got := err.Error(); got != "Attempt to call a state modifying opcode inside STATICCALL" {
+		t.Fatalf("write protection message: got %q", got)
+	}
+	evm.interpreter.readOnly = false
+}
+
+func TestInterpreterStaticCallAllowsZeroValueCall(t *testing.T) {
+	evm := newTestEVM(t)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x00, // value
+		byte(PUSH1), 0x99, // address
+		byte(PUSH2), 0x03, 0xe8, // energy
+		byte(CALL),
+		byte(STOP),
+	}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	evm.interpreter.readOnly = true
+	_, err := evm.interpreter.Run(contract)
+	if err != nil {
+		t.Fatalf("static CALL with zero value should be allowed, got %v", err)
+	}
+	evm.interpreter.readOnly = false
+}
+
+func TestInterpreterStaticCallRejectsNonZeroValueCall(t *testing.T) {
+	evm := newTestEVM(t)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH1), 0x99, // address
+		byte(PUSH2), 0x03, 0xe8, // energy
+		byte(CALL),
+		byte(STOP),
+	}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	evm.interpreter.readOnly = true
+	_, err := evm.interpreter.Run(contract)
+	if err != ErrWriteProtection {
+		t.Fatalf("expected ErrWriteProtection, got %v", err)
+	}
 	evm.interpreter.readOnly = false
 }
 
