@@ -1021,3 +1021,86 @@ func TestTokenBalanceInvalidTokenIDMatchesJavaExceptionClass(t *testing.T) {
 		}
 	})
 }
+
+func TestCallValueInsufficientBalanceRefundsMessageEnergy(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
+	caller := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	target := tcommon.Address{0x41, 0x03}
+	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(target, corepb.AccountType_Normal)
+	evm.StateDB.AddBalance(contractAddr, 3_000_000)
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH4), 0x05, 0xf5, 0xe1, 0x00, // value: 100_000_000
+		byte(PUSH20),
+	}
+	code = append(code, target[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x08, 0xfc, // message-call energy: 2300
+		byte(CALL),
+		byte(STOP),
+	)
+
+	contract := NewContract(caller, contractAddr, 0, 100_000)
+	contract.SetCode(contractAddr, code)
+	_, err := evm.runContract(contract)
+	if err != nil {
+		t.Fatalf("CALL with insufficient balance should push 0, not halt: %v", err)
+	}
+	if contract.Energy == 0 {
+		t.Fatal("CALL failure consumed all energy")
+	}
+	if got, wantMin := contract.Energy, uint64(90_000); got < wantMin {
+		t.Fatalf("CALL failure did not refund message energy: remaining %d, want >= %d", got, wantMin)
+	}
+	if got := evm.StateDB.GetBalance(contractAddr); got != 3_000_000 {
+		t.Fatalf("contract balance changed: got %d", got)
+	}
+	if got := evm.StateDB.GetBalance(target); got != 0 {
+		t.Fatalf("target balance changed: got %d", got)
+	}
+}
+
+func TestTopLevelTransferFailedKeepsRemainingEnergy(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	evm.StateDB.CreateAccount(owner, corepb.AccountType_Normal)
+	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.AddBalance(owner, 1_000_000)
+	evm.StateDB.AddBalance(contractAddr, 10)
+	evm.StateDB.SetContract(contractAddr, &contractpb.SmartContract{ContractAddress: contractAddr.Bytes()})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH20),
+	}
+	code = append(code, contractAddr[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x08, 0xfc, // message-call energy: 2300
+		byte(CALL),
+		byte(STOP),
+	)
+	evm.StateDB.SetCode(contractAddr, code)
+
+	const energyLimit = uint64(100_000)
+	_, left, err := evm.Call(owner, contractAddr, nil, energyLimit, 0)
+	if !errors.Is(err, ErrTransferFailed) {
+		t.Fatalf("expected transfer failure, got %v", err)
+	}
+	if left == 0 {
+		t.Fatal("transfer failure consumed all energy")
+	}
+	if used := energyLimit - left; used >= 20_000 {
+		t.Fatalf("transfer failure energy used = %d, want actual execution cost only", used)
+	}
+}

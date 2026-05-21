@@ -461,7 +461,7 @@ func (tvm *TVM) create(caller tcommon.Address, contractAddr tcommon.Address, cod
 		tvm.restoreNewContractMark(contractAddr, wasNew)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted {
+		if err == ErrExecutionReverted || isTransferFailure(err) {
 			return ret, tcommon.Address{}, contract.Energy, err
 		}
 		return nil, tcommon.Address{}, 0, err
@@ -643,7 +643,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted {
+		if err == ErrExecutionReverted || isTransferFailure(err) {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
