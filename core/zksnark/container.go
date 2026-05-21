@@ -54,6 +54,13 @@ func (c *MerkleContainer) GetCurrent() *IncrementalMerkleTree {
 // from applyBlock before transaction execution.
 func (c *MerkleContainer) ResetCurrent() error {
 	best := c.GetBest()
+	currentPB := rawdb.ReadCurrentMerkleTree(c.db)
+	if currentPB == nil && best.Size() == 0 {
+		return nil
+	}
+	if currentPB != nil && proto.Equal(currentPB, best.Proto()) {
+		return nil
+	}
 	return rawdb.WriteCurrentMerkleTree(c.db, best.Proto())
 }
 

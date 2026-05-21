@@ -48,6 +48,46 @@ func TestContainerResetFromBest(t *testing.T) {
 	}
 }
 
+// TestContainerResetSkipsEmptyFallback covers the common post-activation
+// transparent-block path before the first shielded commitment. With no best
+// tree and no current tree, GetCurrent already falls back to an empty tree;
+// ResetCurrent should avoid writing a zero-byte CURRENT_TREE sentinel.
+func TestContainerResetSkipsEmptyFallback(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+	if got := rawdb.ReadCurrentMerkleTree(db); got != nil {
+		t.Fatalf("CURRENT_TREE should remain absent for empty fallback, got %v", got)
+	}
+}
+
+// TestContainerResetSkipsUnchangedCurrent covers steady state after the
+// current tree already matches best. Resetting again must be a no-op.
+func TestContainerResetSkipsUnchangedCurrent(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	best := NewTree()
+	if err := best.Append(PedersenHash{0x11}); err != nil {
+		t.Fatalf("seed best: %v", err)
+	}
+	if err := rawdb.WriteLastMerkleTree(db, best.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("first ResetCurrent: %v", err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("second ResetCurrent: %v", err)
+	}
+	if got := rawdb.ReadCurrentMerkleTree(db); !proto.Equal(got, best.Proto()) {
+		t.Fatalf("CURRENT_TREE changed: got %v want %v", got, best.Proto())
+	}
+}
+
 // TestContainerAppendPersists covers AppendCommitment: the cm lands in
 // CURRENT_TREE and a subsequent GetCurrent reflects it. Stays within one
 // tx (≤ 2 cms) so no internal Combine fires; works under the default
