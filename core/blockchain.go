@@ -1475,7 +1475,13 @@ func (bc *BlockChain) preloadRewardAccounts(statedb *state.StateDB, addrs []tcom
 
 func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []tcommon.Address) {
 	if len(addrs) == 0 {
+		bc.clearRewardAccountCache()
 		return
+	}
+	for addr := range bc.rewardAcctCache {
+		if _, ok := bc.rewardAcctSeen[addr]; !ok {
+			delete(bc.rewardAcctCache, addr)
+		}
 	}
 	for _, addr := range addrs {
 		if acc := statedb.AccountReference(addr); acc != nil {
