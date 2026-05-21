@@ -27,6 +27,7 @@ const (
 	maxFetchBatch           = tsync.MaxFetchBatch
 	maxParallelSyncPeers    = tsync.MaxParallelSyncPeers
 	minFetchRequestInterval = tsync.MinFetchRequestInterval
+	peerJoinAttemptInterval = 2 * time.Second
 )
 
 type syncDiagnostics struct {
@@ -124,6 +125,8 @@ type SyncService struct {
 
 	bufferWaitStart time.Time
 	bufferWaitNum   uint64
+
+	lastPeerJoinAttempt time.Time
 }
 
 // chainStatusAdapter adapts *core.BlockChain to tsync.ChainStatus by adding
@@ -280,9 +283,7 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 		syncLog.Debug("Sync peer joined", "peer", peer.ID())
 	}
 	ss.sendSyncBlockChain(peer)
-	if started {
-		ss.joinAvailablePeers()
-	}
+	ss.joinAvailablePeers()
 }
 
 func (ss *SyncService) initSessionLocked(now time.Time) {
@@ -304,6 +305,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
+	ss.lastPeerJoinAttempt = time.Time{}
 }
 
 func (ss *SyncService) ensureSessionMapsLocked() {
@@ -413,9 +415,41 @@ func (ss *SyncService) joinAvailablePeers() {
 	if need <= 0 {
 		return
 	}
-	for _, peer := range ss.handler.SyncCandidates(exclude, need) {
+	candidates := ss.handler.SyncCandidates(exclude, need)
+	for _, peer := range candidates {
+		if peer != nil {
+			exclude[peer.ID()] = struct{}{}
+		}
+	}
+	if len(candidates) < need {
+		for _, peer := range ss.handler.HandshakedPeers() {
+			if peer == nil {
+				continue
+			}
+			if _, skip := exclude[peer.ID()]; skip {
+				continue
+			}
+			candidates = append(candidates, peer)
+			exclude[peer.ID()] = struct{}{}
+			if len(candidates) >= need {
+				break
+			}
+		}
+	}
+	for _, peer := range candidates {
 		ss.StartSync(peer)
 	}
+}
+
+func (ss *SyncService) shouldJoinAvailablePeersLocked(now time.Time) bool {
+	if ss.handler == nil || !ss.syncing || ss.pause.Paused() || len(ss.peers) >= maxParallelSyncPeers {
+		return false
+	}
+	if !ss.lastPeerJoinAttempt.IsZero() && now.Sub(ss.lastPeerJoinAttempt) < peerJoinAttemptInterval {
+		return false
+	}
+	ss.lastPeerJoinAttempt = now
+	return true
 }
 
 func (ss *SyncService) sendSyncBlockChain(peer *p2p.Peer) {
@@ -908,8 +942,12 @@ func (ss *SyncService) drainBufferedBlocks() {
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			complete := ss.shouldFinishLocked()
+			joinPeers := !complete && ss.shouldJoinAvailablePeersLocked(now)
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
+			if joinPeers {
+				ss.joinAvailablePeers()
+			}
 			if complete {
 				ss.finishSync()
 			}

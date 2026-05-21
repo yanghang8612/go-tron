@@ -184,6 +184,47 @@ func TestMultiPeerSyncDoesNotRepollBeforeInventoryTipProcessed(t *testing.T) {
 	}
 }
 
+func TestJoinAvailablePeersFallsBackToHandshakedPeers(t *testing.T) {
+	bc := makeTestChain(t)
+	handler := NewTronHandler(bc, nil, nil)
+	ss := NewSyncService(bc, handler)
+
+	peerA, closeA := testPeer(t, "fallback-a")
+	defer closeA()
+	peerB, closeB := testPeer(t, "fallback-b")
+	defer closeB()
+	handler.peers[peerA.ID()] = &peerState{peer: peerA, connState: peerStateHandshaked, rl: p2p.NewRateLimiter()}
+	handler.peers[peerB.ID()] = &peerState{peer: peerB, connState: peerStateHandshaked, rl: p2p.NewRateLimiter()}
+
+	ss.joinAvailablePeers()
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.peers[peerA.ID()] == nil || ss.peers[peerB.ID()] == nil {
+		t.Fatalf("handshaked fallback peers were not joined: %v", ss.peers)
+	}
+}
+
+func TestShouldJoinAvailablePeersThrottle(t *testing.T) {
+	bc := makeTestChain(t)
+	handler := NewTronHandler(bc, nil, nil)
+	ss := NewSyncService(bc, handler)
+	now := time.Unix(100, 0)
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.syncing = true
+	if !ss.shouldJoinAvailablePeersLocked(now) {
+		t.Fatal("first join attempt should be allowed")
+	}
+	if ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval / 2)) {
+		t.Fatal("join attempt should be throttled")
+	}
+	if !ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval)) {
+		t.Fatal("join attempt should be allowed after throttle interval")
+	}
+}
+
 func testPeer(t *testing.T, id string) (*p2p.Peer, func()) {
 	t.Helper()
 	c1, c2 := gnet.Pipe()

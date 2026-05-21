@@ -148,6 +148,31 @@ var (
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
 	}
+	dbCacheFlag = &cli.IntFlag{
+		Name:  "db.cache",
+		Usage: "Pebble read cache size in MiB",
+		Value: 256,
+	}
+	dbHandlesFlag = &cli.IntFlag{
+		Name:  "db.handles",
+		Usage: "Maximum number of Pebble files to keep open",
+		Value: 500,
+	}
+	dbMemtableFlag = &cli.Uint64Flag{
+		Name:  "db.memtable",
+		Usage: "Pebble memtable size in MiB",
+		Value: 64,
+	}
+	dbL0CompactionFlag = &cli.IntFlag{
+		Name:  "db.l0.compact",
+		Usage: "Pebble L0 compaction threshold",
+		Value: 4,
+	}
+	dbL0StopFlag = &cli.IntFlag{
+		Name:  "db.l0.stop",
+		Usage: "Pebble L0 stop-writes threshold",
+		Value: 24,
+	}
 	freezerDisableFlag = &cli.BoolFlag{
 		Name:  "freezer.disable",
 		Usage: "Disable background freezing; existing ancient data remains readable",
@@ -199,6 +224,11 @@ var app = &cli.App{
 		gcmodeFlag,
 		historyEnabledFlag,
 		configFileFlag,
+		dbCacheFlag,
+		dbHandlesFlag,
+		dbMemtableFlag,
+		dbL0CompactionFlag,
+		dbL0StopFlag,
 		freezerDisableFlag,
 		freezerIntervalFlag,
 		freezerMarginFlag,
@@ -215,9 +245,18 @@ var app = &cli.App{
 			Action: versionCmd,
 		},
 		{
-			Name:   "init",
-			Usage:  "Initialize genesis block",
-			Flags:  []cli.Flag{dataDirFlag, testnetFlag, genesisFileFlag},
+			Name:  "init",
+			Usage: "Initialize genesis block",
+			Flags: []cli.Flag{
+				dataDirFlag,
+				testnetFlag,
+				genesisFileFlag,
+				dbCacheFlag,
+				dbHandlesFlag,
+				dbMemtableFlag,
+				dbL0CompactionFlag,
+				dbL0StopFlag,
+			},
 			Action: initCmd,
 		},
 		historyCommand,
@@ -232,7 +271,7 @@ func initCmd(ctx *cli.Context) error {
 	}
 	dbPath := chainDataDir(cfg.DataDir)
 
-	db, err := rawdb.NewPebbleDB(dbPath, 256, 500)
+	db, err := openPebbleDB(ctx, dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -289,7 +328,7 @@ func gtron(ctx *cli.Context) error {
 	}
 
 	// Open database
-	db, err := rawdb.NewPebbleDB(dbPath, 256, 500)
+	db, err := openPebbleDB(ctx, dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

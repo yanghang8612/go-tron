@@ -8,6 +8,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 )
 
+// PebbleOptions exposes the Pebble tuning knobs accepted by NewPebbleDBWithOptions.
+type PebbleOptions = pebbledb.Options
+
 // NewPebbleDB opens (or creates) a Pebble-backed key-value store at path,
 // using cache MiB of read cache and handles open-file slots.
 //
@@ -29,6 +32,17 @@ import (
 // filters, and the metrics surface — matches the upstream go-ethereum wrapper.
 func NewPebbleDB(path string, cache int, handles int) (ethdb.KeyValueStore, error) {
 	return pebbledb.New(path, cache, handles, "", false, pebbledb.DefaultOptions())
+}
+
+// DefaultPebbleOptions returns the production defaults used by NewPebbleDB.
+func DefaultPebbleOptions() PebbleOptions {
+	return pebbledb.DefaultOptions()
+}
+
+// NewPebbleDBWithOptions opens a Pebble database with explicit cache, handle,
+// and low-level Pebble tuning values.
+func NewPebbleDBWithOptions(path string, cache int, handles int, tune PebbleOptions) (ethdb.KeyValueStore, error) {
+	return pebbledb.New(path, cache, handles, "", false, tune)
 }
 
 func NewMemoryDatabase() ethdb.KeyValueStore {

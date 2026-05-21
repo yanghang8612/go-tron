@@ -34,12 +34,15 @@ func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPr
 		return
 	}
 	if !dp.ChangeDelegation() {
-		statedb.AddAllowance(witness, amount)
+		statedb.AddAllowanceFinalReward(witness, amount)
 		return
 	}
 	cycle := dp.CurrentCycleNumber()
 	brokerage := rawdb.ReadCycleBrokerage(db, cycle, witness.Bytes())
+	payBlockRewardWithBrokerage(db, statedb, dp, witness, amount, cycle, brokerage)
+}
 
+func payBlockRewardWithBrokerage(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties, witness tcommon.Address, amount int64, cycle int64, brokerage int) {
 	// Mirror java-tron expression tree exactly:
 	//   double brokerageRate = (double) brokerage / 100;
 	//   long brokerageAmount = (long) (brokerageRate * value);
@@ -51,7 +54,7 @@ func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPr
 		rawdb.AddCycleReward(db, cycle, witness.Bytes(), voterAmount)
 	}
 	if brokerageAmount > 0 {
-		statedb.AddAllowance(witness, brokerageAmount)
+		statedb.AddAllowanceFinalReward(witness, brokerageAmount)
 	}
 }
 
@@ -87,16 +90,18 @@ func payTransactionFeeReward(db kvReadWriter, statedb *state.StateDB, dp *state.
 // db is `kvReadWriter` so applyBlock can pass `bc.buffer` (slice 3 of the
 // fork-rewind fix); see payBlockReward for the rewind semantics.
 type standbyWitnessVote struct {
-	addr  tcommon.Address
-	votes int64
+	addr      tcommon.Address
+	votes     int64
+	brokerage int
 }
 
 type standbyWitnessPaySet struct {
 	witnesses []standbyWitnessVote
 	voteSum   int64
+	cycle     int64
 }
 
-func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB) *standbyWitnessPaySet {
+func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle int64) *standbyWitnessPaySet {
 	// Gather all known witnesses from the index, sort by vote count desc,
 	// take the top N. Matches java-tron's WitnessStore.getWitnessStandby
 	// for the non-optimized path.
@@ -131,13 +136,14 @@ func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB) *standby
 	}
 
 	var voteSum int64
-	for _, v := range all {
+	for i, v := range all {
 		voteSum += v.votes
+		all[i].brokerage = rawdb.ReadCycleBrokerage(db, cycle, v.addr.Bytes())
 	}
 	if voteSum < 1 {
 		return nil
 	}
-	return &standbyWitnessPaySet{witnesses: all, voteSum: voteSum}
+	return &standbyWitnessPaySet{witnesses: all, voteSum: voteSum, cycle: cycle}
 }
 
 func payStandbyWitness(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
@@ -152,8 +158,9 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 	if totalPay <= 0 {
 		return
 	}
-	if set == nil {
-		set = buildStandbyWitnessPaySet(db, statedb)
+	cycle := dp.CurrentCycleNumber()
+	if set == nil || set.cycle != cycle {
+		set = buildStandbyWitnessPaySet(db, statedb, cycle)
 	}
 	if set == nil || set.voteSum < 1 {
 		return
@@ -161,7 +168,7 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 	eachVotePay := float64(totalPay) / float64(set.voteSum)
 	for _, v := range set.witnesses {
 		pay := int64(float64(v.votes) * eachVotePay)
-		payBlockReward(db, statedb, dp, v.addr, pay)
+		payBlockRewardWithBrokerage(db, statedb, dp, v.addr, pay, cycle, v.brokerage)
 	}
 }
 
