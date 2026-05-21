@@ -33,6 +33,11 @@ const (
 	// from the first observed shielded block forward: preserve transparent ZEN
 	// and fee accounting, but do not trust or persist anonymous note state.
 	historicalNileShieldedFeeOnlyStartBlock = 1_685_186
+
+	// These first observed Nile shielded transfers predate java-tron's
+	// ShieldedTransactionCreateAccountFee logic. Even transparent-out transfers
+	// that created an account charged the single shielded_transaction_fee.
+	historicalNileShieldedSingleFeeEndBlock = 1_685_975
 )
 
 type historicalShieldedProofCompat struct {
@@ -55,6 +60,12 @@ var historicalShieldedProofCompatEntries = []historicalShieldedProofCompat{
 		txHash:      common.HexToHash("d43de24389ee218b53452153403ac78590bc1e96391522ed5f80306a2f811a80"),
 		contractRet: corepb.Transaction_Result_SUCCESS,
 	},
+	{
+		genesisHash: params.NileGenesisHash,
+		blockNumber: 1_685_975,
+		txHash:      common.HexToHash("30ea095b1eab1deedf01e40a1045916b71a36dd8fc3b21488037f84d07a84d6a"),
+		contractRet: corepb.Transaction_Result_SUCCESS,
+	},
 }
 
 func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.ShieldedTransferContract, error) {
@@ -72,6 +83,9 @@ func (a *ShieldedTransferActuator) getContract(ctx *Context) (*contractpb.Shield
 // calcFee returns the fee charged for this shielded transaction in ZEN smallest units.
 // If the transparent receiver account does not yet exist, the create-account fee applies.
 func (a *ShieldedTransferActuator) calcFee(ctx *Context, c *contractpb.ShieldedTransferContract) int64 {
+	if usesHistoricalNileShieldedSingleFee(ctx) {
+		return ctx.DynProps.ShieldedTransactionFee()
+	}
 	if len(c.TransparentToAddress) > 0 {
 		to := common.BytesToAddress(c.TransparentToAddress)
 		if !ctx.State.AccountExists(to) {
@@ -278,6 +292,13 @@ func isHistoricalNileShieldedFeeOnlyReplay(ctx *Context) bool {
 		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
 	}
 	return genesisHash == params.NileGenesisHash
+}
+
+func usesHistoricalNileShieldedSingleFee(ctx *Context) bool {
+	if ctx == nil || ctx.BlockNumber > historicalNileShieldedSingleFeeEndBlock {
+		return false
+	}
+	return isHistoricalNileShieldedFeeOnlyReplay(ctx)
 }
 
 func isHistoricalShieldedProofCompatAllowed(ctx *Context, txHash common.Hash) bool {

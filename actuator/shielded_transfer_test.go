@@ -340,6 +340,22 @@ func TestHistoricalShieldedProofCompatEntriesRequireMatchingRet(t *testing.T) {
 	}
 }
 
+func TestHistoricalNileShieldedFeeOnlyReplayCoversKnownFailureBlocks(t *testing.T) {
+	for _, entry := range historicalShieldedProofCompatEntries {
+		ctx := &Context{
+			BlockNumber:         entry.blockNumber,
+			GenesisHash:         entry.genesisHash,
+			TrustTransactionRet: true,
+			Tx: types.NewTransactionFromPB(&corepb.Transaction{Ret: []*corepb.Transaction_Result{{
+				ContractRet: entry.contractRet,
+			}}}),
+		}
+		if !isHistoricalNileShieldedFeeOnlyReplay(ctx) {
+			t.Fatalf("known Nile shielded block should use fee-only replay: block=%d tx=%s", entry.blockNumber, entry.txHash)
+		}
+	}
+}
+
 func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.T) {
 	nullifier := fixedShieldedBytes("historical fee-only nullifier", zcElementSize)
 	c := &contractpb.ShieldedTransferContract{
@@ -368,6 +384,116 @@ func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.
 	}
 	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes()); !ok || !cached {
 		t.Fatalf("proof cache: got (%v,%v), want (true,true)", cached, ok)
+	}
+}
+
+func TestHistoricalNileShieldedFeeOnlyReplayExecuteVisibleAccountingByShape(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x11}
+	to := tcommon.Address{0x41, 0x22}
+
+	tests := []struct {
+		name          string
+		contract      *contractpb.ShieldedTransferContract
+		ownerStart    int64
+		poolStart     int64
+		wantOwner     int64
+		wantTo        int64
+		wantBlackhole int64
+		wantPool      int64
+	}{
+		{
+			name: "transparent in",
+			contract: &contractpb.ShieldedTransferContract{
+				TransparentFromAddress: owner[:],
+				FromAmount:             50_000_000,
+				ReceiveDescription: []*contractpb.ReceiveDescription{{
+					NoteCommitment: fixedShieldedBytes("historical transparent in cm", zcElementSize),
+				}},
+			},
+			ownerStart:    80_000_000,
+			wantOwner:     30_000_000,
+			wantBlackhole: 10_000_000,
+			wantPool:      40_000_000,
+		},
+		{
+			name: "shielded only",
+			contract: &contractpb.ShieldedTransferContract{
+				SpendDescription: []*contractpb.SpendDescription{{
+					Nullifier: fixedShieldedBytes("historical shielded only nullifier", zcElementSize),
+				}},
+				ReceiveDescription: []*contractpb.ReceiveDescription{{
+					NoteCommitment: fixedShieldedBytes("historical shielded only cm", zcElementSize),
+				}},
+			},
+			poolStart:     10_900_000,
+			wantBlackhole: 10_000_000,
+			wantPool:      900_000,
+		},
+		{
+			name: "transparent out",
+			contract: &contractpb.ShieldedTransferContract{
+				SpendDescription: []*contractpb.SpendDescription{{
+					Nullifier: fixedShieldedBytes("historical transparent out nullifier", zcElementSize),
+				}},
+				ReceiveDescription: []*contractpb.ReceiveDescription{{
+					NoteCommitment: fixedShieldedBytes("historical transparent out cm", zcElementSize),
+				}},
+				TransparentToAddress: to[:],
+				ToAmount:             10_000_000,
+			},
+			poolStart:     25_000_000,
+			wantTo:        10_000_000,
+			wantBlackhole: 10_000_000,
+			wantPool:      5_000_000,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := setupShieldedCtx(t, tc.contract)
+			ctx.BlockNumber = 1_685_975
+			ctx.GenesisHash = params.NileGenesisHash
+			ctx.TrustTransactionRet = true
+			ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
+				ContractRet: corepb.Transaction_Result_SUCCESS,
+			}}
+			ctx.DynProps.Set("shielded_transaction_fee", 10_000_000)
+			if tc.poolStart != 0 {
+				ctx.DynProps.AdjustTotalShieldedPoolValue(tc.poolStart)
+			}
+			if len(tc.contract.TransparentFromAddress) > 0 {
+				ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+				ctx.State.SetTRC10Balance(owner, zenTokenID, tc.ownerStart)
+			}
+
+			result, err := (&ShieldedTransferActuator{}).Execute(ctx)
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+			if result.ShieldedTransactionFee != 10_000_000 {
+				t.Fatalf("shielded fee: want 10000000, got %d", result.ShieldedTransactionFee)
+			}
+			if got := ctx.State.GetTRC10Balance(owner, zenTokenID); got != tc.wantOwner {
+				t.Fatalf("owner ZEN balance: want %d, got %d", tc.wantOwner, got)
+			}
+			if got := ctx.State.GetTRC10Balance(to, zenTokenID); got != tc.wantTo {
+				t.Fatalf("recipient ZEN balance: want %d, got %d", tc.wantTo, got)
+			}
+			if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != tc.wantBlackhole {
+				t.Fatalf("blackhole ZEN balance: want %d, got %d", tc.wantBlackhole, got)
+			}
+			if got := ctx.DynProps.TotalShieldedPoolValue(); got != tc.wantPool {
+				t.Fatalf("pool value: want %d, got %d", tc.wantPool, got)
+			}
+			for _, spend := range tc.contract.SpendDescription {
+				if rawdb.HasNullifier(ctx.DB, spend.Nullifier) {
+					t.Fatal("historical fee-only replay must not persist nullifiers")
+				}
+			}
+			if got := rawdb.NoteCommitmentCount(ctx.DB); got != 0 {
+				t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
+			}
+		})
 	}
 }
 
