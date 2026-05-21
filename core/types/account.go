@@ -35,6 +35,13 @@ func (a *Account) SetIsWitness(v bool)                 { a.pb.IsWitness = v }
 func (a *Account) CreateTime() int64                   { return a.pb.CreateTime }
 func (a *Account) SetCreateTime(t int64)               { a.pb.CreateTime = t }
 
+func (a *Account) Copy() *Account {
+	if a == nil {
+		return nil
+	}
+	return NewAccountFromPB(proto.Clone(a.pb).(*corepb.Account))
+}
+
 // AccountName accessors.
 func (a *Account) AccountName() string        { return string(a.pb.AccountName) }
 func (a *Account) SetAccountName(name string) { a.pb.AccountName = []byte(name) }

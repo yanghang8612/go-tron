@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	shieldpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestContainerEmptyFallback covers MerkleContainer.GetCurrent /
@@ -44,6 +45,46 @@ func TestContainerResetFromBest(t *testing.T) {
 	cur := c.GetCurrent()
 	if !bytes.Equal(cur.Proto().GetLeft().GetContent(), leaf[:]) {
 		t.Errorf("CURRENT_TREE.left = %x, want %x", cur.Proto().GetLeft().GetContent(), leaf[:])
+	}
+}
+
+// TestContainerResetSkipsEmptyFallback covers the common post-activation
+// transparent-block path before the first shielded commitment. With no best
+// tree and no current tree, GetCurrent already falls back to an empty tree;
+// ResetCurrent should avoid writing a zero-byte CURRENT_TREE sentinel.
+func TestContainerResetSkipsEmptyFallback(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+	if got := rawdb.ReadCurrentMerkleTree(db); got != nil {
+		t.Fatalf("CURRENT_TREE should remain absent for empty fallback, got %v", got)
+	}
+}
+
+// TestContainerResetSkipsUnchangedCurrent covers steady state after the
+// current tree already matches best. Resetting again must be a no-op.
+func TestContainerResetSkipsUnchangedCurrent(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	best := NewTree()
+	if err := best.Append(PedersenHash{0x11}); err != nil {
+		t.Fatalf("seed best: %v", err)
+	}
+	if err := rawdb.WriteLastMerkleTree(db, best.Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("first ResetCurrent: %v", err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("second ResetCurrent: %v", err)
+	}
+	if got := rawdb.ReadCurrentMerkleTree(db); !proto.Equal(got, best.Proto()) {
+		t.Fatalf("CURRENT_TREE changed: got %v want %v", got, best.Proto())
 	}
 }
 
@@ -133,6 +174,40 @@ func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
 	}
 	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
 		t.Fatalf("block 11 root: got %x, want %x", got, root)
+	}
+	if got := rawdb.ReadIncrMerkleTree(db, root); !proto.Equal(got, best.Proto()) {
+		t.Fatalf("root-keyed tree changed on unchanged save: got %v want %v", got, best.Proto())
+	}
+}
+
+// TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent covers the
+// post-activation, pre-first-commitment hot path. An empty
+// IncrementalMerkleTree marshals to zero bytes, so ReadLastMerkleTree returns
+// nil even though the previous block already indexed the empty-tree root. The
+// container must still reuse that previous root without invoking Pedersen.
+func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	root := make([]byte, len(PedersenHash{}))
+	root[0] = 0xbb
+	if err := rawdb.WriteIncrMerkleTree(db, root, NewTree().Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteMerkleTreeRootByBlock(db, 10, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+	if err := c.SaveCurrentAsBest(11); err != nil {
+		t.Fatalf("SaveCurrentAsBest should reuse previous empty root without Pedersen: %v", err)
+	}
+	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
+		t.Fatalf("block 11 root: got %x, want %x", got, root)
+	}
+	if got := rawdb.ReadIncrMerkleTree(db, root); got != nil {
+		t.Fatalf("empty root-keyed tree should remain zero-byte/absent, got %v", got)
 	}
 }
 
