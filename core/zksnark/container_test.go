@@ -136,6 +136,34 @@ func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
 	}
 }
 
+// TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent covers the
+// post-activation, pre-first-commitment hot path. An empty
+// IncrementalMerkleTree marshals to zero bytes, so ReadLastMerkleTree returns
+// nil even though the previous block already indexed the empty-tree root. The
+// container must still reuse that previous root without invoking Pedersen.
+func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) {
+	db := memorydb.New()
+	c := NewMerkleContainer(db)
+
+	root := make([]byte, len(PedersenHash{}))
+	root[0] = 0xbb
+	if err := rawdb.WriteIncrMerkleTree(db, root, NewTree().Proto()); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteMerkleTreeRootByBlock(db, 10, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetCurrent(); err != nil {
+		t.Fatalf("ResetCurrent: %v", err)
+	}
+	if err := c.SaveCurrentAsBest(11); err != nil {
+		t.Fatalf("SaveCurrentAsBest should reuse previous empty root without Pedersen: %v", err)
+	}
+	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
+		t.Fatalf("block 11 root: got %x, want %x", got, root)
+	}
+}
+
 // TestContainerAnchorExists covers the spend-validation path: a previously
 // saved root is reported as a valid anchor; an unrelated root is not.
 //

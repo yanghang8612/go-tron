@@ -80,25 +80,34 @@ func (c *MerkleContainer) AppendCommitment(cm PedersenHash) error {
 // Mirrors java-tron's `MerkleContainer.saveCurrentMerkleTreeAsBestMerkleTree`.
 func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 	cur := c.GetCurrent()
-	if last := rawdb.ReadLastMerkleTree(c.db); last != nil && proto.Equal(cur.Proto(), last) {
-		if root := rawdb.ReadMerkleTreeRootByBlock(c.db, blockNum-1); len(root) == len(PedersenHash{}) {
-			if err := rawdb.WriteLastMerkleTree(c.db, cur.Proto()); err != nil {
-				return err
-			}
-			if err := rawdb.WriteIncrMerkleTree(c.db, root, cur.Proto()); err != nil {
-				return err
-			}
-			return rawdb.WriteMerkleTreeRootByBlock(c.db, blockNum, root)
+	last := rawdb.ReadLastMerkleTree(c.db)
+	if root := rawdb.ReadMerkleTreeRootByBlock(c.db, blockNum-1); len(root) == len(PedersenHash{}) {
+		if last != nil && proto.Equal(cur.Proto(), last) {
+			return c.writeBestRootIndex(blockNum, root, cur)
+		}
+		if last == nil && cur.Size() == 0 &&
+			rawdb.HasIncrMerkleTree(c.db, root) &&
+			rawdb.ReadIncrMerkleTree(c.db, root) == nil {
+			// Empty IncrementalMerkleTree marshals to zero bytes, so rawdb
+			// intentionally reads LAST_TREE back as nil. The previous block's
+			// root-keyed store entry still proves the best tree is the same
+			// empty tree; reuse it instead of recomputing the 32-level
+			// Sapling empty root on every post-activation transparent block.
+			return c.writeBestRootIndex(blockNum, root, cur)
 		}
 	}
 	root, err := cur.MerkleTreeKey()
 	if err != nil {
 		return err
 	}
-	if err := rawdb.WriteLastMerkleTree(c.db, cur.Proto()); err != nil {
+	return c.writeBestRootIndex(blockNum, root, cur)
+}
+
+func (c *MerkleContainer) writeBestRootIndex(blockNum int64, root []byte, tree *IncrementalMerkleTree) error {
+	if err := rawdb.WriteLastMerkleTree(c.db, tree.Proto()); err != nil {
 		return err
 	}
-	if err := rawdb.WriteIncrMerkleTree(c.db, root, cur.Proto()); err != nil {
+	if err := rawdb.WriteIncrMerkleTree(c.db, root, tree.Proto()); err != nil {
 		return err
 	}
 	return rawdb.WriteMerkleTreeRootByBlock(c.db, blockNum, root)
