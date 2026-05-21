@@ -24,6 +24,10 @@ type stateObject struct {
 	storage           map[tcommon.Hash]tcommon.Hash // dirty contract storage
 	storageExists     map[tcommon.Hash]bool         // java-tron StorageRow existence for cached slots
 	selfDestructed    bool
+
+	// Rooted generic-KV fields (Phase 1: always EmptyKVRoot / 0; no KV trie yet).
+	accountKVRoot       tcommon.Hash
+	accountKVGeneration uint64
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
@@ -32,6 +36,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 		account:       acc,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
+		accountKVRoot: EmptyKVRoot,
 	}
 }
 
@@ -43,6 +48,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		created:       true,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
+		accountKVRoot: EmptyKVRoot,
 	}
 }
 

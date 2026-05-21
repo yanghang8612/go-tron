@@ -1601,18 +1601,20 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
 		}
 		newObj := &stateObject{
-			address:           addr,
-			dirty:             obj.dirty,
-			deleted:           obj.deleted,
-			created:           obj.created,
-			code:              append([]byte{}, obj.code...),
-			codeHash:          obj.codeHash,
-			codeDirty:         obj.codeDirty,
-			contractMeta:      metaCopy,
-			contractMetaDirty: obj.contractMetaDirty,
-			storage:           make(map[tcommon.Hash]tcommon.Hash),
-			storageExists:     make(map[tcommon.Hash]bool),
-			selfDestructed:    obj.selfDestructed,
+			address:             addr,
+			dirty:               obj.dirty,
+			deleted:             obj.deleted,
+			created:             obj.created,
+			code:                append([]byte{}, obj.code...),
+			codeHash:            obj.codeHash,
+			codeDirty:           obj.codeDirty,
+			contractMeta:        metaCopy,
+			contractMetaDirty:   obj.contractMetaDirty,
+			storage:             make(map[tcommon.Hash]tcommon.Hash),
+			storageExists:       make(map[tcommon.Hash]bool),
+			selfDestructed:      obj.selfDestructed,
+			accountKVRoot:       obj.accountKVRoot,
+			accountKVGeneration: obj.accountKVGeneration,
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -1653,7 +1655,21 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.dirty = false
 			continue
 		}
-		data, err := obj.account.Marshal()
+		accBytes, err := obj.account.Marshal()
+		if err != nil {
+			return tcommon.Hash{}, err
+		}
+		envelope := &StateAccountV2{
+			Version:             StateAccountVersion,
+			AccountProto:        accBytes,
+			AccountKVRoot:       obj.accountKVRoot,
+			AccountKVGeneration: obj.accountKVGeneration,
+			// CodeHash is zero in Phase 1; populated in Phase 4 alongside the
+			// content-addressed code domain. Code still loads from rawdb c-<addr>,
+			// and the verbatim java code_hash remains inside AccountProto.
+			CodeHash: tcommon.Hash{},
+		}
+		data, err := envelope.Encode()
 		if err != nil {
 			return tcommon.Hash{}, err
 		}
@@ -1933,11 +1949,17 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if err != nil || data == nil {
 		return nil
 	}
-	acc, err := types.UnmarshalAccount(data)
+	envelope, err := DecodeStateAccountV2(data)
+	if err != nil {
+		return nil
+	}
+	acc, err := types.UnmarshalAccount(envelope.AccountProto)
 	if err != nil {
 		return nil
 	}
 	obj := newStateObject(addr, acc)
+	obj.accountKVRoot = envelope.AccountKVRoot
+	obj.accountKVGeneration = envelope.AccountKVGeneration
 	s.stateObjects[addr] = obj
 	return obj
 }
@@ -1970,7 +1992,8 @@ func (s *StateDB) journalWitness(addr tcommon.Address) {
 	})
 }
 
-// trieKey returns the MPT key for a TRON address: Keccak256(address).
+// trieKey returns the account-trie MPT key for a TRON address: the
+// Keccak256 of its normalized 20-byte AccountID (network prefix stripped).
 func trieKey(addr tcommon.Address) []byte {
-	return crypto.Keccak256(addr.Bytes())
+	return crypto.Keccak256(addr.AccountID().Bytes())
 }
