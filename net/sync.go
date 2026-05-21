@@ -88,7 +88,14 @@ type SyncService struct {
 	inflight   int // blocks requested but not yet received in the current batch
 	pending    map[tcommon.Hash]uint64
 	fetchSeq   uint64      // incremented on each fetch batch and on block receipt
-	fetchTimer *time.Timer // fires if no block arrives within tsync.SyncFetchTimeout
+	fetchTimer *time.Timer // fires if no block arrives within fetchTimeout
+
+	// fetchTimeout is this service's block-fetch deadline, copied from
+	// tsync.SyncFetchTimeout at construction. The timer goroutine reads it
+	// (armPeerFetchTimerLocked / onFetchTimeout) without ss.mu held, so it
+	// must stay a per-instance value: tests override it before sync starts
+	// rather than mutating the shared package global from a defer.
+	fetchTimeout time.Duration
 
 	peers         map[string]*syncPeerState
 	requested     map[tcommon.Hash]string
@@ -140,10 +147,11 @@ func (a chainStatusAdapter) CurrentBlockNum() uint64   { return a.chain.CurrentB
 // NewSyncService creates a new sync service.
 func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	ss := &SyncService{
-		chain:   chain,
-		handler: handler,
-		pause:   tsync.NewPauseGate(),
-		stats:   tsync.NewStats(),
+		chain:        chain,
+		handler:      handler,
+		pause:        tsync.NewPauseGate(),
+		stats:        tsync.NewStats(),
+		fetchTimeout: tsync.SyncFetchTimeout,
 	}
 	ss.watchdog = tsync.NewWatchdog(
 		chainStatusAdapter{chain: chain},
@@ -1247,7 +1255,7 @@ func (ss *SyncService) armPeerFetchTimerLocked(ps *syncPeerState) {
 	ps.fetchSeq++
 	seq := ps.fetchSeq
 	peerID := ps.peer.ID()
-	ps.fetchTimer = time.AfterFunc(tsync.SyncFetchTimeout, func() {
+	ps.fetchTimer = time.AfterFunc(ss.fetchTimeout, func() {
 		ss.onFetchTimeout(seq, peerID)
 	})
 }
@@ -1279,7 +1287,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	ss.mu.Unlock()
 	syncLog.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
-		"timeout", ethcommon.PrettyDuration(tsync.SyncFetchTimeout),
+		"timeout", ethcommon.PrettyDuration(ss.fetchTimeout),
 		"inflight", inflight)
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)

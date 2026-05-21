@@ -8,7 +8,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
-	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -47,12 +46,9 @@ func stubBlock(num int64, parent tcommon.Hash) *types.Block {
 // via tryFindSyncPeer. Before the fix HandleBlock unconditionally
 // stopped the timer without re-arming, leaving inflight>0 forever.
 func TestPartialBatchRearmsFetchTimer(t *testing.T) {
-	old := tsync.SyncFetchTimeout
-	tsync.SyncFetchTimeout = 50 * time.Millisecond
-	defer func() { tsync.SyncFetchTimeout = old }()
-
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
+	ss.fetchTimeout = 50 * time.Millisecond
 
 	c1, c2 := gnet.Pipe()
 	defer c1.Close()

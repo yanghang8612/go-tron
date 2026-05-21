@@ -4,9 +4,10 @@ import "time"
 
 // Tunables shared across the sync sub-packages. Moved verbatim from the
 // constants block in net/sync.go; values must stay byte-for-byte
-// identical to preserve wire-protocol behaviour. Tests may override the
-// `var` entries (SyncFetchTimeout, StatsReportInterval) but should not
-// adjust the `const` entries.
+// identical to preserve wire-protocol behaviour. Tests may shrink
+// StatsReportInterval directly; for the fetch timeout they override the
+// per-instance SyncService.fetchTimeout (seeded from SyncFetchTimeout)
+// instead of this global. The `const` entries must not be adjusted.
 const (
 	// MaxChainInventorySize bounds the number of block IDs returned in a
 	// single CHAIN_INVENTORY response. Matches java-tron's
@@ -25,7 +26,9 @@ const (
 const MinFetchRequestInterval = 350 * time.Millisecond
 
 // SyncFetchTimeout is how long to wait for a block response before failing
-// over to another peer. Exposed as a var so tests can shrink it.
+// over to another peer. It seeds SyncService.fetchTimeout at construction;
+// tests shrink the per-instance field rather than this global so the
+// fetch-timer goroutine never races a test's restore.
 var SyncFetchTimeout = 30 * time.Second
 
 // StatsReportInterval is the cadence at which sync emits "Imported chain

@@ -8,7 +8,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
-	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
@@ -76,12 +75,9 @@ func TestPeerDisconnectedIgnoresNonSyncPeer(t *testing.T) {
 // TestFetchTimeoutAbortsSyncState verifies that when the fetch timer fires
 // (simulated with a very short timeout) the sync state is cleared.
 func TestFetchTimeoutAbortsSyncState(t *testing.T) {
-	old := tsync.SyncFetchTimeout
-	tsync.SyncFetchTimeout = 50 * time.Millisecond
-	defer func() { tsync.SyncFetchTimeout = old }()
-
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
+	ss.fetchTimeout = 50 * time.Millisecond
 
 	c1, c2 := gnet.Pipe()
 	defer c1.Close()
@@ -222,11 +218,6 @@ func TestSyncPeerDisconnectFailover(t *testing.T) {
 // TestSyncFetchTimeoutFailover verifies that when the sync peer stops
 // responding (simulated via a very short timeout), sync aborts and retries.
 func TestSyncFetchTimeoutFailover(t *testing.T) {
-	// Override timeout so the test doesn't take 30 seconds.
-	old := tsync.SyncFetchTimeout
-	tsync.SyncFetchTimeout = 300 * time.Millisecond
-	defer func() { tsync.SyncFetchTimeout = old }()
-
 	// A has 20 blocks; B has 0. C also has 20 blocks as a fallback.
 	bcA := makeChainWithBlocks(t, 20)
 	bcB := makeTestChain(t)
@@ -247,6 +238,12 @@ func TestSyncFetchTimeoutFailover(t *testing.T) {
 	syncA := NewSyncService(bcA, hA)
 	syncB := NewSyncService(bcB, hB)
 	syncC := NewSyncService(bcC, hC)
+	// Override the fetch timeout so the test doesn't take 30 seconds. Set
+	// per-instance before any peer connects so the fetch-timer goroutine
+	// never races this assignment.
+	syncA.fetchTimeout = 300 * time.Millisecond
+	syncB.fetchTimeout = 300 * time.Millisecond
+	syncC.fetchTimeout = 300 * time.Millisecond
 	hA.SetSyncService(syncA)
 	hB.SetSyncService(syncB)
 	hC.SetSyncService(syncC)
