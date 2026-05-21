@@ -36,6 +36,12 @@ func seedShieldedAnchor(t *testing.T, ctx *Context, anchor []byte) {
 	}
 }
 
+func fixedShieldedBytes(label string, size int) []byte {
+	out := make([]byte, size)
+	copy(out, label)
+	return out
+}
+
 func setupShieldedCtx(t *testing.T, c *contractpb.ShieldedTransferContract) *Context {
 	t.Helper()
 	ctx := newTestContext(t, corepb.Transaction_Contract_ShieldedTransferContract, c, 0)
@@ -334,6 +340,64 @@ func TestHistoricalShieldedProofCompatEntriesRequireMatchingRet(t *testing.T) {
 	}
 }
 
+func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.T) {
+	nullifier := fixedShieldedBytes("historical fee-only nullifier", zcElementSize)
+	c := &contractpb.ShieldedTransferContract{
+		SpendDescription: []*contractpb.SpendDescription{{
+			Nullifier: nullifier,
+			Anchor:    fixedShieldedBytes("missing historical anchor", zcElementSize),
+		}},
+		ReceiveDescription: []*contractpb.ReceiveDescription{{
+			NoteCommitment: fixedShieldedBytes("historical fee-only cm", zcElementSize),
+		}},
+	}
+	ctx := setupShieldedCtx(t, c)
+	ctx.BlockNumber = 1_685_975
+	ctx.GenesisHash = params.NileGenesisHash
+	ctx.TrustTransactionRet = true
+	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_SUCCESS,
+	}}
+	ctx.DynProps.AdjustTotalShieldedPoolValue(1_000_000)
+	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
+		t.Fatalf("historical Nile fee-only replay should skip anonymous validation: %v", err)
+	}
+	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes()); !ok || !cached {
+		t.Fatalf("proof cache: got (%v,%v), want (true,true)", cached, ok)
+	}
+}
+
+func TestHistoricalNileShieldedFeeOnlyReplayRequiresTrustedSuccessRet(t *testing.T) {
+	c := &contractpb.ShieldedTransferContract{
+		SpendDescription: []*contractpb.SpendDescription{{
+			Nullifier: fixedShieldedBytes("historical fee-only nullifier", zcElementSize),
+			Anchor:    fixedShieldedBytes("missing historical anchor", zcElementSize),
+		}},
+		ReceiveDescription: []*contractpb.ReceiveDescription{{
+			NoteCommitment: fixedShieldedBytes("historical fee-only cm", zcElementSize),
+		}},
+	}
+	ctx := setupShieldedCtx(t, c)
+	ctx.BlockNumber = 1_685_975
+	ctx.GenesisHash = params.NileGenesisHash
+	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_SUCCESS,
+	}}
+	ctx.DynProps.AdjustTotalShieldedPoolValue(1_000_000)
+
+	err := (&ShieldedTransferActuator{}).Validate(ctx)
+	if err == nil {
+		t.Fatal("untrusted ret should not enable historical Nile fee-only replay")
+	}
+	if err.Error() != "Rt is invalid." {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func historicalNileShieldedTransferTx(t *testing.T) *types.Transaction {
 	t.Helper()
 	const rawDataHex = "0a02b6bd2208a6a9d6d858aec6ca40f8afb08af52d5ae308083312de080a35747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e536869656c6465645472616e73666572436f6e747261637412a4080a15411bbda21b480e295da75f80ac9360fdc71fdf3f031080c8afa02522c2070a20ea912dfa5546ecde523db49ccf292d03f16e47eb7e889a333c66dd31e4e4cca11220e8cd94ab7212742e366935c37bc9c216109d85f486f043b764cd28c3f1edbf271a20cc2dc1ee589b44c1e1396223cf6eafbb3a3bc7a232c123f61dd2ae471f70b7b822c404c50c68e28b3794ae003a270682d6abe3c3874be3b3d581a0bce47df079af6b048e8a6c064ab4b34f1ce7fb26975b2cbe39b21787b1585ec7eba81fbd087e1430f0d5eb496b52887f6e8aa6b1dd41cf9a5ba54eb46fd56f68d1615d69d561c6582aa9623af2cb79926fd49c344bcc3c32765ae041989e43e8c1ddae2675c61ab45d2efc2b1a26da465f3649e287933b7c239995a86d67f1e3011e874121a0a18b82a09a51f538434f4dade8c976b19af70f3706f0a4c45972eeb443b5dbd2cda34d3a34a31ebb20f986a26db44dc4ed72e7072e7a1d8edf6a1dadd332ed922e035c75012f2de38fbdab48699f36eb33289d79f898d2e9b255228cb4e41b960223bc74e4e483336452e00e2281a71a3a2f0fdabd7786e16337d4d995cf90cd97219c1f7e61a95bb82ad3b8dca903d3b41567c858afb77ea349f65cdc4974a3ed27011bcf48ce524f7c8147ec5ffa740e0551e0199eeb66fb0a42213c9fbfe22b0fb53ff2ea4a6aef0ee7f423b82d266c649e119eef375636c1c172b07c8d4a1d5fbd01a31d6d1337add2769e2995aef1ea00e2df23227cb1c0309a9e6ff2f5ff1d539f32c197341a87c3521d001df2e30536dae78c5d6912434c70acf2e2865ca713cd7c23175be13f28ea02cac468070f60cb0e3ef594c3dfe4e2789c02e597dbf8e12c379d619fdf02884bec4a43c06153fb173041c91cfb5b63f1da4e8b40bd50cbfd5e34fd3d5dc5d94c134173fb3f0911b386945c0158d7b52086bea388b99f3877ae95ce25d6eaaaf173862a70933c37a47f3a9a8c80a6b340cd22da621a9e41679a2a50ca9816620bd3a08dda6961a1a7fc61644a8807ac841bc5e02b4686839c1431389063e101a81349dc47af07589d21743459968c53c6a589149e1635ae2778cea58e624a091b6f94690b2e233f965c8a4032c001b992c94e3ef1d5c430a8d2f6ef9d096a46a2d9b96dc832be685172b8a1d197f3f665fd1fe1a0dddb2652dd02c72f9ef8a2a16970984e5f0fe283b2dc82da98fb6161d15059a4ecef7bc2856fd8c902bb1060326a7fb4d5abf885affe7c3aa95801c9bd4a588c7e8d863bc0936157df77140c8c0e33385821cdb0bdf3075f4c1d04df3d01fcb07059d418fb7428d13722864c6f2383a362c1c440ac869c5c57847f7ee8418238b418e5c79a94e7444b8d9c8ac720bf570483f535e9f8a25ef42d2a40f341adcec9cad051bb6ac3a996e3a132e3e48fb2545f855d165b3e17d22a7321a88c4a42bb94757dbbbe0d1f35acc6a7734007b646a7d59d61e0d30dba280c0570b8f2ac8af52d"
@@ -440,5 +504,49 @@ func TestShieldedTransferExecuteTransparentOut(t *testing.T) {
 	// Pool: 1_000_000 + 0 - 300_000 - 100_000 (fee) = 600_000
 	if got := ctx.DynProps.TotalShieldedPoolValue(); got != 600_000 {
 		t.Fatalf("pool value: want 600000, got %d", got)
+	}
+}
+
+func TestHistoricalNileShieldedFeeOnlyReplayExecuteKeepsVisibleAccountingOnly(t *testing.T) {
+	nullifier := fixedShieldedBytes("historical fee-only nullifier", zcElementSize)
+	commitment := fixedShieldedBytes("historical fee-only cm", zcElementSize)
+	c := &contractpb.ShieldedTransferContract{
+		SpendDescription: []*contractpb.SpendDescription{{
+			Nullifier: nullifier,
+		}},
+		ReceiveDescription: []*contractpb.ReceiveDescription{{
+			NoteCommitment: commitment,
+		}},
+	}
+	ctx := setupShieldedCtx(t, c)
+	ctx.BlockNumber = 1_685_975
+	ctx.GenesisHash = params.NileGenesisHash
+	ctx.TrustTransactionRet = true
+	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
+		ContractRet: corepb.Transaction_Result_SUCCESS,
+	}}
+	ctx.DynProps.AdjustTotalShieldedPoolValue(1_000_000)
+
+	result, err := (&ShieldedTransferActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ShieldedTransactionFee != 100_000 {
+		t.Fatalf("shielded fee: want 100000, got %d", result.ShieldedTransactionFee)
+	}
+	if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != 100_000 {
+		t.Fatalf("blackhole ZEN balance: want 100000, got %d", got)
+	}
+	if rawdb.HasNullifier(ctx.DB, nullifier) {
+		t.Fatal("historical fee-only replay must not persist nullifiers")
+	}
+	if got := rawdb.NoteCommitmentCount(ctx.DB); got != 0 {
+		t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
+	}
+	if got := rawdb.ReadNoteCommitment(ctx.DB, 0); got != nil {
+		t.Fatalf("historical fee-only replay persisted commitment: %x", got)
+	}
+	if got := ctx.DynProps.TotalShieldedPoolValue(); got != 900_000 {
+		t.Fatalf("pool value: want 900000, got %d", got)
 	}
 }
