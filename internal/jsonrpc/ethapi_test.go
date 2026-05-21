@@ -190,3 +190,12 @@ func loadCorpusCase(t *testing.T, name string) (reqJSON, resultJSON string) {
 	}
 	return string(c.Request), string(c.Response.Result)
 }
+
+// TestEthAPI_GetLogsFrameworkParity proves eth_getLogs dispatches through the
+// framework with output identical to the frozen corpus, exercising the
+// LogFilter object param (block range, single address, single-topic matrix).
+func TestEthAPI_GetLogsFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	req, wantResult := loadCorpusCase(t, "eth_getLogs")
+	postParity(t, ts.URL, req, wantResult)
+}

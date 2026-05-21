@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -253,4 +254,98 @@ func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
 		return nil, nil
 	}
 	return receiptToRPC(hash, tx, info, block, index), nil
+}
+
+// logFilterArgs is the eth_getLogs filter object. Address and Topics are kept
+// raw because each is polymorphic (address: string|[]string; topics: array of
+// null|string|[]string), parsed below exactly as the legacy handler does.
+type logFilterArgs struct {
+	FromBlock string          `json:"fromBlock"`
+	ToBlock   string          `json:"toBlock"`
+	BlockHash string          `json:"blockHash"`
+	Address   json.RawMessage `json:"address"`
+	Topics    json.RawMessage `json:"topics"`
+}
+
+// GetLogs serves eth_getLogs. It resolves the block range (or blockHash),
+// address set, and topic matrix into a LogFilter and delegates to the backend.
+// A nil result is normalized to an empty array, matching the legacy handler.
+func (e *EthAPI) GetLogs(filterObj logFilterArgs) ([]*RPCLog, error) {
+	filter := LogFilter{}
+
+	if filterObj.BlockHash != "" {
+		var h common.Hash
+		copy(h[:], common.FromHex(filterObj.BlockHash))
+		filter.BlockHash = &h
+	} else {
+		if filterObj.FromBlock != "" {
+			n, err := parseBlockParam(filterObj.FromBlock)
+			if err != nil {
+				return nil, fmt.Errorf("invalid fromBlock: %w", err)
+			}
+			if n == ^uint64(0) {
+				n = e.backend.BlockNumber()
+			}
+			filter.FromBlock = &n
+		}
+		if filterObj.ToBlock != "" {
+			n, err := parseBlockParam(filterObj.ToBlock)
+			if err != nil {
+				return nil, fmt.Errorf("invalid toBlock: %w", err)
+			}
+			if n == ^uint64(0) {
+				n = e.backend.BlockNumber()
+			}
+			filter.ToBlock = &n
+		}
+	}
+
+	// address: string or []string
+	if len(filterObj.Address) > 0 && string(filterObj.Address) != "null" {
+		var addrStr string
+		var addrSlice []string
+		if json.Unmarshal(filterObj.Address, &addrStr) == nil {
+			filter.Addresses = []common.Address{common.BytesToAddress(common.FromHex(addrStr))}
+		} else if json.Unmarshal(filterObj.Address, &addrSlice) == nil {
+			for _, a := range addrSlice {
+				filter.Addresses = append(filter.Addresses, common.BytesToAddress(common.FromHex(a)))
+			}
+		}
+	}
+
+	// topics: [topic0, topic1, ...] where each is null | string | []string
+	if len(filterObj.Topics) > 0 && string(filterObj.Topics) != "null" {
+		var rawTopics []json.RawMessage
+		if err := json.Unmarshal(filterObj.Topics, &rawTopics); err == nil {
+			filter.Topics = make([][]common.Hash, len(rawTopics))
+			for i, rt := range rawTopics {
+				if string(rt) == "null" {
+					filter.Topics[i] = nil
+					continue
+				}
+				var single string
+				var multi []string
+				if json.Unmarshal(rt, &single) == nil {
+					var h common.Hash
+					copy(h[:], common.FromHex(single))
+					filter.Topics[i] = []common.Hash{h}
+				} else if json.Unmarshal(rt, &multi) == nil {
+					for _, s := range multi {
+						var h common.Hash
+						copy(h[:], common.FromHex(s))
+						filter.Topics[i] = append(filter.Topics[i], h)
+					}
+				}
+			}
+		}
+	}
+
+	logs, err := e.backend.GetLogs(filter)
+	if err != nil {
+		return nil, err
+	}
+	if logs == nil {
+		logs = []*RPCLog{}
+	}
+	return logs, nil
 }
