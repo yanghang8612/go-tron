@@ -120,7 +120,7 @@ func (r *LiveStateHistoryReader) AccountAt(addr tcommon.Address, _ uint64) (*typ
 // blockNum is ignored. Slot values are stored as raw bytes with leading
 // zeros trimmed by the contract writer — we right-align into a Hash.
 func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Hash, _ uint64) (tcommon.Hash, error) {
-	raw := rawdb.ReadStorage(r.db, addr, slot)
+	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
 	if len(raw) == 0 {
 		return tcommon.Hash{}, nil
 	}
@@ -453,7 +453,7 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) a
 // readStorageLive reads the current on-disk slot value for (addr, slot).
 // Returns the zero hash when the slot is empty.
 func (r *PersistentHistoryReader) readStorageLive(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
-	raw := rawdb.ReadStorage(r.db, addr, slot)
+	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
 	if len(raw) == 0 {
 		return tcommon.Hash{}, nil
 	}

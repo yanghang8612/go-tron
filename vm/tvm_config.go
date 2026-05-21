@@ -15,7 +15,7 @@ type TVMConfig struct {
 	Freeze               bool // allow_tvm_freeze: TRON freeze precompiles
 	ShieldedToken        bool // allow_tvm_shielded_token
 	Vote                 bool // allow_tvm_vote
-	StakingV2            bool // allow_staking_v2: FreezeV2/DelegateV2 precompiles
+	StakingV2            bool // support_unfreeze_delay: FreezeV2/DelegateV2 TVM ops/precompiles
 	London               bool // allow_tvm_london: BASEFEE
 	Compatibility        bool // allow_tvm_compatibility
 	DynamicEnergy        bool // allow_dynamic_energy
@@ -32,6 +32,8 @@ type TVMConfig struct {
 	// MLOAD/MSTORE/MSTORE8 from the default `0 + memDelta` to
 	// `SPECIAL_TIER (1) + memDelta` (see EnergyCost.java:170-196).
 	HigherLimitForMaxCpuTimeOfOneTx bool
+	MultiSign                       bool // allow_multi_sign
+	OptimizedReturnValueOfChainId   bool // allow_optimized_return_value_of_chain_id
 	// NewResourceModelPower mirrors java-tron's joint check
 	// `supportUnfreezeDelay() && supportAllowNewResourceModel()` used in the
 	// TotalVoteCount precompile to select getAllTronPower() vs getTronPower().
@@ -66,7 +68,7 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		Freeze:               isActive(forks.AllowTvmFreeze),
 		ShieldedToken:        isActive(forks.AllowTvmShieldedToken),
 		Vote:                 isActive(forks.AllowTvmVote),
-		StakingV2:            isActive(forks.AllowStakingV2),
+		StakingV2:            unfreezeDelay,
 		London:               isActive(forks.AllowTvmLondon),
 		Compatibility:        isActive(forks.AllowTvmCompatibleEvm),
 		DynamicEnergy:        isActive(forks.AllowDynamicEnergy),
@@ -82,6 +84,8 @@ func NewTVMConfig(blockNum uint64, dp *state.DynamicProperties) TVMConfig {
 		// entry — only the VM consumes it, and the gating is on the DP
 		// boolean rather than on a fork-controller version vote.
 		HigherLimitForMaxCpuTimeOfOneTx: higherLimit,
+		MultiSign:                       isActive(forks.AllowMultiSign),
+		OptimizedReturnValueOfChainId:   dp != nil && dp.AllowOptimizedReturnValueOfChainId(),
 		NewResourceModelPower:           isActive(forks.AllowNewResourceModel) && unfreezeDelay,
 	}
 }

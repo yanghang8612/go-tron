@@ -534,8 +534,8 @@ func TestPersistentHistoryReader_StorageSlotZeroPreValue(t *testing.T) {
 func TestPersistentHistoryReader_SparseInverseIndexSeek(t *testing.T) {
 	f := newHistoryFixture(t)
 	contract := testAddr(0x90)
-	slot := tcommon.Hash{0x42}
-	other := tcommon.Hash{0x43}
+	slot := tcommon.Hash{31: 0x42}
+	other := tcommon.Hash{31: 0x43}
 
 	// Block 1: write `other` slot (so contract exists post-block-1).
 	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {

@@ -22,6 +22,7 @@ import (
 
 const (
 	tvmTRXPrecision = int64(1_000_000)
+	tvmMinTokenID   = int64(1_000_000)
 	tvmMemoryLimit  = uint64(3 * 1024 * 1024)
 )
 
@@ -63,6 +64,15 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	tokenValueNonZero := !tokenValueWord.IsZero()
 	tokenValue, tokenValueOK := uint256ToInt64Exact(&tokenValueWord)
 	tokenID := int64(tokenIdWord.Uint64())
+	isTokenTransfer := tokenID != 0
+	if in.tvm.cfg.MultiSign {
+		var tokenIDOK bool
+		tokenID, tokenIDOK = uint256ToJavaLongExact(&tokenIdWord)
+		if !tokenIDOK {
+			tokenID = 0
+		}
+		isTokenTransfer = true
+	}
 
 	if in.readOnly && tokenValueNonZero {
 		return nil, ErrWriteProtection
@@ -106,16 +116,29 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 	if tokenValueNonZero {
 		callEnergy += EnergyCallStipend
 	}
+	if in.tvm.cfg.MultiSign && (tokenID <= tvmMinTokenID) {
+		if in.tvm.cfg.Constantinople {
+			contract.Energy += callEnergy
+			return nil, ErrInvalidTokenIDTransfer
+		}
+		return nil, ErrInvalidTokenID
+	}
 	if !tokenValueOK {
 		contract.Energy += callEnergy
 		return nil, ErrEndowmentOutOfRange
 	}
 
 	inputData := mem.getCopy(int64(inOff), int64(inSz))
-	ret, remaining, err := in.tvm.CallToken(
-		contract.Address, addr, inputData, callEnergy,
-		0 /*TRX value*/, tokenID, tokenValue,
-	)
+	var ret []byte
+	var remaining uint64
+	if isTokenTransfer {
+		ret, remaining, err = in.tvm.CallToken(
+			contract.Address, addr, inputData, callEnergy,
+			0 /*TRX value*/, tokenID, tokenValue,
+		)
+	} else {
+		ret, remaining, err = in.tvm.Call(contract.Address, addr, inputData, callEnergy, tokenValue)
+	}
 	contract.Energy += remaining
 	if shouldPropagateCallError(err) {
 		return nil, err
@@ -151,6 +174,19 @@ func opTokenBalance(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *S
 	addrWord := stack.pop()
 	addr := uint256ToAddress(&addrWord)
 	tokenID := int64(tokenIdWord.Uint64())
+	if in.tvm.cfg.MultiSign {
+		var ok bool
+		tokenID, ok = uint256ToJavaLongExact(&tokenIdWord)
+		if !ok {
+			if in.tvm.cfg.Constantinople {
+				return nil, ErrInvalidTokenIDTransfer
+			}
+			return nil, ErrInvalidTokenID
+		}
+		if tokenID <= tvmMinTokenID {
+			return nil, ErrInvalidTokenID
+		}
+	}
 
 	bal := in.tvm.StateDB.GetTRC10Balance(addr, tokenID)
 	result := uint256.NewInt(0)
@@ -202,6 +238,9 @@ func opIsContract(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Sta
 // resourceType: 0=BANDWIDTH, 1=ENERGY
 
 func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	if in.tvm.cfg.Vote && in.readOnly {
+		return nil, ErrWriteProtection
+	}
 	resourceWord := stack.pop()
 	amountWord := stack.pop()
 	receiverWord := stack.pop()
@@ -289,6 +328,9 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 // Stack: receiverAddr, resourceType → success
 
 func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	if in.tvm.cfg.Vote && in.readOnly {
+		return nil, ErrWriteProtection
+	}
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
 

@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -13,7 +14,36 @@ import (
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-func TestEnvironmentAddressOpcodesUseTwentyByteWords(t *testing.T) {
+func TestEnvironmentAddressOpcodesUseTwentyByteWordsAfterMultiSign(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origin := tcommon.Address{0x41, 0x10, 0x11, 0x12}
+	caller := tcommon.Address{0x41, 0x20, 0x21, 0x22}
+	contractAddr := tcommon.Address{0x41, 0x30, 0x31, 0x32}
+	code := []byte{
+		byte(ADDRESS), byte(PUSH1), 0x00, byte(MSTORE),
+		byte(CALLER), byte(PUSH1), 0x20, byte(MSTORE),
+		byte(ORIGIN), byte(PUSH1), 0x40, byte(MSTORE),
+		byte(PUSH1), 0x60, byte(PUSH1), 0x00, byte(RETURN),
+	}
+	sdb.SetCode(contractAddr, code)
+
+	tvm := NewTVM(sdb, nil, origin, 1, 1000, tcommon.Address{}, 1, TVMConfig{MultiSign: true})
+	ret, _, err := tvm.StaticCall(caller, contractAddr, nil, 1_000_000)
+	if err != nil {
+		t.Fatalf("StaticCall: %v", err)
+	}
+	assertAddressWord(t, ret[0:32], contractAddr)
+	assertAddressWord(t, ret[32:64], caller)
+	assertAddressWord(t, ret[64:96], origin)
+}
+
+func TestEnvironmentAddressOpcodesKeepTronPrefixBeforeMultiSign(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := state.NewDatabase(diskdb)
 	sdb, err := state.New(tcommon.Hash{}, db)
@@ -37,9 +67,9 @@ func TestEnvironmentAddressOpcodesUseTwentyByteWords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StaticCall: %v", err)
 	}
-	assertAddressWord(t, ret[0:32], contractAddr)
+	assertFullAddressWord(t, ret[0:32], contractAddr)
 	assertAddressWord(t, ret[32:64], caller)
-	assertAddressWord(t, ret[64:96], origin)
+	assertFullAddressWord(t, ret[64:96], origin)
 }
 
 func TestCreateReturnsTwentyByteAddressWord(t *testing.T) {
@@ -102,6 +132,131 @@ func TestCreate2AddressMatchesJavaFormula(t *testing.T) {
 	if addr != want {
 		t.Fatalf("CREATE2 address: got %s want %s", addr.Hex(), want.Hex())
 	}
+}
+
+func TestCreate2OpcodeUsesCallerBeforeIstanbulAndContextAfter(t *testing.T) {
+	caller := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
+	context := mustAddressFromHex(t, "412122232425262728292a2b2c2d2e2f3031323334")
+	var salt [32]byte
+	salt[31] = 0x7f
+
+	run := func(t *testing.T, cfg TVMConfig, wantSeed tcommon.Address) {
+		t.Helper()
+		tvm, _, _ := newTestTVMForCreate(t, cfg, nil)
+		mem := newMemory()
+		stack := newStack()
+		stack.push(new(uint256.Int).SetBytes(salt[:]))
+		stack.push(uint256.NewInt(0))
+		stack.push(uint256.NewInt(0))
+		stack.push(uint256.NewInt(0))
+		contract := NewContract(caller, context, 0, 1_000_000)
+		contract.SetCode(context, []byte{byte(CREATE2)})
+
+		if _, err := opCreate2(nil, tvm.interpreter, contract, mem, stack); err != nil {
+			t.Fatalf("opCreate2: %v", err)
+		}
+		gotWord := stack.pop()
+		got := uint256ToAddress(&gotWord)
+		want := create2Address(wantSeed, nil, salt)
+		if got != want {
+			t.Fatalf("CREATE2 address: got %s want %s", got.Hex(), want.Hex())
+		}
+	}
+
+	t.Run("pre-istanbul", func(t *testing.T) {
+		run(t, TVMConfig{Constantinople: true}, caller)
+	})
+	t.Run("istanbul", func(t *testing.T) {
+		run(t, TVMConfig{Constantinople: true, Istanbul: true}, context)
+	})
+}
+
+func TestCreate2DepthCheckRequiresCompatibleEVM(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x01}
+	var salt [32]byte
+
+	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
+	tvm.Depth = maxCallDepth
+	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != nil {
+		t.Fatalf("legacy CREATE2 depth check: got %v, want nil", err)
+	}
+
+	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
+	tvm.Depth = maxCallDepth
+	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != ErrDepthExceeded {
+		t.Fatalf("compatible CREATE2 depth check: got %v want %v", err, ErrDepthExceeded)
+	}
+}
+
+func TestCallTokenBeforeMultiSignTreatsTokenIDZeroAsTRXCall(t *testing.T) {
+	tvm, sdb, _ := newTestTVMForCreate(t, TVMConfig{TransferTrc10: true}, nil)
+	caller := tcommon.Address{0x41, 0x11}
+	dest := tcommon.Address{0x41, 0x22}
+	sdb.CreateAccount(caller, corepb.AccountType_Normal)
+	sdb.CreateAccount(dest, corepb.AccountType_Normal)
+	sdb.AddBalance(caller, 100)
+
+	stack := newStack()
+	stack.push(uint256.NewInt(0))  // retSize
+	stack.push(uint256.NewInt(0))  // retOffset
+	stack.push(uint256.NewInt(0))  // inSize
+	stack.push(uint256.NewInt(0))  // inOffset
+	stack.push(uint256.NewInt(0))  // tokenId
+	stack.push(uint256.NewInt(10)) // value; before MultiSign tokenId==0 means TRX value
+	addrWord := addressToUint256(dest)
+	stack.push(&addrWord)
+	stack.push(uint256.NewInt(100_000))
+	contract := NewContract(caller, caller, 0, 200_000)
+
+	if _, err := opCallToken(nil, tvm.interpreter, contract, newMemory(), stack); err != nil {
+		t.Fatalf("opCallToken: %v", err)
+	}
+	if got := stack.pop(); got.Uint64() != 1 {
+		t.Fatalf("CALLTOKEN result: got %d want 1", got.Uint64())
+	}
+	if got := sdb.GetBalance(caller); got != 90 {
+		t.Fatalf("caller balance: got %d want 90", got)
+	}
+	if got := sdb.GetBalance(dest); got != 10 {
+		t.Fatalf("dest balance: got %d want 10", got)
+	}
+}
+
+func TestCallTokenInvalidTokenIDMatchesJavaExceptionClass(t *testing.T) {
+	run := func(t *testing.T, cfg TVMConfig, want error) {
+		t.Helper()
+
+		tvm, sdb, _ := newTestTVMForCreate(t, cfg, nil)
+		caller := tcommon.Address{0x41, 0x11}
+		dest := tcommon.Address{0x41, 0x22}
+		sdb.CreateAccount(caller, corepb.AccountType_Normal)
+		sdb.CreateAccount(dest, corepb.AccountType_Normal)
+		sdb.AddBalance(caller, 100)
+
+		stack := newStack()
+		stack.push(uint256.NewInt(0))         // retSize
+		stack.push(uint256.NewInt(0))         // retOffset
+		stack.push(uint256.NewInt(0))         // inSize
+		stack.push(uint256.NewInt(0))         // inOffset
+		stack.push(uint256.NewInt(1_000_000)) // invalid tokenId
+		stack.push(uint256.NewInt(10))        // token value
+		addrWord := addressToUint256(dest)
+		stack.push(&addrWord)
+		stack.push(uint256.NewInt(100_000))
+		contract := NewContract(caller, caller, 0, 200_000)
+
+		_, err := opCallToken(nil, tvm.interpreter, contract, newMemory(), stack)
+		if !errors.Is(err, want) {
+			t.Fatalf("opCallToken error: got %v want %v", err, want)
+		}
+	}
+
+	t.Run("before-constantinople", func(t *testing.T) {
+		run(t, TVMConfig{TransferTrc10: true, MultiSign: true}, ErrInvalidTokenID)
+	})
+	t.Run("constantinople", func(t *testing.T) {
+		run(t, TVMConfig{TransferTrc10: true, MultiSign: true, Constantinople: true}, ErrInvalidTokenIDTransfer)
+	})
 }
 
 func TestCreateConstructorIsContractSeesPendingMetadata(t *testing.T) {
@@ -262,6 +417,15 @@ func assertAddressWord(t *testing.T, word []byte, addr tcommon.Address) {
 	t.Helper()
 	want := make([]byte, 32)
 	copy(want[12:], addr[1:])
+	if !bytes.Equal(word, want) {
+		t.Fatalf("address word mismatch:\n got  %x\n want %x", word, want)
+	}
+}
+
+func assertFullAddressWord(t *testing.T, word []byte, addr tcommon.Address) {
+	t.Helper()
+	want := make([]byte, 32)
+	copy(want[11:], addr[:])
 	if !bytes.Equal(word, want) {
 		t.Fatalf("address word mismatch:\n got  %x\n want %x", word, want)
 	}

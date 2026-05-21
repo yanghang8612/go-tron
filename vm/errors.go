@@ -6,28 +6,30 @@ import (
 )
 
 var (
-	ErrOutOfEnergy           = errors.New("out of energy")
-	ErrStackOverflow         = errors.New("stack overflow")
-	ErrStackUnderflow        = errors.New("stack underflow")
-	ErrInvalidJump           = errors.New("invalid jump destination")
-	ErrWriteProtection       = errors.New("Attempt to call a state modifying opcode inside STATICCALL")
-	ErrReturnDataOutOfBounds = errors.New("return data out of bounds")
-	ErrDepthExceeded         = errors.New("max call depth exceeded")
-	ErrInsufficientBalance   = errors.New("insufficient balance for transfer")
-	ErrContractAlreadyExists = errors.New("contract already exists")
-	ErrContractCodeTooLarge  = errors.New("max code size exceeded")
-	ErrInvalidCode           = errors.New("invalid code: must not begin with 0xef")
-	ErrInvalidOpCode         = errors.New("opcode not available in current fork")
-	ErrExecutionReverted     = errors.New("execution reverted")
-	ErrAlreadyTimeOut        = errors.New("Already Time Out")
-	ErrOutOfMemory           = errors.New("out of memory")
-	ErrJVMStackOverflow      = errors.New("StackOverflowError:  exceed default JVM stack size!")
-	ErrPrecompiledContract   = errors.New("precompiled contract error")
-	ErrEndowmentOutOfRange   = errors.New("endowment out of long range")
-	ErrTransferFailed        = errors.New("transfer trx failed: Cannot transfer TRX to yourself.")
-	ErrTokenTransferFailed   = errors.New("transfer trc10 failed: Cannot transfer asset to yourself.")
-	errPrecompileFailure     = errors.New("precompile returned failure")
-	errExecutionFailed       = errors.New("execution failed")
+	ErrOutOfEnergy            = errors.New("out of energy")
+	ErrStackOverflow          = errors.New("stack overflow")
+	ErrStackUnderflow         = errors.New("stack underflow")
+	ErrInvalidJump            = errors.New("invalid jump destination")
+	ErrWriteProtection        = errors.New("Attempt to call a state modifying opcode inside STATICCALL")
+	ErrReturnDataOutOfBounds  = errors.New("return data out of bounds")
+	ErrDepthExceeded          = errors.New("max call depth exceeded")
+	ErrInsufficientBalance    = errors.New("insufficient balance for transfer")
+	ErrContractAlreadyExists  = errors.New("contract already exists")
+	ErrContractCodeTooLarge   = errors.New("max code size exceeded")
+	ErrInvalidCode            = errors.New("invalid code: must not begin with 0xef")
+	ErrInvalidOpCode          = errors.New("opcode not available in current fork")
+	ErrExecutionReverted      = errors.New("execution reverted")
+	ErrAlreadyTimeOut         = errors.New("Already Time Out")
+	ErrOutOfMemory            = errors.New("out of memory")
+	ErrJVMStackOverflow       = errors.New("StackOverflowError:  exceed default JVM stack size!")
+	ErrPrecompiledContract    = errors.New("precompiled contract error")
+	ErrEndowmentOutOfRange    = errors.New("endowment out of long range")
+	ErrTransferFailed         = errors.New("transfer trx failed: Cannot transfer TRX to yourself.")
+	ErrTokenTransferFailed    = errors.New("transfer trc10 failed: Cannot transfer asset to yourself.")
+	ErrInvalidTokenID         = errors.New("invalid token id")
+	ErrInvalidTokenIDTransfer = errors.New("invalid token id")
+	errPrecompileFailure      = errors.New("precompile returned failure")
+	errExecutionFailed        = errors.New("execution failed")
 )
 
 type invalidJumpError struct {
@@ -140,7 +142,8 @@ func isFatalVMError(err error) bool {
 func isTransferFailure(err error) bool {
 	return errors.Is(err, ErrTransferFailed) ||
 		errors.Is(err, ErrTokenTransferFailed) ||
-		errors.Is(err, ErrEndowmentOutOfRange)
+		errors.Is(err, ErrEndowmentOutOfRange) ||
+		errors.Is(err, ErrInvalidTokenIDTransfer)
 }
 
 func shouldPropagateCallError(err error) bool {

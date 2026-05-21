@@ -167,7 +167,7 @@ func contractRetFromError(err error) int32 {
 		return 5 // PRECOMPILED_CONTRACT
 	case errors.Is(err, vm.ErrAlreadyTimeOut):
 		return 11 // OUT_OF_TIME
-	case errors.Is(err, vm.ErrTransferFailed), errors.Is(err, vm.ErrTokenTransferFailed), errors.Is(err, vm.ErrEndowmentOutOfRange):
+	case errors.Is(err, vm.ErrTransferFailed), errors.Is(err, vm.ErrTokenTransferFailed), errors.Is(err, vm.ErrEndowmentOutOfRange), errors.Is(err, vm.ErrInvalidTokenIDTransfer):
 		return 14 // TRANSFER_FAILED
 	case errors.Is(err, vm.ErrInvalidJump):
 		return 3 // BAD_JUMP_DESTINATION

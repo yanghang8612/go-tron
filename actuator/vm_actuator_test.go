@@ -560,6 +560,12 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	if got := contractRetFromError(vm.ErrEndowmentOutOfRange); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
 		t.Fatalf("endowment overflow ret: got %d", got)
 	}
+	if got := contractRetFromError(vm.ErrInvalidTokenIDTransfer); got != int32(corepb.Transaction_Result_TRANSFER_FAILED) {
+		t.Fatalf("transfer invalid token id ret: got %d", got)
+	}
+	if got := contractRetFromError(vm.ErrInvalidTokenID); got != int32(corepb.Transaction_Result_UNKNOWN) {
+		t.Fatalf("plain invalid token id ret: got %d", got)
+	}
 	if got := string(runtimeMessageFromError(vm.ErrTokenTransferFailed)); got != "transfer trc10 failed: Cannot transfer asset to yourself." {
 		t.Fatalf("TRC10 transfer failed message: got %q", got)
 	}

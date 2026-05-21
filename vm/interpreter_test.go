@@ -1,13 +1,16 @@
 package vm
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	tronrawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -380,6 +383,80 @@ func TestInterpreterChainIDWorksWithIstanbul(t *testing.T) {
 	_, err = evm.interpreter.Run(contract)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFreezeStaticCallWriteProtectionStartsWithVoteProposal(t *testing.T) {
+	run := func(cfg TVMConfig) error {
+		tvm, _, _ := newTestTVMForCreate(t, cfg, nil)
+		tvm.interpreter.readOnly = true
+		stack := newStack()
+		stack.push(uint256.NewInt(0)) // receiver
+		stack.push(uint256.NewInt(0)) // amount: invalid, so pre-vote path returns 0 before mutating state
+		stack.push(uint256.NewInt(0)) // resource
+		contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+		_, err := opFreeze(nil, tvm.interpreter, contract, newMemory(), stack)
+		return err
+	}
+
+	if err := run(TVMConfig{Freeze: true}); err != nil {
+		t.Fatalf("pre-vote static FREEZE: got %v, want nil", err)
+	}
+	if err := run(TVMConfig{Freeze: true, Vote: true}); err != ErrWriteProtection {
+		t.Fatalf("post-vote static FREEZE: got %v, want %v", err, ErrWriteProtection)
+	}
+}
+
+func TestChainIDReturnsFullGenesisBlockIDBeforeOptimizedProposal(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesis := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     0,
+				Timestamp:  123,
+				ParentHash: []byte("parent-hash-for-chainid-test"),
+			},
+		},
+	})
+	if err := tronrawdb.WriteBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	evm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 0x01020304, TVMConfig{Istanbul: true})
+	evm.SetDB(diskdb)
+
+	code := []byte{byte(CHAINID), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	ret, err := evm.interpreter.Run(contract)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, want := ret, genesis.Hash().Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("chainid full block id:\n got  %x\n want %x", got, want)
+	}
+}
+
+func TestChainIDOptimizedProposalReturnsLowFourBytes(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Istanbul: true, OptimizedReturnValueOfChainId: true})
+	evm.ChainID = 0x01020304
+
+	code := []byte{byte(CHAINID), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	ret, err := evm.interpreter.Run(contract)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := new(uint256.Int).SetBytes(ret).Uint64()
+	if got != 0x01020304 {
+		t.Fatalf("chainid optimized: got %#x want %#x", got, uint64(0x01020304))
 	}
 }
 
@@ -794,6 +871,47 @@ func TestSelfDestructSelfTransfersToBlackholeBeforeRestriction(t *testing.T) {
 	}
 }
 
+func TestSelfDestructAddressComparisonFollowsEnergyAdjustment(t *testing.T) {
+	contractAddr := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f1011121314")
+	beneficiary := mustAddressFromHex(t, "410102030405060708090a0b0c0d0e0f10111213ff")
+
+	run := func(t *testing.T, cfg TVMConfig) (beneficiaryBalance int64, blackholeBalance int64) {
+		t.Helper()
+		evm := newTestEVMWithConfig(t, cfg)
+		evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+		evm.StateDB.AddBalance(contractAddr, 100)
+
+		contract := NewContract(tcommon.Address{0x41, 0x01}, contractAddr, 0, EnergyCallNewAcct)
+		stack := newStack()
+		word := addressToUint256(beneficiary)
+		stack.push(&word)
+		if _, err := opSelfDestruct(nil, evm.interpreter, contract, nil, stack); err != nil {
+			t.Fatalf("opSelfDestruct: %v", err)
+		}
+		return evm.StateDB.GetBalance(beneficiary), evm.StateDB.GetBalance(evm.blackholeAddress())
+	}
+
+	t.Run("legacy-compares-first-twenty-address-bytes", func(t *testing.T) {
+		beneficiaryBalance, blackholeBalance := run(t, TVMConfig{TransferTrc10: true})
+		if beneficiaryBalance != 0 {
+			t.Fatalf("beneficiary balance: got %d want 0", beneficiaryBalance)
+		}
+		if blackholeBalance != 100 {
+			t.Fatalf("blackhole balance: got %d want 100", blackholeBalance)
+		}
+	})
+
+	t.Run("energy-adjustment-compares-full-address", func(t *testing.T) {
+		beneficiaryBalance, blackholeBalance := run(t, TVMConfig{TransferTrc10: true, EnergyAdjustment: true})
+		if beneficiaryBalance != 100 {
+			t.Fatalf("beneficiary balance: got %d want 100", beneficiaryBalance)
+		}
+		if blackholeBalance != 0 {
+			t.Fatalf("blackhole balance: got %d want 0", blackholeBalance)
+		}
+	})
+}
+
 func TestSelfDestructKeepsCodeVisibleUntilCommit(t *testing.T) {
 	evm := newTestEVM(t)
 	contractAddr := tcommon.Address{0x41, 0x88}
@@ -847,4 +965,59 @@ func TestTokenBalanceStackOrderMatchesJava(t *testing.T) {
 	if got != 17 {
 		t.Fatalf("token balance: got %d, want 17", got)
 	}
+}
+
+func TestTokenBalanceInvalidTokenIDMatchesJavaExceptionClass(t *testing.T) {
+	t.Run("low-token-id-stays-unknown-even-after-constantinople", func(t *testing.T) {
+		evm := newTestEVMWithConfig(t, TVMConfig{MultiSign: true, Constantinople: true})
+
+		stack := newStack()
+		addrWord := addressToUint256(tcommon.Address{0x41, 0x01})
+		tokenWord := uint256.NewInt(1_000_000)
+		stack.push(&addrWord)
+		stack.push(tokenWord)
+
+		_, err := opTokenBalance(nil, evm.interpreter, nil, nil, stack)
+		if !errors.Is(err, ErrInvalidTokenID) {
+			t.Fatalf("opTokenBalance error: got %v want %v", err, ErrInvalidTokenID)
+		}
+		if errors.Is(err, ErrInvalidTokenIDTransfer) {
+			t.Fatalf("low token id must not be transfer failure: %v", err)
+		}
+	})
+
+	t.Run("overflow-token-id-becomes-transfer-failure-after-constantinople", func(t *testing.T) {
+		evm := newTestEVMWithConfig(t, TVMConfig{MultiSign: true, Constantinople: true})
+
+		stack := newStack()
+		addrWord := addressToUint256(tcommon.Address{0x41, 0x01})
+		var tokenWord uint256.Int
+		tokenWord.SetUint64(1 << 63)
+		stack.push(&addrWord)
+		stack.push(&tokenWord)
+
+		_, err := opTokenBalance(nil, evm.interpreter, nil, nil, stack)
+		if !errors.Is(err, ErrInvalidTokenIDTransfer) {
+			t.Fatalf("opTokenBalance error: got %v want %v", err, ErrInvalidTokenIDTransfer)
+		}
+	})
+
+	t.Run("negative-exact-token-id-stays-plain-invalid", func(t *testing.T) {
+		evm := newTestEVMWithConfig(t, TVMConfig{MultiSign: true, Constantinople: true})
+
+		stack := newStack()
+		addrWord := addressToUint256(tcommon.Address{0x41, 0x01})
+		var tokenWord uint256.Int
+		tokenWord.SetAllOne()
+		stack.push(&addrWord)
+		stack.push(&tokenWord)
+
+		_, err := opTokenBalance(nil, evm.interpreter, nil, nil, stack)
+		if !errors.Is(err, ErrInvalidTokenID) {
+			t.Fatalf("opTokenBalance error: got %v want %v", err, ErrInvalidTokenID)
+		}
+		if errors.Is(err, ErrInvalidTokenIDTransfer) {
+			t.Fatalf("negative exact token id must not be transfer failure: %v", err)
+		}
+	})
 }

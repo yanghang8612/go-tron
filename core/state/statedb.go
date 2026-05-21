@@ -1349,7 +1349,7 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
-	raw := rawdb.ReadStorage(s.db.DiskDB(), addr, key)
+	raw := rawdb.ReadStorage(s.db.DiskDB(), addr, s.storageRowKey(addr, key))
 	if len(raw) == 0 {
 		return tcommon.Hash{}, false
 	}
@@ -1377,6 +1377,10 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		prevExists: prevExists,
 	})
 	obj.setStorage(key, value, true)
+}
+
+func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	return javaStorageRowKey(addr, key, s.GetContract(addr))
 }
 
 // GetContract returns the contract metadata at addr.
@@ -1615,10 +1619,11 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.contractMetaDirty = false
 		}
 		for k, v := range obj.storage {
+			rowKey := s.storageRowKey(addr, k)
 			if v == (tcommon.Hash{}) {
-				rawdb.DeleteStorage(s.db.DiskDB(), addr, k)
+				rawdb.DeleteStorage(s.db.DiskDB(), addr, rowKey)
 			} else {
-				rawdb.WriteStorage(s.db.DiskDB(), addr, k, v.Bytes())
+				rawdb.WriteStorage(s.db.DiskDB(), addr, rowKey, v.Bytes())
 			}
 		}
 		obj.created = false

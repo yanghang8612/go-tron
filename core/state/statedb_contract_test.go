@@ -63,6 +63,71 @@ func TestStateDBStorageMethods(t *testing.T) {
 	}
 }
 
+func TestStateDBStorageUsesJavaRowKeyForLegacyContracts(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x22}
+	key := tcommon.Hash{0x01}
+	collidingKey := tcommon.Hash{0x02}
+	val := tcommon.Hash{0x42}
+
+	sdb.SetState(addr, key, val)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, key); len(raw) != 0 {
+		t.Fatalf("raw logical storage key should be empty, got %x", raw)
+	}
+	rowKey := javaStorageRowKey(addr, key, nil)
+	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey); len(raw) == 0 {
+		t.Fatal("expected value under java-tron storage row key")
+	}
+
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.GetState(addr, collidingKey); got != val {
+		t.Fatalf("legacy storage row collision: got %x, want %x", got, val)
+	}
+}
+
+func TestStateDBStorageVersionOneHashesSlotBeforeRowKey(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x23}
+	key := tcommon.Hash{0x01}
+	otherKey := tcommon.Hash{0x02}
+	val := tcommon.Hash{0x42}
+	meta := &contractpb.SmartContract{
+		ContractAddress: addr.Bytes(),
+		Version:         1,
+	}
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetContract(addr, meta)
+	sdb.SetState(addr, key, val)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rowKey := javaStorageRowKey(addr, key, nil); len(rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey)) != 0 {
+		t.Fatal("version=1 storage must not use the legacy slot row key")
+	}
+	if rowKey := javaStorageRowKey(addr, key, meta); len(rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey)) == 0 {
+		t.Fatal("expected value under version=1 hashed-slot row key")
+	}
+
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.GetState(addr, otherKey); got != (tcommon.Hash{}) {
+		t.Fatalf("version=1 storage should not collide on raw slot suffix, got %x", got)
+	}
+}
+
 func TestStateDBContractMeta(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x03}

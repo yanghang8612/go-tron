@@ -326,33 +326,31 @@ func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Addres
 
 // Create2 deploys a new contract with a deterministic address.
 func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.cfg.Compatibility && tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
-	codeHash := keccak256(code)
-	var buf []byte
-	buf = append(buf, caller[:]...)
-	buf = append(buf, salt[:]...)
-	buf = append(buf, codeHash[:]...)
-	hash := keccak256(buf)
-
-	var contractAddr tcommon.Address
-	contractAddr[0] = 0x41
-	copy(contractAddr[1:], hash[12:32])
+	contractAddr := create2Address(caller, code, salt)
 
 	tvm.Nonce++
 	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil, tvm.defaultCreateVersion(caller))
 }
 
-func (tvm *TVM) create2WithVersion(caller tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte, version int32) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+func (tvm *TVM) create2WithVersion(caller, addressSeed tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte, version int32) ([]byte, tcommon.Address, uint64, error) {
+	if tvm.cfg.Compatibility && tvm.Depth >= maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
+	contractAddr := create2Address(addressSeed, code, salt)
+
+	tvm.Nonce++
+	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil, version)
+}
+
+func create2Address(seed tcommon.Address, code []byte, salt [32]byte) tcommon.Address {
 	codeHash := keccak256(code)
 	var buf []byte
-	buf = append(buf, caller[:]...)
+	buf = append(buf, seed[:]...)
 	buf = append(buf, salt[:]...)
 	buf = append(buf, codeHash[:]...)
 	hash := keccak256(buf)
@@ -360,9 +358,7 @@ func (tvm *TVM) create2WithVersion(caller tcommon.Address, code []byte, energy u
 	var contractAddr tcommon.Address
 	contractAddr[0] = 0x41
 	copy(contractAddr[1:], hash[12:32])
-
-	tvm.Nonce++
-	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, true, true, nil, version)
+	return contractAddr
 }
 
 func (tvm *TVM) createAddress(nonce uint64) tcommon.Address {

@@ -206,9 +206,9 @@ func newJumpTable() JumpTable {
 	// TRON extensions — V1 freeze/unfreeze (AllowTvmFreeze)
 	freeze := func(c TVMConfig) bool { return c.Freeze }
 	tbl[FREEZE] = &operation{execute: opFreeze, energyCost: EnergyFreeze,
-		minStack: 3, maxStack: 1022, writes: true, enabledFn: freeze}
+		minStack: 3, maxStack: 1022, enabledFn: freeze}
 	tbl[UNFREEZE] = &operation{execute: opUnfreeze, energyCost: EnergyUnfreeze,
-		minStack: 2, maxStack: 1023, writes: true, enabledFn: freeze}
+		minStack: 2, maxStack: 1023, enabledFn: freeze}
 	tbl[FREEZEEXPIRETIME] = &operation{execute: opFreezeExpireTime, energyCost: EnergyFreezeExpireTime,
 		minStack: 2, maxStack: 1023, enabledFn: freeze}
 

@@ -10,9 +10,9 @@ func TestNewTVMConfig_AllFalseByDefault(t *testing.T) {
 	dp := state.NewDynamicProperties()
 	cfg := NewTVMConfig(0, dp)
 	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
-		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
+		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.StakingV2 || cfg.London ||
 		cfg.Compatibility || cfg.DynamicEnergy || cfg.EnergyAdjustment || cfg.Shanghai || cfg.Blob || cfg.Cancun ||
-		cfg.SelfdestructRestrict || cfg.Prague || cfg.Osaka {
+		cfg.SelfdestructRestrict || cfg.Prague || cfg.Osaka || cfg.MultiSign || cfg.OptimizedReturnValueOfChainId {
 		t.Fatal("expected all VM fork flags false by default")
 	}
 }
@@ -50,10 +50,27 @@ func TestNewTVMConfig_LondonEnabled(t *testing.T) {
 func TestNewTVMConfig_NilDynProps(t *testing.T) {
 	cfg := NewTVMConfig(0, nil)
 	if cfg.TransferTrc10 || cfg.Constantinople || cfg.Solidity059 || cfg.Istanbul ||
-		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.London ||
+		cfg.Freeze || cfg.ShieldedToken || cfg.Vote || cfg.StakingV2 || cfg.London ||
 		cfg.Compatibility || cfg.DynamicEnergy || cfg.EnergyAdjustment || cfg.Shanghai || cfg.Blob || cfg.Cancun ||
-		cfg.SelfdestructRestrict || cfg.Prague || cfg.Osaka {
+		cfg.SelfdestructRestrict || cfg.Prague || cfg.Osaka || cfg.MultiSign || cfg.OptimizedReturnValueOfChainId {
 		t.Fatal("expected all false with nil DynProps")
+	}
+}
+
+func TestNewTVMConfig_StakingV2FollowsUnfreezeDelay(t *testing.T) {
+	dp := state.NewDynamicProperties()
+	dp.SetAllowNewResourceModel(true)
+	cfg := NewTVMConfig(0, dp)
+	if cfg.StakingV2 {
+		t.Fatal("StakingV2 TVM gate must stay false until unfreeze_delay_days is set")
+	}
+	dp.SetUnfreezeDelayDays(14)
+	cfg = NewTVMConfig(0, dp)
+	if !cfg.StakingV2 {
+		t.Fatal("StakingV2 TVM gate should follow supportUnfreezeDelay")
+	}
+	if !cfg.NewResourceModelPower {
+		t.Fatal("NewResourceModelPower should require both new resource model and unfreeze delay")
 	}
 }
 

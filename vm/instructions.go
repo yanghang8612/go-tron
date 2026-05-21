@@ -287,7 +287,7 @@ func opSHA3(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 // --- Environment ---
 
 func opAddress(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := addressToUint256(contract.Address)
+	v := addressToUint256WithMode(contract.Address, interpreter.tvmConfig.MultiSign)
 	stack.push(&v)
 	return nil, nil
 }
@@ -301,7 +301,7 @@ func opBalance(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 }
 
 func opOrigin(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	v := addressToUint256(interpreter.tvm.Origin)
+	v := addressToUint256WithMode(interpreter.tvm.Origin, interpreter.tvmConfig.MultiSign)
 	stack.push(&v)
 	return nil, nil
 }
@@ -529,6 +529,14 @@ func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 }
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) && interpreter.tvm.DB != nil {
+		if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
+			var v uint256.Int
+			v.SetBytes(genesis.Hash().Bytes())
+			stack.push(&v)
+			return nil, nil
+		}
+	}
 	v := uint256.NewInt(uint64(interpreter.tvm.ChainID))
 	stack.push(v)
 	return nil, nil
@@ -844,7 +852,8 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 	}
 	interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
 	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
-	if oldSuicide && address == contract.Address {
+	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
+	if oldSuicide && sameOldSuicideAddress {
 		blackhole := interpreter.tvm.blackholeAddress()
 		if balance > 0 {
 			if err := interpreter.tvm.StateDB.SubBalance(contract.Address, balance); err != nil {
@@ -883,6 +892,18 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 
 // --- Helpers ---
 
+func sameSelfDestructAddress(owner, beneficiary tcommon.Address, energyAdjustment bool) bool {
+	if energyAdjustment {
+		return owner == beneficiary
+	}
+	for i := 0; i < 20; i++ {
+		if owner[i] != beneficiary[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func uint256ToAddress(v *uint256.Int) tcommon.Address {
 	b := v.Bytes32()
 	var addr tcommon.Address
@@ -899,10 +920,39 @@ func uint256ToInt64Exact(v *uint256.Int) (int64, bool) {
 	return int64(v.Uint64()), true
 }
 
+func uint256ToJavaLongExact(v *uint256.Int) (int64, bool) {
+	b := v.Bytes32()
+	if b[0]&0x80 == 0 {
+		return uint256ToInt64Exact(v)
+	}
+	for i := 0; i < 24; i++ {
+		if b[i] != 0xff {
+			return 0, false
+		}
+	}
+	if b[24] < 0x80 {
+		return 0, false
+	}
+	return int64(v.Uint64()), true
+}
+
 func addressToUint256(addr tcommon.Address) uint256.Int {
 	var v uint256.Int
 	v.SetBytes(addr[1:])
 	return v
+}
+
+func addressToUint256WithPrefix(addr tcommon.Address) uint256.Int {
+	var v uint256.Int
+	v.SetBytes(addr[:])
+	return v
+}
+
+func addressToUint256WithMode(addr tcommon.Address, multiSign bool) uint256.Int {
+	if multiSign {
+		return addressToUint256(addr)
+	}
+	return addressToUint256WithPrefix(addr)
 }
 
 func getDataSlice(data []byte, offset, size uint64) []byte {

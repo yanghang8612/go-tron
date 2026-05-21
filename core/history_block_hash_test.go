@@ -133,7 +133,15 @@ func TestWriteHistoryBlockHashCapturesRingPreValue(t *testing.T) {
 
 	slotKey := uint64ToDataWord(0)
 	priorHash := tcommon.HexToHash("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe")
-	rawdb.WriteStorage(diskdb, historyStorageAddress, slotKey, priorHash.Bytes())
+	statedb.SetState(historyStorageAddress, slotKey, priorHash)
+	root, err = statedb.Commit()
+	if err != nil {
+		t.Fatalf("seed ring slot Commit: %v", err)
+	}
+	statedb, err = state.New(root, stateDatabase)
+	if err != nil {
+		t.Fatalf("state.New post-ring-seed: %v", err)
+	}
 
 	statedb.SetHistoryEnabled(true)
 	newParentHash := tcommon.HexToHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")

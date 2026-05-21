@@ -77,8 +77,12 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 	energyForCall := interpreter.tvm.adjustedCreateEnergy(contract)
 	contract.UseEnergy(energyForCall)
 
+	addressSeed := contract.Address
+	if !interpreter.tvm.cfg.Istanbul {
+		addressSeed = contract.Caller
+	}
 	ret, addr, remainingEnergy, err := interpreter.tvm.create2WithVersion(
-		contract.Address, code, energyForCall, val, salt, contract.Version,
+		contract.Address, addressSeed, code, energyForCall, val, salt, contract.Version,
 	)
 	contract.Energy += remainingEnergy
 
