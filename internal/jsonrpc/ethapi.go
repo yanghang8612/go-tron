@@ -1,25 +1,52 @@
 package jsonrpc
 
+import (
+	"fmt"
+	"math/big"
+
+	"github.com/tronprotocol/go-tron/common"
+)
+
 // EthAPI implements the "eth" JSON-RPC namespace on the reflection-based
 // internal/rpc framework. It is the migration target for the eth_* arms of
 // api.go's dispatch switch (jsonrpc-reflection).
 //
-// This first increment covers the no-parameter, no-hash methods that migrate
-// zero-diff against the frozen jsonrpc-corpus. The param-bearing methods
-// (getBalance/getCode/getStorageAt/call/estimateGas), the block/tx/receipt
-// readers (which additionally FIX the legacy double-hex-hash bug, so their
-// corpus entries get regenerated at that point), and the filter methods land
-// in follow-up increments.
+// Covered so far: the no-parameter methods and the param-bearing account
+// readers, all of which migrate zero-diff against the frozen jsonrpc-corpus.
+// Still to land: eth_call/estimateGas, the block/tx/receipt readers (which
+// additionally FIX the legacy double-hex-hash bug, so their corpus entries get
+// regenerated at that point), eth_getLogs, and the filter methods.
 //
 // Method names map by the framework's reflection rule (first letter lowered):
-// ChainId -> eth_chainId, BlockNumber -> eth_blockNumber, Syncing ->
-// eth_syncing, GasPrice -> eth_gasPrice, Accounts -> eth_accounts.
+// ChainId -> eth_chainId, GetBalance -> eth_getBalance, etc. Param-bearing
+// methods take string arguments and parse them exactly as the legacy handlers
+// did (common.FromHex etc.), with a trailing *string block tag that the
+// framework leaves nil when the caller omits it — mirroring the legacy
+// resolveBlockArg "default to latest" behavior.
 type EthAPI struct {
 	backend Backend
 }
 
 // NewEthAPI builds an EthAPI over the given backend.
 func NewEthAPI(backend Backend) *EthAPI { return &EthAPI{backend: backend} }
+
+// resolveBlock mirrors api.resolveBlockArg for the framework methods: a nil or
+// empty block tag means "latest" (live read path), otherwise the parsed block
+// number with the archive read path. Returns (blockNum, isLatest, err).
+func (e *EthAPI) resolveBlock(block *string) (uint64, bool, error) {
+	tag := "latest"
+	if block != nil && *block != "" {
+		tag = *block
+	}
+	num, err := parseBlockParam(tag)
+	if err != nil {
+		return 0, false, err
+	}
+	if num == ^uint64(0) { // "latest"/"pending" sentinel
+		return e.backend.BlockNumber(), true, nil
+	}
+	return num, false, nil
+}
 
 // ChainId serves eth_chainId. It is deliberately named ChainId (not ChainID)
 // so the framework's first-letter-lowering yields the canonical method name
@@ -38,3 +65,70 @@ func (e *EthAPI) GasPrice() string { return hexUint64(uint64(e.backend.GasPrice(
 
 // Accounts serves eth_accounts: always empty (the node holds no managed keys).
 func (e *EthAPI) Accounts() []string { return []string{} }
+
+// GetBalance serves eth_getBalance: the SUN balance scaled by 1e12 (to wei-like
+// 18-decimal units) as 0x-hex. The optional block tag selects live vs archive.
+func (e *EthAPI) GetBalance(addrHex string, block *string) (string, error) {
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	var balSUN int64
+	if isLatest {
+		balSUN = e.backend.GetBalance(addr)
+	} else if balSUN, err = e.backend.GetBalanceAt(addr, blockNum); err != nil {
+		return "", err
+	}
+	// Multiply by 1e12 using big.Int to avoid int64 overflow for large balances.
+	wei := new(big.Int).Mul(big.NewInt(balSUN), big.NewInt(1_000_000_000_000))
+	return fmt.Sprintf("0x%x", wei), nil
+}
+
+// GetTransactionCount serves eth_getTransactionCount: TRON has no nonces, so it
+// is always 0. The address/block params are accepted for client compatibility
+// and ignored, exactly as the legacy handler did.
+func (e *EthAPI) GetTransactionCount(_ string, _ *string) string { return "0x0" }
+
+// GetCode serves eth_getCode: the contract bytecode as 0x-hex (live or archive).
+func (e *EthAPI) GetCode(addrHex string, block *string) (string, error) {
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	if isLatest {
+		return hexBytes(e.backend.GetCode(addr)), nil
+	}
+	code, err := e.backend.GetCodeAt(addr, blockNum)
+	if err != nil {
+		return "", err
+	}
+	return hexBytes(code), nil
+}
+
+// GetStorageAt serves eth_getStorageAt: the 32-byte storage word at the given
+// slot as 0x-hex (live or archive). The slot is right-aligned into 32 bytes,
+// matching the legacy handler.
+func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, error) {
+	addr := common.BytesToAddress(common.FromHex(addrHex))
+	var slot common.Hash
+	slotBytes := common.FromHex(slotHex)
+	if len(slotBytes) > 32 {
+		slotBytes = slotBytes[len(slotBytes)-32:]
+	}
+	copy(slot[32-len(slotBytes):], slotBytes)
+	blockNum, isLatest, err := e.resolveBlock(block)
+	if err != nil {
+		return "", err
+	}
+	if isLatest {
+		val := e.backend.GetStorageAt(addr, slot)
+		return hexBytes(val[:]), nil
+	}
+	val, err := e.backend.GetStorageAtBlock(addr, slot, blockNum)
+	if err != nil {
+		return "", err
+	}
+	return hexBytes(val[:]), nil
+}
