@@ -109,6 +109,20 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 	s.stateObjects[addr] = newStateObject(addr, acc.Copy())
 }
 
+// LoadAccountReference hydrates an account into the in-memory object cache
+// without copying it. This is only for per-block hot-path caches that are
+// cleared if block processing fails before commit.
+func (s *StateDB) LoadAccountReference(acc *types.Account) {
+	if acc == nil {
+		return
+	}
+	addr := acc.Address()
+	if _, ok := s.stateObjects[addr]; ok {
+		return
+	}
+	s.stateObjects[addr] = newStateObject(addr, acc)
+}
+
 // CopyAccount returns a detached copy of the cached/live account.
 func (s *StateDB) CopyAccount(addr tcommon.Address) *types.Account {
 	obj := s.getStateObject(addr)
@@ -116,6 +130,17 @@ func (s *StateDB) CopyAccount(addr tcommon.Address) *types.Account {
 		return nil
 	}
 	return obj.account.Copy()
+}
+
+// AccountReference returns the cached/live account pointer without copying it.
+// Callers must treat the returned account as immutable unless they own the
+// StateDB lifecycle and clear any external cache on failure.
+func (s *StateDB) AccountReference(addr tcommon.Address) *types.Account {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	return obj.account
 }
 
 // GetOrCreateAccount returns the state object at addr, creating it if it doesn't exist.

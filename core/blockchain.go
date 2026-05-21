@@ -113,6 +113,8 @@ type BlockChain struct {
 	dynPropsCache    atomic.Value // *state.DynamicProperties; canonical head snapshot
 	standbyPayCache  *standbyWitnessPaySet
 	rewardAcctCache  map[tcommon.Address]*types.Account
+	rewardAcctSeen   map[tcommon.Address]struct{}
+	rewardAcctAddrs  []tcommon.Address
 	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
@@ -277,6 +279,8 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		flushQueue:      make(chan uint64, flushQueueCap),
 		flushPending:    newFlushBarrier(),
 		rewardAcctCache: make(map[tcommon.Address]*types.Account),
+		rewardAcctSeen:  make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs: make([]tcommon.Address, 0, 128),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -713,8 +717,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
 		standbyPaySet = bc.cachedStandbyPaySet(statedb, dynProps.CurrentCycleNumber())
 	}
-	rewardAcctAddrs := rewardAccountAddresses(block.WitnessAddress(), standbyPaySet)
+	rewardAcctAddrs := bc.rewardAccountAddresses(block.WitnessAddress(), standbyPaySet)
 	bc.preloadRewardAccounts(statedb, rewardAcctAddrs)
+	defer func() {
+		if retErr != nil && len(rewardAcctAddrs) > 0 {
+			bc.clearRewardAccountCache()
+		}
+	}()
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
 		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
@@ -1431,30 +1440,26 @@ func (bc *BlockChain) invalidateStandbyPayCache() {
 	bc.standbyPayCache = nil
 }
 
-func rewardAccountAddresses(blockWitness tcommon.Address, standby *standbyWitnessPaySet) []tcommon.Address {
-	seen := make(map[tcommon.Address]struct{}, 1+lenStandbyWitnesses(standby))
-	addrs := make([]tcommon.Address, 0, 1+lenStandbyWitnesses(standby))
+func (bc *BlockChain) rewardAccountAddresses(blockWitness tcommon.Address, standby *standbyWitnessPaySet) []tcommon.Address {
+	for addr := range bc.rewardAcctSeen {
+		delete(bc.rewardAcctSeen, addr)
+	}
+	addrs := bc.rewardAcctAddrs[:0]
 	if blockWitness != (tcommon.Address{}) {
-		seen[blockWitness] = struct{}{}
+		bc.rewardAcctSeen[blockWitness] = struct{}{}
 		addrs = append(addrs, blockWitness)
 	}
 	if standby != nil {
 		for _, w := range standby.witnesses {
-			if _, ok := seen[w.addr]; ok {
+			if _, ok := bc.rewardAcctSeen[w.addr]; ok {
 				continue
 			}
-			seen[w.addr] = struct{}{}
+			bc.rewardAcctSeen[w.addr] = struct{}{}
 			addrs = append(addrs, w.addr)
 		}
 	}
+	bc.rewardAcctAddrs = addrs
 	return addrs
-}
-
-func lenStandbyWitnesses(standby *standbyWitnessPaySet) int {
-	if standby == nil {
-		return 0
-	}
-	return len(standby.witnesses)
 }
 
 func (bc *BlockChain) preloadRewardAccounts(statedb *state.StateDB, addrs []tcommon.Address) {
@@ -1463,7 +1468,7 @@ func (bc *BlockChain) preloadRewardAccounts(statedb *state.StateDB, addrs []tcom
 	}
 	for _, addr := range addrs {
 		if acc := bc.rewardAcctCache[addr]; acc != nil {
-			statedb.LoadAccount(acc)
+			statedb.LoadAccountReference(acc)
 		}
 	}
 }
@@ -1473,7 +1478,7 @@ func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []t
 		return
 	}
 	for _, addr := range addrs {
-		if acc := statedb.CopyAccount(addr); acc != nil {
+		if acc := statedb.AccountReference(addr); acc != nil {
 			bc.rewardAcctCache[addr] = acc
 		} else {
 			delete(bc.rewardAcctCache, addr)
