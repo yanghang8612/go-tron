@@ -83,7 +83,7 @@ func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 	last := rawdb.ReadLastMerkleTree(c.db)
 	if root := rawdb.ReadMerkleTreeRootByBlock(c.db, blockNum-1); len(root) == len(PedersenHash{}) {
 		if last != nil && proto.Equal(cur.Proto(), last) {
-			return c.writeBestRootIndex(blockNum, root, cur)
+			return rawdb.WriteMerkleTreeRootByBlock(c.db, blockNum, root)
 		}
 		if last == nil && cur.Size() == 0 &&
 			rawdb.HasIncrMerkleTree(c.db, root) &&
@@ -93,7 +93,7 @@ func (c *MerkleContainer) SaveCurrentAsBest(blockNum int64) error {
 			// root-keyed store entry still proves the best tree is the same
 			// empty tree; reuse it instead of recomputing the 32-level
 			// Sapling empty root on every post-activation transparent block.
-			return c.writeBestRootIndex(blockNum, root, cur)
+			return rawdb.WriteMerkleTreeRootByBlock(c.db, blockNum, root)
 		}
 	}
 	root, err := cur.MerkleTreeKey()

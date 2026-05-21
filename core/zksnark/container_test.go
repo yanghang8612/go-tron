@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	shieldpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestContainerEmptyFallback covers MerkleContainer.GetCurrent /
@@ -134,6 +135,9 @@ func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
 	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
 		t.Fatalf("block 11 root: got %x, want %x", got, root)
 	}
+	if got := rawdb.ReadIncrMerkleTree(db, root); !proto.Equal(got, best.Proto()) {
+		t.Fatalf("root-keyed tree changed on unchanged save: got %v want %v", got, best.Proto())
+	}
 }
 
 // TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent covers the
@@ -161,6 +165,9 @@ func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) 
 	}
 	if got := rawdb.ReadMerkleTreeRootByBlock(db, 11); !bytes.Equal(got, root) {
 		t.Fatalf("block 11 root: got %x, want %x", got, root)
+	}
+	if got := rawdb.ReadIncrMerkleTree(db, root); got != nil {
+		t.Fatalf("empty root-keyed tree should remain zero-byte/absent, got %v", got)
 	}
 }
 
