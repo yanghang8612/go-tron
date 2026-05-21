@@ -9,10 +9,9 @@
   "response": {
     "error": {
       "code": -32601,
-      "message": "method not found"
+      "message": "the method eth_doesNotExist does not exist/is not available"
     },
     "id": 1,
-    "jsonrpc": "2.0",
-    "result": null
+    "jsonrpc": "2.0"
   }
 }

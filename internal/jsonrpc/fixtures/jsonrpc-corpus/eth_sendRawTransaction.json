@@ -14,7 +14,6 @@
       "message": "the method eth_sendRawTransaction does not exist/is not available"
     },
     "id": 1,
-    "jsonrpc": "2.0",
-    "result": null
+    "jsonrpc": "2.0"
   }
 }

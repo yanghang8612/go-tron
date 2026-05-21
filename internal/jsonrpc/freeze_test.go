@@ -180,7 +180,7 @@ func buildRequestJSON(t *testing.T, spec requestSpec) json.RawMessage {
 // between cases.
 func fire(t *testing.T, reqBody []byte) []byte {
 	t.Helper()
-	srv := httptest.NewServer(jsonrpc.NewAPI(newFreezeBackend()))
+	srv := httptest.NewServer(jsonrpc.NewServer(newFreezeBackend(), 0).Handler())
 	defer srv.Close()
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
