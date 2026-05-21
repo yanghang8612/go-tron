@@ -25,9 +25,13 @@ type stateObject struct {
 	storageExists     map[tcommon.Hash]bool         // java-tron StorageRow existence for cached slots
 	selfDestructed    bool
 
-	// Rooted generic-KV fields (Phase 1: always EmptyKVRoot / 0; no KV trie yet).
+	// Rooted generic-KV fields: root of this account's per-account KV trie
+	// (committed into the StateAccountV2 envelope) and its reset generation.
 	accountKVRoot       tcommon.Hash
 	accountKVGeneration uint64
+
+	// kvDirty holds pending generic-KV writes keyed by string(domainBE2||key).
+	kvDirty map[string]kvEntry
 }
 
 func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
@@ -37,6 +41,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
 		accountKVRoot: EmptyKVRoot,
+		kvDirty:       make(map[string]kvEntry),
 	}
 }
 
@@ -49,6 +54,7 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
 		accountKVRoot: EmptyKVRoot,
+		kvDirty:       make(map[string]kvEntry),
 	}
 }
 

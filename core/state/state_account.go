@@ -14,7 +14,7 @@ import (
 const StateAccountVersion uint64 = 2
 
 // EmptyKVRoot is the AccountKVRoot value for an account with no generic-KV
-// entries (the empty trie root). Phase 1 always uses this.
+// entries (the empty trie root).
 var EmptyKVRoot = tcommon.Hash(ethtypes.EmptyRootHash)
 
 // StateAccountV2 is the internal, versioned, RLP-encoded value stored in the

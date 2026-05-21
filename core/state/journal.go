@@ -131,6 +131,46 @@ func (e selfDestructChange) revert(stateObjects map[tcommon.Address]*stateObject
 	}
 }
 
+// kvChange records a single generic-KV overlay change for revert.
+type kvChange struct {
+	address   tcommon.Address
+	mapKey    string
+	hadEntry  bool
+	prevEntry kvEntry
+}
+
+func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj == nil {
+		return
+	}
+	if e.hadEntry {
+		obj.kvDirty[e.mapKey] = e.prevEntry
+	} else {
+		delete(obj.kvDirty, e.mapKey)
+	}
+}
+
+// kvResetChange records a generic-KV reset (generation bump) for revert. It
+// snapshots the prior root, generation, AND the dirty overlay, because the
+// reset clears the overlay and the post-reset overlay belongs to a new generation.
+type kvResetChange struct {
+	address        tcommon.Address
+	prevRoot       tcommon.Hash
+	prevGeneration uint64
+	prevDirty      map[string]kvEntry
+}
+
+func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	obj := stateObjects[e.address]
+	if obj == nil {
+		return
+	}
+	obj.accountKVRoot = e.prevRoot
+	obj.accountKVGeneration = e.prevGeneration
+	obj.kvDirty = e.prevDirty
+}
+
 // journal tracks state changes for snapshot/revert.
 type journal struct {
 	entries []journalChange

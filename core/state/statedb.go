@@ -1600,6 +1600,14 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		if obj.contractMeta != nil {
 			metaCopy = proto.Clone(obj.contractMeta).(*contractpb.SmartContract)
 		}
+		kvDirtyCopy := make(map[string]kvEntry, len(obj.kvDirty))
+		for k, v := range obj.kvDirty {
+			ec := kvEntry{deleted: v.deleted}
+			if v.val != nil {
+				ec.val = append([]byte{}, v.val...)
+			}
+			kvDirtyCopy[k] = ec
+		}
 		newObj := &stateObject{
 			address:             addr,
 			dirty:               obj.dirty,
@@ -1615,6 +1623,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			selfDestructed:      obj.selfDestructed,
 			accountKVRoot:       obj.accountKVRoot,
 			accountKVGeneration: obj.accountKVGeneration,
+			kvDirty:             kvDirtyCopy,
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -1654,6 +1663,14 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.contractMetaDirty = false
 			obj.dirty = false
 			continue
+		}
+		if len(obj.kvDirty) > 0 {
+			kvRoot, err := s.commitAccountKV(obj)
+			if err != nil {
+				return tcommon.Hash{}, err
+			}
+			obj.accountKVRoot = kvRoot
+			obj.kvDirty = make(map[string]kvEntry)
 		}
 		accBytes, err := obj.account.Marshal()
 		if err != nil {
