@@ -12,15 +12,15 @@ import (
 	"github.com/tronprotocol/go-tron/internal/rpc"
 )
 
-// TestWeb3API_FrameworkParity proves the vendored internal/rpc reflection
-// server dispatches the "web3" namespace to Web3API and returns byte-identical
-// results to the legacy hand-rolled handler — the same values frozen in
-// fixtures/jsonrpc-corpus (web3_clientVersion, web3_sha3). This validates the
-// framework integration for a real go-tron namespace ahead of the live cutover
-// that will delete the corresponding arms of api.go's dispatch switch.
-func TestWeb3API_FrameworkParity(t *testing.T) {
+// TestNetAPI_FrameworkParity proves the vendored internal/rpc reflection server
+// dispatches the "net" namespace to NetAPI and returns byte-identical results
+// to the legacy hand-rolled handler — the same values frozen in
+// fixtures/jsonrpc-corpus (net_version, net_listening, net_peerCount). It
+// reuses the freeze suite's deterministic backend (chainID=728126428,
+// peerCount=3), so the expectations stay locked to the corpus.
+func TestNetAPI_FrameworkParity(t *testing.T) {
 	srv := rpc.NewServer()
-	if err := srv.RegisterName("web3", new(jsonrpc.Web3API)); err != nil {
+	if err := srv.RegisterName("net", jsonrpc.NewNetAPI(newFreezeBackend())); err != nil {
 		t.Fatalf("RegisterName: %v", err)
 	}
 	defer srv.Stop()
@@ -31,14 +31,19 @@ func TestWeb3API_FrameworkParity(t *testing.T) {
 		name, body, wantResult string
 	}{
 		{
-			name:       "clientVersion",
-			body:       `{"jsonrpc":"2.0","id":1,"method":"web3_clientVersion","params":[]}`,
-			wantResult: `"go-tron/v0.3.0-dev"`,
+			name:       "version",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"net_version","params":[]}`,
+			wantResult: `"728126428"`,
 		},
 		{
-			name:       "sha3",
-			body:       `{"jsonrpc":"2.0","id":1,"method":"web3_sha3","params":["0x68656c6c6f"]}`,
-			wantResult: `"0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8"`,
+			name:       "listening",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"net_listening","params":[]}`,
+			wantResult: `true`,
+		},
+		{
+			name:       "peerCount",
+			body:       `{"jsonrpc":"2.0","id":1,"method":"net_peerCount","params":[]}`,
+			wantResult: `"0x3"`,
 		},
 	}
 	for _, tc := range cases {
