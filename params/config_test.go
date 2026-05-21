@@ -65,3 +65,19 @@ func TestNileGenesis_MaintenanceTimeIntervalBootstrap(t *testing.T) {
 		t.Fatalf("DefaultNileGenesis maintenance_time_interval: got %d, want 600000 (config-nile.conf:516)", got)
 	}
 }
+
+// TestNileGenesis_ShieldedTransactionFeeBootstrap locks the historical
+// shielded fee used by live Nile. Nile was initialized before java-tron
+// c1485d4e8 lowered the missing-store default from 10_000_000 to 100_000,
+// so the live chain kept 10 ZEN and reports that value in historical
+// ShieldedTransfer transaction infos.
+func TestNileGenesis_ShieldedTransactionFeeBootstrap(t *testing.T) {
+	g := DefaultNileGenesis()
+	got, ok := g.DynamicProperties["shielded_transaction_fee"]
+	if !ok {
+		t.Fatal("DefaultNileGenesis.DynamicProperties missing shielded_transaction_fee")
+	}
+	if got != 10000000 {
+		t.Fatalf("DefaultNileGenesis shielded_transaction_fee: got %d, want 10000000", got)
+	}
+}

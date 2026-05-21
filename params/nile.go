@@ -57,6 +57,11 @@ func DefaultNileGenesis() *Genesis {
 			// config-nile.conf block.proposalExpireTime = 600_000
 			// (mainnet: 259_200_000).
 			"proposal_expire_time": 600000,
+			// Nile bootstrapped shielded transactions before java-tron commit
+			// c1485d4e8 changed the missing-store default from 10 ZEN to
+			// 0.1 ZEN. Existing Nile DBs kept the old value; live historical
+			// ShieldedTransfer tx infos report shielded_transaction_fee=10000000.
+			"shielded_transaction_fee": 10000000,
 		},
 	}
 }

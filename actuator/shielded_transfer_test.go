@@ -525,17 +525,18 @@ func TestHistoricalNileShieldedFeeOnlyReplayExecuteKeepsVisibleAccountingOnly(t 
 	ctx.Tx.Proto().Ret = []*corepb.Transaction_Result{{
 		ContractRet: corepb.Transaction_Result_SUCCESS,
 	}}
-	ctx.DynProps.AdjustTotalShieldedPoolValue(1_000_000)
+	ctx.DynProps.Set("shielded_transaction_fee", 10_000_000)
+	ctx.DynProps.AdjustTotalShieldedPoolValue(10_900_000)
 
 	result, err := (&ShieldedTransferActuator{}).Execute(ctx)
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if result.ShieldedTransactionFee != 100_000 {
-		t.Fatalf("shielded fee: want 100000, got %d", result.ShieldedTransactionFee)
+	if result.ShieldedTransactionFee != 10_000_000 {
+		t.Fatalf("shielded fee: want 10000000, got %d", result.ShieldedTransactionFee)
 	}
-	if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != 100_000 {
-		t.Fatalf("blackhole ZEN balance: want 100000, got %d", got)
+	if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != 10_000_000 {
+		t.Fatalf("blackhole ZEN balance: want 10000000, got %d", got)
 	}
 	if rawdb.HasNullifier(ctx.DB, nullifier) {
 		t.Fatal("historical fee-only replay must not persist nullifiers")
