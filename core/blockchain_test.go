@@ -527,6 +527,13 @@ func TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary(t *testing.T) {
 	// next_maintenance_time must advance to exactly 2*interval after one
 	// fire (round=0 in CalcNextMaintenanceTime, since blockTime − currentMaint
 	// < interval).
+	// next_maintenance_time is advanced in dynProps and lands in the active
+	// buffer layer; it reaches diskdb only when the async flush worker drains
+	// that layer (see BlockChain.postFlush / WaitForFlushSettled godoc). A
+	// direct-disk read here without settling first races the worker and
+	// intermittently observes the genesis value. Mirror the sibling test's
+	// WaitForFlushSettled() → LoadDynamicProperties(diskdb) convention.
+	bc.WaitForFlushSettled()
 	dynProps := state.LoadDynamicProperties(diskdb)
 	if got, want := dynProps.NextMaintenanceTime(), 2*interval; got != want {
 		t.Fatalf("next_maintenance_time after fire: got %d, want %d", got, want)
