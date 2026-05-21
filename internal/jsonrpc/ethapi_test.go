@@ -107,3 +107,27 @@ func TestEthAPI_AccountFrameworkParity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { postParity(t, ts.URL, tc.body, tc.wantResult) })
 	}
 }
+
+// TestEthAPI_CallFrameworkParity proves eth_call and eth_estimateGas dispatch
+// through the framework — including the {from,to,data,value} object param and
+// the optional/ignored block tag — with output byte-identical to the frozen
+// corpus.
+func TestEthAPI_CallFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	const to = "0x41a0b0c0d0e0f000102030405060708090a0b0c0d0"
+	cases := []struct{ name, body, wantResult string }{
+		{
+			"call",
+			`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"data":"0x70a08231","to":"` + to + `"},"latest"]}`,
+			`"0x0000000000000000000000000000000000000000000000000000000000000001"`,
+		},
+		{
+			"estimateGas",
+			`{"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[{"data":"0x70a08231","to":"` + to + `"}]}`,
+			`"0x0"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { postParity(t, ts.URL, tc.body, tc.wantResult) })
+	}
+}

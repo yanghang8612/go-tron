@@ -3,9 +3,30 @@ package jsonrpc
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
 )
+
+// callArgs is the {from,to,data,value} object accepted by eth_call and
+// eth_estimateGas. All fields are 0x-hex strings, parsed exactly as the legacy
+// handlers did; the framework unmarshals the request's object param into it.
+type callArgs struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Data  string `json:"data"`
+	Value string `json:"value"`
+}
+
+// parseCallValue mirrors the legacy tx-value parsing: empty/"0x0"/"0x" => 0,
+// otherwise base-0 ParseInt with the parse error ignored (as the legacy did).
+func parseCallValue(s string) int64 {
+	if s == "" || s == "0x0" || s == "0x" {
+		return 0
+	}
+	v, _ := strconv.ParseInt(s, 0, 64)
+	return v
+}
 
 // EthAPI implements the "eth" JSON-RPC namespace on the reflection-based
 // internal/rpc framework. It is the migration target for the eth_* arms of
@@ -131,4 +152,44 @@ func (e *EthAPI) GetStorageAt(addrHex, slotHex string, block *string) (string, e
 		return "", err
 	}
 	return hexBytes(val[:]), nil
+}
+
+// Call serves eth_call: read-only TVM execution against head state, returning
+// the result bytes as 0x-hex. 'to' is required. The block tag is accepted and
+// ignored (the legacy handler always reads head), preserving that behavior.
+func (e *EthAPI) Call(tx callArgs, block *string) (string, error) {
+	if tx.To == "" {
+		return "", fmt.Errorf("eth_call: 'to' required")
+	}
+	var from *common.Address
+	if tx.From != "" {
+		a := common.BytesToAddress(common.FromHex(tx.From))
+		from = &a
+	}
+	to := common.BytesToAddress(common.FromHex(tx.To))
+	result, err := e.backend.Call(from, &to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	if err != nil {
+		return "", err
+	}
+	return hexBytes(result), nil
+}
+
+// EstimateGas serves eth_estimateGas: the energy used by a simulated execution
+// as 0x-hex. Both from and to are optional (to may be nil for creation-style
+// estimates, unlike eth_call). The block tag, if present, is ignored.
+func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
+	var from, to *common.Address
+	if tx.From != "" {
+		a := common.BytesToAddress(common.FromHex(tx.From))
+		from = &a
+	}
+	if tx.To != "" {
+		a := common.BytesToAddress(common.FromHex(tx.To))
+		to = &a
+	}
+	energy, err := e.backend.EstimateGas(from, to, common.FromHex(tx.Data), parseCallValue(tx.Value))
+	if err != nil {
+		return "", err
+	}
+	return hexUint64(energy), nil
 }
