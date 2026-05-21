@@ -5,6 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,9 +40,23 @@ func postParity(t *testing.T, url, body, wantResult string) {
 	if got.Error != nil {
 		t.Fatalf("unexpected JSON-RPC error: %+v", got.Error)
 	}
-	if string(got.Result) != wantResult {
+	if !jsonSemanticEqual(got.Result, []byte(wantResult)) {
 		t.Fatalf("result mismatch:\n got = %s\nwant = %s", got.Result, wantResult)
 	}
+}
+
+// jsonSemanticEqual reports whether two JSON documents are equal ignoring
+// object key order and insignificant whitespace — so object results (blocks,
+// receipts) compare correctly regardless of map iteration order.
+func jsonSemanticEqual(a, b []byte) bool {
+	var av, bv interface{}
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }
 
 // ethParityServer registers EthAPI (over the deterministic freeze backend) on a
@@ -130,4 +147,46 @@ func TestEthAPI_CallFrameworkParity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { postParity(t, ts.URL, tc.body, tc.wantResult) })
 	}
+}
+
+// TestEthAPI_BlockTxFrameworkParity proves the block/tx/receipt readers dispatch
+// through the framework with output identical to the (post-hash-fix) frozen
+// corpus. They reuse the shared blockToRPC/txToRPC/receiptToRPC converters, so
+// this guards the framework's param parsing (block tag, fullTx flag, tx hash)
+// against the very fixtures the legacy handler is frozen against.
+func TestEthAPI_BlockTxFrameworkParity(t *testing.T) {
+	ts := ethParityServer(t)
+	for _, name := range []string{
+		"eth_getBlockByNumber_fullTx",
+		"eth_getBlockByNumber_hashesOnly",
+		"eth_getBlockByHash_fullTx",
+		"eth_getBlockByHash_hashesOnly",
+		"eth_getTransactionByHash",
+		"eth_getTransactionReceipt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req, wantResult := loadCorpusCase(t, name)
+			postParity(t, ts.URL, req, wantResult)
+		})
+	}
+}
+
+// loadCorpusCase reads a freeze-corpus file and returns its request JSON and
+// expected result JSON.
+func loadCorpusCase(t *testing.T, name string) (reqJSON, resultJSON string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("fixtures", "jsonrpc-corpus", name+".json"))
+	if err != nil {
+		t.Fatalf("read corpus %s: %v", name, err)
+	}
+	var c struct {
+		Request  json.RawMessage `json:"request"`
+		Response struct {
+			Result json.RawMessage `json:"result"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("parse corpus %s: %v", name, err)
+	}
+	return string(c.Request), string(c.Response.Result)
 }

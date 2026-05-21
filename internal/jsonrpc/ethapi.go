@@ -193,3 +193,64 @@ func (e *EthAPI) EstimateGas(tx callArgs, block *string) (string, error) {
 	}
 	return hexUint64(energy), nil
 }
+
+// GetBlockByNumber serves eth_getBlockByNumber. The optional fullTx flag
+// (default false) selects full tx objects vs a hash list. Reuses the shared
+// blockToRPC converter. An unknown block resolves to null (Ethereum spec).
+func (e *EthAPI) GetBlockByNumber(blockTag string, fullTx *bool) (interface{}, error) {
+	num, err := parseBlockParam(blockTag)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if num == ^uint64(0) { // "latest"/"pending"
+		num = e.backend.BlockNumber()
+	}
+	block, err := e.backend.GetBlockByNumber(num)
+	if err != nil || block == nil {
+		return nil, nil
+	}
+	return blockToRPC(block, fullTx != nil && *fullTx), nil
+}
+
+// GetBlockByHash serves eth_getBlockByHash. Unknown block => null.
+func (e *EthAPI) GetBlockByHash(hashHex string, fullTx *bool) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	block, err := e.backend.GetBlockByHash(hash)
+	if err != nil || block == nil {
+		return nil, nil
+	}
+	return blockToRPC(block, fullTx != nil && *fullTx), nil
+}
+
+// GetTransactionByHash serves eth_getTransactionByHash. Not found => null.
+func (e *EthAPI) GetTransactionByHash(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	tx, block, index, err := e.backend.GetTransactionByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, nil
+	}
+	return txToRPC(tx, hash, block, index), nil
+}
+
+// GetTransactionReceipt serves eth_getTransactionReceipt. Not found => null.
+func (e *EthAPI) GetTransactionReceipt(hashHex string) (interface{}, error) {
+	var hash common.Hash
+	copy(hash[:], common.FromHex(hashHex))
+	info, err := e.backend.GetTransactionInfo(hash)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return nil, nil
+	}
+	tx, block, index, err := e.backend.GetTransactionByHash(hash)
+	if err != nil || tx == nil {
+		return nil, nil
+	}
+	return receiptToRPC(hash, tx, info, block, index), nil
+}
