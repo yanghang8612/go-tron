@@ -89,7 +89,7 @@ func (p *Peer) Send(code byte, payload []byte) {
 	case p.writeCh <- msgFrame{code, payload}:
 	case <-p.quit:
 	default:
-		log.Warn("Peer write buffer full, dropping message",
+		peerLog.Warn("Peer write buffer full, dropping message",
 			"peer", p.id, "msg", MsgName(code), "code", fmt.Sprintf("0x%02x", code))
 	}
 }
@@ -118,7 +118,7 @@ func (p *Peer) readLoop() {
 		}
 		code, payload, err := UnwrapPostHandshake(body)
 		if err != nil {
-			log.Debug("Peer frame unwrap failed", "peer", p.id, "err", err)
+			peerLog.Debug("Peer frame unwrap failed", "peer", p.id, "err", err)
 			return
 		}
 		switch code {
@@ -149,7 +149,7 @@ func (p *Peer) writeLoop() {
 			// Post-handshake: wrap every frame in a CompressMessage.
 			body, err := WrapPostHandshake(msg.code, msg.payload)
 			if err != nil {
-				log.Warn("Peer frame wrap failed",
+				peerLog.Warn("Peer frame wrap failed",
 					"peer", p.id, "msg", MsgName(msg.code), "err", err)
 				return
 			}
@@ -176,7 +176,7 @@ func (p *Peer) keepaliveLoop() {
 			// Check pong freshness — if we've gone too long without one, drop.
 			lastPong := time.Unix(0, p.lastPongNanos.Load())
 			if time.Since(lastPong) > 2*KeepAliveTimeout {
-				log.Warn("Peer keepalive timeout, closing",
+				peerLog.Info("Peer keepalive timeout, closing",
 					"peer", p.id, "since", time.Since(lastPong))
 				p.Close()
 				return

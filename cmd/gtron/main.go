@@ -131,6 +131,10 @@ var (
 		Name:  "log.file",
 		Usage: "Optional log file path; records are tee'd to this file in JSON",
 	}
+	logModuleFlag = &cli.StringSliceFlag{
+		Name:  "log.module",
+		Usage: "Per-module log level override (module=trace|debug|info|warn|error|crit or 0-5); repeatable, e.g. --log.module net/sync=debug --log.module p2p=warn",
+	}
 	gcmodeFlag = &cli.StringFlag{
 		Name:  "gcmode",
 		Usage: "State History Index retention: full (prune to last prune_window blocks) | archive (keep forever)",
@@ -191,6 +195,7 @@ var app = &cli.App{
 		verbosityFlag,
 		logFormatFlag,
 		logFileFlag,
+		logModuleFlag,
 		gcmodeFlag,
 		historyEnabledFlag,
 		configFileFlag,
@@ -200,7 +205,7 @@ var app = &cli.App{
 		freezerBatchFlag,
 	},
 	Before: func(ctx *cli.Context) error {
-		return log.Setup(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"))
+		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
 	},
 	Action: gtron,
 	Commands: []*cli.Command{
@@ -273,12 +278,14 @@ func gtron(ctx *cli.Context) error {
 	if ctx.Bool("dev") {
 		witnessAddr := crypto.PubkeyToAddress(&devWitnessKey.PublicKey)
 		genesis = makeDevGenesis(witnessAddr, ctx.Bool("dev.full-features"), ctx.Int64("dev.maintenance-interval"))
-		fmt.Printf("Dev mode: single-witness genesis (witness=%x)\n", witnessAddr[:6])
+		log.Info("Dev genesis configured", "witness", fmt.Sprintf("%x", witnessAddr[:6]))
 	}
 	if ctx.String("genesis") != "" {
-		fmt.Printf("Custom genesis: chain=%d p2p_version=%d witnesses=%d accounts=%d\n",
-			genesis.Config.ChainID, genesis.Config.P2PVersion,
-			len(genesis.Witnesses), len(genesis.Accounts))
+		log.Info("Custom genesis loaded",
+			"chain", genesis.Config.ChainID,
+			"p2pVersion", genesis.Config.P2PVersion,
+			"witnesses", len(genesis.Witnesses),
+			"accounts", len(genesis.Accounts))
 	}
 
 	// Open database
@@ -468,20 +475,23 @@ func gtron(ctx *cli.Context) error {
 			Window: chainConfig.EffectiveHistoryPruneWindow(),
 		})
 		stack.RegisterLifecycle(pruner)
-		fmt.Printf("History pruner enabled (window=%d blocks)\n", chainConfig.EffectiveHistoryPruneWindow())
+		log.Info("History pruner enabled", "window", chainConfig.EffectiveHistoryPruneWindow())
 	} else if chainConfig.HistoryEnabled {
-		fmt.Println("History capture enabled in archive mode (no pruning)")
+		log.Info("History capture enabled", "mode", params.HistoryModeArchive, "pruning", false)
 	}
 
 	if ancientStore != nil && freezerCfg.Enabled {
 		freezerRunner := chainfreezer.New(newFreezerChainSource(bc), newFreezerStore(ancientStore), freezerCfg)
 		if freezerRunner != nil {
 			stack.RegisterLifecycle(freezerRunner)
-			fmt.Printf("Chain freezer enabled (ancient=%s margin=%d batch=%d interval=%s)\n",
-				ancientPath, freezerCfg.MarginBlocks, freezerCfg.BatchBlocks, freezerCfg.Interval)
+			log.Info("Chain freezer enabled",
+				"ancient", ancientPath,
+				"margin", freezerCfg.MarginBlocks,
+				"batch", freezerCfg.BatchBlocks,
+				"interval", freezerCfg.Interval)
 		}
 	} else if ancientStore != nil {
-		fmt.Printf("Chain freezer disabled; existing ancient data readable (ancient=%s)\n", ancientPath)
+		log.Info("Chain freezer disabled; existing ancient data readable", "ancient", ancientPath)
 	}
 
 	// Start block producer only when --witness is explicitly set.
@@ -510,10 +520,12 @@ func gtron(ctx *cli.Context) error {
 			}
 		}
 		if !found {
-			fmt.Printf("WARNING: witness %x is NOT in the active witness list (%d witnesses). No blocks will be produced.\n", witnessAddr[:6], len(activeWitnesses))
-			fmt.Println("Hint: use --dev mode to create a single-witness dev chain with your key.")
+			log.Warn("Witness key is not in the active witness set; block production will not start",
+				"witness", fmt.Sprintf("%x", witnessAddr[:6]),
+				"activeWitnesses", len(activeWitnesses),
+				"hint", "use --dev mode to create a single-witness dev chain with this key")
 		} else {
-			fmt.Printf("Witness mode enabled (address=%x)\n", witnessAddr[:6])
+			log.Info("Witness mode enabled", "witness", fmt.Sprintf("%x", witnessAddr[:6]))
 		}
 		prod := producer.New(bc, pool, engine, key)
 		prod.BlockCallback = func(block *types.Block) {
@@ -551,15 +563,21 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 
-	fmt.Printf("gtron started (chain=%d, block=%d, http=:%d, datadir=%s)\n",
-		chainConfig.ChainID, bc.CurrentBlock().Number(), cfg.HTTPPort, cfg.DataDir)
+	log.Info("gtron started",
+		"chain", chainConfig.ChainID,
+		"head", bc.CurrentBlock().Number(),
+		"http", fmt.Sprintf(":%d", cfg.HTTPPort),
+		"jsonrpc", fmt.Sprintf(":%d", cfg.JSONRPCPort),
+		"grpc", cfg.GRPCPort,
+		"p2p", fmt.Sprintf(":%d", cfg.P2PPort),
+		"datadir", cfg.DataDir)
 
 	// Wait for interrupt
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	<-sigc
 
-	fmt.Println("\nShutting down...")
+	log.Info("Shutting down")
 	broadcaster.Stop()
 	syncService.Stop()
 	stack.Stop()
@@ -567,7 +585,7 @@ func gtron(ctx *cli.Context) error {
 	// before closing the underlying store. Layers above solidified are
 	// dropped — see core.BlockChain.Close for the trade-off rationale.
 	if err := bc.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "blockchain close: %v\n", err)
+		log.Error("Blockchain close failed", "err", err)
 	}
 	closeStores()
 	return nil

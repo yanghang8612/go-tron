@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 
 	gethlog "github.com/ethereum/go-ethereum/log"
 )
@@ -56,6 +58,9 @@ func (m Module) with(ctx []any) []any {
 // inlining the check here keeps per-block Trace cost at one func call +
 // one comparison on production verbosity.
 func (m Module) enabled(level slog.Level) bool {
+	if lvl, ok := moduleLevel(m.name); ok {
+		return level >= lvl
+	}
 	return gethlog.Root().Enabled(context.Background(), level)
 }
 
@@ -160,19 +165,35 @@ func SetupCLI() {
 //   - file is optional; if non-empty, records are tee'd to that path in JSON
 //     regardless of stderr format.
 func Setup(verbosity int, format, file string) error {
+	return SetupWithModules(verbosity, format, file, nil)
+}
+
+// SetupWithModules configures the global logger with optional per-module
+// levels. Each module entry is "module=level", where level is trace, debug,
+// info, warn, error, crit, or the legacy 0-5 verbosity number.
+//
+// Example:
+//
+//	SetupWithModules(3, "terminal", "", []string{"net/sync=debug", "p2p=warn"})
+func SetupWithModules(verbosity int, format, file string, modules []string) error {
 	if verbosity < 0 || verbosity > 5 {
 		return fmt.Errorf("verbosity %d out of range 0-5", verbosity)
 	}
 	level := gethlog.FromLegacyLevel(verbosity)
+	moduleLevels, err := ParseModuleLevels(modules)
+	if err != nil {
+		return err
+	}
+	handlerLevel := lowestLevel(level, moduleLevels)
 
 	var primary slog.Handler
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "terminal":
-		primary = gethlog.NewTerminalHandlerWithLevel(os.Stderr, level, useColor(os.Stderr))
+		primary = gethlog.NewTerminalHandlerWithLevel(os.Stderr, handlerLevel, useColor(os.Stderr))
 	case "json":
-		primary = gethlog.JSONHandlerWithLevel(os.Stderr, level)
+		primary = gethlog.JSONHandlerWithLevel(os.Stderr, handlerLevel)
 	case "logfmt":
-		primary = gethlog.LogfmtHandlerWithLevel(os.Stderr, level)
+		primary = gethlog.LogfmtHandlerWithLevel(os.Stderr, handlerLevel)
 	default:
 		return fmt.Errorf("unknown log format %q (want terminal|json|logfmt)", format)
 	}
@@ -183,11 +204,124 @@ func Setup(verbosity int, format, file string) error {
 		if err != nil {
 			return fmt.Errorf("open log file: %w", err)
 		}
-		handler = teeHandler{primary: primary, secondary: gethlog.JSONHandlerWithLevel(f, level)}
+		handler = teeHandler{primary: primary, secondary: gethlog.JSONHandlerWithLevel(f, handlerLevel)}
 	}
 
+	setLevels(level, moduleLevels)
+	handler = moduleLevelHandler{next: handler, global: level, modules: moduleLevels}
 	gethlog.SetDefault(gethlog.NewLogger(handler))
 	return nil
+}
+
+// ParseModuleLevels parses module-specific level overrides. Entries may be
+// supplied either as repeated values or as comma-separated lists.
+func ParseModuleLevels(specs []string) (map[string]slog.Level, error) {
+	levels := make(map[string]slog.Level)
+	for _, spec := range specs {
+		for _, part := range strings.Split(spec, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			key, val, ok := strings.Cut(part, "=")
+			if !ok {
+				return nil, fmt.Errorf("invalid log module override %q (want module=level)", part)
+			}
+			module := strings.TrimSpace(key)
+			if module == "" {
+				return nil, fmt.Errorf("invalid log module override %q (empty module)", part)
+			}
+			level, err := ParseLevel(strings.TrimSpace(val))
+			if err != nil {
+				return nil, fmt.Errorf("invalid log module override %q: %w", part, err)
+			}
+			levels[module] = level
+		}
+	}
+	return levels, nil
+}
+
+// ParseLevel parses either a named slog level or geth's legacy 0-5 verbosity.
+func ParseLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "trace":
+		return gethlog.LevelTrace, nil
+	case "debug":
+		return gethlog.LevelDebug, nil
+	case "info":
+		return gethlog.LevelInfo, nil
+	case "warn", "warning":
+		return gethlog.LevelWarn, nil
+	case "error":
+		return gethlog.LevelError, nil
+	case "crit", "critical":
+		return gethlog.LevelCrit, nil
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("unknown level %q", s)
+	}
+	if v < 0 || v > 5 {
+		return 0, fmt.Errorf("verbosity %d out of range 0-5", v)
+	}
+	return gethlog.FromLegacyLevel(v), nil
+}
+
+func lowestLevel(global slog.Level, modules map[string]slog.Level) slog.Level {
+	lowest := global
+	for _, level := range modules {
+		if level < lowest {
+			lowest = level
+		}
+	}
+	return lowest
+}
+
+var moduleLevelsState = struct {
+	sync.RWMutex
+	levels map[string]slog.Level
+}{}
+
+func setLevels(_ slog.Level, levels map[string]slog.Level) {
+	moduleLevelsState.Lock()
+	defer moduleLevelsState.Unlock()
+	if len(levels) == 0 {
+		moduleLevelsState.levels = nil
+		return
+	}
+	cp := make(map[string]slog.Level, len(levels))
+	for module, level := range levels {
+		cp[module] = level
+	}
+	moduleLevelsState.levels = cp
+}
+
+func moduleLevel(module string) (slog.Level, bool) {
+	moduleLevelsState.RLock()
+	defer moduleLevelsState.RUnlock()
+	if len(moduleLevelsState.levels) == 0 {
+		return 0, false
+	}
+	return matchModuleLevel(moduleLevelsState.levels, module)
+}
+
+func matchModuleLevel(levels map[string]slog.Level, module string) (slog.Level, bool) {
+	level, ok := levels[module]
+	bestLen := 0
+	if ok {
+		bestLen = len(module)
+	}
+	for prefix, candidate := range levels {
+		if len(prefix) <= bestLen {
+			continue
+		}
+		if strings.HasPrefix(module, prefix+"/") {
+			level = candidate
+			ok = true
+			bestLen = len(prefix)
+		}
+	}
+	return level, ok
 }
 
 func useColor(f *os.File) bool {
@@ -238,4 +372,66 @@ func (t teeHandler) WithGroup(name string) slog.Handler {
 		primary:   t.primary.WithGroup(name),
 		secondary: t.secondary.WithGroup(name),
 	}
+}
+
+type moduleLevelHandler struct {
+	next    slog.Handler
+	global  slog.Level
+	modules map[string]slog.Level
+	attrs   []slog.Attr
+}
+
+func (h moduleLevelHandler) Enabled(ctx context.Context, lvl slog.Level) bool {
+	return lvl >= lowestLevel(h.global, h.modules) && h.next.Enabled(ctx, lvl)
+}
+
+func (h moduleLevelHandler) Handle(ctx context.Context, r slog.Record) error {
+	module := h.moduleFromAttrs()
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "module" {
+			module = a.Value.String()
+			return false
+		}
+		return true
+	})
+	level := h.global
+	if module != "" {
+		if override, ok := matchModuleLevel(h.modules, module); ok {
+			level = override
+		}
+	}
+	if r.Level < level {
+		return nil
+	}
+	return h.next.Handle(ctx, r)
+}
+
+func (h moduleLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	nextAttrs := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
+	nextAttrs = append(nextAttrs, h.attrs...)
+	nextAttrs = append(nextAttrs, attrs...)
+	return moduleLevelHandler{
+		next:    h.next.WithAttrs(attrs),
+		global:  h.global,
+		modules: h.modules,
+		attrs:   nextAttrs,
+	}
+}
+
+func (h moduleLevelHandler) WithGroup(name string) slog.Handler {
+	return moduleLevelHandler{
+		next:    h.next.WithGroup(name),
+		global:  h.global,
+		modules: h.modules,
+		attrs:   h.attrs,
+	}
+}
+
+func (h moduleLevelHandler) moduleFromAttrs() string {
+	for i := len(h.attrs) - 1; i >= 0; i-- {
+		if h.attrs[i].Key == "module" {
+			return h.attrs[i].Value.String()
+		}
+	}
+	return ""
 }

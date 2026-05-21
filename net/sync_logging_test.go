@@ -26,7 +26,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	var buf bytes.Buffer
 	prev := gtronlog.Root()
 	defer gtronlog.SetDefault(prev)
-	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelInfo)
+	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelDebug)
 	gtronlog.SetDefault(gtronlog.NewLogger(h))
 
 	bc := makeTestChain(t)
@@ -81,6 +81,19 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"txs=",
 		"elapsed=",
 		"execElapsed=",
+		"applyElapsed=",
+		"slowPhase=",
+		"slowElapsed=",
+		"blocks/s=",
+		"head=",
+		"peer=",
+	} {
+		if !strings.Contains(out, k) {
+			t.Errorf("missing key %q in summary line:\n%s", k, out)
+		}
+	}
+	for _, k := range []string{
+		"Imported chain segment details",
 		"bufferWaitElapsed=",
 		"validate=",
 		"execute=",
@@ -89,12 +102,9 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"dpUpdate=",
 		"persist=",
 		"hooks=",
-		"blocks/s=",
-		"head=",
 		"blockBuffer=",
 		"requested=",
 		"retryList=",
-		"peer=",
 		"peerState=",
 		"inflight=",
 		"fetchList=",

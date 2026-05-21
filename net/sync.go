@@ -179,7 +179,7 @@ func (w watchdogPeerSource) HandshakedPeers() []*p2p.Peer {
 // line emitted from checkIsolation. Routed through the net package logger so
 // the module=net tag stays consistent across all sync log lines.
 func watchdogLog(peer *p2p.Peer, head uint64, stalledFor time.Duration) {
-	log.Info("Polling peer (chain stalled)",
+	syncLog.Info("Polling peer (chain stalled)",
 		"peer", peer.ID(),
 		"head", head,
 		"stalledFor", ethcommon.PrettyDuration(stalledFor))
@@ -273,11 +273,11 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	ss.mu.Unlock()
 
 	if started {
-		log.Info("Sync started",
+		syncLog.Info("Sync started",
 			"peer", peer.ID(),
 			"localHead", ss.chain.CurrentBlock().Number())
 	} else {
-		log.Info("Sync peer joined", "peer", peer.ID())
+		syncLog.Debug("Sync peer joined", "peer", peer.ID())
 	}
 	ss.sendSyncBlockChain(peer)
 	if started {
@@ -578,7 +578,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		ps.done = true
 	}
 
-	log.Debug("Chain inventory received",
+	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
 	restart := len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
@@ -629,7 +629,7 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 					// on this peer (lastSyncNum > lastNum). Wait until the
 					// canonical head catches up before asking this peer for
 					// the next 2000-block window.
-					log.Trace("Sync peer waiting for local head",
+					syncLog.Trace("Sync peer waiting for local head",
 						"peer", ps.peer.ID(),
 						"head", ss.chain.CurrentBlock().Number(),
 						"inventoryTip", ps.lastInventoryNum)
@@ -788,7 +788,7 @@ func (ss *SyncService) sendFetchBlocks(peer *p2p.Peer, batch []types.BlockID) {
 	}
 	data, _ := proto.Marshal(fetch)
 	peer.Send(p2p.MsgFetchInvData, data)
-	log.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
+	syncLog.Trace("Fetch sent", "blocks", len(batch), "peer", peer.ID())
 }
 
 func (ss *SyncService) armPeerDelayTimerLocked(ps *syncPeerState, wait time.Duration) {
@@ -868,7 +868,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 		bid := types.BlockID{Hash: blockHash, Num: blockNum}
 		if existing, ok := ss.blockBuffer[blockNum]; ok {
 			if existing.block.Hash() != blockHash {
-				log.Debug("Dropping conflicting buffered sync block",
+				syncLog.Debug("Dropping conflicting buffered sync block",
 					"number", blockNum, "hash", blockHash, "kept", existing.block.Hash(), "peer", peer.ID())
 			}
 		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
@@ -984,7 +984,7 @@ func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 	if peer != nil {
 		peerID = peer.ID()
 	}
-	log.Error("Sync paused",
+	syncLog.Error("Sync paused",
 		"number", num,
 		"peer", peerID,
 		"err", err,
@@ -1090,26 +1090,14 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"txs", s.Txs,
 		"elapsed", ethcommon.PrettyDuration(elapsed),
 		"execElapsed", ethcommon.PrettyDuration(s.ExecElapsed),
-		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
-		// Per-phase wall-clock breakdown — sums across every block in the
-		// window. Together with execElapsed (which is wall time between
-		// drainBufferedBlocks reading the buffer slot and seeing InsertBlock
-		// return) these tell you which phase is the bottleneck. Maintenance
-		// is usually 0; if it's non-trivial the window crossed a 6-hour grid.
-		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
-		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
-		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
-		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
-		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
-		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
-		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
+		"applyElapsed", ethcommon.PrettyDuration(s.ApplyStats.Total()),
 		"blocks/s", round2(blocksPerSec),
 		"txs/s", round2(txsPerSec),
 		"head", head,
 		"remain", remain,
-		"blockBuffer", diag.blockBufferLen,
-		"requested", diag.requestedLen,
-		"retryList", diag.retryListLen,
+	}
+	if phase, elapsed := slowestApplyPhase(s.ApplyStats); phase != "" {
+		ctx = append(ctx, "slowPhase", phase, "slowElapsed", ethcommon.PrettyDuration(elapsed))
 	}
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
@@ -1118,16 +1106,56 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 	if peer != nil {
 		ctx = append(ctx, "peer", peer.ID())
 	}
-	if diag.peerState != "" {
-		ctx = append(ctx, "peerState", diag.peerState)
+	syncLog.Info("Imported chain segment", ctx...)
+
+	detail := []any{
+		"blocks", s.Blocks,
+		"head", head,
+		"bufferWaitElapsed", ethcommon.PrettyDuration(s.BufferWaitElapsed),
+		"validate", ethcommon.PrettyDuration(s.ApplyStats.Validate),
+		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
+		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
+		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
+		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
+		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
+		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
+		"blockBuffer", diag.blockBufferLen,
+		"requested", diag.requestedLen,
+		"retryList", diag.retryListLen,
 	}
-	log.Info("Imported chain segment", ctx...)
+	if diag.peerState != "" {
+		detail = append(detail, "peerState", diag.peerState)
+	}
+	syncLog.Debug("Imported chain segment details", detail...)
 }
 
 func round2(f float64) float64 {
 	// Trim to 2 decimals for log readability without depending on a printf
 	// format directive (slog handlers print floats with full precision).
 	return float64(int64(f*100+0.5)) / 100
+}
+
+func slowestApplyPhase(s core.ApplyStats) (string, time.Duration) {
+	phase := ""
+	var max time.Duration
+	for _, p := range []struct {
+		name string
+		d    time.Duration
+	}{
+		{"validate", s.Validate},
+		{"execute", s.Execute},
+		{"maintenance", s.Maintenance},
+		{"stateCommit", s.StateCommit},
+		{"dpUpdate", s.DPUpdate},
+		{"persist", s.Persist},
+		{"hooks", s.Hooks},
+	} {
+		if p.d > max {
+			phase = p.name
+			max = p.d
+		}
+	}
+	return phase, max
 }
 
 // doReset clears all sync state. Must be called with ss.mu held.
@@ -1211,7 +1239,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		}
 	}
 	ss.mu.Unlock()
-	log.Warn("Fetch timeout, failing over",
+	syncLog.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
 		"timeout", ethcommon.PrettyDuration(tsync.SyncFetchTimeout),
 		"inflight", inflight)
@@ -1260,7 +1288,7 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 		}
 	}
 	ss.mu.Unlock()
-	log.Warn("Sync peer disconnected", "peer", peer.ID())
+	syncLog.Info("Sync peer disconnected", "peer", peer.ID())
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)
 	}
@@ -1337,5 +1365,5 @@ func (ss *SyncService) finishSync() {
 		rate := float64(totalBlocks) * float64(time.Second) / float64(totalElapsed)
 		ctx = append(ctx, "avgBlocks/s", round2(rate))
 	}
-	log.Info("Sync complete", ctx...)
+	syncLog.Info("Sync complete", ctx...)
 }

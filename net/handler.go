@@ -355,7 +355,7 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	var msg corepb.DisconnectMessage
 	if err := proto.Unmarshal(payload, &msg); err == nil {
-		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+		log.Debug("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
 	}
 	// Close the connection — readLoop will exit and call disconnect().
 	// Don't call peer.Stop() here: we're inside readLoop, Stop() would deadlock.

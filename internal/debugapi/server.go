@@ -29,8 +29,10 @@ import (
 	runtimepprof "runtime/pprof"
 	"time"
 
-	"github.com/tronprotocol/go-tron/common/log"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 )
+
+var log = gtronlog.NewModule("debugapi")
 
 // Server hosts the pprof endpoints. Implements node.Lifecycle.
 type Server struct {
@@ -101,7 +103,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("debug listen: %w", err)
 	}
 	s.listener = ln
-	log.Info("Debug API listening", "module", "debugapi", "addr", ln.Addr().String())
+	log.Info("Debug API listening", "addr", ln.Addr().String())
 	go s.httpServer.Serve(ln)
 	return nil
 }
