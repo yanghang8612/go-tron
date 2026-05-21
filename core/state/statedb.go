@@ -95,6 +95,29 @@ func (s *StateDB) GetAccount(addr tcommon.Address) *types.Account {
 	return obj.account
 }
 
+// LoadAccount hydrates an account into the in-memory object cache without
+// marking it dirty or appending to the journal. The caller must provide an
+// account matching this StateDB's origin root.
+func (s *StateDB) LoadAccount(acc *types.Account) {
+	if acc == nil {
+		return
+	}
+	addr := acc.Address()
+	if _, ok := s.stateObjects[addr]; ok {
+		return
+	}
+	s.stateObjects[addr] = newStateObject(addr, acc.Copy())
+}
+
+// CopyAccount returns a detached copy of the cached/live account.
+func (s *StateDB) CopyAccount(addr tcommon.Address) *types.Account {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	return obj.account.Copy()
+}
+
 // GetOrCreateAccount returns the state object at addr, creating it if it doesn't exist.
 // When a new account is created, a nil-prev journal entry is recorded so that
 // snapshot revert can delete it.
@@ -1027,6 +1050,23 @@ func (s *StateDB) AddAllowance(addr tcommon.Address, amount int64) {
 		return
 	}
 	s.journalAccount(addr, obj)
+	obj.account.SetAllowance(obj.account.Allowance() + amount)
+	obj.markDirty()
+}
+
+// AddAllowanceFinalReward adds a block-final witness reward without journaling
+// on non-archive nodes. Reward payment runs after transaction execution and
+// after java account-state-root calculation, so the journal is only needed
+// when State History Index capture is enabled.
+func (s *StateDB) AddAllowanceFinalReward(addr tcommon.Address, amount int64) {
+	if s.historyEnabled {
+		s.AddAllowance(addr, amount)
+		return
+	}
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
 	obj.markDirty()
 }

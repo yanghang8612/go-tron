@@ -112,6 +112,7 @@ type BlockChain struct {
 	activeWitnesses  atomic.Value // []tcommon.Address
 	dynPropsCache    atomic.Value // *state.DynamicProperties; canonical head snapshot
 	standbyPayCache  *standbyWitnessPaySet
+	rewardAcctCache  map[tcommon.Address]*types.Account
 	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
@@ -267,14 +268,15 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
 	bc := &BlockChain{
-		db:           db,
-		chaindb:      chaindb,
-		stateDB:      stateDB,
-		config:       config,
-		fc:           forks.NewForkController(buffer),
-		buffer:       buffer,
-		flushQueue:   make(chan uint64, flushQueueCap),
-		flushPending: newFlushBarrier(),
+		db:              db,
+		chaindb:         chaindb,
+		stateDB:         stateDB,
+		config:          config,
+		fc:              forks.NewForkController(buffer),
+		buffer:          buffer,
+		flushQueue:      make(chan uint64, flushQueueCap),
+		flushPending:    newFlushBarrier(),
+		rewardAcctCache: make(map[tcommon.Address]*types.Account),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -709,8 +711,10 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	var standbyPaySet *standbyWitnessPaySet
 	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
-		standbyPaySet = bc.cachedStandbyPaySet(statedb)
+		standbyPaySet = bc.cachedStandbyPaySet(statedb, dynProps.CurrentCycleNumber())
 	}
+	rewardAcctAddrs := rewardAccountAddresses(block.WitnessAddress(), standbyPaySet)
+	bc.preloadRewardAccounts(statedb, rewardAcctAddrs)
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
 		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
@@ -878,6 +882,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("commit state: %w", err)
 	}
+	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
 
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must
@@ -1218,6 +1223,7 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.reloadActiveWitnesses()
 	bc.reloadDynPropsCache()
 	bc.invalidateStandbyPayCache()
+	bc.clearRewardAccountCache()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
@@ -1396,7 +1402,7 @@ func (bc *BlockChain) cachedDynProps() *state.DynamicProperties {
 
 func (bc *BlockChain) storeDynPropsCache(dp *state.DynamicProperties) {
 	if dp != nil {
-		bc.dynPropsCache.Store(dp.Copy())
+		bc.dynPropsCache.Store(dp)
 	}
 }
 
@@ -1414,15 +1420,69 @@ func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {
 	return tcommon.Hash{}
 }
 
-func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB) *standbyWitnessPaySet {
-	if bc.standbyPayCache == nil {
-		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb)
+func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB, cycle int64) *standbyWitnessPaySet {
+	if bc.standbyPayCache == nil || bc.standbyPayCache.cycle != cycle {
+		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb, cycle)
 	}
 	return bc.standbyPayCache
 }
 
 func (bc *BlockChain) invalidateStandbyPayCache() {
 	bc.standbyPayCache = nil
+}
+
+func rewardAccountAddresses(blockWitness tcommon.Address, standby *standbyWitnessPaySet) []tcommon.Address {
+	seen := make(map[tcommon.Address]struct{}, 1+lenStandbyWitnesses(standby))
+	addrs := make([]tcommon.Address, 0, 1+lenStandbyWitnesses(standby))
+	if blockWitness != (tcommon.Address{}) {
+		seen[blockWitness] = struct{}{}
+		addrs = append(addrs, blockWitness)
+	}
+	if standby != nil {
+		for _, w := range standby.witnesses {
+			if _, ok := seen[w.addr]; ok {
+				continue
+			}
+			seen[w.addr] = struct{}{}
+			addrs = append(addrs, w.addr)
+		}
+	}
+	return addrs
+}
+
+func lenStandbyWitnesses(standby *standbyWitnessPaySet) int {
+	if standby == nil {
+		return 0
+	}
+	return len(standby.witnesses)
+}
+
+func (bc *BlockChain) preloadRewardAccounts(statedb *state.StateDB, addrs []tcommon.Address) {
+	if len(addrs) == 0 || len(bc.rewardAcctCache) == 0 {
+		return
+	}
+	for _, addr := range addrs {
+		if acc := bc.rewardAcctCache[addr]; acc != nil {
+			statedb.LoadAccount(acc)
+		}
+	}
+}
+
+func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []tcommon.Address) {
+	if len(addrs) == 0 {
+		return
+	}
+	for _, addr := range addrs {
+		if acc := statedb.CopyAccount(addr); acc != nil {
+			bc.rewardAcctCache[addr] = acc
+		} else {
+			delete(bc.rewardAcctCache, addr)
+		}
+	}
+}
+
+func (bc *BlockChain) clearRewardAccountCache() {
+	bc.rewardAcctCache = make(map[tcommon.Address]*types.Account)
 }
 
 // loadWitnessesIntoState hydrates witness records for maintenance-only code

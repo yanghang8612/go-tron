@@ -600,6 +600,35 @@ func TestStateDBAllowanceAndWithdraw(t *testing.T) {
 	}
 }
 
+func TestStateDBLoadAccountCopiesAndJournalsMutations(t *testing.T) {
+	db := newTestStateDB(t)
+	addr := testAddr(0x02)
+	acc := types.NewAccount(addr, corepb.AccountType_Normal)
+	acc.SetAllowance(100)
+
+	db.LoadAccount(acc)
+	acc.SetAllowance(999)
+	if got := db.GetAllowance(addr); got != 100 {
+		t.Fatalf("loaded account should be detached from source: got %d, want 100", got)
+	}
+
+	snap := db.Snapshot()
+	db.AddAllowance(addr, 50)
+	if got := db.GetAllowance(addr); got != 150 {
+		t.Fatalf("after add: got %d, want 150", got)
+	}
+	db.RevertToSnapshot(snap)
+	if got := db.GetAllowance(addr); got != 100 {
+		t.Fatalf("after revert: got %d, want 100", got)
+	}
+
+	copied := db.CopyAccount(addr)
+	copied.SetAllowance(777)
+	if got := db.GetAllowance(addr); got != 100 {
+		t.Fatalf("copied account should be detached from state: got %d, want 100", got)
+	}
+}
+
 func TestStateDBWitnessVoteCount(t *testing.T) {
 	db := newTestStateDB(t)
 	wAddr := testAddr(0x10)
