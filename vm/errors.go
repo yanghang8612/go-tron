@@ -31,6 +31,10 @@ type invalidJumpError struct {
 	pc uint64
 }
 
+type invalidOpCodeError struct {
+	op OpCode
+}
+
 type stackUnderflowError struct {
 	expected int
 	actual   int
@@ -73,6 +77,14 @@ func (e invalidJumpError) Is(target error) bool {
 	return target == ErrInvalidJump
 }
 
+func (e invalidOpCodeError) Error() string {
+	return fmt.Sprintf("Invalid operation code: opCode[%x];", byte(e.op))
+}
+
+func (e invalidOpCodeError) Is(target error) bool {
+	return target == ErrInvalidOpCode
+}
+
 func (e stackUnderflowError) Error() string {
 	return fmt.Sprintf("Expected stack size %d but actual %d;", e.expected, e.actual)
 }
@@ -104,6 +116,10 @@ func newOutOfMemoryError(op OpCode) error {
 
 func newInvalidJumpError(pc uint64) error {
 	return invalidJumpError{pc: pc}
+}
+
+func newInvalidOpCodeError(op OpCode) error {
+	return invalidOpCodeError{op: op}
 }
 
 func newStackUnderflowError(expected, actual int) error {

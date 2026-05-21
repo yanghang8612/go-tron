@@ -177,6 +177,8 @@ func contractRetFromError(err error) int32 {
 		return 7 // STACK_TOO_LARGE
 	case errors.Is(err, vm.ErrWriteProtection):
 		return 8 // ILLEGAL_OPERATION
+	case errors.Is(err, vm.ErrInvalidOpCode):
+		return 8 // ILLEGAL_OPERATION
 	case errors.Is(err, vm.ErrDepthExceeded):
 		return 9 // STACK_OVERFLOW
 	case errors.Is(err, vm.ErrContractCodeTooLarge), errors.Is(err, vm.ErrInvalidCode):

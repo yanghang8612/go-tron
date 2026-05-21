@@ -79,14 +79,14 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		op := contract.GetOp(pc)
 		operation := in.table[op]
 		if operation == nil {
-			return nil, ErrInvalidCode
+			return nil, newInvalidOpCodeError(op)
 		}
 		in.currentOp = op
 		in.energyErr = nil
 
 		// Fork gate
 		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
-			return nil, ErrInvalidOpCode
+			return nil, newInvalidOpCodeError(op)
 		}
 
 		// Stack validation

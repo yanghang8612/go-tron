@@ -456,6 +456,37 @@ func TestVMActuatorTriggerExecute_ExtendedResult(t *testing.T) {
 		result.EnergyUsageTotal, len(result.Logs), result.ContractResult)
 }
 
+func TestVMActuatorTriggerInvalidOpcodeReturnsIllegalOperation(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    owner[:],
+		ContractAddress: contractAddr[:],
+	}
+
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 10_000_000)
+	enableVM(ctx)
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, 100_000_000)
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:   owner[:],
+		ContractAddress: contractAddr[:],
+	})
+	ctx.State.SetCode(contractAddr, []byte{0xfe})
+
+	result, err := (&VMActuator{}).Execute(ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ContractRet != int32(corepb.Transaction_Result_ILLEGAL_OPERATION) {
+		t.Fatalf("contract ret: got %d, want ILLEGAL_OPERATION", result.ContractRet)
+	}
+	if got := string(result.ResMessage); got != "Invalid operation code: opCode[fe];" {
+		t.Fatalf("resMessage: got %q", got)
+	}
+}
+
 func TestVMActuatorTriggerReplayOutOfTime(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	contractAddr := tcommon.Address{0x41, 0x02}

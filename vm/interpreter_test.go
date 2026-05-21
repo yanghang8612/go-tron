@@ -91,6 +91,22 @@ func TestInterpreterInvalidJump(t *testing.T) {
 	}
 }
 
+func TestInterpreterInvalidOpcodeMessageMatchesJava(t *testing.T) {
+	evm := newTestEVM(t)
+
+	code := []byte{0xfe}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	_, err := evm.interpreter.Run(contract)
+	if !errors.Is(err, ErrInvalidOpCode) {
+		t.Fatalf("expected ErrInvalidOpCode, got %v", err)
+	}
+	if got := err.Error(); got != "Invalid operation code: opCode[fe];" {
+		t.Fatalf("invalid opcode message: got %q", got)
+	}
+}
+
 func TestInterpreterStackUnderflowMessageMatchesJava(t *testing.T) {
 	evm := newTestEVM(t)
 
@@ -289,7 +305,7 @@ func TestInterpreterChainIDRequiresIstanbul(t *testing.T) {
 	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
 
 	_, err = evm.interpreter.Run(contract)
-	if err != ErrInvalidOpCode {
+	if !errors.Is(err, ErrInvalidOpCode) {
 		t.Fatalf("expected ErrInvalidOpCode, got %v", err)
 	}
 }
@@ -363,7 +379,7 @@ func TestInterpreterPush0RequiresShanghai(t *testing.T) {
 	contract.SetCode(tcommon.Address{0x41, 0x02}, []byte{byte(PUSH0), byte(STOP)})
 
 	_, err := evm.interpreter.Run(contract)
-	if err != ErrInvalidOpCode {
+	if !errors.Is(err, ErrInvalidOpCode) {
 		t.Fatalf("expected ErrInvalidOpCode, got %v", err)
 	}
 }
@@ -400,7 +416,7 @@ func TestInterpreterCLZRequiresOsaka(t *testing.T) {
 	contract.SetCode(tcommon.Address{0x41, 0x02}, []byte{byte(PUSH1), 0x01, byte(CLZ), byte(STOP)})
 
 	_, err := evm.interpreter.Run(contract)
-	if err != ErrInvalidOpCode {
+	if !errors.Is(err, ErrInvalidOpCode) {
 		t.Fatalf("expected ErrInvalidOpCode, got %v", err)
 	}
 }
@@ -441,7 +457,7 @@ func TestInterpreterCancunAndBlobOpcodesRequireForks(t *testing.T) {
 			contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
 			contract.SetCode(tcommon.Address{0x41, 0x02}, tc.code)
 			_, err := evm.interpreter.Run(contract)
-			if err != ErrInvalidOpCode {
+			if !errors.Is(err, ErrInvalidOpCode) {
 				t.Fatalf("expected ErrInvalidOpCode, got %v", err)
 			}
 		})
