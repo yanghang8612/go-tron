@@ -1160,3 +1160,54 @@ func TestTopLevelTransferFailedViaDelegateCallKeepsRemainingEnergy(t *testing.T)
 		t.Fatalf("transfer failure energy used = %d, want actual execution cost only", used)
 	}
 }
+
+// TestTopLevelTransferFailedViaCallTokenKeepsRemainingEnergy is the CallToken
+// twin of TestTopLevelTransferFailedKeepsRemainingEnergy. When the chain has
+// AllowTvmTransferTrc10 active, VMActuator.executeTrigger enters the TVM via
+// CallToken rather than Call (vm_actuator.go), so a contract that internally
+// transfers TRX to itself surfaces ErrTransferFailed up through CallToken's
+// top-level error handler. java-tron refunds the message energy on a transfer
+// failure (Program.callToAddress → refundEnergy), so only the energy actually
+// executed is billed — exactly as for the Call path. Regression guard for the
+// CallToken branch that previously billed the full energy limit (draining the
+// account), which broke cross-impl sync around block 90 of the stress harness.
+func TestTopLevelTransferFailedViaCallTokenKeepsRemainingEnergy(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
+	owner := tcommon.Address{0x41, 0x01}
+	contractAddr := tcommon.Address{0x41, 0x02}
+	evm.StateDB.CreateAccount(owner, corepb.AccountType_Normal)
+	evm.StateDB.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	evm.StateDB.AddBalance(owner, 1_000_000)
+	evm.StateDB.AddBalance(contractAddr, 10)
+	evm.StateDB.SetContract(contractAddr, &contractpb.SmartContract{ContractAddress: contractAddr.Bytes()})
+
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH20),
+	}
+	code = append(code, contractAddr[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x08, 0xfc, // message-call energy: 2300
+		byte(CALL),
+		byte(STOP),
+	)
+	evm.StateDB.SetCode(contractAddr, code)
+
+	const energyLimit = uint64(100_000)
+	// tokenID/tokenValue zero, callValue zero: mirrors a plain TRX trigger
+	// routed through CallToken because AllowTvmTransferTrc10 is on.
+	_, left, err := evm.CallToken(owner, contractAddr, nil, energyLimit, 0, 0, 0)
+	if !errors.Is(err, ErrTransferFailed) {
+		t.Fatalf("expected transfer failure, got %v", err)
+	}
+	if left == 0 {
+		t.Fatal("transfer failure consumed all energy")
+	}
+	if used := energyLimit - left; used >= 20_000 {
+		t.Fatalf("transfer failure energy used = %d, want actual execution cost only", used)
+	}
+}

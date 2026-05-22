@@ -772,7 +772,13 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted {
+		// Transfer failures (e.g. "Cannot transfer TRX/TRC10 to yourself")
+		// must keep the remaining energy, exactly like ErrExecutionReverted and
+		// the Call path above. java-tron refunds the message energy on a
+		// transfer failure (Program.callToAddress → refundEnergy) and only
+		// bills the energy actually executed; billing the full limit here
+		// drained the caller and broke cross-impl sync (stress harness ~blk 90).
+		if err == ErrExecutionReverted || isTransferFailure(err) {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
