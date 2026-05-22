@@ -7,14 +7,13 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // newTestBlockchain creates an in-memory BlockChain with a genesis block for testing.
-func newTestBlockchain(t *testing.T) (*BlockChain, func()) {
+func newTestBlockchain(t *testing.T, witnesses ...params.GenesisWitness) (*BlockChain, func()) {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
@@ -23,6 +22,7 @@ func newTestBlockchain(t *testing.T) (*BlockChain, func()) {
 		Accounts: []params.GenesisAccount{
 			{Address: testCoreAddr(1), Balance: 1000000},
 		},
+		Witnesses: witnesses,
 	}
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
@@ -93,13 +93,14 @@ func TestTronBackend_GetStorageAt(t *testing.T) {
 }
 
 func TestTronBackend_ListWitnessesIncludesPendingVotes(t *testing.T) {
-	bc, cleanup := newTestBlockchain(t)
-	defer cleanup()
-
 	voter := testCoreAddr(1)
 	witness := testCoreAddr(2)
-	rawdb.WriteWitnessIndex(bc.db, []tcommon.Address{witness})
-	rawdb.WriteWitness(bc.db, witness, types.NewWitness(witness, "http://w"))
+	// Witness lives in genesis so it's in the rooted witness index at the head
+	// root (ListWitnesses reads the index from the system-KV); genesis also
+	// writes its capsule (URL/VoteCount=0) to the flat store.
+	bc, cleanup := newTestBlockchain(t, params.GenesisWitness{Address: witness, VoteCount: 0, URL: "http://w"})
+	defer cleanup()
+
 	if err := rawdb.WriteVotes(bc.db, voter, &corepb.Votes{
 		Address: voter.Bytes(),
 		NewVotes: []*corepb.Vote{

@@ -268,29 +268,42 @@ func TestBlockChainActiveWitnesses(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Genesis seeds the active set into the state root; startup loaded it into
+	// the atomic from the system-KV at the head root.
 	witnesses := bc.ActiveWitnesses()
-	if len(witnesses) == 0 {
-		t.Fatal("expected non-empty active witnesses")
+	if len(witnesses) != 2 {
+		t.Fatalf("expected 2 genesis-seeded active witnesses, got %d", len(witnesses))
 	}
 
-	// SetActiveWitnesses now writes through bc.buffer (rewind-safe path), so
-	// it must run inside an open buffer layer — mirror applyBlock's
-	// BeginBlock/CommitBlock bracket.
+	// SetActiveWitnesses stages the new list into the rooted system-KV on a
+	// statedb opened at the head root; the in-memory atomic updates immediately.
 	newList := []tcommon.Address{testCoreAddr(20), testCoreAddr(21)}
-	bc.buffer.BeginBlock(tcommon.Hash{0x1})
-	bc.SetActiveWitnesses(newList)
-	bc.buffer.CommitBlock()
-
+	genesisRoot := bc.HeadStateRoot()
+	statedb, err := state.New(genesisRoot, sdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bc.SetActiveWitnesses(statedb, newList); err != nil {
+		t.Fatal(err)
+	}
 	got := bc.ActiveWitnesses()
 	if len(got) != 2 || got[0] != testCoreAddr(20) || got[1] != testCoreAddr(21) {
 		t.Fatalf("unexpected witnesses after set: %v", got)
 	}
 
-	// Persisted through the buffer (not yet flushed to disk): visible via
-	// BufferedDB, absent from the bare disk store until a solidified flush.
-	persisted := rawdb.ReadActiveWitnesses(bc.BufferedDB())
-	if len(persisted) != 2 {
-		t.Fatalf("expected 2 buffered witnesses, got %d", len(persisted))
+	// Committing roots the new list. Reloading from the new root keeps it;
+	// reloading from the genesis root rewinds the atomic to the seeded set.
+	newRoot, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.reloadActiveWitnesses(newRoot)
+	if g := bc.ActiveWitnesses(); len(g) != 2 || g[0] != testCoreAddr(20) {
+		t.Fatalf("reload from new root lost the set: %v", g)
+	}
+	bc.reloadActiveWitnesses(genesisRoot)
+	if g := bc.ActiveWitnesses(); len(g) != 2 {
+		t.Fatalf("reload from genesis root should restore the seeded set, got %v", g)
 	}
 }
 

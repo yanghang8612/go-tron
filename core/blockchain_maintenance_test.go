@@ -84,17 +84,16 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	// Seed the persisted active set to [0..25] ∪ {27} — witness #27 occupies
-	// the slot that the vote ranking assigns to witness #26. NewBlockChain
-	// honours a non-empty persisted active set verbatim (it only derives the
-	// set from votes when none is stored), so this is the chain's "old"
-	// active set going into the boundary.
+	// Build the chain's "old" active set: [0..25] ∪ {27} — witness #27 occupies
+	// the slot the vote ranking assigns to witness #26. This drifts from the
+	// vote-ranked order on purpose so the boundary rotation is observable. It is
+	// installed into the in-memory atomic after NewBlockChain (genesis roots the
+	// vote-ranked set; this override stands in for an orphan-era drifted set).
 	seededActive := make([]tcommon.Address, 0, params.MaxActiveWitnessNum)
 	for i := 0; i <= 25; i++ {
 		seededActive = append(seededActive, witnessAddr(i))
 	}
 	seededActive = append(seededActive, witnessAddr(27))
-	rawdb.WriteActiveWitnesses(diskdb, seededActive)
 
 	// genesis.go sets is_jobs=true on EVERY genesis witness, including the
 	// standby ones. Make the persisted is_jobs flags consistent with the
@@ -126,7 +125,13 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sanity: NewBlockChain loaded the seeded (drifted) active set verbatim.
+	// Install the drifted "old" active set into the atomic. Genesis rooted the
+	// vote-ranked [0..26]; flipWitnessIsJobs reads this atomic as the outgoing
+	// set at the boundary. No fork here, so the override survives until
+	// maintenance recomputes the set.
+	bc.SetActiveWitnessesForTest(seededActive)
+
+	// Sanity: the atomic now holds the drifted active set.
 	oldActive := map[tcommon.Address]bool{}
 	for _, a := range bc.ActiveWitnesses() {
 		oldActive[a] = true

@@ -22,7 +22,9 @@ func seedWitness(t *testing.T, db ethdb.KeyValueStore, statedb *state.StateDB, a
 	statedb.PutWitness(addr, w.URL())
 	statedb.AddWitnessVoteCount(addr, votes)
 	rawdb.WriteWitness(db, addr, w)
-	rawdb.WriteWitnessIndex(db, []tcommon.Address{addr})
+	if err := statedb.AppendWitnessIndex(addr); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestApplyRewardMaintenance_VIAccumulation(t *testing.T) {

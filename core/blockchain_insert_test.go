@@ -553,32 +553,31 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
+	// wProd casts 150 new votes for wMid, lifting it 200→350 above wHi (300).
+	// At the maintenance boundary this flips the vote-ranked order from the
+	// genesis-rooted [wHi, wMid, wProd] to [wMid, wHi, wProd] — a genuine
+	// rotation that switchFork must rewind. (The active list is now rooted into
+	// the state, not the flat store, so the "old" set can't be pre-seeded in a
+	// drifted order; a real vote delta drives the rotation instead.)
 	if err := rawdb.WriteVotes(diskdb, wProd, &corepb.Votes{
 		Address: wProd.Bytes(),
-		OldVotes: []*corepb.Vote{
-			{VoteAddress: wHi.Bytes(), VoteCount: 1},
-		},
 		NewVotes: []*corepb.Vote{
-			{VoteAddress: wHi.Bytes(), VoteCount: 1},
+			{VoteAddress: wMid.Bytes(), VoteCount: 150},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Seed the on-disk active-witness list in an order that differs from what
-	// SelectActiveWitnesses (vote-descending: wHi, wMid, wProd) will compute,
-	// so the first maintenance run rotates the set. This write predates
-	// NewBlockChain, which loads it verbatim into the atomic.
-	preMaintSet := []tcommon.Address{wProd, wHi, wMid}
-	rawdb.WriteActiveWitnesses(diskdb, preMaintSet)
-
+	// Genesis roots the active set as SelectActiveWitnesses(votes) =
+	// [wHi, wMid, wProd]; NewBlockChain loads it from the system-KV at the head
+	// root. The maintenance boundary recomputes from the post-vote tallies above.
 	sdb := state.NewDatabase(diskdb)
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := bc.ActiveWitnesses(); len(got) != 3 || got[0] != wProd {
-		t.Fatalf("genesis active set not loaded from seed: %v", got)
+	if got := bc.ActiveWitnesses(); len(got) != 3 || got[0] != wHi || got[1] != wMid || got[2] != wProd {
+		t.Fatalf("genesis-rooted active set not loaded: got %v, want [wHi, wMid, wProd]", got)
 	}
 
 	// Chain A: blocks 1..3. Block 3 at ts=9000 crosses the maintenance
@@ -606,11 +605,12 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 		t.Fatalf("after chain A: head = %d, want 3", bc.CurrentBlock().Number())
 	}
 
-	// The maintenance crossing must have rotated the active set to the
-	// vote-sorted order — otherwise the test isn't exercising the bug.
+	// The maintenance crossing must have rotated the active set to the new
+	// vote-sorted order (wMid overtook wHi) — otherwise the test isn't
+	// exercising the rewind.
 	rotated := bc.ActiveWitnesses()
-	if len(rotated) != 3 || rotated[0] != wHi || rotated[1] != wMid || rotated[2] != wProd {
-		t.Fatalf("maintenance did not rotate active set as expected: got %v", rotated)
+	if len(rotated) != 3 || rotated[0] != wMid || rotated[1] != wHi || rotated[2] != wProd {
+		t.Fatalf("maintenance did not rotate active set as expected: got %v, want [wMid, wHi, wProd]", rotated)
 	}
 
 	// Chain B: 4 blocks branching from genesis, all kept strictly below the
@@ -652,19 +652,154 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 		t.Fatal("after switchFork: head hash != chain B tip")
 	}
 
-	// The fix: ActiveWitnesses must have rewound to the pre-maintenance seed.
-	// Chain B never crossed the boundary, so no rotation should be in effect.
+	// The fix: ActiveWitnesses must have rewound to the genesis-rooted set.
+	// Chain B branches from genesis and never crossed the boundary, so the
+	// rotation must be undone — the active list rewinds with the rest of
+	// consensus state via reloadActiveWitnesses(lcaRoot).
 	post := bc.ActiveWitnesses()
-	if len(post) != 3 || post[0] != wProd || post[1] != wHi || post[2] != wMid {
-		t.Fatalf("after switchFork: active set = %v, want pre-maintenance seed %v "+
-			"(orphan-branch rotation must rewind with the rest of consensus state)",
-			post, preMaintSet)
+	if len(post) != 3 || post[0] != wHi || post[1] != wMid || post[2] != wProd {
+		t.Fatalf("after switchFork: active set = %v, want genesis-rooted [wHi, wMid, wProd] "+
+			"(orphan-branch rotation must rewind with the rest of consensus state)", post)
+	}
+}
+
+// TestForkSwitch_WitnessScheduleRewindDualMechanism is the Phase 3c gate for the
+// two-mechanism rewind. Across a maintenance boundary the active witness list
+// changes (rooted — rewinds via reloadActiveWitnesses(lcaRoot)) AND witness
+// is_jobs flags flip (capsule — rewinds via the bc.buffer DiscardBlock). After a
+// switchFork that rewinds across the boundary, BOTH must reflect the
+// pre-maintenance (genesis) state, proving the root-based and buffer-based
+// rewinds stay consistent. Pre-3c suites exercised only one mechanism at a time.
+func TestForkSwitch_WitnessScheduleRewindDualMechanism(t *testing.T) {
+	const interval = int64(21_600_000) // 6h
+	const numWitnesses = 28            // 27 active + 1 standby (#27)
+	witnessAddr := func(i int) tcommon.Address { return testCoreAddr(byte(40 + i)) }
+	// Strictly-decreasing votes → genesis active = vote-ranked [0..26]; #27 standby.
+	initialVote := func(i int) int64 { return 100_000 - int64(i)*100 }
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesisWitnesses := make([]params.GenesisWitness, numWitnesses)
+	accounts := []params.GenesisAccount{{Address: testCoreAddr(1), Balance: 100_000_000}}
+	for i := 0; i < numWitnesses; i++ {
+		genesisWitnesses[i] = params.GenesisWitness{Address: witnessAddr(i), VoteCount: initialVote(i), URL: "http://w"}
+		accounts = append(accounts, params.GenesisAccount{Address: witnessAddr(i), Balance: 1_000_000})
+	}
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		Timestamp:         0,
+		Accounts:          accounts,
+		Witnesses:         genesisWitnesses,
+		DynamicProperties: map[string]int64{"next_maintenance_time": interval},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
 	}
 
-	// The buffer-backed disk view must agree with the atomic.
-	if buffered := rawdb.ReadActiveWitnesses(bc.BufferedDB()); len(buffered) != 3 ||
-		buffered[0] != wProd || buffered[1] != wHi || buffered[2] != wMid {
-		t.Fatalf("after switchFork: buffered active set = %v, want %v", buffered, preMaintSet)
+	// Genesis flips is_jobs=true on every witness; clear it on standby #27 so the
+	// boundary's "incoming → is_jobs=true" flip is a discriminating signal.
+	w27 := rawdb.ReadWitness(diskdb, witnessAddr(27))
+	w27.SetIsJobs(false)
+	rawdb.WriteWitness(diskdb, witnessAddr(27), w27)
+
+	// Pending vote: +150 for #27 (97300→97450) lifts it above #26 (97400) but
+	// below #25 (97500). At the boundary the active set swaps #27 in / #26 out —
+	// a membership change that flips is_jobs for both.
+	if err := rawdb.WriteVotes(diskdb, testCoreAddr(1), &corepb.Votes{
+		Address:  testCoreAddr(1).Bytes(),
+		NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(27).Bytes(), VoteCount: 150}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	isJobs := func(i int) bool {
+		w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr(i))
+		if w == nil {
+			t.Fatalf("witness #%d missing", i)
+		}
+		return w.IsJobs()
+	}
+	active := func() map[tcommon.Address]bool {
+		m := map[tcommon.Address]bool{}
+		for _, a := range bc.ActiveWitnesses() {
+			m[a] = true
+		}
+		return m
+	}
+
+	// Pre-maintenance (genesis-rooted): #26 active+is_jobs, #27 standby+!is_jobs.
+	if a := active(); !a[witnessAddr(26)] || a[witnessAddr(27)] {
+		t.Fatalf("pre-maint active: in26=%v in27=%v, want true/false", a[witnessAddr(26)], a[witnessAddr(27)])
+	}
+	if !isJobs(26) || isJobs(27) {
+		t.Fatalf("pre-maint is_jobs: #26=%v #27=%v, want true/false", isJobs(26), isJobs(27))
+	}
+
+	mkBlock := func(parent *types.Block, num, ts int64) *types.Block {
+		return types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         num,
+					Timestamp:      ts,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr(0).Bytes(),
+				},
+			},
+		})
+	}
+
+	// Chain A: block #1 pre-boundary, block #2 at ts=interval crosses it (java
+	// skips doMaintenance on block #1, so the rotation lands on block #2).
+	a1 := mkBlock(bc.genesisBlock, 1, interval/2)
+	if err := bc.InsertBlock(a1); err != nil {
+		t.Fatalf("chain A block 1: %v", err)
+	}
+	a2 := mkBlock(a1, 2, interval)
+	if err := bc.InsertBlock(a2); err != nil {
+		t.Fatalf("chain A block 2 (maintenance): %v", err)
+	}
+
+	// Post-maintenance: active rotated (#27 in, #26 out) and is_jobs flipped.
+	if a := active(); a[witnessAddr(26)] || !a[witnessAddr(27)] {
+		t.Fatalf("post-maint active not rotated: in26=%v in27=%v, want false/true", a[witnessAddr(26)], a[witnessAddr(27)])
+	}
+	if isJobs(26) || !isJobs(27) {
+		t.Fatalf("post-maint is_jobs not flipped: #26=%v #27=%v, want false/true", isJobs(26), isJobs(27))
+	}
+
+	// Chain B from genesis, 3 blocks all strictly below the boundary (never runs
+	// maintenance), longer than chain A → switchFork rewinds across the boundary.
+	b1 := mkBlock(bc.genesisBlock, 1, 1000)
+	b2 := mkBlock(b1, 2, 2000)
+	b3 := mkBlock(b2, 3, 3000)
+	if err := bc.InsertBlock(b1); err != nil {
+		t.Fatalf("chain B block 1: %v", err)
+	}
+	if err := bc.InsertBlock(b2); err != nil {
+		t.Fatalf("chain B block 2: %v", err)
+	}
+	if bc.CurrentBlock().Hash() != a2.Hash() {
+		t.Fatal("chain B should not have switched yet")
+	}
+	if err := bc.InsertBlock(b3); err != nil {
+		t.Fatalf("chain B block 3 (switch trigger): %v", err)
+	}
+	if bc.CurrentBlock().Hash() != b3.Hash() {
+		t.Fatal("switchFork did not move head to chain B tip")
+	}
+
+	// Dual rewind: the active list (rooted) AND is_jobs (capsule/buffer) both
+	// revert to the pre-maintenance genesis state.
+	if a := active(); !a[witnessAddr(26)] || a[witnessAddr(27)] {
+		t.Fatalf("post-switchFork active not rewound (root): in26=%v in27=%v, want true/false", a[witnessAddr(26)], a[witnessAddr(27)])
+	}
+	if !isJobs(26) || isJobs(27) {
+		t.Fatalf("post-switchFork is_jobs not rewound (buffer): #26=%v #27=%v, want true/false", isJobs(26), isJobs(27))
 	}
 }
 
