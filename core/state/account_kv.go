@@ -66,6 +66,45 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	return append([]byte{}, raw[1:]...), true, nil // strip presence prefix
 }
 
+// GetAccountKVBatch opens owner's KV trie ONCE and resolves every key in one
+// domain, returning name->value for present keys (presence prefix stripped).
+// The dirty overlay is consulted first per key, matching GetAccountKV; a
+// freshly-opened StateDB (the dynamic-properties Load case) has an empty
+// overlay, so this is effectively N trie Gets over a single OpenTrie — versus
+// N OpenTrie+Get pairs if the caller looped GetAccountKV.
+func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDomain, keys [][]byte) (map[string][]byte, error) {
+	if !kvdomains.IsRegistered(domain) {
+		return nil, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	out := make(map[string][]byte, len(keys))
+	obj := s.getStateObject(owner)
+	if obj == nil {
+		return out, nil
+	}
+	tr, err := s.db.OpenTrie(ethcommon.Hash(obj.accountKVRoot))
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		comp := kvCompositeKey(domain, key)
+		if e, ok := obj.kvDirty[string(comp)]; ok {
+			if !e.deleted {
+				out[string(key)] = append([]byte{}, e.val...)
+			}
+			continue
+		}
+		raw, err := tr.Get(kvTrieKey(comp))
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		out[string(key)] = append([]byte{}, raw[1:]...) // strip presence prefix
+	}
+	return out, nil
+}
+
 // SetAccountKV stages a generic-KV write for owner (creating the account if absent).
 func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
 	if !kvdomains.IsRegistered(domain) {

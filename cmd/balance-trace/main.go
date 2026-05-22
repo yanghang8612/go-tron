@@ -121,7 +121,7 @@ func main() {
 		)
 	}
 
-	dp := state.LoadDynamicProperties(db)
+	dp := state.LoadDynamicProperties(db, statedb)
 	fmt.Printf("\n--- DP / maintenance state ---\n")
 	fmt.Printf("LatestBlockHeaderNumber=%d\n", dp.LatestBlockHeaderNumber())
 	fmt.Printf("NextMaintenanceTime=%d interval=%d\n",

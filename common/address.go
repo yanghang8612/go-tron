@@ -5,7 +5,6 @@ import "encoding/hex"
 const (
 	AddressLength        = 21
 	AddressPrefixMainnet = 0x41
-	AddressPrefixTestnet = 0xa0
 )
 
 type Address [AddressLength]byte
@@ -33,7 +32,7 @@ func (a Address) IsEmpty() bool {
 }
 
 // AccountIDLength is the rooted-state account identity size: a TRON address
-// with its 1-byte network prefix (0x41 / 0xa0) stripped.
+// with its 1-byte network prefix (0x41) stripped.
 const AccountIDLength = AddressLength - 1
 
 // AccountID is the 20-byte rooted-state owner identity. It matches the
@@ -50,9 +49,13 @@ func (a Address) AccountID() AccountID {
 	return id
 }
 
-// ValidPrefix reports whether the address carries a known TRON network prefix.
+// ValidPrefix reports whether the address carries the TRON network prefix.
+// go-tron accepts only the mainnet prefix 0x41 (matching java-tron's single
+// configured addressPreFixByte; modern Nile also uses 0x41). Accepting a second
+// prefix would let two distinct 21-byte addresses sharing a 20-byte tail
+// collapse onto one AccountID trie key.
 func (a Address) ValidPrefix() bool {
-	return a[0] == AddressPrefixMainnet || a[0] == AddressPrefixTestnet
+	return a[0] == AddressPrefixMainnet
 }
 
 func (id AccountID) Bytes() []byte { return id[:] }

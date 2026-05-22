@@ -332,7 +332,7 @@ func isVMContractType(contractType corepb.Transaction_Contract_ContractType) boo
 }
 
 func transactionInfoLogAddress(addr tcommon.Address) []byte {
-	if addr[0] == tcommon.AddressPrefixMainnet || addr[0] == tcommon.AddressPrefixTestnet {
+	if addr[0] == tcommon.AddressPrefixMainnet {
 		return append([]byte(nil), addr[1:]...)
 	}
 	return addr.Bytes()

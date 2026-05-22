@@ -259,9 +259,11 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 
 	// Dynamic properties drive the same DP-dependent branches ProcessBlock
 	// takes during live apply (energy limit, consensus-logic optimisation,
-	// reward params). Load them through the scratch overlay so they reflect
-	// disk state without being mutable on disk.
-	dynProps := state.LoadDynamicProperties(scratch)
+	// reward params). Derived keys load through the scratch overlay (disk,
+	// header-rewound below); rooted keys load from statedb, which is opened at
+	// the parent (n-1) root — so the rooted governance/economic params reflect
+	// as-of-(n-1) rather than HEAD, narrowing the drift caveat below.
+	dynProps := state.LoadDynamicProperties(scratch, statedb)
 
 	// Rewind the DP header fields to the PARENT block (n-1). ProcessBlock
 	// derives prevBlockTime from dynProps.LatestBlockHeaderTimestamp()

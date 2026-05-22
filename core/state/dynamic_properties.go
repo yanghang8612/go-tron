@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/params"
 )
 
@@ -269,45 +270,102 @@ func (dp *DynamicProperties) Copy() *DynamicProperties {
 	return out
 }
 
-// LoadDynamicProperties creates a DynamicProperties with defaults, overriding
-// from DB.
-//
-// Fast path: when db implements ethdb.Iteratee a single prefix scan over
-// "dp-*" replaces the historical 133 point Gets (one per key in
-// defaultProps + defaultStringProps + the latest_block_header_hash record).
-// A profile on Nile at h≈890k showed the per-key path dominating CPU at 46%
-// of total samples — every call into Pebble.Get → Iterator.First → Iterator
-// teardown, ~133 times per applyBlock, plus every PBFT hook + tron_backend
-// RPC handler doing the same. The single scan is O(rows) on Pebble's
-// sorted L0/Ln structure and reuses one iterator.
-//
-// Slow path: when db is a bare ethdb.KeyValueReader without iteration (rare
-// — used only by callers that hand in a custom reader without the disk store
-// behind it) we fall through to the original per-key Gets so we never
-// silently drop reads.
-func LoadDynamicProperties(db ethdb.KeyValueReader) *DynamicProperties {
-	dp := NewDynamicProperties()
+// derivedDPKeys are the dynamic properties that stay UNROOTED in flat dp-
+// rawdb. They are recomputable from the canonical chain head and are written
+// post-Commit (head pointers + solidified cursor); everything else roots into
+// the system account's KV. latest_block_header_hash is the hash field, not a
+// props/stringProps entry.
+var derivedDPKeys = map[string]struct{}{
+	"latest_block_header_number":    {},
+	"latest_block_header_timestamp": {},
+	"latest_block_header_hash":      {},
+	"latest_solidified_block_num":   {},
+}
+
+func isDerivedDPKey(k string) bool { _, ok := derivedDPKeys[k]; return ok }
+
+// FlushRooted stages every dirty NON-derived dynamic property into the system
+// account's SystemDynamicProperty KV (committed by statedb.Commit, thus part
+// of the internal full-state root). Call BEFORE statedb.Commit(); the derived
+// keys are left dirty for the post-Commit Flush(db) to write to flat dp-.
+// Encoding matches dp-: int64 → 8-byte BE, string → raw bytes.
+func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
+	buf := make([]byte, 8)
+	for k := range dp.dirty {
+		if isDerivedDPKey(k) {
+			continue
+		}
+		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
+		if err := s.SystemKVPut(kvdomains.SystemDynamicProperty, []byte(k), append([]byte(nil), buf...)); err != nil {
+			return err
+		}
+		delete(dp.dirty, k)
+	}
+	for k := range dp.stringDirty {
+		if isDerivedDPKey(k) {
+			continue
+		}
+		if err := s.SystemKVPut(kvdomains.SystemDynamicProperty, []byte(k), []byte(dp.stringProps[k])); err != nil {
+			return err
+		}
+		delete(dp.stringDirty, k)
+	}
+	return nil
+}
+
+// loadDerivedFromDB reads ONLY the 4 derived keys from flat dp- rawdb. The
+// rooted keys no longer live in dp- (post Phase 3b), so the historical
+// all-keys prefix scan is filtered down to the derived subset.
+func (dp *DynamicProperties) loadDerivedFromDB(db ethdb.KeyValueReader) {
 	if iter, ok := db.(ethdb.Iteratee); ok {
 		rawdb.IterateDynamicProperties(iter, func(name string, value []byte) {
-			applyLoadedDPValue(dp, name, value)
+			if isDerivedDPKey(name) {
+				applyLoadedDPValue(dp, name, value)
+			}
 		})
+		return
+	}
+	for k := range derivedDPKeys {
+		applyLoadedDPValue(dp, k, rawdb.ReadDynamicProperty(db, k))
+	}
+}
+
+// LoadDynamicProperties builds a DynamicProperties from persisted state: the 4
+// derived keys come from flat dp- rawdb (db); the rooted keys come from the
+// system account's KV (sysKV, a StateDB opened at the target root). sysKV may
+// be nil (e.g. pre-genesis or a cache-init before any state exists) — rooted
+// keys then keep their defaults. Derived keys load first; the rooted overlay
+// then overrides, so sysKV always wins for rooted keys.
+func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProperties {
+	dp := NewDynamicProperties()
+	dp.loadDerivedFromDB(db)
+	if sysKV == nil {
 		return dp
 	}
+	keys := make([][]byte, 0, len(defaultProps)+len(defaultStringProps))
 	for k := range defaultProps {
-		data := rawdb.ReadDynamicProperty(db, k)
-		if len(data) == 8 {
-			dp.props[k] = int64(binary.BigEndian.Uint64(data))
+		if !isDerivedDPKey(k) {
+			keys = append(keys, []byte(k))
 		}
 	}
 	for k := range defaultStringProps {
-		data := rawdb.ReadDynamicProperty(db, k)
-		if len(data) > 0 {
-			dp.stringProps[k] = string(data)
+		if !isDerivedDPKey(k) {
+			keys = append(keys, []byte(k))
 		}
 	}
-	hashData := rawdb.ReadDynamicProperty(db, "latest_block_header_hash")
-	if len(hashData) == common.HashLength {
-		dp.latestBlockHeaderHash = common.BytesToHash(hashData)
+	vals, err := sysKV.SystemKVGetBatch(kvdomains.SystemDynamicProperty, keys)
+	if err != nil {
+		return dp
+	}
+	for k := range defaultProps {
+		if v, ok := vals[k]; ok && len(v) == 8 {
+			dp.props[k] = int64(binary.BigEndian.Uint64(v))
+		}
+	}
+	for k := range defaultStringProps {
+		if v, ok := vals[k]; ok {
+			dp.stringProps[k] = string(v)
+		}
 	}
 	return dp
 }

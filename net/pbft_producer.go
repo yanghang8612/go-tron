@@ -39,7 +39,6 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/p2p"
@@ -281,7 +280,7 @@ func (p *PbftProducer) allowPBFT() bool {
 		return false
 	}
 	headNum := p.chain.CurrentBlock().Number()
-	dp := state.LoadDynamicProperties(p.db)
+	dp := p.chain.DynProps()
 	return forks.IsActive(forks.AllowPbft, headNum, dp)
 }
 
@@ -467,8 +466,8 @@ func (p *PbftProducer) dispatch(payload []byte) {
 // epoch returns the epoch value used for outbound PREPREPARE messages —
 // nextMaintenanceTime, matching java-tron MaintenanceManager.applyBlock.
 func (p *PbftProducer) epoch() int64 {
-	if p.db == nil {
+	if p.chain == nil {
 		return 0
 	}
-	return state.LoadDynamicProperties(p.db).NextMaintenanceTime()
+	return p.chain.NextMaintenanceTime()
 }

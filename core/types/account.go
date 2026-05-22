@@ -616,8 +616,17 @@ func (a *Account) ClearUnfrozenV2() {
 	a.pb.UnfrozenV2 = nil
 }
 
+// Marshal serializes the account proto deterministically. The Deterministic
+// option only fixes the ordering of protobuf map fields (Asset, AssetV2,
+// FreeAssetNetUsage*, LatestAssetOperationTime*); without it Go map iteration
+// order leaks into the bytes, which makes the internal account-trie leaf — and
+// thus the internal full-state root — non-reproducible. The guarantee is stable
+// within a binary build (not canonical across protobuf-go versions), which is
+// exactly the scope the internal root needs. java-tron wire compatibility is
+// unaffected: these bytes are never compared byte-for-byte across nodes, and
+// the consensus accountStateRoot uses its own map-free marshal path.
 func (a *Account) Marshal() ([]byte, error) {
-	return proto.Marshal(a.pb)
+	return proto.MarshalOptions{Deterministic: true}.Marshal(a.pb)
 }
 
 func UnmarshalAccount(data []byte) (*Account, error) {

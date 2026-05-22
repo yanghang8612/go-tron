@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -289,7 +288,6 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	if bc.genesisBlock == nil {
 		return nil, errors.New("genesis block not found in database")
 	}
-	bc.storeDynPropsCache(state.LoadDynamicProperties(buffer))
 
 	for _, gw := range rawdb.ReadGenesisWitnesses(db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -301,6 +299,10 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
 	head = recoverHeadToAppliedState(db, chaindb, head, bc.genesisBlock)
 	bc.currentBlock.Store(head)
+
+	// Seed the dynprops cache now that the head is known: rooted keys load from
+	// the system-KV at the head root, derived keys from the buffer.
+	bc.storeDynPropsCache(state.LoadDynamicProperties(buffer, bc.sysKVAt(bc.HeadStateRoot())))
 
 	// Initialize KhaosDB with the current head.
 	bc.khaosDB = NewKhaosDB()
@@ -321,7 +323,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 			}
 		}
 		if len(allWitnesses) > 0 {
-			dynProps := state.LoadDynamicProperties(db)
+			dynProps := state.LoadDynamicProperties(db, bc.sysKVAt(bc.HeadStateRoot()))
 			witnesses = dpos.SelectActiveWitnessesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())
 			rawdb.WriteActiveWitnesses(db, witnesses)
 		}
@@ -361,7 +363,9 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	if head == nil {
 		return genesis
 	}
-	dynProps := state.LoadDynamicProperties(db)
+	// Reads only latest_block_header_number (a derived key in flat dp-), so no
+	// system-KV reader is needed.
+	dynProps := state.LoadDynamicProperties(db, nil)
 	appliedNum := dynProps.LatestBlockHeaderNumber()
 	if appliedNum < 0 || uint64(appliedNum) >= head.Number() {
 		return head
@@ -886,6 +890,15 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}
 
+	// Stage the rooted dynamic properties into the system account's KV BEFORE
+	// Commit so they enter the internal full-state root (and thus rewind with
+	// it). Every rooted dynprop was dirtied pre-Commit (tx exec / statistics /
+	// maintenance); the 4 derived head-pointer keys are set post-Commit and
+	// flushed to flat dp- by dynProps.Flush below.
+	if err := dynProps.FlushRooted(statedb); err != nil {
+		return fmt.Errorf("flush rooted dynamic properties: %w", err)
+	}
+
 	// Commit state (includes both tx execution and maintenance changes).
 	newRoot, err := statedb.Commit()
 	if err != nil {
@@ -1154,7 +1167,9 @@ func (bc *BlockChain) Close() error {
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("close: async buffer flush failed: %w", *errPtr)
 	}
-	dynProps := state.LoadDynamicProperties(bc.buffer)
+	// Reads only latest_solidified_block_num (a derived key in flat dp-), so no
+	// system-KV reader is needed.
+	dynProps := state.LoadDynamicProperties(bc.buffer, nil)
 	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
 		return fmt.Errorf("close: flush up to solidified: %w", err)
 	}
@@ -1230,7 +1245,17 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// new branch is re-applied. (Without this the active set stays stale even
 	// though witness is_jobs and DP correctly rewound.)
 	bc.reloadActiveWitnesses()
-	bc.reloadDynPropsCache()
+	// Rebuild the dynprops cache from the LCA state: rooted keys come from the
+	// system-KV at the LCA root (the buffer was just rewound for derived keys).
+	// currentBlock is still the pre-switch head here, so we pass the LCA root
+	// explicitly rather than relying on HeadStateRoot().
+	lcaRoot := rawdb.ReadBlockStateRoot(bc.chaindb, lcaHash)
+	if lcaRoot == (tcommon.Hash{}) {
+		if n := rawdb.ReadBlockNumber(bc.chaindb, lcaHash); n != nil && *n == 0 {
+			lcaRoot = rawdb.ReadGenesisStateRoot(bc.db)
+		}
+	}
+	bc.reloadDynPropsCache(lcaRoot)
 	bc.invalidateStandbyPayCache()
 	bc.clearRewardAccountCache()
 
@@ -1348,16 +1373,20 @@ func (bc *BlockChain) BufferedDB() ethdb.KeyValueReader {
 // state.LoadDynamicProperties.
 //
 // Hot callers (PBFT BlockHook) use this in place of a bare
-// rawdb.ReadDynamicProperty(bc.db, ...) so they see the just-applied
-// block's DP writes — the buffer is flushed only up to the solidified
-// boundary, which on mainnet 27-SR DPoS lags head by ~19 blocks. A
-// maintenance-boundary write of next_maintenance_time lands in the buffer
-// immediately; a disk-only reader would compute the old epoch and silently
-// miss SRL commit results cached under the new one.
+// rawdb.ReadDynamicProperty(bc.db, ...) so they see the just-applied block's
+// DP writes. It reads the in-memory head snapshot (refreshed each block under
+// chainmu), which is as fresh as the buffer AND carries the rooted keys that
+// Phase 3b moved out of the flat dp- store into the system-account KV — a
+// dp- point read would now miss every rooted key (allow_pbft,
+// next_maintenance_time, …) and silently return the default. The stored
+// snapshot is immutable after storage, so the no-copy Get is race-free.
 func (bc *BlockChain) BufferedDPInt64(name string) int64 {
-	data := rawdb.ReadDynamicProperty(bc.buffer, name)
-	if len(data) == 8 {
-		return int64(binary.BigEndian.Uint64(data))
+	if v := bc.dynPropsCache.Load(); v != nil {
+		if dp, ok := v.(*state.DynamicProperties); ok && dp != nil {
+			if val, found := dp.Get(name); found {
+				return val
+			}
+		}
 	}
 	def, _ := state.DefaultDPInt64(name)
 	return def
@@ -1400,13 +1429,27 @@ func (bc *BlockChain) reloadActiveWitnesses() {
 	}
 }
 
+// sysKVAt opens a StateDB at the given state root so rooted dynamic properties
+// can be read from the system account's KV. Returns nil for the zero root or if
+// the state can't be opened — callers then fall back to rooted defaults.
+func (bc *BlockChain) sysKVAt(root tcommon.Hash) *state.StateDB {
+	if root == (tcommon.Hash{}) {
+		return nil
+	}
+	sysKV, err := state.New(root, bc.stateDB)
+	if err != nil {
+		return nil
+	}
+	return sysKV
+}
+
 func (bc *BlockChain) cachedDynProps() *state.DynamicProperties {
 	if v := bc.dynPropsCache.Load(); v != nil {
 		if dp, ok := v.(*state.DynamicProperties); ok && dp != nil {
 			return dp.Copy()
 		}
 	}
-	return state.LoadDynamicProperties(bc.buffer)
+	return state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(bc.HeadStateRoot()))
 }
 
 func (bc *BlockChain) storeDynPropsCache(dp *state.DynamicProperties) {
@@ -1415,8 +1458,21 @@ func (bc *BlockChain) storeDynPropsCache(dp *state.DynamicProperties) {
 	}
 }
 
-func (bc *BlockChain) reloadDynPropsCache() {
-	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer))
+// SetDynPropsCacheForTest overwrites the in-memory dynamic-properties head
+// snapshot. TEST-ONLY: production refreshes the cache through applyBlock; this
+// lets participation / maintenance tests stage a specific DP value (including
+// rooted keys that no longer live in flat dp-) without applying real blocks.
+func (bc *BlockChain) SetDynPropsCacheForTest(dp *state.DynamicProperties) {
+	bc.storeDynPropsCache(dp)
+}
+
+// reloadDynPropsCache rebuilds the head dynprops snapshot after a fork rewind.
+// rootAt is the LCA state root: derived keys come from the (already rewound)
+// buffer, rooted keys from the system-KV at that root. It must be passed
+// explicitly because the caller rewinds currentBlock AFTER this runs, so
+// HeadStateRoot() would still point at the pre-switch head.
+func (bc *BlockChain) reloadDynPropsCache(rootAt tcommon.Hash) {
+	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(rootAt)))
 }
 
 func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {
@@ -1523,11 +1579,12 @@ func (bc *BlockChain) updateFork(block *types.Block) {
 	bc.fc.Update(block.Version(), slot, len(active))
 }
 
-// NextMaintenanceTime returns the next scheduled maintenance time from dynamic properties.
-// Reads through bc.buffer so unflushed maintenance updates are visible (slice 2).
+// NextMaintenanceTime returns the next scheduled maintenance time from dynamic
+// properties. Reads the in-memory head snapshot (next_maintenance_time is a
+// rooted key; the cache is the freshest committed-head view and avoids a
+// system-KV trie open per call).
 func (bc *BlockChain) NextMaintenanceTime() int64 {
-	dynProps := state.LoadDynamicProperties(bc.buffer)
-	return dynProps.NextMaintenanceTime()
+	return bc.cachedDynProps().NextMaintenanceTime()
 }
 
 // ValidateTransaction runs the tx-envelope checks (signature recovery,
@@ -1569,13 +1626,13 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	return ValidateTAPOS(tx, bc.buffer)
 }
 
-// DynProps loads and returns a snapshot of the current dynamic properties.
-// Reads through bc.buffer so unflushed DP writes (slice 2: every dirty DP
-// key including counters, fee totals, latest_solidified_block_num) are
-// visible to RPC and other external readers without waiting for the
-// solidified-flush boundary.
+// DynProps returns a snapshot of the current dynamic properties. Reads the
+// in-memory head snapshot (a Copy), which applyBlock refreshes each block
+// under chainmu — strictly fresher than the solidified-flush boundary and
+// avoiding a system-KV trie open for the rooted keys on every RPC/admission
+// call.
 func (bc *BlockChain) DynProps() *state.DynamicProperties {
-	return state.LoadDynamicProperties(bc.buffer)
+	return bc.cachedDynProps()
 }
 
 // blockContainsShieldedTransfer reports whether any tx in the block is a

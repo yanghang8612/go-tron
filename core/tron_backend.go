@@ -414,7 +414,9 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	dynProps := state.LoadDynamicProperties(b.chain.db)
+	// Read rooted dynprops at the SAME root as the account state so resource
+	// limits stay consistent with the queried (live or solid) head.
+	dynProps := state.LoadDynamicProperties(b.chain.db, statedb)
 	return &tronapi.AccountResource{
 		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
 		FreeNetLimit:     dynProps.FreeNetLimit(),
@@ -425,7 +427,7 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 }
 
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
-	dynProps := state.LoadDynamicProperties(b.chain.db)
+	dynProps := b.chain.DynProps()
 	all := dynProps.All()
 	params := make([]tronapi.ChainParameter, 0, len(all))
 	for k, v := range all {
@@ -793,7 +795,7 @@ func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract
 }
 
 func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
-	dp := state.LoadDynamicProperties(b.chain.db)
+	dp := b.chain.DynProps()
 	if !dp.AllowSameTokenName() {
 		return rawdb.ReadAssetIssueByName(b.chain.db, name)
 	}
@@ -819,14 +821,14 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueCon
 }
 
 func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
-	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+	if !b.chain.DynProps().AllowSameTokenName() {
 		return rawdb.ListAllLegacyAssets(b.chain.db)
 	}
 	return rawdb.ListAllAssets(b.chain.db)
 }
 
 func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+	if !b.chain.DynProps().AllowSameTokenName() {
 		return rawdb.ListLegacyAssetsPaginated(b.chain.db, offset, limit)
 	}
 	return rawdb.ListAssetsPaginated(b.chain.db, offset, limit)
@@ -837,7 +839,7 @@ func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.A
 	if !ok {
 		return nil
 	}
-	if !state.LoadDynamicProperties(b.chain.db).AllowSameTokenName() {
+	if !b.chain.DynProps().AllowSameTokenName() {
 		if asset := rawdb.ReadAssetIssue(b.chain.db, id); asset != nil {
 			return rawdb.ReadAssetIssueByName(b.chain.db, asset.Name)
 		}
@@ -874,7 +876,7 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
 	// tx the rate is only visible to readers who consult the snapshot at
 	// the next maintenance — until then the cycle key holds the previous
 	// rate. Mirror that semantic here so cross-impl byte-equal holds.
-	dp := state.LoadDynamicProperties(b.chain.db)
+	dp := b.chain.DynProps()
 	cycle := dp.CurrentCycleNumber()
 	return int64(rawdb.ReadCycleBrokerage(b.chain.db, cycle, addr.Bytes()))
 }
@@ -886,15 +888,15 @@ func (b *TronBackend) TotalTransaction() int64 {
 }
 
 func (b *TronBackend) GetBurnTrx() int64 {
-	return state.LoadDynamicProperties(b.chain.db).BurnTrxAmount()
+	return b.chain.DynProps().BurnTrxAmount()
 }
 
 func (b *TronBackend) GetBandwidthPrices() string {
-	return state.LoadDynamicProperties(b.chain.db).BandwidthPriceHistory()
+	return b.chain.DynProps().BandwidthPriceHistory()
 }
 
 func (b *TronBackend) GetEnergyPrices() string {
-	return state.LoadDynamicProperties(b.chain.db).EnergyPriceHistory()
+	return b.chain.DynProps().EnergyPriceHistory()
 }
 
 func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
@@ -985,7 +987,9 @@ func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMess
 	if acc == nil {
 		return nil, nil
 	}
-	dynProps := state.LoadDynamicProperties(b.chain.db)
+	// Read rooted dynprops at the head root (same statedb) for a consistent
+	// net-limit computation.
+	dynProps := state.LoadDynamicProperties(b.chain.db, statedb)
 	frozenBW := statedb.GetFrozenV2Amount(addr, corepb.ResourceCode_BANDWIDTH)
 	var netLimit int64
 	if total := dynProps.TotalNetWeight(); total > 0 {
@@ -1144,7 +1148,7 @@ func (b *TronBackend) ChainID() int64 {
 // ── M5.2 PR-1: JSON-RPC node metadata ────────────────────────────────────────
 
 func (b *TronBackend) GasPrice() int64 {
-	return state.LoadDynamicProperties(b.chain.db).EnergyFee()
+	return b.chain.DynProps().EnergyFee()
 }
 
 func (b *TronBackend) PeerCount() int {
@@ -1538,7 +1542,9 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	validationBuf.BeginBlock(tcommon.Hash{})
 	defer validationBuf.DiscardActive()
 
-	dynProps := state.LoadDynamicProperties(b.chain.buffer)
+	// statedb is opened at the head root; reuse it as the system-KV reader so
+	// rooted dynprops match the state the tx is simulated against.
+	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
 
 	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing step.
 	// Actuators that check ctx.State.GetWitness (witness_update, vote, brokerage, etc.)

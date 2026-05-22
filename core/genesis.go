@@ -71,7 +71,7 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 
 		// Compute expected hash to validate
 		sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
-		expectedBlock, _, err := genesisBlockAndStateRoot(genesis, sdb)
+		expectedBlock, _, _, err := genesisBlockAndStateRoot(genesis, sdb)
 		if err != nil {
 			return genesis.Config, storedHash, nil // Can't verify, trust stored
 		}
@@ -83,7 +83,7 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 
 	// Write genesis
 	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
-	block, stateRoot, err := genesisBlockAndStateRoot(genesis, sdb)
+	block, stateRoot, dp, err := genesisBlockAndStateRoot(genesis, sdb)
 	if err != nil {
 		return nil, tcommon.Hash{}, err
 	}
@@ -111,33 +111,12 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		}
 	}
 
-	// Write dynamic properties
-	if genesis.DynamicProperties != nil {
-		dp := state.NewDynamicProperties()
-		for k, v := range genesis.DynamicProperties {
-			dp.Set(k, v)
-		}
-		if energyFee, ok := genesis.DynamicProperties["energy_fee"]; ok {
-			dp.SetEnergyPriceHistory(fmt.Sprintf("0:%d", energyFee))
-		}
-		// Mirror java-tron Manager.initGenesis -> updateDynamicStoreByConfig:
-		// config-level Constantinople activation immediately makes ClearABI
-		// available in account permission operations.
-		if dp.AllowTvmConstantinople() {
-			dp.AddSystemContractAndSetPermission(int(corepb.Transaction_Contract_ClearABIContract))
-		}
-		// Mirror java-tron Manager.initGenesis: when next_maintenance_time
-		// isn't explicitly seeded, derive it from the genesis timestamp +
-		// maintenance interval. Without this the applyBlock gate
-		// `NextMaintenanceTime() > 0` stays false forever and DoMaintenance
-		// never runs — every standby-witness allowance reward and every
-		// active-set rotation silently drops on the floor. params/mainnet.go
-		// and params/nile.go intentionally omit this key (matching
-		// config.conf), so the fix has to live here at the bootstrap layer
-		// rather than in the params files.
-		if dp.NextMaintenanceTime() == 0 {
-			dp.SetNextMaintenanceTime(genesis.Timestamp + dp.MaintenanceTimeInterval())
-		}
+	// Derived (unrooted) dynamic properties — the head-pointer keys — live in
+	// flat dp-. The rooted governance/economic properties were already staged
+	// into the genesis state root by genesisBlockAndStateRoot; here we just set
+	// the 3 derived keys (they need the genesis block hash) and flush them.
+	// FlushRooted cleared the rooted dirty set, so dp.Flush writes only derived.
+	if dp != nil {
 		dp.SetLatestBlockHeaderNumber(0)
 		dp.SetLatestBlockHeaderTimestamp(genesis.Timestamp)
 		dp.SetLatestBlockHeaderHash(block.Hash())
@@ -185,14 +164,14 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 //     `genesisBlockAndStateRoot` (or `rawdb.ReadGenesisStateRoot` after
 //     `SetupGenesisBlock`) when the post-genesis state root is needed.
 func GenesisToBlock(g *params.Genesis, db *state.Database) (*types.Block, error) {
-	block, _, err := genesisBlockAndStateRoot(g, db)
+	block, _, _, err := genesisBlockAndStateRoot(g, db)
 	return block, err
 }
 
-func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Block, tcommon.Hash, error) {
+func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Block, tcommon.Hash, *state.DynamicProperties, error) {
 	statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), db)
 	if err != nil {
-		return nil, tcommon.Hash{}, err
+		return nil, tcommon.Hash{}, nil, err
 	}
 
 	// Populate accounts (so block #1 onwards finds them) and build genesis txs.
@@ -207,7 +186,7 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		}
 		tx, err := buildGenesisTransferTx(ga.Address, ga.Balance)
 		if err != nil {
-			return nil, tcommon.Hash{}, fmt.Errorf("genesis tx for %s: %w", ga.Address.Hex(), err)
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("genesis tx for %s: %w", ga.Address.Hex(), err)
 		}
 		txs = append(txs, tx)
 	}
@@ -228,13 +207,49 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		statedb.SetIsWitness(gw.Address, true)
 	}
 
+	// Reserved system account: owner of chain-global rooted state (dynamic
+	// properties, witness schedule, etc. in later phases). Created here so it
+	// exists to own KV; it carries no balance and is never a user address.
+	statedb.GetOrCreateAccount(tcommon.SystemAccountAddress)
+
+	// Build the rooted dynamic properties (governance/economic params) and
+	// stage them into the system account's KV BEFORE Commit, so they enter the
+	// genesis state root. The 4 derived head-pointer keys need the genesis
+	// block hash (set post-build), so the caller flushes those to flat dp-;
+	// we return dp for that. Mirrors java-tron Manager.initGenesis ordering.
+	var dp *state.DynamicProperties
+	if g.DynamicProperties != nil {
+		dp = state.NewDynamicProperties()
+		for k, v := range g.DynamicProperties {
+			dp.Set(k, v)
+		}
+		if energyFee, ok := g.DynamicProperties["energy_fee"]; ok {
+			dp.SetEnergyPriceHistory(fmt.Sprintf("0:%d", energyFee))
+		}
+		// Config-level Constantinople activation immediately makes ClearABI
+		// available in account permission operations.
+		if dp.AllowTvmConstantinople() {
+			dp.AddSystemContractAndSetPermission(int(corepb.Transaction_Contract_ClearABIContract))
+		}
+		// When next_maintenance_time isn't explicitly seeded, derive it from
+		// the genesis timestamp + interval; otherwise the applyBlock gate
+		// `NextMaintenanceTime() > 0` stays false forever and DoMaintenance
+		// never runs. params/{mainnet,nile}.go intentionally omit this key.
+		if dp.NextMaintenanceTime() == 0 {
+			dp.SetNextMaintenanceTime(g.Timestamp + dp.MaintenanceTimeInterval())
+		}
+		if err := dp.FlushRooted(statedb); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("flush rooted genesis dynamic properties: %w", err)
+		}
+	}
+
 	// Persist account state. The returned root does NOT go on the block
 	// header (java-tron parity), but it is needed by block #1's applyBlock
 	// to open the StateDB on the correct trie. Caller persists via
 	// `rawdb.WriteGenesisStateRoot`.
 	stateRoot, err := statedb.Commit()
 	if err != nil {
-		return nil, tcommon.Hash{}, err
+		return nil, tcommon.Hash{}, nil, err
 	}
 
 	// Compute tx_trie_root: SHA256 over each tx's full proto bytes, fed
@@ -243,7 +258,7 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	for i, tx := range txs {
 		data, err := proto.Marshal(tx)
 		if err != nil {
-			return nil, tcommon.Hash{}, fmt.Errorf("marshal genesis tx %d: %w", i, err)
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("marshal genesis tx %d: %w", i, err)
 		}
 		leaves[i] = tcommon.Hash(sha256Sum(data))
 	}
@@ -262,7 +277,7 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		Transactions: txs,
 	})
 
-	return block, stateRoot, nil
+	return block, stateRoot, dp, nil
 }
 
 func buildGenesisTransferTx(toAddr tcommon.Address, amount int64) (*corepb.Transaction, error) {

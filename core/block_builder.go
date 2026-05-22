@@ -46,7 +46,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		return nil, fmt.Errorf("open state: %w", err)
 	}
 
-	dynProps := state.LoadDynamicProperties(bc.buffer)
+	// statedb is already opened at parentRoot; reuse it as the system-KV reader
+	// so rooted dynprops load from the parent state the built block extends.
+	dynProps := state.LoadDynamicProperties(bc.buffer, statedb)
 
 	// Load witnesses into statedb for maintenance access. Reads go through
 	// bc.buffer to mirror applyBlock — the chain buffer holds VoteCount /
@@ -159,6 +161,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		applyRewardCycleSnapshot(buildBuf, statedb, dynProps)
 		nextMaint := dpos.CalcNextMaintenanceTime(timestamp, dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 		dynProps.SetNextMaintenanceTime(nextMaint)
+	}
+
+	// Stage rooted dynprops into the system account's KV before Commit, exactly
+	// as applyBlock does, so the built block's internal state root matches what
+	// the applier recomputes on the same block (producer/replay consistency).
+	if err := dynProps.FlushRooted(statedb); err != nil {
+		return nil, fmt.Errorf("flush rooted dynamic properties: %w", err)
 	}
 
 	// Commit state so the throwaway StateDB observes the same post-processing

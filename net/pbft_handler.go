@@ -12,7 +12,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -318,7 +317,7 @@ func (h *PbftHandler) HandlePbftMsg(peer *p2p.Peer, payload []byte) {
 			return
 		}
 	} else if dt == corepb.PBFTMessage_SRL {
-		dp := state.LoadDynamicProperties(h.db)
+		dp := h.chain.DynProps()
 		epoch := raw.GetEpoch()
 		interval := dp.MaintenanceTimeInterval()
 		nextMaint := dp.NextMaintenanceTime()

@@ -30,17 +30,21 @@ func parseCallValue(s string) int64 {
 }
 
 // EthAPI implements the "eth" JSON-RPC namespace on the reflection-based
-// internal/rpc framework: the full set of read-only eth_* methods go-tron
-// serves — the chain/account/block/tx/receipt readers, eth_call/estimateGas,
-// eth_getLogs, and the stateful filter methods. Responses are byte-identical to
-// the frozen jsonrpc-corpus, reusing the shared blockToRPC/txToRPC/receiptToRPC
-// converters in api.go.
+// internal/rpc framework. It is the migration target for the eth_* arms of
+// api.go's dispatch switch (jsonrpc-reflection).
+//
+// Covered so far: the no-parameter methods and the param-bearing account
+// readers, all of which migrate zero-diff against the frozen jsonrpc-corpus.
+// Still to land: eth_call/estimateGas, the block/tx/receipt readers (which
+// additionally FIX the legacy double-hex-hash bug, so their corpus entries get
+// regenerated at that point), eth_getLogs, and the filter methods.
 //
 // Method names map by the framework's reflection rule (first letter lowered):
 // ChainId -> eth_chainId, GetBalance -> eth_getBalance, etc. Param-bearing
-// methods take string arguments parsed with common.FromHex etc., with a
-// trailing *string block tag that the framework leaves nil when the caller
-// omits it (defaulting to "latest").
+// methods take string arguments and parse them exactly as the legacy handlers
+// did (common.FromHex etc.), with a trailing *string block tag that the
+// framework leaves nil when the caller omits it — mirroring the legacy
+// resolveBlockArg "default to latest" behavior.
 type EthAPI struct {
 	backend Backend
 	filters *FilterManager
@@ -52,8 +56,8 @@ func NewEthAPI(backend Backend, filters *FilterManager) *EthAPI {
 	return &EthAPI{backend: backend, filters: filters}
 }
 
-// resolveBlock resolves the optional block tag for the param-bearing readers: a
-// nil or empty tag means "latest" (live read path), otherwise the parsed block
+// resolveBlock mirrors api.resolveBlockArg for the framework methods: a nil or
+// empty block tag means "latest" (live read path), otherwise the parsed block
 // number with the archive read path. Returns (blockNum, isLatest, err).
 func (e *EthAPI) resolveBlock(block *string) (uint64, bool, error) {
 	tag := "latest"
