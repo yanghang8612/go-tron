@@ -832,6 +832,12 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	tvm.interpreter.readOnly = prevReadOnly
 	tvm.interpreter.returnData = ret
 
+	// Unlike Call/CallToken/DelegateCall, StaticCall deliberately omits the
+	// isTransferFailure(err) branch: a static frame is readOnly, so opCall /
+	// opCallToken reject any value or token transfer with ErrWriteProtection
+	// before reaching the caller == addr check that yields ErrTransferFailed /
+	// ErrTokenTransferFailed. The transfer-failure path is unreachable here, so
+	// there is no message energy to refund.
 	if err != nil && err != ErrExecutionReverted {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		if tvm.Depth == 0 {
@@ -893,15 +899,23 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 
 	tvm.interpreter.returnData = ret
 
-	if err != nil && err != ErrExecutionReverted {
+	if err != nil {
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
+		// A transfer failure here means the delegated code (running in the
+		// parent, non-readOnly context) issued a CALL/CALLTOKEN that moved
+		// TRX/TRC10 to the context address itself (caller == addr). Mirror
+		// Call/CallToken/create: keep the remaining energy, exactly like
+		// ErrExecutionReverted. java-tron refunds the message energy on a
+		// transfer failure (Program.callToAddress → refundEnergy) and bills
+		// only the energy actually executed; billing the full limit here would
+		// drain the caller and break cross-impl consensus.
+		if err == ErrExecutionReverted || isTransferFailure(err) {
+			return ret, contract.Energy, err
+		}
 		if tvm.Depth == 0 {
 			return nil, 0, err
 		}
 		return nil, 0, childCallFailure(err)
-	}
-	if err == ErrExecutionReverted {
-		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 	}
 	return ret, contract.Energy, err
 }

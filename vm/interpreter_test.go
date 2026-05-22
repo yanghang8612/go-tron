@@ -1104,3 +1104,59 @@ func TestTopLevelTransferFailedKeepsRemainingEnergy(t *testing.T) {
 		t.Fatalf("transfer failure energy used = %d, want actual execution cost only", used)
 	}
 }
+
+// TestTopLevelTransferFailedViaDelegateCallKeepsRemainingEnergy is the
+// DelegateCall twin of TestTopLevelTransferFailedKeepsRemainingEnergy. A
+// DELEGATECALL runs the delegate's code in the parent (non-readOnly) context,
+// so the delegated code can issue a CALL with value to the context address
+// itself; that transfer-to-self surfaces ErrTransferFailed (caller == addr)
+// and propagates up through DelegateCall's top-level error handler. java-tron
+// refunds the message energy on a transfer failure (Program.callToAddress →
+// refundEnergy), billing only the energy actually executed — exactly as for
+// the Call/CallToken paths. Regression guard for the DelegateCall branch that
+// previously billed the full energy limit (consume-all) on a transfer failure.
+func TestTopLevelTransferFailedViaDelegateCallKeepsRemainingEnergy(t *testing.T) {
+	evm := newTestEVMWithConfig(t, TVMConfig{Constantinople: true})
+	owner := tcommon.Address{0x41, 0x01}
+	contextAddr := tcommon.Address{0x41, 0x02}
+	codeHolder := tcommon.Address{0x41, 0x03}
+	evm.StateDB.CreateAccount(owner, corepb.AccountType_Normal)
+	evm.StateDB.CreateAccount(contextAddr, corepb.AccountType_Contract)
+	evm.StateDB.CreateAccount(codeHolder, corepb.AccountType_Contract)
+	evm.StateDB.AddBalance(owner, 1_000_000)
+	evm.StateDB.AddBalance(contextAddr, 10)
+	evm.StateDB.SetContract(contextAddr, &contractpb.SmartContract{ContractAddress: contextAddr.Bytes()})
+	evm.StateDB.SetContract(codeHolder, &contractpb.SmartContract{ContractAddress: codeHolder.Bytes()})
+
+	// Delegate code lives at codeHolder but runs in contextAddr's frame, so a
+	// CALL to contextAddr is a transfer-to-self (caller == addr) and fails with
+	// ErrTransferFailed, which propagates up through DelegateCall.
+	code := []byte{
+		byte(PUSH1), 0x00, // out size
+		byte(PUSH1), 0x00, // out offset
+		byte(PUSH1), 0x00, // in size
+		byte(PUSH1), 0x00, // in offset
+		byte(PUSH1), 0x01, // value
+		byte(PUSH20),
+	}
+	code = append(code, contextAddr[1:]...)
+	code = append(code,
+		byte(PUSH2), 0x08, 0xfc, // message-call energy: 2300
+		byte(CALL),
+		byte(STOP),
+	)
+	evm.StateDB.SetCode(codeHolder, code)
+
+	const energyLimit = uint64(100_000)
+	// caller, context, addr: run codeHolder's code in contextAddr's context.
+	_, left, err := evm.DelegateCall(owner, contextAddr, codeHolder, nil, energyLimit, 0, 0)
+	if !errors.Is(err, ErrTransferFailed) {
+		t.Fatalf("expected transfer failure, got %v", err)
+	}
+	if left == 0 {
+		t.Fatal("transfer failure consumed all energy")
+	}
+	if used := energyLimit - left; used >= 20_000 {
+		t.Fatalf("transfer failure energy used = %d, want actual execution cost only", used)
+	}
+}
