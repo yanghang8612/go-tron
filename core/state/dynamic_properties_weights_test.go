@@ -2,8 +2,6 @@ package state
 
 import (
 	"testing"
-
-	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 func TestWeightCounters_Defaults(t *testing.T) {
@@ -45,12 +43,10 @@ func TestAddTotalNetWeight_ClampOnceNewRewardActive(t *testing.T) {
 func TestAddTotalEnergyWeight_ZeroDeltaIsNoOp(t *testing.T) {
 	dp := NewDynamicProperties()
 	dp.SetTotalEnergyWeight(42)
-	db := rawdb.NewMemoryDatabase()
-	dp.Flush(db)
 
 	// Simulate a second dp instance from the fresh DB; the AddTotalEnergyWeight(0)
 	// below must not dirty a key and must not change value on next flush.
-	dp2 := LoadDynamicProperties(db)
+	dp2 := flushAndReload(t, dp)
 	dp2.AddTotalEnergyWeight(0)
 	if got := dp2.TotalEnergyWeight(); got != 42 {
 		t.Errorf("zero-delta changed value: got %d, want 42", got)
@@ -58,12 +54,10 @@ func TestAddTotalEnergyWeight_ZeroDeltaIsNoOp(t *testing.T) {
 }
 
 func TestAddTotalTronPowerWeight_RoundTripPersisted(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
 	dp := NewDynamicProperties()
 	dp.AddTotalTronPowerWeight(1234)
-	dp.Flush(db)
 
-	dp2 := LoadDynamicProperties(db)
+	dp2 := flushAndReload(t, dp)
 	if got := dp2.TotalTronPowerWeight(); got != 1234 {
 		t.Errorf("round trip: got %d, want 1234", got)
 	}

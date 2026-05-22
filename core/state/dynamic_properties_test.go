@@ -6,7 +6,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // Test 1: Defaults — NewDynamicProperties returns correct default values.
@@ -97,7 +96,6 @@ func TestDynamicProperties_SetGet(t *testing.T) {
 
 // Test 3: Flush and Load — flush to DB then load back and verify.
 func TestDynamicProperties_FlushAndLoad(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
 	dp := NewDynamicProperties()
 
 	dp.SetLatestBlockHeaderNumber(100)
@@ -113,9 +111,7 @@ func TestDynamicProperties_FlushAndLoad(t *testing.T) {
 	h := common.HexToHash("deadbeef")
 	dp.SetLatestBlockHeaderHash(h)
 
-	dp.Flush(db)
-
-	loaded := LoadDynamicProperties(db)
+	loaded := flushAndReload(t, dp)
 
 	if got := loaded.LatestBlockHeaderNumber(); got != 100 {
 		t.Errorf("after load LatestBlockHeaderNumber: got %d, want 100", got)
@@ -174,14 +170,11 @@ func TestDynamicProperties_GenericGetSet(t *testing.T) {
 
 // Test 5: Only dirty props flushed — create, flush empty, load, verify defaults still work.
 func TestDynamicProperties_OnlyDirtyFlushed(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-
 	// Flush a fresh DynamicProperties with no modifications.
 	dp := NewDynamicProperties()
-	dp.Flush(db)
 
-	// Load from DB — defaults should survive via in-memory fallback.
-	loaded := LoadDynamicProperties(db)
+	// Load back — defaults should survive (nothing was flushed).
+	loaded := flushAndReload(t, dp)
 
 	// These should equal the defaults (nothing was flushed, so DB has no overrides,
 	// and LoadDynamicProperties starts from defaults).
@@ -198,9 +191,8 @@ func TestDynamicProperties_OnlyDirtyFlushed(t *testing.T) {
 	// Now set one prop, flush, reload — only that one should differ from the fresh default.
 	dp2 := NewDynamicProperties()
 	dp2.Set("energy_fee", 999)
-	dp2.Flush(db)
 
-	loaded2 := LoadDynamicProperties(db)
+	loaded2 := flushAndReload(t, dp2)
 	if got := loaded2.EnergyFee(); got != 999 {
 		t.Errorf("EnergyFee after targeted flush: got %d, want 999", got)
 	}
@@ -288,15 +280,13 @@ func TestDynamicProperties_StringSetGet(t *testing.T) {
 }
 
 func TestDynamicProperties_StringFlushAndLoad(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
 	dp := NewDynamicProperties()
 
 	dp.SetEnergyPriceHistory("0:100,9999:200")
 	dp.SetBandwidthPriceHistory("0:10,8888:20")
 	dp.SetMemoFeeHistory("0:0,7777:50")
-	dp.Flush(db)
 
-	loaded := LoadDynamicProperties(db)
+	loaded := flushAndReload(t, dp)
 
 	if got := loaded.EnergyPriceHistory(); got != "0:100,9999:200" {
 		t.Errorf("loaded EnergyPriceHistory: got %q, want %q", got, "0:100,9999:200")
@@ -334,9 +324,7 @@ func TestDynamicProperties_BurnTrxAmount(t *testing.T) {
 	}
 
 	// Persistence round-trip: flush accumulated value, reload, verify.
-	db := rawdb.NewMemoryDatabase()
-	dp.Flush(db)
-	loaded := LoadDynamicProperties(db)
+	loaded := flushAndReload(t, dp)
 	if got := loaded.BurnTrxAmount(); got != 1_500_000 {
 		t.Errorf("after flush+load: want 1500000, got %d", got)
 	}
@@ -431,9 +419,7 @@ func TestBlockFilledSlots_Persistence(t *testing.T) {
 	}
 	want := dp.BlockFilledSlots()
 
-	db := rawdb.NewMemoryDatabase()
-	dp.Flush(db)
-	loaded := LoadDynamicProperties(db)
+	loaded := flushAndReload(t, dp)
 	got := loaded.BlockFilledSlots()
 	if len(got) != BlockFilledSlotsNumber {
 		t.Fatalf("loaded length: want %d, got %d", BlockFilledSlotsNumber, len(got))
@@ -560,22 +546,20 @@ type readerOnly struct{ inner ethdb.KeyValueReader }
 func (r *readerOnly) Get(key []byte) ([]byte, error) { return r.inner.Get(key) }
 func (r *readerOnly) Has(key []byte) (bool, error)   { return r.inner.Has(key) }
 
-// TestLoadDynamicProperties_PrefixScanMatchesPerKey asserts the new prefix-
-// scan fast path returns a DynamicProperties value equal to the legacy
-// per-key fallback. Important: the fast path skipped 133 point Gets per
-// applyBlock, but if it accidentally drops a key (e.g. the
-// latest_block_header_hash special case, or a future stringProp default)
-// every downstream consumer silently sees the in-memory default instead.
-//
-// Verify by writing a non-trivial DP image, then loading via both paths and
-// deep-comparing every public field that LoadDynamicProperties is responsible
-// for.
+// TestLoadDynamicProperties_PrefixScanMatchesPerKey asserts the derived-key
+// load's prefix-scan fast path returns a DynamicProperties value equal to the
+// per-key fallback. The fast path filters a single dp- scan to the derived
+// subset; the slow path point-reads them. If either accidentally drops a key
+// (e.g. the latest_block_header_hash special case) downstream consumers
+// silently see the in-memory default instead. The rooted keys are loaded from
+// a shared sysKV so any divergence is isolated to the derived path.
 func TestLoadDynamicProperties_PrefixScanMatchesPerKey(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
+	sdb := newTestStateDB(t)
+	db := sdb.db.DiskDB()
 	dp := NewDynamicProperties()
 
 	// Mix of int props, the hash slot, and string props so the test covers
-	// every branch of applyLoadedDPValue.
+	// every branch of applyLoadedDPValue (derived) and the rooted overlay.
 	dp.SetLatestBlockHeaderNumber(1234567)
 	dp.SetLatestBlockHeaderTimestamp(1700000000)
 	dp.SetNextMaintenanceTime(1700100000)
@@ -583,10 +567,22 @@ func TestLoadDynamicProperties_PrefixScanMatchesPerKey(t *testing.T) {
 	dp.SetAllowPbft(true)
 	dp.SetLatestBlockHeaderHash(common.HexToHash("0xfeedbeef"))
 	dp.SetString("energy_price_history", "0:100,1700000000:140")
-	dp.Flush(db)
 
-	fast := LoadDynamicProperties(db)
-	slow := LoadDynamicProperties(&readerOnly{inner: db})
+	if err := dp.FlushRooted(sdb); err != nil {
+		t.Fatalf("flush rooted: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	dp.Flush(db) // derived → dp-
+	sysKV, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fast := LoadDynamicProperties(db, sysKV)
+	slow := LoadDynamicProperties(&readerOnly{inner: db}, sysKV)
 
 	if !dpEqual(t, fast, slow) {
 		t.Fatal("prefix-scan and per-key LoadDynamicProperties paths diverged — see logged diffs")

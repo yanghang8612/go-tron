@@ -71,14 +71,19 @@ func TestAccountIDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAccountIDIgnoresPrefix(t *testing.T) {
-	// Same 20-byte identity, different network prefix -> identical AccountID.
-	var a, b Address
-	a[0], b[0] = AddressPrefixMainnet, AddressPrefixTestnet
-	for i := 1; i < AddressLength; i++ {
-		a[i], b[i] = byte(i), byte(i)
+func TestValidPrefixRejectsNonMainnet(t *testing.T) {
+	var mainnet Address
+	mainnet[0] = AddressPrefixMainnet
+	if !mainnet.ValidPrefix() {
+		t.Fatal("0x41 prefix must be valid")
 	}
-	if a.AccountID() != b.AccountID() {
-		t.Fatal("AccountID must ignore the network prefix byte")
+	// Only 0x41 is accepted; the legacy 0xa0 testnet prefix and any other byte
+	// are rejected, so distinct addresses can never collide on one AccountID.
+	for _, p := range []byte{0xa0, 0x00, 0x42} {
+		var addr Address
+		addr[0] = p
+		if addr.ValidPrefix() {
+			t.Fatalf("prefix %#x must be rejected (only 0x41 is valid)", p)
+		}
 	}
 }

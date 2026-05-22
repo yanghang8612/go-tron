@@ -3,7 +3,6 @@ package net
 import (
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"encoding/binary"
 	"testing"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -29,9 +28,11 @@ func makeDataSyncHandler(t *testing.T) (*PbftDataSyncHandler, *core.BlockChain) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	// allow_pbft is a rooted DP key (Phase 3b); stage it into the head cache
+	// the handler reads, not flat dp-.
+	dp := bc.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	bc.SetDynPropsCacheForTest(dp)
 
 	h := NewPbftDataSyncHandler(bc, bc.DB())
 	return h, bc
@@ -167,9 +168,11 @@ func TestPbftDataSync_SRLEpochUsesDefaultInterval(t *testing.T) {
 	// it directly here so allowPBFT() short-circuits to true. Critically we
 	// do NOT Set maintenance_time_interval — the default 21_600_000 must
 	// only live in memory, matching mainnet's empty-map genesis.
-	dp := state.LoadDynamicProperties(diskdb)
+	// allow_pbft is a rooted DP key (Phase 3b); stage it into the head cache
+	// the handler reads, not flat dp-.
+	dp := bc.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	bc.SetDynPropsCacheForTest(dp)
 
 	// Sanity check: ReadDynamicProperty must return absent for the
 	// maintenance interval — that's the precondition this test guards.
@@ -274,9 +277,11 @@ func TestPbftDataSync_SRLEpochUsesBufferedDP(t *testing.T) {
 
 	// Flip allow_pbft on disk so allowPBFT() short-circuits — what matters
 	// here is the SRL epoch computation, not gate activation.
-	dp := state.LoadDynamicProperties(diskdb)
+	// allow_pbft is a rooted DP key (Phase 3b); stage it into the head cache
+	// the handler reads, not flat dp-.
+	dp := bc.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	bc.SetDynPropsCacheForTest(dp)
 
 	h := NewPbftDataSyncHandler(bc, bc.DB())
 
@@ -303,18 +308,11 @@ func TestPbftDataSync_SRLEpochUsesBufferedDP(t *testing.T) {
 		t.Fatalf("InsertBlock(block1): %v", err)
 	}
 
-	// Precondition: disk still holds the OLD next_maintenance_time. If
-	// this ever changes — e.g. solidified-flush logic widens — the test
-	// no longer exercises the buffer/disk delta and must be reworked.
-	rawDisk := rawdb.ReadDynamicProperty(bc.DB(), "next_maintenance_time")
-	if len(rawDisk) != 8 {
-		t.Fatalf("test precondition broken: next_maintenance_time absent on disk after block #1")
-	}
-	if got := int64(binary.BigEndian.Uint64(rawDisk)); got != oldNextMaint {
-		t.Fatalf("test precondition broken: disk next_maintenance_time = %d, want unchanged %d (solidified-flush is no longer gated by solidified=0?)", got, oldNextMaint)
-	}
-
-	// The fix: BufferedDPInt64 sees the new buffered value.
+	// next_maintenance_time is a rooted DP key (Phase 3b): it lives in the
+	// system-account KV, never in flat dp-, so there is no buffer/disk delta to
+	// assert anymore. The invariant that still matters — and the whole point of
+	// this test — is that the SRL epoch computation reads the POST-block value
+	// (via the in-memory head snapshot), not a stale one.
 	const newNextMaint = oldNextMaint + interval
 	if got := bc.BufferedDPInt64("next_maintenance_time"); got != newNextMaint {
 		t.Fatalf("BufferedDPInt64(next_maintenance_time) = %d, want %d", got, newNextMaint)

@@ -234,7 +234,7 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 		// Sanity: the genesis DP write must round-trip through
 		// LoadDynamicProperties so that applyBlock's gate-evaluation at the
 		// top sees the activation.
-		dp := state.LoadDynamicProperties(bc.BufferedDB())
+		dp := loadDPAtRoot(t, bc.BufferedDB(), bc.StateDB(), bc.HeadStateRoot())
 		if !dp.AllowShieldedTransaction() {
 			t.Fatalf("genesis activation lost: allow_shielded_transaction=%v", dp.AllowShieldedTransaction())
 		}

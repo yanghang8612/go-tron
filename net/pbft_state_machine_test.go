@@ -81,9 +81,10 @@ func newPbftRig(t *testing.T, numSRs, localKeyCount int) *pbftRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	// allow_pbft is a rooted DP key (Phase 3b); stage it into the head cache.
+	dp := bc.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	bc.SetDynPropsCacheForTest(dp)
 
 	keys := make([]*ecdsa.PrivateKey, numSRs)
 	addrs := make([]tcommon.Address, numSRs)

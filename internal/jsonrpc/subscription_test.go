@@ -21,8 +21,8 @@ type wsTestBackend struct {
 	subCh chan<- *types.Block
 }
 
-func (b *wsTestBackend) SubscribeBlocks(ch chan<- *types.Block)  { b.subCh = ch }
-func (b *wsTestBackend) UnsubscribeBlocks(_ chan<- *types.Block) {}
+func (b *wsTestBackend) SubscribeBlocks(ch chan<- *types.Block)   { b.subCh = ch }
+func (b *wsTestBackend) UnsubscribeBlocks(_ chan<- *types.Block)  {}
 
 func (b *wsTestBackend) injectBlock(block *types.Block) {
 	if b.subCh != nil {
@@ -30,17 +30,14 @@ func (b *wsTestBackend) injectBlock(block *types.Block) {
 	}
 }
 
-// newWSTestServer creates an httptest.Server backed by the production
-// NewServer handler (the reflection framework for HTTP, the subscription
-// manager for WS), so these tests exercise the real cutover path. The returned
-// backend can inject blocks via the FilterManager that NewServer wires up.
+// newWSTestServer creates an httptest.Server backed by a NewAPI handler.
+// The returned backend can inject blocks.
 func newWSTestServer(t *testing.T) (*httptest.Server, *wsTestBackend) {
 	t.Helper()
 	backend := &wsTestBackend{}
-	jrpc := jsonrpc.NewServer(backend, 0)
-	srv := httptest.NewServer(jrpc.Handler())
+	api := jsonrpc.NewAPI(backend)
+	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
-	t.Cleanup(func() { _ = jrpc.Stop() })
 	return srv, backend
 }
 

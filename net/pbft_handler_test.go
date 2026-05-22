@@ -32,10 +32,11 @@ func makePbftHandlerForTest(t *testing.T) (*PbftHandler, *core.BlockChain) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Enable PBFT fork so allowPBFT() returns true.
-	dp := state.LoadDynamicProperties(diskdb)
+	// Enable PBFT fork so allowPBFT() returns true. allow_pbft is a rooted DP
+	// key (Phase 3b); stage it into the head cache the handler reads.
+	dp := bc.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	bc.SetDynPropsCacheForTest(dp)
 
 	h := NewPbftHandler(bc, bc.DB(), nil, nil)
 	h.Start() //nolint:errcheck
@@ -412,7 +413,7 @@ func makePbftHandlerNoActivation(t *testing.T) (*PbftHandler, *core.BlockChain, 
 // to flip back to false. The sticky atomic is the only thing that keeps it
 // true; a regression that drops or wires it wrong would surface here.
 func TestAllowPBFT_StickyAtomic_FastPathSkipsDB(t *testing.T) {
-	h, _, diskdb := makePbftHandlerNoActivation(t)
+	h, _, _ := makePbftHandlerNoActivation(t)
 
 	// (a) Slow path before activation: allow_pbft absent on disk → buffer
 	//     read returns 0 → allowPBFT must return false and leave the atomic
@@ -424,12 +425,12 @@ func TestAllowPBFT_StickyAtomic_FastPathSkipsDB(t *testing.T) {
 		t.Fatal("pbftActive cached as true before activation")
 	}
 
-	// (b) Activate allow_pbft on disk (mirrors what a successful proposal
-	//     write through bc.buffer would land on the solidified flush). The
-	//     buffer overlay sees the disk value on miss.
-	dp := state.LoadDynamicProperties(diskdb)
+	// (b) Activate allow_pbft by staging it into the head cache. allow_pbft is
+	//     a rooted DP key (Phase 3b); production lands it via a maintenance-
+	//     applied proposal that refreshes the cache.
+	dp := h.chain.DynProps()
 	dp.Set("allow_pbft", 1)
-	dp.Flush(diskdb)
+	h.chain.SetDynPropsCacheForTest(dp)
 
 	if !h.allowPBFT() {
 		t.Fatal("allowPBFT() = false after allow_pbft=1 written to disk, want true")
@@ -438,12 +439,12 @@ func TestAllowPBFT_StickyAtomic_FastPathSkipsDB(t *testing.T) {
 		t.Fatal("pbftActive not cached as true after first true return from slow path")
 	}
 
-	// (c) Regress disk state to allow_pbft=0 — a state the buffered point
-	//     read alone would compute as not-active. The sticky atomic must
-	//     hold the gate open.
-	dp = state.LoadDynamicProperties(diskdb)
+	// (c) Regress the cached allow_pbft to 0 — a state the point read alone
+	//     would compute as not-active. The sticky atomic must hold the gate
+	//     open.
+	dp = h.chain.DynProps()
 	dp.Set("allow_pbft", 0)
-	dp.Flush(diskdb)
+	h.chain.SetDynPropsCacheForTest(dp)
 
 	// Sanity check: the underlying buffered read must now report 0 so
 	// the assertion below is meaningful (if the buffer still reported >=1,

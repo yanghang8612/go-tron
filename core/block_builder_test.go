@@ -356,7 +356,7 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 
 	// Pre-seed cycle brokerage for cycle 0 so payBlockReward sees the correct
 	// rate (mirrors what applyRewardMaintenance writes at maintenance boundary).
-	dp0 := state.LoadDynamicProperties(diskdb)
+	dp0 := loadGenesisDP(t, diskdb)
 	curCycle := dp0.CurrentCycleNumber()
 	rawdb.WriteCycleBrokerage(diskdb, curCycle, witnessAddr.Bytes(), brokerage)
 
@@ -386,7 +386,7 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	//                           witness allowance +3.2M
 	// Total: cycleReward = 38.4M, allowance = 9.6M.
 	// Under the old double-write: cycleReward = 76.8M, allowance = 19.2M.
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	payPerBlock := dp.WitnessPayPerBlock()   // 32_000_000
 	standbyPay := dp.Witness127PayPerBlock() // 16_000_000 (single witness gets all)
 	brokerageRate := float64(brokerage) / 100.0

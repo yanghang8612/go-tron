@@ -24,14 +24,3 @@ func TestTrieKeyUsesAccountID(t *testing.T) {
 		t.Fatal("trieKey must no longer hash the 21-byte address")
 	}
 }
-
-func TestTrieKeyIgnoresPrefix(t *testing.T) {
-	var a, b tcommon.Address
-	a[0], b[0] = tcommon.AddressPrefixMainnet, tcommon.AddressPrefixTestnet
-	for i := 1; i < tcommon.AddressLength; i++ {
-		a[i], b[i] = byte(i), byte(i)
-	}
-	if !bytes.Equal(trieKey(a), trieKey(b)) {
-		t.Fatal("trieKey must depend only on the 20-byte AccountID")
-	}
-}

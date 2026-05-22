@@ -8,7 +8,6 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -156,7 +155,12 @@ func seedFilledSlots(t *testing.T, bc *core.BlockChain, filled int) {
 	for i := 0; i < filled; i++ {
 		ring[i] = 1
 	}
-	rawdb.WriteDynamicProperty(bc.DB(), "block_filled_slots", ring)
+	// block_filled_slots is a rooted DP key (Phase 3b), no longer in flat dp-.
+	// Stage it into the head cache the way applyBlock would: take the current
+	// head snapshot, override the ring, store it back.
+	dp := bc.DynProps()
+	dp.SetBlockFilledSlots(ring)
+	bc.SetDynPropsCacheForTest(dp)
 }
 
 // TestProduceBlock_LowParticipation_Skips: with rate ~10% (13 ones / 128 →

@@ -353,7 +353,7 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	}
 	bc.WaitForFlushSettled()
 
-	dynProps := state.LoadDynamicProperties(diskdb)
+	dynProps := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if dynProps.NextMaintenanceTime() != 6000 {
 		t.Fatalf("maintenance should not have run yet, got %d", dynProps.NextMaintenanceTime())
 	}
@@ -365,7 +365,7 @@ func TestBlockChainInsertBlock_Maintenance(t *testing.T) {
 	}
 	bc.WaitForFlushSettled()
 
-	dynProps = state.LoadDynamicProperties(diskdb)
+	dynProps = loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if dynProps.NextMaintenanceTime() <= 6000 {
 		t.Fatalf("next_maintenance_time should have advanced past 6000, got %d", dynProps.NextMaintenanceTime())
 	}
@@ -451,7 +451,7 @@ func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
 	if got.State != rawdb.ProposalStateApproved {
 		t.Fatalf("proposal #1 state: got %d, want APPROVED (%d)", got.State, rawdb.ProposalStateApproved)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if !dp.AllowCreationOfContracts() {
 		raw, _ := dp.Get("allow_creation_of_contracts")
 		t.Fatalf("allow_creation_of_contracts not set after proposal #1 applied (raw value=%d)", raw)
@@ -527,14 +527,7 @@ func TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary(t *testing.T) {
 	// next_maintenance_time must advance to exactly 2*interval after one
 	// fire (round=0 in CalcNextMaintenanceTime, since blockTime − currentMaint
 	// < interval).
-	// next_maintenance_time is advanced in dynProps and lands in the active
-	// buffer layer; it reaches diskdb only when the async flush worker drains
-	// that layer (see BlockChain.postFlush / WaitForFlushSettled godoc). A
-	// direct-disk read here without settling first races the worker and
-	// intermittently observes the genesis value. Mirror the sibling test's
-	// WaitForFlushSettled() → LoadDynamicProperties(diskdb) convention.
-	bc.WaitForFlushSettled()
-	dynProps := state.LoadDynamicProperties(diskdb)
+	dynProps := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if got, want := dynProps.NextMaintenanceTime(), 2*interval; got != want {
 		t.Fatalf("next_maintenance_time after fire: got %d, want %d", got, want)
 	}
@@ -566,6 +559,71 @@ func TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary(t *testing.T) {
 	if fires != want {
 		t.Fatalf("DoMaintenance fires across stress run: got %d, want %d (blocks=%d→%d)",
 			fires, want, startBlockNum+1, bc.CurrentBlock().Number())
+	}
+}
+
+// TestBlockChainInsertBlock_RootedDynPropsRewind is the Phase 3b pipeline
+// acceptance gate: a maintenance block changes a rooted dynprop
+// (next_maintenance_time), which must (a) move the internal full-state root
+// (anchor) and (b) remain recoverable by reopening the OLD root after the chain
+// advances (rewind). This is the whole point of rooting dynamic properties.
+func TestBlockChainInsertBlock_RootedDynPropsRewind(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+
+	witnessAddr := testCoreAddr(10)
+	const interval = int64(21_600_000)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "http://w1"},
+		},
+		DynamicProperties: map[string]int64{
+			"maintenance_time_interval": interval,
+			"next_maintenance_time":     interval,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Block #1 (ts=1): pre-boundary, next_maintenance_time stays = interval.
+	if err := bc.InsertBlock(buildTestBlock(bc, witnessAddr, 1)); err != nil {
+		t.Fatalf("InsertBlock(#1): %v", err)
+	}
+	bc.WaitForFlushSettled()
+	rootBefore := bc.HeadStateRoot()
+	if got := loadDPAtRoot(t, diskdb, sdb, rootBefore).NextMaintenanceTime(); got != interval {
+		t.Fatalf("pre-boundary next_maintenance_time: got %d, want %d", got, interval)
+	}
+
+	// Block #2 (ts=interval): crosses the boundary; next_maintenance_time
+	// advances to 2*interval and the rooted change moves the state root.
+	if err := bc.InsertBlock(buildTestBlock(bc, witnessAddr, interval)); err != nil {
+		t.Fatalf("InsertBlock(#2): %v", err)
+	}
+	bc.WaitForFlushSettled()
+	rootAfter := bc.HeadStateRoot()
+
+	if rootBefore == rootAfter {
+		t.Fatal("anchor: maintenance changed next_maintenance_time but the state root did not move")
+	}
+	if got := loadDPAtRoot(t, diskdb, sdb, rootAfter).NextMaintenanceTime(); got != 2*interval {
+		t.Fatalf("post-boundary next_maintenance_time at head root: got %d, want %d", got, 2*interval)
+	}
+
+	// Rewind: reopening the pre-boundary root must still yield the OLD value,
+	// even though the chain has advanced past it.
+	if got := loadDPAtRoot(t, diskdb, sdb, rootBefore).NextMaintenanceTime(); got != interval {
+		t.Fatalf("rewind to pre-boundary root: next_maintenance_time = %d, want %d", got, interval)
 	}
 }
 
@@ -661,7 +719,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	bc.WaitForFlushSettled()
 
 	// 1. Grid still advances per java's updateNextMaintenanceTime formula.
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if got := dp.NextMaintenanceTime(); got != wantNextMaint {
 		t.Fatalf("next_maintenance_time after block #1: got %d, want %d (java formula output)", got, wantNextMaint)
 	}
@@ -700,7 +758,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	if gotProp.State != rawdb.ProposalStatePending {
 		t.Fatalf("proposal #1 state after block #1: got %d, want PENDING (%d)", gotProp.State, rawdb.ProposalStatePending)
 	}
-	dpAfter := state.LoadDynamicProperties(diskdb)
+	dpAfter := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if dpAfter.AllowCreationOfContracts() {
 		t.Fatal("allow_creation_of_contracts unexpectedly applied — ProcessProposals fired on block #1")
 	}
@@ -747,7 +805,7 @@ func TestSolidifiedBlockSingleSR(t *testing.T) {
 	bc.WaitForFlushSettled()
 
 	want := uint64(numBlocks)
-	got := uint64(state.LoadDynamicProperties(diskdb).LatestSolidifiedBlockNum())
+	got := uint64(state.LoadDynamicProperties(diskdb, nil).LatestSolidifiedBlockNum()) // derived-only
 	if got != want {
 		t.Fatalf("LatestSolidifiedBlockNum: got %d, want %d", got, want)
 	}
@@ -814,7 +872,7 @@ func TestBlockChainInsertBlock_TryRemoveThePowerOfTheGr(t *testing.T) {
 		t.Fatalf("GR voteCount after strip: got %d, want 0 (100M − 100M)", got)
 	}
 
-	dp := state.LoadDynamicProperties(bc.BufferedDB())
+	dp := loadDPAtRoot(t, bc.BufferedDB(), bc.StateDB(), bc.HeadStateRoot())
 	if got := dp.RemoveThePowerOfTheGr(); got != -1 {
 		t.Fatalf("flag after strip: got %d, want -1", got)
 	}
@@ -828,7 +886,7 @@ func TestBlockChainInsertBlock_TryRemoveThePowerOfTheGr(t *testing.T) {
 	if got := w2.VoteCount(); got != 0 {
 		t.Fatalf("GR voteCount after second maintenance: got %d, want 0", got)
 	}
-	if got := state.LoadDynamicProperties(bc.BufferedDB()).RemoveThePowerOfTheGr(); got != -1 {
+	if got := loadDPAtRoot(t, bc.BufferedDB(), bc.StateDB(), bc.HeadStateRoot()).RemoveThePowerOfTheGr(); got != -1 {
 		t.Fatalf("flag after second maintenance: got %d, want -1", got)
 	}
 }

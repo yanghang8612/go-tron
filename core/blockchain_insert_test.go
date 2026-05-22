@@ -308,7 +308,7 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open state after fork switch: %v", err)
 	}
-	dynProps := state.LoadDynamicProperties(diskdb)
+	dynProps := state.LoadDynamicProperties(diskdb, statedb)
 	wantAllowance := dynProps.WitnessPayPerBlock() * 11
 	if got := statedb.GetAllowance(witnessAddr); got != wantAllowance {
 		t.Fatalf("witness allowance after fork switch: got %d, want %d (11 × WitnessPayPerBlock)", got, wantAllowance)
@@ -484,7 +484,7 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 	// Solidified therefore never advances in this test — which is what we
 	// want, because it keeps the orphan layers in memory so DiscardBlock
 	// can rewind them.
-	dynPost := state.LoadDynamicProperties(bc.BufferedDB())
+	dynPost := state.LoadDynamicProperties(bc.BufferedDB(), nil) // derived-only read
 	if got := dynPost.LatestSolidifiedBlockNum(); got != 0 {
 		t.Fatalf("after switchFork: LatestSolidifiedBlockNum = %d, want 0 (test holds solidified flat)", got)
 	}
@@ -752,7 +752,7 @@ func TestFlushAtSolidified_SurvivesRestart(t *testing.T) {
 	}
 
 	// DP `latest_solidified_block_num` survived restart.
-	dpDisk := state.LoadDynamicProperties(diskdb)
+	dpDisk := state.LoadDynamicProperties(diskdb, nil) // derived-only read
 	if got := dpDisk.LatestSolidifiedBlockNum(); got != 5 {
 		t.Fatalf("disk-side LatestSolidifiedBlockNum = %d, want 5", got)
 	}
@@ -1183,7 +1183,7 @@ func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 	if got := w.LatestBlockNum(); got != 5 {
 		t.Fatalf("disk-side LatestBlockNum = %d, want 5", got)
 	}
-	dpDisk := state.LoadDynamicProperties(diskdb)
+	dpDisk := state.LoadDynamicProperties(diskdb, nil) // derived-only read
 	if got := dpDisk.LatestSolidifiedBlockNum(); got != 5 {
 		t.Fatalf("disk-side LatestSolidifiedBlockNum = %d, want 5", got)
 	}
@@ -1323,7 +1323,7 @@ func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
 	if err := bc.flushBufferUpToSolidified(2); err != nil {
 		t.Fatalf("flush up to 2: %v", err)
 	}
-	if got := state.LoadDynamicProperties(diskdb).LatestBlockHeaderNumber(); got != 2 {
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 2 {
 		t.Fatalf("disk latest_block_header_number = %d, want 2", got)
 	}
 

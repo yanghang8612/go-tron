@@ -70,11 +70,11 @@ func jsonSemanticEqual(a, b []byte) bool {
 	return reflect.DeepEqual(av, bv)
 }
 
-// newEthServer registers EthAPI (over the given backend) on a fresh
-// reflection-framework server and returns its test HTTP endpoint. Shared by the
-// parity tests (freeze backend) and the archive-routing tests (custom stubs).
-func newEthServer(t *testing.T, be jsonrpc.Backend) *httptest.Server {
+// ethParityServer registers EthAPI (over the deterministic freeze backend) on a
+// fresh framework server and returns its test HTTP endpoint.
+func ethParityServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	be := newFreezeBackend()
 	srv := rpc.NewServer()
 	if err := srv.RegisterName("eth", jsonrpc.NewEthAPI(be, jsonrpc.NewFilterManager(be))); err != nil {
 		t.Fatalf("RegisterName: %v", err)
@@ -83,13 +83,6 @@ func newEthServer(t *testing.T, be jsonrpc.Backend) *httptest.Server {
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts
-}
-
-// ethParityServer registers EthAPI (over the deterministic freeze backend) on a
-// fresh framework server and returns its test HTTP endpoint.
-func ethParityServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	return newEthServer(t, newFreezeBackend())
 }
 
 // TestEthAPI_SimpleFrameworkParity proves the no-parameter eth methods dispatch

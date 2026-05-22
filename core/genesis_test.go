@@ -105,7 +105,7 @@ func TestSetupGenesisBlock_NextMaintenanceTimeSeeded(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadGenesisDP(t, diskdb)
 	if dp.NextMaintenanceTime() <= 0 {
 		t.Fatalf("NextMaintenanceTime must be > 0 after genesis bootstrap (mainnet); got %d", dp.NextMaintenanceTime())
 	}
@@ -113,6 +113,34 @@ func TestSetupGenesisBlock_NextMaintenanceTimeSeeded(t *testing.T) {
 	if dp.NextMaintenanceTime() != wantNext {
 		t.Fatalf("NextMaintenanceTime: got %d, want %d (= genesis.Timestamp + MaintenanceTimeInterval)",
 			dp.NextMaintenanceTime(), wantNext)
+	}
+}
+
+// TestSetupGenesisBlock_RootedDynPropsDeterministic guards consensus safety of
+// the Phase 3b rooted-dynprops seed: FlushRooted iterates a Go map (randomized
+// order), so two nodes booting the same genesis must still derive the IDENTICAL
+// genesis state root — otherwise they'd disagree on state from block #1. Also
+// confirms a rooted value round-trips out of the genesis root.
+func TestSetupGenesisBlock_RootedDynPropsDeterministic(t *testing.T) {
+	var firstRoot common.Hash
+	for run := 0; run < 4; run++ {
+		diskdb := ethrawdb.NewMemoryDatabase()
+		if _, _, err := SetupGenesisBlock(diskdb, params.DefaultMainnetGenesis()); err != nil {
+			t.Fatal(err)
+		}
+		root := rawdb.ReadGenesisStateRoot(diskdb)
+		if root == (common.Hash{}) {
+			t.Fatal("genesis state root not persisted")
+		}
+		if run == 0 {
+			firstRoot = root
+		} else if root != firstRoot {
+			t.Fatalf("genesis state root non-deterministic across runs: run %d = %x, run 0 = %x", run, root, firstRoot)
+		}
+		// A rooted dynprop must be recoverable from the genesis root.
+		if got := loadGenesisDP(t, diskdb).MaintenanceTimeInterval(); got != 21600000 {
+			t.Fatalf("rooted maintenance_time_interval at genesis root: got %d, want 21600000", got)
+		}
 	}
 }
 
@@ -205,7 +233,7 @@ func TestSetupGenesisBlock_NextMaintenanceTimeRespectsExplicit(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadGenesisDP(t, diskdb)
 	if dp.NextMaintenanceTime() != explicit {
 		t.Fatalf("explicit next_maintenance_time clobbered: got %d, want %d", dp.NextMaintenanceTime(), explicit)
 	}
@@ -226,7 +254,7 @@ func TestSetupGenesisBlock_EnergyFeeSeedsPriceHistory(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadGenesisDP(t, diskdb)
 	if got := dp.EnergyFee(); got != 420 {
 		t.Fatalf("energy_fee: got %d, want 420", got)
 	}
@@ -250,7 +278,7 @@ func TestSetupGenesisBlock_ConstantinopleConfigAddsClearABIOperation(t *testing.
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	dp := state.LoadDynamicProperties(diskdb)
+	dp := loadGenesisDP(t, diskdb)
 	if !dp.IsContractTypeAvailable(48) {
 		t.Fatal("ClearABIContract bit 48 not set in available_contract_type")
 	}
@@ -364,6 +392,49 @@ func TestSetupGenesisBlockWithAncientFindsFrozenGenesis(t *testing.T) {
 	}
 	if gotHash != genesisHash {
 		t.Fatalf("genesis hash = %x, want %x", gotHash, genesisHash)
+	}
+}
+
+// TestGenesisToBlock_MatchesJavaTronPrivateChain pins the genesis block hash
+// against a live java-tron private chain at /Users/asuka/Works/Tests/TVM/run.
+//
+// The expected hash was captured 2026-05-02 by the diagnostic
+// p2p.TestProbeJavaTronGenesis, which extracts the genesis BlockID from
+// the peer's app-layer P2P_HELLO. The first 8 bytes of the BlockID encode
+// the block number (zero for genesis); the remaining 24 bytes are the
+// trailing 24 bytes of SHA256(BlockHeaderRaw proto bytes).
+//
+// Concretely, java-tron reported genesis ID
+//
+//	000000000000000075da3fe749503edb5d6121d96d450b980294a03648934988
+//
+// and gtron's `Block.ID()` overwrites the leading 8 bytes with the
+// big-endian block number, so we compare on the BlockID, not the raw hash.
+// TestGenesisCreatesSystemAccount verifies that the reserved system account
+// (common.SystemAccountAddress) exists in the persisted post-genesis state so
+// it can own chain-global KV entries from block #1 onward.
+func TestGenesisCreatesSystemAccount(t *testing.T) {
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: common.BytesToAddress([]byte{0x41, 1}), Balance: 1},
+		},
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	root := rawdb.ReadGenesisStateRoot(diskdb)
+	if root == (common.Hash{}) {
+		t.Fatalf("genesis state root not persisted")
+	}
+	sdb, err := state.New(root, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatalf("open state at genesis root: %v", err)
+	}
+	if !sdb.AccountExists(common.SystemAccountAddress) {
+		t.Fatal("genesis must create the reserved system account")
 	}
 }
 
