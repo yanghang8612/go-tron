@@ -64,12 +64,15 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
 
-	// Persist the new witness record + index entry through ctx.DB so it
-	// survives the block commit. Without this the in-memory s.witnesses map
-	// is discarded after applyBlock and the new SR is invisible to the next
-	// block's pre-load. Same per-actuator pattern used by WitnessUpdate.
+	// Persist the new witness capsule through ctx.DB so it survives the block
+	// commit (capsules stay flat until Phase 4). The witness index is rooted
+	// (Phase 3c): append it through ctx.State — the same *StateDB maintenance
+	// reads later this block — so the new SR is visible to gatherWitnessVotes,
+	// is journaled (rolls back if this tx reverts), and rewinds with the root.
 	rawdb.WriteWitness(ctx.DB, ownerAddr, types.NewWitness(ownerAddr, string(wc.Url)))
-	rawdb.AppendWitnessIndex(ctx.DB, ownerAddr)
+	if err := ctx.State.AppendWitnessIndex(ownerAddr); err != nil {
+		return nil, err
+	}
 	// M11.5 slice 2a: java-tron AccountCapsule.setDefaultWitnessPermission,
 	// gated on AllowMultiSign (WitnessCreateActuator.java:137).
 	if ctx.DynProps.AllowMultiSign() {

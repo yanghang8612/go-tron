@@ -438,7 +438,12 @@ func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	db := b.chain.BufferedDB()
-	witnessAddrs := rawdb.ReadWitnessIndex(db)
+	// Witness index is rooted (Phase 3c): read it from the system-KV at the head
+	// root. Capsules below still come from the flat buffered view (Phase 4).
+	var witnessAddrs []tcommon.Address
+	if sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot()); sysKV != nil {
+		witnessAddrs = sysKV.ReadWitnessIndex()
+	}
 	activeSet := b.chain.ActiveWitnesses()
 	activeMap := make(map[tcommon.Address]bool, len(activeSet))
 	for _, a := range activeSet {
@@ -1554,7 +1559,10 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	// a cache hydration, not a mutation. Real witness changes from this
 	// RPC-driven validation path go through PutWitness / SetWitnessURL /
 	// AddWitnessVoteCount, which mark dirty for FlushWitnesses.
-	witnessAddrs := rawdb.ReadWitnessIndex(b.chain.buffer)
+	//
+	// Index is rooted (Phase 3c): read it from statedb (opened at the head root);
+	// capsules still load from the flat buffered view (Phase 4).
+	witnessAddrs := statedb.ReadWitnessIndex()
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
 			statedb.LoadWitness(rawdb.ReadWitness(b.chain.buffer, addr))

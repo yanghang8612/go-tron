@@ -105,7 +105,7 @@ func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle in
 	// Gather all known witnesses from the index, sort by vote count desc,
 	// take the top N. Matches java-tron's WitnessStore.getWitnessStandby
 	// for the non-optimized path.
-	addrs := rawdb.ReadWitnessIndex(db)
+	addrs := statedb.ReadWitnessIndex()
 	if len(addrs) == 0 {
 		return nil
 	}
@@ -211,7 +211,7 @@ func maintenanceWitnessVotes(db kvReadWriter, statedb *state.StateDB) []struct {
 	addr  tcommon.Address
 	votes int64
 } {
-	witnessAddrs := rawdb.ReadWitnessIndex(db)
+	witnessAddrs := statedb.ReadWitnessIndex()
 	if len(witnessAddrs) == 0 {
 		return nil
 	}

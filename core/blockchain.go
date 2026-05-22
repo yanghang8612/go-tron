@@ -308,28 +308,14 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	bc.khaosDB = NewKhaosDB()
 	bc.khaosDB.Start(bc.currentBlock.Load())
 
-	// Load active witnesses from DB; if empty, derive from genesis witnesses
-	witnesses := rawdb.ReadActiveWitnesses(db)
-	if len(witnesses) == 0 {
-		var allWitnesses []dpos.WitnessVote
-		witnessAddrs := rawdb.ReadWitnessIndex(db)
-		for _, addr := range witnessAddrs {
-			w := rawdb.ReadWitness(db, addr)
-			if w != nil {
-				allWitnesses = append(allWitnesses, dpos.WitnessVote{
-					Address: w.Address(),
-					Votes:   w.VoteCount(),
-				})
-			}
+	// Load the active witness list from the rooted system-KV at the head root.
+	// Genesis seeds it (genesisBlockAndStateRoot selects from the genesis
+	// witnesses) and every maintenance block re-roots it, so any head that has
+	// run genesis carries it — no derive-from-index fallback is needed.
+	if sysKV := bc.sysKVAt(bc.HeadStateRoot()); sysKV != nil {
+		if witnesses := sysKV.ReadActiveWitnesses(); len(witnesses) > 0 {
+			bc.activeWitnesses.Store(witnesses)
 		}
-		if len(allWitnesses) > 0 {
-			dynProps := state.LoadDynamicProperties(db, bc.sysKVAt(bc.HeadStateRoot()))
-			witnesses = dpos.SelectActiveWitnessesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())
-			rawdb.WriteActiveWitnesses(db, witnesses)
-		}
-	}
-	if len(witnesses) > 0 {
-		bc.activeWitnesses.Store(witnesses)
 	}
 
 	// Only start the async flush worker once construction can no longer
@@ -656,10 +642,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
 			// SetActiveWitnesses may have mutated the in-memory atomic before
-			// the failure. The buffered disk write was just discarded with the
-			// layer, so reload the atomic from the rewound buffer to keep it
-			// consistent with the state this block never reached.
-			bc.reloadActiveWitnesses()
+			// the failure. Its rooted write was on the now-discarded statedb
+			// (never committed), so reload the atomic from the system-KV at the
+			// head root — still the parent here, the state this block never
+			// advanced past.
+			bc.reloadActiveWitnesses(bc.HeadStateRoot())
 		}
 	}()
 
@@ -843,7 +830,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 				// distribution, before the active set is swapped — bc.ActiveWitnesses()
 				// still holds the outgoing set here.
 				flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
-				bc.SetActiveWitnesses(newActive)
+				if err := bc.SetActiveWitnesses(statedb, newActive); err != nil {
+					return err
+				}
 				maintNewWitnesses = newActive
 			}
 
@@ -1238,23 +1227,23 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 		bc.buffer.DiscardBlock(kb.block.Hash())
 	}
 
-	// An orphan-branch maintenance block may have called SetActiveWitnesses,
-	// mutating the in-memory atomic. Its buffered disk write was just dropped
-	// with the orphan layer above — reload the atomic from the rewound buffer
-	// so the active set rewinds with the rest of consensus state before the
-	// new branch is re-applied. (Without this the active set stays stale even
-	// though witness is_jobs and DP correctly rewound.)
-	bc.reloadActiveWitnesses()
-	// Rebuild the dynprops cache from the LCA state: rooted keys come from the
-	// system-KV at the LCA root (the buffer was just rewound for derived keys).
-	// currentBlock is still the pre-switch head here, so we pass the LCA root
-	// explicitly rather than relying on HeadStateRoot().
+	// Rewind consensus caches to the LCA state. currentBlock is still the
+	// pre-switch head here, so compute the LCA root explicitly rather than
+	// relying on HeadStateRoot(). Both the active witness list (Phase 3c) and
+	// the rooted dynprops live in the system-KV at the LCA root.
 	lcaRoot := rawdb.ReadBlockStateRoot(bc.chaindb, lcaHash)
 	if lcaRoot == (tcommon.Hash{}) {
 		if n := rawdb.ReadBlockNumber(bc.chaindb, lcaHash); n != nil && *n == 0 {
 			lcaRoot = rawdb.ReadGenesisStateRoot(bc.db)
 		}
 	}
+	// An orphan-branch maintenance block may have called SetActiveWitnesses,
+	// mutating the in-memory atomic. Its rooted write was dropped with the
+	// orphan branch's abandoned state — reload the atomic from the system-KV at
+	// the LCA root so the active set rewinds with the rest of consensus state
+	// before the new branch is re-applied. (Without this the active set stays
+	// stale even though witness is_jobs and DP correctly rewound.)
+	bc.reloadActiveWitnesses(lcaRoot)
 	bc.reloadDynPropsCache(lcaRoot)
 	bc.invalidateStandbyPayCache()
 	bc.clearRewardAccountCache()
@@ -1401,30 +1390,41 @@ func (bc *BlockChain) ActiveWitnesses() []tcommon.Address {
 	return v.([]tcommon.Address)
 }
 
-// SetActiveWitnesses updates the active witness list in memory and persists it
-// through bc.buffer (the active applyBlock layer) — NOT straight to bc.db.
-// java-tron keeps the active set in a revoking store (WitnessScheduleStore
-// extends TronStoreWithRevoking), so it must rewind with the rest of consensus
-// state on a fork rewind across a maintenance boundary. Routing the write
-// through the buffer puts it in the same atomically-buffered, switchFork-
-// rewindable set as the witness is_jobs flips (see flipWitnessIsJobs). The
-// in-memory atomic is the fast read path for ActiveWitnesses(); switchFork and
-// the applyBlock error defer reload it from the buffer after a rewind.
+// SetActiveWitnesses updates the active witness list in memory and stages it
+// into the rooted system-KV on statedb (Phase 3c). java-tron keeps the active
+// set in a revoking store (WitnessScheduleStore extends TronStoreWithRevoking),
+// so it must rewind with the rest of consensus state on a fork rewind across a
+// maintenance boundary; rooting it into the block's state root gives that
+// rewindability plus historical-height recovery. The in-memory atomic is the
+// fast read path for ActiveWitnesses(); switchFork and the applyBlock error
+// defer reload it from the system-KV at the rewound root.
 //
-// Must be called inside an open buffer layer (Buffer.Put panics otherwise) —
-// the sole production caller is applyBlock, after BeginBlock.
-func (bc *BlockChain) SetActiveWitnesses(witnesses []tcommon.Address) {
+// The sole production caller is applyBlock's maintenance branch, with statedb
+// open at the block being applied (the write is committed by applyBlock's
+// statedb.Commit, alongside the rooted dynprops).
+func (bc *BlockChain) SetActiveWitnesses(statedb *state.StateDB, witnesses []tcommon.Address) error {
 	bc.activeWitnesses.Store(witnesses)
-	rawdb.WriteActiveWitnesses(bc.buffer, witnesses)
+	return statedb.WriteActiveWitnesses(witnesses)
+}
+
+// SetActiveWitnessesForTest overwrites the in-memory active-witness atomic only
+// (no rooted write). TEST-ONLY: lets tests stage an active set without applying
+// a real block, mirroring SetDynPropsCacheForTest.
+func (bc *BlockChain) SetActiveWitnessesForTest(witnesses []tcommon.Address) {
+	bc.activeWitnesses.Store(witnesses)
 }
 
 // reloadActiveWitnesses refreshes the in-memory active-witness atomic from the
-// buffer-backed view. Called after a rewind (switchFork's DiscardBlock loop or
-// the applyBlock error defer) so the atomic — which an orphan-branch
-// SetActiveWitnesses mutated — falls back to the rewound state. A nil result
-// (no value buffered or on disk) leaves the atomic untouched.
-func (bc *BlockChain) reloadActiveWitnesses() {
-	if reloaded := rawdb.ReadActiveWitnesses(bc.buffer); reloaded != nil {
+// rooted system-KV at the given state root. Called after a rewind (switchFork's
+// DiscardBlock loop or the applyBlock error defer) so the atomic — which an
+// orphan-branch SetActiveWitnesses mutated — falls back to the rewound state. A
+// nil sysKV (zero root) or empty result leaves the atomic untouched.
+func (bc *BlockChain) reloadActiveWitnesses(rootAt tcommon.Hash) {
+	sysKV := bc.sysKVAt(rootAt)
+	if sysKV == nil {
+		return
+	}
+	if reloaded := sysKV.ReadActiveWitnesses(); reloaded != nil {
 		bc.activeWitnesses.Store(reloaded)
 	}
 }
@@ -1556,7 +1556,7 @@ func (bc *BlockChain) clearRewardAccountCache() {
 // that mutates vote counts through StateDB. Ordinary replay does lazy rawdb
 // lookups instead, avoiding a full witness scan on every block.
 func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
-	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
+	witnessAddrs := statedb.ReadWitnessIndex()
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
 			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
@@ -1809,10 +1809,11 @@ func sameAddressSet(a, b []tcommon.Address) bool {
 }
 
 // gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).
-// Reads from bc.buffer so witnesses created earlier in the current block
-// (WitnessCreateActuator writes to bc.buffer) are visible at maintenance.
+// The witness index is read from the rooted system-KV on the same *StateDB the
+// actuator appends to (Phase 3c), so witnesses created earlier in this block are
+// visible at maintenance; capsules still fall back to bc.buffer (Phase 4).
 func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessVote {
-	addrs := rawdb.ReadWitnessIndex(bc.buffer)
+	addrs := statedb.ReadWitnessIndex()
 	var result []dpos.WitnessVote
 	for _, addr := range addrs {
 		w := statedb.GetWitness(addr)

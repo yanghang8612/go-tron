@@ -296,8 +296,10 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 
 	// Hydrate witnesses for the reward/standby paths inside ProcessBlock.
 	// Read-only LoadWitness (does not mark dirty) — backfill never flushes
-	// witnesses, so this only feeds the in-block reward computation.
-	for _, addr := range rawdb.ReadWitnessIndex(scratch) {
+	// witnesses, so this only feeds the in-block reward computation. The index
+	// is read from the rooted system-KV on the parent-root statedb (Phase 3c);
+	// capsules still come from the flat scratch view (Phase 4).
+	for _, addr := range statedb.ReadWitnessIndex() {
 		if statedb.GetWitness(addr) == nil {
 			statedb.LoadWitness(rawdb.ReadWitness(scratch, addr))
 		}

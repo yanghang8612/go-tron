@@ -8,6 +8,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -131,8 +132,9 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		// java-tron Manager.initWitness flips is_jobs=true on every genesis
 		// witness; the maintenance-cycle rotation maintains it thereafter.
 		w.SetIsJobs(true)
+		// Capsule stays flat (`w-`) until Phase 4; the witness index is now
+		// rooted into the genesis state root by genesisBlockAndStateRoot.
 		rawdb.WriteWitness(db, gw.Address, w)
-		rawdb.AppendWitnessIndex(db, gw.Address)
 		initialWitnesses = append(initialWitnesses, rawdb.GenesisWitness{
 			Address:   gw.Address,
 			VoteCount: gw.VoteCount,
@@ -200,11 +202,15 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	// is not on the genesis header (java-tron parity), so this does not
 	// move the genesis block hash; it only changes the persisted post-
 	// genesis state root, which is the correct starting state for block #1.
+	witnessIndex := make([]tcommon.Address, 0, len(g.Witnesses))
+	witnessVotes := make([]dpos.WitnessVote, 0, len(g.Witnesses))
 	for _, gw := range g.Witnesses {
 		if !statedb.AccountExists(gw.Address) {
 			statedb.CreateAccount(gw.Address, corepb.AccountType_AssetIssue)
 		}
 		statedb.SetIsWitness(gw.Address, true)
+		witnessIndex = append(witnessIndex, gw.Address)
+		witnessVotes = append(witnessVotes, dpos.WitnessVote{Address: gw.Address, Votes: gw.VoteCount})
 	}
 
 	// Reserved system account: owner of chain-global rooted state (dynamic
@@ -240,6 +246,26 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		}
 		if err := dp.FlushRooted(statedb); err != nil {
 			return nil, tcommon.Hash{}, nil, fmt.Errorf("flush rooted genesis dynamic properties: %w", err)
+		}
+	}
+
+	// Phase 3c: seed the global witness schedule into the system account's KV so
+	// the witness index and the initial active witness list live in the genesis
+	// state root (and rewind with it). Mirrors java-tron Manager.initWitness +
+	// WitnessScheduleStore init: the active set is selected from the genesis
+	// witnesses' configured vote counts in memory — no capsule read-back. Witness
+	// capsules themselves stay flat (`w-`) until Phase 4.
+	if len(witnessIndex) > 0 {
+		if err := statedb.WriteWitnessIndex(witnessIndex); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis witness index: %w", err)
+		}
+		sortOpt := false
+		if dp != nil {
+			sortOpt = dp.ConsensusLogicOptimization()
+		}
+		active := dpos.SelectActiveWitnessesWithOptimization(witnessVotes, sortOpt)
+		if err := statedb.WriteActiveWitnesses(active); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis active witnesses: %w", err)
 		}
 	}
 

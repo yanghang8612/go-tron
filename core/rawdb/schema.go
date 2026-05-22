@@ -58,9 +58,6 @@ var (
 	// Value: 21*N bytes (same encoding as shuffledWitnessesKey).
 	previousShuffledWitnessesKey = []byte("ws-prev-shuffled")
 
-	activeWitnessesKey = []byte("ActiveWitnesses")
-	witnessIndexKey    = []byte("WitnessIndex")
-
 	// genesisWitnessesKey holds the immutable {address, initial_vote_count}
 	// list from the chain's Genesis config. Required to faithfully port
 	// java-tron's tryRemoveThePowerOfTheGr, which subtracts each GR's

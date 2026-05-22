@@ -50,15 +50,15 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// so rooted dynprops load from the parent state the built block extends.
 	dynProps := state.LoadDynamicProperties(bc.buffer, statedb)
 
-	// Load witnesses into statedb for maintenance access. Reads go through
-	// bc.buffer to mirror applyBlock — the chain buffer holds VoteCount /
-	// URL deltas from blocks that haven't yet been flushed to disk, and we
-	// must see the same values applyBlock will see when it inserts the
-	// block we're about to build.
+	// Load witnesses into statedb for maintenance access. The index is read
+	// from the rooted system-KV on the parent-root statedb (Phase 3c) — that is
+	// the index as-of-parent, including witnesses from unsolidified parent
+	// blocks. Capsule VoteCount/URL still come from bc.buffer (Phase 4), which
+	// holds deltas not yet flushed to disk, matching what applyBlock sees.
 	//
 	// Uses LoadWitness (not PutWitness+AddWitnessVoteCount) so this hydration
 	// pass does not mark witnesses dirty — see applyBlock for the rationale.
-	witnessAddrs := rawdb.ReadWitnessIndex(bc.buffer)
+	witnessAddrs := statedb.ReadWitnessIndex()
 	for _, addr := range witnessAddrs {
 		if statedb.GetWitness(addr) == nil {
 			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
