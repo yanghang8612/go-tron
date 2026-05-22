@@ -21,6 +21,7 @@ const (
 	SystemExchange        KVDomain = 0x0006
 	SystemDelegation      KVDomain = 0x0007
 	SystemAccountIndex    KVDomain = 0x0008
+	SystemMarket          KVDomain = 0x0009
 
 	ContractStorage      KVDomain = 0x0100
 	ContractMetadata     KVDomain = 0x0101
@@ -43,6 +44,7 @@ var registry = map[KVDomain]string{
 	SystemExchange:        "SystemExchange",
 	SystemDelegation:      "SystemDelegation",
 	SystemAccountIndex:    "SystemAccountIndex",
+	SystemMarket:          "SystemMarket",
 	ContractStorage:       "ContractStorage",
 	ContractMetadata:      "ContractMetadata",
 	ContractABI:           "ContractABI",

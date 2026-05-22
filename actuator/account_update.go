@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -39,7 +38,7 @@ func (a *AccountUpdateActuator) Validate(ctx *Context) error {
 	if ctx.State.GetAccountName(ownerAddr) != "" && !ctx.DynProps.AllowUpdateAccountName() {
 		return errors.New("account name already set")
 	}
-	if ctx.DB != nil && rawdb.HasAccountNameIndex(ctx.DB, c.AccountName) && !ctx.DynProps.AllowUpdateAccountName() {
+	if ctx.State != nil && ctx.State.HasAccountNameIndex(c.AccountName) && !ctx.DynProps.AllowUpdateAccountName() {
 		return errors.New("account name already exists")
 	}
 	return nil
@@ -55,10 +54,8 @@ func (a *AccountUpdateActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ctx.State.SetAccountName(ownerAddr, string(c.AccountName))
-	if ctx.DB != nil {
-		if err := rawdb.WriteAccountNameIndex(ctx.DB, c.AccountName, ownerAddr[:]); err != nil {
-			return nil, err
-		}
+	if err := ctx.State.WriteAccountNameIndex(c.AccountName, ownerAddr); err != nil {
+		return nil, err
 	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

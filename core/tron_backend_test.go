@@ -101,14 +101,15 @@ func TestTronBackend_ListWitnessesIncludesPendingVotes(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t, params.GenesisWitness{Address: witness, VoteCount: 0, URL: "http://w"})
 	defer cleanup()
 
-	if err := rawdb.WriteVotes(bc.db, voter, &corepb.Votes{
-		Address: voter.Bytes(),
-		NewVotes: []*corepb.Vote{
-			{VoteAddress: witness.Bytes(), VoteCount: 123},
+	// The pending-vote ledger is rooted (WitnessVoteState KV); ListWitnesses
+	// reads it from the head state root, so seed it there (head is genesis — no
+	// blocks inserted).
+	seedPendingVotesAtGenesis(t, bc, map[tcommon.Address]*corepb.Votes{
+		voter: {
+			Address:  voter.Bytes(),
+			NewVotes: []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 123}},
 		},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 
 	got, err := (&TronBackend{chain: bc}).ListWitnesses()
 	if err != nil {

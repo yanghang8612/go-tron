@@ -1,10 +1,6 @@
 package rawdb
 
 import (
-	"encoding/binary"
-	"encoding/json"
-
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
 
@@ -14,6 +10,10 @@ const (
 	ProposalStateCanceled = 2
 )
 
+// Proposal is the on-disk record for a TRON governance proposal. The records
+// and their index are rooted into the SystemProposal account-KV domain (see
+// core/state/proposal_store.go); this struct stays here as the shared wire
+// type read by the actuators, ProcessProposals, and the API backend.
 type Proposal struct {
 	ID             int64            `json:"id"`
 	Proposer       common.Address   `json:"proposer"`
@@ -22,44 +22,4 @@ type Proposal struct {
 	ExpirationTime int64            `json:"expiration_time"`
 	Approvals      []common.Address `json:"approvals"`
 	State          int32            `json:"state"`
-}
-
-func WriteProposal(db ethdb.KeyValueWriter, id int64, p *Proposal) error {
-	data, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	return db.Put(proposalKey(id), data)
-}
-
-func ReadProposal(db ethdb.KeyValueReader, id int64) *Proposal {
-	data, err := db.Get(proposalKey(id))
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	p := &Proposal{}
-	if err := json.Unmarshal(data, p); err != nil {
-		return nil
-	}
-	return p
-}
-
-func WriteProposalIndex(db ethdb.KeyValueWriter, ids []int64) error {
-	buf := make([]byte, 8*len(ids))
-	for i, id := range ids {
-		binary.BigEndian.PutUint64(buf[i*8:], uint64(id))
-	}
-	return db.Put(proposalIndexKey, buf)
-}
-
-func ReadProposalIndex(db ethdb.KeyValueReader) []int64 {
-	data, err := db.Get(proposalIndexKey)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	ids := make([]int64, len(data)/8)
-	for i := range ids {
-		ids[i] = int64(binary.BigEndian.Uint64(data[i*8:]))
-	}
-	return ids
 }

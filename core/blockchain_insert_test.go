@@ -553,24 +553,9 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	// wProd casts 150 new votes for wMid, lifting it 200→350 above wHi (300).
-	// At the maintenance boundary this flips the vote-ranked order from the
-	// genesis-rooted [wHi, wMid, wProd] to [wMid, wHi, wProd] — a genuine
-	// rotation that switchFork must rewind. (The active list is now rooted into
-	// the state, not the flat store, so the "old" set can't be pre-seeded in a
-	// drifted order; a real vote delta drives the rotation instead.)
-	if err := rawdb.WriteVotes(diskdb, wProd, &corepb.Votes{
-		Address: wProd.Bytes(),
-		NewVotes: []*corepb.Vote{
-			{VoteAddress: wMid.Bytes(), VoteCount: 150},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	// Genesis roots the active set as SelectActiveWitnesses(votes) =
 	// [wHi, wMid, wProd]; NewBlockChain loads it from the system-KV at the head
-	// root. The maintenance boundary recomputes from the post-vote tallies above.
+	// root. The maintenance boundary recomputes from the post-vote tallies below.
 	sdb := state.NewDatabase(diskdb)
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
@@ -579,6 +564,21 @@ func TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance(t *testing.T) {
 	if got := bc.ActiveWitnesses(); len(got) != 3 || got[0] != wHi || got[1] != wMid || got[2] != wProd {
 		t.Fatalf("genesis-rooted active set not loaded: got %v, want [wHi, wMid, wProd]", got)
 	}
+	// wProd casts 150 new votes for wMid, lifting it 200→350 above wHi (300).
+	// At the maintenance boundary this flips the vote-ranked order from the
+	// genesis-rooted [wHi, wMid, wProd] to [wMid, wHi, wProd] — a genuine
+	// rotation that switchFork must rewind. (The active list is rooted into the
+	// state, not the flat store, so the "old" set can't be pre-seeded in a
+	// drifted order; a real vote delta drives the rotation instead.) The vote is
+	// now also rooted (WitnessVoteState KV), so it must be seeded into the
+	// genesis state root — chain B branches from genesis without crossing the
+	// boundary, so the seeded-but-undrained vote rewinds with it.
+	seedPendingVotesAtGenesis(t, bc, map[tcommon.Address]*corepb.Votes{
+		wProd: {
+			Address:  wProd.Bytes(),
+			NewVotes: []*corepb.Vote{{VoteAddress: wMid.Bytes(), VoteCount: 150}},
+		},
+	})
 
 	// Chain A: blocks 1..3. Block 3 at ts=9000 crosses the maintenance
 	// boundary and rotates the active set via SetActiveWitnesses.
@@ -701,21 +701,24 @@ func TestForkSwitch_WitnessScheduleRewindDualMechanism(t *testing.T) {
 	w27.SetIsJobs(false)
 	rawdb.WriteWitness(diskdb, witnessAddr(27), w27)
 
-	// Pending vote: +150 for #27 (97300→97450) lifts it above #26 (97400) but
-	// below #25 (97500). At the boundary the active set swaps #27 in / #26 out —
-	// a membership change that flips is_jobs for both.
-	if err := rawdb.WriteVotes(diskdb, testCoreAddr(1), &corepb.Votes{
-		Address:  testCoreAddr(1).Bytes(),
-		NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(27).Bytes(), VoteCount: 150}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	sdb := state.NewDatabase(diskdb)
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Pending vote: +150 for #27 (97300→97450) lifts it above #26 (97400) but
+	// below #25 (97500). At the boundary the active set swaps #27 in / #26 out —
+	// a membership change that flips is_jobs for both. The vote is rooted
+	// (WitnessVoteState KV), so it must be seeded into the genesis state root;
+	// chain B branches from genesis without crossing the boundary, so the
+	// seeded-but-undrained vote rewinds with it.
+	seedPendingVotesAtGenesis(t, bc, map[tcommon.Address]*corepb.Votes{
+		testCoreAddr(1): {
+			Address:  testCoreAddr(1).Bytes(),
+			NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(27).Bytes(), VoteCount: 150}},
+		},
+	})
 
 	isJobs := func(i int) bool {
 		w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr(i))
@@ -1164,12 +1167,16 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 		chainA[i] = b
 	}
 
-	// Sanity: asset indexes are buffered on chain A.
-	if _, ok := rawdb.ReadAssetNameIndex(bc.BufferedDB(), assetName); !ok {
-		t.Fatal("after chain A: asset name index missing from buffer")
-	}
-	if _, ok := rawdb.ReadAssetOwnerIndex(bc.BufferedDB(), issuer[:]); !ok {
-		t.Fatal("after chain A: asset owner index missing from buffer")
+	// Sanity: asset indexes are rooted into the head state on chain A.
+	if sysKV := bc.sysKVAt(bc.HeadStateRoot()); sysKV == nil {
+		t.Fatal("after chain A: could not open head sysKV")
+	} else {
+		if _, ok := sysKV.ReadAssetNameIndex(assetName); !ok {
+			t.Fatal("after chain A: asset name index missing from head state")
+		}
+		if _, ok := sysKV.ReadAssetOwnerIndex(issuer[:]); !ok {
+			t.Fatal("after chain A: asset owner index missing from head state")
+		}
 	}
 
 	// Build chain B: 4 empty blocks → triggers switchFork on B[4].
@@ -1199,21 +1206,31 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 	}
 
 	// Asset indexes from chain A's orphaned issuance must be GONE from the
-	// buffer view (they would still be on disk if the actuator widening
-	// were not in place — but solidified=0 means nothing was flushed, so
-	// the buffer view is the canonical source of truth here).
-	if _, ok := rawdb.ReadAssetNameIndex(bc.BufferedDB(), assetName); ok {
-		t.Fatal("after switchFork: asset name index leaked from orphan branch")
+	// head state after the fork: the new head (chain B tip) rooted no asset,
+	// so reading the rooted system-KV at HeadStateRoot() must not find them
+	// (solidified=0 means nothing was flushed, so the head root is the
+	// canonical source of truth here).
+	if sysKV := bc.sysKVAt(bc.HeadStateRoot()); sysKV == nil {
+		t.Fatal("after switchFork: could not open head sysKV")
+	} else {
+		if _, ok := sysKV.ReadAssetNameIndex(assetName); ok {
+			t.Fatal("after switchFork: asset name index leaked from orphan branch")
+		}
+		if _, ok := sysKV.ReadAssetOwnerIndex(issuer[:]); ok {
+			t.Fatal("after switchFork: asset owner index leaked from orphan branch")
+		}
 	}
-	if _, ok := rawdb.ReadAssetOwnerIndex(bc.BufferedDB(), issuer[:]); ok {
-		t.Fatal("after switchFork: asset owner index leaked from orphan branch")
-	}
-	// And specifically NOT on disk either.
-	if _, ok := rawdb.ReadAssetNameIndex(diskdb, assetName); ok {
-		t.Fatal("after switchFork: asset name index leaked to disk from orphan branch")
-	}
-	if _, ok := rawdb.ReadAssetOwnerIndex(diskdb, issuer[:]); ok {
-		t.Fatal("after switchFork: asset owner index leaked to disk from orphan branch")
+	// And specifically NOT reachable from disk either: opening the head root
+	// against a fresh state.Database (no shared in-memory trie cache) must
+	// either fail (head trie never flushed) or, if openable, still not carry
+	// the orphaned asset indexes.
+	if diskState, err := state.New(bc.HeadStateRoot(), state.NewDatabase(diskdb)); err == nil {
+		if _, ok := diskState.ReadAssetNameIndex(assetName); ok {
+			t.Fatal("after switchFork: asset name index leaked to disk from orphan branch")
+		}
+		if _, ok := diskState.ReadAssetOwnerIndex(issuer[:]); ok {
+			t.Fatal("after switchFork: asset owner index leaked to disk from orphan branch")
+		}
 	}
 }
 

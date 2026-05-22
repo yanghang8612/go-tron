@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -54,20 +52,17 @@ func makeTestICO(t *testing.T, buyerByte, issuerByte byte, trxNum, num int32, st
 		EndTime:      endTime,
 		Id:           strconv.FormatInt(participateTokenID, 10),
 	}
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
-		t.Fatal(err)
-	}
-
 	tx := makeParticipateAssetTx(buyerByte, issuerByte, participateTokenID, 1_000_000)
 	statedb := setupStateDB(t)
 	statedb.CreateAccount(buyer, corepb.AccountType_Normal)
 	statedb.CreateAccount(issuer, corepb.AccountType_Normal)
 	statedb.AddBalance(buyer, 100_000_000)
 	statedb.SetTRC10Balance(issuer, participateTokenID, 1_000_000_000)
+	if err := statedb.WriteAssetIssue(participateTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.BlockTime = (startTime + endTime) / 2 // midpoint within ICO window
 	ctx.PrevBlockTime = ctx.BlockTime
@@ -128,20 +123,17 @@ func TestParticipateAssetExecute(t *testing.T) {
 		EndTime:      2000,
 		Id:           strconv.FormatInt(participateTokenID, 10),
 	}
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
-		t.Fatal(err)
-	}
-
 	tx := makeParticipateAssetTx(1, 2, participateTokenID, 1_000_000)
 	statedb := setupStateDB(t)
 	statedb.CreateAccount(buyer, corepb.AccountType_Normal)
 	statedb.CreateAccount(issuer, corepb.AccountType_Normal)
 	statedb.AddBalance(buyer, 100_000_000)
 	statedb.SetTRC10Balance(issuer, participateTokenID, 10_000_000)
+	if err := statedb.WriteAssetIssue(participateTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.BlockTime = 1000 // within window
 	ctx.PrevBlockTime = ctx.BlockTime
@@ -189,20 +181,6 @@ func TestParticipateAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *tes
 		EndTime:      2000,
 		Id:           strconv.FormatInt(participateTokenID, 10),
 	}
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssueByName(db, []byte(numericName), asset); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteAssetIssue(db, participateTokenID, asset); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteAssetIssue(db, 123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteAssetNameIndex(db, []byte(numericName), participateTokenID); err != nil {
-		t.Fatal(err)
-	}
-
 	c := &contractpb.ParticipateAssetIssueContract{
 		OwnerAddress: buyer.Bytes(),
 		ToAddress:    issuer.Bytes(),
@@ -222,9 +200,20 @@ func TestParticipateAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *tes
 	statedb.CreateAccount(issuer, corepb.AccountType_Normal)
 	statedb.AddBalance(buyer, 100_000_000)
 	statedb.SetTRC10BalanceLegacyAndV2(issuer, []byte(numericName), participateTokenID, 10_000_000)
+	if err := statedb.WriteAssetIssueByName([]byte(numericName), asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetIssue(participateTokenID, asset); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetIssue(123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteAssetNameIndex([]byte(numericName), participateTokenID); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.BlockTime = 1000
 	ctx.PrevBlockTime = ctx.BlockTime
 

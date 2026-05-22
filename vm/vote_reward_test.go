@@ -148,7 +148,7 @@ func TestVoteWitnessOpcodeUsesJavaArrayLayoutAndSettlesReward(t *testing.T) {
 	if len(votes) != 1 || tcommon.BytesToAddress(votes[0].VoteAddress) != newWitness || votes[0].VoteCount != 7 {
 		t.Fatalf("account votes: got %+v, want one vote for new witness count 7", votes)
 	}
-	pending := rawdb.ReadVotes(tvm.DB, caller)
+	pending := statedb.ReadVotes(caller)
 	if pending == nil || len(pending.OldVotes) != 1 || len(pending.NewVotes) != 1 {
 		t.Fatalf("pending votes not written correctly: %+v", pending)
 	}
@@ -187,7 +187,7 @@ func TestVoteWitnessOpcodeAllowsEmptyVoteListToClearVotes(t *testing.T) {
 	if votes := statedb.GetVotes(caller); len(votes) != 0 {
 		t.Fatalf("votes should be cleared, got %+v", votes)
 	}
-	pending := rawdb.ReadVotes(tvm.DB, caller)
+	pending := statedb.ReadVotes(caller)
 	if pending == nil || len(pending.OldVotes) != 1 || len(pending.NewVotes) != 0 {
 		t.Fatalf("pending empty vote update not written correctly: %+v", pending)
 	}

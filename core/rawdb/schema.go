@@ -31,9 +31,6 @@ var (
 	accountPrefix            = []byte("a-")
 	witnessPrefix            = []byte("w-")
 	witnessLatestBlockPrefix = []byte("wlb-") // per-witness latest produced block number
-	votesPrefix              = []byte("v-")
-	votesIndexKey            = []byte("v-index")
-	proposalPrefix           = []byte("p-")
 	codePrefix               = []byte("c-")
 	contractPrefix           = []byte("ct-")
 	storagePrefix            = []byte("s-")
@@ -67,51 +64,18 @@ var (
 	// Value: 4-byte big-endian count || N * (21B address || 8B BE vote count)
 	genesisWitnessesKey = []byte("GenesisWitnesses")
 
-	proposalIndexKey = []byte("propi")
-
 	delegationPrefix      = []byte("dr-")
 	delegationIndexPrefix = []byte("dri-")
 	brokeragePrefix       = []byte("wb-")
 
-	assetPrefix          = []byte("ast-")  // tokenID big-endian 8B → AssetIssueContract proto bytes (java AssetIssueV2Store)
-	assetLegacyPrefix    = []byte("astl-") // token name bytes → AssetIssueContract proto bytes (java AssetIssueStore)
-	assetNamePrefix      = []byte("astn-") // token name bytes → tokenID big-endian 8B
-	assetOwnerPrefix     = []byte("asto-") // owner address 21B → tokenID big-endian 8B
-	assetIssueTimePrefix = []byte("asti-") // tokenID big-endian 8B → issue timestamp ms big-endian 8B
+	// TRC10 asset stores (formerly ast-/astl-/astn-/asto-/asti-) are rooted into
+	// the reserved system account's SystemAsset KV; see core/state/asset_store.go.
 
-	// marketOrderPrefix (mo-) maps to java-tron's MarketOrderStore
-	// (db name "market-order"). Stores individual MarketOrder protos keyed
-	// by orderID. Present in go-tron since initial market implementation.
-	marketOrderPrefix = []byte("mo-")
-
-	// marketAccountOrderPrefix (mao-) maps to java-tron's MarketAccountStore
-	// (db name "market_account"). Per-owner list of active order IDs.
-	// Covers the "market-account" store in the M2 schema gap list.
-	marketAccountOrderPrefix = []byte("mao-")
-
-	// marketOrderBookPrefix (mop-) maps to java-tron's
-	// MarketPairPriceToOrderStore (db name "market_pair_price_to_order").
-	// Stores MarketOrderIdList for each (sellToken, buyToken, price) triple.
-	// Covers the "market-pair-price-to-order" store in the M2 schema gap list.
-	marketOrderBookPrefix = []byte("mop-")
-
-	// marketPriceListPrefix (mpl-) is a go-tron-specific cache that stores
-	// the full computed MarketPriceList proto for a token pair. Java-tron
-	// computes this dynamically from MarketPairToPriceStore + MarketPairPriceToOrderStore;
-	// go-tron materializes it at write time. Used by market actuators.
-	marketPriceListPrefix = []byte("mpl-")
-
-	// marketPairToPricePrefix (mptop-) maps to java-tron's
-	// MarketPairToPriceStore (db name "market_pair_to_price"). Stores the
-	// int64 count of distinct prices for a (sellToken, buyToken) pair.
-	// Key: mptop- || sellTokenID bytes || '|' || buyTokenID bytes
-	// Value: big-endian int64 count.
-	// Used for existence checks and RPC pagination (java-tron: getPriceNum).
-	// Covers the "market-pair-to-price" store in the M2 schema gap list.
-	marketPairToPricePrefix = []byte("mptop-")
-
-	exchangePrefix   = []byte("ex-")
-	exchangeV2Prefix = []byte("ex2-")
+	// Market (DEX) records (mo-, mao-, mop-, mptop-, mpl-) are no longer flat:
+	// they are rooted into the reserved system account's SystemMarket KV (see
+	// core/state/market_store.go) so the whole order book rewinds with the full
+	// state root. The PriceKey helper below stays here because it is pure price
+	// normalization shared by the market actuators and the rooted store.
 
 	nullifierPrefix        = []byte("nf-")
 	noteCommitmentPrefix   = []byte("nc-")
@@ -190,19 +154,10 @@ var (
 	// Value: big-endian int64 balance (matches Java's Longs.toByteArray).
 	accountAssetPrefix = []byte("aa-")
 
-	// accountNameIndexPrefix (ani-) maps to java-tron's AccountIndexStore
-	// (db name "account-index"). Reverse lookup from account_name bytes to
-	// the 21-byte owner address. Written by AccountUpdateContract and genesis.
-	accountNameIndexPrefix = []byte("ani-")
-
-	// accountIdIndexPrefix (aid-) maps to java-tron's
-	// AccountIdIndexStore (db name "accountid-index"). Reverse lookup
-	// from account_id (a user-chosen UTF-8 string) to the 21-byte
-	// owner address. Written by SetAccountIdContract; read by its
-	// uniqueness check and by the getaccountbyid RPC.
-	// Key:   aid- || account_id bytes (utf-8, lowercased before insert)
-	// Value: 21-byte owner address.
-	accountIdIndexPrefix = []byte("aid-")
+	// The account name index (java-tron AccountIndexStore) and account-id index
+	// (AccountIdIndexStore) are no longer flat keys: they are rooted into the
+	// system account's SystemAccountIndex KV (see core/state/account_index_store.go),
+	// so they rewind with the full state root.
 
 	// accountTracePrefix (at-) maps to java-tron's AccountTraceStore
 	// (db name "account-trace"). Per-account historical balance
@@ -450,10 +405,6 @@ func witnessLatestBlockKey(addr []byte) []byte {
 	return append(append([]byte{}, witnessLatestBlockPrefix...), addr...)
 }
 
-func votesKey(addr []byte) []byte {
-	return append(append([]byte{}, votesPrefix...), addr...)
-}
-
 func dynPropKey(name string) []byte {
 	return append(append([]byte{}, dynPropPrefix...), []byte(name)...)
 }
@@ -462,13 +413,6 @@ func forkStatsKey(version int32) []byte {
 	k := make([]byte, len(forkStatsPrefix)+4)
 	copy(k, forkStatsPrefix)
 	binary.BigEndian.PutUint32(k[len(forkStatsPrefix):], uint32(version))
-	return k
-}
-
-func proposalKey(id int64) []byte {
-	k := make([]byte, len(proposalPrefix)+8)
-	copy(k, proposalPrefix)
-	binary.BigEndian.PutUint64(k[len(proposalPrefix):], uint64(id))
 	return k
 }
 
@@ -554,16 +498,6 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 	var tb [8]byte
 	binary.BigEndian.PutUint64(tb[:], uint64(tokenID))
 	return append(k, tb[:]...)
-}
-
-// accountIdIndexKey builds the accountid-index key. Callers pass the
-// lower-cased account ID, matching java-tron's AccountIdIndexStore.
-func accountIdIndexKey(accountID []byte) []byte {
-	return append(append([]byte{}, accountIdIndexPrefix...), accountID...)
-}
-
-func accountNameIndexKey(accountName []byte) []byte {
-	return append(append([]byte{}, accountNameIndexPrefix...), accountName...)
 }
 
 // accountTraceKey builds an account-trace key: prefix || owner (21B) ||
@@ -664,32 +598,6 @@ func drAccIdxAnchorPrefix(dir drAccIdxDirection, anchor []byte) []byte {
 	return append(k, anchor...)
 }
 
-func assetKey(tokenID int64) []byte {
-	k := make([]byte, len(assetPrefix)+8)
-	copy(k, assetPrefix)
-	binary.BigEndian.PutUint64(k[len(assetPrefix):], uint64(tokenID))
-	return k
-}
-
-func assetLegacyKey(name []byte) []byte {
-	return append(append([]byte{}, assetLegacyPrefix...), name...)
-}
-
-func assetNameKey(name []byte) []byte {
-	return append(append([]byte{}, assetNamePrefix...), name...)
-}
-
-func assetOwnerKey(ownerAddr []byte) []byte {
-	return append(append([]byte{}, assetOwnerPrefix...), ownerAddr...)
-}
-
-func assetIssueTimeKey(tokenID int64) []byte {
-	k := make([]byte, len(assetIssueTimePrefix)+8)
-	copy(k, assetIssueTimePrefix)
-	binary.BigEndian.PutUint64(k[len(assetIssueTimePrefix):], uint64(tokenID))
-	return k
-}
-
 // taposKey builds a RecentBlockStore key from the 2-byte refBlockBytes
 // (low 16 bits of block number, big-endian).
 func taposKey(refBlockBytes []byte) []byte {
@@ -709,48 +617,6 @@ func PriceKey(sellQty, buyQty int64) [16]byte {
 	var k [16]byte
 	binary.BigEndian.PutUint64(k[:8], uint64(sellQty/g))
 	binary.BigEndian.PutUint64(k[8:], uint64(buyQty/g))
-	return k
-}
-
-func marketPairToPriceKey(sellTokenID, buyTokenID []byte) []byte {
-	k := append(append([]byte{}, marketPairToPricePrefix...), sellTokenID...)
-	k = append(k, '|')
-	return append(k, buyTokenID...)
-}
-
-func marketOrderKey(orderID []byte) []byte {
-	return append(append([]byte{}, marketOrderPrefix...), orderID...)
-}
-
-func marketAccountOrderKey(ownerAddr []byte) []byte {
-	return append(append([]byte{}, marketAccountOrderPrefix...), ownerAddr...)
-}
-
-func marketOrderBookKey(sellTokenID, buyTokenID []byte, pk [16]byte) []byte {
-	k := append(append([]byte{}, marketOrderBookPrefix...), sellTokenID...)
-	k = append(k, '|')
-	k = append(k, buyTokenID...)
-	k = append(k, '|')
-	return append(k, pk[:]...)
-}
-
-func marketPriceListKey(sellTokenID, buyTokenID []byte) []byte {
-	k := append(append([]byte{}, marketPriceListPrefix...), sellTokenID...)
-	k = append(k, '|')
-	return append(k, buyTokenID...)
-}
-
-func exchangeKey(id int64) []byte {
-	k := make([]byte, len(exchangePrefix)+8)
-	copy(k, exchangePrefix)
-	binary.BigEndian.PutUint64(k[len(exchangePrefix):], uint64(id))
-	return k
-}
-
-func exchangeV2Key(id int64) []byte {
-	k := make([]byte, len(exchangeV2Prefix)+8)
-	copy(k, exchangeV2Prefix)
-	binary.BigEndian.PutUint64(k[len(exchangeV2Prefix):], uint64(id))
 	return k
 }
 

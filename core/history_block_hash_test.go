@@ -26,14 +26,14 @@ func TestProposalAllowTvmPragueDeploysHistoryBlockHash(t *testing.T) {
 		Approvals:      active,
 		State:          rawdb.ProposalStatePending,
 	}
-	if err := rawdb.WriteProposal(db, p.ID, p); err != nil {
+	if err := statedb.WriteProposal(p.ID, p); err != nil {
 		t.Fatalf("WriteProposal: %v", err)
 	}
-	if err := rawdb.WriteProposalIndex(db, []int64{p.ID}); err != nil {
+	if err := statedb.WriteProposalIndex([]int64{p.ID}); err != nil {
 		t.Fatalf("WriteProposalIndex: %v", err)
 	}
 
-	if err := ProcessProposals(db, dp, active, 1001, nil, statedb); err != nil {
+	if err := ProcessProposals(db, statedb, dp, active, 1001, nil); err != nil {
 		t.Fatalf("ProcessProposals: %v", err)
 	}
 

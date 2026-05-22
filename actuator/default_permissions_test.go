@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -93,14 +91,12 @@ func TestTransferAssetExecute_PostFork_LoadsDefaultPermissions(t *testing.T) {
 	statedb.AddBalance(owner, 1_000_000) // covers create-account fee
 	statedb.SetTRC10Balance(owner, tokenID, 1_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 34, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowMultiSign(true)
 	ctx.DynProps.SetAllowSameTokenName(true)
 

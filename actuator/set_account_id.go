@@ -3,7 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -47,7 +46,7 @@ func (a *SetAccountIdActuator) Validate(ctx *Context) error {
 	if ctx.State.GetAccountId(ownerAddr) != "" {
 		return errors.New("account id already set")
 	}
-	if ctx.DB != nil && rawdb.HasAccountIdIndex(ctx.DB, c.AccountId) {
+	if ctx.State != nil && ctx.State.HasAccountIdIndex(c.AccountId) {
 		return errors.New("account id already exists")
 	}
 	return nil
@@ -63,10 +62,8 @@ func (a *SetAccountIdActuator) Execute(ctx *Context) (*Result, error) {
 		return nil, err
 	}
 	ctx.State.SetAccountId(ownerAddr, string(c.AccountId))
-	if ctx.DB != nil {
-		if err := rawdb.WriteAccountIdIndex(ctx.DB, c.AccountId, ownerAddr[:]); err != nil {
-			return nil, err
-		}
+	if err := ctx.State.WriteAccountIdIndex(c.AccountId, ownerAddr); err != nil {
+		return nil, err
 	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

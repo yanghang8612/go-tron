@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -55,11 +53,6 @@ type BandwidthResult struct {
 	NetUsage           int64
 	NetFee             int64
 	NetFeeForBandwidth bool
-}
-
-type bandwidthAssetStore interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
 }
 
 // availableAccountNet returns this account's share of the global bandwidth
@@ -111,11 +104,11 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 // only staked bandwidth is consulted. On insufficient stake the path falls
 // back to the `create_account_fee` (default 100_000 SUN), bypassing the
 // free-bandwidth daily quota entirely.
-func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, db bandwidthAssetStore) (*BandwidthResult, error) {
-	return consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, HeadSlot(prevBlockTime, 0), db)
+func consumeBandwidth(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64) (*BandwidthResult, error) {
+	return consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, HeadSlot(prevBlockTime, 0))
 }
 
-func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64, db bandwidthAssetStore) (*BandwidthResult, error) {
+func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, resourceTime int64) (*BandwidthResult, error) {
 	if tx.ContractType() == corepb.Transaction_Contract_ShieldedTransferContract {
 		return &BandwidthResult{}, nil
 	}
@@ -132,7 +125,7 @@ func consumeBandwidthWithResourceTime(statedb *state.StateDB, dynProps *state.Dy
 	}
 
 	if tx.ContractType() == corepb.Transaction_Contract_TransferAssetContract {
-		ok, err := useAssetAccountNet(statedb, dynProps, db, tx, sender, txSize, prevBlockTime, resourceTime)
+		ok, err := useAssetAccountNet(statedb, dynProps, tx, sender, txSize, prevBlockTime, resourceTime)
 		if err != nil {
 			return nil, err
 		}
@@ -228,10 +221,7 @@ func contractCreatesNewAccount(statedb *state.StateDB, tx *types.Transaction) bo
 	return false
 }
 
-func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicProperties, db bandwidthAssetStore, tx *types.Transaction, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (bool, error) {
-	if db == nil {
-		return false, nil
-	}
+func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, sender tcommon.Address, txSize, prevBlockTime, resourceTime int64) (bool, error) {
 	contract := tx.Contract()
 	if contract == nil || contract.Parameter == nil {
 		return false, nil
@@ -241,7 +231,7 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 		return false, fmt.Errorf("failed to unmarshal TransferAssetContract: %w", err)
 	}
 
-	asset, tokenID, err := resolveBandwidthAsset(dynProps, db, c.AssetName)
+	asset, tokenID, err := resolveBandwidthAsset(statedb, dynProps, c.AssetName)
 	if err != nil {
 		return false, err
 	}
@@ -297,21 +287,21 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	if dynProps.AllowSameTokenName() {
 		asset.PublicFreeAssetNetUsage = newPublicUsage
 		asset.PublicLatestFreeNetTime = resourceTime
-		if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+		if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
 			return false, err
 		}
 	} else {
-		if legacy := rawdb.ReadAssetIssueByName(db, c.AssetName); legacy != nil {
+		if legacy := statedb.ReadAssetIssueByName(c.AssetName); legacy != nil {
 			legacy.PublicFreeAssetNetUsage = newPublicUsage
 			legacy.PublicLatestFreeNetTime = resourceTime
-			if err := rawdb.WriteAssetIssueByName(db, c.AssetName, legacy); err != nil {
+			if err := statedb.WriteAssetIssueByName(c.AssetName, legacy); err != nil {
 				return false, err
 			}
 		}
-		if v2 := rawdb.ReadAssetIssue(db, tokenID); v2 != nil {
+		if v2 := statedb.ReadAssetIssue(tokenID); v2 != nil {
 			v2.PublicFreeAssetNetUsage = newPublicUsage
 			v2.PublicLatestFreeNetTime = resourceTime
-			if err := rawdb.WriteAssetIssue(db, tokenID, v2); err != nil {
+			if err := statedb.WriteAssetIssue(tokenID, v2); err != nil {
 				return false, err
 			}
 		}
@@ -319,27 +309,27 @@ func useAssetAccountNet(statedb *state.StateDB, dynProps *state.DynamicPropertie
 	return true, nil
 }
 
-func resolveBandwidthAsset(dynProps *state.DynamicProperties, db ethdb.KeyValueReader, assetName []byte) (*contractpb.AssetIssueContract, int64, error) {
+func resolveBandwidthAsset(statedb *state.StateDB, dynProps *state.DynamicProperties, assetName []byte) (*contractpb.AssetIssueContract, int64, error) {
 	if dynProps.AllowSameTokenName() {
 		tokenID, err := strconv.ParseInt(string(assetName), 10, 64)
 		if err != nil {
 			return nil, 0, fmt.Errorf("invalid asset_name: not a numeric ID")
 		}
-		asset := rawdb.ReadAssetIssue(db, tokenID)
+		asset := statedb.ReadAssetIssue(tokenID)
 		if asset == nil {
 			return nil, 0, fmt.Errorf("asset [%s] does not exist", assetName)
 		}
 		return asset, tokenID, nil
 	}
-	if asset := rawdb.ReadAssetIssueByName(db, assetName); asset != nil {
+	if asset := statedb.ReadAssetIssueByName(assetName); asset != nil {
 		tokenID, err := strconv.ParseInt(asset.Id, 10, 64)
 		if err != nil {
 			return nil, 0, fmt.Errorf("invalid legacy asset ID")
 		}
 		return asset, tokenID, nil
 	}
-	if tokenID, ok := rawdb.ReadAssetNameIndex(db, assetName); ok {
-		asset := rawdb.ReadAssetIssue(db, tokenID)
+	if tokenID, ok := statedb.ReadAssetNameIndex(assetName); ok {
+		asset := statedb.ReadAssetIssue(tokenID)
 		if asset != nil {
 			return asset, tokenID, nil
 		}

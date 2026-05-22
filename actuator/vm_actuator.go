@@ -6,7 +6,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -225,8 +224,8 @@ func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
 	evm.HasHeadSlot = ctx.HasHeadSlot
 	evm.SetDB(ctx.DB)
 	evm.SetRootTransactionID(ctx.Tx.Hash())
-	if ctx.DB != nil {
-		if blackhole := rawdb.ReadAccountNameIndex(ctx.DB, []byte("Blackhole")); len(blackhole) > 0 {
+	if ctx.State != nil {
+		if blackhole := ctx.State.ReadAccountNameIndex([]byte("Blackhole")); len(blackhole) > 0 {
 			evm.SetBlackholeAddress(common.BytesToAddress(blackhole))
 		}
 	}

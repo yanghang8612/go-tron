@@ -695,7 +695,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 
 	// Process block (execute transactions, pay reward — does not commit).
 	// The buffer is passed so per-block actuator-side rawdb-direct writes
-	// (WriteAssetIssue, WriteExchange, WriteProposal, WriteContractState
+	// (WriteAssetIssue, WriteProposal, WriteContractState
 	// from VMActuator dynamic-energy, WriteNullifier, etc.) and the
 	// `payBlockReward → AddCycleReward` write (gated on change_delegation)
 	// land in the active buffer layer. `switchFork` rewinds them on orphan
@@ -793,9 +793,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// gates never activate — observed empirically on a Nile soak at
 			// h=860k where 4 proposals had 27 SR approvals each but `state =
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
-			// Routes through bc.buffer per fork-rewind slice 3 so per-proposal
-			// state writes rewind on switchFork.
-			if err := ProcessProposals(bc.buffer, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc, statedb); err != nil {
+			// Per-proposal records live in the rooted SystemProposal KV on
+			// statedb (Phase 3d), so they rewind with the state root on
+			// switchFork; bc.buffer remains only for the still-flat
+			// governance side-effects.
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{
@@ -814,7 +816,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
 			applyRewardVI(bc.buffer, statedb, dynProps)
-			hasPendingVotes := applyPendingVotes(bc.buffer, statedb)
+			hasPendingVotes := applyPendingVotes(statedb)
 			statedb.FlushWitnesses(bc.buffer)
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {

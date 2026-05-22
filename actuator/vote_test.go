@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -127,7 +126,7 @@ func TestVoteWitnessExecute(t *testing.T) {
 	if updatedW.VoteCount() != 0 {
 		t.Fatalf("witness vote count before maintenance: want 0, got %d", updatedW.VoteCount())
 	}
-	pending := rawdb.ReadVotes(ctx.DB, owner)
+	pending := statedb.ReadVotes(owner)
 	if pending == nil || len(pending.OldVotes) != 0 || len(pending.NewVotes) != 1 || pending.NewVotes[0].VoteCount != 50 {
 		t.Fatalf("pending votes not recorded like java-tron VotesStore: %+v", pending)
 	}
@@ -160,7 +159,7 @@ func TestVoteWitnessDuplicateTargetsAllowed(t *testing.T) {
 	if got := statedb.GetWitness(witness).VoteCount(); got != 0 {
 		t.Fatalf("witness vote count before maintenance: got %d, want 0", got)
 	}
-	pending := rawdb.ReadVotes(ctx.DB, owner)
+	pending := statedb.ReadVotes(owner)
 	if pending == nil || len(pending.NewVotes) != 2 {
 		t.Fatalf("duplicate vote targets should be retained in VotesStore: %+v", pending)
 	}

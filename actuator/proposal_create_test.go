@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -231,14 +230,13 @@ func TestProposalCreateExpiration_NileProposal1Parity(t *testing.T) {
 	ctx.DynProps.SetNextMaintenanceTime(nileNextMaintenance)
 	ctx.DynProps.Set("maintenance_time_interval", nileInterval)
 	ctx.DynProps.Set("proposal_expire_time", nileProposalExpire)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 
 	act := &ProposalCreateActuator{}
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
-	p := rawdb.ReadProposal(ctx.DB, 1)
+	p := ctx.State.ReadProposal(1)
 	if p == nil {
 		t.Fatal("proposal #1 not stored")
 	}
@@ -286,14 +284,13 @@ func TestProposalCreate_UsesPrevBlockTime(t *testing.T) {
 	ctx.DynProps.Set("maintenance_time_interval", int64(21_600_000))
 	ctx.DynProps.SetNextMaintenanceTime(prev + 1)
 	ctx.DynProps.Set("proposal_expire_time", int64(600_000))
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 
 	act := &ProposalCreateActuator{}
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
-	p := rawdb.ReadProposal(ctx.DB, 1)
+	p := ctx.State.ReadProposal(1)
 	if p == nil {
 		t.Fatal("proposal not stored")
 	}
@@ -317,9 +314,6 @@ func TestProposalCreateExecute(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-
 	act := &ProposalCreateActuator{}
 	result, err := act.Execute(ctx)
 	if err != nil {
@@ -330,14 +324,14 @@ func TestProposalCreateExecute(t *testing.T) {
 	}
 
 	// java-tron parity: first proposal_id == 1 (pre-increment of latest=0).
-	p := rawdb.ReadProposal(db, 1)
+	p := ctx.State.ReadProposal(1)
 	if p == nil {
 		t.Fatal("proposal not stored at id=1")
 	}
 	if p.ID != 1 || p.Proposer != owner || p.State != rawdb.ProposalStatePending {
 		t.Fatalf("unexpected proposal: %+v", p)
 	}
-	if rawdb.ReadProposal(db, 0) != nil {
+	if ctx.State.ReadProposal(0) != nil {
 		t.Fatal("no proposal should be stored at id=0")
 	}
 	if ctx.DynProps.LatestProposalNum() != 1 {
@@ -348,7 +342,7 @@ func TestProposalCreateExecute(t *testing.T) {
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("second execute failed: %v", err)
 	}
-	if p2 := rawdb.ReadProposal(db, 2); p2 == nil || p2.ID != 2 {
+	if p2 := ctx.State.ReadProposal(2); p2 == nil || p2.ID != 2 {
 		t.Fatalf("second proposal not stored at id=2: %+v", p2)
 	}
 	if ctx.DynProps.LatestProposalNum() != 2 {

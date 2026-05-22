@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -27,8 +26,8 @@ func (a *UpdateAssetActuator) getContract(ctx *Context) (*contractpb.UpdateAsset
 }
 
 func (a *UpdateAssetActuator) Validate(ctx *Context) error {
-	if ctx.DB == nil {
-		return errors.New("DB not available")
+	if ctx.State == nil {
+		return errors.New("state not available")
 	}
 	c, err := a.getContract(ctx)
 	if err != nil {
@@ -47,10 +46,10 @@ func (a *UpdateAssetActuator) Validate(ctx *Context) error {
 		return err
 	}
 	if !ctx.DynProps.AllowSameTokenName() {
-		if rawdb.ReadAssetIssueByName(ctx.DB, issued.Name) == nil {
+		if ctx.State.ReadAssetIssueByName(issued.Name) == nil {
 			return errors.New("token not found")
 		}
-	} else if rawdb.ReadAssetIssue(ctx.DB, issued.TokenID) == nil {
+	} else if ctx.State.ReadAssetIssue(issued.TokenID) == nil {
 		return errors.New("token not found")
 	}
 	if !validBytesLen(c.Url, 256, false) {
@@ -86,7 +85,7 @@ func (a *UpdateAssetActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	v2Asset := rawdb.ReadAssetIssue(ctx.DB, issued.TokenID)
+	v2Asset := ctx.State.ReadAssetIssue(issued.TokenID)
 	if v2Asset == nil {
 		return nil, errors.New("token not found")
 	}
@@ -97,7 +96,7 @@ func (a *UpdateAssetActuator) Execute(ctx *Context) (*Result, error) {
 	v2Asset.PublicFreeAssetNetLimit = c.NewPublicLimit
 
 	if !ctx.DynProps.AllowSameTokenName() {
-		legacyAsset := rawdb.ReadAssetIssueByName(ctx.DB, issued.Name)
+		legacyAsset := ctx.State.ReadAssetIssueByName(issued.Name)
 		if legacyAsset == nil {
 			return nil, errors.New("token not found")
 		}
@@ -105,11 +104,11 @@ func (a *UpdateAssetActuator) Execute(ctx *Context) (*Result, error) {
 		legacyAsset.Url = c.Url
 		legacyAsset.FreeAssetNetLimit = c.NewLimit
 		legacyAsset.PublicFreeAssetNetLimit = c.NewPublicLimit
-		if err := rawdb.WriteAssetIssueByName(ctx.DB, issued.Name, legacyAsset); err != nil {
+		if err := ctx.State.WriteAssetIssueByName(issued.Name, legacyAsset); err != nil {
 			return nil, fmt.Errorf("write updated legacy asset: %w", err)
 		}
 	}
-	if err := rawdb.WriteAssetIssue(ctx.DB, issued.TokenID, v2Asset); err != nil {
+	if err := ctx.State.WriteAssetIssue(issued.TokenID, v2Asset); err != nil {
 		return nil, fmt.Errorf("write updated asset: %w", err)
 	}
 

@@ -33,13 +33,10 @@ func (a *ProposalDeleteActuator) Validate(ctx *Context) error {
 	if !ctx.State.AccountExists(ownerAddr) {
 		return errors.New("owner account does not exist")
 	}
-	if ctx.DB == nil {
-		return errors.New("database not available")
-	}
 	if c.ProposalId > ctx.DynProps.LatestProposalNum() {
 		return errors.New("proposal not found")
 	}
-	proposal := rawdb.ReadProposal(ctx.DB, c.ProposalId)
+	proposal := ctx.State.ReadProposal(c.ProposalId)
 	if proposal == nil {
 		return errors.New("proposal not found")
 	}
@@ -60,15 +57,12 @@ func (a *ProposalDeleteActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ctx.DB == nil {
-		return nil, errors.New("database not available")
-	}
-	proposal := rawdb.ReadProposal(ctx.DB, c.ProposalId)
+	proposal := ctx.State.ReadProposal(c.ProposalId)
 	if proposal == nil {
 		return nil, errors.New("proposal not found")
 	}
 	proposal.State = rawdb.ProposalStateCanceled
-	if err := rawdb.WriteProposal(ctx.DB, c.ProposalId, proposal); err != nil {
+	if err := ctx.State.WriteProposal(c.ProposalId, proposal); err != nil {
 		return nil, err
 	}
 	return &Result{Fee: 0, ContractRet: 1}, nil

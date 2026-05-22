@@ -416,12 +416,16 @@ func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
 			"next_maintenance_time":     interval,
 		},
 	}
-	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Seed a PENDING proposal expiring before the maintenance boundary,
-	// approved by the sole active witness (= 100% > 70% threshold).
+	// approved by the sole active witness (= 100% > 70% threshold). Proposals
+	// are rooted (Phase 3d), so seed it into the genesis state root and re-point
+	// the genesis/head root pointers — mirrors block_builder_test's rooted-seed
+	// pattern — so the chain carries it forward to the maintenance block.
 	pendingProposal := &rawdb.Proposal{
 		ID:             1,
 		Proposer:       witnessAddr,
@@ -431,12 +435,7 @@ func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
 		Approvals:      []tcommon.Address{witnessAddr},
 		State:          rawdb.ProposalStatePending,
 	}
-	if err := rawdb.WriteProposal(diskdb, 1, pendingProposal); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteProposalIndex(diskdb, []int64{1}); err != nil {
-		t.Fatal(err)
-	}
+	seedRootedProposal(t, diskdb, sdb, genesisHash, []*rawdb.Proposal{pendingProposal})
 
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
@@ -457,7 +456,7 @@ func TestBlockChainInsertBlock_ProcessProposalsAtMaintenance(t *testing.T) {
 	}
 	bc.WaitForFlushSettled()
 
-	got := rawdb.ReadProposal(diskdb, 1)
+	got := readRootedProposal(t, sdb, bc.HeadStateRoot(), 1)
 	if got == nil {
 		t.Fatal("proposal #1 missing after maintenance")
 	}
@@ -693,12 +692,14 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 			"change_delegation":         0,
 		},
 	}
-	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Seed a PENDING proposal that would APPROVE at the boundary if
-	// ProcessProposals ran. Skip must keep it PENDING.
+	// ProcessProposals ran. Skip must keep it PENDING. Rooted (Phase 3d), so
+	// seed into the genesis state root.
 	pendingProposal := &rawdb.Proposal{
 		ID:             1,
 		Proposer:       witnessAddr,
@@ -708,12 +709,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 		Approvals:      []tcommon.Address{witnessAddr},
 		State:          rawdb.ProposalStatePending,
 	}
-	if err := rawdb.WriteProposal(diskdb, 1, pendingProposal); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteProposalIndex(diskdb, []int64{1}); err != nil {
-		t.Fatal(err)
-	}
+	seedRootedProposal(t, diskdb, sdb, genesisHash, []*rawdb.Proposal{pendingProposal})
 
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
@@ -764,7 +760,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	}
 
 	// 5. Pending proposal stays pending (ProcessProposals skipped).
-	gotProp := rawdb.ReadProposal(diskdb, 1)
+	gotProp := readRootedProposal(t, sdb, bc.HeadStateRoot(), 1)
 	if gotProp == nil {
 		t.Fatal("proposal #1 missing")
 	}

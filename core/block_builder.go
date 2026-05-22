@@ -137,7 +137,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(buildBuf, dynProps, bc.ActiveWitnesses(), timestamp, bc.fc, statedb); err != nil {
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), timestamp, bc.fc); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{
@@ -148,7 +148,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
 		applyRewardVI(buildBuf, statedb, dynProps)
-		hasPendingVotes := applyPendingVotes(buildBuf, statedb)
+		hasPendingVotes := applyPendingVotes(statedb)
 		if hasPendingVotes {
 			allWitnesses = bc.gatherWitnessVotes(statedb)
 			sorted := dpos.SortWitnessesByVotesWithOptimization(allWitnesses, dynProps.ConsensusLogicOptimization())

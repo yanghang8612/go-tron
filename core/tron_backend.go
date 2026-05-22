@@ -438,18 +438,22 @@ func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 	db := b.chain.BufferedDB()
-	// Witness index is rooted (Phase 3c): read it from the system-KV at the head
-	// root. Capsules below still come from the flat buffered view (Phase 4).
-	var witnessAddrs []tcommon.Address
+	// Witness index AND pending votes are rooted: read both from the system-KV
+	// at the head root (one open). Capsules below still come from the flat
+	// buffered view (Phase 4).
+	var (
+		witnessAddrs  []tcommon.Address
+		pendingDeltas map[tcommon.Address]int64
+	)
 	if sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot()); sysKV != nil {
 		witnessAddrs = sysKV.ReadWitnessIndex()
+		pendingDeltas, _ = pendingVoteDeltas(sysKV)
 	}
 	activeSet := b.chain.ActiveWitnesses()
 	activeMap := make(map[tcommon.Address]bool, len(activeSet))
 	for _, a := range activeSet {
 		activeMap[a] = true
 	}
-	pendingDeltas, _ := pendingVoteDeltas(db)
 
 	var result []*tronapi.WitnessInfo
 	for _, addr := range witnessAddrs {
@@ -586,10 +590,14 @@ func (b *TronBackend) BuildProposalDeleteTransaction(owner tcommon.Address, prop
 }
 
 func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
-	ids := rawdb.ReadProposalIndex(b.chain.db)
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil, nil
+	}
+	ids := sysKV.ReadProposalIndex()
 	var result []*tronapi.ProposalInfo
 	for _, id := range ids {
-		p := rawdb.ReadProposal(b.chain.db, id)
+		p := sysKV.ReadProposal(id)
 		if p == nil {
 			continue
 		}
@@ -795,17 +803,31 @@ func (b *TronBackend) ListNodes() ([]*tronapi.PeerInfo, error) {
 	return b.peersFunc(), nil
 }
 
+// firstAssetTokenID is the first TRC10 token id ever assignable: genesis
+// token_id_num is 1_000_000 and AssetIssueActuator pre-increments before
+// assigning, so ids start at 1_000_001. The rooted enumeration walks
+// [firstAssetTokenID, token_id_num] because the KV trie cannot be prefix-scanned.
+const firstAssetTokenID int64 = 1_000_001
+
 func (b *TronBackend) GetAssetIssueByID(id int64) *contractpb.AssetIssueContract {
-	return rawdb.ReadAssetIssue(b.chain.db, id)
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	return sysKV.ReadAssetIssue(id)
 }
 
 func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueContract {
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
 	dp := b.chain.DynProps()
 	if !dp.AllowSameTokenName() {
-		return rawdb.ReadAssetIssueByName(b.chain.db, name)
+		return sysKV.ReadAssetIssueByName(name)
 	}
 	var match *contractpb.AssetIssueContract
-	for _, asset := range rawdb.ListAllAssets(b.chain.db) {
+	for _, asset := range sysKV.ListAssetsV2(firstAssetTokenID, dp.TokenIdNum()) {
 		if string(asset.Name) != string(name) {
 			continue
 		}
@@ -815,7 +837,7 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueCon
 		match = asset
 	}
 	if id, err := strconv.ParseInt(string(name), 10, 64); err == nil {
-		if asset := rawdb.ReadAssetIssue(b.chain.db, id); asset != nil {
+		if asset := sysKV.ReadAssetIssue(id); asset != nil {
 			if match != nil && match.Id != asset.Id {
 				return nil
 			}
@@ -826,41 +848,79 @@ func (b *TronBackend) GetAssetIssueByName(name []byte) *contractpb.AssetIssueCon
 }
 
 func (b *TronBackend) GetAssetIssueList() []*contractpb.AssetIssueContract {
-	if !b.chain.DynProps().AllowSameTokenName() {
-		return rawdb.ListAllLegacyAssets(b.chain.db)
-	}
-	return rawdb.ListAllAssets(b.chain.db)
+	return b.listAssetsAtHead()
 }
 
 func (b *TronBackend) GetAssetIssueListPaginated(offset, limit int) []*contractpb.AssetIssueContract {
-	if !b.chain.DynProps().AllowSameTokenName() {
-		return rawdb.ListLegacyAssetsPaginated(b.chain.db, offset, limit)
+	all := b.listAssetsAtHead()
+	if offset >= len(all) {
+		return nil
 	}
-	return rawdb.ListAssetsPaginated(b.chain.db, offset, limit)
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end]
+}
+
+// listAssetsAtHead enumerates the rooted TRC10 asset set at the head state root,
+// walking token ids firstAssetTokenID..token_id_num. Pre-AllowSameTokenName it
+// returns the legacy (name-keyed) bucket; post-fork the V2 (id-keyed) bucket —
+// matching the prior flat ListAllLegacyAssets/ListAllAssets selection.
+//
+// NOTE (java-parity, ordering change): the prior flat scan returned legacy
+// records in name-lexicographic order (the astl- prefix sort); this walks the
+// V2 id range and resolves each legacy twin, so the legacy leg now returns
+// records in token-id-ascending order. The set is identical and the V2 leg is
+// unaffected; post-fork the legacy bucket is frozen so the divergence is
+// bounded. Flagged for stress-harness verification rather than fixed here, to
+// keep the migration a pure storage move.
+func (b *TronBackend) listAssetsAtHead() []*contractpb.AssetIssueContract {
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	latest := b.chain.DynProps().TokenIdNum()
+	if !b.chain.DynProps().AllowSameTokenName() {
+		return sysKV.ListAssetsLegacy(firstAssetTokenID, latest)
+	}
+	return sysKV.ListAssetsV2(firstAssetTokenID, latest)
 }
 
 func (b *TronBackend) GetAssetIssueByAccount(addr tcommon.Address) *contractpb.AssetIssueContract {
-	id, ok := rawdb.ReadAssetOwnerIndex(b.chain.db, addr[:])
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	id, ok := sysKV.ReadAssetOwnerIndex(addr[:])
 	if !ok {
 		return nil
 	}
 	if !b.chain.DynProps().AllowSameTokenName() {
-		if asset := rawdb.ReadAssetIssue(b.chain.db, id); asset != nil {
-			return rawdb.ReadAssetIssueByName(b.chain.db, asset.Name)
+		if asset := sysKV.ReadAssetIssue(id); asset != nil {
+			return sysKV.ReadAssetIssueByName(asset.Name)
 		}
 	}
-	return rawdb.ReadAssetIssue(b.chain.db, id)
+	return sysKV.ReadAssetIssue(id)
 }
 
 func (b *TronBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
-	return rawdb.ReadMarketOrder(b.chain.db, orderID)
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	return sysKV.ReadMarketOrder(orderID)
 }
 
 func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.MarketOrder {
-	mao := rawdb.ReadMarketAccountOrder(b.chain.db, addr[:])
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	mao := sysKV.ReadMarketAccountOrder(addr[:])
 	var orders []*corepb.MarketOrder
 	for _, id := range mao.Orders {
-		if o := rawdb.ReadMarketOrder(b.chain.db, id); o != nil {
+		if o := sysKV.ReadMarketOrder(id); o != nil {
 			orders = append(orders, o)
 		}
 	}
@@ -868,11 +928,35 @@ func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.M
 }
 
 func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
-	return rawdb.ReadMarketPriceList(b.chain.db, sellTokenID, buyTokenID)
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	return sysKV.ReadMarketPriceList(sellTokenID, buyTokenID)
+}
+
+// listExchangesAtHead enumerates the rooted exchange set (Phase 3d) at the head
+// state root, walking ids 1..latest_exchange_num as RpcApiService.getExchangeList
+// does off getLatestExchangeNum. This is a behavior-preserving swap of the prior
+// flat ListAllExchanges(exchangePrefix): it returns the V1 bucket unconditionally.
+//
+// NOTE (java-parity, deferred): java-tron's getExchangeList selects the bucket
+// via Commons.getExchangeStoreFinal — V1 pre-AllowSameTokenName, V2 after — so
+// post-fork it returns the live V2 set, whereas this (like the code it replaces)
+// always reads V1. That divergence predates this refactor and is left untouched
+// here to keep the migration a pure storage move; it should be fixed separately.
+func (b *TronBackend) listExchangesAtHead() []*corepb.Exchange {
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil
+	}
+	// latest_exchange_num is read from the cached DynProps, which tracks the same
+	// head this opens sysKV at; both are head-only, so they stay in sync.
+	return sysKV.ListExchanges(b.chain.DynProps().LatestExchangeNum())
 }
 
 func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
-	return rawdb.ListAllExchanges(b.chain.db), nil
+	return b.listExchangesAtHead(), nil
 }
 
 func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
@@ -920,7 +1004,7 @@ func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 }
 
 func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
-	all := rawdb.ListAllExchanges(b.chain.db)
+	all := b.listExchangesAtHead()
 	if len(all) == 0 {
 		return []*corepb.Exchange{}, nil
 	}
@@ -973,7 +1057,13 @@ func (b *TronBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 }
 
 func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
-	addrBytes := rawdb.ReadAccountIdIndex(b.chain.db, accountID)
+	// The account-id index is rooted (SystemAccountIndex): resolve it from the
+	// system-KV at the head state root, mirroring ListWitnesses' rooted read.
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil, fmt.Errorf("account not found")
+	}
+	addrBytes := sysKV.ReadAccountIdIndex(accountID)
 	if addrBytes == nil {
 		return nil, fmt.Errorf("account not found")
 	}
@@ -1019,7 +1109,11 @@ func (b *TronBackend) BuildContractTransaction(contractType corepb.Transaction_C
 }
 
 func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
-	p := rawdb.ReadProposal(b.chain.db, id)
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return nil, fmt.Errorf("proposal %d not found", id)
+	}
+	p := sysKV.ReadProposal(id)
 	if p == nil {
 		return nil, fmt.Errorf("proposal %d not found", id)
 	}

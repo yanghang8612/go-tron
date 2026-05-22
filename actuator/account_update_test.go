@@ -3,9 +3,7 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -44,8 +42,6 @@ func TestAccountUpdateExecute(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountUpdateContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 
 	act := &AccountUpdateActuator{}
 	result, err := act.Execute(ctx)
@@ -58,7 +54,7 @@ func TestAccountUpdateExecute(t *testing.T) {
 	if ctx.State.GetAccountName(owner) != "alice" {
 		t.Fatalf("name not set")
 	}
-	if got := rawdb.ReadAccountNameIndex(db, []byte("alice")); string(got) != string(owner[:]) {
+	if got := ctx.State.ReadAccountNameIndex([]byte("alice")); string(got) != string(owner[:]) {
 		t.Fatalf("account name index not written: got %x", got)
 	}
 }
@@ -102,9 +98,7 @@ func TestAccountUpdateDuplicateNameIndex(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AccountUpdateContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-	if err := rawdb.WriteAccountNameIndex(db, []byte("taken"), other[:]); err != nil {
+	if err := ctx.State.WriteAccountNameIndex([]byte("taken"), other); err != nil {
 		t.Fatal(err)
 	}
 

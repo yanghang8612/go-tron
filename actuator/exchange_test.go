@@ -4,9 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	trawdb "github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -86,14 +84,13 @@ func setupExchangeCtx(t *testing.T, tx *types.Transaction) *Context {
 	statedb.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("1000001"), 1_000_001, 1_000_000)
 
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
-	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("1000001"), &contractpb.AssetIssueContract{
+	if err := ctx.State.WriteAssetIssueByName([]byte("1000001"), &contractpb.AssetIssueContract{
 		Name: []byte("1000001"),
 		Id:   "1000001",
 	}); err != nil {
 		t.Fatalf("WriteAssetIssueByName: %v", err)
 	}
-	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("1000001"), 1_000_001); err != nil {
+	if err := ctx.State.WriteAssetNameIndex([]byte("1000001"), 1_000_001); err != nil {
 		t.Fatalf("WriteAssetNameIndex: %v", err)
 	}
 	return ctx
@@ -122,7 +119,7 @@ func TestExchangeCreateBasic(t *testing.T) {
 	}
 
 	// Exchange ID 1 should exist
-	ex := trawdb.ReadExchange(ctx.DB, 1)
+	ex := ctx.State.ReadExchange(1)
 	if ex == nil {
 		t.Fatal("exchange not stored")
 	}
@@ -150,13 +147,13 @@ func TestExchangeCreatePreSameTokenNameWritesLegacyAndV2(t *testing.T) {
 	}
 	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, c))
 	ctx.State.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("TOKEN"), 1_000_001, 1_000_000)
-	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("TOKEN"), &contractpb.AssetIssueContract{
+	if err := ctx.State.WriteAssetIssueByName([]byte("TOKEN"), &contractpb.AssetIssueContract{
 		Name: []byte("TOKEN"),
 		Id:   "1000001",
 	}); err != nil {
 		t.Fatalf("WriteAssetIssueByName: %v", err)
 	}
-	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("TOKEN"), 1_000_001); err != nil {
+	if err := ctx.State.WriteAssetNameIndex([]byte("TOKEN"), 1_000_001); err != nil {
 		t.Fatalf("WriteAssetNameIndex: %v", err)
 	}
 
@@ -168,14 +165,14 @@ func TestExchangeCreatePreSameTokenNameWritesLegacyAndV2(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	legacy := trawdb.ReadExchange(ctx.DB, 1)
+	legacy := ctx.State.ReadExchange(1)
 	if legacy == nil {
 		t.Fatal("legacy exchange not stored")
 	}
 	if string(legacy.FirstTokenId) != "TOKEN" {
 		t.Fatalf("legacy token id: got %q", legacy.FirstTokenId)
 	}
-	v2 := trawdb.ReadExchangeV2(ctx.DB, 1)
+	v2 := ctx.State.ReadExchangeV2(1)
 	if v2 == nil {
 		t.Fatal("exchange-v2 not stored")
 	}
@@ -195,13 +192,13 @@ func TestExchangeCreatePreSameTokenNameNumericNameUsesNameIndex(t *testing.T) {
 	ctx := setupExchangeCtx(t, makeExchangeCreateTx(ownerExchAddr, c))
 	ctx.State.SetTRC10Balance(ownerExchAddr, 123, 0)
 	ctx.State.SetTRC10BalanceLegacyAndV2(ownerExchAddr, []byte("123"), 1_000_001, 1_000_000)
-	if err := trawdb.WriteAssetIssueByName(ctx.DB, []byte("123"), &contractpb.AssetIssueContract{
+	if err := ctx.State.WriteAssetIssueByName([]byte("123"), &contractpb.AssetIssueContract{
 		Name: []byte("123"),
 		Id:   "1000001",
 	}); err != nil {
 		t.Fatalf("WriteAssetIssueByName: %v", err)
 	}
-	if err := trawdb.WriteAssetNameIndex(ctx.DB, []byte("123"), 1_000_001); err != nil {
+	if err := ctx.State.WriteAssetNameIndex([]byte("123"), 1_000_001); err != nil {
 		t.Fatalf("WriteAssetNameIndex: %v", err)
 	}
 
@@ -219,11 +216,11 @@ func TestExchangeCreatePreSameTokenNameNumericNameUsesNameIndex(t *testing.T) {
 	if got := ctx.State.GetTRC10Balance(ownerExchAddr, 123); got != 0 {
 		t.Fatalf("parsed-ID token balance must stay zero, got %d", got)
 	}
-	legacy := trawdb.ReadExchange(ctx.DB, 1)
+	legacy := ctx.State.ReadExchange(1)
 	if legacy == nil || string(legacy.FirstTokenId) != "123" {
 		t.Fatalf("legacy exchange token id: %+v", legacy)
 	}
-	v2 := trawdb.ReadExchangeV2(ctx.DB, 1)
+	v2 := ctx.State.ReadExchangeV2(1)
 	if v2 == nil || string(v2.FirstTokenId) != "1000001" {
 		t.Fatalf("v2 exchange token id: %+v", v2)
 	}
@@ -239,7 +236,7 @@ func TestExchangeTransactionAfterSameTokenNameReadsV2(t *testing.T) {
 	}
 	ctx := setupExchangeCtx(t, makeExchangeTransactionTx(c))
 	ctx.DynProps.SetAllowSameTokenName(true)
-	if err := trawdb.WriteExchange(ctx.DB, &corepb.Exchange{
+	if err := ctx.State.WriteExchange(&corepb.Exchange{
 		ExchangeId:         1,
 		CreatorAddress:     ownerExchAddr.Bytes(),
 		FirstTokenId:       []byte("TOKEN"),
@@ -249,7 +246,7 @@ func TestExchangeTransactionAfterSameTokenNameReadsV2(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteExchange: %v", err)
 	}
-	if err := trawdb.WriteExchangeV2(ctx.DB, &corepb.Exchange{
+	if err := ctx.State.WriteExchangeV2(&corepb.Exchange{
 		ExchangeId:         1,
 		CreatorAddress:     ownerExchAddr.Bytes(),
 		FirstTokenId:       []byte("1000001"),
@@ -299,7 +296,7 @@ func TestExchangeInjectBasic(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	ex := trawdb.ReadExchange(ctx.DB, 1)
+	ex := ctx.State.ReadExchange(1)
 	// 1000M + 200M = 1200M TRX in pool
 	if ex.FirstTokenBalance != 1_200_000_000 {
 		t.Fatalf("wrong FirstTokenBalance after inject: %d", ex.FirstTokenBalance)
@@ -354,7 +351,7 @@ func TestExchangeWithdrawBasic(t *testing.T) {
 	if trc10After != trc10Before+100_000 {
 		t.Fatalf("TRC10 after withdraw: got %d, want %d", trc10After, trc10Before+100_000)
 	}
-	ex := trawdb.ReadExchange(ctx.DB, 1)
+	ex := ctx.State.ReadExchange(1)
 	if ex.FirstTokenBalance != 800_000_000 || ex.SecondTokenBalance != 400_000 {
 		t.Fatalf("exchange state wrong: %+v", ex)
 	}
@@ -403,7 +400,7 @@ func TestExchangeTransactionBasic(t *testing.T) {
 	}
 
 	// Check exchange pool updated.
-	ex := trawdb.ReadExchange(ctx.DB, 1)
+	ex := ctx.State.ReadExchange(1)
 	if ex.FirstTokenBalance != 1_100_000_000 {
 		t.Fatalf("wrong FirstTokenBalance: %d", ex.FirstTokenBalance)
 	}
@@ -431,7 +428,7 @@ func TestExchangeTransactionHardenedRejectsBalanceOverflow(t *testing.T) {
 	ctx := setupExchangeCtx(t, makeExchangeTransactionTx(c))
 	ctx.DynProps.SetAllowHardenExchangeCalculation(true)
 	ctx.DynProps.Set("exchange_balance_limit", maxInt64)
-	trawdb.WriteExchange(ctx.DB, &corepb.Exchange{
+	ctx.State.WriteExchange(&corepb.Exchange{
 		ExchangeId:         1,
 		CreatorAddress:     ownerExchAddr.Bytes(),
 		FirstTokenId:       []byte("_"),
@@ -505,7 +502,7 @@ func TestExchangeOperationRejectsNonNumericTokenIDAfterSameTokenName(t *testing.
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := setupExchangeCtx(t, tt.tx)
 			ctx.DynProps.SetAllowSameTokenName(true)
-			trawdb.WriteExchangeV2(ctx.DB, &corepb.Exchange{
+			ctx.State.WriteExchangeV2(&corepb.Exchange{
 				ExchangeId:         1,
 				CreatorAddress:     ownerExchAddr.Bytes(),
 				FirstTokenId:       []byte("TOKEN"),

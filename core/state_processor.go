@@ -130,7 +130,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	resourceTime := ctx.ResourceTime()
-	bwResult, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, resourceTime, db)
+	bwResult, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, resourceTime)
 	if err != nil {
 		revertTx()
 		return nil, fmt.Errorf("bandwidth: %w", err)

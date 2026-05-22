@@ -1,21 +1,23 @@
 package core
 
 import (
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 )
 
-func pendingVoteDeltas(db ethdb.KeyValueReader) (map[tcommon.Address]int64, bool) {
-	voters := rawdb.ReadVotesIndex(db)
+// pendingVoteDeltas reads the rooted VotesStore (WitnessVoteState KV) on statedb
+// and nets each voter's old/new vote lists into per-witness deltas. Reading
+// through statedb means deltas reflect any same-block actuator/TVM votes staged
+// in the shared overlay.
+func pendingVoteDeltas(statedb *state.StateDB) (map[tcommon.Address]int64, bool) {
+	voters := statedb.ReadVotesIndex()
 	if len(voters) == 0 {
 		return nil, false
 	}
 	deltas := make(map[tcommon.Address]int64)
 	hasRecords := false
 	for _, voter := range voters {
-		votes := rawdb.ReadVotes(db, voter)
+		votes := statedb.ReadVotes(voter)
 		if votes == nil {
 			continue
 		}
@@ -41,17 +43,19 @@ func pendingVoteDeltas(db ethdb.KeyValueReader) (map[tcommon.Address]int64, bool
 // applyPendingVotes drains java-tron-style VotesStore records into the
 // WitnessStore view at maintenance time. Each record contains the vote list at
 // the start of the epoch plus the voter's latest vote list; the net deltas are
-// applied once and the pending store is cleared.
-func applyPendingVotes(db kvReadWriter, statedb *state.StateDB) bool {
-	voters := rawdb.ReadVotesIndex(db)
+// applied once and the rooted pending store is cleared. Both the records and
+// the clear happen on statedb, so the drain rewinds with the full state root and
+// observes same-block actuator/TVM writes through the shared overlay.
+func applyPendingVotes(statedb *state.StateDB) bool {
+	voters := statedb.ReadVotesIndex()
 	if len(voters) == 0 {
 		return false
 	}
-	deltas, applied := pendingVoteDeltas(db)
+	deltas, applied := pendingVoteDeltas(statedb)
 	for _, voter := range voters {
-		_ = rawdb.DeleteVotes(db, voter)
+		_ = statedb.DeleteVotes(voter)
 	}
-	rawdb.WriteVotesIndex(db, nil)
+	_ = statedb.WriteVotesIndex(nil)
 
 	for addr, delta := range deltas {
 		if delta != 0 {

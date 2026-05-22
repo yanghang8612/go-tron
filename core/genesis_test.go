@@ -185,6 +185,60 @@ func TestSetupGenesisBlock_WitnessAccountsCreated(t *testing.T) {
 	}
 }
 
+// TestSetupGenesisBlock_NameIndexRooted locks the account-index rooting genesis
+// seed: every named genesis account (Zion/Sun/Blackhole on mainnet) must have
+// its name->owner reverse lookup recoverable from the persisted genesis STATE
+// root (it is staged into the system account's SystemAccountIndex KV before
+// Commit, not written to a flat `ani-` key). It also re-asserts genesis-root
+// determinism across runs, since the seed participates in the consensus root.
+func TestSetupGenesisBlock_NameIndexRooted(t *testing.T) {
+	genesis := params.DefaultMainnetGenesis()
+	named := 0
+	for _, ga := range genesis.Accounts {
+		if ga.AccountName != "" {
+			named++
+		}
+	}
+	if named == 0 {
+		t.Fatalf("mainnet genesis has no named accounts; test fixture broken")
+	}
+
+	var firstRoot common.Hash
+	for run := 0; run < 3; run++ {
+		diskdb := ethrawdb.NewMemoryDatabase()
+		if _, _, err := SetupGenesisBlock(diskdb, params.DefaultMainnetGenesis()); err != nil {
+			t.Fatal(err)
+		}
+		root := rawdb.ReadGenesisStateRoot(diskdb)
+		if root == (common.Hash{}) {
+			t.Fatal("genesis state root not persisted")
+		}
+		if run == 0 {
+			firstRoot = root
+		} else if root != firstRoot {
+			t.Fatalf("genesis state root non-deterministic across runs: run %d = %x, run 0 = %x", run, root, firstRoot)
+		}
+
+		sdb, err := state.New(root, state.NewDatabase(diskdb))
+		if err != nil {
+			t.Fatalf("open state at genesis root: %v", err)
+		}
+		for _, ga := range genesis.Accounts {
+			if ga.AccountName == "" {
+				continue
+			}
+			got := sdb.ReadAccountNameIndex([]byte(ga.AccountName))
+			if string(got) != string(ga.Address[:]) {
+				t.Fatalf("name index for %q not rooted at genesis: got %x, want %x", ga.AccountName, got, ga.Address[:])
+			}
+		}
+		// The account-id index has no genesis seed: no genesis account sets one.
+		if sdb.HasAccountIdIndex([]byte("anything")) {
+			t.Fatal("account-id index should be empty at genesis")
+		}
+	}
+}
+
 // TestSetupGenesisBlock_WitnessIsJobsSet locks java-tron Manager.initWitness
 // parity (Manager.java:725): every genesis witness's persisted WitnessCapsule
 // must have is_jobs=true after SetupGenesisBlock. gtron never calls SetIsJobs

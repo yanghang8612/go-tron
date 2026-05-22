@@ -3,15 +3,14 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
-func setupProposalForApprove(t *testing.T, db ethdb.Database, proposer tcommon.Address) {
+func setupProposalForApprove(t *testing.T, sdb *state.StateDB, proposer tcommon.Address) {
 	t.Helper()
 	p := &rawdb.Proposal{
 		ID:             1,
@@ -21,8 +20,12 @@ func setupProposalForApprove(t *testing.T, db ethdb.Database, proposer tcommon.A
 		ExpirationTime: 500 + 259200000,
 		State:          rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 1, p)
-	rawdb.WriteProposalIndex(db, []int64{1})
+	if err := sdb.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.WriteProposalIndex([]int64{1}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProposalApproveValidate(t *testing.T) {
@@ -37,9 +40,7 @@ func TestProposalApproveValidate(t *testing.T) {
 	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-	setupProposalForApprove(t, db, owner)
+	setupProposalForApprove(t, ctx.State, owner)
 	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalApproveActuator{}
@@ -60,10 +61,8 @@ func TestProposalApproveExecute(t *testing.T) {
 	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	proposer := tcommon.Address{0x41, 0x02}
-	setupProposalForApprove(t, db, proposer)
+	setupProposalForApprove(t, ctx.State, proposer)
 
 	act := &ProposalApproveActuator{}
 	result, err := act.Execute(ctx)
@@ -74,7 +73,7 @@ func TestProposalApproveExecute(t *testing.T) {
 		t.Fatalf("expected ContractRet=1")
 	}
 
-	p := rawdb.ReadProposal(db, 1)
+	p := ctx.State.ReadProposal(1)
 	if len(p.Approvals) != 1 || p.Approvals[0] != owner {
 		t.Fatalf("approval not recorded: %+v", p.Approvals)
 	}
@@ -92,13 +91,13 @@ func TestProposalApproveDoubleApprove(t *testing.T) {
 	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	p := &rawdb.Proposal{
 		ID: 1, ExpirationTime: 999999999, State: rawdb.ProposalStatePending,
 		Approvals: []tcommon.Address{owner},
 	}
-	rawdb.WriteProposal(db, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalApproveActuator{}
@@ -118,22 +117,25 @@ func TestProposalApproveRejectsOnlyCanceledState(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.PutWitness(owner, "http://w.com")
 	ctx.ActiveWitnesses = []tcommon.Address{owner}
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.DynProps.SetLatestProposalNum(1)
-	rawdb.WriteProposal(ctx.DB, 1, &rawdb.Proposal{
+	if err := ctx.State.WriteProposal(1, &rawdb.Proposal{
 		ID:             1,
 		ExpirationTime: 999999999,
 		State:          rawdb.ProposalStateApproved,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &ProposalApproveActuator{}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("approved state should not be rejected before expiration: %v", err)
 	}
 
-	p := rawdb.ReadProposal(ctx.DB, 1)
+	p := ctx.State.ReadProposal(1)
 	p.State = rawdb.ProposalStateCanceled
-	rawdb.WriteProposal(ctx.DB, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected canceled proposal to be rejected")
 	}

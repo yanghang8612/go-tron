@@ -86,15 +86,15 @@ func (a *ProposalCreateActuator) Execute(ctx *Context) (*Result, error) {
 		State:          rawdb.ProposalStatePending,
 	}
 
-	if ctx.DB != nil {
-		if err := rawdb.WriteProposal(ctx.DB, proposalID, proposal); err != nil {
-			return nil, err
-		}
-		index := rawdb.ReadProposalIndex(ctx.DB)
-		index = append(index, proposalID)
-		if err := rawdb.WriteProposalIndex(ctx.DB, index); err != nil {
-			return nil, err
-		}
+	// Stage the proposal record + index entry into the rooted system-KV
+	// (Phase 3d). The same *StateDB is read by approve/delete/maintenance
+	// later this block, the write is journaled (rolls back if this tx
+	// reverts), and it rewinds with the state root on a fork rewind.
+	if err := ctx.State.WriteProposal(proposalID, proposal); err != nil {
+		return nil, err
+	}
+	if err := ctx.State.AppendProposalIndex(proposalID); err != nil {
+		return nil, err
 	}
 
 	return &Result{Fee: 0, ContractRet: 1}, nil

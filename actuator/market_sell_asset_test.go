@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/ethdb"
 	trawdb "github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -36,9 +36,9 @@ func makeMarketSellTx(ownerByte byte, sellTokenID []byte, sellQty int64, buyToke
 	return types.NewTransactionFromPB(pb)
 }
 
-func writeMarketAssetIssue(t *testing.T, db ethdb.KeyValueWriter, tokenID int64) {
+func writeMarketAssetIssue(t *testing.T, statedb *state.StateDB, tokenID int64) {
 	t.Helper()
-	if err := trawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{
 		Id: "1000001",
 	}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestMarketSellAssetValidate_Success(t *testing.T) {
 	tx := makeMarketSellTx(1, []byte("1000001"), 100, []byte("_"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
-	writeMarketAssetIssue(t, ctx.DB, tokenID)
+	writeMarketAssetIssue(t, ctx.State, tokenID)
 
 	ctx.DynProps.SetAllowMarketTransaction(true)
 	ctx.DynProps.SetAllowSameTokenName(true)
@@ -76,7 +76,7 @@ func TestMarketSellAssetValidate_TRXSellRequiresFeeAndSellQuantity(t *testing.T)
 	tx := makeMarketSellTx(1, []byte("_"), 100, []byte("1000001"), 200)
 	ctx := setupContext(t, statedb, tx)
 	ctx.DB = ethrawdb.NewMemoryDatabase()
-	writeMarketAssetIssue(t, ctx.DB, tokenID)
+	writeMarketAssetIssue(t, ctx.State, tokenID)
 	ctx.DynProps.SetAllowMarketTransaction(true)
 	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.DynProps.SetMarketSellFee(1)
@@ -173,20 +173,20 @@ func TestMarketSellAssetExecute_NoMatch(t *testing.T) {
 	}
 
 	// Price list should have one entry for TRX -> TRC10(1000001)
-	pl := trawdb.ReadMarketPriceList(db, []byte("_"), []byte("1000001"))
+	pl := statedb.ReadMarketPriceList([]byte("_"), []byte("1000001"))
 	if pl == nil || len(pl.Prices) == 0 {
 		t.Fatal("expected price list entry after placing order")
 	}
 
 	// Order book should have an order at that price
 	pk := trawdb.PriceKey(100, 200)
-	ob := trawdb.ReadMarketOrderBook(db, []byte("_"), []byte("1000001"), pk)
+	ob := statedb.ReadMarketOrderBook([]byte("_"), []byte("1000001"), pk)
 	if ob == nil || len(ob.Head) == 0 {
 		t.Fatal("expected order book entry after placing order")
 	}
 
 	// The order should be ACTIVE
-	order := trawdb.ReadMarketOrder(db, ob.Head)
+	order := statedb.ReadMarketOrder(ob.Head)
 	if order == nil {
 		t.Fatal("expected order to exist in DB")
 	}
@@ -227,7 +227,7 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 
 	// Verify A's order is in the book
 	pkA := trawdb.PriceKey(100, 200)
-	obA := trawdb.ReadMarketOrderBook(db, []byte("_"), []byte("1000001"), pkA)
+	obA := statedb.ReadMarketOrderBook([]byte("_"), []byte("1000001"), pkA)
 	if obA == nil || len(obA.Head) == 0 {
 		t.Fatal("A's order should be in the book")
 	}
@@ -258,24 +258,24 @@ func TestMarketSellAssetExecute_FullMatch(t *testing.T) {
 	}
 
 	// A's order should be INACTIVE
-	orderA := trawdb.ReadMarketOrder(db, orderAID)
+	orderA := statedb.ReadMarketOrder(orderAID)
 	if orderA == nil {
 		t.Fatal("A's order should still exist in DB")
 	}
 	if orderA.State != corepb.MarketOrder_INACTIVE {
 		t.Fatalf("A's order state: want INACTIVE, got %v", orderA.State)
 	}
-	maoA := trawdb.ReadMarketAccountOrder(db, addrA[:])
+	maoA := statedb.ReadMarketAccountOrder(addrA[:])
 	if maoA.Count != 0 || len(maoA.Orders) != 0 || maoA.TotalCount != 1 {
 		t.Fatalf("A market account order should retain only total_count after full fill, got %+v", maoA)
 	}
-	maoB := trawdb.ReadMarketAccountOrder(db, addrB[:])
+	maoB := statedb.ReadMarketAccountOrder(addrB[:])
 	if maoB.Count != 0 || len(maoB.Orders) != 0 || maoB.TotalCount != 1 {
 		t.Fatalf("B market account order should retain only total_count after full fill, got %+v", maoB)
 	}
 
 	// Order book for TRX->TRC10 should be empty (A consumed)
-	obAfter := trawdb.ReadMarketOrderBook(db, []byte("_"), []byte("1000001"), pkA)
+	obAfter := statedb.ReadMarketOrderBook([]byte("_"), []byte("1000001"), pkA)
 	if obAfter != nil && len(obAfter.Head) > 0 {
 		t.Fatal("order book for TRX->TRC10 should be empty after full match")
 	}
@@ -334,11 +334,11 @@ func TestMarketSellAssetExecute_PartialMatch(t *testing.T) {
 	// B's order should be ACTIVE with 200 TRC10 remaining
 	// Find B's order in the book for TRC10->TRX
 	pkB := trawdb.PriceKey(400, 200)
-	obB := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), pkB)
+	obB := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), pkB)
 	if obB == nil || len(obB.Head) == 0 {
 		t.Fatal("B's remaining order should be in the TRC10->TRX book")
 	}
-	orderB := trawdb.ReadMarketOrder(db, obB.Head)
+	orderB := statedb.ReadMarketOrder(obB.Head)
 	if orderB == nil {
 		t.Fatal("B's order should exist in DB")
 	}
@@ -407,7 +407,7 @@ func TestMarketSellAssetExecute_ReturnsTakerRemainWhenBuyRoundsToZero(t *testing
 		t.Fatalf("taker TRC10 balance: want 5, got %d", got)
 	}
 
-	takerOrder := trawdb.ReadMarketOrder(db, result.OrderID)
+	takerOrder := statedb.ReadMarketOrder(result.OrderID)
 	if takerOrder == nil {
 		t.Fatal("taker order should be written")
 	}
@@ -418,11 +418,11 @@ func TestMarketSellAssetExecute_ReturnsTakerRemainWhenBuyRoundsToZero(t *testing
 		t.Fatalf("taker rounded return: want remain=0 return=1, got remain=%d return=%d", takerOrder.SellTokenQuantityRemain, takerOrder.SellTokenQuantityReturn)
 	}
 
-	ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), trawdb.PriceKey(5, 6))
+	ob := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), trawdb.PriceKey(5, 6))
 	if ob == nil || len(ob.Head) == 0 {
 		t.Fatal("second maker order should remain active at the same price")
 	}
-	remainingMaker := trawdb.ReadMarketOrder(db, ob.Head)
+	remainingMaker := statedb.ReadMarketOrder(ob.Head)
 	if remainingMaker == nil {
 		t.Fatal("remaining maker order should exist")
 	}
@@ -453,12 +453,12 @@ func TestMarketSellAssetExecute_ReturnsMakerRemainWhenMakerReceiveRoundsToZero(t
 	if err != nil {
 		t.Fatalf("maker execute failed: %v", err)
 	}
-	makerOrder := trawdb.ReadMarketOrder(db, makerResult.OrderID)
+	makerOrder := statedb.ReadMarketOrder(makerResult.OrderID)
 	if makerOrder == nil {
 		t.Fatal("maker order should exist")
 	}
 	makerOrder.SellTokenQuantityRemain = 1
-	if err := trawdb.WriteMarketOrder(db, makerResult.OrderID, makerOrder); err != nil {
+	if err := statedb.WriteMarketOrder(makerResult.OrderID, makerOrder); err != nil {
 		t.Fatalf("write adjusted maker order: %v", err)
 	}
 
@@ -484,22 +484,22 @@ func TestMarketSellAssetExecute_ReturnsMakerRemainWhenMakerReceiveRoundsToZero(t
 		t.Fatalf("taker TRC10 balance must not receive maker returned remain: want 0, got %d", got)
 	}
 
-	makerOrder = trawdb.ReadMarketOrder(db, makerResult.OrderID)
+	makerOrder = statedb.ReadMarketOrder(makerResult.OrderID)
 	if makerOrder.State != corepb.MarketOrder_INACTIVE {
 		t.Fatalf("maker order state: want INACTIVE, got %v", makerOrder.State)
 	}
 	if makerOrder.SellTokenQuantityRemain != 0 || makerOrder.SellTokenQuantityReturn != 1 {
 		t.Fatalf("maker rounded return: want remain=0 return=1, got remain=%d return=%d", makerOrder.SellTokenQuantityRemain, makerOrder.SellTokenQuantityReturn)
 	}
-	mao := trawdb.ReadMarketAccountOrder(db, maker[:])
+	mao := statedb.ReadMarketAccountOrder(maker[:])
 	if mao.Count != 0 || len(mao.Orders) != 0 {
 		t.Fatalf("maker account order should remove inactive rounded order, got %+v", mao)
 	}
-	if ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), trawdb.PriceKey(10, 6)); ob != nil && len(ob.Head) > 0 {
+	if ob := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), trawdb.PriceKey(10, 6)); ob != nil && len(ob.Head) > 0 {
 		t.Fatal("maker price level should be removed after rounded-zero inactive order")
 	}
 
-	takerOrder := trawdb.ReadMarketOrder(db, takerResult.OrderID)
+	takerOrder := statedb.ReadMarketOrder(takerResult.OrderID)
 	if takerOrder == nil {
 		t.Fatal("taker remainder order should be written")
 	}

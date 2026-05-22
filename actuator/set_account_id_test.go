@@ -3,9 +3,7 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -43,9 +41,7 @@ func TestSetAccountIdDuplicateIndexIsCaseInsensitive(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_SetAccountIdContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-	if err := rawdb.WriteAccountIdIndex(db, []byte("aliceid1"), other[:]); err != nil {
+	if err := ctx.State.WriteAccountIdIndex([]byte("aliceid1"), other); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,8 +59,6 @@ func TestSetAccountIdExecute(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_SetAccountIdContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 
 	act := &SetAccountIdActuator{}
 	result, err := act.Execute(ctx)
@@ -77,7 +71,7 @@ func TestSetAccountIdExecute(t *testing.T) {
 	if ctx.State.GetAccountId(owner) != "user1234" {
 		t.Fatal("id not set")
 	}
-	if got := rawdb.ReadAccountIdIndex(db, []byte("USER1234")); string(got) != string(owner[:]) {
+	if got := ctx.State.ReadAccountIdIndex([]byte("USER1234")); string(got) != string(owner[:]) {
 		t.Fatalf("account id index not written case-insensitively: got %x", got)
 	}
 }

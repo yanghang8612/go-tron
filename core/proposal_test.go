@@ -11,6 +11,7 @@ import (
 
 func TestProcessProposals_Approved(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 
 	// Create proposal to change witness_pay_per_block (ID 5) to 32000000
@@ -25,16 +26,16 @@ func TestProcessProposals_Approved(t *testing.T) {
 		},
 		State: rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
 	// 3 approvals out of 4 SRs = 75% >= 70%
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := rawdb.ReadProposal(db, 0)
+	got := statedb.ReadProposal(0)
 	if got.State != rawdb.ProposalStateApproved {
 		t.Fatalf("expected APPROVED, got %d", got.State)
 	}
@@ -45,6 +46,7 @@ func TestProcessProposals_Approved(t *testing.T) {
 
 func TestProcessProposals_Canceled(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 
 	p := &rawdb.Proposal{
@@ -54,15 +56,15 @@ func TestProcessProposals_Canceled(t *testing.T) {
 		Approvals:      []tcommon.Address{{0x41, 0x01}}, // 1 of 4 = 25%
 		State:          rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
 	active4 := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active4, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active4, 3000, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := rawdb.ReadProposal(db, 0)
+	got := statedb.ReadProposal(0)
 	if got.State != rawdb.ProposalStateCanceled {
 		t.Fatalf("expected CANCELED, got %d", got.State)
 	}
@@ -74,6 +76,7 @@ func TestProcessProposals_Canceled(t *testing.T) {
 
 func TestProcessProposals_NotExpired(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 
 	p := &rawdb.Proposal{
@@ -83,14 +86,14 @@ func TestProcessProposals_NotExpired(t *testing.T) {
 		Approvals:      []tcommon.Address{{0x41, 0x01}},
 		State:          rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
-	if err := ProcessProposals(db, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000, nil); err != nil { // maintenance time < expiration
+	if err := ProcessProposals(db, statedb, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000, nil); err != nil { // maintenance time < expiration
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := rawdb.ReadProposal(db, 0)
+	got := statedb.ReadProposal(0)
 	if got.State != rawdb.ProposalStatePending {
 		t.Fatalf("expected still PENDING, got %d", got.State)
 	}
@@ -101,6 +104,7 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 
 	runProposal := func(paramID, value, expirationTime int64, active []tcommon.Address) *state.DynamicProperties {
 		t.Helper()
+		statedb := newTestStateDB(t)
 		dp := state.NewDynamicProperties()
 		p := &rawdb.Proposal{
 			Parameters:     map[int64]int64{paramID: value},
@@ -108,9 +112,9 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 			Approvals:      active,
 			State:          rawdb.ProposalStatePending,
 		}
-		rawdb.WriteProposal(db, p.ID, p)
-		rawdb.WriteProposalIndex(db, []int64{p.ID})
-		if err := ProcessProposals(db, dp, active, expirationTime+1, nil); err != nil {
+		statedb.WriteProposal(p.ID, p)
+		statedb.WriteProposalIndex([]int64{p.ID})
+		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil); err != nil {
 			t.Fatalf("ProcessProposals: %v", err)
 		}
 		return dp
@@ -126,7 +130,6 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 	}
 
 	// Proposal #11 (ENERGY_FEE) appends to energy_price_history
-	db = ethrawdb.NewMemoryDatabase()
 	dp = runProposal(11, 200, 6000, active)
 	want = "0:100,6000:200"
 	if got := dp.EnergyPriceHistory(); got != want {
@@ -134,7 +137,6 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 	}
 
 	// Proposal #68 (MEMO_FEE) appends to memo_fee_history
-	db = ethrawdb.NewMemoryDatabase()
 	dp = runProposal(68, 100, 7000, active)
 	want = "0:0,7000:100"
 	if got := dp.MemoFeeHistory(); got != want {
@@ -151,6 +153,7 @@ func TestApplyProposalSideEffects_AddSystemContract(t *testing.T) {
 	runProposal := func(paramID, value, expirationTime int64) *state.DynamicProperties {
 		t.Helper()
 		db := ethrawdb.NewMemoryDatabase()
+		statedb := newTestStateDB(t)
 		dp := state.NewDynamicProperties()
 		p := &rawdb.Proposal{
 			Parameters:     map[int64]int64{paramID: value},
@@ -158,9 +161,9 @@ func TestApplyProposalSideEffects_AddSystemContract(t *testing.T) {
 			Approvals:      active,
 			State:          rawdb.ProposalStatePending,
 		}
-		rawdb.WriteProposal(db, p.ID, p)
-		rawdb.WriteProposalIndex(db, []int64{p.ID})
-		if err := ProcessProposals(db, dp, active, expirationTime+1, nil); err != nil {
+		statedb.WriteProposal(p.ID, p)
+		statedb.WriteProposalIndex([]int64{p.ID})
+		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil); err != nil {
 			t.Fatalf("ProcessProposals: %v", err)
 		}
 		return dp

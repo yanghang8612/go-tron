@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -51,15 +49,14 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 	statedb.CreateAccount(to, corepb.AccountType_Normal)
 	statedb.SetTRC10BalanceLegacyAndV2(owner, []byte(tokenName), tokenID, 21_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
 	asset := &contractpb.AssetIssueContract{Name: []byte(tokenName), Id: strconv.FormatInt(tokenID, 10)}
-	if err := rawdb.WriteAssetIssueByName(db, []byte(tokenName), asset); err != nil {
+	if err := statedb.WriteAssetIssueByName([]byte(tokenName), asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetNameIndex(db, []byte(tokenName), tokenID); err != nil {
+	if err := statedb.WriteAssetNameIndex([]byte(tokenName), tokenID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +75,6 @@ func TestTransferAssetExecute_AssetNameAsLiteralName(t *testing.T) {
 		},
 	})
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -105,18 +101,17 @@ func TestTransferAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *testin
 	statedb.CreateAccount(to, corepb.AccountType_Normal)
 	statedb.SetTRC10BalanceLegacyAndV2(owner, []byte(numericName), tokenID, 21_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
 	asset := &contractpb.AssetIssueContract{Name: []byte(numericName), Id: strconv.FormatInt(tokenID, 10)}
-	if err := rawdb.WriteAssetIssueByName(db, []byte(numericName), asset); err != nil {
+	if err := statedb.WriteAssetIssueByName([]byte(numericName), asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssue(db, 123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
+	if err := statedb.WriteAssetIssue(123, &contractpb.AssetIssueContract{Name: []byte("OTHER")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetNameIndex(db, []byte(numericName), tokenID); err != nil {
+	if err := statedb.WriteAssetNameIndex([]byte(numericName), tokenID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +130,6 @@ func TestTransferAssetExecute_PreSameTokenNameNumericNameUsesNameIndex(t *testin
 		},
 	})
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 
 	act := &TransferAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -164,14 +158,12 @@ func TestTransferAssetValidate_Success(t *testing.T) {
 	statedb.CreateAccount(to, corepb.AccountType_Normal)
 	statedb.SetTRC10Balance(owner, tokenID, 500_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 2, tokenID, 100_000)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
@@ -186,7 +178,7 @@ func TestTransferAssetValidate_UnknownToken(t *testing.T) {
 
 	tx := makeTransferAssetTx(1, 2, 9_999_999, 100)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = ethrawdb.NewMemoryDatabase() // empty DB — no token
+	// empty rooted state — no token
 	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
@@ -202,14 +194,12 @@ func TestTransferAssetValidate_InsufficientBalance(t *testing.T) {
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetTRC10Balance(owner, tokenID, 50) // only 50 tokens
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 2, tokenID, 100) // wants 100
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
@@ -227,14 +217,12 @@ func TestTransferAssetExecute_Success(t *testing.T) {
 	statedb.CreateAccount(to, corepb.AccountType_Normal)
 	statedb.SetTRC10Balance(owner, tokenID, 1_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 2, tokenID, 300_000)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}
@@ -263,14 +251,12 @@ func TestTransferAssetExecute_CreateAccountFeeBurnedNotCounted(t *testing.T) {
 	statedb.AddBalance(owner, 1_000_000)
 	statedb.SetTRC10Balance(owner, tokenID, 1_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 0xBB, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.DynProps.Set("create_new_account_fee_in_system_contract", int64(100_000))
 	balanceBefore := statedb.GetBalance(owner)
@@ -297,14 +283,12 @@ func TestTransferAssetExecute_CreatesRecipient(t *testing.T) {
 	statedb.AddBalance(owner, 1_000_000) // TRX for create_account_fee
 	statedb.SetTRC10Balance(owner, tokenID, 1_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetIssue(db, tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, &contractpb.AssetIssueContract{Name: []byte("T")}); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeTransferAssetTx(1, 9, tokenID, 500_000)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(true)
 
 	act := &TransferAssetActuator{}

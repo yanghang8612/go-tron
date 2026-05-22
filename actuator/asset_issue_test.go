@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
@@ -33,7 +32,6 @@ func TestAssetIssueValidate_Success(t *testing.T) {
 	owner := makeTestAddr(1)
 	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 
@@ -47,11 +45,9 @@ func TestAssetIssueValidate_DuplicateName(t *testing.T) {
 	owner := makeTestAddr(1)
 	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee()*2)
-	if err := rawdb.WriteAssetIssueByName(db, []byte("MYTOKEN"), &contractpb.AssetIssueContract{
+	if err := ctx.State.WriteAssetIssueByName([]byte("MYTOKEN"), &contractpb.AssetIssueContract{
 		Name: []byte("MYTOKEN"),
 		Id:   "999999",
 	}); err != nil {
@@ -68,11 +64,9 @@ func TestAssetIssueValidate_AlreadyIssued(t *testing.T) {
 	owner := makeTestAddr(1)
 	c := makeAssetIssueContract(1, "NEWTOKEN", 1_000_000)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee()*2)
-	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 999_999); err != nil {
+	if err := ctx.State.WriteAssetOwnerIndex(owner[:], 999_999); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +79,6 @@ func TestAssetIssueValidate_AlreadyIssued(t *testing.T) {
 func TestAssetIssueValidate_InsufficientFee(t *testing.T) {
 	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	owner := makeTestAddr(1)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	// balance = 0, fee = 1_024_000_000
@@ -100,8 +93,6 @@ func TestAssetIssueExecute(t *testing.T) {
 	owner := makeTestAddr(1)
 	c := makeAssetIssueContract(1, "MYTOKEN", 1_000_000)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 
@@ -118,16 +109,16 @@ func TestAssetIssueExecute(t *testing.T) {
 	}
 
 	tokenID := int64(1_000_001)
-	asset := rawdb.ReadAssetIssue(db, tokenID)
+	asset := ctx.State.ReadAssetIssue(tokenID)
 	if asset == nil {
-		t.Fatal("asset should be stored in rawdb")
+		t.Fatal("asset should be stored in rooted state")
 	}
 	if string(asset.Name) != "MYTOKEN" {
 		t.Fatalf("asset name: want MYTOKEN, got %s", asset.Name)
 	}
-	legacy := rawdb.ReadAssetIssueByName(db, []byte("MYTOKEN"))
+	legacy := ctx.State.ReadAssetIssueByName([]byte("MYTOKEN"))
 	if legacy == nil {
-		t.Fatal("legacy asset should be stored in name-keyed rawdb")
+		t.Fatal("legacy asset should be stored in the name-keyed rooted state")
 	}
 	if ctx.State.GetTRC10BalanceByName(owner, []byte("MYTOKEN")) != 1_000_000 {
 		t.Fatalf("legacy TRC10 balance: want 1000000, got %d", ctx.State.GetTRC10BalanceByName(owner, []byte("MYTOKEN")))
@@ -159,8 +150,6 @@ func TestAssetIssueExecute_PreSameTokenNameV2PrecisionForcedZero(t *testing.T) {
 	c := makeAssetIssueContract(1, "PRETOKEN", 1_000_000)
 	c.Precision = 6
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 	ctx.DynProps.SetAllowSameTokenName(false)
@@ -168,14 +157,14 @@ func TestAssetIssueExecute_PreSameTokenNameV2PrecisionForcedZero(t *testing.T) {
 	if _, err := (&AssetIssueActuator{}).Execute(ctx); err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	legacy := rawdb.ReadAssetIssueByName(db, []byte("PRETOKEN"))
+	legacy := ctx.State.ReadAssetIssueByName([]byte("PRETOKEN"))
 	if legacy == nil {
 		t.Fatal("legacy asset missing")
 	}
 	if legacy.Precision != 6 {
 		t.Fatalf("legacy precision: want 6, got %d", legacy.Precision)
 	}
-	v2 := rawdb.ReadAssetIssue(db, 1_000_001)
+	v2 := ctx.State.ReadAssetIssue(1_000_001)
 	if v2 == nil {
 		t.Fatal("v2 asset missing")
 	}
@@ -191,7 +180,6 @@ func TestAssetIssueValidate_NegativeFrozenAmount(t *testing.T) {
 		{FrozenAmount: -100_000, FrozenDays: 30},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 
@@ -208,8 +196,6 @@ func TestAssetIssueExecute_WithFrozenSupply(t *testing.T) {
 		{FrozenAmount: 200_000, FrozenDays: 30},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 
@@ -255,7 +241,6 @@ func TestAssetIssueValidate_TooManyFrozenEntries(t *testing.T) {
 		})
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 
@@ -269,7 +254,6 @@ func makeAssetIssueCtx(t *testing.T, c *contractpb.AssetIssueContract) *Context 
 	t.Helper()
 	owner := makeTestAddr(1)
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 	return ctx
@@ -358,7 +342,6 @@ func TestAssetIssueValidate_FrozenSumOverflow(t *testing.T) {
 		{FrozenAmount: overflowAmount, FrozenDays: 60},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_AssetIssueContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, ctx.DynProps.AssetIssueFee())
 

@@ -56,7 +56,7 @@ func TestMarketCancelOrderValidate_NotOwner(t *testing.T) {
 
 	// Get the order ID from the book
 	pk := trawdb.PriceKey(100, 50)
-	ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), pk)
+	ob := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), pk)
 	if ob == nil || len(ob.Head) == 0 {
 		t.Fatal("expected order in book")
 	}
@@ -75,11 +75,12 @@ func TestMarketCancelOrderValidate_NotOwner(t *testing.T) {
 
 // TestMarketCancelOrderValidate_AlreadyInactive tries to cancel an order with State=INACTIVE.
 func TestMarketCancelOrderValidate_AlreadyInactive(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
-
-	// Write a fake order with INACTIVE state
-	orderID := []byte("fake-order-id-0001")
+	statedb := setupStateDB(t)
 	owner := makeTestAddr(1)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+
+	// Write a fake order with INACTIVE state into the rooted market store.
+	orderID := []byte("fake-order-id-0001")
 	order := &corepb.MarketOrder{
 		OrderId:                 orderID,
 		OwnerAddress:            owner.Bytes(),
@@ -90,16 +91,12 @@ func TestMarketCancelOrderValidate_AlreadyInactive(t *testing.T) {
 		SellTokenQuantityRemain: 0,
 		State:                   corepb.MarketOrder_INACTIVE,
 	}
-	if err := trawdb.WriteMarketOrder(db, orderID, order); err != nil {
+	if err := statedb.WriteMarketOrder(orderID, order); err != nil {
 		t.Fatalf("failed to write order: %v", err)
 	}
 
-	statedb := setupStateDB(t)
-	statedb.CreateAccount(owner, corepb.AccountType_Normal)
-
 	txCancel := makeMarketCancelTx(1, orderID)
 	ctxCancel := setupContext(t, statedb, txCancel)
-	ctxCancel.DB = db
 
 	cancelAct := &MarketCancelOrderActuator{}
 	if err := cancelAct.Validate(ctxCancel); err == nil {
@@ -135,7 +132,7 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 
 	// Get the order ID
 	pk := trawdb.PriceKey(100, 50)
-	ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), pk)
+	ob := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), pk)
 	if ob == nil || len(ob.Head) == 0 {
 		t.Fatal("expected order in book")
 	}
@@ -162,7 +159,7 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	}
 
 	// Order state should be CANCELED
-	order := trawdb.ReadMarketOrder(db, orderID)
+	order := statedb.ReadMarketOrder(orderID)
 	if order == nil {
 		t.Fatal("order should still exist in DB")
 	}
@@ -175,7 +172,7 @@ func TestMarketCancelOrderExecute_ReturnsTokens(t *testing.T) {
 	if order.SellTokenQuantityReturn != 100 {
 		t.Fatalf("SellTokenQuantityReturn: want 100, got %d", order.SellTokenQuantityReturn)
 	}
-	mao := trawdb.ReadMarketAccountOrder(db, owner[:])
+	mao := statedb.ReadMarketAccountOrder(owner[:])
 	if mao.Count != 0 || len(mao.Orders) != 0 || mao.TotalCount != 1 {
 		t.Fatalf("market account order should retain only total_count after cancel, got %+v", mao)
 	}
@@ -204,7 +201,7 @@ func TestMarketCancelOrderExecute_RemovesFromBook(t *testing.T) {
 
 	// Get the order ID
 	pk := trawdb.PriceKey(100, 50)
-	ob := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), pk)
+	ob := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), pk)
 	if ob == nil || len(ob.Head) == 0 {
 		t.Fatal("expected order in book")
 	}
@@ -222,17 +219,17 @@ func TestMarketCancelOrderExecute_RemovesFromBook(t *testing.T) {
 	}
 
 	// Order book for that price should be nil (deleted)
-	obAfter := trawdb.ReadMarketOrderBook(db, []byte("1000001"), []byte("_"), pk)
+	obAfter := statedb.ReadMarketOrderBook([]byte("1000001"), []byte("_"), pk)
 	if obAfter != nil && len(obAfter.Head) > 0 {
 		t.Fatal("order book should be empty after cancel")
 	}
 
 	// Price list should be empty
-	pl := trawdb.ReadMarketPriceList(db, []byte("1000001"), []byte("_"))
+	pl := statedb.ReadMarketPriceList([]byte("1000001"), []byte("_"))
 	if pl != nil && len(pl.Prices) > 0 {
 		t.Fatalf("price list should be empty after cancel, got %d prices", len(pl.Prices))
 	}
-	if got := trawdb.ReadMarketPairPriceCount(db, []byte("1000001"), []byte("_")); got != 0 {
+	if got := statedb.ReadMarketPairPriceCount([]byte("1000001"), []byte("_")); got != 0 {
 		t.Fatalf("pair price count should be removed after cancel, got %d", got)
 	}
 }

@@ -4,9 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -36,36 +34,34 @@ func makeUpdateAssetTx(ownerByte byte, desc, url string, newLimit, newPublicLimi
 	return types.NewTransactionFromPB(pb)
 }
 
-func writeUpdateAssetTestAsset(t *testing.T, db ethdb.KeyValueWriter, tokenID int64, asset *contractpb.AssetIssueContract) {
+func writeUpdateAssetTestAsset(t *testing.T, statedb *state.StateDB, tokenID int64, asset *contractpb.AssetIssueContract) {
 	t.Helper()
 	if asset.Id == "" {
 		asset.Id = strconv.FormatInt(tokenID, 10)
 	}
-	if err := rawdb.WriteAssetIssueByName(db, asset.Name, asset); err != nil {
+	if err := statedb.WriteAssetIssueByName(asset.Name, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetNameIndex(db, asset.Name, tokenID); err != nil {
+	if err := statedb.WriteAssetNameIndex(asset.Name, tokenID); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestUpdateAssetValidate_Success(t *testing.T) {
 	owner := makeTestAddr(1)
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+	statedb := setupStateDB(t)
+	if err := statedb.WriteAssetOwnerIndex(owner[:], 1_000_001); err != nil {
 		t.Fatal(err)
 	}
-	writeUpdateAssetTestAsset(t, db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("MYTOKEN")})
+	writeUpdateAssetTestAsset(t, statedb, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("MYTOKEN")})
 
 	tx := makeUpdateAssetTx(1, "new desc", "http://new.url", 500, 1000)
-	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetAssetIssued(owner, []byte("MYTOKEN"), "1000001")
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 
 	act := &UpdateAssetActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -75,15 +71,13 @@ func TestUpdateAssetValidate_Success(t *testing.T) {
 
 func TestUpdateAssetValidate_PreSameTokenNameUsesIssuedName(t *testing.T) {
 	owner := makeTestAddr(1)
-	db := ethrawdb.NewMemoryDatabase()
-	writeUpdateAssetTestAsset(t, db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("MYTOKEN")})
+	statedb := setupStateDB(t)
+	writeUpdateAssetTestAsset(t, statedb, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("MYTOKEN")})
 
 	tx := makeUpdateAssetTx(1, "new desc", "http://new.url", 500, 1000)
-	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetAssetIssued(owner, []byte("MYTOKEN"), "1000001")
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	ctx.DynProps.SetAllowSameTokenName(false)
 
 	act := &UpdateAssetActuator{}
@@ -94,14 +88,12 @@ func TestUpdateAssetValidate_PreSameTokenNameUsesIssuedName(t *testing.T) {
 
 func TestUpdateAssetValidate_NotOwner(t *testing.T) {
 	nonOwner := makeTestAddr(2)
-	db := ethrawdb.NewMemoryDatabase()
 	// No entry for nonOwner in owner index
 
 	tx := makeUpdateAssetTx(2, "desc", "url", 0, 0)
 	statedb := setupStateDB(t)
 	statedb.CreateAccount(nonOwner, corepb.AccountType_Normal)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 
 	act := &UpdateAssetActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -111,13 +103,12 @@ func TestUpdateAssetValidate_NotOwner(t *testing.T) {
 
 func TestUpdateAssetValidate_NewLimitOutOfRange(t *testing.T) {
 	owner := makeTestAddr(1)
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+	statedb := setupStateDB(t)
+	if err := statedb.WriteAssetOwnerIndex(owner[:], 1_000_001); err != nil {
 		t.Fatal(err)
 	}
-	writeUpdateAssetTestAsset(t, db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")})
+	writeUpdateAssetTestAsset(t, statedb, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")})
 
-	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetAssetIssued(owner, []byte("T"), "1000001")
 
@@ -126,7 +117,6 @@ func TestUpdateAssetValidate_NewLimitOutOfRange(t *testing.T) {
 	// negative new_limit
 	tx := makeUpdateAssetTx(1, "", "", -1, 0)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for negative new_limit")
 	}
@@ -134,7 +124,6 @@ func TestUpdateAssetValidate_NewLimitOutOfRange(t *testing.T) {
 	// new_limit == oneDayNetLimit (at upper bound)
 	tx = makeUpdateAssetTx(1, "", "", ctx.DynProps.OneDayNetLimit(), 0)
 	ctx = setupContext(t, statedb, tx)
-	ctx.DB = db
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for new_limit >= one_day_net_limit")
 	}
@@ -142,27 +131,24 @@ func TestUpdateAssetValidate_NewLimitOutOfRange(t *testing.T) {
 
 func TestUpdateAssetValidate_NewPublicLimitOutOfRange(t *testing.T) {
 	owner := makeTestAddr(1)
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+	statedb := setupStateDB(t)
+	if err := statedb.WriteAssetOwnerIndex(owner[:], 1_000_001); err != nil {
 		t.Fatal(err)
 	}
-	writeUpdateAssetTestAsset(t, db, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")})
+	writeUpdateAssetTestAsset(t, statedb, 1_000_001, &contractpb.AssetIssueContract{Name: []byte("T")})
 
-	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetAssetIssued(owner, []byte("T"), "1000001")
 	act := &UpdateAssetActuator{}
 
 	tx := makeUpdateAssetTx(1, "", "", 0, -1)
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for negative new_public_limit")
 	}
 
 	tx = makeUpdateAssetTx(1, "", "", 0, ctx.DynProps.OneDayNetLimit())
 	ctx = setupContext(t, statedb, tx)
-	ctx.DB = db
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected error for new_public_limit >= one_day_net_limit")
 	}
@@ -170,11 +156,11 @@ func TestUpdateAssetValidate_NewPublicLimitOutOfRange(t *testing.T) {
 
 func TestUpdateAssetExecute(t *testing.T) {
 	owner := makeTestAddr(1)
-	db := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.WriteAssetOwnerIndex(db, owner[:], 1_000_001); err != nil {
+	statedb := setupStateDB(t)
+	if err := statedb.WriteAssetOwnerIndex(owner[:], 1_000_001); err != nil {
 		t.Fatal(err)
 	}
-	writeUpdateAssetTestAsset(t, db, 1_000_001, &contractpb.AssetIssueContract{
+	writeUpdateAssetTestAsset(t, statedb, 1_000_001, &contractpb.AssetIssueContract{
 		Name:                    []byte("MYTOKEN"),
 		Description:             []byte("old desc"),
 		Url:                     []byte("http://old.url"),
@@ -183,11 +169,9 @@ func TestUpdateAssetExecute(t *testing.T) {
 	})
 
 	tx := makeUpdateAssetTx(1, "new desc", "http://new.url", 500, 1000)
-	statedb := setupStateDB(t)
 	statedb.CreateAccount(owner, corepb.AccountType_Normal)
 	statedb.SetAssetIssued(owner, []byte("MYTOKEN"), "1000001")
 	ctx := setupContext(t, statedb, tx)
-	ctx.DB = db
 
 	act := &UpdateAssetActuator{}
 	result, err := act.Execute(ctx)
@@ -198,9 +182,9 @@ func TestUpdateAssetExecute(t *testing.T) {
 		t.Fatal("expected ContractRet=1")
 	}
 
-	updated := rawdb.ReadAssetIssue(db, 1_000_001)
+	updated := statedb.ReadAssetIssue(1_000_001)
 	if updated == nil {
-		t.Fatal("asset should still be in rawdb")
+		t.Fatal("asset should still be in rooted state")
 	}
 	if string(updated.Description) != "new desc" {
 		t.Fatalf("description: want 'new desc', got %s", updated.Description)

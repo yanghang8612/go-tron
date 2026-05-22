@@ -661,11 +661,15 @@ func cloneVMVotes(votes []*corepb.Vote) []*corepb.Vote {
 	return out
 }
 
+// recordTVMPendingVotes stages a voter's epoch delta into the rooted VotesStore
+// (WitnessVoteState KV) on the TVM's statedb — the same *StateDB the enclosing
+// actuator and the maintenance drain hold — so a contract-issued vote is
+// visible to the same-block drain and rewinds with the full state root.
 func recordTVMPendingVotes(tvm *TVM, owner tcommon.Address, oldVotes, newVotes []*corepb.Vote) error {
-	if tvm.DB == nil {
+	if tvm.StateDB == nil {
 		return nil
 	}
-	pending := rawdb.ReadVotes(tvm.DB, owner)
+	pending := tvm.StateDB.ReadVotes(owner)
 	if pending == nil {
 		pending = &corepb.Votes{
 			Address:  owner.Bytes(),
@@ -673,7 +677,7 @@ func recordTVMPendingVotes(tvm *TVM, owner tcommon.Address, oldVotes, newVotes [
 		}
 	}
 	pending.NewVotes = cloneVMVotes(newVotes)
-	return rawdb.WriteVotes(tvm.DB, owner, pending)
+	return tvm.StateDB.WriteVotes(owner, pending)
 }
 
 func validTVMStakeV2Resource(tvm *TVM, resource corepb.ResourceCode) bool {

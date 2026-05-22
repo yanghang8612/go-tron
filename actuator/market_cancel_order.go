@@ -7,6 +7,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -51,7 +52,7 @@ func (a *MarketCancelOrderActuator) Validate(ctx *Context) error {
 	}
 
 	// 3. Order exists in DB
-	order := rawdb.ReadMarketOrder(ctx.DB, c.OrderId)
+	order := ctx.State.ReadMarketOrder(c.OrderId)
 	if order == nil {
 		return errors.New("order does not exist")
 	}
@@ -92,7 +93,7 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 1: Read order from DB
-	order := rawdb.ReadMarketOrder(ctx.DB, c.OrderId)
+	order := ctx.State.ReadMarketOrder(c.OrderId)
 	if order == nil {
 		return nil, errors.New("order does not exist")
 	}
@@ -106,7 +107,7 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 
 	// Step 3: Remove from order book
 	pk := rawdb.PriceKey(order.SellTokenQuantity, order.BuyTokenQuantity)
-	if err := removeOrderFromBook(ctx.DB, order, pk); err != nil {
+	if err := removeOrderFromBook(ctx.State, order, pk); err != nil {
 		return nil, err
 	}
 
@@ -116,7 +117,7 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 	order.State = corepb.MarketOrder_CANCELED
 
 	// Step 5: Write order back
-	if err := rawdb.WriteMarketOrder(ctx.DB, c.OrderId, order); err != nil {
+	if err := ctx.State.WriteMarketOrder(c.OrderId, order); err != nil {
 		return nil, err
 	}
 
@@ -129,9 +130,11 @@ func (a *MarketCancelOrderActuator) Execute(ctx *Context) (*Result, error) {
 }
 
 // removeOrderFromBook unlinks the order from the linked list in the order book.
-// If the list becomes empty, it deletes the order book entry and removes the price from the price list.
-func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]byte) error {
-	ob := rawdb.ReadMarketOrderBook(db, order.SellTokenId, order.BuyTokenId, pk)
+// If the list becomes empty, it deletes the order book entry and removes the
+// price from the price list. Market state is rooted (SystemMarket KV), so reads
+// and writes go through the rooted StateDB.
+func removeOrderFromBook(st *state.StateDB, order *corepb.MarketOrder, pk [16]byte) error {
+	ob := st.ReadMarketOrderBook(order.SellTokenId, order.BuyTokenId, pk)
 	if ob == nil {
 		// Already absent — nothing to do
 		return nil
@@ -142,10 +145,10 @@ func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]b
 
 	// Update prev's Next pointer
 	if len(prevID) > 0 {
-		prev := rawdb.ReadMarketOrder(db, prevID)
+		prev := st.ReadMarketOrder(prevID)
 		if prev != nil {
 			prev.Next = nextID
-			if err := rawdb.WriteMarketOrder(db, prevID, prev); err != nil {
+			if err := st.WriteMarketOrder(prevID, prev); err != nil {
 				return err
 			}
 		}
@@ -153,10 +156,10 @@ func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]b
 
 	// Update next's Prev pointer
 	if len(nextID) > 0 {
-		next := rawdb.ReadMarketOrder(db, nextID)
+		next := st.ReadMarketOrder(nextID)
 		if next != nil {
 			next.Prev = prevID
-			if err := rawdb.WriteMarketOrder(db, nextID, next); err != nil {
+			if err := st.WriteMarketOrder(nextID, next); err != nil {
 				return err
 			}
 		}
@@ -176,12 +179,12 @@ func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]b
 	// Check if list is now empty
 	if len(ob.Head) == 0 {
 		// Delete the order book entry
-		if err := rawdb.DeleteMarketOrderBook(db, order.SellTokenId, order.BuyTokenId, pk); err != nil {
+		if err := st.DeleteMarketOrderBook(order.SellTokenId, order.BuyTokenId, pk); err != nil {
 			return err
 		}
 
 		// Remove price from price list
-		pl := rawdb.ReadMarketPriceList(db, order.SellTokenId, order.BuyTokenId)
+		pl := st.ReadMarketPriceList(order.SellTokenId, order.BuyTokenId)
 		var remaining []*corepb.MarketPrice
 		for _, p := range pl.Prices {
 			if rawdb.PriceKey(p.SellTokenQuantity, p.BuyTokenQuantity) != pk {
@@ -189,20 +192,22 @@ func removeOrderFromBook(db BufferedKVStore, order *corepb.MarketOrder, pk [16]b
 			}
 		}
 		pl.Prices = remaining
-		if err := rawdb.WriteMarketPriceList(db, order.SellTokenId, order.BuyTokenId, pl); err != nil {
+		if err := st.WriteMarketPriceList(order.SellTokenId, order.BuyTokenId, pl); err != nil {
 			return err
 		}
-		count := rawdb.ReadMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId)
+		count := st.ReadMarketPairPriceCount(order.SellTokenId, order.BuyTokenId)
 		if count <= 1 {
-			if err := rawdb.DeleteMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId); err != nil {
+			if err := st.DeleteMarketPairPriceCount(order.SellTokenId, order.BuyTokenId); err != nil {
 				return err
 			}
 		} else {
-			rawdb.WriteMarketPairPriceCount(db, order.SellTokenId, order.BuyTokenId, count-1)
+			if err := st.WriteMarketPairPriceCount(order.SellTokenId, order.BuyTokenId, count-1); err != nil {
+				return err
+			}
 		}
 	} else {
 		// Write updated order book list back
-		if err := rawdb.WriteMarketOrderBook(db, order.SellTokenId, order.BuyTokenId, pk, ob); err != nil {
+		if err := st.WriteMarketOrderBook(order.SellTokenId, order.BuyTokenId, pk, ob); err != nil {
 			return err
 		}
 	}

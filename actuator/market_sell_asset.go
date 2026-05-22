@@ -72,7 +72,7 @@ func (a *MarketSellAssetActuator) Validate(ctx *Context) error {
 	if c.SellTokenQuantity > quantityLimit || c.BuyTokenQuantity > quantityLimit {
 		return fmt.Errorf("token quantity must less than %d", quantityLimit)
 	}
-	if mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress); mao != nil && mao.Count >= maxMarketActiveOrderNum {
+	if mao := ctx.State.ReadMarketAccountOrder(c.OwnerAddress); mao != nil && mao.Count >= maxMarketActiveOrderNum {
 		return errors.New("maximum number of active market orders exceeded")
 	}
 
@@ -123,7 +123,7 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 2: Generate order ID
-	mao := rawdb.ReadMarketAccountOrder(ctx.DB, c.OwnerAddress)
+	mao := ctx.State.ReadMarketAccountOrder(c.OwnerAddress)
 	orderID := generateOrderID(c.OwnerAddress, c.SellTokenId, c.BuyTokenId, mao.TotalCount)
 
 	// Step 3: Create MarketOrder proto
@@ -164,7 +164,7 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Step 7: Write the order
-	if err := rawdb.WriteMarketOrder(ctx.DB, orderID, order); err != nil {
+	if err := ctx.State.WriteMarketOrder(orderID, order); err != nil {
 		return nil, err
 	}
 
@@ -174,7 +174,7 @@ func (a *MarketSellAssetActuator) Execute(ctx *Context) (*Result, error) {
 		mao.Orders = append(mao.Orders, orderID)
 		mao.Count++
 	}
-	if err := rawdb.WriteMarketAccountOrder(ctx.DB, c.OwnerAddress, mao); err != nil {
+	if err := ctx.State.WriteMarketAccountOrder(c.OwnerAddress, mao); err != nil {
 		return nil, err
 	}
 
@@ -274,7 +274,7 @@ func deductToken(ctx *Context, addr tcommon.Address, tokenID []byte, amount int6
 func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.MarketOrderDetail, error) {
 	// Get opposite price list: what's selling what we want to buy, for what we're selling
 	// Opposite: sellTokenId = incoming.BuyTokenId, buyTokenId = incoming.SellTokenId
-	oppPL := rawdb.ReadMarketPriceList(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId)
+	oppPL := ctx.State.ReadMarketPriceList(incoming.BuyTokenId, incoming.SellTokenId)
 	if oppPL == nil || len(oppPL.Prices) == 0 {
 		return 0, nil, nil
 	}
@@ -340,7 +340,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 		}
 
 		pk := rawdb.PriceKey(cp.price.SellTokenQuantity, cp.price.BuyTokenQuantity)
-		ob := rawdb.ReadMarketOrderBook(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, pk)
+		ob := ctx.State.ReadMarketOrderBook(incoming.BuyTokenId, incoming.SellTokenId, pk)
 		if ob == nil || len(ob.Head) == 0 {
 			// Price entry with no orders — mark exhausted
 			exhaustedPrices[pk] = true
@@ -350,7 +350,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 		// Walk linked list at this price
 		currentID := bytes.Clone(ob.Head)
 		for len(currentID) > 0 && incoming.SellTokenQuantityRemain > 0 {
-			existing := rawdb.ReadMarketOrder(ctx.DB, currentID)
+			existing := ctx.State.ReadMarketOrder(currentID)
 			if existing == nil {
 				break
 			}
@@ -409,7 +409,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 					if err := deactivateMarketOrderHead(ctx, existing, ob, nextID, exhaustedPrices, pk); err != nil {
 						return 0, nil, err
 					}
-					if err := rawdb.WriteMarketOrder(ctx.DB, currentID, existing); err != nil {
+					if err := ctx.State.WriteMarketOrder(currentID, existing); err != nil {
 						return 0, nil, err
 					}
 					currentID = nextID
@@ -441,7 +441,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 			}
 
 			// Write updated existing order
-			if err := rawdb.WriteMarketOrder(ctx.DB, currentID, existing); err != nil {
+			if err := ctx.State.WriteMarketOrder(currentID, existing); err != nil {
 				return 0, nil, err
 			}
 
@@ -450,14 +450,14 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 
 		// Update order book for this price
 		if exhaustedPrices[pk] {
-			if err := rawdb.DeleteMarketOrderBook(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, pk); err != nil {
+			if err := ctx.State.DeleteMarketOrderBook(incoming.BuyTokenId, incoming.SellTokenId, pk); err != nil {
 				return 0, nil, err
 			}
 			if err := decrementMarketPairPriceCount(ctx, incoming.BuyTokenId, incoming.SellTokenId); err != nil {
 				return 0, nil, err
 			}
 		} else {
-			if err := rawdb.WriteMarketOrderBook(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, pk, ob); err != nil {
+			if err := ctx.State.WriteMarketOrderBook(incoming.BuyTokenId, incoming.SellTokenId, pk, ob); err != nil {
 				return 0, nil, err
 			}
 		}
@@ -473,7 +473,7 @@ func matchOrder(ctx *Context, incoming *corepb.MarketOrder) (int64, []*corepb.Ma
 			}
 		}
 		oppPL.Prices = remaining
-		if err := rawdb.WriteMarketPriceList(ctx.DB, incoming.BuyTokenId, incoming.SellTokenId, oppPL); err != nil {
+		if err := ctx.State.WriteMarketPriceList(incoming.BuyTokenId, incoming.SellTokenId, oppPL); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -505,10 +505,10 @@ func deactivateMarketOrderHead(ctx *Context, order *corepb.MarketOrder, ob *core
 	}
 
 	if len(nextID) > 0 {
-		nextOrder := rawdb.ReadMarketOrder(ctx.DB, nextID)
+		nextOrder := ctx.State.ReadMarketOrder(nextID)
 		if nextOrder != nil {
 			nextOrder.Prev = nil
-			if err := rawdb.WriteMarketOrder(ctx.DB, nextID, nextOrder); err != nil {
+			if err := ctx.State.WriteMarketOrder(nextID, nextOrder); err != nil {
 				return err
 			}
 		}
@@ -522,7 +522,7 @@ func deactivateMarketOrderHead(ctx *Context, order *corepb.MarketOrder, ob *core
 }
 
 func removeMarketAccountOrder(ctx *Context, owner []byte, orderID []byte) error {
-	mao := rawdb.ReadMarketAccountOrder(ctx.DB, owner)
+	mao := ctx.State.ReadMarketAccountOrder(owner)
 	for i, id := range mao.Orders {
 		if bytes.Equal(id, orderID) {
 			mao.Orders = append(mao.Orders[:i], mao.Orders[i+1:]...)
@@ -532,16 +532,15 @@ func removeMarketAccountOrder(ctx *Context, owner []byte, orderID []byte) error 
 	if mao.Count > 0 {
 		mao.Count--
 	}
-	return rawdb.WriteMarketAccountOrder(ctx.DB, owner, mao)
+	return ctx.State.WriteMarketAccountOrder(owner, mao)
 }
 
 func decrementMarketPairPriceCount(ctx *Context, sellTokenID, buyTokenID []byte) error {
-	count := rawdb.ReadMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID)
+	count := ctx.State.ReadMarketPairPriceCount(sellTokenID, buyTokenID)
 	if count <= 1 {
-		return rawdb.DeleteMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID)
+		return ctx.State.DeleteMarketPairPriceCount(sellTokenID, buyTokenID)
 	}
-	rawdb.WriteMarketPairPriceCount(ctx.DB, sellTokenID, buyTokenID, count-1)
-	return nil
+	return ctx.State.WriteMarketPairPriceCount(sellTokenID, buyTokenID, count-1)
 }
 
 // addOrderToBook adds an order to the price list and linked list in the order book.
@@ -549,7 +548,7 @@ func addOrderToBook(ctx *Context, order *corepb.MarketOrder) error {
 	pk := rawdb.PriceKey(order.SellTokenQuantity, order.BuyTokenQuantity)
 
 	// Update price list: add this price if not present
-	pl := rawdb.ReadMarketPriceList(ctx.DB, order.SellTokenId, order.BuyTokenId)
+	pl := ctx.State.ReadMarketPriceList(order.SellTokenId, order.BuyTokenId)
 	found := false
 	for _, p := range pl.Prices {
 		if rawdb.PriceKey(p.SellTokenQuantity, p.BuyTokenQuantity) == pk {
@@ -562,14 +561,16 @@ func addOrderToBook(ctx *Context, order *corepb.MarketOrder) error {
 			SellTokenQuantity: order.SellTokenQuantity,
 			BuyTokenQuantity:  order.BuyTokenQuantity,
 		})
-		if err := rawdb.WriteMarketPriceList(ctx.DB, order.SellTokenId, order.BuyTokenId, pl); err != nil {
+		if err := ctx.State.WriteMarketPriceList(order.SellTokenId, order.BuyTokenId, pl); err != nil {
 			return err
 		}
-		rawdb.IncrMarketPairPriceCount(ctx.DB, order.SellTokenId, order.BuyTokenId, 1)
+		if err := ctx.State.IncrMarketPairPriceCount(order.SellTokenId, order.BuyTokenId, 1); err != nil {
+			return err
+		}
 	}
 
 	// Update linked list at this price key
-	ob := rawdb.ReadMarketOrderBook(ctx.DB, order.SellTokenId, order.BuyTokenId, pk)
+	ob := ctx.State.ReadMarketOrderBook(order.SellTokenId, order.BuyTokenId, pk)
 	if ob == nil {
 		// First order at this price
 		ob = &corepb.MarketOrderIdList{
@@ -582,10 +583,10 @@ func addOrderToBook(ctx *Context, order *corepb.MarketOrder) error {
 		// Append as new tail
 		prevTailID := bytes.Clone(ob.Tail)
 		if len(prevTailID) > 0 {
-			prevTail := rawdb.ReadMarketOrder(ctx.DB, prevTailID)
+			prevTail := ctx.State.ReadMarketOrder(prevTailID)
 			if prevTail != nil {
 				prevTail.Next = order.OrderId
-				if err := rawdb.WriteMarketOrder(ctx.DB, prevTailID, prevTail); err != nil {
+				if err := ctx.State.WriteMarketOrder(prevTailID, prevTail); err != nil {
 					return err
 				}
 			}
@@ -595,5 +596,5 @@ func addOrderToBook(ctx *Context, order *corepb.MarketOrder) error {
 		ob.Tail = order.OrderId
 	}
 
-	return rawdb.WriteMarketOrderBook(ctx.DB, order.SellTokenId, order.BuyTokenId, pk, ob)
+	return ctx.State.WriteMarketOrderBook(order.SellTokenId, order.BuyTokenId, pk, ob)
 }

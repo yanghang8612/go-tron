@@ -104,13 +104,9 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	if err := rawdb.WriteTaposRef(db, 0, block.Hash()); err != nil {
 		return nil, tcommon.Hash{}, fmt.Errorf("write genesis tapos ref: %w", err)
 	}
-	for _, ga := range genesis.Accounts {
-		if ga.AccountName != "" {
-			if err := rawdb.WriteAccountNameIndex(db, []byte(ga.AccountName), ga.Address[:]); err != nil {
-				return nil, tcommon.Hash{}, fmt.Errorf("write genesis account name index: %w", err)
-			}
-		}
-	}
+	// The account name index for named genesis accounts is now rooted into the
+	// genesis state root by genesisBlockAndStateRoot (above); no flat `ani-`
+	// write here.
 
 	// Derived (unrooted) dynamic properties — the head-pointer keys — live in
 	// flat dp-. The rooted governance/economic properties were already staged
@@ -177,11 +173,19 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	}
 
 	// Populate accounts (so block #1 onwards finds them) and build genesis txs.
+	// Named genesis accounts (Zion/Sun/Blackhole) are collected here and seeded
+	// into the rooted name index below, once the system account exists.
 	txs := make([]*corepb.Transaction, 0, len(g.Accounts))
+	type namedGenesisAccount struct {
+		name  []byte
+		owner tcommon.Address
+	}
+	namedAccounts := make([]namedGenesisAccount, 0, len(g.Accounts))
 	for _, ga := range g.Accounts {
 		obj := statedb.GetOrCreateAccount(ga.Address)
 		if ga.AccountName != "" {
 			obj.Account().SetAccountName(ga.AccountName)
+			namedAccounts = append(namedAccounts, namedGenesisAccount{name: []byte(ga.AccountName), owner: ga.Address})
 		}
 		if ga.Balance != 0 {
 			obj.Account().SetBalance(ga.Balance)
@@ -266,6 +270,18 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		active := dpos.SelectActiveWitnessesWithOptimization(witnessVotes, sortOpt)
 		if err := statedb.WriteActiveWitnesses(active); err != nil {
 			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis active witnesses: %w", err)
+		}
+	}
+
+	// Seed the rooted account name index for named genesis accounts
+	// (Zion/Sun/Blackhole) into the system account's KV BEFORE Commit, so the
+	// name->owner reverse lookup lives in the genesis state root and rewinds with
+	// it. Mirrors java-tron Manager.initAccount writing AccountIndexStore at
+	// genesis. The account-id index has no genesis seed (no genesis account sets
+	// an account_id). Previously written flat (`ani-`) post-Commit.
+	for _, na := range namedAccounts {
+		if err := statedb.WriteAccountNameIndex(na.name, na.owner); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis account name index: %w", err)
 		}
 	}
 

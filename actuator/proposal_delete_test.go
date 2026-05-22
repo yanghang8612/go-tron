@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -19,10 +18,10 @@ func TestProposalDeleteValidate(t *testing.T) {
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	p := &rawdb.Proposal{ID: 1, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
@@ -41,10 +40,10 @@ func TestProposalDeleteNotProposer(t *testing.T) {
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	p := &rawdb.Proposal{ID: 1, Proposer: other, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
@@ -62,10 +61,10 @@ func TestProposalDeleteExecute(t *testing.T) {
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	p := &rawdb.Proposal{ID: 1, Proposer: owner, ExpirationTime: 999999999, State: rawdb.ProposalStatePending}
-	rawdb.WriteProposal(db, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	ctx.DynProps.SetLatestProposalNum(1)
 
 	act := &ProposalDeleteActuator{}
@@ -77,7 +76,7 @@ func TestProposalDeleteExecute(t *testing.T) {
 		t.Fatalf("expected ContractRet=1")
 	}
 
-	got := rawdb.ReadProposal(db, 1)
+	got := ctx.State.ReadProposal(1)
 	if got.State != rawdb.ProposalStateCanceled {
 		t.Fatalf("expected CANCELED, got %d", got.State)
 	}
@@ -91,23 +90,26 @@ func TestProposalDeleteRejectsOnlyCanceledState(t *testing.T) {
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ProposalDeleteContract, c, 0)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.DynProps.SetLatestProposalNum(1)
-	rawdb.WriteProposal(ctx.DB, 1, &rawdb.Proposal{
+	if err := ctx.State.WriteProposal(1, &rawdb.Proposal{
 		ID:             1,
 		Proposer:       owner,
 		ExpirationTime: 999999999,
 		State:          rawdb.ProposalStateApproved,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &ProposalDeleteActuator{}
 	if err := act.Validate(ctx); err != nil {
 		t.Fatalf("approved state should not be rejected before expiration: %v", err)
 	}
 
-	p := rawdb.ReadProposal(ctx.DB, 1)
+	p := ctx.State.ReadProposal(1)
 	p.State = rawdb.ProposalStateCanceled
-	rawdb.WriteProposal(ctx.DB, 1, p)
+	if err := ctx.State.WriteProposal(1, p); err != nil {
+		t.Fatal(err)
+	}
 	if err := act.Validate(ctx); err == nil {
 		t.Fatal("expected canceled proposal to be rejected")
 	}

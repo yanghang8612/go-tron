@@ -2,15 +2,18 @@ package actuator
 
 import (
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
+// recordPendingVotes stages a voter's epoch delta into the rooted VotesStore
+// (WitnessVoteState KV) on the in-scope statedb, so the maintenance drain later
+// in the SAME block reads it through the shared overlay and it rewinds with the
+// full state root.
 func recordPendingVotes(ctx *Context, owner common.Address, oldVotes, newVotes []*corepb.Vote) error {
-	if ctx.DB == nil {
+	if ctx.State == nil {
 		return nil
 	}
-	votes := rawdb.ReadVotes(ctx.DB, owner)
+	votes := ctx.State.ReadVotes(owner)
 	if votes == nil {
 		votes = &corepb.Votes{
 			Address:  owner.Bytes(),
@@ -18,7 +21,7 @@ func recordPendingVotes(ctx *Context, owner common.Address, oldVotes, newVotes [
 		}
 	}
 	votes.NewVotes = cloneVotes(newVotes)
-	return rawdb.WriteVotes(ctx.DB, owner, votes)
+	return ctx.State.WriteVotes(owner, votes)
 }
 
 func cloneVotes(votes []*corepb.Vote) []*corepb.Vote {

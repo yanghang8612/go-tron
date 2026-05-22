@@ -16,19 +16,16 @@ const version3_6_5 int32 = 9
 // activeWitnesses is the current active super-representative set; only approvals
 // from current witnesses are counted (matches java-tron's hasMostApprovals logic).
 //
-// db accepts a Reader+Writer so callers can pass either an `ethdb.KeyValueStore`
-// (BuildBlock path) or `core/blockbuffer.Buffer` (applyBlock path) — slice 3
-// of the fork-rewind fix routes the per-proposal WriteProposal updates
-// through the buffer when invoked from `applyBlock`.
-func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController, statedbOpt ...*state.StateDB) error {
-	var statedb *state.StateDB
-	if len(statedbOpt) > 0 {
-		statedb = statedbOpt[0]
-	}
+// The proposal records and their index are read/written through statedb — the
+// rooted SystemProposal KV (Phase 3d), java-tron's revoking ProposalStore. db
+// remains the Reader+Writer for the still-flat governance side-effects (e.g.
+// deployHistoryBlockHash); it is `core/blockbuffer.Buffer` on the applyBlock
+// path and `ethdb.KeyValueStore` on the BuildBlock path.
+func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
 	activeCount := len(activeWitnesses)
-	ids := rawdb.ReadProposalIndex(db)
+	ids := statedb.ReadProposalIndex()
 	for _, id := range ids {
-		p := rawdb.ReadProposal(db, id)
+		p := statedb.ReadProposal(id)
 		if p == nil || p.State != rawdb.ProposalStatePending {
 			continue
 		}
@@ -75,7 +72,7 @@ func ProcessProposals(db kvReadWriter, dynProps *state.DynamicProperties, active
 		} else {
 			p.State = rawdb.ProposalStateCanceled
 		}
-		if err := rawdb.WriteProposal(db, id, p); err != nil {
+		if err := statedb.WriteProposal(id, p); err != nil {
 			return err
 		}
 	}

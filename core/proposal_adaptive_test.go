@@ -12,6 +12,7 @@ import (
 
 func TestProcessProposals_AdaptiveEnergySideEffect(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetTotalEnergyLimit(50_000_000_000)
 	fc := forks.NewForkController(db)
@@ -33,11 +34,11 @@ func TestProcessProposals_AdaptiveEnergySideEffect(t *testing.T) {
 		},
 		State: rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active, 3000, fc); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -57,6 +58,7 @@ func TestProcessProposals_AdaptiveEnergySideEffect(t *testing.T) {
 
 func TestProcessProposals_AllowNewRewardActivates(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetCurrentCycleNumber(42)
 
@@ -69,11 +71,11 @@ func TestProcessProposals_AllowNewRewardActivates(t *testing.T) {
 		},
 		State: rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -90,6 +92,7 @@ func TestProcessProposals_AllowNewRewardActivates(t *testing.T) {
 
 func TestProcessProposals_AdaptiveEnergyNoSideEffectWithoutVersion(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetAdaptiveResourceLimitTargetRatio(10)
 	dynProps.SetAdaptiveResourceLimitMultiplier(1000)
@@ -105,11 +108,11 @@ func TestProcessProposals_AdaptiveEnergyNoSideEffectWithoutVersion(t *testing.T)
 		},
 		State: rawdb.ProposalStatePending,
 	}
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, dynProps, active, 3000, fc); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, fc); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

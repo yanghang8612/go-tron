@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -139,11 +138,11 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 		return errors.New("insufficient balance for asset issue fee")
 	}
 	if !forks.IsActive(forks.AllowSameTokenName, ctx.BlockNumber, ctx.DynProps) {
-		if rawdb.ReadAssetIssueByName(ctx.DB, c.Name) != nil {
+		if ctx.State.ReadAssetIssueByName(c.Name) != nil {
 			return errors.New("token name already exists")
 		}
 	}
-	if _, ok := rawdb.ReadAssetOwnerIndex(ctx.DB, owner[:]); ok {
+	if _, ok := ctx.State.ReadAssetOwnerIndex(owner[:]); ok {
 		return errors.New("address has already issued a token")
 	}
 	return nil
@@ -177,20 +176,20 @@ func (a *AssetIssueActuator) Execute(ctx *Context) (*Result, error) {
 	// both the legacy name-keyed AssetIssueStore and the ID-keyed V2 store; the
 	// V2 copy has precision forced to 0.
 	if !ctx.DynProps.AllowSameTokenName() {
-		if err := rawdb.WriteAssetIssueByName(ctx.DB, c.Name, legacyAsset); err != nil {
+		if err := ctx.State.WriteAssetIssueByName(c.Name, legacyAsset); err != nil {
 			return nil, fmt.Errorf("write legacy asset: %w", err)
 		}
-		if err := rawdb.WriteAssetNameIndex(ctx.DB, c.Name, tokenID); err != nil {
+		if err := ctx.State.WriteAssetNameIndex(c.Name, tokenID); err != nil {
 			return nil, fmt.Errorf("write name index: %w", err)
 		}
 	}
-	if err := rawdb.WriteAssetIssue(ctx.DB, tokenID, v2Asset); err != nil {
+	if err := ctx.State.WriteAssetIssue(tokenID, v2Asset); err != nil {
 		return nil, fmt.Errorf("write asset: %w", err)
 	}
-	if err := rawdb.WriteAssetOwnerIndex(ctx.DB, owner[:], tokenID); err != nil {
+	if err := ctx.State.WriteAssetOwnerIndex(owner[:], tokenID); err != nil {
 		return nil, fmt.Errorf("write owner index: %w", err)
 	}
-	if err := rawdb.WriteAssetIssueTime(ctx.DB, tokenID, ctx.PrevBlockTime); err != nil {
+	if err := ctx.State.WriteAssetIssueTime(tokenID, ctx.PrevBlockTime); err != nil {
 		return nil, fmt.Errorf("write issue time: %w", err)
 	}
 

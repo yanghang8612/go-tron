@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -98,7 +96,7 @@ func TestConsumeBandwidth_ShieldedTransferSkipped(t *testing.T) {
 	dynProps := state.NewDynamicProperties()
 
 	tx := makeBandwidthShieldedTransferTx(1, 100)
-	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -128,7 +126,7 @@ func TestConsumeBandwidth_FreeBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -167,7 +165,7 @@ func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -184,7 +182,6 @@ func TestConsumeBandwidth_FrozenBandwidth(t *testing.T) {
 }
 
 func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetTotalNetWeight(1)
@@ -207,20 +204,20 @@ func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
 		FreeAssetNetLimit:       100_000,
 		PublicFreeAssetNetLimit: 100_000,
 	}
-	if err := rawdb.WriteAssetIssueByName(db, tokenName, asset); err != nil {
+	if err := statedb.WriteAssetIssueByName(tokenName, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetIssue(db, tokenID, asset); err != nil {
+	if err := statedb.WriteAssetIssue(tokenID, asset); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteAssetNameIndex(db, tokenName, tokenID); err != nil {
+	if err := statedb.WriteAssetNameIndex(tokenName, tokenID); err != nil {
 		t.Fatal(err)
 	}
 
 	tx := makeBandwidthTransferAssetTx(1, 2, tokenName, 100)
 	txSize := int64(tx.Size())
 
-	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, db)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -245,7 +242,7 @@ func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
 	if got := statedb.GetLatestConsumeTime(issuer); got != testBandwidthHeadSlot {
 		t.Fatalf("issuer latest consume time: want %d, got %d", testBandwidthHeadSlot, got)
 	}
-	legacyAsset := rawdb.ReadAssetIssueByName(db, tokenName)
+	legacyAsset := statedb.ReadAssetIssueByName(tokenName)
 	if legacyAsset == nil {
 		t.Fatal("legacy asset missing")
 	}
@@ -255,7 +252,7 @@ func TestConsumeBandwidth_TransferAssetUsesAssetAccountNet(t *testing.T) {
 	if got := legacyAsset.PublicLatestFreeNetTime; got != testBandwidthHeadSlot {
 		t.Fatalf("legacy public latest free net time: want %d, got %d", testBandwidthHeadSlot, got)
 	}
-	v2Asset := rawdb.ReadAssetIssue(db, tokenID)
+	v2Asset := statedb.ReadAssetIssue(tokenID)
 	if v2Asset == nil {
 		t.Fatal("v2 asset missing")
 	}
@@ -287,7 +284,7 @@ func TestConsumeBandwidth_BurnTRX(t *testing.T) {
 
 	balBefore := statedb.GetBalance(sender)
 	blackholeBefore := statedb.GetBalance(params.BlackholeAddress)
-	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -327,7 +324,7 @@ func TestConsumeBandwidth_TransactionFeePool(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -366,7 +363,7 @@ func TestConsumeBandwidth_BlackholeOptimization(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 	txSize := int64(tx.Size())
 
-	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}
@@ -396,7 +393,7 @@ func TestConsumeBandwidth_InsufficientBalance(t *testing.T) {
 	statedb.SetLatestConsumeFreeTime(sender, testBandwidthHeadSlot)
 
 	tx := makeTestTransferTx(1, 2, 0)
-	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	_, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err == nil {
 		t.Fatal("expected error for insufficient balance to pay bandwidth")
 	}
@@ -418,7 +415,7 @@ func TestConsumeBandwidth_CreateNewAccount_Fee(t *testing.T) {
 	tx := makeTestTransferTx(1, 2, 100)
 
 	balBefore := statedb.GetBalance(sender)
-	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot, nil)
+	res, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, testBandwidthBlockTime, testBandwidthHeadSlot)
 	if err != nil {
 		t.Fatalf("consumeBandwidth failed: %v", err)
 	}

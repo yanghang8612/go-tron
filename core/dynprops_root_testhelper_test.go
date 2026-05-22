@@ -33,3 +33,45 @@ func loadGenesisDP(tb testing.TB, diskdb ethdb.KeyValueStore) *state.DynamicProp
 	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(diskdb))
 	return loadDPAtRoot(tb, diskdb, sdb, rawdb.ReadGenesisStateRoot(diskdb))
 }
+
+// seedRootedProposal stages proposal records + the matching index into the
+// genesis state root and re-points both the genesis-root and genesis-block
+// root pointers to the post-seed root, so a BlockChain opened afterward carries
+// the proposals forward. Mirrors the rooted-seed pattern in block_builder_test.
+// Proposals are runtime-created in production (genesis never seeds them), so
+// this exists only to set up maintenance-boundary tests.
+func seedRootedProposal(tb testing.TB, diskdb ethdb.KeyValueStore, sdb *state.Database, genesisHash tcommon.Hash, proposals []*rawdb.Proposal) {
+	tb.Helper()
+	root := rawdb.ReadGenesisStateRoot(diskdb)
+	statedb, err := state.New(root, sdb)
+	if err != nil {
+		tb.Fatalf("open genesis state: %v", err)
+	}
+	ids := make([]int64, len(proposals))
+	for i, p := range proposals {
+		if err := statedb.WriteProposal(p.ID, p); err != nil {
+			tb.Fatalf("seed proposal %d: %v", p.ID, err)
+		}
+		ids[i] = p.ID
+	}
+	if err := statedb.WriteProposalIndex(ids); err != nil {
+		tb.Fatalf("seed proposal index: %v", err)
+	}
+	newRoot, err := statedb.Commit()
+	if err != nil {
+		tb.Fatalf("commit seeded proposals: %v", err)
+	}
+	rawdb.WriteGenesisStateRoot(diskdb, newRoot)
+	rawdb.WriteBlockStateRoot(diskdb, genesisHash, newRoot)
+}
+
+// readRootedProposal resolves a proposal record from the rooted SystemProposal
+// KV at the given state root.
+func readRootedProposal(tb testing.TB, sdb *state.Database, root tcommon.Hash, id int64) *rawdb.Proposal {
+	tb.Helper()
+	statedb, err := state.New(root, sdb)
+	if err != nil {
+		tb.Fatalf("open state at %x: %v", root[:], err)
+	}
+	return statedb.ReadProposal(id)
+}

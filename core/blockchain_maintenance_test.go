@@ -110,20 +110,22 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 		w.SetIsJobs(seededActiveSet[witnessAddr(i)])
 		rawdb.WriteWitness(diskdb, witnessAddr(i), w)
 	}
-	// java-tron only runs updateWitness/reward/is_jobs rotation when the
-	// VotesStore has at least one record. Equal old/new votes keep witness
-	// balances unchanged while still exercising that maintenance branch.
-	if err := rawdb.WriteVotes(diskdb, testCoreAddr(200), &corepb.Votes{
-		OldVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
-		NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// java-tron only runs updateWitness/reward/is_jobs rotation when the
+	// VotesStore has at least one record. Equal old/new votes keep witness
+	// balances unchanged while still exercising that maintenance branch. The
+	// vote is rooted (WitnessVoteState KV), so seed it into the genesis state
+	// root the maintenance drain opens.
+	seedPendingVotesAtGenesis(t, bc, map[tcommon.Address]*corepb.Votes{
+		testCoreAddr(200): {
+			OldVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
+			NewVotes: []*corepb.Vote{{VoteAddress: witnessAddr(0).Bytes(), VoteCount: 1}},
+		},
+	})
 
 	// Install the drifted "old" active set into the atomic. Genesis rooted the
 	// vote-ranked [0..26]; flipWitnessIsJobs reads this atomic as the outgoing

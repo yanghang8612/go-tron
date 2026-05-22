@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -25,14 +24,14 @@ type resolvedAsset struct {
 // still resolve through the legacy name index instead of ParseInt.
 func resolveAssetNameOrID(ctx *Context, assetName []byte) (int64, error) {
 	if !ctx.DynProps.AllowSameTokenName() {
-		if asset := rawdb.ReadAssetIssueByName(ctx.DB, assetName); asset != nil {
+		if asset := ctx.State.ReadAssetIssueByName(assetName); asset != nil {
 			id, err := strconv.ParseInt(asset.Id, 10, 64)
 			if err != nil {
 				return 0, errors.New("invalid legacy asset ID")
 			}
 			return id, nil
 		}
-		if id, ok := rawdb.ReadAssetNameIndex(ctx.DB, assetName); ok {
+		if id, ok := ctx.State.ReadAssetNameIndex(assetName); ok {
 			return id, nil
 		}
 		return 0, errors.New("invalid asset_name: no name index hit")
@@ -50,10 +49,10 @@ func resolveAsset(ctx *Context, assetName []byte) (*resolvedAsset, error) {
 	}
 	var asset *contractpb.AssetIssueContract
 	if !ctx.DynProps.AllowSameTokenName() {
-		asset = rawdb.ReadAssetIssueByName(ctx.DB, assetName)
+		asset = ctx.State.ReadAssetIssueByName(assetName)
 	}
 	if asset == nil {
-		asset = rawdb.ReadAssetIssue(ctx.DB, tokenID)
+		asset = ctx.State.ReadAssetIssue(tokenID)
 	}
 	if asset == nil {
 		return nil, errors.New("token not found")
@@ -74,8 +73,8 @@ func (a *TransferAssetActuator) getContract(ctx *Context) (*contractpb.TransferA
 }
 
 func (a *TransferAssetActuator) Validate(ctx *Context) error {
-	if ctx.DB == nil {
-		return errors.New("DB not available")
+	if ctx.State == nil {
+		return errors.New("state not available")
 	}
 	c, err := a.getContract(ctx)
 	if err != nil {

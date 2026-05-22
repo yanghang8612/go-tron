@@ -34,6 +34,7 @@ func auditActiveSet() []tcommon.Address {
 // against the new ratio.
 func TestProcessProposals_C2_AdaptiveRatioMultiplier(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	// Pre-state: default total_energy_limit = 50_000_000_000.
@@ -44,10 +45,10 @@ func TestProcessProposals_C2_AdaptiveRatioMultiplier(t *testing.T) {
 	// Propose target_ratio = 20. java stores ratio = 24*60*20 = 28800 and
 	// target_limit = 50_000_000_000 / 28800 = 1_736_111.
 	p := approvedProposal(0, map[int64]int64{33: 20})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
 
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -65,6 +66,7 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 	const maxInt64 = int64(9_223_372_036_854_775_807)
 
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 	dp.SetCurrentCycleNumber(42)
 
@@ -78,9 +80,9 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 
 	// Proposal #59 (ALLOW_TVM_VOTE) → should set cycle = 43.
 	p1 := approvedProposal(0, map[int64]int64{59: 1})
-	rawdb.WriteProposal(db, 0, p1)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p1)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.NewRewardAlgorithmEffectiveCycle(); got != 43 {
@@ -92,9 +94,9 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 	// stays at 43, not 51 (= 50+1).
 	dp.SetCurrentCycleNumber(50)
 	p2 := approvedProposal(1, map[int64]int64{67: 1})
-	rawdb.WriteProposal(db, 1, p2)
-	rawdb.WriteProposalIndex(db, []int64{0, 1})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3001, nil); err != nil {
+	statedb.WriteProposal(1, p2)
+	statedb.WriteProposalIndex([]int64{0, 1})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3001, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.NewRewardAlgorithmEffectiveCycle(); got != 43 {
@@ -106,13 +108,14 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 // target_limit and current_limit get refreshed when adaptive energy is off.
 func TestProcessProposals_C5_TotalCurrentEnergyLimitRoutes(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	// Adaptive energy OFF (default) → current_limit follows total_limit.
 	p := approvedProposal(0, map[int64]int64{19: 80_000_000_000})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -132,6 +135,7 @@ func TestProcessProposals_C5_TotalCurrentEnergyLimitRoutes(t *testing.T) {
 // overwrite a target_ratio/multiplier that has since been moved by #33.
 func TestProcessProposals_M1_AdaptiveEnergyReapprovalNoop(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 	// Pretend #21 + #33 already ran: AllowAdaptiveEnergy=1, ratio=43200 (#33
 	// with value=30 → 24*60*30).
@@ -142,9 +146,9 @@ func TestProcessProposals_M1_AdaptiveEnergyReapprovalNoop(t *testing.T) {
 	// Now re-approve #21. java would short-circuit the whole block; go must
 	// match — ratio/multiplier must stay at the post-#33 values.
 	p := approvedProposal(0, map[int64]int64{21: 1})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.AdaptiveResourceLimitTargetRatio(); got != 43200 {
@@ -160,6 +164,7 @@ func TestProcessProposals_M1_AdaptiveEnergyReapprovalNoop(t *testing.T) {
 // but still reachable for early replay / private chains.
 func TestProcessProposals_C5_TotalEnergyLimitV1Routes(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	// Baseline currentLimit must NOT change after the proposal even though
@@ -168,9 +173,9 @@ func TestProcessProposals_C5_TotalEnergyLimitV1Routes(t *testing.T) {
 	dp.SetTotalEnergyCurrentLimit(123_456)
 
 	p := approvedProposal(0, map[int64]int64{17: 80_000_000_000})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -191,15 +196,16 @@ func TestProcessProposals_C5_TotalEnergyLimitV1Routes(t *testing.T) {
 // `if (getAllowMultiSign()==0)` short-circuits.
 func TestProcessProposals_M1_MultiSignReapprovalNoop(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	// Pre-state: flag is already on with a sentinel value.
 	dp.Set("allow_multi_sign", 42) // non-zero sentinel
 
 	p := approvedProposal(0, map[int64]int64{20: 1})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -214,6 +220,7 @@ func TestProcessProposals_M1_MultiSignReapprovalNoop(t *testing.T) {
 // adding these bits — must run on first activation.
 func TestProcessProposals_M3_MarketTransactionAddsBits52_53(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	beforeOps := dp.ActiveDefaultOperations()
@@ -225,9 +232,9 @@ func TestProcessProposals_M3_MarketTransactionAddsBits52_53(t *testing.T) {
 	}
 
 	p := approvedProposal(0, map[int64]int64{44: 1})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -244,6 +251,7 @@ func TestProcessProposals_M3_MarketTransactionAddsBits52_53(t *testing.T) {
 // ALLOW_CHANGE_DELEGATION case is unguarded).
 func TestProcessProposals_M3_ChangeDelegationValueZeroStillAddsBit49(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	dp := state.NewDynamicProperties()
 
 	// Snapshot the default active_default_operations bitmap; bit 49 should
@@ -255,9 +263,9 @@ func TestProcessProposals_M3_ChangeDelegationValueZeroStillAddsBit49(t *testing.
 	}
 
 	p := approvedProposal(0, map[int64]int64{30: 0})
-	rawdb.WriteProposal(db, 0, p)
-	rawdb.WriteProposalIndex(db, []int64{0})
-	if err := ProcessProposals(db, dp, auditActiveSet(), 3000, nil); err != nil {
+	statedb.WriteProposal(0, p)
+	statedb.WriteProposalIndex([]int64{0})
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 

@@ -6,7 +6,7 @@ func TestRegisteredDomains(t *testing.T) {
 	registered := []KVDomain{
 		SystemDynamicProperty, SystemWitnessSchedule, SystemProposal,
 		SystemForkVote, SystemAsset, SystemExchange, SystemDelegation,
-		SystemAccountIndex, ContractStorage, ContractMetadata, ContractABI,
+		SystemAccountIndex, SystemMarket, ContractStorage, ContractMetadata, ContractABI,
 		ContractRuntimeState, AccountLocalIndex, AccountPermissionAux,
 		WitnessCapsule, WitnessVoteState,
 	}
