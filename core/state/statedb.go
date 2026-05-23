@@ -1542,6 +1542,35 @@ func (s *StateDB) SetContract(addr tcommon.Address, contract *contractpb.SmartCo
 	obj.markDirty()
 }
 
+// ReadContractState loads the per-contract dynamic-energy runtime state.
+func (s *StateDB) ReadContractState(addr tcommon.Address) *types.ContractState {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey)
+	if err != nil || !ok || len(data) == 0 {
+		return nil
+	}
+	cs, err := types.NewContractStateFromBytes(data)
+	if err != nil {
+		return nil
+	}
+	return cs
+}
+
+// WriteContractState stores the per-contract dynamic-energy runtime state.
+func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractState) error {
+	if cs == nil {
+		return nil
+	}
+	data, err := cs.Bytes()
+	if err != nil {
+		return err
+	}
+	return s.SetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey, data)
+}
+
 // IsContract returns whether the address has contract code or metadata.
 func (s *StateDB) IsContract(addr tcommon.Address) bool {
 	return s.GetContract(addr) != nil || len(s.GetCode(addr)) > 0

@@ -24,14 +24,14 @@ import (
 // neutral — the capture side just fills it in, regardless of whether it
 // came from gRPC, HTTP, or a direct DB dump.
 type Snapshot struct {
-	BlockNum       uint64                      `json:"blockNum"`
-	Accounts       []SnapshotAccount           `json:"accounts,omitempty"`
-	ContractStates []SnapshotContractState     `json:"contractStates,omitempty"`
-	Code           []SnapshotCode              `json:"code,omitempty"`
-	Witnesses      []SeedWitness               `json:"witnesses,omitempty"`
-	DP             map[string]int64            `json:"dp"`
-	Closure        []string                    `json:"closure"` // 41-hex; matches range-wide closure
-	Extra          map[string]json.RawMessage  `json:"extra,omitempty"`
+	BlockNum       uint64                     `json:"blockNum"`
+	Accounts       []SnapshotAccount          `json:"accounts,omitempty"`
+	ContractStates []SnapshotContractState    `json:"contractStates,omitempty"`
+	Code           []SnapshotCode             `json:"code,omitempty"`
+	Witnesses      []SeedWitness              `json:"witnesses,omitempty"`
+	DP             map[string]int64           `json:"dp"`
+	Closure        []string                   `json:"closure"` // 41-hex; matches range-wide closure
+	Extra          map[string]json.RawMessage `json:"extra,omitempty"`
 }
 
 type SnapshotAccount struct {
@@ -145,7 +145,7 @@ func LoadSnapshot(r io.Reader) (*Loaded, *Snapshot, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("contractState %s: decode: %w", cs.Address, err)
 		}
-		if err := rawdb.WriteContractState(diskdb, addr, csState); err != nil {
+		if err := sdb.WriteContractState(addr, csState); err != nil {
 			return nil, nil, fmt.Errorf("contractState %s: write: %w", cs.Address, err)
 		}
 	}
@@ -196,7 +196,7 @@ func DumpSnapshot(l *Loaded, blockNum uint64) (*Snapshot, error) {
 				CodeHex: hex.EncodeToString(code),
 			})
 		}
-		if cs := rawdb.ReadContractState(l.DiskDB, a); cs != nil {
+		if cs := l.StateDB.ReadContractState(a); cs != nil {
 			b, err := cs.Bytes()
 			if err != nil {
 				return nil, fmt.Errorf("marshal contractState %s: %w", hex.EncodeToString(a[:]), err)

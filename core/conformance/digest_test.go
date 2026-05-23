@@ -82,7 +82,7 @@ func TestDigestB_DetectsContractStateChange(t *testing.T) {
 
 	cs := types.NewContractState(5)
 	cs.SetEnergyFactor(1234)
-	if err := rawdb.WriteContractState(db, addrs[1], cs); err != nil {
+	if err := sdb.WriteContractState(addrs[1], cs); err != nil {
 		t.Fatal(err)
 	}
 	d1 := DigestB(sdb, db, addrs, dp)

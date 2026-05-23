@@ -361,6 +361,10 @@ Implementation start:
   commitments, proof verification cache rows, incremental Merkle trees, the
   current/last tree sentinels, and block-number-to-root indexes are used
   through `StateDB` by shielded actuators and block Merkle lifecycle hooks.
+- Contract dynamic-energy runtime state now has a native `StateDB` typed store
+  in each contract account's `ContractRuntimeState` domain. TVM factor updates,
+  energy-usage accumulation, conformance digests, and fixture snapshots no
+  longer read/write legacy flat `cs-` rows during execution.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

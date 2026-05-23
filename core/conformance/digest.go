@@ -51,9 +51,9 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 		// Code bytes (empty for non-contract accounts).
 		writeLenPrefixed(h, sdb.GetCode(a))
 
-		// Per-contract dynamic-energy state (nil → length-0 marker).
+		// Per-contract dynamic-energy state (nil -> length-0 marker).
 		var csBytes []byte
-		if cs := rawdb.ReadContractState(db, a); cs != nil {
+		if cs := sdb.ReadContractState(a); cs != nil {
 			b, err := cs.Bytes()
 			if err == nil {
 				csBytes = b
@@ -126,7 +126,7 @@ func DigestC(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 			entry["codeHash"] = hex.EncodeToString(sdb.GetCodeHash(a).Bytes())
 			entry["codeLen"] = len(code)
 		}
-		if cs := rawdb.ReadContractState(db, a); cs != nil {
+		if cs := sdb.ReadContractState(a); cs != nil {
 			entry["contractState"] = map[string]int64{
 				"updateCycle":  cs.UpdateCycle(),
 				"energyFactor": cs.EnergyFactor(),

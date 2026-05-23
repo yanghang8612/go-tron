@@ -7,6 +7,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -149,6 +150,74 @@ func TestStateDBContractMeta(t *testing.T) {
 	got := sdb.GetContract(addr)
 	if got == nil || got.Name != "test" {
 		t.Fatal("contract meta mismatch")
+	}
+}
+
+func TestStateDBContractRuntimeStateRoundTrip(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x24}
+	cs := types.NewContractState(12)
+	cs.SetEnergyFactor(3000)
+	cs.AddEnergyUsage(456)
+
+	if got := sdb.ReadContractState(addr); got != nil {
+		t.Fatalf("contract state should be absent before write, got %+v", got)
+	}
+	if err := sdb.WriteContractState(addr, cs); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := reloaded.ReadContractState(addr)
+	if got == nil {
+		t.Fatal("contract state missing after reopen")
+	}
+	if got.UpdateCycle() != 12 || got.EnergyFactor() != 3000 || got.EnergyUsage() != 456 {
+		t.Fatalf("contract state = cycle:%d factor:%d usage:%d", got.UpdateCycle(), got.EnergyFactor(), got.EnergyUsage())
+	}
+}
+
+func TestStateDBContractRuntimeStateIgnoresFutureFlatMirror(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x25}
+	cs := types.NewContractState(10)
+	cs.SetEnergyFactor(1000)
+	if err := sdb.WriteContractState(addr, cs); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	future := types.NewContractState(99)
+	future.SetEnergyFactor(9000)
+	if err := rawdb.WriteContractState(diskdb, addr, future); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.ReadContractState(addr)
+	if got == nil {
+		t.Fatal("rooted contract state missing")
+	}
+	if got.UpdateCycle() != 10 || got.EnergyFactor() != 1000 {
+		t.Fatalf("historical root loaded future flat contract state: cycle=%d factor=%d", got.UpdateCycle(), got.EnergyFactor())
 	}
 }
 

@@ -5,14 +5,12 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
-func newTestTVMWithDB(t *testing.T) (*TVM, ethdb.KeyValueStore, *state.DynamicProperties) {
+func newTestTVMWithDB(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProperties) {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
@@ -25,11 +23,11 @@ func newTestTVMWithDB(t *testing.T) (*TVM, ethdb.KeyValueStore, *state.DynamicPr
 
 	tvm := NewTVM(stateDB, dp, tcommon.Address{}, 1, 1000, tcommon.Address{}, 1, TVMConfig{DynamicEnergy: true})
 	tvm.SetDB(diskdb)
-	return tvm, diskdb, dp
+	return tvm, stateDB, dp
 }
 
 func TestUpdateContractEnergyFactor_BootstrapsFresh(t *testing.T) {
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	dp.SetCurrentCycleNumber(42)
 	addr := tcommon.Address{0x41, 0x01}
 
@@ -40,7 +38,7 @@ func TestUpdateContractEnergyFactor_BootstrapsFresh(t *testing.T) {
 		t.Fatalf("factor: got %d, want %d", got, types.DynamicEnergyFactorDecimal)
 	}
 	// State persisted at cycle 42 with zero factor/usage.
-	cs := rawdb.ReadContractState(db, addr)
+	cs := stateDB.ReadContractState(addr)
 	if cs == nil {
 		t.Fatal("state should have been written")
 	}
@@ -50,7 +48,7 @@ func TestUpdateContractEnergyFactor_BootstrapsFresh(t *testing.T) {
 }
 
 func TestUpdateContractEnergyFactor_AdvancesAcrossCycles(t *testing.T) {
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	dp.SetCurrentCycleNumber(1001)
 	dp.Set("dynamic_energy_threshold", 900_000)
 	dp.SetDynamicEnergyIncreaseFactor(2000)
@@ -61,7 +59,7 @@ func TestUpdateContractEnergyFactor_AdvancesAcrossCycles(t *testing.T) {
 	prior := types.NewContractState(1000)
 	prior.SetEnergyFactor(5000)
 	prior.AddEnergyUsage(1_000_000)
-	_ = rawdb.WriteContractState(db, addr, prior)
+	_ = stateDB.WriteContractState(addr, prior)
 
 	got := updateContractEnergyFactor(tvm, addr)
 
@@ -69,7 +67,7 @@ func TestUpdateContractEnergyFactor_AdvancesAcrossCycles(t *testing.T) {
 	if got != 18_000 {
 		t.Fatalf("factor: got %d, want 18000", got)
 	}
-	updated := rawdb.ReadContractState(db, addr)
+	updated := stateDB.ReadContractState(addr)
 	if updated.EnergyFactor() != 8000 {
 		t.Fatalf("stored factor: got %d, want 8000", updated.EnergyFactor())
 	}
@@ -99,14 +97,14 @@ func TestApplyDynamicEnergyPenalty(t *testing.T) {
 }
 
 func TestRecordContractEnergyUsage_Accumulates(t *testing.T) {
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	dp.SetCurrentCycleNumber(7)
 	addr := tcommon.Address{0x41, 0x03}
 
 	recordContractEnergyUsage(tvm, addr, 500)
 	recordContractEnergyUsage(tvm, addr, 300)
 
-	cs := rawdb.ReadContractState(db, addr)
+	cs := stateDB.ReadContractState(addr)
 	if cs == nil {
 		t.Fatal("state not written")
 	}
@@ -119,7 +117,7 @@ func TestRecordContractEnergyUsage_Accumulates(t *testing.T) {
 }
 
 func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	dp.SetCurrentCycleNumber(10)
 	dp.Set("dynamic_energy_threshold", 0)
 	dp.SetDynamicEnergyIncreaseFactor(2000)
@@ -129,7 +127,7 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	addr := tcommon.Address{0x41, 0x04}
 	cs := types.NewContractState(10)
 	cs.SetEnergyFactor(5000) // 1.5× multiplier
-	_ = rawdb.WriteContractState(db, addr, cs)
+	_ = stateDB.WriteContractState(addr, cs)
 
 	// ADD (0x01) has energyCost = 3. With factor 1.5× the charge is 4
 	// (3 base + 1 penalty after truncation): 3 × 15000 / 10000 = 4.
@@ -155,14 +153,14 @@ func TestInterpreter_DynamicEnergyPenaltyCharged(t *testing.T) {
 	}
 
 	// ContractState.EnergyUsage should accumulate only the base 9.
-	updated := rawdb.ReadContractState(db, addr)
+	updated := stateDB.ReadContractState(addr)
 	if updated.EnergyUsage() != 9 {
 		t.Fatalf("recorded usage: got %d, want 9", updated.EnergyUsage())
 	}
 }
 
 func TestInterpreter_DynamicEnergyNestedCallsRecordParentAndChildSeparately(t *testing.T) {
-	tvm, db, _ := newTestTVMWithDB(t)
+	tvm, stateDB, _ := newTestTVMWithDB(t)
 	parent := tcommon.Address{0x41, 0x31}
 	child := tcommon.Address{0x41, 0x32}
 
@@ -195,16 +193,16 @@ func TestInterpreter_DynamicEnergyNestedCallsRecordParentAndChildSeparately(t *t
 		t.Fatalf("run: %v", err)
 	}
 
-	if got := rawdb.ReadContractState(db, parent).EnergyUsage(); got != 61 {
+	if got := stateDB.ReadContractState(parent).EnergyUsage(); got != 61 {
 		t.Fatalf("parent usage: got %d, want 61", got)
 	}
-	if got := rawdb.ReadContractState(db, child).EnergyUsage(); got != 9 {
+	if got := stateDB.ReadContractState(child).EnergyUsage(); got != 9 {
 		t.Fatalf("child usage: got %d, want 9", got)
 	}
 }
 
 func TestInterpreter_DynamicEnergyOffNoPenalty(t *testing.T) {
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	tvm.cfg.DynamicEnergy = false
 	tvm.interpreter.tvmConfig.DynamicEnergy = false
 	dp.SetCurrentCycleNumber(10)
@@ -213,7 +211,7 @@ func TestInterpreter_DynamicEnergyOffNoPenalty(t *testing.T) {
 	// Seed a factor, but since flag is off the interpreter must ignore it.
 	cs := types.NewContractState(10)
 	cs.SetEnergyFactor(10000) // would be 2.0× if applied
-	_ = rawdb.WriteContractState(db, addr, cs)
+	_ = stateDB.WriteContractState(addr, cs)
 
 	code := []byte{0x60, 0x01, 0x60, 0x02, 0x01, 0x00}
 	contract := NewContract(tcommon.Address{0x41, 0x00}, addr, 0, 100)
@@ -231,17 +229,17 @@ func TestInterpreter_DynamicEnergyOffNoPenalty(t *testing.T) {
 // newTestTVMWithFactor returns a TVM with DynamicEnergy on and a pre-seeded
 // contract-state factor so that the returned multiplier is
 // factor + DynamicEnergyFactorDecimal (i.e. factor=5000 → 1.5×).
-func newTestTVMWithFactor(t *testing.T, addr tcommon.Address, factor int64) (*TVM, ethdb.KeyValueStore) {
+func newTestTVMWithFactor(t *testing.T, addr tcommon.Address, factor int64) (*TVM, *state.StateDB) {
 	t.Helper()
-	tvm, db, dp := newTestTVMWithDB(t)
+	tvm, stateDB, dp := newTestTVMWithDB(t)
 	dp.SetCurrentCycleNumber(10)
 	dp.Set("dynamic_energy_threshold", 0)
 	dp.SetDynamicEnergyIncreaseFactor(2000)
 	dp.SetDynamicEnergyMaxFactor(10000)
 	cs := types.NewContractState(10)
 	cs.SetEnergyFactor(factor)
-	_ = rawdb.WriteContractState(db, addr, cs)
-	return tvm, db
+	_ = stateDB.WriteContractState(addr, cs)
+	return tvm, stateDB
 }
 
 // TestInterpreter_DynamicEnergyPenalty_MemoryOps verifies that the dynamic-
@@ -340,7 +338,7 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		// With DynamicEnergy disabled the factor must be ignored even if the
 		// ContractState has a large stored factor.
 		addr := tcommon.Address{0x41, 0xA3}
-		tvm, db := newTestTVMWithFactor(t, addr, 10000) // would be 2.0× if applied
+		tvm, stateDB := newTestTVMWithFactor(t, addr, 10000) // would be 2.0× if applied
 
 		// Disable the flag after seeding state.
 		tvm.cfg.DynamicEnergy = false
@@ -348,7 +346,7 @@ func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 		// Wipe the ContractState so the interpreter doesn't load a factor.
 		cs := types.NewContractState(10)
 		cs.SetEnergyFactor(10000)
-		_ = rawdb.WriteContractState(db, addr, cs)
+		_ = stateDB.WriteContractState(addr, cs)
 
 		code := []byte{
 			byte(PUSH1), 0x80,

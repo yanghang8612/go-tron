@@ -2,7 +2,6 @@ package vm
 
 import (
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -17,7 +16,7 @@ import (
 //
 // Mirrors java-tron Program.updateContextContractFactor.
 func updateContractEnergyFactor(tvm *TVM, addr tcommon.Address) int64 {
-	if tvm.DB == nil {
+	if tvm.StateDB == nil {
 		return types.DynamicEnergyFactorDecimal
 	}
 	dp := tvm.StateDB.DynamicProperties()
@@ -26,10 +25,10 @@ func updateContractEnergyFactor(tvm *TVM, addr tcommon.Address) int64 {
 	}
 	currentCycle := dp.CurrentCycleNumber()
 
-	cs := rawdb.ReadContractState(tvm.DB, addr)
+	cs := tvm.StateDB.ReadContractState(addr)
 	if cs == nil {
 		cs = types.NewContractState(currentCycle)
-		_ = rawdb.WriteContractState(tvm.DB, addr, cs)
+		_ = tvm.StateDB.WriteContractState(addr, cs)
 		return types.DynamicEnergyFactorDecimal
 	}
 
@@ -38,7 +37,7 @@ func updateContractEnergyFactor(tvm *TVM, addr tcommon.Address) int64 {
 	maxFactor := dp.DynamicEnergyMaxFactor()
 
 	if cs.CatchUpToCycle(currentCycle, threshold, increaseFactor, maxFactor, dp.AllowStrictMath()) {
-		_ = rawdb.WriteContractState(tvm.DB, addr, cs)
+		_ = tvm.StateDB.WriteContractState(addr, cs)
 	}
 	return cs.EnergyFactor() + types.DynamicEnergyFactorDecimal
 }
@@ -48,10 +47,10 @@ func updateContractEnergyFactor(tvm *TVM, addr tcommon.Address) int64 {
 // counter compared against DynamicEnergyThreshold at the next catch-up
 // call; the scaled (post-factor) usage is not what drives the feedback.
 func recordContractEnergyUsage(tvm *TVM, addr tcommon.Address, rawUsage int64) {
-	if tvm.DB == nil || rawUsage <= 0 {
+	if tvm.StateDB == nil || rawUsage <= 0 {
 		return
 	}
-	cs := rawdb.ReadContractState(tvm.DB, addr)
+	cs := tvm.StateDB.ReadContractState(addr)
 	if cs == nil {
 		dp := tvm.StateDB.DynamicProperties()
 		var cycle int64
@@ -61,7 +60,7 @@ func recordContractEnergyUsage(tvm *TVM, addr tcommon.Address, rawUsage int64) {
 		cs = types.NewContractState(cycle)
 	}
 	cs.AddEnergyUsage(rawUsage)
-	_ = rawdb.WriteContractState(tvm.DB, addr, cs)
+	_ = tvm.StateDB.WriteContractState(addr, cs)
 }
 
 // applyDynamicEnergyPenalty returns the penalty (additional cost) to
