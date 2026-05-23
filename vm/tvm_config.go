@@ -44,8 +44,8 @@ type TVMConfig struct {
 	// signature duplicates from the same address; post-fork it must report
 	// failure (java-tron MUtil.checkCPUTime → OutOfTimeException). This is NOT derived from an
 	// AllowFlag — VERSION_4_7_1 is a pure SR-version vote, no DP key — so
-	// it cannot be set by `NewTVMConfig`; the caller wires it via a direct
-	// `cfg.MultiSigCheckV2 = forks.PassVersion(db, 27, ...)`.
+	// it cannot be set by `NewTVMConfig`; the caller wires it from the rooted
+	// fork-vote store for the current execution state.
 	MultiSigCheckV2 bool
 }
 

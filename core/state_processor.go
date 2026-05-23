@@ -69,7 +69,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	// the prev block's timestamp (the DP value during processTransaction),
 	// so we pass prevBlockTime here for parity.
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
-		forks.PassVersion(db, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
+		forks.PassVersionFromStore(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
 	}
 	if err := ValidateTxCommon(tx, prevBlockTime); err != nil {
@@ -102,7 +102,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		// VERSION_4_7_1 (value 27): java-tron swapped the multi-sig dedup
 		// key from raw signature bytes to recovered address. We mirror by
 		// passing the fork-pass result through.
-		multiSigByAddress := forks.PassVersion(db, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
+		multiSigByAddress := forks.PassVersionFromStore(statedb, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
 		if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
 			return nil, fmt.Errorf("validate envelope: %w", err)
 		}
@@ -430,7 +430,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		txInfos = append(txInfos, info)
 		statedb.FinalizeTransaction()
 
-		accumulateBlockEnergyUsage(dynProps, db, prevBlockTime, result)
+		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
 	}
 
 	if parentAccountStateRoot != nil {

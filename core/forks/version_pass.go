@@ -17,10 +17,23 @@ import (
 // callers serialise via Pebble's per-key consistency, so this read does
 // not need the controller's mutex.
 func PassVersion(db ethdb.KeyValueReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
+	return PassVersionFromStore(rawDBForkStatsReader{db: db}, version, latestBlockTime, maintenanceIntervalMs)
+}
+
+type rawDBForkStatsReader struct {
+	db ethdb.KeyValueReader
+}
+
+func (s rawDBForkStatsReader) ReadForkStats(version int32) []byte {
+	return rawdb.ReadForkStats(s.db, version)
+}
+
+// PassVersionFromStore is the typed-store variant of PassVersion.
+func PassVersionFromStore(store ForkStatsReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
 	vp, ok := lookupVersion(version)
 	if !ok {
 		return false
 	}
-	stats := rawdb.ReadForkStats(db, version)
+	stats := store.ReadForkStats(version)
 	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
 }

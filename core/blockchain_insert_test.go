@@ -172,7 +172,11 @@ func TestBlockChain_InsertBlockUpdatesForkStats(t *testing.T) {
 		}
 	}
 
-	stats := rawdb.ReadForkStats(bc.buffer, 28)
+	headState, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	if err != nil {
+		t.Fatalf("open head state: %v", err)
+	}
+	stats := headState.ReadForkStats(28)
 	if len(stats) != 2 {
 		t.Fatalf("v28 stats len: got %d, want 2", len(stats))
 	}

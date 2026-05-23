@@ -301,10 +301,10 @@ func validateProposalForkGate(ctx *Context, id int64) error {
 }
 
 func proposalPassVersion(ctx *Context, version int32) bool {
-	if ctx.DB == nil {
+	if ctx.State == nil {
 		return false
 	}
-	return forks.PassVersion(ctx.DB, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return forks.PassVersionFromStore(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
 }
 
 func validateProposalOne(id, value int64) error {

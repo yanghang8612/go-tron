@@ -17,10 +17,10 @@ import (
 // Returns false when DB or DynProps is missing (defensive — unit tests that
 // stub a Context without DB will not have the fork stats anyway).
 func multiSigCheckV2Pass(ctx *Context) bool {
-	if ctx == nil || ctx.DB == nil || ctx.DynProps == nil {
+	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
 		return false
 	}
-	return forks.PassVersion(ctx.DB, 27, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return forks.PassVersionFromStore(ctx.State, 27, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
 }
 
 const contractNameMaxLen = 32

@@ -8,6 +8,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/txpool"
@@ -106,7 +107,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
 		statedb.FinalizeTransaction()
-		accumulateBlockEnergyUsage(dynProps, rootedBuildDB, prevBlockTime, result)
+		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
 	}
 
 	var accountStateRoot tcommon.Hash
@@ -132,7 +133,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(rootedBuildDB, statedb, dynProps, bc.ActiveWitnesses(), timestamp, bc.fc); err != nil {
+		if err := ProcessProposals(rootedBuildDB, statedb, dynProps, bc.ActiveWitnesses(), timestamp, forks.NewForkControllerFromState(statedb)); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{

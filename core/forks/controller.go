@@ -22,8 +22,8 @@ import (
 // serial. Reads (Pass) are protected by a mutex because audit-loop callers
 // (actuators, rpc) may race with producer updates.
 type ForkController struct {
-	db keyValueReadWriter
-	mu sync.RWMutex
+	store ForkStatsStore
+	mu    sync.RWMutex
 }
 
 type keyValueReadWriter interface {
@@ -31,9 +31,41 @@ type keyValueReadWriter interface {
 	ethdb.KeyValueWriter
 }
 
+type ForkStatsReader interface {
+	ReadForkStats(version int32) []byte
+}
+
+type ForkStatsStore interface {
+	ForkStatsReader
+	WriteForkStats(version int32, stats []byte)
+}
+
+type rawDBForkStatsStore struct {
+	db keyValueReadWriter
+}
+
+func (s rawDBForkStatsStore) ReadForkStats(version int32) []byte {
+	return rawdb.ReadForkStats(s.db, version)
+}
+
+func (s rawDBForkStatsStore) WriteForkStats(version int32, stats []byte) {
+	rawdb.WriteForkStats(s.db, version, stats)
+}
+
 // NewForkController binds a controller to a KV store.
 func NewForkController(db keyValueReadWriter) *ForkController {
-	return &ForkController{db: db}
+	return NewForkControllerFromStore(rawDBForkStatsStore{db: db})
+}
+
+// NewForkControllerFromStore binds a controller to a typed fork-stats store.
+func NewForkControllerFromStore(store ForkStatsStore) *ForkController {
+	return &ForkController{store: store}
+}
+
+// NewForkControllerFromState binds a controller to StateDB's rooted
+// SystemForkVote domain.
+func NewForkControllerFromState(statedb *state.StateDB) *ForkController {
+	return NewForkControllerFromStore(statedb)
 }
 
 // Update records the vote carried by a block: the producing SR's slot is
@@ -55,7 +87,7 @@ func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
 	defer fc.mu.Unlock()
 
 	for _, vp := range KnownVersions {
-		stats := rawdb.ReadForkStats(fc.db, vp.Value)
+		stats := fc.store.ReadForkStats(vp.Value)
 		if len(stats) != witnessCount {
 			stats = make([]byte, witnessCount)
 		} else {
@@ -69,7 +101,7 @@ func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
 		} else {
 			stats[slot] = VoteDowngrade
 		}
-		rawdb.WriteForkStats(fc.db, vp.Value, stats)
+		fc.store.WriteForkStats(vp.Value, stats)
 	}
 }
 
@@ -88,7 +120,7 @@ func (fc *ForkController) Pass(version int32, latestBlockTime, maintenanceInterv
 		return false
 	}
 	fc.mu.RLock()
-	stats := rawdb.ReadForkStats(fc.db, version)
+	stats := fc.store.ReadForkStats(version)
 	fc.mu.RUnlock()
 	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
 }
@@ -124,7 +156,7 @@ func (fc *ForkController) IsActive(flag AllowFlag, dp *state.DynamicProperties, 
 func (fc *ForkController) Stats(version int32) []byte {
 	fc.mu.RLock()
 	defer fc.mu.RUnlock()
-	return rawdb.ReadForkStats(fc.db, version)
+	return fc.store.ReadForkStats(version)
 }
 
 // Reset clears the bitmap for every known version that has not yet
@@ -141,7 +173,7 @@ func (fc *ForkController) Reset(latestBlockTime, maintenanceIntervalMs int64, wi
 		if fc.passLocked(vp.Value, latestBlockTime, maintenanceIntervalMs) {
 			continue
 		}
-		rawdb.WriteForkStats(fc.db, vp.Value, make([]byte, witnessCount))
+		fc.store.WriteForkStats(vp.Value, make([]byte, witnessCount))
 	}
 }
 
@@ -152,7 +184,7 @@ func (fc *ForkController) passLocked(version int32, latestBlockTime, maintenance
 	if !ok {
 		return false
 	}
-	stats := rawdb.ReadForkStats(fc.db, version)
+	stats := fc.store.ReadForkStats(version)
 	return passFromStats(stats, vp, latestBlockTime, maintenanceIntervalMs)
 }
 

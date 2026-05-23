@@ -253,7 +253,7 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 
 	dp := b.chain.DynProps()
 	cfg := vm.NewTVMConfig(current.Number(), dp)
-	cfg.MultiSigCheckV2 = forks.PassVersion(b.chain.buffer, 27,
+	cfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
 

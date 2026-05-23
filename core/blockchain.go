@@ -419,6 +419,9 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 
 // ForkController returns the chain's fork controller.
 func (bc *BlockChain) ForkController() *forks.ForkController {
+	if statedb := bc.sysKVAt(bc.HeadStateRoot()); statedb != nil {
+		return forks.NewForkControllerFromState(statedb)
+	}
 	return bc.fc
 }
 
@@ -798,7 +801,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// Per-proposal records live in the rooted SystemProposal KV on
 			// statedb; legacy-shaped governance side-effects pass through
 			// rootedDB so they are included in the full state root too.
-			if err := ProcessProposals(rootedDB, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
+			if err := ProcessProposals(rootedDB, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), forks.NewForkControllerFromState(statedb)); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{
@@ -854,7 +857,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
-		forks.NewForkController(rootedDB).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
+		forks.NewForkControllerFromState(statedb).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
 	} else {
 		dynProps.SetStateFlag(0)
 	}
@@ -890,7 +893,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
 	bc.updateSolidifiedBlock(statedb, block.WitnessAddress(), int64(block.Number()), dynProps)
-	bc.updateForkWithDB(rootedDB, block)
+	bc.updateFork(statedb, block)
 	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("stage tapos ref: %w", err)
 	}
@@ -1552,14 +1555,7 @@ func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
 	}
 }
 
-func (bc *BlockChain) updateFork(block *types.Block) {
-	bc.updateForkWithDB(bc.buffer, block)
-}
-
-func (bc *BlockChain) updateForkWithDB(db interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-}, block *types.Block) {
+func (bc *BlockChain) updateFork(statedb *state.StateDB, block *types.Block) {
 	active := bc.ActiveWitnesses()
 	slot := -1
 	for i, witness := range active {
@@ -1571,7 +1567,7 @@ func (bc *BlockChain) updateForkWithDB(db interface {
 	if slot < 0 {
 		return
 	}
-	forks.NewForkController(db).Update(block.Version(), slot, len(active))
+	forks.NewForkControllerFromState(statedb).Update(block.Version(), slot, len(active))
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic
@@ -1609,7 +1605,7 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	// signature bytes to recovered address. For pool admission we use the
 	// chain head's prev-block time + maintenance interval to evaluate it.
 	dynProps := bc.DynProps()
-	multiSigByAddress := forks.PassVersion(bc.buffer, 27,
+	multiSigByAddress := forks.PassVersionFromStore(statedb, 27,
 		dynProps.LatestBlockHeaderTimestamp(), dynProps.MaintenanceTimeInterval())
 	if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
 		return err

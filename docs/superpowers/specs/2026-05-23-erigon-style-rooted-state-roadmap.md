@@ -365,6 +365,11 @@ Implementation start:
   in each contract account's `ContractRuntimeState` domain. TVM factor updates,
   energy-usage accumulation, conformance digests, and fixture snapshots no
   longer read/write legacy flat `cs-` rows during execution.
+- Software-fork vote bitmaps now have a native `StateDB` typed store in the
+  system-owned `SystemForkVote` domain. Block-version updates, maintenance
+  reset, proposal fork gates, multi-signature fork gates, adaptive-energy
+  accounting gates, and backend constant-call config read fork stats from the
+  current rooted state.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

@@ -9,7 +9,6 @@ import (
 	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -308,7 +307,7 @@ func TestApplyTransaction_ExchangeRejectedAfterFork(t *testing.T) {
 	for i := 0; i < 19; i++ {
 		stats[i] = forks.VoteUpgrade
 	}
-	rawdb.WriteForkStats(db, 33, stats)
+	statedb.WriteForkStats(33, stats)
 
 	tx := makeExchangeTransactionTx(1)
 	// blockTime well past the v33 HardForkTime ceiling.

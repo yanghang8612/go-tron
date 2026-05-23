@@ -15,14 +15,14 @@ func TestProcessProposals_AdaptiveEnergySideEffect(t *testing.T) {
 	statedb := newTestStateDB(t)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetTotalEnergyLimit(50_000_000_000)
-	fc := forks.NewForkController(db)
+	fc := forks.NewForkControllerFromState(statedb)
 
 	// Simulate VERSION_3_6_5 (value=9) having passed with all slots voting upgrade.
 	stats := make([]byte, 27)
 	for i := range stats {
 		stats[i] = forks.VoteUpgrade
 	}
-	rawdb.WriteForkStats(db, 9, stats)
+	statedb.WriteForkStats(9, stats)
 
 	// Create proposal to enable adaptive energy (proposal ID 21).
 	p := &rawdb.Proposal{
@@ -96,7 +96,7 @@ func TestProcessProposals_AdaptiveEnergyNoSideEffectWithoutVersion(t *testing.T)
 	dynProps := state.NewDynamicProperties()
 	dynProps.SetAdaptiveResourceLimitTargetRatio(10)
 	dynProps.SetAdaptiveResourceLimitMultiplier(1000)
-	fc := forks.NewForkController(db)
+	fc := forks.NewForkControllerFromState(statedb)
 	// No VERSION_3_6_5 fork stats → fc.Pass(9, ...) returns false.
 
 	p := &rawdb.Proposal{

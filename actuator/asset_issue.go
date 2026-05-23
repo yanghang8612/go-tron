@@ -115,7 +115,7 @@ func (a *AssetIssueActuator) Validate(ctx *Context) error {
 		// exactly — including the silent-overflow `frozenDays *
 		// FROZEN_PERIOD` multiplication, since java's `long *` wraps and
 		// only the `addExact(startTime, frozenPeriod)` step throws.
-		if forks.PassVersion(ctx.DB, 34, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval()) {
+		if forks.PassVersionFromStore(ctx.State, 34, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval()) {
 			frozenPeriod := f.FrozenDays * params.FrozenPeriod
 			sum := c.StartTime + frozenPeriod
 			if (frozenPeriod > 0 && sum < c.StartTime) ||

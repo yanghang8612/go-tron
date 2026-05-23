@@ -176,7 +176,7 @@ func markProposalForkVersionPassed(t *testing.T, ctx *Context, version int32) {
 	for i := range stats {
 		stats[i] = 1
 	}
-	rawdb.WriteForkStats(ctx.DB, version, stats)
+	ctx.State.WriteForkStats(version, stats)
 }
 
 // TestProposalCreateExpiration_NileProposal1Parity replays Nile-live's

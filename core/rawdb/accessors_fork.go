@@ -20,3 +20,9 @@ func ReadForkStats(db ethdb.KeyValueReader, version int32) []byte {
 	}
 	return data
 }
+
+// ForkStatsStateKey returns the legacy logical key used when fork vote
+// bitmaps are stored under the rooted SystemForkVote domain.
+func ForkStatsStateKey(version int32) []byte {
+	return forkStatsKey(version)
+}

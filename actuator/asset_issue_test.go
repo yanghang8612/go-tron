@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -352,15 +351,15 @@ func TestAssetIssueValidate_FrozenSumOverflow(t *testing.T) {
 }
 
 // activateV34 seeds the v34 fork bitmap at quorum (80% of 27 SRs = ceil(21.6)
-// = 22) so forks.PassVersion(db, 34, ...) returns true. ctx.BlockTime must
-// be past the v34 hardForkTime ceiling for the test to exercise the gate.
+// = 22). ctx.BlockTime must be past the v34 hardForkTime ceiling for the test
+// to exercise the gate.
 func activateV34(t *testing.T, ctx *Context) {
 	t.Helper()
 	stats := make([]byte, 27)
 	for i := 0; i < 22; i++ {
 		stats[i] = forks.VoteUpgrade
 	}
-	rawdb.WriteForkStats(ctx.DB, 34, stats)
+	ctx.State.WriteForkStats(34, stats)
 	ctx.BlockTime = 1_700_000_000_000 // well past 1596780000000
 	ctx.PrevBlockTime = ctx.BlockTime
 }

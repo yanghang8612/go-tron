@@ -3,9 +3,6 @@ package core
 import (
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
-
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/actuator"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -16,27 +13,34 @@ import (
 // portion when adaptive is on, and only adds the balance-paid overflow
 // after VERSION_3_6_5 passes. Go must match both tiers.
 
-// passVersion3_6_5 marks SR-vote tallies so that
-// forks.PassVersion(db, 9, _, _) returns true for the supplied db.
+type forkStatsMem map[int32][]byte
+
+func (m forkStatsMem) ReadForkStats(version int32) []byte {
+	return m[version]
+}
+
+func (m forkStatsMem) WriteForkStats(version int32, stats []byte) {
+	m[version] = append([]byte(nil), stats...)
+}
+
+// passVersion3_6_5 marks SR-vote tallies so that VERSION_3_6_5 passes for the
+// supplied fork-stats store.
 // VERSION_3_6_5 (value 9) uses the legacy "strict all-upgrade" check:
 // every slot in the bitmap must read VoteUpgrade.
-func passVersion3_6_5(db interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-}, witnessCount int) {
-	fc := forks.NewForkController(db)
+func passVersion3_6_5(store forks.ForkStatsStore, witnessCount int) {
+	fc := forks.NewForkControllerFromStore(store)
 	for slot := 0; slot < witnessCount; slot++ {
 		fc.Update(9, slot, witnessCount)
 	}
 }
 
 func TestAccumulateBlockEnergyUsage_AdaptiveOff_NoOp(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	stats := forkStatsMem{}
 	dp := state.NewDynamicProperties()
 	dp.SetAllowAdaptiveEnergy(false)
 	dp.SetBlockEnergyUsage(7)
 
-	accumulateBlockEnergyUsage(dp, db, 0, &actuator.Result{
+	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
@@ -48,12 +52,12 @@ func TestAccumulateBlockEnergyUsage_AdaptiveOff_NoOp(t *testing.T) {
 }
 
 func TestAccumulateBlockEnergyUsage_PreV3_6_5_StakeOnly(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	stats := forkStatsMem{}
 	dp := state.NewDynamicProperties()
 	dp.SetAllowAdaptiveEnergy(true)
 	// No fork stats written → PassVersion(9) returns false.
 
-	accumulateBlockEnergyUsage(dp, db, 0, &actuator.Result{
+	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
@@ -66,12 +70,12 @@ func TestAccumulateBlockEnergyUsage_PreV3_6_5_StakeOnly(t *testing.T) {
 }
 
 func TestAccumulateBlockEnergyUsage_PostV3_6_5_FullUsage(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	stats := forkStatsMem{}
 	dp := state.NewDynamicProperties()
 	dp.SetAllowAdaptiveEnergy(true)
-	passVersion3_6_5(db, 27)
+	passVersion3_6_5(stats, 27)
 
-	accumulateBlockEnergyUsage(dp, db, 0, &actuator.Result{
+	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
@@ -85,12 +89,12 @@ func TestAccumulateBlockEnergyUsage_PostV3_6_5_FullUsage(t *testing.T) {
 func TestAccumulateBlockEnergyUsage_PostV3_6_5_StakeOnlyEqualsTotal(t *testing.T) {
 	// Stake fully covered the tx: EnergyUsed == EnergyUsageTotal.
 	// Pre- and post-3_6_5 must both add EnergyUsageTotal (no overflow).
-	db := ethrawdb.NewMemoryDatabase()
+	stats := forkStatsMem{}
 	dp := state.NewDynamicProperties()
 	dp.SetAllowAdaptiveEnergy(true)
-	passVersion3_6_5(db, 27)
+	passVersion3_6_5(stats, 27)
 
-	accumulateBlockEnergyUsage(dp, db, 0, &actuator.Result{
+	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal: 1000,
 		EnergyUsed:       1000,
 	})
@@ -100,12 +104,12 @@ func TestAccumulateBlockEnergyUsage_PostV3_6_5_StakeOnlyEqualsTotal(t *testing.T
 }
 
 func TestAccumulateBlockEnergyUsage_ZeroUsage_NoOp(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	stats := forkStatsMem{}
 	dp := state.NewDynamicProperties()
 	dp.SetAllowAdaptiveEnergy(true)
 	dp.SetBlockEnergyUsage(42)
 
-	accumulateBlockEnergyUsage(dp, db, 0, &actuator.Result{
+	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal: 0,
 	})
 	if got := dp.BlockEnergyUsage(); got != 42 {
