@@ -597,6 +597,19 @@ Acceptance:
 - Domain latest/history/snapshot reads agree with the committed root.
 - Block hashes and java-compatible `accountStateRoot` remain unchanged.
 
+Implementation start:
+
+- `core/rawdb` now has `state-commitment-v1- || blockNum` checkpoints carrying
+  block hash, commitment root, and scheme name.
+- `ComputeLatestDomainRoot` provides a deterministic debug commitment over
+  physical generic-domain latest tables (`state-kv-generation-v2-` and
+  `state-kv-latest-v2-`). It deliberately excludes code blobs because the final
+  commitment must reference selected account `CodeHash` values, not every
+  retained content-addressed blob.
+- This root is not authoritative yet and is not written during block execution;
+  it is a transition tool for comparing domain-latest determinism before the
+  full commitment domain replaces nested-MPT root building.
+
 Estimated effort: 10-15 days.
 
 ## Phase 9: Pruning Modes

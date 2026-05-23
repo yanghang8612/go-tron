@@ -209,6 +209,15 @@ var (
 	// Value: RLP(StateDomainChange)
 	stateChangeSetPrefix = []byte("state-changeset-v1-")
 
+	// stateCommitmentPrefix stores transitional commitment checkpoints for the
+	// Erigon-style domain state engine. The current checkpoints are debug
+	// commitments over physical latest-domain tables, not yet the authoritative
+	// internal full state root.
+	//
+	// Key:   state-commitment-v1- || blockNum u64
+	// Value: RLP(StateCommitmentCheckpoint)
+	stateCommitmentPrefix = []byte("state-commitment-v1-")
+
 	// stateKVGenerationPrefix stores the latest physical generation observed
 	// for an account. It lets a later recreate pick generation+1 without
 	// scanning or deleting old latest rows from prior incarnations.
@@ -620,6 +629,13 @@ func stateChangeSetBlockPrefix(blockNum uint64) []byte {
 	k := make([]byte, len(stateChangeSetPrefix)+8)
 	copy(k, stateChangeSetPrefix)
 	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
+	return k
+}
+
+func stateCommitmentCheckpointKey(blockNum uint64) []byte {
+	k := make([]byte, len(stateCommitmentPrefix)+8)
+	copy(k, stateCommitmentPrefix)
+	binary.BigEndian.PutUint64(k[len(stateCommitmentPrefix):], blockNum)
 	return k
 }
 
