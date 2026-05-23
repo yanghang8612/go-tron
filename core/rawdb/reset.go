@@ -60,6 +60,7 @@ var resetMutablePrefixes = [][]byte{
 	stateCodePrefix,
 	stateTxRangePrefix,
 	stateChangeSetPrefix,
+	stateChangeInversePrefix,
 	stateCommitmentPrefix,
 	stateKVGenerationPrefix,
 	sectionBloomPrefix,

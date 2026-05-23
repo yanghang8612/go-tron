@@ -515,9 +515,11 @@ Implementation start:
 - `rawdb.ReadStateKVAsOf` reconstructs a single generic latest-domain key at a
   target block by reading current latest and rolling block change sets backward
   through `(target, head]`.
-- The first implementation scans block change sets directly. Phase 6 still
-  needs domain-level inverse indexes and typed-store/RPC integration before it
-  can replace the older account/slot-specific State History Index readers.
+- `state-change-index-v1-` is the owner/generation/domain/key inverse index for
+  domain change rows, so `ReadStateKVAsOf` can jump directly to blocks that
+  touched the requested key.
+- Phase 6 still needs typed-store/RPC integration before it can replace the
+  older account/slot-specific State History Index readers.
 
 Estimated effort: 8-12 days.
 

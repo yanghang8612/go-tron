@@ -209,6 +209,15 @@ var (
 	// Value: RLP(StateDomainChange)
 	stateChangeSetPrefix = []byte("state-changeset-v1-")
 
+	// stateChangeInversePrefix is the owner/domain/key inverse index for
+	// StateDomainChange rows. It lets GetAsOf find blocks that touched one
+	// logical domain key without scanning every block changeset.
+	//
+	// Key:   state-change-index-v1- || owner20 || generation u64
+	//        || domain u16 || logical_key || blockNum u64
+	// Value: empty
+	stateChangeInversePrefix = []byte("state-change-index-v1-")
+
 	// stateCommitmentPrefix stores transitional commitment checkpoints for the
 	// Erigon-style domain state engine. The current checkpoints are debug
 	// commitments over physical latest-domain tables, not yet the authoritative
@@ -637,6 +646,25 @@ func stateCommitmentCheckpointKey(blockNum uint64) []byte {
 	copy(k, stateCommitmentPrefix)
 	binary.BigEndian.PutUint64(k[len(stateCommitmentPrefix):], blockNum)
 	return k
+}
+
+func stateChangeInverseKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte, blockNum uint64) []byte {
+	k := stateChangeInverseKeyPrefix(owner, generation, domain, logicalKey)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], blockNum)
+	return append(k, b[:]...)
+}
+
+func stateChangeInverseKeyPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateChangeInversePrefix)+common.AccountIDLength+8+2+len(logicalKey))
+	k = append(k, stateChangeInversePrefix...)
+	k = append(k, accountID[:]...)
+	var b [10]byte
+	binary.BigEndian.PutUint64(b[:8], generation)
+	binary.BigEndian.PutUint16(b[8:], uint16(domain))
+	k = append(k, b[:]...)
+	return append(k, logicalKey...)
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the

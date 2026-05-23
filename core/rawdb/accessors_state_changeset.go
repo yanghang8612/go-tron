@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -82,7 +83,10 @@ func WriteStateDomainChange(db ethdb.KeyValueWriter, change *StateDomainChange) 
 	if err != nil {
 		return err
 	}
-	return db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data)
+	if err := db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data); err != nil {
+		return err
+	}
+	return db.Put(stateChangeInverseKey(c.Owner, c.Generation, c.Domain, c.Key, c.BlockNum), nil)
 }
 
 func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
@@ -125,6 +129,33 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 	return deleteStateKVPrefixByScan(db, stateChangeSetBlockPrefix(blockNum))
 }
 
+func IterateStateDomainChangeBlocks(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {
+	prefix := stateChangeInverseKeyPrefix(owner, generation, domain, key)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	for it.Next() {
+		blockNum, ok := StateDomainChangeInverseBlockNum(it.Key(), len(prefix))
+		if !ok {
+			continue
+		}
+		cont, err := fn(blockNum)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
+func StateDomainChangeInverseBlockNum(key []byte, prefixLen int) (uint64, bool) {
+	if len(key) != prefixLen+8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key[prefixLen:]), true
+}
+
 // UnwindStateDomainChanges restores the physical latest-state index to the
 // state before blockNum for every generic-domain row captured in that block.
 // It intentionally leaves the change-set rows themselves intact; callers decide
@@ -165,7 +196,17 @@ func ReadStateKVAsOf(db stateKVLatestStore, owner common.Address, generation uin
 	if targetBlock >= headBlock {
 		return value, exists, nil
 	}
-	for blockNum := headBlock; blockNum > targetBlock; blockNum-- {
+	var touched []uint64
+	if err := IterateStateDomainChangeBlocks(db, owner, generation, domain, key, func(blockNum uint64) (bool, error) {
+		if blockNum > targetBlock && blockNum <= headBlock {
+			touched = append(touched, blockNum)
+		}
+		return true, nil
+	}); err != nil {
+		return nil, false, err
+	}
+	for i := len(touched) - 1; i >= 0; i-- {
+		blockNum := touched[i]
 		var changes []*StateDomainChange
 		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
 			changes = append(changes, change)

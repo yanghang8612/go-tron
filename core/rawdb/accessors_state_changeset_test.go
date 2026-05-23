@@ -86,6 +86,17 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	if len(seqs) != 2 || seqs[0] != 1 || seqs[1] != 2 {
 		t.Fatalf("seqs = %v", seqs)
 	}
+
+	var blocks []uint64
+	if err := IterateStateDomainChangeBlocks(db, owner, 3, kvdomains.SystemReward, []byte("reward/1"), func(blockNum uint64) (bool, error) {
+		blocks = append(blocks, blockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate inverse: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0] != 9 {
+		t.Fatalf("inverse blocks = %v", blocks)
+	}
 }
 
 func TestUnwindStateDomainChangesRestoresLatestIndex(t *testing.T) {
