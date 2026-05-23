@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -24,13 +23,13 @@ func TestUnDelegateResourceValidate(t *testing.T) {
 	ctx.DynProps.SetUnfreezeDelayDays(14)
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	dr := &rawdb.DelegatedResource{
 		From: owner, To: receiver,
 		FrozenBalanceForBandwidth: 1000000,
 	}
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, true, dr)
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, true, dr); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &UnDelegateResourceActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -54,14 +53,14 @@ func TestUnDelegateResourceLocked(t *testing.T) {
 	ctx.PrevBlockTime = 1000
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	dr := &rawdb.DelegatedResource{
 		From: owner, To: receiver,
 		FrozenBalanceForBandwidth: 1000000,
 		ExpireTimeForBandwidth:    999999,
 	}
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, true, dr)
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, true, dr); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &UnDelegateResourceActuator{}
 	if err := act.Validate(ctx); err == nil {
@@ -84,14 +83,16 @@ func TestUnDelegateResourceExecute(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	dr := &rawdb.DelegatedResource{
 		From: owner, To: receiver,
 		FrozenBalanceForBandwidth: 1000000,
 	}
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, false, dr)
-	rawdb.WriteDelegationIndex(db, owner, []tcommon.Address{receiver})
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &UnDelegateResourceActuator{}
 	result, err := act.Execute(ctx)
@@ -103,7 +104,7 @@ func TestUnDelegateResourceExecute(t *testing.T) {
 	}
 
 	// Delegation fully removed
-	if rawdb.ReadDelegatedResource(db, owner, receiver) != nil {
+	if ctx.State.ReadDelegatedResource(owner, receiver) != nil {
 		t.Fatal("delegation should be removed")
 	}
 	// Owner's frozen restored
@@ -130,15 +131,19 @@ func TestUnDelegateResource_AllowsUnlockedWhenLockedBucketStillFuture(t *testing
 	ctx.State.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 1_500_000)
 	ctx.State.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 1_500_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, false, &rawdb.DelegatedResource{
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
 		From: owner, To: receiver, FrozenBalanceForBandwidth: 1_000_000,
-	})
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, true, &rawdb.DelegatedResource{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, true, &rawdb.DelegatedResource{
 		From: owner, To: receiver, FrozenBalanceForBandwidth: 500_000, ExpireTimeForBandwidth: 999_999,
-	})
-	rawdb.WriteDelegationIndex(db, owner, []tcommon.Address{receiver})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &UnDelegateResourceActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -147,14 +152,14 @@ func TestUnDelegateResource_AllowsUnlockedWhenLockedBucketStillFuture(t *testing
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false)
+	unlocked := ctx.State.ReadDelegatedResourceV2(owner, receiver, false)
 	if unlocked == nil || unlocked.FrozenBalanceForBandwidth != 500_000 {
 		t.Fatalf("unexpected unlocked bucket after undelegate: %+v", unlocked)
 	}
-	if locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true); locked == nil || locked.FrozenBalanceForBandwidth != 500_000 {
+	if locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true); locked == nil || locked.FrozenBalanceForBandwidth != 500_000 {
 		t.Fatalf("future locked bucket should remain: %+v", locked)
 	}
-	if receivers := rawdb.ReadDelegationIndex(db, owner); len(receivers) != 1 || receivers[0] != receiver {
+	if receivers := ctx.State.ReadDelegationIndex(owner); len(receivers) != 1 || receivers[0] != receiver {
 		t.Fatalf("delegation index should remain while locked bucket exists: %v", receivers)
 	}
 }
@@ -177,15 +182,19 @@ func TestUnDelegateResource_MovesExpiredLockedBucketBeforeSubtract(t *testing.T)
 	ctx.State.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 3_000_000)
 	ctx.State.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 3_000_000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, false, &rawdb.DelegatedResource{
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
 		From: owner, To: receiver, FrozenBalanceForBandwidth: 1_000_000,
-	})
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, true, &rawdb.DelegatedResource{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, true, &rawdb.DelegatedResource{
 		From: owner, To: receiver, FrozenBalanceForBandwidth: 2_000_000, ExpireTimeForBandwidth: 999,
-	})
-	rawdb.WriteDelegationIndex(db, owner, []tcommon.Address{receiver})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.State.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+		t.Fatal(err)
+	}
 
 	act := &UnDelegateResourceActuator{}
 	if err := act.Validate(ctx); err != nil {
@@ -194,10 +203,10 @@ func TestUnDelegateResource_MovesExpiredLockedBucketBeforeSubtract(t *testing.T)
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true); locked != nil {
+	if locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true); locked != nil {
 		t.Fatalf("expired locked bucket should be removed: %+v", locked)
 	}
-	unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false)
+	unlocked := ctx.State.ReadDelegatedResourceV2(owner, receiver, false)
 	if unlocked == nil || unlocked.FrozenBalanceForBandwidth != 500_000 {
 		t.Fatalf("unexpected unlocked bucket after moving expired lock and subtracting: %+v", unlocked)
 	}

@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/params"
@@ -74,9 +73,6 @@ func TestDelegateResourceExecute(t *testing.T) {
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5000000)
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
-
 	act := &DelegateResourceActuator{}
 	result, err := act.Execute(ctx)
 	if err != nil {
@@ -92,14 +88,14 @@ func TestDelegateResourceExecute(t *testing.T) {
 	}
 
 	// Delegation record
-	dr := rawdb.ReadDelegatedResource(db, owner, receiver)
+	dr := ctx.State.ReadDelegatedResource(owner, receiver)
 	if dr == nil || dr.FrozenBalanceForBandwidth != 1000000 {
 		t.Fatalf("delegation record wrong: %+v", dr)
 	}
-	if unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false); unlocked == nil || unlocked.FrozenBalanceForBandwidth != 1000000 {
+	if unlocked := ctx.State.ReadDelegatedResourceV2(owner, receiver, false); unlocked == nil || unlocked.FrozenBalanceForBandwidth != 1000000 {
 		t.Fatalf("unlocked delegation bucket wrong: %+v", unlocked)
 	}
-	if locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true); locked != nil {
+	if locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true); locked != nil {
 		t.Fatalf("locked bucket should not exist for unlocked delegation: %+v", locked)
 	}
 }
@@ -253,7 +249,6 @@ func setupLockedDelegateCtx(t *testing.T, lockPeriodBlocks int64) (*Context, tco
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5000000)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	return ctx, owner, receiver, c
 }
 
@@ -269,7 +264,7 @@ func TestDelegateResource_LockPreFork_ForcesDefault(t *testing.T) {
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	dr := rawdb.ReadDelegatedResource(ctx.DB, owner, receiver)
+	dr := ctx.State.ReadDelegatedResource(owner, receiver)
 	wantExpire := ctx.PrevBlockTime + int64(params.DelegatePeriod/params.BlockProducedInterval)*params.BlockProducedInterval
 	if dr.ExpireTimeForBandwidth != wantExpire {
 		t.Fatalf("pre-fork expire = %d, want %d (PrevBlockTime + 86400*3000ms)", dr.ExpireTimeForBandwidth, wantExpire)
@@ -287,7 +282,7 @@ func TestDelegateResource_LockPostFork_HonorsContract(t *testing.T) {
 	if _, err := act.Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	dr := rawdb.ReadDelegatedResource(ctx.DB, owner, receiver)
+	dr := ctx.State.ReadDelegatedResource(owner, receiver)
 	wantExpire := ctx.PrevBlockTime + 100*params.BlockProducedInterval
 	if dr.ExpireTimeForBandwidth != wantExpire {
 		t.Fatalf("post-fork expire = %d, want %d (PrevBlockTime + 100*3000ms)", dr.ExpireTimeForBandwidth, wantExpire)
@@ -297,7 +292,6 @@ func TestDelegateResource_LockPostFork_HonorsContract(t *testing.T) {
 func TestDelegateResource_LockedAndUnlockedUseSeparateV2Buckets(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	receiver := tcommon.Address{0x41, 0x02}
-	db := ethrawdb.NewMemoryDatabase()
 	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract,
 		&contractpb.DelegateResourceContract{
 			OwnerAddress:    owner[:],
@@ -311,7 +305,6 @@ func TestDelegateResource_LockedAndUnlockedUseSeparateV2Buckets(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
 	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5_000_000)
-	ctx.DB = db
 
 	act := &DelegateResourceActuator{}
 	if _, err := act.Execute(ctx); err != nil {
@@ -331,16 +324,16 @@ func TestDelegateResource_LockedAndUnlockedUseSeparateV2Buckets(t *testing.T) {
 		t.Fatalf("locked execute: %v", err)
 	}
 
-	unlocked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, false)
+	unlocked := ctx.State.ReadDelegatedResourceV2(owner, receiver, false)
 	if unlocked == nil || unlocked.FrozenBalanceForBandwidth != 1_000_000 || unlocked.ExpireTimeForBandwidth != 0 {
 		t.Fatalf("unexpected unlocked bucket: %+v", unlocked)
 	}
-	locked := rawdb.ReadDelegatedResourceV2(db, owner, receiver, true)
+	locked := ctx.State.ReadDelegatedResourceV2(owner, receiver, true)
 	wantExpire := ctx.PrevBlockTime + 100*params.BlockProducedInterval
 	if locked == nil || locked.FrozenBalanceForBandwidth != 2_000_000 || locked.ExpireTimeForBandwidth != wantExpire {
 		t.Fatalf("unexpected locked bucket: %+v want expire %d", locked, wantExpire)
 	}
-	agg := rawdb.ReadDelegatedResource(db, owner, receiver)
+	agg := ctx.State.ReadDelegatedResource(owner, receiver)
 	if agg == nil || agg.FrozenBalanceForBandwidth != 3_000_000 || agg.ExpireTimeForBandwidth != wantExpire {
 		t.Fatalf("unexpected aggregate: %+v", agg)
 	}
@@ -366,11 +359,13 @@ func TestDelegateResource_LockPostFork_RejectsShorterRemain(t *testing.T) {
 	ctx.DynProps.SetMaxDelegateLockPeriod(10_000_000)
 	// Pre-seed a prior locked delegation whose remaining time exceeds the new
 	// lockPeriod's duration: existingExpire - PrevBlockTime > 100*3000.
-	rawdb.WriteDelegatedResourceV2(ctx.DB, owner, receiver, true, &rawdb.DelegatedResource{
+	if err := ctx.State.WriteDelegatedResourceV2(owner, receiver, true, &rawdb.DelegatedResource{
 		From: owner, To: receiver,
 		FrozenBalanceForBandwidth: 1,
 		ExpireTimeForBandwidth:    ctx.PrevBlockTime + 1_000_000, // remain = 1_000_000ms ≫ 300_000ms
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := (&DelegateResourceActuator{}).Validate(ctx); err == nil {
 		t.Fatal("expected reject for shorter lockPeriod than remaining time")

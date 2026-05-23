@@ -371,17 +371,17 @@ var (
 // error per the spec.
 const HistorySchemaVersion uint32 = 1
 
-// drAccIdxDirection enumerates the four sub-indices of
+// DrAccIdxDirection enumerates the four sub-indices of
 // DelegatedResourceAccountIndexStore, matching java-tron's 0x01..0x04
 // prefix bytes for V1/V2 × from/to-anchored lookups.
-type drAccIdxDirection byte
+type DrAccIdxDirection byte
 
 const (
-	DrAccIdxLegacy drAccIdxDirection = 0x00 // V1 aggregate record before proposal #69
-	DrAccIdxV1From drAccIdxDirection = 0x01 // V1: from-anchored  (anchor=from, counterparty=to)
-	DrAccIdxV1To   drAccIdxDirection = 0x02 // V1: to-anchored    (anchor=to,   counterparty=from)
-	DrAccIdxV2From drAccIdxDirection = 0x03 // V2: from-anchored
-	DrAccIdxV2To   drAccIdxDirection = 0x04 // V2: to-anchored
+	DrAccIdxLegacy DrAccIdxDirection = 0x00 // V1 aggregate record before proposal #69
+	DrAccIdxV1From DrAccIdxDirection = 0x01 // V1: from-anchored  (anchor=from, counterparty=to)
+	DrAccIdxV1To   DrAccIdxDirection = 0x02 // V1: to-anchored    (anchor=to,   counterparty=from)
+	DrAccIdxV2From DrAccIdxDirection = 0x03 // V2: from-anchored
+	DrAccIdxV2To   DrAccIdxDirection = 0x04 // V2: to-anchored
 )
 
 func blockKey(number uint64) []byte {
@@ -630,7 +630,7 @@ func rewardViIsDoneKey() []byte {
 // drAccIdxKey builds a DelegatedResourceAccountIndex key. Mirrors
 // java-tron's Bytes.concat(PREFIX, anchor, counterparty) layout with
 // the prefix byte selecting V1/V2 × from/to.
-func drAccIdxKey(dir drAccIdxDirection, anchor, counterparty []byte) []byte {
+func drAccIdxKey(dir DrAccIdxDirection, anchor, counterparty []byte) []byte {
 	k := make([]byte, 0, len(drAccIdxPrefix)+1+len(anchor)+len(counterparty))
 	k = append(k, drAccIdxPrefix...)
 	k = append(k, byte(dir))
@@ -645,7 +645,7 @@ func drAccIdxLegacyKey(account []byte) []byte {
 // drAccIdxAnchorPrefix returns the byte prefix that iterates every
 // (counterparty, value) under a given direction+anchor — drax- ||
 // direction || anchor.
-func drAccIdxAnchorPrefix(dir drAccIdxDirection, anchor []byte) []byte {
+func drAccIdxAnchorPrefix(dir DrAccIdxDirection, anchor []byte) []byte {
 	k := make([]byte, 0, len(drAccIdxPrefix)+1+len(anchor))
 	k = append(k, drAccIdxPrefix...)
 	k = append(k, byte(dir))

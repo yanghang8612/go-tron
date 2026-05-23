@@ -147,3 +147,15 @@ func ReadDelegationIndex(db ethdb.KeyValueReader, from common.Address) []common.
 	}
 	return addrs
 }
+
+func DelegatedResourceStateKey(from, to common.Address) []byte {
+	return delegationKey(from[:], to[:])
+}
+
+func DelegatedResourceV2StateKey(from, to common.Address, locked bool) []byte {
+	return delegationKeyV2(from[:], to[:], locked)
+}
+
+func DelegationIndexStateKey(from common.Address) []byte {
+	return delegationIndexKey(from[:])
+}

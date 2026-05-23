@@ -203,7 +203,7 @@ func TestUnfreezeBalanceExecute_Delegated(t *testing.T) {
 	act := &UnfreezeBalanceActuator{}
 	ctx := setupContext(t, statedb, tx)
 	ctx.DynProps.SetAllowDelegateResource(true)
-	if err := rawdb.WriteDelegatedResource(ctx.DB, owner, receiver, &rawdb.DelegatedResource{
+	if err := statedb.WriteDelegatedResourceLegacy(owner, receiver, &rawdb.DelegatedResource{
 		From:                      owner,
 		To:                        receiver,
 		FrozenBalanceForBandwidth: 3_000_000,

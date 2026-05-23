@@ -183,7 +183,7 @@ func WriteDrAccountIndexUnDelegate(db ethdb.KeyValueWriter, v2 bool, from, to []
 
 // ReadDrAccountIndexEntry returns the proto record stored at
 // (direction, anchor, counterparty) or nil if absent.
-func ReadDrAccountIndexEntry(db ethdb.KeyValueReader, dir drAccIdxDirection, anchor, counterparty []byte) *corepb.DelegatedResourceAccountIndex {
+func ReadDrAccountIndexEntry(db ethdb.KeyValueReader, dir DrAccIdxDirection, anchor, counterparty []byte) *corepb.DelegatedResourceAccountIndex {
 	data, err := db.Get(drAccIdxKey(dir, anchor, counterparty))
 	if err != nil || len(data) == 0 {
 		return nil
@@ -199,7 +199,7 @@ func ReadDrAccountIndexEntry(db ethdb.KeyValueReader, dir drAccIdxDirection, anc
 // and invokes fn. Aborts on fn returning an error.
 func IterateDrAccountIndex(
 	db ethdb.Iteratee,
-	dir drAccIdxDirection,
+	dir DrAccIdxDirection,
 	anchor []byte,
 	fn func(counterparty []byte, rec *corepb.DelegatedResourceAccountIndex) error,
 ) error {
@@ -222,4 +222,16 @@ func IterateDrAccountIndex(
 		}
 	}
 	return it.Error()
+}
+
+func DrAccountIndexLegacyStateKey(account []byte) []byte {
+	return drAccIdxLegacyKey(account)
+}
+
+func DrAccountIndexStateKey(dir DrAccIdxDirection, anchor, counterparty []byte) []byte {
+	return drAccIdxKey(dir, anchor, counterparty)
+}
+
+func DrAccountIndexAnchorStatePrefix(dir DrAccIdxDirection, anchor []byte) []byte {
+	return drAccIdxAnchorPrefix(dir, anchor)
 }

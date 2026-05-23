@@ -134,14 +134,14 @@ func TestStakingV2AvailableUnfreezeCountsOnlyUnexpired(t *testing.T) {
 }
 
 func TestStakingV2ResourceV2ReadsDelegatedPairBuckets(t *testing.T) {
-	tvm, db, _ := newTestTVMWithDB(t)
+	tvm, _, _ := newTestTVMWithDB(t)
 	statedb := tvm.StateDB
 	from := stakingPrecompileAddr(0x11)
 	target := stakingPrecompileAddr(0x12)
 	statedb.CreateAccount(from, corepb.AccountType_Normal)
 	statedb.AddFreezeV2(from, corepb.ResourceCode_TRON_POWER, 99)
 
-	if err := rawdb.WriteDelegatedResourceV2(db, from, target, false, &rawdb.DelegatedResource{
+	if err := statedb.WriteDelegatedResourceV2(from, target, false, &rawdb.DelegatedResource{
 		From:                      from,
 		To:                        target,
 		FrozenBalanceForBandwidth: 7,
@@ -149,7 +149,7 @@ func TestStakingV2ResourceV2ReadsDelegatedPairBuckets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteDelegatedResourceV2(db, from, target, true, &rawdb.DelegatedResource{
+	if err := statedb.WriteDelegatedResourceV2(from, target, true, &rawdb.DelegatedResource{
 		From:                      from,
 		To:                        target,
 		FrozenBalanceForBandwidth: 13,

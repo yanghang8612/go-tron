@@ -642,9 +642,13 @@ func proposalParametersToList(m map[int64]int64) []tronapi.ProposalParameterEntr
 }
 
 func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) ([]*tronapi.DelegatedResourceInfo, error) {
+	statedb, err := state.New(b.chain.HeadStateRoot(), b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
 	resources := make([]*tronapi.DelegatedResourceInfo, 0, 2)
 	for _, locked := range []bool{false, true} {
-		dr := rawdb.ReadDelegatedResourceV2(b.chain.db, from, to, locked)
+		dr := statedb.ReadDelegatedResourceV2(from, to, locked)
 		if !nonEmptyDelegatedResource(dr) {
 			continue
 		}
@@ -673,7 +677,11 @@ func delegatedResourceInfo(from, to tcommon.Address, dr *rawdb.DelegatedResource
 }
 
 func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (*tronapi.DelegationIndexInfo, error) {
-	receivers := rawdb.ReadDelegationIndex(b.chain.db, addr)
+	statedb, err := state.New(b.chain.HeadStateRoot(), b.chain.StateDB())
+	if err != nil {
+		return nil, fmt.Errorf("open state: %w", err)
+	}
+	receivers := statedb.ReadDelegationIndex(addr)
 	toAddresses := make([]string, len(receivers))
 	for i, r := range receivers {
 		toAddresses[i] = hex.EncodeToString(r[:])
@@ -694,8 +702,8 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 
 	// Compute already-delegated amount from the delegation index.
 	var delegated int64
-	for _, receiver := range rawdb.ReadDelegationIndex(b.chain.db, addr) {
-		dr := rawdb.ReadDelegatedResource(b.chain.db, addr, receiver)
+	for _, receiver := range statedb.ReadDelegationIndex(addr) {
+		dr := statedb.ReadDelegatedResource(addr, receiver)
 		if dr == nil {
 			continue
 		}

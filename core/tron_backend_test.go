@@ -187,14 +187,18 @@ func TestTronBackend_GetDelegatedResourceV2ReturnsSeparateBuckets(t *testing.T) 
 
 	from := testCoreAddr(1)
 	to := testCoreAddr(2)
-	if err := rawdb.WriteDelegatedResourceV2(bc.db, from, to, false, &rawdb.DelegatedResource{
+	statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.WriteDelegatedResourceV2(from, to, false, &rawdb.DelegatedResource{
 		From:                      from,
 		To:                        to,
 		FrozenBalanceForBandwidth: 100,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rawdb.WriteDelegatedResourceV2(bc.db, from, to, true, &rawdb.DelegatedResource{
+	if err := statedb.WriteDelegatedResourceV2(from, to, true, &rawdb.DelegatedResource{
 		From:                   from,
 		To:                     to,
 		FrozenBalanceForEnergy: 200,
@@ -202,6 +206,12 @@ func TestTronBackend_GetDelegatedResourceV2ReturnsSeparateBuckets(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+	newRoot, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawdb.WriteGenesisStateRoot(bc.db, newRoot)
+	rawdb.WriteBlockStateRoot(bc.db, bc.CurrentBlock().Hash(), newRoot)
 
 	got, err := (&TronBackend{chain: bc}).GetDelegatedResourceV2(from, to)
 	if err != nil {

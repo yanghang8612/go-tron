@@ -228,11 +228,11 @@ func TestFreezeBalanceExecute_Delegated(t *testing.T) {
 	if got := recvObj.AcquiredDelegatedFrozenBandwidth(); got != 3_000_000 {
 		t.Fatalf("acquired delegated frozen bandwidth: want 3000000, got %d", got)
 	}
-	legacy := rawdb.ReadDrAccountIndexLegacy(ctx.DB, owner.Bytes())
+	legacy := ctx.State.ReadDrAccountIndexLegacy(owner.Bytes())
 	if legacy == nil || len(legacy.ToAccounts) != 1 || string(legacy.ToAccounts[0]) != string(receiver.Bytes()) {
 		t.Fatalf("legacy owner index wrong: %+v", legacy)
 	}
-	if directional := rawdb.ReadDrAccountIndexEntry(ctx.DB, rawdb.DrAccIdxV1From, owner.Bytes(), receiver.Bytes()); directional != nil {
+	if directional := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV1From, owner.Bytes(), receiver.Bytes()); directional != nil {
 		t.Fatalf("pre-optimization must not write directional index, got %+v", directional)
 	}
 }
@@ -275,10 +275,10 @@ func TestFreezeBalanceExecute_DelegatedOptimizationWritesDirectionalIndex(t *tes
 	if _, err := (&FreezeBalanceActuator{}).Execute(ctx); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if legacy := rawdb.ReadDrAccountIndexLegacy(ctx.DB, owner.Bytes()); legacy != nil {
+	if legacy := ctx.State.ReadDrAccountIndexLegacy(owner.Bytes()); legacy != nil {
 		t.Fatalf("post-optimization legacy index should be absent, got %+v", legacy)
 	}
-	directional := rawdb.ReadDrAccountIndexEntry(ctx.DB, rawdb.DrAccIdxV1From, owner.Bytes(), receiver.Bytes())
+	directional := ctx.State.ReadDrAccountIndexEntry(rawdb.DrAccIdxV1From, owner.Bytes(), receiver.Bytes())
 	if directional == nil || string(directional.Account) != string(receiver.Bytes()) || directional.Timestamp != ctx.PrevBlockTime {
 		t.Fatalf("directional owner index wrong: %+v", directional)
 	}

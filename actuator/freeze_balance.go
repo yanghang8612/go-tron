@@ -122,7 +122,7 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 			ctx.State.FreezeV1TronPower(ownerAddr, fc.FrozenBalance, expireTimeMs)
 		}
 	} else {
-		dr := rawdb.ReadDelegatedResourceLegacy(ctx.DB, ownerAddr, receiverAddr)
+		dr := ctx.State.ReadDelegatedResourceLegacy(ownerAddr, receiverAddr)
 		if dr == nil {
 			dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
 		}
@@ -136,20 +136,20 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 			dr.FrozenBalanceForEnergy += fc.FrozenBalance
 			dr.ExpireTimeForEnergy = expireTimeMs
 		}
-		if err := rawdb.WriteDelegatedResource(ctx.DB, ownerAddr, receiverAddr, dr); err != nil {
+		if err := ctx.State.WriteDelegatedResourceLegacy(ownerAddr, receiverAddr, dr); err != nil {
 			return nil, err
 		}
 		if ctx.DynProps.AllowDelegateOptimization() {
-			if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, ownerAddr[:]); err != nil {
+			if err := ctx.State.ConvertDrAccountIndexLegacy(ownerAddr[:]); err != nil {
 				return nil, err
 			}
-			if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, receiverAddr[:]); err != nil {
+			if err := ctx.State.ConvertDrAccountIndexLegacy(receiverAddr[:]); err != nil {
 				return nil, err
 			}
-			if err := rawdb.WriteDrAccountIndexDelegate(ctx.DB, false, ownerAddr[:], receiverAddr[:], ctx.PrevBlockTime); err != nil {
+			if err := ctx.State.WriteDrAccountIndexDelegate(false, ownerAddr[:], receiverAddr[:], ctx.PrevBlockTime); err != nil {
 				return nil, err
 			}
-		} else if err := rawdb.WriteDrAccountIndexLegacyDelegate(ctx.DB, ownerAddr[:], receiverAddr[:]); err != nil {
+		} else if err := ctx.State.WriteDrAccountIndexLegacyDelegate(ownerAddr[:], receiverAddr[:]); err != nil {
 			return nil, err
 		}
 	}

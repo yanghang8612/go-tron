@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -85,7 +84,7 @@ func (a *UnfreezeBalanceActuator) Validate(ctx *Context) error {
 		if !ctx.DynProps.AllowTvmConstantinople() && !ctx.State.AccountExists(receiverAddr) {
 			return errors.New("receiver account does not exist")
 		}
-		dr := rawdb.ReadDelegatedResourceLegacy(ctx.DB, ownerAddr, receiverAddr)
+		dr := ctx.State.ReadDelegatedResourceLegacy(ownerAddr, receiverAddr)
 		if dr == nil {
 			return errors.New("delegated Resource does not exist")
 		}
@@ -139,7 +138,7 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 		}
 		ctx.State.AddBalance(ownerAddr, removed)
 	} else {
-		dr := rawdb.ReadDelegatedResourceLegacy(ctx.DB, ownerAddr, receiverAddr)
+		dr := ctx.State.ReadDelegatedResourceLegacy(ownerAddr, receiverAddr)
 		if dr == nil {
 			return nil, errors.New("delegated Resource does not exist")
 		}
@@ -156,23 +155,23 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 			ctx.State.UnfreezeV1DelegatedEnergy(ownerAddr, receiverAddr, removed)
 		}
 		if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
-			if err := rawdb.DeleteDelegatedResourceLegacy(ctx.DB, ownerAddr, receiverAddr); err != nil {
+			if err := ctx.State.DeleteDelegatedResourceLegacy(ownerAddr, receiverAddr); err != nil {
 				return nil, err
 			}
 			if ctx.DynProps.AllowDelegateOptimization() {
-				if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, ownerAddr[:]); err != nil {
+				if err := ctx.State.ConvertDrAccountIndexLegacy(ownerAddr[:]); err != nil {
 					return nil, err
 				}
-				if err := rawdb.ConvertDrAccountIndexLegacy(ctx.DB, receiverAddr[:]); err != nil {
+				if err := ctx.State.ConvertDrAccountIndexLegacy(receiverAddr[:]); err != nil {
 					return nil, err
 				}
-				if err := rawdb.WriteDrAccountIndexUnDelegate(ctx.DB, false, ownerAddr[:], receiverAddr[:]); err != nil {
+				if err := ctx.State.WriteDrAccountIndexUnDelegate(false, ownerAddr[:], receiverAddr[:]); err != nil {
 					return nil, err
 				}
-			} else if err := rawdb.WriteDrAccountIndexLegacyUnDelegate(ctx.DB, ownerAddr[:], receiverAddr[:]); err != nil {
+			} else if err := ctx.State.WriteDrAccountIndexLegacyUnDelegate(ownerAddr[:], receiverAddr[:]); err != nil {
 				return nil, err
 			}
-		} else if err := rawdb.WriteDelegatedResource(ctx.DB, ownerAddr, receiverAddr, dr); err != nil {
+		} else if err := ctx.State.WriteDelegatedResourceLegacy(ownerAddr, receiverAddr, dr); err != nil {
 			return nil, err
 		}
 		ctx.State.AddBalance(ownerAddr, removed)

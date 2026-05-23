@@ -5,7 +5,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -52,11 +51,8 @@ func (a *UnDelegateResourceActuator) Validate(ctx *Context) error {
 	if c.Balance <= 0 {
 		return errors.New("undelegate balance must be positive")
 	}
-	if ctx.DB == nil {
-		return errors.New("database not available")
-	}
-	unlockResource := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, false)
-	lockResource := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, true)
+	unlockResource := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false)
+	lockResource := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true)
 	if unlockResource == nil && lockResource == nil {
 		return errors.New("no delegation record found")
 	}
@@ -123,10 +119,10 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	// Update delegation record
-	if err := rawdb.UnlockExpiredDelegatedResource(ctx.DB, ctx.DB, ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
+	if err := ctx.State.UnlockExpiredDelegatedResource(ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
 		return nil, err
 	}
-	dr := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, false)
+	dr := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false)
 	if dr == nil {
 		return nil, errors.New("unlocked delegation record not found")
 	}
@@ -137,20 +133,20 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	}
 
 	if dr.FrozenBalanceForBandwidth <= 0 && dr.FrozenBalanceForEnergy <= 0 {
-		if err := rawdb.DeleteDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, false); err != nil {
+		if err := ctx.State.DeleteDelegatedResourceV2(ownerAddr, receiverAddr, false); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := rawdb.WriteDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, false, dr); err != nil {
+		if err := ctx.State.WriteDelegatedResourceV2(ownerAddr, receiverAddr, false, dr); err != nil {
 			return nil, err
 		}
 	}
 
-	if rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, false) == nil &&
-		rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, true) == nil {
-		receivers := rawdb.ReadDelegationIndex(ctx.DB, ownerAddr)
+	if ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, false) == nil &&
+		ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true) == nil {
+		receivers := ctx.State.ReadDelegationIndex(ownerAddr)
 		receivers = removeAddress(receivers, receiverAddr)
-		if err := rawdb.WriteDelegationIndex(ctx.DB, ownerAddr, receivers); err != nil {
+		if err := ctx.State.WriteDelegationIndex(ownerAddr, receivers); err != nil {
 			return nil, err
 		}
 	}

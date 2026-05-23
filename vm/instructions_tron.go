@@ -285,30 +285,26 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	case 0:
 		if delegated {
 			in.tvm.StateDB.FreezeV1DelegatedBandwidth(caller, receiver, amount)
-			if in.tvm.DB != nil {
-				dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
-				if dr == nil {
-					dr = &rawdb.DelegatedResource{From: caller, To: receiver}
-				}
-				dr.FrozenBalanceForBandwidth += amount
-				dr.ExpireTimeForBandwidth = expireMs
-				_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+			dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(caller, receiver)
+			if dr == nil {
+				dr = &rawdb.DelegatedResource{From: caller, To: receiver}
 			}
+			dr.FrozenBalanceForBandwidth += amount
+			dr.ExpireTimeForBandwidth = expireMs
+			_ = in.tvm.StateDB.WriteDelegatedResourceLegacy(caller, receiver, dr)
 		} else {
 			in.tvm.StateDB.FreezeV1Bandwidth(caller, amount, expireMs)
 		}
 	case 1:
 		if delegated {
 			in.tvm.StateDB.FreezeV1DelegatedEnergy(caller, receiver, amount)
-			if in.tvm.DB != nil {
-				dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
-				if dr == nil {
-					dr = &rawdb.DelegatedResource{From: caller, To: receiver}
-				}
-				dr.FrozenBalanceForEnergy += amount
-				dr.ExpireTimeForEnergy = expireMs
-				_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+			dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(caller, receiver)
+			if dr == nil {
+				dr = &rawdb.DelegatedResource{From: caller, To: receiver}
 			}
+			dr.FrozenBalanceForEnergy += amount
+			dr.ExpireTimeForEnergy = expireMs
+			_ = in.tvm.StateDB.WriteDelegatedResourceLegacy(caller, receiver, dr)
 		} else {
 			in.tvm.StateDB.FreezeV1Energy(caller, amount, expireMs)
 		}
@@ -339,11 +335,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	var unfrozen int64
 	delegated := receiver != caller
 	if delegated {
-		if in.tvm.DB == nil {
-			stack.push(uint256.NewInt(0))
-			return nil, nil
-		}
-		dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+		dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(caller, receiver)
 		if dr == nil {
 			stack.push(uint256.NewInt(0))
 			return nil, nil
@@ -372,9 +364,9 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 			return nil, nil
 		}
 		if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
-			_ = rawdb.DeleteDelegatedResourceLegacy(in.tvm.DB, caller, receiver)
+			_ = in.tvm.StateDB.DeleteDelegatedResourceLegacy(caller, receiver)
 		} else {
-			_ = rawdb.WriteDelegatedResource(in.tvm.DB, caller, receiver, dr)
+			_ = in.tvm.StateDB.WriteDelegatedResourceLegacy(caller, receiver, dr)
 		}
 	} else {
 		switch resourceType {
@@ -414,8 +406,8 @@ func opFreezeExpireTime(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	resourceType := int64(resourceWord.Uint64())
 
 	var expireMs int64
-	if addr != contract.Address && in.tvm.DB != nil {
-		if dr := rawdb.ReadDelegatedResourceLegacy(in.tvm.DB, contract.Address, addr); dr != nil {
+	if addr != contract.Address {
+		if dr := in.tvm.StateDB.ReadDelegatedResourceLegacy(contract.Address, addr); dr != nil {
 			switch resourceType {
 			case 0:
 				expireMs = dr.ExpireTimeForBandwidth

@@ -106,19 +106,17 @@ func (a *DelegateResourceActuator) Validate(ctx *Context) error {
 		if lockPeriod < 0 || lockPeriod > maxLock {
 			return fmt.Errorf("the lock period of delegate resource cannot be less than 0 and cannot exceed %d!", maxLock)
 		}
-		if ctx.DB != nil {
-			if dr := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, true); dr != nil {
-				var existingExpire int64
-				switch c.Resource {
-				case corepb.ResourceCode_BANDWIDTH:
-					existingExpire = dr.ExpireTimeForBandwidth
-				case corepb.ResourceCode_ENERGY:
-					existingExpire = dr.ExpireTimeForEnergy
-				}
-				remain := existingExpire - ctx.PrevBlockTime
-				if lockPeriod*params.BlockProducedInterval < remain {
-					return fmt.Errorf("the lock period for %s this time cannot be less than the remaining time[%dms] of the last lock period for %s!", c.Resource, remain, c.Resource)
-				}
+		if dr := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, true); dr != nil {
+			var existingExpire int64
+			switch c.Resource {
+			case corepb.ResourceCode_BANDWIDTH:
+				existingExpire = dr.ExpireTimeForBandwidth
+			case corepb.ResourceCode_ENERGY:
+				existingExpire = dr.ExpireTimeForEnergy
+			}
+			remain := existingExpire - ctx.PrevBlockTime
+			if lockPeriod*params.BlockProducedInterval < remain {
+				return fmt.Errorf("the lock period for %s this time cannot be less than the remaining time[%dms] of the last lock period for %s!", c.Resource, remain, c.Resource)
 			}
 		}
 	}
@@ -152,48 +150,44 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// Track incoming delegation on receiver
 	ctx.State.AddAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
 
-	// Update delegation record in rawdb
-	if ctx.DB != nil {
-		if err := rawdb.UnlockExpiredDelegatedResource(ctx.DB, ctx.DB, ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
-			return nil, err
-		}
+	if err := ctx.State.UnlockExpiredDelegatedResource(ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {
+		return nil, err
+	}
 
-		locked := c.Lock
-		dr := rawdb.ReadDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, locked)
-		if dr == nil {
-			dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
+	locked := c.Lock
+	dr := ctx.State.ReadDelegatedResourceV2(ownerAddr, receiverAddr, locked)
+	if dr == nil {
+		dr = &rawdb.DelegatedResource{From: ownerAddr, To: receiverAddr}
+	}
+	// java-tron `DelegateResourceActuator.execute` line 297:
+	// expireTime = now + getLockPeriod(...) * BLOCK_PRODUCED_INTERVAL.
+	// `c.LockPeriod` is denominated in *blocks*; multiplying by
+	// `BlockProducedInterval` (ms) yields the duration the receiver's
+	// stake is locked for. Before the chain reaches the
+	// SupportMaxDelegateLockPeriod fork state, contract.LockPeriod is
+	// ignored and forced to the default (86400 blocks).
+	lockPeriodBlocks := getLockPeriod(ctx.DynProps.SupportMaxDelegateLockPeriod(), c.LockPeriod)
+	expireTime := ctx.PrevBlockTime + lockPeriodBlocks*params.BlockProducedInterval
+	if c.Resource == corepb.ResourceCode_BANDWIDTH {
+		dr.FrozenBalanceForBandwidth += c.Balance
+		if locked {
+			dr.ExpireTimeForBandwidth = expireTime
 		}
-		// java-tron `DelegateResourceActuator.execute` line 297:
-		// expireTime = now + getLockPeriod(...) * BLOCK_PRODUCED_INTERVAL.
-		// `c.LockPeriod` is denominated in *blocks*; multiplying by
-		// `BlockProducedInterval` (ms) yields the duration the receiver's
-		// stake is locked for. Before the chain reaches the
-		// SupportMaxDelegateLockPeriod fork state, contract.LockPeriod is
-		// ignored and forced to the default (86400 blocks).
-		lockPeriodBlocks := getLockPeriod(ctx.DynProps.SupportMaxDelegateLockPeriod(), c.LockPeriod)
-		expireTime := ctx.PrevBlockTime + lockPeriodBlocks*params.BlockProducedInterval
-		if c.Resource == corepb.ResourceCode_BANDWIDTH {
-			dr.FrozenBalanceForBandwidth += c.Balance
-			if locked {
-				dr.ExpireTimeForBandwidth = expireTime
-			}
-		} else {
-			dr.FrozenBalanceForEnergy += c.Balance
-			if locked {
-				dr.ExpireTimeForEnergy = expireTime
-			}
+	} else {
+		dr.FrozenBalanceForEnergy += c.Balance
+		if locked {
+			dr.ExpireTimeForEnergy = expireTime
 		}
-		if err := rawdb.WriteDelegatedResourceV2(ctx.DB, ownerAddr, receiverAddr, locked, dr); err != nil {
-			return nil, err
-		}
+	}
+	if err := ctx.State.WriteDelegatedResourceV2(ownerAddr, receiverAddr, locked, dr); err != nil {
+		return nil, err
+	}
 
-		// Update delegation index
-		receivers := rawdb.ReadDelegationIndex(ctx.DB, ownerAddr)
-		if !containsAddress(receivers, receiverAddr) {
-			receivers = append(receivers, receiverAddr)
-			if err := rawdb.WriteDelegationIndex(ctx.DB, ownerAddr, receivers); err != nil {
-				return nil, err
-			}
+	receivers := ctx.State.ReadDelegationIndex(ownerAddr)
+	if !containsAddress(receivers, receiverAddr) {
+		receivers = append(receivers, receiverAddr)
+		if err := ctx.State.WriteDelegationIndex(ownerAddr, receivers); err != nil {
+			return nil, err
 		}
 	}
 

@@ -3,7 +3,6 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
@@ -161,7 +160,6 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	dp.SetUnfreezeDelayDays(14)
 	dp.Set("total_net_limit", 43_200_000_000)
 	dp.SetTotalNetWeight(1000)
-	db := ethrawdb.NewMemoryDatabase()
 
 	owner := makeTestAddr(0x41)
 	receiver := makeTestAddr(0x42)
@@ -171,11 +169,13 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	// Owner has delegated 100 TRX worth of bandwidth to receiver.
 	statedb.AddDelegatedFrozenV2(owner, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
 	statedb.AddAcquiredDelegatedFrozenV2(receiver, corepb.ResourceCode_BANDWIDTH, 100*trxPrecisionTest)
-	rawdb.WriteDelegatedResourceV2(db, owner, receiver, false, &rawdb.DelegatedResource{
+	if err := statedb.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
 		From:                      owner,
 		To:                        receiver,
 		FrozenBalanceForBandwidth: 100 * trxPrecisionTest,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Receiver has used 600 bandwidth.
 	statedb.SetNetUsage(receiver, 600)
@@ -201,7 +201,6 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	ctx := &Context{
 		State:         statedb,
 		DynProps:      dp,
-		DB:            db,
 		Tx:            tx,
 		BlockTime:     5_000, // same time — no decay
 		PrevBlockTime: 5_000,
@@ -239,7 +238,7 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	}
 
 	// Delegation record updated.
-	dr := rawdb.ReadDelegatedResource(db, owner, receiver)
+	dr := statedb.ReadDelegatedResource(owner, receiver)
 	if dr == nil || dr.FrozenBalanceForBandwidth != 60*trxPrecisionTest {
 		t.Fatalf("delegation record frozen: got %+v", dr)
 	}

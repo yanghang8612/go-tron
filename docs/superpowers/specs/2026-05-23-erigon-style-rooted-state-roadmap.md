@@ -350,6 +350,12 @@ Implementation start:
   account-vote snapshots, and voter begin/end cycle cursors are read/written
   through `StateDB` in block reward, maintenance, withdraw actuator, TVM vote
   reward opcodes, and brokerage RPC queries.
+- Delegation lifecycle records now have a native `StateDB` typed store in the
+  system-owned `SystemDelegation` account-KV domain. Legacy and V2 delegated
+  resource buckets, owner-to-receiver indexes, and V1/V2 delegated-resource
+  account indexes are read/written through `StateDB` in freeze/unfreeze,
+  delegate/undelegate, TVM resource opcodes, staking precompiles, and
+  delegation RPC queries.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

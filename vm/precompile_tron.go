@@ -7,7 +7,6 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -874,12 +873,12 @@ func freezeV2ResourceFromInt(v int64) (corepb.ResourceCode, bool) {
 }
 
 func delegatedPairV2(tvm *TVM, from, to tcommon.Address, resType corepb.ResourceCode) int64 {
-	if tvm.DB == nil {
+	if tvm == nil || tvm.StateDB == nil {
 		return 0
 	}
 	var total int64
 	for _, locked := range []bool{false, true} {
-		dr := rawdb.ReadDelegatedResourceV2(tvm.DB, from, to, locked)
+		dr := tvm.StateDB.ReadDelegatedResourceV2(from, to, locked)
 		if dr == nil {
 			continue
 		}
