@@ -87,3 +87,69 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 		t.Fatalf("seqs = %v", seqs)
 	}
 }
+
+func TestUnwindStateDomainChangesRestoresLatestIndex(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x01}
+	createdKey := []byte("created")
+	updatedKey := []byte("updated")
+	deletedKey := []byte("deleted")
+
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemReward, createdKey, []byte("new"))
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemReward, updatedKey, []byte("new"))
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemReward, deletedKey, []byte("old"))
+	_ = DeleteStateKVLatest(db, owner, 0, kvdomains.SystemReward, deletedKey)
+
+	changes := []*StateDomainChange{
+		{
+			BlockNum:   10,
+			TxNum:      10,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        createdKey,
+			NextExists: true,
+			Next:       []byte("new"),
+		},
+		{
+			BlockNum:   10,
+			TxNum:      10,
+			Seq:        2,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        updatedKey,
+			PrevExists: true,
+			Prev:       []byte("old"),
+			NextExists: true,
+			Next:       []byte("new"),
+		},
+		{
+			BlockNum:   10,
+			TxNum:      10,
+			Seq:        3,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        deletedKey,
+			PrevExists: true,
+			Prev:       []byte("old"),
+		},
+	}
+	for _, change := range changes {
+		if err := WriteStateDomainChange(db, change); err != nil {
+			t.Fatalf("write change: %v", err)
+		}
+	}
+
+	if err := UnwindStateDomainChanges(db, 10); err != nil {
+		t.Fatalf("unwind: %v", err)
+	}
+	if _, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemReward, createdKey); err != nil || ok {
+		t.Fatalf("created key after unwind = ok:%v err:%v", ok, err)
+	}
+	if got, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemReward, updatedKey); err != nil || !ok || !bytes.Equal(got, []byte("old")) {
+		t.Fatalf("updated key after unwind = %q ok:%v err:%v", got, ok, err)
+	}
+	if got, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemReward, deletedKey); err != nil || !ok || !bytes.Equal(got, []byte("old")) {
+		t.Fatalf("deleted key after unwind = %q ok:%v err:%v", got, ok, err)
+	}
+}

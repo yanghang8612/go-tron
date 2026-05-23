@@ -125,6 +125,33 @@ func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 	return deleteStateKVPrefixByScan(db, stateChangeSetBlockPrefix(blockNum))
 }
 
+// UnwindStateDomainChanges restores the physical latest-state index to the
+// state before blockNum for every generic-domain row captured in that block.
+// It intentionally leaves the change-set rows themselves intact; callers decide
+// whether they are pruning history or merely checking an unwind candidate.
+func UnwindStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
+	var changes []*StateDomainChange
+	if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		changes = append(changes, change)
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	for i := len(changes) - 1; i >= 0; i-- {
+		change := changes[i]
+		if change.PrevExists {
+			if err := WriteStateKVLatest(db, change.Owner, change.Generation, change.Domain, change.Key, change.Prev); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := DeleteStateKVLatest(db, change.Owner, change.Generation, change.Domain, change.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cloneStateDomainChange(in *StateDomainChange) *StateDomainChange {
 	if in == nil {
 		return nil

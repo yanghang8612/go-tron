@@ -480,6 +480,10 @@ Implementation start:
   order and per-account domain keys are committed in sorted composite-key order.
   The rows are written through `blockbuffer`, so failed blocks and discarded fork
   branches drop their change sets with the rest of the block layer.
+- `rawdb.UnwindStateDomainChanges` can apply one block's change-set rows
+  backwards to the physical latest-state index. It restores previous values or
+  deletes rows that were created by the block, while leaving the change-set rows
+  available for verification/pruning policy.
 
 Estimated effort: 8-12 days.
 
