@@ -77,7 +77,6 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	buildBuf := blockbuffer.New(bc.buffer)
 	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
 	statedb.SetAccountKVIndexStore(buildBuf)
-	rootedBuildDB := state.NewRootedStore(statedb, buildBuf)
 
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction
@@ -96,7 +95,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		// Producer pulls from txpool whose Add gate already validates the
 		// envelope; re-validating here would re-recover signatures for every
 		// pending tx on every slot. Trust the pool, run only actuator.Validate.
-		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, rootedBuildDB, bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
+		result, err := ApplyTransactionWithResourceSlotAndEnergyFork(statedb, dynProps, tx, prevBlockTime, prevBlockHeadSlot, timestamp, blockNum, buildBuf, bc.ActiveWitnesses(), bc.config.EnergyLimitForkBlockNum(), true, false)
 		if err != nil {
 			h := tx.Hash()
 			log.Debug("Skipping tx in build", "tx", fmt.Sprintf("%x", h[:8]), "err", err)
@@ -127,13 +126,13 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// Pay block reward to witness (brokerage-aware once change_delegation is on)
 	// and drain the transaction-fee pool share. Writes go through buildBuf
 	// (throwaway) so they don't reach disk here.
-	payBlockReward(rootedBuildDB, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-	payStandbyWitness(rootedBuildDB, statedb, dynProps)
-	payTransactionFeeReward(rootedBuildDB, statedb, dynProps, witnessAddr)
+	payBlockReward(buildBuf, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
+	payStandbyWitness(buildBuf, statedb, dynProps)
+	payTransactionFeeReward(buildBuf, statedb, dynProps, witnessAddr)
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(rootedBuildDB, statedb, dynProps, bc.ActiveWitnesses(), timestamp, forks.NewForkControllerFromState(statedb)); err != nil {
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), timestamp, forks.NewForkControllerFromState(statedb)); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{
@@ -143,7 +142,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		}
 		allWitnesses := bc.gatherWitnessVotes(statedb)
 		dpos.TryRemoveThePowerOfTheGr(adapter, allWitnesses)
-		applyRewardVI(rootedBuildDB, statedb, dynProps)
+		applyRewardVI(buildBuf, statedb, dynProps)
 		hasPendingVotes := applyPendingVotes(statedb)
 		if hasPendingVotes {
 			allWitnesses = bc.gatherWitnessVotes(statedb)
@@ -154,7 +153,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		}
 		// Writes go through buildBuf (throwaway); applyBlock's maintenance
 		// path is the canonical writer.
-		applyRewardCycleSnapshot(rootedBuildDB, statedb, dynProps)
+		applyRewardCycleSnapshot(buildBuf, statedb, dynProps)
 		nextMaint := dpos.CalcNextMaintenanceTime(timestamp, dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 		dynProps.SetNextMaintenanceTime(nextMaint)
 	}

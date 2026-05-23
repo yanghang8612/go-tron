@@ -374,6 +374,11 @@ Implementation start:
   contract account's `ContractABI` domain. ClearABI execution writes the ABI
   clear marker through the contract account state instead of the legacy flat
   AbiStore.
+- Block execution and block building no longer wrap their runtime DB in
+  `RootedStore`. Transactions, maintenance, reward snapshots, fork votes,
+  shielded state, and proposal side-effects write through typed `StateDB`
+  stores; the runtime DB is reserved for non-rooted chain/runtime data such as
+  TAPOS and genesis witness metadata.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

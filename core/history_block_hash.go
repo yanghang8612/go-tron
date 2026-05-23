@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -30,14 +29,12 @@ func mustDecodeHex(s string) []byte {
 	return b
 }
 
-func deployHistoryBlockHash(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties) {
+func deployHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicProperties) {
 	if statedb == nil || dynProps == nil {
 		return
 	}
 	if len(statedb.GetCode(historyStorageAddress)) > 0 ||
-		statedb.GetContract(historyStorageAddress) != nil ||
-		(db != nil && (len(rawdb.ReadCode(db, historyStorageAddress)) > 0 ||
-			len(rawdb.ReadContract(db, historyStorageAddress)) > 0)) {
+		statedb.GetContract(historyStorageAddress) != nil {
 		return
 	}
 

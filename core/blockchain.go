@@ -642,7 +642,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// on success it is promoted via CommitBlock.
 	bc.buffer.BeginBlock(block.Hash())
 	statedb.SetAccountKVIndexStore(bc.buffer)
-	rootedDB := state.NewRootedStore(statedb, bc.buffer)
 	defer func() {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
@@ -699,12 +698,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	prevIsMaintenance := dynProps.StateFlag() == 1
 
 	// Process block (execute transactions, pay reward — does not commit).
-	// The buffer is passed so per-block actuator-side rawdb-direct writes
-	// (WriteAssetIssue, WriteProposal, WriteContractState
-	// from VMActuator dynamic-energy, WriteNullifier, etc.) and the
-	// `payBlockReward → AddCycleReward` write (gated on change_delegation)
-	// land in the active buffer layer. `switchFork` rewinds them on orphan
-	// discard. Slice 3 of the fork-rewind fix.
+	// Mutable state writes go through StateDB typed stores; bc.buffer is still
+	// passed for non-rooted chain/runtime data visible during execution (TAPOS,
+	// genesis witness metadata, and similar compatibility reads).
 	blockRoot := block.AccountStateRoot()
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
@@ -722,9 +718,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}()
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, rootedDB, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, rootedDB, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -798,10 +794,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// gates never activate — observed empirically on a Nile soak at
 			// h=860k where 4 proposals had 27 SR approvals each but `state =
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
-			// Per-proposal records live in the rooted SystemProposal KV on
-			// statedb; legacy-shaped governance side-effects pass through
-			// rootedDB so they are included in the full state root too.
-			if err := ProcessProposals(rootedDB, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), forks.NewForkControllerFromState(statedb)); err != nil {
+			// Per-proposal records and governance side-effects live in rooted
+			// StateDB domains.
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), forks.NewForkControllerFromState(statedb)); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{
@@ -819,7 +814,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// java-tron accumulates reward VI before VotesStore old/new deltas
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
-			applyRewardVI(rootedDB, statedb, dynProps)
+			applyRewardVI(bc.buffer, statedb, dynProps)
 			hasPendingVotes := applyPendingVotes(statedb)
 			statedb.FlushWitnesses(bc.buffer)
 			maintNewWitnesses = bc.ActiveWitnesses()
@@ -842,7 +837,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 				maintNewWitnesses = newActive
 			}
 
-			applyRewardCycleSnapshot(rootedDB, statedb, dynProps)
+			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
 			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 			dynProps.SetNextMaintenanceTime(nextMaint)
 			bc.invalidateStandbyPayCache()

@@ -347,10 +347,9 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // the tx loop. Production callers (BlockChain.applyBlock when the engine
 // is wired) pass true; test fixtures that bypass envelope checks pass false.
 //
-// The db parameter accepts either an `ethdb.KeyValueStore` (BuildBlock path)
-// or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
-// fix routes block-reward + actuator rawdb-direct writes through the buffer
-// so switchFork can rewind them on orphan-branch discard.
+// The db parameter carries non-rooted chain/runtime data visible during
+// execution, such as TAPOS references and genesis witness metadata. Mutable
+// state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
 	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil)
 	return txInfos, err
@@ -377,10 +376,6 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
-	if db != nil && !state.IsRootedStore(db) {
-		db = state.NewRootedStore(statedb, db)
-	}
-
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {

@@ -116,7 +116,7 @@ func TestWriteHistoryBlockHashCapturesRingPreValue(t *testing.T) {
 	// Install the BlockHashHistory contract account so GetState's disk
 	// fallback actually fires. Without this, getStateObject returns nil
 	// and the pre-warm becomes a no-op for the wrong reason.
-	deployHistoryBlockHash(diskdb, statedb, dp)
+	deployHistoryBlockHash(statedb, dp)
 	root, err := statedb.Commit()
 	if err != nil {
 		t.Fatalf("seed Commit: %v", err)
