@@ -554,6 +554,18 @@ Acceptance:
 - Snapshot merge never exposes overlapping or partially indexed file sets.
 - Corrupt/missing accessor fails closed and can rebuild.
 
+Implementation start:
+
+- `core/state/snapshots` defines immutable segment families (`latest`,
+  `accessor`, `history`, `inverted`) and a versioned manifest with a visible
+  txNum range.
+- Manifest validation rejects unsupported versions, inverted ranges, duplicate
+  paths, unsafe relative paths, unknown domains/kinds, and overlapping segments
+  within a `(domain, kind)` family.
+- `PublishManifest` writes a manifest through a temp file + fsync + rename, and
+  `LoadManifest` validates/sorts the visible set on restart. The aggregator
+  worker and snapshot-backed read path are still pending.
+
 Estimated effort: 12-18 days for a first production-quality version.
 
 ## Phase 8: Commitment Domain and Root Builder
