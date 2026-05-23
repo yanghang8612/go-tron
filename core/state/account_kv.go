@@ -300,10 +300,19 @@ func (s *StateDB) commitAccountKV(obj *stateObject) (tcommon.Hash, error) {
 
 func (s *StateDB) commitAccountKVLatest(obj *stateObject) error {
 	index := s.accountKVIndex()
-	for mapKey, entry := range obj.kvDirty {
+	keys := make([]string, 0, len(obj.kvDirty))
+	for mapKey := range obj.kvDirty {
+		keys = append(keys, mapKey)
+	}
+	sort.Strings(keys)
+	for _, mapKey := range keys {
+		entry := obj.kvDirty[mapKey]
 		domain, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
 		if !ok {
 			return fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
+		}
+		if err := s.writeDomainChange(index, obj, domain, logicalKey, entry); err != nil {
+			return err
 		}
 		if entry.deleted {
 			if err := rawdb.DeleteStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey); err != nil {
@@ -316,6 +325,36 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject) error {
 		}
 	}
 	return nil
+}
+
+func (s *StateDB) writeDomainChange(index accountKVIndexStore, obj *stateObject, domain kvdomains.KVDomain, logicalKey []byte, entry kvEntry) error {
+	if !s.changeSet.enabled {
+		return nil
+	}
+	prev, prevExists, err := rawdb.ReadStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey)
+	if err != nil {
+		return err
+	}
+	nextExists := !entry.deleted
+	var next []byte
+	if nextExists {
+		next = append([]byte(nil), entry.val...)
+	}
+	s.changeSet.seq++
+	return rawdb.WriteStateDomainChange(s.changeSet.writer, &rawdb.StateDomainChange{
+		BlockNum:   s.changeSet.blockNum,
+		BlockHash:  s.changeSet.blockHash,
+		TxNum:      s.changeSet.txNum,
+		Seq:        s.changeSet.seq,
+		Owner:      obj.address,
+		Generation: obj.accountKVGeneration,
+		Domain:     domain,
+		Key:        append([]byte(nil), logicalKey...),
+		PrevExists: prevExists,
+		Prev:       prev,
+		NextExists: nextExists,
+		Next:       next,
+	})
 }
 
 func (s *StateDB) writeAccountKVGeneration(obj *stateObject) error {

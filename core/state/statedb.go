@@ -1,8 +1,10 @@
 package state
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -76,6 +78,17 @@ type StateDB struct {
 		ethdb.KeyValueWriter
 		ethdb.Iteratee
 	}
+
+	changeSet domainChangeSetCapture
+}
+
+type domainChangeSetCapture struct {
+	writer    ethdb.KeyValueWriter
+	blockNum  uint64
+	blockHash tcommon.Hash
+	txNum     uint64
+	seq       uint64
+	enabled   bool
 }
 
 // New creates a StateDB from the given state root.
@@ -105,6 +118,25 @@ func (s *StateDB) SetAccountKVIndexStore(store interface {
 	ethdb.Iteratee
 }) {
 	s.accountKVIndexStore = store
+}
+
+// SetDomainChangeSetWriter enables Phase-5 block-level domain change capture
+// for the next Commit. The first implementation assigns one state txNum per
+// block; the rows are written to the supplied block buffer so failed applies
+// and orphan branches discard them with the rest of the block layer.
+func (s *StateDB) SetDomainChangeSetWriter(writer ethdb.KeyValueWriter, blockNum uint64, blockHash tcommon.Hash) {
+	if writer == nil {
+		s.changeSet = domainChangeSetCapture{}
+		return
+	}
+	txNum := rawdb.BlockStateTxNum(blockNum)
+	s.changeSet = domainChangeSetCapture{
+		writer:    writer,
+		blockNum:  blockNum,
+		blockHash: blockHash,
+		txNum:     txNum,
+		enabled:   true,
+	}
 }
 
 // GetAccount returns the account at addr, or nil if not found.
@@ -1755,7 +1787,23 @@ func (s *StateDB) Copy() (*StateDB, error) {
 
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
-	for addr, obj := range s.stateObjects {
+	if s.changeSet.enabled {
+		if err := rawdb.WriteStateTxRange(s.changeSet.writer, s.changeSet.blockNum, s.changeSet.blockHash, s.changeSet.txNum, s.changeSet.txNum); err != nil {
+			return tcommon.Hash{}, err
+		}
+		defer func() {
+			s.changeSet = domainChangeSetCapture{}
+		}()
+	}
+	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
+	for addr := range s.stateObjects {
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+	})
+	for _, addr := range addrs {
+		obj := s.stateObjects[addr]
 		if !obj.dirty {
 			continue
 		}

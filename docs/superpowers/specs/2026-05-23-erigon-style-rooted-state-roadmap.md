@@ -464,6 +464,23 @@ Acceptance:
 - Reorg across maintenance boundary uses change sets, not only buffer discard.
 - Replay restart and change-set unwind produce the same root at sampled heights.
 
+Implementation start:
+
+- `core/rawdb` now has a block-level state transaction range table:
+  `state-tx-range-v1- || blockNum -> StateTxRange`. The first implementation
+  assigns one state txNum per block (`begin == end == blockNum`).
+- `core/rawdb` also has `state-changeset-v1- || blockNum || seq` rows carrying
+  `owner`, `generation`, `domain`, `logical_key`, previous value/existence, and
+  next value/existence for generic latest-domain writes.
+- `StateDB.Commit` can be given a block-buffered change-set writer. During
+  block application, commit captures pre-values immediately before writing the
+  physical latest-state index, so the rows cover typed account-KV domains,
+  rooted dynamic properties, and contract storage staged during commit.
+- Change-set sequencing is deterministic: accounts are committed in address
+  order and per-account domain keys are committed in sorted composite-key order.
+  The rows are written through `blockbuffer`, so failed blocks and discarded fork
+  branches drop their change sets with the rest of the block layer.
+
 Estimated effort: 8-12 days.
 
 ## Phase 6: Historical Reads

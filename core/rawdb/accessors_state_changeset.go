@@ -1,0 +1,137 @@
+package rawdb
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+)
+
+// BlockStateTxNum returns the first phase's monotonic state transaction number.
+// This phase assigns one txNum per block; later phases can expand the
+// corresponding StateTxRange without changing the block-level call sites.
+func BlockStateTxNum(blockNum uint64) uint64 {
+	return blockNum
+}
+
+type StateTxRange struct {
+	BlockNum   uint64
+	BlockHash  common.Hash
+	BeginTxNum uint64
+	EndTxNum   uint64
+}
+
+type StateDomainChange struct {
+	BlockNum   uint64
+	BlockHash  common.Hash
+	TxNum      uint64
+	Seq        uint64
+	Owner      common.Address
+	Generation uint64
+	Domain     kvdomains.KVDomain
+	Key        []byte
+	PrevExists bool
+	Prev       []byte
+	NextExists bool
+	Next       []byte
+}
+
+func WriteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64, blockHash common.Hash, beginTxNum, endTxNum uint64) error {
+	row := &StateTxRange{
+		BlockNum:   blockNum,
+		BlockHash:  blockHash,
+		BeginTxNum: beginTxNum,
+		EndTxNum:   endTxNum,
+	}
+	data, err := rlp.EncodeToBytes(row)
+	if err != nil {
+		return err
+	}
+	return db.Put(stateTxRangeKey(blockNum), data)
+}
+
+func ReadStateTxRange(db ethdb.KeyValueReader, blockNum uint64) (*StateTxRange, bool, error) {
+	data, err := db.Get(stateTxRangeKey(blockNum))
+	if err != nil {
+		return nil, false, nil
+	}
+	var row StateTxRange
+	if err := rlp.DecodeBytes(data, &row); err != nil {
+		return nil, false, err
+	}
+	return &row, true, nil
+}
+
+func DeleteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64) error {
+	return db.Delete(stateTxRangeKey(blockNum))
+}
+
+func WriteStateDomainChange(db ethdb.KeyValueWriter, change *StateDomainChange) error {
+	if change == nil {
+		return errors.New("rawdb: nil StateDomainChange")
+	}
+	if !kvdomains.IsRegistered(change.Domain) {
+		return fmt.Errorf("rawdb: unregistered change domain %#04x", uint16(change.Domain))
+	}
+	c := cloneStateDomainChange(change)
+	data, err := rlp.EncodeToBytes(c)
+	if err != nil {
+		return err
+	}
+	return db.Put(stateChangeSetKey(c.BlockNum, c.Seq), data)
+}
+
+func ReadStateDomainChange(db ethdb.KeyValueReader, blockNum, seq uint64) (*StateDomainChange, bool, error) {
+	data, err := db.Get(stateChangeSetKey(blockNum, seq))
+	if err != nil {
+		return nil, false, nil
+	}
+	var row StateDomainChange
+	if err := rlp.DecodeBytes(data, &row); err != nil {
+		return nil, false, err
+	}
+	return cloneStateDomainChange(&row), true, nil
+}
+
+func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*StateDomainChange) (bool, error)) error {
+	prefix := stateChangeSetBlockPrefix(blockNum)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	for it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, prefix) {
+			continue
+		}
+		var row StateDomainChange
+		if err := rlp.DecodeBytes(it.Value(), &row); err != nil {
+			return err
+		}
+		cont, err := fn(cloneStateDomainChange(&row))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
+func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
+	return deleteStateKVPrefixByScan(db, stateChangeSetBlockPrefix(blockNum))
+}
+
+func cloneStateDomainChange(in *StateDomainChange) *StateDomainChange {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Key = append([]byte(nil), in.Key...)
+	out.Prev = append([]byte(nil), in.Prev...)
+	out.Next = append([]byte(nil), in.Next...)
+	return &out
+}

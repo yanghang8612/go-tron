@@ -191,6 +191,24 @@ var (
 	// Value: contract bytecode
 	stateCodePrefix = []byte("state-code-v1-")
 
+	// stateTxRangePrefix records the first Erigon-style state transaction
+	// numbering layer. The first implementation assigns one txNum per block:
+	// begin_tx_num == end_tx_num == block number. Later phases can split a
+	// block into per-transaction txNums without changing consumers that read
+	// the range row first.
+	//
+	// Key:   state-tx-range-v1- || blockNum u64
+	// Value: RLP(StateTxRange)
+	stateTxRangePrefix = []byte("state-tx-range-v1-")
+
+	// stateChangeSetPrefix records pre-values for latest-domain writes. Rows
+	// are block-scoped and sequence-ordered in commit order so unwind code can
+	// replay them backwards for a block.
+	//
+	// Key:   state-changeset-v1- || blockNum u64 || seq u64
+	// Value: RLP(StateDomainChange)
+	stateChangeSetPrefix = []byte("state-changeset-v1-")
+
 	// stateKVGenerationPrefix stores the latest physical generation observed
 	// for an account. It lets a later recreate pick generation+1 without
 	// scanning or deleting old latest rows from prior incarnations.
@@ -581,6 +599,28 @@ func stateCodeKey(hash common.Hash) []byte {
 	k := make([]byte, 0, len(stateCodePrefix)+common.HashLength)
 	k = append(k, stateCodePrefix...)
 	return append(k, hash.Bytes()...)
+}
+
+func stateTxRangeKey(blockNum uint64) []byte {
+	k := make([]byte, len(stateTxRangePrefix)+8)
+	copy(k, stateTxRangePrefix)
+	binary.BigEndian.PutUint64(k[len(stateTxRangePrefix):], blockNum)
+	return k
+}
+
+func stateChangeSetKey(blockNum, seq uint64) []byte {
+	k := make([]byte, len(stateChangeSetPrefix)+16)
+	copy(k, stateChangeSetPrefix)
+	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
+	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix)+8:], seq)
+	return k
+}
+
+func stateChangeSetBlockPrefix(blockNum uint64) []byte {
+	k := make([]byte, len(stateChangeSetPrefix)+8)
+	copy(k, stateChangeSetPrefix)
+	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
+	return k
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the

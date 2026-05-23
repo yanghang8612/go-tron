@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -120,6 +121,27 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	}
 	if meta.NumAddrs < 2 {
 		t.Errorf("NumAddrs = %d, want >=2 (sender+receiver, witness too if active)", meta.NumAddrs)
+	}
+
+	txRange, ok, err := rawdb.ReadStateTxRange(bdb, 1)
+	if err != nil || !ok {
+		t.Fatalf("StateTxRange missing: ok=%v err=%v", ok, err)
+	}
+	if txRange.BeginTxNum != rawdb.BlockStateTxNum(1) || txRange.EndTxNum != rawdb.BlockStateTxNum(1) {
+		t.Fatalf("StateTxRange = %+v", txRange)
+	}
+	var sawDynProp bool
+	if err := rawdb.IterateStateDomainChanges(bc.buffer, 1, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change.Owner == tcommon.SystemAccountAddress && change.Domain == kvdomains.SystemDynamicProperty {
+			sawDynProp = true
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate state domain changes: %v", err)
+	}
+	if !sawDynProp {
+		t.Fatal("state domain change set did not capture rooted dynamic properties")
 	}
 }
 
