@@ -570,6 +570,12 @@ Implementation start:
 - `PublishManifest` writes a manifest through a temp file + fsync + rename, and
   `LoadManifest` validates/sorts the visible set on restart. The aggregator
   worker and snapshot-backed read path are still pending.
+- Latest-domain segment files now have a deterministic first format and manager:
+  `BuildLatestDomainSegmentFromDB` freezes one logical domain out of the
+  physical latest index, `OpenLatestSegment` validates size/checksum/metadata,
+  and `OpenManager` serves `GetLatest` / `IterateLatestPrefix` from the visible
+  manifest. The execution read path is not redirected to snapshots by default
+  yet; hot latest/state roots remain authoritative.
 
 Estimated effort: 12-18 days for a first production-quality version.
 
@@ -611,9 +617,11 @@ Implementation start:
   `state-kv-latest-v2-`). It deliberately excludes code blobs because the final
   commitment must reference selected account `CodeHash` values, not every
   retained content-addressed blob.
-- This root is not authoritative yet and is not written during block execution;
-  it is a transition tool for comparing domain-latest determinism before the
-  full commitment domain replaces nested-MPT root building.
+- The checkpoint writer is available behind the explicit
+  `--state.commitment.checkpoints` debug gate. When enabled, block application
+  computes the latest-domain debug root over the blockbuffer view and writes the
+  checkpoint into the same rewindable layer as the block's domain changes. This
+  root is still not authoritative and does not replace `bsr-<blockHash>`.
 
 Estimated effort: 10-15 days.
 
@@ -650,8 +658,14 @@ Implementation start:
 - `core/state/pruning` defines explicit `archive`, `full`, and `snap` modes.
 - The first policy layer validates history/reorg windows and exposes retention
   predicates for domain history, reorg data, and visible snapshot ranges.
-- The policy is not wired into node config or deletion workers yet; it is the
-  shared contract for Phase 9 pruners and integrity checks.
+- A conservative domain-history worker now prunes block-numbered state tx
+  ranges, domain change sets, their inverse indexes, and debug commitment
+  checkpoints outside the configured retention windows. It never deletes latest
+  rows, code blobs, or immutable chain data.
+- A domain integrity checker validates retained latest/change-set/checkpoint
+  rows and visible snapshot manifests/files/checksums; code-hash reachability
+  can be checked explicitly for retained roots/history. The worker is not yet
+  registered as a node lifecycle.
 
 Estimated effort: 7-12 days after snapshots/history exist.
 

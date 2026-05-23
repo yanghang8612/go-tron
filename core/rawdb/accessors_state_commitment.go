@@ -45,6 +45,25 @@ func DeleteStateCommitmentCheckpoint(db ethdb.KeyValueWriter, blockNum uint64) e
 	return db.Delete(stateCommitmentCheckpointKey(blockNum))
 }
 
+func IterateStateCommitmentCheckpoints(db ethdb.Iteratee, fn func(*StateCommitmentCheckpoint) (bool, error)) error {
+	it := db.NewIterator(stateCommitmentPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		var checkpoint StateCommitmentCheckpoint
+		if err := rlp.DecodeBytes(it.Value(), &checkpoint); err != nil {
+			return err
+		}
+		cont, err := fn(&checkpoint)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
 // ComputeLatestDomainRoot computes a deterministic debug commitment over the
 // physical latest generic-domain tables. It intentionally excludes
 // content-addressed code blobs because the final commitment must include only

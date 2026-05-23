@@ -36,6 +36,12 @@ type ChainConfig struct {
 	// slots per round, generous enough to cover the reorg horizon and a
 	// day-or-two wallet-tx grace window. Ignored in archive mode.
 	HistoryPruneWindow uint64
+	// StateCommitmentCheckpoints enables the transitional Erigon-style domain
+	// commitment checkpoint writer. It computes a deterministic debug root over
+	// physical latest-domain rows after each block. The computation is
+	// intentionally opt-in until the incremental commitment domain replaces
+	// nested-MPT root building.
+	StateCommitmentCheckpoints bool
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890

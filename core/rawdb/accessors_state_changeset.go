@@ -71,6 +71,25 @@ func DeleteStateTxRange(db ethdb.KeyValueWriter, blockNum uint64) error {
 	return db.Delete(stateTxRangeKey(blockNum))
 }
 
+func IterateStateTxRanges(db ethdb.Iteratee, fn func(*StateTxRange) (bool, error)) error {
+	it := db.NewIterator(stateTxRangePrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		var row StateTxRange
+		if err := rlp.DecodeBytes(it.Value(), &row); err != nil {
+			return err
+		}
+		cont, err := fn(&row)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
 func WriteStateDomainChange(db ethdb.KeyValueWriter, change *StateDomainChange) error {
 	if change == nil {
 		return errors.New("rawdb: nil StateDomainChange")
@@ -126,6 +145,12 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
+	if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+		key := stateChangeInverseKey(change.Owner, change.Generation, change.Domain, change.Key, change.BlockNum)
+		return true, db.Delete(key)
+	}); err != nil {
+		return err
+	}
 	return deleteStateKVPrefixByScan(db, stateChangeSetBlockPrefix(blockNum))
 }
 

@@ -910,6 +910,20 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("commit state: %w", err)
 	}
 	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
+	if bc.config.StateCommitmentCheckpoints {
+		domainRoot, err := rawdb.ComputeLatestDomainRoot(bc.buffer)
+		if err != nil {
+			return fmt.Errorf("compute domain commitment checkpoint: %w", err)
+		}
+		if err := rawdb.WriteStateCommitmentCheckpoint(bc.buffer, &rawdb.StateCommitmentCheckpoint{
+			BlockNum:  block.Number(),
+			BlockHash: block.Hash(),
+			Root:      domainRoot,
+			Scheme:    rawdb.LatestDomainCommitmentScheme,
+		}); err != nil {
+			return fmt.Errorf("write domain commitment checkpoint: %w", err)
+		}
+	}
 
 	// The root is persisted out-of-band — we do NOT mutate
 	// `block.AccountStateRoot()` because the block proto's content must

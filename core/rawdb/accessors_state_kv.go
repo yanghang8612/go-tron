@@ -18,6 +18,14 @@ type stateKVLatestStore interface {
 	ethdb.Iteratee
 }
 
+type StateKVLatestRow struct {
+	Owner      common.Address
+	Generation uint64
+	Domain     kvdomains.KVDomain
+	Key        []byte
+	Value      []byte
+}
+
 func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) error {
 	wrapped := make([]byte, 1+len(value))
 	wrapped[0] = stateKVLatestPresencePrefix
@@ -30,13 +38,11 @@ func ReadStateKVLatest(db ethdb.KeyValueReader, owner common.Address, generation
 	if err != nil {
 		return nil, false, nil
 	}
-	if len(raw) == 0 {
-		return nil, false, fmt.Errorf("state kv latest: empty encoded value for %s domain %#04x", owner.Hex(), uint16(domain))
+	value, err := DecodeStateKVLatestValue(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w for %s domain %#04x", err, owner.Hex(), uint16(domain))
 	}
-	if raw[0] != stateKVLatestPresencePrefix {
-		return nil, false, fmt.Errorf("state kv latest: bad presence prefix %#x for %s domain %#04x", raw[0], owner.Hex(), uint16(domain))
-	}
-	return append([]byte(nil), raw[1:]...), true, nil
+	return value, true, nil
 }
 
 func DeleteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
@@ -53,14 +59,11 @@ func IterateStateKVLatest(db ethdb.Iteratee, owner common.Address, generation ui
 		if len(key) < headerLen || !bytes.HasPrefix(key, prefix) {
 			continue
 		}
-		raw := it.Value()
-		if len(raw) == 0 {
-			return fmt.Errorf("state kv latest: empty encoded value for key %x", key)
+		value, err := DecodeStateKVLatestValue(it.Value())
+		if err != nil {
+			return fmt.Errorf("%w for key %x", err, key)
 		}
-		if raw[0] != stateKVLatestPresencePrefix {
-			return fmt.Errorf("state kv latest: bad presence prefix %#x for key %x", raw[0], key)
-		}
-		cont, err := fn(append([]byte(nil), key[headerLen:]...), append([]byte(nil), raw[1:]...))
+		cont, err := fn(append([]byte(nil), key[headerLen:]...), value)
 		if err != nil {
 			return err
 		}
@@ -69,6 +72,76 @@ func IterateStateKVLatest(db ethdb.Iteratee, owner common.Address, generation ui
 		}
 	}
 	return it.Error()
+}
+
+func IterateStateKVLatestRows(db ethdb.Iteratee, fn func(StateKVLatestRow) (bool, error)) error {
+	it := db.NewIterator(stateKVLatestPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		owner, generation, domain, logicalKey, ok := DecodeStateKVLatestKey(it.Key())
+		if !ok {
+			continue
+		}
+		value, err := DecodeStateKVLatestValue(it.Value())
+		if err != nil {
+			return fmt.Errorf("%w for key %x", err, it.Key())
+		}
+		cont, err := fn(StateKVLatestRow{
+			Owner:      owner,
+			Generation: generation,
+			Domain:     domain,
+			Key:        logicalKey,
+			Value:      value,
+		})
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
+func IterateStateKVLatestDomainRows(db ethdb.Iteratee, domain kvdomains.KVDomain, fn func(StateKVLatestRow) (bool, error)) error {
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("state kv latest: unregistered domain %#04x", uint16(domain))
+	}
+	return IterateStateKVLatestRows(db, func(row StateKVLatestRow) (bool, error) {
+		if row.Domain != domain {
+			return true, nil
+		}
+		return fn(row)
+	})
+}
+
+func DecodeStateKVLatestKey(key []byte) (common.Address, uint64, kvdomains.KVDomain, []byte, bool) {
+	headerLen := len(stateKVLatestPrefix) + common.AccountIDLength + 8 + 2
+	if len(key) < headerLen || !bytes.HasPrefix(key, stateKVLatestPrefix) {
+		return common.Address{}, 0, 0, nil, false
+	}
+	off := len(stateKVLatestPrefix)
+	var id common.AccountID
+	copy(id[:], key[off:off+common.AccountIDLength])
+	off += common.AccountIDLength
+	generation := binary.BigEndian.Uint64(key[off : off+8])
+	off += 8
+	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(key[off : off+2]))
+	if !kvdomains.IsRegistered(domain) {
+		return common.Address{}, 0, 0, nil, false
+	}
+	off += 2
+	return id.Address(common.AddressPrefixMainnet), generation, domain, append([]byte(nil), key[off:]...), true
+}
+
+func DecodeStateKVLatestValue(raw []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("state kv latest: empty encoded value")
+	}
+	if raw[0] != stateKVLatestPresencePrefix {
+		return nil, fmt.Errorf("state kv latest: bad presence prefix %#x", raw[0])
+	}
+	return append([]byte(nil), raw[1:]...), nil
 }
 
 func DeleteStateKVLatestPrefix(db stateKVLatestStore, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) error {

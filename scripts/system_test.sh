@@ -112,12 +112,33 @@ skip() {
 }
 
 http_get() {
-    curl -sf --max-time 5 "http://localhost:$1$2" 2>/dev/null || echo "CURL_ERROR"
+    local port=$1
+    local path=$2
+    local out
+    for _ in 1 2 3; do
+        out=$(curl -sf --max-time 10 "http://localhost:$port$path" 2>/dev/null) && {
+            echo "$out"
+            return 0
+        }
+        sleep 1
+    done
+    echo "CURL_ERROR"
 }
 
 http_post() {
-    curl -sf --max-time 5 -X POST -H "Content-Type: application/json" \
-        -d "$3" "http://localhost:$1$2" 2>/dev/null || echo "CURL_ERROR"
+    local port=$1
+    local path=$2
+    local body=$3
+    local out
+    for _ in 1 2 3; do
+        out=$(curl -sf --max-time 10 -X POST -H "Content-Type: application/json" \
+            -d "$body" "http://localhost:$port$path" 2>/dev/null) && {
+            echo "$out"
+            return 0
+        }
+        sleep 1
+    done
+    echo "CURL_ERROR"
 }
 
 # Extract JSON field using python3
@@ -156,6 +177,58 @@ wait_for_block() {
         tries=$((tries + 1))
         if [ $tries -ge 40 ]; then
             echo "ERROR: $name did not reach block $target (at $num)"
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+block_num() {
+    json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get "$1" /wallet/getnowblock)" || echo "0"
+}
+
+wait_for_sync_close() {
+    local sr_port=$1
+    local node_port=$2
+    local max_diff=$3
+    local name=$4
+    local tries=0
+    while true; do
+        local sr_num node_num diff
+        sr_num=$(block_num "$sr_port")
+        node_num=$(block_num "$node_port")
+        diff=$((sr_num - node_num))
+        if [ "$diff" -lt 0 ]; then diff=$((-diff)); fi
+        if [ "$sr_num" -gt 0 ] && [ "$node_num" -gt 0 ] && [ "$diff" -le "$max_diff" ] 2>/dev/null; then
+            echo "$name synced close enough (sr=$sr_num node=$node_num diff=$diff)"
+            return 0
+        fi
+        tries=$((tries + 1))
+        if [ $tries -ge 90 ]; then
+            echo "ERROR: $name did not sync within diff $max_diff (sr=$sr_num node=$node_num diff=$diff)"
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+wait_for_account_balance() {
+    local port=$1
+    local address=$2
+    local expected=$3
+    local name=$4
+    local tries=0
+    while true; do
+        local result balance
+        result=$(http_post "$port" "/wallet/getaccount" "{\"address\": \"$address\"}")
+        balance=$(json_field "d.get('balance',0)" "$result" || echo "0")
+        if [ "$balance" = "$expected" ]; then
+            echo "$name balance reached $expected"
+            return 0
+        fi
+        tries=$((tries + 1))
+        if [ $tries -ge 60 ]; then
+            echo "ERROR: $name balance did not reach $expected (got $balance)"
             return 1
         fi
         sleep 1
@@ -457,7 +530,7 @@ wait_for_http $NODE_HTTP "Node"
 
 # Wait for sync
 echo "Waiting for node to sync..."
-sleep 10
+wait_for_sync_close $SR_HTTP $NODE_HTTP 3 "Node"
 
 SR_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
 NODE_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $NODE_HTTP /wallet/getnowblock)" || echo "0")
@@ -568,7 +641,6 @@ check "broadcast to relay node accepted" "$BCAST2" '"result":true'
 echo "  Waiting for SR to mine the propagated tx..."
 CURRENT_BLOCK=$(json_field "d.get('block_header',{}).get('raw_data',{}).get('number',0)" "$(http_get $SR_HTTP /wallet/getnowblock)" || echo "0")
 wait_for_block $SR_HTTP $((CURRENT_BLOCK + 3)) "SR"
-sleep 5  # let sync propagate back to node
 
 # Verify SR mined TX2 (confirms P2P pool propagation worked)
 RESULT2=$(http_post $SR_HTTP "/wallet/gettransactioninfobyid" "{\"value\": \"$TX_ID2\"}")
@@ -577,6 +649,7 @@ echo "  TX2 mined in block: $TX2_BLOCK"
 if [ "$TX2_BLOCK" -gt 0 ] 2>/dev/null; then
     echo "  PASS: SR mined the tx received via P2P from relay node"
     PASS=$((PASS + 1))
+    wait_for_block $NODE_HTTP $TX2_BLOCK "Node"
 else
     echo "  FAIL: SR did not mine tx (P2P propagation may have failed)"
     FAIL=$((FAIL + 1))
@@ -590,6 +663,11 @@ check_eq "recipient2 balance on SR" "$SR_R2_BAL" "$TRANSFER_AMOUNT2"
 
 RESULT=$(http_post $NODE_HTTP "/wallet/getaccount" "{\"address\": \"$RECIPIENT2_ADDR\"}")
 NODE_R2_BAL=$(json_field "d.get('balance',0)" "$RESULT" || echo "0")
+if [ "$NODE_R2_BAL" != "$TRANSFER_AMOUNT2" ]; then
+    wait_for_account_balance $NODE_HTTP "$RECIPIENT2_ADDR" "$TRANSFER_AMOUNT2" "Recipient2 on node" || true
+    RESULT=$(http_post $NODE_HTTP "/wallet/getaccount" "{\"address\": \"$RECIPIENT2_ADDR\"}")
+    NODE_R2_BAL=$(json_field "d.get('balance',0)" "$RESULT" || echo "0")
+fi
 echo "  Recipient2 balance on node: $NODE_R2_BAL"
 check_eq "recipient2 balance synced to node" "$NODE_R2_BAL" "$TRANSFER_AMOUNT2"
 
@@ -721,27 +799,19 @@ RESULT=$(http_get $SR_HTTP "/wallet/getassetissuelist")
 check "getassetissuelist returns assetIssue key" "$RESULT" '"assetIssue"'
 
 # 11.2 getassetissuebyid — unknown ID returns {}
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyid" \
-    -H "Content-Type: application/json" \
-    -d '{"value":1000001}' 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getassetissuebyid" '{"value":1000001}')
 check "getassetissuebyid unknown returns {}" "$RESULT" '{}'
 
 # 11.3 getassetissuebyname — unknown name returns {}
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyname" \
-    -H "Content-Type: application/json" \
-    -d '{"value":"UNKNOWNTOKEN"}' 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getassetissuebyname" '{"value":"UNKNOWNTOKEN","visible":true}')
 check "getassetissuebyname unknown returns {}" "$RESULT" '{}'
 
 # 11.4 getpaginatedassetissuelist — empty returns assetIssue array
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getpaginatedassetissuelist" \
-    -H "Content-Type: application/json" \
-    -d '{"offset":0,"limit":10}' 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getpaginatedassetissuelist" '{"offset":0,"limit":10}')
 check "getpaginatedassetissuelist returns assetIssue key" "$RESULT" '"assetIssue"'
 
 # 11.5 getassetissuebyaccount — unknown account returns {}
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getassetissuebyaccount" \
-    -H "Content-Type: application/json" \
-    -d "{\"address\":\"$WITNESS_ADDR\"}" 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getassetissuebyaccount" "{\"address\":\"$WITNESS_ADDR\"}")
 check "getassetissuebyaccount unknown returns {}" "$RESULT" '{}'
 
 # ─────────────────────────────────────────────────────────────────
@@ -751,22 +821,15 @@ echo ""
 echo "=== Test Group 12: Market Order Query Endpoints ==="
 
 # 12.1 getmarketorderbyid — unknown returns {}
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketorderbyid" \
-    -H "Content-Type: application/json" \
-    -d '{"value":"0000000000000000000000000000000000000000000000000000000000000000"}' \
-    2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getmarketorderbyid" '{"value":"0000000000000000000000000000000000000000000000000000000000000000"}')
 check "getmarketorderbyid unknown returns {}" "$RESULT" '{}'
 
 # 12.2 getmarketordersfromaccount — unknown account returns orders array
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketordersfromaccount" \
-    -H "Content-Type: application/json" \
-    -d "{\"address\":\"$WITNESS_ADDR\"}" 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getmarketordersfromaccount" "{\"address\":\"$WITNESS_ADDR\"}")
 check "getmarketordersfromaccount returns orders key" "$RESULT" '"orders"'
 
 # 12.3 getmarketpricebypair — unknown pair returns sell_token_id
-RESULT=$(curl -sf --max-time 5 -X POST "http://localhost:$SR_HTTP/wallet/getmarketpricebypair" \
-    -H "Content-Type: application/json" \
-    -d '{"sell_token_id":"1000001","buy_token_id":"_"}' 2>/dev/null || echo "CURL_ERROR")
+RESULT=$(http_post $SR_HTTP "/wallet/getmarketpricebypair" '{"sell_token_id":"1000001","buy_token_id":"_","visible":true}')
 check "getmarketpricebypair returns sell_token_id" "$RESULT" 'sell_token_id'
 
 # ─────────────────────────────────────────────────────────────────

@@ -144,6 +144,10 @@ var (
 		Name:  "history.enabled",
 		Usage: "Turn on the State History Index capture path. Required to actually populate (and, in full mode, prune) the index; archive mode implies it.",
 	}
+	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
+		Name:  "state.commitment.checkpoints",
+		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
@@ -227,6 +231,7 @@ var app = &cli.App{
 		logModuleFlag,
 		gcmodeFlag,
 		historyEnabledFlag,
+		stateCommitmentCheckpointsFlag,
 		configFileFlag,
 		dbCacheFlag,
 		dbHandlesFlag,
@@ -374,6 +379,7 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return err
 	}
+	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
 
 	// Create blockchain
 	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
