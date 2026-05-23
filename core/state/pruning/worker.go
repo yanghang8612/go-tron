@@ -14,8 +14,9 @@ type Store interface {
 }
 
 type Worker struct {
-	DB     Store
-	Policy Policy
+	DB        Store
+	Policy    Policy
+	MaxBlocks int
 }
 
 type Stats struct {
@@ -43,6 +44,9 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 	if err := rawdb.IterateStateTxRanges(w.DB, func(row *rawdb.StateTxRange) (bool, error) {
 		if !w.Policy.RetainHistory(row.BlockNum, headNum) {
 			txRangeBlocks = append(txRangeBlocks, row.BlockNum)
+			if w.MaxBlocks > 0 && len(txRangeBlocks) >= w.MaxBlocks {
+				return false, nil
+			}
 		}
 		return true, nil
 	}); err != nil {

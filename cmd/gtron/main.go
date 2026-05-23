@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
+	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -32,6 +33,8 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
+
+const domainStateReorgWindow uint64 = 128
 
 var (
 	dataDirFlag = &cli.StringFlag{
@@ -549,6 +552,20 @@ func gtron(ctx *cli.Context) error {
 		log.Info("History pruner enabled", "window", chainConfig.EffectiveHistoryPruneWindow())
 	} else if chainConfig.HistoryEnabled {
 		log.Info("History capture enabled", "mode", params.HistoryModeArchive, "pruning", false)
+	}
+	if chainConfig.EffectiveHistoryMode() == params.HistoryModeFull {
+		historyWindow := chainConfig.EffectiveHistoryPruneWindow()
+		reorgWindow := domainStateReorgWindow
+		if historyWindow < reorgWindow {
+			reorgWindow = historyWindow
+		}
+		domainPruner := statepruning.NewPruner(newDomainPrunerChainSource(bc), statepruning.PrunerConfig{
+			Policy: statepruning.FullPolicy(historyWindow, reorgWindow),
+		})
+		stack.RegisterLifecycle(domainPruner)
+		log.Info("Domain state pruner enabled", "historyWindow", historyWindow, "reorgWindow", reorgWindow)
+	} else {
+		log.Info("Domain state pruning disabled", "mode", params.HistoryModeArchive)
 	}
 
 	if ancientStore != nil && freezerCfg.Enabled {

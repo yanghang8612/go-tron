@@ -3,7 +3,9 @@ package pruning
 import (
 	"bytes"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -116,3 +118,53 @@ func TestCheckerValidatesSnapshotSegmentsAndCodeHashes(t *testing.T) {
 		t.Fatalf("code hash check: %v", err)
 	}
 }
+
+func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for _, blockNum := range []uint64{1, 2, 3} {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chain := &fakePruneChain{db: db, solidified: 5}
+	pruner := NewPruner(chain, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 1,
+	})
+	stats, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("prune pass: %v", err)
+	}
+	if stats.DeletedTxRanges != 1 {
+		t.Fatalf("deleted tx ranges = %d, want 1", stats.DeletedTxRanges)
+	}
+	if got := pruner.Stats(); got.Passes != 1 || got.LastSolidifiedBlock != 5 {
+		t.Fatalf("pruner stats = %+v", got)
+	}
+	remaining := 0
+	if err := rawdb.IterateStateTxRanges(db, func(row *rawdb.StateTxRange) (bool, error) {
+		remaining++
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 2 {
+		t.Fatalf("remaining tx ranges = %d, want 2", remaining)
+	}
+	if err := pruner.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := pruner.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+type fakePruneChain struct {
+	db         ethdb.KeyValueStore
+	solidified int64
+}
+
+func (f *fakePruneChain) DB() ethdb.KeyValueStore { return f.db }
+
+func (f *fakePruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/historyprune"
+	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 )
 
 // prunerChainSource adapts *core.BlockChain to the narrow
@@ -17,6 +18,10 @@ type prunerChainSource struct {
 }
 
 func newPrunerChainSource(chain *core.BlockChain) historyprune.ChainSource {
+	return &prunerChainSource{chain: chain}
+}
+
+func newDomainPrunerChainSource(chain *core.BlockChain) statepruning.ChainSource {
 	return &prunerChainSource{chain: chain}
 }
 
