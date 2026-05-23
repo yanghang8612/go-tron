@@ -75,6 +75,53 @@ func TestStateDBDomainChangeSetCapturesAccountKVAndStorage(t *testing.T) {
 	}
 }
 
+func TestStateDBGetAccountKVAsOfUsesDomainChanges(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(disk)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("reward/as-of")
+	v1 := []byte("v1")
+	v2 := []byte("v2")
+
+	if err := sdb.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, v1); err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetDomainChangeSetWriter(disk, 1, tcommon.Hash{0x01})
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit block 1: %v", err)
+	}
+
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, v2); err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetDomainChangeSetWriter(disk, 2, tcommon.Hash{0x02})
+	root, err = sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit block 2: %v", err)
+	}
+
+	head, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := head.GetAccountKVAsOf(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, 1, 2)
+	if err != nil || !ok || !bytes.Equal(got, v1) {
+		t.Fatalf("as-of block 1 = %q ok:%v err:%v, want %q", got, ok, err, v1)
+	}
+	got, ok, err = head.GetAccountKVAsOf(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, 2, 2)
+	if err != nil || !ok || !bytes.Equal(got, v2) {
+		t.Fatalf("as-of block 2 = %q ok:%v err:%v, want %q", got, ok, err, v2)
+	}
+}
+
 func collectStateDomainChanges(t *testing.T, db ethdb.Iteratee, blockNum uint64) []*rawdb.StateDomainChange {
 	t.Helper()
 	var changes []*rawdb.StateDomainChange

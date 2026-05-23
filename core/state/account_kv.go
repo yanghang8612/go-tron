@@ -102,6 +102,21 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	return append([]byte{}, raw[1:]...), true, nil // strip presence prefix
 }
 
+// GetAccountKVAsOf reconstructs owner's domain key at the end of targetBlock
+// using the Phase-5 domain change-set history. This first typed bridge resolves
+// history within the account's current KV generation; account-incarnation
+// history is handled by later commitment/history phases.
+func (s *StateDB) GetAccountKVAsOf(owner tcommon.Address, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	if !kvdomains.IsRegistered(domain) {
+		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	obj := s.getStateObject(owner)
+	if obj == nil || obj.deleted {
+		return nil, false, nil
+	}
+	return rawdb.ReadStateKVAsOf(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key, targetBlock, headBlock)
+}
+
 // GetAccountKVBatch opens owner's KV trie ONCE and resolves every key in one
 // domain, returning name->value for present keys (presence prefix stripped).
 // The dirty overlay is consulted first per key, matching GetAccountKV; a

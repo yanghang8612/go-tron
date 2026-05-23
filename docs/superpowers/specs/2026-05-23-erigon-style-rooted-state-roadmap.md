@@ -518,8 +518,11 @@ Implementation start:
 - `state-change-index-v1-` is the owner/generation/domain/key inverse index for
   domain change rows, so `ReadStateKVAsOf` can jump directly to blocks that
   touched the requested key.
-- Phase 6 still needs typed-store/RPC integration before it can replace the
-  older account/slot-specific State History Index readers.
+- `StateDB.GetAccountKVAsOf` exposes the same as-of lookup to typed stores for
+  the account's current KV generation.
+- Phase 6 still needs RPC integration and cross-generation account-incarnation
+  handling before it can replace the older account/slot-specific State History
+  Index readers.
 
 Estimated effort: 8-12 days.
 
