@@ -15,11 +15,16 @@ type Peer struct {
 	conn    net.Conn
 	id      string
 	inbound bool
-	handler Handler
-	writeCh chan msgFrame
-	quit    chan struct{}
-	closed  atomic.Bool
-	wg      sync.WaitGroup
+	// remoteNodeID is the hex-encoded libp2p node ID learned during handshake.
+	// It is used by Server to reject duplicate connections to the same node,
+	// including cases where the same endpoint is discovered under different
+	// address strings.
+	remoteNodeID string
+	handler      Handler
+	writeCh      chan msgFrame
+	quit         chan struct{}
+	closed       atomic.Bool
+	wg           sync.WaitGroup
 
 	// lastSeenNanos holds the UnixNano timestamp of the most recent valid
 	// inbound post-handshake frame (or the handshake completion time if no

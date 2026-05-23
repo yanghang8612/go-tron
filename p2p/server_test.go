@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"errors"
 	"net"
 	"sort"
@@ -135,6 +136,57 @@ func TestServerPerIPCapRejectsSecondInbound(t *testing.T) {
 	// srv must have exactly 1 peer accepted (second from same IP rejected).
 	if got := srv.PeerCount(); got != 1 {
 		t.Fatalf("expected 1 peer (per-IP cap), got %d", got)
+	}
+}
+
+func TestServerRejectsDuplicateRemoteNodeID(t *testing.T) {
+	h := &testHandler{}
+	srv := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   10,
+		NodeID:     bytes.Repeat([]byte{0xA1}, 64),
+	}, h)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	sharedNodeID := bytes.Repeat([]byte{0xD1}, 64)
+	d1 := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   5,
+		NodeID:     append([]byte(nil), sharedNodeID...),
+	}, &testHandler{})
+	if err := d1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer d1.Stop()
+
+	d2 := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   5,
+		NodeID:     append([]byte(nil), sharedNodeID...),
+	}, &testHandler{})
+	if err := d2.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Stop()
+
+	if err := d1.AddPeer(srv.ListenAddr()); err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && srv.PeerCount() != 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := srv.PeerCount(); got != 1 {
+		t.Fatalf("expected first peer accepted, got %d", got)
+	}
+
+	_ = d2.AddPeer(srv.ListenAddr())
+	time.Sleep(100 * time.Millisecond)
+	if got := srv.PeerCount(); got != 1 {
+		t.Fatalf("expected duplicate node ID to be rejected, got %d peers", got)
 	}
 }
 

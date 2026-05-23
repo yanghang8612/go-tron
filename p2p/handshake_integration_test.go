@@ -71,8 +71,14 @@ func TestPerformLibp2pHandshakeSuccess(t *testing.T) {
 
 	errA := make(chan error, 1)
 	errB := make(chan error, 1)
-	go func() { errA <- srvA.performLibp2pHandshake(a) }()
-	go func() { errB <- srvB.performLibp2pHandshake(b) }()
+	go func() {
+		_, err := srvA.performLibp2pHandshake(a)
+		errA <- err
+	}()
+	go func() {
+		_, err := srvB.performLibp2pHandshake(b)
+		errB <- err
+	}()
 
 	select {
 	case err := <-errA:
@@ -102,8 +108,14 @@ func TestPerformLibp2pHandshakeNetworkMismatch(t *testing.T) {
 
 	errA := make(chan error, 1)
 	errB := make(chan error, 1)
-	go func() { errA <- srvA.performLibp2pHandshake(a) }()
-	go func() { errB <- srvB.performLibp2pHandshake(b) }()
+	go func() {
+		_, err := srvA.performLibp2pHandshake(a)
+		errA <- err
+	}()
+	go func() {
+		_, err := srvB.performLibp2pHandshake(b)
+		errB <- err
+	}()
 
 	var aErr, bErr error
 	select {
@@ -132,8 +144,14 @@ func TestPerformLibp2pHandshakeVersionMismatch(t *testing.T) {
 
 	errA := make(chan error, 1)
 	errB := make(chan error, 1)
-	go func() { errA <- srvA.performLibp2pHandshake(a) }()
-	go func() { errB <- srvB.performLibp2pHandshake(b) }()
+	go func() {
+		_, err := srvA.performLibp2pHandshake(a)
+		errA <- err
+	}()
+	go func() {
+		_, err := srvB.performLibp2pHandshake(b)
+		errB <- err
+	}()
 
 	var aErr, bErr error
 	select {

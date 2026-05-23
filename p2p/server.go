@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -76,6 +77,7 @@ type Server struct {
 	handler     Handler
 	listener    net.Listener
 	peers       map[string]*Peer
+	peerNodeIDs map[string]string // remote libp2p node ID hex -> peer ID
 	mu          sync.RWMutex
 	quit        chan struct{}
 	stopOnce    sync.Once
@@ -115,6 +117,7 @@ func NewServer(config ServerConfig, handler Handler) *Server {
 		config:      config,
 		handler:     handler,
 		peers:       make(map[string]*Peer),
+		peerNodeIDs: make(map[string]string),
 		quit:        make(chan struct{}),
 		maintainCh:  make(chan struct{}, 1),
 		dialLimiter: limiter,
@@ -172,6 +175,7 @@ func (s *Server) Stop() error {
 		peers = append(peers, p)
 	}
 	s.peers = make(map[string]*Peer)
+	s.peerNodeIDs = make(map[string]string)
 	s.mu.Unlock()
 
 	for _, p := range peers {
@@ -236,7 +240,7 @@ func (s *Server) AddPeer(addr string) error {
 // performLibp2pHandshake runs the libp2p HANDSHAKE_HELLO exchange on a raw
 // connection. On success, the conn is ready for application-layer messages.
 // On failure, it sends a DISCONNECT and returns an error — caller must close.
-func (s *Server) performLibp2pHandshake(conn net.Conn) error {
+func (s *Server) performLibp2pHandshake(conn net.Conn) (*p2ppb.HelloMessage, error) {
 	// Deadline so a hung peer can't stall us forever.
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetDeadline(time.Time{}) //nolint:errcheck
@@ -251,16 +255,16 @@ func (s *Server) performLibp2pHandshake(conn net.Conn) error {
 	hello := BuildHelloMessage(localEP, s.config.NetworkID, 0)
 	helloPayload, err := EncodeHello(hello)
 	if err != nil {
-		return fmt.Errorf("encode hello: %w", err)
+		return nil, fmt.Errorf("encode hello: %w", err)
 	}
 	if err := WriteMsg(conn, MsgLibp2pHello, helloPayload); err != nil {
-		return fmt.Errorf("send hello: %w", err)
+		return nil, fmt.Errorf("send hello: %w", err)
 	}
 
 	// Read peer's response — must be either HANDSHAKE_HELLO or DISCONNECT.
 	code, payload, err := ReadMsg(conn)
 	if err != nil {
-		return fmt.Errorf("read hello: %w", err)
+		return nil, fmt.Errorf("read hello: %w", err)
 	}
 	if code == MsgLibp2pDisconnect {
 		dm, _ := ParseDisconnect(payload)
@@ -268,14 +272,14 @@ func (s *Server) performLibp2pHandshake(conn net.Conn) error {
 		if dm != nil {
 			reason = dm.Reason
 		}
-		return fmt.Errorf("peer sent disconnect: %v", reason)
+		return nil, fmt.Errorf("peer sent disconnect: %v", reason)
 	}
 	if code != MsgLibp2pHello {
-		return fmt.Errorf("expected HELLO, got code %#x", code)
+		return nil, fmt.Errorf("expected HELLO, got code %#x", code)
 	}
 	peerHello, err := ParseHello(payload)
 	if err != nil {
-		return fmt.Errorf("parse hello: %w", err)
+		return nil, fmt.Errorf("parse hello: %w", err)
 	}
 	reason := ValidateHello(peerHello, s.config.NetworkID, s.config.Version, time.Now())
 	if reason != p2ppb.DisconnectReason_PEER_QUITING { // 0 = accept
@@ -283,9 +287,9 @@ func (s *Server) performLibp2pHandshake(conn net.Conn) error {
 		dm := BuildDisconnect(reason)
 		body, _ := EncodeDisconnect(dm)
 		_ = WriteMsg(conn, MsgLibp2pDisconnect, body)
-		return fmt.Errorf("reject peer: %v", reason)
+		return nil, fmt.Errorf("reject peer: %v", reason)
 	}
-	return nil
+	return peerHello, nil
 }
 
 func (s *Server) acceptLoop() {
@@ -330,29 +334,48 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 	s.mu.Unlock()
 
 	// Libp2p handshake on the raw conn — before peer is registered.
-	if err := s.performLibp2pHandshake(conn); err != nil {
+	peerHello, err := s.performLibp2pHandshake(conn)
+	if err != nil {
 		return err
+	}
+	remoteNodeID := helloNodeIDKey(peerHello)
+	if remoteNodeID != "" && remoteNodeID == nodeIDKey(s.config.NodeID) {
+		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_DUPLICATE_PEER)
+		return errDuplicatePeer
 	}
 
 	// Re-check capacity/dedup/per-IP under lock (another peer may have joined meanwhile).
 	s.mu.Lock()
 	if len(s.peers) >= s.config.MaxPeers {
 		s.mu.Unlock()
+		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_TOO_MANY_PEERS)
 		return net.ErrClosed
 	}
 	if _, exists := s.peers[id]; exists {
 		s.mu.Unlock()
+		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_DUPLICATE_PEER)
+		return errDuplicatePeer
+	}
+	if existing, exists := s.peerNodeIDs[remoteNodeID]; remoteNodeID != "" && exists {
+		s.mu.Unlock()
+		_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_DUPLICATE_PEER)
+		log.Info("Peer rejected duplicate node ID", "addr", id, "existing", existing)
 		return errDuplicatePeer
 	}
 	if inbound {
 		remoteHost, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 		if s.countInboundFromIPLocked(remoteHost) >= s.config.MaxConnectionsWithSameIP {
 			s.mu.Unlock()
+			_ = writePostHandshakeDisconnect(conn, p2ppb.DisconnectReason_TOO_MANY_PEERS_WITH_SAME_IP)
 			return errTooManyFromSameIP
 		}
 	}
 	p := NewPeer(conn, id, inbound, s)
+	p.remoteNodeID = remoteNodeID
 	s.peers[id] = p
+	if remoteNodeID != "" {
+		s.peerNodeIDs[remoteNodeID] = id
+	}
 	s.mu.Unlock()
 
 	p.Start()
@@ -364,6 +387,9 @@ func (s *Server) addPeerConn(conn net.Conn, id string, inbound bool) error {
 // the maintain loop to reconnect to seeds if needed.
 func (s *Server) removePeer(id string) {
 	s.mu.Lock()
+	if p := s.peers[id]; p != nil && p.remoteNodeID != "" {
+		delete(s.peerNodeIDs, p.remoteNodeID)
+	}
 	delete(s.peers, id)
 	s.mu.Unlock()
 	// Non-blocking send: if a signal is already pending, skip.
@@ -371,6 +397,33 @@ func (s *Server) removePeer(id string) {
 	case s.maintainCh <- struct{}{}:
 	default:
 	}
+}
+
+func nodeIDKey(id []byte) string {
+	if len(id) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(id)
+}
+
+func helloNodeIDKey(hello *p2ppb.HelloMessage) string {
+	if hello == nil || hello.From == nil {
+		return ""
+	}
+	return nodeIDKey(hello.From.NodeId)
+}
+
+func writePostHandshakeDisconnect(conn net.Conn, reason p2ppb.DisconnectReason) error {
+	dm := BuildDisconnect(reason)
+	payload, err := EncodeDisconnect(dm)
+	if err != nil {
+		return err
+	}
+	body, err := WrapPostHandshake(MsgLibp2pDisconnect, payload)
+	if err != nil {
+		return err
+	}
+	return WriteFrameBody(conn, body)
 }
 
 // countInboundFromIPLocked counts active inbound peers whose remote host equals
