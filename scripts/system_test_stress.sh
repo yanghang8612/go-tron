@@ -582,6 +582,24 @@ with open(path, 'w') as f:
 print("  NoAbi009.java solidity-lag assertions relaxed for single-node harness")
 PY
 
+            python3 - "$STEST_SANDBOX/testcase/src/test/java/stest/tron/wallet/common/client/utils/PublicMethed.java" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = '    Assert.assertTrue(freezeBalanceV2(addressByte,delegateAmount,resourceCode,priKey,blockingStubFull));'
+new = '''    long uniqueFreezeAmount = delegateAmount
+        + 1_000_000L * (long) randomFreezeAmount.getAndIncrement();
+    Assert.assertTrue(freezeBalanceV2(addressByte, uniqueFreezeAmount, resourceCode, priKey,
+        blockingStubFull));'''
+if old not in src:
+    sys.exit("PublicMethed.java delegateResourceForReceiver freeze pattern not found")
+src = src.replace(old, new, 1)
+with open(path, 'w') as f:
+    f.write(src)
+print("  PublicMethed.java delegateResourceForReceiver freeze txids randomized")
+PY
+
             python3 - "$STEST_SANDBOX/testcase/src/test/java" <<'PY'
 from pathlib import Path
 import sys
@@ -610,6 +628,24 @@ def disable_method(src, method):
     if "enabled = true" not in ann:
         raise SystemExit(f"enabled=true pattern not found for {method}")
     return src[:start] + ann.replace("enabled = true", "enabled = false", 1) + src[idx:]
+
+def top_up_contract_executor(src, method):
+    marker = f"public void {method}("
+    idx = src.find(marker)
+    if idx < 0:
+        raise SystemExit(f"method pattern not found: {method}")
+    body = src.find("{", idx)
+    if body < 0:
+        raise SystemExit(f"method body not found: {method}")
+    insert_at = body + 1
+    topup = '''
+    Assert.assertTrue(PublicMethed.sendcoin(contractExcAddress, 1000000000L,
+        testNetAccountAddress, testNetAccountKey, blockingStubFull));
+    PublicMethed.waitProduceNextBlock(blockingStubFull);
+'''
+    if topup.strip() in src[body:body + 500]:
+        return src
+    return src[:insert_at] + topup + src[insert_at:]
 
 for rel in [
     "stest/tron/wallet/dailybuild/operationupdate/MutiSignAssetTest.java",
@@ -651,6 +687,16 @@ for rel, method in [
      "test04GetNormalAddressCodeHash"),
 ]:
     edit(rel, lambda s, method=method: disable_method(s, method))
+
+for method in [
+    "test06Incorrect2ndAnd32ndIncorrectSignatures",
+    "test07IncorrectAddress",
+    "test08IncorrectHash",
+]:
+    edit(
+        "stest/tron/wallet/dailybuild/tvmnewcommand/batchValidateSignContract/batchValidateSignContract011.java",
+        lambda s, method=method: top_up_contract_executor(s, method),
+    )
 
 print("  dailyBuild stale local-harness cases patched/disabled")
 PY

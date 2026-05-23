@@ -55,8 +55,11 @@ The default system-test checkout is:
 
 The harness expects:
 
-- JDK 17 for running java-tron on arm64:
+- A JDK matching the bundled `rocksdbjni` architecture in `FullNode.jar`. The
+  arm64 java-tron jar runs with JDK 17:
   `/Users/asuka/Library/Java/JavaVirtualMachines/corretto-17.0.18/Contents/Home`
+  The local x86_64 jar needs an x86_64 JDK, for example:
+  `/Users/asuka/Library/Java/JavaVirtualMachines/corretto-1.8.0_442/Contents/Home`
 - JDK 8 for Gradle 6.3 in system-test:
   `/Users/asuka/Library/Java/JavaVirtualMachines/azul-1.8.0_482/Contents/Home`
 - TRON solc fork:
@@ -175,6 +178,12 @@ These are local-harness patches, not gtron consensus behavior:
   itself, including duplicate FreezeBalanceV2 broadcasts in
   `ExtCodeHashTest005.test03GetInvalidAddressCodeHash` and
   `ExtCodeHashTest005.test04GetNormalAddressCodeHash`.
+- Randomize the temporary FreezeBalanceV2 amount used by
+  `PublicMethed.delegateResourceForReceiver` so parallel dailyBuild cases do
+  not produce identical freeze txids before delegating resources.
+- Top up `batchValidateSignContract011`'s execution account before its
+  high-cost negative-signature cases, avoiding a local account-depletion
+  cascade that otherwise fails inside java-tron system-test helpers.
 
 If a future run reports a TestNG failure while gtron remains fully synced and
 `gtron.log` has no `failed to insert`, inspect whether the failure reproduces
@@ -189,12 +198,13 @@ A useful passing run has all of the following:
 - `watchdog.log` shows gtron at the same height as java-tron through the run.
 - `gtron.log` has no `failed to insert`, `panic`, `fatal`, or `ERROR`.
 
-The last known green run was on 2026-05-18:
+The last known green run was on 2026-05-23:
 
 ```text
 tests=876 failures=0 errors=0 skipped=39
-BUILD SUCCESSFUL in 25m 23s
-watchdog tail: java=667 gtron=667 diff=0
+BUILD SUCCESSFUL in 25m 25s
+watchdog tail: java=497 gtron=497 diff=0
+receipt parity: compared_blocks=499 compared_tx_infos=2053 mismatched_tx_infos=0 head_lag_blocks=0
 ```
 
 Useful inspection commands:
