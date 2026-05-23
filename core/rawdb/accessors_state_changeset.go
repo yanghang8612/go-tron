@@ -152,6 +152,47 @@ func UnwindStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
 	return nil
 }
 
+// ReadStateKVAsOf reconstructs one generic latest-domain value at the end of
+// targetBlock by starting from the current latest row and rolling back captured
+// block change sets in (targetBlock, headBlock]. This first archive-domain
+// reader is intentionally simple and block-scanning; later phases add inverted
+// indexes so callers can jump directly to blocks that touched the requested key.
+func ReadStateKVAsOf(db stateKVLatestStore, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	value, exists, err := ReadStateKVLatest(db, owner, generation, domain, key)
+	if err != nil {
+		return nil, false, err
+	}
+	if targetBlock >= headBlock {
+		return value, exists, nil
+	}
+	for blockNum := headBlock; blockNum > targetBlock; blockNum-- {
+		var changes []*StateDomainChange
+		if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+			changes = append(changes, change)
+			return true, nil
+		}); err != nil {
+			return nil, false, err
+		}
+		for i := len(changes) - 1; i >= 0; i-- {
+			change := changes[i]
+			if change.Owner != owner ||
+				change.Generation != generation ||
+				change.Domain != domain ||
+				!bytes.Equal(change.Key, key) {
+				continue
+			}
+			if change.PrevExists {
+				value = append([]byte(nil), change.Prev...)
+				exists = true
+			} else {
+				value = nil
+				exists = false
+			}
+		}
+	}
+	return append([]byte(nil), value...), exists, nil
+}
+
 func cloneStateDomainChange(in *StateDomainChange) *StateDomainChange {
 	if in == nil {
 		return nil

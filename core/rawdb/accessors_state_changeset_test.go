@@ -153,3 +153,94 @@ func TestUnwindStateDomainChangesRestoresLatestIndex(t *testing.T) {
 		t.Fatalf("deleted key after unwind = %q ok:%v err:%v", got, ok, err)
 	}
 }
+
+func TestReadStateKVAsOfRollsBackChanges(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x01}
+	key := []byte("history/key")
+
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemReward, key, []byte("v7"))
+	changes := []*StateDomainChange{
+		{
+			BlockNum:   3,
+			TxNum:      3,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte("v2"),
+			NextExists: true,
+			Next:       []byte("v3"),
+		},
+		{
+			BlockNum:   5,
+			TxNum:      5,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte("v3"),
+			NextExists: true,
+			Next:       []byte("v5"),
+		},
+		{
+			BlockNum:   7,
+			TxNum:      7,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte("v5"),
+			NextExists: true,
+			Next:       []byte("v7"),
+		},
+	}
+	for _, change := range changes {
+		if err := WriteStateDomainChange(db, change); err != nil {
+			t.Fatalf("write change: %v", err)
+		}
+	}
+
+	tests := []struct {
+		block uint64
+		want  []byte
+	}{
+		{7, []byte("v7")},
+		{6, []byte("v5")},
+		{5, []byte("v5")},
+		{4, []byte("v3")},
+		{3, []byte("v3")},
+		{2, []byte("v2")},
+	}
+	for _, tt := range tests {
+		got, ok, err := ReadStateKVAsOf(db, owner, 0, kvdomains.SystemReward, key, tt.block, 7)
+		if err != nil || !ok || !bytes.Equal(got, tt.want) {
+			t.Fatalf("as-of block %d = %q ok:%v err:%v, want %q", tt.block, got, ok, err, tt.want)
+		}
+	}
+}
+
+func TestReadStateKVAsOfHandlesCreatedKey(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x01}
+	key := []byte("created")
+	mustWriteStateKVLatest(t, db, owner, 0, kvdomains.SystemReward, key, []byte("new"))
+	if err := WriteStateDomainChange(db, &StateDomainChange{
+		BlockNum:   4,
+		TxNum:      4,
+		Seq:        1,
+		Owner:      owner,
+		Domain:     kvdomains.SystemReward,
+		Key:        key,
+		NextExists: true,
+		Next:       []byte("new"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := ReadStateKVAsOf(db, owner, 0, kvdomains.SystemReward, key, 3, 4); err != nil || ok {
+		t.Fatalf("created key before creation = %q ok:%v err:%v", got, ok, err)
+	}
+}
