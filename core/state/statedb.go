@@ -67,6 +67,15 @@ type StateDB struct {
 	// is the final flush (and the no-op early return there keeps the cost
 	// to a single bool check per block for non-archive nodes).
 	historyEnabled bool
+
+	// accountKVIndexStore is the physical latest-state index view. It defaults
+	// to the disk DB, but block application points it at blockbuffer so latest
+	// rows rewind with unsolidified blocks.
+	accountKVIndexStore interface {
+		ethdb.KeyValueReader
+		ethdb.KeyValueWriter
+		ethdb.Iteratee
+	}
 }
 
 // New creates a StateDB from the given state root.
@@ -85,6 +94,17 @@ func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 		dynProps:       NewDynamicProperties(),
 		originRoot:     ethcommon.Hash(root),
 	}, nil
+}
+
+// SetAccountKVIndexStore overrides the physical latest-state index view used
+// by account-KV iteration and commit-time index writes. Block execution passes
+// the blockbuffer here so unsolidified latest rows are fork-rewindable.
+func (s *StateDB) SetAccountKVIndexStore(store interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+	ethdb.Iteratee
+}) {
+	s.accountKVIndexStore = store
 }
 
 // GetAccount returns the account at addr, or nil if not found.
@@ -164,7 +184,9 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	// missing account or a pending-delete object from an earlier tx in the
 	// same block.
 	s.journalAccount(addr, obj)
+	nextGeneration := s.nextAccountKVGeneration(addr, obj)
 	obj = newEmptyStateObject(addr)
+	obj.accountKVGeneration = nextGeneration
 	// Recreating an address after SELFDESTRUCT must not resurrect stale code
 	// or contract metadata from rawdb. java-tron deletes CodeStore and
 	// ContractStore alongside the account; keep that deletion intent on the
@@ -1609,15 +1631,16 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		return nil, err
 	}
 	cp := &StateDB{
-		db:             s.db,
-		trie:           tr,
-		stateObjects:   make(map[tcommon.Address]*stateObject),
-		witnesses:      make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses: make(map[tcommon.Address]struct{}),
-		journal:        newJournal(),
-		dynProps:       s.dynProps,
-		originRoot:     s.originRoot,
-		historyEnabled: s.historyEnabled,
+		db:                  s.db,
+		trie:                tr,
+		stateObjects:        make(map[tcommon.Address]*stateObject),
+		witnesses:           make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses:      make(map[tcommon.Address]struct{}),
+		journal:             newJournal(),
+		dynProps:            s.dynProps,
+		originRoot:          s.originRoot,
+		historyEnabled:      s.historyEnabled,
+		accountKVIndexStore: s.accountKVIndexStore,
 	}
 	for addr, obj := range s.stateObjects {
 		var metaCopy *contractpb.SmartContract
@@ -1671,6 +1694,9 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		}
 		if obj.deleted || obj.selfDestructed {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
+				return tcommon.Hash{}, err
+			}
+			if err := s.writeAccountKVGeneration(obj); err != nil {
 				return tcommon.Hash{}, err
 			}
 			rawdb.DeleteCode(s.db.DiskDB(), addr)
@@ -1729,8 +1755,14 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			if err != nil {
 				return tcommon.Hash{}, err
 			}
+			if err := s.commitAccountKVLatest(obj); err != nil {
+				return tcommon.Hash{}, err
+			}
 			obj.accountKVRoot = kvRoot
 			obj.kvDirty = make(map[string]kvEntry)
+		}
+		if err := s.writeAccountKVGeneration(obj); err != nil {
+			return tcommon.Hash{}, err
 		}
 		accBytes, err := obj.account.Marshal()
 		if err != nil {

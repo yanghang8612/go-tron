@@ -638,6 +638,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// layers via DiscardBlock. On any error path the active layer is discarded;
 	// on success it is promoted via CommitBlock.
 	bc.buffer.BeginBlock(block.Hash())
+	statedb.SetAccountKVIndexStore(bc.buffer)
 	rootedDB := state.NewRootedStore(statedb, bc.buffer)
 	defer func() {
 		if retErr != nil {

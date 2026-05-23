@@ -1,13 +1,17 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"sort"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -23,6 +27,12 @@ type kvEntry struct {
 	deleted bool
 }
 
+type accountKVIndexStore interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+	ethdb.Iteratee
+}
+
 // kvCompositeKey is the pre-hash logical key: domain (big-endian u16) || key.
 func kvCompositeKey(domain kvdomains.KVDomain, key []byte) []byte {
 	out := make([]byte, 2+len(key))
@@ -34,6 +44,32 @@ func kvCompositeKey(domain kvdomains.KVDomain, key []byte) []byte {
 // kvTrieKey is the per-account KV trie key: Keccak256(domain || key).
 func kvTrieKey(composite []byte) []byte {
 	return crypto.Keccak256(composite)
+}
+
+func splitKVCompositeKey(composite []byte) (kvdomains.KVDomain, []byte, bool) {
+	if len(composite) < 2 {
+		return 0, nil, false
+	}
+	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(composite[:2]))
+	return domain, append([]byte(nil), composite[2:]...), true
+}
+
+func (s *StateDB) accountKVIndex() accountKVIndexStore {
+	if s.accountKVIndexStore != nil {
+		return s.accountKVIndexStore
+	}
+	return s.db.DiskDB()
+}
+
+func (s *StateDB) nextAccountKVGeneration(owner tcommon.Address, prev *stateObject) uint64 {
+	if prev != nil {
+		return prev.accountKVGeneration + 1
+	}
+	gen, ok, err := rawdb.ReadStateKVGeneration(s.accountKVIndex(), owner)
+	if err == nil && ok {
+		return gen + 1
+	}
+	return 0
 }
 
 // GetAccountKV reads a generic-KV value for owner. Returns (value, exists, err).
@@ -105,6 +141,53 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 	return out, nil
 }
 
+// IterateAccountKV iterates the current StateDB view for owner's domain and
+// logical prefix. The physical latest-state index supplies the committed rows;
+// the in-memory dirty overlay is merged on top so callers see uncommitted puts
+// and tombstones consistently with GetAccountKV.
+func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	obj := s.getStateObject(owner)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	entries := make(map[string][]byte)
+	if err := rawdb.IterateStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, prefix, func(key, value []byte) (bool, error) {
+		entries[string(key)] = append([]byte(nil), value...)
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	for mapKey, entry := range obj.kvDirty {
+		d, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
+		if !ok || d != domain || !bytes.HasPrefix(logicalKey, prefix) {
+			continue
+		}
+		if entry.deleted {
+			delete(entries, string(logicalKey))
+			continue
+		}
+		entries[string(logicalKey)] = append([]byte(nil), entry.val...)
+	}
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return nil
+}
+
 // SetAccountKV stages a generic-KV write for owner (creating the account if absent).
 func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
 	if !kvdomains.IsRegistered(domain) {
@@ -133,6 +216,25 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
 	obj.kvDirty[mk] = kvEntry{val: nil, deleted: true}
 	obj.markDirty()
+	return nil
+}
+
+// DeleteAccountKVPrefix stages tombstones for every visible key under
+// owner/domain/prefix. It uses the physical latest-state index for committed
+// rows and the dirty overlay for same-block writes.
+func (s *StateDB) DeleteAccountKVPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
+	var keys [][]byte
+	if err := s.IterateAccountKV(owner, domain, prefix, func(key, _ []byte) (bool, error) {
+		keys = append(keys, append([]byte(nil), key...))
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := s.DeleteAccountKV(owner, domain, key); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -194,4 +296,28 @@ func (s *StateDB) commitAccountKV(obj *stateObject) (tcommon.Hash, error) {
 		}
 	}
 	return tcommon.Hash(root), nil
+}
+
+func (s *StateDB) commitAccountKVLatest(obj *stateObject) error {
+	index := s.accountKVIndex()
+	for mapKey, entry := range obj.kvDirty {
+		domain, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
+		if !ok {
+			return fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
+		}
+		if entry.deleted {
+			if err := rawdb.DeleteStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rawdb.WriteStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey, entry.val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *StateDB) writeAccountKVGeneration(obj *stateObject) error {
+	return rawdb.WriteStateKVGeneration(s.accountKVIndex(), obj.address, obj.accountKVGeneration)
 }

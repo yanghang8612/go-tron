@@ -282,6 +282,21 @@ Acceptance:
 - Domain iteration is O(number of matching keys), not O(size of trie).
 - Current rooted tests and restart tests pass.
 
+Implementation:
+
+- `core/rawdb` now owns `state-kv-latest-v2-` with key shape
+  `owner20 || generation_u64 || domain_u16 || logical_key`, plus
+  `state-kv-generation-v2-` as the per-account generation high-water used to
+  assign a higher generation after delete/recreate without scanning old rows.
+- `StateDB.Commit` writes the physical latest index and generation marker in
+  the same commit path that updates the account-KV MPT root. `SetAccountKV` and
+  `DeleteAccountKV` remain overlay-only.
+- `StateDB.IterateAccountKV` and `DeleteAccountKVPrefix` read the latest index
+  and merge the dirty overlay, so domain prefix deletion no longer depends on
+  hashed MPT iteration.
+- Block application and producer block building route latest-index writes
+  through `blockbuffer`, keeping unsolidified and throwaway writes discardable.
+
 Estimated effort: 7-10 days.
 
 ## Phase 3: Native Typed Stores, Remove RootedStore From Execution

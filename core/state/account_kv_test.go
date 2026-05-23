@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/blockbuffer"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -217,4 +219,261 @@ func TestResetAccountKVRevertRestoresOverlay(t *testing.T) {
 	if obj := sdb.getStateObject(addr); obj.accountKVGeneration != 0 {
 		t.Fatalf("generation after revert = %d, want 0", obj.accountKVGeneration)
 	}
+}
+
+func TestAccountKVLatestIndexCommitDeleteAndIterate(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x67)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/2"), []byte("2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/1"), []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDelegation, []byte("aa/1"))
+	if err != nil || !ok || string(got) != "1" {
+		t.Fatalf("latest index = %q ok=%v err=%v, want 1,true,nil", got, ok, err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	err = reopened.IterateAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/"), func(key, value []byte) (bool, error) {
+		keys = append(keys, string(key)+"="+string(value))
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"aa/1=1", "aa/2=2"}; !equalStringSlices(keys, want) {
+		t.Fatalf("iteration = %v, want %v", keys, want)
+	}
+
+	if err := reopened.DeleteAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/1")); err != nil {
+		t.Fatal(err)
+	}
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDelegation, []byte("aa/1")); err != nil || ok {
+		t.Fatalf("deleted latest index ok=%v err=%v", ok, err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/1")); err != nil || ok {
+		t.Fatalf("deleted MPT value ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAccountKVIterateMergesDirtyOverlay(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x68)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemMarket, []byte("p/1"), []byte("old"))
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemMarket, []byte("p/2"), []byte("keep"))
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reopened.SetAccountKV(addr, kvdomains.SystemMarket, []byte("p/1"), []byte("new"))
+	_ = reopened.SetAccountKV(addr, kvdomains.SystemMarket, []byte("p/3"), []byte("overlay"))
+	_ = reopened.DeleteAccountKV(addr, kvdomains.SystemMarket, []byte("p/2"))
+
+	var keys []string
+	err = reopened.IterateAccountKV(addr, kvdomains.SystemMarket, []byte("p/"), func(key, value []byte) (bool, error) {
+		keys = append(keys, string(key)+"="+string(value))
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"p/1=new", "p/3=overlay"}; !equalStringSlices(keys, want) {
+		t.Fatalf("merged iteration = %v, want %v", keys, want)
+	}
+}
+
+func TestDeleteAccountKVPrefixUsesLatestIndex(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x69)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle/1"), []byte("1"))
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle/2"), []byte("2"))
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemReward, []byte("other"), []byte("x"))
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.DeleteAccountKVPrefix(addr, kvdomains.SystemReward, []byte("cycle/")); err != nil {
+		t.Fatal(err)
+	}
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range [][]byte{[]byte("cycle/1"), []byte("cycle/2")} {
+		if _, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || ok {
+			t.Fatalf("%s survived prefix delete: ok=%v err=%v", key, ok, err)
+		}
+		if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemReward, key); err != nil || ok {
+			t.Fatalf("%s survived latest prefix delete: ok=%v err=%v", key, ok, err)
+		}
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemReward, []byte("other")); err != nil || !ok || string(got) != "x" {
+		t.Fatalf("other = %q ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestResetAccountKVLeavesOldLatestGenerationUnreachable(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6a)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = sdb.SetAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), []byte("old"))
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.ResetAccountKV(addr); err != nil {
+		t.Fatal(err)
+	}
+	_ = reopened.SetAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), []byte("new"))
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if old, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.ContractStorage, []byte("slot")); err != nil || !ok || string(old) != "old" {
+		t.Fatalf("old generation latest = %q ok=%v err=%v", old, ok, err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	if err := reopened.IterateAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), func(key, value []byte) (bool, error) {
+		keys = append(keys, string(key)+"="+string(value))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"slot=new"}; !equalStringSlices(keys, want) {
+		t.Fatalf("generation-scoped iteration = %v, want %v", keys, want)
+	}
+}
+
+func TestRecreatedAccountUsesNextKVGeneration(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6b)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = sdb.SetAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), []byte("old"))
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.DeleteAccount(addr)
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = reopened.SetAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), []byte("new"))
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj.accountKVGeneration != 1 {
+		t.Fatalf("recreated generation = %d, want 1", obj.accountKVGeneration)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.ContractStorage, []byte("slot")); err != nil || !ok || string(got) != "new" {
+		t.Fatalf("recreated slot = %q ok=%v err=%v", got, ok, err)
+	}
+	var keys []string
+	if err := reopened.IterateAccountKV(addr, kvdomains.ContractStorage, []byte("slot"), func(key, value []byte) (bool, error) {
+		keys = append(keys, string(key)+"="+string(value))
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"slot=new"}; !equalStringSlices(keys, want) {
+		t.Fatalf("recreated iteration = %v, want %v", keys, want)
+	}
+}
+
+func TestAccountKVLatestIndexCanBeBufferedAndDiscarded(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6c)
+	buf := blockbuffer.New(sdb.db.DiskDB())
+	var blockHash tcommon.Hash
+	blockHash[0] = 0x01
+	buf.BeginBlock(blockHash)
+	sdb.SetAccountKVIndexStore(buf)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("k"), []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDelegation, []byte("k")); err != nil || ok {
+		t.Fatalf("latest index reached disk before buffer flush: ok=%v err=%v", ok, err)
+	}
+	if got, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v" {
+		t.Fatalf("buffer latest = %q ok=%v err=%v", got, ok, err)
+	}
+	buf.CommitBlock()
+	buf.DiscardBlock(blockHash)
+	if _, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDelegation, []byte("k")); err != nil || ok {
+		t.Fatalf("discarded latest index visible: ok=%v err=%v", ok, err)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

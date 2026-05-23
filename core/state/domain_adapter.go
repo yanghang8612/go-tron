@@ -1,8 +1,6 @@
 package state
 
 import (
-	"fmt"
-
 	tcommon "github.com/tronprotocol/go-tron/common"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -49,8 +47,8 @@ func (d *DomainState) DomainDel(owner tcommon.Address, domain kvdomains.KVDomain
 }
 
 func (d *DomainState) DomainDelPrefix(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte) error {
-	if !kvdomains.IsRegistered(domain) {
-		return fmt.Errorf("domain state: unregistered domain %#04x", uint16(domain))
+	if d == nil || d.state == nil {
+		return nil
 	}
-	return statedomains.ErrPrefixDeleteUnsupported
+	return d.state.DeleteAccountKVPrefix(owner, domain, prefix)
 }

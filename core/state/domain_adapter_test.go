@@ -1,7 +1,6 @@
 package state
 
 import (
-	"errors"
 	"testing"
 
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
@@ -62,10 +61,42 @@ func TestDomainOverlayFlushesToStateDBAdapter(t *testing.T) {
 	}
 }
 
-func TestDomainStatePrefixDeleteUnsupportedUntilLatestIndex(t *testing.T) {
+func TestDomainStatePrefixDeleteUsesLatestIndex(t *testing.T) {
 	sdb := newTestStateDB(t)
-	err := sdb.Domains().DomainDelPrefix(testAddr(0x79), kvdomains.SystemDelegation, []byte("prefix"))
-	if !errors.Is(err, statedomains.ErrPrefixDeleteUnsupported) {
-		t.Fatalf("DomainDelPrefix err = %v", err)
+	owner := testAddr(0x79)
+	dom := sdb.Domains()
+	if err := dom.DomainPut(owner, kvdomains.SystemDelegation, []byte("prefix/1"), []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := dom.DomainPut(owner, kvdomains.SystemDelegation, []byte("prefix/2"), []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	if err := dom.DomainPut(owner, kvdomains.SystemDelegation, []byte("other"), []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Domains().DomainDelPrefix(owner, kvdomains.SystemDelegation, []byte("prefix/")); err != nil {
+		t.Fatal(err)
+	}
+	root, err = reopened.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := reopened.Domains().GetLatest(owner, kvdomains.SystemDelegation, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("prefix/1 visible after prefix delete: ok=%v err=%v", ok, err)
+	}
+	if got, ok, err := reopened.Domains().GetLatest(owner, kvdomains.SystemDelegation, []byte("other")); err != nil || !ok || string(got) != "keep" {
+		t.Fatalf("other = %q ok=%v err=%v", got, ok, err)
 	}
 }

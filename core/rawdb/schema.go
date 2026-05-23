@@ -3,6 +3,9 @@ package rawdb
 import (
 	"encoding/binary"
 	"strconv"
+
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 var (
@@ -169,6 +172,24 @@ var (
 	// XOR trick makes newer blocks sort first under lex ordering, so
 	// a prefix iterator hands the latest trace back on first hit.
 	accountTracePrefix = []byte("at-")
+
+	// stateKVLatestPrefix is the Erigon-style physical latest-state index for
+	// generic account KV. It is not the commitment itself; the account KV MPT
+	// root in StateAccountV2 remains authoritative in this phase. The index is
+	// a prefix-iterable mirror used for domain iteration and prefix deletion.
+	//
+	// Key:   state-kv-latest-v2- || owner AccountID20 || generation u64
+	//        || domain u16 || logical key
+	// Value: 0x01 || value, preserving empty-but-present values.
+	stateKVLatestPrefix = []byte("state-kv-latest-v2-")
+
+	// stateKVGenerationPrefix stores the latest physical generation observed
+	// for an account. It lets a later recreate pick generation+1 without
+	// scanning or deleting old latest rows from prior incarnations.
+	//
+	// Key:   state-kv-generation-v2- || owner AccountID20
+	// Value: generation u64
+	stateKVGenerationPrefix = []byte("state-kv-generation-v2-")
 
 	// sectionBloomPrefix (sb-) maps to java-tron's SectionBloomStore
 	// (db name "section-bloom"). Bloom filter per (section, bitIndex)
@@ -513,6 +534,39 @@ func accountTraceKey(owner []byte, blockNum int64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(xored))
 	return append(k, b[:]...)
+}
+
+func stateKVLatestKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
+	return append(stateKVLatestDomainPrefix(owner, generation, domain), logicalKey...)
+}
+
+func stateKVLatestDomainPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain) []byte {
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength+8+2)
+	k = append(k, stateKVLatestPrefix...)
+	k = append(k, accountID[:]...)
+	var buf [10]byte
+	binary.BigEndian.PutUint64(buf[:8], generation)
+	binary.BigEndian.PutUint16(buf[8:], uint16(domain))
+	return append(k, buf[:]...)
+}
+
+func stateKVLatestLogicalPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) []byte {
+	return append(stateKVLatestDomainPrefix(owner, generation, domain), logicalPrefix...)
+}
+
+func stateKVLatestOwnerPrefix(owner common.Address) []byte {
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateKVLatestPrefix)+common.AccountIDLength)
+	k = append(k, stateKVLatestPrefix...)
+	return append(k, accountID[:]...)
+}
+
+func stateKVGenerationKey(owner common.Address) []byte {
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateKVGenerationPrefix)+common.AccountIDLength)
+	k = append(k, stateKVGenerationPrefix...)
+	return append(k, accountID[:]...)
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the

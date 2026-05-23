@@ -56,6 +56,8 @@ var resetMutablePrefixes = [][]byte{
 	contractStatePrefix,
 	accountAssetPrefix,
 	accountTracePrefix,
+	stateKVLatestPrefix,
+	stateKVGenerationPrefix,
 	sectionBloomPrefix,
 	treeBlockIndexPrefix,
 	pbftSignDataPrefix,
