@@ -22,3 +22,10 @@ func ReadWitnessBrokerage(db ethdb.KeyValueReader, addr common.Address) int64 {
 	}
 	return int64(binary.BigEndian.Uint64(data))
 }
+
+// WitnessBrokerageStateKey exposes the legacy current-brokerage key bytes for
+// the native typed StateDB witness store. The key shape stays centralized in
+// rawdb/schema.
+func WitnessBrokerageStateKey(addr common.Address) []byte {
+	return brokerageKey(addr[:])
+}

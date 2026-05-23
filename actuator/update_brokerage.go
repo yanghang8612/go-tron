@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -55,8 +54,8 @@ func (a *UpdateBrokerageActuator) Execute(ctx *Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ctx.DB != nil {
-		rawdb.WriteWitnessBrokerage(ctx.DB, ownerAddr, int64(c.Brokerage))
+	if err := ctx.State.WriteWitnessBrokerage(ownerAddr, int64(c.Brokerage)); err != nil {
+		return nil, err
 	}
 	return &Result{Fee: 0, ContractRet: 1}, nil
 }

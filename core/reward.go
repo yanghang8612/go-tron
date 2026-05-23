@@ -259,7 +259,7 @@ func applyRewardCycleSnapshot(db kvReadWriter, statedb *state.StateDB, dp *state
 
 	nextCycle := dp.CurrentCycleNumber() + 1
 	for _, w := range ws {
-		brokerage := rawdb.ReadWitnessBrokerage(db, w.addr)
+		brokerage := statedb.ReadWitnessBrokerage(w.addr)
 		rawdb.WriteCycleBrokerage(db, nextCycle, w.addr.Bytes(), int(brokerage))
 		rawdb.WriteCycleVote(db, nextCycle, w.addr.Bytes(), w.votes)
 	}

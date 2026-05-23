@@ -341,6 +341,9 @@ Implementation start:
 - Per-witness latest-produced-block cursors are staged through the same witness
   domain and used by solidified-block computation, so fork rewind and historical
   restart no longer depend on the flat latest-block cursor.
+- Current witness brokerage set by `UpdateBrokerage` is staged in the same
+  witness-owned domain. Maintenance cycle snapshots read this rooted current
+  rate when writing per-cycle brokerage records.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

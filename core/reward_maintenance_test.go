@@ -4,8 +4,8 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
@@ -58,8 +58,8 @@ func TestApplyRewardMaintenance_CycleRollover(t *testing.T) {
 
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
 	seedWitness(t, db, statedb, addr, 1_500)
-	// Current-cycle brokerage set to 15.
-	if err := rawdb.WriteWitnessBrokerage(db, addr, 15); err != nil {
+	// Current brokerage is rooted in the witness-owned KV domain.
+	if err := statedb.WriteWitnessBrokerage(addr, 15); err != nil {
 		t.Fatal(err)
 	}
 

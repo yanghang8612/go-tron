@@ -3,9 +3,7 @@ package actuator
 import (
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -63,8 +61,6 @@ func TestUpdateBrokerageExecute(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.PutWitness(owner, "http://w.com")
 
-	db := ethrawdb.NewMemoryDatabase()
-	ctx.DB = db
 	act := &UpdateBrokerageActuator{}
 	result, err := act.Execute(ctx)
 	if err != nil {
@@ -73,7 +69,7 @@ func TestUpdateBrokerageExecute(t *testing.T) {
 	if result.ContractRet != 1 {
 		t.Fatalf("expected ContractRet=1")
 	}
-	if got := rawdb.ReadWitnessBrokerage(db, owner); got != 50 {
+	if got := ctx.State.ReadWitnessBrokerage(owner); got != 50 {
 		t.Fatalf("expected brokerage 50, got %d", got)
 	}
 }

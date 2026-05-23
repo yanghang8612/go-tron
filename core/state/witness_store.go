@@ -54,3 +54,20 @@ func (s *StateDB) WriteWitnessLatestBlock(addr tcommon.Address, num int64) error
 	binary.BigEndian.PutUint64(buf[:], uint64(num))
 	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr), buf[:])
 }
+
+// ReadWitnessBrokerage returns the current brokerage rate set by
+// UpdateBrokerage. Missing rows default to java-tron's DEFAULT_BROKERAGE (20).
+func (s *StateDB) ReadWitnessBrokerage(addr tcommon.Address) int64 {
+	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr))
+	if err != nil || !ok || len(raw) != 8 {
+		return int64(rawdb.DefaultBrokerage)
+	}
+	return int64(binary.BigEndian.Uint64(raw))
+}
+
+// WriteWitnessBrokerage stages the current brokerage rate for a witness.
+func (s *StateDB) WriteWitnessBrokerage(addr tcommon.Address, brokerage int64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(brokerage))
+	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessBrokerageStateKey(addr), buf[:])
+}
