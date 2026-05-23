@@ -122,6 +122,72 @@ func TestStateDBGetAccountKVAsOfUsesDomainChanges(t *testing.T) {
 	}
 }
 
+func TestStateDBIterateAccountKVAsOfUsesDomainChanges(t *testing.T) {
+	disk := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(disk)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := tcommon.SystemAccountAddress
+	domain := kvdomains.SystemReward
+	if err := sdb.SetAccountKV(owner, domain, []byte("reward/a"), []byte("a1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(owner, domain, []byte("reward/b"), []byte("b1")); err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetDomainChangeSetWriter(disk, 1, tcommon.Hash{0x01})
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(owner, domain, []byte("reward/a"), []byte("a2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(owner, domain, []byte("other/c"), []byte("c2")); err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetDomainChangeSetWriter(disk, 2, tcommon.Hash{0x02})
+	root, err = sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at1 := make(map[string]string)
+	if err := head.IterateAccountKVAsOf(owner, domain, []byte("reward/"), 1, 2, func(key, value []byte) (bool, error) {
+		at1[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate as-of block 1: %v", err)
+	}
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("block 1 prefix = %v", at1)
+	}
+	at2 := make(map[string]string)
+	if err := head.IterateAccountKVAsOf(owner, domain, []byte("reward/"), 2, 2, func(key, value []byte) (bool, error) {
+		at2[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate as-of block 2: %v", err)
+	}
+	if len(at2) != 1 || at2["reward/a"] != "a2" {
+		t.Fatalf("block 2 prefix = %v", at2)
+	}
+}
+
 func collectStateDomainChanges(t *testing.T, db ethdb.Iteratee, blockNum uint64) []*rawdb.StateDomainChange {
 	t.Helper()
 	var changes []*rawdb.StateDomainChange

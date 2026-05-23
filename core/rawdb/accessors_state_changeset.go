@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -174,6 +175,34 @@ func IterateStateDomainChangeBlocks(db ethdb.Iteratee, owner common.Address, gen
 	return it.Error()
 }
 
+func IterateStateDomainChangeBlocksByPrefix(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, keyPrefix []byte, fn func(blockNum uint64) (bool, error)) error {
+	prefix := stateChangeInverseKeyPrefix(owner, generation, domain, keyPrefix)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	seen := make(map[uint64]struct{})
+	for it.Next() {
+		if !bytes.HasPrefix(it.Key(), prefix) {
+			continue
+		}
+		if len(it.Key()) < len(prefix)+8 {
+			continue
+		}
+		blockNum := binary.BigEndian.Uint64(it.Key()[len(it.Key())-8:])
+		if _, ok := seen[blockNum]; ok {
+			continue
+		}
+		seen[blockNum] = struct{}{}
+		cont, err := fn(blockNum)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
 func StateDomainChangeInverseBlockNum(key []byte, prefixLen int) (uint64, bool) {
 	if len(key) != prefixLen+8 {
 		return 0, false
@@ -257,6 +286,66 @@ func ReadStateKVAsOf(db stateKVLatestStore, owner common.Address, generation uin
 		}
 	}
 	return append([]byte(nil), value...), exists, nil
+}
+
+func IterateStateKVAsOfPrefix(db stateKVLatestStore, owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, targetBlock, headBlock uint64, fn func(key, value []byte) (bool, error)) error {
+	entries := make(map[string][]byte)
+	if err := IterateStateKVLatest(db, owner, generation, domain, prefix, func(key, value []byte) (bool, error) {
+		entries[string(key)] = append([]byte(nil), value...)
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	if targetBlock < headBlock {
+		var touched []uint64
+		if err := IterateStateDomainChangeBlocksByPrefix(db, owner, generation, domain, prefix, func(blockNum uint64) (bool, error) {
+			if blockNum > targetBlock && blockNum <= headBlock {
+				touched = append(touched, blockNum)
+			}
+			return true, nil
+		}); err != nil {
+			return err
+		}
+		for i := len(touched) - 1; i >= 0; i-- {
+			blockNum := touched[i]
+			var changes []*StateDomainChange
+			if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
+				changes = append(changes, change)
+				return true, nil
+			}); err != nil {
+				return err
+			}
+			for i := len(changes) - 1; i >= 0; i-- {
+				change := changes[i]
+				if change.Owner != owner ||
+					change.Generation != generation ||
+					change.Domain != domain ||
+					!bytes.HasPrefix(change.Key, prefix) {
+					continue
+				}
+				if change.PrevExists {
+					entries[string(change.Key)] = append([]byte(nil), change.Prev...)
+				} else {
+					delete(entries, string(change.Key))
+				}
+			}
+		}
+	}
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return nil
 }
 
 func cloneStateDomainChange(in *StateDomainChange) *StateDomainChange {

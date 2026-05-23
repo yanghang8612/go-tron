@@ -255,3 +255,88 @@ func TestReadStateKVAsOfHandlesCreatedKey(t *testing.T) {
 		t.Fatalf("created key before creation = %q ok:%v err:%v", got, ok, err)
 	}
 }
+
+func TestIterateStateKVAsOfPrefixRollsBackRange(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	owner := common.Address{0x41, 0x01}
+	domain := kvdomains.SystemReward
+
+	mustWriteStateKVLatest(t, db, owner, 0, domain, []byte("acct/a"), []byte("a3"))
+	mustWriteStateKVLatest(t, db, owner, 0, domain, []byte("acct/b"), []byte("b3"))
+	mustWriteStateKVLatest(t, db, owner, 0, domain, []byte("other/c"), []byte("c3"))
+	changes := []*StateDomainChange{
+		{
+			BlockNum:   2,
+			TxNum:      2,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     domain,
+			Key:        []byte("acct/a"),
+			PrevExists: true,
+			Prev:       []byte("a1"),
+			NextExists: true,
+			Next:       []byte("a2"),
+		},
+		{
+			BlockNum:   3,
+			TxNum:      3,
+			Seq:        1,
+			Owner:      owner,
+			Domain:     domain,
+			Key:        []byte("acct/a"),
+			PrevExists: true,
+			Prev:       []byte("a2"),
+			NextExists: true,
+			Next:       []byte("a3"),
+		},
+		{
+			BlockNum:   3,
+			TxNum:      3,
+			Seq:        2,
+			Owner:      owner,
+			Domain:     domain,
+			Key:        []byte("acct/b"),
+			NextExists: true,
+			Next:       []byte("b3"),
+		},
+		{
+			BlockNum:   3,
+			TxNum:      3,
+			Seq:        3,
+			Owner:      owner,
+			Domain:     domain,
+			Key:        []byte("other/c"),
+			PrevExists: true,
+			Prev:       []byte("c2"),
+			NextExists: true,
+			Next:       []byte("c3"),
+		},
+	}
+	for _, change := range changes {
+		if err := WriteStateDomainChange(db, change); err != nil {
+			t.Fatalf("write change: %v", err)
+		}
+	}
+
+	got := make(map[string]string)
+	if err := IterateStateKVAsOfPrefix(db, owner, 0, domain, []byte("acct/"), 2, 3, func(key, value []byte) (bool, error) {
+		got[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate as-of prefix: %v", err)
+	}
+	if len(got) != 1 || got["acct/a"] != "a2" {
+		t.Fatalf("as-of prefix at block 2 = %v, want only acct/a=a2", got)
+	}
+
+	got = make(map[string]string)
+	if err := IterateStateKVAsOfPrefix(db, owner, 0, domain, []byte("acct/"), 3, 3, func(key, value []byte) (bool, error) {
+		got[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate head prefix: %v", err)
+	}
+	if len(got) != 2 || got["acct/a"] != "a3" || got["acct/b"] != "b3" {
+		t.Fatalf("as-of prefix at head = %v", got)
+	}
+}
