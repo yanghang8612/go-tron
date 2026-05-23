@@ -28,11 +28,13 @@ const (
 
 // peerState tracks per-peer protocol state.
 type peerState struct {
-	peer        *p2p.Peer
-	connState   peerConnState
-	rl          *p2p.RateLimiter
-	headBlockID tcommon.Hash
-	headNum     uint64
+	peer           *p2p.Peer
+	connState      peerConnState
+	rl             *p2p.RateLimiter
+	headBlockID    tcommon.Hash
+	headNum        uint64
+	solidNum       uint64
+	lowestBlockNum uint64
 }
 
 // TronHandler implements p2p.Handler for the TRON protocol.
@@ -134,6 +136,7 @@ func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	ourHead := h.chain.CurrentBlock().Number()
+	needFrom := ourHead + 1
 	var best *peerState
 	for _, ps := range h.peers {
 		if ps.connState != peerStateHandshaked {
@@ -143,6 +146,9 @@ func (h *TronHandler) BestSyncCandidate(exclude *p2p.Peer) *p2p.Peer {
 			continue
 		}
 		if ps.headNum <= ourHead {
+			continue
+		}
+		if !ps.canServeSyncFrom(needFrom) {
 			continue
 		}
 		if best == nil || ps.headNum > best.headNum {
@@ -163,6 +169,7 @@ func (h *TronHandler) SyncCandidates(exclude map[string]struct{}, limit int) []*
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	ourHead := h.chain.CurrentBlock().Number()
+	needFrom := ourHead + 1
 	states := make([]*peerState, 0, len(h.peers))
 	for _, ps := range h.peers {
 		if ps.connState != peerStateHandshaked {
@@ -174,6 +181,9 @@ func (h *TronHandler) SyncCandidates(exclude map[string]struct{}, limit int) []*
 			}
 		}
 		if ps.headNum <= ourHead {
+			continue
+		}
+		if !ps.canServeSyncFrom(needFrom) {
 			continue
 		}
 		states = append(states, ps)
@@ -189,6 +199,26 @@ func (h *TronHandler) SyncCandidates(exclude map[string]struct{}, limit int) []*
 		peers = append(peers, ps.peer)
 	}
 	return peers
+}
+
+func (ps *peerState) canServeSyncFrom(num uint64) bool {
+	if ps == nil || ps.peer == nil || ps.connState != peerStateHandshaked {
+		return false
+	}
+	return ps.lowestBlockNum == 0 || num >= ps.lowestBlockNum
+}
+
+func (h *TronHandler) syncPeerCanServe(peer *p2p.Peer, from uint64) (bool, uint64, uint64) {
+	if peer == nil {
+		return false, 0, 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ps := h.peers[peer.ID()]
+	if ps == nil {
+		return false, 0, 0
+	}
+	return ps.canServeSyncFrom(from), ps.lowestBlockNum, ps.headNum
 }
 
 // OnPeerConnected is called when a new TCP connection is established.
@@ -337,12 +367,20 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 		ps.headNum = uint64(hello.HeadBlockId.Number)
 		ps.headBlockID = tcommon.BytesToHash(hello.HeadBlockId.Hash)
 	}
+	if hello.SolidBlockId != nil && hello.SolidBlockId.Number > 0 {
+		ps.solidNum = uint64(hello.SolidBlockId.Number)
+	}
+	if hello.LowestBlockNum > 0 {
+		ps.lowestBlockNum = uint64(hello.LowestBlockNum)
+	}
 	h.mu.Unlock()
 
 	localHead := h.chain.CurrentBlock().Number()
 	log.Info("Peer handshaked",
 		"peer", peer.ID(),
 		"peerHead", ps.headNum,
+		"peerSolid", ps.solidNum,
+		"peerLowest", ps.lowestBlockNum,
 		"localHead", localHead,
 		"lag", int64(ps.headNum)-int64(localHead))
 
@@ -355,7 +393,9 @@ func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {
 func (h *TronHandler) handleDisconnect(peer *p2p.Peer, payload []byte) {
 	var msg corepb.DisconnectMessage
 	if err := proto.Unmarshal(payload, &msg); err == nil {
-		log.Debug("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+		log.Info("Peer disconnected", "peer", peer.ID(), "reason", msg.Reason.String())
+	} else {
+		log.Info("Peer disconnected", "peer", peer.ID(), "err", err)
 	}
 	// Close the connection — readLoop will exit and call disconnect().
 	// Don't call peer.Stop() here: we're inside readLoop, Stop() would deadlock.

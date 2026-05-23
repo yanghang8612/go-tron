@@ -267,6 +267,18 @@ func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	if ss.pause.Paused() {
 		return
 	}
+	needFrom := ss.chain.CurrentBlock().Number() + 1
+	if ss.handler != nil {
+		ok, lowest, head := ss.handler.syncPeerCanServe(peer, needFrom)
+		if !ok {
+			syncLog.Info("Skipping sync peer outside available range",
+				"peer", peer.ID(),
+				"needFrom", needFrom,
+				"peerLowest", lowest,
+				"peerHead", head)
+			return
+		}
+	}
 	now := time.Now()
 	ss.mu.Lock()
 	started := false
@@ -413,6 +425,7 @@ func (ss *SyncService) joinAvailablePeers() {
 	if ss.handler == nil {
 		return
 	}
+	needFrom := ss.chain.CurrentBlock().Number() + 1
 	ss.mu.Lock()
 	need := maxParallelSyncPeers - len(ss.peers)
 	exclude := make(map[string]struct{}, len(ss.peers))
@@ -435,6 +448,9 @@ func (ss *SyncService) joinAvailablePeers() {
 				continue
 			}
 			if _, skip := exclude[peer.ID()]; skip {
+				continue
+			}
+			if ok, _, _ := ss.handler.syncPeerCanServe(peer, needFrom); !ok {
 				continue
 			}
 			candidates = append(candidates, peer)

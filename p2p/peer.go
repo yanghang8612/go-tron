@@ -21,12 +21,13 @@ type Peer struct {
 	closed  atomic.Bool
 	wg      sync.WaitGroup
 
-	// lastPongNanos holds the UnixNano timestamp of the most recent keepalive
-	// pong received (or the handshake completion time if no pong yet). It is
-	// written and read atomically so no mutex is needed.
+	// lastSeenNanos holds the UnixNano timestamp of the most recent valid
+	// inbound post-handshake frame (or the handshake completion time if no
+	// frame has arrived yet). It is written and read atomically so no mutex is
+	// needed.
 	// Note: UnixNano does not overflow for any plausible clock value in the
 	// range [1678, 2262] CE, which covers all expected production use.
-	lastPongNanos atomic.Int64
+	lastSeenNanos atomic.Int64
 }
 
 type msgFrame struct {
@@ -46,7 +47,7 @@ func NewPeer(conn net.Conn, id string, inbound bool, handler Handler) *Peer {
 	}
 	// Treat handshake completion as the "last live" event so the keepalive
 	// timer doesn't immediately expire on a freshly connected peer.
-	p.lastPongNanos.Store(time.Now().UnixNano())
+	p.lastSeenNanos.Store(time.Now().UnixNano())
 	return p
 }
 
@@ -121,15 +122,22 @@ func (p *Peer) readLoop() {
 			peerLog.Debug("Peer frame unwrap failed", "peer", p.id, "err", err)
 			return
 		}
+		p.lastSeenNanos.Store(time.Now().UnixNano())
 		switch code {
 		case MsgLibp2pKeepAlivePing:
 			// Echo back as pong — include the caller's timestamp payload so the
 			// remote can measure RTT if desired.
 			p.Send(MsgLibp2pKeepAlivePong, payload)
 		case MsgLibp2pKeepAlivePong:
-			p.lastPongNanos.Store(time.Now().UnixNano())
+			// lastSeenNanos was refreshed above; no separate pong timestamp is
+			// needed for liveness.
 		case MsgLibp2pDisconnect:
 			// Peer told us to go away; close gracefully.
+			if msg, err := ParseDisconnect(payload); err == nil {
+				peerLog.Info("Peer libp2p disconnect", "peer", p.id, "reason", msg.Reason.String())
+			} else {
+				peerLog.Info("Peer libp2p disconnect", "peer", p.id, "err", err)
+			}
 			return
 		case MsgLibp2pStatus:
 			// Accept but ignore — application layer doesn't consume this yet.
@@ -163,7 +171,7 @@ func (p *Peer) writeLoop() {
 }
 
 // keepaliveLoop sends KEEP_ALIVE_PING every KeepAliveTimeout/2 and closes the
-// peer if no pong has been received within 2*KeepAliveTimeout.
+// peer if no valid inbound frame has been received within 2*KeepAliveTimeout.
 func (p *Peer) keepaliveLoop() {
 	defer p.wg.Done()
 	// Fire pings at roughly half the timeout so we get a pong before the peer
@@ -173,11 +181,10 @@ func (p *Peer) keepaliveLoop() {
 	for {
 		select {
 		case <-tick.C:
-			// Check pong freshness — if we've gone too long without one, drop.
-			lastPong := time.Unix(0, p.lastPongNanos.Load())
-			if time.Since(lastPong) > 2*KeepAliveTimeout {
+			lastSeen := time.Unix(0, p.lastSeenNanos.Load())
+			if time.Since(lastSeen) > 2*KeepAliveTimeout {
 				peerLog.Info("Peer keepalive timeout, closing",
-					"peer", p.id, "since", time.Since(lastPong))
+					"peer", p.id, "since", time.Since(lastSeen))
 				p.Close()
 				return
 			}

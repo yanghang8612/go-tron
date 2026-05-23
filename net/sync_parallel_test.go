@@ -205,6 +205,91 @@ func TestJoinAvailablePeersFallsBackToHandshakedPeers(t *testing.T) {
 	}
 }
 
+func TestSyncCandidatesSkipPeersBelowRequiredRange(t *testing.T) {
+	bc := makeChainWithBlocks(t, 10)
+	handler := NewTronHandler(bc, nil, nil)
+
+	full, closeFull := testPeer(t, "range-full")
+	defer closeFull()
+	edge, closeEdge := testPeer(t, "range-edge")
+	defer closeEdge()
+	pruned, closePruned := testPeer(t, "range-pruned")
+	defer closePruned()
+
+	handler.peers[full.ID()] = &peerState{
+		peer:           full,
+		connState:      peerStateHandshaked,
+		rl:             p2p.NewRateLimiter(),
+		headNum:        30,
+		lowestBlockNum: 0,
+	}
+	handler.peers[edge.ID()] = &peerState{
+		peer:           edge,
+		connState:      peerStateHandshaked,
+		rl:             p2p.NewRateLimiter(),
+		headNum:        20,
+		lowestBlockNum: 11,
+	}
+	handler.peers[pruned.ID()] = &peerState{
+		peer:           pruned,
+		connState:      peerStateHandshaked,
+		rl:             p2p.NewRateLimiter(),
+		headNum:        100,
+		lowestBlockNum: 12,
+	}
+
+	candidates := handler.SyncCandidates(nil, 10)
+	seen := map[string]bool{}
+	for _, peer := range candidates {
+		seen[peer.ID()] = true
+	}
+	if !seen[full.ID()] || !seen[edge.ID()] {
+		t.Fatalf("expected eligible peers in candidates, got %v", seen)
+	}
+	if seen[pruned.ID()] {
+		t.Fatalf("peer below required sync range should be skipped")
+	}
+	if best := handler.BestSyncCandidate(nil); best == nil || best.ID() != full.ID() {
+		t.Fatalf("best sync candidate = %v, want %s", best, full.ID())
+	}
+}
+
+func TestStartSyncSkipsPeerBelowRequiredRange(t *testing.T) {
+	bc := makeChainWithBlocks(t, 10)
+	handler := NewTronHandler(bc, nil, nil)
+	ss := NewSyncService(bc, handler)
+
+	pruned, closePruned := testPeer(t, "start-pruned")
+	defer closePruned()
+	handler.peers[pruned.ID()] = &peerState{
+		peer:           pruned,
+		connState:      peerStateHandshaked,
+		rl:             p2p.NewRateLimiter(),
+		headNum:        20,
+		lowestBlockNum: 12,
+	}
+
+	ss.StartSync(pruned)
+	if ss.IsSyncing() {
+		t.Fatal("sync started from peer whose lowest block is above the required next block")
+	}
+
+	eligible, closeEligible := testPeer(t, "start-eligible")
+	defer closeEligible()
+	handler.peers[eligible.ID()] = &peerState{
+		peer:           eligible,
+		connState:      peerStateHandshaked,
+		rl:             p2p.NewRateLimiter(),
+		headNum:        20,
+		lowestBlockNum: 11,
+	}
+
+	ss.StartSync(eligible)
+	if !ss.IsSyncing() {
+		t.Fatal("sync did not start from peer covering the required next block")
+	}
+}
+
 func TestShouldJoinAvailablePeersThrottle(t *testing.T) {
 	bc := makeTestChain(t)
 	handler := NewTronHandler(bc, nil, nil)

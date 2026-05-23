@@ -79,3 +79,31 @@ func TestPeerDisconnectNotifiesHandler(t *testing.T) {
 	}
 	h.mu.Unlock()
 }
+
+func TestPeerRefreshesLastSeenOnInboundFrame(t *testing.T) {
+	c1, c2 := net.Pipe()
+	h := &testHandler{}
+	p := NewPeer(c1, "pipe:seen", false, h)
+	p.lastSeenNanos.Store(time.Now().Add(-time.Hour).UnixNano())
+	before := p.lastSeenNanos.Load()
+	p.Start()
+	defer p.Stop()
+	defer c2.Close()
+
+	body, err := WrapPostHandshake(MsgLibp2pKeepAlivePing, []byte{0x01})
+	if err != nil {
+		t.Fatalf("wrap ping: %v", err)
+	}
+	if err := WriteFrameBody(c2, body); err != nil {
+		t.Fatalf("write ping: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got := p.lastSeenNanos.Load(); got > before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("lastSeenNanos was not refreshed by inbound keepalive ping")
+}
