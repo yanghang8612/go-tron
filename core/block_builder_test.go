@@ -350,7 +350,8 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 			"next_maintenance_time": 9_000_000_000, // far in future; no maintenance
 		},
 	}
-	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -358,7 +359,19 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 	// rate (mirrors what applyRewardMaintenance writes at maintenance boundary).
 	dp0 := loadGenesisDP(t, diskdb)
 	curCycle := dp0.CurrentCycleNumber()
-	rawdb.WriteCycleBrokerage(diskdb, curCycle, witnessAddr.Bytes(), brokerage)
+	genesisState, err := state.New(rawdb.ReadGenesisStateRoot(diskdb), sdb)
+	if err != nil {
+		t.Fatalf("open genesis state: %v", err)
+	}
+	if err := genesisState.WriteCycleBrokerage(curCycle, witnessAddr.Bytes(), brokerage); err != nil {
+		t.Fatalf("seed cycle brokerage: %v", err)
+	}
+	newGenesisRoot, err := genesisState.Commit()
+	if err != nil {
+		t.Fatalf("commit cycle brokerage seed: %v", err)
+	}
+	rawdb.WriteGenesisStateRoot(diskdb, newGenesisRoot)
+	rawdb.WriteBlockStateRoot(diskdb, genesisHash, newGenesisRoot)
 
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
@@ -408,8 +421,8 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 			gotAllowance, wantAllowance, wantAllowance*2)
 	}
 
-	// Read cycle reward from disk (flushed by applyBlock via bc.buffer).
-	gotCycleReward := rawdb.ReadCycleReward(diskdb, curCycle, witnessAddr.Bytes())
+	// Read cycle reward from the rooted post-apply state.
+	gotCycleReward := postState.ReadCycleReward(curCycle, witnessAddr.Bytes())
 	if gotCycleReward != wantCycleReward {
 		t.Errorf("cycleReward[%d][witness]: got %d, want %d (double-write would give %d)",
 			curCycle, gotCycleReward, wantCycleReward, wantCycleReward*2)

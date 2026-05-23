@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -44,8 +43,8 @@ func TestWithdrawReward_SettlesPendingReward(t *testing.T) {
 	})
 
 	// Set up VI spread: VI[0] = 0, VI[9] = 1e18 (delta applies to cycles [1, 10)).
-	rawdb.WriteWitnessVI(db, 0, witness.Bytes(), new(big.Int))
-	rawdb.WriteWitnessVI(db, 9, witness.Bytes(), reward.DecimalOfViReward)
+	_ = statedb.WriteWitnessVI(0, witness.Bytes(), new(big.Int))
+	_ = statedb.WriteWitnessVI(9, witness.Bytes(), reward.DecimalOfViReward)
 
 	// beginCycle defaults to 0, endCycle defaults to RewardRemark (-1),
 	// so the edge-case path is NOT triggered; we fall straight to the
@@ -60,10 +59,10 @@ func TestWithdrawReward_SettlesPendingReward(t *testing.T) {
 	}
 
 	// Cursors updated: begin = 10, end = 11.
-	if got := rawdb.ReadBeginCycle(db, voter.Bytes()); got != 10 {
+	if got := statedb.ReadBeginCycle(voter.Bytes()); got != 10 {
 		t.Fatalf("beginCycle: got %d, want 10", got)
 	}
-	if got := rawdb.ReadEndCycle(db, voter.Bytes()); got != 11 {
+	if got := statedb.ReadEndCycle(voter.Bytes()); got != 11 {
 		t.Fatalf("endCycle: got %d, want 11", got)
 	}
 }
@@ -82,7 +81,7 @@ func TestWithdrawReward_NoVotesResetsBegin(t *testing.T) {
 	withdrawReward(db, statedb, dp, voter)
 
 	// beginCycle should be bumped to currentCycle+1 = 6.
-	if got := rawdb.ReadBeginCycle(db, voter.Bytes()); got != 6 {
+	if got := statedb.ReadBeginCycle(voter.Bytes()); got != 6 {
 		t.Fatalf("beginCycle: got %d, want 6", got)
 	}
 }
@@ -97,14 +96,14 @@ func TestWithdrawReward_SkipsWhenBeginInFuture(t *testing.T) {
 	voter := makeTestAddr(0x20)
 	seedAccount(statedb, voter, 0)
 	// Voter's beginCycle is ahead of currentCycle — no-op.
-	rawdb.WriteBeginCycle(db, voter.Bytes(), 10)
+	_ = statedb.WriteBeginCycle(voter.Bytes(), 10)
 
 	withdrawReward(db, statedb, dp, voter)
 
 	if got := statedb.GetAllowance(voter); got != 0 {
 		t.Fatalf("allowance: got %d, want 0", got)
 	}
-	if got := rawdb.ReadBeginCycle(db, voter.Bytes()); got != 10 {
+	if got := statedb.ReadBeginCycle(voter.Bytes()); got != 10 {
 		t.Fatalf("beginCycle should not change: got %d, want 10", got)
 	}
 }
@@ -125,8 +124,8 @@ func TestQueryReward_IncludesPendingAndAllowance(t *testing.T) {
 		{VoteAddress: witness.Bytes(), VoteCount: 100},
 	})
 
-	rawdb.WriteWitnessVI(db, 0, witness.Bytes(), new(big.Int))
-	rawdb.WriteWitnessVI(db, 9, witness.Bytes(), reward.DecimalOfViReward)
+	_ = statedb.WriteWitnessVI(0, witness.Bytes(), new(big.Int))
+	_ = statedb.WriteWitnessVI(9, witness.Bytes(), reward.DecimalOfViReward)
 
 	got := queryReward(db, statedb, dp, voter)
 
@@ -139,7 +138,7 @@ func TestQueryReward_IncludesPendingAndAllowance(t *testing.T) {
 	if got := statedb.GetAllowance(voter); got != 50 {
 		t.Fatalf("allowance mutated: got %d, want 50", got)
 	}
-	if got := rawdb.ReadBeginCycle(db, voter.Bytes()); got != 0 {
+	if got := statedb.ReadBeginCycle(voter.Bytes()); got != 0 {
 		t.Fatalf("cursor mutated: got %d, want 0", got)
 	}
 }

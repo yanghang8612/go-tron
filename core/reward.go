@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -24,11 +23,9 @@ import (
 // accumulates into DelegationStore as the voter reward pool for the
 // current cycle.
 //
-// The db parameter is widened to `kvReadWriter` (slice 3 of the fork-rewind
-// fix) so applyBlock can pass `bc.buffer`, making the cycle-reward write
-// rewindable on switchFork once `change_delegation` is active. The legacy
-// flat path does not touch rawdb, so the gate keeps disk traffic unchanged
-// on mainnet pre-fork.
+// The db parameter remains in the signature for the existing block-processing
+// call chain; reward-v2 storage itself is rooted in StateDB's SystemReward
+// domain so cycle snapshots rewind with the block state root.
 func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties, witness tcommon.Address, amount int64) {
 	if amount <= 0 {
 		return
@@ -38,7 +35,7 @@ func payBlockReward(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPr
 		return
 	}
 	cycle := dp.CurrentCycleNumber()
-	brokerage := rawdb.ReadCycleBrokerage(db, cycle, witness.Bytes())
+	brokerage := statedb.ReadCycleBrokerage(cycle, witness.Bytes())
 	payBlockRewardWithBrokerage(db, statedb, dp, witness, amount, cycle, brokerage)
 }
 
@@ -51,7 +48,7 @@ func payBlockRewardWithBrokerage(db kvReadWriter, statedb *state.StateDB, dp *st
 	voterAmount := amount - brokerageAmount
 
 	if voterAmount > 0 {
-		rawdb.AddCycleReward(db, cycle, witness.Bytes(), voterAmount)
+		_ = statedb.AddCycleReward(cycle, witness.Bytes(), voterAmount)
 	}
 	if brokerageAmount > 0 {
 		statedb.AddAllowanceFinalReward(witness, brokerageAmount)
@@ -86,9 +83,6 @@ func payTransactionFeeReward(db kvReadWriter, statedb *state.StateDB, dp *state.
 //
 // Only runs once change_delegation is active — before that, the legacy
 // IncentiveManager.reward path at maintenance time handles standby pay.
-//
-// db is `kvReadWriter` so applyBlock can pass `bc.buffer` (slice 3 of the
-// fork-rewind fix); see payBlockReward for the rewind semantics.
 type standbyWitnessVote struct {
 	addr      tcommon.Address
 	votes     int64
@@ -133,7 +127,7 @@ func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle in
 	var voteSum int64
 	for i, v := range all {
 		voteSum += v.votes
-		all[i].brokerage = rawdb.ReadCycleBrokerage(db, cycle, v.addr.Bytes())
+		all[i].brokerage = statedb.ReadCycleBrokerage(cycle, v.addr.Bytes())
 	}
 	if voteSum < 1 {
 		return nil
@@ -167,11 +161,9 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 	}
 }
 
-// kvReadWriter is the narrow ethdb capability applyRewardMaintenance and
-// accumulateWitnessVi need: reads (Read*) and writes (Write*) on per-cycle
-// reward keys. Both rawdb.NewMemoryDatabase() (an ethdb.KeyValueStore) and
-// blockbuffer.Buffer satisfy this, letting callers route the writes either
-// to disk directly or through the fork-rewind buffer (slice 2).
+// kvReadWriter is retained for the existing block-processing signatures while
+// reward-v2 data moves into StateDB. Callers still pass the same DB-like value
+// used by older paths, but this file no longer writes reward snapshots there.
 type kvReadWriter interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
@@ -184,18 +176,18 @@ type kvReadWriter interface {
 // If reward or voteCount is zero, VI is just forwarded (only persisted
 // when the forwarded value is nonzero, matching java-tron's
 // "Zero vi will not be record" guard).
-func accumulateWitnessVi(db kvReadWriter, cycle int64, addr []byte, voteCount int64) {
-	preVi := rawdb.ReadWitnessVI(db, cycle-1, addr)
-	cycleReward := rawdb.ReadCycleReward(db, cycle, addr)
+func accumulateWitnessVi(statedb *state.StateDB, cycle int64, addr []byte, voteCount int64) {
+	preVi := statedb.ReadWitnessVI(cycle-1, addr)
+	cycleReward := statedb.ReadCycleReward(cycle, addr)
 	if cycleReward == 0 || voteCount == 0 {
 		if preVi.Sign() != 0 {
-			rawdb.WriteWitnessVI(db, cycle, addr, preVi)
+			_ = statedb.WriteWitnessVI(cycle, addr, preVi)
 		}
 		return
 	}
 	delta := new(big.Int).Mul(big.NewInt(cycleReward), reward.DecimalOfViReward)
 	delta.Quo(delta, big.NewInt(voteCount))
-	rawdb.WriteWitnessVI(db, cycle, addr, new(big.Int).Add(preVi, delta))
+	_ = statedb.WriteWitnessVI(cycle, addr, new(big.Int).Add(preVi, delta))
 }
 
 // maintenanceWitnessVotes returns every known witness and its current
@@ -239,7 +231,7 @@ func applyRewardVI(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicPro
 	curCycle := dp.CurrentCycleNumber()
 	if dp.UseNewRewardAlgorithm() {
 		for _, w := range ws {
-			accumulateWitnessVi(db, curCycle, w.addr.Bytes(), w.votes)
+			accumulateWitnessVi(statedb, curCycle, w.addr.Bytes(), w.votes)
 		}
 	}
 }
@@ -260,8 +252,8 @@ func applyRewardCycleSnapshot(db kvReadWriter, statedb *state.StateDB, dp *state
 	nextCycle := dp.CurrentCycleNumber() + 1
 	for _, w := range ws {
 		brokerage := statedb.ReadWitnessBrokerage(w.addr)
-		rawdb.WriteCycleBrokerage(db, nextCycle, w.addr.Bytes(), int(brokerage))
-		rawdb.WriteCycleVote(db, nextCycle, w.addr.Bytes(), w.votes)
+		_ = statedb.WriteCycleBrokerage(nextCycle, w.addr.Bytes(), int(brokerage))
+		_ = statedb.WriteCycleVote(nextCycle, w.addr.Bytes(), w.votes)
 	}
 	dp.SetCurrentCycleNumber(nextCycle)
 }

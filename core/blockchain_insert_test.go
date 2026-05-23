@@ -1010,9 +1010,17 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 		chainA[i] = b
 	}
 
-	// Sanity: cycle reward reflects 3 chain-A blocks (read via buffer —
-	// solidified stays at 0 with 3 witnesses).
-	gotA := rawdb.ReadCycleReward(bc.BufferedDB(), 7, witnessAddr.Bytes())
+	readCycleRewardAtHead := func() int64 {
+		t.Helper()
+		statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+		if err != nil {
+			t.Fatalf("open head state: %v", err)
+		}
+		return statedb.ReadCycleReward(7, witnessAddr.Bytes())
+	}
+
+	// Sanity: cycle reward reflects 3 chain-A blocks in the canonical state root.
+	gotA := readCycleRewardAtHead()
 	wantA := 3 * voterPerBlock
 	if gotA != wantA {
 		t.Fatalf("after chain A: cycle 7 reward = %d, want %d", gotA, wantA)
@@ -1046,7 +1054,7 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 
 	// Without slice-3 buffer routing, this would be (3 + 4) × voterPerBlock.
 	// With the fix, only chain B's 4 blocks survive.
-	gotB := rawdb.ReadCycleReward(bc.BufferedDB(), 7, witnessAddr.Bytes())
+	gotB := readCycleRewardAtHead()
 	wantB := 4 * voterPerBlock
 	if gotB != wantB {
 		t.Fatalf("after switchFork: cycle 7 reward = %d, want %d "+

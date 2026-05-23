@@ -1,9 +1,7 @@
 package actuator
 
 import (
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -24,13 +22,13 @@ import (
 //  4. Writes the new cursors and snapshots the current account-vote for
 //     the next withdrawal.
 func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) {
-	if dp == nil || db == nil || !dp.ChangeDelegation() {
+	if dp == nil || statedb == nil || !dp.ChangeDelegation() {
 		return
 	}
 
 	currentCycle := dp.CurrentCycleNumber()
-	beginCycle := rawdb.ReadBeginCycle(db, addr.Bytes())
-	endCycle := rawdb.ReadEndCycle(db, addr.Bytes())
+	beginCycle := statedb.ReadBeginCycle(addr.Bytes())
+	endCycle := statedb.ReadEndCycle(addr.Bytes())
 	acct := statedb.GetAccount(addr)
 	if acct == nil || beginCycle > currentCycle {
 		return
@@ -39,15 +37,15 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 	// Current-cycle edge: a snapshot exists for beginCycle — voter's vote
 	// was already counted there — skip.
 	if beginCycle == currentCycle {
-		if snap := rawdb.ReadCycleAccountVote(db, beginCycle, addr.Bytes()); snap != nil {
+		if snap := statedb.ReadCycleAccountVote(beginCycle, addr.Bytes()); snap != nil {
 			return
 		}
 	}
 
 	// Finalize the most-recent recorded-but-not-yet-settled cycle.
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
-		if votes := readSnapshotVotes(db, beginCycle, addr); len(votes) > 0 {
-			paid := reward.ComputeVoterReward(db, dp, votes, beginCycle, endCycle)
+		if votes := readSnapshotVotes(statedb, beginCycle, addr); len(votes) > 0 {
+			paid := reward.ComputeVoterReward(statedb, dp, votes, beginCycle, endCycle)
 			if paid > 0 {
 				statedb.AddAllowance(addr, paid)
 			}
@@ -59,28 +57,28 @@ func withdrawReward(db BufferedKVStore, statedb *state.StateDB, dp *state.Dynami
 
 	currentVotes := voteEntriesFromAccount(acct)
 	if len(currentVotes) == 0 {
-		rawdb.WriteBeginCycle(db, addr.Bytes(), endCycle+1)
+		_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle+1)
 		return
 	}
 
 	if beginCycle < endCycle {
-		paid := reward.ComputeVoterReward(db, dp, currentVotes, beginCycle, endCycle)
+		paid := reward.ComputeVoterReward(statedb, dp, currentVotes, beginCycle, endCycle)
 		if paid > 0 {
 			statedb.AddAllowance(addr, paid)
 		}
 	}
 
-	rawdb.WriteBeginCycle(db, addr.Bytes(), endCycle)
-	rawdb.WriteEndCycle(db, addr.Bytes(), endCycle+1)
+	_ = statedb.WriteBeginCycle(addr.Bytes(), endCycle)
+	_ = statedb.WriteEndCycle(addr.Bytes(), endCycle+1)
 	if snap := marshalAccountVote(acct); snap != nil {
-		rawdb.WriteCycleAccountVote(db, endCycle, addr.Bytes(), snap)
+		_ = statedb.WriteCycleAccountVote(endCycle, addr.Bytes(), snap)
 	}
 }
 
 // queryReward returns the pending reward a voter would settle on withdraw,
 // without mutating state. Mirrors MortgageService.queryReward.
 func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicProperties, addr common.Address) int64 {
-	if dp == nil || db == nil || !dp.ChangeDelegation() {
+	if dp == nil || statedb == nil || !dp.ChangeDelegation() {
 		return 0
 	}
 	acct := statedb.GetAccount(addr)
@@ -90,16 +88,16 @@ func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicPr
 	allowance := statedb.GetAllowance(addr)
 
 	currentCycle := dp.CurrentCycleNumber()
-	beginCycle := rawdb.ReadBeginCycle(db, addr.Bytes())
-	endCycle := rawdb.ReadEndCycle(db, addr.Bytes())
+	beginCycle := statedb.ReadBeginCycle(addr.Bytes())
+	endCycle := statedb.ReadEndCycle(addr.Bytes())
 	if beginCycle > currentCycle {
 		return allowance
 	}
 
 	var pending int64
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
-		if votes := readSnapshotVotes(db, beginCycle, addr); len(votes) > 0 {
-			pending += reward.ComputeVoterReward(db, dp, votes, beginCycle, endCycle)
+		if votes := readSnapshotVotes(statedb, beginCycle, addr); len(votes) > 0 {
+			pending += reward.ComputeVoterReward(statedb, dp, votes, beginCycle, endCycle)
 		}
 		beginCycle++
 	}
@@ -110,7 +108,7 @@ func queryReward(db BufferedKVStore, statedb *state.StateDB, dp *state.DynamicPr
 		return pending + allowance
 	}
 	if beginCycle < endCycle {
-		pending += reward.ComputeVoterReward(db, dp, currentVotes, beginCycle, endCycle)
+		pending += reward.ComputeVoterReward(statedb, dp, currentVotes, beginCycle, endCycle)
 	}
 	return pending + allowance
 }
@@ -134,8 +132,8 @@ func voteEntriesFromAccount(acct *types.Account) []reward.VoteEntry {
 
 // readSnapshotVotes loads a voter's cycle-snapshot vote list (written via
 // WriteCycleAccountVote) into reward.VoteEntry slice.
-func readSnapshotVotes(db ethdb.KeyValueReader, cycle int64, addr common.Address) []reward.VoteEntry {
-	raw := rawdb.ReadCycleAccountVote(db, cycle, addr.Bytes())
+func readSnapshotVotes(statedb *state.StateDB, cycle int64, addr common.Address) []reward.VoteEntry {
+	raw := statedb.ReadCycleAccountVote(cycle, addr.Bytes())
 	if len(raw) == 0 {
 		return nil
 	}

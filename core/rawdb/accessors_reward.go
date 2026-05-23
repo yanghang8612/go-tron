@@ -123,6 +123,26 @@ func WriteCycleAccountVote(db ethdb.KeyValueWriter, cycle int64, addr []byte, pr
 	_ = db.Put(delegRewardKey(cycle, addr, "account-vote"), proto)
 }
 
+func CycleRewardStateKey(cycle int64, addr []byte) []byte {
+	return delegRewardKey(cycle, addr, "reward")
+}
+
+func CycleVoteStateKey(cycle int64, addr []byte) []byte {
+	return delegRewardKey(cycle, addr, "vote")
+}
+
+func WitnessVIStateKey(cycle int64, addr []byte) []byte {
+	return delegRewardKey(cycle, addr, "vi")
+}
+
+func CycleBrokerageStateKey(cycle int64, addr []byte) []byte {
+	return delegRewardKey(cycle, addr, "brokerage")
+}
+
+func CycleAccountVoteStateKey(cycle int64, addr []byte) []byte {
+	return delegRewardKey(cycle, addr, "account-vote")
+}
+
 // ---- voter beginCycle / endCycle cursors -------------------------------
 
 // ReadBeginCycle returns the voter's beginCycle cursor. Zero if unset.
@@ -141,6 +161,10 @@ func WriteBeginCycle(db ethdb.KeyValueWriter, addr []byte, cycle int64) {
 	_ = db.Put(delegBeginCycleKey(addr), buf[:])
 }
 
+func BeginCycleStateKey(addr []byte) []byte {
+	return delegBeginCycleKey(addr)
+}
+
 // ReadEndCycle returns the voter's endCycle cursor. Returns RewardRemark (-1)
 // if never written, matching java-tron's DelegationStore.getEndCycle sentinel.
 func ReadEndCycle(db ethdb.KeyValueReader, addr []byte) int64 {
@@ -156,4 +180,8 @@ func WriteEndCycle(db ethdb.KeyValueWriter, addr []byte, cycle int64) {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(cycle))
 	_ = db.Put(delegEndCycleKey(addr), buf[:])
+}
+
+func EndCycleStateKey(addr []byte) []byte {
+	return delegEndCycleKey(addr)
 }

@@ -9,7 +9,6 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -25,6 +24,7 @@ func newVoteRewardTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicPropert
 	}
 	dp := state.NewDynamicProperties()
 	dp.SetCurrentCycleNumber(10)
+	dp.SetNewRewardAlgorithmEffectiveCycle(0)
 	statedb.SetDynamicProperties(dp)
 	tvm := NewTVM(statedb, dp, tcommon.Address{}, 1, 123456, tcommon.Address{}, 1, TVMConfig{Vote: true})
 	tvm.SetDB(diskdb)
@@ -42,9 +42,9 @@ func seedPendingTVMReward(statedb *state.StateDB, tvm *TVM, voter, witness tcomm
 	statedb.CreateAccount(voter, corepb.AccountType_Normal)
 	statedb.SetAllowance(voter, allowance)
 	statedb.SetVotes(voter, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: votes}})
-	rawdb.WriteBeginCycle(tvm.DB, voter.Bytes(), 1)
-	rawdb.WriteWitnessVI(tvm.DB, 0, witness.Bytes(), new(big.Int))
-	rawdb.WriteWitnessVI(tvm.DB, 9, witness.Bytes(), reward.DecimalOfViReward)
+	_ = statedb.WriteBeginCycle(voter.Bytes(), 1)
+	_ = statedb.WriteWitnessVI(0, witness.Bytes(), new(big.Int))
+	_ = statedb.WriteWitnessVI(9, witness.Bytes(), reward.DecimalOfViReward)
 }
 
 func int64FromWord(out []byte) int64 {
@@ -75,7 +75,7 @@ func TestRewardBalancePrecompileQueriesCallerReward(t *testing.T) {
 	if got := statedb.GetAllowance(caller); got != 50 {
 		t.Fatalf("query mutated allowance: got %d, want 50", got)
 	}
-	if got := rawdb.ReadBeginCycle(tvm.DB, caller.Bytes()); got != 1 {
+	if got := statedb.ReadBeginCycle(caller.Bytes()); got != 1 {
 		t.Fatalf("query mutated begin cycle: got %d, want 1", got)
 	}
 }
@@ -105,7 +105,7 @@ func TestWithdrawRewardOpcodeSettlesPendingReward(t *testing.T) {
 	if got := statedb.GetLatestWithdrawTime(caller); got != tvm.Timestamp {
 		t.Fatalf("latest withdraw: got %d, want %d", got, tvm.Timestamp)
 	}
-	if got := rawdb.ReadBeginCycle(tvm.DB, caller.Bytes()); got != 10 {
+	if got := statedb.ReadBeginCycle(caller.Bytes()); got != 10 {
 		t.Fatalf("begin cycle: got %d, want 10", got)
 	}
 }

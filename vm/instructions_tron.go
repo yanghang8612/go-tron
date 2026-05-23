@@ -7,10 +7,8 @@ package vm
 import (
 	"encoding/binary"
 	"errors"
-	"math/big"
 	"math/bits"
 
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/delegation"
@@ -851,24 +849,24 @@ func isTVMGenesisWitness(tvm *TVM, addr tcommon.Address) bool {
 }
 
 func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
-	if tvm == nil || !tvm.cfg.Vote || tvm.DB == nil || tvm.StateDB == nil || tvm.DynProps == nil {
+	if tvm == nil || !tvm.cfg.Vote || tvm.StateDB == nil || tvm.DynProps == nil {
 		return
 	}
 	currentCycle := tvm.DynProps.CurrentCycleNumber()
-	beginCycle := rawdb.ReadBeginCycle(tvm.DB, addr.Bytes())
-	endCycle := rawdb.ReadEndCycle(tvm.DB, addr.Bytes())
+	beginCycle := tvm.StateDB.ReadBeginCycle(addr.Bytes())
+	endCycle := tvm.StateDB.ReadEndCycle(addr.Bytes())
 	acct := tvm.StateDB.GetAccount(addr)
 	if acct == nil || beginCycle > currentCycle {
 		return
 	}
 	if beginCycle == currentCycle {
-		if snap := rawdb.ReadCycleAccountVote(tvm.DB, beginCycle, addr.Bytes()); snap != nil {
+		if snap := tvm.StateDB.ReadCycleAccountVote(beginCycle, addr.Bytes()); snap != nil {
 			return
 		}
 	}
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
-		if votes := tvmReadSnapshotVotes(tvm.DB, beginCycle, addr); len(votes) > 0 {
-			tvmAdjustAllowance(tvm, addr, tvmComputeVoterReward(tvm.DB, votes, beginCycle, endCycle))
+		if votes := tvmReadSnapshotVotes(tvm.StateDB, beginCycle, addr); len(votes) > 0 {
+			tvmAdjustAllowance(tvm, addr, reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, votes, beginCycle, endCycle))
 		}
 		beginCycle++
 	}
@@ -876,21 +874,21 @@ func tvmWithdrawReward(tvm *TVM, addr tcommon.Address) {
 
 	currentVotes := tvmVoteEntriesFromAccount(acct)
 	if len(currentVotes) == 0 {
-		rawdb.WriteBeginCycle(tvm.DB, addr.Bytes(), endCycle+1)
+		_ = tvm.StateDB.WriteBeginCycle(addr.Bytes(), endCycle+1)
 		return
 	}
 	if beginCycle < endCycle {
-		tvmAdjustAllowance(tvm, addr, tvmComputeVoterReward(tvm.DB, currentVotes, beginCycle, endCycle))
+		tvmAdjustAllowance(tvm, addr, reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, currentVotes, beginCycle, endCycle))
 	}
-	rawdb.WriteBeginCycle(tvm.DB, addr.Bytes(), endCycle)
-	rawdb.WriteEndCycle(tvm.DB, addr.Bytes(), endCycle+1)
+	_ = tvm.StateDB.WriteBeginCycle(addr.Bytes(), endCycle)
+	_ = tvm.StateDB.WriteEndCycle(addr.Bytes(), endCycle+1)
 	if snap := tvmMarshalAccountVote(acct); snap != nil {
-		rawdb.WriteCycleAccountVote(tvm.DB, endCycle, addr.Bytes(), snap)
+		_ = tvm.StateDB.WriteCycleAccountVote(endCycle, addr.Bytes(), snap)
 	}
 }
 
 func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
-	if tvm == nil || !tvm.cfg.Vote || tvm.DB == nil || tvm.StateDB == nil || tvm.DynProps == nil {
+	if tvm == nil || !tvm.cfg.Vote || tvm.StateDB == nil || tvm.DynProps == nil {
 		return 0
 	}
 	acct := tvm.StateDB.GetAccount(addr)
@@ -899,16 +897,16 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 	}
 	allowance := tvm.StateDB.GetAllowance(addr)
 	currentCycle := tvm.DynProps.CurrentCycleNumber()
-	beginCycle := rawdb.ReadBeginCycle(tvm.DB, addr.Bytes())
-	endCycle := rawdb.ReadEndCycle(tvm.DB, addr.Bytes())
+	beginCycle := tvm.StateDB.ReadBeginCycle(addr.Bytes())
+	endCycle := tvm.StateDB.ReadEndCycle(addr.Bytes())
 	if beginCycle > currentCycle {
 		return allowance
 	}
 
 	var pending int64
 	if beginCycle+1 == endCycle && beginCycle < currentCycle {
-		if votes := tvmReadSnapshotVotes(tvm.DB, beginCycle, addr); len(votes) > 0 {
-			pending += tvmComputeVoterReward(tvm.DB, votes, beginCycle, endCycle)
+		if votes := tvmReadSnapshotVotes(tvm.StateDB, beginCycle, addr); len(votes) > 0 {
+			pending += reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, votes, beginCycle, endCycle)
 		}
 		beginCycle++
 	}
@@ -918,7 +916,7 @@ func tvmQueryReward(tvm *TVM, addr tcommon.Address) int64 {
 		return pending + allowance
 	}
 	if beginCycle < endCycle {
-		pending += tvmComputeVoterReward(tvm.DB, currentVotes, beginCycle, endCycle)
+		pending += reward.ComputeVoterReward(tvm.StateDB, tvm.DynProps, currentVotes, beginCycle, endCycle)
 	}
 	return pending + allowance
 }
@@ -943,8 +941,10 @@ func tvmVoteEntriesFromAccount(acct tvmVoteAccount) []reward.VoteEntry {
 	return out
 }
 
-func tvmReadSnapshotVotes(db ethdb.KeyValueReader, cycle int64, addr tcommon.Address) []reward.VoteEntry {
-	raw := rawdb.ReadCycleAccountVote(db, cycle, addr.Bytes())
+func tvmReadSnapshotVotes(store interface {
+	ReadCycleAccountVote(cycle int64, addr []byte) []byte
+}, cycle int64, addr tcommon.Address) []reward.VoteEntry {
+	raw := store.ReadCycleAccountVote(cycle, addr.Bytes())
 	if len(raw) == 0 {
 		return nil
 	}
@@ -971,25 +971,6 @@ func tvmMarshalAccountVote(acct tvmVoteAccount) []byte {
 		return nil
 	}
 	return raw
-}
-
-func tvmComputeVoterReward(db ethdb.KeyValueReader, votes []reward.VoteEntry, beginCycle, endCycle int64) int64 {
-	if beginCycle >= endCycle {
-		return 0
-	}
-	var total int64
-	for _, vote := range votes {
-		beginVI := rawdb.ReadWitnessVI(db, beginCycle-1, vote.Witness.Bytes())
-		endVI := rawdb.ReadWitnessVI(db, endCycle-1, vote.Witness.Bytes())
-		delta := new(big.Int).Sub(endVI, beginVI)
-		if delta.Sign() <= 0 {
-			continue
-		}
-		share := new(big.Int).Mul(delta, big.NewInt(vote.Count))
-		share.Quo(share, reward.DecimalOfViReward)
-		total += share.Int64()
-	}
-	return total
 }
 
 func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {

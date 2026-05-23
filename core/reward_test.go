@@ -6,7 +6,6 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -36,7 +35,7 @@ func TestPayBlockReward_LegacyFlat(t *testing.T) {
 		t.Fatalf("legacy allowance: got %d, want 1000", got)
 	}
 	// Voter pool should be zero — legacy path doesn't touch it.
-	if got := rawdb.ReadCycleReward(db, 0, addr.Bytes()); got != 0 {
+	if got := statedb.ReadCycleReward(0, addr.Bytes()); got != 0 {
 		t.Fatalf("cycle reward: got %d, want 0", got)
 	}
 }
@@ -56,7 +55,7 @@ func TestPayBlockReward_BrokerageSplit(t *testing.T) {
 	if got := statedb.GetAllowance(addr); got != 20 {
 		t.Fatalf("witness allowance: got %d, want 20", got)
 	}
-	if got := rawdb.ReadCycleReward(db, 5, addr.Bytes()); got != 80 {
+	if got := statedb.ReadCycleReward(5, addr.Bytes()); got != 80 {
 		t.Fatalf("voter pool: got %d, want 80", got)
 	}
 }
@@ -71,14 +70,14 @@ func TestPayBlockReward_CustomBrokerage(t *testing.T) {
 	statedb.CreateAccount(addr, 0)
 
 	// Write 50% brokerage snapshot for cycle 3.
-	rawdb.WriteCycleBrokerage(db, 3, addr.Bytes(), 50)
+	_ = statedb.WriteCycleBrokerage(3, addr.Bytes(), 50)
 
 	payBlockReward(db, statedb, dp, addr, 1000)
 
 	if got := statedb.GetAllowance(addr); got != 500 {
 		t.Fatalf("witness allowance: got %d, want 500", got)
 	}
-	if got := rawdb.ReadCycleReward(db, 3, addr.Bytes()); got != 500 {
+	if got := statedb.ReadCycleReward(3, addr.Bytes()); got != 500 {
 		t.Fatalf("voter pool: got %d, want 500", got)
 	}
 }
@@ -100,7 +99,7 @@ func TestPayBlockReward_AccumulatesAcrossBlocks(t *testing.T) {
 	if got := statedb.GetAllowance(addr); got != 60 {
 		t.Fatalf("accumulated allowance: got %d, want 60", got)
 	}
-	if got := rawdb.ReadCycleReward(db, 1, addr.Bytes()); got != 240 {
+	if got := statedb.ReadCycleReward(1, addr.Bytes()); got != 240 {
 		t.Fatalf("accumulated pool: got %d, want 240", got)
 	}
 }
@@ -122,7 +121,7 @@ func TestPayTransactionFeeReward_LegacyFlat(t *testing.T) {
 	if got := dp.TransactionFeePool(); got != 0 {
 		t.Fatalf("transaction fee pool: got %d, want 0", got)
 	}
-	if got := rawdb.ReadCycleReward(db, 0, addr.Bytes()); got != 0 {
+	if got := statedb.ReadCycleReward(0, addr.Bytes()); got != 0 {
 		t.Fatalf("cycle reward: got %d, want 0", got)
 	}
 }
@@ -143,7 +142,7 @@ func TestPayTransactionFeeReward_BrokerageSplit(t *testing.T) {
 	if got := statedb.GetAllowance(addr); got != 200 {
 		t.Fatalf("witness fee allowance: got %d, want 200", got)
 	}
-	if got := rawdb.ReadCycleReward(db, 5, addr.Bytes()); got != 800 {
+	if got := statedb.ReadCycleReward(5, addr.Bytes()); got != 800 {
 		t.Fatalf("fee voter pool: got %d, want 800", got)
 	}
 	if got := dp.TransactionFeePool(); got != 0 {
@@ -170,14 +169,14 @@ func TestPayTransactionFeeReward_Disabled(t *testing.T) {
 }
 
 func TestAccumulateWitnessVi_FirstReward(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	addr := []byte{0x41, 0x01}
 
 	// Seed cycle 5 with reward 1000 and voteCount 200.
-	rawdb.WriteCycleReward(db, 5, addr, 1000)
-	accumulateWitnessVi(db, 5, addr, 200)
+	_ = statedb.WriteCycleReward(5, addr, 1000)
+	accumulateWitnessVi(statedb, 5, addr, 200)
 
-	got := rawdb.ReadWitnessVI(db, 5, addr)
+	got := statedb.ReadWitnessVI(5, addr)
 	// delta = 1000 * 10^18 / 200 = 5 * 10^18
 	want := new(big.Int).Mul(big.NewInt(5), reward.DecimalOfViReward)
 	if got.Cmp(want) != 0 {
@@ -186,47 +185,47 @@ func TestAccumulateWitnessVi_FirstReward(t *testing.T) {
 }
 
 func TestAccumulateWitnessVi_ForwardsPreviousWhenNoReward(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	addr := []byte{0x41, 0x01}
 
 	// Cycle 4 has VI = 7 × 10^18 (from some prior cycle), cycle 5 has no reward.
 	prevVi := new(big.Int).Mul(big.NewInt(7), reward.DecimalOfViReward)
-	rawdb.WriteWitnessVI(db, 4, addr, prevVi)
+	_ = statedb.WriteWitnessVI(4, addr, prevVi)
 
-	accumulateWitnessVi(db, 5, addr, 200) // no reward written for cycle 5
+	accumulateWitnessVi(statedb, 5, addr, 200) // no reward written for cycle 5
 
-	got := rawdb.ReadWitnessVI(db, 5, addr)
+	got := statedb.ReadWitnessVI(5, addr)
 	if got.Cmp(prevVi) != 0 {
 		t.Fatalf("vi should forward prior value: got %s, want %s", got.String(), prevVi.String())
 	}
 }
 
 func TestAccumulateWitnessVi_SkipsWhenVoteZero(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	addr := []byte{0x41, 0x01}
 
-	rawdb.WriteCycleReward(db, 5, addr, 1000)
+	_ = statedb.WriteCycleReward(5, addr, 1000)
 	// voteCount = 0 → should skip write (no prior VI to forward).
-	accumulateWitnessVi(db, 5, addr, 0)
+	accumulateWitnessVi(statedb, 5, addr, 0)
 
-	got := rawdb.ReadWitnessVI(db, 5, addr)
+	got := statedb.ReadWitnessVI(5, addr)
 	if got.Sign() != 0 {
 		t.Fatalf("vi: expected zero (no write), got %s", got.String())
 	}
 }
 
 func TestAccumulateWitnessVi_AddsToPrevious(t *testing.T) {
-	db := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	addr := []byte{0x41, 0x01}
 
 	prevVi := new(big.Int).Mul(big.NewInt(3), reward.DecimalOfViReward)
-	rawdb.WriteWitnessVI(db, 9, addr, prevVi)
+	_ = statedb.WriteWitnessVI(9, addr, prevVi)
 
 	// Cycle 10 reward = 500, voteCount = 100 → delta = 5 × 10^18.
-	rawdb.WriteCycleReward(db, 10, addr, 500)
-	accumulateWitnessVi(db, 10, addr, 100)
+	_ = statedb.WriteCycleReward(10, addr, 500)
+	accumulateWitnessVi(statedb, 10, addr, 100)
 
-	got := rawdb.ReadWitnessVI(db, 10, addr)
+	got := statedb.ReadWitnessVI(10, addr)
 	// Expected: prev (3e18) + delta (5e18) = 8e18.
 	want := new(big.Int).Mul(big.NewInt(8), reward.DecimalOfViReward)
 	if got.Cmp(want) != 0 {

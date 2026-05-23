@@ -344,6 +344,12 @@ Implementation start:
 - Current witness brokerage set by `UpdateBrokerage` is staged in the same
   witness-owned domain. Maintenance cycle snapshots read this rooted current
   rate when writing per-cycle brokerage records.
+- Reward-v2 cycle snapshots now have a native `StateDB` typed store in the
+  system-owned `SystemReward` account-KV domain. Per-cycle reward pools,
+  per-cycle vote snapshots, witness VI, per-cycle brokerage snapshots, voter
+  account-vote snapshots, and voter begin/end cycle cursors are read/written
+  through `StateDB` in block reward, maintenance, withdraw actuator, TVM vote
+  reward opcodes, and brokerage RPC queries.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

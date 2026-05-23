@@ -967,7 +967,11 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
 	// rate. Mirror that semantic here so cross-impl byte-equal holds.
 	dp := b.chain.DynProps()
 	cycle := dp.CurrentCycleNumber()
-	return int64(rawdb.ReadCycleBrokerage(b.chain.db, cycle, addr.Bytes()))
+	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if sysKV == nil {
+		return int64(rawdb.DefaultBrokerage)
+	}
+	return int64(sysKV.ReadCycleBrokerage(cycle, addr.Bytes()))
 }
 
 func (b *TronBackend) TotalTransaction() int64 {
