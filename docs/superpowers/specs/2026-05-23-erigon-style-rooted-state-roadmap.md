@@ -671,6 +671,15 @@ Acceptance:
 - Flat state prefixes can be rebuilt or are absent on a fresh DB.
 - All dailyBuild and java-tron parity tests pass.
 
+Implementation start:
+
+- `core/state` now has a production-path static guard that fails if non-test Go
+  files reintroduce `NewRootedStore(...)` wrappers outside the legacy adapter
+  itself.
+- The same guard rejects production uses of legacy address-keyed
+  `rawdb.ReadCode` / `rawdb.WriteCode`; those accessors remain only for explicit
+  compatibility tests and rawdb adapter code.
+
 Estimated effort: 4-7 days.
 
 ## Validation Matrix
