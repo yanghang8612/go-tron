@@ -239,6 +239,16 @@ Acceptance:
 - `go test ./core/state ./core/rawdb ./core/blockbuffer ./core -count=1`
   passes.
 
+Implementation start:
+
+- `core/state/domains` now owns the Phase-1 latest-domain interfaces, latest-key
+  encoding, in-memory overlay, operation batch, prefix tombstones, hooks, and
+  metrics.
+- `StateDB.Domains()` adapts the current account-KV trie to the domain
+  interfaces while keeping the MPT/account-KV root authoritative. Prefix delete
+  against `StateDB` remains explicitly unsupported until Phase 2 adds a physical
+  latest-state index.
+
 Estimated effort: 5-7 days.
 
 ## Phase 2: Latest-State Physical Index
