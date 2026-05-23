@@ -356,6 +356,11 @@ Implementation start:
   account indexes are read/written through `StateDB` in freeze/unfreeze,
   delegate/undelegate, TVM resource opcodes, staking precompiles, and
   delegation RPC queries.
+- Shielded global records now have a native `StateDB` typed store in the
+  system-owned `SystemShielded` account-KV domain. Nullifiers, note
+  commitments, proof verification cache rows, incremental Merkle trees, the
+  current/last tree sentinels, and block-number-to-root indexes are used
+  through `StateDB` by shielded actuators and block Merkle lifecycle hooks.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

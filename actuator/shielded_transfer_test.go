@@ -4,9 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -31,7 +29,7 @@ func shieldedReceive(commitment []byte) *contractpb.ReceiveDescription {
 
 func seedShieldedAnchor(t *testing.T, ctx *Context, anchor []byte) {
 	t.Helper()
-	if err := rawdb.WriteIncrMerkleTree(ctx.DB, anchor, &contractpb.IncrementalMerkleTree{}); err != nil {
+	if err := ctx.State.WriteIncrMerkleTree(anchor, &contractpb.IncrementalMerkleTree{}); err != nil {
 		t.Fatalf("WriteIncrMerkleTree: %v", err)
 	}
 }
@@ -45,7 +43,6 @@ func fixedShieldedBytes(label string, size int) []byte {
 func setupShieldedCtx(t *testing.T, c *contractpb.ShieldedTransferContract) *Context {
 	t.Helper()
 	ctx := newTestContext(t, corepb.Transaction_Contract_ShieldedTransferContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	ctx.DynProps.SetAllowSameTokenName(true)
 	ctx.DynProps.SetAllowShieldedTransaction(true)
 	return ctx
@@ -60,7 +57,6 @@ func TestShieldedTransferDisabled(t *testing.T) {
 		SpendDescription:       []*contractpb.SpendDescription{{Nullifier: []byte("nullifier1")}},
 	}
 	ctx := newTestContext(t, corepb.Transaction_Contract_ShieldedTransferContract, c, 0)
-	ctx.DB = ethrawdb.NewMemoryDatabase()
 	// AllowShieldedTransaction defaults to false
 
 	act := &ShieldedTransferActuator{}
@@ -96,7 +92,7 @@ func TestShieldedTransferValidateTransparentFrom(t *testing.T) {
 
 	// Fund account properly: fromAmount(500k) + fee(100k) = 600k
 	ctx.State.SetTRC10Balance(owner, zenTokenID, 600_000)
-	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), true); err != nil {
+	if err := ctx.State.WriteZKProofResult(ctx.Tx.Hash().Bytes(), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := act.Validate(ctx); err != nil {
@@ -119,7 +115,7 @@ func TestShieldedTransferDoubleSpend(t *testing.T) {
 	seedShieldedAnchor(t, ctx, anchor)
 
 	// Pre-record the nullifier to simulate double spend
-	if err := rawdb.WriteNullifier(ctx.DB, nullifier); err != nil {
+	if err := ctx.State.WriteNullifier(nullifier); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,7 +189,7 @@ func TestShieldedTransferValidateRejectsOutputProofShape(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	txID := ctx.Tx.Hash()
-	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID.Bytes()); !ok || cached {
+	if cached, ok := ctx.State.ReadZKProofResult(txID.Bytes()); !ok || cached {
 		t.Fatalf("failed proof cache: got (%v,%v), want (false,true)", cached, ok)
 	}
 
@@ -222,7 +218,7 @@ func TestShieldedTransferValidateRejectsUnverifiedProof(t *testing.T) {
 		t.Fatal("expected proof verification rejection")
 	}
 	txID := ctx.Tx.Hash()
-	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID.Bytes()); !ok || cached {
+	if cached, ok := ctx.State.ReadZKProofResult(txID.Bytes()); !ok || cached {
 		t.Fatalf("failed proof cache: got (%v,%v), want (false,true)", cached, ok)
 	}
 }
@@ -239,7 +235,7 @@ func TestShieldedTransferValidateCachedProofSuccess(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetTRC10Balance(owner, zenTokenID, 1_000_000)
 
-	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), true); err != nil {
+	if err := ctx.State.WriteZKProofResult(ctx.Tx.Hash().Bytes(), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
@@ -273,7 +269,7 @@ func TestShieldedTransferValidateAcceptsHistoricalNileOutputProof(t *testing.T) 
 		ctx.State.SetTRC10Balance(owner, ctx.DynProps.ZenTokenID(), c.FromAmount)
 
 		if seedFailedCache {
-			if err := rawdb.WriteZKProofResult(ctx.DB, tx.Hash().Bytes(), false); err != nil {
+			if err := ctx.State.WriteZKProofResult(tx.Hash().Bytes(), false); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -281,7 +277,7 @@ func TestShieldedTransferValidateAcceptsHistoricalNileOutputProof(t *testing.T) 
 		if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
 			t.Fatalf("historical Nile shielded transfer should validate: %v", err)
 		}
-		if cached, ok := rawdb.ReadZKProofResult(ctx.DB, tx.Hash().Bytes()); !ok || !cached {
+		if cached, ok := ctx.State.ReadZKProofResult(tx.Hash().Bytes()); !ok || !cached {
 			t.Fatalf("proof cache: got (%v,%v), want (true,true)", cached, ok)
 		}
 	}
@@ -375,14 +371,14 @@ func TestHistoricalNileShieldedFeeOnlyReplaySkipsAnonymousValidation(t *testing.
 		ContractRet: corepb.Transaction_Result_SUCCESS,
 	}}
 	ctx.DynProps.AdjustTotalShieldedPoolValue(1_000_000)
-	if err := rawdb.WriteZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes(), false); err != nil {
+	if err := ctx.State.WriteZKProofResult(ctx.Tx.Hash().Bytes(), false); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := (&ShieldedTransferActuator{}).Validate(ctx); err != nil {
 		t.Fatalf("historical Nile fee-only replay should skip anonymous validation: %v", err)
 	}
-	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, ctx.Tx.Hash().Bytes()); !ok || !cached {
+	if cached, ok := ctx.State.ReadZKProofResult(ctx.Tx.Hash().Bytes()); !ok || !cached {
 		t.Fatalf("proof cache: got (%v,%v), want (true,true)", cached, ok)
 	}
 }
@@ -486,11 +482,11 @@ func TestHistoricalNileShieldedFeeOnlyReplayExecuteVisibleAccountingByShape(t *t
 				t.Fatalf("pool value: want %d, got %d", tc.wantPool, got)
 			}
 			for _, spend := range tc.contract.SpendDescription {
-				if rawdb.HasNullifier(ctx.DB, spend.Nullifier) {
+				if ctx.State.HasNullifier(spend.Nullifier) {
 					t.Fatal("historical fee-only replay must not persist nullifiers")
 				}
 			}
-			if got := rawdb.NoteCommitmentCount(ctx.DB); got != 0 {
+			if got := ctx.State.NoteCommitmentCount(); got != 0 {
 				t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
 			}
 		})
@@ -579,11 +575,11 @@ func TestShieldedTransferExecuteTransparentIn(t *testing.T) {
 		t.Fatalf("blackhole ZEN balance: want 100000, got %d", got)
 	}
 	// Nullifier should be recorded
-	if !rawdb.HasNullifier(ctx.DB, nullifier) {
+	if !ctx.State.HasNullifier(nullifier) {
 		t.Fatal("nullifier should be recorded after execute")
 	}
 	// Note commitment should be recorded
-	if got := rawdb.NoteCommitmentCount(ctx.DB); got != 1 {
+	if got := ctx.State.NoteCommitmentCount(); got != 1 {
 		t.Fatalf("note commitment count: want 1, got %d", got)
 	}
 	// Pool value: fromAmount - toAmount(0) - fee = 500k - 0 - 100k = 400k
@@ -624,7 +620,7 @@ func TestShieldedTransferExecuteTransparentOut(t *testing.T) {
 		t.Fatalf("recipient ZEN balance: want 300000, got %d", got)
 	}
 	// Nullifier recorded
-	if !rawdb.HasNullifier(ctx.DB, nullifier) {
+	if !ctx.State.HasNullifier(nullifier) {
 		t.Fatal("nullifier should be recorded")
 	}
 	// Pool: 1_000_000 + 0 - 300_000 - 100_000 (fee) = 600_000
@@ -664,13 +660,13 @@ func TestHistoricalNileShieldedFeeOnlyReplayExecuteKeepsVisibleAccountingOnly(t 
 	if got := ctx.State.GetTRC10Balance(params.BlackholeAddress, zenTokenID); got != 10_000_000 {
 		t.Fatalf("blackhole ZEN balance: want 10000000, got %d", got)
 	}
-	if rawdb.HasNullifier(ctx.DB, nullifier) {
+	if ctx.State.HasNullifier(nullifier) {
 		t.Fatal("historical fee-only replay must not persist nullifiers")
 	}
-	if got := rawdb.NoteCommitmentCount(ctx.DB); got != 0 {
+	if got := ctx.State.NoteCommitmentCount(); got != 0 {
 		t.Fatalf("historical fee-only replay must not persist note commitments, got %d", got)
 	}
-	if got := rawdb.ReadNoteCommitment(ctx.DB, 0); got != nil {
+	if got := ctx.State.ReadNoteCommitment(0); got != nil {
 		t.Fatalf("historical fee-only replay persisted commitment: %x", got)
 	}
 	if got := ctx.DynProps.TotalShieldedPoolValue(); got != 900_000 {

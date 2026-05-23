@@ -181,10 +181,10 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 		}
 		seenNullifiers[key] = struct{}{}
 		if !feeOnlyReplay {
-			if !rawdb.HasIncrMerkleTree(ctx.DB, spend.Anchor) {
+			if !ctx.State.HasIncrMerkleTree(spend.Anchor) {
 				return errors.New("Rt is invalid.")
 			}
-			if rawdb.HasNullifier(ctx.DB, spend.Nullifier) {
+			if ctx.State.HasNullifier(spend.Nullifier) {
 				return errors.New("note has been spend in this transaction")
 			}
 		}
@@ -226,7 +226,7 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 	txHash := ctx.Tx.Hash()
 	txID := txHash.Bytes()
 	skipProofVerification := feeOnlyReplay
-	if cached, ok := rawdb.ReadZKProofResult(ctx.DB, txID); ok {
+	if cached, ok := ctx.State.ReadZKProofResult(txID); ok {
 		if cached {
 			return nil
 		}
@@ -238,45 +238,45 @@ func (a *ShieldedTransferActuator) Validate(ctx *Context) error {
 	}
 	if !skipProofVerification {
 		if err := validateShieldedProofShape(c); err != nil {
-			_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+			_ = ctx.State.WriteZKProofResult(txID, false)
 			return err
 		}
 	}
 
 	valueBalance, ok := checkedAddInt64(c.ToAmount, -c.FromAmount)
 	if !ok {
-		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		_ = ctx.State.WriteZKProofResult(txID, false)
 		return errors.New("shielded pool value overflow")
 	}
 	valueBalance, ok = checkedAddInt64(valueBalance, fee)
 	if !ok {
-		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		_ = ctx.State.WriteZKProofResult(txID, false)
 		return errors.New("shielded pool value overflow")
 	}
 	newPool, ok := checkedAddInt64(ctx.DynProps.TotalShieldedPoolValue(), -valueBalance)
 	if !ok || newPool < 0 {
-		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		_ = ctx.State.WriteZKProofResult(txID, false)
 		return errors.New("total shielded pool value can not below 0")
 	}
 
 	if skipProofVerification {
-		return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+		return ctx.State.WriteZKProofResult(txID, true)
 	}
 
 	signHash, err := shieldedTransactionSignHash(ctx, c)
 	if err != nil {
-		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		_ = ctx.State.WriteZKProofResult(txID, false)
 		return err
 	}
 	if err := zksnark.VerifyShieldedTransfer(c, valueBalance, signHash); err != nil {
 		if isHistoricalShieldedProofCompatAllowed(ctx, txHash) {
-			return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+			return ctx.State.WriteZKProofResult(txID, true)
 		}
-		_ = rawdb.WriteZKProofResult(ctx.DB, txID, false)
+		_ = ctx.State.WriteZKProofResult(txID, false)
 		return err
 	}
 
-	return rawdb.WriteZKProofResult(ctx.DB, txID, true)
+	return ctx.State.WriteZKProofResult(txID, true)
 }
 
 func isHistoricalNileShieldedFeeOnlyReplay(ctx *Context) bool {
@@ -422,7 +422,7 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 			if len(spend.Nullifier) == 0 {
 				continue
 			}
-			if err := rawdb.WriteNullifier(ctx.DB, spend.Nullifier); err != nil {
+			if err := ctx.State.WriteNullifier(spend.Nullifier); err != nil {
 				return nil, err
 			}
 		}
@@ -437,12 +437,12 @@ func (a *ShieldedTransferActuator) Execute(ctx *Context) (*Result, error) {
 		// The tree state was reset from LAST_TREE before tx execution (see
 		// BlockChain.applyBlock) and is promoted back into LAST_TREE after
 		// the tx loop succeeds.
-		merkle := zksnark.NewMerkleContainer(ctx.DB)
+		merkle := zksnark.NewMerkleContainer(ctx.State)
 		for _, recv := range c.ReceiveDescription {
 			if len(recv.NoteCommitment) == 0 {
 				continue
 			}
-			if err := rawdb.AppendNoteCommitment(ctx.DB, recv.NoteCommitment); err != nil {
+			if err := ctx.State.AppendNoteCommitment(recv.NoteCommitment); err != nil {
 				return nil, err
 			}
 			var cm zksnark.PedersenHash

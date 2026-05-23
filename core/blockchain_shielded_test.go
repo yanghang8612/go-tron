@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -207,11 +206,15 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 		return bc
 	}
 
-	// Reads route through bc.BufferedDB() so they see writes that are still
-	// in the active/committed buffer layer — on a single-witness chain
-	// solidified == head, so flushBufferUpToSolidified drains each layer to
-	// disk immediately after CommitBlock and disk-fallback reads would also
-	// succeed, but BufferedDB is the safer choice.
+	openHeadState := func(t *testing.T, bc *BlockChain) *state.StateDB {
+		t.Helper()
+		statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+		if err != nil {
+			t.Fatalf("open head state: %v", err)
+		}
+		return statedb
+	}
+
 	t.Run("pre-activation block writes nothing", func(t *testing.T) {
 		bc := newChain(t, false)
 
@@ -220,7 +223,7 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 			t.Fatalf("InsertBlock(block1): %v", err)
 		}
 
-		if got := rawdb.ReadMerkleTreeRootByBlock(bc.BufferedDB(), 1); got != nil {
+		if got := openHeadState(t, bc).ReadMerkleTreeRootByBlock(1); got != nil {
 			t.Errorf("MerkleTreeIndexStore[1] should be absent pre-activation, got %x", got)
 		}
 	})
@@ -247,7 +250,8 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 			t.Fatalf("block1 not applied: head=%d", bc.CurrentBlock().Number())
 		}
 
-		root := rawdb.ReadMerkleTreeRootByBlock(bc.BufferedDB(), 1)
+		headState := openHeadState(t, bc)
+		root := headState.ReadMerkleTreeRootByBlock(1)
 		if len(root) == 0 {
 			t.Fatal("MerkleTreeIndexStore[1] missing on activation block")
 		}
@@ -256,7 +260,7 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 		if len(root) != 32 {
 			t.Errorf("root length = %d, want 32", len(root))
 		}
-		if !rawdb.HasIncrMerkleTree(bc.BufferedDB(), root) {
+		if !headState.HasIncrMerkleTree(root) {
 			t.Errorf("root %x not indexed in IncrementalMerkleTreeStore", root)
 		}
 	})
@@ -282,8 +286,9 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 		// Both blocks must have populated the index — java-tron writes one
 		// entry per block once the gate is on, even when the tree is
 		// unchanged. Wallet anchor lookups depend on the density.
-		root1 := rawdb.ReadMerkleTreeRootByBlock(bc.BufferedDB(), 1)
-		root2 := rawdb.ReadMerkleTreeRootByBlock(bc.BufferedDB(), 2)
+		headState := openHeadState(t, bc)
+		root1 := headState.ReadMerkleTreeRootByBlock(1)
+		root2 := headState.ReadMerkleTreeRootByBlock(2)
 		if len(root1) == 0 {
 			t.Error("MerkleTreeIndexStore[1] missing")
 		}

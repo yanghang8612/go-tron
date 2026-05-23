@@ -212,3 +212,35 @@ func WriteMerkleTreeRootByBlock(db ethdb.KeyValueWriter, blockNum int64, root []
 func DeleteMerkleTreeRootByBlock(db ethdb.KeyValueWriter, blockNum int64) error {
 	return db.Delete(merkleTreeIndexKey(blockNum))
 }
+
+func NullifierStateKey(nullifier []byte) []byte {
+	return nullifierKey(nullifier)
+}
+
+func NoteCommitmentCountStateKey() []byte {
+	return append([]byte(nil), noteCommitmentCountKey...)
+}
+
+func NoteCommitmentStateKey(index int64) []byte {
+	return noteCommitmentKey(index)
+}
+
+func ZKProofStateKey(txID []byte) []byte {
+	return zkProofKey(txID)
+}
+
+func IncrMerkleTreeStateKey(root []byte) []byte {
+	return incrMerkleTreeKey(root)
+}
+
+func IncrMerkleLastTreeStateKey() []byte {
+	return append([]byte(nil), incrMerkleLastTreeKey...)
+}
+
+func IncrMerkleCurrentTreeStateKey() []byte {
+	return append([]byte(nil), incrMerkleCurrentTreeKey...)
+}
+
+func MerkleTreeIndexStateKey(blockNum int64) []byte {
+	return merkleTreeIndexKey(blockNum)
+}

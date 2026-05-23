@@ -678,7 +678,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
 	}
 	if shieldedMerkleAvailable && shieldedActive {
-		if err := zksnark.NewMerkleContainer(rootedDB).ResetCurrent(); err != nil {
+		if err := zksnark.NewMerkleContainer(statedb).ResetCurrent(); err != nil {
 			return fmt.Errorf("reset shielded merkle tree: %w", err)
 		}
 	}
@@ -741,7 +741,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// disjunction here — drift between the two call sites would silently
 	// break the java-tron LAST_TREE / MerkleTreeIndexStore density invariant.
 	if shieldedMerkleAvailable && shieldedActive {
-		if err := zksnark.NewMerkleContainer(rootedDB).SaveCurrentAsBest(int64(block.Number())); err != nil {
+		if err := zksnark.NewMerkleContainer(statedb).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
 	}

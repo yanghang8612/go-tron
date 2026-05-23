@@ -15,7 +15,7 @@ import (
 // GetBest with no prior writes — both fall back to the empty tree.
 func TestContainerEmptyFallback(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	if t1, t2 := c.GetCurrent(), c.GetBest(); t1.Size() != 0 || t2.Size() != 0 {
 		t.Fatalf("empty container should give size-0 trees: current=%d best=%d", t1.Size(), t2.Size())
@@ -26,7 +26,7 @@ func TestContainerEmptyFallback(t *testing.T) {
 // becomes a copy of LAST_TREE.
 func TestContainerResetFromBest(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	// Plant a non-trivial LAST_TREE.
 	leaf := PedersenHash{0x11, 0x22, 0x33}
@@ -54,7 +54,7 @@ func TestContainerResetFromBest(t *testing.T) {
 // ResetCurrent should avoid writing a zero-byte CURRENT_TREE sentinel.
 func TestContainerResetSkipsEmptyFallback(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	if err := c.ResetCurrent(); err != nil {
 		t.Fatalf("ResetCurrent: %v", err)
@@ -68,7 +68,7 @@ func TestContainerResetSkipsEmptyFallback(t *testing.T) {
 // current tree already matches best. Resetting again must be a no-op.
 func TestContainerResetSkipsUnchangedCurrent(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	best := NewTree()
 	if err := best.Append(PedersenHash{0x11}); err != nil {
@@ -94,7 +94,7 @@ func TestContainerResetSkipsUnchangedCurrent(t *testing.T) {
 // no-sapling build.
 func TestContainerAppendPersists(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	cm1 := PedersenHash{0xaa, 0xbb}
 	cm2 := PedersenHash{0xcc, 0xdd}
@@ -123,7 +123,7 @@ func TestContainerAppendPersists(t *testing.T) {
 // (e.g. by caching an empty root and silently saving invalid state).
 func TestContainerSaveRequiresPedersen(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	if err := c.AppendCommitment(PedersenHash{0xfe}); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestContainerSaveRequiresPedersen(t *testing.T) {
 // without recomputing Pedersen hashes.
 func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	best := NewTree()
 	if err := best.Append(PedersenHash{0x11}); err != nil {
@@ -187,7 +187,7 @@ func TestContainerSaveReusesPreviousRootWhenTreeUnchanged(t *testing.T) {
 // container must still reuse that previous root without invoking Pedersen.
 func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	root := make([]byte, len(PedersenHash{}))
 	root[0] = 0xbb
@@ -218,7 +218,7 @@ func TestContainerSaveReusesPreviousEmptyRootWhenLastTreeIsAbsent(t *testing.T) 
 // a tree under an arbitrary root key via the underlying rawdb accessor.
 func TestContainerAnchorExists(t *testing.T) {
 	db := memorydb.New()
-	c := NewMerkleContainer(db)
+	c := NewMerkleContainerFromDB(db)
 
 	root := make([]byte, 32)
 	root[0] = 0xab
