@@ -370,6 +370,10 @@ Implementation start:
   reset, proposal fork gates, multi-signature fork gates, adaptive-energy
   accounting gates, and backend constant-call config read fork stats from the
   current rooted state.
+- Dedicated contract ABI rows now have a native `StateDB` typed store in each
+  contract account's `ContractABI` domain. ClearABI execution writes the ABI
+  clear marker through the contract account state instead of the legacy flat
+  AbiStore.
 - The legacy flat witness rows remain as a compatibility mirror at genesis and
   during explicit `FlushWitnesses` compatibility drains; tests that assert
   canonical witness counters now read from the rooted head state.

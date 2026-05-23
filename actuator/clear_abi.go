@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,10 +66,8 @@ func (a *ClearABIActuator) Execute(ctx *Context) (*Result, error) {
 	if raw == nil {
 		return nil, errors.New("contract not found")
 	}
-	if ctx.DB != nil {
-		if err := rawdb.WriteContractABI(ctx.DB, contractAddr.Bytes(), &contractpb.SmartContract_ABI{}); err != nil {
-			return nil, err
-		}
+	if err := ctx.State.WriteContractABI(contractAddr, &contractpb.SmartContract_ABI{}); err != nil {
+		return nil, err
 	}
 	meta := proto.Clone(raw).(*contractpb.SmartContract)
 	meta.Abi = nil

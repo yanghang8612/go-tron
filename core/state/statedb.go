@@ -1571,6 +1571,35 @@ func (s *StateDB) WriteContractState(addr tcommon.Address, cs *types.ContractSta
 	return s.SetAccountKV(addr, kvdomains.ContractRuntimeState, contractStateKVKey, data)
 }
 
+// ReadContractABI loads the dedicated ABI store entry for a contract.
+func (s *StateDB) ReadContractABI(addr tcommon.Address) *contractpb.SmartContract_ABI {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	data, ok, err := s.GetAccountKV(addr, kvdomains.ContractABI, contractABIKVKey)
+	if err != nil || !ok {
+		return nil
+	}
+	var abi contractpb.SmartContract_ABI
+	if err := proto.Unmarshal(data, &abi); err != nil {
+		return nil
+	}
+	return &abi
+}
+
+// WriteContractABI stores a dedicated ABI entry for a contract.
+func (s *StateDB) WriteContractABI(addr tcommon.Address, abi *contractpb.SmartContract_ABI) error {
+	if abi == nil {
+		return s.DeleteAccountKV(addr, kvdomains.ContractABI, contractABIKVKey)
+	}
+	data, err := proto.Marshal(abi)
+	if err != nil {
+		return err
+	}
+	return s.SetAccountKV(addr, kvdomains.ContractABI, contractABIKVKey, data)
+}
+
 // IsContract returns whether the address has contract code or metadata.
 func (s *StateDB) IsContract(addr tcommon.Address) bool {
 	return s.GetContract(addr) != nil || len(s.GetCode(addr)) > 0

@@ -93,6 +93,9 @@ func TestClearABIExecute(t *testing.T) {
 	if got.Abi != nil {
 		t.Fatal("ABI not cleared")
 	}
+	if dedicated := ctx.State.ReadContractABI(contractAddr); dedicated == nil {
+		t.Fatal("dedicated ABI clear marker not written")
+	}
 }
 
 func TestClearABIValidate_ForkDisabled(t *testing.T) {

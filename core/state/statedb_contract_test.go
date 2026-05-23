@@ -221,6 +221,74 @@ func TestStateDBContractRuntimeStateIgnoresFutureFlatMirror(t *testing.T) {
 	}
 }
 
+func TestStateDBContractABIRoundTrip(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := tcommon.Address{0x41, 0x26}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetContract(addr, &contractpb.SmartContract{ContractAddress: addr.Bytes()})
+	abi := &contractpb.SmartContract_ABI{
+		Entrys: []*contractpb.SmartContract_ABI_Entry{{
+			Name: "transfer",
+			Type: contractpb.SmartContract_ABI_Entry_Function,
+		}},
+	}
+
+	if got := sdb.ReadContractABI(addr); got != nil {
+		t.Fatalf("ABI should be absent before write, got %+v", got)
+	}
+	if err := sdb.WriteContractABI(addr, abi); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := reloaded.ReadContractABI(addr); !proto.Equal(got, abi) {
+		t.Fatalf("ABI = %v, want %v", got, abi)
+	}
+}
+
+func TestStateDBContractABIIgnoresFutureFlatMirror(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x27}
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetContract(addr, &contractpb.SmartContract{ContractAddress: addr.Bytes()})
+	abi := &contractpb.SmartContract_ABI{
+		Entrys: []*contractpb.SmartContract_ABI_Entry{{Name: "rooted"}},
+	}
+	if err := sdb.WriteContractABI(addr, abi); err != nil {
+		t.Fatal(err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rawdb.WriteContractABI(diskdb, addr.Bytes(), &contractpb.SmartContract_ABI{
+		Entrys: []*contractpb.SmartContract_ABI_Entry{{Name: "future"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.ReadContractABI(addr); !proto.Equal(got, abi) {
+		t.Fatalf("historical root loaded future flat ABI: %v", got)
+	}
+}
+
 func TestStateDBContractReadsIgnoreFutureFlatMirror(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)
