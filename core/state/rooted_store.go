@@ -39,6 +39,9 @@ func IsRootedStore(db interface{}) bool {
 
 func (s *RootedStore) Has(key []byte) (bool, error) {
 	if s != nil && s.state != nil {
+		if owner, ok := rawdb.ParseLegacyCodeKey(key); ok {
+			return len(s.state.GetCode(owner)) > 0, nil
+		}
 		if rk, ok := rawdb.LookupRootedStateKey(key); ok {
 			_, exists, err := s.state.GetAccountKV(rk.Owner, rk.Domain, rk.Key)
 			return exists, err
@@ -52,6 +55,12 @@ func (s *RootedStore) Has(key []byte) (bool, error) {
 
 func (s *RootedStore) Get(key []byte) ([]byte, error) {
 	if s != nil && s.state != nil {
+		if owner, ok := rawdb.ParseLegacyCodeKey(key); ok {
+			if code := s.state.GetCode(owner); len(code) > 0 {
+				return append([]byte(nil), code...), nil
+			}
+			return nil, errors.New("rooted store: not found")
+		}
 		if rk, ok := rawdb.LookupRootedStateKey(key); ok {
 			value, exists, err := s.state.GetAccountKV(rk.Owner, rk.Domain, rk.Key)
 			if err != nil {
@@ -71,6 +80,9 @@ func (s *RootedStore) Get(key []byte) ([]byte, error) {
 
 func (s *RootedStore) Put(key, value []byte) error {
 	if s != nil && s.state != nil {
+		if owner, ok := rawdb.ParseLegacyCodeKey(key); ok {
+			s.state.SetCode(owner, value)
+		}
 		if rk, ok := rawdb.LookupRootedStateKey(key); ok {
 			if err := s.state.SetAccountKV(rk.Owner, rk.Domain, rk.Key, value); err != nil {
 				return err
@@ -85,6 +97,9 @@ func (s *RootedStore) Put(key, value []byte) error {
 
 func (s *RootedStore) Delete(key []byte) error {
 	if s != nil && s.state != nil {
+		if owner, ok := rawdb.ParseLegacyCodeKey(key); ok {
+			s.state.SetCode(owner, nil)
+		}
 		if rk, ok := rawdb.LookupRootedStateKey(key); ok {
 			if err := s.state.DeleteAccountKV(rk.Owner, rk.Domain, rk.Key); err != nil {
 				return err

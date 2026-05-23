@@ -238,8 +238,15 @@ func TestBuildBlock_FinalizesSelfDestructBetweenTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit seeded contract: %v", err)
 	}
-	if got := rawdb.ReadCode(diskdb, contractAddr); len(got) == 0 {
-		t.Fatal("seeded code missing")
+	seeded, err := state.New(newRoot, sdb)
+	if err != nil {
+		t.Fatalf("open seeded state: %v", err)
+	}
+	if got := seeded.GetCode(contractAddr); len(got) == 0 {
+		t.Fatal("seeded code missing from state")
+	}
+	if got := rawdb.ReadCode(diskdb, contractAddr); len(got) != 0 {
+		t.Fatalf("seeded code wrote legacy flat mirror: %x", got)
 	}
 	rawdb.WriteGenesisStateRoot(diskdb, newRoot)
 	rawdb.WriteBlockStateRoot(diskdb, genesisHash, newRoot)

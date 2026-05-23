@@ -413,6 +413,20 @@ Acceptance:
 - Code bytes are reachable from the internal full root through `CodeHash`.
 - No state path reads legacy `c-` for canonical state.
 
+Implementation:
+
+- `core/rawdb` now has `state-code-v1- || code_hash32 -> code_bytes`.
+- `StateDB.Commit` writes non-empty dirty bytecode into that immutable domain
+  and stores the selected hash in `StateAccountV2.CodeHash`; it deletes the old
+  address-keyed `c-` mirror on code/account changes instead of updating it.
+- `StateDB.GetCode` resolves bytecode only through the account envelope's
+  `CodeHash`; `GetCodeHash` returns that selected hash without loading code.
+- `RootedStore` keeps a compatibility view for explicit legacy `rawdb.ReadCode`
+  tests, but `LookupRootedStateKey` no longer classifies `c-` as rooted account
+  KV.
+- Live/archive history readers no longer use legacy flat code as a canonical
+  fallback; code history is captured from `StateDB` preimages.
+
 Estimated effort: 5-8 days.
 
 ## Phase 5: Change Sets and Block/Tx Numbering

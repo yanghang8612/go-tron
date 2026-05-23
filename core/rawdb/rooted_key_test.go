@@ -98,6 +98,7 @@ func TestLookupRootedStateKeyRuntimeDerivedAndHistoryStayFlat(t *testing.T) {
 		{name: "previous shuffled witnesses", key: previousShuffledWitnessesKey},
 		{name: "tapos recent block", key: taposKey([]byte{0x00, 0x01})},
 		{name: "total transaction count", key: totalTransactionCountKey},
+		{name: "legacy address code mirror", key: codeKey(owner.Bytes())},
 		{name: "state kv latest physical index", key: stateKVLatestKey(owner, 0, kvdomains.SystemDelegation, []byte("k"))},
 		{name: "state kv generation physical index", key: stateKVGenerationKey(owner)},
 		{name: "account trace", key: accountTraceKey(owner.Bytes(), 12)},

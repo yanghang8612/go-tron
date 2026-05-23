@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"bytes"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 )
@@ -67,4 +69,12 @@ func ReadStorage(db ethdb.KeyValueReader, addr common.Address, key common.Hash) 
 
 func DeleteCode(db ethdb.KeyValueWriter, addr common.Address) {
 	db.Delete(codeKey(addr.Bytes()))
+}
+
+// ParseLegacyCodeKey decodes an old address-keyed CodeStore key.
+func ParseLegacyCodeKey(key []byte) (common.Address, bool) {
+	if len(key) != len(codePrefix)+common.AddressLength || !bytes.HasPrefix(key, codePrefix) {
+		return common.Address{}, false
+	}
+	return common.BytesToAddress(key[len(codePrefix):]), true
 }

@@ -52,7 +52,7 @@ already-native typed stores in `core/state`.
 | `cs-` | contract / `ContractRuntimeState` | `RootedStore` bridge | Keep rooted; dynamic energy state is block-deterministic. |
 | `ct-` | contract / `ContractMetadata` | `StateDB` native KV plus mirror | Keep rooted; remove rawdb mirror from execution path. |
 | `s-` | contract / `ContractStorage` | `StateDB` native KV plus mirror | Keep rooted; final physical key becomes prefix-iterable account-KV domain. |
-| `c-` | contract now, future `CodeDomain` by `code_hash` | `StateDB` stores code under `ContractMetadata/code` | Move to content-addressed immutable code domain in Phase 4. |
+| `c-` | legacy address-keyed code mirror; canonical code is `state-code-v1-` by `code_hash` | Compatibility accessor only; `StateDB` reads `CodeHash -> CodeDomain` | Keep out of rooted state. Fresh DBs write canonical bytecode to content-addressed `state-code-v1-`; legacy `c-` is deleted on code/account changes and never read for canonical state. |
 | `nf-`, `nc-`, `nccount` | system / `SystemShielded` | `RootedStore` bridge | Keep rooted; spend/nullifier and note commitment state affects shielded validation. |
 | `zkp-` | system / `SystemShielded` | `RootedStore` bridge | Keep rooted while java-tron-visible proof result cache participates in shielded execution. Revisit if proven pure cache. |
 | `imt-`, `imt-LAST_TREE`, `imt-CURRENT_TREE` | system / `SystemShielded` | `RootedStore` bridge | Keep rooted; shielded anchor validation depends on deterministic tree state. |

@@ -183,6 +183,14 @@ var (
 	// Value: 0x01 || value, preserving empty-but-present values.
 	stateKVLatestPrefix = []byte("state-kv-latest-v2-")
 
+	// stateCodePrefix is the content-addressed TVM bytecode domain.
+	// Account envelopes commit only the code hash; code bytes are immutable
+	// payloads keyed by that hash.
+	//
+	// Key:   state-code-v1- || code_hash32
+	// Value: contract bytecode
+	stateCodePrefix = []byte("state-code-v1-")
+
 	// stateKVGenerationPrefix stores the latest physical generation observed
 	// for an account. It lets a later recreate pick generation+1 without
 	// scanning or deleting old latest rows from prior incarnations.
@@ -567,6 +575,12 @@ func stateKVGenerationKey(owner common.Address) []byte {
 	k := make([]byte, 0, len(stateKVGenerationPrefix)+common.AccountIDLength)
 	k = append(k, stateKVGenerationPrefix...)
 	return append(k, accountID[:]...)
+}
+
+func stateCodeKey(hash common.Hash) []byte {
+	k := make([]byte, 0, len(stateCodePrefix)+common.HashLength)
+	k = append(k, stateCodePrefix...)
+	return append(k, hash.Bytes()...)
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the

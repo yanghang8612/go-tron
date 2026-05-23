@@ -74,8 +74,9 @@ type HistoryReader interface {
 // trie.Get), and satisfies this interface directly via GetAccount.
 //
 // Storage cells and contract code are available from StateDB's rooted contract
-// domains; flat reads are used only when a caller supplies no live contract
-// reader.
+// domains. Contract code requires a live contract reader because the canonical
+// address -> code-hash edge lives in the account envelope, not in the legacy
+// flat CodeStore.
 type LiveAccountReader interface {
 	GetAccount(addr tcommon.Address) *types.Account
 }
@@ -90,9 +91,9 @@ type LiveContractReader interface {
 // that weren't synced with HistoryEnabled=true — those nodes don't have
 // sh-* rows on disk, so the only available answer is "current state".
 //
-// Backed by a LiveAccountReader (for accounts) + the disk KV (for storage
-// and code) — the same shape the archive reader uses for its
-// end-of-HEAD baseline.
+// Backed by a LiveAccountReader (for accounts) plus optional live contract
+// reads. Without a live contract reader, CodeAt degrades to nil because the
+// content-addressed code domain is keyed by hash, not by address.
 type LiveStateHistoryReader struct {
 	db   ethdb.KeyValueReader
 	live LiveAccountReader
@@ -100,11 +101,13 @@ type LiveStateHistoryReader struct {
 
 // NewLiveStateHistoryReader wraps a (disk KV reader, live-account reader)
 // pair as a HistoryReader that returns live state for any block. `db` serves
-// storage and code from flat-state; `live` resolves accounts via the trie.
+// storage from flat compatibility paths when no live contract reader exists;
+// `live` resolves accounts and contract code via the trie-backed state.
 //
 // `live` may be nil — in that case `AccountAt` returns nil (degraded
-// "no account exists" semantics) but storage and code reads continue to
-// function. This is the same nil tolerance as PersistentHistoryReader so
+// "no account exists" semantics) but storage reads continue to function.
+// Contract code returns nil without a live contract reader. This is the same
+// nil tolerance as PersistentHistoryReader so
 // the two readers share an interface contract.
 //
 // Parameter order is (db, live) to match NewPersistentHistoryReader and
@@ -146,11 +149,7 @@ func (r *LiveStateHistoryReader) CodeAt(addr tcommon.Address, _ uint64) ([]byte,
 		}
 		return append([]byte(nil), code...), nil
 	}
-	code := rawdb.ReadCode(r.db, addr)
-	if len(code) == 0 {
-		return nil, nil
-	}
-	return code, nil
+	return nil, nil
 }
 
 // Compile-time interface checks.
@@ -444,24 +443,22 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 }
 
 // readAccountAndCodeLive reads the current account + code for addr from
-// the chain's live view. Account/code resolution goes through the MPT-backed
-// live reader when available; flat code is only a compatibility fallback.
+// the chain's live view. Code resolution goes through the account envelope's
+// CodeHash; there is no canonical address-keyed flat code fallback.
 func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) accountCacheEntry {
 	var acc *types.Account
 	if r.live != nil {
 		acc = r.live.GetAccount(addr)
 	}
 	if acc == nil {
-		// No live account means "no code either" — contract code is owned by
-		// the account's rooted KV and is cleared together with SELFDESTRUCT+
+		// No live account means "no code either" — contract code is selected
+		// by the account envelope and cleared together with SELFDESTRUCT+
 		// DeleteAccount in statedb.Commit().
 		return accountCacheEntry{}
 	}
 	var code []byte
 	if live, ok := r.live.(LiveContractReader); ok {
 		code = live.GetCode(addr)
-	} else {
-		code = rawdb.ReadCode(r.db, addr)
 	}
 	if len(code) == 0 {
 		code = nil

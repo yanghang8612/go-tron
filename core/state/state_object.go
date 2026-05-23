@@ -67,9 +67,14 @@ func (s *stateObject) markDirty() {
 func (s *stateObject) Account() *types.Account { return s.account }
 
 func (s *stateObject) setCode(code []byte) {
-	s.code = make([]byte, len(code))
-	copy(s.code, code)
-	s.codeHash = tcommon.Keccak256(code)
+	if len(code) == 0 {
+		s.code = nil
+		s.codeHash = tcommon.Hash{}
+	} else {
+		s.code = make([]byte, len(code))
+		copy(s.code, code)
+		s.codeHash = tcommon.Keccak256(code)
+	}
 	s.codeDirty = true
 	s.markDirty()
 }

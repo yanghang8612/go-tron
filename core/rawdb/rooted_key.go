@@ -24,9 +24,6 @@ func LookupRootedStateKey(key []byte) (RootedStateKey, bool) {
 	if len(key) == 0 {
 		return RootedStateKey{}, false
 	}
-	if owner, _, ok := ownerAndRestAfterPrefix(key, codePrefix); ok {
-		return rooted(owner, kvdomains.ContractMetadata, []byte("code")), true
-	}
 	if owner, _, ok := ownerAndRestAfterPrefix(key, contractPrefix); ok {
 		return rooted(owner, kvdomains.ContractMetadata, []byte("meta")), true
 	}

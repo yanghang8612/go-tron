@@ -7,6 +7,7 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -72,6 +73,13 @@ func TestContractCodePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
+	hash := tcommon.Keccak256(code)
+	if flat := rawdb.ReadCode(diskdb, contractAddr); len(flat) != 0 {
+		t.Fatalf("legacy flat code mirror was written: %x", flat)
+	}
+	if got := rawdb.ReadStateCode(diskdb, hash); !bytes.Equal(got, code) {
+		t.Fatalf("state code domain = %x, want %x", got, code)
+	}
 
 	// Open a fresh StateDB — empty in-memory cache, same disk storage
 	db2 := NewDatabase(diskdb)
@@ -83,6 +91,17 @@ func TestContractCodePersistence(t *testing.T) {
 	got := sdb2.GetCode(contractAddr)
 	if !bytes.Equal(got, code) {
 		t.Fatalf("code not persisted after restart: got %x", got)
+	}
+	raw, err := sdb2.trie.Get(trieKey(contractAddr))
+	if err != nil || raw == nil {
+		t.Fatalf("trie.Get: data=%v err=%v", raw, err)
+	}
+	envelope, err := DecodeStateAccountV2(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.CodeHash != hash {
+		t.Fatalf("envelope CodeHash = %x, want %x", envelope.CodeHash, hash)
 	}
 }
 

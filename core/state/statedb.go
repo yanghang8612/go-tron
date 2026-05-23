@@ -1393,7 +1393,6 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 // --- Contract support ---
 
 var (
-	contractCodeKVKey  = []byte("code")
 	contractMetaKVKey  = []byte("meta")
 	contractABIKVKey   = []byte("abi")
 	contractStateKVKey = []byte("state")
@@ -1405,11 +1404,9 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	if obj == nil || obj.deleted {
 		return nil
 	}
-	if len(obj.code) == 0 && !obj.codeDirty {
-		code, ok, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractCodeKVKey)
-		if err == nil && ok && len(code) > 0 {
+	if obj.code == nil && !obj.codeDirty && obj.codeHash != (tcommon.Hash{}) {
+		if code := rawdb.ReadStateCode(s.db.DiskDB(), obj.codeHash); len(code) > 0 {
 			obj.code = append([]byte(nil), code...)
-			obj.codeHash = tcommon.Keccak256(code)
 		}
 	}
 	return obj.code
@@ -1418,9 +1415,10 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 // SetCode sets the contract bytecode at addr. Creates the account if needed.
 func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
 	obj := s.GetOrCreateAccount(addr)
+	prevCode := append([]byte(nil), s.GetCode(addr)...)
 	s.journal.append(codeChange{
 		address:  addr,
-		prevCode: obj.code,
+		prevCode: prevCode,
 		prevHash: obj.codeHash,
 	})
 	obj.setCode(code)
@@ -1442,7 +1440,8 @@ func (s *StateDB) GetCodeHash(addr tcommon.Address) tcommon.Hash {
 	if obj.codeHash != (tcommon.Hash{}) {
 		return obj.codeHash
 	}
-	if len(s.GetCode(addr)) > 0 {
+	if len(obj.code) > 0 {
+		obj.codeHash = tcommon.Keccak256(obj.code)
 		return obj.codeHash
 	}
 	return tcommon.Keccak256(nil)
@@ -1783,12 +1782,13 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			continue
 		}
 		if obj.codeDirty {
-			if len(obj.code) == 0 {
-				obj.stageDeleteKV(kvdomains.ContractMetadata, contractCodeKVKey)
+			if len(obj.code) == 0 || obj.codeHash == (tcommon.Hash{}) {
 				rawdb.DeleteCode(s.db.DiskDB(), addr)
 			} else {
-				obj.stageKV(kvdomains.ContractMetadata, contractCodeKVKey, obj.code)
-				rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
+				if err := rawdb.WriteStateCode(s.db.DiskDB(), obj.codeHash, obj.code); err != nil {
+					return tcommon.Hash{}, err
+				}
+				rawdb.DeleteCode(s.db.DiskDB(), addr)
 			}
 		}
 		if obj.contractMetaDirty {
@@ -1841,10 +1841,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			AccountProto:        accBytes,
 			AccountKVRoot:       obj.accountKVRoot,
 			AccountKVGeneration: obj.accountKVGeneration,
-			// CodeHash is zero until a content-addressed code domain is added;
-			// contract code still lives in the account-KV metadata domain, and
-			// the verbatim java code_hash remains inside AccountProto.
-			CodeHash: tcommon.Hash{},
+			CodeHash:            obj.codeHash,
 		}
 		data, err := envelope.Encode()
 		if err != nil {
@@ -2112,6 +2109,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	obj := newStateObject(addr, acc)
 	obj.accountKVRoot = envelope.AccountKVRoot
 	obj.accountKVGeneration = envelope.AccountKVGeneration
+	obj.codeHash = envelope.CodeHash
 	s.stateObjects[addr] = obj
 	return obj
 }
