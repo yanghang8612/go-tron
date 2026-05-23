@@ -126,10 +126,10 @@ type BlockChain struct {
 
 	khaosDB *KhaosDB
 
-	// buffer holds rawdb-direct writes from applyBlock that must be
-	// rewindable on switchFork (slice 1: witness statistics only). Layered
-	// per applyBlock; switchFork drops orphan-branch layers. Slice 1 does
-	// not flush to disk; reads must consult the buffer (see BufferedDB).
+	// buffer holds legacy rawdb-shaped mirror writes from applyBlock that must
+	// be rewindable on switchFork. Layered per applyBlock; switchFork drops
+	// orphan-branch layers. Rooted state is authoritative for consensus state,
+	// while BufferedDB keeps legacy readers aligned with unflushed mirrors.
 	buffer *blockbuffer.Buffer
 
 	// Async-flush plumbing. applyBlock posts the new solidified cutoff to
@@ -633,11 +633,12 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 	stats.mark(&stats.Validate)
 
-	// Open a fresh buffer layer for this block. The layer holds rawdb-direct
-	// writes (slice 1: witness statistics only) so that switchFork can drop
-	// the orphan-branch layers via DiscardBlock. On any error path the
-	// active layer is discarded; on success it is promoted via CommitBlock.
+	// Open a fresh buffer layer for this block. The layer holds legacy
+	// rawdb-shaped mirror writes so that switchFork can drop orphan-branch
+	// layers via DiscardBlock. On any error path the active layer is discarded;
+	// on success it is promoted via CommitBlock.
 	bc.buffer.BeginBlock(block.Hash())
+	rootedDB := state.NewRootedStore(statedb, bc.buffer)
 	defer func() {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
@@ -676,7 +677,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("shielded merkle tree backend unavailable: %w", zksnark.ErrPedersenUnimplemented)
 	}
 	if shieldedMerkleAvailable && shieldedActive {
-		if err := zksnark.NewMerkleContainer(bc.buffer).ResetCurrent(); err != nil {
+		if err := zksnark.NewMerkleContainer(rootedDB).ResetCurrent(); err != nil {
 			return fmt.Errorf("reset shielded merkle tree: %w", err)
 		}
 	}
@@ -717,9 +718,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}()
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, rootedDB, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
+		txInfos, _, err = processBlock(statedb, dynProps, block, rootedDB, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -739,7 +740,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// disjunction here — drift between the two call sites would silently
 	// break the java-tron LAST_TREE / MerkleTreeIndexStore density invariant.
 	if shieldedMerkleAvailable && shieldedActive {
-		if err := zksnark.NewMerkleContainer(bc.buffer).SaveCurrentAsBest(int64(block.Number())); err != nil {
+		if err := zksnark.NewMerkleContainer(rootedDB).SaveCurrentAsBest(int64(block.Number())); err != nil {
 			return fmt.Errorf("save shielded merkle tree: %w", err)
 		}
 	}
@@ -751,7 +752,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// back — so the merge order here ensures both the actuator-driven
 	// VoteCount and the consensus-driven counter updates land together
 	// instead of one overwriting the other. (D-2.c root-cause fix.)
-	statedb.FlushWitnesses(bc.buffer)
+	statedb.FlushWitnesses(rootedDB)
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
@@ -760,7 +761,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// is updated on dynProps in-memory and lands via dynProps.Flush(bc.db)
 	// below — not yet retrofitted onto the buffer (see slice 2 backlog in
 	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
-	dpos.ApplyBlockStatistics(bc.buffer, dynProps, block, previousHeadTimestamp,
+	dpos.ApplyBlockStatistics(rootedDB, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 	stats.mark(&stats.Execute)
 
@@ -794,10 +795,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// h=860k where 4 proposals had 27 SR approvals each but `state =
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records live in the rooted SystemProposal KV on
-			// statedb (Phase 3d), so they rewind with the state root on
-			// switchFork; bc.buffer remains only for the still-flat
-			// governance side-effects.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
+			// statedb; legacy-shaped governance side-effects pass through
+			// rootedDB so they are included in the full state root too.
+			if err := ProcessProposals(rootedDB, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.fc); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{
@@ -810,14 +810,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// tryRemoveThePowerOfTheGr mutates witness VoteCount before the
 			// java-tron reward-VI step. The earlier FlushWitnesses ran before
 			// maintenance, so drain this mutation now.
-			statedb.FlushWitnesses(bc.buffer)
+			statedb.FlushWitnesses(rootedDB)
 
 			// java-tron accumulates reward VI before VotesStore old/new deltas
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
-			applyRewardVI(bc.buffer, statedb, dynProps)
+			applyRewardVI(rootedDB, statedb, dynProps)
 			hasPendingVotes := applyPendingVotes(statedb)
-			statedb.FlushWitnesses(bc.buffer)
+			statedb.FlushWitnesses(rootedDB)
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {
 				allWitnesses = bc.gatherWitnessVotes(statedb)
@@ -831,14 +831,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 				// java-tron MaintenanceManager flips is_jobs after reward
 				// distribution, before the active set is swapped — bc.ActiveWitnesses()
 				// still holds the outgoing set here.
-				flipWitnessIsJobs(bc.buffer, bc.ActiveWitnesses(), newActive)
+				flipWitnessIsJobs(rootedDB, bc.ActiveWitnesses(), newActive)
 				if err := bc.SetActiveWitnesses(statedb, newActive); err != nil {
 					return err
 				}
 				maintNewWitnesses = newActive
 			}
 
-			applyRewardCycleSnapshot(bc.buffer, statedb, dynProps)
+			applyRewardCycleSnapshot(rootedDB, statedb, dynProps)
 			nextMaint := dpos.CalcNextMaintenanceTime(block.Timestamp(), dynProps.NextMaintenanceTime(), dynProps.MaintenanceTimeInterval())
 			dynProps.SetNextMaintenanceTime(nextMaint)
 			bc.invalidateStandbyPayCache()
@@ -853,7 +853,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
-		bc.fc.Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
+		forks.NewForkController(rootedDB).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
 	} else {
 		dynProps.SetStateFlag(0)
 	}
@@ -881,11 +881,25 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}
 
-	// Stage the rooted dynamic properties into the system account's KV BEFORE
-	// Commit so they enter the internal full-state root (and thus rewind with
-	// it). Every rooted dynprop was dirtied pre-Commit (tx exec / statistics /
-	// maintenance); the 4 derived head-pointer keys are set post-Commit and
-	// flushed to flat dp- by dynProps.Flush below.
+	// Update dynamic properties and fork-vote state before Commit so every
+	// mutable consensus store touched by this block is included in the full
+	// internal state root. Replay-derived TAPOS/metric rows are staged into
+	// the active buffer below, but intentionally stay outside the state root.
+	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
+	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
+	dynProps.SetLatestBlockHeaderHash(block.Hash())
+	bc.updateSolidifiedBlock(rootedDB, block.WitnessAddress(), int64(block.Number()), dynProps)
+	bc.updateForkWithDB(rootedDB, block)
+	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("stage tapos ref: %w", err)
+	}
+	if n := len(block.Transactions()); n > 0 {
+		count := rawdb.ReadTotalTransactionCount(bc.buffer)
+		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
+	}
+
+	// Stage dynamic properties into the system account's KV BEFORE Commit so
+	// they enter the internal full-state root (and thus rewind with it).
 	if err := dynProps.FlushRooted(statedb); err != nil {
 		return fmt.Errorf("flush rooted dynamic properties: %w", err)
 	}
@@ -903,17 +917,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
 	stats.mark(&stats.StateCommit)
 
-	// Update dynamic properties.
-	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
-	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
-	dynProps.SetLatestBlockHeaderHash(block.Hash())
-
-	// Update solidified block number (mirrors java-tron Manager.updateSolidifiedBlock).
-	// Routes WriteWitnessLatestBlock + the per-witness ReadWitnessLatestBlock
-	// loop through bc.buffer so the solidified compute reflects in-flight
-	// updates (slice 2).
-	bc.updateSolidifiedBlock(block.WitnessAddress(), int64(block.Number()), dynProps)
-
 	// Land DP changes into the active buffer layer (slice 2). This includes
 	// block_filled_slots (from ApplyBlockStatistics), latest_block_header_*,
 	// latest_solidified_block_num, burn_trx_amount (from burnFee actuators),
@@ -921,11 +924,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// keys, etc. — every dirty DP key.
 	dynProps.Flush(bc.buffer)
 
-	// java-tron's Manager.applyBlock persists the block after processing and
-	// then calls updateFork(block). At that point the current block's
-	// transactions have already been validated against the previous fork
-	// bitmap, while the next block observes this producer's version vote.
-	bc.updateFork(block)
 	stats.mark(&stats.DPUpdate)
 
 	// Persist block.
@@ -961,15 +959,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
 	}
 
-	// Increment the non-consensus total transaction counter through bc.buffer
-	// so switchFork rewinds the increment on orphan blocks (slice 2). The
-	// matching read also consults the buffer — otherwise a buffered
-	// increment would be overwritten by the disk's stale value on the next
-	// block.
-	if n := len(block.Transactions()); n > 0 {
-		count := rawdb.ReadTotalTransactionCount(bc.buffer)
-		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
-	}
 	bc.storeDynPropsCache(dynProps)
 	stats.mark(&stats.Persist)
 
@@ -1347,12 +1336,10 @@ func (bc *BlockChain) ChainDB() *rawdb.ChainDB {
 	return bc.chaindb
 }
 
-// BufferedDB returns a read-only view that consults the in-memory
-// applyBlock buffer first, then falls through to the disk store. Reads of
-// rawdb fields that are written through the buffer (slice 1: witness
-// statistics counters) must go through this view to see the current state
-// — disk reads alone return stale values until slice 2 wires a flush
-// policy.
+// BufferedDB returns a read-only view that consults the in-memory applyBlock
+// buffer first, then falls through to the disk store. Legacy rawdb-shaped
+// mirrors can remain buffered until their block is solidified, so non-rooted
+// compatibility readers use this view to observe the canonical head.
 func (bc *BlockChain) BufferedDB() ethdb.KeyValueReader {
 	return bc.buffer
 }
@@ -1567,6 +1554,13 @@ func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
 }
 
 func (bc *BlockChain) updateFork(block *types.Block) {
+	bc.updateForkWithDB(bc.buffer, block)
+}
+
+func (bc *BlockChain) updateForkWithDB(db interface {
+	ethdb.KeyValueReader
+	ethdb.KeyValueWriter
+}, block *types.Block) {
 	active := bc.ActiveWitnesses()
 	slot := -1
 	for i, witness := range active {
@@ -1578,7 +1572,7 @@ func (bc *BlockChain) updateFork(block *types.Block) {
 	if slot < 0 {
 		return
 	}
-	bc.fc.Update(block.Version(), slot, len(active))
+	forks.NewForkController(db).Update(block.Version(), slot, len(active))
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic
@@ -1730,12 +1724,13 @@ func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
 // For a single-SR chain (N=1) this means floor(1*0.3)=0, so the solidified
 // number always equals that SR's latest block (i.e. the current head).
 // Mirrors java-tron Manager.updateSolidifiedBlock().
-func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
-	// Persist this witness's latest produced block number through bc.buffer
+func (bc *BlockChain) updateSolidifiedBlock(db witnessKV, producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
+	// Persist this witness's latest produced block number through the rooted
+	// legacy view (mirrored to bc.buffer)
 	// so it rewinds on switchFork (slice 2). The N-way read below also
 	// consults the buffer — otherwise the solidified compute would use a
 	// stale on-disk value for the just-written witness.
-	rawdb.WriteWitnessLatestBlock(bc.buffer, producerAddr, blockNum)
+	rawdb.WriteWitnessLatestBlock(db, producerAddr, blockNum)
 
 	active := bc.ActiveWitnesses()
 	n := len(active)
@@ -1745,7 +1740,7 @@ func (bc *BlockChain) updateSolidifiedBlock(producerAddr tcommon.Address, blockN
 
 	nums := make([]int64, 0, n)
 	for _, addr := range active {
-		nums = append(nums, rawdb.ReadWitnessLatestBlock(bc.buffer, addr))
+		nums = append(nums, rawdb.ReadWitnessLatestBlock(db, addr))
 	}
 	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
 
@@ -1810,10 +1805,10 @@ func sameAddressSet(a, b []tcommon.Address) bool {
 	return true
 }
 
-// gatherWitnessVotes collects all witnesses and their vote counts from statedb (falling back to rawdb).
-// The witness index is read from the rooted system-KV on the same *StateDB the
-// actuator appends to (Phase 3c), so witnesses created earlier in this block are
-// visible at maintenance; capsules still fall back to bc.buffer (Phase 4).
+// gatherWitnessVotes collects all witnesses and their vote counts from the
+// rooted witness index and rooted witness capsules on the same *StateDB the
+// actuator appends to, so witnesses created earlier in this block are visible
+// at maintenance.
 func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessVote {
 	addrs := statedb.ReadWitnessIndex()
 	var result []dpos.WitnessVote

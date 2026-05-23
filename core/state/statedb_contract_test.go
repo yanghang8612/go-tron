@@ -9,6 +9,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestStateDBCodeMethods(t *testing.T) {
@@ -148,6 +149,51 @@ func TestStateDBContractMeta(t *testing.T) {
 	got := sdb.GetContract(addr)
 	if got == nil || got.Name != "test" {
 		t.Fatal("contract meta mismatch")
+	}
+}
+
+func TestStateDBContractReadsIgnoreFutureFlatMirror(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x33}
+	slot := tcommon.BytesToHash([]byte{0x01})
+	stale := tcommon.BytesToHash([]byte{0x99})
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	futureMeta := &contractpb.SmartContract{
+		OriginAddress:   addr.Bytes(),
+		ContractAddress: addr.Bytes(),
+		Name:            "future",
+	}
+	metaBytes, err := proto.Marshal(futureMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawdb.WriteCode(diskdb, addr, []byte{0xfe})
+	rawdb.WriteContract(diskdb, addr, metaBytes)
+	rawdb.WriteStorage(diskdb, addr, javaStorageRowKey(addr, slot, nil), stale.Bytes())
+
+	reloaded, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.GetCode(addr); len(got) != 0 {
+		t.Fatalf("historical root loaded future flat code: %x", got)
+	}
+	if got := reloaded.GetContract(addr); got != nil {
+		t.Fatalf("historical root loaded future flat contract metadata: %+v", got)
+	}
+	if got := reloaded.GetState(addr, slot); got != (tcommon.Hash{}) {
+		t.Fatalf("historical root loaded future flat storage: %x", got)
 	}
 }
 

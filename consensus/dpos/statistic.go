@@ -29,9 +29,9 @@ type KVReadWriter interface {
 // attribution; isMaintenance is computed from previousHeadTimestamp to match
 // the way java-tron's DposSlot.getSlot interprets the slot calculator.
 //
-// Witness records are written via rawdb.WriteWitness — the in-memory statedb
-// witness cache is not used because nothing else mutates these counters in the
-// same applyBlock pass.
+// Witness records are written via rawdb.WriteWitness. applyBlock passes a
+// RootedStore so the update enters the account-KV root while also mirroring the
+// legacy w- key into the rewind buffer.
 func ApplyBlockStatistics(
 	db KVReadWriter,
 	dp *state.DynamicProperties,

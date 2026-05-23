@@ -2,6 +2,7 @@ package state
 
 import (
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -88,6 +89,16 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 	s.storage[key] = value
 	s.storageExists[key] = exists
+	s.markDirty()
+}
+
+func (s *stateObject) stageKV(domain kvdomains.KVDomain, key, value []byte) {
+	s.kvDirty[string(kvCompositeKey(domain, key))] = kvEntry{val: append([]byte(nil), value...), deleted: false}
+	s.markDirty()
+}
+
+func (s *stateObject) stageDeleteKV(domain kvdomains.KVDomain, key []byte) {
+	s.kvDirty[string(kvCompositeKey(domain, key))] = kvEntry{deleted: true}
 	s.markDirty()
 }
 

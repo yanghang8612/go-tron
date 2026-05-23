@@ -16,10 +16,9 @@ import (
 //   - witnessScheduleIndexKey:  the enumeration of every registered witness,
 //     iterated at maintenance/reward time and grown by WitnessCreateActuator.
 //
-// Per-witness capsules (vote counts, is_jobs, URL) remain flat (`w-`) until
-// Phase 4 moves them to witness-owned domains. The shuffled witness schedule is
-// reserved for this domain too, but go-tron has no writer for it yet (only PBFT
-// reads, which are inert), so nothing is rooted for it here.
+// Per-witness capsules (vote counts, is_jobs, URL) are rooted separately under
+// the witness-owned WitnessCapsule domain via the RootedStore legacy view.
+// The shuffled witness schedule is reserved for this domain too.
 //
 // The value encoding reuses the existing on-disk wire format verbatim —
 // 4-byte big-endian count followed by N×21-byte addresses — so no new encoding

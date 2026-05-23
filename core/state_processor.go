@@ -377,6 +377,10 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 }
 
 func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+	if db != nil && !state.IsRootedStore(db) {
+		db = state.NewRootedStore(statedb, db)
+	}
+
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {

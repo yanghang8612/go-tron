@@ -18,9 +18,9 @@ const version3_6_5 int32 = 9
 //
 // The proposal records and their index are read/written through statedb — the
 // rooted SystemProposal KV (Phase 3d), java-tron's revoking ProposalStore. db
-// remains the Reader+Writer for the still-flat governance side-effects (e.g.
-// deployHistoryBlockHash); it is `core/blockbuffer.Buffer` on the applyBlock
-// path and `ethdb.KeyValueStore` on the BuildBlock path.
+// remains the Reader+Writer for legacy rawdb-shaped side-effects (e.g.
+// deployHistoryBlockHash); the apply/build paths wrap it in RootedStore so
+// mutable state writes enter the full state root.
 func ProcessProposals(db kvReadWriter, statedb *state.StateDB, dynProps *state.DynamicProperties, activeWitnesses []tcommon.Address, maintenanceTime int64, fc *forks.ForkController) error {
 	activeCount := len(activeWitnesses)
 	ids := statedb.ReadProposalIndex()

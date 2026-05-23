@@ -89,8 +89,16 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		return nil, tcommon.Hash{}, err
 	}
 
+	if err := writeGenesisMaterializedState(db, genesis, block, stateRoot, dp); err != nil {
+		return nil, tcommon.Hash{}, err
+	}
+
+	return genesis.Config, block.Hash(), nil
+}
+
+func writeGenesisMaterializedState(db ethdb.KeyValueStore, genesis *params.Genesis, block *types.Block, stateRoot tcommon.Hash, dp *state.DynamicProperties) error {
 	if err := rawdb.WriteBlock(db, block); err != nil {
-		return nil, tcommon.Hash{}, fmt.Errorf("write genesis block: %w", err)
+		return fmt.Errorf("write genesis block: %w", err)
 	}
 	rawdb.WriteHeadBlockHash(db, block.Hash())
 	// Persist post-genesis state root separately. The genesis block header
@@ -98,21 +106,18 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	// applyBlock falls back to this when current.Number()==0.
 	rawdb.WriteGenesisStateRoot(db, stateRoot)
 	// Seed the TAPOS recent-block ring with genesis so txs in block #1 that
-	// reference the genesis hash (the only legal target for the first tx
-	// wave) pass validation. java-tron Manager.initGenesis writes this slot
-	// alongside the genesis block itself.
+	// reference the genesis hash (the only legal target for the first tx wave)
+	// pass validation. java-tron Manager.initGenesis writes this slot alongside
+	// the genesis block itself.
 	if err := rawdb.WriteTaposRef(db, 0, block.Hash()); err != nil {
-		return nil, tcommon.Hash{}, fmt.Errorf("write genesis tapos ref: %w", err)
+		return fmt.Errorf("write genesis tapos ref: %w", err)
 	}
-	// The account name index for named genesis accounts is now rooted into the
-	// genesis state root by genesisBlockAndStateRoot (above); no flat `ani-`
-	// write here.
+	// The account name index for named genesis accounts is rooted into the
+	// genesis state root by genesisBlockAndStateRoot; no flat `ani-` write here.
 
-	// Derived (unrooted) dynamic properties — the head-pointer keys — live in
-	// flat dp-. The rooted governance/economic properties were already staged
-	// into the genesis state root by genesisBlockAndStateRoot; here we just set
-	// the 3 derived keys (they need the genesis block hash) and flush them.
-	// FlushRooted cleared the rooted dirty set, so dp.Flush writes only derived.
+	// Dynamic properties are already rooted into the genesis state root by
+	// genesisBlockAndStateRoot. Keep the flat dp- mirror for startup tools that
+	// do not have a state root in hand.
 	if dp != nil {
 		dp.SetLatestBlockHeaderNumber(0)
 		dp.SetLatestBlockHeaderTimestamp(genesis.Timestamp)
@@ -120,7 +125,6 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		dp.Flush(db)
 	}
 
-	// Write witnesses
 	initialWitnesses := make([]rawdb.GenesisWitness, 0, len(genesis.Witnesses))
 	for _, gw := range genesis.Witnesses {
 		w := types.NewWitness(gw.Address, gw.URL)
@@ -128,8 +132,8 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		// java-tron Manager.initWitness flips is_jobs=true on every genesis
 		// witness; the maintenance-cycle rotation maintains it thereafter.
 		w.SetIsJobs(true)
-		// Capsule stays flat (`w-`) until Phase 4; the witness index is now
-		// rooted into the genesis state root by genesisBlockAndStateRoot.
+		// Flat witness rows are retained as a compatibility mirror; the same
+		// capsule was rooted into the genesis state root above.
 		rawdb.WriteWitness(db, gw.Address, w)
 		initialWitnesses = append(initialWitnesses, rawdb.GenesisWitness{
 			Address:   gw.Address,
@@ -137,8 +141,7 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 		})
 	}
 	rawdb.WriteGenesisWitnesses(db, initialWitnesses)
-
-	return genesis.Config, block.Hash(), nil
+	return nil
 }
 
 // GenesisToBlock builds the genesis block from the Genesis config.
@@ -208,11 +211,16 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	// genesis state root, which is the correct starting state for block #1.
 	witnessIndex := make([]tcommon.Address, 0, len(g.Witnesses))
 	witnessVotes := make([]dpos.WitnessVote, 0, len(g.Witnesses))
+	rootedGenesisDB := state.NewRootedStore(statedb, nil)
 	for _, gw := range g.Witnesses {
 		if !statedb.AccountExists(gw.Address) {
 			statedb.CreateAccount(gw.Address, corepb.AccountType_AssetIssue)
 		}
 		statedb.SetIsWitness(gw.Address, true)
+		w := types.NewWitness(gw.Address, gw.URL)
+		w.SetVoteCount(gw.VoteCount)
+		w.SetIsJobs(true)
+		rawdb.WriteWitness(rootedGenesisDB, gw.Address, w)
 		witnessIndex = append(witnessIndex, gw.Address)
 		witnessVotes = append(witnessVotes, dpos.WitnessVote{Address: gw.Address, Votes: gw.VoteCount})
 	}
@@ -253,12 +261,12 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		}
 	}
 
-	// Phase 3c: seed the global witness schedule into the system account's KV so
-	// the witness index and the initial active witness list live in the genesis
+	// Seed the global witness schedule into the system account's KV so the
+	// witness index and the initial active witness list live in the genesis
 	// state root (and rewind with it). Mirrors java-tron Manager.initWitness +
 	// WitnessScheduleStore init: the active set is selected from the genesis
-	// witnesses' configured vote counts in memory — no capsule read-back. Witness
-	// capsules themselves stay flat (`w-`) until Phase 4.
+	// witnesses' configured vote counts in memory, while witness capsules were
+	// already staged through RootedStore above and mirrored flat for legacy reads.
 	if len(witnessIndex) > 0 {
 		if err := statedb.WriteWitnessIndex(witnessIndex); err != nil {
 			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis witness index: %w", err)
@@ -318,6 +326,27 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		BlockHeader:  &corepb.BlockHeader{RawData: header},
 		Transactions: txs,
 	})
+
+	// The genesis block hash is available only after the block is built, but
+	// the DP head keys include it in the rooted state. Commit a small second
+	// state transition; the root stays out-of-band, so the java-tron genesis
+	// block bytes remain unchanged.
+	finalState, err := state.New(stateRoot, db)
+	if err != nil {
+		return nil, tcommon.Hash{}, nil, err
+	}
+	if dp != nil {
+		dp.SetLatestBlockHeaderNumber(0)
+		dp.SetLatestBlockHeaderTimestamp(g.Timestamp)
+		dp.SetLatestBlockHeaderHash(block.Hash())
+		if err := dp.FlushRooted(finalState); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("root genesis derived dynamic properties: %w", err)
+		}
+	}
+	stateRoot, err = finalState.Commit()
+	if err != nil {
+		return nil, tcommon.Hash{}, nil, err
+	}
 
 	return block, stateRoot, dp, nil
 }

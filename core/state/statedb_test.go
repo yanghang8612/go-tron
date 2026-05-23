@@ -730,22 +730,31 @@ func TestContractStoragePersistsAcrossCommit(t *testing.T) {
 	}
 }
 
-func TestNewAccountIgnoresStaleFlatStorage(t *testing.T) {
+func TestStateDBIgnoresStaleFlatStorageMirror(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(diskdb)
 	addr := testAddr(0x44)
 	key := tcommon.BytesToHash([]byte{0x01})
 	stale := tcommon.BytesToHash([]byte{0x99})
-	rawdb.WriteStorage(diskdb, addr, key, stale.Bytes())
 
 	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sdb.GetOrCreateAccount(addr)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawdb.WriteStorage(diskdb, addr, javaStorageRowKey(addr, key, nil), stale.Bytes())
+	sdb, err = New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := sdb.GetState(addr, key); got != (tcommon.Hash{}) {
-		t.Fatalf("new account storage must be empty despite stale flat storage: got %x", got)
+		t.Fatalf("rooted storage must ignore stale flat mirror: got %x", got)
 	}
 }
 

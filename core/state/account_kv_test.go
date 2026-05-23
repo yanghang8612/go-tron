@@ -96,6 +96,37 @@ func TestAccountKVRootMovesAndPersists(t *testing.T) {
 	}
 }
 
+func TestLoadAccountReferencePreservesAccountKVRoot(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x12)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.WitnessCapsule, []byte("witness"), []byte("rooted")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	source, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := source.AccountReference(addr)
+	if acc == nil {
+		t.Fatal("account reference missing")
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.LoadAccountReference(acc)
+	got, ok, err := reloaded.GetAccountKV(addr, kvdomains.WitnessCapsule, []byte("witness"))
+	if err != nil || !ok || string(got) != "rooted" {
+		t.Fatalf("loaded account lost KV root: got %q ok=%v err=%v", got, ok, err)
+	}
+}
+
 func TestAccountKVDeterministicRoot(t *testing.T) {
 	build := func() tcommon.Hash {
 		sdb := newTestStateDB(t)

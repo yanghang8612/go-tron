@@ -192,6 +192,10 @@ var (
 		Usage: "Maximum blocks frozen per freezer pass",
 		Value: defaultFreezerBatch(),
 	}
+	syncRestartFromFlag = &cli.Uint64Flag{
+		Name:  "sync.restart-from",
+		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
+	}
 )
 
 var app = &cli.App{
@@ -233,6 +237,7 @@ var app = &cli.App{
 		freezerIntervalFlag,
 		freezerMarginFlag,
 		freezerBatchFlag,
+		syncRestartFromFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
@@ -376,6 +381,27 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
+	}
+	if ctx.IsSet("sync.restart-from") {
+		target := ctx.Uint64("sync.restart-from")
+		lastProgress := uint64(0)
+		log.Info("Historical sync restart requested", "target", target, "currentHead", bc.CurrentBlock().Number())
+		if err := bc.RestartSyncFromHeight(target, genesis, ancientStore, func(p core.RestartSyncProgress) {
+			switch p.Phase {
+			case "replay":
+				if p.Block == p.Target || p.Block-lastProgress >= 10000 {
+					lastProgress = p.Block
+					log.Info("Historical sync restart replaying", "block", p.Block, "target", p.Target)
+				}
+			default:
+				log.Info("Historical sync restart phase", "phase", p.Phase, "block", p.Block, "target", p.Target)
+			}
+		}); err != nil {
+			_ = bc.Close()
+			closeStores()
+			return err
+		}
+		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
 
 	// Create transaction pool

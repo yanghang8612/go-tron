@@ -73,11 +73,16 @@ type HistoryReader interface {
 // to resolve "live" accounts (in-memory stateObjects map falling back to
 // trie.Get), and satisfies this interface directly via GetAccount.
 //
-// Storage cells and contract code DO live under flat-state prefixes (s-,
-// c-) and are read via rawdb.ReadStorage / rawdb.ReadCode — those paths
-// don't need this interface.
+// Storage cells and contract code are available from StateDB's rooted contract
+// domains; flat reads are used only when a caller supplies no live contract
+// reader.
 type LiveAccountReader interface {
 	GetAccount(addr tcommon.Address) *types.Account
+}
+
+type LiveContractReader interface {
+	GetCode(addr tcommon.Address) []byte
+	GetState(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash
 }
 
 // LiveStateHistoryReader is the no-op fallback. It IGNORES blockNum and
@@ -120,6 +125,9 @@ func (r *LiveStateHistoryReader) AccountAt(addr tcommon.Address, _ uint64) (*typ
 // blockNum is ignored. Slot values are stored as raw bytes with leading
 // zeros trimmed by the contract writer — we right-align into a Hash.
 func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Hash, _ uint64) (tcommon.Hash, error) {
+	if live, ok := r.live.(LiveContractReader); ok {
+		return live.GetState(addr, slot), nil
+	}
 	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
 	if len(raw) == 0 {
 		return tcommon.Hash{}, nil
@@ -131,6 +139,13 @@ func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Ha
 
 // CodeAt returns the live contract bytecode at addr; blockNum is ignored.
 func (r *LiveStateHistoryReader) CodeAt(addr tcommon.Address, _ uint64) ([]byte, error) {
+	if live, ok := r.live.(LiveContractReader); ok {
+		code := live.GetCode(addr)
+		if len(code) == 0 {
+			return nil, nil
+		}
+		return append([]byte(nil), code...), nil
+	}
 	code := rawdb.ReadCode(r.db, addr)
 	if len(code) == 0 {
 		return nil, nil
@@ -429,21 +444,25 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 }
 
 // readAccountAndCodeLive reads the current account + code for addr from
-// the chain's live view. Account resolution goes through the MPT-backed
-// LiveAccountReader (the flat-state account prefix is not populated);
-// code lives under the flat-state c- prefix.
+// the chain's live view. Account/code resolution goes through the MPT-backed
+// live reader when available; flat code is only a compatibility fallback.
 func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) accountCacheEntry {
 	var acc *types.Account
 	if r.live != nil {
 		acc = r.live.GetAccount(addr)
 	}
 	if acc == nil {
-		// No live account means "no code either" — both flat-state c- rows
-		// and MPT entries get cleared together by SELFDESTRUCT+
+		// No live account means "no code either" — contract code is owned by
+		// the account's rooted KV and is cleared together with SELFDESTRUCT+
 		// DeleteAccount in statedb.Commit().
 		return accountCacheEntry{}
 	}
-	code := rawdb.ReadCode(r.db, addr)
+	var code []byte
+	if live, ok := r.live.(LiveContractReader); ok {
+		code = live.GetCode(addr)
+	} else {
+		code = rawdb.ReadCode(r.db, addr)
+	}
 	if len(code) == 0 {
 		code = nil
 	}
@@ -453,6 +472,9 @@ func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) a
 // readStorageLive reads the current on-disk slot value for (addr, slot).
 // Returns the zero hash when the slot is empty.
 func (r *PersistentHistoryReader) readStorageLive(addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
+	if live, ok := r.live.(LiveContractReader); ok {
+		return live.GetState(addr, slot), nil
+	}
 	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
 	if len(raw) == 0 {
 		return tcommon.Hash{}, nil

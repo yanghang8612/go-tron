@@ -278,7 +278,7 @@ func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transacti
 	if blockNum == nil {
 		return nil, fmt.Errorf("transaction not found")
 	}
-	block := rawdb.ReadBlock(b.chain.chaindb, *blockNum)
+	block := b.chain.GetBlockByNumber(*blockNum)
 	if block == nil {
 		return nil, fmt.Errorf("block %d not found", *blockNum)
 	}
@@ -295,10 +295,16 @@ func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.Trans
 	if info == nil {
 		return nil, fmt.Errorf("transaction info not found")
 	}
+	if head := b.chain.CurrentBlock(); head != nil && uint64(info.BlockNumber) > head.Number() {
+		return nil, fmt.Errorf("transaction info not found")
+	}
 	return info, nil
 }
 
 func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.TransactionInfo, error) {
+	if head := b.chain.CurrentBlock(); head != nil && blockNum > head.Number() {
+		return nil, nil
+	}
 	infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, blockNum)
 	return infos, nil
 }
@@ -1439,6 +1445,11 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
 	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
+	if info != nil {
+		if head := b.chain.CurrentBlock(); head != nil && uint64(info.BlockNumber) > head.Number() {
+			return nil, nil
+		}
+	}
 	return info, nil // nil info = not found (not an error)
 }
 

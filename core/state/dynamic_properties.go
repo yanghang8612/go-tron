@@ -270,11 +270,9 @@ func (dp *DynamicProperties) Copy() *DynamicProperties {
 	return out
 }
 
-// derivedDPKeys are the dynamic properties that stay UNROOTED in flat dp-
-// rawdb. They are recomputable from the canonical chain head and are written
-// post-Commit (head pointers + solidified cursor); everything else roots into
-// the system account's KV. latest_block_header_hash is the hash field, not a
-// props/stringProps entry.
+// derivedDPKeys are dynamic properties that are also mirrored to flat dp- for
+// startup/diagnostic readers that do not have a state root in hand. They are
+// still staged into the rooted system account before Commit.
 var derivedDPKeys = map[string]struct{}{
 	"latest_block_header_number":    {},
 	"latest_block_header_timestamp": {},
@@ -284,31 +282,34 @@ var derivedDPKeys = map[string]struct{}{
 
 func isDerivedDPKey(k string) bool { _, ok := derivedDPKeys[k]; return ok }
 
-// FlushRooted stages every dirty NON-derived dynamic property into the system
-// account's SystemDynamicProperty KV (committed by statedb.Commit, thus part
-// of the internal full-state root). Call BEFORE statedb.Commit(); the derived
-// keys are left dirty for the post-Commit Flush(db) to write to flat dp-.
+// FlushRooted stages every dirty dynamic property into the system account's
+// SystemDynamicProperty KV (committed by statedb.Commit, thus part of the
+// internal full-state root). Derived keys are intentionally left dirty so the
+// post-Commit Flush(db) still mirrors them to flat dp-.
 // Encoding matches dp-: int64 → 8-byte BE, string → raw bytes.
 func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 	buf := make([]byte, 8)
 	for k := range dp.dirty {
-		if isDerivedDPKey(k) {
-			continue
-		}
 		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
 		if err := s.SystemKVPut(kvdomains.SystemDynamicProperty, []byte(k), append([]byte(nil), buf...)); err != nil {
 			return err
 		}
-		delete(dp.dirty, k)
+		if !isDerivedDPKey(k) {
+			delete(dp.dirty, k)
+		}
 	}
 	for k := range dp.stringDirty {
-		if isDerivedDPKey(k) {
-			continue
-		}
 		if err := s.SystemKVPut(kvdomains.SystemDynamicProperty, []byte(k), []byte(dp.stringProps[k])); err != nil {
 			return err
 		}
-		delete(dp.stringDirty, k)
+		if !isDerivedDPKey(k) {
+			delete(dp.stringDirty, k)
+		}
+	}
+	if dp.hashDirty {
+		if err := s.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"), dp.latestBlockHeaderHash.Bytes()); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -330,12 +331,9 @@ func (dp *DynamicProperties) loadDerivedFromDB(db ethdb.KeyValueReader) {
 	}
 }
 
-// LoadDynamicProperties builds a DynamicProperties from persisted state: the 4
-// derived keys come from flat dp- rawdb (db); the rooted keys come from the
-// system account's KV (sysKV, a StateDB opened at the target root). sysKV may
-// be nil (e.g. pre-genesis or a cache-init before any state exists) — rooted
-// keys then keep their defaults. Derived keys load first; the rooted overlay
-// then overrides, so sysKV always wins for rooted keys.
+// LoadDynamicProperties builds DynamicProperties from persisted state. Flat
+// dp- supplies a fallback mirror; the rooted system account KV wins whenever a
+// state root is available.
 func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProperties {
 	dp := NewDynamicProperties()
 	dp.loadDerivedFromDB(db)
@@ -344,15 +342,12 @@ func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProp
 	}
 	keys := make([][]byte, 0, len(defaultProps)+len(defaultStringProps))
 	for k := range defaultProps {
-		if !isDerivedDPKey(k) {
-			keys = append(keys, []byte(k))
-		}
+		keys = append(keys, []byte(k))
 	}
 	for k := range defaultStringProps {
-		if !isDerivedDPKey(k) {
-			keys = append(keys, []byte(k))
-		}
+		keys = append(keys, []byte(k))
 	}
+	keys = append(keys, []byte("latest_block_header_hash"))
 	vals, err := sysKV.SystemKVGetBatch(kvdomains.SystemDynamicProperty, keys)
 	if err != nil {
 		return dp
@@ -366,6 +361,9 @@ func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProp
 		if v, ok := vals[k]; ok {
 			dp.stringProps[k] = string(v)
 		}
+	}
+	if v, ok := vals["latest_block_header_hash"]; ok && len(v) == common.HashLength {
+		dp.latestBlockHeaderHash = common.BytesToHash(v)
 	}
 	return dp
 }

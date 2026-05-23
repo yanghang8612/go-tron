@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -106,6 +107,10 @@ func (s *StateDB) LoadAccount(acc *types.Account) {
 	if _, ok := s.stateObjects[addr]; ok {
 		return
 	}
+	if obj := s.getStateObject(addr); obj != nil {
+		obj.account = acc.Copy()
+		return
+	}
 	s.stateObjects[addr] = newStateObject(addr, acc.Copy())
 }
 
@@ -118,6 +123,10 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 	}
 	addr := acc.Address()
 	if _, ok := s.stateObjects[addr]; ok {
+		return
+	}
+	if obj := s.getStateObject(addr); obj != nil {
+		obj.account = acc
 		return
 	}
 	s.stateObjects[addr] = newStateObject(addr, acc)
@@ -602,6 +611,14 @@ func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
 
 // GetWitness returns the witness at addr.
 func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
+	if w := s.witnesses[addr]; w != nil {
+		return w
+	}
+	w := rawdb.ReadWitness(NewRootedStore(s, nil), addr)
+	if w == nil {
+		return nil
+	}
+	s.witnesses[addr] = w.Copy()
 	return s.witnesses[addr]
 }
 
@@ -641,7 +658,7 @@ func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
 //
 // Marks the address dirty so FlushWitnesses persists it.
 func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
-	existing := s.witnesses[addr]
+	existing := s.GetWitness(addr)
 	if existing == nil {
 		// No in-memory record — promote a fresh one. Caller is responsible
 		// for ensuring counters are loaded separately if needed.
@@ -1039,7 +1056,7 @@ func (s *StateDB) ClearVotes(addr tcommon.Address) {
 // AddWitnessVoteCount adds delta to a witness's vote count. Marks the
 // address dirty so FlushWitnesses persists the new VoteCount.
 func (s *StateDB) AddWitnessVoteCount(addr tcommon.Address, delta int64) {
-	w := s.witnesses[addr]
+	w := s.GetWitness(addr)
 	if w == nil {
 		return
 	}
@@ -1343,6 +1360,13 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 
 // --- Contract support ---
 
+var (
+	contractCodeKVKey  = []byte("code")
+	contractMetaKVKey  = []byte("meta")
+	contractABIKVKey   = []byte("abi")
+	contractStateKVKey = []byte("state")
+)
+
 // GetCode returns the contract bytecode at addr.
 func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 	obj := s.getStateObject(addr)
@@ -1350,9 +1374,9 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 		return nil
 	}
 	if len(obj.code) == 0 && !obj.codeDirty {
-		code := rawdb.ReadCode(s.db.DiskDB(), addr)
-		if len(code) > 0 {
-			obj.code = code
+		code, ok, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractCodeKVKey)
+		if err == nil && ok && len(code) > 0 {
+			obj.code = append([]byte(nil), code...)
 			obj.codeHash = tcommon.Keccak256(code)
 		}
 	}
@@ -1414,8 +1438,8 @@ func (s *StateDB) GetStateWithExist(addr tcommon.Address, key tcommon.Hash) (tco
 		return tcommon.Hash{}, false
 	}
 	// Load from persistent storage on cache miss.
-	raw := rawdb.ReadStorage(s.db.DiskDB(), addr, s.storageRowKey(addr, key))
-	if len(raw) == 0 {
+	raw, ok, err := s.GetAccountKV(addr, kvdomains.ContractStorage, s.storageRowKey(addr, key).Bytes())
+	if err != nil || !ok || len(raw) == 0 {
 		return tcommon.Hash{}, false
 	}
 	var h tcommon.Hash
@@ -1455,8 +1479,8 @@ func (s *StateDB) GetContract(addr tcommon.Address) *contractpb.SmartContract {
 		return nil
 	}
 	if obj.contractMeta == nil && !obj.contractMetaDirty {
-		data := rawdb.ReadContract(s.db.DiskDB(), addr)
-		if len(data) > 0 {
+		data, ok, err := s.GetAccountKV(addr, kvdomains.ContractMetadata, contractMetaKVKey)
+		if err == nil && ok && len(data) > 0 {
 			var sc contractpb.SmartContract
 			if err := proto.Unmarshal(data, &sc); err == nil {
 				obj.contractMeta = &sc
@@ -1664,6 +1688,42 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.dirty = false
 			continue
 		}
+		if obj.codeDirty {
+			if len(obj.code) == 0 {
+				obj.stageDeleteKV(kvdomains.ContractMetadata, contractCodeKVKey)
+				rawdb.DeleteCode(s.db.DiskDB(), addr)
+			} else {
+				obj.stageKV(kvdomains.ContractMetadata, contractCodeKVKey, obj.code)
+				rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
+			}
+		}
+		if obj.contractMetaDirty {
+			if obj.contractMeta == nil {
+				obj.stageDeleteKV(kvdomains.ContractMetadata, contractMetaKVKey)
+				obj.stageDeleteKV(kvdomains.ContractABI, contractABIKVKey)
+				rawdb.DeleteContract(s.db.DiskDB(), addr)
+				if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+					return tcommon.Hash{}, err
+				}
+			} else {
+				metaBytes, err := proto.Marshal(obj.contractMeta)
+				if err != nil {
+					return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+				}
+				obj.stageKV(kvdomains.ContractMetadata, contractMetaKVKey, metaBytes)
+				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
+			}
+		}
+		for k, v := range obj.storage {
+			rowKey := s.storageRowKey(addr, k).Bytes()
+			if v == (tcommon.Hash{}) {
+				obj.stageDeleteKV(kvdomains.ContractStorage, rowKey)
+				rawdb.DeleteStorage(s.db.DiskDB(), addr, tcommon.BytesToHash(rowKey))
+			} else {
+				obj.stageKV(kvdomains.ContractStorage, rowKey, v.Bytes())
+				rawdb.WriteStorage(s.db.DiskDB(), addr, tcommon.BytesToHash(rowKey), v.Bytes())
+			}
+		}
 		if len(obj.kvDirty) > 0 {
 			kvRoot, err := s.commitAccountKV(obj)
 			if err != nil {
@@ -1681,9 +1741,9 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			AccountProto:        accBytes,
 			AccountKVRoot:       obj.accountKVRoot,
 			AccountKVGeneration: obj.accountKVGeneration,
-			// CodeHash is zero in Phase 1; populated in Phase 4 alongside the
-			// content-addressed code domain. Code still loads from rawdb c-<addr>,
-			// and the verbatim java code_hash remains inside AccountProto.
+			// CodeHash is zero until a content-addressed code domain is added;
+			// contract code still lives in the account-KV metadata domain, and
+			// the verbatim java code_hash remains inside AccountProto.
 			CodeHash: tcommon.Hash{},
 		}
 		data, err := envelope.Encode()
@@ -1694,35 +1754,10 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			return tcommon.Hash{}, err
 		}
 		if obj.codeDirty {
-			if len(obj.code) == 0 {
-				rawdb.DeleteCode(s.db.DiskDB(), addr)
-			} else {
-				rawdb.WriteCode(s.db.DiskDB(), addr, obj.code)
-			}
 			obj.codeDirty = false
 		}
 		if obj.contractMetaDirty {
-			if obj.contractMeta == nil {
-				rawdb.DeleteContract(s.db.DiskDB(), addr)
-				if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
-					return tcommon.Hash{}, err
-				}
-			} else {
-				metaBytes, err := proto.Marshal(obj.contractMeta)
-				if err != nil {
-					return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
-				}
-				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
-			}
 			obj.contractMetaDirty = false
-		}
-		for k, v := range obj.storage {
-			rowKey := s.storageRowKey(addr, k)
-			if v == (tcommon.Hash{}) {
-				rawdb.DeleteStorage(s.db.DiskDB(), addr, rowKey)
-			} else {
-				rawdb.WriteStorage(s.db.DiskDB(), addr, rowKey, v.Bytes())
-			}
 		}
 		obj.created = false
 		obj.dirty = false

@@ -37,9 +37,10 @@ func flushAndReload(t *testing.T, dp *DynamicProperties) *DynamicProperties {
 	return LoadDynamicProperties(sdb.db.DiskDB(), reopened)
 }
 
-// FlushRooted stages non-derived keys into the system account's KV (rooted into
-// the committed state root); derived keys are left for the flat dp- Flush.
-func TestDynPropRootedFlushExcludesDerived(t *testing.T) {
+// FlushRooted stages every dynamic property into the system account's KV
+// (rooted into the committed state root); derived keys are also left dirty for
+// the flat dp- mirror.
+func TestDynPropRootedFlushIncludesDerived(t *testing.T) {
 	sdb := newTestStateDB(t)
 	dp := NewDynamicProperties()
 	dp.Set("next_maintenance_time", 12345) // rooted
@@ -63,13 +64,17 @@ func TestDynPropRootedFlushExcludesDerived(t *testing.T) {
 	if len(got) != 8 || int64(binary.BigEndian.Uint64(got)) != 12345 {
 		t.Fatalf("rooted value = %v, want BE(12345)", got)
 	}
-	if _, ok, _ := reopened.SystemKVGet(kvdomains.SystemDynamicProperty, []byte("latest_block_header_number")); ok {
-		t.Fatal("derived key must not be rooted into system-KV")
+	got, ok, err = reopened.SystemKVGet(kvdomains.SystemDynamicProperty, []byte("latest_block_header_number"))
+	if err != nil || !ok {
+		t.Fatalf("rooted latest_block_header_number missing: ok=%v err=%v", ok, err)
+	}
+	if len(got) != 8 || int64(binary.BigEndian.Uint64(got)) != 7 {
+		t.Fatalf("rooted derived value = %v, want BE(7)", got)
 	}
 }
 
-// FlushRooted clears the rooted dirty entries so the later flat Flush only
-// writes derived keys to dp-.
+// FlushRooted clears non-derived dirty entries while derived entries remain for
+// the later flat mirror Flush.
 func TestDynPropFlushRootedClearsRootedDirty(t *testing.T) {
 	sdb := newTestStateDB(t)
 	dp := NewDynamicProperties()

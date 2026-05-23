@@ -22,6 +22,14 @@ const (
 	SystemDelegation      KVDomain = 0x0007
 	SystemAccountIndex    KVDomain = 0x0008
 	SystemMarket          KVDomain = 0x0009
+	SystemReward          KVDomain = 0x000a
+	SystemShielded        KVDomain = 0x000b
+	SystemForkAux         KVDomain = 0x000c
+	SystemPBFT            KVDomain = 0x000d
+	SystemTapos           KVDomain = 0x000e
+	SystemTrace           KVDomain = 0x000f
+	SystemBloom           KVDomain = 0x0010
+	SystemCheckpoint      KVDomain = 0x0011
 
 	ContractStorage      KVDomain = 0x0100
 	ContractMetadata     KVDomain = 0x0101
@@ -45,6 +53,14 @@ var registry = map[KVDomain]string{
 	SystemDelegation:      "SystemDelegation",
 	SystemAccountIndex:    "SystemAccountIndex",
 	SystemMarket:          "SystemMarket",
+	SystemReward:          "SystemReward",
+	SystemShielded:        "SystemShielded",
+	SystemForkAux:         "SystemForkAux",
+	SystemPBFT:            "SystemPBFT",
+	SystemTapos:           "SystemTapos",
+	SystemTrace:           "SystemTrace",
+	SystemBloom:           "SystemBloom",
+	SystemCheckpoint:      "SystemCheckpoint",
 	ContractStorage:       "ContractStorage",
 	ContractMetadata:      "ContractMetadata",
 	ContractABI:           "ContractABI",
