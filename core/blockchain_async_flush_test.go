@@ -7,7 +7,6 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -54,7 +53,7 @@ func newAsyncFlushChain(t *testing.T, witnessAddr tcommon.Address) (*BlockChain,
 // flush guaranteed at applyBlock-return time.
 func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 	witnessAddr := testInsertAddr(1)
-	bc, diskdb := newAsyncFlushChain(t, witnessAddr)
+	bc, _ := newAsyncFlushChain(t, witnessAddr)
 
 	const N = 5
 	for i := 1; i <= N; i++ {
@@ -70,11 +69,8 @@ func TestAsyncFlush_DrainsViaWorker(t *testing.T) {
 		t.Fatalf("after drain: buffer holds %d layers, want 0", got)
 	}
 
-	// On-disk counters reflect every applied block.
-	w := rawdb.ReadWitness(diskdb, witnessAddr)
-	if w == nil {
-		t.Fatal("witness record missing on disk after async drain")
-	}
+	// Rooted counters reflect every applied block after the worker drains.
+	w := readWitnessAtHead(t, bc, witnessAddr)
 	if got := w.TotalProduced(); got != N {
 		t.Fatalf("disk TotalProduced = %d, want %d", got, N)
 	}
@@ -143,7 +139,7 @@ func TestAsyncFlush_InsertBlockPostsToWorkerQueue(t *testing.T) {
 // to the queue, and Close must catch up.
 func TestAsyncFlush_CloseDrainsPending(t *testing.T) {
 	witnessAddr := testInsertAddr(1)
-	bc, diskdb := newAsyncFlushChain(t, witnessAddr)
+	bc, _ := newAsyncFlushChain(t, witnessAddr)
 
 	const N = 6
 	for i := 1; i <= N; i++ {
@@ -162,11 +158,8 @@ func TestAsyncFlush_CloseDrainsPending(t *testing.T) {
 		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
 	}
 
-	// Disk-side counters match every applied block.
-	w := rawdb.ReadWitness(diskdb, witnessAddr)
-	if w == nil {
-		t.Fatal("witness record missing on disk after Close")
-	}
+	// Rooted counters match every applied block.
+	w := readWitnessAtHead(t, bc, witnessAddr)
 	if got := w.TotalProduced(); got != N {
 		t.Fatalf("disk TotalProduced = %d, want %d", got, N)
 	}

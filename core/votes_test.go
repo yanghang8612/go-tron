@@ -38,6 +38,9 @@ func seedPendingVotesAtGenesis(t *testing.T, bc *BlockChain, records map[tcommon
 		t.Fatalf("commit seeded votes: %v", err)
 	}
 	rawdb.WriteGenesisStateRoot(bc.db, newRoot)
+	if bc.genesisBlock != nil {
+		rawdb.WriteBlockStateRoot(bc.db, bc.genesisBlock.Hash(), newRoot)
+	}
 }
 
 // TestApplyPendingVotes_SameBlockVisibility proves the rooting's central

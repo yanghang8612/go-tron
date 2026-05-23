@@ -1,22 +1,17 @@
 package dpos
 
 import (
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 )
 
-// KVReadWriter is the narrow ethdb capability ApplyBlockStatistics needs:
-// per-witness ReadWitness lookups plus WriteWitness updates. Both
-// rawdb.NewMemoryDatabase() (an ethdb.KeyValueStore) and
-// blockbuffer.Buffer satisfy this interface, letting callers route the
-// writes either to disk directly or through the fork-rewind buffer.
-type KVReadWriter interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
+// WitnessStore is the native rooted witness capsule surface needed by
+// ApplyBlockStatistics.
+type WitnessStore interface {
+	GetWitness(common.Address) *types.Witness
+	SetWitnessCapsule(*types.Witness) error
 }
 
 // ApplyBlockStatistics updates per-witness production counters and the
@@ -28,12 +23,8 @@ type KVReadWriter interface {
 // activeWitnesses is the schedule used by GetScheduledWitness for missed-slot
 // attribution; isMaintenance is computed from previousHeadTimestamp to match
 // the way java-tron's DposSlot.getSlot interprets the slot calculator.
-//
-// Witness records are written via rawdb.WriteWitness. applyBlock passes a
-// RootedStore so the update enters the account-KV root while also mirroring the
-// legacy w- key into the rewind buffer.
 func ApplyBlockStatistics(
-	db KVReadWriter,
+	witnesses WitnessStore,
 	dp *state.DynamicProperties,
 	block *types.Block,
 	previousHeadTimestamp int64,
@@ -45,11 +36,11 @@ func ApplyBlockStatistics(
 	blockTime := block.Timestamp()
 	producer := block.WitnessAddress()
 
-	wc := loadOrInitWitness(db, producer)
+	wc := loadOrInitWitness(witnesses, producer)
 	wc.SetTotalProduced(wc.TotalProduced() + 1)
 	wc.SetLatestBlockNum(blockNum)
 	wc.SetLatestSlotNum(AbsoluteSlot(blockTime, genesisTimestamp))
-	rawdb.WriteWitness(db, producer, wc)
+	_ = witnesses.SetWitnessCapsule(wc)
 
 	var slot int64 = 1
 	if blockNum != 1 {
@@ -63,17 +54,17 @@ func ApplyBlockStatistics(
 		if missed == (common.Address{}) {
 			continue
 		}
-		m := loadOrInitWitness(db, missed)
+		m := loadOrInitWitness(witnesses, missed)
 		m.SetTotalMissed(m.TotalMissed() + 1)
-		rawdb.WriteWitness(db, missed, m)
+		_ = witnesses.SetWitnessCapsule(m)
 		dp.ApplyBlockToFilledSlots(false)
 	}
 
 	dp.ApplyBlockToFilledSlots(true)
 }
 
-func loadOrInitWitness(db ethdb.KeyValueReader, addr common.Address) *types.Witness {
-	if w := rawdb.ReadWitness(db, addr); w != nil {
+func loadOrInitWitness(witnesses WitnessStore, addr common.Address) *types.Witness {
+	if w := witnesses.GetWitness(addr); w != nil {
 		return w
 	}
 	return types.NewWitness(addr, "")

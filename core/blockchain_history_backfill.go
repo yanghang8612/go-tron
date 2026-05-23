@@ -294,15 +294,10 @@ func (bc *BlockChain) backfillOneBlock(n uint64) error {
 		dynProps.SetLatestBlockHeaderHash(parentBlock.Hash())
 	}
 
-	// Hydrate witnesses for the reward/standby paths inside ProcessBlock.
-	// Read-only LoadWitness (does not mark dirty) — backfill never flushes
-	// witnesses, so this only feeds the in-block reward computation. The index
-	// is read from the rooted system-KV on the parent-root statedb (Phase 3c);
-	// capsules still come from the flat scratch view (Phase 4).
+	// Warm witnesses for the reward/standby paths inside ProcessBlock. The
+	// index and capsules are both read from the rooted parent-state view.
 	for _, addr := range statedb.ReadWitnessIndex() {
-		if statedb.GetWitness(addr) == nil {
-			statedb.LoadWitness(rawdb.ReadWitness(scratch, addr))
-		}
+		_ = statedb.GetWitness(addr)
 	}
 
 	// Choose the same ProcessBlock variant applyBlock would: the

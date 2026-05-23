@@ -211,7 +211,6 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	// genesis state root, which is the correct starting state for block #1.
 	witnessIndex := make([]tcommon.Address, 0, len(g.Witnesses))
 	witnessVotes := make([]dpos.WitnessVote, 0, len(g.Witnesses))
-	rootedGenesisDB := state.NewRootedStore(statedb, nil)
 	for _, gw := range g.Witnesses {
 		if !statedb.AccountExists(gw.Address) {
 			statedb.CreateAccount(gw.Address, corepb.AccountType_AssetIssue)
@@ -220,7 +219,9 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		w := types.NewWitness(gw.Address, gw.URL)
 		w.SetVoteCount(gw.VoteCount)
 		w.SetIsJobs(true)
-		rawdb.WriteWitness(rootedGenesisDB, gw.Address, w)
+		if err := statedb.SetWitnessCapsule(w); err != nil {
+			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis witness capsule: %w", err)
+		}
 		witnessIndex = append(witnessIndex, gw.Address)
 		witnessVotes = append(witnessVotes, dpos.WitnessVote{Address: gw.Address, Votes: gw.VoteCount})
 	}
@@ -266,7 +267,8 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 	// state root (and rewind with it). Mirrors java-tron Manager.initWitness +
 	// WitnessScheduleStore init: the active set is selected from the genesis
 	// witnesses' configured vote counts in memory, while witness capsules were
-	// already staged through RootedStore above and mirrored flat for legacy reads.
+	// already staged into each witness account's KV domain above and mirrored
+	// flat for legacy reads.
 	if len(witnessIndex) > 0 {
 		if err := statedb.WriteWitnessIndex(witnessIndex); err != nil {
 			return nil, tcommon.Hash{}, nil, fmt.Errorf("seed genesis witness index: %w", err)

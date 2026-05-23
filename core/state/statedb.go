@@ -34,12 +34,12 @@ type StateDB struct {
 	// dirtyWitnesses tracks addresses whose VoteCount or URL changed in
 	// the current block. FlushWitnesses iterates this set instead of the
 	// full witnesses map so no-op blocks (the common case — no VoteWitness
-	// or WitnessUpdate tx) skip the rawdb Read+Write entirely.
+	// or WitnessUpdate tx) skip witness persistence entirely.
 	//
 	// Population: every mutator that changes VoteCount or URL marks dirty
 	// (PutWitness, SetWitnessURL, AddWitnessVoteCount). Preload via
-	// LoadWitness does NOT mark dirty — it just hydrates the in-memory
-	// cache from rawdb.
+	// GetWitness / LoadWitness does NOT mark dirty — it just hydrates the
+	// in-memory cache.
 	//
 	// Revert: the set is deliberately NOT cleared by RevertToSnapshot.
 	// Flushing a witness whose net change is zero costs one Read+Write but
@@ -636,19 +636,18 @@ func (s *StateDB) GetWitness(addr tcommon.Address) *types.Witness {
 	if w := s.witnesses[addr]; w != nil {
 		return w
 	}
-	w := rawdb.ReadWitness(NewRootedStore(s, nil), addr)
-	if w == nil {
+	w, err := s.readWitnessCapsule(addr)
+	if err != nil || w == nil {
 		return nil
 	}
 	s.witnesses[addr] = w.Copy()
 	return s.witnesses[addr]
 }
 
-// LoadWitness hydrates the in-memory witness cache from a rawdb-backed
-// record without marking the address dirty or appending to the journal.
-// Preload paths (applyBlock, BuildBlock, RPC validation) call this once
-// per block to mirror WitnessStore into the StateDB so actuators that
-// read GetWitness see the up-to-date VoteCount / URL.
+// LoadWitness hydrates the in-memory witness cache from an external record
+// without marking the address dirty or appending to the journal. Legacy tests
+// and compatibility fallback paths use it to seed records that are not yet in
+// the native witness domain.
 //
 // Stores a deep copy of w so the in-memory map does not alias the
 // caller's record (the caller typically discards w after this call, but
@@ -666,8 +665,8 @@ func (s *StateDB) LoadWitness(w *types.Witness) {
 // SetWitnessURL when updating an existing witness so that VoteCount /
 // production counters survive the URL change (java-tron parity).
 //
-// Marks the address dirty so FlushWitnesses persists it. For preload
-// from rawdb use LoadWitness instead.
+// Marks the address dirty so FlushWitnesses persists it. For preload use
+// GetWitness (native domain) or LoadWitness (external record) instead.
 func (s *StateDB) PutWitness(addr tcommon.Address, url string) {
 	s.journalWitness(addr)
 	s.witnesses[addr] = types.NewWitness(addr, url)
@@ -702,20 +701,20 @@ type witnessFlushKV interface {
 	ethdb.KeyValueWriter
 }
 
-// FlushWitnesses persists the in-memory witness deltas (VoteCount, URL) onto
-// rawdb-stored witness records via db. Called by applyBlock between
-// ProcessBlock and ApplyBlockStatistics so VoteWitness / Unfreeze /
-// WitnessUpdate effects on VoteCount and URL survive across blocks —
-// StateDB.Commit only flushes accounts, never the witness map.
+// FlushWitnesses persists the in-memory witness deltas (VoteCount, URL) into
+// the native witness account-KV domain, and mirrors them to db when a legacy
+// flat view is supplied. Called by applyBlock between ProcessBlock and
+// ApplyBlockStatistics so VoteWitness / Unfreeze / WitnessUpdate effects on
+// VoteCount and URL survive across blocks.
 //
 // Mirrors java-tron's pattern where VoteWitnessActuator writes to
 // VotesStore and MaintenanceManager.countVote drains it into WitnessStore;
-// the per-block merge here keeps the in-memory cache aligned with rawdb so
-// the next block's pre-load sees the updated VoteCount.
+// the per-block merge here keeps the in-memory cache aligned with the rooted
+// capsule so the next block sees the updated VoteCount.
 //
 // Only addresses in s.dirtyWitnesses are flushed: a no-op block (no
 // VoteWitness, no WitnessUpdate, no Unfreeze touching votes) does zero
-// rawdb Reads or Writes. The dirty set is cleared at the end so a
+// persistence work. The dirty set is cleared at the end so a
 // subsequent applyBlock on the same StateDB instance starts clean.
 func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 	for addr := range s.dirtyWitnesses {
@@ -727,7 +726,12 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 			// nothing to write.
 			continue
 		}
-		stored := rawdb.ReadWitness(db, addr)
+		stored, _ := s.readWitnessCapsule(addr)
+		if stored == nil && db != nil {
+			// Compatibility fallback for tests and pre-native mirrors. Fresh
+			// databases root witness capsules at genesis.
+			stored = rawdb.ReadWitness(db, addr)
+		}
 		if stored == nil {
 			// Witness not yet persisted (e.g. WitnessCreateActuator
 			// already wrote it via ctx.DB earlier in this block, OR a
@@ -735,7 +739,10 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 			// in-memory record so its VoteCount/URL land — counters
 			// default to 0, which ApplyBlockStatistics will populate
 			// when the witness produces or misses.
-			rawdb.WriteWitness(db, addr, w.Copy())
+			_ = s.SetWitnessCapsule(w.Copy())
+			if db != nil {
+				rawdb.WriteWitness(db, addr, w.Copy())
+			}
 			continue
 		}
 		// Merge: only override fields the in-memory record owns.
@@ -744,7 +751,10 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 		// must not be clobbered.
 		stored.SetVoteCount(w.VoteCount())
 		stored.Proto().Url = w.URL()
-		rawdb.WriteWitness(db, addr, stored)
+		_ = s.SetWitnessCapsule(stored)
+		if db != nil {
+			rawdb.WriteWitness(db, addr, stored)
+		}
 	}
 	clear(s.dirtyWitnesses)
 }

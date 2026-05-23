@@ -54,3 +54,9 @@ func ReadWitness(db ethdb.KeyValueReader, addr common.Address) *types.Witness {
 	}
 	return w
 }
+
+// WitnessCapsuleStateKey exposes the legacy witness key bytes for the native
+// typed StateDB witness store. The key shape stays centralized in rawdb/schema.
+func WitnessCapsuleStateKey(addr common.Address) []byte {
+	return witnessKey(addr.Bytes())
+}

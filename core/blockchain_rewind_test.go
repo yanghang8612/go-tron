@@ -74,7 +74,7 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := bc.CurrentBlock().Number(); got != 5 {
 		t.Fatalf("precondition head = %d, want 5", got)
 	}
-	if got := rawdb.ReadWitnessLatestBlock(bc.BufferedDB(), witness); got != 5 {
+	if got := readWitnessLatestBlockAtHead(t, bc, witness); got != 5 {
 		t.Fatalf("precondition witness latest = %d, want 5", got)
 	}
 	if info := rawdb.ReadTransactionInfo(bc.ChainDB(), tx4Hash[:]); info == nil {
@@ -108,13 +108,10 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := bc.DynProps().LatestBlockHeaderNumber(); got != 2 {
 		t.Fatalf("dynprops latest block = %d, want 2", got)
 	}
-	if got := rawdb.ReadWitnessLatestBlock(bc.BufferedDB(), witness); got != 2 {
+	if got := readWitnessLatestBlockAtHead(t, bc, witness); got != 2 {
 		t.Fatalf("witness latest after rewind = %d, want 2", got)
 	}
-	w := rawdb.ReadWitness(bc.BufferedDB(), witness)
-	if w == nil {
-		t.Fatal("witness missing after rewind")
-	}
+	w := readWitnessAtHead(t, bc, witness)
 	if got := w.TotalProduced(); got != 2 {
 		t.Fatalf("witness total produced after rewind = %d, want 2", got)
 	}

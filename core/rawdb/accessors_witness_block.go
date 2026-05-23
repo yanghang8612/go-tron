@@ -27,3 +27,9 @@ func WriteWitnessLatestBlock(db ethdb.KeyValueWriter, addr tcommon.Address, num 
 	binary.BigEndian.PutUint64(buf[:], uint64(num))
 	db.Put(key, buf[:])
 }
+
+// WitnessLatestBlockStateKey exposes the legacy latest-block key bytes for the
+// native typed StateDB witness store. The key shape stays centralized here.
+func WitnessLatestBlockStateKey(addr tcommon.Address) []byte {
+	return witnessLatestBlockKey(addr[:])
+}

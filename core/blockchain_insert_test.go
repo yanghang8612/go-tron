@@ -390,11 +390,8 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 		t.Fatalf("after chain A: head = %d, want 3", bc.CurrentBlock().Number())
 	}
 
-	// Sanity: buffer reflects exactly 3 productions (linear extension path).
-	wA := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
-	if wA == nil {
-		t.Fatal("witness counter not buffered after chain A")
-	}
+	// Sanity: head state reflects exactly 3 productions (linear extension path).
+	wA := readWitnessAtHead(t, bc, witnessAddr)
 	if got := wA.TotalProduced(); got != 3 {
 		t.Fatalf("after chain A: TotalProduced = %d, want 3", got)
 	}
@@ -442,10 +439,7 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 
 	// The bug: without orphan-buffer rollback, TotalProduced would be
 	// 3 (chain A) + 4 (chain B) = 7. With slice-1 fix it must be exactly 4.
-	wPost := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
-	if wPost == nil {
-		t.Fatal("witness counter missing after switchFork")
-	}
+	wPost := readWitnessAtHead(t, bc, witnessAddr)
 	if got := wPost.TotalProduced(); got != 4 {
 		t.Fatalf("after switchFork: TotalProduced = %d, want 4 "+
 			"(orphan branch counters must NOT be double-counted)", got)
@@ -474,7 +468,7 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 
 	// Per-witness latest-block cursor (used by updateSolidifiedBlock):
 	// must reflect canonical chain B's tip, not chain A's stale tip.
-	if got := rawdb.ReadWitnessLatestBlock(bc.BufferedDB(), witnessAddr); got != 4 {
+	if got := readWitnessLatestBlockAtHead(t, bc, witnessAddr); got != 4 {
 		t.Fatalf("after switchFork: WitnessLatestBlock = %d, want 4", got)
 	}
 
@@ -695,17 +689,17 @@ func TestForkSwitch_WitnessScheduleRewindDualMechanism(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Genesis flips is_jobs=true on every witness; clear it on standby #27 so the
-	// boundary's "incoming → is_jobs=true" flip is a discriminating signal.
-	w27 := rawdb.ReadWitness(diskdb, witnessAddr(27))
-	w27.SetIsJobs(false)
-	rawdb.WriteWitness(diskdb, witnessAddr(27), w27)
-
 	sdb := state.NewDatabase(diskdb)
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Genesis flips is_jobs=true on every witness; clear it on standby #27 so the
+	// boundary's "incoming -> is_jobs=true" flip is a discriminating signal.
+	w27 := readWitnessAtHead(t, bc, witnessAddr(27)).Copy()
+	w27.SetIsJobs(false)
+	seedGenesisWitnessCapsule(t, bc, w27)
 
 	// Pending vote: +150 for #27 (97300→97450) lifts it above #26 (97400) but
 	// below #25 (97500). At the boundary the active set swaps #27 in / #26 out —
@@ -721,11 +715,7 @@ func TestForkSwitch_WitnessScheduleRewindDualMechanism(t *testing.T) {
 	})
 
 	isJobs := func(i int) bool {
-		w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr(i))
-		if w == nil {
-			t.Fatalf("witness #%d missing", i)
-		}
-		return w.IsJobs()
+		return readWitnessAtHead(t, bc, witnessAddr(i)).IsJobs()
 	}
 	active := func() map[tcommon.Address]bool {
 		m := map[tcommon.Address]bool{}
@@ -875,13 +865,10 @@ func TestFlushAtSolidified_SurvivesRestart(t *testing.T) {
 		t.Fatalf("restart: head = %d, want 5", got)
 	}
 
-	// Read post-applyBlock counters DIRECTLY from disk (not via the new
-	// buffer). They must match what slice 1's direct-write path would have
-	// produced — i.e. the on-disk consistency property.
-	w := rawdb.ReadWitness(diskdb, witnessAddr)
-	if w == nil {
-		t.Fatal("witness counter not on disk after restart")
-	}
+	// Read post-applyBlock counters from the restarted head state. Witness
+	// capsules are rooted state; the flat witness row is only a compatibility
+	// mirror and is not the source of truth.
+	w := readWitnessAtHead(t, bc2, witnessAddr)
 	if got := w.TotalProduced(); got != 5 {
 		t.Fatalf("disk-side TotalProduced = %d, want 5", got)
 	}
@@ -898,9 +885,9 @@ func TestFlushAtSolidified_SurvivesRestart(t *testing.T) {
 		t.Fatalf("disk-side LatestBlockHeaderNumber = %d, want 5", got)
 	}
 
-	// Per-witness latest-block cursor (used by updateSolidifiedBlock) is
-	// also on disk after restart.
-	if got := rawdb.ReadWitnessLatestBlock(diskdb, witnessAddr); got != 5 {
+	// Per-witness latest-block cursor (used by updateSolidifiedBlock) also
+	// survives restart via the rooted witness domain.
+	if got := readWitnessLatestBlockAtHead(t, bc2, witnessAddr); got != 5 {
 		t.Fatalf("disk-side WitnessLatestBlock = %d, want 5", got)
 	}
 }
@@ -948,10 +935,7 @@ func TestLinearExtension_WitnessCountersThroughBuffer(t *testing.T) {
 		}
 	}
 
-	w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr)
-	if w == nil {
-		t.Fatal("witness counter not buffered after linear chain")
-	}
+	w := readWitnessAtHead(t, bc, witnessAddr)
 	if got := w.TotalProduced(); got != 3 {
 		t.Fatalf("linear extension: TotalProduced = %d, want 3", got)
 	}
@@ -1324,11 +1308,8 @@ func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 		t.Fatalf("restart: head = %d, want 5", got)
 	}
 
-	// Disk-side counters must match what was on the now-flushed buffer.
-	w := rawdb.ReadWitness(diskdb, witnessAddr)
-	if w == nil {
-		t.Fatal("witness counter not on disk after Close+restart")
-	}
+	// Rooted witness counters must match what was on the now-flushed buffer.
+	w := readWitnessAtHead(t, bc2, witnessAddr)
 	if got := w.TotalProduced(); got != 5 {
 		t.Fatalf("disk-side TotalProduced = %d, want 5", got)
 	}
@@ -1426,10 +1407,10 @@ func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
 	if got := bc2.GetBlockByNumber(5); got != nil {
 		t.Fatal("stale block body above recovered head should not be returned as canonical")
 	}
-	// Witness counter NOT on disk — was only ever in the dropped buffer.
-	w := rawdb.ReadWitness(diskdb, witnessAddr)
-	if w != nil && w.TotalProduced() != 0 {
-		t.Fatalf("disk-side TotalProduced = %d, want 0 "+
+	// Witness counter is back at the recovered head root; the dropped layers
+	// never became persisted head state.
+	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 0 {
+		t.Fatalf("rooted TotalProduced = %d, want 0 "+
 			"(layers above solidified were dropped on Close)", w.TotalProduced())
 	}
 }

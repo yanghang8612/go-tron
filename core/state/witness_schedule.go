@@ -17,8 +17,8 @@ import (
 //     iterated at maintenance/reward time and grown by WitnessCreateActuator.
 //
 // Per-witness capsules (vote counts, is_jobs, URL) are rooted separately under
-// the witness-owned WitnessCapsule domain via the RootedStore legacy view.
-// The shuffled witness schedule is reserved for this domain too.
+// the witness-owned WitnessCapsule domain by witness_store.go. The shuffled
+// witness schedule is reserved for this domain too.
 //
 // The value encoding reuses the existing on-disk wire format verbatim —
 // 4-byte big-endian count followed by N×21-byte addresses — so no new encoding

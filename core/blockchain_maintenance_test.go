@@ -6,7 +6,6 @@ import (
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/consensus/dpos"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -39,10 +38,7 @@ import (
 //	(d) unaffected witnesses keep their prior is_jobs — the [0..25] active
 //	    members stay true, the untouched standbys #28/#29 stay false.
 //
-// is_jobs is read back from the persisted witness records via bc.BufferedDB()
-// (flipWitnessIsJobs writes through bc.buffer; with 27 active witnesses and a
-// single producer the solidified line never advances, so nothing flushes to
-// the bare disk store).
+// is_jobs is read back from the rooted witness capsules at the head state.
 func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	sdb := state.NewDatabase(diskdb)
@@ -105,14 +101,14 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 	for _, a := range seededActive {
 		seededActiveSet[a] = true
 	}
-	for i := 0; i < numWitnesses; i++ {
-		w := rawdb.ReadWitness(diskdb, witnessAddr(i))
-		w.SetIsJobs(seededActiveSet[witnessAddr(i)])
-		rawdb.WriteWitness(diskdb, witnessAddr(i), w)
-	}
 	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i := 0; i < numWitnesses; i++ {
+		w := readWitnessAtHead(t, bc, witnessAddr(i)).Copy()
+		w.SetIsJobs(seededActiveSet[witnessAddr(i)])
+		seedGenesisWitnessCapsule(t, bc, w)
 	}
 
 	// java-tron only runs updateWitness/reward/is_jobs rotation when the
@@ -201,15 +197,9 @@ func TestBlockChainInsertBlock_IsJobsRotationAcrossMaintenance(t *testing.T) {
 		}
 	}
 
-	// is_jobs is read from the persisted witness records through the buffered
-	// view — flipWitnessIsJobs writes via bc.buffer and with 27 active
-	// witnesses + one producer the solidified line never advances.
+	// is_jobs is read from rooted witness capsules at the head state.
 	isJobs := func(i int) bool {
-		w := rawdb.ReadWitness(bc.BufferedDB(), witnessAddr(i))
-		if w == nil {
-			t.Fatalf("witness #%d missing after maintenance", i)
-		}
-		return w.IsJobs()
+		return readWitnessAtHead(t, bc, witnessAddr(i)).IsJobs()
 	}
 
 	// (b) Every member of the new active set has is_jobs=true. Witness #26 is

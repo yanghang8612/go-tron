@@ -443,18 +443,12 @@ func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
 }
 
 func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
-	db := b.chain.BufferedDB()
-	// Witness index AND pending votes are rooted: read both from the system-KV
-	// at the head root (one open). Capsules below still come from the flat
-	// buffered view (Phase 4).
-	var (
-		witnessAddrs  []tcommon.Address
-		pendingDeltas map[tcommon.Address]int64
-	)
-	if sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot()); sysKV != nil {
-		witnessAddrs = sysKV.ReadWitnessIndex()
-		pendingDeltas, _ = pendingVoteDeltas(sysKV)
+	statedb := b.chain.sysKVAt(b.chain.HeadStateRoot())
+	if statedb == nil {
+		return nil, nil
 	}
+	witnessAddrs := statedb.ReadWitnessIndex()
+	pendingDeltas, _ := pendingVoteDeltas(statedb)
 	activeSet := b.chain.ActiveWitnesses()
 	activeMap := make(map[tcommon.Address]bool, len(activeSet))
 	for _, a := range activeSet {
@@ -463,7 +457,7 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 
 	var result []*tronapi.WitnessInfo
 	for _, addr := range witnessAddrs {
-		w := rawdb.ReadWitness(db, addr)
+		w := statedb.GetWitness(addr)
 		if w == nil {
 			continue
 		}
@@ -1656,22 +1650,11 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	// rooted dynprops match the state the tx is simulated against.
 	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
 
-	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing step.
-	// Actuators that check ctx.State.GetWitness (witness_update, vote, brokerage, etc.)
-	// will fail "owner is not a witness" without this.
-	//
-	// LoadWitness mirrors the rawdb record without marking dirty — preload is
-	// a cache hydration, not a mutation. Real witness changes from this
-	// RPC-driven validation path go through PutWitness / SetWitnessURL /
-	// AddWitnessVoteCount, which mark dirty for FlushWitnesses.
-	//
-	// Index is rooted (Phase 3c): read it from statedb (opened at the head root);
-	// capsules still load from the flat buffered view (Phase 4).
+	// Hydrate witnesses into statedb, matching InsertBlock's pre-processing
+	// step. Witness index and capsules are rooted at the head state.
 	witnessAddrs := statedb.ReadWitnessIndex()
 	for _, addr := range witnessAddrs {
-		if statedb.GetWitness(addr) == nil {
-			statedb.LoadWitness(rawdb.ReadWitness(b.chain.buffer, addr))
-		}
+		_ = statedb.GetWitness(addr)
 	}
 
 	ctx := &actuator.Context{

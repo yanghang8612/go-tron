@@ -113,14 +113,9 @@ func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle in
 	for _, a := range addrs {
 		w := statedb.GetWitness(a)
 		if w == nil {
-			wc := rawdb.ReadWitness(db, a)
-			if wc == nil {
-				continue
-			}
-			all = append(all, standbyWitnessVote{addr: a, votes: wc.VoteCount()})
-		} else {
-			all = append(all, standbyWitnessVote{addr: a, votes: w.VoteCount()})
+			continue
 		}
+		all = append(all, standbyWitnessVote{addr: a, votes: w.VoteCount()})
 	}
 	// Descending by vote; stable tiebreak by address to match java-tron's
 	// deterministic sort.
@@ -204,10 +199,10 @@ func accumulateWitnessVi(db kvReadWriter, cycle int64, addr []byte, voteCount in
 }
 
 // maintenanceWitnessVotes returns every known witness and its current
-// StateDB vote count. The in-memory StateDB is authoritative during
-// maintenance because tryRemoveThePowerOfTheGr and pending vote deltas may
-// have already mutated witnesses before the rawdb view is flushed.
-func maintenanceWitnessVotes(db kvReadWriter, statedb *state.StateDB) []struct {
+// StateDB vote count. The native witness domain is authoritative during
+// maintenance because tryRemoveThePowerOfTheGr and pending vote deltas may have
+// already mutated witnesses before any legacy flat mirror is flushed.
+func maintenanceWitnessVotes(statedb *state.StateDB) []struct {
 	addr  tcommon.Address
 	votes int64
 } {
@@ -222,20 +217,13 @@ func maintenanceWitnessVotes(db kvReadWriter, statedb *state.StateDB) []struct {
 	}, 0, len(witnessAddrs))
 	for _, a := range witnessAddrs {
 		w := statedb.GetWitness(a)
-		var votes int64
-		if w != nil {
-			votes = w.VoteCount()
-		} else {
-			stored := rawdb.ReadWitness(db, a)
-			if stored == nil {
-				continue
-			}
-			votes = stored.VoteCount()
+		if w == nil {
+			continue
 		}
 		ws = append(ws, struct {
 			addr  tcommon.Address
 			votes int64
-		}{a, votes})
+		}{a, w.VoteCount()})
 	}
 	return ws
 }
@@ -244,7 +232,7 @@ func maintenanceWitnessVotes(db kvReadWriter, statedb *state.StateDB) []struct {
 // MaintenanceManager.doMaintenance: accumulate VI before VotesStore deltas are
 // folded into WitnessStore.
 func applyRewardVI(db kvReadWriter, statedb *state.StateDB, dp *state.DynamicProperties) {
-	ws := maintenanceWitnessVotes(db, statedb)
+	ws := maintenanceWitnessVotes(statedb)
 	if len(ws) == 0 {
 		return
 	}
@@ -264,7 +252,7 @@ func applyRewardCycleSnapshot(db kvReadWriter, statedb *state.StateDB, dp *state
 	if !dp.ChangeDelegation() {
 		return
 	}
-	ws := maintenanceWitnessVotes(db, statedb)
+	ws := maintenanceWitnessVotes(statedb)
 	if len(ws) == 0 {
 		return
 	}

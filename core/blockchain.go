@@ -753,7 +753,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// back — so the merge order here ensures both the actuator-driven
 	// VoteCount and the consensus-driven counter updates land together
 	// instead of one overwriting the other. (D-2.c root-cause fix.)
-	statedb.FlushWitnesses(rootedDB)
+	statedb.FlushWitnesses(bc.buffer)
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
@@ -762,7 +762,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// is updated on dynProps in-memory and lands via dynProps.Flush(bc.db)
 	// below — not yet retrofitted onto the buffer (see slice 2 backlog in
 	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
-	dpos.ApplyBlockStatistics(rootedDB, dynProps, block, previousHeadTimestamp,
+	dpos.ApplyBlockStatistics(statedb, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 	stats.mark(&stats.Execute)
 
@@ -811,14 +811,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// tryRemoveThePowerOfTheGr mutates witness VoteCount before the
 			// java-tron reward-VI step. The earlier FlushWitnesses ran before
 			// maintenance, so drain this mutation now.
-			statedb.FlushWitnesses(rootedDB)
+			statedb.FlushWitnesses(bc.buffer)
 
 			// java-tron accumulates reward VI before VotesStore old/new deltas
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
 			applyRewardVI(rootedDB, statedb, dynProps)
 			hasPendingVotes := applyPendingVotes(statedb)
-			statedb.FlushWitnesses(rootedDB)
+			statedb.FlushWitnesses(bc.buffer)
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {
 				allWitnesses = bc.gatherWitnessVotes(statedb)
@@ -832,7 +832,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 				// java-tron MaintenanceManager flips is_jobs after reward
 				// distribution, before the active set is swapped — bc.ActiveWitnesses()
 				// still holds the outgoing set here.
-				flipWitnessIsJobs(rootedDB, bc.ActiveWitnesses(), newActive)
+				flipWitnessIsJobs(statedb, bc.ActiveWitnesses(), newActive)
 				if err := bc.SetActiveWitnesses(statedb, newActive); err != nil {
 					return err
 				}
@@ -889,7 +889,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
-	bc.updateSolidifiedBlock(rootedDB, block.WitnessAddress(), int64(block.Number()), dynProps)
+	bc.updateSolidifiedBlock(statedb, block.WitnessAddress(), int64(block.Number()), dynProps)
 	bc.updateForkWithDB(rootedDB, block)
 	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("stage tapos ref: %w", err)
@@ -1542,15 +1542,13 @@ func (bc *BlockChain) clearRewardAccountCache() {
 	bc.rewardAcctCache = make(map[tcommon.Address]*types.Account)
 }
 
-// loadWitnessesIntoState hydrates witness records for maintenance-only code
-// that mutates vote counts through StateDB. Ordinary replay does lazy rawdb
+// loadWitnessesIntoState warms witness records for maintenance-only code that
+// mutates vote counts through StateDB. Ordinary replay does lazy native-domain
 // lookups instead, avoiding a full witness scan on every block.
 func (bc *BlockChain) loadWitnessesIntoState(statedb *state.StateDB) {
 	witnessAddrs := statedb.ReadWitnessIndex()
 	for _, addr := range witnessAddrs {
-		if statedb.GetWitness(addr) == nil {
-			statedb.LoadWitness(rawdb.ReadWitness(bc.buffer, addr))
-		}
+		_ = statedb.GetWitness(addr)
 	}
 }
 
@@ -1725,13 +1723,9 @@ func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
 // For a single-SR chain (N=1) this means floor(1*0.3)=0, so the solidified
 // number always equals that SR's latest block (i.e. the current head).
 // Mirrors java-tron Manager.updateSolidifiedBlock().
-func (bc *BlockChain) updateSolidifiedBlock(db witnessKV, producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
-	// Persist this witness's latest produced block number through the rooted
-	// legacy view (mirrored to bc.buffer)
-	// so it rewinds on switchFork (slice 2). The N-way read below also
-	// consults the buffer — otherwise the solidified compute would use a
-	// stale on-disk value for the just-written witness.
-	rawdb.WriteWitnessLatestBlock(db, producerAddr, blockNum)
+func (bc *BlockChain) updateSolidifiedBlock(statedb *state.StateDB, producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
+	// The rooted cursor is canonical for rewind and historical restart.
+	_ = statedb.WriteWitnessLatestBlock(producerAddr, blockNum)
 
 	active := bc.ActiveWitnesses()
 	n := len(active)
@@ -1741,7 +1735,7 @@ func (bc *BlockChain) updateSolidifiedBlock(db witnessKV, producerAddr tcommon.A
 
 	nums := make([]int64, 0, n)
 	for _, addr := range active {
-		nums = append(nums, rawdb.ReadWitnessLatestBlock(db, addr))
+		nums = append(nums, statedb.ReadWitnessLatestBlock(addr))
 	}
 	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
 
@@ -1755,39 +1749,30 @@ func (bc *BlockChain) updateSolidifiedBlock(db witnessKV, producerAddr tcommon.A
 	}
 }
 
-// witnessKV is the read+write capability flipWitnessIsJobs needs; both
-// *blockbuffer.Buffer and a plain ethdb store satisfy it.
-type witnessKV interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-}
-
 // flipWitnessIsJobs mirrors java-tron MaintenanceManager.applyBlock: when the
 // active witness set rotates at a maintenance boundary, clear is_jobs on every
 // outgoing member and set it on every incoming member. java-tron guards this
 // on order-independent set inequality of currentWits vs newWits, so an
-// unchanged cycle rewrites nothing. Writes go direct to the block buffer via
-// rawdb (not through statedb) because statedb.FlushWitnesses only merges
-// VoteCount and URL onto the stored record — is_jobs would be dropped.
-func flipWitnessIsJobs(db witnessKV, oldActive, newActive []tcommon.Address) {
+// unchanged cycle rewrites nothing.
+func flipWitnessIsJobs(statedb *state.StateDB, oldActive, newActive []tcommon.Address) {
 	if sameAddressSet(oldActive, newActive) {
 		return
 	}
 	for _, addr := range oldActive {
-		setWitnessIsJobs(db, addr, false)
+		setWitnessIsJobs(statedb, addr, false)
 	}
 	for _, addr := range newActive {
-		setWitnessIsJobs(db, addr, true)
+		setWitnessIsJobs(statedb, addr, true)
 	}
 }
 
-func setWitnessIsJobs(db witnessKV, addr tcommon.Address, v bool) {
-	w := rawdb.ReadWitness(db, addr)
+func setWitnessIsJobs(statedb *state.StateDB, addr tcommon.Address, v bool) {
+	w := statedb.GetWitness(addr)
 	if w == nil {
 		return
 	}
 	w.SetIsJobs(v)
-	rawdb.WriteWitness(db, addr, w)
+	_ = statedb.SetWitnessCapsule(w)
 }
 
 func sameAddressSet(a, b []tcommon.Address) bool {
@@ -1815,9 +1800,6 @@ func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessV
 	var result []dpos.WitnessVote
 	for _, addr := range addrs {
 		w := statedb.GetWitness(addr)
-		if w == nil {
-			w = rawdb.ReadWitness(bc.buffer, addr)
-		}
 		if w != nil {
 			result = append(result, dpos.WitnessVote{
 				Address: w.Address(),

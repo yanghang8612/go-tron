@@ -17,19 +17,21 @@ import (
 // maintenance boundary, is_jobs is cleared on every outgoing member and set on
 // every incoming member. Members present in both sets end up true.
 func TestFlipWitnessIsJobs_Rotation(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	a, b, c := testCoreAddr(1), testCoreAddr(2), testCoreAddr(3)
 	for _, addr := range []tcommon.Address{a, b, c} {
 		w := types.NewWitness(addr, "")
 		w.SetIsJobs(addr == a || addr == b) // a,b are the current active set
-		rawdb.WriteWitness(diskdb, addr, w)
+		if err := statedb.SetWitnessCapsule(w); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	flipWitnessIsJobs(diskdb, []tcommon.Address{a, b}, []tcommon.Address{b, c})
+	flipWitnessIsJobs(statedb, []tcommon.Address{a, b}, []tcommon.Address{b, c})
 
 	want := map[tcommon.Address]bool{a: false, b: true, c: true}
 	for addr, exp := range want {
-		w := rawdb.ReadWitness(diskdb, addr)
+		w := statedb.GetWitness(addr)
 		if w == nil {
 			t.Fatalf("witness %s missing", addr.Hex())
 		}
@@ -42,18 +44,20 @@ func TestFlipWitnessIsJobs_Rotation(t *testing.T) {
 // TestFlipWitnessIsJobs_NoChangeSkips verifies the java-tron guard: when the
 // active set is unchanged (order-independent), no witness records are touched.
 func TestFlipWitnessIsJobs_NoChangeSkips(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
+	statedb := newTestStateDB(t)
 	a, b := testCoreAddr(1), testCoreAddr(2)
 	for _, addr := range []tcommon.Address{a, b} {
 		w := types.NewWitness(addr, "")
 		w.SetIsJobs(false) // deliberately stale; guard must leave it untouched
-		rawdb.WriteWitness(diskdb, addr, w)
+		if err := statedb.SetWitnessCapsule(w); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	flipWitnessIsJobs(diskdb, []tcommon.Address{a, b}, []tcommon.Address{b, a})
+	flipWitnessIsJobs(statedb, []tcommon.Address{a, b}, []tcommon.Address{b, a})
 
 	for _, addr := range []tcommon.Address{a, b} {
-		if w := rawdb.ReadWitness(diskdb, addr); w.IsJobs() {
+		if w := statedb.GetWitness(addr); w.IsJobs() {
 			t.Errorf("witness %s: IsJobs rewritten despite unchanged set", addr.Hex())
 		}
 	}

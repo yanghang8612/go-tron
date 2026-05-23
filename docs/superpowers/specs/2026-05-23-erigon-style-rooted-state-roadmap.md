@@ -331,6 +331,20 @@ Acceptance:
 - Flat state mirrors are no longer required for canonical head correctness.
 - Restart from historical height works without relying on flat mirrors.
 
+Implementation start:
+
+- Witness capsules now have a native `StateDB` typed store in the witness-owned
+  `WitnessCapsule` account-KV domain. Witness create/update/lookup, DPoS block
+  statistics, maintenance `is_jobs` flips, standby/reward vote scans, producer
+  validation/build preloads, backfill preloads, and `ListWitnesses` read/write
+  witness capsules through `StateDB` rather than raw witness rows.
+- Per-witness latest-produced-block cursors are staged through the same witness
+  domain and used by solidified-block computation, so fork rewind and historical
+  restart no longer depend on the flat latest-block cursor.
+- The legacy flat witness rows remain as a compatibility mirror at genesis and
+  during explicit `FlushWitnesses` compatibility drains; tests that assert
+  canonical witness counters now read from the rooted head state.
+
 Estimated effort: 10-15 days.
 
 ## Phase 4: Content-Addressed Code Domain

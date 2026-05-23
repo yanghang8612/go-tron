@@ -3,8 +3,6 @@ package actuator
 import (
 	"errors"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/types"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -64,12 +62,9 @@ func (a *WitnessCreateActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.PutWitness(ownerAddr, string(wc.Url))
 	ctx.State.SetIsWitness(ownerAddr, true)
 
-	// Persist the new witness capsule through ctx.DB so it survives the block
-	// commit (capsules stay flat until Phase 4). The witness index is rooted
-	// (Phase 3c): append it through ctx.State — the same *StateDB maintenance
-	// reads later this block — so the new SR is visible to gatherWitnessVotes,
-	// is journaled (rolls back if this tx reverts), and rewinds with the root.
-	rawdb.WriteWitness(ctx.DB, ownerAddr, types.NewWitness(ownerAddr, string(wc.Url)))
+	// The witness index is rooted: append it through ctx.State — the same
+	// *StateDB maintenance reads later this block — so the new SR is visible to
+	// gatherWitnessVotes, is journaled, and rewinds with the root.
 	if err := ctx.State.AppendWitnessIndex(ownerAddr); err != nil {
 		return nil, err
 	}
