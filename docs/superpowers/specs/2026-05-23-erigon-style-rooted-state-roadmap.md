@@ -640,6 +640,14 @@ Acceptance:
 - Archive node answers historical state across retained range.
 - Pruning is idempotent and crash-safe.
 
+Implementation start:
+
+- `core/state/pruning` defines explicit `archive`, `full`, and `snap` modes.
+- The first policy layer validates history/reorg windows and exposes retention
+  predicates for domain history, reorg data, and visible snapshot ranges.
+- The policy is not wired into node config or deletion workers yet; it is the
+  shared contract for Phase 9 pruners and integrity checks.
+
 Estimated effort: 7-12 days after snapshots/history exist.
 
 ## Phase 10: Remove Legacy Flat State Semantics
