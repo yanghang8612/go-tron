@@ -3,6 +3,7 @@ package state
 import (
 	"sync"
 
+	"github.com/VictoriaMetrics/fastcache"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
@@ -14,16 +15,19 @@ const trieNodeBatchPreallocSize = ethdb.IdealBatchSize
 
 // DatabaseConfig tunes the in-process trie database wrapper.
 type DatabaseConfig struct {
-	// CleanTrieCacheSizeBytes enables geth hashdb's clean-node cache. It caches
-	// decoded-once trie node blobs above Pebble so consecutive block commits do
-	// not have to re-read hot account/KV trie nodes from compacting SSTables.
+	// CleanTrieCacheSizeBytes enables the in-process trie-node cache. It keeps
+	// raw legacy trie node blobs above Pebble, including nodes just produced by
+	// block commits, so consecutive blocks do not have to re-read hot account/KV
+	// trie nodes from compacting SSTables.
 	CleanTrieCacheSizeBytes int
 }
 
 // Database wraps access to tries.
 type Database struct {
 	disk              ethdb.Database
+	trieDisk          ethdb.Database
 	trieDB            *triedb.Database
+	trieNodeCache     *fastcache.Cache
 	trieNodeBatchPool sync.Pool
 }
 
@@ -39,13 +43,28 @@ func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database 
 	if cfg.CleanTrieCacheSizeBytes < 0 {
 		cfg.CleanTrieCacheSizeBytes = 0
 	}
-	trieDBCfg := &triedb.Config{
-		HashDB: &hashdb.Config{CleanCacheSize: cfg.CleanTrieCacheSizeBytes},
+	trieDisk := diskdb
+	var trieNodeCache *fastcache.Cache
+	if cfg.CleanTrieCacheSizeBytes > 0 {
+		trieNodeCache = fastcache.New(cfg.CleanTrieCacheSizeBytes)
+		trieDisk = &trieNodeCacheDB{
+			Database: diskdb,
+			cache:    trieNodeCache,
+		}
 	}
-	trieDB := triedb.NewDatabase(diskdb, trieDBCfg)
+	trieDBCfg := &triedb.Config{
+		// go-tron keeps its own read-through/write-through node cache around
+		// the trie database so nodes produced by our manual batched writer are
+		// visible to the next block without a Pebble read. Leaving hashdb's
+		// separate clean cache disabled avoids holding the same blobs twice.
+		HashDB: &hashdb.Config{CleanCacheSize: 0},
+	}
+	trieDB := triedb.NewDatabase(trieDisk, trieDBCfg)
 	db := &Database{
-		disk:   diskdb,
-		trieDB: trieDB,
+		disk:          diskdb,
+		trieDisk:      trieDisk,
+		trieDB:        trieDB,
+		trieNodeCache: trieNodeCache,
 	}
 	db.trieNodeBatchPool.New = func() any {
 		return diskdb.NewBatchWithSize(trieNodeBatchPreallocSize)
@@ -74,7 +93,11 @@ func (db *Database) Close() error {
 	if db == nil || db.trieDB == nil {
 		return nil
 	}
-	return db.trieDB.Close()
+	err := db.trieDB.Close()
+	if db.trieNodeCache != nil {
+		db.trieNodeCache.Reset()
+	}
+	return err
 }
 
 func (db *Database) newTrieNodeBatch() ethdb.Batch {
@@ -87,4 +110,11 @@ func (db *Database) releaseTrieNodeBatch(batch ethdb.Batch) {
 	}
 	batch.Reset()
 	db.trieNodeBatchPool.Put(batch)
+}
+
+func (db *Database) cacheTrieNode(hash ethcommon.Hash, blob []byte) {
+	if db == nil || db.trieNodeCache == nil || len(blob) == 0 {
+		return
+	}
+	db.trieNodeCache.Set(hash[:], blob)
 }

@@ -402,9 +402,9 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	if stateDBConfig.CleanTrieCacheSizeBytes > 0 {
-		log.Info("State trie clean cache enabled", "cacheMiB", stateDBConfig.CleanTrieCacheSizeBytes/(1024*1024))
+		log.Info("State trie node cache enabled", "cacheMiB", stateDBConfig.CleanTrieCacheSizeBytes/(1024*1024))
 	} else {
-		log.Info("State trie clean cache disabled")
+		log.Info("State trie node cache disabled")
 	}
 	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)

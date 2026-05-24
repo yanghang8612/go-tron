@@ -117,8 +117,14 @@ func (w *accountKVLatestBatch) flush() error {
 }
 
 type trieNodeBatchWriter struct {
-	db    *Database
-	batch ethdb.Batch
+	db           *Database
+	batch        ethdb.Batch
+	pendingCache []trieNodeCacheEntry
+}
+
+type trieNodeCacheEntry struct {
+	hash ethcommon.Hash
+	blob []byte
 }
 
 func newTrieNodeBatchWriter(db *Database) *trieNodeBatchWriter {
@@ -132,20 +138,20 @@ func (w *trieNodeBatchWriter) release() {
 	if w == nil || w.batch == nil {
 		return
 	}
+	w.pendingCache = nil
 	w.db.releaseTrieNodeBatch(w.batch)
 	w.batch = nil
 }
 
 func (w *trieNodeBatchWriter) write(hash ethcommon.Hash, blob []byte) error {
 	ethrawdb.WriteLegacyTrieNode(w.batch, hash, blob)
+	if w.db.trieNodeCache != nil && len(blob) > 0 {
+		w.pendingCache = append(w.pendingCache, trieNodeCacheEntry{hash: hash, blob: blob})
+	}
 	if w.batch.ValueSize() < ethdb.IdealBatchSize {
 		return nil
 	}
-	if err := w.batch.Write(); err != nil {
-		return err
-	}
-	w.batch.Reset()
-	return nil
+	return w.flush()
 }
 
 func (w *trieNodeBatchWriter) writeNodeSet(nodes *trienode.NodeSet) error {
@@ -169,6 +175,10 @@ func (w *trieNodeBatchWriter) flush() error {
 	if err := w.batch.Write(); err != nil {
 		return err
 	}
+	for _, entry := range w.pendingCache {
+		w.db.cacheTrieNode(entry.hash, entry.blob)
+	}
+	w.pendingCache = w.pendingCache[:0]
 	w.batch.Reset()
 	return nil
 }
