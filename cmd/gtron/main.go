@@ -561,7 +561,7 @@ func gtron(ctx *cli.Context) error {
 	} else if chainConfig.HistoryEnabled {
 		log.Info("History capture enabled", "mode", params.HistoryModeArchive, "pruning", false)
 	}
-	if chainConfig.EffectiveHistoryMode() == params.HistoryModeFull {
+	if shouldEnableDomainStatePruner(chainConfig) {
 		historyWindow := chainConfig.EffectiveHistoryPruneWindow()
 		reorgWindow := domainStateReorgWindow
 		if historyWindow < reorgWindow {

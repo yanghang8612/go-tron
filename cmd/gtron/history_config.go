@@ -86,6 +86,13 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 	return nil
 }
 
+func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
+	if cfg == nil || cfg.EffectiveHistoryMode() != params.HistoryModeFull {
+		return false
+	}
+	return cfg.HistoryEnabled || cfg.StateCommitmentCheckpoints
+}
+
 // normaliseHistoryMode validates a user-supplied --gcmode value. The
 // canonical strings are "full" and "archive"; anything else is a hard
 // error rather than a silent fallback so a typo doesn't degrade an

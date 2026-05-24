@@ -235,3 +235,39 @@ func TestApplyHistoryConfig_CLIEnabledOverridesTOMLDisabled(t *testing.T) {
 		t.Fatal("CLI --history.enabled should override TOML enabled=false")
 	}
 }
+
+func TestShouldEnableDomainStatePruner(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  params.ChainConfig
+		want bool
+	}{
+		{
+			name: "plain full stays zero cost",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull},
+			want: false,
+		},
+		{
+			name: "full history capture needs pruning",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull, HistoryEnabled: true},
+			want: true,
+		},
+		{
+			name: "full checkpoints need pruning",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull, StateCommitmentCheckpoints: true},
+			want: true,
+		},
+		{
+			name: "archive never prunes",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true, StateCommitmentCheckpoints: true},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldEnableDomainStatePruner(&tt.cfg); got != tt.want {
+				t.Fatalf("shouldEnableDomainStatePruner = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

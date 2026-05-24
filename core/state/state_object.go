@@ -28,8 +28,9 @@ type stateObject struct {
 
 	// Rooted generic-KV fields: root of this account's per-account KV trie
 	// (committed into the StateAccountV2 envelope) and its reset generation.
-	accountKVRoot       tcommon.Hash
-	accountKVGeneration uint64
+	accountKVRoot            tcommon.Hash
+	accountKVGeneration      uint64
+	accountKVGenerationDirty bool
 
 	// kvDirty holds pending generic-KV writes keyed by string(domainBE2||key).
 	kvDirty map[string]kvEntry

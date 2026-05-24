@@ -226,6 +226,7 @@ func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
 	obj := newStateObject(addr, snapshot.Account)
 	obj.accountKVRoot = snapshot.AccountKVRoot
 	obj.accountKVGeneration = snapshot.AccountKVGeneration
+	obj.accountKVGenerationDirty = false
 	obj.codeHash = snapshot.CodeHash
 	s.stateObjects[addr] = obj
 }
@@ -1820,21 +1821,22 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			kvDirtyCopy[k] = ec
 		}
 		newObj := &stateObject{
-			address:             addr,
-			dirty:               obj.dirty,
-			deleted:             obj.deleted,
-			created:             obj.created,
-			code:                append([]byte{}, obj.code...),
-			codeHash:            obj.codeHash,
-			codeDirty:           obj.codeDirty,
-			contractMeta:        metaCopy,
-			contractMetaDirty:   obj.contractMetaDirty,
-			storage:             make(map[tcommon.Hash]tcommon.Hash),
-			storageExists:       make(map[tcommon.Hash]bool),
-			selfDestructed:      obj.selfDestructed,
-			accountKVRoot:       obj.accountKVRoot,
-			accountKVGeneration: obj.accountKVGeneration,
-			kvDirty:             kvDirtyCopy,
+			address:                  addr,
+			dirty:                    obj.dirty,
+			deleted:                  obj.deleted,
+			created:                  obj.created,
+			code:                     append([]byte{}, obj.code...),
+			codeHash:                 obj.codeHash,
+			codeDirty:                obj.codeDirty,
+			contractMeta:             metaCopy,
+			contractMetaDirty:        obj.contractMetaDirty,
+			storage:                  make(map[tcommon.Hash]tcommon.Hash),
+			storageExists:            make(map[tcommon.Hash]bool),
+			selfDestructed:           obj.selfDestructed,
+			accountKVRoot:            obj.accountKVRoot,
+			accountKVGeneration:      obj.accountKVGeneration,
+			accountKVGenerationDirty: obj.accountKVGenerationDirty,
+			kvDirty:                  kvDirtyCopy,
 		}
 		if obj.account != nil {
 			data, _ := obj.account.Marshal()
@@ -1932,7 +1934,8 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 				rawdb.WriteStorage(s.db.DiskDB(), addr, tcommon.BytesToHash(rowKey), v.Bytes())
 			}
 		}
-		if len(obj.kvDirty) > 0 {
+		hadKVChanges := len(obj.kvDirty) > 0
+		if hadKVChanges {
 			kvRoot, err := s.commitAccountKV(obj, trieNodeWriter)
 			if err != nil {
 				return tcommon.Hash{}, err
@@ -1943,8 +1946,10 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			obj.accountKVRoot = kvRoot
 			obj.kvDirty = make(map[string]kvEntry)
 		}
-		if err := s.writeAccountKVGeneration(obj); err != nil {
-			return tcommon.Hash{}, err
+		if obj.accountKVGenerationDirty || hadKVChanges {
+			if err := s.writeAccountKVGeneration(obj); err != nil {
+				return tcommon.Hash{}, err
+			}
 		}
 		accBytes, err := obj.account.Marshal()
 		if err != nil {
@@ -2221,6 +2226,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	obj := newStateObject(addr, acc)
 	obj.accountKVRoot = envelope.AccountKVRoot
 	obj.accountKVGeneration = envelope.AccountKVGeneration
+	obj.accountKVGenerationDirty = false
 	obj.codeHash = envelope.CodeHash
 	s.stateObjects[addr] = obj
 	return obj

@@ -191,6 +191,19 @@ func TestApplyBlock_HistoryDisabledNoRows(t *testing.T) {
 	if rawdb.HasHistoryMeta(bdb, 1) {
 		t.Error("sh-m- row leaked despite HistoryEnabled=false")
 	}
+	if _, ok, err := rawdb.ReadStateTxRange(bc.buffer, 1); err != nil || ok {
+		t.Errorf("StateTxRange leaked despite HistoryEnabled=false: ok=%v err=%v", ok, err)
+	}
+	var domainChanges int
+	if err := rawdb.IterateStateDomainChanges(bc.buffer, 1, func(change *rawdb.StateDomainChange) (bool, error) {
+		domainChanges++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate state domain changes: %v", err)
+	}
+	if domainChanges != 0 {
+		t.Errorf("StateDomainChange rows leaked despite HistoryEnabled=false: %d", domainChanges)
+	}
 }
 
 // TestApplyBlock_HistoryReorgDropsOrphan inserts a canonical chain A then

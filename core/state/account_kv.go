@@ -398,14 +398,16 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 		prevDirty[k] = v
 	}
 	s.journal.append(kvResetChange{
-		address:        owner,
-		prevRoot:       obj.accountKVRoot,
-		prevGeneration: obj.accountKVGeneration,
-		prevDirty:      prevDirty,
+		address:             owner,
+		prevRoot:            obj.accountKVRoot,
+		prevGeneration:      obj.accountKVGeneration,
+		prevGenerationDirty: obj.accountKVGenerationDirty,
+		prevDirty:           prevDirty,
 	})
 	obj.kvDirty = make(map[string]kvEntry)
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
+	obj.accountKVGenerationDirty = true
 	obj.markDirty()
 	s.invalidateAccountKVTrie(owner)
 	return nil
@@ -501,5 +503,9 @@ func (s *StateDB) writeDomainChange(index accountKVIndexStore, obj *stateObject,
 }
 
 func (s *StateDB) writeAccountKVGeneration(obj *stateObject) error {
-	return rawdb.WriteStateKVGeneration(s.accountKVIndex(), obj.address, obj.accountKVGeneration)
+	if err := rawdb.WriteStateKVGeneration(s.accountKVIndex(), obj.address, obj.accountKVGeneration); err != nil {
+		return err
+	}
+	obj.accountKVGenerationDirty = false
+	return nil
 }

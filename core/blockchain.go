@@ -906,7 +906,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err := dynProps.FlushRooted(statedb); err != nil {
 		return fmt.Errorf("flush rooted dynamic properties: %w", err)
 	}
-	statedb.SetDomainChangeSetWriter(bc.buffer, block.Number(), block.Hash())
+	if bc.config.HistoryEnabled {
+		statedb.SetDomainChangeSetWriter(bc.buffer, block.Number(), block.Hash())
+	}
 
 	// Commit state (includes both tx execution and maintenance changes).
 	newRoot, err := statedb.Commit()
