@@ -352,6 +352,15 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	}
 	obj := s.GetOrCreateAccount(owner)
 	mk := string(kvCompositeKey(domain, key))
+	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
+		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
+		if err != nil {
+			return err
+		}
+		if exists && bytes.Equal(current, value) {
+			return nil
+		}
+	}
 	if journal {
 		prev, had := obj.kvDirty[mk]
 		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
@@ -371,6 +380,15 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 		return nil
 	}
 	mk := string(kvCompositeKey(domain, key))
+	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
+		_, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+	}
 	prev, had := obj.kvDirty[mk]
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
 	obj.kvDirty[mk] = kvEntry{val: nil, deleted: true}

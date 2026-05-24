@@ -78,7 +78,9 @@ type SyncService struct {
 	chain   *core.BlockChain
 	handler *TronHandler
 
-	insertMu sync.Mutex
+	drainMu    sync.Mutex
+	draining   bool
+	drainAgain bool
 
 	mu         sync.Mutex
 	syncing    bool
@@ -965,9 +967,29 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 }
 
 func (ss *SyncService) drainBufferedBlocks() {
-	ss.insertMu.Lock()
-	defer ss.insertMu.Unlock()
+	ss.drainMu.Lock()
+	if ss.draining {
+		ss.drainAgain = true
+		ss.drainMu.Unlock()
+		return
+	}
+	ss.draining = true
+	ss.drainMu.Unlock()
 
+	for {
+		ss.drainBufferedBlocksOnce()
+		ss.drainMu.Lock()
+		if !ss.drainAgain {
+			ss.draining = false
+			ss.drainMu.Unlock()
+			return
+		}
+		ss.drainAgain = false
+		ss.drainMu.Unlock()
+	}
+}
+
+func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
 	for {
 		now := time.Now()

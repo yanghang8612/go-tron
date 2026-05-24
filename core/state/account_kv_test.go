@@ -98,6 +98,43 @@ func TestAccountKVRootMovesAndPersists(t *testing.T) {
 	}
 }
 
+func TestAccountKVNoopLatestWritesDoNotDirtyState(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x13)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
+	reopened.SetAccountKVIndexReads(true)
+	if err := reopened.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set same: %v", err)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing")
+	}
+	if len(obj.kvDirty) != 0 || obj.dirty {
+		t.Fatalf("same-value write dirtied state: dirty=%t kvDirty=%d", obj.dirty, len(obj.kvDirty))
+	}
+	root2, err := reopened.Commit()
+	if err != nil {
+		t.Fatalf("commit noop: %v", err)
+	}
+	if root2 != root {
+		t.Fatalf("noop commit moved root: got %x want %x", root2, root)
+	}
+}
+
 func TestLoadAccountReferencePreservesAccountKVRoot(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x12)
