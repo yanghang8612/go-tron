@@ -44,7 +44,7 @@ type layer struct {
 	deletes   map[string]struct{}
 }
 
-const maxFlushBatchPreallocSize = 1 << 20
+const maxFlushBatchValueSize = 1 << 20
 
 func newLayer(hash common.Hash) *layer {
 	return &layer{
@@ -345,19 +345,20 @@ func (b *Buffer) FlushUpTo(
 	// Step 2: lock-free disk I/O. Layers are immutable post-commit, so
 	// reading blockHash + write/delete maps without b.mu is race-free, and
 	// readers can RLock concurrently.
-	flushed := 0
+	eligible := 0
 	for _, l := range snapshot {
 		n, ok := numberOf(l.blockHash)
 		if !ok || n > cutoff {
 			break
 		}
-		if err := flushLayer(l, w); err != nil {
-			// Drop whatever we already flushed before surfacing the error,
-			// so a retry doesn't re-write those layers.
-			b.dropFlushedPrefix(flushed)
-			return err
-		}
-		flushed++
+		eligible++
+	}
+	flushed, err := flushLayers(snapshot[:eligible], w)
+	if err != nil {
+		// Drop whatever we already flushed before surfacing the error, so a
+		// retry doesn't re-write those layers.
+		b.dropFlushedPrefix(flushed)
+		return err
 	}
 	if flushed == 0 {
 		return nil
@@ -390,19 +391,73 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
-		batch := batcher.NewBatchWithSize(flushLayerBatchSize(l))
-		for k, v := range l.writes {
-			if err := batch.Put([]byte(k), v); err != nil {
-				return err
-			}
-		}
-		for k := range l.deletes {
-			if err := batch.Delete([]byte(k)); err != nil {
-				return err
-			}
+		batch := batcher.NewBatch()
+		defer closeBatch(batch)
+		if err := writeLayer(l, batch); err != nil {
+			return err
 		}
 		return batch.Write()
 	}
+	return writeLayer(l, w)
+}
+
+func flushLayers(layers []*layer, w ethdb.KeyValueWriter) (int, error) {
+	if len(layers) == 0 {
+		return 0, nil
+	}
+	batcher, ok := w.(ethdb.Batcher)
+	if !ok {
+		flushed := 0
+		for _, l := range layers {
+			if err := writeLayer(l, w); err != nil {
+				return flushed, err
+			}
+			flushed++
+		}
+		return flushed, nil
+	}
+
+	batch := batcher.NewBatch()
+	defer closeBatch(batch)
+
+	flushed := 0
+	queuedLayers := 0
+	flushQueued := func() error {
+		if queuedLayers == 0 {
+			return nil
+		}
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		flushed += queuedLayers
+		queuedLayers = 0
+		batch.Reset()
+		return nil
+	}
+
+	for _, l := range layers {
+		if queuedLayers > 0 && batch.ValueSize()+layerWriteSize(l) > maxFlushBatchValueSize {
+			if err := flushQueued(); err != nil {
+				return flushed, err
+			}
+		}
+		if err := writeLayer(l, batch); err != nil {
+			return flushed, err
+		}
+		queuedLayers++
+		if batch.ValueSize() >= maxFlushBatchValueSize {
+			if err := flushQueued(); err != nil {
+				return flushed, err
+			}
+		}
+	}
+	if err := flushQueued(); err != nil {
+		return flushed, err
+	}
+	return flushed, nil
+}
+
+func writeLayer(l *layer, w ethdb.KeyValueWriter) error {
 	for k, v := range l.writes {
 		if err := w.Put([]byte(k), v); err != nil {
 			return err
@@ -416,9 +471,9 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	return nil
 }
 
-func flushLayerBatchSize(l *layer) int {
+func layerWriteSize(l *layer) int {
 	if l == nil {
-		return ethdb.IdealBatchSize
+		return 0
 	}
 	size := 0
 	for k, v := range l.writes {
@@ -427,13 +482,13 @@ func flushLayerBatchSize(l *layer) int {
 	for k := range l.deletes {
 		size += len(k)
 	}
-	if size < ethdb.IdealBatchSize {
-		return ethdb.IdealBatchSize
-	}
-	if size > maxFlushBatchPreallocSize {
-		return maxFlushBatchPreallocSize
-	}
 	return size
+}
+
+func closeBatch(batch ethdb.Batch) {
+	if closer, ok := batch.(interface{ Close() }); ok {
+		closer.Close()
+	}
 }
 
 // NewIterator returns an iterator over the buffer view: every key whose bytes

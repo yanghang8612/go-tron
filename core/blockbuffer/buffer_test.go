@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -39,6 +40,38 @@ func (w *blockingWriter) Put(key, value []byte) error {
 }
 
 func (w *blockingWriter) Delete(key []byte) error { return nil }
+
+type countingBatcher struct {
+	ethdb.KeyValueStore
+	batches atomic.Int32
+	writes  atomic.Int32
+}
+
+func (w *countingBatcher) NewBatch() ethdb.Batch {
+	w.batches.Add(1)
+	return &countingBatch{
+		Batch:  w.KeyValueStore.NewBatch(),
+		writes: &w.writes,
+	}
+}
+
+func (w *countingBatcher) NewBatchWithSize(size int) ethdb.Batch {
+	w.batches.Add(1)
+	return &countingBatch{
+		Batch:  w.KeyValueStore.NewBatchWithSize(size),
+		writes: &w.writes,
+	}
+}
+
+type countingBatch struct {
+	ethdb.Batch
+	writes *atomic.Int32
+}
+
+func (b *countingBatch) Write() error {
+	b.writes.Add(1)
+	return b.Batch.Write()
+}
 
 func bufHash(b byte) common.Hash {
 	var h common.Hash
@@ -451,6 +484,45 @@ func TestBuffer_FlushUpTo_KeepsHigherLayersRewindable(t *testing.T) {
 	mustNotFound(t, b, []byte("b"))
 	if got := len(b.PendingBlocks()); got != 0 {
 		t.Fatalf("PendingBlocks = %d, want 0 after flush+discard", got)
+	}
+}
+
+func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
+	b := New(rawdb.NewMemoryDatabase())
+	hashes := []common.Hash{bufHash(1), bufHash(2), bufHash(3)}
+	for i, h := range hashes {
+		b.BeginBlock(h)
+		if err := b.Put([]byte("k"), []byte{byte('A' + i)}); err != nil {
+			t.Fatal(err)
+		}
+		b.CommitBlock()
+	}
+
+	numberOf := func(h common.Hash) (uint64, bool) {
+		for i, x := range hashes {
+			if x == h {
+				return uint64(i + 1), true
+			}
+		}
+		return 0, false
+	}
+
+	dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
+	if err := b.FlushUpTo(3, numberOf, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.batches.Load(); got != 1 {
+		t.Fatalf("NewBatch calls = %d, want 1", got)
+	}
+	if got := dst.writes.Load(); got != 1 {
+		t.Fatalf("batch Write calls = %d, want 1", got)
+	}
+	got, err := dst.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("dst.Get after FlushUpTo: %v", err)
+	}
+	if !bytes.Equal(got, []byte("C")) {
+		t.Fatalf("batched FlushUpTo order = %q, want %q", got, "C")
 	}
 }
 
