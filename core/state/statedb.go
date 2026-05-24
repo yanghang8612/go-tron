@@ -1239,6 +1239,7 @@ func (s *StateDB) AddAllowanceFinalReward(addr tcommon.Address, amount int64) {
 		return
 	}
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
+	obj.accountDirty = true
 	obj.markDirty()
 }
 
@@ -1587,11 +1588,16 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 	if _, cached := obj.storage[key]; !cached {
 		prev, prevExists = s.GetStateWithExist(addr, key)
 	}
+	if !s.historyEnabled && prevExists && prev == value {
+		return
+	}
+	_, prevDirty := obj.dirtyStorage[key]
 	s.journal.append(storageChange{
 		address:    addr,
 		key:        key,
 		prev:       prev,
 		prevExists: prevExists,
+		prevDirty:  prevDirty,
 	})
 	obj.setStorage(key, value, true)
 }
@@ -1814,15 +1820,24 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		}
 		kvDirtyCopy := make(map[string]kvEntry, len(obj.kvDirty))
 		for k, v := range obj.kvDirty {
-			ec := kvEntry{deleted: v.deleted, trieKey: v.trieKey}
+			ec := kvEntry{
+				deleted:    v.deleted,
+				trieKey:    v.trieKey,
+				prevExists: v.prevExists,
+				prevLoaded: v.prevLoaded,
+			}
 			if v.val != nil {
 				ec.val = append([]byte{}, v.val...)
+			}
+			if v.prev != nil {
+				ec.prev = append([]byte{}, v.prev...)
 			}
 			kvDirtyCopy[k] = ec
 		}
 		newObj := &stateObject{
 			address:                  addr,
 			dirty:                    obj.dirty,
+			accountDirty:             obj.accountDirty,
 			deleted:                  obj.deleted,
 			created:                  obj.created,
 			code:                     append([]byte{}, obj.code...),
@@ -1832,6 +1847,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			contractMetaDirty:        obj.contractMetaDirty,
 			storage:                  make(map[tcommon.Hash]tcommon.Hash),
 			storageExists:            make(map[tcommon.Hash]bool),
+			dirtyStorage:             make(map[tcommon.Hash]struct{}, len(obj.dirtyStorage)),
 			selfDestructed:           obj.selfDestructed,
 			accountKVRoot:            obj.accountKVRoot,
 			accountKVGeneration:      obj.accountKVGeneration,
@@ -1847,9 +1863,273 @@ func (s *StateDB) Copy() (*StateDB, error) {
 			newObj.storage[k] = v
 			newObj.storageExists[k] = obj.storageExists[k]
 		}
+		for k := range obj.dirtyStorage {
+			newObj.dirtyStorage[k] = struct{}{}
+		}
 		cp.stateObjects[addr] = newObj
 	}
 	return cp, nil
+}
+
+type storageCommitOp struct {
+	rowKey tcommon.Hash
+	value  []byte
+	delete bool
+	staged bool
+}
+
+type accountCommitPlan struct {
+	addr              tcommon.Address
+	accountTrieKey    ethcommon.Hash
+	obj               *stateObject
+	deleteAccount     bool
+	deleteContract    bool
+	deleteContractABI bool
+	contractMetaBytes []byte
+	storageOps        []storageCommitOp
+	kvPlan            *accountKVCommitPlan
+	hadKVDirty        bool
+	kvTrieChanged     bool
+	kvLatestChanged   bool
+}
+
+func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
+	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
+	for addr, obj := range s.stateObjects {
+		if !obj.dirty {
+			continue
+		}
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+	})
+
+	plans := make([]*accountCommitPlan, 0, len(addrs))
+	for _, addr := range addrs {
+		plan, err := s.prepareAccountCommitPlan(addr, s.stateObjects[addr])
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+	return plans, nil
+}
+
+func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject) (*accountCommitPlan, error) {
+	plan := &accountCommitPlan{
+		addr:           addr,
+		accountTrieKey: ethcommon.BytesToHash(trieKey(addr)),
+		obj:            obj,
+		deleteAccount:  obj.deleted || obj.selfDestructed,
+	}
+	if plan.deleteAccount {
+		return plan, nil
+	}
+	if obj.contractMetaDirty {
+		if obj.contractMeta == nil {
+			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, nil, true); err != nil {
+				return nil, err
+			}
+			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractABI, contractABIKVKey, nil, true); err != nil {
+				return nil, err
+			}
+			plan.deleteContract = true
+			plan.deleteContractABI = true
+		} else {
+			metaBytes, err := proto.Marshal(obj.contractMeta)
+			if err != nil {
+				return nil, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
+			}
+			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes, false); err != nil {
+				return nil, err
+			}
+			plan.contractMetaBytes = metaBytes
+		}
+	}
+
+	if len(obj.dirtyStorage) > 0 {
+		storageKeys := make([]tcommon.Hash, 0, len(obj.dirtyStorage))
+		for key := range obj.dirtyStorage {
+			storageKeys = append(storageKeys, key)
+		}
+		sort.Slice(storageKeys, func(i, j int) bool {
+			return bytes.Compare(storageKeys[i].Bytes(), storageKeys[j].Bytes()) < 0
+		})
+		plan.storageOps = make([]storageCommitOp, 0, len(storageKeys))
+		for _, key := range storageKeys {
+			value := obj.storage[key]
+			rowKey := s.storageRowKey(addr, key)
+			if value == (tcommon.Hash{}) {
+				staged, err := s.stageAccountKVCommit(obj, kvdomains.ContractStorage, rowKey.Bytes(), nil, true)
+				if err != nil {
+					return nil, err
+				}
+				plan.storageOps = append(plan.storageOps, storageCommitOp{
+					rowKey: rowKey,
+					delete: true,
+					staged: staged,
+				})
+				continue
+			}
+			staged, err := s.stageAccountKVCommit(obj, kvdomains.ContractStorage, rowKey.Bytes(), value.Bytes(), false)
+			if err != nil {
+				return nil, err
+			}
+			plan.storageOps = append(plan.storageOps, storageCommitOp{
+				rowKey: rowKey,
+				value:  append([]byte(nil), value.Bytes()...),
+				staged: staged,
+			})
+		}
+	}
+
+	plan.hadKVDirty = len(obj.kvDirty) > 0
+	if plan.hadKVDirty {
+		kvPlan, err := s.prepareAccountKVCommitPlan(obj)
+		if err != nil {
+			return nil, err
+		}
+		plan.kvPlan = kvPlan
+	}
+	return plan, nil
+}
+
+func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex accountKVIndexStore, accountKVLatestWriter *accountKVLatestBatch) error {
+	obj := plan.obj
+	addr := plan.addr
+	if plan.deleteAccount {
+		return nil
+	}
+
+	if obj.codeDirty {
+		if len(obj.code) == 0 || obj.codeHash == (tcommon.Hash{}) {
+			rawdb.DeleteCode(s.db.DiskDB(), addr)
+		} else {
+			if err := rawdb.WriteStateCode(s.db.DiskDB(), obj.codeHash, obj.code); err != nil {
+				return err
+			}
+			rawdb.DeleteCode(s.db.DiskDB(), addr)
+		}
+	}
+	if plan.deleteContract {
+		rawdb.DeleteContract(s.db.DiskDB(), addr)
+	}
+	if plan.deleteContractABI {
+		if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+			return err
+		}
+	}
+	if plan.contractMetaBytes != nil {
+		rawdb.WriteContract(s.db.DiskDB(), addr, plan.contractMetaBytes)
+	}
+	for _, op := range plan.storageOps {
+		if !op.staged {
+			continue
+		}
+		if op.delete {
+			rawdb.DeleteStorage(s.db.DiskDB(), addr, op.rowKey)
+			continue
+		}
+		rawdb.WriteStorage(s.db.DiskDB(), addr, op.rowKey, op.value)
+	}
+
+	if plan.hadKVDirty {
+		latestChanged, err := s.commitAccountKVLatest(obj, plan.kvPlan, accountKVIndex, accountKVLatestWriter)
+		if err != nil {
+			return err
+		}
+		plan.kvLatestChanged = latestChanged
+	}
+	return nil
+}
+
+func accountTrieCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
+	out := append([]*accountCommitPlan(nil), plans...)
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].accountTrieKey[:], out[j].accountTrieKey[:]) < 0
+	})
+	return out
+}
+
+func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan) error {
+	obj := plan.obj
+	addr := plan.addr
+	if plan.deleteAccount {
+		if err := s.trie.Delete(plan.accountTrieKey.Bytes()); err != nil {
+			return err
+		}
+		if err := s.writeAccountKVGeneration(obj); err != nil {
+			return err
+		}
+		rawdb.DeleteCode(s.db.DiskDB(), addr)
+		rawdb.DeleteContract(s.db.DiskDB(), addr)
+		if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+			return err
+		}
+		return nil
+	}
+	generationDirty := obj.accountKVGenerationDirty
+	hadKVChanges := plan.kvTrieChanged || plan.kvLatestChanged
+	needsAccountTrieUpdate := obj.accountDirty || obj.created || obj.codeDirty || generationDirty || hadKVChanges
+	if generationDirty || hadKVChanges {
+		if err := s.writeAccountKVGeneration(obj); err != nil {
+			return err
+		}
+	}
+	if needsAccountTrieUpdate {
+		accBytes, err := obj.account.Marshal()
+		if err != nil {
+			return err
+		}
+		envelope := &StateAccountV2{
+			Version:             StateAccountVersion,
+			AccountProto:        accBytes,
+			AccountKVRoot:       obj.accountKVRoot,
+			AccountKVGeneration: obj.accountKVGeneration,
+			CodeHash:            obj.codeHash,
+		}
+		data, err := envelope.Encode()
+		if err != nil {
+			return err
+		}
+		if err := s.trie.Update(plan.accountTrieKey.Bytes(), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
+	obj := plan.obj
+	if plan.deleteAccount {
+		obj.deleted = true
+		obj.selfDestructed = false
+		obj.code = nil
+		obj.codeHash = tcommon.Hash{}
+		obj.codeDirty = false
+		obj.accountDirty = false
+		obj.contractMeta = nil
+		obj.contractMetaDirty = false
+		obj.storage = make(map[tcommon.Hash]tcommon.Hash)
+		obj.storageExists = make(map[tcommon.Hash]bool)
+		obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+		obj.dirty = false
+		return
+	}
+	if plan.hadKVDirty {
+		obj.kvDirty = make(map[string]kvEntry)
+	}
+	if obj.codeDirty {
+		obj.codeDirty = false
+	}
+	if obj.contractMetaDirty {
+		obj.contractMetaDirty = false
+	}
+	obj.accountDirty = false
+	obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+	obj.created = false
+	obj.dirty = false
 }
 
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
@@ -1862,122 +2142,32 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			s.changeSet = domainChangeSetCapture{}
 		}()
 	}
-	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
-	for addr, obj := range s.stateObjects {
-		if !obj.dirty {
-			continue
-		}
-		addrs = append(addrs, addr)
+	plans, err := s.dirtyAccountCommitPlans()
+	if err != nil {
+		return tcommon.Hash{}, err
 	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
-	})
 	trieNodeWriter := newTrieNodeBatchWriter(s.db)
 	defer trieNodeWriter.release()
-	for _, addr := range addrs {
-		obj := s.stateObjects[addr]
-		if obj.deleted || obj.selfDestructed {
-			if err := s.trie.Delete(trieKey(addr)); err != nil {
-				return tcommon.Hash{}, err
-			}
-			if err := s.writeAccountKVGeneration(obj); err != nil {
-				return tcommon.Hash{}, err
-			}
-			rawdb.DeleteCode(s.db.DiskDB(), addr)
-			rawdb.DeleteContract(s.db.DiskDB(), addr)
-			if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
-				return tcommon.Hash{}, err
-			}
-			obj.deleted = true
-			obj.selfDestructed = false
-			obj.code = nil
-			obj.codeHash = tcommon.Hash{}
-			obj.codeDirty = false
-			obj.contractMeta = nil
-			obj.contractMetaDirty = false
-			obj.dirty = false
-			continue
-		}
-		if obj.codeDirty {
-			if len(obj.code) == 0 || obj.codeHash == (tcommon.Hash{}) {
-				rawdb.DeleteCode(s.db.DiskDB(), addr)
-			} else {
-				if err := rawdb.WriteStateCode(s.db.DiskDB(), obj.codeHash, obj.code); err != nil {
-					return tcommon.Hash{}, err
-				}
-				rawdb.DeleteCode(s.db.DiskDB(), addr)
-			}
-		}
-		if obj.contractMetaDirty {
-			if obj.contractMeta == nil {
-				obj.stageDeleteKV(kvdomains.ContractMetadata, contractMetaKVKey)
-				obj.stageDeleteKV(kvdomains.ContractABI, contractABIKVKey)
-				rawdb.DeleteContract(s.db.DiskDB(), addr)
-				if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
-					return tcommon.Hash{}, err
-				}
-			} else {
-				metaBytes, err := proto.Marshal(obj.contractMeta)
-				if err != nil {
-					return tcommon.Hash{}, fmt.Errorf("marshal contractMeta for %s: %w", addr.Hex(), err)
-				}
-				obj.stageKV(kvdomains.ContractMetadata, contractMetaKVKey, metaBytes)
-				rawdb.WriteContract(s.db.DiskDB(), addr, metaBytes)
-			}
-		}
-		for k, v := range obj.storage {
-			rowKey := s.storageRowKey(addr, k).Bytes()
-			if v == (tcommon.Hash{}) {
-				obj.stageDeleteKV(kvdomains.ContractStorage, rowKey)
-				rawdb.DeleteStorage(s.db.DiskDB(), addr, tcommon.BytesToHash(rowKey))
-			} else {
-				obj.stageKV(kvdomains.ContractStorage, rowKey, v.Bytes())
-				rawdb.WriteStorage(s.db.DiskDB(), addr, tcommon.BytesToHash(rowKey), v.Bytes())
-			}
-		}
-		hadKVChanges := len(obj.kvDirty) > 0
-		if hadKVChanges {
-			kvRoot, err := s.commitAccountKV(obj, trieNodeWriter)
-			if err != nil {
-				return tcommon.Hash{}, err
-			}
-			if err := s.commitAccountKVLatest(obj); err != nil {
-				return tcommon.Hash{}, err
-			}
-			obj.accountKVRoot = kvRoot
-			obj.kvDirty = make(map[string]kvEntry)
-		}
-		if obj.accountKVGenerationDirty || hadKVChanges {
-			if err := s.writeAccountKVGeneration(obj); err != nil {
-				return tcommon.Hash{}, err
-			}
-		}
-		accBytes, err := obj.account.Marshal()
-		if err != nil {
+	accountKVIndex := s.accountKVIndex()
+	accountKVLatestWriter := newAccountKVLatestBatch(accountKVIndex)
+	for _, plan := range plans {
+		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVLatestWriter); err != nil {
 			return tcommon.Hash{}, err
 		}
-		envelope := &StateAccountV2{
-			Version:             StateAccountVersion,
-			AccountProto:        accBytes,
-			AccountKVRoot:       obj.accountKVRoot,
-			AccountKVGeneration: obj.accountKVGeneration,
-			CodeHash:            obj.codeHash,
-		}
-		data, err := envelope.Encode()
-		if err != nil {
+	}
+	if err := accountKVLatestWriter.flush(); err != nil {
+		return tcommon.Hash{}, err
+	}
+	if err := s.commitAccountKVPlans(plans, trieNodeWriter); err != nil {
+		return tcommon.Hash{}, err
+	}
+	for _, plan := range accountTrieCommitPlans(plans) {
+		if err := s.updateAccountTrieWithPlan(plan); err != nil {
 			return tcommon.Hash{}, err
 		}
-		if err := s.trie.Update(trieKey(addr), data); err != nil {
-			return tcommon.Hash{}, err
-		}
-		if obj.codeDirty {
-			obj.codeDirty = false
-		}
-		if obj.contractMetaDirty {
-			obj.contractMetaDirty = false
-		}
-		obj.created = false
-		obj.dirty = false
+	}
+	for _, plan := range plans {
+		s.finalizeAccountCommitPlan(plan)
 	}
 	root, nodes := s.trie.Commit(false)
 	if err := trieNodeWriter.writeNodeSet(nodes); err != nil {
@@ -2238,6 +2428,7 @@ func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	var prev []byte
 	if obj != nil && obj.account != nil {
 		prev, _ = obj.account.Marshal()
+		obj.accountDirty = true
 	}
 	s.journal.append(accountChange{
 		address:          addr,

@@ -127,6 +127,43 @@ func TestBuffer_WriteThenReadInActiveLayer(t *testing.T) {
 	}
 }
 
+func TestBufferBatchWritesActiveLayer(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+	b.BeginBlock(bufHash(1))
+
+	batch := b.NewBatch()
+	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Put([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Get([]byte("k1")); err == nil {
+		t.Fatal("batch write became visible before Write")
+	}
+	if err := batch.Delete([]byte("k1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Put([]byte("k1"), []byte("v3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("k1"), []byte("v3"))
+	mustGet(t, b, []byte("k2"), []byte("v2"))
+
+	batch.Reset()
+	if err := batch.Delete([]byte("k2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustNotFound(t, b, []byte("k2"))
+}
+
 // Tombstone semantics: Delete makes a key from base appear absent.
 func TestBuffer_DeleteTombstonesBaseKey(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()

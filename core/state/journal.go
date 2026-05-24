@@ -36,6 +36,7 @@ func (e accountChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 			obj.account = acc
 		}
 		obj.dirty = true
+		obj.accountDirty = true
 		obj.deleted = e.prevDeleted
 		obj.created = e.prevCreated
 		obj.selfDestructed = e.prevSelfDestruct
@@ -62,6 +63,7 @@ type storageChange struct {
 	key        tcommon.Hash
 	prev       tcommon.Hash
 	prevExists bool
+	prevDirty  bool
 }
 
 func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
@@ -73,6 +75,14 @@ func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 		} else {
 			obj.storage[e.key] = e.prev
 			obj.storageExists[e.key] = e.prevExists
+		}
+		if obj.dirtyStorage == nil {
+			obj.dirtyStorage = make(map[tcommon.Hash]struct{})
+		}
+		if e.prevDirty {
+			obj.dirtyStorage[e.key] = struct{}{}
+		} else {
+			delete(obj.dirtyStorage, e.key)
 		}
 		obj.markDirty()
 	}

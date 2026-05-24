@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sort"
+	"sync"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -25,17 +27,91 @@ const kvPresencePrefix = 0x01
 // kvEntry is one pending account-KV write in the dirty overlay. deleted=true is
 // a tombstone; deleted=false means val is present (val may be empty but != nil).
 type kvEntry struct {
-	val     []byte
-	deleted bool
-	trieKey ethcommon.Hash
+	val        []byte
+	prev       []byte
+	deleted    bool
+	trieKey    ethcommon.Hash
+	prevExists bool
+	prevLoaded bool
 }
 
-type kvCommitItem struct{ entry kvEntry }
+type kvCommitItem struct {
+	logicalKey []byte
+	entry      kvEntry
+	domain     kvdomains.KVDomain
+}
+
+type accountKVCommitPlan struct {
+	items []kvCommitItem
+}
+
+type accountKVLatestBatch struct {
+	writer ethdb.KeyValueWriter
+	batch  ethdb.Batch
+	ops    int
+}
+
+type accountKVCommitResult struct {
+	root        tcommon.Hash
+	trieChanged bool
+	nodes       *trienode.NodeSet
+}
 
 type accountKVIndexStore interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
+}
+
+func newAccountKVLatestBatch(index accountKVIndexStore) *accountKVLatestBatch {
+	w := &accountKVLatestBatch{writer: index}
+	if batcher, ok := index.(ethdb.Batcher); ok {
+		w.batch = batcher.NewBatch()
+		w.writer = w.batch
+	}
+	return w
+}
+
+func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) error {
+	if err := rawdb.WriteStateKVLatest(w.writer, owner, generation, domain, logicalKey, value); err != nil {
+		return err
+	}
+	return w.maybeFlush()
+}
+
+func (w *accountKVLatestBatch) delete(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) error {
+	if err := rawdb.DeleteStateKVLatest(w.writer, owner, generation, domain, logicalKey); err != nil {
+		return err
+	}
+	return w.maybeFlush()
+}
+
+func (w *accountKVLatestBatch) maybeFlush() error {
+	if w.batch == nil {
+		return nil
+	}
+	w.ops++
+	if w.batch.ValueSize() < ethdb.IdealBatchSize && w.ops < 4096 {
+		return nil
+	}
+	if err := w.batch.Write(); err != nil {
+		return err
+	}
+	w.batch.Reset()
+	w.ops = 0
+	return nil
+}
+
+func (w *accountKVLatestBatch) flush() error {
+	if w.batch == nil || w.ops == 0 {
+		return nil
+	}
+	if err := w.batch.Write(); err != nil {
+		return err
+	}
+	w.batch.Reset()
+	w.ops = 0
+	return nil
 }
 
 type trieNodeBatchWriter struct {
@@ -118,6 +194,37 @@ func newKVEntry(composite, value []byte, deleted bool) kvEntry {
 		e.val = append([]byte(nil), value...)
 	}
 	return e
+}
+
+func (e *kvEntry) setPrev(value []byte, exists bool) {
+	e.prevLoaded = true
+	e.prevExists = exists
+	if exists {
+		e.prev = append(e.prev[:0], value...)
+		return
+	}
+	e.prev = nil
+}
+
+func (e *kvEntry) inheritPrev(prev kvEntry) {
+	if !prev.prevLoaded {
+		return
+	}
+	e.prevLoaded = true
+	e.prevExists = prev.prevExists
+	if prev.prevExists {
+		e.prev = append([]byte(nil), prev.prev...)
+	}
+}
+
+func (e kvEntry) latestNoop() (bool, bool) {
+	if !e.prevLoaded {
+		return false, false
+	}
+	if e.deleted {
+		return !e.prevExists, true
+	}
+	return e.prevExists && bytes.Equal(e.prev, e.val), true
 }
 
 func splitKVCompositeKey(composite []byte) (kvdomains.KVDomain, []byte, bool) {
@@ -376,7 +483,13 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	obj := s.GetOrCreateAccount(owner)
 	comp := kvCompositeKey(domain, key)
 	mk := string(comp)
-	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
+	prevDirty, dirty := obj.kvDirty[mk]
+	var (
+		prevValue  []byte
+		prevExists bool
+		prevLoaded bool
+	)
+	if !dirty && s.accountKVLatestReadEnabled() {
 		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return err
@@ -384,14 +497,49 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		if exists && bytes.Equal(current, value) {
 			return nil
 		}
+		prevValue = current
+		prevExists = exists
+		prevLoaded = true
 	}
 	if journal {
-		prev, had := obj.kvDirty[mk]
-		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
+		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
 	}
-	obj.kvDirty[mk] = newKVEntry(comp, value, false)
+	entry := newKVEntry(comp, value, false)
+	if dirty {
+		entry.inheritPrev(prevDirty)
+	} else if prevLoaded {
+		entry.setPrev(prevValue, prevExists)
+	}
+	obj.kvDirty[mk] = entry
 	obj.markDirty()
 	return nil
+}
+
+func (s *StateDB) stageAccountKVCommit(obj *stateObject, domain kvdomains.KVDomain, key, value []byte, deleted bool) (bool, error) {
+	if !kvdomains.IsRegistered(domain) {
+		return false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	if obj == nil {
+		return false, nil
+	}
+	comp := kvCompositeKey(domain, key)
+	mk := string(comp)
+	prevDirty, dirty := obj.kvDirty[mk]
+	entry := newKVEntry(comp, value, deleted)
+	if dirty {
+		entry.inheritPrev(prevDirty)
+	} else if s.accountKVLatestReadEnabled() {
+		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), obj.address, obj.accountKVGeneration, domain, key)
+		if err != nil {
+			return false, err
+		}
+		entry.setPrev(current, exists)
+		if noop, known := entry.latestNoop(); known && noop {
+			return false, nil
+		}
+	}
+	obj.kvDirty[mk] = entry
+	return true, nil
 }
 
 // DeleteAccountKV stages a tombstone for owner's (domain,key).
@@ -405,18 +553,32 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	}
 	comp := kvCompositeKey(domain, key)
 	mk := string(comp)
-	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
-		_, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
+	prevDirty, dirty := obj.kvDirty[mk]
+	var (
+		prevValue  []byte
+		prevExists bool
+		prevLoaded bool
+	)
+	if !dirty && s.accountKVLatestReadEnabled() {
+		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			return nil
 		}
+		prevValue = current
+		prevExists = true
+		prevLoaded = true
 	}
-	prev, had := obj.kvDirty[mk]
-	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
-	obj.kvDirty[mk] = newKVEntry(comp, nil, true)
+	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})
+	entry := newKVEntry(comp, nil, true)
+	if dirty {
+		entry.inheritPrev(prevDirty)
+	} else if prevLoaded {
+		entry.setPrev(prevValue, prevExists)
+	}
+	obj.kvDirty[mk] = entry
 	obj.markDirty()
 	return nil
 }
@@ -468,31 +630,52 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	return nil
 }
 
-// commitAccountKV applies obj's dirty KV overlay to its KV trie, persists the
-// trie nodes, and returns the new AccountKVRoot. Call only when len(obj.kvDirty) > 0.
-func (s *StateDB) commitAccountKV(obj *stateObject, nodeWriter *trieNodeBatchWriter) (tcommon.Hash, error) {
-	tr, err := s.accountKVTrie(obj)
-	if err != nil {
-		return tcommon.Hash{}, err
-	}
-	defer s.invalidateAccountKVTrie(obj.address)
-	items := make([]kvCommitItem, 0, len(obj.kvDirty))
+func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
+	plan := &accountKVCommitPlan{items: make([]kvCommitItem, 0, len(obj.kvDirty))}
 	for mk, e := range obj.kvDirty {
+		if noop, known := e.latestNoop(); known && noop {
+			continue
+		}
 		if e.trieKey == (ethcommon.Hash{}) {
 			e.trieKey = kvTrieHash([]byte(mk))
 			obj.kvDirty[mk] = e
 		}
-		items = append(items, kvCommitItem{entry: e})
+		composite := []byte(mk)
+		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
+		if !ok {
+			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
+		}
+		plan.items = append(plan.items, kvCommitItem{
+			logicalKey: logicalKey,
+			entry:      e,
+			domain:     domain,
+		})
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return bytes.Compare(items[i].entry.trieKey[:], items[j].entry.trieKey[:]) < 0
+	sort.Slice(plan.items, func(i, j int) bool {
+		return bytes.Compare(plan.items[i].entry.trieKey[:], plan.items[j].entry.trieKey[:]) < 0
 	})
-	for _, item := range items {
+	return plan, nil
+}
+
+// computeAccountKVCommitment applies obj's dirty KV overlay to an isolated
+// per-account KV trie and returns the new root plus dirty node set. It
+// deliberately bypasses StateDB.accountKVTries so this CPU-heavy commitment
+// step can be workerized without mutating shared trie caches.
+func (s *StateDB) computeAccountKVCommitment(obj *stateObject, plan *accountKVCommitPlan) (accountKVCommitResult, error) {
+	result := accountKVCommitResult{root: obj.accountKVRoot}
+	if plan == nil || len(plan.items) == 0 {
+		return result, nil
+	}
+	tr, err := s.db.OpenTrie(ethcommon.Hash(obj.accountKVRoot))
+	if err != nil {
+		return accountKVCommitResult{}, err
+	}
+	for _, item := range plan.items {
 		e := item.entry
 		tk := e.trieKey.Bytes()
 		if e.deleted {
 			if err := tr.Delete(tk); err != nil {
-				return tcommon.Hash{}, err
+				return accountKVCommitResult{}, err
 			}
 			continue
 		}
@@ -500,60 +683,165 @@ func (s *StateDB) commitAccountKV(obj *stateObject, nodeWriter *trieNodeBatchWri
 		wrapped[0] = kvPresencePrefix
 		copy(wrapped[1:], e.val)
 		if err := tr.Update(tk, wrapped); err != nil {
-			return tcommon.Hash{}, err
+			return accountKVCommitResult{}, err
 		}
 	}
 	root, nodes := tr.Commit(false)
-	if err := nodeWriter.writeNodeSet(nodes); err != nil {
-		return tcommon.Hash{}, err
-	}
-	return tcommon.Hash(root), nil
+	result.root = tcommon.Hash(root)
+	result.trieChanged = true
+	result.nodes = nodes
+	return result, nil
 }
 
-func (s *StateDB) commitAccountKVLatest(obj *stateObject) error {
-	index := s.accountKVIndex()
-	keys := make([]string, 0, len(obj.kvDirty))
-	for mapKey := range obj.kvDirty {
-		keys = append(keys, mapKey)
-	}
-	sort.Strings(keys)
-	for _, mapKey := range keys {
-		entry := obj.kvDirty[mapKey]
-		domain, logicalKey, ok := splitKVCompositeKeyView([]byte(mapKey))
-		if !ok {
-			return fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
-		}
-		if err := s.writeDomainChange(index, obj, domain, logicalKey, entry); err != nil {
-			return err
-		}
-		if entry.deleted {
-			if err := rawdb.DeleteStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey); err != nil {
-				return err
-			}
+func (s *StateDB) accountKVCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
+	out := make([]*accountCommitPlan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.deleteAccount || !plan.hadKVDirty {
 			continue
 		}
-		if err := rawdb.WriteStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey, entry.val); err != nil {
+		if plan.kvPlan == nil || len(plan.kvPlan.items) == 0 {
+			continue
+		}
+		out = append(out, plan)
+	}
+	return out
+}
+
+func accountKVCommitWorkers(tasks int) int {
+	if tasks <= 1 {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > tasks {
+		workers = tasks
+	}
+	return workers
+}
+
+func (s *StateDB) computeAccountKVCommitments(plans []*accountCommitPlan) ([]accountKVCommitResult, error) {
+	results := make([]accountKVCommitResult, len(plans))
+	if len(plans) == 0 {
+		return results, nil
+	}
+	if len(plans) == 1 {
+		result, err := s.computeAccountKVCommitment(plans[0].obj, plans[0].kvPlan)
+		if err != nil {
+			return nil, err
+		}
+		results[0] = result
+		return results, nil
+	}
+
+	workers := accountKVCommitWorkers(len(plans))
+	jobs := make(chan int)
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				result, err := s.computeAccountKVCommitment(plans[idx].obj, plans[idx].kvPlan)
+				if err != nil {
+					errOnce.Do(func() { firstErr = err })
+					continue
+				}
+				results[idx] = result
+			}
+		}()
+	}
+	for idx := range plans {
+		jobs <- idx
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *trieNodeBatchWriter) error {
+	kvPlans := s.accountKVCommitPlans(plans)
+	results, err := s.computeAccountKVCommitments(kvPlans)
+	if err != nil {
+		return err
+	}
+	for i, plan := range kvPlans {
+		result := results[i]
+		if err := nodeWriter.writeNodeSet(result.nodes); err != nil {
 			return err
 		}
+		plan.kvTrieChanged = result.trieChanged
+		plan.obj.accountKVRoot = result.root
+		s.invalidateAccountKVTrie(plan.addr)
 	}
 	return nil
 }
 
-func (s *StateDB) writeDomainChange(index accountKVIndexStore, obj *stateObject, domain kvdomains.KVDomain, logicalKey []byte, entry kvEntry) error {
-	if !s.changeSet.enabled {
-		return nil
+func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitPlan, index accountKVIndexStore, latest *accountKVLatestBatch) (bool, error) {
+	if plan == nil || len(plan.items) == 0 {
+		return false, nil
 	}
-	prev, prevExists, err := rawdb.ReadStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey)
-	if err != nil {
-		return err
+	wrote := false
+	for _, item := range plan.items {
+		entry := item.entry
+		changed, err := s.writeDomainChange(index, obj, item.domain, item.logicalKey, entry)
+		if err != nil {
+			return false, err
+		}
+		if !changed {
+			continue
+		}
+		wrote = true
+		if entry.deleted {
+			if err := latest.delete(obj.address, obj.accountKVGeneration, item.domain, item.logicalKey); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if err := latest.put(obj.address, obj.accountKVGeneration, item.domain, item.logicalKey, entry.val); err != nil {
+			return false, err
+		}
+	}
+	return wrote, nil
+}
+
+func (s *StateDB) writeDomainChange(index accountKVIndexStore, obj *stateObject, domain kvdomains.KVDomain, logicalKey []byte, entry kvEntry) (bool, error) {
+	prev := entry.prev
+	prevExists := entry.prevExists
+	if !entry.prevLoaded {
+		if !s.changeSet.enabled {
+			return true, nil
+		}
+		var err error
+		prev, prevExists, err = rawdb.ReadStateKVLatest(index, obj.address, obj.accountKVGeneration, domain, logicalKey)
+		if err != nil {
+			return false, err
+		}
 	}
 	nextExists := !entry.deleted
 	var next []byte
 	if nextExists {
 		next = append([]byte(nil), entry.val...)
 	}
+	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
+		return false, nil
+	}
+	if !s.changeSet.enabled {
+		return true, nil
+	}
 	s.changeSet.seq++
-	return rawdb.WriteStateDomainChange(s.changeSet.writer, &rawdb.StateDomainChange{
+	return true, rawdb.WriteStateDomainChange(s.changeSet.writer, &rawdb.StateDomainChange{
 		BlockNum:   s.changeSet.blockNum,
 		BlockHash:  s.changeSet.blockHash,
 		TxNum:      s.changeSet.txNum,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -135,6 +136,202 @@ func TestAccountKVNoopLatestWritesDoNotDirtyState(t *testing.T) {
 	}
 }
 
+func TestAccountKVNetZeroDirtyWriteSkipsCommitWork(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x14)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	reopened.SetAccountKVIndexReads(true)
+	if err := reopened.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("temp")); err != nil {
+		t.Fatalf("set temp: %v", err)
+	}
+	if err := reopened.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set original: %v", err)
+	}
+
+	index.resetCounts()
+	root2, err := reopened.Commit()
+	if err != nil {
+		t.Fatalf("commit net-zero: %v", err)
+	}
+	if root2 != root {
+		t.Fatalf("net-zero write moved root: got %x want %x", root2, root)
+	}
+	if index.puts != 0 || index.deletes != 0 {
+		t.Fatalf("net-zero write touched latest index: puts=%d deletes=%d", index.puts, index.deletes)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing after net-zero write")
+	}
+	if obj.dirty || len(obj.kvDirty) != 0 {
+		t.Fatalf("net-zero write left dirty state: dirty=%v kvDirty=%d", obj.dirty, len(obj.kvDirty))
+	}
+}
+
+func TestAccountKVNetZeroWriteSkipsDomainChangeSet(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x15)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle"), []byte("orig")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
+	reopened.SetAccountKVIndexReads(true)
+	if err := reopened.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle"), []byte("next")); err != nil {
+		t.Fatalf("set next: %v", err)
+	}
+	if err := reopened.SetAccountKV(addr, kvdomains.SystemReward, []byte("cycle"), []byte("orig")); err != nil {
+		t.Fatalf("restore original: %v", err)
+	}
+	var blockHash tcommon.Hash
+	blockHash[0] = 0x15
+	reopened.SetDomainChangeSetWriter(reopened.db.DiskDB(), 15, blockHash)
+	root2, err := reopened.Commit()
+	if err != nil {
+		t.Fatalf("commit net-zero: %v", err)
+	}
+	if root2 != root {
+		t.Fatalf("net-zero write moved root: got %x want %x", root2, root)
+	}
+	var changes int
+	if err := rawdb.IterateStateDomainChanges(reopened.db.DiskDB(), 15, func(*rawdb.StateDomainChange) (bool, error) {
+		changes++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate changes: %v", err)
+	}
+	if changes != 0 {
+		t.Fatalf("net-zero write recorded %d domain changes", changes)
+	}
+}
+
+func TestReadCachedStorageDoesNotCommitAsDirty(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x16)
+	var slot, value tcommon.Hash
+	slot[31] = 0x01
+	value[31] = 0x7b
+	sdb.SetState(addr, slot, value)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit storage: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	reopened.SetAccountKVIndexReads(true)
+	if got := reopened.GetState(addr, slot); got != value {
+		t.Fatalf("cached storage read = %x, want %x", got, value)
+	}
+	reopened.AddBalance(addr, 1)
+
+	index.resetCounts()
+	if _, err := reopened.Commit(); err != nil {
+		t.Fatalf("commit balance-only after storage read: %v", err)
+	}
+	if index.puts != 0 || index.deletes != 0 {
+		t.Fatalf("read-only storage cache touched latest index: puts=%d deletes=%d", index.puts, index.deletes)
+	}
+}
+
+func TestSetStateSameValueDoesNotDirtyStorage(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x17)
+	var slot, value tcommon.Hash
+	slot[31] = 0x02
+	value[31] = 0x2a
+	sdb.SetState(addr, slot, value)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit storage: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	reopened.SetAccountKVIndexStore(reopened.db.DiskDB())
+	reopened.SetAccountKVIndexReads(true)
+	reopened.SetState(addr, slot, value)
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing")
+	}
+	if _, dirty := obj.dirtyStorage[slot]; dirty || obj.dirty {
+		t.Fatalf("same-value SetState dirtied account: accountDirty=%t storageDirty=%t", obj.dirty, dirty)
+	}
+}
+
+func TestStorageNetZeroWriteSkipsAccountKVCommit(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x18)
+	var slot, original, next tcommon.Hash
+	slot[31] = 0x03
+	original[31] = 0x11
+	next[31] = 0x22
+	sdb.SetState(addr, slot, original)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit storage: %v", err)
+	}
+
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	index := &countingKVIndexStore{KeyValueStore: reopened.db.DiskDB()}
+	reopened.SetAccountKVIndexStore(index)
+	reopened.SetAccountKVIndexReads(true)
+	reopened.SetState(addr, slot, next)
+	reopened.SetState(addr, slot, original)
+
+	index.resetCounts()
+	root2, err := reopened.Commit()
+	if err != nil {
+		t.Fatalf("commit net-zero storage: %v", err)
+	}
+	if root2 != root {
+		t.Fatalf("net-zero storage moved root: got %x want %x", root2, root)
+	}
+	if index.puts != 0 || index.deletes != 0 {
+		t.Fatalf("net-zero storage touched latest index: puts=%d deletes=%d", index.puts, index.deletes)
+	}
+	obj := reopened.getStateObject(addr)
+	if obj == nil {
+		t.Fatal("account missing after net-zero storage")
+	}
+	if obj.dirty || len(obj.kvDirty) != 0 || len(obj.dirtyStorage) != 0 {
+		t.Fatalf("net-zero storage left dirty state: dirty=%v kvDirty=%d dirtyStorage=%d", obj.dirty, len(obj.kvDirty), len(obj.dirtyStorage))
+	}
+}
+
 func TestLoadAccountReferencePreservesAccountKVRoot(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x12)
@@ -217,6 +414,41 @@ func TestAccountKVDeterministicRoot(t *testing.T) {
 	}
 	if build() != build() {
 		t.Fatal("KV commit is non-deterministic")
+	}
+}
+
+func TestAccountKVCommitMultipleAccountsWorkerPath(t *testing.T) {
+	build := func() (tcommon.Hash, *Database) {
+		sdb := newTestStateDB(t)
+		for i := 0; i < 16; i++ {
+			addr := testAddr(byte(0x80 + i))
+			sdb.CreateAccount(addr, corepb.AccountType_Normal)
+			if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("k"), []byte{byte(i)}); err != nil {
+				t.Fatalf("set account %d: %v", i, err)
+			}
+		}
+		root, err := sdb.Commit()
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return root, sdb.db
+	}
+
+	rootA, _ := build()
+	rootB, db := build()
+	if rootA != rootB {
+		t.Fatalf("multi-account worker commit root mismatch: %x != %x", rootA, rootB)
+	}
+	reopened, err := New(rootB, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		addr := testAddr(byte(0x80 + i))
+		got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k"))
+		if err != nil || !ok || !bytes.Equal(got, []byte{byte(i)}) {
+			t.Fatalf("account %d kv = %x ok=%v err=%v", i, got, ok, err)
+		}
 	}
 }
 
@@ -623,4 +855,25 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+type countingKVIndexStore struct {
+	ethdb.KeyValueStore
+	puts    int
+	deletes int
+}
+
+func (s *countingKVIndexStore) Put(key, value []byte) error {
+	s.puts++
+	return s.KeyValueStore.Put(key, value)
+}
+
+func (s *countingKVIndexStore) Delete(key []byte) error {
+	s.deletes++
+	return s.KeyValueStore.Delete(key)
+}
+
+func (s *countingKVIndexStore) resetCounts() {
+	s.puts = 0
+	s.deletes = 0
 }

@@ -13,8 +13,12 @@ type stateObject struct {
 	address tcommon.Address
 	account *types.Account
 	dirty   bool
-	deleted bool
-	created bool
+	// accountDirty tracks protobuf-account envelope changes separately from
+	// rooted KV/storage/code changes so net-zero KV overlays can skip account
+	// trie updates at commit.
+	accountDirty bool
+	deleted      bool
+	created      bool
 
 	// Contract fields
 	code              []byte                        // contract bytecode
@@ -22,8 +26,9 @@ type stateObject struct {
 	codeDirty         bool                          // true if code was modified
 	contractMeta      *contractpb.SmartContract     // contract metadata
 	contractMetaDirty bool                          // true if contractMeta was modified
-	storage           map[tcommon.Hash]tcommon.Hash // dirty contract storage
+	storage           map[tcommon.Hash]tcommon.Hash // cached current contract storage
 	storageExists     map[tcommon.Hash]bool         // java-tron StorageRow existence for cached slots
+	dirtyStorage      map[tcommon.Hash]struct{}     // storage slots actually written this block
 	selfDestructed    bool
 
 	// Rooted generic-KV fields: root of this account's per-account KV trie
@@ -42,6 +47,7 @@ func newStateObject(addr tcommon.Address, acc *types.Account) *stateObject {
 		account:       acc,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
+		dirtyStorage:  make(map[tcommon.Hash]struct{}),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
@@ -52,9 +58,11 @@ func newEmptyStateObject(addr tcommon.Address) *stateObject {
 		address:       addr,
 		account:       types.NewAccount(addr, corepb.AccountType_Normal),
 		dirty:         true,
+		accountDirty:  true,
 		created:       true,
 		storage:       make(map[tcommon.Hash]tcommon.Hash),
 		storageExists: make(map[tcommon.Hash]bool),
+		dirtyStorage:  make(map[tcommon.Hash]struct{}),
 		accountKVRoot: EmptyKVRoot,
 		kvDirty:       make(map[string]kvEntry),
 	}
@@ -93,8 +101,12 @@ func (s *stateObject) getStorageWithExist(key tcommon.Hash) (tcommon.Hash, bool,
 }
 
 func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
+	if s.dirtyStorage == nil {
+		s.dirtyStorage = make(map[tcommon.Hash]struct{})
+	}
 	s.storage[key] = value
 	s.storageExists[key] = exists
+	s.dirtyStorage[key] = struct{}{}
 	s.markDirty()
 }
 

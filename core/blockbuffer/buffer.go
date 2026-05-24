@@ -87,9 +87,118 @@ type Buffer struct {
 	active  *layer
 }
 
+type bufferBatchOp struct {
+	delete bool
+	key    []byte
+	value  []byte
+}
+
+type bufferBatch struct {
+	parent *Buffer
+	ops    []bufferBatchOp
+	size   int
+	closed bool
+}
+
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
 	return &Buffer{base: base}
+}
+
+// NewBatch creates a write batch against the active layer. Write applies all
+// queued operations while holding Buffer.mu once, which keeps high-cardinality
+// latest-state writes from repeatedly locking the block buffer.
+func (b *Buffer) NewBatch() ethdb.Batch {
+	return &bufferBatch{parent: b}
+}
+
+// NewBatchWithSize creates a batch with a small preallocation derived from the
+// caller's byte-size hint. The hint is approximate, matching ethdb semantics.
+func (b *Buffer) NewBatchWithSize(size int) ethdb.Batch {
+	capHint := 0
+	if size > 0 {
+		capHint = size / 64
+		if capHint < 1 {
+			capHint = 1
+		}
+	}
+	return &bufferBatch{parent: b, ops: make([]bufferBatchOp, 0, capHint)}
+}
+
+func (b *bufferBatch) Put(key, value []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := append([]byte(nil), key...)
+	v := append([]byte(nil), value...)
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v})
+	b.size += len(k) + len(v)
+	return nil
+}
+
+func (b *bufferBatch) Delete(key []byte) error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	k := append([]byte(nil), key...)
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k})
+	b.size += len(k)
+	return nil
+}
+
+func (b *bufferBatch) DeleteRange(_, _ []byte) error {
+	return errors.New("blockbuffer: batch DeleteRange unsupported")
+}
+
+func (b *bufferBatch) ValueSize() int { return b.size }
+
+func (b *bufferBatch) Write() error {
+	if b.closed {
+		return errors.New("blockbuffer: batch closed")
+	}
+	b.parent.mu.Lock()
+	defer b.parent.mu.Unlock()
+	if b.parent.active == nil {
+		panic("blockbuffer: batch Write called with no active layer")
+	}
+	for _, op := range b.ops {
+		k := string(op.key)
+		if op.delete {
+			delete(b.parent.active.writes, k)
+			b.parent.active.deletes[k] = struct{}{}
+			continue
+		}
+		delete(b.parent.active.deletes, k)
+		b.parent.active.writes[k] = append([]byte(nil), op.value...)
+	}
+	return nil
+}
+
+func (b *bufferBatch) Reset() {
+	b.ops = b.ops[:0]
+	b.size = 0
+}
+
+func (b *bufferBatch) Replay(w ethdb.KeyValueWriter) error {
+	for _, op := range b.ops {
+		if op.delete {
+			if err := w.Delete(op.key); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.Put(op.key, op.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *bufferBatch) Close() {
+	b.closed = true
+	b.parent = nil
+	b.ops = nil
+	b.size = 0
 }
 
 // BeginBlock opens a fresh active layer for the given block hash.
