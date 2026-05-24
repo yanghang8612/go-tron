@@ -7,9 +7,18 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/ethereum/go-ethereum/triedb/hashdb"
 )
 
 const trieNodeBatchPreallocSize = ethdb.IdealBatchSize
+
+// DatabaseConfig tunes the in-process trie database wrapper.
+type DatabaseConfig struct {
+	// CleanTrieCacheSizeBytes enables geth hashdb's clean-node cache. It caches
+	// decoded-once trie node blobs above Pebble so consecutive block commits do
+	// not have to re-read hot account/KV trie nodes from compacting SSTables.
+	CleanTrieCacheSizeBytes int
+}
 
 // Database wraps access to tries.
 type Database struct {
@@ -20,7 +29,20 @@ type Database struct {
 
 // NewDatabase creates a state database.
 func NewDatabase(diskdb ethdb.Database) *Database {
-	trieDB := triedb.NewDatabase(diskdb, nil) // hash-based defaults
+	return NewDatabaseWithConfig(diskdb, DatabaseConfig{})
+}
+
+// NewDatabaseWithConfig creates a state database with explicit trie cache
+// settings. The default remains hash-based trie storage for java-tron wire and
+// state-root compatibility.
+func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database {
+	if cfg.CleanTrieCacheSizeBytes < 0 {
+		cfg.CleanTrieCacheSizeBytes = 0
+	}
+	trieDBCfg := &triedb.Config{
+		HashDB: &hashdb.Config{CleanCacheSize: cfg.CleanTrieCacheSizeBytes},
+	}
+	trieDB := triedb.NewDatabase(diskdb, trieDBCfg)
 	db := &Database{
 		disk:   diskdb,
 		trieDB: trieDB,
@@ -44,6 +66,15 @@ func (db *Database) TrieDB() *triedb.Database {
 // DiskDB returns the underlying disk database.
 func (db *Database) DiskDB() ethdb.Database {
 	return db.disk
+}
+
+// Close releases in-process trie caches. The underlying disk database remains
+// owned by the caller.
+func (db *Database) Close() error {
+	if db == nil || db.trieDB == nil {
+		return nil
+	}
+	return db.trieDB.Close()
 }
 
 func (db *Database) newTrieNodeBatch() ethdb.Batch {

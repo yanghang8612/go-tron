@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/urfave/cli/v2"
 )
 
@@ -42,6 +43,26 @@ func makePebbleConfig(ctx *cli.Context) (int, int, rawdb.PebbleOptions, error) {
 	tune.L0CompactionThreshold = l0Compact
 	tune.L0StopWritesThreshold = l0Stop
 	return cache, handles, tune, nil
+}
+
+func makeStateDatabaseConfig(ctx *cli.Context) (state.DatabaseConfig, error) {
+	trieCacheMiB := intFlagOrDefault(ctx, "state.trie.cache", stateTrieCacheFlag.Value)
+	if trieCacheMiB < -1 {
+		return state.DatabaseConfig{}, fmt.Errorf("--state.trie.cache must be >= -1")
+	}
+	if trieCacheMiB == -1 {
+		dbCacheMiB := intFlagOrDefault(ctx, "db.cache", dbCacheFlag.Value)
+		trieCacheMiB = dbCacheMiB / 8
+		if trieCacheMiB < 32 {
+			trieCacheMiB = 32
+		}
+		if trieCacheMiB > 1024 {
+			trieCacheMiB = 1024
+		}
+	}
+	return state.DatabaseConfig{
+		CleanTrieCacheSizeBytes: trieCacheMiB * 1024 * 1024,
+	}, nil
 }
 
 func intFlagOrDefault(ctx *cli.Context, name string, fallback int) int {

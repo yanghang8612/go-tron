@@ -155,6 +155,11 @@ var (
 		Name:  "state.commitment.checkpoints",
 		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
 	}
+	stateTrieCacheFlag = &cli.IntFlag{
+		Name:  "state.trie.cache",
+		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
+		Value: -1,
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
 		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
@@ -240,6 +245,7 @@ var app = &cli.App{
 		gcmodeFlag,
 		historyEnabledFlag,
 		stateCommitmentCheckpointsFlag,
+		stateTrieCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
 		dbHandlesFlag,
@@ -390,7 +396,17 @@ func gtron(ctx *cli.Context) error {
 	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
 
 	// Create blockchain
-	sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+	stateDBConfig, err := makeStateDatabaseConfig(ctx)
+	if err != nil {
+		closeStores()
+		return err
+	}
+	if stateDBConfig.CleanTrieCacheSizeBytes > 0 {
+		log.Info("State trie clean cache enabled", "cacheMiB", stateDBConfig.CleanTrieCacheSizeBytes/(1024*1024))
+	} else {
+		log.Info("State trie clean cache disabled")
+	}
+	sdb := state.NewDatabaseWithConfig(rawdb.WrapKeyValueStore(db), stateDBConfig)
 	bc, err := core.NewBlockChainWithAncient(db, sdb, chainConfig, ancientReader)
 	if err != nil {
 		closeStores()

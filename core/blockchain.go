@@ -558,6 +558,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
 			"stateCommitKVCompute", ethcommon.PrettyDuration(stats.StateCommitDetail.KVCompute),
 			"stateCommitKVNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.KVNodeWrite),
+			"stateCommitAccountMarshal", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieMarshal),
+			"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieWrite),
 			"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
 			"stateCommitTrieNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.TrieNodeWrite+stats.StateCommitDetail.TrieNodeFlush),
 			"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
@@ -1203,6 +1205,9 @@ func (bc *BlockChain) Close() error {
 	// next Buffer mutation. Discard explicitly so reads after Close fall
 	// straight through to disk.
 	bc.buffer.Discard()
+	if err := bc.stateDB.Close(); err != nil {
+		return fmt.Errorf("close: state trie database: %w", err)
+	}
 	return nil
 }
 

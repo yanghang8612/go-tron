@@ -10,7 +10,7 @@ import (
 func makeDBFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbL0CompactionFlag, dbL0StopFlag}
+	app.Flags = []cli.Flag{dbCacheFlag, dbHandlesFlag, dbMemtableFlag, dbL0CompactionFlag, dbL0StopFlag, stateTrieCacheFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -78,5 +78,45 @@ func TestMakePebbleConfigRejectsExplicitZero(t *testing.T) {
 
 	if _, _, _, err := makePebbleConfig(ctx); err == nil {
 		t.Fatal("expected explicit zero cache to fail")
+	}
+}
+
+func TestMakeStateDatabaseConfigAutoScalesFromDBCache(t *testing.T) {
+	ctx := makeDBFlagSet(t, []string{"--db.cache", "8192"})
+
+	cfg, err := makeStateDatabaseConfig(ctx)
+	if err != nil {
+		t.Fatalf("makeStateDatabaseConfig: %v", err)
+	}
+	if cfg.CleanTrieCacheSizeBytes != 1024*1024*1024 {
+		t.Fatalf("clean trie cache=%d, want 1GiB", cfg.CleanTrieCacheSizeBytes)
+	}
+}
+
+func TestMakeStateDatabaseConfigOverrideAndDisable(t *testing.T) {
+	ctx := makeDBFlagSet(t, []string{"--state.trie.cache", "256"})
+	cfg, err := makeStateDatabaseConfig(ctx)
+	if err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if cfg.CleanTrieCacheSizeBytes != 256*1024*1024 {
+		t.Fatalf("override clean trie cache=%d, want 256MiB", cfg.CleanTrieCacheSizeBytes)
+	}
+
+	ctx = makeDBFlagSet(t, []string{"--state.trie.cache", "0"})
+	cfg, err = makeStateDatabaseConfig(ctx)
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if cfg.CleanTrieCacheSizeBytes != 0 {
+		t.Fatalf("disabled clean trie cache=%d, want 0", cfg.CleanTrieCacheSizeBytes)
+	}
+}
+
+func TestMakeStateDatabaseConfigRejectsInvalidValue(t *testing.T) {
+	ctx := makeDBFlagSet(t, []string{"--state.trie.cache", "-2"})
+
+	if _, err := makeStateDatabaseConfig(ctx); err == nil {
+		t.Fatal("expected invalid trie cache to fail")
 	}
 }

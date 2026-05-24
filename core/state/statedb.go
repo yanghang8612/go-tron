@@ -104,11 +104,16 @@ type CommitStats struct {
 	KVCompute         time.Duration
 	KVNodeWrite       time.Duration
 	AccountTrieUpdate time.Duration
-	Finalize          time.Duration
-	AccountTrieCommit time.Duration
-	TrieNodeWrite     time.Duration
-	TrieNodeFlush     time.Duration
-	Reopen            time.Duration
+	// AccountTrie* fields below are a breakdown of AccountTrieUpdate and are
+	// intentionally excluded from Total to avoid double-counting.
+	AccountTrieMarshal    time.Duration
+	AccountTrieGeneration time.Duration
+	AccountTrieWrite      time.Duration
+	Finalize              time.Duration
+	AccountTrieCommit     time.Duration
+	TrieNodeWrite         time.Duration
+	TrieNodeFlush         time.Duration
+	Reopen                time.Duration
 
 	Accounts   int
 	KVAccounts int
@@ -123,6 +128,9 @@ func (s *CommitStats) Add(o CommitStats) {
 	s.KVCompute += o.KVCompute
 	s.KVNodeWrite += o.KVNodeWrite
 	s.AccountTrieUpdate += o.AccountTrieUpdate
+	s.AccountTrieMarshal += o.AccountTrieMarshal
+	s.AccountTrieGeneration += o.AccountTrieGeneration
+	s.AccountTrieWrite += o.AccountTrieWrite
 	s.Finalize += o.Finalize
 	s.AccountTrieCommit += o.AccountTrieCommit
 	s.TrieNodeWrite += o.TrieNodeWrite
@@ -2107,15 +2115,23 @@ func accountTrieCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
 	return out
 }
 
-func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan) error {
+func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan, stats *CommitStats) error {
 	obj := plan.obj
 	addr := plan.addr
 	if plan.deleteAccount {
+		start := time.Now()
 		if err := s.trie.Delete(plan.accountTrieKey.Bytes()); err != nil {
 			return err
 		}
+		if stats != nil {
+			stats.AccountTrieWrite += time.Since(start)
+		}
+		start = time.Now()
 		if err := s.writeAccountKVGeneration(obj); err != nil {
 			return err
+		}
+		if stats != nil {
+			stats.AccountTrieGeneration += time.Since(start)
 		}
 		rawdb.DeleteCode(s.db.DiskDB(), addr)
 		rawdb.DeleteContract(s.db.DiskDB(), addr)
@@ -2128,11 +2144,16 @@ func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan) error {
 	hadKVChanges := plan.kvTrieChanged || plan.kvLatestChanged
 	needsAccountTrieUpdate := obj.accountDirty || obj.created || obj.codeDirty || generationDirty || hadKVChanges
 	if generationDirty || hadKVChanges {
+		start := time.Now()
 		if err := s.writeAccountKVGeneration(obj); err != nil {
 			return err
 		}
+		if stats != nil {
+			stats.AccountTrieGeneration += time.Since(start)
+		}
 	}
 	if needsAccountTrieUpdate {
+		start := time.Now()
 		accBytes, err := obj.account.Marshal()
 		if err != nil {
 			return err
@@ -2148,8 +2169,15 @@ func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan) error {
 		if err != nil {
 			return err
 		}
+		if stats != nil {
+			stats.AccountTrieMarshal += time.Since(start)
+		}
+		start = time.Now()
 		if err := s.trie.Update(plan.accountTrieKey.Bytes(), data); err != nil {
 			return err
+		}
+		if stats != nil {
+			stats.AccountTrieWrite += time.Since(start)
 		}
 	}
 	return nil
@@ -2239,7 +2267,7 @@ func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
 		return tcommon.Hash{}, stats, err
 	}
 	for _, plan := range accountTrieCommitPlans(plans) {
-		if err := s.updateAccountTrieWithPlan(plan); err != nil {
+		if err := s.updateAccountTrieWithPlan(plan, &stats); err != nil {
 			return tcommon.Hash{}, stats, err
 		}
 	}

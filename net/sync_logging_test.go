@@ -10,6 +10,8 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/state"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
@@ -108,6 +110,9 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		"stateCommitKVCompute=",
 		"stateCommitKVNodes=",
 		"stateCommitAccountTrieUpdate=",
+		"stateCommitAccountTrieMarshal=",
+		"stateCommitAccountTrieGeneration=",
+		"stateCommitAccountTrieWrite=",
 		"stateCommitFinalize=",
 		"stateCommitAccountTrieCommit=",
 		"stateCommitTrieNodes=",
@@ -129,5 +134,32 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		if !strings.Contains(out, k) {
 			t.Errorf("missing key %q in summary line:\n%s", k, out)
 		}
+	}
+}
+
+func TestSlowestStateCommitPhasePrefersAccountTrieLeafWhenAvailable(t *testing.T) {
+	phase, elapsed := slowestStateCommitPhase(core.ApplyStats{
+		StateCommitDetail: state.CommitStats{
+			KVCompute:             2 * time.Second,
+			AccountTrieUpdate:     10 * time.Second,
+			AccountTrieMarshal:    time.Second,
+			AccountTrieGeneration: 500 * time.Millisecond,
+			AccountTrieWrite:      6 * time.Second,
+		},
+	})
+	if phase != "accountTrieWrite" || elapsed != 6*time.Second {
+		t.Fatalf("slowestStateCommitPhase = %s %v, want accountTrieWrite 6s", phase, elapsed)
+	}
+}
+
+func TestSlowestStateCommitPhaseFallsBackToAccountTrieAggregate(t *testing.T) {
+	phase, elapsed := slowestStateCommitPhase(core.ApplyStats{
+		StateCommitDetail: state.CommitStats{
+			KVCompute:         2 * time.Second,
+			AccountTrieUpdate: 10 * time.Second,
+		},
+	})
+	if phase != "accountTrieUpdate" || elapsed != 10*time.Second {
+		t.Fatalf("slowestStateCommitPhase = %s %v, want accountTrieUpdate 10s", phase, elapsed)
 	}
 }

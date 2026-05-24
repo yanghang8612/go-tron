@@ -1226,6 +1226,9 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"stateCommitKVCompute", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.KVCompute),
 		"stateCommitKVNodes", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.KVNodeWrite),
 		"stateCommitAccountTrieUpdate", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieUpdate),
+		"stateCommitAccountTrieMarshal", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieMarshal),
+		"stateCommitAccountTrieGeneration", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieGeneration),
+		"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieWrite),
 		"stateCommitFinalize", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Finalize),
 		"stateCommitAccountTrieCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieCommit),
 		"stateCommitTrieNodes", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.TrieNodeWrite),
@@ -1280,22 +1283,32 @@ func slowestStateCommitPhase(s core.ApplyStats) (string, time.Duration) {
 	phase := ""
 	var max time.Duration
 	d := s.StateCommitDetail
-	for _, p := range []struct {
+	type phaseDuration struct {
 		name string
 		d    time.Duration
-	}{
+	}
+	phases := []phaseDuration{
 		{"prepare", d.Prepare},
 		{"flatWrite", d.FlatWrite},
 		{"flatFlush", d.FlatFlush},
 		{"kvCompute", d.KVCompute},
 		{"kvNodes", d.KVNodeWrite},
-		{"accountTrieUpdate", d.AccountTrieUpdate},
 		{"finalize", d.Finalize},
 		{"accountTrieCommit", d.AccountTrieCommit},
 		{"trieNodes", d.TrieNodeWrite},
 		{"trieFlush", d.TrieNodeFlush},
 		{"reopen", d.Reopen},
-	} {
+	}
+	if d.AccountTrieMarshal+d.AccountTrieGeneration+d.AccountTrieWrite > 0 {
+		phases = append(phases,
+			phaseDuration{"accountTrieMarshal", d.AccountTrieMarshal},
+			phaseDuration{"accountTrieGeneration", d.AccountTrieGeneration},
+			phaseDuration{"accountTrieWrite", d.AccountTrieWrite},
+		)
+	} else {
+		phases = append(phases, phaseDuration{"accountTrieUpdate", d.AccountTrieUpdate})
+	}
+	for _, p := range phases {
 		if p.d > max {
 			phase = p.name
 			max = p.d
