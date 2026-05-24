@@ -221,6 +221,35 @@ func TestResetAccountKVRevertRestoresOverlay(t *testing.T) {
 	}
 }
 
+func TestAccountKVTrieCacheInvalidatedAcrossResetRevert(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x65)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	_ = sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("orig"))
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb, err = New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || string(got) != "orig" {
+		t.Fatalf("warm cache get = %q ok=%v err=%v", got, ok, err)
+	}
+	snap := sdb.Snapshot()
+	if err := sdb.ResetAccountKV(addr); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("reset key visible through stale trie cache: ok=%v err=%v", ok, err)
+	}
+	sdb.RevertToSnapshot(snap)
+	if got, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || string(got) != "orig" {
+		t.Fatalf("reverted get = %q ok=%v err=%v, want orig,true,nil", got, ok, err)
+	}
+}
+
 func TestAccountKVLatestIndexCommitDeleteAndIterate(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x67)

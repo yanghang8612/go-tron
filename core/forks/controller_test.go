@@ -202,3 +202,58 @@ func TestForkController_Update_RebuildsOnWitnessCountChange(t *testing.T) {
 		t.Errorf("slot 3 after rebuild: got %d, want upgrade", stats[3])
 	}
 }
+
+type countingForkStore struct {
+	data       map[int32][]byte
+	batchReads int
+	writes     int
+}
+
+func newCountingForkStore() *countingForkStore {
+	return &countingForkStore{data: make(map[int32][]byte)}
+}
+
+func (s *countingForkStore) ReadForkStats(version int32) []byte {
+	if v := s.data[version]; v != nil {
+		return append([]byte(nil), v...)
+	}
+	return nil
+}
+
+func (s *countingForkStore) ReadForkStatsBatch(versions []int32) map[int32][]byte {
+	s.batchReads++
+	out := make(map[int32][]byte, len(versions))
+	for _, version := range versions {
+		if v := s.data[version]; v != nil {
+			out[version] = append([]byte(nil), v...)
+		}
+	}
+	return out
+}
+
+func (s *countingForkStore) WriteForkStats(version int32, stats []byte) {
+	s.writes++
+	s.data[version] = append([]byte(nil), stats...)
+}
+
+func TestForkController_UpdateBatchesReadsAndSkipsNoopWrites(t *testing.T) {
+	store := newCountingForkStore()
+	fc := NewForkControllerFromStore(store)
+
+	fc.Update(35, 0, 27)
+	if store.batchReads != 1 {
+		t.Fatalf("first update batch reads = %d, want 1", store.batchReads)
+	}
+	if store.writes != len(KnownVersions) {
+		t.Fatalf("first update writes = %d, want %d", store.writes, len(KnownVersions))
+	}
+
+	store.writes = 0
+	fc.Update(35, 0, 27)
+	if store.batchReads != 2 {
+		t.Fatalf("second update batch reads = %d, want 2", store.batchReads)
+	}
+	if store.writes != 0 {
+		t.Fatalf("repeat update writes = %d, want 0", store.writes)
+	}
+}

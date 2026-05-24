@@ -16,6 +16,27 @@ func (s *StateDB) ReadForkStats(version int32) []byte {
 	return data
 }
 
+// ReadForkStatsBatch loads multiple software-version vote bitmaps with a
+// single account-KV trie open. ForkController.Update calls this once per block
+// for all known versions, which avoids repeated SystemForkVote trie setup.
+func (s *StateDB) ReadForkStatsBatch(versions []int32) map[int32][]byte {
+	keys := make([][]byte, 0, len(versions))
+	for _, version := range versions {
+		keys = append(keys, rawdb.ForkStatsStateKey(version))
+	}
+	values, err := s.GetAccountKVBatch(tcommon.SystemAccountAddress, kvdomains.SystemForkVote, keys)
+	if err != nil {
+		return nil
+	}
+	out := make(map[int32][]byte, len(values))
+	for i, version := range versions {
+		if value, ok := values[string(keys[i])]; ok {
+			out[version] = value
+		}
+	}
+	return out
+}
+
 // WriteForkStats stages a software-version vote bitmap in the rooted
 // SystemForkVote domain.
 func (s *StateDB) WriteForkStats(version int32, stats []byte) {

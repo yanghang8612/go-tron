@@ -79,6 +79,12 @@ type StateDB struct {
 		ethdb.Iteratee
 	}
 
+	// accountKVTries caches per-account generic-KV tries for the lifetime of a
+	// StateDB block application. System/reward/fork paths may touch many keys
+	// under the same owner; sharing the opened trie avoids repeating root-node
+	// resolution for every GetAccountKV call.
+	accountKVTries map[tcommon.Address]*trie.Trie
+
 	changeSet domainChangeSetCapture
 }
 
@@ -824,6 +830,7 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	journalLen := s.snapshots[id]
 	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
 	s.snapshots = s.snapshots[:id]
+	s.clearAccountKVTrieCache()
 }
 
 // FinalizeTransaction mirrors java-tron's rootRepository.commit() boundary for
@@ -1926,6 +1933,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	s.originRoot = root
 	s.journal = newJournal()
 	s.snapshots = s.snapshots[:0]
+	s.clearAccountKVTrieCache()
 
 	return tcommon.Hash(root), nil
 }

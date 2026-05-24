@@ -9,6 +9,7 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -72,13 +73,43 @@ func (s *StateDB) nextAccountKVGeneration(owner tcommon.Address, prev *stateObje
 	return 0
 }
 
+func (s *StateDB) accountKVTrie(obj *stateObject) (*trie.Trie, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	if s.accountKVTries == nil {
+		s.accountKVTries = make(map[tcommon.Address]*trie.Trie)
+	}
+	if tr := s.accountKVTries[obj.address]; tr != nil {
+		return tr, nil
+	}
+	tr, err := s.db.OpenTrie(ethcommon.Hash(obj.accountKVRoot))
+	if err != nil {
+		return nil, err
+	}
+	s.accountKVTries[obj.address] = tr
+	return tr, nil
+}
+
+func (s *StateDB) invalidateAccountKVTrie(owner tcommon.Address) {
+	if s.accountKVTries != nil {
+		delete(s.accountKVTries, owner)
+	}
+}
+
+func (s *StateDB) clearAccountKVTrieCache() {
+	if len(s.accountKVTries) > 0 {
+		s.accountKVTries = nil
+	}
+}
+
 // GetAccountKV reads a generic-KV value for owner. Returns (value, exists, err).
 func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	if !kvdomains.IsRegistered(domain) {
 		return nil, false, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.getStateObject(owner)
-	if obj == nil {
+	if obj == nil || obj.deleted {
 		return nil, false, nil
 	}
 	comp := kvCompositeKey(domain, key)
@@ -88,7 +119,7 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		}
 		return append([]byte{}, e.val...), true, nil
 	}
-	tr, err := s.db.OpenTrie(ethcommon.Hash(obj.accountKVRoot))
+	tr, err := s.accountKVTrie(obj)
 	if err != nil {
 		return nil, false, err
 	}
@@ -142,11 +173,14 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 		return nil, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	out := make(map[string][]byte, len(keys))
-	obj := s.getStateObject(owner)
-	if obj == nil {
+	if len(keys) == 0 {
 		return out, nil
 	}
-	tr, err := s.db.OpenTrie(ethcommon.Hash(obj.accountKVRoot))
+	obj := s.getStateObject(owner)
+	if obj == nil || obj.deleted {
+		return out, nil
+	}
+	tr, err := s.accountKVTrie(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +323,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 	obj.accountKVRoot = EmptyKVRoot
 	obj.accountKVGeneration++
 	obj.markDirty()
+	s.invalidateAccountKVTrie(owner)
 	return nil
 }
 
@@ -296,10 +331,11 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 // trie nodes, and returns the new AccountKVRoot. Call only when len(obj.kvDirty) > 0.
 func (s *StateDB) commitAccountKV(obj *stateObject) (tcommon.Hash, error) {
 	base := ethcommon.Hash(obj.accountKVRoot)
-	tr, err := s.db.OpenTrie(base)
+	tr, err := s.accountKVTrie(obj)
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
+	defer s.invalidateAccountKVTrie(obj.address)
 	for mk, e := range obj.kvDirty {
 		tk := kvTrieKey([]byte(mk))
 		if e.deleted {

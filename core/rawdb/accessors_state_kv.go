@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -171,6 +172,13 @@ func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint6
 }
 
 func deleteStateKVPrefixByScan(db stateKVLatestStore, prefix []byte) error {
+	if deleter, ok := db.(ethdb.KeyValueRangeDeleter); ok {
+		if err := deleter.DeleteRange(prefix, prefixUpperBound(prefix)); err == nil {
+			return nil
+		} else if !errors.Is(err, ethdb.ErrTooManyKeys) {
+			return err
+		}
+	}
 	for {
 		it := db.NewIterator(prefix, nil)
 		keys := make([][]byte, 0, resetScanBatch)

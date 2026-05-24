@@ -155,10 +155,23 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 		return
 	}
 	eachVotePay := float64(totalPay) / float64(set.voteSum)
+	voterDeltas := make(map[tcommon.Address]int64, len(set.witnesses))
 	for _, v := range set.witnesses {
 		pay := int64(float64(v.votes) * eachVotePay)
-		payBlockRewardWithBrokerage(db, statedb, dp, v.addr, pay, cycle, v.brokerage)
+		if pay <= 0 {
+			continue
+		}
+		brokerageRate := float64(v.brokerage) / 100.0
+		brokerageAmount := int64(brokerageRate * float64(pay))
+		voterAmount := pay - brokerageAmount
+		if voterAmount > 0 {
+			voterDeltas[v.addr] += voterAmount
+		}
+		if brokerageAmount > 0 {
+			statedb.AddAllowanceFinalReward(v.addr, brokerageAmount)
+		}
 	}
+	_ = statedb.AddCycleRewards(cycle, voterDeltas)
 }
 
 // kvReadWriter is retained for the existing block-processing signatures while

@@ -1,8 +1,10 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/big"
+	"sort"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -29,6 +31,25 @@ func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
 	return int64(binary.BigEndian.Uint64(raw))
 }
 
+func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tcommon.Address]int64 {
+	keys := make([][]byte, 0, len(addrs))
+	for _, addr := range addrs {
+		keys = append(keys, rawdb.CycleRewardStateKey(cycle, addr.Bytes()))
+	}
+	values, err := s.GetAccountKVBatch(tcommon.SystemAccountAddress, kvdomains.SystemReward, keys)
+	out := make(map[tcommon.Address]int64, len(addrs))
+	if err != nil {
+		return out
+	}
+	for i, addr := range addrs {
+		raw := values[string(keys[i])]
+		if len(raw) == 8 {
+			out[addr] = int64(binary.BigEndian.Uint64(raw))
+		}
+	}
+	return out
+}
+
 func (s *StateDB) WriteCycleReward(cycle int64, addr []byte, value int64) error {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(value))
@@ -37,6 +58,31 @@ func (s *StateDB) WriteCycleReward(cycle int64, addr []byte, value int64) error 
 
 func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
 	return s.WriteCycleReward(cycle, addr, s.ReadCycleReward(cycle, addr)+delta)
+}
+
+func (s *StateDB) AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+	addrs := make([]tcommon.Address, 0, len(deltas))
+	for addr, delta := range deltas {
+		if delta != 0 {
+			addrs = append(addrs, addr)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+	})
+	current := s.ReadCycleRewards(cycle, addrs)
+	for _, addr := range addrs {
+		if err := s.WriteCycleReward(cycle, addr.Bytes(), current[addr]+deltas[addr]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *StateDB) ReadCycleVote(cycle int64, addr []byte) int64 {

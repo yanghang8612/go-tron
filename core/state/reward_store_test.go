@@ -107,3 +107,33 @@ func TestRewardStoreRoundTripAcrossRoot(t *testing.T) {
 		t.Fatalf("end cycle: got %d, want 9", got)
 	}
 }
+
+func TestRewardStoreAddCycleRewardsBatch(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr1 := testAddr(0x46)
+	addr2 := testAddr(0x47)
+
+	if err := statedb.WriteCycleReward(8, addr1.Bytes(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.AddCycleRewards(8, map[tcommon.Address]int64{
+		addr1: 5,
+		addr2: 7,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, statedb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.ReadCycleReward(8, addr1.Bytes()); got != 15 {
+		t.Fatalf("addr1 reward = %d, want 15", got)
+	}
+	if got := reopened.ReadCycleReward(8, addr2.Bytes()); got != 7 {
+		t.Fatalf("addr2 reward = %d, want 7", got)
+	}
+}

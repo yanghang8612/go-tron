@@ -35,6 +35,10 @@ type ForkStatsReader interface {
 	ReadForkStats(version int32) []byte
 }
 
+type ForkStatsBatchReader interface {
+	ReadForkStatsBatch(versions []int32) map[int32][]byte
+}
+
 type ForkStatsStore interface {
 	ForkStatsReader
 	WriteForkStats(version int32, stats []byte)
@@ -68,6 +72,14 @@ func NewForkControllerFromState(statedb *state.StateDB) *ForkController {
 	return NewForkControllerFromStore(statedb)
 }
 
+var knownVersionValues = func() []int32 {
+	values := make([]int32, len(KnownVersions))
+	for i, vp := range KnownVersions {
+		values[i] = vp.Value
+	}
+	return values
+}()
+
 // Update records the vote carried by a block: the producing SR's slot is
 // marked VoteUpgrade in every known version bitmap with Value <= blockVersion,
 // and VoteDowngrade in all higher versions. Mirrors java-tron
@@ -86,22 +98,38 @@ func (fc *ForkController) Update(blockVersion int32, slot, witnessCount int) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
+	var batchStats map[int32][]byte
+	if br, ok := fc.store.(ForkStatsBatchReader); ok {
+		batchStats = br.ReadForkStatsBatch(knownVersionValues)
+	}
 	for _, vp := range KnownVersions {
-		stats := fc.store.ReadForkStats(vp.Value)
+		var stats []byte
+		if batchStats != nil {
+			stats = batchStats[vp.Value]
+		} else {
+			stats = fc.store.ReadForkStats(vp.Value)
+		}
+		changed := false
 		if len(stats) != witnessCount {
 			stats = make([]byte, witnessCount)
+			changed = true
 		} else {
 			// Copy so we don't mutate the db-returned slice in place (Pebble reuses).
 			fresh := make([]byte, witnessCount)
 			copy(fresh, stats)
 			stats = fresh
 		}
+		want := VoteDowngrade
 		if vp.Value <= blockVersion {
-			stats[slot] = VoteUpgrade
-		} else {
-			stats[slot] = VoteDowngrade
+			want = VoteUpgrade
 		}
-		fc.store.WriteForkStats(vp.Value, stats)
+		if stats[slot] != want {
+			stats[slot] = want
+			changed = true
+		}
+		if changed {
+			fc.store.WriteForkStats(vp.Value, stats)
+		}
 	}
 }
 
