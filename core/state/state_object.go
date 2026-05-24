@@ -99,12 +99,14 @@ func (s *stateObject) setStorage(key, value tcommon.Hash, exists bool) {
 }
 
 func (s *stateObject) stageKV(domain kvdomains.KVDomain, key, value []byte) {
-	s.kvDirty[string(kvCompositeKey(domain, key))] = kvEntry{val: append([]byte(nil), value...), deleted: false}
+	comp := kvCompositeKey(domain, key)
+	s.kvDirty[string(comp)] = newKVEntry(comp, value, false)
 	s.markDirty()
 }
 
 func (s *stateObject) stageDeleteKV(domain kvdomains.KVDomain, key []byte) {
-	s.kvDirty[string(kvCompositeKey(domain, key))] = kvEntry{deleted: true}
+	comp := kvCompositeKey(domain, key)
+	s.kvDirty[string(comp)] = newKVEntry(comp, nil, true)
 	s.markDirty()
 }
 

@@ -27,7 +27,10 @@ const kvPresencePrefix = 0x01
 type kvEntry struct {
 	val     []byte
 	deleted bool
+	trieKey ethcommon.Hash
 }
+
+type kvCommitItem struct{ entry kvEntry }
 
 type accountKVIndexStore interface {
 	ethdb.KeyValueReader
@@ -105,12 +108,32 @@ func kvTrieKey(composite []byte) []byte {
 	return crypto.Keccak256(composite)
 }
 
+func kvTrieHash(composite []byte) ethcommon.Hash {
+	return ethcommon.BytesToHash(kvTrieKey(composite))
+}
+
+func newKVEntry(composite, value []byte, deleted bool) kvEntry {
+	e := kvEntry{deleted: deleted, trieKey: kvTrieHash(composite)}
+	if !deleted {
+		e.val = append([]byte(nil), value...)
+	}
+	return e
+}
+
 func splitKVCompositeKey(composite []byte) (kvdomains.KVDomain, []byte, bool) {
 	if len(composite) < 2 {
 		return 0, nil, false
 	}
 	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(composite[:2]))
 	return domain, append([]byte(nil), composite[2:]...), true
+}
+
+func splitKVCompositeKeyView(composite []byte) (kvdomains.KVDomain, []byte, bool) {
+	if len(composite) < 2 {
+		return 0, nil, false
+	}
+	domain := kvdomains.KVDomain(binary.BigEndian.Uint16(composite[:2]))
+	return domain, composite[2:], true
 }
 
 func (s *StateDB) accountKVIndex() accountKVIndexStore {
@@ -351,7 +374,8 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
-	mk := string(kvCompositeKey(domain, key))
+	comp := kvCompositeKey(domain, key)
+	mk := string(comp)
 	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
 		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -365,7 +389,7 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 		prev, had := obj.kvDirty[mk]
 		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
 	}
-	obj.kvDirty[mk] = kvEntry{val: append([]byte{}, value...), deleted: false}
+	obj.kvDirty[mk] = newKVEntry(comp, value, false)
 	obj.markDirty()
 	return nil
 }
@@ -379,7 +403,8 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	if obj == nil {
 		return nil
 	}
-	mk := string(kvCompositeKey(domain, key))
+	comp := kvCompositeKey(domain, key)
+	mk := string(comp)
 	if _, dirty := obj.kvDirty[mk]; !dirty && s.accountKVLatestReadEnabled() {
 		_, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
@@ -391,7 +416,7 @@ func (s *StateDB) DeleteAccountKV(owner tcommon.Address, domain kvdomains.KVDoma
 	}
 	prev, had := obj.kvDirty[mk]
 	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
-	obj.kvDirty[mk] = kvEntry{val: nil, deleted: true}
+	obj.kvDirty[mk] = newKVEntry(comp, nil, true)
 	obj.markDirty()
 	return nil
 }
@@ -451,8 +476,20 @@ func (s *StateDB) commitAccountKV(obj *stateObject, nodeWriter *trieNodeBatchWri
 		return tcommon.Hash{}, err
 	}
 	defer s.invalidateAccountKVTrie(obj.address)
+	items := make([]kvCommitItem, 0, len(obj.kvDirty))
 	for mk, e := range obj.kvDirty {
-		tk := kvTrieKey([]byte(mk))
+		if e.trieKey == (ethcommon.Hash{}) {
+			e.trieKey = kvTrieHash([]byte(mk))
+			obj.kvDirty[mk] = e
+		}
+		items = append(items, kvCommitItem{entry: e})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return bytes.Compare(items[i].entry.trieKey[:], items[j].entry.trieKey[:]) < 0
+	})
+	for _, item := range items {
+		e := item.entry
+		tk := e.trieKey.Bytes()
 		if e.deleted {
 			if err := tr.Delete(tk); err != nil {
 				return tcommon.Hash{}, err
@@ -482,7 +519,7 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject) error {
 	sort.Strings(keys)
 	for _, mapKey := range keys {
 		entry := obj.kvDirty[mapKey]
-		domain, logicalKey, ok := splitKVCompositeKey([]byte(mapKey))
+		domain, logicalKey, ok := splitKVCompositeKeyView([]byte(mapKey))
 		if !ok {
 			return fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
 		}

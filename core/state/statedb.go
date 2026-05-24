@@ -1814,7 +1814,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		}
 		kvDirtyCopy := make(map[string]kvEntry, len(obj.kvDirty))
 		for k, v := range obj.kvDirty {
-			ec := kvEntry{deleted: v.deleted}
+			ec := kvEntry{deleted: v.deleted, trieKey: v.trieKey}
 			if v.val != nil {
 				ec.val = append([]byte{}, v.val...)
 			}
