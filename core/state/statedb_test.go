@@ -165,6 +165,45 @@ func TestStateDBCommitThenContinue(t *testing.T) {
 	}
 }
 
+func TestStateDBCommitPersistsHistoricalAccountTrieRoots(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(1)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 1000)
+	root1, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit root1: %v", err)
+	}
+
+	atRoot1, err := New(root1, sdb.db)
+	if err != nil {
+		t.Fatalf("open root1: %v", err)
+	}
+	if got := atRoot1.GetBalance(addr); got != 1000 {
+		t.Fatalf("balance at root1 = %d, want 1000", got)
+	}
+
+	sdb.AddBalance(addr, 500)
+	root2, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit root2: %v", err)
+	}
+	atRoot2, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatalf("open root2: %v", err)
+	}
+	if got := atRoot2.GetBalance(addr); got != 1500 {
+		t.Fatalf("balance at root2 = %d, want 1500", got)
+	}
+	atRoot1Again, err := New(root1, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen root1: %v", err)
+	}
+	if got := atRoot1Again.GetBalance(addr); got != 1000 {
+		t.Fatalf("balance at root1 after root2 commit = %d, want 1000", got)
+	}
+}
+
 func TestStateDBWitness(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(1)

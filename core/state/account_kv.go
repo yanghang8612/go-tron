@@ -55,6 +55,20 @@ func (w *trieNodeBatchWriter) write(hash ethcommon.Hash, blob []byte) error {
 	return nil
 }
 
+func (w *trieNodeBatchWriter) writeNodeSet(nodes *trienode.NodeSet) error {
+	if nodes == nil {
+		return nil
+	}
+	var err error
+	nodes.ForEachWithOrder(func(_ string, n *trienode.Node) {
+		if err != nil || n.IsDeleted() {
+			return
+		}
+		err = w.write(n.Hash, n.Blob)
+	})
+	return err
+}
+
 func (w *trieNodeBatchWriter) flush() error {
 	if w.batch.ValueSize() == 0 {
 		return nil
@@ -421,16 +435,8 @@ func (s *StateDB) commitAccountKV(obj *stateObject, nodeWriter *trieNodeBatchWri
 		}
 	}
 	root, nodes := tr.Commit(false)
-	if nodes != nil {
-		nodes.ForEachWithOrder(func(_ string, n *trienode.Node) {
-			if err != nil || n.IsDeleted() {
-				return
-			}
-			err = nodeWriter.write(n.Hash, n.Blob)
-		})
-		if err != nil {
-			return tcommon.Hash{}, err
-		}
+	if err := nodeWriter.writeNodeSet(nodes); err != nil {
+		return tcommon.Hash{}, err
 	}
 	return tcommon.Hash(root), nil
 }

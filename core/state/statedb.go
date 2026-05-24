@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/trie/trienode"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -1868,7 +1867,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	sort.Slice(addrs, func(i, j int) bool {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
-	accountKVNodeWriter := newTrieNodeBatchWriter(s.db.DiskDB())
+	trieNodeWriter := newTrieNodeBatchWriter(s.db.DiskDB())
 	for _, addr := range addrs {
 		obj := s.stateObjects[addr]
 		if !obj.dirty {
@@ -1934,7 +1933,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			}
 		}
 		if len(obj.kvDirty) > 0 {
-			kvRoot, err := s.commitAccountKV(obj, accountKVNodeWriter)
+			kvRoot, err := s.commitAccountKV(obj, trieNodeWriter)
 			if err != nil {
 				return tcommon.Hash{}, err
 			}
@@ -1974,18 +1973,12 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		obj.created = false
 		obj.dirty = false
 	}
-	if err := accountKVNodeWriter.flush(); err != nil {
+	root, nodes := s.trie.Commit(false)
+	if err := trieNodeWriter.writeNodeSet(nodes); err != nil {
 		return tcommon.Hash{}, err
 	}
-
-	root, nodes := s.trie.Commit(false)
-	if nodes != nil {
-		if err := s.db.TrieDB().Update(root, s.originRoot, 0, trienode.NewWithNodeSet(nodes), nil); err != nil {
-			return tcommon.Hash{}, err
-		}
-		if err := s.db.TrieDB().Commit(root, false); err != nil {
-			return tcommon.Hash{}, err
-		}
+	if err := trieNodeWriter.flush(); err != nil {
+		return tcommon.Hash{}, err
 	}
 
 	newTrie, err := s.db.OpenTrie(root)
