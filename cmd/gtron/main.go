@@ -574,7 +574,7 @@ func gtron(ctx *cli.Context) error {
 		stack.RegisterLifecycle(domainPruner)
 		log.Info("Domain state pruner enabled", "historyWindow", historyWindow, "reorgWindow", reorgWindow)
 	} else {
-		log.Info("Domain state pruning disabled", "mode", params.HistoryModeArchive)
+		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
 	}
 
 	if ancientStore != nil && freezerCfg.Enabled {
