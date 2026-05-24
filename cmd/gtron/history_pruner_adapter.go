@@ -6,6 +6,7 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/historyprune"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
+	tnet "github.com/tronprotocol/go-tron/net"
 )
 
 // prunerChainSource adapts *core.BlockChain to the narrow
@@ -17,12 +18,20 @@ type prunerChainSource struct {
 	chain *core.BlockChain
 }
 
+type domainPrunerChainSource struct {
+	*prunerChainSource
+	sync *tnet.SyncService
+}
+
 func newPrunerChainSource(chain *core.BlockChain) historyprune.ChainSource {
 	return &prunerChainSource{chain: chain}
 }
 
-func newDomainPrunerChainSource(chain *core.BlockChain) statepruning.ChainSource {
-	return &prunerChainSource{chain: chain}
+func newDomainPrunerChainSource(chain *core.BlockChain, syncService *tnet.SyncService) statepruning.ChainSource {
+	return &domainPrunerChainSource{
+		prunerChainSource: &prunerChainSource{chain: chain},
+		sync:              syncService,
+	}
 }
 
 func (a *prunerChainSource) DB() ethdb.KeyValueStore {
@@ -36,4 +45,15 @@ func (a *prunerChainSource) LatestSolidifiedBlockNum() int64 {
 	// is bounded by the pass's Interval (default 1 minute), so allocator
 	// pressure is negligible.
 	return a.chain.DynProps().LatestSolidifiedBlockNum()
+}
+
+func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {
+	if a == nil || a.sync == nil {
+		return 0, false
+	}
+	remaining, ok := a.sync.SyncRemainingBlocks()
+	if !ok || remaining <= 0 {
+		return 0, false
+	}
+	return uint64(remaining), true
 }

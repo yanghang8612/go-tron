@@ -146,13 +146,34 @@ func IterateStateDomainChanges(db ethdb.Iteratee, blockNum uint64, fn func(*Stat
 }
 
 func DeleteStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
+	inverseKeys := make([][]byte, 0, resetScanBatch)
+	flushInverse := func() error {
+		if err := deleteStateKVKeys(db, inverseKeys); err != nil {
+			return err
+		}
+		inverseKeys = inverseKeys[:0]
+		return nil
+	}
 	if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
 		key := stateChangeInverseKey(change.Owner, change.Generation, change.Domain, change.Key, change.BlockNum)
-		return true, db.Delete(key)
+		inverseKeys = append(inverseKeys, key)
+		if len(inverseKeys) >= resetScanBatch {
+			if err := flushInverse(); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
 	}); err != nil {
 		return err
 	}
-	return deleteStateKVPrefixByScan(db, stateChangeSetBlockPrefix(blockNum))
+	if err := flushInverse(); err != nil {
+		return err
+	}
+	// Domain pruning deletes a small per-block prefix repeatedly while a node
+	// is syncing. Use point deletes here: Pebble range tombstones are excellent
+	// for one-shot resets, but high-frequency per-block DeleteRange calls make
+	// every later iterator pay keyspan-fragment costs.
+	return deleteStateKVPrefixByPointScan(db, stateChangeSetBlockPrefix(blockNum))
 }
 
 func IterateStateDomainChangeBlocks(db ethdb.Iteratee, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(blockNum uint64) (bool, error)) error {

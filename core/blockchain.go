@@ -925,10 +925,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		}
 	}
 
-	// The root is persisted out-of-band — we do NOT mutate
-	// `block.AccountStateRoot()` because the block proto's content must
-	// round-trip byte-identical to what the wire delivered.
-	rawdb.WriteBlockStateRoot(bc.db, block.Hash(), newRoot)
 	stats.mark(&stats.StateCommit)
 
 	// Land DP changes into the active buffer layer (slice 2). This includes
@@ -940,12 +936,6 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 
 	stats.mark(&stats.DPUpdate)
 
-	// Persist block.
-	if err := rawdb.WriteBlock(bc.db, block); err != nil {
-		return fmt.Errorf("write block: %w", err)
-	}
-	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
-
 	// Record this block in the TAPOS recent-block ring so future txs can
 	// reference it. java-tron's Manager.updateRecentBlock runs unconditionally
 	// at the head of pushBlockInner; doing it here (after the block is fully
@@ -954,24 +944,16 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := rawdb.WriteTaposRef(bc.db, block.Number(), block.Hash()); err != nil {
-		return fmt.Errorf("write tapos ref: %w", err)
+	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos); err != nil {
+		return err
 	}
+	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
 
-	// Advance currentBlock before writing tx infos so that any caller
-	// unblocked by WriteTransactionInfo sees the new state root.
+	// Publish the new head only after all metadata needed by readers
+	// (block body, out-of-band state root, TAPOS, tx infos, tx indexes) has
+	// landed in one durable batch.
 	bc.currentBlock.Store(block)
 	bc.lastInsertNano.Store(time.Now().UnixNano())
-
-	// Persist transaction infos and indexes.
-	for _, info := range txInfos {
-		rawdb.WriteTransactionInfo(bc.db, info.Id, info)
-	}
-	rawdb.WriteTransactionInfosByBlock(bc.db, block.Number(), txInfos)
-	for _, tx := range block.Transactions() {
-		h := tx.Hash()
-		rawdb.WriteTransactionIndex(bc.db, h[:], block.Number())
-	}
 
 	bc.storeDynPropsCache(dynProps)
 	stats.mark(&stats.Persist)
@@ -1010,6 +992,41 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return err
 	}
 	stats.mark(&stats.Persist)
+	return nil
+}
+
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
+	batch := bc.db.NewBatch()
+
+	// The root is persisted out-of-band — we do NOT mutate
+	// `block.AccountStateRoot()` because the block proto's content must
+	// round-trip byte-identical to what the wire delivered.
+	if err := rawdb.WriteBlockStateRoot(batch, block.Hash(), stateRoot); err != nil {
+		return fmt.Errorf("write block state root: %w", err)
+	}
+	if err := rawdb.WriteBlock(batch, block); err != nil {
+		return fmt.Errorf("write block: %w", err)
+	}
+	if err := rawdb.WriteTaposRef(batch, block.Number(), block.Hash()); err != nil {
+		return fmt.Errorf("write tapos ref: %w", err)
+	}
+	for _, info := range txInfos {
+		if err := rawdb.WriteTransactionInfo(batch, info.Id, info); err != nil {
+			return fmt.Errorf("write tx info: %w", err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(batch, block.Number(), txInfos); err != nil {
+		return fmt.Errorf("write block tx infos: %w", err)
+	}
+	for _, tx := range block.Transactions() {
+		h := tx.Hash()
+		if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {
+			return fmt.Errorf("write tx index: %w", err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("write block metadata batch: %w", err)
+	}
 	return nil
 }
 

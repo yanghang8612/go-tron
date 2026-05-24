@@ -567,8 +567,9 @@ func gtron(ctx *cli.Context) error {
 		if historyWindow < reorgWindow {
 			reorgWindow = historyWindow
 		}
-		domainPruner := statepruning.NewPruner(newDomainPrunerChainSource(bc), statepruning.PrunerConfig{
-			Policy: statepruning.FullPolicy(historyWindow, reorgWindow),
+		domainPruner := statepruning.NewPruner(newDomainPrunerChainSource(bc, syncService), statepruning.PrunerConfig{
+			Policy:     statepruning.FullPolicy(historyWindow, reorgWindow),
+			MaxSyncLag: historyWindow,
 		})
 		stack.RegisterLifecycle(domainPruner)
 		log.Info("Domain state pruner enabled", "historyWindow", historyWindow, "reorgWindow", reorgWindow)

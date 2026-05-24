@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -99,6 +100,56 @@ func TestStateDomainChangeRoundTripAndIteration(t *testing.T) {
 	}
 }
 
+func TestDeleteStateDomainChangesUsesPointDeletes(t *testing.T) {
+	db := &rangeDeleteCountingStore{KeyValueStore: ethrawdb.NewMemoryDatabase()}
+	owner := common.Address{0x41, 0x01}
+	for seq, key := range [][]byte{[]byte("reward/1"), []byte("reward/2")} {
+		if err := WriteStateDomainChange(db, &StateDomainChange{
+			BlockNum:   9,
+			BlockHash:  common.Hash{0x09},
+			TxNum:      9,
+			Seq:        uint64(seq + 1),
+			Owner:      owner,
+			Generation: 3,
+			Domain:     kvdomains.SystemReward,
+			Key:        key,
+			PrevExists: true,
+			Prev:       []byte("old"),
+			NextExists: true,
+			Next:       []byte("new"),
+		}); err != nil {
+			t.Fatalf("write change: %v", err)
+		}
+	}
+
+	if err := DeleteStateDomainChanges(db, 9); err != nil {
+		t.Fatalf("delete changes: %v", err)
+	}
+	if db.rangeDeletes != 0 {
+		t.Fatalf("DeleteStateDomainChanges used DeleteRange %d time(s)", db.rangeDeletes)
+	}
+	rows := 0
+	if err := IterateStateDomainChanges(db, 9, func(change *StateDomainChange) (bool, error) {
+		rows++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate changes: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("forward changes survived: %d", rows)
+	}
+	var blocks []uint64
+	if err := IterateStateDomainChangeBlocks(db, owner, 3, kvdomains.SystemReward, []byte("reward/1"), func(blockNum uint64) (bool, error) {
+		blocks = append(blocks, blockNum)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate inverse: %v", err)
+	}
+	if len(blocks) != 0 {
+		t.Fatalf("inverse blocks survived: %v", blocks)
+	}
+}
+
 func TestUnwindStateDomainChangesRestoresLatestIndex(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	owner := common.Address{0x41, 0x01}
@@ -163,6 +214,16 @@ func TestUnwindStateDomainChangesRestoresLatestIndex(t *testing.T) {
 	if got, ok, err := ReadStateKVLatest(db, owner, 0, kvdomains.SystemReward, deletedKey); err != nil || !ok || !bytes.Equal(got, []byte("old")) {
 		t.Fatalf("deleted key after unwind = %q ok:%v err:%v", got, ok, err)
 	}
+}
+
+type rangeDeleteCountingStore struct {
+	ethdb.KeyValueStore
+	rangeDeletes int
+}
+
+func (db *rangeDeleteCountingStore) DeleteRange(start, end []byte) error {
+	db.rangeDeletes++
+	return db.KeyValueStore.DeleteRange(start, end)
 }
 
 func TestReadStateKVAsOfRollsBackChanges(t *testing.T) {

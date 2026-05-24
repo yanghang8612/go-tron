@@ -179,6 +179,10 @@ func deleteStateKVPrefixByScan(db stateKVLatestStore, prefix []byte) error {
 			return err
 		}
 	}
+	return deleteStateKVPrefixByPointScan(db, prefix)
+}
+
+func deleteStateKVPrefixByPointScan(db stateKVLatestStore, prefix []byte) error {
 	for {
 		it := db.NewIterator(prefix, nil)
 		keys := make([][]byte, 0, resetScanBatch)
@@ -196,13 +200,32 @@ func deleteStateKVPrefixByScan(db stateKVLatestStore, prefix []byte) error {
 		if len(keys) == 0 {
 			return nil
 		}
-		for _, key := range keys {
-			if err := db.Delete(key); err != nil {
-				return err
-			}
+		if err := deleteStateKVKeys(db, keys); err != nil {
+			return err
 		}
 		if len(keys) < resetScanBatch {
 			return nil
 		}
 	}
+}
+
+func deleteStateKVKeys(db stateKVLatestStore, keys [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		for _, key := range keys {
+			if err := batch.Delete(key); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
+	for _, key := range keys {
+		if err := db.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }

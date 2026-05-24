@@ -14,12 +14,12 @@ import (
 const ancientTxInfos = "tx_infos"
 
 // WriteTransactionInfo stores a single TransactionInfo indexed by txID.
-func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) {
+func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) error {
 	data, err := proto.Marshal(info)
 	if err != nil {
-		return
+		return err
 	}
-	db.Put(txInfoKey(txID), data)
+	return db.Put(txInfoKey(txID), data)
 }
 
 // ReadTransactionInfo retrieves a TransactionInfo by txID. The per-tx index
@@ -38,7 +38,7 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 }
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.
-func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) {
+func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
 	ret := &corepb.TransactionRet{
 		BlockNumber:     int64(blockNum),
 		Transactioninfo: infos,
@@ -48,9 +48,9 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 	}
 	data, err := proto.Marshal(ret)
 	if err != nil {
-		return
+		return err
 	}
-	db.Put(txInfoBlockKey(blockNum), data)
+	return db.Put(txInfoBlockKey(blockNum), data)
 }
 
 // ReadTransactionInfosByBlock retrieves all TransactionInfos for a block
@@ -76,10 +76,10 @@ func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.Transac
 }
 
 // WriteTransactionIndex stores a tx-hash to block-number mapping.
-func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64) {
+func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64) error {
 	num := make([]byte, 8)
 	binary.BigEndian.PutUint64(num, blockNum)
-	db.Put(txKey(txHash), num)
+	return db.Put(txKey(txHash), num)
 }
 
 // ReadTransactionIndex retrieves the block number for a tx hash. The tx

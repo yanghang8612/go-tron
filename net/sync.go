@@ -231,6 +231,22 @@ func (ss *SyncService) IsSyncing() bool {
 	return ss.syncing
 }
 
+// SyncRemainingBlocks reports the current sync backlog when a sync session is
+// active. The value is advisory and intended for background workers that should
+// avoid competing with deep catch-up imports.
+func (ss *SyncService) SyncRemainingBlocks() (int64, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if !ss.syncing || ss.pause.Paused() {
+		return 0, false
+	}
+	remaining := ss.estimatedRemainLocked()
+	if remaining <= 0 {
+		return 0, false
+	}
+	return remaining, true
+}
+
 // IsPaused reports whether sync has been stopped by a prior InsertBlock failure.
 // While paused, no new sync starts and the watchdog skips its kick — but peers
 // stay connected and inbound SYNC_BLOCK_CHAIN requests are still served.

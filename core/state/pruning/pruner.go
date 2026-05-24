@@ -21,14 +21,25 @@ type ChainSource interface {
 	LatestSolidifiedBlockNum() int64
 }
 
+type syncRemainingSource interface {
+	SyncRemainingBlocks() (uint64, bool)
+}
+
 type PrunerConfig struct {
-	Policy    Policy
+	Policy Policy
+
 	Interval  time.Duration
 	BatchSize int
+
+	// MaxSyncLag defers pruning while the node is still catching up and the
+	// sync service can report more than this many blocks remaining. A zero
+	// value disables the catch-up gate.
+	MaxSyncLag uint64
 }
 
 type PrunerStats struct {
 	Passes                       uint64
+	SkippedCatchup               uint64
 	DeletedTxRanges              uint64
 	DeletedDomainChangeBlocks    uint64
 	DeletedCommitmentCheckpoints uint64
@@ -48,6 +59,7 @@ type Pruner struct {
 	deletedTxRanges              atomic.Uint64
 	deletedDomainChangeBlocks    atomic.Uint64
 	deletedCommitmentCheckpoints atomic.Uint64
+	skippedCatchup               atomic.Uint64
 	lastSolidifiedBlock          atomic.Uint64
 	lastPassDuration             atomic.Int64
 }
@@ -90,7 +102,8 @@ func (p *Pruner) Start() error {
 		"historyWindow", p.cfg.Policy.HistoryWindow,
 		"reorgWindow", p.cfg.Policy.ReorgWindow,
 		"interval", p.cfg.Interval,
-		"batch", p.cfg.BatchSize)
+		"batch", p.cfg.BatchSize,
+		"maxSyncLag", p.cfg.MaxSyncLag)
 	return nil
 }
 
@@ -102,6 +115,7 @@ func (p *Pruner) Stop() error {
 	<-p.done
 	log.Info("Domain state pruner stopped",
 		"passes", p.passes.Load(),
+		"skippedCatchup", p.skippedCatchup.Load(),
 		"txRanges", p.deletedTxRanges.Load(),
 		"changeBlocks", p.deletedDomainChangeBlocks.Load(),
 		"commitments", p.deletedCommitmentCheckpoints.Load())
@@ -117,6 +131,7 @@ func (p *Pruner) Stats() PrunerStats {
 		DeletedTxRanges:              p.deletedTxRanges.Load(),
 		DeletedDomainChangeBlocks:    p.deletedDomainChangeBlocks.Load(),
 		DeletedCommitmentCheckpoints: p.deletedCommitmentCheckpoints.Load(),
+		SkippedCatchup:               p.skippedCatchup.Load(),
 		LastSolidifiedBlock:          p.lastSolidifiedBlock.Load(),
 		LastPassDuration:             time.Duration(p.lastPassDuration.Load()),
 	}
@@ -144,6 +159,12 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	if solidified < 0 {
 		solidified = 0
 	}
+	if p.shouldSkipForCatchup() {
+		p.skippedCatchup.Add(1)
+		p.lastSolidifiedBlock.Store(uint64(solidified))
+		p.lastPassDuration.Store(time.Since(start).Nanoseconds())
+		return Stats{}, nil
+	}
 	stats, err := Worker{
 		DB:        p.chain.DB(),
 		Policy:    p.cfg.Policy,
@@ -159,4 +180,19 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	p.lastSolidifiedBlock.Store(uint64(solidified))
 	p.lastPassDuration.Store(time.Since(start).Nanoseconds())
 	return stats, nil
+}
+
+func (p *Pruner) shouldSkipForCatchup() bool {
+	if p.cfg.MaxSyncLag == 0 {
+		return false
+	}
+	source, ok := p.chain.(syncRemainingSource)
+	if !ok {
+		return false
+	}
+	remaining, ok := source.SyncRemainingBlocks()
+	if !ok {
+		return false
+	}
+	return remaining > p.cfg.MaxSyncLag
 }

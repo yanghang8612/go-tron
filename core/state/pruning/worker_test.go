@@ -160,11 +160,55 @@ func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	}
 }
 
+func TestPrunerSkipsWhileSyncLagExceedsThreshold(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for _, blockNum := range []uint64{1, 2} {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chain := &fakePruneChain{db: db, solidified: 100, syncRemaining: 1_000, syncRemainingOK: true}
+	pruner := NewPruner(chain, PrunerConfig{
+		Policy:     FullPolicy(2, 1),
+		Interval:   time.Hour,
+		BatchSize:  10,
+		MaxSyncLag: 100,
+	})
+	stats, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("prune pass: %v", err)
+	}
+	if stats.DeletedTxRanges != 0 || pruner.Stats().SkippedCatchup != 1 {
+		t.Fatalf("stats after skip = %+v pruner=%+v", stats, pruner.Stats())
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("block 1 range pruned during catch-up ok:%v err:%v", ok, err)
+	}
+
+	chain.syncRemaining = 10
+	stats, err = pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("prune pass after catch-up: %v", err)
+	}
+	if stats.DeletedTxRanges != 2 {
+		t.Fatalf("deleted tx ranges after catch-up = %d, want 2", stats.DeletedTxRanges)
+	}
+	if got := pruner.Stats(); got.Passes != 1 || got.SkippedCatchup != 1 {
+		t.Fatalf("pruner stats after catch-up = %+v", got)
+	}
+}
+
 type fakePruneChain struct {
-	db         ethdb.KeyValueStore
-	solidified int64
+	db              ethdb.KeyValueStore
+	solidified      int64
+	syncRemaining   uint64
+	syncRemainingOK bool
 }
 
 func (f *fakePruneChain) DB() ethdb.KeyValueStore { return f.db }
 
 func (f *fakePruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }
+
+func (f *fakePruneChain) SyncRemainingBlocks() (uint64, bool) {
+	return f.syncRemaining, f.syncRemainingOK
+}
