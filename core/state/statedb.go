@@ -1872,7 +1872,8 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	sort.Slice(addrs, func(i, j int) bool {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
-	trieNodeWriter := newTrieNodeBatchWriter(s.db.DiskDB())
+	trieNodeWriter := newTrieNodeBatchWriter(s.db)
+	defer trieNodeWriter.release()
 	for _, addr := range addrs {
 		obj := s.stateObjects[addr]
 		if obj.deleted || obj.selfDestructed {

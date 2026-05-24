@@ -56,6 +56,43 @@ tail -F /Users/asuka/gtron-soak/logs/soak-monitor.log
 curl -s http://127.0.0.1:8090/wallet/getnowblock | jq -r '.block_header.raw_data.number'
 ```
 
+## Linux Sync Service Profile
+
+For a dedicated Nile sync host with roughly 60 GiB RAM, the current profiling
+baseline uses an 8 GiB Pebble block cache, 256 MiB memtables, and relaxed L0
+thresholds:
+
+```ini
+[Service]
+Environment=GOMEMLIMIT=32GiB
+ExecStart=/bin/bash -lc 'exec /data/gtron/go-tron/build/bin/gtron \
+    --datadir       /data/gtron/nile/datadir \
+    --testnet \
+    --p2p.port      18888 \
+    --http.port     8090 \
+    --jsonrpc.port  8545 \
+    --grpc.port     50051 \
+    --pprof.port    6060 \
+    --pprof.addr    127.0.0.1 \
+    --maxpeers      30 \
+    --db.cache      8192 \
+    --db.handles    8192 \
+    --db.memtable   256 \
+    --db.l0.compact 8 \
+    --db.l0.stop    64 \
+    --seednode      44.236.192.97:18888 \
+    --seednode      44.236.125.107:18888 \
+    --seednode      44.232.119.174:18888 \
+    --seednode      52.39.105.180:18888 \
+    --seednode      54.70.52.47:18888'
+MemoryHigh=32G
+MemoryMax=40G
+LimitNOFILE=65536
+```
+
+If the host only has around 27 GiB available to gtron, keep the tighter
+`GOMEMLIMIT=20GiB`, `MemoryHigh=20G`, `MemoryMax=23G` settings instead.
+
 ## Sync expectations
 
 Nile's head is far lower than mainnet's, so cold sync from genesis is short.

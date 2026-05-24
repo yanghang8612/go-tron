@@ -44,6 +44,8 @@ type layer struct {
 	deletes   map[string]struct{}
 }
 
+const maxFlushBatchPreallocSize = 1 << 20
+
 func newLayer(hash common.Hash) *layer {
 	return &layer{
 		blockHash: hash,
@@ -388,7 +390,7 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 	if batcher, ok := w.(ethdb.Batcher); ok {
-		batch := batcher.NewBatch()
+		batch := batcher.NewBatchWithSize(flushLayerBatchSize(l))
 		for k, v := range l.writes {
 			if err := batch.Put([]byte(k), v); err != nil {
 				return err
@@ -412,6 +414,26 @@ func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
 		}
 	}
 	return nil
+}
+
+func flushLayerBatchSize(l *layer) int {
+	if l == nil {
+		return ethdb.IdealBatchSize
+	}
+	size := 0
+	for k, v := range l.writes {
+		size += len(k) + len(v)
+	}
+	for k := range l.deletes {
+		size += len(k)
+	}
+	if size < ethdb.IdealBatchSize {
+		return ethdb.IdealBatchSize
+	}
+	if size > maxFlushBatchPreallocSize {
+		return maxFlushBatchPreallocSize
+	}
+	return size
 }
 
 // NewIterator returns an iterator over the buffer view: every key whose bytes

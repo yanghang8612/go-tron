@@ -36,11 +36,23 @@ type accountKVIndexStore interface {
 }
 
 type trieNodeBatchWriter struct {
+	db    *Database
 	batch ethdb.Batch
 }
 
-func newTrieNodeBatchWriter(db ethdb.Database) *trieNodeBatchWriter {
-	return &trieNodeBatchWriter{batch: db.NewBatch()}
+func newTrieNodeBatchWriter(db *Database) *trieNodeBatchWriter {
+	return &trieNodeBatchWriter{
+		db:    db,
+		batch: db.newTrieNodeBatch(),
+	}
+}
+
+func (w *trieNodeBatchWriter) release() {
+	if w == nil || w.batch == nil {
+		return
+	}
+	w.db.releaseTrieNodeBatch(w.batch)
+	w.batch = nil
 }
 
 func (w *trieNodeBatchWriter) write(hash ethcommon.Hash, blob []byte) error {
