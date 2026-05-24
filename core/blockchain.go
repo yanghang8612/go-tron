@@ -114,6 +114,7 @@ type BlockChain struct {
 	rewardAcctCache  map[tcommon.Address]*types.Account
 	rewardAcctSeen   map[tcommon.Address]struct{}
 	rewardAcctAddrs  []tcommon.Address
+	forkStatsCache   map[int32][]byte
 	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
@@ -280,6 +281,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		rewardAcctCache: make(map[tcommon.Address]*types.Account),
 		rewardAcctSeen:  make(map[tcommon.Address]struct{}),
 		rewardAcctAddrs: make([]tcommon.Address, 0, 128),
+		forkStatsCache:  make(map[int32][]byte, len(forks.KnownVersions)),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -598,6 +600,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
 	}
+	statedb.SetAccountKVIndexStore(bc.buffer)
+	statedb.SetAccountKVIndexReads(true)
 	// Flip the SHI capture flag for this block. Without this the StateDB's
 	// AccumulateHistory short-circuits and no rows land in bc.buffer.
 	if bc.config.HistoryEnabled {
@@ -641,10 +645,10 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// layers via DiscardBlock. On any error path the active layer is discarded;
 	// on success it is promoted via CommitBlock.
 	bc.buffer.BeginBlock(block.Hash())
-	statedb.SetAccountKVIndexStore(bc.buffer)
 	defer func() {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
+			bc.clearForkStatsCache()
 			// SetActiveWitnesses may have mutated the in-memory atomic before
 			// the failure. Its rooted write was on the now-discarded statedb
 			// (never committed), so reload the atomic from the system-KV at the
@@ -796,7 +800,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records and governance side-effects live in rooted
 			// StateDB domains.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), forks.NewForkControllerFromState(statedb)); err != nil {
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.forkControllerForState(statedb)); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{
@@ -852,7 +856,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
-		forks.NewForkControllerFromState(statedb).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
+		bc.forkControllerForState(statedb).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
 	} else {
 		dynProps.SetStateFlag(0)
 	}
@@ -1269,6 +1273,7 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.reloadDynPropsCache(lcaRoot)
 	bc.invalidateStandbyPayCache()
 	bc.clearRewardAccountCache()
+	bc.clearForkStatsCache()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
@@ -1594,7 +1599,7 @@ func (bc *BlockChain) updateFork(statedb *state.StateDB, block *types.Block) {
 	if slot < 0 {
 		return
 	}
-	forks.NewForkControllerFromState(statedb).Update(block.Version(), slot, len(active))
+	bc.forkControllerForState(statedb).Update(block.Version(), slot, len(active))
 }
 
 // NextMaintenanceTime returns the next scheduled maintenance time from dynamic

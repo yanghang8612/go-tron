@@ -153,4 +153,5 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 	bc.fc = forks.NewForkController(bc.buffer)
 	bc.invalidateStandbyPayCache()
 	bc.clearRewardAccountCache()
+	bc.clearForkStatsCache()
 }

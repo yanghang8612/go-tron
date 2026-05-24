@@ -495,6 +495,52 @@ func TestAccountKVLatestIndexCanBeBufferedAndDiscarded(t *testing.T) {
 	}
 }
 
+func TestAccountKVLatestIndexReadThroughIsOptIn(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6d)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("k"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	root1, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDelegation, []byte("k"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(root1, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v1" {
+		t.Fatalf("root read = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+	reopened.SetAccountKVIndexStore(sdb.db.DiskDB())
+	reopened.SetAccountKVIndexReads(true)
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v2" {
+		t.Fatalf("latest-index read = %q ok=%v err=%v, want v2", got, ok, err)
+	}
+}
+
+func TestAccountKVFinalWriteSkipsSnapshotJournal(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x6e)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	snap := sdb.Snapshot()
+	if err := sdb.SetAccountKVFinal(addr, kvdomains.SystemDelegation, []byte("k"), []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	sdb.RevertToSnapshot(snap)
+	if got, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v" {
+		t.Fatalf("final write after snapshot revert = %q ok=%v err=%v, want v", got, ok, err)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

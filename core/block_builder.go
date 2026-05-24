@@ -47,6 +47,20 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		return nil, fmt.Errorf("open state: %w", err)
 	}
 
+	// Throwaway buffer: all rawdb-accumulator writes during block assembly
+	// (cycle rewards, brokerage snapshots, VI accumulations) go here and are
+	// never flushed to disk. Reads fall through to bc.buffer first so pending
+	// but not-yet-solidified writes from prior blocks (including shielded
+	// Merkle anchors) are visible during block assembly. The statedb still sees
+	// the full reward (correct account_state_root), and InsertBlock → applyBlock
+	// → ProcessBlock is the single canonical rawdb write path. Without this,
+	// BuildBlock would write to bc.db directly, then applyBlock would read those
+	// values and add again — doubling cycleReward[N][witness] and allowance.
+	buildBuf := blockbuffer.New(bc.buffer)
+	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
+	statedb.SetAccountKVIndexStore(buildBuf)
+	statedb.SetAccountKVIndexReads(true)
+
 	// statedb is already opened at parentRoot; reuse it as the system-KV reader
 	// so rooted dynprops load from the parent state the built block extends.
 	dynProps := state.LoadDynamicProperties(bc.buffer, statedb)
@@ -64,19 +78,6 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Reset per-block energy accumulator.
 	dynProps.SetBlockEnergyUsage(0)
-
-	// Throwaway buffer: all rawdb-accumulator writes during block assembly
-	// (cycle rewards, brokerage snapshots, VI accumulations) go here and are
-	// never flushed to disk. Reads fall through to bc.buffer first so pending
-	// but not-yet-solidified writes from prior blocks (including shielded
-	// Merkle anchors) are visible during block assembly. The statedb still sees
-	// the full reward (correct account_state_root), and InsertBlock → applyBlock
-	// → ProcessBlock is the single canonical rawdb write path. Without this,
-	// BuildBlock would write to bc.db directly, then applyBlock would read those
-	// values and add again — doubling cycleReward[N][witness] and allowance.
-	buildBuf := blockbuffer.New(bc.buffer)
-	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
-	statedb.SetAccountKVIndexStore(buildBuf)
 
 	// Execute transactions, collecting successful ones
 	var appliedTxProtos []*corepb.Transaction

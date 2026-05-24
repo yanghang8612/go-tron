@@ -103,6 +103,10 @@ func (s *StateDB) clearAccountKVTrieCache() {
 	}
 }
 
+func (s *StateDB) accountKVLatestReadEnabled() bool {
+	return s.accountKVIndexReads && s.accountKVIndexStore != nil
+}
+
 // GetAccountKV reads a generic-KV value for owner. Returns (value, exists, err).
 func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
 	if !kvdomains.IsRegistered(domain) {
@@ -118,6 +122,9 @@ func (s *StateDB) GetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 			return nil, false, nil
 		}
 		return append([]byte{}, e.val...), true, nil
+	}
+	if s.accountKVLatestReadEnabled() {
+		return rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 	}
 	tr, err := s.accountKVTrie(obj)
 	if err != nil {
@@ -162,12 +169,10 @@ func (s *StateDB) IterateAccountKVAsOf(owner tcommon.Address, domain kvdomains.K
 	return rawdb.IterateStateKVAsOfPrefix(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, prefix, targetBlock, headBlock, fn)
 }
 
-// GetAccountKVBatch opens owner's KV trie ONCE and resolves every key in one
-// domain, returning name->value for present keys (presence prefix stripped).
-// The dirty overlay is consulted first per key, matching GetAccountKV; a
-// freshly-opened StateDB (the dynamic-properties Load case) has an empty
-// overlay, so this is effectively N trie Gets over a single OpenTrie — versus
-// N OpenTrie+Get pairs if the caller looped GetAccountKV.
+// GetAccountKVBatch resolves many keys in one owner/domain, returning
+// name->value for present keys. The dirty overlay is consulted first per key,
+// matching GetAccountKV. Live block application may opt into the flat latest
+// index; historical readers fall back to one opened KV trie plus N trie Gets.
 func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDomain, keys [][]byte) (map[string][]byte, error) {
 	if !kvdomains.IsRegistered(domain) {
 		return nil, fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
@@ -178,6 +183,26 @@ func (s *StateDB) GetAccountKVBatch(owner tcommon.Address, domain kvdomains.KVDo
 	}
 	obj := s.getStateObject(owner)
 	if obj == nil || obj.deleted {
+		return out, nil
+	}
+	if s.accountKVLatestReadEnabled() {
+		index := s.accountKVIndex()
+		for _, key := range keys {
+			comp := kvCompositeKey(domain, key)
+			if e, ok := obj.kvDirty[string(comp)]; ok {
+				if !e.deleted {
+					out[string(key)] = append([]byte{}, e.val...)
+				}
+				continue
+			}
+			value, ok, err := rawdb.ReadStateKVLatest(index, owner, obj.accountKVGeneration, domain, key)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out[string(key)] = value
+			}
+		}
 		return out, nil
 	}
 	tr, err := s.accountKVTrie(obj)
@@ -253,13 +278,26 @@ func (s *StateDB) IterateAccountKV(owner tcommon.Address, domain kvdomains.KVDom
 
 // SetAccountKV stages a generic-KV write for owner (creating the account if absent).
 func (s *StateDB) SetAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
+	return s.setAccountKV(owner, domain, key, value, true)
+}
+
+// SetAccountKVFinal stages a block-final generic-KV write without appending a
+// transaction-snapshot journal entry. Use only after transaction execution is
+// complete; ordinary actuator/VM paths must keep using SetAccountKV.
+func (s *StateDB) SetAccountKVFinal(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
+	return s.setAccountKV(owner, domain, key, value, false)
+}
+
+func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte, journal bool) error {
 	if !kvdomains.IsRegistered(domain) {
 		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
 	}
 	obj := s.GetOrCreateAccount(owner)
 	mk := string(kvCompositeKey(domain, key))
-	prev, had := obj.kvDirty[mk]
-	s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
+	if journal {
+		prev, had := obj.kvDirty[mk]
+		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: had, prevEntry: prev})
+	}
 	obj.kvDirty[mk] = kvEntry{val: append([]byte{}, value...), deleted: false}
 	obj.markDirty()
 	return nil

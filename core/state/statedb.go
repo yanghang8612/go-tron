@@ -85,6 +85,12 @@ type StateDB struct {
 	// resolution for every GetAccountKV call.
 	accountKVTries map[tcommon.Address]*trie.Trie
 
+	// accountKVIndexReads lets the live block-application path read generic KV
+	// values from the flat latest-state index instead of resolving the nested
+	// account-KV trie. Enable only when the StateDB is opened at the current
+	// canonical parent root and accountKVIndexStore reflects that same head.
+	accountKVIndexReads bool
+
 	changeSet domainChangeSetCapture
 }
 
@@ -124,6 +130,13 @@ func (s *StateDB) SetAccountKVIndexStore(store interface {
 	ethdb.Iteratee
 }) {
 	s.accountKVIndexStore = store
+}
+
+// SetAccountKVIndexReads toggles the live-sync read-through from the flat
+// latest-state index. It is intentionally opt-in because historical StateDB
+// readers must continue resolving by trie root, not by canonical latest rows.
+func (s *StateDB) SetAccountKVIndexReads(on bool) {
+	s.accountKVIndexReads = on
 }
 
 // SetDomainChangeSetWriter enables Phase-5 block-level domain change capture
@@ -1747,6 +1760,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		originRoot:          s.originRoot,
 		historyEnabled:      s.historyEnabled,
 		accountKVIndexStore: s.accountKVIndexStore,
+		accountKVIndexReads: s.accountKVIndexReads,
 	}
 	for addr, obj := range s.stateObjects {
 		var metaCopy *contractpb.SmartContract

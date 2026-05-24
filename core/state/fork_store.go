@@ -42,3 +42,9 @@ func (s *StateDB) ReadForkStatsBatch(versions []int32) map[int32][]byte {
 func (s *StateDB) WriteForkStats(version int32, stats []byte) {
 	_ = s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemForkVote, rawdb.ForkStatsStateKey(version), stats)
 }
+
+// WriteForkStatsFinal stages a block-final fork vote bitmap without
+// transaction-snapshot journaling.
+func (s *StateDB) WriteForkStatsFinal(version int32, stats []byte) {
+	_ = s.SetAccountKVFinal(tcommon.SystemAccountAddress, kvdomains.SystemForkVote, rawdb.ForkStatsStateKey(version), stats)
+}

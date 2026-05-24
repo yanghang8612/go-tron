@@ -23,6 +23,10 @@ func (s *StateDB) writeSystemReward(key, value []byte) error {
 	return s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, value)
 }
 
+func (s *StateDB) writeSystemRewardFinal(key, value []byte) error {
+	return s.SetAccountKVFinal(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, value)
+}
+
 func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
 	raw, ok := s.readSystemReward(rawdb.CycleRewardStateKey(cycle, addr))
 	if !ok || len(raw) != 8 {
@@ -56,11 +60,29 @@ func (s *StateDB) WriteCycleReward(cycle int64, addr []byte, value int64) error 
 	return s.writeSystemReward(rawdb.CycleRewardStateKey(cycle, addr), buf[:])
 }
 
+func (s *StateDB) WriteCycleRewardFinal(cycle int64, addr []byte, value int64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(value))
+	return s.writeSystemRewardFinal(rawdb.CycleRewardStateKey(cycle, addr), buf[:])
+}
+
 func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
 	return s.WriteCycleReward(cycle, addr, s.ReadCycleReward(cycle, addr)+delta)
 }
 
+func (s *StateDB) AddCycleRewardFinal(cycle int64, addr []byte, delta int64) error {
+	return s.WriteCycleRewardFinal(cycle, addr, s.ReadCycleReward(cycle, addr)+delta)
+}
+
 func (s *StateDB) AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64) error {
+	return s.addCycleRewards(cycle, deltas, false)
+}
+
+func (s *StateDB) AddCycleRewardsFinal(cycle int64, deltas map[tcommon.Address]int64) error {
+	return s.addCycleRewards(cycle, deltas, true)
+}
+
+func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64, final bool) error {
 	if len(deltas) == 0 {
 		return nil
 	}
@@ -78,7 +100,13 @@ func (s *StateDB) AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64)
 	})
 	current := s.ReadCycleRewards(cycle, addrs)
 	for _, addr := range addrs {
-		if err := s.WriteCycleReward(cycle, addr.Bytes(), current[addr]+deltas[addr]); err != nil {
+		var err error
+		if final {
+			err = s.WriteCycleRewardFinal(cycle, addr.Bytes(), current[addr]+deltas[addr])
+		} else {
+			err = s.WriteCycleReward(cycle, addr.Bytes(), current[addr]+deltas[addr])
+		}
+		if err != nil {
 			return err
 		}
 	}

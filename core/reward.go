@@ -48,7 +48,7 @@ func payBlockRewardWithBrokerage(db kvReadWriter, statedb *state.StateDB, dp *st
 	voterAmount := amount - brokerageAmount
 
 	if voterAmount > 0 {
-		_ = statedb.AddCycleReward(cycle, witness.Bytes(), voterAmount)
+		_ = statedb.AddCycleRewardFinal(cycle, witness.Bytes(), voterAmount)
 	}
 	if brokerageAmount > 0 {
 		statedb.AddAllowanceFinalReward(witness, brokerageAmount)
@@ -171,7 +171,7 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 			statedb.AddAllowanceFinalReward(v.addr, brokerageAmount)
 		}
 	}
-	_ = statedb.AddCycleRewards(cycle, voterDeltas)
+	_ = statedb.AddCycleRewardsFinal(cycle, voterDeltas)
 }
 
 // kvReadWriter is retained for the existing block-processing signatures while
