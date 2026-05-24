@@ -1863,7 +1863,10 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		}()
 	}
 	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
-	for addr := range s.stateObjects {
+	for addr, obj := range s.stateObjects {
+		if !obj.dirty {
+			continue
+		}
 		addrs = append(addrs, addr)
 	}
 	sort.Slice(addrs, func(i, j int) bool {
@@ -1872,9 +1875,6 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	trieNodeWriter := newTrieNodeBatchWriter(s.db.DiskDB())
 	for _, addr := range addrs {
 		obj := s.stateObjects[addr]
-		if !obj.dirty {
-			continue
-		}
 		if obj.deleted || obj.selfDestructed {
 			if err := s.trie.Delete(trieKey(addr)); err != nil {
 				return tcommon.Hash{}, err

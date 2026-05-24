@@ -387,6 +387,20 @@ func (b *Buffer) dropFlushedPrefix(n int) {
 }
 
 func flushLayer(l *layer, w ethdb.KeyValueWriter) error {
+	if batcher, ok := w.(ethdb.Batcher); ok {
+		batch := batcher.NewBatch()
+		for k, v := range l.writes {
+			if err := batch.Put([]byte(k), v); err != nil {
+				return err
+			}
+		}
+		for k := range l.deletes {
+			if err := batch.Delete([]byte(k)); err != nil {
+				return err
+			}
+		}
+		return batch.Write()
+	}
 	for k, v := range l.writes {
 		if err := w.Put([]byte(k), v); err != nil {
 			return err
