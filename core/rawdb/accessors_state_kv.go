@@ -31,6 +31,13 @@ func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generatio
 	wrapped := make([]byte, 1+len(value))
 	wrapped[0] = stateKVLatestPresencePrefix
 	copy(wrapped[1:], value)
+	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, wrapped)
+}
+
+// WriteStateKVLatestEncoded writes a value that is already encoded with the
+// latest-state presence prefix. State commit uses it to share the same encoded
+// bytes with the account KV trie and avoid wrapping each update twice.
+func WriteStateKVLatestEncoded(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, wrapped []byte) error {
 	return db.Put(stateKVLatestKey(owner, generation, domain, logicalKey), wrapped)
 }
 

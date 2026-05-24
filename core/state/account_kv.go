@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -28,6 +29,7 @@ const kvPresencePrefix = 0x01
 // a tombstone; deleted=false means val is present (val may be empty but != nil).
 type kvEntry struct {
 	val        []byte
+	wrapped    []byte
 	prev       []byte
 	deleted    bool
 	trieKey    ethcommon.Hash
@@ -72,8 +74,8 @@ func newAccountKVLatestBatch(index accountKVIndexStore) *accountKVLatestBatch {
 	return w
 }
 
-func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) error {
-	if err := rawdb.WriteStateKVLatest(w.writer, owner, generation, domain, logicalKey, value); err != nil {
+func (w *accountKVLatestBatch) put(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, encodedValue []byte) error {
+	if err := rawdb.WriteStateKVLatestEncoded(w.writer, owner, generation, domain, logicalKey, encodedValue); err != nil {
 		return err
 	}
 	return w.maybeFlush()
@@ -191,9 +193,22 @@ func kvTrieHash(composite []byte) ethcommon.Hash {
 func newKVEntry(composite, value []byte, deleted bool) kvEntry {
 	e := kvEntry{deleted: deleted, trieKey: kvTrieHash(composite)}
 	if !deleted {
-		e.val = append([]byte(nil), value...)
+		e.wrapped = make([]byte, 1+len(value))
+		e.wrapped[0] = kvPresencePrefix
+		copy(e.wrapped[1:], value)
+		e.val = e.wrapped[1:]
 	}
 	return e
+}
+
+func (e kvEntry) encodedValue() []byte {
+	if len(e.wrapped) > 0 {
+		return e.wrapped
+	}
+	wrapped := make([]byte, 1+len(e.val))
+	wrapped[0] = kvPresencePrefix
+	copy(wrapped[1:], e.val)
+	return wrapped
 }
 
 func (e *kvEntry) setPrev(value []byte, exists bool) {
@@ -679,10 +694,7 @@ func (s *StateDB) computeAccountKVCommitment(obj *stateObject, plan *accountKVCo
 			}
 			continue
 		}
-		wrapped := make([]byte, 1+len(e.val))
-		wrapped[0] = kvPresencePrefix
-		copy(wrapped[1:], e.val)
-		if err := tr.Update(tk, wrapped); err != nil {
+		if err := tr.Update(tk, e.encodedValue()); err != nil {
 			return accountKVCommitResult{}, err
 		}
 	}
@@ -770,12 +782,25 @@ func (s *StateDB) computeAccountKVCommitments(plans []*accountCommitPlan) ([]acc
 	return results, nil
 }
 
-func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *trieNodeBatchWriter) error {
+func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *trieNodeBatchWriter, stats *CommitStats) error {
 	kvPlans := s.accountKVCommitPlans(plans)
+	if stats != nil {
+		stats.KVAccounts += len(kvPlans)
+		for _, plan := range kvPlans {
+			stats.KVItems += len(plan.kvPlan.items)
+		}
+	}
+
+	start := time.Now()
 	results, err := s.computeAccountKVCommitments(kvPlans)
+	if stats != nil {
+		stats.KVCompute += time.Since(start)
+	}
 	if err != nil {
 		return err
 	}
+
+	start = time.Now()
 	for i, plan := range kvPlans {
 		result := results[i]
 		if err := nodeWriter.writeNodeSet(result.nodes); err != nil {
@@ -784,6 +809,9 @@ func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *t
 		plan.kvTrieChanged = result.trieChanged
 		plan.obj.accountKVRoot = result.root
 		s.invalidateAccountKVTrie(plan.addr)
+	}
+	if stats != nil {
+		stats.KVNodeWrite += time.Since(start)
 	}
 	return nil
 }
@@ -809,7 +837,7 @@ func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitP
 			}
 			continue
 		}
-		if err := latest.put(obj.address, obj.accountKVGeneration, item.domain, item.logicalKey, entry.val); err != nil {
+		if err := latest.put(obj.address, obj.accountKVGeneration, item.domain, item.logicalKey, entry.encodedValue()); err != nil {
 			return false, err
 		}
 	}
@@ -830,15 +858,16 @@ func (s *StateDB) writeDomainChange(index accountKVIndexStore, obj *stateObject,
 		}
 	}
 	nextExists := !entry.deleted
-	var next []byte
-	if nextExists {
-		next = append([]byte(nil), entry.val...)
-	}
-	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
+	nextValue := entry.val
+	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, nextValue)) {
 		return false, nil
 	}
 	if !s.changeSet.enabled {
 		return true, nil
+	}
+	var next []byte
+	if nextExists {
+		next = append([]byte(nil), nextValue...)
 	}
 	s.changeSet.seq++
 	return true, rawdb.WriteStateDomainChange(s.changeSet.writer, &rawdb.StateDomainChange{

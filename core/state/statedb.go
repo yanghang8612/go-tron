@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -91,6 +92,60 @@ type StateDB struct {
 	accountKVIndexReads bool
 
 	changeSet domainChangeSetCapture
+}
+
+// CommitStats breaks StateDB.Commit wall-clock time into the write phases that
+// matter during sync. It is intentionally observational: Commit and
+// CommitWithStats execute the same state transition and persist the same keys.
+type CommitStats struct {
+	Prepare           time.Duration
+	FlatWrite         time.Duration
+	FlatFlush         time.Duration
+	KVCompute         time.Duration
+	KVNodeWrite       time.Duration
+	AccountTrieUpdate time.Duration
+	Finalize          time.Duration
+	AccountTrieCommit time.Duration
+	TrieNodeWrite     time.Duration
+	TrieNodeFlush     time.Duration
+	Reopen            time.Duration
+
+	Accounts   int
+	KVAccounts int
+	KVItems    int
+}
+
+// Add folds another commit breakdown into this one.
+func (s *CommitStats) Add(o CommitStats) {
+	s.Prepare += o.Prepare
+	s.FlatWrite += o.FlatWrite
+	s.FlatFlush += o.FlatFlush
+	s.KVCompute += o.KVCompute
+	s.KVNodeWrite += o.KVNodeWrite
+	s.AccountTrieUpdate += o.AccountTrieUpdate
+	s.Finalize += o.Finalize
+	s.AccountTrieCommit += o.AccountTrieCommit
+	s.TrieNodeWrite += o.TrieNodeWrite
+	s.TrieNodeFlush += o.TrieNodeFlush
+	s.Reopen += o.Reopen
+	s.Accounts += o.Accounts
+	s.KVAccounts += o.KVAccounts
+	s.KVItems += o.KVItems
+}
+
+// Total returns the sum of measured Commit subphases.
+func (s CommitStats) Total() time.Duration {
+	return s.Prepare +
+		s.FlatWrite +
+		s.FlatFlush +
+		s.KVCompute +
+		s.KVNodeWrite +
+		s.AccountTrieUpdate +
+		s.Finalize +
+		s.AccountTrieCommit +
+		s.TrieNodeWrite +
+		s.TrieNodeFlush +
+		s.Reopen
 }
 
 type domainChangeSetCapture struct {
@@ -2134,9 +2189,24 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 
 // Commit writes all dirty accounts to the MPT and returns the new root hash.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
+	root, _, err := s.CommitWithStats()
+	return root, err
+}
+
+// CommitWithStats writes all dirty accounts to the MPT and returns the new
+// root hash plus a phase breakdown for sync/profile diagnostics.
+func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
+	var stats CommitStats
+	last := time.Now()
+	mark := func(phase *time.Duration) {
+		now := time.Now()
+		*phase += now.Sub(last)
+		last = now
+	}
+
 	if s.changeSet.enabled {
 		if err := rawdb.WriteStateTxRange(s.changeSet.writer, s.changeSet.blockNum, s.changeSet.blockHash, s.changeSet.txNum, s.changeSet.txNum); err != nil {
-			return tcommon.Hash{}, err
+			return tcommon.Hash{}, stats, err
 		}
 		defer func() {
 			s.changeSet = domainChangeSetCapture{}
@@ -2144,50 +2214,67 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	}
 	plans, err := s.dirtyAccountCommitPlans()
 	if err != nil {
-		return tcommon.Hash{}, err
+		return tcommon.Hash{}, stats, err
 	}
+	stats.Accounts = len(plans)
+	mark(&stats.Prepare)
+
 	trieNodeWriter := newTrieNodeBatchWriter(s.db)
 	defer trieNodeWriter.release()
 	accountKVIndex := s.accountKVIndex()
 	accountKVLatestWriter := newAccountKVLatestBatch(accountKVIndex)
 	for _, plan := range plans {
 		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVLatestWriter); err != nil {
-			return tcommon.Hash{}, err
+			return tcommon.Hash{}, stats, err
 		}
 	}
+	mark(&stats.FlatWrite)
+
 	if err := accountKVLatestWriter.flush(); err != nil {
-		return tcommon.Hash{}, err
+		return tcommon.Hash{}, stats, err
 	}
-	if err := s.commitAccountKVPlans(plans, trieNodeWriter); err != nil {
-		return tcommon.Hash{}, err
+	mark(&stats.FlatFlush)
+
+	if err := s.commitAccountKVPlans(plans, trieNodeWriter, &stats); err != nil {
+		return tcommon.Hash{}, stats, err
 	}
 	for _, plan := range accountTrieCommitPlans(plans) {
 		if err := s.updateAccountTrieWithPlan(plan); err != nil {
-			return tcommon.Hash{}, err
+			return tcommon.Hash{}, stats, err
 		}
 	}
+	mark(&stats.AccountTrieUpdate)
+
 	for _, plan := range plans {
 		s.finalizeAccountCommitPlan(plan)
 	}
+	mark(&stats.Finalize)
+
 	root, nodes := s.trie.Commit(false)
+	mark(&stats.AccountTrieCommit)
+
 	if err := trieNodeWriter.writeNodeSet(nodes); err != nil {
-		return tcommon.Hash{}, err
+		return tcommon.Hash{}, stats, err
 	}
+	mark(&stats.TrieNodeWrite)
+
 	if err := trieNodeWriter.flush(); err != nil {
-		return tcommon.Hash{}, err
+		return tcommon.Hash{}, stats, err
 	}
+	mark(&stats.TrieNodeFlush)
 
 	newTrie, err := s.db.OpenTrie(root)
 	if err != nil {
-		return tcommon.Hash{}, err
+		return tcommon.Hash{}, stats, err
 	}
 	s.trie = newTrie
 	s.originRoot = root
 	s.journal = newJournal()
 	s.snapshots = s.snapshots[:0]
 	s.clearAccountKVTrieCache()
+	mark(&stats.Reopen)
 
-	return tcommon.Hash(root), nil
+	return tcommon.Hash(root), stats, nil
 }
 
 // SetAccountName sets the account name.

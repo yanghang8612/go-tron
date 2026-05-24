@@ -99,6 +99,27 @@ func TestAccountKVRootMovesAndPersists(t *testing.T) {
 	}
 }
 
+func TestAccountKVCommitWithStatsReportsKVWork(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr1 := testAddr(0x21)
+	addr2 := testAddr(0x22)
+	if err := sdb.SetAccountKV(addr1, kvdomains.SystemDynamicProperty, []byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set addr1/k1: %v", err)
+	}
+	if err := sdb.SetAccountKV(addr1, kvdomains.SystemDynamicProperty, []byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set addr1/k2: %v", err)
+	}
+	if err := sdb.SetAccountKV(addr2, kvdomains.SystemDynamicProperty, []byte("k3"), []byte("v3")); err != nil {
+		t.Fatalf("set addr2/k3: %v", err)
+	}
+
+	if _, stats, err := sdb.CommitWithStats(); err != nil {
+		t.Fatalf("commit: %v", err)
+	} else if stats.Accounts != 2 || stats.KVAccounts != 2 || stats.KVItems < 3 {
+		t.Fatalf("stats counts = accounts:%d kvAccounts:%d kvItems:%d, want accounts=2 kvAccounts=2 kvItems>=3", stats.Accounts, stats.KVAccounts, stats.KVItems)
+	}
+}
+
 func TestAccountKVNoopLatestWritesDoNotDirtyState(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x13)

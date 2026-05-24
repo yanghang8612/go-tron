@@ -47,20 +47,23 @@ var (
 //     tally, active-set rotation, reward VI). Zero on non-maintenance blocks.
 //   - StateCommit: statedb.Commit — trie.Update for every dirty account +
 //     TrieDB.Update/Commit for hash-based trie node writes. Empirically the
-//     dominant phase as state grows.
+//     dominant phase as state grows. StateCommitDetail splits this phase into
+//     the flat latest-state, per-account KV commitment, and trie-node flush
+//     subphases for sync diagnostics.
 //   - DPUpdate: dynamic-properties writes (latest_block_header_*,
 //     solidified, fork-vote tally) into the buffer.
 //   - Persist: WriteBlock + WriteTaposRef + tx info persist + the final
 //     buffer flushBufferUpToSolidified that lands committed layers on disk.
 //   - Hooks: post-apply callback fan-out (PBFT, broadcaster, etc.).
 type ApplyStats struct {
-	Validate    time.Duration
-	Execute     time.Duration
-	Maintenance time.Duration
-	StateCommit time.Duration
-	DPUpdate    time.Duration
-	Persist     time.Duration
-	Hooks       time.Duration
+	Validate          time.Duration
+	Execute           time.Duration
+	Maintenance       time.Duration
+	StateCommit       time.Duration
+	StateCommitDetail state.CommitStats
+	DPUpdate          time.Duration
+	Persist           time.Duration
+	Hooks             time.Duration
 }
 
 // Total returns the sum of every phase.
@@ -553,6 +556,10 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			"execute", ethcommon.PrettyDuration(stats.Execute),
 			"maintenance", ethcommon.PrettyDuration(stats.Maintenance),
 			"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
+			"stateCommitKVCompute", ethcommon.PrettyDuration(stats.StateCommitDetail.KVCompute),
+			"stateCommitKVNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.KVNodeWrite),
+			"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
+			"stateCommitTrieNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.TrieNodeWrite+stats.StateCommitDetail.TrieNodeFlush),
 			"dpUpdate", ethcommon.PrettyDuration(stats.DPUpdate),
 			"persist", ethcommon.PrettyDuration(stats.Persist),
 			"hooks", ethcommon.PrettyDuration(stats.Hooks),
@@ -911,10 +918,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).
-	newRoot, err := statedb.Commit()
+	newRoot, commitStats, err := statedb.CommitWithStats()
 	if err != nil {
 		return fmt.Errorf("commit state: %w", err)
 	}
+	stats.StateCommitDetail = commitStats
 	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
 	if bc.config.StateCommitmentCheckpoints {
 		domainRoot, err := rawdb.ComputeLatestDomainRoot(bc.buffer)

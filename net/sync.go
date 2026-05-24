@@ -1199,6 +1199,9 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 	if phase, elapsed := slowestApplyPhase(s.ApplyStats); phase != "" {
 		ctx = append(ctx, "slowPhase", phase, "slowElapsed", ethcommon.PrettyDuration(elapsed))
 	}
+	if phase, elapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
+		ctx = append(ctx, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(elapsed))
+	}
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
 		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
@@ -1216,6 +1219,21 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"execute", ethcommon.PrettyDuration(s.ApplyStats.Execute),
 		"maintenance", ethcommon.PrettyDuration(s.ApplyStats.Maintenance),
 		"stateCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommit),
+		"stateCommitMeasured", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Total()),
+		"stateCommitPrepare", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Prepare),
+		"stateCommitFlatWrite", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.FlatWrite),
+		"stateCommitFlatFlush", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.FlatFlush),
+		"stateCommitKVCompute", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.KVCompute),
+		"stateCommitKVNodes", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.KVNodeWrite),
+		"stateCommitAccountTrieUpdate", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieUpdate),
+		"stateCommitFinalize", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Finalize),
+		"stateCommitAccountTrieCommit", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.AccountTrieCommit),
+		"stateCommitTrieNodes", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.TrieNodeWrite),
+		"stateCommitTrieFlush", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.TrieNodeFlush),
+		"stateCommitReopen", ethcommon.PrettyDuration(s.ApplyStats.StateCommitDetail.Reopen),
+		"stateCommitAccounts", s.ApplyStats.StateCommitDetail.Accounts,
+		"stateCommitKVAccounts", s.ApplyStats.StateCommitDetail.KVAccounts,
+		"stateCommitKVItems", s.ApplyStats.StateCommitDetail.KVItems,
 		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
 		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
 		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
@@ -1249,6 +1267,34 @@ func slowestApplyPhase(s core.ApplyStats) (string, time.Duration) {
 		{"dpUpdate", s.DPUpdate},
 		{"persist", s.Persist},
 		{"hooks", s.Hooks},
+	} {
+		if p.d > max {
+			phase = p.name
+			max = p.d
+		}
+	}
+	return phase, max
+}
+
+func slowestStateCommitPhase(s core.ApplyStats) (string, time.Duration) {
+	phase := ""
+	var max time.Duration
+	d := s.StateCommitDetail
+	for _, p := range []struct {
+		name string
+		d    time.Duration
+	}{
+		{"prepare", d.Prepare},
+		{"flatWrite", d.FlatWrite},
+		{"flatFlush", d.FlatFlush},
+		{"kvCompute", d.KVCompute},
+		{"kvNodes", d.KVNodeWrite},
+		{"accountTrieUpdate", d.AccountTrieUpdate},
+		{"finalize", d.Finalize},
+		{"accountTrieCommit", d.AccountTrieCommit},
+		{"trieNodes", d.TrieNodeWrite},
+		{"trieFlush", d.TrieNodeFlush},
+		{"reopen", d.Reopen},
 	} {
 		if p.d > max {
 			phase = p.name

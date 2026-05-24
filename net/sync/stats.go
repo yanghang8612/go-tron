@@ -68,6 +68,7 @@ func (s *Stats) AddApplyBlock(a core.ApplyStats) {
 	s.cur.ApplyStats.Execute += a.Execute
 	s.cur.ApplyStats.Maintenance += a.Maintenance
 	s.cur.ApplyStats.StateCommit += a.StateCommit
+	s.cur.ApplyStats.StateCommitDetail.Add(a.StateCommitDetail)
 	s.cur.ApplyStats.DPUpdate += a.DPUpdate
 	s.cur.ApplyStats.Persist += a.Persist
 	s.cur.ApplyStats.Hooks += a.Hooks
