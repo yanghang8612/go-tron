@@ -18,13 +18,13 @@
 // (v1.17.2) with one targeted deviation in New():
 //
 //   - MemTableSize is bumped from cache/(2*memTableNumber) (~32 MiB at cache=256 MiB)
-//     to a configurable value (default 64 MiB) so the WAL/memtable absorbs more
+//     to a configurable value (default 256 MiB) so the WAL/memtable absorbs more
 //     write traffic before flushing to L0.
-//   - L0CompactionThreshold is restored to Pebble's upstream default of 4 (go-eth
+//   - L0CompactionThreshold is relaxed above Pebble's upstream default of 4 (go-eth
 //     hard-codes 2 to keep compaction debt low at the cost of more frequent L0
 //     compactions). Under sync write load that choice pegs background compaction
 //     CPU; relaxing it trades a little read amp for fewer compactions.
-//   - L0StopWritesThreshold is explicitly set to 24 (Pebble default 12) so transient
+//   - L0StopWritesThreshold is explicitly set to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall the producer / sync writers.
 //
 // Everything else — async writes (pebble.NoSync), MaxConcurrentCompactions=NumCPU,
@@ -34,10 +34,10 @@
 // $(go env GOPATH)/pkg/mod/github.com/ethereum/go-ethereum@<ver>/ethdb/pebble/pebble.go
 // should produce a small, localized delta in New().
 //
-// Background: a CPU profile at h≈1.96M (mainnet sync) shows
-// pebble.(*DB).runCompaction at 27.66% of total CPU. The numbers above are a
-// first conservative pass; tune further with empirical data from the
-// compact/level0 and stall/* metrics this package already exports.
+// Background: CPU profiles from Nile initial sync show Pebble compaction and
+// SyncFileRange dominating wall time after account-KV read caching. The numbers
+// above intentionally favor bulk-sync throughput on full-node class machines;
+// small hosts can still override them through the CLI flags.
 package pebbledb
 
 import (
@@ -81,17 +81,16 @@ const (
 type Options struct {
 	// MemTableSizeBytes controls the size of an individual memtable / write
 	// buffer. Larger memtables produce fewer (but bigger) L0 SSTables, which
-	// trades write-burst smoothing for higher per-flush cost. Default: 64 MiB.
+	// trades write-burst smoothing for higher per-flush cost. Default: 256 MiB.
 	MemTableSizeBytes uint64
 
 	// L0CompactionThreshold is the number of L0 sub-levels that triggers an L0
-	// compaction. Default: 4 (Pebble upstream default). go-ethereum overrides
-	// this to 2 in order to cap compaction debt; we trade that for fewer
-	// background compactions.
+	// compaction. Default: 8. go-ethereum overrides this to 2 in order to cap
+	// compaction debt; we trade that for fewer background compactions.
 	L0CompactionThreshold int
 
 	// L0StopWritesThreshold is the number of L0 files at which Pebble starts
-	// stalling foreground writes. Default: 24 (Pebble upstream is 12).
+	// stalling foreground writes. Default: 64 (Pebble upstream is 12).
 	L0StopWritesThreshold int
 }
 
@@ -99,9 +98,9 @@ type Options struct {
 // (see go-tron's CPU-profile-driven retune of go-ethereum's Pebble defaults).
 func DefaultOptions() Options {
 	return Options{
-		MemTableSizeBytes:     64 * 1024 * 1024,
-		L0CompactionThreshold: 4,
-		L0StopWritesThreshold: 24,
+		MemTableSizeBytes:     256 * 1024 * 1024,
+		L0CompactionThreshold: 8,
+		L0StopWritesThreshold: 64,
 	}
 }
 

@@ -33,10 +33,10 @@ func TestMakePebbleConfigDefaults(t *testing.T) {
 	if cache != 256 || handles != 500 {
 		t.Fatalf("defaults: cache=%d handles=%d", cache, handles)
 	}
-	if tune.MemTableSizeBytes != 64*1024*1024 {
+	if tune.MemTableSizeBytes != 256*1024*1024 {
 		t.Fatalf("memtable=%d", tune.MemTableSizeBytes)
 	}
-	if tune.L0CompactionThreshold != 4 || tune.L0StopWritesThreshold != 24 {
+	if tune.L0CompactionThreshold != 8 || tune.L0StopWritesThreshold != 64 {
 		t.Fatalf("l0 compact=%d stop=%d", tune.L0CompactionThreshold, tune.L0StopWritesThreshold)
 	}
 }

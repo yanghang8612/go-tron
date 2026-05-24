@@ -111,7 +111,7 @@ type BlockChain struct {
 	activeWitnesses  atomic.Value // []tcommon.Address
 	dynPropsCache    atomic.Value // *state.DynamicProperties; canonical head snapshot
 	standbyPayCache  *standbyWitnessPaySet
-	rewardAcctCache  map[tcommon.Address]*types.Account
+	rewardAcctCache  map[tcommon.Address]*state.AccountSnapshot
 	rewardAcctSeen   map[tcommon.Address]struct{}
 	rewardAcctAddrs  []tcommon.Address
 	forkStatsCache   map[int32][]byte
@@ -278,7 +278,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		buffer:          buffer,
 		flushQueue:      make(chan uint64, flushQueueCap),
 		flushPending:    newFlushBarrier(),
-		rewardAcctCache: make(map[tcommon.Address]*types.Account),
+		rewardAcctCache: make(map[tcommon.Address]*state.AccountSnapshot),
 		rewardAcctSeen:  make(map[tcommon.Address]struct{}),
 		rewardAcctAddrs: make([]tcommon.Address, 0, 128),
 		forkStatsCache:  make(map[int32][]byte, len(forks.KnownVersions)),
@@ -1548,8 +1548,8 @@ func (bc *BlockChain) preloadRewardAccounts(statedb *state.StateDB, addrs []tcom
 		return
 	}
 	for _, addr := range addrs {
-		if acc := bc.rewardAcctCache[addr]; acc != nil {
-			statedb.LoadAccountReference(acc)
+		if snapshot := bc.rewardAcctCache[addr]; snapshot != nil {
+			statedb.LoadAccountSnapshotReference(snapshot)
 		}
 	}
 }
@@ -1565,8 +1565,8 @@ func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []t
 		}
 	}
 	for _, addr := range addrs {
-		if acc := statedb.AccountReference(addr); acc != nil {
-			bc.rewardAcctCache[addr] = acc
+		if snapshot := statedb.AccountSnapshotReference(addr); snapshot != nil {
+			bc.rewardAcctCache[addr] = snapshot
 		} else {
 			delete(bc.rewardAcctCache, addr)
 		}
@@ -1574,7 +1574,7 @@ func (bc *BlockChain) updateRewardAccountCache(statedb *state.StateDB, addrs []t
 }
 
 func (bc *BlockChain) clearRewardAccountCache() {
-	bc.rewardAcctCache = make(map[tcommon.Address]*types.Account)
+	bc.rewardAcctCache = make(map[tcommon.Address]*state.AccountSnapshot)
 }
 
 // loadWitnessesIntoState warms witness records for maintenance-only code that

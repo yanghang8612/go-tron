@@ -17,13 +17,12 @@ type PebbleOptions = pebbledb.Options
 // Tuning is delegated to core/rawdb/pebbledb, whose DefaultOptions() applies a
 // go-tron-specific deviation from go-ethereum's upstream Pebble defaults:
 //
-//   - MemTableSize is sized independently from the cache (64 MiB by default,
+//   - MemTableSize is sized independently from the cache (256 MiB by default,
 //     up from go-eth's cache/8 ≈ 32 MiB at cache=256 MiB) so the WAL/memtable
 //     absorbs more sync write traffic before flushing to L0.
-//   - L0CompactionThreshold is restored to Pebble's upstream 4 (go-eth uses 2
-//     to cap compaction debt; that pegged background-compaction CPU under our
-//     sync workload — see the h≈1.96M profile that motivated this change).
-//   - L0StopWritesThreshold is raised to 24 (Pebble default 12) so transient
+//   - L0CompactionThreshold is relaxed to 8 (go-eth uses 2 to cap compaction
+//     debt; that pegged background-compaction CPU under our sync workload).
+//   - L0StopWritesThreshold is raised to 64 (Pebble default 12) so transient
 //     L0 bursts don't stall foreground writers when MaxConcurrentCompactions
 //     can drain them.
 //

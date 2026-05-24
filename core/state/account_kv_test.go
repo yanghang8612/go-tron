@@ -129,6 +129,41 @@ func TestLoadAccountReferencePreservesAccountKVRoot(t *testing.T) {
 	}
 }
 
+func TestLoadAccountSnapshotReferencePreservesEnvelope(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x13)
+	acc := sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	acc.SetAllowance(7)
+	if err := sdb.SetAccountKV(addr, kvdomains.WitnessCapsule, []byte("witness"), []byte("snapshot")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	source, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := source.AccountSnapshotReference(addr)
+	if snapshot == nil || snapshot.Account == nil {
+		t.Fatal("account snapshot missing")
+	}
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.LoadAccountSnapshotReference(snapshot)
+	if got := reloaded.GetAllowance(addr); got != 7 {
+		t.Fatalf("snapshot account allowance = %d, want 7", got)
+	}
+	got, ok, err := reloaded.GetAccountKV(addr, kvdomains.WitnessCapsule, []byte("witness"))
+	if err != nil || !ok || string(got) != "snapshot" {
+		t.Fatalf("loaded snapshot lost KV root: got %q ok=%v err=%v", got, ok, err)
+	}
+}
+
 func TestAccountKVDeterministicRoot(t *testing.T) {
 	build := func() tcommon.Hash {
 		sdb := newTestStateDB(t)

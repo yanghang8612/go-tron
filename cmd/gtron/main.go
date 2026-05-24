@@ -172,17 +172,17 @@ var (
 	dbMemtableFlag = &cli.Uint64Flag{
 		Name:  "db.memtable",
 		Usage: "Pebble memtable size in MiB",
-		Value: 64,
+		Value: 256,
 	}
 	dbL0CompactionFlag = &cli.IntFlag{
 		Name:  "db.l0.compact",
 		Usage: "Pebble L0 compaction threshold",
-		Value: 4,
+		Value: 8,
 	}
 	dbL0StopFlag = &cli.IntFlag{
 		Name:  "db.l0.stop",
 		Usage: "Pebble L0 stop-writes threshold",
-		Value: 24,
+		Value: 64,
 	}
 	freezerDisableFlag = &cli.BoolFlag{
 		Name:  "freezer.disable",

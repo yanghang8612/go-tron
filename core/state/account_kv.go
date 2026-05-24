@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
@@ -32,6 +33,37 @@ type accountKVIndexStore interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
+}
+
+type trieNodeBatchWriter struct {
+	batch ethdb.Batch
+}
+
+func newTrieNodeBatchWriter(db ethdb.Database) *trieNodeBatchWriter {
+	return &trieNodeBatchWriter{batch: db.NewBatch()}
+}
+
+func (w *trieNodeBatchWriter) write(hash ethcommon.Hash, blob []byte) error {
+	ethrawdb.WriteLegacyTrieNode(w.batch, hash, blob)
+	if w.batch.ValueSize() < ethdb.IdealBatchSize {
+		return nil
+	}
+	if err := w.batch.Write(); err != nil {
+		return err
+	}
+	w.batch.Reset()
+	return nil
+}
+
+func (w *trieNodeBatchWriter) flush() error {
+	if w.batch.ValueSize() == 0 {
+		return nil
+	}
+	if err := w.batch.Write(); err != nil {
+		return err
+	}
+	w.batch.Reset()
+	return nil
 }
 
 // kvCompositeKey is the pre-hash logical key: domain (big-endian u16) || key.
@@ -367,8 +399,7 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 
 // commitAccountKV applies obj's dirty KV overlay to its KV trie, persists the
 // trie nodes, and returns the new AccountKVRoot. Call only when len(obj.kvDirty) > 0.
-func (s *StateDB) commitAccountKV(obj *stateObject) (tcommon.Hash, error) {
-	base := ethcommon.Hash(obj.accountKVRoot)
+func (s *StateDB) commitAccountKV(obj *stateObject, nodeWriter *trieNodeBatchWriter) (tcommon.Hash, error) {
 	tr, err := s.accountKVTrie(obj)
 	if err != nil {
 		return tcommon.Hash{}, err
@@ -391,10 +422,13 @@ func (s *StateDB) commitAccountKV(obj *stateObject) (tcommon.Hash, error) {
 	}
 	root, nodes := tr.Commit(false)
 	if nodes != nil {
-		if err := s.db.TrieDB().Update(root, base, 0, trienode.NewWithNodeSet(nodes), nil); err != nil {
-			return tcommon.Hash{}, err
-		}
-		if err := s.db.TrieDB().Commit(root, false); err != nil {
+		nodes.ForEachWithOrder(func(_ string, n *trienode.Node) {
+			if err != nil || n.IsDeleted() {
+				return
+			}
+			err = nodeWriter.write(n.Hash, n.Blob)
+		})
+		if err != nil {
 			return tcommon.Hash{}, err
 		}
 	}

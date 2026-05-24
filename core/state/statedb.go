@@ -103,6 +103,16 @@ type domainChangeSetCapture struct {
 	enabled   bool
 }
 
+// AccountSnapshot is a compact view of the account envelope needed to hydrate
+// a state object without re-reading the account trie. It intentionally carries
+// the generic-KV root/generation and code hash alongside the account proto.
+type AccountSnapshot struct {
+	Account             *types.Account
+	AccountKVRoot       tcommon.Hash
+	AccountKVGeneration uint64
+	CodeHash            tcommon.Hash
+}
+
 // New creates a StateDB from the given state root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	tr, err := db.OpenTrie(ethcommon.Hash(root))
@@ -203,6 +213,24 @@ func (s *StateDB) LoadAccountReference(acc *types.Account) {
 	s.stateObjects[addr] = newStateObject(addr, acc)
 }
 
+// LoadAccountSnapshotReference hydrates an account envelope into the in-memory
+// object cache without copying the account. It is for hot-path block caches
+// that are discarded if block processing fails before commit.
+func (s *StateDB) LoadAccountSnapshotReference(snapshot *AccountSnapshot) {
+	if snapshot == nil || snapshot.Account == nil {
+		return
+	}
+	addr := snapshot.Account.Address()
+	if _, ok := s.stateObjects[addr]; ok {
+		return
+	}
+	obj := newStateObject(addr, snapshot.Account)
+	obj.accountKVRoot = snapshot.AccountKVRoot
+	obj.accountKVGeneration = snapshot.AccountKVGeneration
+	obj.codeHash = snapshot.CodeHash
+	s.stateObjects[addr] = obj
+}
+
 // CopyAccount returns a detached copy of the cached/live account.
 func (s *StateDB) CopyAccount(addr tcommon.Address) *types.Account {
 	obj := s.getStateObject(addr)
@@ -221,6 +249,23 @@ func (s *StateDB) AccountReference(addr tcommon.Address) *types.Account {
 		return nil
 	}
 	return obj.account
+}
+
+// AccountSnapshotReference returns a cacheable view of the account envelope
+// without copying the account proto. Mutating the returned Account mutates the
+// cached state object, so callers must only keep this across successful block
+// boundaries where the cache is updated immediately after Commit.
+func (s *StateDB) AccountSnapshotReference(addr tcommon.Address) *AccountSnapshot {
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.deleted {
+		return nil
+	}
+	return &AccountSnapshot{
+		Account:             obj.account,
+		AccountKVRoot:       obj.accountKVRoot,
+		AccountKVGeneration: obj.accountKVGeneration,
+		CodeHash:            obj.codeHash,
+	}
 }
 
 // GetOrCreateAccount returns the state object at addr, creating it if it doesn't exist.
@@ -1823,6 +1868,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 	sort.Slice(addrs, func(i, j int) bool {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
+	accountKVNodeWriter := newTrieNodeBatchWriter(s.db.DiskDB())
 	for _, addr := range addrs {
 		obj := s.stateObjects[addr]
 		if !obj.dirty {
@@ -1888,7 +1934,7 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 			}
 		}
 		if len(obj.kvDirty) > 0 {
-			kvRoot, err := s.commitAccountKV(obj)
+			kvRoot, err := s.commitAccountKV(obj, accountKVNodeWriter)
 			if err != nil {
 				return tcommon.Hash{}, err
 			}
@@ -1927,6 +1973,9 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 		}
 		obj.created = false
 		obj.dirty = false
+	}
+	if err := accountKVNodeWriter.flush(); err != nil {
+		return tcommon.Hash{}, err
 	}
 
 	root, nodes := s.trie.Commit(false)
