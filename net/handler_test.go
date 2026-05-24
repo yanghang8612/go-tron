@@ -1,6 +1,7 @@
 package net
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 	"time"
@@ -80,6 +81,38 @@ func TestHandshakeSuccess(t *testing.T) {
 	}
 	if h2.HandshakedPeerCount() != 1 {
 		t.Fatalf("h2 handshaked peers: want 1, got %d", h2.HandshakedPeerCount())
+	}
+}
+
+func TestBuildHelloIncludesFromEndpoint(t *testing.T) {
+	bc := makeTestChain(t)
+	handler := NewTronHandler(bc, txpool.New(), nil)
+	nodeID := bytes.Repeat([]byte{0x42}, 64)
+	srv := p2p.NewServer(p2p.ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   5,
+		NodeID:     nodeID,
+		NetworkID:  params.NileNetworkID,
+		ExternalIP: "203.0.113.9",
+		Port:       18888,
+	}, handler)
+	handler.SetServer(srv)
+
+	hello := handler.buildHello()
+	if hello.From == nil {
+		t.Fatal("hello.from is nil")
+	}
+	if !bytes.Equal(hello.From.NodeId, nodeID) {
+		t.Fatalf("hello.from.nodeId mismatch")
+	}
+	if got := string(hello.From.Address); got != "203.0.113.9" {
+		t.Fatalf("hello.from.address = %q", got)
+	}
+	if hello.From.Port != 18888 {
+		t.Fatalf("hello.from.port = %d", hello.From.Port)
+	}
+	if hello.Version != params.NileNetworkID {
+		t.Fatalf("hello.version = %d, want %d", hello.Version, params.NileNetworkID)
 	}
 }
 

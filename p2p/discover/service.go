@@ -100,6 +100,24 @@ func (s *Service) SetOnNewPeer(fn func(addr string)) {
 	s.onNewPeer = fn
 }
 
+// SetExternalIP overrides the address advertised in outbound discovery
+// endpoints. The UDP source address remains authoritative for peers that
+// choose to canonicalize it, but java-tron also propagates this endpoint in
+// neighbour replies.
+func (s *Service) SetExternalIP(ip string) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return
+	}
+	if ip4 := parsed.To4(); ip4 != nil {
+		s.localEP.Address = []byte(ip4.String())
+		s.localEP.AddressIpv6 = nil
+		return
+	}
+	s.localEP.Address = nil
+	s.localEP.AddressIpv6 = []byte(parsed.String())
+}
+
 // AddBootstrap records seed node addresses and sends them initial pings.
 // Seeds are kept separately from the routing table; they are re-pinged on each
 // maintenance cycle until a pong arrives and the real nodeID is installed by

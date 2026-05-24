@@ -34,6 +34,7 @@ func makeConfig(ctx *cli.Context) *node.Config {
 		DataDir:      ctx.String("datadir"),
 		P2PPort:      ctx.Int("p2p.port"),
 		DiscoverPort: ctx.Int("discover.port"),
+		ExternalIP:   ctx.String("external.ip"),
 		HTTPPort:     ctx.Int("http.port"),
 		JSONRPCPort:  ctx.Int("jsonrpc.port"),
 		GRPCPort:     ctx.Int("grpc.port"),

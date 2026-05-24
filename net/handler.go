@@ -314,7 +314,7 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 	if h.server != nil {
 		version = h.server.NetworkID()
 	}
-	return &corepb.HelloMessage{
+	hello := &corepb.HelloMessage{
 		Version:   version,
 		Timestamp: time.Now().UnixMilli(),
 		GenesisBlockId: &corepb.HelloMessage_BlockId{
@@ -330,6 +330,10 @@ func (h *TronHandler) buildHello() *corepb.HelloMessage {
 			Number: int64(headID.Num),
 		},
 	}
+	if h.server != nil {
+		hello.From = h.server.LocalEndpoint()
+	}
+	return hello
 }
 
 func (h *TronHandler) handleHello(peer *p2p.Peer, payload []byte) {

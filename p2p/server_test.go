@@ -281,6 +281,54 @@ func TestServer_BootstrapNodesFedToDiscovery(t *testing.T) {
 	}
 }
 
+func TestServer_BootstrapNodesDeduplicated(t *testing.T) {
+	fake := &fakeDiscovery{}
+	srv := NewServer(ServerConfig{
+		ListenAddr:     "127.0.0.1:0",
+		MaxPeers:       1,
+		SeedNodes:      []string{"1.1.1.1:11111", "2.2.2.2:22222"},
+		BootstrapNodes: []string{"2.2.2.2:22222", "1.1.1.1:11111"},
+		Discovery:      fake,
+	}, &testHandler{})
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	got := fake.snapshot()
+	want := []string{"1.1.1.1:11111", "2.2.2.2:22222"}
+	if len(got) != len(want) {
+		t.Fatalf("AddBootstrap got %v entries, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("AddBootstrap got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestServerLocalEndpointReturnsCopy(t *testing.T) {
+	nodeID := bytes.Repeat([]byte{0xab}, 64)
+	srv := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		NodeID:     nodeID,
+		ExternalIP: "203.0.113.10",
+		Port:       18888,
+	}, &testHandler{})
+
+	ep := srv.LocalEndpoint()
+	ep.NodeId[0] = 0
+	ep.Address[0] = 'x'
+
+	again := srv.LocalEndpoint()
+	if again.NodeId[0] != 0xab {
+		t.Fatal("LocalEndpoint leaked mutable nodeID")
+	}
+	if got := string(again.Address); got != "203.0.113.10" {
+		t.Fatalf("LocalEndpoint address = %q", got)
+	}
+}
+
 // TestServer_AddPeerThrottlesPerAddr covers the M3.5 follow-up: removePeer
 // fires maintainCh, which in turn dials every seed in parallel. Without a
 // per-address gate, a hiccup on a flaky seed list cascades into a session-wide

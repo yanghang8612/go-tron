@@ -140,8 +140,22 @@ func (s *Server) Start() error {
 	// Start discovery service if configured
 	if s.config.Discovery != nil {
 		s.config.Discovery.Start()
-		bootstrap := append([]string{}, s.config.SeedNodes...)
-		bootstrap = append(bootstrap, s.config.BootstrapNodes...)
+		bootstrap := make([]string, 0, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
+		seen := make(map[string]struct{}, len(s.config.SeedNodes)+len(s.config.BootstrapNodes))
+		for _, addr := range s.config.SeedNodes {
+			if _, ok := seen[addr]; ok {
+				continue
+			}
+			seen[addr] = struct{}{}
+			bootstrap = append(bootstrap, addr)
+		}
+		for _, addr := range s.config.BootstrapNodes {
+			if _, ok := seen[addr]; ok {
+				continue
+			}
+			seen[addr] = struct{}{}
+			bootstrap = append(bootstrap, addr)
+		}
 		s.config.Discovery.AddBootstrap(bootstrap)
 	} else {
 		// Dial seed nodes directly when discovery is disabled
@@ -206,6 +220,16 @@ func (s *Server) PeerCount() int {
 // Hello (= java-tron's `p2p.version` config field).
 func (s *Server) NetworkID() int32 {
 	return s.config.NetworkID
+}
+
+// LocalEndpoint returns the endpoint this node advertises in libp2p and TRON
+// hello messages. Callers receive a copy so they cannot mutate server config.
+func (s *Server) LocalEndpoint() *corepb.Endpoint {
+	return &corepb.Endpoint{
+		Address: append([]byte(nil), []byte(s.config.ExternalIP)...),
+		Port:    s.config.Port,
+		NodeId:  append([]byte(nil), s.config.NodeID...),
+	}
 }
 
 // Peers returns a snapshot of all connected peers.

@@ -52,6 +52,10 @@ var (
 		Usage: "Kademlia discovery UDP port (0 → reuse --p2p.port)",
 		Value: 0,
 	}
+	externalIPFlag = &cli.StringFlag{
+		Name:  "external.ip",
+		Usage: "IPv4 address advertised in P2P discovery and hello messages",
+	}
 	httpPortFlag = &cli.IntFlag{
 		Name:  "http.port",
 		Usage: "HTTP API port",
@@ -213,6 +217,7 @@ var app = &cli.App{
 		dataDirFlag,
 		p2pPortFlag,
 		discoverPortFlag,
+		externalIPFlag,
 		httpPortFlag,
 		jsonrpcPortFlag,
 		grpcPortFlag,
@@ -461,6 +466,9 @@ func gtron(ctx *cli.Context) error {
 	if err != nil {
 		closeStores()
 		return fmt.Errorf("create discovery service: %w", err)
+	}
+	if externalIP != "" {
+		discSvc.SetExternalIP(externalIP)
 	}
 
 	// Built-in bootstrap nodes are fed into the discovery routing table so the
