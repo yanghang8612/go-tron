@@ -431,8 +431,11 @@ func DefaultDPInt64(key string) (int64, bool) {
 	return v, ok
 }
 
-// Set sets a value and marks the key dirty.
+// Set sets a value and marks the key dirty when the stored value changes.
 func (dp *DynamicProperties) Set(key string, value int64) {
+	if current, ok := dp.props[key]; ok && current == value {
+		return
+	}
 	dp.props[key] = value
 	dp.dirty[key] = struct{}{}
 }
@@ -898,6 +901,9 @@ func (dp *DynamicProperties) SetLatestSolidifiedBlockNum(n int64) {
 }
 
 func (dp *DynamicProperties) SetLatestBlockHeaderHash(h common.Hash) {
+	if dp.latestBlockHeaderHash == h {
+		return
+	}
 	dp.latestBlockHeaderHash = h
 	dp.hashDirty = true
 }
@@ -1715,8 +1721,11 @@ func (dp *DynamicProperties) GetString(key string) (string, bool) {
 	return v, ok
 }
 
-// SetString sets a string-typed DP key and marks it dirty.
+// SetString sets a string-typed DP key and marks it dirty when it changes.
 func (dp *DynamicProperties) SetString(key string, value string) {
+	if current, ok := dp.stringProps[key]; ok && current == value {
+		return
+	}
 	dp.stringProps[key] = value
 	dp.stringDirty[key] = struct{}{}
 }

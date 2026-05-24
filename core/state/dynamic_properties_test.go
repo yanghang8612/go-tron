@@ -168,6 +168,51 @@ func TestDynamicProperties_GenericGetSet(t *testing.T) {
 	}
 }
 
+func TestDynamicProperties_UnchangedValuesDoNotDirty(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	dp.SetStateFlag(dp.StateFlag())
+	if _, ok := dp.dirty["state_flag"]; ok {
+		t.Fatal("unchanged int64 property was marked dirty")
+	}
+
+	dp.SetString("block_filled_slots", dp.stringProps["block_filled_slots"])
+	if _, ok := dp.stringDirty["block_filled_slots"]; ok {
+		t.Fatal("unchanged string property was marked dirty")
+	}
+
+	dp.SetLatestBlockHeaderHash(dp.LatestBlockHeaderHash())
+	if dp.hashDirty {
+		t.Fatal("unchanged latest_block_header_hash was marked dirty")
+	}
+}
+
+func TestDynamicProperties_RepeatedSetKeepsExistingDirty(t *testing.T) {
+	dp := NewDynamicProperties()
+
+	dp.SetStateFlag(1)
+	dp.SetStateFlag(1)
+	if got := dp.StateFlag(); got != 1 {
+		t.Fatalf("state_flag = %d, want 1", got)
+	}
+	if _, ok := dp.dirty["state_flag"]; !ok {
+		t.Fatal("dirty int64 property lost after repeated set")
+	}
+
+	dp.SetString("block_filled_slots", strings.Repeat("\x00", BlockFilledSlotsNumber))
+	dp.SetString("block_filled_slots", strings.Repeat("\x00", BlockFilledSlotsNumber))
+	if _, ok := dp.stringDirty["block_filled_slots"]; !ok {
+		t.Fatal("dirty string property lost after repeated set")
+	}
+
+	h := common.HexToHash("01")
+	dp.SetLatestBlockHeaderHash(h)
+	dp.SetLatestBlockHeaderHash(h)
+	if !dp.hashDirty {
+		t.Fatal("dirty latest_block_header_hash lost after repeated set")
+	}
+}
+
 // Test 5: Only dirty props flushed — create, flush empty, load, verify defaults still work.
 func TestDynamicProperties_OnlyDirtyFlushed(t *testing.T) {
 	// Flush a fresh DynamicProperties with no modifications.
