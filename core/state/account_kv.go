@@ -44,7 +44,9 @@ type kvCommitItem struct {
 }
 
 type accountKVCommitPlan struct {
-	items []kvCommitItem
+	items        []kvCommitItem
+	noopItems    int
+	noopByDomain [kvDomainStatCount]int
 }
 
 type accountKVLatestBatch struct {
@@ -658,17 +660,21 @@ func (s *StateDB) ResetAccountKV(owner tcommon.Address) error {
 func (s *StateDB) prepareAccountKVCommitPlan(obj *stateObject) (*accountKVCommitPlan, error) {
 	plan := &accountKVCommitPlan{items: make([]kvCommitItem, 0, len(obj.kvDirty))}
 	for mk, e := range obj.kvDirty {
+		composite := []byte(mk)
+		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
+		if !ok {
+			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
+		}
 		if noop, known := e.latestNoop(); known && noop {
+			plan.noopItems++
+			if idx, ok := kvDomainStatIndex(domain); ok {
+				plan.noopByDomain[idx]++
+			}
 			continue
 		}
 		if e.trieKey == (ethcommon.Hash{}) {
 			e.trieKey = kvTrieHash([]byte(mk))
 			obj.kvDirty[mk] = e
-		}
-		composite := []byte(mk)
-		domain, logicalKey, ok := splitKVCompositeKeyView(composite)
-		if !ok {
-			return nil, fmt.Errorf("account kv: malformed composite key for %s", obj.address.Hex())
 		}
 		plan.items = append(plan.items, kvCommitItem{
 			logicalKey: logicalKey,

@@ -118,6 +118,8 @@ type CommitStats struct {
 	Accounts   int
 	KVAccounts int
 	KVItems    int
+
+	Mutations CommitMutationStats
 }
 
 // Add folds another commit breakdown into this one.
@@ -139,6 +141,7 @@ func (s *CommitStats) Add(o CommitStats) {
 	s.Accounts += o.Accounts
 	s.KVAccounts += o.KVAccounts
 	s.KVItems += o.KVItems
+	s.Mutations.Add(o.Mutations)
 }
 
 // Total returns the sum of measured Commit subphases.
@@ -2245,6 +2248,7 @@ func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
 		return tcommon.Hash{}, stats, err
 	}
 	stats.Accounts = len(plans)
+	stats.Mutations = summarizeCommitMutations(plans)
 	mark(&stats.Prepare)
 
 	trieNodeWriter := newTrieNodeBatchWriter(s.db)

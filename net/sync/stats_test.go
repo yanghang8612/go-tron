@@ -74,6 +74,12 @@ func TestStats_AddBufferWaitAccumulates(t *testing.T) {
 
 func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 	s := NewStats()
+	var mut1 state.CommitMutationStats
+	mut1.AccountUpdates = 4
+	mut1.KVPutItems = 2
+	var mut2 state.CommitMutationStats
+	mut2.AccountUpdates = 40
+	mut2.KVPutItems = 20
 	s.AddApplyBlock(core.ApplyStats{
 		Validate:    1 * time.Millisecond,
 		Execute:     2 * time.Millisecond,
@@ -88,6 +94,7 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              3,
 			KVAccounts:            2,
 			KVItems:               5,
+			Mutations:             mut1,
 		},
 		DPUpdate: 5 * time.Millisecond,
 		Persist:  6 * time.Millisecond,
@@ -107,6 +114,7 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              30,
 			KVAccounts:            20,
 			KVItems:               50,
+			Mutations:             mut2,
 		},
 		DPUpdate: 50 * time.Millisecond,
 		Persist:  60 * time.Millisecond,
@@ -127,6 +135,10 @@ func TestStats_AddApplyBlockSumsPerPhase(t *testing.T) {
 			Accounts:              33,
 			KVAccounts:            22,
 			KVItems:               55,
+			Mutations: state.CommitMutationStats{
+				AccountUpdates: 44,
+				KVPutItems:     22,
+			},
 		},
 		DPUpdate: 55 * time.Millisecond,
 		Persist:  66 * time.Millisecond,

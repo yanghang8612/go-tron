@@ -1202,6 +1202,16 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 	if phase, elapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
 		ctx = append(ctx, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(elapsed))
 	}
+	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
+	if topMutations == "" {
+		topMutations = "none"
+	}
+	ctx = append(ctx, "stateMutTop", topMutations)
+	topKVDomains := s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(3)
+	if topKVDomains == "" {
+		topKVDomains = "none"
+	}
+	ctx = append(ctx, "stateMutKVTop", topKVDomains)
 	if blocksPerSec > 0 && remain > 0 {
 		etaSec := float64(remain) / blocksPerSec
 		ctx = append(ctx, "eta", ethcommon.PrettyDuration(time.Duration(etaSec*float64(time.Second))))
@@ -1237,6 +1247,21 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"stateCommitAccounts", s.ApplyStats.StateCommitDetail.Accounts,
 		"stateCommitKVAccounts", s.ApplyStats.StateCommitDetail.KVAccounts,
 		"stateCommitKVItems", s.ApplyStats.StateCommitDetail.KVItems,
+		"stateMutAccountCreates", s.ApplyStats.StateCommitDetail.Mutations.AccountCreates,
+		"stateMutAccountUpdates", s.ApplyStats.StateCommitDetail.Mutations.AccountUpdates,
+		"stateMutAccountDeletes", s.ApplyStats.StateCommitDetail.Mutations.AccountDeletes,
+		"stateMutCodeUpdates", s.ApplyStats.StateCommitDetail.Mutations.CodeUpdates,
+		"stateMutCodeDeletes", s.ApplyStats.StateCommitDetail.Mutations.CodeDeletes,
+		"stateMutContractMetaUpdates", s.ApplyStats.StateCommitDetail.Mutations.ContractMetaUpdates,
+		"stateMutContractMetaDeletes", s.ApplyStats.StateCommitDetail.Mutations.ContractMetaDeletes,
+		"stateMutStoragePuts", s.ApplyStats.StateCommitDetail.Mutations.StoragePuts,
+		"stateMutStorageDeletes", s.ApplyStats.StateCommitDetail.Mutations.StorageDeletes,
+		"stateMutStorageNoops", s.ApplyStats.StateCommitDetail.Mutations.StorageNoops,
+		"stateMutKVPuts", s.ApplyStats.StateCommitDetail.Mutations.KVPutItems,
+		"stateMutKVDeletes", s.ApplyStats.StateCommitDetail.Mutations.KVDeleteItems,
+		"stateMutKVNoops", s.ApplyStats.StateCommitDetail.Mutations.KVNoopItems,
+		"stateMutTop", s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(10),
+		"stateMutKVTop", s.ApplyStats.StateCommitDetail.Mutations.TopKVDomainsString(10),
 		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
 		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
 		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
