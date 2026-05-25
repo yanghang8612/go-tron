@@ -34,3 +34,26 @@ func TestRewardAccountCachePrunesNonCurrentAddresses(t *testing.T) {
 		t.Fatalf("current reward account cache: got %+v, want allowance 22", got)
 	}
 }
+
+func TestWitnessBlockCacheReloadsAfterClear(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x03})
+	bc := &BlockChain{}
+
+	if err := statedb.WriteWitnessLatestBlock(addr, 7); err != nil {
+		t.Fatal(err)
+	}
+	if got := bc.cachedWitnessLatestBlock(statedb, addr); got != 7 {
+		t.Fatalf("cached latest block = %d, want 7", got)
+	}
+	if err := statedb.WriteWitnessLatestBlock(addr, 9); err != nil {
+		t.Fatal(err)
+	}
+	if got := bc.cachedWitnessLatestBlock(statedb, addr); got != 7 {
+		t.Fatalf("cached latest block after dirty update = %d, want cached 7", got)
+	}
+	bc.clearWitnessBlockCache()
+	if got := bc.cachedWitnessLatestBlock(statedb, addr); got != 9 {
+		t.Fatalf("cached latest block after clear = %d, want 9", got)
+	}
+}

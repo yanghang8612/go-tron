@@ -52,7 +52,7 @@ func (s *StateDB) ReadWitnessLatestBlock(addr tcommon.Address) int64 {
 func (s *StateDB) WriteWitnessLatestBlock(addr tcommon.Address, num int64) error {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(num))
-	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr), buf[:])
+	return s.setAccountKVFinalNoRead(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr), buf[:])
 }
 
 // ReadWitnessBrokerage returns the current brokerage rate set by

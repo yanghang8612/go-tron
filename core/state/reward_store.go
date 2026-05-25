@@ -12,19 +12,19 @@ import (
 )
 
 func (s *StateDB) readSystemReward(key []byte) ([]byte, bool) {
-	raw, ok, err := s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key)
+	raw, ok, err := s.readSystemRewardWithError(key)
 	if err != nil || !ok {
 		return nil, false
 	}
 	return raw, true
 }
 
-func (s *StateDB) writeSystemReward(key, value []byte) error {
-	return s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, value)
+func (s *StateDB) readSystemRewardWithError(key []byte) ([]byte, bool, error) {
+	return s.GetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key)
 }
 
-func (s *StateDB) writeSystemRewardFinal(key, value []byte) error {
-	return s.SetAccountKVFinal(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, value)
+func (s *StateDB) writeSystemReward(key, value []byte) error {
+	return s.SetAccountKV(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, value)
 }
 
 func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
@@ -61,9 +61,25 @@ func (s *StateDB) WriteCycleReward(cycle int64, addr []byte, value int64) error 
 }
 
 func (s *StateDB) WriteCycleRewardFinal(cycle int64, addr []byte, value int64) error {
+	key := rawdb.CycleRewardStateKey(cycle, addr)
+	raw, exists, err := s.readSystemRewardWithError(key)
+	if err != nil {
+		return err
+	}
+	return s.writeCycleRewardFinalWithPrev(key, raw, exists, value)
+}
+
+func (s *StateDB) writeCycleRewardFinalWithPrev(key, prev []byte, prevExists bool, value int64) error {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(value))
-	return s.writeSystemRewardFinal(rawdb.CycleRewardStateKey(cycle, addr), buf[:])
+	return s.setAccountKVFinalWithPrev(tcommon.SystemAccountAddress, kvdomains.SystemReward, key, prev, buf[:], prevExists)
+}
+
+func decodeCycleReward(raw []byte, exists bool) int64 {
+	if !exists || len(raw) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(raw))
 }
 
 func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
@@ -71,7 +87,12 @@ func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
 }
 
 func (s *StateDB) AddCycleRewardFinal(cycle int64, addr []byte, delta int64) error {
-	return s.WriteCycleRewardFinal(cycle, addr, s.ReadCycleReward(cycle, addr)+delta)
+	key := rawdb.CycleRewardStateKey(cycle, addr)
+	raw, exists, err := s.readSystemRewardWithError(key)
+	if err != nil {
+		return err
+	}
+	return s.writeCycleRewardFinalWithPrev(key, raw, exists, decodeCycleReward(raw, exists)+delta)
 }
 
 func (s *StateDB) AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64) error {
@@ -98,13 +119,23 @@ func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64,
 	sort.Slice(addrs, func(i, j int) bool {
 		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
 	})
-	current := s.ReadCycleRewards(cycle, addrs)
+	keys := make([][]byte, 0, len(addrs))
 	for _, addr := range addrs {
+		keys = append(keys, rawdb.CycleRewardStateKey(cycle, addr.Bytes()))
+	}
+	current, err := s.GetAccountKVBatch(tcommon.SystemAccountAddress, kvdomains.SystemReward, keys)
+	if err != nil {
+		return err
+	}
+	for i, addr := range addrs {
 		var err error
+		key := keys[i]
+		raw, exists := current[string(key)]
+		next := decodeCycleReward(raw, exists) + deltas[addr]
 		if final {
-			err = s.WriteCycleRewardFinal(cycle, addr.Bytes(), current[addr]+deltas[addr])
+			err = s.writeCycleRewardFinalWithPrev(key, raw, exists, next)
 		} else {
-			err = s.WriteCycleReward(cycle, addr.Bytes(), current[addr]+deltas[addr])
+			err = s.WriteCycleReward(cycle, addr.Bytes(), next)
 		}
 		if err != nil {
 			return err

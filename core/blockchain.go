@@ -109,16 +109,18 @@ type BlockChain struct {
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
 
-	genesisBlock     *types.Block
-	genesisWitnesses []consensus.GenesisWitnessInfo
-	activeWitnesses  atomic.Value // []tcommon.Address
-	dynPropsCache    atomic.Value // *state.DynamicProperties; canonical head snapshot
-	standbyPayCache  *standbyWitnessPaySet
-	rewardAcctCache  map[tcommon.Address]*state.AccountSnapshot
-	rewardAcctSeen   map[tcommon.Address]struct{}
-	rewardAcctAddrs  []tcommon.Address
-	forkStatsCache   map[int32][]byte
-	fc               *forks.ForkController
+	genesisBlock      *types.Block
+	genesisWitnesses  []consensus.GenesisWitnessInfo
+	activeWitnesses   atomic.Value // []tcommon.Address
+	dynPropsCache     atomic.Value // *state.DynamicProperties; canonical head snapshot
+	standbyPayCache   *standbyWitnessPaySet
+	rewardAcctCache   map[tcommon.Address]*state.AccountSnapshot
+	systemAcctCache   *state.AccountSnapshot
+	rewardAcctSeen    map[tcommon.Address]struct{}
+	rewardAcctAddrs   []tcommon.Address
+	witnessBlockCache map[tcommon.Address]int64
+	forkStatsCache    map[int32][]byte
+	fc                *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -273,18 +275,19 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
 	bc := &BlockChain{
-		db:              db,
-		chaindb:         chaindb,
-		stateDB:         stateDB,
-		config:          config,
-		fc:              forks.NewForkController(buffer),
-		buffer:          buffer,
-		flushQueue:      make(chan uint64, flushQueueCap),
-		flushPending:    newFlushBarrier(),
-		rewardAcctCache: make(map[tcommon.Address]*state.AccountSnapshot),
-		rewardAcctSeen:  make(map[tcommon.Address]struct{}),
-		rewardAcctAddrs: make([]tcommon.Address, 0, 128),
-		forkStatsCache:  make(map[int32][]byte, len(forks.KnownVersions)),
+		db:                db,
+		chaindb:           chaindb,
+		stateDB:           stateDB,
+		config:            config,
+		fc:                forks.NewForkController(buffer),
+		buffer:            buffer,
+		flushQueue:        make(chan uint64, flushQueueCap),
+		flushPending:      newFlushBarrier(),
+		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
+		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
+		witnessBlockCache: make(map[tcommon.Address]int64),
+		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -611,6 +614,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 	statedb.SetAccountKVIndexStore(bc.buffer)
 	statedb.SetAccountKVIndexReads(true)
+	bc.preloadSystemAccount(statedb)
 	// Flip the SHI capture flag for this block. Without this the StateDB's
 	// AccumulateHistory short-circuits and no rows land in bc.buffer.
 	if bc.config.HistoryEnabled {
@@ -657,6 +661,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			bc.buffer.DiscardActive()
+			bc.clearSystemAccountCache()
+			bc.clearWitnessBlockCache()
 			bc.clearForkStatsCache()
 			// SetActiveWitnesses may have mutated the in-memory atomic before
 			// the failure. Its rooted write was on the now-discarded statedb
@@ -925,6 +931,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		return fmt.Errorf("commit state: %w", err)
 	}
 	stats.StateCommitDetail = commitStats
+	bc.updateSystemAccountCache(statedb)
 	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
 	if bc.config.StateCommitmentCheckpoints {
 		domainRoot, err := rawdb.ComputeLatestDomainRoot(bc.buffer)
@@ -1287,7 +1294,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.reloadActiveWitnesses(lcaRoot)
 	bc.reloadDynPropsCache(lcaRoot)
 	bc.invalidateStandbyPayCache()
+	bc.clearSystemAccountCache()
 	bc.clearRewardAccountCache()
+	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
 
 	var lcaBlock *types.Block
@@ -1592,6 +1601,39 @@ func (bc *BlockChain) clearRewardAccountCache() {
 	bc.rewardAcctCache = make(map[tcommon.Address]*state.AccountSnapshot)
 }
 
+func (bc *BlockChain) preloadSystemAccount(statedb *state.StateDB) {
+	if bc.systemAcctCache != nil {
+		statedb.LoadAccountSnapshotReference(bc.systemAcctCache)
+	}
+}
+
+// updateSystemAccountCache keeps the hot system-account envelope in memory
+// across successful linear block applications. Rooted reward, dynamic-property,
+// fork and schedule domains all hang off this account's KV root.
+func (bc *BlockChain) updateSystemAccountCache(statedb *state.StateDB) {
+	bc.systemAcctCache = statedb.AccountSnapshotReference(tcommon.SystemAccountAddress)
+}
+
+func (bc *BlockChain) clearSystemAccountCache() {
+	bc.systemAcctCache = nil
+}
+
+func (bc *BlockChain) cachedWitnessLatestBlock(statedb *state.StateDB, addr tcommon.Address) int64 {
+	if bc.witnessBlockCache == nil {
+		bc.witnessBlockCache = make(map[tcommon.Address]int64)
+	}
+	if num, ok := bc.witnessBlockCache[addr]; ok {
+		return num
+	}
+	num := statedb.ReadWitnessLatestBlock(addr)
+	bc.witnessBlockCache[addr] = num
+	return num
+}
+
+func (bc *BlockChain) clearWitnessBlockCache() {
+	bc.witnessBlockCache = make(map[tcommon.Address]int64)
+}
+
 // loadWitnessesIntoState warms witness records for maintenance-only code that
 // mutates vote counts through StateDB. Ordinary replay does lazy native-domain
 // lookups instead, avoiding a full witness scan on every block.
@@ -1769,6 +1811,10 @@ func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
 func (bc *BlockChain) updateSolidifiedBlock(statedb *state.StateDB, producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
 	// The rooted cursor is canonical for rewind and historical restart.
 	_ = statedb.WriteWitnessLatestBlock(producerAddr, blockNum)
+	if bc.witnessBlockCache == nil {
+		bc.witnessBlockCache = make(map[tcommon.Address]int64)
+	}
+	bc.witnessBlockCache[producerAddr] = blockNum
 
 	active := bc.ActiveWitnesses()
 	n := len(active)
@@ -1778,7 +1824,7 @@ func (bc *BlockChain) updateSolidifiedBlock(statedb *state.StateDB, producerAddr
 
 	nums := make([]int64, 0, n)
 	for _, addr := range active {
-		nums = append(nums, statedb.ReadWitnessLatestBlock(addr))
+		nums = append(nums, bc.cachedWitnessLatestBlock(statedb, addr))
 	}
 	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
 

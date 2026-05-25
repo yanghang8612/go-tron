@@ -291,7 +291,7 @@ func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 	buf := make([]byte, 8)
 	for k := range dp.dirty {
 		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
-		if err := s.SystemKVPutFinal(kvdomains.SystemDynamicProperty, []byte(k), append([]byte(nil), buf...)); err != nil {
+		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(k), buf); err != nil {
 			return err
 		}
 		if !isDerivedDPKey(k) {
@@ -299,7 +299,7 @@ func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 		}
 	}
 	for k := range dp.stringDirty {
-		if err := s.SystemKVPutFinal(kvdomains.SystemDynamicProperty, []byte(k), []byte(dp.stringProps[k])); err != nil {
+		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(k), []byte(dp.stringProps[k])); err != nil {
 			return err
 		}
 		if !isDerivedDPKey(k) {
@@ -307,7 +307,7 @@ func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 		}
 	}
 	if dp.hashDirty {
-		if err := s.SystemKVPutFinal(kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"), dp.latestBlockHeaderHash.Bytes()); err != nil {
+		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"), dp.latestBlockHeaderHash.Bytes()); err != nil {
 			return err
 		}
 	}

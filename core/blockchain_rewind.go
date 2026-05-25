@@ -152,6 +152,8 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(root)))
 	bc.fc = forks.NewForkController(bc.buffer)
 	bc.invalidateStandbyPayCache()
+	bc.clearSystemAccountCache()
 	bc.clearRewardAccountCache()
+	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
 }

@@ -510,23 +510,49 @@ func (s *StateDB) setAccountKV(owner tcommon.Address, domain kvdomains.KVDomain,
 	obj := s.GetOrCreateAccount(owner)
 	comp := kvCompositeKey(domain, key)
 	mk := string(comp)
-	prevDirty, dirty := obj.kvDirty[mk]
 	var (
 		prevValue  []byte
 		prevExists bool
 		prevLoaded bool
 	)
+	_, dirty := obj.kvDirty[mk]
 	if !dirty && s.accountKVLatestReadEnabled() {
 		current, exists, err := rawdb.ReadStateKVLatest(s.accountKVIndex(), owner, obj.accountKVGeneration, domain, key)
 		if err != nil {
 			return err
 		}
-		if exists && bytes.Equal(current, value) {
-			return nil
-		}
 		prevValue = current
 		prevExists = exists
 		prevLoaded = true
+	}
+	return s.setAccountKVWithPrev(owner, domain, key, value, journal, prevValue, prevExists, prevLoaded)
+}
+
+func (s *StateDB) setAccountKVFinalWithPrev(owner tcommon.Address, domain kvdomains.KVDomain, key, prev, value []byte, prevExists bool) error {
+	return s.setAccountKVWithPrev(owner, domain, key, value, false, prev, prevExists, true)
+}
+
+// setAccountKVFinalNoRead stages block-final bookkeeping writes whose caller
+// already knows the value changed. History-enabled commits still read the
+// previous value later when writing the domain change-set.
+func (s *StateDB) setAccountKVFinalNoRead(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte) error {
+	return s.setAccountKVWithPrev(owner, domain, key, value, false, nil, false, false)
+}
+
+func (s *StateDB) setAccountKVWithPrev(owner tcommon.Address, domain kvdomains.KVDomain, key, value []byte, journal bool, prevValue []byte, prevExists, prevLoaded bool) error {
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("account kv: unregistered domain %#04x", uint16(domain))
+	}
+	obj := s.GetOrCreateAccount(owner)
+	comp := kvCompositeKey(domain, key)
+	mk := string(comp)
+	prevDirty, dirty := obj.kvDirty[mk]
+	if dirty {
+		if !prevDirty.deleted && bytes.Equal(prevDirty.val, value) {
+			return nil
+		}
+	} else if prevLoaded && prevExists && bytes.Equal(prevValue, value) {
+		return nil
 	}
 	if journal {
 		s.journal.append(kvChange{address: owner, mapKey: mk, hadEntry: dirty, prevEntry: prevDirty})

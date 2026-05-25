@@ -137,3 +137,26 @@ func TestRewardStoreAddCycleRewardsBatch(t *testing.T) {
 		t.Fatalf("addr2 reward = %d, want 7", got)
 	}
 }
+
+func TestRewardStoreAddCycleRewardsFinalStacksDirtyValues(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := testAddr(0x48)
+
+	if err := statedb.AddCycleRewardsFinal(9, map[tcommon.Address]int64{addr: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := statedb.AddCycleRewardsFinal(9, map[tcommon.Address]int64{addr: 7}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := statedb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, statedb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.ReadCycleReward(9, addr.Bytes()); got != 12 {
+		t.Fatalf("reward = %d, want 12", got)
+	}
+}
