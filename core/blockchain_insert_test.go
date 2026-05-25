@@ -127,6 +127,53 @@ func TestBlockChain_InsertBlock_MultipleBlocks(t *testing.T) {
 	}
 }
 
+func TestBlockChain_LatestCommitmentModeDefersHotKVAndCheckpoints(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	cfg := *params.MainnetChainConfig
+	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
+	cfg.StateCommitmentInterval = 2
+	genesis := &params.Genesis{
+		Config:            &cfg,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statsByBlock := make(map[uint64]state.CommitStats)
+	bc.AddApplyStatsHook(func(block *types.Block, stats ApplyStats) {
+		statsByBlock[block.Number()] = stats.StateCommitDetail
+	})
+
+	for i := uint64(1); i <= 2; i++ {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:     int64(i),
+					Timestamp:  int64(i) * 3000,
+					ParentHash: parent.Hash().Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+	}
+	if got := statsByBlock[1].DeferredKVItems; got == 0 {
+		t.Fatal("block 1 did not defer any hot account-KV items")
+	}
+	if got := statsByBlock[2].RebuiltKVAccounts; got == 0 {
+		t.Fatal("block 2 checkpoint did not rebuild deferred account-KV roots")
+	}
+	if len(bc.deferredKVCommitOwners) != 0 {
+		t.Fatalf("deferred owner set not cleared after checkpoint: %d", len(bc.deferredKVCommitOwners))
+	}
+}
+
 func TestBlockChain_InsertBlockUpdatesForkStats(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	w1 := testInsertAddr(1)

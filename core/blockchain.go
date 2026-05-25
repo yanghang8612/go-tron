@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -109,18 +110,19 @@ type BlockChain struct {
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
 
-	genesisBlock      *types.Block
-	genesisWitnesses  []consensus.GenesisWitnessInfo
-	activeWitnesses   atomic.Value // []tcommon.Address
-	dynPropsCache     atomic.Value // *state.DynamicProperties; canonical head snapshot
-	standbyPayCache   *standbyWitnessPaySet
-	rewardAcctCache   map[tcommon.Address]*state.AccountSnapshot
-	systemAcctCache   *state.AccountSnapshot
-	rewardAcctSeen    map[tcommon.Address]struct{}
-	rewardAcctAddrs   []tcommon.Address
-	witnessBlockCache map[tcommon.Address]int64
-	forkStatsCache    map[int32][]byte
-	fc                *forks.ForkController
+	genesisBlock           *types.Block
+	genesisWitnesses       []consensus.GenesisWitnessInfo
+	activeWitnesses        atomic.Value // []tcommon.Address
+	dynPropsCache          atomic.Value // *state.DynamicProperties; canonical head snapshot
+	standbyPayCache        *standbyWitnessPaySet
+	rewardAcctCache        map[tcommon.Address]*state.AccountSnapshot
+	systemAcctCache        *state.AccountSnapshot
+	rewardAcctSeen         map[tcommon.Address]struct{}
+	rewardAcctAddrs        []tcommon.Address
+	witnessBlockCache      map[tcommon.Address]int64
+	forkStatsCache         map[int32][]byte
+	deferredKVCommitOwners map[tcommon.Address]struct{}
+	fc                     *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -275,19 +277,20 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
 	bc := &BlockChain{
-		db:                db,
-		chaindb:           chaindb,
-		stateDB:           stateDB,
-		config:            config,
-		fc:                forks.NewForkController(buffer),
-		buffer:            buffer,
-		flushQueue:        make(chan uint64, flushQueueCap),
-		flushPending:      newFlushBarrier(),
-		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
-		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
-		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
-		witnessBlockCache: make(map[tcommon.Address]int64),
-		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
+		db:                     db,
+		chaindb:                chaindb,
+		stateDB:                stateDB,
+		config:                 config,
+		fc:                     forks.NewForkController(buffer),
+		buffer:                 buffer,
+		flushQueue:             make(chan uint64, flushQueueCap),
+		flushPending:           newFlushBarrier(),
+		rewardAcctCache:        make(map[tcommon.Address]*state.AccountSnapshot),
+		rewardAcctSeen:         make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs:        make([]tcommon.Address, 0, 128),
+		witnessBlockCache:      make(map[tcommon.Address]int64),
+		forkStatsCache:         make(map[int32][]byte, len(forks.KnownVersions)),
+		deferredKVCommitOwners: make(map[tcommon.Address]struct{}),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -423,6 +426,49 @@ func (bc *BlockChain) GenesisTimestamp() int64 {
 // Config returns the chain config.
 func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
+}
+
+func (bc *BlockChain) stateCommitOptions(block *types.Block, wasMaintenanceBlock bool) state.CommitOptions {
+	if bc.config == nil || bc.config.EffectiveStateCommitmentMode() != params.StateCommitmentModeLatest {
+		return state.CommitOptions{}
+	}
+	opts := state.CommitOptions{
+		DeferAccountKVCommitment: state.HotAccountKVCommitmentDomain,
+	}
+	if bc.stateCommitmentCheckpointDue(block, wasMaintenanceBlock) {
+		opts.RebuildDeferredAccountKVRoots = true
+		opts.RebuildAccountKVRootOwners = bc.deferredKVCommitOwnerList()
+		return opts
+	}
+	opts.DeferredAccountKVRootOwner = func(addr tcommon.Address) {
+		bc.deferredKVCommitOwners[addr] = struct{}{}
+	}
+	return opts
+}
+
+func (bc *BlockChain) stateCommitmentCheckpointDue(block *types.Block, wasMaintenanceBlock bool) bool {
+	if bc.config == nil || bc.config.EffectiveStateCommitmentMode() != params.StateCommitmentModeLatest {
+		return false
+	}
+	if wasMaintenanceBlock {
+		return true
+	}
+	interval := bc.config.EffectiveStateCommitmentInterval()
+	return interval > 0 && block.Number() > 0 && block.Number()%interval == 0
+}
+
+func (bc *BlockChain) deferredKVCommitOwnerList() []tcommon.Address {
+	if len(bc.deferredKVCommitOwners) == 0 {
+		return nil
+	}
+	addrs := make([]tcommon.Address, 0, len(bc.deferredKVCommitOwners))
+	for addr := range bc.deferredKVCommitOwners {
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+	})
+	return addrs
 }
 
 // ForkController returns the chain's fork controller.
@@ -561,6 +607,8 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			"stateCommit", ethcommon.PrettyDuration(stats.StateCommit),
 			"stateCommitKVCompute", ethcommon.PrettyDuration(stats.StateCommitDetail.KVCompute),
 			"stateCommitKVNodes", ethcommon.PrettyDuration(stats.StateCommitDetail.KVNodeWrite),
+			"stateCommitDeferredKVItems", stats.StateCommitDetail.DeferredKVItems,
+			"stateCommitRebuiltKVItems", stats.StateCommitDetail.RebuiltKVItems,
 			"stateCommitAccountMarshal", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieMarshal),
 			"stateCommitAccountTrieWrite", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieWrite),
 			"stateCommitTrieCommit", ethcommon.PrettyDuration(stats.StateCommitDetail.AccountTrieCommit),
@@ -926,9 +974,13 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).
-	newRoot, commitStats, err := statedb.CommitWithStats()
+	commitOpts := bc.stateCommitOptions(block, wasMaintenanceBlock)
+	newRoot, commitStats, err := statedb.CommitWithStatsOptions(commitOpts)
 	if err != nil {
 		return fmt.Errorf("commit state: %w", err)
+	}
+	if commitOpts.RebuildDeferredAccountKVRoots {
+		bc.deferredKVCommitOwners = make(map[tcommon.Address]struct{})
 	}
 	stats.StateCommitDetail = commitStats
 	bc.updateSystemAccountCache(statedb)
@@ -1488,6 +1540,10 @@ func (bc *BlockChain) sysKVAt(root tcommon.Hash) *state.StateDB {
 	sysKV, err := state.New(root, bc.stateDB)
 	if err != nil {
 		return nil
+	}
+	if bc.config != nil && bc.config.EffectiveStateCommitmentMode() == params.StateCommitmentModeLatest {
+		sysKV.SetAccountKVIndexStore(bc.buffer)
+		sysKV.SetAccountKVIndexReads(true)
 	}
 	return sysKV
 }

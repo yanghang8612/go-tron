@@ -4,6 +4,8 @@
 // registered here; no raw domain constants may be scattered through actuators.
 package kvdomains
 
+import "sort"
+
 // KVDomain identifies a logical namespace within an account's generic KV space.
 type KVDomain uint16
 
@@ -80,4 +82,14 @@ func IsRegistered(d KVDomain) bool {
 // Name returns the registered name for d, or "" if unregistered.
 func Name(d KVDomain) string {
 	return registry[d]
+}
+
+// All returns the registered domains in ascending numeric order.
+func All() []KVDomain {
+	out := make([]KVDomain, 0, len(registry))
+	for domain := range registry {
+		out = append(out, domain)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }

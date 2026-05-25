@@ -95,8 +95,9 @@ type StateDB struct {
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that
-// matter during sync. It is intentionally observational: Commit and
-// CommitWithStats execute the same state transition and persist the same keys.
+// matter during sync. With zero-value CommitOptions it is intentionally
+// observational: Commit and CommitWithStats execute the same state transition
+// and persist the same keys.
 type CommitStats struct {
 	Prepare           time.Duration
 	FlatWrite         time.Duration
@@ -118,8 +119,49 @@ type CommitStats struct {
 	Accounts   int
 	KVAccounts int
 	KVItems    int
+	// DeferredKV* counts account-KV items whose physical latest-domain rows
+	// were written now while nested account-KV trie/root work was postponed.
+	DeferredKVAccounts int
+	DeferredKVItems    int
+	// RebuiltKV* counts accounts whose nested account-KV root was rebuilt from
+	// latest-domain rows during a batched checkpoint.
+	RebuiltKVAccounts int
+	RebuiltKVItems    int
 
 	Mutations CommitMutationStats
+}
+
+// CommitOptions controls optional Erigon-style commit behavior. The zero value
+// is the full compatibility path: latest-domain rows, nested account-KV roots,
+// account trie root, and trie nodes are all committed before returning.
+type CommitOptions struct {
+	// DeferAccountKVCommitment returns true for domains whose nested
+	// account-KV trie/root update may be postponed after the latest-domain row
+	// is written.
+	DeferAccountKVCommitment func(kvdomains.KVDomain) bool
+	// RebuildDeferredAccountKVRoots forces deferred domains touched by this
+	// commit to rebuild their owner's full nested KV root from latest-domain
+	// rows instead of postponing again.
+	RebuildDeferredAccountKVRoots bool
+	// RebuildAccountKVRootOwners are additional owners, usually accumulated
+	// across earlier deferred blocks, whose nested KV root must be rebuilt from
+	// latest-domain rows in this commit even if the owner is otherwise clean.
+	RebuildAccountKVRootOwners []tcommon.Address
+	// DeferredAccountKVRootOwner is called once per owner whose nested KV root
+	// remains deferred after latest-domain rows have been written.
+	DeferredAccountKVRootOwner func(tcommon.Address)
+}
+
+// HotAccountKVCommitmentDomain reports the domains currently deferred by
+// latest-mode block import. These are the measured hot domains from sync
+// profiling; other domains keep the per-block rooted commitment path.
+func HotAccountKVCommitmentDomain(domain kvdomains.KVDomain) bool {
+	switch domain {
+	case kvdomains.SystemDynamicProperty, kvdomains.SystemReward, kvdomains.WitnessCapsule:
+		return true
+	default:
+		return false
+	}
 }
 
 // Add folds another commit breakdown into this one.
@@ -141,6 +183,10 @@ func (s *CommitStats) Add(o CommitStats) {
 	s.Accounts += o.Accounts
 	s.KVAccounts += o.KVAccounts
 	s.KVItems += o.KVItems
+	s.DeferredKVAccounts += o.DeferredKVAccounts
+	s.DeferredKVItems += o.DeferredKVItems
+	s.RebuiltKVAccounts += o.RebuiltKVAccounts
+	s.RebuiltKVItems += o.RebuiltKVItems
 	s.Mutations.Add(o.Mutations)
 }
 
@@ -1957,6 +2003,7 @@ type accountCommitPlan struct {
 	hadKVDirty        bool
 	kvTrieChanged     bool
 	kvLatestChanged   bool
+	kvRootRebuild     bool
 }
 
 func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
@@ -1980,6 +2027,47 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 		plans = append(plans, plan)
 	}
 	return plans, nil
+}
+
+func (s *StateDB) appendAccountKVRootRebuildPlans(plans []*accountCommitPlan, owners []tcommon.Address) []*accountCommitPlan {
+	if len(owners) == 0 {
+		return plans
+	}
+	byAddr := make(map[tcommon.Address]*accountCommitPlan, len(plans))
+	for _, plan := range plans {
+		byAddr[plan.addr] = plan
+	}
+	unique := make(map[tcommon.Address]struct{}, len(owners))
+	for _, addr := range owners {
+		if plan := byAddr[addr]; plan != nil {
+			plan.kvRootRebuild = true
+			continue
+		}
+		unique[addr] = struct{}{}
+	}
+	if len(unique) == 0 {
+		return plans
+	}
+	addrs := make([]tcommon.Address, 0, len(unique))
+	for addr := range unique {
+		addrs = append(addrs, addr)
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+	})
+	for _, addr := range addrs {
+		obj := s.getStateObject(addr)
+		if obj == nil || obj.deleted {
+			continue
+		}
+		plans = append(plans, &accountCommitPlan{
+			addr:           addr,
+			accountTrieKey: ethcommon.BytesToHash(trieKey(addr)),
+			obj:            obj,
+			kvRootRebuild:  true,
+		})
+	}
+	return plans
 }
 
 func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject) (*accountCommitPlan, error) {
@@ -2118,7 +2206,7 @@ func accountTrieCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
 	return out
 }
 
-func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan, stats *CommitStats) error {
+func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan, stats *CommitStats, opts CommitOptions) error {
 	obj := plan.obj
 	addr := plan.addr
 	if plan.deleteAccount {
@@ -2145,6 +2233,12 @@ func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan, stats *Comm
 	}
 	generationDirty := obj.accountKVGenerationDirty
 	hadKVChanges := plan.kvTrieChanged || plan.kvLatestChanged
+	if opts.DeferAccountKVCommitment != nil && !plan.kvTrieChanged {
+		// Latest-domain writes alone must not force an account-trie envelope
+		// rewrite in latest mode. The envelope's AccountKVRoot is reconciled
+		// when the deferred owner is rebuilt at a checkpoint.
+		hadKVChanges = false
+	}
 	needsAccountTrieUpdate := obj.accountDirty || obj.created || obj.codeDirty || generationDirty || hadKVChanges
 	if generationDirty || hadKVChanges {
 		start := time.Now()
@@ -2227,6 +2321,13 @@ func (s *StateDB) Commit() (tcommon.Hash, error) {
 // CommitWithStats writes all dirty accounts to the MPT and returns the new
 // root hash plus a phase breakdown for sync/profile diagnostics.
 func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
+	return s.CommitWithStatsOptions(CommitOptions{})
+}
+
+// CommitWithStatsOptions writes dirty latest-domain rows and the account root
+// according to opts. The zero-value opts preserves the full per-block rooted
+// commitment behavior used by consensus-compatible default sync.
+func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, CommitStats, error) {
 	var stats CommitStats
 	last := time.Now()
 	mark := func(phase *time.Duration) {
@@ -2247,6 +2348,7 @@ func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
 	if err != nil {
 		return tcommon.Hash{}, stats, err
 	}
+	plans = s.appendAccountKVRootRebuildPlans(plans, opts.RebuildAccountKVRootOwners)
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
 	mark(&stats.Prepare)
@@ -2267,11 +2369,11 @@ func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
 	}
 	mark(&stats.FlatFlush)
 
-	if err := s.commitAccountKVPlans(plans, trieNodeWriter, &stats); err != nil {
+	if err := s.commitAccountKVPlans(plans, trieNodeWriter, &stats, opts); err != nil {
 		return tcommon.Hash{}, stats, err
 	}
 	for _, plan := range accountTrieCommitPlans(plans) {
-		if err := s.updateAccountTrieWithPlan(plan, &stats); err != nil {
+		if err := s.updateAccountTrieWithPlan(plan, &stats, opts); err != nil {
 			return tcommon.Hash{}, stats, err
 		}
 	}

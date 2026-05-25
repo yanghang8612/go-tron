@@ -155,6 +155,16 @@ var (
 		Name:  "state.commitment.checkpoints",
 		Usage: "Write transitional Erigon-style latest-domain commitment checkpoints after each block",
 	}
+	stateCommitmentModeFlag = &cli.StringFlag{
+		Name:  "state.commitment.mode",
+		Usage: "State commitment mode: full (per-block rooted commitment) | latest (latest-domain writes with batched hot KV commitments)",
+		Value: params.StateCommitmentModeFull,
+	}
+	stateCommitmentIntervalFlag = &cli.Uint64Flag{
+		Name:  "state.commitment.interval",
+		Usage: "Checkpoint interval in blocks for --state.commitment.mode=latest",
+		Value: params.StateCommitmentDefaultInterval,
+	}
 	stateTrieCacheFlag = &cli.IntFlag{
 		Name:  "state.trie.cache",
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
@@ -245,6 +255,8 @@ var app = &cli.App{
 		gcmodeFlag,
 		historyEnabledFlag,
 		stateCommitmentCheckpointsFlag,
+		stateCommitmentModeFlag,
+		stateCommitmentIntervalFlag,
 		stateTrieCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
@@ -394,6 +406,23 @@ func gtron(ctx *cli.Context) error {
 		return err
 	}
 	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
+	switch mode := ctx.String("state.commitment.mode"); mode {
+	case "", params.StateCommitmentModeFull:
+		chainConfig.StateCommitmentMode = params.StateCommitmentModeFull
+	case params.StateCommitmentModeLatest:
+		chainConfig.StateCommitmentMode = params.StateCommitmentModeLatest
+	default:
+		closeStores()
+		return fmt.Errorf("invalid --state.commitment.mode %q (want %q or %q)", mode, params.StateCommitmentModeFull, params.StateCommitmentModeLatest)
+	}
+	chainConfig.StateCommitmentInterval = ctx.Uint64("state.commitment.interval")
+	if chainConfig.EffectiveStateCommitmentMode() == params.StateCommitmentModeLatest {
+		log.Warn("Latest-domain state commitment mode enabled",
+			"mode", chainConfig.EffectiveStateCommitmentMode(),
+			"checkpointInterval", chainConfig.EffectiveStateCommitmentInterval(),
+			"compatibility", "rooted account-KV commitments are batched",
+		)
+	}
 
 	// Create blockchain
 	stateDBConfig, err := makeStateDatabaseConfig(ctx)

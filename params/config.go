@@ -42,6 +42,16 @@ type ChainConfig struct {
 	// intentionally opt-in until the incremental commitment domain replaces
 	// nested-MPT root building.
 	StateCommitmentCheckpoints bool
+	// StateCommitmentMode selects how block import maintains the internal
+	// rooted state commitment. "full" preserves the legacy per-block account-KV
+	// and account-trie commitment path. "latest" writes physical latest-domain
+	// rows on every block and defers the hottest nested account-KV commitments
+	// to periodic/maintenance checkpoints.
+	StateCommitmentMode string
+	// StateCommitmentInterval is the checkpoint cadence, in blocks, for
+	// StateCommitmentModeLatest. Zero falls back to
+	// StateCommitmentDefaultInterval.
+	StateCommitmentInterval uint64
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
@@ -54,11 +64,25 @@ const (
 	HistoryModeArchive = "archive"
 )
 
+// State commitment modes. Full is the compatibility default. Latest is the
+// Erigon-style sync mode that keeps latest-domain rows current on every block
+// and batches the hottest rooted account-KV commitments.
+const (
+	StateCommitmentModeFull   = "full"
+	StateCommitmentModeLatest = "latest"
+)
+
 // HistoryDefaultPruneWindow is the default retention window for "full"
 // mode. 27_648 ≈ 27 maintenance rounds × 1024 slots per round — covers the
 // reorg horizon with a generous wallet-tx grace window. See the spec's
 // Pruning section for the sizing rationale.
 const HistoryDefaultPruneWindow uint64 = 27 * 1024
+
+// StateCommitmentDefaultInterval is the default batched rooted-commitment
+// cadence for latest mode. It is deliberately far shorter than the TRON
+// maintenance interval, so the rooted view is regularly reconciled even during
+// long non-maintenance sync spans.
+const StateCommitmentDefaultInterval uint64 = 1024
 
 func chainConfigInt64(v int64) *int64 { return &v }
 
@@ -94,6 +118,29 @@ func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
 		return HistoryDefaultPruneWindow
 	}
 	return c.HistoryPruneWindow
+}
+
+// EffectiveStateCommitmentMode returns the active commitment mode. Blank and
+// unrecognised values normalise to full so old configs keep the exact
+// compatibility path unless latest mode is explicitly selected.
+func (c *ChainConfig) EffectiveStateCommitmentMode() string {
+	if c == nil || c.StateCommitmentMode == "" {
+		return StateCommitmentModeFull
+	}
+	switch c.StateCommitmentMode {
+	case StateCommitmentModeLatest:
+		return StateCommitmentModeLatest
+	default:
+		return StateCommitmentModeFull
+	}
+}
+
+// EffectiveStateCommitmentInterval returns the latest-mode checkpoint cadence.
+func (c *ChainConfig) EffectiveStateCommitmentInterval() uint64 {
+	if c == nil || c.StateCommitmentInterval == 0 {
+		return StateCommitmentDefaultInterval
+	}
+	return c.StateCommitmentInterval
 }
 
 var MainnetChainConfig = &ChainConfig{

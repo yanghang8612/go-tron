@@ -31,6 +31,24 @@ func TestNileConfig(t *testing.T) {
 	}
 }
 
+func TestStateCommitmentConfigDefaults(t *testing.T) {
+	cfg := &ChainConfig{}
+	if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeFull {
+		t.Fatalf("default state commitment mode = %q, want %q", got, StateCommitmentModeFull)
+	}
+	if got := cfg.EffectiveStateCommitmentInterval(); got != StateCommitmentDefaultInterval {
+		t.Fatalf("default state commitment interval = %d, want %d", got, StateCommitmentDefaultInterval)
+	}
+	cfg.StateCommitmentMode = StateCommitmentModeLatest
+	cfg.StateCommitmentInterval = 64
+	if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeLatest {
+		t.Fatalf("latest state commitment mode = %q, want %q", got, StateCommitmentModeLatest)
+	}
+	if got := cfg.EffectiveStateCommitmentInterval(); got != 64 {
+		t.Fatalf("state commitment interval = %d, want 64", got)
+	}
+}
+
 // TestNileGenesis_ProposalExpireTimeOverride locks the Nile-specific
 // proposal_expire_time seed against accidental removal. java-tron's
 // config-nile.conf:517 sets `proposalExpireTime = 600000` (10 min);

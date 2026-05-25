@@ -854,6 +854,95 @@ func TestAccountKVLatestIndexReadThroughIsOptIn(t *testing.T) {
 	}
 }
 
+func TestAccountKVDeferredHotCommitWritesLatestOnly(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x70)
+	key := []byte("cycle")
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	root, stats, err := sdb.CommitWithStatsOptions(CommitOptions{
+		DeferAccountKVCommitment: HotAccountKVCommitmentDomain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.DeferredKVAccounts != 1 || stats.DeferredKVItems != 1 || stats.RebuiltKVAccounts != 0 {
+		t.Fatalf("deferred stats = accounts:%d items:%d rebuilt:%d, want 1/1/0", stats.DeferredKVAccounts, stats.DeferredKVItems, stats.RebuiltKVAccounts)
+	}
+
+	rooted, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := rooted.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || ok {
+		t.Fatalf("rooted read unexpectedly saw deferred value: ok=%v err=%v", ok, err)
+	}
+	rooted.SetAccountKVIndexStore(sdb.db.DiskDB())
+	rooted.SetAccountKVIndexReads(true)
+	if got, ok, err := rooted.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || !ok || string(got) != "v1" {
+		t.Fatalf("latest read = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+}
+
+func TestAccountKVDeferredHotCommitCanRebuildCleanOwnerFromLatest(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x71)
+	key := []byte("cycle")
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	root1, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	live, err := New(root1, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.SetAccountKVIndexStore(sdb.db.DiskDB())
+	live.SetAccountKVIndexReads(true)
+	if err := live.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	root2, stats, err := live.CommitWithStatsOptions(CommitOptions{
+		DeferAccountKVCommitment: HotAccountKVCommitmentDomain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.DeferredKVAccounts != 1 || stats.DeferredKVItems != 1 {
+		t.Fatalf("deferred stats = accounts:%d items:%d, want 1/1", stats.DeferredKVAccounts, stats.DeferredKVItems)
+	}
+
+	checkpoint, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.SetAccountKVIndexStore(sdb.db.DiskDB())
+	checkpoint.SetAccountKVIndexReads(true)
+	root3, stats, err := checkpoint.CommitWithStatsOptions(CommitOptions{
+		RebuildAccountKVRootOwners: []tcommon.Address{addr},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.RebuiltKVAccounts != 1 || stats.RebuiltKVItems != 1 {
+		t.Fatalf("rebuilt stats = accounts:%d items:%d, want 1/1", stats.RebuiltKVAccounts, stats.RebuiltKVItems)
+	}
+	if root3 == root2 {
+		t.Fatal("checkpoint rebuild did not move rooted state")
+	}
+	rooted, err := New(root3, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := rooted.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || !ok || string(got) != "v2" {
+		t.Fatalf("rebuilt rooted read = %q ok=%v err=%v, want v2", got, ok, err)
+	}
+}
+
 func TestAccountKVFinalWriteSkipsSnapshotJournal(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x6e)

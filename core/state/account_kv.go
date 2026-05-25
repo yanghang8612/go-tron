@@ -67,6 +67,8 @@ type accountKVIndexStore interface {
 	ethdb.Iteratee
 }
 
+var accountKVDomains = kvdomains.All()
+
 func newAccountKVLatestBatch(index accountKVIndexStore) *accountKVLatestBatch {
 	w := &accountKVLatestBatch{writer: index}
 	if batcher, ok := index.(ethdb.Batcher); ok {
@@ -220,6 +222,13 @@ func (e kvEntry) encodedValue() []byte {
 	wrapped := make([]byte, 1+len(e.val))
 	wrapped[0] = kvPresencePrefix
 	copy(wrapped[1:], e.val)
+	return wrapped
+}
+
+func wrapKVValue(value []byte) []byte {
+	wrapped := make([]byte, 1+len(value))
+	wrapped[0] = kvPresencePrefix
+	copy(wrapped[1:], value)
 	return wrapped
 }
 
@@ -747,6 +756,35 @@ func (s *StateDB) computeAccountKVCommitment(obj *stateObject, plan *accountKVCo
 	return result, nil
 }
 
+func (s *StateDB) computeAccountKVCommitmentFromLatest(obj *stateObject) (accountKVCommitResult, int, error) {
+	result := accountKVCommitResult{root: EmptyKVRoot}
+	if obj == nil {
+		return result, 0, nil
+	}
+	tr, err := s.db.OpenTrie(ethcommon.Hash(EmptyKVRoot))
+	if err != nil {
+		return accountKVCommitResult{}, 0, err
+	}
+	items := 0
+	for _, domain := range accountKVDomains {
+		if err := rawdb.IterateStateKVLatest(s.accountKVIndex(), obj.address, obj.accountKVGeneration, domain, nil, func(logicalKey, value []byte) (bool, error) {
+			comp := kvCompositeKey(domain, logicalKey)
+			if err := tr.Update(kvTrieKey(comp), wrapKVValue(value)); err != nil {
+				return false, err
+			}
+			items++
+			return true, nil
+		}); err != nil {
+			return accountKVCommitResult{}, 0, err
+		}
+	}
+	root, nodes := tr.Commit(false)
+	result.root = tcommon.Hash(root)
+	result.trieChanged = result.root != obj.accountKVRoot
+	result.nodes = nodes
+	return result, items, nil
+}
+
 func (s *StateDB) accountKVCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
 	out := make([]*accountCommitPlan, 0, len(plans))
 	for _, plan := range plans {
@@ -824,7 +862,7 @@ func (s *StateDB) computeAccountKVCommitments(plans []*accountCommitPlan) ([]acc
 	return results, nil
 }
 
-func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *trieNodeBatchWriter, stats *CommitStats) error {
+func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *trieNodeBatchWriter, stats *CommitStats, opts CommitOptions) error {
 	kvPlans := s.accountKVCommitPlans(plans)
 	if stats != nil {
 		stats.KVAccounts += len(kvPlans)
@@ -833,8 +871,53 @@ func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *t
 		}
 	}
 
+	incrementalPlans := make([]*accountCommitPlan, 0, len(kvPlans))
+	incrementalOriginals := make([]*accountCommitPlan, 0, len(kvPlans))
+	rebuildPlans := make([]*accountCommitPlan, 0, len(plans))
+	rebuildSeen := make(map[tcommon.Address]struct{})
+	addRebuildPlan := func(plan *accountCommitPlan) {
+		if plan == nil || plan.deleteAccount || plan.obj == nil {
+			return
+		}
+		if _, ok := rebuildSeen[plan.addr]; ok {
+			return
+		}
+		rebuildSeen[plan.addr] = struct{}{}
+		rebuildPlans = append(rebuildPlans, plan)
+	}
+	for _, plan := range plans {
+		if plan.kvRootRebuild {
+			addRebuildPlan(plan)
+		}
+	}
+	for _, plan := range kvPlans {
+		immediate, deferred := splitAccountKVCommitItems(plan.kvPlan.items, opts.DeferAccountKVCommitment)
+		if len(deferred) == 0 {
+			if _, rebuilding := rebuildSeen[plan.addr]; !rebuilding {
+				incrementalPlans = append(incrementalPlans, plan)
+				incrementalOriginals = append(incrementalOriginals, plan)
+			}
+			continue
+		}
+		if opts.RebuildDeferredAccountKVRoots {
+			addRebuildPlan(plan)
+			continue
+		}
+		if stats != nil {
+			stats.DeferredKVAccounts++
+			stats.DeferredKVItems += len(deferred)
+		}
+		if opts.DeferredAccountKVRootOwner != nil {
+			opts.DeferredAccountKVRootOwner(plan.addr)
+		}
+		if len(immediate) > 0 {
+			incrementalPlans = append(incrementalPlans, cloneAccountKVCommitPlan(plan, immediate))
+			incrementalOriginals = append(incrementalOriginals, plan)
+		}
+	}
+
 	start := time.Now()
-	results, err := s.computeAccountKVCommitments(kvPlans)
+	results, err := s.computeAccountKVCommitments(incrementalPlans)
 	if stats != nil {
 		stats.KVCompute += time.Since(start)
 	}
@@ -843,19 +926,83 @@ func (s *StateDB) commitAccountKVPlans(plans []*accountCommitPlan, nodeWriter *t
 	}
 
 	start = time.Now()
-	for i, plan := range kvPlans {
+	for i := range incrementalPlans {
 		result := results[i]
+		if err := nodeWriter.writeNodeSet(result.nodes); err != nil {
+			return err
+		}
+		original := incrementalOriginals[i]
+		original.kvTrieChanged = result.trieChanged
+		original.obj.accountKVRoot = result.root
+		s.invalidateAccountKVTrie(original.addr)
+	}
+	if stats != nil {
+		stats.KVNodeWrite += time.Since(start)
+	}
+	if len(rebuildPlans) == 0 {
+		return nil
+	}
+
+	start = time.Now()
+	rebuildResults := make([]accountKVCommitResult, len(rebuildPlans))
+	rebuildItems := make([]int, len(rebuildPlans))
+	for i, plan := range rebuildPlans {
+		result, items, err := s.computeAccountKVCommitmentFromLatest(plan.obj)
+		if err != nil {
+			if stats != nil {
+				stats.KVCompute += time.Since(start)
+			}
+			return err
+		}
+		rebuildResults[i] = result
+		rebuildItems[i] = items
+	}
+	if stats != nil {
+		stats.KVCompute += time.Since(start)
+	}
+
+	start = time.Now()
+	for i, plan := range rebuildPlans {
+		result := rebuildResults[i]
 		if err := nodeWriter.writeNodeSet(result.nodes); err != nil {
 			return err
 		}
 		plan.kvTrieChanged = result.trieChanged
 		plan.obj.accountKVRoot = result.root
 		s.invalidateAccountKVTrie(plan.addr)
+		if stats != nil {
+			stats.RebuiltKVAccounts++
+			stats.RebuiltKVItems += rebuildItems[i]
+		}
 	}
 	if stats != nil {
 		stats.KVNodeWrite += time.Since(start)
 	}
 	return nil
+}
+
+func splitAccountKVCommitItems(items []kvCommitItem, deferDomain func(kvdomains.KVDomain) bool) ([]kvCommitItem, []kvCommitItem) {
+	if deferDomain == nil || len(items) == 0 {
+		return items, nil
+	}
+	immediate := make([]kvCommitItem, 0, len(items))
+	deferred := make([]kvCommitItem, 0, len(items))
+	for _, item := range items {
+		if deferDomain(item.domain) {
+			deferred = append(deferred, item)
+			continue
+		}
+		immediate = append(immediate, item)
+	}
+	return immediate, deferred
+}
+
+func cloneAccountKVCommitPlan(plan *accountCommitPlan, items []kvCommitItem) *accountCommitPlan {
+	clone := *plan
+	kvPlan := *plan.kvPlan
+	kvPlan.items = append([]kvCommitItem(nil), items...)
+	clone.kvPlan = &kvPlan
+	return &clone
 }
 
 func (s *StateDB) commitAccountKVLatest(obj *stateObject, plan *accountKVCommitPlan, index accountKVIndexStore, latest *accountKVLatestBatch) (bool, error) {
