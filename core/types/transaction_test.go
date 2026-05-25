@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/crypto"
@@ -66,6 +67,55 @@ func TestTransactionContractType(t *testing.T) {
 	ct := tx.ContractType()
 	if ct != corepb.Transaction_Contract_TransferContract {
 		t.Fatalf("expected TransferContract, got %v", ct)
+	}
+}
+
+// TestRecoverSigners_JavaSignatureV pins java-tron Rsv.fromSignature parity for
+// 65-byte signatures whose v byte is already 27/28. The fixture is Nile block
+// 3,595,432 tx 76d86fa20262de881670ff502e4164fb99f6b39f9652a00f0c173ab60aa2ae10;
+// its signature ends in 0x1c. go-ethereum expects recovery id 0/1, so passing
+// the raw signature directly rejects a block java-tron accepts.
+func TestRecoverSigners_JavaSignatureV(t *testing.T) {
+	rawDataHex := "0a02dc902208d3638f92df8a2be94090a0eafb8a2e5a69080112650a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412340a1541b0e03d96eec5aba4037e4fca2431da6fdba85068121541b03c7de5f60a49a2f3098463691ca2e137d822d618e0d691d01270bfa9cdd28a2e"
+	sigHex := "c37ebd8ba2abfdcd2945d3f63994165bf778fe35415dd6aed37b77446ef9783170f0742aa17d7fa56fb98c65e67db7190b927272a95e2de72dee1cb9d166c6441c"
+	const wantBase58 = "TS6SZL6hBF4pVU6oyvSJubZqKfi73BV48F"
+	const wantTxID = "76d86fa20262de881670ff502e4164fb99f6b39f9652a00f0c173ab60aa2ae10"
+
+	rawData, err := hex.DecodeString(rawDataHex)
+	if err != nil {
+		t.Fatalf("decode rawData: %v", err)
+	}
+	rawPB := &corepb.TransactionRaw{}
+	if err := proto.Unmarshal(rawData, rawPB); err != nil {
+		t.Fatalf("unmarshal rawData: %v", err)
+	}
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil {
+		t.Fatalf("decode sig: %v", err)
+	}
+	if len(sig) != 65 {
+		t.Fatalf("sig len=%d, want 65", len(sig))
+	}
+	if sig[64] != 28 {
+		t.Fatalf("sig v=%d, want 28", sig[64])
+	}
+
+	tx := NewTransactionFromPB(&corepb.Transaction{
+		RawData:   rawPB,
+		Signature: [][]byte{sig},
+	})
+	if got := tx.Hash(); hex.EncodeToString(got[:]) != wantTxID {
+		t.Fatalf("txID mismatch: got %x, want %s", got, wantTxID)
+	}
+	addrs, err := tx.RecoverSigners()
+	if err != nil {
+		t.Fatalf("RecoverSigners: %v", err)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("addrs len=%d, want 1", len(addrs))
+	}
+	if got := crypto.AddressToBase58(addrs[0]); got != wantBase58 {
+		t.Fatalf("addr = %s, want %s", got, wantBase58)
 	}
 }
 
@@ -140,6 +190,42 @@ func TestRecoverSigners_RejectsShortSignature(t *testing.T) {
 	})
 	if _, err := tx.RecoverSigners(); err != ErrBadSignatureLength {
 		t.Fatalf("err = %v, want ErrBadSignatureLength", err)
+	}
+}
+
+func TestCanonicalSignatureKey_NormalizesLikeJavaTron(t *testing.T) {
+	sig0 := make([]byte, 66)
+	for i := range 64 {
+		sig0[i] = byte(i + 1)
+	}
+	sig0[64] = 1
+	sig0[65] = 2
+	sig28 := append([]byte(nil), sig0...)
+	sig28[64] = 28
+	sig28[65] = 3
+
+	key0, err := CanonicalSignatureKey(sig0)
+	if err != nil {
+		t.Fatalf("CanonicalSignatureKey(v=1): %v", err)
+	}
+	key28, err := CanonicalSignatureKey(sig28)
+	if err != nil {
+		t.Fatalf("CanonicalSignatureKey(v=28): %v", err)
+	}
+	if key0 != key28 {
+		t.Fatal("v=1 and v=28 should dedupe to the same java-tron signature key")
+	}
+	if len(key0) != 65 {
+		t.Fatalf("key len=%d, want 65", len(key0))
+	}
+	if key0[0] != 28 {
+		t.Fatalf("key header=%d, want 28", key0[0])
+	}
+
+	bad := append([]byte(nil), sig0...)
+	bad[64] = 26
+	if _, err := CanonicalSignatureKey(bad); !errors.Is(err, ErrBadSignatureRecoveryID) {
+		t.Fatalf("bad recovery id err=%v, want ErrBadSignatureRecoveryID", err)
 	}
 }
 

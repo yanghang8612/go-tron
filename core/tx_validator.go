@@ -145,17 +145,19 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	// signature, reject on duplicate, and never short-circuit once threshold
 	// is reached — a later unauthorized or duplicate signer still aborts.
 	//
-	// Pre-VERSION_4_7_1 java dedups by the canonical r||s||v projection of
-	// the signature (getBase64FromByteString → Rsv.fromSignature on bytes
-	// [0:65]); trailing bytes past v don't affect the dedup key. Use sig[:65]
-	// to stay equivalent — the historical Nile tx that motivated this carries
-	// 66-byte sigs with a stray trailing byte, and a naive string(sigs[i])
-	// key would silently accept duplicates that java rejects.
+	// Pre-VERSION_4_7_1 java dedups by getBase64FromByteString:
+	// Rsv.fromSignature over bytes [0:65] followed by ECDSASignature.toBase64,
+	// i.e. canonical v||r||s. This normalizes v=0/1 to 27/28 and ignores
+	// trailing bytes past v. A naive string(sigs[i]) key would silently accept
+	// duplicates that java rejects.
 	var totalWeight int64
 	seenAddr := make(map[tcommon.Address]struct{}, len(addrs))
 	seenSig := make(map[string]struct{}, len(sigs))
 	for i, addr := range addrs {
-		sigKey := string(sigs[i][:65])
+		sigKey, err := types.CanonicalSignatureKey(sigs[i])
+		if err != nil {
+			return ErrInvalidTxSignature
+		}
 		var dup bool
 		if multiSigByAddress {
 			_, dup = seenAddr[addr]

@@ -84,28 +84,77 @@ func (tx *Transaction) Signatures() [][]byte {
 // canonical 65 bytes (r ‖ s ‖ v). Returned by RecoverSigners.
 var ErrBadSignatureLength = errors.New("transaction: signature length < 65")
 
+// ErrBadSignatureRecoveryID means a tx signature's v/recovery-id byte is outside
+// java-tron's accepted range after Rsv.fromSignature normalization.
+var ErrBadSignatureRecoveryID = errors.New("transaction: signature recovery id out of range")
+
+func javaSignatureHeader(sig []byte) (byte, error) {
+	if len(sig) < 65 {
+		return 0, ErrBadSignatureLength
+	}
+	v := int(sig[64])
+	if v < 27 {
+		v += 27
+	}
+	if v < 27 || v > 34 {
+		return 0, ErrBadSignatureRecoveryID
+	}
+	return byte(v), nil
+}
+
+func signatureForRecovery(sig []byte) ([]byte, error) {
+	header, err := javaSignatureHeader(sig)
+	if err != nil {
+		return nil, err
+	}
+	if header >= 31 {
+		header -= 4
+	}
+	out := make([]byte, 65)
+	copy(out, sig[:65])
+	out[64] = header - 27
+	return out, nil
+}
+
+// CanonicalSignatureKey returns java-tron's pre-VERSION_4_7_1 duplicate-signature
+// key for a transaction signature. TransactionCapsule.getBase64FromByteString
+// canonicalizes through Rsv.fromSignature and ECDSASignature.toBase64, which is
+// v||r||s with v normalized into java's 27..34 header range; bytes after the
+// first 65 are ignored.
+func CanonicalSignatureKey(sig []byte) (string, error) {
+	header, err := javaSignatureHeader(sig)
+	if err != nil {
+		return "", err
+	}
+	key := make([]byte, 65)
+	key[0] = header
+	copy(key[1:33], sig[:32])
+	copy(key[33:65], sig[32:64])
+	return string(key), nil
+}
+
 // RecoverSigners returns the address recovered from each signature in
 // tx.Signatures, signing over the tx RawData hash. The order matches the
 // signature order; callers that need set semantics (e.g. weight summation
 // across distinct keys) must dedupe themselves.
 //
-// Canonical signatures are 65 bytes (r ‖ s ‖ v) — the same format java-tron's
-// ECKey.signatureToAddress consumes. java's Rsv.fromSignature takes [0:32],
-// [32:64], [64] and silently ignores anything past byte 65; checkWeight only
-// rejects sig.size() < 65 (TransactionCapsule.checkWeight). Historical Nile
-// txs (e.g. 8cc541fdad2c576291387462a9ec9f50594b13f05fa03b7d7916f348649a4909
-// at block 1,793,761) carry 66-byte payloads with trailing 0x02 from an old
-// SDK; refusing them desyncs from java. Match the parity rule: require
-// len(sig) >= 65, recover from sig[:65].
+// Canonical signatures are at least 65 bytes (r ‖ s ‖ v). java's
+// Rsv.fromSignature takes [0:32], [32:64], [64], maps v<27 to v+27, and
+// silently ignores anything past byte 65; checkWeight only rejects
+// sig.size() < 65 (TransactionCapsule.checkWeight). Historical Nile txs carry
+// both 66-byte payloads with trailing bytes and Java-style v=27/28 signatures.
+// Match the parity rule: require len(sig) >= 65, normalize v like java-tron,
+// then pass a geth-compatible recovery id to crypto.SigToPub.
 func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
 	hash := tx.Hash()
 	sigs := tx.Signatures()
 	addrs := make([]common.Address, 0, len(sigs))
 	for _, sig := range sigs {
-		if len(sig) < 65 {
-			return nil, ErrBadSignatureLength
+		recoverySig, err := signatureForRecovery(sig)
+		if err != nil {
+			return nil, err
 		}
-		pub, err := crypto.SigToPub(hash[:], sig[:65])
+		pub, err := crypto.SigToPub(hash[:], recoverySig)
 		if err != nil {
 			return nil, fmt.Errorf("transaction: recover signer: %w", err)
 		}
