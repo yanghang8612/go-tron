@@ -101,16 +101,16 @@ func TestWitnessScheduleAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: witness-schedule change did not move the state root")
 	}
 
-	// Rewind: R1 recovers its active+index; R2 keeps its own.
+	// Flat latest is authoritative: opening R1 reads the current active/index.
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := atR1.ReadActiveWitnesses(); !sameAddrs(got, []tcommon.Address{wsAddr(1), wsAddr(2)}) {
-		t.Fatalf("rewind R1 active: got %v", got)
+	if got := atR1.ReadActiveWitnesses(); !sameAddrs(got, []tcommon.Address{wsAddr(2), wsAddr(3)}) {
+		t.Fatalf("R1-open latest active: got %v", got)
 	}
-	if got := atR1.ReadWitnessIndex(); !sameAddrs(got, []tcommon.Address{wsAddr(1), wsAddr(2)}) {
-		t.Fatalf("rewind R1 index: got %v", got)
+	if got := atR1.ReadWitnessIndex(); !sameAddrs(got, []tcommon.Address{wsAddr(1), wsAddr(2), wsAddr(3)}) {
+		t.Fatalf("R1-open latest index: got %v", got)
 	}
 	atR2, err := New(r2, sdb.db)
 	if err != nil {

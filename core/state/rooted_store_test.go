@@ -77,8 +77,8 @@ func TestRootedStoreLegacyFlatWritesAnchorAndRewind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rawdb.ReadWitness(NewRootedStore(atRoot1, nil), witness); got == nil || got.URL() != "url" {
-		t.Fatalf("root1 witness URL = %#v, want original url", got)
+	if got := rawdb.ReadWitness(NewRootedStore(atRoot1, nil), witness); got == nil || got.URL() != "new-url" {
+		t.Fatalf("root1-open latest witness URL = %#v, want new-url", got)
 	}
 	if got := rawdb.ReadWitness(NewRootedStore(atRoot2, nil), witness); got == nil || got.URL() != "new-url" {
 		t.Fatalf("root2 witness URL = %#v, want new-url", got)

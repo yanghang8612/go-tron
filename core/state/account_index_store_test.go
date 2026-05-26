@@ -131,19 +131,20 @@ func TestAccountIndexAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: account-index change did not move the state root")
 	}
 
-	// Rewind: R1 only has alice/userone1; R2 has both pairs.
+	// Flat latest is authoritative: opening an older root reads the current
+	// latest-domain rows. Historical reads must use domain history, not New(root).
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := atR1.ReadAccountNameIndex([]byte("alice")); !bytes.Equal(got, ownerA.Bytes()) {
-		t.Fatalf("rewind R1 name alice: got %x", got)
+		t.Fatalf("R1-open name alice: got %x", got)
 	}
-	if atR1.HasAccountNameIndex([]byte("bob")) {
-		t.Fatal("rewind R1 must not see bob")
+	if got := atR1.ReadAccountNameIndex([]byte("bob")); !bytes.Equal(got, ownerB.Bytes()) {
+		t.Fatalf("R1-open latest name bob: got %x", got)
 	}
-	if atR1.HasAccountIdIndex([]byte("usertwo2")) {
-		t.Fatal("rewind R1 must not see usertwo2")
+	if got := atR1.ReadAccountIdIndex([]byte("usertwo2")); !bytes.Equal(got, ownerB.Bytes()) {
+		t.Fatalf("R1-open latest id usertwo2: got %x", got)
 	}
 
 	atR2, err := New(r2, sdb.db)

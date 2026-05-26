@@ -3,6 +3,7 @@ package state
 import (
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -19,13 +20,13 @@ func TestCommitWritesV2Envelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	raw, err := reopened.trie.Get(trieKey(addr))
-	if err != nil || raw == nil {
-		t.Fatalf("trie.Get: data=%v err=%v", raw, err)
+	raw, ok, err := rawdb.ReadStateAccountLatest(reopened.accountKVIndex(), addr)
+	if err != nil || !ok {
+		t.Fatalf("account latest: ok=%v err=%v", ok, err)
 	}
 	v, err := DecodeStateAccountV2(raw)
 	if err != nil {
-		t.Fatalf("trie value is not a StateAccountV2 envelope: %v", err)
+		t.Fatalf("account latest value is not a StateAccountV2 envelope: %v", err)
 	}
 	if v.Version != StateAccountVersion {
 		t.Fatalf("version = %d", v.Version)

@@ -92,9 +92,9 @@ func TestContractCodePersistence(t *testing.T) {
 	if !bytes.Equal(got, code) {
 		t.Fatalf("code not persisted after restart: got %x", got)
 	}
-	raw, err := sdb2.trie.Get(trieKey(contractAddr))
-	if err != nil || raw == nil {
-		t.Fatalf("trie.Get: data=%v err=%v", raw, err)
+	raw, ok, err := rawdb.ReadStateAccountLatest(sdb2.accountKVIndex(), contractAddr)
+	if err != nil || !ok {
+		t.Fatalf("account latest: ok=%v err=%v", ok, err)
 	}
 	envelope, err := DecodeStateAccountV2(raw)
 	if err != nil {

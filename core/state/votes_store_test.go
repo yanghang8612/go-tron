@@ -132,27 +132,28 @@ func TestVotesStoreAnchorRewindAndDrain(t *testing.T) {
 		t.Fatal("drain: clearing pending votes did not move the state root")
 	}
 
-	// Rewind: R0 empty, R1 holds both records + index, R2 drained.
+	// Flat latest is authoritative: opening older roots reads the current
+	// drained vote domain. Historical reads are served by domain history.
 	atR0, err := New(r0, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if idx := atR0.ReadVotesIndex(); len(idx) != 0 {
-		t.Fatalf("R0 index should be empty, got %v", idx)
+		t.Fatalf("R0-open latest index should be drained, got %v", idx)
 	}
 
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if idx := atR1.ReadVotesIndex(); !sameAddrs(idx, []tcommon.Address{v1, v2}) {
-		t.Fatalf("rewind R1 index: got %v, want [v1 v2]", idx)
+	if idx := atR1.ReadVotesIndex(); len(idx) != 0 {
+		t.Fatalf("R1-open latest index should be drained, got %v", idx)
 	}
-	if got := atR1.ReadVotes(v1); got == nil || got.NewVotes[0].VoteCount != 10 {
-		t.Fatalf("rewind R1 v1 record lost: %+v", got)
+	if got := atR1.ReadVotes(v1); got != nil {
+		t.Fatalf("R1-open latest v1 should be drained, got %+v", got)
 	}
-	if got := atR1.ReadVotes(v2); got == nil || got.NewVotes[0].VoteCount != 20 {
-		t.Fatalf("rewind R1 v2 record lost: %+v", got)
+	if got := atR1.ReadVotes(v2); got != nil {
+		t.Fatalf("R1-open latest v2 should be drained, got %+v", got)
 	}
 
 	atR2, err := New(r2, sdb.db)

@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,11 +10,10 @@ import (
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/trie"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -25,10 +25,10 @@ var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 )
 
-// StateDB manages in-memory account state with MPT-backed commits.
+// StateDB manages in-memory account state with Erigon-style flat latest-domain
+// commits backed by a CommitmentDomain root.
 type StateDB struct {
-	db   *Database
-	trie *trie.Trie
+	db *Database
 
 	stateObjects map[tcommon.Address]*stateObject
 	witnesses    map[tcommon.Address]*types.Witness
@@ -52,23 +52,15 @@ type StateDB struct {
 
 	journal   *journal
 	snapshots []int // journal length at each snapshot
+	// domainChangeNoJournal mirrors block-final writes that intentionally
+	// bypass the snapshot/revert journal but still need temporal change rows.
+	domainChangeNoJournal []journalChange
 
 	dynProps *DynamicProperties
 
-	// originRoot is the trie root at the time of the last successful Commit (or
-	// the root passed to New). It is used as the parent root when updating the
-	// triedb so that the hashdb reference graph is correct across multiple blocks.
+	// originRoot is the CommitmentDomain root at the time of the last successful
+	// Commit (or the root passed to New).
 	originRoot ethcommon.Hash
-
-	// historyEnabled toggles the State History Index capture path
-	// (AccumulateHistory). Off by default; applyBlock turns it on via
-	// SetHistoryEnabled when params.ChainConfig.HistoryEnabled is true.
-	// Mutating SetState / SetCode / journalAccount themselves do NOT branch on
-	// this flag — the per-block journal already records every pre-mutation
-	// value needed by AccumulateHistory, so the only place the gate matters
-	// is the final flush (and the no-op early return there keeps the cost
-	// to a single bool check per block for non-archive nodes).
-	historyEnabled bool
 
 	// accountKVIndexStore is the physical latest-state index view. It defaults
 	// to the disk DB, but block application points it at blockbuffer so latest
@@ -78,20 +70,18 @@ type StateDB struct {
 		ethdb.KeyValueWriter
 		ethdb.Iteratee
 	}
-
-	// accountKVTries caches per-account generic-KV tries for the lifetime of a
-	// StateDB block application. System/reward/fork paths may touch many keys
-	// under the same owner; sharing the opened trie avoids repeating root-node
-	// resolution for every GetAccountKV call.
-	accountKVTries map[tcommon.Address]*trie.Trie
-
-	// accountKVIndexReads lets the live block-application path read generic KV
-	// values from the flat latest-state index instead of resolving the nested
-	// account-KV trie. Enable only when the StateDB is opened at the current
-	// canonical parent root and accountKVIndexStore reflects that same head.
-	accountKVIndexReads bool
+	accountKVLatestReader   statedomains.LatestReader
+	accountKVLatestIterator statedomains.Iterator
+	flatLatestReader        domainCommitmentLatestReader
 
 	changeSet domainChangeSetCapture
+
+	codeStore       stateCodeStore
+	codeColdHistory StateCodeColdHistoryAtOrBefore
+	codeColdTxNum   uint64
+
+	commitmentColdHistory statedomains.CommitmentSnapshotSource
+	commitmentColdTxNum   uint64
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that
@@ -105,8 +95,9 @@ type CommitStats struct {
 	KVCompute         time.Duration
 	KVNodeWrite       time.Duration
 	AccountTrieUpdate time.Duration
-	// AccountTrie* fields below are a breakdown of AccountTrieUpdate and are
-	// intentionally excluded from Total to avoid double-counting.
+	// AccountTrie* names are retained for metrics compatibility. In the flat
+	// layout they measure account-latest envelope update and CommitmentDomain
+	// root work, not full-state trie writes.
 	AccountTrieMarshal    time.Duration
 	AccountTrieGeneration time.Duration
 	AccountTrieWrite      time.Duration
@@ -119,49 +110,284 @@ type CommitStats struct {
 	Accounts   int
 	KVAccounts int
 	KVItems    int
-	// DeferredKV* counts account-KV items whose physical latest-domain rows
-	// were written now while nested account-KV trie/root work was postponed.
+	// DeferredKV* is retained for metrics compatibility and is always zero in
+	// the flat-only commit path.
 	DeferredKVAccounts int
 	DeferredKVItems    int
-	// RebuiltKV* counts accounts whose nested account-KV root was rebuilt from
-	// latest-domain rows during a batched checkpoint.
+	// RebuiltKV* is retained for metrics compatibility and is always zero in
+	// the flat-only commit path.
 	RebuiltKVAccounts int
 	RebuiltKVItems    int
 
 	Mutations CommitMutationStats
 }
 
-// CommitOptions controls optional Erigon-style commit behavior. The zero value
-// is the full compatibility path: latest-domain rows, nested account-KV roots,
-// account trie root, and trie nodes are all committed before returning.
+// CommitOptions is intentionally empty after the state commit path was
+// collapsed onto flat latest domains plus CommitmentDomain. The type remains as
+// an API shim for call sites that still route through CommitWithStatsOptions.
 type CommitOptions struct {
-	// DeferAccountKVCommitment returns true for domains whose nested
-	// account-KV trie/root update may be postponed after the latest-domain row
-	// is written.
-	DeferAccountKVCommitment func(kvdomains.KVDomain) bool
-	// RebuildDeferredAccountKVRoots forces deferred domains touched by this
-	// commit to rebuild their owner's full nested KV root from latest-domain
-	// rows instead of postponing again.
-	RebuildDeferredAccountKVRoots bool
-	// RebuildAccountKVRootOwners are additional owners, usually accumulated
-	// across earlier deferred blocks, whose nested KV root must be rebuilt from
-	// latest-domain rows in this commit even if the owner is otherwise clean.
-	RebuildAccountKVRootOwners []tcommon.Address
-	// DeferredAccountKVRootOwner is called once per owner whose nested KV root
-	// remains deferred after latest-domain rows have been written.
-	DeferredAccountKVRootOwner func(tcommon.Address)
+	// FlushLatestDomain lets a staged execution plan own the scoped
+	// account-KV latest flush. The scoped commitment reader can consume the
+	// pending latest batch before it is physically flushed. It is only valid
+	// together with CommitWithStatsOptionsInScope.
+	FlushLatestDomain func() error
 }
 
-// HotAccountKVCommitmentDomain reports the domains currently deferred by
-// latest-mode block import. These are the measured hot domains from sync
-// profiling; other domains keep the per-block rooted commitment path.
-func HotAccountKVCommitmentDomain(domain kvdomains.KVDomain) bool {
-	switch domain {
-	case kvdomains.SystemDynamicProperty, kvdomains.SystemReward, kvdomains.WitnessCapsule:
-		return true
-	default:
-		return false
+// CommitScope carries the domain transaction objects reused by a staged range
+// import. A scope is tied to one live StateDB instance; each block still emits
+// its own state root and history range, but generic account-KV writes flow
+// through the same SharedDomainTx/latest writer instead of allocating a fresh
+// domain transaction per block.
+type CommitScope struct {
+	state              *StateDB
+	generationResolver statedomains.GenerationResolver
+	history            *DomainHistoryState
+	commitment         *commitScopeCommitment
+	latestWriter       *accountKVLatestBatch
+	latestReader       *commitScopeLatestReader
+	tx                 *statedomains.SharedDomainTx
+	commits            uint64
+}
+
+type commitScopeCommitment struct {
+	current *DomainCommitmentState
+}
+
+// NewCommitScope prepares reusable domain-transaction state for staged range
+// execution. The caller must create the scope after the StateDB has been
+// configured with its active latest-domain index store.
+func (s *StateDB) NewCommitScope() *CommitScope {
+	scope := &CommitScope{state: s}
+	resolveGeneration := func(owner tcommon.Address) (uint64, error) {
+		if scope.generationResolver == nil {
+			return 0, fmt.Errorf("state commit scope: missing account kv generation for %s", owner.Hex())
+		}
+		return scope.generationResolver(owner)
 	}
+	index := s.accountKVIndex()
+	scope.history = NewDomainHistoryState(s, 0)
+	scope.commitment = &commitScopeCommitment{}
+	scope.latestWriter = newAccountKVLatestDomainBatch(index, resolveGeneration, &s.changeSet, nil)
+	scope.latestReader = &commitScopeLatestReader{writer: scope.latestWriter, state: s}
+	scope.tx = statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
+		Latest:     scope.latestReader,
+		Writer:     scope.latestWriter,
+		History:    scope.history,
+		Commitment: scope.commitment,
+	})
+	s.setAccountKVLatestView(scope.latestReader, scope.latestReader)
+	s.flatLatestReader = scope.latestReader
+	return scope
+}
+
+func (s *StateDB) CommitWithStatsOptionsInScope(scope *CommitScope, opts CommitOptions) (tcommon.Hash, CommitStats, error) {
+	return s.commitWithStatsOptions(opts, scope)
+}
+
+func (scope *CommitScope) Close() error {
+	if scope == nil || scope.tx == nil {
+		return nil
+	}
+	if err := scope.FlushLatest(); err != nil {
+		return err
+	}
+	if err := scope.tx.Close(); err != nil {
+		return err
+	}
+	scope.discard()
+	return nil
+}
+
+func (scope *CommitScope) FlushLatest() error {
+	if scope == nil || scope.latestWriter == nil {
+		return nil
+	}
+	return scope.latestWriter.flush()
+}
+
+func (scope *CommitScope) FlushLatestUpTo(cutoff uint64, numberOf func(tcommon.Hash) (uint64, bool)) error {
+	if scope == nil || scope.latestWriter == nil {
+		return nil
+	}
+	return scope.latestWriter.flushUpTo(cutoff, numberOf)
+}
+
+func (scope *CommitScope) Abort() error {
+	if scope == nil {
+		return nil
+	}
+	err := scope.FlushLatestCommitted()
+	if scope.tx != nil {
+		if closeErr := scope.tx.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	scope.discard()
+	return err
+}
+
+func (scope *CommitScope) Discard() {
+	if scope == nil {
+		return
+	}
+	if scope.tx != nil {
+		_ = scope.tx.Close()
+	}
+	scope.discard()
+}
+
+func (scope *CommitScope) FlushLatestCommitted() error {
+	if scope == nil || scope.latestWriter == nil {
+		return nil
+	}
+	return scope.latestWriter.flushCommitted(true)
+}
+
+func (scope *CommitScope) discard() {
+	if scope == nil {
+		return
+	}
+	if scope.tx != nil {
+		scope.tx.Discard()
+	}
+	if scope.latestWriter != nil {
+		scope.latestWriter.reset()
+	}
+	if scope.commitment != nil {
+		scope.commitment.current = nil
+	}
+	if scope.latestReader != nil {
+		scope.latestReader.generation = nil
+	}
+	scope.detachLatestView()
+	scope.generationResolver = nil
+}
+
+func (scope *CommitScope) prepare(generation statedomains.GenerationResolver, commitment *DomainCommitmentState, txNum uint64) error {
+	if scope == nil || scope.tx == nil || scope.latestWriter == nil || scope.latestReader == nil || scope.history == nil || scope.commitment == nil {
+		return errors.New("state commit scope: incomplete scope")
+	}
+	scope.generationResolver = generation
+	scope.latestReader.generation = generation
+	if commitment != nil {
+		commitment.latestReader = scope.latestReader
+	}
+	scope.commitment.current = commitment
+	scope.history.SetHeadTxNum(txNum)
+	scope.tx.SetTxNum(txNum)
+	scope.commits++
+	return nil
+}
+
+type commitScopeLatestReader struct {
+	writer     *accountKVLatestBatch
+	state      *StateDB
+	generation statedomains.GenerationResolver
+}
+
+func (r *commitScopeLatestReader) GetLatest(owner tcommon.Address, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	generation, err := r.resolveGeneration(owner)
+	if err != nil {
+		return nil, false, err
+	}
+	return r.writer.readLatest(owner, generation, domain, key)
+}
+
+func (r *commitScopeLatestReader) resolveGeneration(owner tcommon.Address) (uint64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	if r.generation != nil {
+		return r.generation(owner)
+	}
+	if r.state != nil {
+		if obj := r.state.getStateObject(owner); obj != nil {
+			return obj.accountKVGeneration, nil
+		}
+		generation, ok, err := r.state.readStateKVGeneration(owner)
+		if err != nil || ok {
+			return generation, err
+		}
+	}
+	return 0, nil
+}
+
+func (r *commitScopeLatestReader) AccountLatest(owner tcommon.Address) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readAccountLatest(owner)
+}
+
+func (r *commitScopeLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {
+	if r == nil || r.writer == nil {
+		return 0, false, nil
+	}
+	return r.writer.readKVGeneration(owner)
+}
+
+func (r *commitScopeLatestReader) KVLatest(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]byte, bool, error) {
+	if r == nil || r.writer == nil {
+		return nil, false, nil
+	}
+	return r.writer.readLatest(owner, generation, domain, key)
+}
+
+func (r *commitScopeLatestReader) KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	if r == nil || r.writer == nil {
+		return nil
+	}
+	return r.writer.iterateLatestPrefix(owner, generation, domain, prefix, fn)
+}
+
+func (r *commitScopeLatestReader) DomainIterate(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, fn statedomains.IterateFunc) error {
+	if r == nil || r.writer == nil {
+		return nil
+	}
+	generation, err := r.resolveGeneration(owner)
+	if err != nil {
+		return err
+	}
+	return r.writer.iterateLatestPrefix(owner, generation, domain, prefix, fn)
+}
+
+func (scope *CommitScope) detachLatestView() {
+	if scope == nil || scope.state == nil {
+		return
+	}
+	if scope.state.accountKVLatestReader == scope.latestReader {
+		scope.state.accountKVLatestReader = nil
+	}
+	if scope.state.accountKVLatestIterator == scope.latestReader {
+		scope.state.accountKVLatestIterator = nil
+	}
+	if scope.state.flatLatestReader == scope.latestReader {
+		scope.state.flatLatestReader = nil
+	}
+}
+
+func (c *commitScopeCommitment) RecordCommitmentMutations(ctx context.Context, mutations []statedomains.Mutation) error {
+	if c == nil || c.current == nil {
+		return nil
+	}
+	return c.current.RecordCommitmentMutations(ctx, mutations)
+}
+
+func (c *commitScopeCommitment) SeekCommitment(ctx context.Context) (uint64, uint64, error) {
+	if c == nil || c.current == nil {
+		return 0, 0, statedomains.ErrNilCommitmentProcessor
+	}
+	return c.current.SeekCommitment(ctx)
+}
+
+func (c *commitScopeCommitment) ComputeCommitment(ctx context.Context, blockNum, txNum uint64) (tcommon.Hash, error) {
+	if c == nil || c.current == nil {
+		return tcommon.Hash{}, statedomains.ErrNilCommitmentProcessor
+	}
+	return c.current.ComputeCommitment(ctx, blockNum, txNum)
 }
 
 // Add folds another commit breakdown into this one.
@@ -206,17 +432,21 @@ func (s CommitStats) Total() time.Duration {
 }
 
 type domainChangeSetCapture struct {
-	writer    ethdb.KeyValueWriter
-	blockNum  uint64
-	blockHash tcommon.Hash
-	txNum     uint64
-	seq       uint64
-	enabled   bool
+	writer          ethdb.KeyValueWriter
+	blockNum        uint64
+	blockHash       tcommon.Hash
+	beginTxNum      uint64
+	endTxNum        uint64
+	txNum           uint64
+	seq             uint64
+	journalMark     int
+	captureAtCommit bool
+	enabled         bool
 }
 
 // AccountSnapshot is a compact view of the account envelope needed to hydrate
-// a state object without re-reading the account trie. It intentionally carries
-// the generic-KV root/generation and code hash alongside the account proto.
+// a state object without re-reading account latest rows. It intentionally
+// carries the generic-KV generation and code hash alongside the account proto.
 type AccountSnapshot struct {
 	Account             *types.Account
 	AccountKVRoot       tcommon.Hash
@@ -224,22 +454,24 @@ type AccountSnapshot struct {
 	CodeHash            tcommon.Hash
 }
 
-// New creates a StateDB from the given state root.
+// New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
-	tr, err := db.OpenTrie(ethcommon.Hash(root))
-	if err != nil {
-		return nil, err
-	}
 	return &StateDB{
 		db:             db,
-		trie:           tr,
 		stateObjects:   make(map[tcommon.Address]*stateObject),
 		witnesses:      make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses: make(map[tcommon.Address]struct{}),
 		journal:        newJournal(),
 		dynProps:       NewDynamicProperties(),
 		originRoot:     ethcommon.Hash(root),
+		codeStore:      newDefaultStateCodeStore(db),
 	}, nil
+}
+
+// NewFlat is an explicit alias for New. New databases have only one state
+// layout: flat latest domains plus CommitmentDomain.
+func NewFlat(root tcommon.Hash, db *Database) (*StateDB, error) {
+	return New(root, db)
 }
 
 // SetAccountKVIndexStore overrides the physical latest-state index view used
@@ -253,30 +485,103 @@ func (s *StateDB) SetAccountKVIndexStore(store interface {
 	s.accountKVIndexStore = store
 }
 
-// SetAccountKVIndexReads toggles the live-sync read-through from the flat
-// latest-state index. It is intentionally opt-in because historical StateDB
-// readers must continue resolving by trie root, not by canonical latest rows.
+// SetAccountKVIndexReads is retained as a no-op shim. Flat latest rows are the
+// only account-KV read path.
 func (s *StateDB) SetAccountKVIndexReads(on bool) {
-	s.accountKVIndexReads = on
 }
 
-// SetDomainChangeSetWriter enables Phase-5 block-level domain change capture
-// for the next Commit. The first implementation assigns one state txNum per
-// block; the rows are written to the supplied block buffer so failed applies
-// and orphan branches discard them with the rest of the block layer.
+// SetCodeColdHistory enables content-addressed CodeDomain snapshot fallback
+// for live code reads. txNum is the latest state txNum this StateDB may read
+// from; code is immutable, so older CodeDomain snapshots at or before txNum
+// are valid fallback sources when hot state-code rows have been pruned.
+func (s *StateDB) SetCodeColdHistory(source StateCodeColdHistoryAtOrBefore, txNum uint64) {
+	s.codeColdHistory = source
+	s.codeColdTxNum = txNum
+}
+
+// SetCommitmentColdHistory enables CommitmentDomain branch-node snapshot
+// repair during commit. txNum identifies the cold latest snapshot that matches
+// the hot state root being extended.
+func (s *StateDB) SetCommitmentColdHistory(source statedomains.CommitmentSnapshotSource, txNum uint64) {
+	s.commitmentColdHistory = source
+	s.commitmentColdTxNum = txNum
+}
+
+// SetDomainChangeSetWriter enables block-level domain change capture for the
+// next Commit. This compatibility helper writes a single block-final txNum.
 func (s *StateDB) SetDomainChangeSetWriter(writer ethdb.KeyValueWriter, blockNum uint64, blockHash tcommon.Hash) {
+	s.SetDomainChangeSetWriterRange(writer, blockNum, blockHash, blockNum, blockNum)
+}
+
+// SetDomainChangeSetWriterRange enables block-level domain change capture for
+// the next Commit and records the txNum range reserved for the block. Domain
+// changes written by this Commit are still tagged with the block-final txNum;
+// the range is present so later per-transaction flushes can fill earlier txNums
+// without changing the persisted StateTxRange contract.
+func (s *StateDB) SetDomainChangeSetWriterRange(writer ethdb.KeyValueWriter, blockNum uint64, blockHash tcommon.Hash, beginTxNum, endTxNum uint64) {
 	if writer == nil {
 		s.changeSet = domainChangeSetCapture{}
 		return
 	}
-	txNum := rawdb.BlockStateTxNum(blockNum)
 	s.changeSet = domainChangeSetCapture{
-		writer:    writer,
-		blockNum:  blockNum,
-		blockHash: blockHash,
-		txNum:     txNum,
-		enabled:   true,
+		writer:          writer,
+		blockNum:        blockNum,
+		blockHash:       blockHash,
+		beginTxNum:      beginTxNum,
+		endTxNum:        endTxNum,
+		txNum:           endTxNum,
+		journalMark:     s.journal.length(),
+		captureAtCommit: true,
+		enabled:         true,
 	}
+}
+
+// BeginDomainChangeJournalCapture enables Erigon-style temporal capture for
+// the current block. Domain changes are emitted from journal deltas at
+// transaction/block-final boundaries; Commit only writes latest rows and the
+// StateTxRange metadata.
+func (s *StateDB) BeginDomainChangeJournalCapture(writer ethdb.KeyValueWriter, blockNum uint64, blockHash tcommon.Hash, beginTxNum, endTxNum uint64) {
+	s.SetDomainChangeSetWriterRange(writer, blockNum, blockHash, beginTxNum, endTxNum)
+	s.changeSet.captureAtCommit = false
+	s.changeSet.journalMark = s.journal.length()
+}
+
+// SetDomainChangeTxNum sets the txNum stamped on subsequently flushed
+// StateDomainChange rows. If the txNum falls outside the currently reserved
+// block range, the range is widened so the persisted StateTxRange still covers
+// every change emitted by this StateDB instance.
+func (s *StateDB) SetDomainChangeTxNum(txNum uint64) {
+	if !s.changeSet.enabled {
+		return
+	}
+	s.changeSet.txNum = txNum
+	if txNum < s.changeSet.beginTxNum {
+		s.changeSet.beginTxNum = txNum
+	}
+	if txNum > s.changeSet.endTxNum {
+		s.changeSet.endTxNum = txNum
+	}
+}
+
+func (s *StateDB) DomainChangeTxNumAtOrdinal(ordinal uint64) (uint64, error) {
+	if s == nil || !s.changeSet.enabled {
+		return rawdb.StateTxNumAt(0, ordinal)
+	}
+	return rawdb.StateTxNumAt(s.changeSet.beginTxNum, ordinal)
+}
+
+func (s *StateDB) DomainChangeJournalMark() int {
+	if s == nil {
+		return 0
+	}
+	return s.journal.length()
+}
+
+func (s *StateDB) FlushPendingDomainChanges(txNum uint64) error {
+	if s == nil || !s.changeSet.enabled || s.changeSet.captureAtCommit {
+		return nil
+	}
+	return s.FlushDomainChangesSince(s.changeSet.journalMark, txNum)
 }
 
 // GetAccount returns the account at addr, or nil if not found.
@@ -901,19 +1206,10 @@ func (s *StateDB) SetWitnessURL(addr tcommon.Address, url string) {
 	s.dirtyWitnesses[addr] = struct{}{}
 }
 
-// witnessFlushKV is the narrow capability FlushWitnesses needs. The block
-// buffer (read+write layered store) and a plain ethdb.KeyValueStore both
-// satisfy this.
-type witnessFlushKV interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-}
-
 // FlushWitnesses persists the in-memory witness deltas (VoteCount, URL) into
-// the native witness account-KV domain, and mirrors them to db when a legacy
-// flat view is supplied. Called by applyBlock between ProcessBlock and
-// ApplyBlockStatistics so VoteWitness / Unfreeze / WitnessUpdate effects on
-// VoteCount and URL survive across blocks.
+// the native witness account-KV domain. Called by applyBlock between
+// ProcessBlock and ApplyBlockStatistics so VoteWitness / Unfreeze /
+// WitnessUpdate effects on VoteCount and URL survive across blocks.
 //
 // Mirrors java-tron's pattern where VoteWitnessActuator writes to
 // VotesStore and MaintenanceManager.countVote drains it into WitnessStore;
@@ -924,7 +1220,7 @@ type witnessFlushKV interface {
 // VoteWitness, no WitnessUpdate, no Unfreeze touching votes) does zero
 // persistence work. The dirty set is cleared at the end so a
 // subsequent applyBlock on the same StateDB instance starts clean.
-func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
+func (s *StateDB) FlushWitnesses() {
 	for addr := range s.dirtyWitnesses {
 		w := s.witnesses[addr]
 		if w == nil {
@@ -935,11 +1231,6 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 			continue
 		}
 		stored, _ := s.readWitnessCapsule(addr)
-		if stored == nil && db != nil {
-			// Compatibility fallback for tests and pre-native mirrors. Fresh
-			// databases root witness capsules at genesis.
-			stored = rawdb.ReadWitness(db, addr)
-		}
 		if stored == nil {
 			// Witness not yet persisted (e.g. WitnessCreateActuator
 			// already wrote it via ctx.DB earlier in this block, OR a
@@ -948,9 +1239,6 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 			// default to 0, which ApplyBlockStatistics will populate
 			// when the witness produces or misses.
 			_ = s.SetWitnessCapsule(w.Copy())
-			if db != nil {
-				rawdb.WriteWitness(db, addr, w.Copy())
-			}
 			continue
 		}
 		// Merge: only override fields the in-memory record owns.
@@ -960,9 +1248,6 @@ func (s *StateDB) FlushWitnesses(db witnessFlushKV) {
 		stored.SetVoteCount(w.VoteCount())
 		stored.Proto().Url = w.URL()
 		_ = s.SetWitnessCapsule(stored)
-		if db != nil {
-			rawdb.WriteWitness(db, addr, stored)
-		}
 	}
 	clear(s.dirtyWitnesses)
 }
@@ -1000,7 +1285,6 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	journalLen := s.snapshots[id]
 	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
 	s.snapshots = s.snapshots[:id]
-	s.clearAccountKVTrieCache()
 }
 
 // FinalizeTransaction mirrors java-tron's rootRepository.commit() boundary for
@@ -1337,18 +1621,27 @@ func (s *StateDB) AddAllowance(addr tcommon.Address, amount int64) {
 	obj.markDirty()
 }
 
-// AddAllowanceFinalReward adds a block-final witness reward without journaling
-// on non-archive nodes. Reward payment runs after transaction execution and
-// after java account-state-root calculation, so the journal is only needed
-// when State History Index capture is enabled.
+// AddAllowanceFinalReward adds a block-final witness reward without legacy SHI
+// journaling. Reward payment runs after transaction execution and after java
+// account-state-root calculation; flat temporal history captures the rooted
+// writes through the domain-change no-journal path.
 func (s *StateDB) AddAllowanceFinalReward(addr tcommon.Address, amount int64) {
-	if s.historyEnabled {
-		s.AddAllowance(addr, amount)
-		return
-	}
 	obj := s.getStateObject(addr)
 	if obj == nil {
 		return
+	}
+	if s.changeSet.enabled {
+		var prevLatest []byte
+		if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
+			prevLatest = latest
+		}
+		s.domainChangeNoJournal = append(s.domainChangeNoJournal, accountChange{
+			address:          addr,
+			prevLatest:       prevLatest,
+			prevDeleted:      obj.deleted,
+			prevCreated:      obj.created,
+			prevSelfDestruct: obj.selfDestructed,
+		})
 	}
 	obj.account.SetAllowance(obj.account.Allowance() + amount)
 	obj.accountDirty = true
@@ -1615,8 +1908,12 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 		return nil
 	}
 	if obj.code == nil && !obj.codeDirty && obj.codeHash != (tcommon.Hash{}) {
-		if code := rawdb.ReadStateCode(s.db.DiskDB(), obj.codeHash); len(code) > 0 {
+		if code := s.readStateCode(obj.codeHash); len(code) > 0 {
 			obj.code = append([]byte(nil), code...)
+		} else if s.codeColdHistory != nil {
+			if code, ok, err := s.codeColdHistory.GetCodeAtOrBefore(obj.codeHash, s.codeColdTxNum); err == nil && ok && len(code) > 0 {
+				obj.code = append([]byte(nil), code...)
+			}
 		}
 	}
 	return obj.code
@@ -1626,10 +1923,15 @@ func (s *StateDB) GetCode(addr tcommon.Address) []byte {
 func (s *StateDB) SetCode(addr tcommon.Address, code []byte) {
 	obj := s.GetOrCreateAccount(addr)
 	prevCode := append([]byte(nil), s.GetCode(addr)...)
+	var prevLatest []byte
+	if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
+		prevLatest = latest
+	}
 	s.journal.append(codeChange{
-		address:  addr,
-		prevCode: prevCode,
-		prevHash: obj.codeHash,
+		address:    addr,
+		prevCode:   prevCode,
+		prevHash:   obj.codeHash,
+		prevLatest: prevLatest,
 	})
 	obj.setCode(code)
 }
@@ -1700,7 +2002,7 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 	if _, cached := obj.storage[key]; !cached {
 		prev, prevExists = s.GetStateWithExist(addr, key)
 	}
-	if !s.historyEnabled && prevExists && prev == value {
+	if prevExists && prev == value {
 		return
 	}
 	_, prevDirty := obj.dirtyStorage[key]
@@ -1861,7 +2163,7 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 	obj.markSelfDestructed()
 }
 
-// DeleteAccount removes an account from the account trie on commit.
+// DeleteAccount removes an account from flat account latest on commit.
 func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 	obj := s.getStateObject(addr)
 	if obj == nil {
@@ -1903,27 +2205,22 @@ func (s *StateDB) HasSelfDestructed(addr tcommon.Address) bool {
 // Copy creates a deep copy of the StateDB for read-only execution.
 //
 // NOTE: the journal is NOT copied — `cp.journal` is a fresh empty journal.
-// Any AccumulateHistory call on the copy therefore only captures mutations
-// performed after Copy; the source StateDB's accumulated history is invisible
-// to the copy. Production uses Copy only for read-only VM execution (eth_call
-// / debug_traceCall snapshots), where AccumulateHistory is never invoked.
+// Production uses Copy only for read-only VM execution (eth_call /
+// debug_traceCall snapshots), where temporal history capture is not invoked.
 func (s *StateDB) Copy() (*StateDB, error) {
-	tr, err := s.db.OpenTrie(s.originRoot)
-	if err != nil {
-		return nil, err
-	}
 	cp := &StateDB{
-		db:                  s.db,
-		trie:                tr,
-		stateObjects:        make(map[tcommon.Address]*stateObject),
-		witnesses:           make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses:      make(map[tcommon.Address]struct{}),
-		journal:             newJournal(),
-		dynProps:            s.dynProps,
-		originRoot:          s.originRoot,
-		historyEnabled:      s.historyEnabled,
-		accountKVIndexStore: s.accountKVIndexStore,
-		accountKVIndexReads: s.accountKVIndexReads,
+		db:                    s.db,
+		stateObjects:          make(map[tcommon.Address]*stateObject),
+		witnesses:             make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses:        make(map[tcommon.Address]struct{}),
+		journal:               newJournal(),
+		dynProps:              s.dynProps,
+		originRoot:            s.originRoot,
+		accountKVIndexStore:   s.accountKVIndexStore,
+		codeColdHistory:       s.codeColdHistory,
+		codeColdTxNum:         s.codeColdTxNum,
+		commitmentColdHistory: s.commitmentColdHistory,
+		commitmentColdTxNum:   s.commitmentColdTxNum,
 	}
 	for addr, obj := range s.stateObjects {
 		var metaCopy *contractpb.SmartContract
@@ -1934,7 +2231,6 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		for k, v := range obj.kvDirty {
 			ec := kvEntry{
 				deleted:    v.deleted,
-				trieKey:    v.trieKey,
 				prevExists: v.prevExists,
 				prevLoaded: v.prevLoaded,
 			}
@@ -1991,19 +2287,13 @@ type storageCommitOp struct {
 }
 
 type accountCommitPlan struct {
-	addr              tcommon.Address
-	accountTrieKey    ethcommon.Hash
-	obj               *stateObject
-	deleteAccount     bool
-	deleteContract    bool
-	deleteContractABI bool
-	contractMetaBytes []byte
-	storageOps        []storageCommitOp
-	kvPlan            *accountKVCommitPlan
-	hadKVDirty        bool
-	kvTrieChanged     bool
-	kvLatestChanged   bool
-	kvRootRebuild     bool
+	addr               tcommon.Address
+	obj                *stateObject
+	deleteAccount      bool
+	storageOps         []storageCommitOp
+	kvPlan             *accountKVCommitPlan
+	hadKVDirty         bool
+	accountLatestDirty bool
 }
 
 func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
@@ -2029,53 +2319,12 @@ func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
 	return plans, nil
 }
 
-func (s *StateDB) appendAccountKVRootRebuildPlans(plans []*accountCommitPlan, owners []tcommon.Address) []*accountCommitPlan {
-	if len(owners) == 0 {
-		return plans
-	}
-	byAddr := make(map[tcommon.Address]*accountCommitPlan, len(plans))
-	for _, plan := range plans {
-		byAddr[plan.addr] = plan
-	}
-	unique := make(map[tcommon.Address]struct{}, len(owners))
-	for _, addr := range owners {
-		if plan := byAddr[addr]; plan != nil {
-			plan.kvRootRebuild = true
-			continue
-		}
-		unique[addr] = struct{}{}
-	}
-	if len(unique) == 0 {
-		return plans
-	}
-	addrs := make([]tcommon.Address, 0, len(unique))
-	for addr := range unique {
-		addrs = append(addrs, addr)
-	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
-	})
-	for _, addr := range addrs {
-		obj := s.getStateObject(addr)
-		if obj == nil || obj.deleted {
-			continue
-		}
-		plans = append(plans, &accountCommitPlan{
-			addr:           addr,
-			accountTrieKey: ethcommon.BytesToHash(trieKey(addr)),
-			obj:            obj,
-			kvRootRebuild:  true,
-		})
-	}
-	return plans
-}
-
 func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObject) (*accountCommitPlan, error) {
 	plan := &accountCommitPlan{
-		addr:           addr,
-		accountTrieKey: ethcommon.BytesToHash(trieKey(addr)),
-		obj:            obj,
-		deleteAccount:  obj.deleted || obj.selfDestructed,
+		addr:               addr,
+		obj:                obj,
+		deleteAccount:      obj.deleted || obj.selfDestructed,
+		accountLatestDirty: obj.accountDirty || obj.created || obj.codeDirty || obj.accountKVGenerationDirty,
 	}
 	if plan.deleteAccount {
 		return plan, nil
@@ -2088,8 +2337,6 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractABI, contractABIKVKey, nil, true); err != nil {
 				return nil, err
 			}
-			plan.deleteContract = true
-			plan.deleteContractABI = true
 		} else {
 			metaBytes, err := proto.Marshal(obj.contractMeta)
 			if err != nil {
@@ -2098,7 +2345,6 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 			if _, err := s.stageAccountKVCommit(obj, kvdomains.ContractMetadata, contractMetaKVKey, metaBytes, false); err != nil {
 				return nil, err
 			}
-			plan.contractMetaBytes = metaBytes
 		}
 	}
 
@@ -2149,132 +2395,159 @@ func (s *StateDB) prepareAccountCommitPlan(addr tcommon.Address, obj *stateObjec
 	return plan, nil
 }
 
-func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex accountKVIndexStore, accountKVLatestWriter *accountKVLatestBatch) error {
+func (s *StateDB) applyAccountPlanFlat(plan *accountCommitPlan, accountKVIndex accountKVIndexStore, accountKVLatestWriter statedomains.Writer) error {
 	obj := plan.obj
-	addr := plan.addr
 	if plan.deleteAccount {
 		return nil
 	}
 
 	if obj.codeDirty {
-		if len(obj.code) == 0 || obj.codeHash == (tcommon.Hash{}) {
-			rawdb.DeleteCode(s.db.DiskDB(), addr)
-		} else {
-			if err := rawdb.WriteStateCode(s.db.DiskDB(), obj.codeHash, obj.code); err != nil {
+		if len(obj.code) != 0 && obj.codeHash != (tcommon.Hash{}) {
+			if err := s.writeStateCode(obj.codeHash, obj.code); err != nil {
 				return err
 			}
-			rawdb.DeleteCode(s.db.DiskDB(), addr)
 		}
 	}
-	if plan.deleteContract {
-		rawdb.DeleteContract(s.db.DiskDB(), addr)
-	}
-	if plan.deleteContractABI {
-		if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
-			return err
-		}
-	}
-	if plan.contractMetaBytes != nil {
-		rawdb.WriteContract(s.db.DiskDB(), addr, plan.contractMetaBytes)
-	}
-	for _, op := range plan.storageOps {
-		if !op.staged {
-			continue
-		}
-		if op.delete {
-			rawdb.DeleteStorage(s.db.DiskDB(), addr, op.rowKey)
-			continue
-		}
-		rawdb.WriteStorage(s.db.DiskDB(), addr, op.rowKey, op.value)
-	}
-
 	if plan.hadKVDirty {
-		latestChanged, err := s.commitAccountKVLatest(obj, plan.kvPlan, accountKVIndex, accountKVLatestWriter)
-		if err != nil {
+		if _, err := s.commitAccountKVLatest(obj, plan.kvPlan, accountKVLatestWriter); err != nil {
 			return err
 		}
-		plan.kvLatestChanged = latestChanged
 	}
 	return nil
 }
 
-func accountTrieCommitPlans(plans []*accountCommitPlan) []*accountCommitPlan {
+func accountCommitPlansByAddress(plans []*accountCommitPlan) []*accountCommitPlan {
 	out := append([]*accountCommitPlan(nil), plans...)
 	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].accountTrieKey[:], out[j].accountTrieKey[:]) < 0
+		return bytes.Compare(out[i].addr.Bytes(), out[j].addr.Bytes()) < 0
 	})
 	return out
 }
 
-func (s *StateDB) updateAccountTrieWithPlan(plan *accountCommitPlan, stats *CommitStats, opts CommitOptions) error {
+func accountCommitPlanGenerationResolver(plans []*accountCommitPlan) statedomains.GenerationResolver {
+	generations := make(map[tcommon.Address]uint64, len(plans))
+	for _, plan := range plans {
+		if plan == nil || plan.obj == nil {
+			continue
+		}
+		generations[plan.addr] = plan.obj.accountKVGeneration
+	}
+	return func(owner tcommon.Address) (uint64, error) {
+		generation, ok := generations[owner]
+		if !ok {
+			return 0, fmt.Errorf("account kv generation for %s not in commit plan", owner.Hex())
+		}
+		return generation, nil
+	}
+}
+
+func encodeAccountLatestObject(obj *stateObject, flatRoot bool) ([]byte, bool, error) {
+	if obj == nil || obj.deleted || obj.selfDestructed || obj.account == nil {
+		return nil, false, nil
+	}
+	accBytes, err := obj.account.Marshal()
+	if err != nil {
+		return nil, false, err
+	}
+	accountKVRoot := obj.accountKVRoot
+	if flatRoot {
+		accountKVRoot = EmptyKVRoot
+	}
+	envelope := &StateAccountV2{
+		Version:             StateAccountVersion,
+		AccountProto:        accBytes,
+		AccountKVRoot:       accountKVRoot,
+		AccountKVGeneration: obj.accountKVGeneration,
+		CodeHash:            obj.codeHash,
+	}
+	data, err := envelope.Encode()
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
+	if plan == nil || plan.obj == nil {
+		return nil
+	}
 	obj := plan.obj
 	addr := plan.addr
 	if plan.deleteAccount {
-		start := time.Now()
-		if err := s.trie.Delete(plan.accountTrieKey.Bytes()); err != nil {
+		if err := s.writeAccountLatestChange(addr, false, nil); err != nil {
 			return err
 		}
-		if stats != nil {
-			stats.AccountTrieWrite += time.Since(start)
+		if latestWriter == nil {
+			return fmt.Errorf("account latest writer unavailable")
 		}
-		start = time.Now()
-		if err := s.writeAccountKVGeneration(obj); err != nil {
+		if err := latestWriter.deleteAccountLatest(addr); err != nil {
 			return err
 		}
-		if stats != nil {
-			stats.AccountTrieGeneration += time.Since(start)
-		}
-		rawdb.DeleteCode(s.db.DiskDB(), addr)
-		rawdb.DeleteContract(s.db.DiskDB(), addr)
-		if err := rawdb.DeleteContractABI(s.db.DiskDB(), addr.Bytes()); err != nil {
+		commitment.recordAccountLatestTouch(addr)
+		if err := s.writeAccountKVGeneration(obj, commitment, latestWriter); err != nil {
 			return err
 		}
 		return nil
 	}
 	generationDirty := obj.accountKVGenerationDirty
-	hadKVChanges := plan.kvTrieChanged || plan.kvLatestChanged
-	if opts.DeferAccountKVCommitment != nil && !plan.kvTrieChanged {
-		// Latest-domain writes alone must not force an account-trie envelope
-		// rewrite in latest mode. The envelope's AccountKVRoot is reconciled
-		// when the deferred owner is rebuilt at a checkpoint.
-		hadKVChanges = false
-	}
-	needsAccountTrieUpdate := obj.accountDirty || obj.created || obj.codeDirty || generationDirty || hadKVChanges
-	if generationDirty || hadKVChanges {
-		start := time.Now()
-		if err := s.writeAccountKVGeneration(obj); err != nil {
+	needsAccountLatestUpdate := plan.accountLatestDirty || flatRoot
+	if generationDirty {
+		if err := s.writeAccountKVGeneration(obj, commitment, latestWriter); err != nil {
 			return err
-		}
-		if stats != nil {
-			stats.AccountTrieGeneration += time.Since(start)
 		}
 	}
-	if needsAccountTrieUpdate {
-		start := time.Now()
-		accBytes, err := obj.account.Marshal()
-		if err != nil {
+	if !needsAccountLatestUpdate {
+		return nil
+	}
+	data, exists, err := encodeAccountLatestObject(obj, flatRoot)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := s.writeAccountLatestChange(addr, exists, data); err != nil {
+		return err
+	}
+	if latestWriter == nil {
+		return fmt.Errorf("account latest writer unavailable")
+	}
+	if err := latestWriter.writeAccountLatest(addr, data); err != nil {
+		return err
+	}
+	commitment.recordAccountLatestTouch(addr)
+	return nil
+}
+
+func (s *StateDB) writeAccountLatestChange(addr tcommon.Address, nextExists bool, next []byte) error {
+	if s == nil || !s.changeSet.enabled || !s.changeSet.captureAtCommit {
+		return nil
+	}
+	prev, prevExists, err := s.readStateAccountLatest(addr)
+	if err != nil {
+		return err
+	}
+	if prevExists == nextExists && (!nextExists || bytes.Equal(prev, next)) {
+		return nil
+	}
+	var nextCopy []byte
+	if nextExists {
+		nextCopy = append([]byte(nil), next...)
+	}
+	return s.changeSet.publishCommitDomainChange(&rawdb.StateDomainChange{
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      addr,
+		PrevExists: prevExists,
+		Prev:       prev,
+		NextExists: nextExists,
+		Next:       nextCopy,
+	})
+}
+
+func (s *StateDB) writeFlatAccountLatestPlans(plans []*accountCommitPlan, flatRoot bool, commitment *DomainCommitmentState, latestWriter *accountKVLatestBatch) error {
+	for _, plan := range accountCommitPlansByAddress(plans) {
+		if err := s.writeFlatAccountLatestWithPlan(plan, flatRoot, commitment, latestWriter); err != nil {
 			return err
-		}
-		envelope := &StateAccountV2{
-			Version:             StateAccountVersion,
-			AccountProto:        accBytes,
-			AccountKVRoot:       obj.accountKVRoot,
-			AccountKVGeneration: obj.accountKVGeneration,
-			CodeHash:            obj.codeHash,
-		}
-		data, err := envelope.Encode()
-		if err != nil {
-			return err
-		}
-		if stats != nil {
-			stats.AccountTrieMarshal += time.Since(start)
-		}
-		start = time.Now()
-		if err := s.trie.Update(plan.accountTrieKey.Bytes(), data); err != nil {
-			return err
-		}
-		if stats != nil {
-			stats.AccountTrieWrite += time.Since(start)
 		}
 	}
 	return nil
@@ -2312,22 +2585,26 @@ func (s *StateDB) finalizeAccountCommitPlan(plan *accountCommitPlan) {
 	obj.dirty = false
 }
 
-// Commit writes all dirty accounts to the MPT and returns the new root hash.
+// Commit writes all dirty latest-domain rows and returns the new CommitmentDomain root.
 func (s *StateDB) Commit() (tcommon.Hash, error) {
 	root, _, err := s.CommitWithStats()
 	return root, err
 }
 
-// CommitWithStats writes all dirty accounts to the MPT and returns the new
-// root hash plus a phase breakdown for sync/profile diagnostics.
+// CommitWithStats writes all dirty latest-domain rows and returns the new
+// CommitmentDomain root plus a phase breakdown for sync/profile diagnostics.
 func (s *StateDB) CommitWithStats() (tcommon.Hash, CommitStats, error) {
 	return s.CommitWithStatsOptions(CommitOptions{})
 }
 
-// CommitWithStatsOptions writes dirty latest-domain rows and the account root
-// according to opts. The zero-value opts preserves the full per-block rooted
-// commitment behavior used by consensus-compatible default sync.
+// CommitWithStatsOptions writes dirty latest-domain rows and updates the
+// CommitmentDomain root. The options parameter is retained for API stability;
+// there is no longer a rooted trie commit mode.
 func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, CommitStats, error) {
+	return s.commitWithStatsOptions(opts, nil)
+}
+
+func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope) (tcommon.Hash, CommitStats, error) {
 	var stats CommitStats
 	last := time.Now()
 	mark := func(phase *time.Duration) {
@@ -2335,9 +2612,12 @@ func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, Comm
 		*phase += now.Sub(last)
 		last = now
 	}
+	if scope != nil && scope.state != s {
+		return tcommon.Hash{}, stats, errors.New("state commit scope belongs to a different StateDB")
+	}
 
 	if s.changeSet.enabled {
-		if err := rawdb.WriteStateTxRange(s.changeSet.writer, s.changeSet.blockNum, s.changeSet.blockHash, s.changeSet.txNum, s.changeSet.txNum); err != nil {
+		if err := defaultStateDomainChangeRunner(s.changeSet.writer).PublishStateTxRange(s.changeSet.blockNum, s.changeSet.blockHash, s.changeSet.beginTxNum, s.changeSet.endTxNum); err != nil {
 			return tcommon.Hash{}, stats, err
 		}
 		defer func() {
@@ -2348,67 +2628,120 @@ func (s *StateDB) CommitWithStatsOptions(opts CommitOptions) (tcommon.Hash, Comm
 	if err != nil {
 		return tcommon.Hash{}, stats, err
 	}
-	plans = s.appendAccountKVRootRebuildPlans(plans, opts.RebuildAccountKVRootOwners)
 	stats.Accounts = len(plans)
 	stats.Mutations = summarizeCommitMutations(plans)
+	for _, plan := range plans {
+		if plan.kvPlan == nil || len(plan.kvPlan.items) == 0 {
+			continue
+		}
+		stats.KVAccounts++
+		stats.KVItems += len(plan.kvPlan.items)
+	}
 	mark(&stats.Prepare)
 
-	trieNodeWriter := newTrieNodeBatchWriter(s.db)
-	defer trieNodeWriter.release()
 	accountKVIndex := s.accountKVIndex()
-	accountKVLatestWriter := newAccountKVLatestBatch(accountKVIndex)
+	generationResolver := accountCommitPlanGenerationResolver(plans)
+	commitmentState := NewDomainCommitmentStateWithGenerationResolver(s, generationResolver)
+	var accountKVLatestWriter *accountKVLatestBatch
+	var accountKVTemporalTx statedomains.TemporalTx
+	if scope != nil {
+		if err := scope.prepare(generationResolver, commitmentState, s.changeSet.endTxNum); err != nil {
+			return tcommon.Hash{}, stats, err
+		}
+		accountKVLatestWriter = scope.latestWriter
+		accountKVTemporalTx = scope.tx
+		defer func() {
+			scope.generationResolver = nil
+			scope.latestReader.generation = nil
+			scope.commitment.current = nil
+			commitmentState.latestReader = nil
+		}()
+	} else {
+		accountKVLatestWriter = newAccountKVLatestDomainBatch(accountKVIndex, generationResolver, &s.changeSet, nil)
+		tx := statedomains.NewSharedDomainTx(statedomains.SharedDomainTxConfig{
+			Latest:     statedomains.NewFlatStoreWithGenerationResolver(accountKVIndex, 0, generationResolver),
+			Writer:     accountKVLatestWriter,
+			History:    NewDomainHistoryState(s, s.changeSet.endTxNum),
+			Commitment: commitmentState,
+		})
+		tx.SetTxNum(s.changeSet.endTxNum)
+		defer tx.Close()
+		accountKVTemporalTx = tx
+	}
 	for _, plan := range plans {
-		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVLatestWriter); err != nil {
+		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVTemporalTx); err != nil {
+			if scope != nil {
+				scope.discard()
+			}
 			return tcommon.Hash{}, stats, err
 		}
 	}
 	mark(&stats.FlatWrite)
 
-	if err := accountKVLatestWriter.flush(); err != nil {
+	if err := accountKVTemporalTx.Flush(context.Background()); err != nil {
+		if scope != nil {
+			scope.discard()
+		}
 		return tcommon.Hash{}, stats, err
 	}
-	mark(&stats.FlatFlush)
+	if err := s.writeFlatAccountLatestPlans(plans, true, commitmentState, accountKVLatestWriter); err != nil {
+		if scope != nil {
+			scope.discard()
+		}
+		return tcommon.Hash{}, stats, err
+	}
+	mark(&stats.AccountTrieUpdate)
 
-	if err := s.commitAccountKVPlans(plans, trieNodeWriter, &stats, opts); err != nil {
-		return tcommon.Hash{}, stats, err
-	}
-	for _, plan := range accountTrieCommitPlans(plans) {
-		if err := s.updateAccountTrieWithPlan(plan, &stats, opts); err != nil {
+	if opts.FlushLatestDomain != nil && scope != nil {
+		if err := opts.FlushLatestDomain(); err != nil {
+			scope.discard()
+			return tcommon.Hash{}, stats, err
+		}
+	} else {
+		if err := accountKVLatestWriter.flush(); err != nil {
+			if scope != nil {
+				scope.discard()
+			}
 			return tcommon.Hash{}, stats, err
 		}
 	}
-	mark(&stats.AccountTrieUpdate)
+	mark(&stats.FlatFlush)
 
 	for _, plan := range plans {
 		s.finalizeAccountCommitPlan(plan)
 	}
 	mark(&stats.Finalize)
 
-	root, nodes := s.trie.Commit(false)
-	mark(&stats.AccountTrieCommit)
-
-	if err := trieNodeWriter.writeNodeSet(nodes); err != nil {
-		return tcommon.Hash{}, stats, err
-	}
-	mark(&stats.TrieNodeWrite)
-
-	if err := trieNodeWriter.flush(); err != nil {
-		return tcommon.Hash{}, stats, err
-	}
-	mark(&stats.TrieNodeFlush)
-
-	newTrie, err := s.db.OpenTrie(root)
+	touchUpdates, err := commitmentState.latestUpdatesFromTouches()
 	if err != nil {
+		if scope != nil {
+			scope.discard()
+		}
 		return tcommon.Hash{}, stats, err
 	}
-	s.trie = newTrie
-	s.originRoot = root
+	root, err := s.applyLatestDomainCommitment(touchUpdates)
+	if err != nil {
+		if scope != nil {
+			scope.discard()
+		}
+		return tcommon.Hash{}, stats, err
+	}
+	s.originRoot = ethcommon.Hash(root)
 	s.journal = newJournal()
 	s.snapshots = s.snapshots[:0]
-	s.clearAccountKVTrieCache()
-	mark(&stats.Reopen)
+	mark(&stats.AccountTrieCommit)
 
-	return tcommon.Hash(root), stats, nil
+	return root, stats, nil
+}
+
+func (s *StateDB) applyLatestDomainCommitment(updates []rawdb.StateCommitmentUpdate) (tcommon.Hash, error) {
+	index := s.accountKVIndex()
+	repair := statedomains.CommitmentSnapshotRepair{
+		Source: s.commitmentColdHistory,
+		TxNum:  s.commitmentColdTxNum,
+	}
+	root, err := statedomains.ApplyLatestCommitmentWithSnapshotRepair(index, updates, repair)
+	return tcommon.Hash(root), err
 }
 
 // SetAccountName sets the account name.
@@ -2618,13 +2951,14 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 	obj.markDirty()
 }
 
-// getStateObject returns the state object for addr, loading from trie if needed.
+// getStateObject returns the state object for addr, loading from the flat
+// account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if obj, ok := s.stateObjects[addr]; ok {
 		return obj
 	}
-	data, err := s.trie.Get(trieKey(addr))
-	if err != nil || data == nil {
+	data, ok, err := s.readStateAccountLatest(addr)
+	if err != nil || !ok {
 		return nil
 	}
 	envelope, err := DecodeStateAccountV2(data)
@@ -2647,13 +2981,18 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 // journalAccount records the current state of an account for revert.
 func (s *StateDB) journalAccount(addr tcommon.Address, obj *stateObject) {
 	var prev []byte
+	var prevLatest []byte
 	if obj != nil && obj.account != nil {
 		prev, _ = obj.account.Marshal()
+		if latest, exists, err := encodeAccountLatestObject(obj, true); err == nil && exists {
+			prevLatest = latest
+		}
 		obj.accountDirty = true
 	}
 	s.journal.append(accountChange{
 		address:          addr,
 		prev:             prev,
+		prevLatest:       prevLatest,
 		prevDeleted:      obj != nil && obj.deleted,
 		prevCreated:      obj != nil && obj.created,
 		prevSelfDestruct: obj != nil && obj.selfDestructed,
@@ -2671,10 +3010,4 @@ func (s *StateDB) journalWitness(addr tcommon.Address) {
 		address: addr,
 		prev:    prev,
 	})
-}
-
-// trieKey returns the account-trie MPT key for a TRON address: the
-// Keccak256 of its normalized 20-byte AccountID (network prefix stripped).
-func trieKey(addr tcommon.Address) []byte {
-	return crypto.Keccak256(addr.AccountID().Bytes())
 }

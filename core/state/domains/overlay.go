@@ -24,9 +24,20 @@ type Writer interface {
 	DomainDelPrefix(owner common.Address, domain kvdomains.KVDomain, prefix []byte) error
 }
 
+type IterateFunc func(key, value []byte) (bool, error)
+
+type Iterator interface {
+	DomainIterate(owner common.Address, domain kvdomains.KVDomain, prefix []byte, fn IterateFunc) error
+}
+
 type Store interface {
 	LatestReader
 	Writer
+}
+
+type IterableStore interface {
+	Store
+	Iterator
 }
 
 type MutationKind uint8

@@ -13,11 +13,15 @@ import (
 
 const stateKVLatestPresencePrefix = 0x01
 
-type stateKVLatestStore interface {
+// StateKVLatestStore is the mutable flat-latest database surface needed by
+// state-domain history unwind and pruning helpers.
+type StateKVLatestStore interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
 }
+
+type stateKVLatestStore = StateKVLatestStore
 
 type StateKVLatestRow struct {
 	Owner      common.Address
@@ -27,11 +31,20 @@ type StateKVLatestRow struct {
 	Value      []byte
 }
 
+type StateKVGenerationRow struct {
+	Owner      common.Address
+	Generation uint64
+}
+
 func WriteStateKVLatest(db ethdb.KeyValueWriter, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey, value []byte) error {
+	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, EncodeStateKVLatestValue(value))
+}
+
+func EncodeStateKVLatestValue(value []byte) []byte {
 	wrapped := make([]byte, 1+len(value))
 	wrapped[0] = stateKVLatestPresencePrefix
 	copy(wrapped[1:], value)
-	return WriteStateKVLatestEncoded(db, owner, generation, domain, logicalKey, wrapped)
+	return wrapped
 }
 
 // WriteStateKVLatestEncoded writes a value that is already encoded with the
@@ -162,9 +175,13 @@ func DeleteStateKVLatestOwner(db stateKVLatestStore, owner common.Address) error
 }
 
 func WriteStateKVGeneration(db ethdb.KeyValueWriter, owner common.Address, generation uint64) error {
+	return db.Put(stateKVGenerationKey(owner), EncodeStateKVGenerationValue(generation))
+}
+
+func EncodeStateKVGenerationValue(generation uint64) []byte {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], generation)
-	return db.Put(stateKVGenerationKey(owner), buf[:])
+	return append([]byte(nil), buf[:]...)
 }
 
 func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint64, bool, error) {
@@ -172,10 +189,56 @@ func ReadStateKVGeneration(db ethdb.KeyValueReader, owner common.Address) (uint6
 	if err != nil {
 		return 0, false, nil
 	}
-	if len(data) != 8 {
-		return 0, false, fmt.Errorf("state kv generation: bad length %d for %s", len(data), owner.Hex())
+	generation, err := DecodeStateKVGenerationValue(data)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w for %s", err, owner.Hex())
 	}
-	return binary.BigEndian.Uint64(data), true, nil
+	return generation, true, nil
+}
+
+func DecodeStateKVGenerationValue(data []byte) (uint64, error) {
+	if len(data) != 8 {
+		return 0, fmt.Errorf("state kv generation: bad length %d", len(data))
+	}
+	return binary.BigEndian.Uint64(data), nil
+}
+
+func DeleteStateKVGeneration(db ethdb.KeyValueWriter, owner common.Address) error {
+	return db.Delete(stateKVGenerationKey(owner))
+}
+
+func DecodeStateKVGenerationKey(key []byte) (common.Address, bool) {
+	headerLen := len(stateKVGenerationPrefix)
+	if len(key) != headerLen+common.AccountIDLength || !bytes.HasPrefix(key, stateKVGenerationPrefix) {
+		return common.Address{}, false
+	}
+	var id common.AccountID
+	copy(id[:], key[headerLen:])
+	return id.Address(common.AddressPrefixMainnet), true
+}
+
+func IterateStateKVGeneration(db ethdb.Iteratee, ownerPrefix []byte, fn func(StateKVGenerationRow) (bool, error)) error {
+	prefix := append(append([]byte{}, stateKVGenerationPrefix...), ownerPrefix...)
+	it := db.NewIterator(prefix, nil)
+	defer it.Release()
+	for it.Next() {
+		owner, ok := DecodeStateKVGenerationKey(it.Key())
+		if !ok {
+			continue
+		}
+		generation, err := DecodeStateKVGenerationValue(it.Value())
+		if err != nil {
+			return fmt.Errorf("%w for key %x", err, it.Key())
+		}
+		cont, err := fn(StateKVGenerationRow{Owner: owner, Generation: generation})
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
 }
 
 func deleteStateKVPrefixByScan(db stateKVLatestStore, prefix []byte) error {

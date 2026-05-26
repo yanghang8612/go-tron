@@ -134,20 +134,19 @@ func TestProposalAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: proposal change did not move the state root")
 	}
 
-	// Rewind: R1 recovers proposal 1 PENDING + index {1}; R2 keeps APPROVED +
-	// index {1,2}.
+	// Flat latest is authoritative: opening R1 reads the current proposal rows.
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := atR1.ReadProposal(1); got == nil || got.State != rawdb.ProposalStatePending {
-		t.Fatalf("rewind R1 proposal 1 state: %+v", got)
+	if got := atR1.ReadProposal(1); got == nil || got.State != rawdb.ProposalStateApproved {
+		t.Fatalf("R1-open latest proposal 1 state: %+v", got)
 	}
-	if atR1.ReadProposal(2) != nil {
-		t.Fatal("rewind R1: proposal 2 must not exist")
+	if got := atR1.ReadProposal(2); got == nil || got.State != rawdb.ProposalStatePending {
+		t.Fatalf("R1-open latest proposal 2 state: %+v", got)
 	}
-	if got := atR1.ReadProposalIndex(); !sameInt64s(got, []int64{1}) {
-		t.Fatalf("rewind R1 index: got %v", got)
+	if got := atR1.ReadProposalIndex(); !sameInt64s(got, []int64{1, 2}) {
+		t.Fatalf("R1-open latest index: got %v", got)
 	}
 
 	atR2, err := New(r2, sdb.db)

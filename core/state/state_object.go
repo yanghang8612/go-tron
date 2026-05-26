@@ -31,8 +31,9 @@ type stateObject struct {
 	dirtyStorage      map[tcommon.Hash]struct{}     // storage slots actually written this block
 	selfDestructed    bool
 
-	// Rooted generic-KV fields: root of this account's per-account KV trie
-	// (committed into the StateAccountV2 envelope) and its reset generation.
+	// Generic-KV generation is the Erigon-style incarnation number. AccountKVRoot
+	// is retained in the envelope as EmptyKVRoot while the flat latest rows carry
+	// actual generic-KV content.
 	accountKVRoot            tcommon.Hash
 	accountKVGeneration      uint64
 	accountKVGenerationDirty bool

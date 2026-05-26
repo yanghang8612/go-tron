@@ -197,25 +197,25 @@ func TestMarketStoreAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: market change did not move the state root")
 	}
 
-	// Rewind to R1: every sub-store recovers its standing-order value.
+	// Flat latest is authoritative: opening R1 reads the current canceled/empty view.
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := atR1.ReadMarketOrder(ord.OrderId); got == nil || got.State != corepb.MarketOrder_ACTIVE || got.SellTokenQuantityRemain != 100 {
-		t.Fatalf("rewind R1 order: %+v", got)
+	if got := atR1.ReadMarketOrder(ord.OrderId); got == nil || got.State != corepb.MarketOrder_CANCELED {
+		t.Fatalf("R1-open order should be CANCELED: %+v", got)
 	}
-	if got := atR1.ReadMarketAccountOrder(ord.OwnerAddress); got.Count != 1 || len(got.Orders) != 1 || !bytes.Equal(got.Orders[0], ord.OrderId) {
-		t.Fatalf("rewind R1 account order: %+v", got)
+	if got := atR1.ReadMarketAccountOrder(ord.OwnerAddress); got.Count != 0 || len(got.Orders) != 0 {
+		t.Fatalf("R1-open account order should be empty: %+v", got)
 	}
-	if got := atR1.ReadMarketOrderBook(sell, buy, pk); got == nil || !bytes.Equal(got.Head, ord.OrderId) {
-		t.Fatalf("rewind R1 order book: %+v", got)
+	if got := atR1.ReadMarketOrderBook(sell, buy, pk); got != nil {
+		t.Fatalf("R1-open order book should be gone: %+v", got)
 	}
-	if got := atR1.ReadMarketPairPriceCount(sell, buy); got != 1 {
-		t.Fatalf("rewind R1 price count: want 1, got %d", got)
+	if got := atR1.ReadMarketPairPriceCount(sell, buy); got != 0 {
+		t.Fatalf("R1-open price count should be 0, got %d", got)
 	}
-	if got := atR1.ReadMarketPriceList(sell, buy); len(got.Prices) != 1 || got.Prices[0].SellTokenQuantity != 100 {
-		t.Fatalf("rewind R1 price list: %+v", got)
+	if got := atR1.ReadMarketPriceList(sell, buy); len(got.Prices) != 0 {
+		t.Fatalf("R1-open price list should be empty: %+v", got)
 	}
 
 	// R2 keeps its own canceled/empty view.

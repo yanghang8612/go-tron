@@ -15,6 +15,7 @@ type journalChange interface {
 type accountChange struct {
 	address          tcommon.Address
 	prev             []byte // serialized Account protobuf before mutation, nil if account didn't exist
+	prevLatest       []byte // encoded flat account-latest envelope before mutation
 	prevDeleted      bool
 	prevCreated      bool
 	prevSelfDestruct bool
@@ -90,9 +91,10 @@ func (e storageChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 
 // codeChange records a code change for revert.
 type codeChange struct {
-	address  tcommon.Address
-	prevCode []byte
-	prevHash tcommon.Hash
+	address    tcommon.Address
+	prevCode   []byte
+	prevHash   tcommon.Hash
+	prevLatest []byte
 }
 
 func (e codeChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
@@ -165,11 +167,12 @@ func (e kvChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tc
 // snapshots the prior root, generation, AND the dirty overlay, because the
 // reset clears the overlay and the post-reset overlay belongs to a new generation.
 type kvResetChange struct {
-	address             tcommon.Address
-	prevRoot            tcommon.Hash
-	prevGeneration      uint64
-	prevGenerationDirty bool
-	prevDirty           map[string]kvEntry
+	address              tcommon.Address
+	prevRoot             tcommon.Hash
+	prevGeneration       uint64
+	prevGenerationExists bool
+	prevGenerationDirty  bool
+	prevDirty            map[string]kvEntry
 }
 
 func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {

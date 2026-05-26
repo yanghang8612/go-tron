@@ -183,6 +183,15 @@ var (
 	// Value: 0x01 || value, preserving empty-but-present values.
 	stateKVLatestPrefix = []byte("state-kv-latest-v2-")
 
+	// stateAccountLatestPrefix is the Erigon-style flat account latest
+	// domain. Values are opaque to rawdb; state.StateDB stores its internal
+	// StateAccountV2 envelope here so account reads no longer require
+	// resolving the account MPT in latest-mode sync.
+	//
+	// Key:   state-account-latest-v1- || owner AccountID20
+	// Value: state.StateAccountV2 RLP bytes
+	stateAccountLatestPrefix = []byte("state-account-latest-v1-")
+
 	// stateCodePrefix is the content-addressed TVM bytecode domain.
 	// Account envelopes commit only the code hash; code bytes are immutable
 	// payloads keyed by that hash.
@@ -191,41 +200,57 @@ var (
 	// Value: contract bytecode
 	stateCodePrefix = []byte("state-code-v1-")
 
-	// stateTxRangePrefix records the first Erigon-style state transaction
-	// numbering layer. The first implementation assigns one txNum per block:
-	// begin_tx_num == end_tx_num == block number. Later phases can split a
-	// block into per-transaction txNums without changing consumers that read
-	// the range row first.
+	// stageProgressPrefix stores Erigon-style staged-sync progress. Stages are
+	// monotonic per canonical execution pipeline and are rewindable metadata on
+	// fresh databases.
+	//
+	// Key:   stage-progress-v1- || stage name
+	// Value: block number u64
+	stageProgressPrefix = []byte("stage-progress-v1-")
+
+	// stateTxRangePrefix maps block numbers to the compact global txNum range
+	// used by flat temporal history. Each block consumes one txNum per
+	// transaction plus one block-final txNum for maintenance and derived
+	// stores.
 	//
 	// Key:   state-tx-range-v1- || blockNum u64
 	// Value: RLP(StateTxRange)
 	stateTxRangePrefix = []byte("state-tx-range-v1-")
 
-	// stateChangeSetPrefix records pre-values for latest-domain writes. Rows
-	// are block-scoped and sequence-ordered in commit order so unwind code can
-	// replay them backwards for a block.
+	// stateChangeSetPrefix records pre-values for flat latest-domain writes.
+	// Rows are block-scoped and sequence-ordered in commit order so unwind code
+	// can replay them backwards for a block. The row payload identifies the
+	// concrete flat domain: account latest, account-KV latest, or account-KV
+	// generation.
 	//
-	// Key:   state-changeset-v1- || blockNum u64 || seq u64
+	// Key:   state-changeset-v2- || blockNum u64 || seq u64
 	// Value: RLP(StateDomainChange)
-	stateChangeSetPrefix = []byte("state-changeset-v1-")
+	stateChangeSetPrefix = []byte("state-changeset-v2-")
 
-	// stateChangeInversePrefix is the owner/domain/key inverse index for
-	// StateDomainChange rows. It lets GetAsOf find blocks that touched one
-	// logical domain key without scanning every block changeset.
+	// stateChangeInversePrefix indexes StateDomainChange rows by physical
+	// latest-domain row key. It lets GetAsOf find blocks that touched one
+	// latest row without scanning every block changeset.
 	//
-	// Key:   state-change-index-v1- || owner20 || generation u64
-	//        || domain u16 || logical_key || blockNum u64
+	// Key:   state-change-index-v2- || latest_row_key || blockNum u64
 	// Value: empty
-	stateChangeInversePrefix = []byte("state-change-index-v1-")
+	stateChangeInversePrefix = []byte("state-change-index-v2-")
 
-	// stateCommitmentPrefix stores transitional commitment checkpoints for the
-	// Erigon-style domain state engine. The current checkpoints are debug
-	// commitments over physical latest-domain tables, not yet the authoritative
-	// internal full state root.
+	// stateCommitmentPrefix is the legacy checkpoint prefix for the transitional
+	// commitment engine. Fresh databases write checkpoints into
+	// stateCommitmentDomainPrefix under logical "checkpoint/" keys; this prefix
+	// remains only so mutable-state reset can clear older local dev databases.
 	//
 	// Key:   state-commitment-v1- || blockNum u64
 	// Value: RLP(StateCommitmentCheckpoint)
 	stateCommitmentPrefix = []byte("state-commitment-v1-")
+
+	// stateCommitmentDomainPrefix is the independent physical commitment
+	// domain, modelled after Erigon's CommitmentDomain. Rows are opaque to
+	// rawdb; callers own the logical key layout and value encoding.
+	//
+	// Key:   state-commitment-domain-v1- || logical key
+	// Value: opaque bytes, including empty-but-present values.
+	stateCommitmentDomainPrefix = []byte("state-commitment-domain-v1-")
 
 	// stateKVGenerationPrefix stores the latest physical generation observed
 	// for an account. It lets a later recreate pick generation+1 without
@@ -331,89 +356,7 @@ var (
 	// Value: aggregate stores Account + FromAccounts/ToAccounts;
 	//        directional stores Account=counterparty + Timestamp.
 	drAccIdxPrefix = []byte("drax-")
-
-	// --- State History Index (SHI) ---
-	//
-	// The sh- family of prefixes implements gtron's archive-state query
-	// support, modelled on go-ethereum's pathdb history. Each block
-	// applied by the chain writes:
-	//   1. one sh-m- row capturing per-block metadata (count, hash, ver)
-	//   2. one sh-a- row per account whose state mutated, with the
-	//      account's PRE-block proto/code/contract-meta as a blob
-	//   3. one sh-s- row per TVM storage slot that mutated, value =
-	//      32-byte pre-slot value
-	//   4. one sh-i-a- row per (addr, blockNum) for fast "find latest
-	//      change ≤ N for this addr" lookups
-	//   5. one sh-i-s- row per (addr, slot, blockNum) for the same on
-	//      storage slots
-	//
-	// Reads at block N reconstruct state by starting from HEAD and
-	// rolling back deltas for blocks (N, HEAD]; the inverse index lets
-	// callers skip blocks that didn't touch the queried key. The full
-	// design and read-path algorithm live in
-	// docs/superpowers/specs/2026-05-19-state-history-index-design.md.
-
-	// shMetaPrefix (sh-m-) holds StateHistoryMeta protos per block.
-	// Key:   sh-m- || big-endian uint64 blockNum
-	// Value: proto-encoded historystate.StateHistoryMeta
-	shMetaPrefix = []byte("sh-m-")
-
-	// shAccountPrefix (sh-a-) holds AccountDelta blobs (one per touched
-	// account per block).
-	// Key:   sh-a- || big-endian uint64 blockNum || 21B addr
-	// Value: proto-encoded historystate.AccountDelta
-	shAccountPrefix = []byte("sh-a-")
-
-	// shSlotPrefix (sh-s-) holds TVM storage slot pre-values (one per
-	// touched (addr, slot) per block). Value is raw 32-byte pre-value;
-	// no proto wrapper. An empty value byte slice would be ambiguous
-	// with "absent", so we write a single 0x00 sentinel byte when the
-	// pre-value is all-zero — readers normalise back to Hash{}.
-	// Key:   sh-s- || big-endian uint64 blockNum || 21B addr || 32B slotkey
-	// Value: 32B slot pre-value (or 1-byte 0x00 sentinel for the
-	//        all-zero pre-value).
-	shSlotPrefix = []byte("sh-s-")
-
-	// shAddrInversePrefix (sh-i-a-) is the inverse index for account
-	// deltas. Addresses come FIRST so a prefix scan finds "every block
-	// that touched addr" without scanning the entire history; the
-	// embedded blockNum lets callers SeekLT a target N.
-	// Key:   sh-i-a- || 21B addr || big-endian uint64 blockNum
-	// Value: empty (key-only marker)
-	shAddrInversePrefix = []byte("sh-i-a-")
-
-	// shSlotInversePrefix (sh-i-s-) is the inverse index for slot
-	// deltas. Same layout shape as shAddrInversePrefix but with an
-	// extra 32-byte slot segment.
-	// Key:   sh-i-s- || 21B addr || 32B slotkey || big-endian uint64 blockNum
-	// Value: empty (key-only marker)
-	shSlotInversePrefix = []byte("sh-i-s-")
-
-	// shConfigKey is the singleton HistoryConfig sentinel. Carries the
-	// archive-vs-full mode, prune window, first/last available block
-	// numbers, and schema version. Distinct prefix segment ("-cfg-")
-	// makes collision with sh-a-/sh-m-/etc impossible regardless of
-	// addr/blockNum content (length differs and segment differs).
-	shConfigKey = []byte("sh-cfg-")
-
-	// shBackfillCursorKey is the singleton resume cursor for the Slice 6
-	// operator-recovery backfill tool. It holds the big-endian uint64 of
-	// the last block whose history rows the backfill has re-derived, so a
-	// `gtron history backfill --resume` picks up at cursor+1 after an
-	// interrupt. Kept separate from HistoryConfig.FirstBlock (which the
-	// live writer and the pruner own) so backfill progress can't be
-	// confused with prune progress. Distinct "-bf-cursor-" segment avoids
-	// collision with the sh-a-/sh-m-/sh-cfg- families.
-	shBackfillCursorKey = []byte("sh-bf-cursor-")
 )
-
-// HistorySchemaVersion is the on-disk format version for the State
-// History Index. Bump any time the wire format of StateHistoryMeta /
-// AccountDelta / HistoryConfig or the key layout above changes. The
-// HistoryConfig.schema_ver field is checked on startup against this
-// constant — a mismatch refuses to launch with a "rebuild your archive"
-// error per the spec.
-const HistorySchemaVersion uint32 = 1
 
 // DrAccIdxDirection enumerates the four sub-indices of
 // DelegatedResourceAccountIndexStore, matching java-tron's 0x01..0x04
@@ -613,10 +556,27 @@ func stateKVGenerationKey(owner common.Address) []byte {
 	return append(k, accountID[:]...)
 }
 
+func stateAccountLatestKey(owner common.Address) []byte {
+	accountID := owner.AccountID()
+	k := make([]byte, 0, len(stateAccountLatestPrefix)+common.AccountIDLength)
+	k = append(k, stateAccountLatestPrefix...)
+	return append(k, accountID[:]...)
+}
+
+func stateAccountLatestLogicalPrefix(ownerPrefix []byte) []byte {
+	k := make([]byte, 0, len(stateAccountLatestPrefix)+len(ownerPrefix))
+	k = append(k, stateAccountLatestPrefix...)
+	return append(k, ownerPrefix...)
+}
+
 func stateCodeKey(hash common.Hash) []byte {
 	k := make([]byte, 0, len(stateCodePrefix)+common.HashLength)
 	k = append(k, stateCodePrefix...)
 	return append(k, hash.Bytes()...)
+}
+
+func stageProgressKey(stage StageID) []byte {
+	return append(append([]byte{}, stageProgressPrefix...), []byte(stage)...)
 }
 
 func stateTxRangeKey(blockNum uint64) []byte {
@@ -648,23 +608,25 @@ func stateCommitmentCheckpointKey(blockNum uint64) []byte {
 	return k
 }
 
-func stateChangeInverseKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte, blockNum uint64) []byte {
-	k := stateChangeInverseKeyPrefix(owner, generation, domain, logicalKey)
+func stateCommitmentDomainKey(logicalKey []byte) []byte {
+	return append(append([]byte{}, stateCommitmentDomainPrefix...), logicalKey...)
+}
+
+func stateCommitmentDomainLogicalPrefix(logicalPrefix []byte) []byte {
+	return append(append([]byte{}, stateCommitmentDomainPrefix...), logicalPrefix...)
+}
+
+func stateChangeInverseKey(latestKey []byte, blockNum uint64) []byte {
+	k := stateChangeInverseKeyPrefix(latestKey)
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], blockNum)
 	return append(k, b[:]...)
 }
 
-func stateChangeInverseKeyPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {
-	accountID := owner.AccountID()
-	k := make([]byte, 0, len(stateChangeInversePrefix)+common.AccountIDLength+8+2+len(logicalKey))
+func stateChangeInverseKeyPrefix(latestKey []byte) []byte {
+	k := make([]byte, 0, len(stateChangeInversePrefix)+len(latestKey))
 	k = append(k, stateChangeInversePrefix...)
-	k = append(k, accountID[:]...)
-	var b [10]byte
-	binary.BigEndian.PutUint64(b[:8], generation)
-	binary.BigEndian.PutUint16(b[8:], uint16(domain))
-	k = append(k, b[:]...)
-	return append(k, logicalKey...)
+	return append(k, latestKey...)
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the
@@ -796,107 +758,4 @@ func merkleTreeIndexKey(blockNum int64) []byte {
 	copy(k, merkleTreeIndexPrefix)
 	binary.BigEndian.PutUint64(k[len(merkleTreeIndexPrefix):], uint64(blockNum))
 	return k
-}
-
-// --- State History Index key builders ---
-
-// historyMetaKey builds the sh-m- key: prefix || big-endian uint64 blockNum.
-func historyMetaKey(blockNum uint64) []byte {
-	k := make([]byte, len(shMetaPrefix)+8)
-	copy(k, shMetaPrefix)
-	binary.BigEndian.PutUint64(k[len(shMetaPrefix):], blockNum)
-	return k
-}
-
-// historyAccountKey builds the sh-a- key: prefix || blockNum || 21B addr.
-// blockNum-first ordering lets a per-block range-delete prune by big-endian
-// blockNum range. addr lives at the tail.
-func historyAccountKey(blockNum uint64, addr []byte) []byte {
-	k := make([]byte, 0, len(shAccountPrefix)+8+len(addr))
-	k = append(k, shAccountPrefix...)
-	var nb [8]byte
-	binary.BigEndian.PutUint64(nb[:], blockNum)
-	k = append(k, nb[:]...)
-	return append(k, addr...)
-}
-
-// historyAccountBlockPrefix returns the prefix that scopes a range scan to
-// "every account delta at blockNum": sh-a- || blockNum. Useful for pruning
-// or per-block diagnostics.
-func historyAccountBlockPrefix(blockNum uint64) []byte {
-	k := make([]byte, len(shAccountPrefix)+8)
-	copy(k, shAccountPrefix)
-	binary.BigEndian.PutUint64(k[len(shAccountPrefix):], blockNum)
-	return k
-}
-
-// historySlotKey builds the sh-s- key: prefix || blockNum || 21B addr || 32B slot.
-func historySlotKey(blockNum uint64, addr []byte, slot []byte) []byte {
-	k := make([]byte, 0, len(shSlotPrefix)+8+len(addr)+len(slot))
-	k = append(k, shSlotPrefix...)
-	var nb [8]byte
-	binary.BigEndian.PutUint64(nb[:], blockNum)
-	k = append(k, nb[:]...)
-	k = append(k, addr...)
-	return append(k, slot...)
-}
-
-// historySlotBlockPrefix returns the prefix that scopes a range scan to
-// "every slot delta at blockNum": sh-s- || blockNum. Counterpart to
-// historyAccountBlockPrefix used by the pruner.
-func historySlotBlockPrefix(blockNum uint64) []byte {
-	k := make([]byte, len(shSlotPrefix)+8)
-	copy(k, shSlotPrefix)
-	binary.BigEndian.PutUint64(k[len(shSlotPrefix):], blockNum)
-	return k
-}
-
-// historyAddrInverseKey builds the sh-i-a- key: prefix || 21B addr || blockNum.
-// addr-first ordering lets a prefix scan find "every block that touched
-// this addr" without scanning the entire history.
-func historyAddrInverseKey(addr []byte, blockNum uint64) []byte {
-	k := make([]byte, 0, len(shAddrInversePrefix)+len(addr)+8)
-	k = append(k, shAddrInversePrefix...)
-	k = append(k, addr...)
-	var nb [8]byte
-	binary.BigEndian.PutUint64(nb[:], blockNum)
-	return append(k, nb[:]...)
-}
-
-// historyAddrInverseAddrPrefix returns the prefix that scopes a range scan to
-// "every block-touch row for this addr": sh-i-a- || addr.
-func historyAddrInverseAddrPrefix(addr []byte) []byte {
-	k := make([]byte, 0, len(shAddrInversePrefix)+len(addr))
-	k = append(k, shAddrInversePrefix...)
-	return append(k, addr...)
-}
-
-// historySlotInverseKey builds the sh-i-s- key: prefix || 21B addr || 32B slot || blockNum.
-func historySlotInverseKey(addr []byte, slot []byte, blockNum uint64) []byte {
-	k := make([]byte, 0, len(shSlotInversePrefix)+len(addr)+len(slot)+8)
-	k = append(k, shSlotInversePrefix...)
-	k = append(k, addr...)
-	k = append(k, slot...)
-	var nb [8]byte
-	binary.BigEndian.PutUint64(nb[:], blockNum)
-	return append(k, nb[:]...)
-}
-
-// historySlotInverseSlotPrefix returns the prefix that scopes a range scan
-// to "every block-touch row for this (addr, slot)": sh-i-s- || addr || slot.
-func historySlotInverseSlotPrefix(addr []byte, slot []byte) []byte {
-	k := make([]byte, 0, len(shSlotInversePrefix)+len(addr)+len(slot))
-	k = append(k, shSlotInversePrefix...)
-	k = append(k, addr...)
-	return append(k, slot...)
-}
-
-// historyConfigKey returns the singleton HistoryConfig key.
-func historyConfigKey() []byte {
-	return append([]byte{}, shConfigKey...)
-}
-
-// historyBackfillCursorKey returns the singleton backfill resume-cursor key.
-func historyBackfillCursorKey() []byte {
-	return append([]byte{}, shBackfillCursorKey...)
 }

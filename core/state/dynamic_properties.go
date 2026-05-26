@@ -6,7 +6,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -314,20 +313,22 @@ func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 	return nil
 }
 
-// loadDerivedFromDB reads ONLY the 4 derived keys from flat dp- rawdb. The
-// rooted keys no longer live in dp- (post Phase 3b), so the historical
+// loadDerived reads ONLY the derived runtime keys from the flat dynamic-property
+// mirror. Rooted governance keys no longer live in dp-, so the historical
 // all-keys prefix scan is filtered down to the derived subset.
-func (dp *DynamicProperties) loadDerivedFromDB(db ethdb.KeyValueReader) {
-	if iter, ok := db.(ethdb.Iteratee); ok {
-		rawdb.IterateDynamicProperties(iter, func(name string, value []byte) {
-			if isDerivedDPKey(name) {
-				applyLoadedDPValue(dp, name, value)
-			}
-		})
+func (dp *DynamicProperties) loadDerived(store derivedDynamicPropertyReader) {
+	if store == nil {
+		return
+	}
+	if store.IterateDerivedDynamicProperties(func(name string, value []byte) {
+		if isDerivedDPKey(name) {
+			applyLoadedDPValue(dp, name, value)
+		}
+	}) {
 		return
 	}
 	for k := range derivedDPKeys {
-		applyLoadedDPValue(dp, k, rawdb.ReadDynamicProperty(db, k))
+		applyLoadedDPValue(dp, k, store.ReadDerivedDynamicProperty(k))
 	}
 }
 
@@ -335,8 +336,12 @@ func (dp *DynamicProperties) loadDerivedFromDB(db ethdb.KeyValueReader) {
 // dp- supplies a fallback mirror; the rooted system account KV wins whenever a
 // state root is available.
 func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProperties {
+	return loadDynamicPropertiesFromDerivedStore(newRawDBDerivedDynamicPropertyReader(db), sysKV)
+}
+
+func loadDynamicPropertiesFromDerivedStore(store derivedDynamicPropertyReader, sysKV *StateDB) *DynamicProperties {
 	dp := NewDynamicProperties()
-	dp.loadDerivedFromDB(db)
+	dp.loadDerived(store)
 	if sysKV == nil {
 		return dp
 	}
@@ -390,22 +395,41 @@ func applyLoadedDPValue(dp *DynamicProperties, name string, value []byte) {
 	}
 }
 
-// Flush writes only dirty props to db as 8-byte big-endian, then clears dirty state.
+// Flush mirrors only derived/runtime dirty props to flat dp-, then clears dirty
+// state. Rooted governance properties live in SystemDynamicProperty KV and must
+// not keep writing the legacy dp- namespace.
 func (dp *DynamicProperties) Flush(db ethdb.KeyValueWriter) {
+	dp.flushDerived(newRawDBDerivedDynamicPropertyWriter(db))
+}
+
+func (dp *DynamicProperties) flushDerived(store derivedDynamicPropertyWriter) {
 	buf := make([]byte, 8)
 	for k := range dp.dirty {
+		if !isDerivedDPKey(k) {
+			continue
+		}
 		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
-		rawdb.WriteDynamicProperty(db, k, append([]byte{}, buf...))
+		writeDerivedDynamicProperty(store, k, append([]byte{}, buf...))
 	}
 	for k := range dp.stringDirty {
-		rawdb.WriteDynamicProperty(db, k, []byte(dp.stringProps[k]))
+		if !isDerivedDPKey(k) {
+			continue
+		}
+		writeDerivedDynamicProperty(store, k, []byte(dp.stringProps[k]))
 	}
 	if dp.hashDirty {
-		rawdb.WriteDynamicProperty(db, "latest_block_header_hash", dp.latestBlockHeaderHash.Bytes())
+		writeDerivedDynamicProperty(store, "latest_block_header_hash", dp.latestBlockHeaderHash.Bytes())
 		dp.hashDirty = false
 	}
 	dp.dirty = make(map[string]struct{})
 	dp.stringDirty = make(map[string]struct{})
+}
+
+func writeDerivedDynamicProperty(store derivedDynamicPropertyWriter, name string, value []byte) {
+	if store == nil {
+		return
+	}
+	store.WriteDerivedDynamicProperty(name, value)
 }
 
 // Get returns the value for a key and whether it was found.

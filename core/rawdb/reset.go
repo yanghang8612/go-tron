@@ -57,11 +57,14 @@ var resetMutablePrefixes = [][]byte{
 	accountAssetPrefix,
 	accountTracePrefix,
 	stateKVLatestPrefix,
+	stateAccountLatestPrefix,
 	stateCodePrefix,
+	stageProgressPrefix,
 	stateTxRangePrefix,
 	stateChangeSetPrefix,
 	stateChangeInversePrefix,
 	stateCommitmentPrefix,
+	stateCommitmentDomainPrefix,
 	stateKVGenerationPrefix,
 	sectionBloomPrefix,
 	treeBlockIndexPrefix,
@@ -71,13 +74,6 @@ var resetMutablePrefixes = [][]byte{
 	taposPrefix,
 	drAccIdxPrefix,
 	checkPointV2Prefix,
-	shMetaPrefix,
-	shAccountPrefix,
-	shSlotPrefix,
-	shAddrInversePrefix,
-	shSlotInversePrefix,
-	shConfigKey,
-	shBackfillCursorKey,
 }
 
 var resetMutableSingletons = [][]byte{

@@ -7,9 +7,9 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-// RootedStore is a legacy rawdb-compatible view over StateDB. Keys that still
-// have flat rawdb accessors are mirrored into the generic account-KV root while
-// non-state keys fall through to the backing store unchanged.
+// RootedStore is a test-only rawdb-compatible view over StateDB. It exists to
+// verify old rawdb key mappings against flat account-KV state after production
+// code stopped wrapping execution DBs with this adapter.
 type RootedStore struct {
 	state    *StateDB
 	fallback interface {

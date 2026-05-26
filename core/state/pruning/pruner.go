@@ -1,12 +1,15 @@
 package pruning
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 var log = gtronlog.NewModule("core/state/pruning")
@@ -25,11 +28,18 @@ type syncRemainingSource interface {
 	SyncRemainingBlocks() (uint64, bool)
 }
 
+type canonicalHashSource interface {
+	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
+}
+
 type PrunerConfig struct {
 	Policy Policy
 
 	Interval  time.Duration
 	BatchSize int
+	// SnapshotDir points at the snapshot manifest directory used by snap mode
+	// to decide when hot StateDomainChanges are safely covered by snapshots.
+	SnapshotDir string
 
 	// MaxSyncLag defers pruning while the node is still catching up and the
 	// sync service can report more than this many blocks remaining. A zero
@@ -43,6 +53,7 @@ type PrunerStats struct {
 	DeletedTxRanges              uint64
 	DeletedDomainChangeBlocks    uint64
 	DeletedCommitmentCheckpoints uint64
+	DeletedStateCodeRows         uint64
 	LastSolidifiedBlock          uint64
 	LastPassDuration             time.Duration
 }
@@ -59,6 +70,7 @@ type Pruner struct {
 	deletedTxRanges              atomic.Uint64
 	deletedDomainChangeBlocks    atomic.Uint64
 	deletedCommitmentCheckpoints atomic.Uint64
+	deletedStateCodeRows         atomic.Uint64
 	skippedCatchup               atomic.Uint64
 	lastSolidifiedBlock          atomic.Uint64
 	lastPassDuration             atomic.Int64
@@ -103,6 +115,7 @@ func (p *Pruner) Start() error {
 		"reorgWindow", p.cfg.Policy.ReorgWindow,
 		"interval", p.cfg.Interval,
 		"batch", p.cfg.BatchSize,
+		"snapshotDir", p.cfg.SnapshotDir,
 		"maxSyncLag", p.cfg.MaxSyncLag)
 	return nil
 }
@@ -118,7 +131,8 @@ func (p *Pruner) Stop() error {
 		"skippedCatchup", p.skippedCatchup.Load(),
 		"txRanges", p.deletedTxRanges.Load(),
 		"changeBlocks", p.deletedDomainChangeBlocks.Load(),
-		"commitments", p.deletedCommitmentCheckpoints.Load())
+		"commitments", p.deletedCommitmentCheckpoints.Load(),
+		"codeRows", p.deletedStateCodeRows.Load())
 	return nil
 }
 
@@ -131,6 +145,7 @@ func (p *Pruner) Stats() PrunerStats {
 		DeletedTxRanges:              p.deletedTxRanges.Load(),
 		DeletedDomainChangeBlocks:    p.deletedDomainChangeBlocks.Load(),
 		DeletedCommitmentCheckpoints: p.deletedCommitmentCheckpoints.Load(),
+		DeletedStateCodeRows:         p.deletedStateCodeRows.Load(),
 		SkippedCatchup:               p.skippedCatchup.Load(),
 		LastSolidifiedBlock:          p.lastSolidifiedBlock.Load(),
 		LastPassDuration:             time.Duration(p.lastPassDuration.Load()),
@@ -165,11 +180,18 @@ func (p *Pruner) PrunePass() (Stats, error) {
 		p.lastPassDuration.Store(time.Since(start).Nanoseconds())
 		return Stats{}, nil
 	}
+	pruneHead := uint64(solidified)
+	var err error
+	pruneHead, err = p.capPruneHeadAtVerifiedFinishStage(pruneHead)
+	if err != nil {
+		return Stats{}, err
+	}
 	stats, err := Worker{
-		DB:        p.chain.DB(),
-		Policy:    p.cfg.Policy,
-		MaxBlocks: p.cfg.BatchSize,
-	}.PruneTo(uint64(solidified))
+		DB:          p.chain.DB(),
+		Policy:      p.cfg.Policy,
+		MaxBlocks:   p.cfg.BatchSize,
+		SnapshotDir: p.cfg.SnapshotDir,
+	}.PruneTo(pruneHead)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -177,9 +199,41 @@ func (p *Pruner) PrunePass() (Stats, error) {
 	p.deletedTxRanges.Add(uint64(stats.DeletedTxRanges))
 	p.deletedDomainChangeBlocks.Add(uint64(stats.DeletedDomainChangeBlocks))
 	p.deletedCommitmentCheckpoints.Add(uint64(stats.DeletedCommitmentCheckpoints))
+	p.deletedStateCodeRows.Add(uint64(stats.DeletedStateCodeRows))
 	p.lastSolidifiedBlock.Store(uint64(solidified))
 	p.lastPassDuration.Store(time.Since(start).Nanoseconds())
 	return stats, nil
+}
+
+func (p *Pruner) capPruneHeadAtVerifiedFinishStage(pruneHead uint64) (uint64, error) {
+	row, ok, err := newRawDBStageProgressReader(p.chain.DB()).Read(rawdb.StageFinish)
+	if err != nil || !ok {
+		return pruneHead, err
+	}
+	if row.HasBlockHash {
+		hash, ok := p.canonicalBlockHash(row.BlockNum)
+		if !ok {
+			return 0, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
+		}
+		if hash != row.BlockHash {
+			return 0, fmt.Errorf("pruning: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, hash)
+		}
+	}
+	if row.BlockNum < pruneHead {
+		return row.BlockNum, nil
+	}
+	return pruneHead, nil
+}
+
+func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	if source, ok := p.chain.(canonicalHashSource); ok {
+		return source.CanonicalBlockHash(blockNum)
+	}
+	block := rawdb.ReadBlockKV(p.chain.DB(), blockNum)
+	if block == nil {
+		return common.Hash{}, false
+	}
+	return block.Hash(), true
 }
 
 func (p *Pruner) shouldSkipForCatchup() bool {

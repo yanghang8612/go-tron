@@ -29,7 +29,7 @@ func TestForkStatsStoreRoundTripAtRoot(t *testing.T) {
 	}
 }
 
-func TestForkStatsStoreIgnoresFutureFlatMirror(t *testing.T) {
+func TestForkStatsStoreIgnoresRawDBWritesAfterRoot(t *testing.T) {
 	sdb := newTestStateDB(t)
 	sdb.WriteForkStats(35, []byte{1, 0, 1})
 	root, err := sdb.Commit()
@@ -44,6 +44,6 @@ func TestForkStatsStoreIgnoresFutureFlatMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := reopened.ReadForkStats(35); !bytes.Equal(got, []byte{1, 0, 1}) {
-		t.Fatalf("historical root loaded future flat fork stats: %x", got)
+		t.Fatalf("historical root loaded post-root rawdb fork stats: %x", got)
 	}
 }

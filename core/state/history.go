@@ -1,21 +1,29 @@
 package state
 
 import (
+	"bytes"
 	"errors"
-	"fmt"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
-var ErrHistoryDeltaMissing = errors.New("history inverse index references missing forward delta")
+var ErrStateDomainHistoryUnavailable = errors.New("flat state domain history unavailable")
 
-func missingHistoryDelta(kind string, blockNum uint64) error {
-	return fmt.Errorf("%w: kind=%s block=%d", ErrHistoryDeltaMissing, kind, blockNum)
+func stateDomainHistoryConfig() (snapshots.DomainCfg, error) {
+	cfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok {
+		return snapshots.DomainCfg{}, ErrStateDomainHistoryUnavailable
+	}
+	return cfg, nil
 }
 
 // HistoryReader is the read-side API for archive-mode state history queries.
@@ -36,14 +44,13 @@ func missingHistoryDelta(kind string, blockNum uint64) error {
 //
 //   - LiveStateHistoryReader (this file) — no-op fallback for nodes built
 //     with HistoryEnabled=false. It IGNORES blockNum and returns the LIVE
-//     state. RPC handlers select this implementation when the node wasn't
-//     synced in archive mode; callers get "degraded" historical reads
-//     (== live reads) without an error.
+//     state. Kept for internal callers that explicitly want best-effort live
+//     reads; production archive RPCs return an explicit error when temporal
+//     history is unavailable.
 //
-//   - PersistentHistoryReader — the archive-mode implementation. Walks the
-//     sh-a- / sh-s- delta entries newest-first, applying each as a rollback,
-//     until the state matches end-of-blockNum. Uses the sh-i-a- / sh-i-s-
-//     inverse indexes to skip blocks that didn't touch the queried key.
+//   - PersistentHistoryReader — the archive-mode implementation. Rolls flat
+//     latest-domain rows back with StateDomainChange history until the state
+//     matches end-of-blockNum.
 //
 // All methods return (nil, nil) / (zero, nil) for "account/slot doesn't
 // exist at that block" — they do NOT return an error for that case. A
@@ -66,12 +73,9 @@ type HistoryReader interface {
 }
 
 // LiveAccountReader is the narrow capability the history readers need to
-// resolve the END-OF-HEAD account snapshot. gtron persists account state
-// in an MPT keyed by Keccak256(addr) (see state.StateDB.Commit), not under
-// the flat-state account prefix — so a live account read can NOT be served
-// by rawdb.ReadAccount(disk, addr). The chain's *StateDB already knows how
-// to resolve "live" accounts (in-memory stateObjects map falling back to
-// trie.Get), and satisfies this interface directly via GetAccount.
+// resolve the END-OF-HEAD account snapshot. StateDB satisfies this interface
+// directly via GetAccount, resolving its in-memory overlay before falling back
+// to flat account latest rows.
 //
 // Storage cells and contract code are available from StateDB's rooted contract
 // domains. Contract code requires a live contract reader because the canonical
@@ -88,8 +92,8 @@ type LiveContractReader interface {
 
 // LiveStateHistoryReader is the no-op fallback. It IGNORES blockNum and
 // returns the live state for every query. Used by RPC handlers on nodes
-// that weren't synced with HistoryEnabled=true — those nodes don't have
-// sh-* rows on disk, so the only available answer is "current state".
+// that explicitly choose best-effort current-state answers instead of strict
+// archive semantics.
 //
 // Backed by a LiveAccountReader (for accounts) plus optional live contract
 // reads. Without a live contract reader, CodeAt degrades to nil because the
@@ -101,8 +105,8 @@ type LiveStateHistoryReader struct {
 
 // NewLiveStateHistoryReader wraps a (disk KV reader, live-account reader)
 // pair as a HistoryReader that returns live state for any block. `db` serves
-// storage from flat compatibility paths when no live contract reader exists;
-// `live` resolves accounts and contract code via the trie-backed state.
+// storage from flat latest account-KV when no live contract reader exists;
+// `live` resolves accounts and contract code via the current StateDB view.
 //
 // `live` may be nil — in that case `AccountAt` returns nil (degraded
 // "no account exists" semantics) but storage reads continue to function.
@@ -131,13 +135,7 @@ func (r *LiveStateHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.Ha
 	if live, ok := r.live.(LiveContractReader); ok {
 		return live.GetState(addr, slot), nil
 	}
-	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
-	if len(raw) == 0 {
-		return tcommon.Hash{}, nil
-	}
-	var h tcommon.Hash
-	copy(h[len(h)-len(raw):], raw)
-	return h, nil
+	return readFlatStorageLatest(r.db, addr, slot)
 }
 
 // CodeAt returns the live contract bytecode at addr; blockNum is ignored.
@@ -158,11 +156,9 @@ var (
 	_ HistoryReader = (*PersistentHistoryReader)(nil)
 )
 
-// PersistentHistoryReader reconstructs historical state from sh-* rawdb
-// rows. It seeks the inverse index for the queried key (sh-i-a-, sh-i-s-),
-// gathers every block M > blockNum at which the key was modified, then
-// rolls back each AccountDelta / SlotDelta in newest-first order. The
-// resulting candidate is the state at the end of blockNum.
+// PersistentHistoryReader reconstructs historical state from flat temporal
+// StateDomainChange rows. It rolls physical latest-domain values back from the
+// current head to the requested block using StateTxRange txNum windows.
 //
 // Per-request caching:
 //
@@ -182,14 +178,14 @@ var (
 // Buffer awareness:
 //
 //	The reader takes an ethdb.KeyValueReader that should be the chain's
-//	buffer-aware view (bc.buffer), NOT the bare disk store. sh-* delta rows
-//	for recent (unflushed) blocks live only in the in-memory buffer layers
-//	until they flush past the solidified line; the buffer's NewIterator
-//	merges those layers over disk and masks tombstones, so a buffer-backed
-//	reader sees the logically-complete row set and transparently falls
-//	through to disk for flushed rows. The production archive-query path
-//	(core.TronBackend.historyReaderAt) wires bc.buffer for exactly this
-//	reason. Passing the bare disk store would miss recent history.
+//	buffer-aware view (bc.buffer), NOT the bare disk store. Temporal rows for
+//	recent (unflushed) blocks live only in the in-memory buffer layers until
+//	they flush past the solidified line; the buffer's NewIterator merges those
+//	layers over disk and masks tombstones, so a buffer-backed reader sees the
+//	logically-complete row set and transparently falls through to disk for
+//	flushed rows. The production archive-query path
+//	(core.TronBackend.historyReaderAt) wires bc.buffer for exactly this reason.
+//	Passing the bare disk store would miss recent history.
 //
 // The headNum parameter is the chain's current head as of reader
 // construction. When blockNum >= headNum the reader short-circuits to a
@@ -202,16 +198,15 @@ type PersistentHistoryReader struct {
 	db readerDB
 
 	// live resolves the end-of-HEAD account snapshot. Accounts live in the
-	// MPT (state.StateDB.Commit writes via trie.Update keyed by
-	// Keccak256(addr)) so a flat-state Get(accountKey) won't find them.
-	// Code and storage stay on flat-state prefixes and are served by `db`
-	// directly. live may be nil — in that case the reader's live-account
-	// baseline is "no account exists", and any AccountAt(addr, N) is
-	// answerable only from history rows.
+	// flat account latest domain plus StateDB's in-memory overlay. live may be
+	// nil — in that case the reader's live-account baseline is "no account
+	// exists", and any AccountAt(addr, N) is answerable only from history rows.
 	live LiveAccountReader
 
-	headNum uint64
-	cache   map[reqCacheKey]any
+	headNum     uint64
+	coldHistory StateDomainChangeColdHistory
+	latest      hotStateLatestReader
+	cache       map[reqCacheKey]any
 }
 
 // readerDB is the KV surface the reader needs: point Get/Has reads plus
@@ -220,6 +215,26 @@ type PersistentHistoryReader struct {
 type readerDB interface {
 	ethdb.KeyValueReader
 	ethdb.Iteratee
+}
+
+type StateDomainChangeColdHistory interface {
+	IterateStateDomainChanges(fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error
+}
+
+type StateDomainChangeColdTxRange interface {
+	StateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bool, error)
+}
+
+type StateDomainChangeColdKeyHistory interface {
+	IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
+}
+
+type StateCodeColdHistory interface {
+	GetCode(hash tcommon.Hash, txNum uint64) ([]byte, bool, error)
+}
+
+type StateCodeColdHistoryAtOrBefore interface {
+	GetCodeAtOrBefore(hash tcommon.Hash, txNum uint64) ([]byte, bool, error)
 }
 
 // reqCacheKey identifies one (kind, addr [, slot], blockNum) cache entry.
@@ -259,15 +274,21 @@ type accountCacheEntry struct {
 // path in isolation).
 //
 // `db` is the disk-side KV store: it serves per-block AccountDelta /
-// SlotDelta rows, the inverse-index scan, and the live flat-state code +
-// storage. The chain's *rawdb.Database satisfies the interface directly;
-// tests use ethrawdb.NewMemoryDatabase().
+// SlotDelta rows, the inverse-index scan, and the live flat latest domains.
+// The chain's *rawdb.Database satisfies the interface directly; tests use
+// ethrawdb.NewMemoryDatabase().
 func NewPersistentHistoryReader(db readerDB, live LiveAccountReader, headNum uint64) *PersistentHistoryReader {
+	return NewPersistentHistoryReaderWithColdHistory(db, live, headNum, nil)
+}
+
+func NewPersistentHistoryReaderWithColdHistory(db readerDB, live LiveAccountReader, headNum uint64, coldHistory StateDomainChangeColdHistory) *PersistentHistoryReader {
 	return &PersistentHistoryReader{
-		db:      db,
-		live:    live,
-		headNum: headNum,
-		cache:   make(map[reqCacheKey]any),
+		db:          db,
+		live:        live,
+		headNum:     headNum,
+		coldHistory: coldHistory,
+		latest:      newRegistryHotStateLatestReader(db, snapshots.DefaultDomainRegistry()),
+		cache:       make(map[reqCacheKey]any),
 	}
 }
 
@@ -316,39 +337,13 @@ func (r *PersistentHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.H
 		return h, nil
 	}
 
-	// Walk the inverse index forward, collect every block M > blockNum
-	// where the slot was modified. memorydb / Pebble iterators are
-	// forward-only; we materialise into a slice so we can roll back in
-	// newest-first order (apply older pre-values last, so they overwrite
-	// the more-recent rollback steps).
-	futures, err := r.collectFutureBlocks(rawdb.IterateSlotInverse(r.db, addr, slot), rawdb.SlotInverseBlockNum, blockNum)
-	if err != nil {
+	if h, ok, err := r.storageFromStateDomain(addr, slot, blockNum); err != nil {
 		return tcommon.Hash{}, err
-	}
-	if len(futures) == 0 {
-		// Slot never modified after blockNum → live state is correct.
-		h, err := r.readStorageLive(addr, slot)
-		if err != nil {
-			return tcommon.Hash{}, err
-		}
+	} else if ok {
 		r.cache[key] = h
 		return h, nil
 	}
-
-	// Start with live (end-of-HEAD) and roll back newest-first.
-	candidate, err := r.readStorageLive(addr, slot)
-	if err != nil {
-		return tcommon.Hash{}, err
-	}
-	for i := len(futures) - 1; i >= 0; i-- {
-		preVal, found := rawdb.ReadSlotDelta(r.db, futures[i], addr, slot)
-		if !found {
-			return tcommon.Hash{}, missingHistoryDelta("slot", futures[i])
-		}
-		candidate = preVal
-	}
-	r.cache[key] = candidate
-	return candidate, nil
+	return tcommon.Hash{}, ErrStateDomainHistoryUnavailable
 }
 
 // accountAndCode walks the addr inverse index once and reconstructs both
@@ -369,96 +364,527 @@ func (r *PersistentHistoryReader) accountAndCode(addr tcommon.Address, blockNum 
 		return entry, nil
 	}
 
-	futures, err := r.collectFutureBlocks(rawdb.IterateAddrInverse(r.db, addr), rawdb.AddrInverseBlockNum, blockNum)
-	if err != nil {
+	if entry, ok, err := r.accountAndCodeFromStateDomain(addr, blockNum); err != nil {
 		return accountCacheEntry{}, err
-	}
-	if len(futures) == 0 {
-		entry := r.readAccountAndCodeLive(addr)
+	} else if ok {
 		r.cache[cacheKey] = entry
 		return entry, nil
 	}
+	return accountCacheEntry{}, ErrStateDomainHistoryUnavailable
+}
 
-	// Live = end-of-HEAD baseline.
-	entry := r.readAccountAndCodeLive(addr)
-	acc := entry.account
-	code := entry.code
-
-	// Roll back newest-first.
-	//
-	// Each AccountDelta records the pre-block state at its block M:
-	//   - ExistedPre=false → at end-of-(M-1), account didn't exist.
-	//   - AccountProtoPre != nil → the full pre-block account proto.
-	//   - CodePre != nil → block M's codeChange captured this prevCode.
-	//     If CodePre is nil, code at end-of-(M-1) == code at end-of-M (no
-	//     codeChange happened at M), so we keep the running candidate.
-	for i := len(futures) - 1; i >= 0; i-- {
-		delta := rawdb.ReadAccountDelta(r.db, futures[i], addr)
-		if delta == nil {
-			return accountCacheEntry{}, missingHistoryDelta("account", futures[i])
-		}
-		if !delta.ExistedPre {
-			// Account didn't exist pre-block M. Code likewise gone.
-			acc = nil
-			code = nil
-			continue
-		}
-		if len(delta.AccountProtoPre) > 0 {
-			var pb corepb.Account
-			if err := proto.Unmarshal(delta.AccountProtoPre, &pb); err != nil {
-				return accountCacheEntry{}, err
-			}
-			acc = types.NewAccountFromPB(&pb)
-		} else {
-			// ExistedPre=true but no proto bytes is only possible if slice-2
-			// captured no accountChange but did capture a codeChange /
-			// contractMetaChange. The pre-block proto stayed equal to the
-			// then-current proto from disk; the absence of AccountProtoPre
-			// means "no balance/freeze/etc change at block M", so the
-			// running candidate account is already correct for end-of-(M-1).
-		}
-		if delta.CodePre != nil {
-			// nil-vs-empty distinction: slice 2 writes nil for "no
-			// codeChange captured" and a (possibly empty) slice for "code
-			// was changed; pre-block code is these bytes". A non-nil empty
-			// slice means "pre-block had no code" — represent as nil here
-			// so callers see the same shape as a never-had-code account.
-			//
-			// NOTE: len(CodePre)==0 && CodePre!=nil is currently unreachable
-			// under the slice-2 capture path (history_capture.go only allocates
-			// CodePre when len(prevCode)>0, and proto3 bytes round-trips
-			// nil/empty identically). Kept as a future-safe defensive branch
-			// in case a downstream capture path produces an explicit-empty
-			// pre-image.
-			if len(delta.CodePre) == 0 {
-				code = nil
-			} else {
-				code = delta.CodePre
-			}
+func (r *PersistentHistoryReader) accountAndCodeFromStateDomain(addr tcommon.Address, blockNum uint64) (accountCacheEntry, bool, error) {
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil || !ok {
+		return accountCacheEntry{}, false, err
+	}
+	data, ok, err := r.readStateAccountLatestAsOf(addr, blockNum, r.headNum)
+	if err != nil {
+		return accountCacheEntry{}, false, err
+	}
+	if !ok {
+		return accountCacheEntry{}, true, nil
+	}
+	envelope, err := DecodeStateAccountV2(data)
+	if err != nil {
+		return accountCacheEntry{}, false, err
+	}
+	var pb corepb.Account
+	if err := proto.Unmarshal(envelope.AccountProto, &pb); err != nil {
+		return accountCacheEntry{}, false, err
+	}
+	acc := types.NewAccountFromPB(&pb)
+	var code []byte
+	if envelope.CodeHash != (tcommon.Hash{}) {
+		code, err = r.readCodeByHashAtBlock(envelope.CodeHash, blockNum)
+		if err != nil {
+			return accountCacheEntry{}, false, err
 		}
 	}
-	out := accountCacheEntry{account: acc, code: code}
-	r.cache[cacheKey] = out
-	return out, nil
+	if len(code) == 0 {
+		code = nil
+	}
+	return accountCacheEntry{account: acc, code: code}, true, nil
+}
+
+func (r *PersistentHistoryReader) storageFromStateDomain(addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, bool, error) {
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil || !ok {
+		return tcommon.Hash{}, false, err
+	}
+	accountData, accountExists, err := r.readStateAccountLatestAsOf(addr, blockNum, r.headNum)
+	if err != nil {
+		return tcommon.Hash{}, false, err
+	}
+	if !accountExists {
+		return tcommon.Hash{}, true, nil
+	}
+	envelope, err := DecodeStateAccountV2(accountData)
+	if err != nil {
+		return tcommon.Hash{}, false, err
+	}
+	var meta *contractpb.SmartContract
+	if data, ok, err := r.readStateAccountKVAsOf(addr, kvdomains.ContractMetadata, contractMetaKVKey, blockNum, r.headNum); err != nil {
+		return tcommon.Hash{}, false, err
+	} else if ok && len(data) > 0 {
+		var sc contractpb.SmartContract
+		if err := proto.Unmarshal(data, &sc); err != nil {
+			return tcommon.Hash{}, false, err
+		}
+		meta = &sc
+	}
+	rowKey := javaStorageRowKey(addr, slot, meta)
+	raw, ok, err := r.readStateKVAsOf(addr, envelope.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes(), blockNum, r.headNum)
+	if err != nil {
+		return tcommon.Hash{}, false, err
+	}
+	if !ok || len(raw) == 0 {
+		return tcommon.Hash{}, true, nil
+	}
+	var h tcommon.Hash
+	copy(h[len(h)-len(raw):], raw)
+	return h, true, nil
+}
+
+func (r *PersistentHistoryReader) readStateAccountLatestAsOf(owner tcommon.Address, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	if r.coldHistory == nil {
+		cfg, err := stateDomainHistoryConfig()
+		if err != nil {
+			return nil, false, err
+		}
+		if cfg.ReadHotAccountLatestAsOf == nil {
+			return nil, false, ErrStateDomainHistoryUnavailable
+		}
+		return cfg.ReadHotAccountLatestAsOf(r.db, owner, targetTxNum, headTxNum)
+	}
+	value, exists, err := r.hotLatest().AccountLatest(owner)
+	if err != nil {
+		return nil, false, err
+	}
+	if targetTxNum >= headTxNum {
+		return append([]byte(nil), value...), exists, nil
+	}
+	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainAccountLatest, owner, 0, 0, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := len(changes) - 1; i >= 0; i-- {
+		value, exists = previousStateDomainValue(changes[i])
+	}
+	return append([]byte(nil), value...), exists, nil
+}
+
+func (r *PersistentHistoryReader) readStateKVAsOf(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	return r.readStateKVAsOfTxNum(owner, generation, domain, key, targetTxNum, headTxNum)
+}
+
+func (r *PersistentHistoryReader) readStateKVAsOfTxNum(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, targetTxNum, headTxNum uint64) ([]byte, bool, error) {
+	if r.coldHistory == nil {
+		cfg, err := stateDomainHistoryConfig()
+		if err != nil {
+			return nil, false, err
+		}
+		if cfg.ReadHotKVLatestAsOf == nil {
+			return nil, false, ErrStateDomainHistoryUnavailable
+		}
+		return cfg.ReadHotKVLatestAsOf(r.db, owner, generation, domain, key, targetTxNum, headTxNum)
+	}
+	value, exists, err := r.hotLatest().KVLatest(owner, generation, domain, key)
+	if err != nil {
+		return nil, false, err
+	}
+	if targetTxNum >= headTxNum {
+		return append([]byte(nil), value...), exists, nil
+	}
+	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := len(changes) - 1; i >= 0; i-- {
+		value, exists = previousStateDomainValue(changes[i])
+	}
+	return append([]byte(nil), value...), exists, nil
+}
+
+func (r *PersistentHistoryReader) readCodeByHashAtBlock(hash tcommon.Hash, blockNum uint64) ([]byte, error) {
+	if hash == (tcommon.Hash{}) {
+		return nil, nil
+	}
+	if code, ok, err := r.hotLatest().Code(hash); err != nil {
+		return nil, err
+	} else if ok && len(code) > 0 {
+		return code, nil
+	}
+	cold, ok := r.coldHistory.(StateCodeColdHistory)
+	if !ok {
+		return nil, nil
+	}
+	txNum, err := r.stateTxNumAtBlockEnd(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if contentAddressed, ok := r.coldHistory.(StateCodeColdHistoryAtOrBefore); ok {
+		code, ok, err := contentAddressed.GetCodeAtOrBefore(hash, txNum)
+		if err != nil || !ok || len(code) == 0 {
+			return nil, err
+		}
+		return append([]byte(nil), code...), nil
+	}
+	code, ok, err := cold.GetCode(hash, txNum)
+	if err != nil || !ok || len(code) == 0 {
+		return nil, err
+	}
+	return append([]byte(nil), code...), nil
+}
+
+func (r *PersistentHistoryReader) readStateKVGenerationAsOfTxNum(owner tcommon.Address, targetTxNum, headTxNum uint64) (uint64, bool, error) {
+	if r.coldHistory == nil {
+		cfg, err := stateDomainHistoryConfig()
+		if err != nil {
+			return 0, false, err
+		}
+		if cfg.ReadHotKVGenerationAsOf == nil {
+			return 0, false, ErrStateDomainHistoryUnavailable
+		}
+		return cfg.ReadHotKVGenerationAsOf(r.db, owner, targetTxNum, headTxNum)
+	}
+	generation, exists, err := r.hotLatest().KVGeneration(owner)
+	if err != nil {
+		return 0, false, err
+	}
+	if targetTxNum >= headTxNum {
+		return generation, exists, nil
+	}
+	changes, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVGeneration, owner, 0, 0, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	for i := len(changes) - 1; i >= 0; i-- {
+		change := changes[i]
+		if !change.PrevExists {
+			generation = 0
+			exists = false
+			continue
+		}
+		generation, err = rawdb.DecodeStateKVGenerationValue(change.Prev)
+		if err != nil {
+			return 0, false, err
+		}
+		exists = true
+	}
+	return generation, exists, nil
+}
+
+func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, domain kvdomains.KVDomain, key []byte, targetBlock, headBlock uint64) ([]byte, bool, error) {
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	if r.coldHistory == nil {
+		cfg, err := stateDomainHistoryConfig()
+		if err != nil {
+			return nil, false, err
+		}
+		if cfg.ReadHotAccountKVAsOf == nil {
+			return nil, false, ErrStateDomainHistoryUnavailable
+		}
+		return cfg.ReadHotAccountKVAsOf(r.db, owner, domain, key, targetTxNum, headTxNum)
+	}
+	generation, _, err := r.hotLatest().KVGeneration(owner)
+	if err != nil {
+		return nil, false, err
+	}
+	value, exists, err := r.hotLatest().KVLatest(owner, generation, domain, key)
+	if err != nil {
+		return nil, false, err
+	}
+	upperTxNum := headTxNum
+	for targetTxNum < upperTxNum {
+		changes, err := r.collectStateAccountKVChanges(targetTxNum, upperTxNum, owner, generation, domain, key)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(changes) == 0 {
+			break
+		}
+		generationChanged := false
+		for i := len(changes) - 1; i >= 0; i-- {
+			change := changes[i]
+			switch change.FlatDomain {
+			case rawdb.StateFlatDomainKVLatest:
+				value, exists = previousStateDomainValue(change)
+			case rawdb.StateFlatDomainKVGeneration:
+				generation, _, err = r.readStateKVGenerationAsOfTxNum(owner, previousTxNum(change.TxNum), headTxNum)
+				if err != nil {
+					return nil, false, err
+				}
+				value, exists, err = r.hotLatest().KVLatest(owner, generation, domain, key)
+				if err != nil {
+					return nil, false, err
+				}
+				upperTxNum = previousTxNum(change.TxNum)
+				generationChanged = true
+			}
+			if generationChanged {
+				break
+			}
+		}
+		if !generationChanged {
+			break
+		}
+	}
+	return append([]byte(nil), value...), exists, nil
+}
+
+func (r *PersistentHistoryReader) collectStateAccountKVChanges(targetTxNum, headTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*rawdb.StateDomainChange, error) {
+	kvChanges, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key)
+	if err != nil {
+		return nil, err
+	}
+	generationChanges, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVGeneration, owner, 0, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	return mergeStateDomainChangeSets(kvChanges, generationChanges), nil
+}
+
+func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*rawdb.StateDomainChange, error) {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil, nil
+	}
+	match := func(change *rawdb.StateDomainChange) bool {
+		if change.FlatDomain != flatDomain || change.Owner != owner {
+			return false
+		}
+		if flatDomain != rawdb.StateFlatDomainKVLatest {
+			return true
+		}
+		return change.Generation == generation && change.Domain == domain && bytes.Equal(change.Key, key)
+	}
+	seen := make(map[stateDomainChangeKey]struct{})
+	var changes []*rawdb.StateDomainChange
+	add := func(change *rawdb.StateDomainChange) error {
+		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum || !match(change) {
+			return nil
+		}
+		key := makeStateDomainChangeKey(change)
+		if _, ok := seen[key]; ok {
+			return nil
+		}
+		seen[key] = struct{}{}
+		changes = append(changes, cloneHistoryDomainChange(change))
+		return nil
+	}
+	if err := r.iterateHotStateDomainChangesByKey(targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+		return true, add(change)
+	}); err != nil {
+		return nil, err
+	}
+	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
+		if keyed, ok := r.coldHistory.(StateDomainChangeColdKeyHistory); ok {
+			if err := keyed.IterateStateDomainChangesByKey(targetTxNum+1, headTxNum, flatDomain, owner, generation, domain, key, func(change *rawdb.StateDomainChange) (bool, error) {
+				return true, add(change)
+			}); err != nil {
+				return nil, err
+			}
+		} else if err := r.coldHistory.IterateStateDomainChanges(targetTxNum+1, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			return true, add(change)
+		}); err != nil {
+			return nil, err
+		}
+	}
+	sortStateDomainChanges(changes)
+	return changes, nil
+}
+
+func (r *PersistentHistoryReader) iterateHotStateDomainChangesByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil
+	}
+	cfg, err := stateDomainHistoryConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.IterateHotHistoryChanges == nil {
+		return ErrStateDomainHistoryUnavailable
+	}
+	return cfg.IterateHotHistoryChanges(r.db, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, fn)
+}
+
+func mergeStateDomainChangeSets(sets ...[]*rawdb.StateDomainChange) []*rawdb.StateDomainChange {
+	seen := make(map[stateDomainChangeKey]struct{})
+	var out []*rawdb.StateDomainChange
+	for _, changes := range sets {
+		for _, change := range changes {
+			if change == nil {
+				continue
+			}
+			key := makeStateDomainChangeKey(change)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, change)
+		}
+	}
+	sortStateDomainChanges(out)
+	return out
+}
+
+func sortStateDomainChanges(changes []*rawdb.StateDomainChange) {
+	sort.Slice(changes, func(i, j int) bool {
+		if changes[i].TxNum != changes[j].TxNum {
+			return changes[i].TxNum < changes[j].TxNum
+		}
+		if changes[i].BlockNum != changes[j].BlockNum {
+			return changes[i].BlockNum < changes[j].BlockNum
+		}
+		return changes[i].Seq < changes[j].Seq
+	})
+}
+
+type stateDomainChangeKey struct {
+	blockNum   uint64
+	txNum      uint64
+	seq        uint64
+	flatDomain rawdb.StateFlatDomain
+	owner      tcommon.Address
+	generation uint64
+	domain     kvdomains.KVDomain
+	key        string
+}
+
+func makeStateDomainChangeKey(change *rawdb.StateDomainChange) stateDomainChangeKey {
+	return stateDomainChangeKey{
+		blockNum:   change.BlockNum,
+		txNum:      change.TxNum,
+		seq:        change.Seq,
+		flatDomain: change.FlatDomain,
+		owner:      change.Owner,
+		generation: change.Generation,
+		domain:     change.Domain,
+		key:        string(change.Key),
+	}
+}
+
+func previousStateDomainValue(change *rawdb.StateDomainChange) ([]byte, bool) {
+	if change == nil || !change.PrevExists {
+		return nil, false
+	}
+	return append([]byte(nil), change.Prev...), true
+}
+
+func previousTxNum(txNum uint64) uint64 {
+	if txNum == 0 {
+		return 0
+	}
+	return txNum - 1
+}
+
+func cloneHistoryDomainChange(in *rawdb.StateDomainChange) *rawdb.StateDomainChange {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Key = append([]byte(nil), in.Key...)
+	out.Prev = append([]byte(nil), in.Prev...)
+	out.Next = append([]byte(nil), in.Next...)
+	return &out
+}
+
+func (r *PersistentHistoryReader) stateDomainHistoryAvailable() (bool, error) {
+	if r == nil || r.headNum == 0 {
+		return false, nil
+	}
+	_, ok, err := r.stateTxRangeForBlock(r.headNum)
+	return ok, err
+}
+
+func (r *PersistentHistoryReader) stateTxNumAtBlockEnd(blockNum uint64) (uint64, error) {
+	row, ok, err := r.stateTxRangeForBlock(blockNum)
+	if err != nil {
+		return 0, err
+	}
+	if ok {
+		if row.EndTxNum < row.BeginTxNum {
+			return 0, errors.New("state history: invalid stored state tx range")
+		}
+		return row.EndTxNum, nil
+	}
+	return blockNum, nil
+}
+
+func (r *PersistentHistoryReader) stateTxRangeForBlock(blockNum uint64) (*rawdb.StateTxRange, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	if row, ok, err := snapshots.StateDomainHistoryTxRangeForBlock(r.db, blockNum); err != nil {
+		return nil, false, err
+	} else if ok {
+		return row, true, nil
+	}
+	if cold, ok := r.coldHistory.(StateDomainChangeColdTxRange); ok {
+		return cold.StateTxRangeForBlock(blockNum)
+	}
+	return nil, false, nil
 }
 
 // readAccountAndCodeLive reads the current account + code for addr from
 // the chain's live view. Code resolution goes through the account envelope's
 // CodeHash; there is no canonical address-keyed flat code fallback.
 func (r *PersistentHistoryReader) readAccountAndCodeLive(addr tcommon.Address) accountCacheEntry {
-	var acc *types.Account
 	if r.live != nil {
-		acc = r.live.GetAccount(addr)
+		acc := r.live.GetAccount(addr)
+		if acc == nil {
+			// No live account means "no code either" — contract code is
+			// selected by the account envelope and cleared together with
+			// SELFDESTRUCT+DeleteAccount in StateDB.Commit().
+			return accountCacheEntry{}
+		}
+		var code []byte
+		if live, ok := r.live.(LiveContractReader); ok {
+			code = live.GetCode(addr)
+		}
+		if len(code) == 0 {
+			code = nil
+		}
+		return accountCacheEntry{account: acc, code: code}
 	}
-	if acc == nil {
-		// No live account means "no code either" — contract code is selected
-		// by the account envelope and cleared together with SELFDESTRUCT+
-		// DeleteAccount in statedb.Commit().
+
+	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(r.hotLatest(), addr)
+	if err != nil || !ok {
 		return accountCacheEntry{}
 	}
+	var pb corepb.Account
+	if err := proto.Unmarshal(envelope.AccountProto, &pb); err != nil {
+		return accountCacheEntry{}
+	}
+	acc := types.NewAccountFromPB(&pb)
 	var code []byte
-	if live, ok := r.live.(LiveContractReader); ok {
-		code = live.GetCode(addr)
+	if envelope.CodeHash != (tcommon.Hash{}) {
+		if hotCode, ok, err := r.hotLatest().Code(envelope.CodeHash); err == nil && ok {
+			code = hotCode
+		}
 	}
 	if len(code) == 0 {
 		code = nil
@@ -472,43 +898,35 @@ func (r *PersistentHistoryReader) readStorageLive(addr tcommon.Address, slot tco
 	if live, ok := r.live.(LiveContractReader); ok {
 		return live.GetState(addr, slot), nil
 	}
-	raw := rawdb.ReadStorage(r.db, addr, storageRowKeyFromDB(r.db, addr, slot))
-	if len(raw) == 0 {
-		return tcommon.Hash{}, nil
+	return readFlatStorageLatestWithReader(r.hotLatest(), addr, slot)
+}
+
+func readFlatStorageLatest(db ethdb.KeyValueReader, addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
+	return readFlatStorageLatestWithReader(defaultHotLatest(db), addr, slot)
+}
+
+func readFlatStorageLatestWithReader(latest hotStateLatestReader, addr tcommon.Address, slot tcommon.Hash) (tcommon.Hash, error) {
+	envelope, ok, err := readFlatAccountLatestEnvelopeWithReader(latest, addr)
+	if err != nil || !ok {
+		return tcommon.Hash{}, err
+	}
+	rowKey, err := storageRowKeyFromFlatLatest(latest, addr, envelope.AccountKVGeneration, slot)
+	if err != nil {
+		return tcommon.Hash{}, err
+	}
+	raw, ok, err := latest.KVLatest(addr, envelope.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes())
+	if err != nil || !ok || len(raw) == 0 {
+		return tcommon.Hash{}, err
 	}
 	var h tcommon.Hash
 	copy(h[len(h)-len(raw):], raw)
 	return h, nil
 }
 
-// collectFutureBlocks walks an inverse-index iterator forward and
-// collects every blockNum strictly greater than `target`. `extract` pulls
-// the trailing big-endian uint64 blockNum out of each key — pass
-// rawdb.AddrInverseBlockNum or rawdb.SlotInverseBlockNum.
-//
-// The iterator is released by this helper. The returned slice is sorted
-// ascending (matching the inverse-index key order); callers iterate it
-// in reverse to roll back newest-first.
-//
-// Defensive clamp: entries with blockNum > headNum are skipped. In normal
-// operation the inverse-index doesn't contain such rows because the
-// reader was constructed for "history up to headNum"; if it does, another
-// writer raced ahead and the reader treats those rows as out-of-view.
-func (r *PersistentHistoryReader) collectFutureBlocks(it ethdb.Iterator, extract func([]byte) (uint64, bool), target uint64) ([]uint64, error) {
-	defer it.Release()
-	var futures []uint64
-	for it.Next() {
-		m, ok := extract(it.Key())
-		if !ok {
-			continue
-		}
-		if m <= target {
-			continue
-		}
-		if m > r.headNum {
-			continue
-		}
-		futures = append(futures, m)
-	}
-	return futures, it.Error()
+func readFlatAccountLatestEnvelope(db ethdb.KeyValueReader, addr tcommon.Address) (*StateAccountV2, bool, error) {
+	return readFlatAccountLatestEnvelopeWithReader(defaultHotLatest(db), addr)
+}
+
+func readFlatAccountLatestEnvelopeWithReader(latest hotStateLatestReader, addr tcommon.Address) (*StateAccountV2, bool, error) {
+	return decodeHotAccountEnvelope(latest, addr)
 }

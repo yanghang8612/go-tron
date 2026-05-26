@@ -35,3 +35,18 @@ func TestStateCodeRejectsMismatchedHash(t *testing.T) {
 		t.Fatal("expected hash mismatch error")
 	}
 }
+
+func TestStateCodeDelete(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	code := []byte{0x60, 0x01}
+	hash := common.Keccak256(code)
+	if err := WriteStateCode(db, hash, code); err != nil {
+		t.Fatalf("write state code: %v", err)
+	}
+	if err := DeleteStateCode(db, hash); err != nil {
+		t.Fatalf("delete state code: %v", err)
+	}
+	if got := ReadStateCode(db, hash); got != nil {
+		t.Fatalf("deleted code = %x", got)
+	}
+}

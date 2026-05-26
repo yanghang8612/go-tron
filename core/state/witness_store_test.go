@@ -7,7 +7,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
-func TestWitnessBrokerageAnchorAndRewind(t *testing.T) {
+func TestWitnessBrokerageAnchorAndFlatLatest(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x01}
 
@@ -39,12 +39,12 @@ func TestWitnessBrokerageAnchorAndRewind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rewound, err := New(root1, sdb.db)
+	root1Open, err := New(root1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rewound.ReadWitnessBrokerage(addr); got != 45 {
-		t.Fatalf("rewound brokerage = %d, want 45", got)
+	if got := root1Open.ReadWitnessBrokerage(addr); got != 70 {
+		t.Fatalf("root1-open latest brokerage = %d, want 70", got)
 	}
 	atR2, err := New(root2, sdb.db)
 	if err != nil {

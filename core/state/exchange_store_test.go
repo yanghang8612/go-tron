@@ -190,19 +190,19 @@ func TestExchangeStoreAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: exchange change did not move the state root")
 	}
 
-	// Rewind to R1: V1 and V2 both recover their R1 values; exchange 2 absent.
+	// Flat latest is authoritative: opening R1 reads current latest-domain rows.
 	atR1, err := New(r1, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := atR1.ReadExchange(1); !sameExchange(got, v1r1) {
-		t.Fatalf("rewind R1 V1: got %+v", got)
+		t.Fatalf("R1-open V1: got %+v", got)
 	}
-	if got := atR1.ReadExchangeV2(1); !sameExchange(got, v2r1) {
-		t.Fatalf("rewind R1 V2: got %+v", got)
+	if got := atR1.ReadExchangeV2(1); !sameExchange(got, v2r2) {
+		t.Fatalf("R1-open latest V2: got %+v", got)
 	}
-	if got := atR1.ReadExchangeV2(2); got != nil {
-		t.Fatalf("rewind R1: exchange 2 should not exist yet, got %+v", got)
+	if got := atR1.ReadExchangeV2(2); !sameExchange(got, ex2) {
+		t.Fatalf("R1-open latest exchange 2: got %+v", got)
 	}
 
 	// R2 keeps its own: updated V2 exchange 1, new exchange 2; V1 leg unchanged.

@@ -8,17 +8,18 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 )
 
-// StateAccountVersion is the only account-trie envelope version this build
-// reads or writes. Fresh databases only; legacy raw-proto values are not
+// StateAccountVersion is the only flat account-latest envelope version this
+// build reads or writes. Fresh databases only; legacy raw-proto values are not
 // supported.
 const StateAccountVersion uint64 = 2
 
-// EmptyKVRoot is the AccountKVRoot value for an account with no generic-KV
-// entries (the empty trie root).
+// EmptyKVRoot is retained in the account envelope for compatibility with older
+// in-process callers. Flat-state commits write this value instead of rebuilding
+// per-account KV tries.
 var EmptyKVRoot = tcommon.Hash(ethtypes.EmptyRootHash)
 
 // StateAccountV2 is the internal, versioned, RLP-encoded value stored in the
-// account trie. It is deterministic and independent of java-tron protobuf
+// flat account latest domain. It is deterministic and independent of java-tron protobuf
 // definitions; it never leaks onto the wire, into blocks/transactions, or into
 // RPC responses. The java-tron account serialization is unchanged and lives in
 // AccountProto.
@@ -35,7 +36,7 @@ func (v *StateAccountV2) Encode() ([]byte, error) {
 	return rlp.EncodeToBytes(v)
 }
 
-// DecodeStateAccountV2 parses an account-trie value and enforces the version.
+// DecodeStateAccountV2 parses a flat account-latest envelope and enforces the version.
 func DecodeStateAccountV2(data []byte) (*StateAccountV2, error) {
 	v := new(StateAccountV2)
 	if err := rlp.DecodeBytes(data, v); err != nil {

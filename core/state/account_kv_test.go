@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -119,6 +120,488 @@ func TestAccountKVCommitWithStatsReportsKVWork(t *testing.T) {
 		t.Fatalf("stats counts = accounts:%d kvAccounts:%d kvItems:%d, want accounts=2 kvAccounts=2 kvItems>=3", stats.Accounts, stats.KVAccounts, stats.KVItems)
 	} else if stats.Mutations.KVPutItems != 3 || stats.Mutations.KVDomain(kvdomains.SystemDynamicProperty).Puts != 3 {
 		t.Fatalf("mutation stats = %+v domain=%+v, want 3 SystemDynamicProperty puts", stats.Mutations, stats.Mutations.KVDomain(kvdomains.SystemDynamicProperty))
+	}
+}
+
+func TestCommitScopeReusesSharedDomainTxAcrossCommits(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x24)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+	sharedTx := scope.tx
+	sharedWriter := scope.latestWriter
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	root1, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{})
+	if err != nil {
+		t.Fatalf("commit1: %v", err)
+	}
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+		t.Fatal("commit scope replaced shared domain transaction objects after first commit")
+	}
+	if scope.commits != 1 {
+		t.Fatalf("scope commits after first commit = %d, want 1", scope.commits)
+	}
+	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
+		t.Fatalf("shared tx retained %d mutations after first commit", len(mutations))
+	}
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	root2, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{})
+	if err != nil {
+		t.Fatalf("commit2: %v", err)
+	}
+	if root2 == root1 {
+		t.Fatal("second scoped commit did not move commitment root")
+	}
+	if scope.tx != sharedTx || scope.latestWriter != sharedWriter {
+		t.Fatal("commit scope replaced shared domain transaction objects after second commit")
+	}
+	if scope.commits != 2 {
+		t.Fatalf("scope commits after second commit = %d, want 2", scope.commits)
+	}
+	if mutations := scope.tx.Mutations(); len(mutations) != 0 {
+		t.Fatalf("shared tx retained %d mutations after second commit", len(mutations))
+	}
+
+	reopened, err := New(root2, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k1")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("k1 after scoped commits = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k2")); err != nil || !ok || !bytes.Equal(got, []byte("v2")) {
+		t.Fatalf("k2 after scoped commits = %q ok=%v err=%v, want v2", got, ok, err)
+	}
+}
+
+func TestCommitScopeUsesPlanSuppliedLatestDomainFlush(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x25)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	flushed := false
+	root, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error {
+			flushed = true
+			return scope.FlushLatest()
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit with plan supplied flush: %v", err)
+	}
+	if !flushed {
+		t.Fatal("plan supplied flush was not called")
+	}
+	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("latest after plan supplied flush = %q ok=%v err=%v, want v", got, ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("plan-flush root = %x, rebuilt latest-domain root = %x", root, rebuilt)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("reopened kv after plan supplied flush = %q ok=%v err=%v, want v", got, ok, err)
+	}
+}
+
+func TestCommitScopeComputesRootFromUnflushedLatestBatch(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x27)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	flushHookCalled := false
+	root, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error {
+			flushHookCalled = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit with deferred latest flush: %v", err)
+	}
+	if !flushHookCalled {
+		t.Fatal("latest-domain flush hook was not called")
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("disk latest before explicit scoped flush ok=%v err=%v, want not visible", ok, err)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest flush: %v", err)
+	}
+	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("disk latest after explicit scoped flush = %q ok=%v err=%v, want v", got, ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("deferred-flush root = %x, rebuilt latest-domain root = %x", root, rebuilt)
+	}
+}
+
+func TestCommitScopeComputesDeleteRootFromUnflushedLatestBatch(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x28)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v1")); err != nil {
+		t.Fatalf("set initial kv: %v", err)
+	}
+	initialRoot, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("initial commit: %v", err)
+	}
+
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+	if err := sdb.DeleteAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil {
+		t.Fatalf("delete kv: %v", err)
+	}
+	flushHookCalled := false
+	root, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error {
+			flushHookCalled = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit with deferred latest delete: %v", err)
+	}
+	if !flushHookCalled {
+		t.Fatal("latest-domain flush hook was not called")
+	}
+	if root == initialRoot {
+		t.Fatal("deferred latest delete did not move commitment root")
+	}
+	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("disk latest before explicit delete flush = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest delete flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("disk latest after explicit delete flush ok=%v err=%v, want missing", ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("deferred-delete root = %x, rebuilt latest-domain root = %x", root, rebuilt)
+	}
+}
+
+func TestCommitScopeComputesAccountRootFromUnflushedLatestBatch(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x2d)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	sdb.AddBalance(addr, 123)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	root, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("commit with deferred account latest flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr); err != nil || ok {
+		t.Fatalf("disk account latest before explicit scoped flush ok=%v err=%v, want not visible", ok, err)
+	}
+	sdb.stateObjects = make(map[tcommon.Address]*stateObject)
+	if got := sdb.GetBalance(addr); got != 123 {
+		t.Fatalf("balance through pending account latest = %d, want 123", got)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr); err != nil || !ok {
+		t.Fatalf("disk account latest after explicit scoped flush ok=%v err=%v, want visible", ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("deferred-account root = %x, rebuilt latest-domain root = %x", root, rebuilt)
+	}
+}
+
+func TestCommitScopeComputesGenerationRootFromUnflushedLatestBatch(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x2e)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("old"), []byte("v1")); err != nil {
+		t.Fatalf("set initial kv: %v", err)
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatalf("initial commit: %v", err)
+	}
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+	if err := sdb.ResetAccountKV(addr); err != nil {
+		t.Fatalf("reset account kv: %v", err)
+	}
+	root, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("commit with deferred generation flush: %v", err)
+	}
+	if generation, ok, err := rawdb.ReadStateKVGeneration(sdb.db.DiskDB(), addr); err != nil || ok {
+		t.Fatalf("disk generation before explicit scoped flush = %d ok=%v err=%v, want not visible", generation, ok, err)
+	}
+	if generation, ok, err := scope.latestReader.KVGeneration(addr); err != nil || !ok || generation != 1 {
+		t.Fatalf("pending generation = %d ok=%v err=%v, want 1", generation, ok, err)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest flush: %v", err)
+	}
+	if generation, ok, err := rawdb.ReadStateKVGeneration(sdb.db.DiskDB(), addr); err != nil || !ok || generation != 1 {
+		t.Fatalf("disk generation after explicit scoped flush = %d ok=%v err=%v, want 1", generation, ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("deferred-generation root = %x, rebuilt latest-domain root = %x", root, rebuilt)
+	}
+}
+
+func TestCommitScopeLatestReaderSeesUnflushedBatchWrites(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x26)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	generation := func(tcommon.Address) (uint64, error) { return 0, nil }
+	commitment := NewDomainCommitmentStateWithGenerationResolver(sdb, generation)
+	if err := scope.prepare(generation, commitment, 1); err != nil {
+		t.Fatalf("prepare scope: %v", err)
+	}
+	if err := scope.tx.DomainPut(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v1")); err != nil {
+		t.Fatalf("domain put: %v", err)
+	}
+	if err := scope.tx.Flush(context.Background()); err != nil {
+		t.Fatalf("flush shared tx: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("disk latest before scoped batch flush ok=%v err=%v, want not visible", ok, err)
+	}
+	if got, ok, err := scope.tx.GetLatest(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("scope latest before batch flush = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+	if err := scope.tx.DomainDel(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil {
+		t.Fatalf("domain delete: %v", err)
+	}
+	if err := scope.tx.Flush(context.Background()); err != nil {
+		t.Fatalf("flush delete: %v", err)
+	}
+	if got, ok, err := scope.tx.GetLatest(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("scope latest after pending delete = %q ok=%v err=%v, want missing", got, ok, err)
+	}
+}
+
+func TestAccountKVLatestBatchDomainDelPrefixSeesPendingWrites(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x29)
+	writer := newAccountKVLatestDomainBatch(sdb.db.DiskDB(), func(tcommon.Address) (uint64, error) {
+		return 0, nil
+	}, nil, nil)
+
+	if err := writer.DomainPut(addr, kvdomains.SystemDynamicProperty, []byte("prefix/1"), []byte("one")); err != nil {
+		t.Fatalf("domain put: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest before prefix delete ok=%v err=%v, want not visible", ok, err)
+	}
+	if err := writer.DomainDelPrefix(addr, kvdomains.SystemDynamicProperty, []byte("prefix/")); err != nil {
+		t.Fatalf("domain prefix delete: %v", err)
+	}
+	if _, ok, err := writer.readLatest(addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("pending latest after prefix delete ok=%v err=%v, want missing", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest before explicit flush ok=%v err=%v, want still not visible", ok, err)
+	}
+	if err := writer.flush(); err != nil {
+		t.Fatalf("flush writer: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest after prefix delete flush ok=%v err=%v, want missing", ok, err)
+	}
+}
+
+func TestCommitScopePrefixDeleteRecordsPendingLatestTouches(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x2a)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+	generation := func(tcommon.Address) (uint64, error) { return 0, nil }
+
+	commitment1 := NewDomainCommitmentStateWithGenerationResolver(sdb, generation)
+	if err := scope.prepare(generation, commitment1, 1); err != nil {
+		t.Fatalf("prepare first scope commit: %v", err)
+	}
+	if err := scope.tx.DomainPut(addr, kvdomains.SystemDynamicProperty, []byte("prefix/1"), []byte("one")); err != nil {
+		t.Fatalf("domain put: %v", err)
+	}
+	if err := scope.tx.Flush(context.Background()); err != nil {
+		t.Fatalf("flush first domain tx: %v", err)
+	}
+	root1, err := commitment1.ComputeCommitment(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("compute first commitment: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest after first unflushed put ok=%v err=%v, want not visible", ok, err)
+	}
+
+	commitment2 := NewDomainCommitmentStateWithGenerationResolver(sdb, generation)
+	if err := scope.prepare(generation, commitment2, 2); err != nil {
+		t.Fatalf("prepare second scope commit: %v", err)
+	}
+	if err := scope.tx.DomainDelPrefix(addr, kvdomains.SystemDynamicProperty, []byte("prefix/")); err != nil {
+		t.Fatalf("domain prefix delete: %v", err)
+	}
+	if err := scope.tx.Flush(context.Background()); err != nil {
+		t.Fatalf("flush second domain tx: %v", err)
+	}
+	root2, err := commitment2.ComputeCommitment(context.Background(), 2, 2)
+	if err != nil {
+		t.Fatalf("compute second commitment: %v", err)
+	}
+	if root2 == root1 {
+		t.Fatal("pending prefix delete did not move commitment root")
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest before explicit prefix-delete flush ok=%v err=%v, want not visible", ok, err)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest after explicit prefix-delete flush ok=%v err=%v, want missing", ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root2 {
+		t.Fatalf("pending-prefix-delete root = %x, rebuilt latest-domain root = %x", root2, rebuilt)
+	}
+}
+
+func TestCommitScopeStateDBReadsUnflushedLatestAcrossCommits(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x2b)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k"), []byte("v1")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	if _, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error { return nil },
+	}); err != nil {
+		t.Fatalf("commit with deferred latest flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
+		t.Fatalf("disk latest before range flush ok=%v err=%v, want not visible", ok, err)
+	}
+	if got, ok, err := sdb.GetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("StateDB GetAccountKV through pending latest = %q ok=%v err=%v, want v1", got, ok, err)
+	}
+	batch, err := sdb.GetAccountKVBatch(addr, kvdomains.SystemDynamicProperty, [][]byte{[]byte("k")})
+	if err != nil {
+		t.Fatalf("StateDB GetAccountKVBatch through pending latest: %v", err)
+	}
+	if got := batch[string([]byte("k"))]; !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("StateDB batch pending latest = %q, want v1", got)
+	}
+	var iterated [][]byte
+	if err := sdb.IterateAccountKV(addr, kvdomains.SystemDynamicProperty, []byte(""), func(key, value []byte) (bool, error) {
+		iterated = append(iterated, append(append([]byte(nil), key...), value...))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("StateDB IterateAccountKV through pending latest: %v", err)
+	}
+	if len(iterated) != 1 || !bytes.Equal(iterated[0], []byte("kv1")) {
+		t.Fatalf("StateDB iterator pending latest = %q, want key/value kv1", iterated)
+	}
+}
+
+func TestCommitScopeStateDBPrefixDeleteSeesUnflushedPriorCommit(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(0x2c)
+	sdb.CreateAccount(addr, corepb.AccountType_Normal)
+	scope := sdb.NewCommitScope()
+	defer scope.Close()
+
+	if err := sdb.SetAccountKV(addr, kvdomains.SystemDynamicProperty, []byte("prefix/1"), []byte("one")); err != nil {
+		t.Fatalf("set kv: %v", err)
+	}
+	root1, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("commit with deferred latest flush: %v", err)
+	}
+	if err := sdb.DeleteAccountKVPrefix(addr, kvdomains.SystemDynamicProperty, []byte("prefix/")); err != nil {
+		t.Fatalf("StateDB prefix delete through pending latest: %v", err)
+	}
+	root2, _, err := sdb.CommitWithStatsOptionsInScope(scope, CommitOptions{
+		FlushLatestDomain: func() error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("commit pending prefix delete: %v", err)
+	}
+	if root2 == root1 {
+		t.Fatal("StateDB prefix delete over pending latest did not move commitment root")
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest before explicit range flush ok=%v err=%v, want not visible", ok, err)
+	}
+	if err := scope.FlushLatest(); err != nil {
+		t.Fatalf("explicit scoped latest flush: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
+		t.Fatalf("disk latest after explicit range flush ok=%v err=%v, want missing", ok, err)
+	}
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root2 {
+		t.Fatalf("StateDB pending-prefix root = %x, rebuilt latest-domain root = %x", root2, rebuilt)
 	}
 }
 
@@ -627,7 +1110,7 @@ func TestAccountKVLatestIndexCommitDeleteAndIterate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("aa/1")); err != nil || ok {
-		t.Fatalf("deleted MPT value ok=%v err=%v", ok, err)
+		t.Fatalf("deleted flat value ok=%v err=%v", ok, err)
 	}
 }
 
@@ -822,7 +1305,7 @@ func TestAccountKVLatestIndexCanBeBufferedAndDiscarded(t *testing.T) {
 	}
 }
 
-func TestAccountKVLatestIndexReadThroughIsOptIn(t *testing.T) {
+func TestAccountKVFlatLatestReadThroughIsAuthoritative(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x6d)
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)
@@ -844,48 +1327,39 @@ func TestAccountKVLatestIndexReadThroughIsOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v1" {
-		t.Fatalf("root read = %q ok=%v err=%v, want v1", got, ok, err)
-	}
-	reopened.SetAccountKVIndexStore(sdb.db.DiskDB())
-	reopened.SetAccountKVIndexReads(true)
 	if got, ok, err := reopened.GetAccountKV(addr, kvdomains.SystemDelegation, []byte("k")); err != nil || !ok || string(got) != "v2" {
-		t.Fatalf("latest-index read = %q ok=%v err=%v, want v2", got, ok, err)
+		t.Fatalf("flat latest read = %q ok=%v err=%v, want v2", got, ok, err)
 	}
 }
 
-func TestAccountKVDeferredHotCommitWritesLatestOnly(t *testing.T) {
+func TestAccountKVFlatCommitWritesCommitmentRoot(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x70)
 	key := []byte("cycle")
 	if err := sdb.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v1")); err != nil {
 		t.Fatal(err)
 	}
-	root, stats, err := sdb.CommitWithStatsOptions(CommitOptions{
-		DeferAccountKVCommitment: HotAccountKVCommitmentDomain,
-	})
+	root, stats, err := sdb.CommitWithStats()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.DeferredKVAccounts != 1 || stats.DeferredKVItems != 1 || stats.RebuiltKVAccounts != 0 {
-		t.Fatalf("deferred stats = accounts:%d items:%d rebuilt:%d, want 1/1/0", stats.DeferredKVAccounts, stats.DeferredKVItems, stats.RebuiltKVAccounts)
+	if stats.KVAccounts != 1 || stats.KVItems != 1 || stats.DeferredKVAccounts != 0 || stats.DeferredKVItems != 0 {
+		t.Fatalf("flat stats = kvAccounts:%d kvItems:%d deferred:%d/%d, want 1/1/0/0", stats.KVAccounts, stats.KVItems, stats.DeferredKVAccounts, stats.DeferredKVItems)
+	}
+	if got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(sdb.db.DiskDB()); err != nil || !ok || got != root {
+		t.Fatalf("commitment root = %x ok=%v err=%v, want %x", got, ok, err, root)
 	}
 
 	rooted, err := New(root, sdb.db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := rooted.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || ok {
-		t.Fatalf("rooted read unexpectedly saw deferred value: ok=%v err=%v", ok, err)
-	}
-	rooted.SetAccountKVIndexStore(sdb.db.DiskDB())
-	rooted.SetAccountKVIndexReads(true)
 	if got, ok, err := rooted.GetAccountKV(addr, kvdomains.SystemReward, key); err != nil || !ok || string(got) != "v1" {
-		t.Fatalf("latest read = %q ok=%v err=%v, want v1", got, ok, err)
+		t.Fatalf("flat read = %q ok=%v err=%v, want v1", got, ok, err)
 	}
 }
 
-func TestAccountKVDeferredHotCommitCanRebuildCleanOwnerFromLatest(t *testing.T) {
+func TestAccountKVFlatCommitStableWhenNoDirtyAccounts(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(0x71)
 	key := []byte("cycle")
@@ -906,14 +1380,12 @@ func TestAccountKVDeferredHotCommitCanRebuildCleanOwnerFromLatest(t *testing.T) 
 	if err := live.SetAccountKV(addr, kvdomains.SystemReward, key, []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
-	root2, stats, err := live.CommitWithStatsOptions(CommitOptions{
-		DeferAccountKVCommitment: HotAccountKVCommitmentDomain,
-	})
+	root2, stats, err := live.CommitWithStats()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.DeferredKVAccounts != 1 || stats.DeferredKVItems != 1 {
-		t.Fatalf("deferred stats = accounts:%d items:%d, want 1/1", stats.DeferredKVAccounts, stats.DeferredKVItems)
+	if stats.KVAccounts != 1 || stats.KVItems != 1 || stats.DeferredKVAccounts != 0 || stats.DeferredKVItems != 0 {
+		t.Fatalf("flat stats = kvAccounts:%d kvItems:%d deferred:%d/%d, want 1/1/0/0", stats.KVAccounts, stats.KVItems, stats.DeferredKVAccounts, stats.DeferredKVItems)
 	}
 
 	checkpoint, err := New(root2, sdb.db)
@@ -922,17 +1394,15 @@ func TestAccountKVDeferredHotCommitCanRebuildCleanOwnerFromLatest(t *testing.T) 
 	}
 	checkpoint.SetAccountKVIndexStore(sdb.db.DiskDB())
 	checkpoint.SetAccountKVIndexReads(true)
-	root3, stats, err := checkpoint.CommitWithStatsOptions(CommitOptions{
-		RebuildAccountKVRootOwners: []tcommon.Address{addr},
-	})
+	root3, stats, err := checkpoint.CommitWithStats()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.RebuiltKVAccounts != 1 || stats.RebuiltKVItems != 1 {
-		t.Fatalf("rebuilt stats = accounts:%d items:%d, want 1/1", stats.RebuiltKVAccounts, stats.RebuiltKVItems)
+	if stats.RebuiltKVAccounts != 0 || stats.RebuiltKVItems != 0 || stats.Accounts != 0 {
+		t.Fatalf("rebuild stats = accounts:%d rebuilt:%d/%d, want 0/0/0", stats.Accounts, stats.RebuiltKVAccounts, stats.RebuiltKVItems)
 	}
-	if root3 == root2 {
-		t.Fatal("checkpoint rebuild did not move rooted state")
+	if root3 != root2 {
+		t.Fatalf("empty flat commit moved root: got %x want %x", root3, root2)
 	}
 	rooted, err := New(root3, sdb.db)
 	if err != nil {
@@ -976,12 +1446,16 @@ type countingKVIndexStore struct {
 }
 
 func (s *countingKVIndexStore) Put(key, value []byte) error {
-	s.puts++
+	if bytes.HasPrefix(key, []byte("state-kv-latest-v2-")) {
+		s.puts++
+	}
 	return s.KeyValueStore.Put(key, value)
 }
 
 func (s *countingKVIndexStore) Delete(key []byte) error {
-	s.deletes++
+	if bytes.HasPrefix(key, []byte("state-kv-latest-v2-")) {
+		s.deletes++
+	}
 	return s.KeyValueStore.Delete(key)
 }
 

@@ -93,6 +93,61 @@ func TestDynPropFlushRootedClearsRootedDirty(t *testing.T) {
 	}
 }
 
+func TestDynPropFlatFlushWritesOnlyDerivedRuntimeKeys(t *testing.T) {
+	sdb := newTestStateDB(t)
+	db := sdb.db.DiskDB()
+	dp := NewDynamicProperties()
+
+	dp.Set("energy_fee", 420)                 // rooted governance
+	dp.SetLatestProposalNum(9)                // rooted governance
+	dp.SetString("energy_price_history", "x") // rooted string
+	dp.SetLatestBlockHeaderNumber(5)          // derived/runtime mirror
+	dp.SetLatestBlockHeaderHash(tcommon.HexToHash("1234"))
+
+	dp.Flush(db)
+
+	for _, key := range []string{"energy_fee", "latest_proposal_num", "energy_price_history"} {
+		if v := rawdb.ReadDynamicProperty(db, key); len(v) != 0 {
+			t.Fatalf("rooted key %q must not be in dp-, got %x", key, v)
+		}
+	}
+	if v := rawdb.ReadDynamicProperty(db, "latest_block_header_number"); len(v) != 8 {
+		t.Fatalf("derived number must be in dp-, got %x", v)
+	}
+	if v := rawdb.ReadDynamicProperty(db, "latest_block_header_hash"); len(v) != tcommon.HashLength {
+		t.Fatalf("runtime hash must be in dp-, got %x", v)
+	}
+}
+
+func TestDynPropFlushDerivedUsesTypedStoreBoundary(t *testing.T) {
+	dp := NewDynamicProperties()
+	dp.Set("energy_fee", 420)
+	dp.SetString("energy_price_history", "0:420")
+	dp.SetLatestBlockHeaderNumber(5)
+	dp.SetLatestBlockHeaderTimestamp(6)
+	dp.SetLatestSolidifiedBlockNum(4)
+	dp.SetLatestBlockHeaderHash(tcommon.HexToHash("1234"))
+
+	store := newRecordingDerivedDPStore(true)
+	dp.flushDerived(store)
+
+	for _, key := range []string{"energy_fee", "energy_price_history"} {
+		if _, ok := store.writes[key]; ok {
+			t.Fatalf("rooted key %q must not be written through derived store", key)
+		}
+	}
+	for _, key := range []string{
+		"latest_block_header_number",
+		"latest_block_header_timestamp",
+		"latest_solidified_block_num",
+		"latest_block_header_hash",
+	} {
+		if _, ok := store.writes[key]; !ok {
+			t.Fatalf("derived key %q was not written through derived store", key)
+		}
+	}
+}
+
 // LoadDynamicProperties merges rooted (system-KV) + derived (dp-).
 func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	sdb := newTestStateDB(t)
@@ -117,6 +172,29 @@ func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	}
 	if loaded.LatestBlockHeaderNumber() != 42 {
 		t.Fatalf("derived not loaded: %d", loaded.LatestBlockHeaderNumber())
+	}
+}
+
+func TestDynPropLoadDerivedStoreFiltersRootedKeys(t *testing.T) {
+	store := newRecordingDerivedDPStore(true)
+	store.values["latest_block_header_number"] = be8(42)
+	store.values["energy_fee"] = be8(999)
+	loaded := loadDynamicPropertiesFromDerivedStore(store, nil)
+	if loaded.LatestBlockHeaderNumber() != 42 {
+		t.Fatalf("derived latest block number = %d, want 42", loaded.LatestBlockHeaderNumber())
+	}
+	if got := loaded.EnergyFee(); got != NewDynamicProperties().EnergyFee() {
+		t.Fatalf("rooted energy_fee loaded from derived store: got %d", got)
+	}
+
+	fallback := newRecordingDerivedDPStore(false)
+	fallback.values["latest_solidified_block_num"] = be8(7)
+	loaded = loadDynamicPropertiesFromDerivedStore(fallback, nil)
+	if got := loaded.LatestSolidifiedBlockNum(); got != 7 {
+		t.Fatalf("fallback derived latest solidified = %d, want 7", got)
+	}
+	if !fallback.reads["latest_solidified_block_num"] {
+		t.Fatal("fallback reader did not point-read derived key")
 	}
 }
 
@@ -161,13 +239,14 @@ func TestDynPropRootedAnchorAndRewind(t *testing.T) {
 		t.Fatal("anchor: rooted dynprop change did not move the state root")
 	}
 
-	// Rewind: reopening R1 recovers R1's values; R2 keeps R2's.
+	// Flat latest is authoritative: reopening R1 reads current latest-domain
+	// values. Historical reads are served by domain history/snapshots.
 	atR1 := LoadDynamicProperties(sdb.db.DiskDB(), mustOpen(t, sdb, r1))
-	if got := atR1.NextMaintenanceTime(); got != 111 {
-		t.Fatalf("rewind R1 int64: got %d, want 111", got)
+	if got := atR1.NextMaintenanceTime(); got != 222 {
+		t.Fatalf("R1-open latest int64: got %d, want 222", got)
 	}
-	if got, _ := atR1.GetString("memo_fee_history"); got != "0:111" {
-		t.Fatalf("rewind R1 string: got %q, want 0:111", got)
+	if got, _ := atR1.GetString("memo_fee_history"); got != "0:222" {
+		t.Fatalf("R1-open latest string: got %q, want 0:222", got)
 	}
 	atR2 := LoadDynamicProperties(sdb.db.DiskDB(), mustOpen(t, sdb, r2))
 	if got := atR2.NextMaintenanceTime(); got != 222 {
@@ -199,4 +278,39 @@ func TestDynPropLoadNilSysKVUsesDefaults(t *testing.T) {
 	if loaded.LatestBlockHeaderNumber() != 11 {
 		t.Fatalf("derived should load with nil sysKV: %d", loaded.LatestBlockHeaderNumber())
 	}
+}
+
+type recordingDerivedDPStore struct {
+	values      map[string][]byte
+	writes      map[string][]byte
+	reads       map[string]bool
+	iterateFast bool
+}
+
+func newRecordingDerivedDPStore(iterateFast bool) *recordingDerivedDPStore {
+	return &recordingDerivedDPStore{
+		values:      make(map[string][]byte),
+		writes:      make(map[string][]byte),
+		reads:       make(map[string]bool),
+		iterateFast: iterateFast,
+	}
+}
+
+func (s *recordingDerivedDPStore) ReadDerivedDynamicProperty(name string) []byte {
+	s.reads[name] = true
+	return append([]byte(nil), s.values[name]...)
+}
+
+func (s *recordingDerivedDPStore) IterateDerivedDynamicProperties(fn func(name string, value []byte)) bool {
+	if !s.iterateFast {
+		return false
+	}
+	for name, value := range s.values {
+		fn(name, append([]byte(nil), value...))
+	}
+	return true
+}
+
+func (s *recordingDerivedDPStore) WriteDerivedDynamicProperty(name string, value []byte) {
+	s.writes[name] = append([]byte(nil), value...)
 }

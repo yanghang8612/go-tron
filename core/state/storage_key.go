@@ -1,9 +1,8 @@
 package state
 
 import (
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,15 +28,20 @@ func javaStorageRowKey(addr tcommon.Address, key tcommon.Hash, meta *contractpb.
 	return rowKey
 }
 
-func storageRowKeyFromDB(db ethdb.KeyValueReader, addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+func storageRowKeyFromFlatLatest(latest accountKVLatestGenerationReader, addr tcommon.Address, generation uint64, key tcommon.Hash) (tcommon.Hash, error) {
 	var meta *contractpb.SmartContract
-	if data := rawdb.ReadContract(db, addr); len(data) > 0 {
+	if latest == nil {
+		return javaStorageRowKey(addr, key, nil), nil
+	}
+	if data, ok, err := latest.KVLatest(addr, generation, kvdomains.ContractMetadata, contractMetaKVKey); err != nil {
+		return tcommon.Hash{}, err
+	} else if ok && len(data) > 0 {
 		var sc contractpb.SmartContract
 		if err := proto.Unmarshal(data, &sc); err == nil {
 			meta = &sc
 		}
 	}
-	return javaStorageRowKey(addr, key, meta)
+	return javaStorageRowKey(addr, key, meta), nil
 }
 
 func isZeroBytes(b []byte) bool {

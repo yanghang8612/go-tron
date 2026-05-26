@@ -1,17 +1,61 @@
 package state
 
 import (
+	"bytes"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
+
+func mustReadStateAccountEnvelope(t *testing.T, sdb *StateDB, addr tcommon.Address) *StateAccountV2 {
+	t.Helper()
+	data, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("account latest row missing for %s", addr.Hex())
+	}
+	env, err := DecodeStateAccountV2(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+type recordingStateCodeStore struct {
+	codes  map[tcommon.Hash][]byte
+	reads  []tcommon.Hash
+	writes []tcommon.Hash
+}
+
+func newRecordingStateCodeStore() *recordingStateCodeStore {
+	return &recordingStateCodeStore{codes: make(map[tcommon.Hash][]byte)}
+}
+
+func (s *recordingStateCodeStore) ReadStateCode(hash tcommon.Hash) []byte {
+	s.reads = append(s.reads, hash)
+	code := s.codes[hash]
+	if len(code) == 0 {
+		return nil
+	}
+	return append([]byte(nil), code...)
+}
+
+func (s *recordingStateCodeStore) WriteStateCode(hash tcommon.Hash, code []byte) error {
+	s.writes = append(s.writes, hash)
+	s.codes[hash] = append([]byte(nil), code...)
+	return nil
+}
 
 func TestStateDBCodeMethods(t *testing.T) {
 	sdb := newTestStateDB(t)
@@ -38,6 +82,40 @@ func TestStateDBCodeMethods(t *testing.T) {
 	}
 }
 
+func TestStateDBCodeUsesTypedStoreBoundary(t *testing.T) {
+	sdb := newTestStateDB(t)
+	store := newRecordingStateCodeStore()
+	sdb.codeStore = store
+	addr := tcommon.Address{0x41, 0x01, 0x10}
+	code := []byte{0x60, 0x0a, 0x60, 0x00, 0xf3}
+	hash := tcommon.Keccak256(code)
+
+	sdb.CreateAccount(addr, corepb.AccountType_Contract)
+	sdb.SetCode(addr, code)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit code through typed store: %v", err)
+	}
+	if len(store.writes) != 1 || store.writes[0] != hash || !bytes.Equal(store.codes[hash], code) {
+		t.Fatalf("typed code writes = %x store=%x, want hash %x code %x", store.writes, store.codes[hash], hash, code)
+	}
+	if got := rawdb.ReadStateCode(sdb.db.DiskDB(), hash); len(got) != 0 {
+		t.Fatalf("rawdb code table was written despite typed store override: %x", got)
+	}
+
+	reloaded, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.codeStore = store
+	if got := reloaded.GetCode(addr); !bytes.Equal(got, code) {
+		t.Fatalf("typed store code reload = %x, want %x", got, code)
+	}
+	if len(store.reads) != 1 || store.reads[0] != hash {
+		t.Fatalf("typed code reads = %x, want [%x]", store.reads, hash)
+	}
+}
+
 func TestStateDBCodeHashForExistingEmptyAccount(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := tcommon.Address{0x41, 0x01}
@@ -45,6 +123,54 @@ func TestStateDBCodeHashForExistingEmptyAccount(t *testing.T) {
 
 	if hash := sdb.GetCodeHash(addr); hash != tcommon.Keccak256(nil) {
 		t.Fatalf("empty account code hash: got %x, want %x", hash, tcommon.Keccak256(nil))
+	}
+}
+
+func TestStateDBGetCodeFallsBackToColdCodeDomain(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := NewDatabase(diskdb)
+	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tcommon.Address{0x41, 0x01, 0x02}
+	code := []byte{0x60, 0x01, 0x60, 0x02}
+	hash := tcommon.Keccak256(code)
+	sdb.SetCode(addr, code)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	codeRef, accessorRef, btreeRef, err := snapshots.BuildCodeSegmentFilesFromDB(diskdb, dir, 10, 10, "latest/code-10-10.seg")
+	if err != nil {
+		t.Fatalf("build code snapshot: %v", err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 10, []snapshots.SegmentRef{codeRef, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("publish code snapshot: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(diskdb, hash); err != nil {
+		t.Fatalf("delete hot code: %v", err)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	reloaded, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded.SetCodeColdHistory(mgr, 11)
+	copied, err := reloaded.Copy()
+	if err != nil {
+		t.Fatalf("copy state: %v", err)
+	}
+	if got := copied.GetCode(addr); !bytes.Equal(got, code) {
+		t.Fatalf("copied cold code = %x, want %x", got, code)
+	}
+	if got := reloaded.GetCode(addr); !bytes.Equal(got, code) {
+		t.Fatalf("cold code = %x, want %x", got, code)
 	}
 }
 
@@ -78,12 +204,17 @@ func TestStateDBStorageUsesJavaRowKeyForLegacyContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, key); len(raw) != 0 {
-		t.Fatalf("raw logical storage key should be empty, got %x", raw)
-	}
 	rowKey := javaStorageRowKey(addr, key, nil)
-	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey); len(raw) == 0 {
-		t.Fatal("expected value under java-tron storage row key")
+	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey); len(raw) != 0 {
+		t.Fatalf("legacy storage mirror was written: %x", raw)
+	}
+	env := mustReadStateAccountEnvelope(t, sdb, addr)
+	raw, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, env.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || tcommon.BytesToHash(raw) != val {
+		t.Fatalf("ContractStorage latest row = %x ok=%v, want %x", raw, ok, val)
 	}
 
 	reloaded, err := New(root, sdb.db)
@@ -115,10 +246,19 @@ func TestStateDBStorageVersionOneHashesSlotBeforeRowKey(t *testing.T) {
 	}
 
 	if rowKey := javaStorageRowKey(addr, key, nil); len(rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey)) != 0 {
-		t.Fatal("version=1 storage must not use the legacy slot row key")
+		t.Fatal("version=1 storage must not write legacy slot row key")
 	}
-	if rowKey := javaStorageRowKey(addr, key, meta); len(rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey)) == 0 {
-		t.Fatal("expected value under version=1 hashed-slot row key")
+	rowKey := javaStorageRowKey(addr, key, meta)
+	if raw := rawdb.ReadStorage(sdb.db.DiskDB(), addr, rowKey); len(raw) != 0 {
+		t.Fatalf("version=1 storage wrote legacy mirror: %x", raw)
+	}
+	env := mustReadStateAccountEnvelope(t, sdb, addr)
+	raw, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, env.AccountKVGeneration, kvdomains.ContractStorage, rowKey.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || tcommon.BytesToHash(raw) != val {
+		t.Fatalf("version=1 ContractStorage latest row = %x ok=%v, want %x", raw, ok, val)
 	}
 
 	reloaded, err := New(root, sdb.db)
@@ -367,9 +507,6 @@ func TestStateDBSelfDestructDeletesAccountAtCommit(t *testing.T) {
 	sdb.CreateAccount(addr, corepb.AccountType_Contract)
 	sdb.SetCode(addr, code)
 	sdb.SetContract(addr, meta)
-	if err := rawdb.WriteContractABI(diskdb, addr.Bytes(), &contractpb.SmartContract_ABI{}); err != nil {
-		t.Fatal(err)
-	}
 	root, err := sdb.Commit()
 	if err != nil {
 		t.Fatal(err)
@@ -406,9 +543,6 @@ func TestStateDBSelfDestructDeletesAccountAtCommit(t *testing.T) {
 	}
 	if got := sdb.GetContract(addr); got != nil {
 		t.Fatalf("selfdestructed contract meta survived commit: %+v", got)
-	}
-	if rawdb.ReadContractABI(diskdb, addr.Bytes()) != nil {
-		t.Fatal("selfdestructed dedicated ABI survived commit")
 	}
 }
 
@@ -479,9 +613,6 @@ func TestDeleteAccountClearsPersistedContractCodeOnRecreate(t *testing.T) {
 	sdb.CreateAccount(addr, corepb.AccountType_Contract)
 	sdb.SetCode(addr, code)
 	sdb.SetContract(addr, meta)
-	if err := rawdb.WriteContractABI(diskdb, addr.Bytes(), &contractpb.SmartContract_ABI{}); err != nil {
-		t.Fatal(err)
-	}
 	root, err := sdb.Commit()
 	if err != nil {
 		t.Fatal(err)
@@ -520,9 +651,6 @@ func TestDeleteAccountClearsPersistedContractCodeOnRecreate(t *testing.T) {
 	}
 	if got := sdb.GetContract(addr); got != nil {
 		t.Fatalf("stale contract meta survived commit: %+v", got)
-	}
-	if rawdb.ReadContractABI(diskdb, addr.Bytes()) != nil {
-		t.Fatal("stale dedicated ABI survived commit")
 	}
 	if !sdb.AccountExists(addr) {
 		t.Fatal("recreated normal account should persist")

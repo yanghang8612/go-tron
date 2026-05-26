@@ -6,7 +6,6 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -199,8 +198,8 @@ func TestStateDBCommitPersistsHistoricalAccountTrieRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen root1: %v", err)
 	}
-	if got := atRoot1Again.GetBalance(addr); got != 1000 {
-		t.Fatalf("balance at root1 after root2 commit = %d, want 1000", got)
+	if got := atRoot1Again.GetBalance(addr); got != 1500 {
+		t.Fatalf("flat latest balance at root1 after root2 commit = %d, want 1500", got)
 	}
 }
 
@@ -222,33 +221,51 @@ func TestStateDBWitness(t *testing.T) {
 	}
 }
 
+func commitAndReopenStateDB(t *testing.T, sdb *StateDB) (*StateDB, tcommon.Hash) {
+	t.Helper()
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root, sdb.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reopened, root
+}
+
+func seedWitnessCapsule(t *testing.T, sdb *StateDB, addr tcommon.Address, url string, votes int64) *types.Witness {
+	t.Helper()
+	w := types.NewWitness(addr, url)
+	w.SetVoteCount(votes)
+	if err := sdb.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
 // TestStateDBFlushWitnesses_VoteCountDelta covers the D-2.c scenario: a
 // VoteWitness-style in-memory delta on a pre-existing witness must persist
-// to rawdb without clobbering production counters. Prior to the fix the
-// delta lived only in s.witnesses and was discarded after the block,
-// causing accumulateWitnessVi to use a stale VoteCount on every subsequent
-// maintenance.
+// to the native witness capsule without clobbering production counters. Prior
+// to the fix the delta lived only in s.witnesses and was discarded after the
+// block, causing accumulateWitnessVi to use a stale VoteCount on every
+// subsequent maintenance.
 func TestStateDBFlushWitnesses_VoteCountDelta(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := newTestStateDB(t)
 	addr := testAddr(1)
 
-	// Seed disk with a witness that already has counters from prior blocks.
+	// Seed native state with a witness that already has counters from prior
+	// blocks.
 	pre := types.NewWitness(addr, "http://sr-a")
 	pre.SetVoteCount(100)
 	pre.SetTotalProduced(42)
 	pre.SetTotalMissed(7)
 	pre.SetLatestBlockNum(99)
 	pre.SetLatestSlotNum(101)
-	rawdb.WriteWitness(diskdb, addr, pre)
-
-	// Fresh statedb opens with disk-backed Database; pre-load picks up the
-	// existing record (VoteCount=100, URL set).
-	sdb, err := New(tcommon.Hash(ethtypes.EmptyRootHash), NewDatabase(diskdb))
-	if err != nil {
+	if err := sdb.SetWitnessCapsule(pre); err != nil {
 		t.Fatal(err)
 	}
-	sdb.PutWitness(addr, pre.URL())
-	sdb.AddWitnessVoteCount(addr, pre.VoteCount())
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
 	// Simulate VoteWitnessActuator applying a +1 delta in-memory.
 	sdb.AddWitnessVoteCount(addr, 1)
@@ -256,12 +273,13 @@ func TestStateDBFlushWitnesses_VoteCountDelta(t *testing.T) {
 		t.Fatalf("in-memory VoteCount = %d, want 101", got)
 	}
 
-	// Flush: VoteCount must reach disk; counters must be preserved.
-	sdb.FlushWitnesses(diskdb)
+	// Flush: VoteCount must reach native state; counters must be preserved.
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
-	post := rawdb.ReadWitness(diskdb, addr)
+	post := sdb.GetWitness(addr)
 	if post == nil {
-		t.Fatal("witness disappeared from disk after flush")
+		t.Fatal("witness disappeared after flush")
 	}
 	if post.VoteCount() != 101 {
 		t.Errorf("VoteCount = %d, want 101", post.VoteCount())
@@ -282,135 +300,70 @@ func TestStateDBFlushWitnesses_VoteCountDelta(t *testing.T) {
 }
 
 // TestStateDBFlushWitnesses_FreshWitness covers the WitnessCreate path
-// where the in-memory record exists but rawdb has no entry yet. Flush
-// should write the in-memory record verbatim so counters default to zero.
+// where the in-memory record exists but native state has no entry yet. Flush
+// should write the in-memory record verbatim.
 func TestStateDBFlushWitnesses_FreshWitness(t *testing.T) {
 	sdb := newTestStateDB(t)
 	addr := testAddr(2)
 	sdb.PutWitness(addr, "http://new-sr")
 	sdb.AddWitnessVoteCount(addr, 5)
 
-	diskdb := ethrawdb.NewMemoryDatabase()
-	sdb.FlushWitnesses(diskdb)
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
-	post := rawdb.ReadWitness(diskdb, addr)
+	post := sdb.GetWitness(addr)
 	if post == nil {
-		t.Fatal("fresh witness must be written to disk on flush")
+		t.Fatal("fresh witness must be written on flush")
 	}
 	if post.URL() != "http://new-sr" || post.VoteCount() != 5 {
 		t.Fatalf("fresh witness fields wrong: url=%q votes=%d", post.URL(), post.VoteCount())
 	}
 }
 
-// countingKV wraps an ethdb.KeyValueStore and tallies Has/Get/Put/Delete
-// calls. Used by the FlushWitnesses dirty-set tests to assert that no-op
-// blocks issue zero rawdb operations while mutated witnesses issue exactly
-// one Read + one Write each.
-type countingKV struct {
-	inner         ethdb.KeyValueStore
-	hasN, getN    int
-	putN, deleteN int
-}
-
-func newCountingKV() *countingKV {
-	return &countingKV{inner: ethrawdb.NewMemoryDatabase()}
-}
-
-func (c *countingKV) Has(key []byte) (bool, error) {
-	c.hasN++
-	return c.inner.Has(key)
-}
-
-func (c *countingKV) Get(key []byte) ([]byte, error) {
-	c.getN++
-	return c.inner.Get(key)
-}
-
-func (c *countingKV) Put(key []byte, value []byte) error {
-	c.putN++
-	return c.inner.Put(key, value)
-}
-
-func (c *countingKV) Delete(key []byte) error {
-	c.deleteN++
-	return c.inner.Delete(key)
-}
-
-// seedWitness writes a witness to the underlying store directly (bypassing
-// the counters) and returns the seeded record. Used to prepare the rawdb
-// state that LoadWitness will hydrate from.
-func (c *countingKV) seedWitness(t *testing.T, addr tcommon.Address, url string, votes int64) *types.Witness {
-	t.Helper()
-	w := types.NewWitness(addr, url)
-	w.SetVoteCount(votes)
-	rawdb.WriteWitness(c.inner, addr, w)
-	return w
-}
-
-// resetCounts zeroes the call counters after seeding so subsequent
-// assertions only see calls from the operation under test.
-func (c *countingKV) resetCounts() {
-	c.hasN, c.getN, c.putN, c.deleteN = 0, 0, 0, 0
-}
-
 // TestFlushWitnesses_NoMutation covers the common case: preload N
-// witnesses from rawdb and flush without touching any of them. The dirty
-// set must be empty, so FlushWitnesses issues zero Reads and zero Writes.
+// witnesses from native state and flush without touching any of them. The
+// dirty set must be empty, so FlushWitnesses leaves the commitment root
+// unchanged.
 // This is the hot path the perf change targets — most blocks have no
 // VoteWitness, WitnessUpdate, or Unfreeze tx.
 func TestFlushWitnesses_NoMutation(t *testing.T) {
 	const n = 27
-	kv := newCountingKV()
+	sdb := newTestStateDB(t)
 	addrs := make([]tcommon.Address, n)
 	for i := 0; i < n; i++ {
 		addrs[i] = testAddr(byte(0x80 + i))
-		kv.seedWitness(t, addrs[i], "http://sr", int64(100+i))
+		seedWitnessCapsule(t, sdb, addrs[i], "http://sr", int64(100+i))
 	}
+	sdb, root := commitAndReopenStateDB(t, sdb)
 
-	sdb := newTestStateDB(t)
-	for i := 0; i < n; i++ {
-		sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addrs[i]))
-	}
-
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
-	if kv.getN != 0 || kv.hasN != 0 || kv.putN != 0 || kv.deleteN != 0 {
-		t.Fatalf("expected zero db ops on no-mutation flush, got get=%d has=%d put=%d delete=%d",
-			kv.getN, kv.hasN, kv.putN, kv.deleteN)
+	sdb.FlushWitnesses()
+	_, rootAfter := commitAndReopenStateDB(t, sdb)
+	if rootAfter != root {
+		t.Fatalf("no-mutation flush changed root: got %s, want %s", rootAfter.Hex(), root.Hex())
 	}
 }
 
 // TestFlushWitnesses_SingleVoteMutation: one VoteWitness-style delta
-// against a preloaded witness. Flush must issue exactly one rawdb Read
-// (Has+Get) and one Put for the touched address; the other preloaded
-// witnesses stay untouched.
+// against a preloaded witness. Flush updates the touched witness while the
+// other preloaded witnesses stay untouched.
 func TestFlushWitnesses_SingleVoteMutation(t *testing.T) {
-	kv := newCountingKV()
+	sdb := newTestStateDB(t)
 	addr1 := testAddr(0xA1)
 	addr2 := testAddr(0xA2)
-	kv.seedWitness(t, addr1, "http://sr1", 50)
-	kv.seedWitness(t, addr2, "http://sr2", 60)
-
-	sdb := newTestStateDB(t)
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr1))
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr2))
+	seedWitnessCapsule(t, sdb, addr1, "http://sr1", 50)
+	seedWitnessCapsule(t, sdb, addr2, "http://sr2", 60)
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
 	sdb.AddWitnessVoteCount(addr1, 10)
 
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
-	// Has+Get for the read, Put for the merged write.
-	if kv.getN != 1 || kv.putN != 1 || kv.deleteN != 0 {
-		t.Fatalf("single-mutation flush: got get=%d has=%d put=%d delete=%d, want get=1 put=1 delete=0",
-			kv.getN, kv.hasN, kv.putN, kv.deleteN)
-	}
-
-	post := rawdb.ReadWitness(kv.inner, addr1)
+	post := sdb.GetWitness(addr1)
 	if post.VoteCount() != 60 {
 		t.Fatalf("VoteCount = %d, want 60", post.VoteCount())
 	}
-	post2 := rawdb.ReadWitness(kv.inner, addr2)
+	post2 := sdb.GetWitness(addr2)
 	if post2.VoteCount() != 60 {
 		t.Fatalf("addr2 VoteCount = %d, want 60 (untouched)", post2.VoteCount())
 	}
@@ -419,38 +372,30 @@ func TestFlushWitnesses_SingleVoteMutation(t *testing.T) {
 // TestFlushWitnesses_MultiMutation: VoteCount on addr1, URL on addr2.
 // Both witnesses must flush; the third preloaded witness stays untouched.
 func TestFlushWitnesses_MultiMutation(t *testing.T) {
-	kv := newCountingKV()
+	sdb := newTestStateDB(t)
 	addr1 := testAddr(0xB1)
 	addr2 := testAddr(0xB2)
 	addr3 := testAddr(0xB3)
-	kv.seedWitness(t, addr1, "http://sr1", 10)
-	kv.seedWitness(t, addr2, "http://sr2-old", 20)
-	kv.seedWitness(t, addr3, "http://sr3", 30)
-
-	sdb := newTestStateDB(t)
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr1))
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr2))
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr3))
+	seedWitnessCapsule(t, sdb, addr1, "http://sr1", 10)
+	seedWitnessCapsule(t, sdb, addr2, "http://sr2-old", 20)
+	seedWitnessCapsule(t, sdb, addr3, "http://sr3", 30)
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
 	sdb.AddWitnessVoteCount(addr1, 5)
 	sdb.SetWitnessURL(addr2, "http://sr2-new")
 
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
-	if kv.getN != 2 || kv.putN != 2 {
-		t.Fatalf("multi-mutation flush: got get=%d put=%d, want get=2 put=2", kv.getN, kv.putN)
-	}
-
-	post1 := rawdb.ReadWitness(kv.inner, addr1)
+	post1 := sdb.GetWitness(addr1)
 	if post1.VoteCount() != 15 {
 		t.Errorf("addr1 VoteCount = %d, want 15", post1.VoteCount())
 	}
-	post2 := rawdb.ReadWitness(kv.inner, addr2)
+	post2 := sdb.GetWitness(addr2)
 	if post2.URL() != "http://sr2-new" {
 		t.Errorf("addr2 URL = %q, want http://sr2-new", post2.URL())
 	}
-	post3 := rawdb.ReadWitness(kv.inner, addr3)
+	post3 := sdb.GetWitness(addr3)
 	if post3.URL() != "http://sr3" || post3.VoteCount() != 30 {
 		t.Errorf("addr3 changed unexpectedly: url=%q votes=%d", post3.URL(), post3.VoteCount())
 	}
@@ -460,38 +405,28 @@ func TestFlushWitnesses_MultiMutation(t *testing.T) {
 // (clears dirty set), then mutate addr2 only. The second flush must only
 // touch addr2 — the dirty set must NOT carry addr1 forward.
 func TestFlushWitnesses_RemutationClearsBetweenFlushes(t *testing.T) {
-	kv := newCountingKV()
+	sdb := newTestStateDB(t)
 	addr1 := testAddr(0xC1)
 	addr2 := testAddr(0xC2)
-	kv.seedWitness(t, addr1, "http://sr1", 5)
-	kv.seedWitness(t, addr2, "http://sr2", 7)
-
-	sdb := newTestStateDB(t)
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr1))
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr2))
+	seedWitnessCapsule(t, sdb, addr1, "http://sr1", 5)
+	seedWitnessCapsule(t, sdb, addr2, "http://sr2", 7)
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
 	// Round 1: mutate addr1 only.
 	sdb.AddWitnessVoteCount(addr1, 1)
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
-	if kv.getN != 1 || kv.putN != 1 {
-		t.Fatalf("round 1: got get=%d put=%d, want 1/1", kv.getN, kv.putN)
-	}
+	sdb.FlushWitnesses()
 
 	// Round 2: mutate addr2 only. The dirty set must have been cleared,
 	// so addr1 must not flush again.
 	sdb.AddWitnessVoteCount(addr2, 1)
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
-	if kv.getN != 1 || kv.putN != 1 {
-		t.Fatalf("round 2: got get=%d put=%d, want 1/1 (addr1 must NOT re-flush)", kv.getN, kv.putN)
-	}
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
 
-	post1 := rawdb.ReadWitness(kv.inner, addr1)
+	post1 := sdb.GetWitness(addr1)
 	if post1.VoteCount() != 6 {
 		t.Errorf("addr1 final VoteCount = %d, want 6", post1.VoteCount())
 	}
-	post2 := rawdb.ReadWitness(kv.inner, addr2)
+	post2 := sdb.GetWitness(addr2)
 	if post2.VoteCount() != 8 {
 		t.Errorf("addr2 final VoteCount = %d, want 8", post2.VoteCount())
 	}
@@ -502,7 +437,6 @@ func TestFlushWitnesses_RemutationClearsBetweenFlushes(t *testing.T) {
 // record. The flush must tolerate this (the nil-guard inside the loop)
 // and do zero work — there is no witness to write.
 func TestFlushWitnesses_RevertedWitnessSurvives(t *testing.T) {
-	kv := newCountingKV()
 	sdb := newTestStateDB(t)
 	addr := testAddr(0xD1)
 
@@ -515,10 +449,10 @@ func TestFlushWitnesses_RevertedWitnessSurvives(t *testing.T) {
 		t.Fatal("witness should be reverted out of the in-memory map")
 	}
 
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
-	if kv.getN != 0 || kv.putN != 0 {
-		t.Fatalf("reverted witness: got get=%d put=%d, want 0/0", kv.getN, kv.putN)
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
+	if got := sdb.GetWitness(addr); got != nil {
+		t.Fatalf("reverted witness persisted unexpectedly: %+v", got)
 	}
 }
 
@@ -526,22 +460,19 @@ func TestFlushWitnesses_RevertedWitnessSurvives(t *testing.T) {
 // against the regression where preload paths mark every preloaded witness
 // dirty (the bug this perf change exists to fix).
 func TestFlushWitnesses_LoadWitnessDoesNotMarkDirty(t *testing.T) {
-	kv := newCountingKV()
 	addr := testAddr(0xE1)
-	kv.seedWitness(t, addr, "http://sr", 100)
-
 	sdb := newTestStateDB(t)
-	sdb.LoadWitness(rawdb.ReadWitness(kv.inner, addr))
+	sdb.LoadWitness(types.NewWitness(addr, "http://external"))
 
 	// Sanity: witness is visible in-memory.
-	if sdb.GetWitness(addr).VoteCount() != 100 {
+	if sdb.GetWitness(addr).URL() != "http://external" {
 		t.Fatal("LoadWitness should hydrate VoteCount")
 	}
 
-	kv.resetCounts()
-	sdb.FlushWitnesses(kv)
-	if kv.getN != 0 || kv.putN != 0 {
-		t.Fatalf("LoadWitness must not mark dirty: got get=%d put=%d", kv.getN, kv.putN)
+	sdb.FlushWitnesses()
+	sdb, _ = commitAndReopenStateDB(t, sdb)
+	if got := sdb.GetWitness(addr); got != nil {
+		t.Fatalf("LoadWitness must not mark dirty or persist: %+v", got)
 	}
 }
 

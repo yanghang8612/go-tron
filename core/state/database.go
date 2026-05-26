@@ -1,8 +1,6 @@
 package state
 
 import (
-	"sync"
-
 	"github.com/VictoriaMetrics/fastcache"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -11,24 +9,20 @@ import (
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
 )
 
-const trieNodeBatchPreallocSize = ethdb.IdealBatchSize
-
 // DatabaseConfig tunes the in-process trie database wrapper.
 type DatabaseConfig struct {
-	// CleanTrieCacheSizeBytes enables the in-process trie-node cache. It keeps
-	// raw legacy trie node blobs above Pebble, including nodes just produced by
-	// block commits, so consecutive blocks do not have to re-read hot account/KV
-	// trie nodes from compacting SSTables.
+	// CleanTrieCacheSizeBytes enables the in-process trie-node cache for
+	// java-tron accountStateRoot trie reads/writes. Internal full state no
+	// longer uses a trie-backed root.
 	CleanTrieCacheSizeBytes int
 }
 
-// Database wraps access to tries.
+// Database wraps state storage plus the independent java-tron accountStateRoot trie.
 type Database struct {
-	disk              ethdb.Database
-	trieDisk          ethdb.Database
-	trieDB            *triedb.Database
-	trieNodeCache     *fastcache.Cache
-	trieNodeBatchPool sync.Pool
+	disk          ethdb.Database
+	trieDisk      ethdb.Database
+	trieDB        *triedb.Database
+	trieNodeCache *fastcache.Cache
 }
 
 // NewDatabase creates a state database.
@@ -37,8 +31,7 @@ func NewDatabase(diskdb ethdb.Database) *Database {
 }
 
 // NewDatabaseWithConfig creates a state database with explicit trie cache
-// settings. The default remains hash-based trie storage for java-tron wire and
-// state-root compatibility.
+// settings for the independent java-tron accountStateRoot trie.
 func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database {
 	if cfg.CleanTrieCacheSizeBytes < 0 {
 		cfg.CleanTrieCacheSizeBytes = 0
@@ -53,10 +46,8 @@ func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database 
 		}
 	}
 	trieDBCfg := &triedb.Config{
-		// go-tron keeps its own read-through/write-through node cache around
-		// the trie database so nodes produced by our manual batched writer are
-		// visible to the next block without a Pebble read. Leaving hashdb's
-		// separate clean cache disabled avoids holding the same blobs twice.
+		// The wrapper above provides the cache; leaving hashdb's separate clean
+		// cache disabled avoids holding the same blobs twice.
 		HashDB: &hashdb.Config{CleanCacheSize: 0},
 	}
 	trieDB := triedb.NewDatabase(trieDisk, trieDBCfg)
@@ -66,18 +57,15 @@ func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database 
 		trieDB:        trieDB,
 		trieNodeCache: trieNodeCache,
 	}
-	db.trieNodeBatchPool.New = func() any {
-		return diskdb.NewBatchWithSize(trieNodeBatchPreallocSize)
-	}
 	return db
 }
 
-// OpenTrie opens the main account trie at the given root.
+// OpenTrie opens the independent java-tron accountStateRoot trie at root.
 func (db *Database) OpenTrie(root ethcommon.Hash) (*trie.Trie, error) {
 	return trie.New(trie.TrieID(root), db.trieDB)
 }
 
-// TrieDB returns the underlying trie database for committing nodes.
+// TrieDB returns the underlying java-tron accountStateRoot trie database.
 func (db *Database) TrieDB() *triedb.Database {
 	return db.trieDB
 }
@@ -98,23 +86,4 @@ func (db *Database) Close() error {
 		db.trieNodeCache.Reset()
 	}
 	return err
-}
-
-func (db *Database) newTrieNodeBatch() ethdb.Batch {
-	return db.trieNodeBatchPool.Get().(ethdb.Batch)
-}
-
-func (db *Database) releaseTrieNodeBatch(batch ethdb.Batch) {
-	if batch == nil {
-		return
-	}
-	batch.Reset()
-	db.trieNodeBatchPool.Put(batch)
-}
-
-func (db *Database) cacheTrieNode(hash ethcommon.Hash, blob []byte) {
-	if db == nil || db.trieNodeCache == nil || len(blob) == 0 {
-		return
-	}
-	db.trieNodeCache.Set(hash[:], blob)
 }

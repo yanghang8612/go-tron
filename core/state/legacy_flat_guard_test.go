@@ -39,11 +39,22 @@ func TestNoLegacyRootedStoreOrFlatCodeInProductionPaths(t *testing.T) {
 			return err
 		}
 		text := string(data)
-		if rel != filepath.Join("core", "state", "rooted_store.go") && strings.Contains(text, "NewRootedStore(") {
+		if strings.Contains(text, "NewRootedStore(") {
 			violations = append(violations, rel+": production code must not wrap execution DBs in RootedStore")
 		}
-		if strings.Contains(text, "rawdb.ReadCode(") || strings.Contains(text, "rawdb.WriteCode(") {
+		if strings.Contains(text, "rawdb.ReadCode(") || strings.Contains(text, "rawdb.WriteCode(") || strings.Contains(text, "rawdb.DeleteCode(") {
 			violations = append(violations, rel+": production code must not read/write legacy address-keyed CodeStore")
+		}
+		if strings.Contains(text, "rawdb.ReadStorage(") || strings.Contains(text, "rawdb.WriteStorage(") {
+			violations = append(violations, rel+": production code must not read/write legacy address-keyed ContractStorage")
+		}
+		if strings.Contains(text, "rawdb.ReadContract(") || strings.Contains(text, "rawdb.WriteContract(") ||
+			strings.Contains(text, "rawdb.ReadContractABI(") || strings.Contains(text, "rawdb.WriteContractABI(") ||
+			strings.Contains(text, "rawdb.DeleteContract(") || strings.Contains(text, "rawdb.DeleteContractABI(") {
+			violations = append(violations, rel+": production code must not read/write legacy address-keyed ContractStore/ABIStore")
+		}
+		if strings.Contains(text, "rawdb.ReadWitness(") || strings.Contains(text, "rawdb.WriteWitness(") {
+			violations = append(violations, rel+": production code must not read/write legacy address-keyed WitnessStore")
 		}
 		return nil
 	})
