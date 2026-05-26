@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -15,11 +14,13 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
+	"github.com/tronprotocol/go-tron/params"
 	apipb "github.com/tronprotocol/go-tron/proto/api"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -35,10 +36,11 @@ type TxBroadcaster interface {
 
 // TronBackend implements tronapi.Backend.
 type TronBackend struct {
-	chain       *BlockChain
-	pool        *txpool.TxPool
-	txBroadcast TxBroadcaster              // nil until wired from main
-	peersFunc   func() []*tronapi.PeerInfo // nil until wired from main
+	chain            *BlockChain
+	pool             *txpool.TxPool
+	txBroadcast      TxBroadcaster              // nil until wired from main
+	peersFunc        func() []*tronapi.PeerInfo // nil until wired from main
+	stateColdHistory state.StateDomainChangeColdHistory
 
 	subsMu    sync.Mutex
 	blockSubs []chan<- *types.Block
@@ -90,6 +92,13 @@ func (b *TronBackend) SetPeerLister(fn func() []*tronapi.PeerInfo) {
 	b.peersFunc = fn
 }
 
+// SetStateColdHistory wires snapshot-backed flat history into archive reads.
+// Hot history remains the primary source; this reader only supplies pruned
+// StateDomainChange rows that have been moved to cold snapshot segments.
+func (b *TronBackend) SetStateColdHistory(source state.StateDomainChangeColdHistory) {
+	b.stateColdHistory = source
+}
+
 func (b *TronBackend) CurrentBlock() *types.Block {
 	return b.chain.CurrentBlock()
 }
@@ -122,7 +131,7 @@ func (b *TronBackend) GetBlockByNumber(number uint64) (*types.Block, error) {
 
 func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -133,58 +142,23 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 	return acc, nil
 }
 
-// GetAccountAt returns the account as of the post-apply state of `blockNum`.
-//
-// Fast path (unchanged): when the block's committed state root is still on
-// disk — always true for the recent solid / PBFT-confirmed heights the
-// /walletsolidity/ and /walletpbft/ variants query — it opens a StateDB at
-// that root. This keeps those responses isolated from live state.
-//
-// Archive fallback (slice 7): when the root is absent (pruned by full-mode
-// gcmode, but the block is older than head) it reconstructs the account from
-// the State History Index instead of erroring — this is the TRON-flavored
-// equivalent of java-tron's archive /walletsolidity/getaccount serving any
-// past block. The fallback requires the node to have captured history; on a
-// non-archive node it returns ErrArchiveHistoryDisabled rather than a
-// generic "no state root" error so operators get an actionable message.
-//
-// Both paths return a "not found" error for an address that didn't exist at
-// that height, preserving the existing handler contract (which renders that
-// as an empty `{}` body).
+// GetAccountAt returns the account as of the post-apply state of blockNum.
+// Flat latest roots are commitments, not historical MPT snapshots, so all
+// non-head reads go through flat temporal domain history. The live head is
+// served by the same history reader, which delegates to the current flat
+// StateDB.
 func (b *TronBackend) GetAccountAt(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
-	// Reject blocks past head up front. A future block has no committed state
-	// root, so it would fall into the history-reader branch below — where
-	// requireArchive and the reader both treat blockNum >= headNum as "serve
-	// live" and would silently return the head account for a block that does
-	// not exist yet. Pre-slice-7 this errored; preserve that contract.
-	if head := b.chain.CurrentBlock(); head != nil && blockNum > head.Number() {
-		return nil, fmt.Errorf("block %d is beyond current head %d", blockNum, head.Number())
-	}
-	root := b.chain.StateRootAtBlock(blockNum)
-	if root == (tcommon.Hash{}) {
-		// State root pruned (or never written). Reconstruct via history if
-		// the node is an archive node; otherwise the answer is unrecoverable.
-		reader, headNum, err := b.historyReaderAt()
-		if err != nil {
-			return nil, err
-		}
-		if err := b.requireArchive(blockNum, headNum); err != nil {
-			return nil, err
-		}
-		acc, err := reader.AccountAt(addr, blockNum)
-		if err != nil {
-			return nil, fmt.Errorf("reconstruct account at block %d: %w", blockNum, err)
-		}
-		if acc == nil {
-			return nil, fmt.Errorf("account not found at block %d", blockNum)
-		}
-		return acc, nil
-	}
-	statedb, err := state.New(root, b.chain.StateDB())
+	reader, headNum, err := b.historyReaderAt()
 	if err != nil {
-		return nil, fmt.Errorf("open state at block %d: %w", blockNum, err)
+		return nil, err
 	}
-	acc := statedb.GetAccount(addr)
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return nil, err
+	}
+	acc, err := reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account at block %d: %w", blockNum, err)
+	}
 	if acc == nil {
 		return nil, fmt.Errorf("account not found at block %d", blockNum)
 	}
@@ -222,7 +196,7 @@ func (b *TronBackend) PendingTransactionCount() int {
 
 func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContract, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -236,7 +210,7 @@ func (b *TronBackend) GetContract(addr tcommon.Address) (*contractpb.SmartContra
 func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Address, data []byte, energyLimit int64) (*tronapi.TriggerResult, error) {
 	current := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -416,7 +390,7 @@ func (b *TronBackend) GetAccountResourceAt(addr tcommon.Address, blockNum uint64
 }
 
 func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.AccountResource, error) {
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -642,7 +616,7 @@ func proposalParametersToList(m map[int64]int64) []tronapi.ProposalParameterEntr
 }
 
 func (b *TronBackend) GetDelegatedResourceV2(from, to tcommon.Address) ([]*tronapi.DelegatedResourceInfo, error) {
-	statedb, err := state.New(b.chain.HeadStateRoot(), b.chain.StateDB())
+	statedb, err := b.chain.openState(b.chain.HeadStateRoot())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -677,7 +651,7 @@ func delegatedResourceInfo(from, to tcommon.Address, dr *rawdb.DelegatedResource
 }
 
 func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (*tronapi.DelegationIndexInfo, error) {
-	statedb, err := state.New(b.chain.HeadStateRoot(), b.chain.StateDB())
+	statedb, err := b.chain.openState(b.chain.HeadStateRoot())
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -694,7 +668,7 @@ func (b *TronBackend) GetDelegatedResourceAccountIndexV2(addr tcommon.Address) (
 
 func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -728,7 +702,7 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -747,7 +721,7 @@ func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timesta
 
 func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -777,7 +751,7 @@ func (b *TronBackend) GetRewardAt(addr tcommon.Address, blockNum uint64) (*trona
 }
 
 func (b *TronBackend) rewardAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.RewardInfo, error) {
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -1086,7 +1060,7 @@ func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 
 func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMessage, error) {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
@@ -1275,7 +1249,7 @@ func (b *TronBackend) BlockNumber() uint64 {
 
 func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return 0
 	}
@@ -1284,7 +1258,7 @@ func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
 
 func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return nil
 	}
@@ -1293,7 +1267,7 @@ func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
 
 func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcommon.Hash {
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return tcommon.Hash{}
 	}
@@ -1302,32 +1276,32 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 
 // ErrArchiveHistoryDisabled is returned by the *At archive-query methods
 // when the caller asks for a historical block (blockNum < head) on a node
-// that wasn't synced with --history.enabled. Such a node has no sh-* rows
-// on disk, so the historical answer is unrecoverable; rather than silently
-// returning the live value (which would be wrong for any block < head) the
-// backend surfaces this clear error. Queries AT head are still served from
-// live state and never hit this path.
+// that wasn't synced with --history.enabled. Such a node has no temporal
+// domain changes on disk, so the historical answer is unrecoverable; rather
+// than silently returning the live value (which would be wrong for any block
+// < head) the backend surfaces this clear error. Queries AT head are still
+// served from live state and never hit this path.
 var ErrArchiveHistoryDisabled = fmt.Errorf("archive history not available: node not running with --history.enabled")
 
 // ErrArchiveHistoryPruned is returned when a historical query asks for a block
-// below the local State History Index retention floor. In full mode the pruner
-// deletes sh-* rows below HistoryConfig.FirstBlock, so reconstructing those
-// heights would silently skip required rollback deltas and return an
+// below the local flat-history retention floor. In full mode the domain pruner
+// deletes StateTxRange/StateDomainChange rows below the retention window, so
+// reconstructing those heights would silently skip required rollback deltas and return an
 // unverifiable state.
 var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested block")
 
 // historyReaderAt builds a single-use PersistentHistoryReader for one
 // archive query and reports the chain head number it was constructed
-// against. The reader walks history rows newest-first from head down to the
-// requested block, so its `db` and `live` baseline must agree on "head":
+// against. The reader walks temporal domain rows newest-first from head down
+// to the requested block, so its `db` and `live` baseline must agree on "head":
 //
-//   - db = b.chain.buffer — the buffer overlay sees sh-* rows for blocks
+//   - db = b.chain.buffer — the buffer overlay sees temporal rows for blocks
 //     applied but not yet flushed to disk (head can lead the flushed/
 //     solidified boundary by ~19 blocks on mainnet DPoS), matching the
-//     fork-rewind-safe reader the slice-4 tests exercise.
-//   - live = StateDB opened at the head's committed state root — the MPT
-//     account view the reader rolls deltas back from, the same baseline the
-//     live GetBalance/GetCode reads use.
+//     fork-rewind-safe reader the reorg tests exercise.
+//   - live = StateDB opened at the head's committed state root — the flat
+//     account view the reader rolls domain changes back from, the same
+//     baseline the live GetBalance/GetCode reads use.
 //
 // headNum and the live root are tied to a single head number rather than
 // read independently. Calling CurrentBlock().Number() and HeadStateRoot()
@@ -1338,23 +1312,23 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 // StateRootAtBlock(headNum) resolves the root for that exact number, so the
 // baseline and the threshold can no longer skew.
 //
-// The caller is responsible for the HistoryEnabled gate (see
+// The caller is responsible for the flat-history availability gate (see
 // requireArchive); this helper only assembles the reader.
 func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, error) {
 	headNum := b.chain.CurrentBlock().Number()
 	root := b.chain.StateRootAtBlock(headNum)
-	live, err := state.New(root, b.chain.StateDB())
+	live, err := b.chain.openState(root)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open head state: %w", err)
 	}
-	return state.NewPersistentHistoryReader(b.chain.buffer, live, headNum), headNum, nil
+	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, nil
 }
 
-// requireArchive enforces the block range and HistoryEnabled gates for a query
+// requireArchive enforces the block range and flat-history gates for a query
 // bound to blockNum. A query at head is served from live state. A query past
 // head has no committed state and must fail instead of silently returning head.
-// A query for a strictly-older block requires the node to have been capturing
-// history; otherwise it returns ErrArchiveHistoryDisabled.
+// A query for a strictly-older block requires StateTxRange metadata at head and
+// at the requested block (except genesis block 0).
 func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
 	if blockNum > headNum {
 		return fmt.Errorf("block %d is beyond current head %d", blockNum, headNum)
@@ -1362,25 +1336,53 @@ func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
 	if blockNum == headNum {
 		return nil
 	}
-	if !b.chain.Config().HistoryEnabled {
+	cfg := b.chain.Config()
+	if cfg == nil || !cfg.HistoryEnabled {
 		return ErrArchiveHistoryDisabled
 	}
-	cfg, err := rawdb.ReadHistoryConfig(b.chain.buffer)
-	if err == nil {
-		if cfg.FirstBlock > 0 && blockNum < cfg.FirstBlock {
-			return fmt.Errorf("%w: requested=%d first_available=%d",
-				ErrArchiveHistoryPruned, blockNum, cfg.FirstBlock)
+
+	if cfg.EffectiveHistoryMode() == params.HistoryModeFull {
+		window := cfg.EffectiveHistoryPruneWindow()
+		if window > 0 && headNum >= window {
+			firstAvailable := headNum - window + 1
+			if blockNum < firstAvailable {
+				return fmt.Errorf("%w: requested=%d first_available=%d",
+					ErrArchiveHistoryPruned, blockNum, firstAvailable)
+			}
 		}
-		return nil
 	}
-	if !errors.Is(err, rawdb.ErrHistoryConfigAbsent) {
-		return fmt.Errorf("read history config: %w", err)
+
+	if ok, err := b.archiveStateTxRangeAvailable(headNum); err != nil {
+		return fmt.Errorf("read flat history head range: %w", err)
+	} else if !ok {
+		return ErrArchiveHistoryDisabled
+	}
+	if blockNum > 0 {
+		if ok, err := b.archiveStateTxRangeAvailable(blockNum); err != nil {
+			return fmt.Errorf("read flat history range: %w", err)
+		} else if !ok {
+			return fmt.Errorf("%w: requested=%d first_available=%d",
+				ErrArchiveHistoryPruned, blockNum, blockNum+1)
+		}
 	}
 	return nil
 }
 
+func (b *TronBackend) archiveStateTxRangeAvailable(blockNum uint64) (bool, error) {
+	if _, ok, err := snapshots.StateDomainHistoryTxRangeForBlock(b.chain.buffer, blockNum); err != nil {
+		return false, err
+	} else if ok {
+		return true, nil
+	}
+	if cold, ok := b.stateColdHistory.(state.StateDomainChangeColdTxRange); ok {
+		_, ok, err := cold.StateTxRangeForBlock(blockNum)
+		return ok, err
+	}
+	return false, nil
+}
+
 // GetBalanceAt returns addr's TRX balance (in SUN) as it stood at the end of
-// blockNum, reconstructed via the State History Index. blockNum >= head
+// blockNum, reconstructed via flat temporal domain history. blockNum >= head
 // reads live state; an older block on a non-archive node returns
 // ErrArchiveHistoryDisabled. A non-existent account at that height returns
 // (0, nil) — matching the live GetBalance "no account ⇒ 0" convention.
@@ -1649,7 +1651,7 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 
 	head := b.chain.CurrentBlock()
 	root := b.chain.HeadStateRoot()
-	statedb, err := state.New(root, b.chain.StateDB())
+	statedb, err := b.chain.openState(root)
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
 	}

@@ -13,7 +13,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 )
 
@@ -25,7 +24,7 @@ import (
 // Versioning: the salt below is bumped (vN → vN+1) whenever the canonical
 // encoding changes, since any change invalidates allowlists captured against
 // the previous version.
-func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address, dp *state.DynamicProperties) [32]byte {
+func DigestB(sdb *state.StateDB, _ ethdb.KeyValueStore, addrs []tcommon.Address, dp *state.DynamicProperties) [32]byte {
 	sorted := append([]tcommon.Address(nil), addrs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
@@ -64,7 +63,7 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 		// Witness proto (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/
 		// VoteCount/IsJobs/URL). Non-witness addresses → length-0 marker.
 		var wBytes []byte
-		if w := rawdb.ReadWitness(db, a); w != nil {
+		if w := sdb.GetWitness(a); w != nil {
 			if b, err := w.Marshal(); err == nil {
 				wBytes = b
 			}
@@ -95,7 +94,7 @@ func DigestB(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 
 // DigestC emits the same data as DigestB but as structured JSON for human
 // diffing. Map keys are stable.
-func DigestC(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address, dp *state.DynamicProperties) json.RawMessage {
+func DigestC(sdb *state.StateDB, _ ethdb.KeyValueStore, addrs []tcommon.Address, dp *state.DynamicProperties) json.RawMessage {
 	sorted := append([]tcommon.Address(nil), addrs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return bytes.Compare(sorted[i][:], sorted[j][:]) < 0
@@ -133,7 +132,7 @@ func DigestC(sdb *state.StateDB, db ethdb.KeyValueStore, addrs []tcommon.Address
 				"energyUsage":  cs.EnergyUsage(),
 			}
 		}
-		if w := rawdb.ReadWitness(db, a); w != nil {
+		if w := sdb.GetWitness(a); w != nil {
 			entry["witness"] = map[string]any{
 				"totalProduced":  w.TotalProduced(),
 				"totalMissed":    w.TotalMissed(),

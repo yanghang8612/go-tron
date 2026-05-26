@@ -40,10 +40,10 @@ type SeedContract struct {
 	Raw     json.RawMessage `json:"raw,omitempty"`
 }
 
-// SeedWitness holds the full corepb.Witness proto for an SR address — DigestB
-// reads rawdb.ReadWitness independently of the Account record, so witness
+// SeedWitness holds the full corepb.Witness proto for an SR address. Witness
 // counters (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/VoteCount/IsJobs/URL)
-// must travel through the seed/snapshot path explicitly.
+// live in the native witness capsule domain rather than the Account record, so
+// they must travel through the seed/snapshot path explicitly.
 type SeedWitness struct {
 	Address      string `json:"address"`
 	WitnessProto string `json:"witnessProto"` // base64 of corepb.Witness

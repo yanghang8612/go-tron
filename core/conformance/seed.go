@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -93,7 +92,7 @@ func LoadSeed(path string) (*Loaded, error) {
 		if err != nil {
 			return nil, fmt.Errorf("witness address %q: %w", w.Address, err)
 		}
-		if err := applySeedWitness(diskdb, addr, w); err != nil {
+		if err := applySeedWitness(sdb, addr, w); err != nil {
 			return nil, fmt.Errorf("apply witness %s: %w", w.Address, err)
 		}
 	}
@@ -194,7 +193,7 @@ func applyRawAccount(sdb *state.StateDB, addr tcommon.Address, raw json.RawMessa
 	return nil
 }
 
-func applySeedWitness(db ethdb.KeyValueStore, addr tcommon.Address, w SeedWitness) error {
+func applySeedWitness(sdb *state.StateDB, addr tcommon.Address, w SeedWitness) error {
 	wBytes, err := base64.StdEncoding.DecodeString(w.WitnessProto)
 	if err != nil {
 		return fmt.Errorf("witness %s: base64: %w", w.Address, err)
@@ -203,8 +202,7 @@ func applySeedWitness(db ethdb.KeyValueStore, addr tcommon.Address, w SeedWitnes
 	if err != nil {
 		return fmt.Errorf("witness %s: proto: %w", w.Address, err)
 	}
-	rawdb.WriteWitness(db, addr, witness)
-	return nil
+	return sdb.SetWitnessCapsule(witness)
 }
 
 func applySeedContract(sdb *state.StateDB, addr tcommon.Address, c SeedContract) error {

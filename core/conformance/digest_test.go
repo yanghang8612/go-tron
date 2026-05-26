@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -105,12 +104,16 @@ func TestDigestB_DetectsWitnessChange(t *testing.T) {
 	sdb, db, dp, addrs := newDigestFixture(t)
 	// Make addrs[0] a witness with initial counters.
 	w := types.NewWitness(addrs[0], "http://example.com")
-	rawdb.WriteWitness(db, addrs[0], w)
+	if err := sdb.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
 	d0 := DigestB(sdb, db, addrs, dp)
 
 	// Bump TotalProduced; digest must change.
 	w.SetTotalProduced(w.TotalProduced() + 1)
-	rawdb.WriteWitness(db, addrs[0], w)
+	if err := sdb.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
 	d1 := DigestB(sdb, db, addrs, dp)
 	if d0 == d1 {
 		t.Fatal("digest must change when witness TotalProduced changes")
@@ -144,7 +147,9 @@ func TestDigestC_WitnessAndDPStrings(t *testing.T) {
 	w.SetTotalProduced(5)
 	w.SetTotalMissed(1)
 	w.SetLatestBlockNum(123)
-	rawdb.WriteWitness(db, addrs[0], w)
+	if err := sdb.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
 
 	raw := DigestC(sdb, db, addrs, dp)
 	var m map[string]any

@@ -8,12 +8,12 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
-	historypb "github.com/tronprotocol/go-tron/proto/core/historystate"
 )
 
-// Slice 7 of the State History Index: archive-query RPC surface.
+// Archive-query RPC surface over flat temporal state history.
 //
 // These tests cover the TronBackend.*At methods that wrap the slice-3
 // PersistentHistoryReader: GetBalanceAt / GetCodeAt / GetStorageAtBlock.
@@ -94,8 +94,8 @@ func TestArchiveQuery_BalanceAtBlock(t *testing.T) {
 		t.Fatal("GetBalanceAt(recipient, head+100) returned nil error")
 	}
 
-	// Independent oracle cross-check: the history reader (rollback over
-	// sh-* deltas) must agree byte-for-byte with the MPT account view
+	// Independent oracle cross-check: the history reader (rollback over flat
+	// temporal domain changes) must agree byte-for-byte with the account view
 	// reconstructed from each block's committed state root — a completely
 	// separate code path. This validates BOTH the credited recipient AND
 	// the debited sender (whose balance also absorbs the one-time
@@ -122,8 +122,8 @@ func TestArchiveQuery_BalanceAtBlock(t *testing.T) {
 
 // TestArchiveQuery_GetAccountAtFallsBackToHistory verifies the slice-7
 // upgrade to TronBackend.GetAccountAt: when a block's committed state root
-// has been pruned (StateRootAtBlock → zero) the method reconstructs the
-// account from the State History Index instead of erroring. This is the
+// has been pruned (StateRootAtBlock -> zero) the method reconstructs the
+// account from flat temporal history instead of erroring. This is the
 // TRON-flavored archive surface (/walletsolidity/getaccount over any past
 // block). The fast path (root present) is unchanged and covered elsewhere.
 func TestArchiveQuery_GetAccountAtFallsBackToHistory(t *testing.T) {
@@ -255,17 +255,16 @@ func TestArchiveQuery_PruneFloorRejectsUnavailableHistory(t *testing.T) {
 		}
 	}
 
-	if err := rawdb.PruneHistoryBlockRange(bc.db, 1, 3); err != nil {
-		t.Fatalf("PruneHistoryBlockRange: %v", err)
+	bc.buffer.BeginBlock(tcommon.Hash{0xEE})
+	for n := uint64(1); n <= 3; n++ {
+		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateDomainChanges(%d): %v", n, err)
+		}
+		if err := rawdb.DeleteStateTxRange(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateTxRange(%d): %v", n, err)
+		}
 	}
-	if err := rawdb.WriteHistoryConfig(bc.db, &historypb.HistoryConfig{
-		Mode:       0,
-		FirstBlock: 4,
-		LastBlock:  numBlocks,
-		SchemaVer:  rawdb.HistorySchemaVersion,
-	}); err != nil {
-		t.Fatalf("WriteHistoryConfig: %v", err)
-	}
+	bc.buffer.CommitBlock()
 	rawdb.DeleteBlockStateRoot(bc.db, block2.Hash())
 
 	if _, err := b.GetBalanceAt(recipient, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
@@ -283,13 +282,78 @@ func TestArchiveQuery_PruneFloorRejectsUnavailableHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
+	b, witness, recipient := archiveBackend(t)
+	bc := b.chain
+	bc.config.HistoryMode = params.HistoryModeSnap
+	bc.config.HistoryPruneWindow = 1
+
+	const numBlocks = 4
+	parent := bc.genesisBlock.Hash()
+	want := make([]int64, numBlocks+1)
+	var running int64
+	for n := int64(1); n <= numBlocks; n++ {
+		amount := n * 1000
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, amount)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		running += amount
+		want[n] = running
+	}
+
+	range2, ok, err := rawdb.ReadStateTxRange(bc.buffer, 2)
+	if err != nil || !ok {
+		t.Fatalf("read block 2 tx range: ok=%v err=%v", ok, err)
+	}
+	range3, ok, err := rawdb.ReadStateTxRange(bc.buffer, 3)
+	if err != nil || !ok {
+		t.Fatalf("read block 3 tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(bc.buffer, dir, range2.BeginTxNum, range3.EndTxNum, "history/state-domain-change-2-3.seg")
+	if err != nil {
+		t.Fatalf("build cold state-domain-change segment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range3.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	b.SetStateColdHistory(mgr)
+
+	bc.buffer.BeginBlock(tcommon.Hash{0xCF})
+	for n := uint64(2); n <= 3; n++ {
+		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateDomainChanges(%d): %v", n, err)
+		}
+		if err := rawdb.DeleteStateTxRange(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateTxRange(%d): %v", n, err)
+		}
+	}
+	bc.buffer.CommitBlock()
+
+	for n := uint64(1); n <= numBlocks; n++ {
+		got, err := b.GetBalanceAt(recipient, n)
+		if err != nil {
+			t.Fatalf("cold GetBalanceAt(recipient, %d): %v", n, err)
+		}
+		if got != want[n] {
+			t.Errorf("cold GetBalanceAt(recipient, %d) = %d, want %d", n, got, want[n])
+		}
+	}
+}
+
 // TestArchiveQuery_GatedOnHistoryEnabled verifies the HistoryEnabled gate:
 // on a node that did NOT capture history, an archive query for a block
 // older than head returns ErrArchiveHistoryDisabled, while a query at head
 // still succeeds from live state.
 func TestArchiveQuery_GatedOnHistoryEnabled(t *testing.T) {
 	// Build a chain with HistoryEnabled=false. Single producing witness so
-	// blocks advance head; the absence of sh-* rows is the point.
+	// blocks advance head; the absence of flat temporal rows is the point.
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
 	cfg.HistoryEnabled = false

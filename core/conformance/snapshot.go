@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -129,7 +128,12 @@ func LoadSnapshot(r io.Reader) (*Loaded, *Snapshot, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("witness %s: proto unmarshal: %w", sw.Address, err)
 		}
-		rawdb.WriteWitness(diskdb, addr, w)
+		if w.Address() != addr {
+			return nil, nil, fmt.Errorf("witness %s: proto address mismatch %s", sw.Address, w.Address().Hex())
+		}
+		if err := sdb.SetWitnessCapsule(w); err != nil {
+			return nil, nil, fmt.Errorf("witness %s: write: %w", sw.Address, err)
+		}
 	}
 
 	for _, cs := range snap.ContractStates {
@@ -208,7 +212,7 @@ func DumpSnapshot(l *Loaded, blockNum uint64) (*Snapshot, error) {
 		}
 	}
 	for _, a := range l.Closure {
-		if w := rawdb.ReadWitness(l.DiskDB, a); w != nil {
+		if w := l.StateDB.GetWitness(a); w != nil {
 			b, err := w.Marshal()
 			if err != nil {
 				return nil, fmt.Errorf("marshal witness %s: %w", hex.EncodeToString(a[:]), err)

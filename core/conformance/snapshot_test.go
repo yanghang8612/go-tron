@@ -10,7 +10,6 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -99,7 +98,7 @@ func TestSnapshotRoundTrip_PreservesContractState(t *testing.T) {
 // witness counters (TotalProduced/Missed/LatestBlockNum/LatestSlotNum/
 // VoteCount/IsJobs/URL) survive a Dump→JSON→Load cycle. Without explicit
 // witness handling this test fails because Snapshot has no witness field
-// and DigestB reads ReadWitness from a fresh diskdb that knows nothing.
+// and DigestB reads the native witness capsule from a fresh StateDB.
 func TestSnapshotRoundTrip_PreservesWitness(t *testing.T) {
 	dir := t.TempDir()
 	witness := buildRangeFixture(t, dir, 1000)
@@ -115,7 +114,9 @@ func TestSnapshotRoundTrip_PreservesWitness(t *testing.T) {
 	w.SetLatestSlotNum(101)
 	w.SetVoteCount(7777)
 	w.SetIsJobs(true)
-	rawdb.WriteWitness(loaded.DiskDB, witness, w)
+	if err := loaded.StateDB.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
 
 	d0 := DigestB(loaded.StateDB, loaded.DiskDB, loaded.Closure, loaded.DynProps)
 

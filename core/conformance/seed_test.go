@@ -10,7 +10,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -99,10 +98,10 @@ func TestLoadSeed_RawAccountRoundTrip(t *testing.T) {
 	// named fields (latestOpTime, allowance). Base64-encode it; round-trip
 	// it through LoadSeed; assert every field survives.
 	pb := &corepb.Account{
-		Address:       []byte{0x41, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa},
-		Balance:       12345,
+		Address:            []byte{0x41, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa},
+		Balance:            12345,
 		LatestOprationTime: 999,
-		Allowance:     1_000_000,
+		Allowance:          1_000_000,
 	}
 	bs, err := proto.Marshal(pb)
 	if err != nil {
@@ -169,9 +168,9 @@ func TestLoadSeed_WitnessRoundTrip(t *testing.T) {
 		t.Fatalf("load seed with witness: %v", err)
 	}
 
-	got := rawdb.ReadWitness(loaded.DiskDB, addr)
+	got := loaded.StateDB.GetWitness(addr)
 	if got == nil {
-		t.Fatal("witness missing in diskdb after LoadSeed")
+		t.Fatal("witness missing after LoadSeed")
 	}
 	if got.VoteCount() != 555 || got.TotalProduced() != 42 || got.TotalMissed() != 3 {
 		t.Fatalf("witness counters lost: vc=%d produced=%d missed=%d", got.VoteCount(), got.TotalProduced(), got.TotalMissed())
