@@ -379,7 +379,11 @@ Next step:
 
 - Document CodeDomain as content-addressed latest retention plus account-envelope
   temporal selection, unless future java-tron parity tests prove code needs a
-  separate temporal changeset.
+  separate temporal changeset. The content-addressed model now has a behavioral
+  anchor: `TestPersistentHistoryReaderReadsCodeFromColdCodeDomain` proves the
+  cold CodeDomain retains a superseded bytecode version, so historical `CodeAt`
+  across an in-place overwrite is served by account-envelope history selecting
+  the right code hash plus content-addressed retention of every referenced hash.
 - Add java-tron parity fixtures for historical contract code if future
   compatibility work finds a case where content-addressed retention is
   insufficient.
@@ -886,13 +890,29 @@ Status update:
 - Fork-switch coverage now verifies the internal CommitmentDomain root after
   rewind/replay: the stored latest commitment root must match the canonical
   block-state root and a rebuild from the visible latest-domain rows.
+- Contract storage update/delete/recreate is covered: a mid-life slot overwrite
+  (non-zero -> different non-zero) is historically distinguished by
+  `TenBlockSweep` (slot 0x03 at block 3 -> 0x07 at block 7), and the
+  delete/recreate lifecycle by `AccountDeletedThenRecreated`.
+- Historical code reconstruction across an in-place bytecode overwrite is now
+  pinned both hot and cold: `TestPersistentHistoryReader_CodeUpdateHistory`
+  reconstructs codeA at block 1 and codeB at block 2 through the historical
+  reader (verified non-tautological), and
+  `TestPersistentHistoryReaderReadsCodeFromColdCodeDomain` now asserts that both
+  code versions reconstruct from the cold CodeDomain after the hot code bytes
+  are deleted, i.e. the cold CodeDomain retains the superseded version.
 
 Next step:
 
-- Add golden tests for:
-  - contract storage update/delete/recreate
-  - code update and historical `CodeAt`
-  - account-KV generation changes
+- account-KV generation changes are not yet exercisable end-to-end. The
+  rawdb-layer generation-as-of reader (`ReadStateKVGenerationAsOfTxNum`) is
+  unit-tested, but current execution flows do not produce a persisted
+  `KVGenerationDomain` row change: `ResetAccountKV` (the only writer that marks
+  the generation dirty) has no callers, and the recreate-time bump in
+  `GetOrCreateAccount` is persisted only through the account envelope
+  (`StateAccountV2.AccountKVGeneration`), not the separate generation row that
+  the archive reader consumes. Whether that envelope/row split is a real archive
+  divergence or benign is tracked as a separate investigation.
 - Keep java-tron fixture replay as the final compatibility gate.
 
 Acceptance:
