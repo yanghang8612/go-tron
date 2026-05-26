@@ -38,15 +38,15 @@ func TestStats_AddBlockAccumulates(t *testing.T) {
 	s.InitSession(time.Unix(0, 0))
 
 	s.AddBlock(3, 10*time.Millisecond)
-	s.AddBlock(5, 20*time.Millisecond)
+	s.AddBlocks(2, 5, 20*time.Millisecond)
 	s.AddBlock(2, 7*time.Millisecond)
 
 	snap := s.CurrentSnapshot()
-	if snap.Blocks != 3 {
-		t.Fatalf("Blocks=%d, want 3", snap.Blocks)
+	if snap.Blocks != 4 {
+		t.Fatalf("Blocks=%d, want 4", snap.Blocks)
 	}
-	if snap.TotalBlocks != 3 {
-		t.Fatalf("TotalBlocks=%d, want 3", snap.TotalBlocks)
+	if snap.TotalBlocks != 4 {
+		t.Fatalf("TotalBlocks=%d, want 4", snap.TotalBlocks)
 	}
 	if snap.Txs != 10 {
 		t.Fatalf("Txs=%d, want 10", snap.Txs)
@@ -218,6 +218,23 @@ func TestStats_WindowElapsedBoundary(t *testing.T) {
 	s.SnapshotAndReset(newStart)
 	if got := s.WindowElapsed(newStart.Add(100 * time.Millisecond)); got != 100*time.Millisecond {
 		t.Fatalf("post-reset WindowElapsed=%v, want 100ms", got)
+	}
+}
+
+func TestStats_RecordBlocksSnapshotsWholeRange(t *testing.T) {
+	s := NewStats()
+	start := time.Unix(1_700_000_000, 0)
+	s.InitSession(start)
+
+	snap, emit := s.RecordBlocks(3, 7, 30*time.Millisecond, start.Add(time.Second), 500*time.Millisecond)
+	if !emit {
+		t.Fatal("RecordBlocks did not emit after interval")
+	}
+	if snap.Blocks != 3 || snap.TotalBlocks != 3 || snap.Txs != 7 || snap.ExecElapsed != 30*time.Millisecond {
+		t.Fatalf("snapshot = %+v, want 3 blocks/7 txs/30ms", snap)
+	}
+	if got := s.CurrentSnapshot(); got.Blocks != 0 || got.TotalBlocks != 3 || got.Txs != 0 || got.ExecElapsed != 0 {
+		t.Fatalf("post-reset snapshot = %+v, want cleared window with total blocks preserved", got)
 	}
 }
 

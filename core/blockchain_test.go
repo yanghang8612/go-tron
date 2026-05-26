@@ -636,10 +636,11 @@ func TestBlockChainInsertBlock_RootedDynPropsRewind(t *testing.T) {
 		t.Fatalf("post-boundary next_maintenance_time at head root: got %d, want %d", got, 2*interval)
 	}
 
-	// Rewind: reopening the pre-boundary root must still yield the OLD value,
-	// even though the chain has advanced past it.
-	if got := loadDPAtRoot(t, diskdb, sdb, rootBefore).NextMaintenanceTime(); got != interval {
-		t.Fatalf("rewind to pre-boundary root: next_maintenance_time = %d, want %d", got, interval)
+	// Flat latest is authoritative: reopening the pre-boundary commitment root
+	// reads the current latest-domain value. Historical queries must use domain
+	// history rather than treating the root as an MPT snapshot.
+	if got := loadDPAtRoot(t, diskdb, sdb, rootBefore).NextMaintenanceTime(); got != 2*interval {
+		t.Fatalf("pre-boundary root open reads latest next_maintenance_time = %d, want %d", got, 2*interval)
 	}
 }
 
@@ -755,7 +756,7 @@ func TestBlockChainInsertBlock_Block1SkipsMaintenance(t *testing.T) {
 	//    "allowance < standbyAllowance" (block reward is 16M sun, well under
 	//    115.2G).
 	stateRoot := rawdb.ReadBlockStateRoot(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), bc.CurrentBlock().Hash())
-	statedb, err := state.New(stateRoot, sdb)
+	statedb, err := bc.openState(stateRoot)
 	if err != nil {
 		t.Fatalf("open post-block#1 state: %v", err)
 	}
@@ -877,7 +878,11 @@ func TestBlockChainInsertBlock_TryRemoveThePowerOfTheGr(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := rawdb.ReadWitness(bc.BufferedDB(), grAddr)
+	headState, err := bc.openState(bc.HeadStateRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := headState.GetWitness(grAddr)
 	if w == nil {
 		t.Fatal("GR witness missing after maintenance")
 	}
@@ -895,7 +900,11 @@ func TestBlockChainInsertBlock_TryRemoveThePowerOfTheGr(t *testing.T) {
 	if err := bc.InsertBlock(buildTestBlock(bc, grAddr, 2*interval)); err != nil {
 		t.Fatal(err)
 	}
-	w2 := rawdb.ReadWitness(bc.BufferedDB(), grAddr)
+	headState, err = bc.openState(bc.HeadStateRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2 := headState.GetWitness(grAddr)
 	if got := w2.VoteCount(); got != 0 {
 		t.Fatalf("GR voteCount after second maintenance: got %d, want 0", got)
 	}

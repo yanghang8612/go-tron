@@ -90,6 +90,48 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	if got := bc.CurrentBlock().Number(); got != 2 {
 		t.Fatalf("buffered chain did not drain in order, head=%d", got)
 	}
+	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != 2 {
+		t.Fatalf("sync stats total blocks after buffered range drain = %d, want 2", got)
+	}
+	ss.mu.Lock()
+	buffered := len(ss.blockBuffer)
+	ss.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("buffered range not fully drained: %d blocks remain", buffered)
+	}
+}
+
+func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	peer, closePeer := testPeer(t, "range-fail")
+	defer closePeer()
+
+	parent := bc.CurrentBlock().Hash()
+	block1 := stubBlock(1, parent)
+	block2 := stubBlock(2, tcommon.Hash{0xee})
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.blockBuffer[1] = bufferedSyncBlock{block: block1, peer: peer}
+	ss.blockBuffer[2] = bufferedSyncBlock{block: block2, peer: peer}
+	ss.bufferedHash[block1.Hash()] = struct{}{}
+	ss.bufferedHash[block2.Hash()] = struct{}{}
+	ss.mu.Unlock()
+
+	ss.drainBufferedBlocksOnce()
+
+	if got := bc.CurrentBlock().Number(); got != 1 {
+		t.Fatalf("head after partial buffered range failure = %d, want 1", got)
+	}
+	paused, atNum, _, err := ss.PausedStatus()
+	if !paused || atNum != 2 || err == nil {
+		t.Fatalf("paused=%v at=%d err=%v, want paused at block 2", paused, atNum, err)
+	}
+	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != 1 {
+		t.Fatalf("sync stats total blocks after partial range = %d, want 1", got)
+	}
 }
 
 func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {

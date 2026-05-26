@@ -65,6 +65,20 @@ func TestApplyHistoryConfig_GcmodeArchive(t *testing.T) {
 	}
 }
 
+func TestApplyHistoryConfig_GcmodeSnap(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "snap"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeSnap {
+		t.Errorf("--gcmode snap: mode = %q, want %q", got, params.HistoryModeSnap)
+	}
+	if !cfg.HistoryEnabled {
+		t.Error("snap mode did not auto-enable HistoryEnabled")
+	}
+}
+
 func TestApplyHistoryConfig_GcmodeUnknownErrors(t *testing.T) {
 	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "weird"})
 	cfg := &params.ChainConfig{}
@@ -261,6 +275,11 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 			name: "archive never prunes",
 			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true, StateCommitmentCheckpoints: true},
 			want: false,
+		},
+		{
+			name: "snap history capture needs pruning",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeSnap, HistoryEnabled: true},
+			want: true,
 		},
 	}
 	for _, tt := range tests {

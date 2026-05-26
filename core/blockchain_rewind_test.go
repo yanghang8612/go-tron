@@ -124,7 +124,13 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := rawdb.ReadLatestPbftBlockNum(diskdb); got != -1 {
 		t.Fatalf("future latest PBFT survived rewind: %d", got)
 	}
-	headState, err := state.New(bc.HeadStateRoot(), sdb)
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		got, ok, err := rawdb.ReadStageProgress(diskdb, stage)
+		if err != nil || !ok || got != 2 {
+			t.Fatalf("%s stage after rewind = %d ok=%v err=%v, want 2", stage, got, ok, err)
+		}
+	}
+	headState, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		t.Fatalf("open rewound state: %v", err)
 	}
@@ -133,6 +139,22 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	}
 	if len(progress) == 0 || progress[len(progress)-1] != (coreRestartEvent{phase: "done", block: 2}) {
 		t.Fatalf("progress did not finish at done/2: %+v", progress)
+	}
+	wantProgress := []coreRestartEvent{
+		{phase: "reset", block: 0},
+		{phase: "genesis", block: 0},
+		{phase: "replay", block: 1},
+		{phase: "replay", block: 2},
+		{phase: "flush", block: 2},
+		{phase: "done", block: 2},
+	}
+	if len(progress) != len(wantProgress) {
+		t.Fatalf("progress = %+v, want %+v", progress, wantProgress)
+	}
+	for i := range wantProgress {
+		if progress[i] != wantProgress[i] {
+			t.Fatalf("progress[%d] = %+v, want %+v (all=%+v)", i, progress[i], wantProgress[i], progress)
+		}
 	}
 }
 

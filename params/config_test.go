@@ -33,19 +33,30 @@ func TestNileConfig(t *testing.T) {
 
 func TestStateCommitmentConfigDefaults(t *testing.T) {
 	cfg := &ChainConfig{}
-	if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeFull {
-		t.Fatalf("default state commitment mode = %q, want %q", got, StateCommitmentModeFull)
+	for _, mode := range []string{"", StateCommitmentModeLatest, "full", "unknown"} {
+		cfg.StateCommitmentMode = mode
+		if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeLatest {
+			t.Fatalf("state commitment mode %q = %q, want %q", mode, got, StateCommitmentModeLatest)
+		}
 	}
-	if got := cfg.EffectiveStateCommitmentInterval(); got != StateCommitmentDefaultInterval {
-		t.Fatalf("default state commitment interval = %d, want %d", got, StateCommitmentDefaultInterval)
-	}
-	cfg.StateCommitmentMode = StateCommitmentModeLatest
-	cfg.StateCommitmentInterval = 64
-	if got := cfg.EffectiveStateCommitmentMode(); got != StateCommitmentModeLatest {
-		t.Fatalf("latest state commitment mode = %q, want %q", got, StateCommitmentModeLatest)
-	}
-	if got := cfg.EffectiveStateCommitmentInterval(); got != 64 {
-		t.Fatalf("state commitment interval = %d, want 64", got)
+}
+
+func TestHistoryModeConfigDefaults(t *testing.T) {
+	cfg := &ChainConfig{}
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"", HistoryModeFull},
+		{HistoryModeFull, HistoryModeFull},
+		{HistoryModeSnap, HistoryModeSnap},
+		{HistoryModeArchive, HistoryModeArchive},
+		{"unknown", HistoryModeFull},
+	} {
+		cfg.HistoryMode = tc.mode
+		if got := cfg.EffectiveHistoryMode(); got != tc.want {
+			t.Fatalf("history mode %q = %q, want %q", tc.mode, got, tc.want)
+		}
 	}
 }
 

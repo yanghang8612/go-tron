@@ -1,9 +1,11 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -127,11 +129,223 @@ func TestBlockChain_InsertBlock_MultipleBlocks(t *testing.T) {
 	}
 }
 
-func TestBlockChain_LatestCommitmentModeDefersHotKVAndCheckpoints(t *testing.T) {
+func TestBlockChain_InsertBlocks_AdvancesCanonicalStages(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateOpens := 0
+	commitScopes := 0
+	bc.stateOpenHook = func(tcommon.Hash) {
+		stateOpens++
+	}
+	bc.stateCommitScopeHook = func() {
+		commitScopes++
+	}
+
+	blocks := make([]*types.Block, 0, 3)
+	parentHash := bc.CurrentBlock().Hash()
+	for i := uint64(1); i <= 3; i++ {
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:     int64(i),
+					Timestamp:  int64(i) * 3000,
+					ParentHash: parentHash.Bytes(),
+				},
+			},
+		})
+		blocks = append(blocks, block)
+		parentHash = block.Hash()
+	}
+
+	if err := bc.InsertBlocks(blocks); err != nil {
+		t.Fatalf("InsertBlocks: %v", err)
+	}
+	if got := bc.CurrentBlock().Number(); got != 3 {
+		t.Fatalf("current block = %d, want 3", got)
+	}
+	if stateOpens != 1 {
+		t.Fatalf("InsertBlocks opened StateDB %d times, want 1 shared range state", stateOpens)
+	}
+	if commitScopes != 1 {
+		t.Fatalf("InsertBlocks opened commit scopes %d times, want 1 shared domain scope", commitScopes)
+	}
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(bc.buffer, stage)
+		if err != nil || !ok || row.BlockNum != 3 || !row.HasBlockHash || row.BlockHash != blocks[2].Hash() {
+			t.Fatalf("%s stage progress = %+v ok=%v err=%v, want block 3 hash-bound", stage, row, ok, err)
+		}
+	}
+}
+
+func TestBlockChain_InsertBlocksReportsFirstFailedIndex(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block1 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3000,
+				ParentHash: bc.CurrentBlock().Hash().Bytes(),
+			},
+		},
+	})
+
+	err = bc.InsertBlocks([]*types.Block{block1, nil})
+	var rangeErr *InsertBlocksError
+	if !errors.As(err, &rangeErr) {
+		t.Fatalf("InsertBlocks error = %v, want InsertBlocksError", err)
+	}
+	if rangeErr.Index != 1 || rangeErr.BlockNumber != 0 {
+		t.Fatalf("InsertBlocksError = index %d block %d, want index 1 block 0", rangeErr.Index, rangeErr.BlockNumber)
+	}
+	if got := bc.CurrentBlock().Number(); got != 1 {
+		t.Fatalf("current block after partial range = %d, want 1", got)
+	}
+}
+
+func TestBlockChain_InsertBlocksPlansStateTxRangesOnce(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	genesis := &params.Genesis{
+		Config:            cfg,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateTxSeeds := 0
+	bc.stateTxRangeSeedHook = func(parentBlockNum uint64) {
+		stateTxSeeds++
+		if parentBlockNum != 0 {
+			t.Fatalf("state tx range seeded at parent %d, want genesis parent 0", parentBlockNum)
+		}
+	}
+
+	blocks := make([]*types.Block, 0, 3)
+	parentHash := bc.CurrentBlock().Hash()
+	for i := uint64(1); i <= 3; i++ {
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:     int64(i),
+					Timestamp:  int64(i) * 3000,
+					ParentHash: parentHash.Bytes(),
+				},
+			},
+		})
+		blocks = append(blocks, block)
+		parentHash = block.Hash()
+	}
+
+	if err := bc.InsertBlocks(blocks); err != nil {
+		t.Fatalf("InsertBlocks: %v", err)
+	}
+	if stateTxSeeds != 1 {
+		t.Fatalf("state tx range seed reads = %d, want 1 range seed", stateTxSeeds)
+	}
+	for i := uint64(1); i <= 3; i++ {
+		txRange, ok, err := rawdb.ReadStateTxRange(bc.buffer, i)
+		if err != nil || !ok {
+			t.Fatalf("StateTxRange(%d) ok=%v err=%v", i, ok, err)
+		}
+		if txRange.BlockHash != blocks[i-1].Hash() || txRange.BeginTxNum != i || txRange.EndTxNum != i {
+			t.Fatalf("StateTxRange(%d) = hash %x [%d,%d], want %x [%d,%d]", i, txRange.BlockHash, txRange.BeginTxNum, txRange.EndTxNum, blocks[i-1].Hash(), i, i)
+		}
+	}
+}
+
+func TestBlockChain_StageProgressDoesNotAdvanceOnFailedExecution(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testProcessorAddr(1), Balance: 100},
+		},
+		DynamicProperties: map[string]int64{},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block1 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3000,
+				ParentHash: genesisHash[:],
+			},
+		},
+	})
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("InsertBlock(block1): %v", err)
+	}
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		got, ok, err := rawdb.ReadStageProgress(bc.buffer, stage)
+		if err != nil || !ok || got != 1 {
+			t.Fatalf("%s stage progress after block1 = %d ok=%v err=%v, want 1", stage, got, ok, err)
+		}
+	}
+
+	badTx := makeTestTransferTx(1, 2, 200)
+	block2 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     2,
+				Timestamp:  6000,
+				ParentHash: bc.CurrentBlock().Hash().Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{badTx.Proto()},
+	})
+	if err := bc.InsertBlock(block2); err == nil {
+		t.Fatal("InsertBlock(block2) succeeded; want transfer validation error")
+	}
+	if got := bc.CurrentBlock().Number(); got != 1 {
+		t.Fatalf("current block after failed execution = %d, want 1", got)
+	}
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		got, ok, err := rawdb.ReadStageProgress(bc.buffer, stage)
+		if err != nil || !ok || got != 1 {
+			t.Fatalf("%s stage progress after failed block = %d ok=%v err=%v, want 1", stage, got, ok, err)
+		}
+	}
+}
+
+func TestBlockChain_LatestCommitmentModeUsesFlatRootAndCommitmentDomain(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := *params.MainnetChainConfig
 	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
-	cfg.StateCommitmentInterval = 2
 	genesis := &params.Genesis{
 		Config:            &cfg,
 		DynamicProperties: map[string]int64{},
@@ -163,14 +377,29 @@ func TestBlockChain_LatestCommitmentModeDefersHotKVAndCheckpoints(t *testing.T) 
 			t.Fatalf("block %d: %v", i, err)
 		}
 	}
-	if got := statsByBlock[1].DeferredKVItems; got == 0 {
-		t.Fatal("block 1 did not defer any hot account-KV items")
+	if got := statsByBlock[1].TrieNodeWrite; got != 0 {
+		t.Fatalf("block 1 wrote legacy trie nodes in latest mode: %s", got)
 	}
-	if got := statsByBlock[2].RebuiltKVAccounts; got == 0 {
-		t.Fatal("block 2 checkpoint did not rebuild deferred account-KV roots")
+	if got := statsByBlock[2].TrieNodeWrite; got != 0 {
+		t.Fatalf("block 2 wrote legacy trie nodes in latest mode: %s", got)
 	}
-	if len(bc.deferredKVCommitOwners) != 0 {
-		t.Fatalf("deferred owner set not cleared after checkpoint: %d", len(bc.deferredKVCommitOwners))
+	root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(bc.buffer)
+	if err != nil || !ok {
+		t.Fatalf("latest commitment root missing: ok=%v err=%v", ok, err)
+	}
+	if root != bc.HeadStateRoot() {
+		t.Fatalf("head state root = %x, commitment root = %x", bc.HeadStateRoot(), root)
+	}
+	var scratch tcommon.Hash
+	scratch[0] = 0xff
+	bc.buffer.BeginBlock(scratch)
+	rebuilt, err := rawdb.RebuildLatestDomainCommitment(bc.buffer)
+	bc.buffer.DiscardActive()
+	if err != nil {
+		t.Fatalf("rebuild latest commitment: %v", err)
+	}
+	if rebuilt != root {
+		t.Fatalf("incremental commitment root = %x, rebuilt = %x", root, rebuilt)
 	}
 }
 
@@ -219,7 +448,7 @@ func TestBlockChain_InsertBlockUpdatesForkStats(t *testing.T) {
 		}
 	}
 
-	headState, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	headState, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		t.Fatalf("open head state: %v", err)
 	}
@@ -355,7 +584,7 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	// the test observes the post-reorg state, not a partial flush.
 	bc.WaitForFlushSettled()
 	stateRoot := rawdb.ReadBlockStateRoot(bc.chaindb, bc.CurrentBlock().Hash())
-	statedb, err := state.New(stateRoot, sdb)
+	statedb, err := bc.openState(stateRoot)
 	if err != nil {
 		t.Fatalf("open state after fork switch: %v", err)
 	}
@@ -364,6 +593,97 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	if got := statedb.GetAllowance(witnessAddr); got != wantAllowance {
 		t.Fatalf("witness allowance after fork switch: got %d, want %d (11 × WitnessPayPerBlock)", got, wantAllowance)
 	}
+}
+
+func TestBlockChain_ForkSwitchRestoresCommitmentRoot(t *testing.T) {
+	bc, witnessAddr := newHistoryReorgChain(t)
+	defer bc.Close()
+	forkCommitScopes := 0
+	bc.stateCommitScopeHook = func() {
+		forkCommitScopes++
+	}
+
+	chainA := make([]*types.Block, 4)
+	chainA[0] = bc.genesisBlock
+	for n := int64(1); n <= 3; n++ {
+		b := buildTransferBlock(t, n, n*3000, chainA[n-1].Hash(), witnessAddr, n*100)
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("insert A%d: %v", n, err)
+		}
+		chainA[n] = b
+	}
+
+	chainB := make([]*types.Block, 5)
+	chainB[0] = bc.genesisBlock
+	for n := int64(1); n <= 4; n++ {
+		chainB[n] = buildTransferBlock(t, n, n*3000+1, chainB[n-1].Hash(), witnessAddr, n*1000)
+	}
+	for n := 1; n <= 3; n++ {
+		if err := bc.InsertBlock(chainB[n]); err != nil {
+			t.Fatalf("insert B%d pre-switch: %v", n, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainA[3].Hash() {
+		t.Fatalf("chain A should remain canonical before longer fork arrives")
+	}
+	if err := bc.InsertBlock(chainB[4]); err != nil {
+		t.Fatalf("insert B4 switch trigger: %v", err)
+	}
+	if forkCommitScopes != 1 {
+		t.Fatalf("fork replay opened commit scopes = %d, want 1 shared range executor scope", forkCommitScopes)
+	}
+	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
+		t.Fatalf("head hash = %x, want B4 %x", bc.CurrentBlock().Hash(), chainB[4].Hash())
+	}
+
+	bdb := bc.BufferedDB()
+	got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(bdb)
+	if err != nil || !ok {
+		t.Fatalf("commitment root after switch missing: ok=%v err=%v", ok, err)
+	}
+	if headRoot := bc.HeadStateRoot(); got != headRoot {
+		t.Fatalf("commitment root after switch = %x, head state root = %x", got, headRoot)
+	}
+	if blockRoot := rawdb.ReadBlockStateRoot(bc.chaindb, bc.CurrentBlock().Hash()); got != blockRoot {
+		t.Fatalf("commitment root after switch = %x, block state root = %x", got, blockRoot)
+	}
+	latestView, ok := bdb.(latestCommitmentView)
+	if !ok {
+		t.Fatalf("buffered db does not expose latest iterator view")
+	}
+	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatest(t, latestView); got != rebuilt {
+		t.Fatalf("commitment root after switch = %x, rebuilt latest-domain root = %x", got, rebuilt)
+	}
+}
+
+type latestCommitmentView interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+}
+
+func rebuildLatestCommitmentRootFromVisibleLatest(t *testing.T, src latestCommitmentView) tcommon.Hash {
+	t.Helper()
+	scratch := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.IterateStateAccountLatest(src, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+		return true, rawdb.WriteStateAccountLatest(scratch, row.Owner, row.Value)
+	}); err != nil {
+		t.Fatalf("copy account latest rows: %v", err)
+	}
+	if err := rawdb.IterateStateKVGeneration(src, nil, func(row rawdb.StateKVGenerationRow) (bool, error) {
+		return true, rawdb.WriteStateKVGeneration(scratch, row.Owner, row.Generation)
+	}); err != nil {
+		t.Fatalf("copy kv generation rows: %v", err)
+	}
+	if err := rawdb.IterateStateKVLatestRows(src, func(row rawdb.StateKVLatestRow) (bool, error) {
+		return true, rawdb.WriteStateKVLatest(scratch, row.Owner, row.Generation, row.Domain, row.Key, row.Value)
+	}); err != nil {
+		t.Fatalf("copy kv latest rows: %v", err)
+	}
+	root, err := rawdb.RebuildLatestDomainCommitment(scratch)
+	if err != nil {
+		t.Fatalf("rebuild latest commitment from visible latest rows: %v", err)
+	}
+	return root
 }
 
 // TestForkSwitch_WitnessCountersNoDoubleCount drives a 3-vs-4 reorg where the
@@ -1063,7 +1383,7 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 
 	readCycleRewardAtHead := func() int64 {
 		t.Helper()
-		statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+		statedb, err := bc.openState(bc.HeadStateRoot())
 		if err != nil {
 			t.Fatalf("open head state: %v", err)
 		}

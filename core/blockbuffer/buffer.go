@@ -3,13 +3,15 @@
 // to defer post-applyBlock rawdb-direct writes so that switchFork can
 // discard the layers belonging to orphaned-branch blocks.
 //
-// One layer is opened per applyBlock via BeginBlock(hash). Writes during the
-// block go to the active layer; CommitBlock promotes it onto the layered
-// stack (newest at the top). DiscardBlock(hash) removes a specific layer
-// (used in switchFork for orphan rewinds). DiscardActive drops the
-// in-progress layer (used on applyBlock failure). Reads check the active
-// layer first, then layers newest-first, then fall through to the base
-// reader. Tombstones for deletes return a not-found error.
+// One layer is opened per applyBlock via BeginBlock(hash). Direct writes during
+// the block go to the active layer, and batch operations bind to the active
+// layer at Put/Delete time so a later batch Write can still land in the block
+// that produced the operation. CommitBlock promotes the active layer onto the
+// layered stack (newest at the top). DiscardBlock(hash) removes a specific
+// layer (used in switchFork for orphan rewinds). DiscardActive drops the
+// in-progress layer (used on applyBlock failure). Reads check the active layer
+// first, then layers newest-first, then fall through to the base reader.
+// Tombstones for deletes return a not-found error.
 //
 // The buffer is single-writer: callers must serialize all method calls. In
 // core/blockchain.go this is provided by bc.chainmu.
@@ -91,6 +93,7 @@ type bufferBatchOp struct {
 	delete bool
 	key    []byte
 	value  []byte
+	target *layer
 }
 
 type bufferBatch struct {
@@ -105,9 +108,9 @@ func New(base ethdb.KeyValueReader) *Buffer {
 	return &Buffer{base: base}
 }
 
-// NewBatch creates a write batch against the active layer. Write applies all
-// queued operations while holding Buffer.mu once, which keeps high-cardinality
-// latest-state writes from repeatedly locking the block buffer.
+// NewBatch creates a write batch whose operations are owned by the active layer
+// at Put/Delete time. Write applies queued operations under one exclusive lock,
+// while each Put/Delete only takes a brief read lock to capture the layer.
 func (b *Buffer) NewBatch() ethdb.Batch {
 	return &bufferBatch{parent: b}
 }
@@ -131,7 +134,7 @@ func (b *bufferBatch) Put(key, value []byte) error {
 	}
 	k := append([]byte(nil), key...)
 	v := append([]byte(nil), value...)
-	b.ops = append(b.ops, bufferBatchOp{key: k, value: v})
+	b.ops = append(b.ops, bufferBatchOp{key: k, value: v, target: b.parent.activeLayer()})
 	b.size += len(k) + len(v)
 	return nil
 }
@@ -141,7 +144,7 @@ func (b *bufferBatch) Delete(key []byte) error {
 		return errors.New("blockbuffer: batch closed")
 	}
 	k := append([]byte(nil), key...)
-	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k})
+	b.ops = append(b.ops, bufferBatchOp{delete: true, key: k, target: b.parent.activeLayer()})
 	b.size += len(k)
 	return nil
 }
@@ -156,22 +159,109 @@ func (b *bufferBatch) Write() error {
 	if b.closed {
 		return errors.New("blockbuffer: batch closed")
 	}
+	b.parent.flushMu.Lock()
+	defer b.parent.flushMu.Unlock()
 	b.parent.mu.Lock()
 	defer b.parent.mu.Unlock()
-	if b.parent.active == nil {
-		panic("blockbuffer: batch Write called with no active layer")
-	}
 	for _, op := range b.ops {
-		k := string(op.key)
-		if op.delete {
-			delete(b.parent.active.writes, k)
-			b.parent.active.deletes[k] = struct{}{}
-			continue
+		target := op.target
+		if target == nil {
+			target = b.parent.active
 		}
-		delete(b.parent.active.deletes, k)
-		b.parent.active.writes[k] = append([]byte(nil), op.value...)
+		if target == nil {
+			panic("blockbuffer: batch Write called with no active layer")
+		}
+		if !b.parent.layerPendingLocked(target) {
+			return errors.New("blockbuffer: batch target layer is no longer pending")
+		}
+		applyBatchOpToLayer(target, op)
 	}
 	return nil
+}
+
+func applyBatchOpToLayer(target *layer, op bufferBatchOp) {
+	k := string(op.key)
+	if op.delete {
+		delete(target.writes, k)
+		target.deletes[k] = struct{}{}
+		return
+	}
+	delete(target.deletes, k)
+	target.writes[k] = append([]byte(nil), op.value...)
+}
+
+func bufferBatchOpSize(op bufferBatchOp) int {
+	if op.delete {
+		return len(op.key)
+	}
+	return len(op.key) + len(op.value)
+}
+
+// WriteUpTo applies and removes queued operations whose captured committed
+// layer belongs to a block at or below cutoff. Operations for newer committed
+// layers or the active layer remain queued. Unlike Write, this is intended for
+// range-owned batches that must land writes before FlushUpTo drops old layers.
+func (b *bufferBatch) WriteUpTo(cutoff uint64, numberOf func(common.Hash) (uint64, bool)) (int, error) {
+	if b.closed {
+		return 0, errors.New("blockbuffer: batch closed")
+	}
+	if numberOf == nil {
+		return len(b.ops), errors.New("blockbuffer: nil block number resolver")
+	}
+	return b.writeFiltered(func(target *layer) bool {
+		n, ok := numberOf(target.blockHash)
+		return ok && n <= cutoff
+	}, false)
+}
+
+// WriteCommitted applies and removes queued operations whose captured target is
+// currently a committed layer. If dropStale is true, operations whose captured
+// layer has already been discarded are removed instead of causing an error.
+func (b *bufferBatch) WriteCommitted(dropStale bool) (int, error) {
+	if b.closed {
+		return 0, errors.New("blockbuffer: batch closed")
+	}
+	return b.writeFiltered(func(*layer) bool { return true }, dropStale)
+}
+
+func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale bool) (int, error) {
+	b.parent.flushMu.Lock()
+	defer b.parent.flushMu.Unlock()
+	b.parent.mu.Lock()
+	defer b.parent.mu.Unlock()
+
+	kept := b.ops[:0]
+	keptSize := 0
+	for _, op := range b.ops {
+		target := op.target
+		if target == nil {
+			target = b.parent.active
+		}
+		if target == nil {
+			if dropStale {
+				continue
+			}
+			kept = append(kept, op)
+			keptSize += bufferBatchOpSize(op)
+			continue
+		}
+		if !b.parent.layerPendingLocked(target) {
+			if dropStale {
+				continue
+			}
+			return len(b.ops), errors.New("blockbuffer: batch target layer is no longer pending")
+		}
+		if !b.parent.layerCommittedLocked(target) || !matchCommitted(target) {
+			kept = append(kept, op)
+			keptSize += bufferBatchOpSize(op)
+			continue
+		}
+		applyBatchOpToLayer(target, op)
+	}
+	clear(b.ops[len(kept):])
+	b.ops = kept
+	b.size = keptSize
+	return len(b.ops), nil
 }
 
 func (b *bufferBatch) Reset() {
@@ -199,6 +289,42 @@ func (b *bufferBatch) Close() {
 	b.parent = nil
 	b.ops = nil
 	b.size = 0
+}
+
+func (b *Buffer) activeLayer() *layer {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.active
+}
+
+func (b *Buffer) layerPendingLocked(target *layer) bool {
+	if b == nil || target == nil {
+		return false
+	}
+	if b.active == target {
+		return true
+	}
+	for _, l := range b.layers {
+		if l == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Buffer) layerCommittedLocked(target *layer) bool {
+	if b == nil || target == nil {
+		return false
+	}
+	for _, l := range b.layers {
+		if l == target {
+			return true
+		}
+	}
+	return false
 }
 
 // BeginBlock opens a fresh active layer for the given block hash.

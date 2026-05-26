@@ -118,6 +118,7 @@ func Default() Config {
 //     zero extra margin is reorg-safe). The production 128-block margin is
 //     applied only via Default(); leaving an explicit 0 untouched here lets
 //     callers — and the missing-block test — drive a true zero margin.
+//
 // WIRING CONTRACT: applyDefaults deliberately does NOT default MarginBlocks
 // (an explicit 0 is a valid "freeze up to solidified" choice). The
 // production 128-block cushion lives in Default(). The cmd/gtron config
@@ -246,8 +247,8 @@ type Runner struct {
 	done chan struct{}
 	once sync.Once
 
-	// stats fields are atomics so Snapshot is lock-free against the
-	// running goroutine. Mirrors the historyprune pattern.
+	// stats fields are atomics so Snapshot is lock-free against the running
+	// goroutine.
 	blocksFrozen     atomic.Uint64
 	passesCompleted  atomic.Uint64
 	lastPassUnixNano atomic.Int64

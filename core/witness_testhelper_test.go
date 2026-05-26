@@ -11,7 +11,7 @@ import (
 
 func readWitnessAtHead(tb testing.TB, bc *BlockChain, addr tcommon.Address) *types.Witness {
 	tb.Helper()
-	statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	statedb, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		tb.Fatalf("open head state: %v", err)
 	}
@@ -24,7 +24,7 @@ func readWitnessAtHead(tb testing.TB, bc *BlockChain, addr tcommon.Address) *typ
 
 func readWitnessLatestBlockAtHead(tb testing.TB, bc *BlockChain, addr tcommon.Address) int64 {
 	tb.Helper()
-	statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+	statedb, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		tb.Fatalf("open head state: %v", err)
 	}

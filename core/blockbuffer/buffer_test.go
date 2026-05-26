@@ -3,6 +3,7 @@ package blockbuffer
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -162,6 +163,134 @@ func TestBufferBatchWritesActiveLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustNotFound(t, b, []byte("k2"))
+}
+
+func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+
+	b.BeginBlock(bufHash(1))
+	batch := b.NewBatch()
+	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	b.BeginBlock(bufHash(2))
+	if err := batch.Put([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("k1"), []byte("v1"))
+	mustGet(t, b, []byte("k2"), []byte("v2"))
+	b.CommitBlock()
+
+	b.DiscardBlock(bufHash(1))
+	mustNotFound(t, b, []byte("k1"))
+	mustGet(t, b, []byte("k2"), []byte("v2"))
+}
+
+func TestBufferBatchRejectsWriteAfterCapturedLayerDropped(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+
+	b.BeginBlock(bufHash(1))
+	batch := b.NewBatch()
+	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+	b.DiscardBlock(bufHash(1))
+
+	err := batch.Write()
+	if err == nil || !strings.Contains(err.Error(), "target layer is no longer pending") {
+		t.Fatalf("batch write after captured layer drop err = %v, want target layer rejection", err)
+	}
+	mustNotFound(t, b, []byte("k1"))
+}
+
+func TestBufferBatchWriteUpToAppliesOnlyEligibleCommittedLayers(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+
+	b.BeginBlock(bufHash(1))
+	batch := b.NewBatch()
+	layerBatch, ok := batch.(interface {
+		WriteUpTo(uint64, func(common.Hash) (uint64, bool)) (int, error)
+	})
+	if !ok {
+		t.Fatal("buffer batch missing WriteUpTo")
+	}
+	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	b.BeginBlock(bufHash(2))
+	if err := batch.Put([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	remaining, err := layerBatch.WriteUpTo(1, func(h common.Hash) (uint64, bool) {
+		switch h {
+		case bufHash(1):
+			return 1, true
+		case bufHash(2):
+			return 2, true
+		default:
+			return 0, false
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining ops = %d, want 1", remaining)
+	}
+	mustGet(t, b, []byte("k1"), []byte("v1"))
+	mustNotFound(t, b, []byte("k2"))
+
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	mustGet(t, b, []byte("k2"), []byte("v2"))
+}
+
+func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
+	base := rawdb.NewMemoryDatabase()
+	b := New(base)
+
+	b.BeginBlock(bufHash(1))
+	batch := b.NewBatch()
+	layerBatch, ok := batch.(interface {
+		WriteCommitted(bool) (int, error)
+	})
+	if !ok {
+		t.Fatal("buffer batch missing WriteCommitted")
+	}
+	if err := batch.Put([]byte("committed"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	b.CommitBlock()
+
+	b.BeginBlock(bufHash(2))
+	if err := batch.Put([]byte("discarded"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	b.DiscardActive()
+
+	remaining, err := layerBatch.WriteCommitted(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining ops = %d, want 0", remaining)
+	}
+	mustGet(t, b, []byte("committed"), []byte("v1"))
+	mustNotFound(t, b, []byte("discarded"))
 }
 
 // Tombstone semantics: Delete makes a key from base appear absent.

@@ -13,62 +13,50 @@ type ChainConfig struct {
 	// Java-tron config key: enery.limit.block.num.
 	// A nil pointer means the java-tron default.
 	BlockNumForEnergyLimit *int64
-	// HistoryEnabled toggles the State History Index (SHI) capture path.
-	// false (the default) leaves applyBlock and StateDB on the zero-overhead
-	// fast path — no per-mutation accounting, no per-block flush. Archive
+	// HistoryEnabled toggles flat temporal StateDomainChange capture. false
+	// (the default) leaves applyBlock and StateDB on the zero-overhead fast
+	// path — no per-mutation accounting, no per-block temporal flush. Archive
 	// operators opt in via node config; the gate is independent of any
 	// java-tron proposal, so flipping it never affects consensus.
 	HistoryEnabled bool
-	// HistoryMode is the retention policy for State History Index rows
-	// captured by applyBlock. "full" prunes rows older than HistoryPruneWindow
-	// blocks (the default — recent-tip-only archive coverage); "archive"
-	// keeps every row forever. Slice 5's background pruner consults this
-	// field at construction time and skips registration entirely in archive
-	// mode so history grows linearly with chain length.
+	// HistoryMode is the retention policy for StateDomainChange/StateTxRange
+	// rows captured by applyBlock. "full" prunes rows older than
+	// HistoryPruneWindow blocks (the default — recent-tip-only archive
+	// coverage); "archive" keeps every row forever.
 	//
 	// Ignored when HistoryEnabled is false (no rows to prune, no archive to
 	// keep).
 	HistoryMode string
 	// HistoryPruneWindow is the number of recent blocks of state history
-	// retained in "full" mode. Rows for blocks below (solidified - window)
-	// become eligible for deletion by the background pruner. The default
+	// retained in "full" mode. Temporal rows for blocks below (solidified -
+	// window) become eligible for deletion by the background pruner. The default
 	// (HistoryDefaultPruneWindow) is sized at 27 maintenance rounds × ~1K
 	// slots per round, generous enough to cover the reorg horizon and a
 	// day-or-two wallet-tx grace window. Ignored in archive mode.
 	HistoryPruneWindow uint64
-	// StateCommitmentCheckpoints enables the transitional Erigon-style domain
-	// commitment checkpoint writer. It computes a deterministic debug root over
-	// physical latest-domain rows after each block. The computation is
-	// intentionally opt-in until the incremental commitment domain replaces
-	// nested-MPT root building.
+	// StateCommitmentCheckpoints enables optional latest-domain commitment
+	// checkpoint rows after each block. The block state root itself is already
+	// the CommitmentDomain root.
 	StateCommitmentCheckpoints bool
-	// StateCommitmentMode selects how block import maintains the internal
-	// rooted state commitment. "full" preserves the legacy per-block account-KV
-	// and account-trie commitment path. "latest" writes physical latest-domain
-	// rows on every block and defers the hottest nested account-KV commitments
-	// to periodic/maintenance checkpoints.
+	// StateCommitmentMode is retained as an operator-facing label. Fresh nodes
+	// always use "latest": flat latest domains plus CommitmentDomain root.
 	StateCommitmentMode string
-	// StateCommitmentInterval is the checkpoint cadence, in blocks, for
-	// StateCommitmentModeLatest. Zero falls back to
-	// StateCommitmentDefaultInterval.
-	StateCommitmentInterval uint64
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
 
-// History retention modes for ChainConfig.HistoryMode. "full" prunes; any
-// other value (typically "archive") disables the pruner and keeps every
-// row. The CLI / TOML loaders normalise unknown values upstream.
+// History retention modes for ChainConfig.HistoryMode. "full" prunes hot
+// history below the local window; "snap" prunes hot history only after cold
+// snapshot coverage exists; "archive" keeps every row.
 const (
 	HistoryModeFull    = "full"
+	HistoryModeSnap    = "snap"
 	HistoryModeArchive = "archive"
 )
 
-// State commitment modes. Full is the compatibility default. Latest is the
-// Erigon-style sync mode that keeps latest-domain rows current on every block
-// and batches the hottest rooted account-KV commitments.
+// State commitment modes. Latest is the only fresh-node state layout:
+// flat latest domains plus CommitmentDomain root.
 const (
-	StateCommitmentModeFull   = "full"
 	StateCommitmentModeLatest = "latest"
 )
 
@@ -77,12 +65,6 @@ const (
 // reorg horizon with a generous wallet-tx grace window. See the spec's
 // Pruning section for the sizing rationale.
 const HistoryDefaultPruneWindow uint64 = 27 * 1024
-
-// StateCommitmentDefaultInterval is the default batched rooted-commitment
-// cadence for latest mode. It is deliberately far shorter than the TRON
-// maintenance interval, so the rooted view is regularly reconciled even during
-// long non-maintenance sync spans.
-const StateCommitmentDefaultInterval uint64 = 1024
 
 func chainConfigInt64(v int64) *int64 { return &v }
 
@@ -94,9 +76,8 @@ func (c *ChainConfig) EnergyLimitForkBlockNum() int64 {
 }
 
 // EffectiveHistoryMode returns the resolved retention mode: blank /
-// unrecognised values normalise to HistoryModeFull so the pruner is
-// always wired in by default. Archive operators must opt in explicitly
-// via "archive".
+// unrecognised values normalise to HistoryModeFull so the pruner is always
+// conservative by default. Archive/snap operators must opt in explicitly.
 func (c *ChainConfig) EffectiveHistoryMode() string {
 	if c == nil || c.HistoryMode == "" {
 		return HistoryModeFull
@@ -104,6 +85,8 @@ func (c *ChainConfig) EffectiveHistoryMode() string {
 	switch c.HistoryMode {
 	case HistoryModeArchive:
 		return HistoryModeArchive
+	case HistoryModeSnap:
+		return HistoryModeSnap
 	default:
 		return HistoryModeFull
 	}
@@ -121,26 +104,10 @@ func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
 }
 
 // EffectiveStateCommitmentMode returns the active commitment mode. Blank and
-// unrecognised values normalise to full so old configs keep the exact
-// compatibility path unless latest mode is explicitly selected.
+// unrecognised values normalise to latest; new databases do not preserve the
+// old per-block MPT materialisation path by default.
 func (c *ChainConfig) EffectiveStateCommitmentMode() string {
-	if c == nil || c.StateCommitmentMode == "" {
-		return StateCommitmentModeFull
-	}
-	switch c.StateCommitmentMode {
-	case StateCommitmentModeLatest:
-		return StateCommitmentModeLatest
-	default:
-		return StateCommitmentModeFull
-	}
-}
-
-// EffectiveStateCommitmentInterval returns the latest-mode checkpoint cadence.
-func (c *ChainConfig) EffectiveStateCommitmentInterval() uint64 {
-	if c == nil || c.StateCommitmentInterval == 0 {
-		return StateCommitmentDefaultInterval
-	}
-	return c.StateCommitmentInterval
+	return StateCommitmentModeLatest
 }
 
 var MainnetChainConfig = &ChainConfig{

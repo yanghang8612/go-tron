@@ -11,8 +11,8 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-// applyHistoryConfig wires the operator-level State History Index
-// retention settings into a chain config. Precedence (highest first):
+// applyHistoryConfig wires the operator-level flat temporal-state retention
+// settings into a chain config. Precedence (highest first):
 //
 //  1. --gcmode CLI flag
 //  2. [history] section in the TOML file (when --config is set)
@@ -23,14 +23,13 @@ import (
 // can hoist this into a richer loader; until then a focused
 // section-parser keeps the dep tree clean.
 //
-// applyHistoryConfig also turns HistoryEnabled on whenever the operator
-// has explicitly asked for archive mode (an archive node with the capture
-// path disabled would silently produce an empty index) OR has explicitly
-// opted in via --history.enabled / [history] enabled. Full mode is inert
-// without one of those: the pruner Lifecycle only registers when
-// HistoryEnabled && mode==full, so `--gcmode=full --history.enabled` is
-// the canonical way to run a pruned-history node. Plain full mode with no
-// opt-in stays the zero-cost default (no capture, no pruning).
+// applyHistoryConfig also turns HistoryEnabled on whenever the operator has
+// explicitly asked for archive or snap mode (both need temporal capture to
+// answer as-of queries) OR has explicitly opted in via --history.enabled /
+// [history] enabled. Full mode is inert without one of those: the domain pruner
+// Lifecycle only registers when flat history or commitment checkpoints are
+// enabled. Plain full mode with no opt-in stays the zero-cost default (no
+// capture, no pruning).
 //
 // Precedence for the enable toggle: --history.enabled CLI flag (when set)
 // overrides [history] enabled TOML, which overrides the archive-implied
@@ -73,21 +72,26 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 		cfg.HistoryEnabled = ctx.Bool("history.enabled")
 	}
 
-	// Step 3: archive mode implicitly turns on the capture path even when
-	// the operator didn't pass --history.enabled. Without HistoryEnabled
-	// the on-disk index stays empty and an archive-query RPC would
-	// silently return live state for every blockNum — operationally
-	// broken. An explicit --history.enabled=false in archive mode is
-	// contradictory; archive wins (the index the operator asked to keep
-	// forever must actually be captured).
-	if cfg.EffectiveHistoryMode() == params.HistoryModeArchive {
+	// Step 3: archive/snap modes implicitly turn on temporal capture even when
+	// the operator didn't pass --history.enabled. Without HistoryEnabled the
+	// on-disk history stays empty and an archive-query RPC would silently return
+	// live state for every blockNum — operationally broken. An explicit
+	// --history.enabled=false in those modes is contradictory; retention mode
+	// wins (the history the operator asked to retain must actually be captured).
+	switch cfg.EffectiveHistoryMode() {
+	case params.HistoryModeArchive, params.HistoryModeSnap:
 		cfg.HistoryEnabled = true
 	}
 	return nil
 }
 
 func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
-	if cfg == nil || cfg.EffectiveHistoryMode() != params.HistoryModeFull {
+	if cfg == nil {
+		return false
+	}
+	switch cfg.EffectiveHistoryMode() {
+	case params.HistoryModeFull, params.HistoryModeSnap:
+	default:
 		return false
 	}
 	return cfg.HistoryEnabled || cfg.StateCommitmentCheckpoints
@@ -101,10 +105,12 @@ func normaliseHistoryMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", params.HistoryModeFull:
 		return params.HistoryModeFull, nil
+	case params.HistoryModeSnap:
+		return params.HistoryModeSnap, nil
 	case params.HistoryModeArchive:
 		return params.HistoryModeArchive, nil
 	default:
-		return "", fmt.Errorf("--gcmode: unknown value %q (want full|archive)", s)
+		return "", fmt.Errorf("--gcmode: unknown value %q (want full|snap|archive)", s)
 	}
 }
 

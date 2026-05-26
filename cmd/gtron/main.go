@@ -13,12 +13,12 @@ import (
 	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core"
 	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
-	"github.com/tronprotocol/go-tron/core/historyprune"
 	"github.com/tronprotocol/go-tron/core/producer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/crypto"
@@ -144,12 +144,12 @@ var (
 	}
 	gcmodeFlag = &cli.StringFlag{
 		Name:  "gcmode",
-		Usage: "State History Index retention: full (prune to last prune_window blocks) | archive (keep forever)",
+		Usage: "Flat temporal state retention: full (prune hot rows) | snap (prune hot rows after snapshot coverage) | archive (keep hot rows forever)",
 		Value: params.HistoryModeFull,
 	}
 	historyEnabledFlag = &cli.BoolFlag{
 		Name:  "history.enabled",
-		Usage: "Turn on the State History Index capture path. Required to actually populate (and, in full mode, prune) the index; archive mode implies it.",
+		Usage: "Turn on flat temporal state capture. Required to populate as-of history; archive mode implies it.",
 	}
 	stateCommitmentCheckpointsFlag = &cli.BoolFlag{
 		Name:  "state.commitment.checkpoints",
@@ -157,13 +157,8 @@ var (
 	}
 	stateCommitmentModeFlag = &cli.StringFlag{
 		Name:  "state.commitment.mode",
-		Usage: "State commitment mode: full (per-block rooted commitment) | latest (latest-domain writes with batched hot KV commitments)",
-		Value: params.StateCommitmentModeFull,
-	}
-	stateCommitmentIntervalFlag = &cli.Uint64Flag{
-		Name:  "state.commitment.interval",
-		Usage: "Checkpoint interval in blocks for --state.commitment.mode=latest",
-		Value: params.StateCommitmentDefaultInterval,
+		Usage: "State commitment mode: latest (flat latest domains + CommitmentDomain root)",
+		Value: params.StateCommitmentModeLatest,
 	}
 	stateTrieCacheFlag = &cli.IntFlag{
 		Name:  "state.trie.cache",
@@ -256,7 +251,6 @@ var app = &cli.App{
 		historyEnabledFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
-		stateCommitmentIntervalFlag,
 		stateTrieCacheFlag,
 		configFileFlag,
 		dbCacheFlag,
@@ -295,7 +289,6 @@ var app = &cli.App{
 			},
 			Action: initCmd,
 		},
-		historyCommand,
 	},
 }
 
@@ -396,7 +389,7 @@ func gtron(ctx *cli.Context) error {
 		return fmt.Errorf("setup genesis: %w", err)
 	}
 
-	// Apply operator-supplied State History Index retention settings
+	// Apply operator-supplied flat temporal-state retention settings
 	// (--gcmode / [history] in --config). Done after SetupGenesisBlock
 	// because it returns a pointer into genesis.Config we now mutate.
 	// HistoryMode is operator-level (not consensus-relevant) so this
@@ -407,20 +400,16 @@ func gtron(ctx *cli.Context) error {
 	}
 	chainConfig.StateCommitmentCheckpoints = ctx.Bool("state.commitment.checkpoints")
 	switch mode := ctx.String("state.commitment.mode"); mode {
-	case "", params.StateCommitmentModeFull:
-		chainConfig.StateCommitmentMode = params.StateCommitmentModeFull
-	case params.StateCommitmentModeLatest:
+	case "", params.StateCommitmentModeLatest:
 		chainConfig.StateCommitmentMode = params.StateCommitmentModeLatest
 	default:
 		closeStores()
-		return fmt.Errorf("invalid --state.commitment.mode %q (want %q or %q)", mode, params.StateCommitmentModeFull, params.StateCommitmentModeLatest)
+		return fmt.Errorf("invalid --state.commitment.mode %q (want %q)", mode, params.StateCommitmentModeLatest)
 	}
-	chainConfig.StateCommitmentInterval = ctx.Uint64("state.commitment.interval")
 	if chainConfig.EffectiveStateCommitmentMode() == params.StateCommitmentModeLatest {
 		log.Warn("Latest-domain state commitment mode enabled",
 			"mode", chainConfig.EffectiveStateCommitmentMode(),
-			"checkpointInterval", chainConfig.EffectiveStateCommitmentInterval(),
-			"compatibility", "rooted account-KV commitments are batched",
+			"compatibility", "legacy state trie materialisation is disabled",
 		)
 	}
 
@@ -475,6 +464,23 @@ func gtron(ctx *cli.Context) error {
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
+	stateSnapshotDir := stateSnapshotsDir(cfg.DataDir)
+	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
+	if err != nil {
+		_ = bc.Close()
+		closeStores()
+		return fmt.Errorf("open state snapshots: %w", err)
+	}
+	bc.SetStateCodeColdHistory(stateSnapshotManager)
+	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
+	backend.SetStateColdHistory(stateSnapshotManager)
+	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
+		log.Info("State snapshots loaded",
+			"dir", stateSnapshotDir,
+			"visibleTxStart", manifest.VisibleTxStart,
+			"visibleTxEnd", manifest.VisibleTxEnd,
+			"segments", len(manifest.Segments))
+	}
 	apiServer := tronapi.NewServer(backend, cfg.HTTPPort)
 	jrpcServer := jsonrpc.NewServer(backend, cfg.JSONRPCPort)
 	grpcServer := grpcapi.NewServer(backend, fmt.Sprintf(":%d", cfg.GRPCPort))
@@ -593,31 +599,38 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)
 
-	// State History Index pruner: only registered when the chain is in
-	// "full" retention mode AND history capture is on. Archive mode
-	// skips registration entirely so the index grows linearly (and so
-	// the operator can confirm intent via gtron logs at start time).
-	if chainConfig.HistoryEnabled && chainConfig.EffectiveHistoryMode() == params.HistoryModeFull {
-		pruner := historyprune.New(newPrunerChainSource(bc), historyprune.PrunerConfig{
-			Window: chainConfig.EffectiveHistoryPruneWindow(),
-		})
-		stack.RegisterLifecycle(pruner)
-		log.Info("History pruner enabled", "window", chainConfig.EffectiveHistoryPruneWindow())
-	} else if chainConfig.HistoryEnabled {
-		log.Info("History capture enabled", "mode", params.HistoryModeArchive, "pruning", false)
-	}
 	if shouldEnableDomainStatePruner(chainConfig) {
 		historyWindow := chainConfig.EffectiveHistoryPruneWindow()
 		reorgWindow := domainStateReorgWindow
 		if historyWindow < reorgWindow {
 			reorgWindow = historyWindow
 		}
-		domainPruner := statepruning.NewPruner(newDomainPrunerChainSource(bc, syncService), statepruning.PrunerConfig{
-			Policy:     statepruning.FullPolicy(historyWindow, reorgWindow),
-			MaxSyncLag: historyWindow,
+		prunePolicy := statepruning.FullPolicy(historyWindow, reorgWindow)
+		if chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap {
+			prunePolicy = statepruning.SnapPolicy(historyWindow, reorgWindow)
+		}
+		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
+		domainLifecycle := statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
+			Snapshot: statesnapshots.Config{
+				Dir:            stateSnapshotDir,
+				Enabled:        chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+				HistoryDataset: historyDataset,
+				HistoryWindow:  historyWindow,
+			},
+			Pruner: statepruning.PrunerConfig{
+				Policy:      prunePolicy,
+				SnapshotDir: stateSnapshotDir,
+				MaxSyncLag:  historyWindow,
+			},
 		})
-		stack.RegisterLifecycle(domainPruner)
-		log.Info("Domain state pruner enabled", "historyWindow", historyWindow, "reorgWindow", reorgWindow)
+		stack.RegisterLifecycle(domainLifecycle)
+		log.Info("Domain state snapshot/prune lifecycle enabled",
+			"mode", prunePolicy.Mode,
+			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+			"dataset", historyDataset,
+			"historyWindow", historyWindow,
+			"reorgWindow", reorgWindow,
+			"snapshotDir", stateSnapshotDir)
 	} else {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
 	}

@@ -58,9 +58,8 @@ func buildTransferBlock(t *testing.T, number int64, ts int64, parentHash tcommon
 }
 
 // TestApplyBlock_HistoryEnabledRoutesToBuffer asserts that with
-// HistoryEnabled=true a block import lands AccountDelta + inverse rows in
-// the chain's KV store (via bc.buffer flush). We touch the transfer's
-// sender and receiver, both of which must show up.
+// HistoryEnabled=true a block import lands Erigon-style temporal domain rows
+// in the chain's KV store (via bc.buffer flush).
 func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
@@ -96,58 +95,77 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	// but reading through the buffer is correct either way).
 	bdb := bc.BufferedDB()
 
-	if !rawdb.HasAccountDelta(bdb, 1, testInsertAddr(1)) {
-		t.Error("AccountDelta missing for sender")
-	}
-	if !rawdb.HasAccountDelta(bdb, 1, testInsertAddr(2)) {
-		t.Error("AccountDelta missing for receiver")
-	}
-	if !rawdb.HasAddrInverse(bdb, testInsertAddr(1), 1) {
-		t.Error("AddrInverse missing for sender")
-	}
-	if !rawdb.HasAddrInverse(bdb, testInsertAddr(2), 1) {
-		t.Error("AddrInverse missing for receiver")
-	}
-
-	meta := rawdb.ReadHistoryMeta(bdb, 1)
-	if meta == nil {
-		t.Fatal("StateHistoryMeta missing")
-	}
-	if meta.BlockNum != 1 {
-		t.Errorf("BlockNum = %d, want 1", meta.BlockNum)
-	}
-	if string(meta.BlockHash) != string(block1.Hash().Bytes()) {
-		t.Errorf("BlockHash mismatch")
-	}
-	if meta.NumAddrs < 2 {
-		t.Errorf("NumAddrs = %d, want >=2 (sender+receiver, witness too if active)", meta.NumAddrs)
-	}
-
 	txRange, ok, err := rawdb.ReadStateTxRange(bdb, 1)
 	if err != nil || !ok {
 		t.Fatalf("StateTxRange missing: ok=%v err=%v", ok, err)
 	}
-	if txRange.BeginTxNum != rawdb.BlockStateTxNum(1) || txRange.EndTxNum != rawdb.BlockStateTxNum(1) {
+	parentEnd, err := rawdb.StateTxNumAtBlockEnd(bdb, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBegin, wantEnd, err := rawdb.NextStateTxRange(parentEnd, uint64(len(block1.Transactions())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txRange.BeginTxNum != wantBegin || txRange.EndTxNum != wantEnd {
 		t.Fatalf("StateTxRange = %+v", txRange)
 	}
+	if txRange.BlockHash != block1.Hash() {
+		t.Fatalf("StateTxRange block hash = %x, want %x", txRange.BlockHash, block1.Hash())
+	}
 	var sawDynProp bool
+	touchedAccounts := make(map[tcommon.Address]bool)
 	if err := rawdb.IterateStateDomainChanges(bc.buffer, 1, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change.BlockHash != block1.Hash() {
+			t.Fatalf("StateDomainChange block hash = %x, want %x", change.BlockHash, block1.Hash())
+		}
+		if change.FlatDomain == rawdb.StateFlatDomainAccountLatest {
+			touchedAccounts[change.Owner] = true
+		}
 		if change.Owner == tcommon.SystemAccountAddress && change.Domain == kvdomains.SystemDynamicProperty {
 			sawDynProp = true
-			return false, nil
 		}
 		return true, nil
 	}); err != nil {
 		t.Fatalf("iterate state domain changes: %v", err)
 	}
+	if !touchedAccounts[testInsertAddr(1)] {
+		t.Fatal("state domain change set did not capture sender account latest")
+	}
+	if !touchedAccounts[testInsertAddr(2)] {
+		t.Fatal("state domain change set did not capture receiver account latest")
+	}
 	if !sawDynProp {
 		t.Fatal("state domain change set did not capture rooted dynamic properties")
+	}
+
+	reader := state.NewPersistentHistoryReader(bc.buffer, nil, bc.CurrentBlock().Number())
+	senderPre, err := reader.AccountAt(testInsertAddr(1), 0)
+	if err != nil {
+		t.Fatalf("AccountAt(sender, 0): %v", err)
+	}
+	if senderPre == nil || senderPre.Balance() != 99_000_000_000_000_000 {
+		t.Fatalf("AccountAt(sender, 0).Balance = %v, want genesis balance", senderPre)
+	}
+	receiverPre, err := reader.AccountAt(testInsertAddr(2), 0)
+	if err != nil {
+		t.Fatalf("AccountAt(receiver, 0): %v", err)
+	}
+	if receiverPre != nil {
+		t.Fatalf("AccountAt(receiver, 0) = %v, want nil", receiverPre)
+	}
+	receiverPost, err := reader.AccountAt(testInsertAddr(2), 1)
+	if err != nil {
+		t.Fatalf("AccountAt(receiver, 1): %v", err)
+	}
+	if receiverPost == nil || receiverPost.Balance() != 5_000_000 {
+		t.Fatalf("AccountAt(receiver, 1).Balance = %v, want 5000000", receiverPost)
 	}
 }
 
 // TestApplyBlock_HistoryDisabledNoRows asserts that with the default config
-// (HistoryEnabled=false) NO sh-* rows are written for an inserted block —
-// the zero-overhead promise.
+// (HistoryEnabled=false) no temporal domain rows are written for an inserted
+// block.
 func TestApplyBlock_HistoryDisabledNoRows(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	// Default config: HistoryEnabled defaults to false (not set explicitly).
@@ -181,16 +199,6 @@ func TestApplyBlock_HistoryDisabledNoRows(t *testing.T) {
 		t.Fatalf("InsertBlock: %v", err)
 	}
 
-	bdb := bc.BufferedDB()
-	if rawdb.HasAccountDelta(bdb, 1, testInsertAddr(1)) {
-		t.Error("sh-a- row leaked despite HistoryEnabled=false")
-	}
-	if rawdb.HasAddrInverse(bdb, testInsertAddr(1), 1) {
-		t.Error("sh-i-a- row leaked despite HistoryEnabled=false")
-	}
-	if rawdb.HasHistoryMeta(bdb, 1) {
-		t.Error("sh-m- row leaked despite HistoryEnabled=false")
-	}
 	if _, ok, err := rawdb.ReadStateTxRange(bc.buffer, 1); err != nil || ok {
 		t.Errorf("StateTxRange leaked despite HistoryEnabled=false: ok=%v err=%v", ok, err)
 	}
@@ -206,12 +214,10 @@ func TestApplyBlock_HistoryDisabledNoRows(t *testing.T) {
 	}
 }
 
-// TestApplyBlock_HistoryReorgDropsOrphan inserts a canonical chain A then
-// a longer competing chain B that triggers switchFork; asserts that the
-// canonical B history rows are present after the rewind (the orphan A1
-// layer was discarded and the buffer is now showing B1's rows). Deeper
-// fork-rewind invariants (e.g. no leaked rows after a full-flush cycle)
-// land in Slice 4's integration suite.
+// TestApplyBlock_HistoryReorgDropsOrphan inserts a canonical chain A then a
+// longer competing chain B that triggers switchFork; asserts that canonical B
+// temporal-domain rows are present after the rewind while the orphan A1 layer
+// is no longer pending.
 func TestApplyBlock_HistoryReorgDropsOrphan(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
@@ -259,10 +265,14 @@ func TestApplyBlock_HistoryReorgDropsOrphan(t *testing.T) {
 	if err := bc.InsertBlock(blockA1); err != nil {
 		t.Fatalf("insert A1: %v", err)
 	}
-	// History rows present for the canonical A1 block.
+	// Temporal rows present for the canonical A1 block.
 	bdb := bc.BufferedDB()
-	if !rawdb.HasAddrInverse(bdb, witnessAddr, 1) {
-		t.Fatal("expected sh-i-a- for witness after A1")
+	txRangeA1, ok, err := rawdb.ReadStateTxRange(bdb, 1)
+	if err != nil || !ok {
+		t.Fatalf("expected StateTxRange for A1: ok=%v err=%v", ok, err)
+	}
+	if txRangeA1.BlockHash != blockA1.Hash() {
+		t.Fatalf("StateTxRange block 1 hash = %x, want A1 %x", txRangeA1.BlockHash, blockA1.Hash())
 	}
 
 	// Chain B: 2 blocks with different timestamps → distinct hashes,
@@ -302,24 +312,25 @@ func TestApplyBlock_HistoryReorgDropsOrphan(t *testing.T) {
 		t.Fatalf("after switchFork: head hash = %x, want B2 %x", bc.CurrentBlock().Hash(), blockB2.Hash())
 	}
 
-	// After switchFork the orphaned A1 block's history rows must be gone
-	// (its buffer layer was discarded). The B1 / B2 history rows must be
+	// After switchFork the orphaned A1 block's temporal rows must be gone
+	// (its buffer layer was discarded). The B1 / B2 temporal rows must be
 	// present.
 	bdb = bc.BufferedDB()
 
 	// B1 + B2 present.
-	if !rawdb.HasHistoryMeta(bdb, 1) {
-		t.Error("expected sh-m- for block 1 (B1) after switchFork")
+	txRangeB1, ok, err := rawdb.ReadStateTxRange(bdb, 1)
+	if err != nil || !ok {
+		t.Fatalf("expected StateTxRange for block 1 (B1) after switchFork: ok=%v err=%v", ok, err)
 	}
-	if !rawdb.HasHistoryMeta(bdb, 2) {
-		t.Error("expected sh-m- for block 2 (B2) after switchFork")
+	txRangeB2, ok, err := rawdb.ReadStateTxRange(bdb, 2)
+	if err != nil || !ok {
+		t.Fatalf("expected StateTxRange for block 2 (B2) after switchFork: ok=%v err=%v", ok, err)
 	}
-	metaB1 := rawdb.ReadHistoryMeta(bdb, 1)
-	if metaB1 == nil {
-		t.Fatal("sh-m- at block 1 missing after switchFork")
+	if txRangeB1.BlockHash != blockB1.Hash() {
+		t.Errorf("StateTxRange block 1 hash = %x, want B1 hash %x", txRangeB1.BlockHash, blockB1.Hash())
 	}
-	if string(metaB1.BlockHash) != string(blockB1.Hash().Bytes()) {
-		t.Errorf("sh-m- at block 1 hash = %x, want B1 hash %x (A1 row would have a different hash and indicates the orphan layer wasn't discarded)", metaB1.BlockHash, blockB1.Hash().Bytes())
+	if txRangeB2.BlockHash != blockB2.Hash() {
+		t.Errorf("StateTxRange block 2 hash = %x, want B2 hash %x", txRangeB2.BlockHash, blockB2.Hash())
 	}
 
 	// The buffer's pending-blocks stack should reflect only the new branch

@@ -116,8 +116,8 @@ func writeGenesisMaterializedState(db ethdb.KeyValueStore, genesis *params.Genes
 	// genesis state root by genesisBlockAndStateRoot; no flat `ani-` write here.
 
 	// Dynamic properties are already rooted into the genesis state root by
-	// genesisBlockAndStateRoot. Keep the flat dp- mirror for startup tools that
-	// do not have a state root in hand.
+	// genesisBlockAndStateRoot. Keep only the derived/runtime flat dp- keys for
+	// startup tools that do not have a state root in hand.
 	if dp != nil {
 		dp.SetLatestBlockHeaderNumber(0)
 		dp.SetLatestBlockHeaderTimestamp(genesis.Timestamp)
@@ -132,9 +132,6 @@ func writeGenesisMaterializedState(db ethdb.KeyValueStore, genesis *params.Genes
 		// java-tron Manager.initWitness flips is_jobs=true on every genesis
 		// witness; the maintenance-cycle rotation maintains it thereafter.
 		w.SetIsJobs(true)
-		// Flat witness rows are retained as a compatibility mirror; the same
-		// capsule was rooted into the genesis state root above.
-		rawdb.WriteWitness(db, gw.Address, w)
 		initialWitnesses = append(initialWitnesses, rawdb.GenesisWitness{
 			Address:   gw.Address,
 			VoteCount: gw.VoteCount,

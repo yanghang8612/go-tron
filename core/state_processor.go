@@ -351,21 +351,21 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
 }
 
 func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
@@ -375,7 +375,7 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {
@@ -402,6 +402,10 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	accountStateMark := statedb.JournalMark()
 
 	for i, tx := range block.Transactions() {
+		domainChangeMark := statedb.DomainChangeJournalMark()
+		if domainChanges != nil {
+			domainChangeMark = domainChanges.JournalMark()
+		}
 		if dynProps.ConsensusLogicOptimization() {
 			if err := ValidateTxRetCount(tx); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
@@ -424,12 +428,25 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
 		statedb.FinalizeTransaction()
+		if domainChanges != nil {
+			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
+				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
+			}
+		} else {
+			txNum, err := statedb.DomainChangeTxNumAtOrdinal(uint64(i))
+			if err != nil {
+				return nil, tcommon.Hash{}, fmt.Errorf("tx %d state txNum: %w", i, err)
+			}
+			if err := statedb.FlushDomainChangesSince(domainChangeMark, txNum); err != nil {
+				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
+			}
+		}
 
 		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
 	}
 
 	if parentAccountStateRoot != nil {
-		javaAccountStateRoot, err = statedb.JavaAccountStateRoot(*parentAccountStateRoot, accountStateMark)
+		javaAccountStateRoot, err = defaultStateRootAdapter.JavaAccountStateRoot(statedb, *parentAccountStateRoot, accountStateMark)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("account state root: %w", err)
 		}

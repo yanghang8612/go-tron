@@ -8,6 +8,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -82,13 +83,12 @@ func TestWriteHistoryBlockHashStoresParentHashBySlot(t *testing.T) {
 	}
 }
 
-// TestWriteHistoryBlockHashCapturesRingPreValue is the regression test for
-// the State History Index ring-wrap bug. writeHistoryBlockHash calls
-// SetState directly without going through opSload, so without an internal
-// pre-warm the journal's storageChange.prev captures zero rather than the
-// real disk value. Once the 8191-block ring wraps (block ≥ 8192), the
-// sh-s- row at the wrapped slot would record zero instead of the
-// prior-cycle parent hash.
+// TestWriteHistoryBlockHashCapturesRingPreValue is the regression test for the
+// BlockHashHistory ring-wrap pre-image. writeHistoryBlockHash calls SetState
+// directly without going through opSload, so without an internal pre-warm the
+// journal's storageChange.prev captures zero rather than the real disk value.
+// Once the 8191-block ring wraps (block >= 8192), the temporal domain change
+// at the wrapped slot must record the prior-cycle parent hash.
 //
 // Setup mirrors the wrap condition:
 //
@@ -100,7 +100,7 @@ func TestWriteHistoryBlockHashStoresParentHashBySlot(t *testing.T) {
 //     with the statedb's storage cache empty afterwards.
 //  3. Drive writeHistoryBlockHash for blockNum = historyServeWindow + 1 so
 //     the slot index wraps back to 0.
-//  4. Flush via AccumulateHistory and assert the recorded pre-value is the
+//  4. Flush flat domain changes and assert the recorded pre-value is the
 //     planted priorHash, not zero.
 //
 // FAILS on pre-fix code (got 0x000…0), PASSES on fixed code (got priorHash).
@@ -143,20 +143,38 @@ func TestWriteHistoryBlockHashCapturesRingPreValue(t *testing.T) {
 		t.Fatalf("state.New post-ring-seed: %v", err)
 	}
 
-	statedb.SetHistoryEnabled(true)
 	newParentHash := tcommon.HexToHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	// Block number = ring + 1 → slot index wraps to 0.
 	blockNum := historyServeWindow + 1
-	writeHistoryBlockHash(statedb, dp, blockNum, newParentHash)
 
 	buf := ethrawdb.NewMemoryDatabase()
-	if err := statedb.AccumulateHistory(buf, blockNum, tcommon.Hash{0xAB}); err != nil {
-		t.Fatalf("AccumulateHistory: %v", err)
+	begin, end, err := rawdb.NextStateTxRange(blockNum-1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statedb.BeginDomainChangeJournalCapture(buf, blockNum, tcommon.Hash{0xAB}, begin, end)
+	mark := statedb.DomainChangeJournalMark()
+	writeHistoryBlockHash(statedb, dp, blockNum, newParentHash)
+	if err := statedb.FlushDomainChangesSince(mark, end); err != nil {
+		t.Fatalf("FlushDomainChangesSince: %v", err)
 	}
 
-	got, ok := rawdb.ReadSlotDelta(buf, blockNum, historyStorageAddress, slotKey)
-	if !ok {
-		t.Fatal("SlotDelta missing for ring slot")
+	var got tcommon.Hash
+	var found bool
+	if err := rawdb.IterateStateDomainChanges(buf, blockNum, func(change *rawdb.StateDomainChange) (bool, error) {
+		if change.Owner == historyStorageAddress &&
+			change.Domain == kvdomains.ContractStorage &&
+			change.PrevExists {
+			copy(got[:], change.Prev)
+			found = true
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateStateDomainChanges: %v", err)
+	}
+	if !found {
+		t.Fatal("StateDomainChange missing for ring slot")
 	}
 	if got != priorHash {
 		t.Fatalf("ring slot pre-value: got %s, want %s (real prior-cycle hash, not zero)",

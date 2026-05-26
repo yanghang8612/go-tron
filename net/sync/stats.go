@@ -78,10 +78,18 @@ func (s *Stats) AddApplyBlock(a core.ApplyStats) {
 // block/tx counts, the session-wide total, and the cumulative InsertBlock
 // wall-clock.
 func (s *Stats) AddBlock(txs int, exec time.Duration) {
+	s.AddBlocks(1, txs, exec)
+}
+
+// AddBlocks records a successfully-applied block range as one window update.
+func (s *Stats) AddBlocks(blocks, txs int, exec time.Duration) {
+	if blocks <= 0 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cur.Blocks++
-	s.cur.TotalBlocks++
+	s.cur.Blocks += blocks
+	s.cur.TotalBlocks += blocks
 	s.cur.Txs += txs
 	s.cur.ExecElapsed += exec
 }
@@ -142,10 +150,19 @@ func (s *Stats) snapshotAndResetLocked(now time.Time) Snapshot {
 // StartTime so a sub-microsecond clock advance can never make the new
 // window's startTime earlier than the old window's WindowElapsed reading.
 func (s *Stats) RecordBlock(txs int, exec time.Duration, now time.Time, interval time.Duration) (Snapshot, bool) {
+	return s.RecordBlocks(1, txs, exec, now, interval)
+}
+
+// RecordBlocks atomically appends one contiguous imported range's drain-time
+// bookkeeping into the current window, then optionally snapshots and resets.
+func (s *Stats) RecordBlocks(blocks, txs int, exec time.Duration, now time.Time, interval time.Duration) (Snapshot, bool) {
+	if blocks <= 0 {
+		return Snapshot{}, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cur.Blocks++
-	s.cur.TotalBlocks++
+	s.cur.Blocks += blocks
+	s.cur.TotalBlocks += blocks
 	s.cur.Txs += txs
 	s.cur.ExecElapsed += exec
 	if s.cur.StartTime.IsZero() || now.Sub(s.cur.StartTime) < interval {

@@ -65,8 +65,8 @@ func writeHistoryBlockHash(statedb *state.StateDB, dynProps *state.DynamicProper
 	// the real disk pre-value rather than zero. The TVM normally pre-warms
 	// via opSload before opSstore; this direct write path bypasses that.
 	// Without this pre-warm, once the BlockHashHistory ring wraps
-	// (block ≥ 8192), the State History Index would record zero pre-values
-	// for ring slots instead of the prior-cycle hash.
+	// (block >= 8192), temporal history would record zero pre-values for ring
+	// slots instead of the prior-cycle hash.
 	_ = statedb.GetState(historyStorageAddress, slotKey)
 	statedb.SetState(historyStorageAddress, slotKey, parentHash)
 }

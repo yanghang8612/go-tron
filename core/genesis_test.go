@@ -256,7 +256,12 @@ func TestSetupGenesisBlock_WitnessIsJobsSet(t *testing.T) {
 	}
 
 	for _, gw := range genesis.Witnesses {
-		w := rawdb.ReadWitness(diskdb, gw.Address)
+		root := rawdb.ReadGenesisStateRoot(diskdb)
+		statedb, err := state.New(root, state.NewDatabase(diskdb))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := statedb.GetWitness(gw.Address)
 		if w == nil {
 			t.Errorf("witness %s: no Witness record after genesis", gw.Address.Hex())
 			continue

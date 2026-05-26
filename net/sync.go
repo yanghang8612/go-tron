@@ -1,6 +1,7 @@
 package net
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,6 +66,12 @@ type syncPeerState struct {
 type bufferedSyncBlock struct {
 	block *types.Block
 	peer  *p2p.Peer
+}
+
+type bufferedSyncBatch struct {
+	blocks      []*types.Block
+	buffered    []bufferedSyncBlock
+	bufferWaits []time.Duration
 }
 
 type outboundSyncRequest struct {
@@ -998,9 +1005,9 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.mu.Unlock()
 			break
 		}
-		next := ss.chain.CurrentBlock().Number() + 1
-		buffered, ok := ss.blockBuffer[next]
-		if !ok {
+		batch := ss.popBufferedSyncBatchLocked(now)
+		if len(batch.blocks) == 0 {
+			next := ss.chain.CurrentBlock().Number() + 1
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			complete := ss.shouldFinishLocked()
@@ -1015,46 +1022,98 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			}
 			break
 		}
-		bufferWait := ss.endBufferWaitLocked(next, now)
-		delete(ss.blockBuffer, next)
-		delete(ss.bufferedHash, buffered.block.Hash())
 		ss.mu.Unlock()
-		ss.stats.AddBufferWait(bufferWait)
+		for _, wait := range batch.bufferWaits {
+			ss.stats.AddBufferWait(wait)
+		}
 
 		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlock(buffered.block)
+		insertErr := ss.chain.InsertBlocks(batch.blocks)
 		insertElapsed := time.Since(insertStart)
+		applied := len(batch.blocks)
 		if insertErr != nil {
-			ss.pauseSync(buffered.peer, buffered.block.Number(), insertErr)
+			failed := 0
+			var rangeErr *core.InsertBlocksError
+			if errors.As(insertErr, &rangeErr) && rangeErr.Index >= 0 && rangeErr.Index < len(batch.buffered) {
+				failed = rangeErr.Index
+			}
+			applied = failed
+			ss.recordImportedBatch(batch, applied, insertElapsed)
+			failedBlock := batch.buffered[failed].block
+			var failedNum uint64
+			if failedBlock != nil {
+				failedNum = failedBlock.Number()
+			} else if rangeErr != nil {
+				failedNum = rangeErr.BlockNumber
+			}
+			ss.pauseSync(batch.buffered[failed].peer, failedNum, insertErr)
 			break
 		}
-
-		// RecordBlock atomically (under stats.mu) appends this block's drain
-		// counters and decides whether the window has elapsed. Combining the
-		// two preserves the pre-refactor invariant where the producer path's
-		// onApplyStats hook could not race with the count++/snapshot/reset
-		// trio that lived in one ss.mu critical section.
-		snap, emit := ss.stats.RecordBlock(
-			len(buffered.block.Transactions()),
-			insertElapsed,
-			time.Now(),
-			tsync.StatsReportInterval,
-		)
-
-		ss.mu.Lock()
-		var diag syncDiagnostics
-		if emit {
-			diag = ss.snapshotDiagnosticsLocked()
-		}
-		remain := ss.estimatedRemainLocked()
-		ss.mirrorLegacyLocked()
-		ss.mu.Unlock()
-
-		if emit {
-			ss.reportSegment(snap, diag, buffered.block.Number(), remain, buffered.peer)
-		}
+		ss.recordImportedBatch(batch, applied, insertElapsed)
 	}
 	ss.sendOutboundRequests(out)
+}
+
+func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
+	next := ss.chain.CurrentBlock().Number() + 1
+	var batch bufferedSyncBatch
+	for len(batch.blocks) < maxFetchBatch {
+		buffered, ok := ss.blockBuffer[next]
+		if !ok {
+			break
+		}
+		batch.bufferWaits = append(batch.bufferWaits, ss.endBufferWaitLocked(next, now))
+		delete(ss.blockBuffer, next)
+		if buffered.block != nil {
+			delete(ss.bufferedHash, buffered.block.Hash())
+		}
+		batch.buffered = append(batch.buffered, buffered)
+		batch.blocks = append(batch.blocks, buffered.block)
+		next++
+	}
+	return batch
+}
+
+func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration) {
+	if applied <= 0 {
+		return
+	}
+	var txs int
+	for i := 0; i < applied; i++ {
+		if block := batch.buffered[i].block; block != nil {
+			txs += len(block.Transactions())
+		}
+	}
+	// RecordBlocks atomically (under stats.mu) appends the whole range's
+	// counters and decides whether the window has elapsed. applyBlock hooks
+	// have already contributed phase stats for the same applied range, so
+	// recording the range as one unit keeps block counts and phase totals
+	// aligned in the emitted sync summary.
+	snap, emit := ss.stats.RecordBlocks(
+		applied,
+		txs,
+		totalElapsed,
+		time.Now(),
+		tsync.StatsReportInterval,
+	)
+
+	ss.mu.Lock()
+	var diag syncDiagnostics
+	if emit {
+		diag = ss.snapshotDiagnosticsLocked()
+	}
+	remain := ss.estimatedRemainLocked()
+	ss.mirrorLegacyLocked()
+	ss.mu.Unlock()
+
+	if emit {
+		last := batch.buffered[applied-1]
+		var head uint64
+		if last.block != nil {
+			head = last.block.Number()
+		}
+		ss.reportSegment(snap, diag, head, remain, last.peer)
+	}
 }
 
 func (ss *SyncService) beginBufferWaitLocked(next uint64, now time.Time) {

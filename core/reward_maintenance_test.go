@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
@@ -15,13 +14,13 @@ import (
 
 var _ = ethrawdb.NewMemoryDatabase // pin import
 
-func seedWitness(t *testing.T, db ethdb.KeyValueStore, statedb *state.StateDB, addr tcommon.Address, votes int64) {
+func seedWitness(t *testing.T, statedb *state.StateDB, addr tcommon.Address, votes int64) {
 	t.Helper()
 	w := types.NewWitness(addr, "")
 	w.SetVoteCount(votes)
-	statedb.PutWitness(addr, w.URL())
-	statedb.AddWitnessVoteCount(addr, votes)
-	rawdb.WriteWitness(db, addr, w)
+	if err := statedb.SetWitnessCapsule(w); err != nil {
+		t.Fatal(err)
+	}
 	if err := statedb.AppendWitnessIndex(addr); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestApplyRewardMaintenance_VIAccumulation(t *testing.T) {
 	dp.SetCurrentCycleNumber(5)
 
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
-	seedWitness(t, db, statedb, addr, 400)
+	seedWitness(t, statedb, addr, 400)
 	// Seed cycle 5's voter pool to 800.
 	_ = statedb.WriteCycleReward(5, addr.Bytes(), 800)
 
@@ -57,7 +56,7 @@ func TestApplyRewardMaintenance_CycleRollover(t *testing.T) {
 	dp.SetCurrentCycleNumber(7)
 
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
-	seedWitness(t, db, statedb, addr, 1_500)
+	seedWitness(t, statedb, addr, 1_500)
 	// Current brokerage is rooted in the witness-owned KV domain.
 	if err := statedb.WriteWitnessBrokerage(addr, 15); err != nil {
 		t.Fatal(err)
@@ -84,7 +83,7 @@ func TestApplyRewardMaintenance_LegacyPath_NoOp(t *testing.T) {
 	dp.SetCurrentCycleNumber(5)
 
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
-	seedWitness(t, db, statedb, addr, 400)
+	seedWitness(t, statedb, addr, 400)
 
 	applyRewardMaintenance(db, statedb, dp)
 
@@ -109,7 +108,7 @@ func TestApplyRewardMaintenance_VIAndCycleTogether(t *testing.T) {
 	dp.SetCurrentCycleNumber(3)
 
 	addr := tcommon.BytesToAddress([]byte{0x41, 0x01})
-	seedWitness(t, db, statedb, addr, 250)
+	seedWitness(t, statedb, addr, 250)
 	_ = statedb.WriteCycleReward(3, addr.Bytes(), 500)
 
 	applyRewardMaintenance(db, statedb, dp)

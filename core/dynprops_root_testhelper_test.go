@@ -22,6 +22,14 @@ func loadDPAtRoot(tb testing.TB, db ethdb.KeyValueReader, sdb *state.Database, r
 		if err != nil {
 			tb.Fatalf("open sysKV at %x: %v", root[:], err)
 		}
+		if index, ok := db.(interface {
+			ethdb.KeyValueReader
+			ethdb.KeyValueWriter
+			ethdb.Iteratee
+		}); ok {
+			sysKV.SetAccountKVIndexStore(index)
+			sysKV.SetAccountKVIndexReads(true)
+		}
 	}
 	return state.LoadDynamicProperties(db, sysKV)
 }

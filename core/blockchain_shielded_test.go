@@ -208,7 +208,7 @@ func TestApplyBlockShieldedMerkleLifecycle(t *testing.T) {
 
 	openHeadState := func(t *testing.T, bc *BlockChain) *state.StateDB {
 		t.Helper()
-		statedb, err := state.New(bc.HeadStateRoot(), bc.StateDB())
+		statedb, err := bc.openState(bc.HeadStateRoot())
 		if err != nil {
 			t.Fatalf("open head state: %v", err)
 		}

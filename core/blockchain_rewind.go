@@ -14,6 +14,8 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 )
 
+const restartSyncReplayBatchSize = 100
+
 // RestartSyncProgress is emitted by RestartSyncFromHeight after each major
 // phase and replayed block. Block is meaningful for replay/done phases.
 type RestartSyncProgress struct {
@@ -27,12 +29,14 @@ type RestartSyncProgress struct {
 //
 // This is an offline startup operation. Call it before P2P, producer, PBFT, and
 // API hooks are registered; it intentionally replays canonical blocks through
-// applyBlock and therefore would otherwise re-fire those hooks.
+// the same staged range importer used by sync and therefore would otherwise
+// re-fire apply hooks.
 //
 // The implementation is deliberately conservative: it clears every
-// replay-derived flat namespace, reseeds genesis, replays blocks [1, height],
-// then force-flushes all blockbuffer layers. That makes the result correct even
-// while some consensus stores still live outside the rooted account/state KV.
+// replay-derived flat namespace, reseeds genesis, replays blocks [1, height] in
+// staged batches, then force-flushes all blockbuffer layers. That makes the
+// result correct even while some consensus stores still live outside the rooted
+// account/state KV.
 func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genesis, ancient rawdb.AncientWriter, progressFn func(RestartSyncProgress)) error {
 	if bc == nil {
 		return errors.New("restart sync: nil blockchain")
@@ -94,22 +98,52 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	}
 	bc.resetRuntimeStateLocked(genesisBlock, genesisRoot)
 
-	for n := uint64(1); n <= height; n++ {
-		block := rawdb.ReadBlock(bc.chaindb, n)
-		if block == nil {
-			return fmt.Errorf("restart sync: block %d not found during replay", n)
+	for start := uint64(1); start <= height; {
+		end := start + restartSyncReplayBatchSize - 1
+		if end < start || end > height {
+			end = height
 		}
-		parent := bc.CurrentBlock()
-		if block.Number() != parent.Number()+1 {
-			return fmt.Errorf("restart sync: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+		blocks := make([]*types.Block, 0, end-start+1)
+		for n := start; n <= end; n++ {
+			block := rawdb.ReadBlock(bc.chaindb, n)
+			if block == nil {
+				return fmt.Errorf("restart sync: block %d not found during replay", n)
+			}
+			if len(blocks) == 0 {
+				parent := bc.CurrentBlock()
+				if block.Number() != parent.Number()+1 {
+					return fmt.Errorf("restart sync: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+				}
+				if block.ParentHash() != parent.Hash() {
+					return fmt.Errorf("restart sync: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+				}
+			} else {
+				parent := blocks[len(blocks)-1]
+				if block.Number() != parent.Number()+1 {
+					return fmt.Errorf("restart sync: block %d has number %d, want %d", n, block.Number(), parent.Number()+1)
+				}
+				if block.ParentHash() != parent.Hash() {
+					return fmt.Errorf("restart sync: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+				}
+			}
+			blocks = append(blocks, block)
 		}
-		if block.ParentHash() != parent.Hash() {
-			return fmt.Errorf("restart sync: block %d parent mismatch: have %x want %x", n, block.ParentHash(), parent.Hash())
+		if err := bc.insertBlocksLocked(blocks); err != nil {
+			var rangeErr *InsertBlocksError
+			if errors.As(err, &rangeErr) {
+				for i := 0; i < rangeErr.Index && i < len(blocks); i++ {
+					emit("replay", blocks[i].Number())
+				}
+				if rangeErr.BlockNumber != 0 {
+					return fmt.Errorf("restart sync: replay block %d: %w", rangeErr.BlockNumber, err)
+				}
+			}
+			return fmt.Errorf("restart sync: replay block range %d-%d: %w", start, end, err)
 		}
-		if err := bc.applyBlock(block); err != nil {
-			return fmt.Errorf("restart sync: replay block %d: %w", n, err)
+		for _, block := range blocks {
+			emit("replay", block.Number())
 		}
-		emit("replay", n)
+		start = end + 1
 	}
 
 	emit("flush", height)
@@ -130,6 +164,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		return fmt.Errorf("restart sync: final head mismatch: got #%d %x want #%d %x", final.Number(), final.Hash(), height, targetHash)
 	}
 	rawdb.WriteHeadBlockHash(bc.db, final.Hash())
+	if err := rewindCanonicalStagePipeline(bc.db, height, final.Hash()); err != nil {
+		return fmt.Errorf("restart sync: rewind canonical stage progress: %w", err)
+	}
 	bc.resetRuntimeStateLocked(final, bc.HeadStateRoot())
 	emit("done", height)
 	return nil

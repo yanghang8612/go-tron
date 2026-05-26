@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -19,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
@@ -33,6 +33,29 @@ var (
 	ErrInvalidNumber = errors.New("invalid block number")
 )
 
+// InsertBlocksError reports the first block that failed inside InsertBlocks.
+// Blocks before Index were applied successfully; Index and later blocks were
+// not applied.
+type InsertBlocksError struct {
+	Index       int
+	BlockNumber uint64
+	Err         error
+}
+
+func (e *InsertBlocksError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("insert block range index %d block %d: %v", e.Index, e.BlockNumber, e.Err)
+}
+
+func (e *InsertBlocksError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // ApplyStats reports per-phase wall-clock time spent inside applyBlock.
 //
 // Subscribers should treat ApplyStats as read-only. The fields are exported so
@@ -42,15 +65,13 @@ var (
 //   - Validate: header verification (signature recovery, scheduled-witness
 //     match, post-fork timestamp alignment) plus parent linkage.
 //   - Execute: transaction execution + reward + BLOCK_FILLED_SLOTS update.
-//     Includes the in-memory state mutations; does NOT include the trie
-//     commit (that lives in StateCommit).
+//     Includes the in-memory state mutations; does NOT include the flat
+//     commitment update (that lives in StateCommit).
 //   - Maintenance: doMaintenance work on cycle boundaries (proposals, vote
 //     tally, active-set rotation, reward VI). Zero on non-maintenance blocks.
-//   - StateCommit: statedb.Commit — trie.Update for every dirty account +
-//     TrieDB.Update/Commit for hash-based trie node writes. Empirically the
-//     dominant phase as state grows. StateCommitDetail splits this phase into
-//     the flat latest-state, per-account KV commitment, and trie-node flush
-//     subphases for sync diagnostics.
+//   - StateCommit: statedb.Commit — flat latest-domain writes plus
+//     CommitmentDomain root update. StateCommitDetail splits this phase into
+//     the latest-state and commitment subphases for sync diagnostics.
 //   - DPUpdate: dynamic-properties writes (latest_block_header_*,
 //     solidified, fork-vote tally) into the buffer.
 //   - Persist: WriteBlock + WriteTaposRef + tx info persist + the final
@@ -106,23 +127,28 @@ type BlockChain struct {
 	stateDB *state.Database
 	config  *params.ChainConfig
 
+	stateCodeColdHistory       state.StateCodeColdHistoryAtOrBefore
+	stateCommitmentColdHistory state.StateCommitmentColdHistory
+	stateOpenHook              func(tcommon.Hash)
+	stateCommitScopeHook       func()
+	stateTxRangeSeedHook       func(uint64)
+
 	currentBlock   atomic.Pointer[types.Block]
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
 
-	genesisBlock           *types.Block
-	genesisWitnesses       []consensus.GenesisWitnessInfo
-	activeWitnesses        atomic.Value // []tcommon.Address
-	dynPropsCache          atomic.Value // *state.DynamicProperties; canonical head snapshot
-	standbyPayCache        *standbyWitnessPaySet
-	rewardAcctCache        map[tcommon.Address]*state.AccountSnapshot
-	systemAcctCache        *state.AccountSnapshot
-	rewardAcctSeen         map[tcommon.Address]struct{}
-	rewardAcctAddrs        []tcommon.Address
-	witnessBlockCache      map[tcommon.Address]int64
-	forkStatsCache         map[int32][]byte
-	deferredKVCommitOwners map[tcommon.Address]struct{}
-	fc                     *forks.ForkController
+	genesisBlock      *types.Block
+	genesisWitnesses  []consensus.GenesisWitnessInfo
+	activeWitnesses   atomic.Value // []tcommon.Address
+	dynPropsCache     atomic.Value // *state.DynamicProperties; canonical head snapshot
+	standbyPayCache   *standbyWitnessPaySet
+	rewardAcctCache   map[tcommon.Address]*state.AccountSnapshot
+	systemAcctCache   *state.AccountSnapshot
+	rewardAcctSeen    map[tcommon.Address]struct{}
+	rewardAcctAddrs   []tcommon.Address
+	witnessBlockCache map[tcommon.Address]int64
+	forkStatsCache    map[int32][]byte
+	fc                *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -189,6 +215,18 @@ func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
 	bc.blockHookMu.Lock()
 	bc.blockHooks = append(bc.blockHooks, fn)
 	bc.blockHookMu.Unlock()
+}
+
+// SetStateCodeColdHistory wires content-addressed CodeDomain snapshots into
+// live StateDB code reads after hot state-code rows have been pruned.
+func (bc *BlockChain) SetStateCodeColdHistory(source state.StateCodeColdHistoryAtOrBefore) {
+	bc.stateCodeColdHistory = source
+}
+
+// SetStateCommitmentColdHistory wires CommitmentDomain snapshots into commit
+// repair so pruned hot branch nodes can be restored before incremental updates.
+func (bc *BlockChain) SetStateCommitmentColdHistory(source state.StateCommitmentColdHistory) {
+	bc.stateCommitmentColdHistory = source
 }
 
 // AddApplyStatsHook registers a callback invoked after each successful
@@ -277,20 +315,19 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
 	bc := &BlockChain{
-		db:                     db,
-		chaindb:                chaindb,
-		stateDB:                stateDB,
-		config:                 config,
-		fc:                     forks.NewForkController(buffer),
-		buffer:                 buffer,
-		flushQueue:             make(chan uint64, flushQueueCap),
-		flushPending:           newFlushBarrier(),
-		rewardAcctCache:        make(map[tcommon.Address]*state.AccountSnapshot),
-		rewardAcctSeen:         make(map[tcommon.Address]struct{}),
-		rewardAcctAddrs:        make([]tcommon.Address, 0, 128),
-		witnessBlockCache:      make(map[tcommon.Address]int64),
-		forkStatsCache:         make(map[int32][]byte, len(forks.KnownVersions)),
-		deferredKVCommitOwners: make(map[tcommon.Address]struct{}),
+		db:                db,
+		chaindb:           chaindb,
+		stateDB:           stateDB,
+		config:            config,
+		fc:                forks.NewForkController(buffer),
+		buffer:            buffer,
+		flushQueue:        make(chan uint64, flushQueueCap),
+		flushPending:      newFlushBarrier(),
+		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
+		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
+		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
+		witnessBlockCache: make(map[tcommon.Address]int64),
+		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -428,47 +465,8 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 	return bc.config
 }
 
-func (bc *BlockChain) stateCommitOptions(block *types.Block, wasMaintenanceBlock bool) state.CommitOptions {
-	if bc.config == nil || bc.config.EffectiveStateCommitmentMode() != params.StateCommitmentModeLatest {
-		return state.CommitOptions{}
-	}
-	opts := state.CommitOptions{
-		DeferAccountKVCommitment: state.HotAccountKVCommitmentDomain,
-	}
-	if bc.stateCommitmentCheckpointDue(block, wasMaintenanceBlock) {
-		opts.RebuildDeferredAccountKVRoots = true
-		opts.RebuildAccountKVRootOwners = bc.deferredKVCommitOwnerList()
-		return opts
-	}
-	opts.DeferredAccountKVRootOwner = func(addr tcommon.Address) {
-		bc.deferredKVCommitOwners[addr] = struct{}{}
-	}
-	return opts
-}
-
-func (bc *BlockChain) stateCommitmentCheckpointDue(block *types.Block, wasMaintenanceBlock bool) bool {
-	if bc.config == nil || bc.config.EffectiveStateCommitmentMode() != params.StateCommitmentModeLatest {
-		return false
-	}
-	if wasMaintenanceBlock {
-		return true
-	}
-	interval := bc.config.EffectiveStateCommitmentInterval()
-	return interval > 0 && block.Number() > 0 && block.Number()%interval == 0
-}
-
-func (bc *BlockChain) deferredKVCommitOwnerList() []tcommon.Address {
-	if len(bc.deferredKVCommitOwners) == 0 {
-		return nil
-	}
-	addrs := make([]tcommon.Address, 0, len(bc.deferredKVCommitOwners))
-	for addr := range bc.deferredKVCommitOwners {
-		addrs = append(addrs, addr)
-	}
-	sort.Slice(addrs, func(i, j int) bool {
-		return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
-	})
-	return addrs
+func (bc *BlockChain) stateCommitOptions(_ *types.Block, _ bool) state.CommitOptions {
+	return state.CommitOptions{}
 }
 
 // ForkController returns the chain's fork controller.
@@ -545,6 +543,63 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 
+	return bc.insertBlockLocked(block)
+}
+
+// InsertBlocks applies a fetched canonical range through the same staged block
+// pipeline while holding the chain lock once for the whole range. Each block
+// still commits independently today; this entry point is the range-shaped
+// surface sync can move onto while execution is collapsed toward shared domain
+// transactions.
+func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
+	if len(blocks) == 0 {
+		return nil
+	}
+	bc.chainmu.Lock()
+	defer bc.chainmu.Unlock()
+
+	return bc.insertBlocksLocked(blocks)
+}
+
+// insertBlocksLocked applies a contiguous range through insertBlockLocked.
+// Callers must hold bc.chainmu.
+func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
+	executor := newCanonicalRangeExecutor(bc, true)
+	defer func() {
+		if closeErr := executor.Close(); closeErr != nil {
+			if err == nil {
+				err = closeErr
+			} else {
+				err = fmt.Errorf("%w; close range executor: %v", err, closeErr)
+			}
+		}
+	}()
+	for i, block := range blocks {
+		if err := bc.insertBlockLockedWithExecutor(block, executor); err != nil {
+			var blockNum uint64
+			if block != nil {
+				blockNum = block.Number()
+			}
+			return &InsertBlocksError{Index: i, BlockNumber: blockNum, Err: err}
+		}
+	}
+	return nil
+}
+
+// insertBlockLocked is InsertBlock's body. Callers must hold bc.chainmu.
+func (bc *BlockChain) insertBlockLocked(block *types.Block) error {
+	executor := newCanonicalRangeExecutor(bc, false)
+	defer executor.Close()
+	return bc.insertBlockLockedWithExecutor(block, executor)
+}
+
+// insertBlockLockedWithExecutor is insertBlockLocked with a range executor that
+// owns reusable StateDB, CommitScope, and StateTxRange allocation. Callers must
+// hold bc.chainmu.
+func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor *canonicalRangeExecutor) error {
+	if block == nil {
+		return errors.New("block is nil")
+	}
 	current := bc.CurrentBlock()
 
 	// Duplicate check: already committed on the canonical chain.
@@ -570,12 +625,22 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 			bc.khaosDB.RemoveBlk(block.Hash())
 			return fmt.Errorf("switchFork: %w", err)
 		}
+		if executor != nil {
+			executor.Reset()
+		}
 		return nil
 	}
 
 	// Normal linear extension: the pushed block IS the new global head.
-	if err := bc.applyBlock(block); err != nil {
+	if executor == nil {
+		executor = newCanonicalRangeExecutor(bc, false)
+		defer executor.Close()
+	}
+	if err := executor.Apply(block); err != nil {
 		bc.khaosDB.RemoveBlk(block.Hash())
+		if abortErr := executor.Abort(); abortErr != nil {
+			return fmt.Errorf("%w; abort range executor: %v", err, abortErr)
+		}
 		return err
 	}
 	return nil
@@ -585,9 +650,24 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // current canonical tip (bc.CurrentBlock()). It updates currentBlock on success.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
+	executor := newCanonicalRangeExecutor(bc, false)
+	defer executor.Close()
+	return executor.Apply(block)
+}
+
+// applyBlockWithPlan executes, commits, and persists one linear-extension
+// block from a range-owned execution plan. If plan.state is non-nil, it must
+// already represent the current canonical head's post-state; on success the
+// same object represents the new head and can be reused by the next block in a
+// canonicalRangeExecutor.
+func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBlockExecution) (retErr error) {
 	current := bc.CurrentBlock()
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("async buffer flush failed: %w", *errPtr)
+	}
+	historyEnabled := bc.config != nil && bc.config.HistoryEnabled
+	if err := plan.Validate(block, historyEnabled); err != nil {
+		return err
 	}
 
 	stats := applyStats{last: time.Now()}
@@ -647,27 +727,15 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// VerifyHeader so the buffer-overlay dp can be threaded into header
 	// verification, removing the redundant LoadDynamicProperties that
 	// chain.DynProps() used to perform inside VerifyHeader.
-	parentRoot := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
-	if parentRoot == (tcommon.Hash{}) && current.Number() == 0 {
-		parentRoot = rawdb.ReadGenesisStateRoot(bc.db)
+	statedb := plan.state
+	stagePipeline := plan.pipeline
+	if err := bc.prepareOpenState(statedb); err != nil {
+		return fmt.Errorf("prepare reusable state: %w", err)
 	}
-	if parentRoot == (tcommon.Hash{}) {
-		// Backwards-compat fallback for chain databases written before
-		// blockStateRootPrefix existed.
-		parentRoot = current.AccountStateRoot()
-	}
-	statedb, err := state.New(parentRoot, bc.stateDB)
-	if err != nil {
-		return fmt.Errorf("open state: %w", err)
-	}
-	statedb.SetAccountKVIndexStore(bc.buffer)
-	statedb.SetAccountKVIndexReads(true)
 	bc.preloadSystemAccount(statedb)
-	// Flip the SHI capture flag for this block. Without this the StateDB's
-	// AccumulateHistory short-circuits and no rows land in bc.buffer.
-	if bc.config.HistoryEnabled {
-		statedb.SetHistoryEnabled(true)
-	}
+	// HistoryEnabled on the live block path now means flat temporal domain
+	// capture. The legacy SHI journal flag stays off here; StateDomainChange
+	// rows below carry the per-block/per-tx history used by archive reads.
 
 	// Load dynamic properties through the buffer so that DP keys written by
 	// pending (not-yet-flushed) layers are visible to this applyBlock — e.g.
@@ -720,6 +788,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			bc.reloadActiveWitnesses(bc.HeadStateRoot())
 		}
 	}()
+	if err := stagePipeline.Advance(rawdb.StageHeaders, rawdb.StageBodies); err != nil {
+		return err
+	}
 
 	// Sapling commitment-tree lifecycle: java-tron resets CURRENT_TREE from
 	// LAST_TREE before every block, then saves CURRENT_TREE as best after the
@@ -771,6 +842,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	blockRoot := block.AccountStateRoot()
 	var txInfos []*corepb.TransactionInfo
 	var javaAccountStateRoot tcommon.Hash
+	var err error
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	var standbyPaySet *standbyWitnessPaySet
 	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
@@ -783,11 +855,18 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			bc.clearRewardAccountCache()
 		}
 	}()
+	var domainChangeStage *state.DomainChangeStage
+	if historyEnabled {
+		domainChangeStage, err = plan.BeginDomainChangeStage(bc.buffer)
+		if err != nil {
+			return fmt.Errorf("begin domain change stage: %w", err)
+		}
+	}
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -819,7 +898,7 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// back — so the merge order here ensures both the actuator-driven
 	// VoteCount and the consensus-driven counter updates land together
 	// instead of one overwriting the other. (D-2.c root-cause fix.)
-	statedb.FlushWitnesses(bc.buffer)
+	statedb.FlushWitnesses()
 
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
@@ -831,6 +910,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	dpos.ApplyBlockStatistics(statedb, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 	stats.mark(&stats.Execute)
+	if err := stagePipeline.Advance(rawdb.StageExecution); err != nil {
+		return err
+	}
 
 	// Run maintenance if at boundary (before commit so allowances are included).
 	wasMaintenanceBlock := false
@@ -876,14 +958,14 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 			// tryRemoveThePowerOfTheGr mutates witness VoteCount before the
 			// java-tron reward-VI step. The earlier FlushWitnesses ran before
 			// maintenance, so drain this mutation now.
-			statedb.FlushWitnesses(bc.buffer)
+			statedb.FlushWitnesses()
 
 			// java-tron accumulates reward VI before VotesStore old/new deltas
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
 			applyRewardVI(bc.buffer, statedb, dynProps)
 			hasPendingVotes := applyPendingVotes(statedb)
-			statedb.FlushWitnesses(bc.buffer)
+			statedb.FlushWitnesses()
 			maintNewWitnesses = bc.ActiveWitnesses()
 			if hasPendingVotes {
 				allWitnesses = bc.gatherWitnessVotes(statedb)
@@ -925,26 +1007,11 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	}
 	stats.mark(&stats.Maintenance)
 
-	// Verify state root if the block carries one (java-tron sets this on
-	// post-fork blocks via the AccountStateCallBack hook) before committing
-	// the full StateDB. Commit writes flat contract storage/code alongside
-	// trie nodes; doing it after this check keeps a rejected java-tron block
-	// from contaminating the parent state used by the next retry.
-	if blockRoot != (tcommon.Hash{}) && blockRoot != javaAccountStateRoot {
-		return fmt.Errorf("state root mismatch: block=%x computed=%x", blockRoot, javaAccountStateRoot)
-	}
-
-	// State History Index (SHI) capture. Walks the per-block journal and
-	// flushes pre-block account / slot / code / contract-meta deltas to
-	// bc.buffer so switchFork's DiscardBlock rewinds them along with the
-	// other buffered writes for this layer. Must run BEFORE statedb.Commit,
-	// which truncates the journal; the belt-and-braces config gate here
-	// skips the function call entirely on non-archive operators (StateDB
-	// also short-circuits internally, this guard just avoids the call cost).
-	if bc.config.HistoryEnabled {
-		if err := statedb.AccumulateHistory(bc.buffer, block.Number(), block.Hash()); err != nil {
-			return fmt.Errorf("accumulate state history: %w", err)
-		}
+	// Verify java-tron's header accountStateRoot, if present, before committing
+	// the internal StateDB root. The two roots intentionally use different
+	// domains; only the adapter knows how to interpret the wire root.
+	if err := defaultStateRootAdapter.ValidateJavaAccountStateRoot(blockRoot, javaAccountStateRoot); err != nil {
+		return err
 	}
 
 	// Update dynamic properties and fork-vote state before Commit so every
@@ -969,36 +1036,22 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	if err := dynProps.FlushRooted(statedb); err != nil {
 		return fmt.Errorf("flush rooted dynamic properties: %w", err)
 	}
-	if bc.config.HistoryEnabled {
-		statedb.SetDomainChangeSetWriter(bc.buffer, block.Number(), block.Hash())
+	if domainChangeStage != nil {
+		if err := domainChangeStage.FlushFinal(); err != nil {
+			return fmt.Errorf("flush block-final domain changes: %w", err)
+		}
 	}
 
 	// Commit state (includes both tx execution and maintenance changes).
 	commitOpts := bc.stateCommitOptions(block, wasMaintenanceBlock)
-	newRoot, commitStats, err := statedb.CommitWithStatsOptions(commitOpts)
+	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
 	if err != nil {
-		return fmt.Errorf("commit state: %w", err)
+		return err
 	}
-	if commitOpts.RebuildDeferredAccountKVRoots {
-		bc.deferredKVCommitOwners = make(map[tcommon.Address]struct{})
-	}
-	stats.StateCommitDetail = commitStats
+	newRoot := commitResult.Root
+	stats.StateCommitDetail = commitResult.Stats
 	bc.updateSystemAccountCache(statedb)
 	bc.updateRewardAccountCache(statedb, rewardAcctAddrs)
-	if bc.config.StateCommitmentCheckpoints {
-		domainRoot, err := rawdb.ComputeLatestDomainRoot(bc.buffer)
-		if err != nil {
-			return fmt.Errorf("compute domain commitment checkpoint: %w", err)
-		}
-		if err := rawdb.WriteStateCommitmentCheckpoint(bc.buffer, &rawdb.StateCommitmentCheckpoint{
-			BlockNum:  block.Number(),
-			BlockHash: block.Hash(),
-			Root:      domainRoot,
-			Scheme:    rawdb.LatestDomainCommitmentScheme,
-		}); err != nil {
-			return fmt.Errorf("write domain commitment checkpoint: %w", err)
-		}
-	}
 
 	stats.mark(&stats.StateCommit)
 
@@ -1054,6 +1107,9 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 		h(block)
 	}
 	stats.mark(&stats.Hooks)
+	if err := stagePipeline.Advance(rawdb.StageFinish); err != nil {
+		return err
+	}
 
 	// Promote the buffer layer to the layered stack. Slice 1 introduced the
 	// layered stack; slice 2 adds the flush-at-solidified policy below.
@@ -1063,11 +1119,54 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	// async flusher. Layers above solidified stay in memory and remain
 	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
 	// invariant that Manager.eraseBlock can never pop past solidified.
-	if err := bc.postFlush(dynProps.LatestSolidifiedBlockNum()); err != nil {
+	solidified := dynProps.LatestSolidifiedBlockNum()
+	if err := plan.FlushLatestUpTo(solidified, bc.blockNumberOf); err != nil {
+		return err
+	}
+	if err := bc.postFlush(solidified); err != nil {
 		return err
 	}
 	stats.mark(&stats.Persist)
 	return nil
+}
+
+type stateTxRangeAllocator struct {
+	enabled        bool
+	parentEndTxNum uint64
+}
+
+func (bc *BlockChain) newStateTxRangeAllocator(parentBlockNum uint64) (*stateTxRangeAllocator, error) {
+	if bc.config == nil || !bc.config.HistoryEnabled {
+		return &stateTxRangeAllocator{}, nil
+	}
+	if bc.stateTxRangeSeedHook != nil {
+		bc.stateTxRangeSeedHook(parentBlockNum)
+	}
+	parentEndTxNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(bc.buffer, parentBlockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read state tx range seed at block %d: %w", parentBlockNum, err)
+	}
+	return &stateTxRangeAllocator{
+		enabled:        true,
+		parentEndTxNum: parentEndTxNum,
+	}, nil
+}
+
+func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, error) {
+	if a == nil || !a.enabled || block == nil {
+		return nil, nil
+	}
+	beginTxNum, endTxNum, err := rawdb.NextStateTxRange(a.parentEndTxNum, uint64(len(block.Transactions())))
+	if err != nil {
+		return nil, err
+	}
+	a.parentEndTxNum = endTxNum
+	return &rawdb.StateTxRange{
+		BlockNum:   block.Number(),
+		BlockHash:  block.Hash(),
+		BeginTxNum: beginTxNum,
+		EndTxNum:   endTxNum,
+	}, nil
 }
 
 func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
@@ -1117,14 +1216,15 @@ func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
 	if solidified <= 0 {
 		return nil
 	}
-	numberOf := func(h tcommon.Hash) (uint64, bool) {
-		p := rawdb.ReadBlockNumber(bc.chaindb, h)
-		if p == nil {
-			return 0, false
-		}
-		return *p, true
+	return bc.buffer.FlushUpTo(uint64(solidified), bc.blockNumberOf, bc.db)
+}
+
+func (bc *BlockChain) blockNumberOf(h tcommon.Hash) (uint64, bool) {
+	p := rawdb.ReadBlockNumber(bc.chaindb, h)
+	if p == nil {
+		return 0, false
 	}
-	return bc.buffer.FlushUpTo(uint64(solidified), numberOf, bc.db)
+	return *p, true
 }
 
 // startFlushWorker spawns the background goroutine that drains flushQueue
@@ -1295,7 +1395,14 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// worker holds only the buffer's internal mu, so this can't deadlock.
 	bc.flushPending.wait()
 
-	currentHash := bc.CurrentBlock().Hash()
+	current := bc.CurrentBlock()
+	if current == nil {
+		return errors.New("current block is nil")
+	}
+	currentHash := current.Hash()
+	if err := verifyCanonicalStagePipelineHead(bc.buffer, current.Number(), currentHash); err != nil {
+		return fmt.Errorf("verify canonical stage head before fork rewind: %w", err)
+	}
 	newBranch, oldBranch, err := bc.khaosDB.GetBranch(newHead.Hash(), currentHash)
 	if err != nil {
 		// Can't find LCA: discard the entire new branch from KhaosDB.
@@ -1362,22 +1469,29 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 
 	// Rewind currentBlock to LCA so that applyBlock reads the correct parent root.
 	bc.currentBlock.Store(lcaBlock)
+	if err := rewindCanonicalStagePipeline(bc.db, lcaBlock.Number(), lcaBlock.Hash()); err != nil {
+		return fmt.Errorf("rewind canonical stage progress to LCA %d: %w", lcaBlock.Number(), err)
+	}
 
 	// Apply new branch blocks in order LCA+1 → newHead.
 	reversed := make([]*types.Block, len(newBranch))
 	for i, kb := range newBranch {
 		reversed[len(newBranch)-1-i] = kb.block
 	}
-	for _, b := range reversed {
-		if err := bc.applyBlock(b); err != nil {
-			// Remove orphaned new-branch blocks from KhaosDB.
-			for _, kb := range newBranch {
-				bc.khaosDB.RemoveBlk(kb.block.Hash())
+	forkExecutor := newCanonicalRangeExecutor(bc, true)
+	if len(reversed) > 0 {
+		for _, b := range reversed {
+			if err := forkExecutor.Apply(b); err != nil {
+				// Remove orphaned new-branch blocks from KhaosDB.
+				for _, kb := range newBranch {
+					bc.khaosDB.RemoveBlk(kb.block.Hash())
+				}
+				forkExecutor.Reset()
+				return fmt.Errorf("apply fork block %d: %w", b.Number(), err)
 			}
-			return fmt.Errorf("apply fork block %d: %w", b.Number(), err)
 		}
 	}
-	return nil
+	return forkExecutor.Close()
 }
 
 // LastInsertTime returns when the last block was successfully inserted.
@@ -1537,15 +1651,69 @@ func (bc *BlockChain) sysKVAt(root tcommon.Hash) *state.StateDB {
 	if root == (tcommon.Hash{}) {
 		return nil
 	}
-	sysKV, err := state.New(root, bc.stateDB)
+	sysKV, err := bc.openState(root)
 	if err != nil {
 		return nil
 	}
-	if bc.config != nil && bc.config.EffectiveStateCommitmentMode() == params.StateCommitmentModeLatest {
-		sysKV.SetAccountKVIndexStore(bc.buffer)
-		sysKV.SetAccountKVIndexReads(true)
-	}
 	return sysKV
+}
+
+func (bc *BlockChain) openState(root tcommon.Hash) (*state.StateDB, error) {
+	if bc.stateOpenHook != nil {
+		bc.stateOpenHook(root)
+	}
+	statedb, err := state.New(root, bc.stateDB)
+	if err != nil {
+		return nil, err
+	}
+	if err := bc.prepareOpenState(statedb); err != nil {
+		return nil, err
+	}
+	return statedb, nil
+}
+
+func (bc *BlockChain) openCurrentState() (*state.StateDB, error) {
+	current := bc.CurrentBlock()
+	root := rawdb.ReadBlockStateRoot(bc.chaindb, current.Hash())
+	if root == (tcommon.Hash{}) && current.Number() == 0 {
+		root = rawdb.ReadGenesisStateRoot(bc.db)
+	}
+	if root == (tcommon.Hash{}) {
+		// Backwards-compat fallback for chain databases written before
+		// blockStateRootPrefix existed.
+		root = current.AccountStateRoot()
+	}
+	return bc.openState(root)
+}
+
+func (bc *BlockChain) prepareOpenState(statedb *state.StateDB) error {
+	if err := bc.configureStateCodeColdHistory(statedb); err != nil {
+		return err
+	}
+	statedb.SetAccountKVIndexStore(bc.buffer)
+	statedb.SetAccountKVIndexReads(true)
+	return nil
+}
+
+func (bc *BlockChain) configureStateCodeColdHistory(statedb *state.StateDB) error {
+	if statedb == nil || (bc.stateCodeColdHistory == nil && bc.stateCommitmentColdHistory == nil) {
+		return nil
+	}
+	head := bc.CurrentBlock()
+	if head == nil {
+		return nil
+	}
+	txNum, err := snapshots.StateDomainHistoryTxNumAtBlockEnd(bc.db, head.Number())
+	if err != nil {
+		return err
+	}
+	if bc.stateCodeColdHistory != nil {
+		statedb.SetCodeColdHistory(bc.stateCodeColdHistory, txNum)
+	}
+	if bc.stateCommitmentColdHistory != nil {
+		statedb.SetCommitmentColdHistory(bc.stateCommitmentColdHistory, txNum)
+	}
+	return nil
 }
 
 func (bc *BlockChain) cachedDynProps() *state.DynamicProperties {
@@ -1742,7 +1910,7 @@ func (bc *BlockChain) ValidateTransaction(tx *types.Transaction) error {
 	if err := ValidateTxCommon(tx, bc.CurrentBlock().Timestamp()); err != nil {
 		return err
 	}
-	statedb, err := state.New(bc.HeadStateRoot(), bc.stateDB)
+	statedb, err := bc.openState(bc.HeadStateRoot())
 	if err != nil {
 		return fmt.Errorf("open head state for tx validation: %w", err)
 	}

@@ -46,6 +46,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
+	if err := bc.configureStateCodeColdHistory(statedb); err != nil {
+		return nil, fmt.Errorf("configure cold code history: %w", err)
+	}
 
 	// Throwaway buffer: all rawdb-accumulator writes during block assembly
 	// (cycle rewards, brokerage snapshots, VI accumulations) go here and are
@@ -112,7 +115,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	var accountStateRoot tcommon.Hash
 	if dynProps.AllowAccountStateRoot() {
-		accountStateRoot, err = statedb.JavaAccountStateRoot(parent.AccountStateRoot(), accountStateMark)
+		accountStateRoot, err = defaultStateRootAdapter.JavaAccountStateRoot(statedb, parent.AccountStateRoot(), accountStateMark)
 		if err != nil {
 			return nil, fmt.Errorf("account state root: %w", err)
 		}

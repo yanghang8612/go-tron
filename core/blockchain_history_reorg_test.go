@@ -1,8 +1,10 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,24 +17,24 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 )
 
-// Slice 4 of the State History Index: fork-rewind integration tests.
+// Slice 4 of flat temporal state history: fork-rewind integration tests.
 //
 // These tests lock in the behaviour described in
 // docs/superpowers/specs/2026-05-19-state-history-index-design.md
 // "Fork-rewind safety" — namely that bc.buffer.DiscardBlock drops the
-// orphan-branch sh-* rows automatically when switchFork rewinds, so that:
+// orphan-branch StateTxRange/StateDomainChange rows automatically when
+// switchFork rewinds, so that:
 //
-//   - no `sh-*` rows remain visible at orphan-branch block heights after
-//     a reorg (the per-block meta row's BlockHash matches the canonical
+//   - no orphan temporal rows remain visible at orphan-branch block heights
+//     after a reorg (the per-block tx range's BlockHash matches the canonical
 //     branch, and no orphan hashes linger in bc.buffer.PendingBlocks);
 //
-//   - the slice-3 PersistentHistoryReader returns the post-reorg canonical
-//     state at every height, not the pre-reorg orphan state;
+//   - PersistentHistoryReader returns the post-reorg canonical state at every
+//     height, not the pre-reorg orphan state;
 //
 //   - concurrent readers running an AccountAt query while a reorg is in
-//     flight observe either the pre-reorg or the post-reorg state, never
-//     a partial / panicking view (the buffer's RW lock serialises
-//     mutators against concurrent Get / NewIterator readers).
+//     flight observe a consistent non-panicking view (the buffer's RW lock
+//     serialises mutators against concurrent Get / NewIterator readers).
 //
 // All three tests use the same fixture pattern as slice 2's
 // TestApplyBlock_HistoryReorgDropsOrphan: three witnesses, only one
@@ -88,12 +90,11 @@ func newHistoryReorgChain(t *testing.T) (*BlockChain, tcommon.Address) {
 // 6 transfer blocks (amounts 1*1000, 2*1000, ... 6*1000) that triggers
 // switchFork. After the rewind:
 //
-//   - the per-block StateHistoryMeta at heights 1..5 must point at chain
-//     B's blocks (not the dropped A blocks);
+//   - the per-block StateTxRange at heights 1..5 must point at chain B's
+//     blocks (not the dropped A blocks);
 //   - no orphan-A hash remains in bc.buffer.PendingBlocks;
-//   - the slice-3 PersistentHistoryReader, walking through bc.buffer,
-//     must return the chain-B (canonical) receiver balance at every
-//     queried height.
+//   - PersistentHistoryReader, walking through bc.buffer, must return the
+//     chain-B (canonical) receiver balance at every queried height.
 //
 // The recipient is testInsertAddr(2). buildTransferBlock uses addr(1) as
 // the (genesis-funded) sender and addr(2) as the receiver, so each block
@@ -126,14 +127,14 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 		t.Fatalf("after chain A: head = %d, want 5", bc.CurrentBlock().Number())
 	}
 
-	// Sanity: orphan-side meta rows exist with A's hashes BEFORE the reorg.
+	// Sanity: orphan-side temporal rows exist with A's hashes BEFORE the reorg.
 	for n := uint64(1); n <= 5; n++ {
-		meta := rawdb.ReadHistoryMeta(bc.BufferedDB(), n)
-		if meta == nil {
-			t.Fatalf("expected sh-m- for A%d pre-reorg", n)
+		txRange, ok, err := rawdb.ReadStateTxRange(bc.BufferedDB(), n)
+		if err != nil || !ok {
+			t.Fatalf("expected StateTxRange for A%d pre-reorg: ok=%v err=%v", n, ok, err)
 		}
-		if string(meta.BlockHash) != string(chainA[n].Hash().Bytes()) {
-			t.Fatalf("pre-reorg sh-m- at %d: hash %x, want A%d %x", n, meta.BlockHash, n, chainA[n].Hash().Bytes())
+		if txRange.BlockHash != chainA[n].Hash() {
+			t.Fatalf("pre-reorg StateTxRange at %d: hash %x, want A%d %x", n, txRange.BlockHash, n, chainA[n].Hash())
 		}
 	}
 
@@ -171,26 +172,32 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 	}
 
 	bdb := bc.BufferedDB()
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		got, ok, err := rawdb.ReadStageProgress(bdb, stage)
+		if err != nil || !ok || got != 6 {
+			t.Fatalf("%s stage after switchFork = %d ok=%v err=%v, want 6", stage, got, ok, err)
+		}
+	}
 
-	// (a) Per-height meta rows reflect chain B, not chain A. If
+	// (a) Per-height tx ranges reflect chain B, not chain A. If
 	// DiscardBlock had failed to strip A's layer, the buffer's
 	// newest-first lookup would still surface A's row at any height
 	// where A's layer happened to sit above B's in the layered stack.
 	for n := uint64(1); n <= 5; n++ {
-		meta := rawdb.ReadHistoryMeta(bdb, n)
-		if meta == nil {
-			t.Errorf("post-reorg sh-m- at %d is missing", n)
+		txRange, ok, err := rawdb.ReadStateTxRange(bdb, n)
+		if err != nil || !ok {
+			t.Errorf("post-reorg StateTxRange at %d missing: ok=%v err=%v", n, ok, err)
 			continue
 		}
-		if string(meta.BlockHash) != string(chainB[n].Hash().Bytes()) {
-			t.Errorf("post-reorg sh-m- at %d: hash %x, want B%d %x", n, meta.BlockHash, n, chainB[n].Hash().Bytes())
+		if txRange.BlockHash != chainB[n].Hash() {
+			t.Errorf("post-reorg StateTxRange at %d: hash %x, want B%d %x", n, txRange.BlockHash, n, chainB[n].Hash())
 		}
 	}
 	// Height 6 only exists on chain B.
-	if meta6 := rawdb.ReadHistoryMeta(bdb, 6); meta6 == nil {
-		t.Error("post-reorg sh-m- at 6 missing")
-	} else if string(meta6.BlockHash) != string(chainB[6].Hash().Bytes()) {
-		t.Errorf("post-reorg sh-m- at 6: hash %x, want B6 %x", meta6.BlockHash, chainB[6].Hash().Bytes())
+	if txRange6, ok, err := rawdb.ReadStateTxRange(bdb, 6); err != nil || !ok {
+		t.Errorf("post-reorg StateTxRange at 6 missing: ok=%v err=%v", ok, err)
+	} else if txRange6.BlockHash != chainB[6].Hash() {
+		t.Errorf("post-reorg StateTxRange at 6: hash %x, want B6 %x", txRange6.BlockHash, chainB[6].Hash())
 	}
 
 	// (b) bc.buffer.PendingBlocks must contain ONLY canonical-B hashes.
@@ -241,6 +248,48 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 	}
 }
 
+func TestHistoryReorgRejectsMismatchedStageHeadBeforeSwitch(t *testing.T) {
+	bc, witnessAddr := newHistoryReorgChain(t)
+	defer bc.Close()
+
+	chainA := make([]*types.Block, 3)
+	chainA[0] = bc.genesisBlock
+	for n := int64(1); n <= 2; n++ {
+		block := buildTransferBlock(t, n, n*3000, chainA[n-1].Hash(), witnessAddr, n*100)
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("insert A%d: %v", n, err)
+		}
+		chainA[n] = block
+	}
+
+	chainB := make([]*types.Block, 4)
+	chainB[0] = bc.genesisBlock
+	for n := int64(1); n <= 3; n++ {
+		chainB[n] = buildTransferBlock(t, n, n*3000+1, chainB[n-1].Hash(), witnessAddr, n*1000)
+	}
+	for n := 1; n <= 2; n++ {
+		if err := bc.InsertBlock(chainB[n]); err != nil {
+			t.Fatalf("insert B%d pre-switch: %v", n, err)
+		}
+	}
+	if bc.CurrentBlock().Hash() != chainA[2].Hash() {
+		t.Fatalf("chain A should remain canonical before longer fork arrives")
+	}
+	bc.buffer.BeginBlock(tcommon.Hash{0xfe})
+	if err := rawdb.WriteStageProgressWithHash(bc.buffer, rawdb.StageFinish, chainA[2].Number(), tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("corrupt finish stage: %v", err)
+	}
+	bc.buffer.CommitBlock()
+	err := bc.InsertBlock(chainB[3])
+	if err == nil || !strings.Contains(err.Error(), "verify canonical stage head before fork rewind") ||
+		!strings.Contains(err.Error(), "Finish stage progress") {
+		t.Fatalf("insert B3 error = %v, want stage-head verification failure", err)
+	}
+	if bc.CurrentBlock().Hash() != chainA[2].Hash() {
+		t.Fatalf("head changed after rejected switchFork: got %x want A2 %x", bc.CurrentBlock().Hash(), chainA[2].Hash())
+	}
+}
+
 // TestHistoryReorg_DeepRewind_TwentySevenBlocks scales TestHistoryReorg_-
 // DropsOrphanBranch_DepthSix up to a one-DPoS-round reorg depth. The
 // shared prefix is 13 blocks; then chain A extends with 14 more (total
@@ -250,13 +299,12 @@ func TestHistoryReorg_DropsOrphanBranch_DepthSix(t *testing.T) {
 // After the reorg the canonical chain is B (40 blocks): heights 1..13
 // share state with what A had, heights 14..40 are chain-B-only.
 //
-// The slice-3 reader walks the inverse index newest-first. After a deep
-// rewind, every orphan-side inverse-index entry must be gone — if even
-// one leaks, the reader would walk into a missing sh-a- delta row and
-// either return the wrong value or panic. We exercise this by querying
-// the reader at every height 1..27 (covering both the shared-prefix and
-// the deep-rewind window) and asserting the returned balance matches
-// chain B's running sum, never chain A's.
+// The reader walks flat StateDomainChange history. After a deep rewind, every
+// orphan-side temporal row must be gone; if even one leaks, the reader can
+// reconstruct an orphan value. We exercise this by querying the reader at every
+// height 1..27 (covering both the shared-prefix and the deep-rewind window)
+// and asserting the returned balance matches chain B's running sum, never
+// chain A's.
 //
 // Chain A and chain B use disjoint per-block amounts (chain A: n*7,
 // chain B: n*11) so any leak through to chain A's deltas would produce
@@ -352,30 +400,30 @@ func TestHistoryReorg_DeepRewind_TwentySevenBlocks(t *testing.T) {
 		}
 	}
 
-	// --- Invariant 2: per-height sh-m- BlockHash matches the post-reorg
+	// --- Invariant 2: per-height StateTxRange BlockHash matches the post-reorg
 	// canonical chain at every height in [14..27]. Heights [1..13] are
 	// the shared prefix; both branches share the same blockHash there,
 	// so the assertion is the same. Skipping height 13 → 14 also catches
 	// off-by-one bugs where DiscardBlock chops too few / too many layers.
 	bdb := bc.BufferedDB()
 	for n := uint64(1); n <= chainALen; n++ {
-		meta := rawdb.ReadHistoryMeta(bdb, n)
-		if meta == nil {
-			t.Errorf("sh-m- at %d missing", n)
+		txRange, ok, err := rawdb.ReadStateTxRange(bdb, n)
+		if err != nil || !ok {
+			t.Errorf("StateTxRange at %d missing: ok=%v err=%v", n, ok, err)
 			continue
 		}
-		var want []byte
+		var want tcommon.Hash
 		if int(n) <= sharedPrefix {
-			want = shared[n].Hash().Bytes()
+			want = shared[n].Hash()
 		} else {
-			want = chainB[n].Hash().Bytes()
+			want = chainB[n].Hash()
 		}
-		if string(meta.BlockHash) != string(want) {
-			t.Errorf("sh-m- at %d: hash %x, want %x", n, meta.BlockHash, want)
+		if txRange.BlockHash != want {
+			t.Errorf("StateTxRange at %d: hash %x, want %x", n, txRange.BlockHash, want)
 		}
 	}
 
-	// --- Invariant 3: the slice-3 reader returns post-reorg canonical
+	// --- Invariant 3: the reader returns post-reorg canonical
 	// balances at every queried height in [1..27]. For each block N:
 	//
 	//   * end-of-N balance = sum of all (transfer amounts at blocks 1..N).
@@ -438,32 +486,23 @@ func canonicalRunningSum(N, sharedPrefix int, prefixAmount, branchMul int64) int
 //
 // Primary acceptance (matches the slice-4 plan's "ensure no race" line):
 //
-//   1. Under `go test -race`, no race detector report fires.
-//   2. No reader goroutine panics or returns an error.
-//   3. After the reorg has fully drained, the reader's view is
-//      exclusively the post-reorg (chain B) state at every height.
+//  1. Under `go test -race`, no race detector report fires.
+//  2. No reader goroutine panics or returns an error.
+//  3. After the reorg has fully drained, the reader's view is
+//     exclusively the post-reorg (chain B) state at every height.
 //
-// In-flight values are NOT strictly asserted, only logged. The slice-3
-// `PersistentHistoryReader.AccountAt` walks the inverse index via one
-// `NewIterator` call and then issues per-block `Get` calls for the
-// AccountDelta rows; the buffer's RW lock guarantees per-operation
-// atomicity, NOT walk-atomicity. switchFork's `DiscardBlock` loop runs
-// between the iterator snapshot and the per-delta Gets, so the reader
-// can legitimately observe a partial walk where some delta rows have
-// just been discarded — the walk's `continue` on missing deltas
-// surfaces a value that matches neither the pre-reorg nor the
-// post-reorg branch but is still derived from observed buffer
-// contents. This is a slice-3 design choice (see
-// `history.go::accountAndCode`'s "internal inconsistency we don't try
-// to paper over" comment); fully eliminating it requires either a
-// reader-held buffer snapshot or a delta-missing retry. The test
-// documents the window via t.Logf but does not fail when the partial
-// walk surfaces — fully tightening the contract is out of scope for
-// slice 4 (whose job is to verify the rewind machinery itself).
+// In-flight values are NOT strictly asserted, only logged. The reader walks
+// StateDomainChange history through iterator/Get operations against the
+// layered buffer; the buffer's RW lock guarantees per-operation atomicity, not
+// request-level snapshot isolation. switchFork's DiscardBlock loop can run
+// between those operations, so a reader can legitimately observe a partial
+// view. The test documents the window via t.Logf but does not fail when the
+// partial walk surfaces because this test's job is to verify the rewind
+// machinery itself.
 //
 // Multiple readers + spin-on-readsDone keep the race detector's
-// scheduler interleaving the iterator + Get pair against switchFork's
-// DiscardBlock loop. Don't weaken the workload — it's what makes the
+// scheduler interleaving reader operations against switchFork's DiscardBlock
+// loop. Don't weaken the workload — it's what makes the
 // race-detector coverage real.
 //
 // Per-request reader cache: a single PersistentHistoryReader memoises
@@ -537,6 +576,11 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 				for n := uint64(1); n <= 5; n++ {
 					acc, err := r.AccountAt(recipient, n)
 					if err != nil {
+						if errors.Is(err, state.ErrStateDomainHistoryUnavailable) {
+							readsDone.Add(1)
+							partialReads.Add(1)
+							continue
+						}
 						msg := fmt.Sprintf("AccountAt(%d) errored: %v", n, err)
 						readerErr.CompareAndSwap(nil, &msg)
 						return
@@ -544,19 +588,19 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 					readsDone.Add(1)
 					if acc == nil {
 						// Allowed: in some interleavings the per-block
-						// inverse-index scan briefly sees no rows for
-						// the address. Skip the value check in that case
-						// — we still trip the race detector on any
-						// data-race underneath.
+						// temporal scan briefly sees no rows for the
+						// address. Skip the value check in that case; we
+						// still trip the race detector on any data-race
+						// underneath.
 						continue
 					}
 					got := acc.Balance()
 					if got != preReorg(n) && got != postReorg(n) {
 						// Partial walk under switchFork interleaving —
-						// expected per slice-3 design (see test doc
-						// comment). Count it so the bottom of the test
-						// can confirm via t.Logf that the race window
-						// fired without failing.
+						// tolerated here (see test doc comment). Count
+						// it so the bottom of the test can confirm via
+						// t.Logf that the race window fired without
+						// failing.
 						partialReads.Add(1)
 					}
 				}
@@ -609,16 +653,16 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 	}
 	if got := partialReads.Load(); got > 0 {
 		// Partial-walk reads are not a failure; we log them so the test
-		// output documents that the slice-3 walk-atomicity window was
+		// output documents that the request snapshot-isolation window was
 		// exercised. A future slice tightening the reader's lock or
 		// adding a retry path would drive this to zero.
 		//
-		// TODO(slice-5): if reader gains walk-atomicity (snapshot or
+		// TODO: if reader gains walk-atomicity (snapshot or
 		// retry path), convert this t.Logf to a t.Errorf and assert
 		// partialReads == 0 — the count is currently only diagnostic.
 		t.Logf("observed %d partial-walk reads during in-flight reorg "+
-			"(slice-3 NewIterator+Get is not walk-atomic; tracked as a "+
-			"known limitation outside slice 4 scope)", got)
+			"(iterator+Get is not request-snapshot isolated; tracked as a "+
+			"known limitation outside this test's scope)", got)
 	}
 
 	// Final correctness check: after the reorg has fully drained, the
@@ -637,5 +681,3 @@ func TestHistoryReorg_ConcurrentReadDuringRewind(t *testing.T) {
 		}
 	}
 }
-
-

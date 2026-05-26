@@ -7,7 +7,9 @@ import (
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -29,39 +31,39 @@ func TestIntegrationDeployAndCall(t *testing.T) {
 	// Else:
 	//   PUSH1 0 → SLOAD → PUSH1 0 → MSTORE → PUSH1 32 → PUSH1 0 → RETURN
 	runtime := []byte{
-		byte(PUSH1), 0x20,   // 0x00-0x01: push 32
-		byte(CALLDATASIZE),  // 0x02: push calldatasize
-		byte(LT),            // 0x03: calldatasize < 32 ?
-		byte(PUSH1), 0x0f,   // 0x04-0x05: jump target for GET
-		byte(JUMPI),         // 0x06
+		byte(PUSH1), 0x20, // 0x00-0x01: push 32
+		byte(CALLDATASIZE), // 0x02: push calldatasize
+		byte(LT),           // 0x03: calldatasize < 32 ?
+		byte(PUSH1), 0x0f,  // 0x04-0x05: jump target for GET
+		byte(JUMPI), // 0x06
 		// SET path (calldatasize >= 32)
-		byte(PUSH1), 0x00,   // 0x07-0x08
-		byte(CALLDATALOAD),  // 0x09
-		byte(PUSH1), 0x00,   // 0x0a-0x0b
-		byte(SSTORE),        // 0x0c
-		byte(STOP),          // 0x0d
-		byte(STOP),          // 0x0e: padding
+		byte(PUSH1), 0x00, // 0x07-0x08
+		byte(CALLDATALOAD), // 0x09
+		byte(PUSH1), 0x00,  // 0x0a-0x0b
+		byte(SSTORE), // 0x0c
+		byte(STOP),   // 0x0d
+		byte(STOP),   // 0x0e: padding
 		// GET path at 0x0f
-		byte(JUMPDEST),      // 0x0f
-		byte(PUSH1), 0x00,   // 0x10-0x11
-		byte(SLOAD),         // 0x12
-		byte(PUSH1), 0x00,   // 0x13-0x14
-		byte(MSTORE),        // 0x15
-		byte(PUSH1), 0x20,   // 0x16-0x17
-		byte(PUSH1), 0x00,   // 0x18-0x19
-		byte(RETURN),        // 0x1a
+		byte(JUMPDEST),    // 0x0f
+		byte(PUSH1), 0x00, // 0x10-0x11
+		byte(SLOAD),       // 0x12
+		byte(PUSH1), 0x00, // 0x13-0x14
+		byte(MSTORE),      // 0x15
+		byte(PUSH1), 0x20, // 0x16-0x17
+		byte(PUSH1), 0x00, // 0x18-0x19
+		byte(RETURN), // 0x1a
 	}
 
 	// Init code: CODECOPY runtime to memory, RETURN it
 	runtimeLen := len(runtime)
 	initCode := []byte{
 		byte(PUSH1), byte(runtimeLen), // size
-		byte(DUP1),                    // dup for RETURN
-		byte(PUSH1), 0x00,             // placeholder: codeOffset (= len(initCode))
-		byte(PUSH1), 0x00,             // memOffset
+		byte(DUP1),        // dup for RETURN
+		byte(PUSH1), 0x00, // placeholder: codeOffset (= len(initCode))
+		byte(PUSH1), 0x00, // memOffset
 		byte(CODECOPY),                // copy runtime to memory
 		byte(PUSH1), byte(runtimeLen), // size for RETURN
-		byte(PUSH1), 0x00,             // offset for RETURN
+		byte(PUSH1), 0x00, // offset for RETURN
 		byte(RETURN),
 	}
 	initCode[4] = byte(len(initCode)) // fix the CODECOPY source offset
@@ -106,6 +108,63 @@ func TestIntegrationDeployAndCall(t *testing.T) {
 		t.Fatalf("expected 42, got %d", val)
 	}
 	t.Logf("GET returned %d", val)
+}
+
+func TestIntegrationCallUsesColdCodeDomainAfterHotCodePrune(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	owner := tcommon.Address{0x41, 0x01}
+	contract := tcommon.Address{0x41, 0x02}
+	sdb.AddBalance(owner, 1_000_000_000_000)
+	code := []byte{
+		byte(PUSH1), 0x42,
+		byte(PUSH1), 0x00,
+		byte(MSTORE),
+		byte(PUSH1), 0x20,
+		byte(PUSH1), 0x00,
+		byte(RETURN),
+	}
+	codeHash := tcommon.Keccak256(code)
+	sdb.SetCode(contract, code)
+	root, err := sdb.Commit()
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	dir := t.TempDir()
+	codeRef, accessorRef, btreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(diskdb, dir, 1, 1, "latest/code-1-1.seg")
+	if err != nil {
+		t.Fatalf("build code snapshot: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(1, 1, []statesnapshots.SegmentRef{codeRef, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(diskdb, codeHash); err != nil {
+		t.Fatalf("delete hot code: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	reloaded, err := state.New(root, db)
+	if err != nil {
+		t.Fatalf("reopen state: %v", err)
+	}
+	reloaded.SetCodeColdHistory(mgr, 1)
+
+	evm := NewTVM(reloaded, nil, owner, 1, 1000, tcommon.Address{}, 1, TVMConfig{})
+	ret, _, err := evm.StaticCall(owner, contract, nil, 1_000_000)
+	if err != nil {
+		t.Fatalf("static call after hot code prune: %v", err)
+	}
+	if len(ret) != 32 || ret[31] != 0x42 {
+		t.Fatalf("cold code static call returned %x, want trailing 0x42", ret)
+	}
 }
 
 func TestIntegrationStaticCall(t *testing.T) {

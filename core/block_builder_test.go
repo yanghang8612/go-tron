@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -91,6 +92,119 @@ func TestBuildBlock_AccountStateRootEnabledEmptyPool(t *testing.T) {
 	if got := result.Block.AccountStateRoot(); got != want {
 		t.Fatalf("accountStateRoot: got %x, want empty trie root %x", got, want)
 	}
+}
+
+func TestBuildThenInsert_JavaAccountStateRootIsSeparateFromInternalRoot(t *testing.T) {
+	bc, witnessAddr := newLatestModeAccountRootChain(t)
+
+	pool := txpool.New()
+	if err := pool.Add(makeTestTransferTx(1, 2, 1_000_000)); err != nil {
+		t.Fatalf("pool.Add: %v", err)
+	}
+
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	if err != nil {
+		t.Fatalf("BuildBlock: %v", err)
+	}
+	block := result.Block
+	javaRoot := block.AccountStateRoot()
+	if javaRoot == (tcommon.Hash{}) {
+		t.Fatal("built block should carry java accountStateRoot")
+	}
+	if javaRoot == tcommon.Hash(ethtypes.EmptyRootHash) {
+		t.Fatalf("transfer block accountStateRoot stayed at empty trie root: %x", javaRoot)
+	}
+
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+
+	internalRoot := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash())
+	if internalRoot == (tcommon.Hash{}) {
+		t.Fatal("internal block state root was not persisted")
+	}
+	if got := bc.HeadStateRoot(); got != internalRoot {
+		t.Fatalf("head state root = %x, persisted internal root = %x", got, internalRoot)
+	}
+	commitmentRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(bc.buffer)
+	if err != nil || !ok {
+		t.Fatalf("latest commitment root missing: ok=%v err=%v", ok, err)
+	}
+	if commitmentRoot != internalRoot {
+		t.Fatalf("commitment root = %x, internal root = %x", commitmentRoot, internalRoot)
+	}
+	if internalRoot == javaRoot {
+		t.Fatalf("internal CommitmentDomain root unexpectedly equals java accountStateRoot %x", javaRoot)
+	}
+	if got := bc.CurrentBlock().AccountStateRoot(); got != javaRoot {
+		t.Fatalf("stored block accountStateRoot = %x, built java root = %x", got, javaRoot)
+	}
+}
+
+func TestInsertBlock_RejectsMismatchedJavaAccountStateRoot(t *testing.T) {
+	bc, witnessAddr := newLatestModeAccountRootChain(t)
+
+	pool := txpool.New()
+	if err := pool.Add(makeTestTransferTx(1, 2, 1_000_000)); err != nil {
+		t.Fatalf("pool.Add: %v", err)
+	}
+	result, err := BuildBlock(bc, pool, witnessAddr, 3000)
+	if err != nil {
+		t.Fatalf("BuildBlock: %v", err)
+	}
+	block := result.Block
+	badRoot := block.AccountStateRoot()
+	if badRoot == (tcommon.Hash{}) {
+		t.Fatal("built block should carry java accountStateRoot")
+	}
+	badRoot[0] ^= 0xff
+	block.SetAccountStateRoot(badRoot)
+	block.ResetHash()
+
+	err = bc.InsertBlock(block)
+	if err == nil {
+		t.Fatal("InsertBlock succeeded with mismatched accountStateRoot")
+	}
+	if !strings.Contains(err.Error(), "state root mismatch") {
+		t.Fatalf("InsertBlock error = %v, want state root mismatch", err)
+	}
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("current block after failed insert = %d, want genesis", got)
+	}
+	if root := rawdb.ReadBlockStateRoot(bc.chaindb, block.Hash()); root != (tcommon.Hash{}) {
+		t.Fatalf("failed block persisted internal root %x", root)
+	}
+}
+
+func newLatestModeAccountRootChain(t *testing.T) (*BlockChain, tcommon.Address) {
+	t.Helper()
+
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	cfg := *params.MainnetChainConfig
+	cfg.StateCommitmentMode = params.StateCommitmentModeLatest
+
+	witnessAddr := testProcessorAddr(0xFF)
+	genesis := &params.Genesis{
+		Config:    &cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: testProcessorAddr(1), Balance: 100_000_000},
+			{Address: witnessAddr, Balance: 1_000_000},
+		},
+		DynamicProperties: map[string]int64{
+			"allow_account_state_root": 1,
+			"next_maintenance_time":    1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, sdb, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bc, witnessAddr
 }
 
 func TestBuildBlock_WithTransactions(t *testing.T) {
@@ -418,7 +532,7 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 
 	// Read allowance from post-apply state.
 	headRoot := bc.HeadStateRoot()
-	postState, err := state.New(headRoot, bc.StateDB())
+	postState, err := bc.openState(headRoot)
 	if err != nil {
 		t.Fatalf("open post state: %v", err)
 	}
