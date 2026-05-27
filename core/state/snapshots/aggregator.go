@@ -73,13 +73,6 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 	kvLatestDomains[SegmentDatasetKVLatest] = domains
 
 	var refs []SegmentRef
-	buildLatest := func(latestRef, accessorRef, btreeRef SegmentRef, err error) error {
-		if err != nil {
-			return err
-		}
-		refs = append(refs, latestRef, accessorRef, btreeRef)
-		return nil
-	}
 	registry := DefaultDomainRegistry()
 	for _, cfg := range registry.LatestConfigs() {
 		if cfg.BuildLatest == nil {
@@ -87,15 +80,19 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 		}
 		if cfg.DomainSpecific {
 			for _, domain := range kvLatestDomains[cfg.Dataset] {
-				if err := buildLatest(cfg.BuildLatest(db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts))); err != nil {
+				built, err := cfg.BuildLatest(db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts, cfg.latestPathExt()))
+				if err != nil {
 					return nil, err
 				}
+				refs = append(refs, built...)
 			}
 			continue
 		}
-		if err := buildLatest(cfg.BuildLatest(db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts))); err != nil {
+		built, err := cfg.BuildLatest(db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts, cfg.latestPathExt()))
+		if err != nil {
 			return nil, err
 		}
+		refs = append(refs, built...)
 	}
 	for _, cfg := range registry.HistoryConfigs() {
 		if cfg.BuildHistory == nil {
@@ -301,8 +298,11 @@ func aggregatePath(base string, opts AggregatorBuildOptions) string {
 	return fmt.Sprintf("%s-%d-%d.json", base, opts.FromTxNum, opts.ToTxNum)
 }
 
-func aggregateLatestPath(base string, opts AggregatorBuildOptions) string {
-	return fmt.Sprintf("%s-%d-%d.seg", base, opts.FromTxNum, opts.ToTxNum)
+func aggregateLatestPath(base string, opts AggregatorBuildOptions, ext string) string {
+	if ext == "" {
+		ext = ".seg"
+	}
+	return fmt.Sprintf("%s-%d-%d%s", base, opts.FromTxNum, opts.ToTxNum, ext)
 }
 
 func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {

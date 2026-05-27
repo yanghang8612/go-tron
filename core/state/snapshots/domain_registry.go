@@ -18,6 +18,7 @@ type DomainCfg struct {
 	Dataset                           SegmentDataset
 	DomainSpecific                    bool
 	LatestPathStem                    string
+	LatestPathExt                     string // default ".seg"; CommitmentBranch will use ".json"
 	HistoryPathStem                   string
 	HasLatest                         bool
 	HasLatestAccessor                 bool
@@ -82,7 +83,7 @@ type DomainRegistry struct {
 	ordered   []DomainCfg
 }
 
-type LatestSnapshotBuilder func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error)
+type LatestSnapshotBuilder func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error)
 
 type HotAccountLatestReader func(db ethdb.KeyValueReader, owner common.Address) ([]byte, bool, error)
 
@@ -165,8 +166,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatest:         true,
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildAccountLatestSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildAccountLatestSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 			ReadHotAccountLatest:    rawdb.ReadStateAccountLatest,
 			IterateHotAccountLatest: rawdb.IterateStateAccountLatest,
@@ -179,8 +184,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatest:         true,
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
-			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildLatestDomainSegmentFilesFromDB(db, dir, domain, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, domain kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildLatestDomainSegmentFilesFromDB(db, dir, domain, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 			ReadHotKVLatest:        rawdb.ReadStateKVLatest,
 			IterateHotKVLatestRows: rawdb.IterateStateKVLatestRows,
@@ -192,8 +201,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatest:         true,
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildKVGenerationSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildKVGenerationSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 			ReadHotKVGeneration:    rawdb.ReadStateKVGeneration,
 			IterateHotKVGeneration: rawdb.IterateStateKVGeneration,
@@ -205,8 +218,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatest:         true,
 			HasLatestAccessor: true,
 			HasLatestBTree:    true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildCodeSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildCodeSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 			ReadHotCode:    readHotStateCode,
 			IterateHotCode: rawdb.IterateStateCode,
@@ -220,8 +237,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor:     true,
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildCommitmentRootSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildCommitmentRootSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 		},
 		{
@@ -232,8 +253,12 @@ func DefaultDomainRegistry() DomainRegistry {
 			HasLatestAccessor:     true,
 			HasLatestBTree:        true,
 			TracksCommitmentFlush: true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildCommitmentCheckpointSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+				latest, accessor, btree, err := BuildCommitmentCheckpointSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
+				if err != nil {
+					return nil, err
+				}
+				return []SegmentRef{latest, accessor, btree}, nil
 			},
 			WriteHotCommitmentCheckpoint:      rawdb.WriteStateCommitmentCheckpoint,
 			ReadHotLatestCommitmentCheckpoint: rawdb.ReadLatestStateCommitmentCheckpoint,
@@ -383,6 +408,13 @@ func (cfg DomainCfg) LatestPathBase(domain kvdomains.KVDomain) string {
 		return fmt.Sprintf("%s-%04x", cfg.LatestPathStem, uint16(domain))
 	}
 	return cfg.LatestPathStem
+}
+
+func (cfg DomainCfg) latestPathExt() string {
+	if cfg.LatestPathExt == "" {
+		return ".seg"
+	}
+	return cfg.LatestPathExt
 }
 
 func (cfg DomainCfg) HistoryPath(fromTxNum, toTxNum uint64) string {
