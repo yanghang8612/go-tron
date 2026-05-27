@@ -2,7 +2,6 @@ package domains
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -55,92 +54,6 @@ type CommitmentBranchSnapshotSource interface {
 type CommitmentSnapshotRepair struct {
 	Source CommitmentSnapshotSource
 	TxNum  uint64
-}
-
-type rawDBLatestCommitmentStore struct {
-	db CommitmentDB
-}
-
-// NewRawDBLatestCommitmentStore builds the legacy incremental binary-radix
-// LatestCommitmentStore over db. This is the gate=false path.
-func NewRawDBLatestCommitmentStore(db CommitmentDB) LatestCommitmentStore {
-	return rawDBLatestCommitmentStore{db: db}
-}
-
-func (s rawDBLatestCommitmentStore) ReadRoot() (common.Hash, bool, error) {
-	return rawdb.ReadLatestDomainCommitmentRoot(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) WriteRoot(root common.Hash) error {
-	return rawdb.WriteLatestDomainCommitmentRoot(s.db, root)
-}
-
-func (s rawDBLatestCommitmentStore) RootNodePresent(root common.Hash) (bool, error) {
-	return rawdb.LatestDomainCommitmentRootNodePresent(s.db, root)
-}
-
-func (s rawDBLatestCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error) {
-	return rawdb.RestoreLatestDomainCommitmentRootFromNodes(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapshotSource, txNum uint64, expectedRoot common.Hash) (bool, error) {
-	if source == nil || expectedRoot == (common.Hash{}) {
-		return false, nil
-	}
-	snapshotRoot, ok, err := source.GetCommitmentRoot(txNum)
-	if err != nil || !ok || snapshotRoot != expectedRoot {
-		return false, err
-	}
-	restored := 0
-	if err := source.IterateCommitmentNodes(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), txNum, func(logicalKey, value []byte) (bool, error) {
-		if !rawdb.IsLatestDomainCommitmentNodeLogicalKey(logicalKey) {
-			return false, fmt.Errorf("domains: snapshot commitment node has unexpected key %x", logicalKey)
-		}
-		if len(value) != common.HashLength {
-			return false, fmt.Errorf("domains: snapshot commitment node %x has bad hash length %d", logicalKey, len(value))
-		}
-		if err := rawdb.WriteStateCommitmentDomain(s.db, logicalKey, value); err != nil {
-			return false, err
-		}
-		restored++
-		return true, nil
-	}); err != nil {
-		return false, err
-	}
-	if restored == 0 {
-		return false, nil
-	}
-	return s.RootNodePresent(expectedRoot)
-}
-
-func (s rawDBLatestCommitmentStore) Rebuild() (common.Hash, error) {
-	return rawdb.RebuildLatestDomainCommitment(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
-	return rawdb.UpdateLatestDomainCommitment(s.db, updates)
-}
-
-func (s rawDBLatestCommitmentStore) ReadLatestCheckpoint() (*rawdb.StateCommitmentCheckpoint, bool, error) {
-	return rawdb.ReadLatestStateCommitmentCheckpoint(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) IterateCheckpoints(fn func(*rawdb.StateCommitmentCheckpoint) (bool, error)) error {
-	return rawdb.IterateStateCommitmentCheckpoints(s.db, fn)
-}
-
-func ApplyLatestCommitment(db CommitmentDB, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
-	if db == nil {
-		return common.Hash{}, ErrNilCommitmentStore
-	}
-	return ApplyLatestCommitmentWithStore(NewRawDBLatestCommitmentStore(db), updates)
-}
-
-func ApplyLatestCommitmentWithSnapshotRepair(db CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
-	if db == nil {
-		return common.Hash{}, ErrNilCommitmentStore
-	}
-	return ApplyLatestCommitmentWithStoreAndRepair(NewRawDBLatestCommitmentStore(db), updates, repair)
 }
 
 // ApplyLatestCommitmentWithStore drives the engine-agnostic orchestrator over an
@@ -239,13 +152,6 @@ func applyLatestCommitmentWithRepair(store LatestCommitmentStore, updates []rawd
 		}
 	}
 	return store.Update(updates)
-}
-
-func SeekLatestCommitment(db CommitmentDB, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
-	if db == nil {
-		return 0, 0, ErrNilCommitmentStore
-	}
-	return seekLatestCommitment(NewRawDBLatestCommitmentStore(db), txNumAtBlockEnd)
 }
 
 // SeekLatestCommitmentWithStore is the store-injecting variant of
