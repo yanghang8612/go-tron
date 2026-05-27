@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/tronprotocol/go-tron/common"
-	"golang.org/x/crypto/sha3"
 )
 
 const LatestDomainCommitmentScheme = "state-flat-latest-v1"
@@ -170,22 +169,6 @@ func DecodeStateCommitmentCheckpointValue(data []byte) (*StateCommitmentCheckpoi
 	return &checkpoint, nil
 }
 
-// ComputeLatestDomainRoot computes a deterministic commitment over the
-// physical flat latest-state tables. It intentionally excludes content-
-// addressed code blobs because account envelopes select code by hash; code
-// retention may contain orphan immutable blobs.
-func ComputeLatestDomainRoot(db ethdb.Iteratee) (common.Hash, error) {
-	h := sha3.NewLegacyKeccak256()
-	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
-		if err := hashPrefix(h, db, prefix); err != nil {
-			return common.Hash{}, err
-		}
-	}
-	var out common.Hash
-	h.Sum(out[:0])
-	return out, nil
-}
-
 func WriteLatestDomainCommitmentRoot(db ethdb.KeyValueWriter, root common.Hash) error {
 	return WriteStateCommitmentDomain(db, latestDomainCommitmentRootKey, root.Bytes())
 }
@@ -241,33 +224,11 @@ func IsStateCommitmentCheckpointLogicalKey(logicalKey []byte) bool {
 		len(logicalKey) == len(stateCommitmentCheckpointLogicalPfx)+8
 }
 
+// latestDomainCommitmentStore is the read/write/iterate surface the binary-radix
+// latest-domain commitment routines (RebuildLatestDomainCommitment /
+// UpdateLatestDomainCommitment) operate over.
 type latestDomainCommitmentStore interface {
 	ethdb.KeyValueReader
 	ethdb.KeyValueWriter
 	ethdb.Iteratee
-}
-
-func ComputeAndWriteLatestDomainRoot(db latestDomainCommitmentStore) (common.Hash, error) {
-	return RebuildLatestDomainCommitment(db)
-}
-
-type byteWriter interface {
-	Write([]byte) (int, error)
-}
-
-func hashPrefix(h byteWriter, db ethdb.Iteratee, prefix []byte) error {
-	it := db.NewIterator(prefix, nil)
-	defer it.Release()
-	for it.Next() {
-		writeLenPrefixed(h, it.Key())
-		writeLenPrefixed(h, it.Value())
-	}
-	return it.Error()
-}
-
-func writeLenPrefixed(h byteWriter, data []byte) {
-	var lenBuf [8]byte
-	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
-	_, _ = h.Write(lenBuf[:])
-	_, _ = h.Write(data)
 }

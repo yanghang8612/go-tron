@@ -14,6 +14,10 @@ import (
 
 const commitmentPathBits = common.HashLength * 8
 
+// commitmentNodePrefix is the logical key prefix the latest-domain commitment
+// branch rows are stored under inside the CommitmentDomain keyspace. The
+// snapshot and pruning layers reference it via
+// LatestDomainCommitmentNodeLogicalPrefix / IsLatestDomainCommitmentNodeLogicalKey.
 var commitmentNodePrefix = []byte("tree/node/")
 
 type StateCommitmentUpdate struct {
@@ -52,11 +56,9 @@ func StateKVGenerationCommitmentKey(owner common.Address) []byte {
 // latest-domain source tables (account-latest, KV-generation, KV-latest) in a
 // deterministic prefix order and calls fn with the physical (key, value) of
 // each row. The physical key is exactly what NewStateCommitmentPut expects as a
-// commitment key, matching how RebuildLatestDomainCommitment derives the
-// latest-domain commitment. Iteration stops when fn returns (false, nil) or an
-// error. It exists so callers outside rawdb can bootstrap a commitment engine
-// from the latest-domain rows without duplicating the unexported prefix
-// literals.
+// commitment key. Iteration stops when fn returns (false, nil) or an error. It
+// exists so callers outside rawdb can bootstrap a commitment engine from the
+// latest-domain rows without duplicating the unexported prefix literals.
 func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value []byte) (bool, error)) error {
 	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
 		it := db.NewIterator(prefix, nil)
@@ -78,66 +80,6 @@ func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value 
 		}
 	}
 	return nil
-}
-
-func RebuildLatestDomainCommitment(db latestDomainCommitmentStore) (common.Hash, error) {
-	if err := clearLatestDomainCommitmentNodes(db); err != nil {
-		return common.Hash{}, err
-	}
-	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
-		if err := applyCommitmentUpdatesFromPrefix(db, prefix); err != nil {
-			return common.Hash{}, err
-		}
-	}
-	root, _, err := readCommitmentNode(db, 0, nil)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if err := WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		return common.Hash{}, err
-	}
-	return root, nil
-}
-
-// RestoreLatestDomainCommitmentRootFromNodes repairs the latest-root row from
-// existing CommitmentDomain branch state without scanning latest-domain rows.
-func RestoreLatestDomainCommitmentRootFromNodes(db latestDomainCommitmentStore) (common.Hash, bool, error) {
-	root, ok, err := readCommitmentNode(db, 0, nil)
-	if err != nil || !ok {
-		return common.Hash{}, ok, err
-	}
-	if err := WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		return common.Hash{}, false, err
-	}
-	return root, true, nil
-}
-
-// LatestDomainCommitmentRootNodePresent reports whether the persisted branch
-// root node exists and matches the supplied latest-root row.
-func LatestDomainCommitmentRootNodePresent(db ethdb.KeyValueReader, root common.Hash) (bool, error) {
-	if root == (common.Hash{}) {
-		return true, nil
-	}
-	node, ok, err := readCommitmentNode(db, 0, nil)
-	if err != nil || !ok {
-		return false, err
-	}
-	return node == root, nil
-}
-
-func UpdateLatestDomainCommitment(db latestDomainCommitmentStore, updates []StateCommitmentUpdate) (common.Hash, error) {
-	updates = CoalesceStateCommitmentUpdates(updates)
-	if err := applyCommitmentUpdates(db, updates); err != nil {
-		return common.Hash{}, err
-	}
-	root, _, err := readCommitmentNode(db, 0, nil)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if err := WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		return common.Hash{}, err
-	}
-	return root, nil
 }
 
 func CoalesceStateCommitmentUpdates(updates []StateCommitmentUpdate) []StateCommitmentUpdate {
@@ -174,6 +116,44 @@ func cloneStateCommitmentUpdate(update StateCommitmentUpdate) StateCommitmentUpd
 		Value:  append([]byte(nil), update.Value...),
 		Delete: update.Delete,
 	}
+}
+
+// RebuildLatestDomainCommitment recomputes the binary-radix commitment over the
+// three latest-domain source tables from scratch and writes the resulting root.
+func RebuildLatestDomainCommitment(db latestDomainCommitmentStore) (common.Hash, error) {
+	if err := clearLatestDomainCommitmentNodes(db); err != nil {
+		return common.Hash{}, err
+	}
+	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
+		if err := applyCommitmentUpdatesFromPrefix(db, prefix); err != nil {
+			return common.Hash{}, err
+		}
+	}
+	root, _, err := readCommitmentNode(db, 0, nil)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if err := WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		return common.Hash{}, err
+	}
+	return root, nil
+}
+
+// UpdateLatestDomainCommitment applies an incremental batch of latest-domain
+// updates to the persisted binary-radix branch state and rewrites the root.
+func UpdateLatestDomainCommitment(db latestDomainCommitmentStore, updates []StateCommitmentUpdate) (common.Hash, error) {
+	updates = CoalesceStateCommitmentUpdates(updates)
+	if err := applyCommitmentUpdates(db, updates); err != nil {
+		return common.Hash{}, err
+	}
+	root, _, err := readCommitmentNode(db, 0, nil)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if err := WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		return common.Hash{}, err
+	}
+	return root, nil
 }
 
 func clearLatestDomainCommitmentNodes(db latestDomainCommitmentStore) error {
@@ -299,7 +279,7 @@ func commitmentChildPath(path []byte, parentDepth, childBit int) []byte {
 
 func commitmentPath(key []byte) common.Hash {
 	h := sha3.NewLegacyKeccak256()
-	writeLenPrefixed(h, key)
+	writeCommitmentLenPrefixed(h, key)
 	var out common.Hash
 	h.Sum(out[:0])
 	return out
@@ -308,8 +288,8 @@ func commitmentPath(key []byte) common.Hash {
 func commitmentLeafHash(key, value []byte) common.Hash {
 	h := sha3.NewLegacyKeccak256()
 	_, _ = h.Write([]byte{0x00})
-	writeLenPrefixed(h, key)
-	writeLenPrefixed(h, value)
+	writeCommitmentLenPrefixed(h, key)
+	writeCommitmentLenPrefixed(h, value)
 	var out common.Hash
 	h.Sum(out[:0])
 	return out
@@ -326,6 +306,13 @@ func commitmentBranchHash(left, right common.Hash) common.Hash {
 	var out common.Hash
 	h.Sum(out[:0])
 	return out
+}
+
+func writeCommitmentLenPrefixed(h interface{ Write([]byte) (int, error) }, data []byte) {
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(data)
 }
 
 func setCommitmentPathBit(path []byte, bitIndex, bit int) {

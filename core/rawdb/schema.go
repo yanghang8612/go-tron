@@ -235,15 +235,6 @@ var (
 	// Value: empty
 	stateChangeInversePrefix = []byte("state-change-index-v2-")
 
-	// stateCommitmentPrefix is the legacy checkpoint prefix for the transitional
-	// commitment engine. Fresh databases write checkpoints into
-	// stateCommitmentDomainPrefix under logical "checkpoint/" keys; this prefix
-	// remains only so mutable-state reset can clear older local dev databases.
-	//
-	// Key:   state-commitment-v1- || blockNum u64
-	// Value: RLP(StateCommitmentCheckpoint)
-	stateCommitmentPrefix = []byte("state-commitment-v1-")
-
 	// stateCommitmentDomainPrefix is the independent physical commitment
 	// domain, modelled after Erigon's CommitmentDomain. Rows are opaque to
 	// rawdb; callers own the logical key layout and value encoding.
@@ -617,13 +608,6 @@ func stateChangeSetBlockPrefix(blockNum uint64) []byte {
 	k := make([]byte, len(stateChangeSetPrefix)+8)
 	copy(k, stateChangeSetPrefix)
 	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
-	return k
-}
-
-func stateCommitmentCheckpointKey(blockNum uint64) []byte {
-	k := make([]byte, len(stateCommitmentPrefix)+8)
-	copy(k, stateCommitmentPrefix)
-	binary.BigEndian.PutUint64(k[len(stateCommitmentPrefix):], blockNum)
 	return k
 }
 

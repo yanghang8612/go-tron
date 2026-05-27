@@ -8,12 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-func TestStateCommitmentDomainPrefixIsIndependent(t *testing.T) {
-	if bytes.Equal(stateCommitmentDomainPrefix, stateCommitmentPrefix) {
-		t.Fatal("commitment domain prefix must not reuse checkpoint prefix")
-	}
-}
-
 func TestStateCommitmentDomainReadWriteCopies(t *testing.T) {
 	db := NewMemoryDatabase()
 	key := []byte("branch/account/1")
