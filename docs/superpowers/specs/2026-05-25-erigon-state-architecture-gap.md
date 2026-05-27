@@ -237,12 +237,16 @@ Status update:
 
 Next step:
 
-- Evaluate whether a recsplit/hash accessor is still needed after `.bt`.
-- Preserve ordered cursor support for prefix/range APIs; hash-only indexes are
-  not enough for gtron because `IterateKVLatestPrefix` and
-  `IterateCommitmentNodes` are required.
+- Recsplit/hash accessor evaluation CONCLUDED (2026-05-27 audit): not adopted.
+  `Manager.getLatestValueFromRef`/`iterateLatestPrefix` prefer `.bt` (bounded
+  leaf-block scan for point lookup, BTree floor seek for prefix), then `.lidx`,
+  then a full scan only when no companion exists — so both acceptance criteria
+  are already met. A hash-only recsplit index cannot replace this because gtron
+  requires ordered cursors for `IterateKVLatestPrefix` and
+  `IterateCommitmentNodes`; `.bt` provides ordered seek that a hash index would
+  not. Revisit only if a profile shows `.bt` point-lookup cost dominates.
 
-Acceptance:
+Acceptance (met):
 
 - Point lookup does not require `O(log n)` disk key reads for every query.
 - Prefix iteration can seek to the first matching key without scanning from the
