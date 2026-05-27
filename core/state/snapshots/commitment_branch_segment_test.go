@@ -259,3 +259,73 @@ func TestCommitmentBranchSourceComposes(t *testing.T) {
 		t.Fatalf("out-of-range branch iteration produced %d rows, want 0", outRows)
 	}
 }
+
+// TestManagerIterateCommitmentBranchesDynamic proves that *Manager.IterateCommitmentBranches
+// resolves the covering branch segment from the on-disk manifest ON EVERY CALL,
+// not once at startup. A SINGLE mgr instance must see a newly-published [1,150]
+// ref immediately after it is written, without re-opening the manager.
+//
+// The discriminating assertion is step-4: txNum=101 is outside [1,100] (yields
+// nothing before the second build) but inside [1,150] (yields rows after the
+// second build). This assertion would FAIL if IterateCommitmentBranches cached
+// the covering ref at first call — the cached [1,100] ref would still exclude 101.
+func TestManagerIterateCommitmentBranchesDynamic(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+
+	dir := t.TempDir()
+	agg := NewAggregator(dir)
+
+	// --- step 1: build [1,100] ---
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 100}); err != nil {
+		t.Fatalf("BuildLatest [1,100]: %v", err)
+	}
+
+	// Open the manager ONCE; keep this single instance for all assertions below.
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	// --- step 2: txNum=100 is in [1,100] → rows expected ---
+	rows100 := 0
+	if err := mgr.IterateCommitmentBranches(100, func(_, _ []byte) (bool, error) {
+		rows100++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateCommitmentBranches(100) after [1,100] build: %v", err)
+	}
+	if rows100 == 0 {
+		t.Fatalf("IterateCommitmentBranches(100): want rows, got 0 — branch segment not served")
+	}
+
+	// txNum=101 is outside [1,100] → no rows expected yet.
+	rows101before := 0
+	if err := mgr.IterateCommitmentBranches(101, func(_, _ []byte) (bool, error) {
+		rows101before++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateCommitmentBranches(101) before [1,150] build: %v", err)
+	}
+	if rows101before != 0 {
+		t.Fatalf("IterateCommitmentBranches(101) before re-build: want 0 rows, got %d", rows101before)
+	}
+
+	// --- step 3: publish a wider [1,150] ref — the SAME mgr must see it immediately ---
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 150}); err != nil {
+		t.Fatalf("BuildLatest [1,150]: %v", err)
+	}
+
+	// --- step 4 (discriminating): txNum=101 is now covered by [1,150] ---
+	// This assertion fails if IterateCommitmentBranches cached the [1,100] ref.
+	rows101after := 0
+	if err := mgr.IterateCommitmentBranches(101, func(_, _ []byte) (bool, error) {
+		rows101after++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateCommitmentBranches(101) after [1,150] build: %v", err)
+	}
+	if rows101after == 0 {
+		t.Fatalf("IterateCommitmentBranches(101) after [1,150] build: want rows, got 0 — Manager did not re-read manifest (caching bug)")
+	}
+}

@@ -780,6 +780,51 @@ func (m *Manager) GetCommitmentRoot(txNum uint64) (common.Hash, bool, error) {
 	return common.BytesToHash(value), true, nil
 }
 
+// coveringCommitmentBranchRef returns the newest published CommitmentBranch
+// latest segment whose visible tx range covers txNum.
+func coveringCommitmentBranchRef(manifest *Manifest, txNum uint64) (SegmentRef, bool) {
+	if manifest == nil {
+		return SegmentRef{}, false
+	}
+	var best SegmentRef
+	found := false
+	for _, ref := range manifest.Segments {
+		if ref.NormalizedDataset() != SegmentDatasetCommitmentBranch || ref.Kind != SegmentLatest {
+			continue
+		}
+		if txNum < ref.FromTxNum || txNum > ref.ToTxNum {
+			continue
+		}
+		if !found || ref.ToTxNum > best.ToTxNum {
+			best = ref
+			found = true
+		}
+	}
+	return best, found
+}
+
+// IterateCommitmentBranches serves snapshotted staged branch rows for txNum from
+// the current manifest's covering CommitmentBranch segment, or yields nothing
+// (declining cleanly to Rebuild) when none covers txNum. Resolving against
+// m.Manifest() — which re-reads the on-disk manifest per call — means a snapshot
+// published after process start is visible immediately. This makes *Manager
+// satisfy domains.CommitmentBranchSnapshotSource structurally, so the bare
+// Manager already wired into the chain drives staged cold-restore.
+func (m *Manager) IterateCommitmentBranches(txNum uint64, fn func(prefix, encoded []byte) (bool, error)) error {
+	if m == nil {
+		return nil
+	}
+	ref, ok := coveringCommitmentBranchRef(m.Manifest(), txNum)
+	if !ok {
+		return nil
+	}
+	seg, err := OpenCommitmentBranchSegment(m.dir, ref)
+	if err != nil {
+		return err
+	}
+	return seg.Iterate(fn)
+}
+
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {
 	if hash == (common.Hash{}) {
 		return nil, false, nil

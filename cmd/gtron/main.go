@@ -616,6 +616,10 @@ func gtron(ctx *cli.Context) error {
 				Enabled:        chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 				HistoryDataset: historyDataset,
 				HistoryWindow:  historyWindow,
+				// LatestBuildBlocks controls how often latest-dataset snapshots
+				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
+				// datasets share this single coarse cadence. Operators may tune it.
+				LatestBuildBlocks: statesnapshots.DefaultLatestBuildBlocks,
 			},
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
