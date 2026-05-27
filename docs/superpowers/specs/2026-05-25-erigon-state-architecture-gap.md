@@ -904,15 +904,22 @@ Status update:
 
 Next step:
 
-- account-KV generation changes are not yet exercisable end-to-end. The
-  rawdb-layer generation-as-of reader (`ReadStateKVGenerationAsOfTxNum`) is
-  unit-tested, but current execution flows do not produce a persisted
-  `KVGenerationDomain` row change: `ResetAccountKV` (the only writer that marks
-  the generation dirty) has no callers, and the recreate-time bump in
-  `GetOrCreateAccount` is persisted only through the account envelope
-  (`StateAccountV2.AccountKVGeneration`), not the separate generation row that
-  the archive reader consumes. Whether that envelope/row split is a real archive
-  divergence or benign is tracked as a separate investigation.
+- account-KV generation changes are covered end-to-end:
+  `TestRecreatedAccountDoesNotLeakOldGenerationSlots` proves a destroy+recreate
+  bumps the per-account generation (persisted via the account envelope and read
+  back as generation+1 on reopen), so the recreated account reads a fresh
+  namespace and does NOT leak a prior-incarnation slot, while the orphaned gen-0
+  rows survive on disk (Erigon-incarnation style, no O(N) prefix delete).
+  `TestArchiveStorageAgreesWithLiveAcrossRecreate` proves the archive
+  `StorageAt` path agrees with live reads across the recreate.
+  Benign residual: the standalone generation-as-of row reader
+  (`ReadStateKVGenerationAsOfTxNum`, which reads the separate `KVGeneration` row
+  rather than the envelope) can return a stale generation after a recreate,
+  because the recreate bump is persisted via the envelope, not that row, and
+  `ResetAccountKV` (the only writer that marks the row dirty) has no callers. The
+  storage reconstruction path does not consume that row (proven by the
+  archive-vs-live storage test), so no storage/leak divergence is observable;
+  this is a latent inconsistency in a non-storage accessor, not a correctness bug.
 - Keep java-tron fixture replay as the final compatibility gate.
 
 Acceptance:
