@@ -35,7 +35,6 @@ type LatestCommitmentStore interface {
 
 type CommitmentSnapshotSource interface {
 	GetCommitmentRoot(txNum uint64) (common.Hash, bool, error)
-	IterateCommitmentNodes(logicalPrefix []byte, txNum uint64, fn func(logicalKey, value []byte) (bool, error)) error
 }
 
 // CommitmentBranchSnapshotSource is the staged engine's snapshot restore seam.

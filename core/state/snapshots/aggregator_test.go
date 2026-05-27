@@ -15,8 +15,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x66}, common.AccountIDLength)...))
 	root := common.BytesToHash(bytes.Repeat([]byte{0xab}, common.HashLength))
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte{0x01, 0x02}...)
-	nodeHash := common.BytesToHash(bytes.Repeat([]byte{0xcd}, common.HashLength))
 	code := []byte{0x60, 0x00, 0x60, 0x01}
 	codeHash := common.Keccak256(code)
 
@@ -33,9 +31,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateCommitmentDomain(db, nodeKey, nodeHash.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
@@ -72,7 +67,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build aggregate snapshot: %v", err)
 	}
-	if result.Manifest == nil || len(result.Segments) != 24 {
+	if result.Manifest == nil || len(result.Segments) != 21 {
 		t.Fatalf("aggregate result = %+v", result)
 	}
 	loaded, err := LoadManifest(dir)
@@ -94,9 +89,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentAccessor)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
@@ -147,9 +139,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 	if got, ok, err := mgr.GetCommitmentRoot(15); err != nil || !ok || got != root {
 		t.Fatalf("manager root = %x ok=%v err=%v", got, ok, err)
-	}
-	if got, ok, err := mgr.GetCommitmentNode(nodeKey, 15); err != nil || !ok || !bytes.Equal(got, nodeHash.Bytes()) {
-		t.Fatalf("manager node = %x ok=%v err=%v", got, ok, err)
 	}
 	var historyReads []*rawdb.StateDomainChange
 	if err := mgr.IterateStateDomainChanges(15, 15, func(change *rawdb.StateDomainChange) (bool, error) {

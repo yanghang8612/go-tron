@@ -207,7 +207,7 @@ func TestCheckerValidatesSnapshotSegmentsAndCodeHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check snapshots: %v", err)
 	}
-	if report.SnapshotSegments != 4 || report.LatestRows != 1 || report.KVLatestRows != 1 || !report.CommitmentRootPresent || report.CommitmentNodes == 0 {
+	if report.SnapshotSegments != 4 || report.LatestRows != 1 || report.KVLatestRows != 1 || !report.CommitmentRootPresent {
 		t.Fatalf("report = %+v", report)
 	}
 	code := []byte{0xde, 0xad}
@@ -255,7 +255,7 @@ func TestCheckerCountsFlatLatestDatasets(t *testing.T) {
 	if report.LatestRows != 3 || report.AccountLatestRows != 1 || report.KVGenerationRows != 1 || report.KVLatestRows != 1 {
 		t.Fatalf("latest counts = %+v", report)
 	}
-	if !report.CommitmentRootPresent || report.CommitmentNodes == 0 || report.CommitmentDomainRows == 0 {
+	if !report.CommitmentRootPresent || report.CommitmentDomainRows == 0 {
 		t.Fatalf("commitment counts = %+v", report)
 	}
 }

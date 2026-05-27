@@ -14,10 +14,9 @@ import (
 
 const commitmentPathBits = common.HashLength * 8
 
-// commitmentNodePrefix is the logical key prefix the latest-domain commitment
-// branch rows are stored under inside the CommitmentDomain keyspace. The
-// snapshot and pruning layers reference it via
-// LatestDomainCommitmentNodeLogicalPrefix / IsLatestDomainCommitmentNodeLogicalKey.
+// commitmentNodePrefix is the logical key prefix the legacy binary-radix
+// commitment engine (RebuildLatestDomainCommitment / UpdateLatestDomainCommitment)
+// stores its branch-node rows under inside the shared CommitmentDomain keyspace.
 var commitmentNodePrefix = []byte("tree/node/")
 
 type StateCommitmentUpdate struct {

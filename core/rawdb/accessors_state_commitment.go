@@ -203,20 +203,12 @@ func stateCommitmentCheckpointLogicalKey(blockNum uint64) []byte {
 	return key
 }
 
-func LatestDomainCommitmentNodeLogicalPrefix() []byte {
-	return append([]byte(nil), commitmentNodePrefix...)
-}
-
 func IsLatestDomainCommitmentRootLogicalKey(logicalKey []byte) bool {
 	return bytes.Equal(logicalKey, latestDomainCommitmentRootKey)
 }
 
 func IsLatestStateCommitmentCheckpointLogicalKey(logicalKey []byte) bool {
 	return bytes.Equal(logicalKey, latestStateCommitmentCheckpointKey)
-}
-
-func IsLatestDomainCommitmentNodeLogicalKey(logicalKey []byte) bool {
-	return bytes.HasPrefix(logicalKey, commitmentNodePrefix)
 }
 
 func IsStateCommitmentCheckpointLogicalKey(logicalKey []byte) bool {

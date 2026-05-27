@@ -344,60 +344,6 @@ func buildCommitmentRootSegmentFilesFromStore(store latestHotStore, dir string, 
 	})
 }
 
-func BuildCommitmentNodeSegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
-	if db == nil {
-		return SegmentRef{}, errors.New("snapshots: nil database")
-	}
-	return buildCommitmentDomainSegmentFromStore(newRawDBLatestHotBuildStore(db), SegmentDatasetCommitmentNode, rawdb.LatestDomainCommitmentNodeLogicalPrefix(), dir, fromTxNum, toTxNum, relPath)
-}
-
-func buildCommitmentDomainSegmentFromStore(store latestHotStore, dataset SegmentDataset, logicalPrefix []byte, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
-	if store == nil {
-		return SegmentRef{}, errors.New("snapshots: nil latest hot store")
-	}
-	return writeLatestSegmentFromIterator(dir, SegmentRef{
-		Dataset:   dataset,
-		Kind:      SegmentLatest,
-		FromTxNum: fromTxNum,
-		ToTxNum:   toTxNum,
-		Path:      relPath,
-	}, func(yield func(LatestEntry) error) error {
-		return store.IterateCommitmentDomain(logicalPrefix, func(logicalKey, value []byte) (bool, error) {
-			if err := yield(LatestEntry{Key: CommitmentSnapshotKey(logicalKey), Value: value}); err != nil {
-				return false, err
-			}
-			return true, nil
-		})
-	})
-}
-
-func BuildCommitmentNodeSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-	if db == nil {
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
-	}
-	return buildCommitmentDomainSegmentFilesFromStore(newRawDBLatestHotBuildStore(db), SegmentDatasetCommitmentNode, rawdb.LatestDomainCommitmentNodeLogicalPrefix(), dir, fromTxNum, toTxNum, relPath)
-}
-
-func buildCommitmentDomainSegmentFilesFromStore(store latestHotStore, dataset SegmentDataset, logicalPrefix []byte, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-	if store == nil {
-		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
-	}
-	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
-		Dataset:   dataset,
-		Kind:      SegmentLatest,
-		FromTxNum: fromTxNum,
-		ToTxNum:   toTxNum,
-		Path:      relPath,
-	}, func(yield func(LatestEntry) error) error {
-		return store.IterateCommitmentDomain(logicalPrefix, func(logicalKey, value []byte) (bool, error) {
-			if err := yield(LatestEntry{Key: CommitmentSnapshotKey(logicalKey), Value: value}); err != nil {
-				return false, err
-			}
-			return true, nil
-		})
-	})
-}
-
 func BuildCommitmentCheckpointSegmentFilesFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
 	if db == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil database")
@@ -543,7 +489,7 @@ func validateLatestStreamRef(ref SegmentRef) error {
 		if !kvdomains.IsRegistered(ref.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(ref.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentNode, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
 		if ref.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(ref.Domain))
 		}
@@ -834,14 +780,6 @@ func (m *Manager) GetCommitmentRoot(txNum uint64) (common.Hash, bool, error) {
 	return common.BytesToHash(value), true, nil
 }
 
-func (m *Manager) GetCommitmentNode(logicalKey []byte, txNum uint64) ([]byte, bool, error) {
-	return m.getLatestValue(SegmentDatasetCommitmentNode, 0, CommitmentSnapshotKey(logicalKey), txNum)
-}
-
-func (m *Manager) IterateCommitmentNodes(logicalPrefix []byte, txNum uint64, fn func(logicalKey, value []byte) (bool, error)) error {
-	return m.iterateLatestPrefix(SegmentDatasetCommitmentNode, 0, logicalPrefix, txNum, fn)
-}
-
 func (m *Manager) GetCode(hash common.Hash, txNum uint64) ([]byte, bool, error) {
 	if hash == (common.Hash{}) {
 		return nil, false, nil
@@ -1074,7 +1012,7 @@ func (s *LatestSegment) Validate() error {
 		if !kvdomains.IsRegistered(s.Domain) {
 			return fmt.Errorf("snapshots: unregistered latest segment domain %#04x", uint16(s.Domain))
 		}
-	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentNode, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetAccountLatest, SegmentDatasetKVGeneration, SegmentDatasetCode, SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
 		if s.Domain != 0 {
 			return fmt.Errorf("snapshots: %s latest segment must not set kv domain %#04x", dataset, uint16(s.Domain))
 		}
@@ -1176,7 +1114,7 @@ func (s *LatestSegment) restoreToStore(store latestHotStore) error {
 				return err
 			}
 		}
-	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentNode, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
 		for _, entry := range s.Entries {
 			if err := restoreLatestEntryToStore(s.normalizedDataset(), s.Domain, store, entry); err != nil {
 				return err
@@ -1224,7 +1162,7 @@ func restoreLatestEntryToStore(dataset SegmentDataset, domain kvdomains.KVDomain
 			return err
 		}
 		return store.WriteCode(hash, entry.Value)
-	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentNode, SegmentDatasetCommitmentCheckpoint:
+	case SegmentDatasetCommitmentRoot, SegmentDatasetCommitmentCheckpoint:
 		return store.WriteCommitmentDomain(entry.Key, entry.Value)
 	default:
 		return fmt.Errorf("snapshots: unknown latest dataset %q", dataset)
@@ -1286,13 +1224,6 @@ func validateLatestEntry(dataset SegmentDataset, entry LatestEntry) error {
 		}
 		if len(entry.Value) != common.HashLength {
 			return fmt.Errorf("snapshots: commitment root length %d", len(entry.Value))
-		}
-	case SegmentDatasetCommitmentNode:
-		if !rawdb.IsLatestDomainCommitmentNodeLogicalKey(entry.Key) {
-			return fmt.Errorf("snapshots: commitment node segment has key %q", entry.Key)
-		}
-		if len(entry.Value) != common.HashLength {
-			return fmt.Errorf("snapshots: commitment node length %d", len(entry.Value))
 		}
 	case SegmentDatasetCommitmentCheckpoint:
 		if !rawdb.IsStateCommitmentCheckpointLogicalKey(entry.Key) && !rawdb.IsLatestStateCommitmentCheckpointLogicalKey(entry.Key) {

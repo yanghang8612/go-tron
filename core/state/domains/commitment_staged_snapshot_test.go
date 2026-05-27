@@ -14,9 +14,6 @@ type fakeBranchSnapshotSource struct {
 	root     common.Hash
 	rootOK   bool
 	branches []fakeBranchRow
-	// nodeErr, when set, is returned from IterateCommitmentNodes to prove the
-	// staged restore never touches the legacy node-iteration path.
-	nodeErr error
 }
 
 type fakeBranchRow struct {
@@ -26,10 +23,6 @@ type fakeBranchRow struct {
 
 func (s *fakeBranchSnapshotSource) GetCommitmentRoot(uint64) (common.Hash, bool, error) {
 	return s.root, s.rootOK, nil
-}
-
-func (s *fakeBranchSnapshotSource) IterateCommitmentNodes([]byte, uint64, func(logicalKey, value []byte) (bool, error)) error {
-	return s.nodeErr
 }
 
 func (s *fakeBranchSnapshotSource) IterateCommitmentBranches(_ uint64, fn func(prefix, encoded []byte) (bool, error)) error {
@@ -101,7 +94,6 @@ func TestStagedRestoreNodesFromSnapshotRederivesRoot(t *testing.T) {
 	// Capture the live branch rows + root into a snapshot source, then prune the
 	// hot branch rows so only the snapshot can re-derive the root.
 	src := captureBranchSnapshot(t, db)
-	src.nodeErr = errTouchedLegacyNodes
 	deleteStagedBranchRows(t, db)
 	if _, ok, err := store.store.GetBranch(nil); err != nil || ok {
 		t.Fatalf("precondition: root branch still present after prune (ok=%v err=%v)", ok, err)
@@ -193,12 +185,4 @@ func TestStagedRestoreNodesFromSnapshotNilOrZero(t *testing.T) {
 	if ok, err := store.RestoreNodesFromSnapshot(src, 1, common.Hash{}); err != nil || ok {
 		t.Fatalf("zero expected root = ok %v err %v, want false nil", ok, err)
 	}
-}
-
-var errTouchedLegacyNodes = &touchedLegacyNodesError{}
-
-type touchedLegacyNodesError struct{}
-
-func (*touchedLegacyNodesError) Error() string {
-	return "staged restore must not iterate legacy commitment nodes"
 }

@@ -358,7 +358,3 @@ type noopCommitmentSnapshotSource struct{}
 func (noopCommitmentSnapshotSource) GetCommitmentRoot(uint64) (common.Hash, bool, error) {
 	return common.Hash{}, false, nil
 }
-
-func (noopCommitmentSnapshotSource) IterateCommitmentNodes([]byte, uint64, func(logicalKey, value []byte) (bool, error)) error {
-	return nil
-}

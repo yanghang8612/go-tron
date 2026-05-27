@@ -225,19 +225,6 @@ func DefaultDomainRegistry() DomainRegistry {
 			},
 		},
 		{
-			Name:                  "CommitmentDomain",
-			Dataset:               SegmentDatasetCommitmentNode,
-			LatestPathStem:        "commitment/nodes",
-			HasLatest:             true,
-			HasLatestAccessor:     true,
-			HasLatestBTree:        true,
-			TracksCommitmentFlush: true,
-			BuildLatest: func(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, SegmentRef, SegmentRef, error) {
-				return BuildCommitmentNodeSegmentFilesFromDB(db, dir, fromTxNum, toTxNum, relPath)
-			},
-			IterateHotCommitmentDomain: rawdb.IterateStateCommitmentDomain,
-		},
-		{
 			Name:                  "CommitmentCheckpoint",
 			Dataset:               SegmentDatasetCommitmentCheckpoint,
 			LatestPathStem:        "commitment/checkpoints",

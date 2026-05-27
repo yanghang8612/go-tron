@@ -37,7 +37,6 @@ const (
 	SegmentDatasetKVGeneration         SegmentDataset = "kv-generation"
 	SegmentDatasetCode                 SegmentDataset = "code"
 	SegmentDatasetCommitmentRoot       SegmentDataset = "commitment-root"
-	SegmentDatasetCommitmentNode       SegmentDataset = "commitment-node"
 	SegmentDatasetCommitmentCheckpoint SegmentDataset = "commitment-checkpoint"
 	SegmentDatasetStateDomainChange    SegmentDataset = "state-domain-change"
 )

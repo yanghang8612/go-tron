@@ -19,7 +19,6 @@ type CheckReport struct {
 	KVLatestRows          int
 	KVGenerationRows      int
 	CommitmentDomainRows  int
-	CommitmentNodes       int
 	CommitmentRootPresent bool
 	ReferencedCodeHashes  int
 	RetainedTxRanges      int
@@ -109,25 +108,13 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 	if checkpointCfg.ReadHotLatestCommitmentCheckpoint == nil {
 		return CheckReport{}, errors.New("pruning: missing latest commitment checkpoint reader")
 	}
-	commitmentCfg, err := latestDomainConfig(snapshots.SegmentDatasetCommitmentNode)
-	if err != nil {
-		return CheckReport{}, err
-	}
-	if commitmentCfg.IterateHotCommitmentDomain == nil {
-		return CheckReport{}, errors.New("pruning: missing CommitmentDomain iterator")
-	}
-	if err := commitmentCfg.IterateHotCommitmentDomain(c.DB, nil, func(logicalKey, value []byte) (bool, error) {
+	if err := rawdb.IterateStateCommitmentDomain(c.DB, nil, func(logicalKey, value []byte) (bool, error) {
 		report.CommitmentDomainRows++
 		switch {
 		case rawdb.IsLatestDomainCommitmentRootLogicalKey(logicalKey):
 			report.CommitmentRootPresent = true
 			if len(value) != common.HashLength {
 				return false, fmt.Errorf("pruning: latest commitment root has bad length %d", len(value))
-			}
-		case rawdb.IsLatestDomainCommitmentNodeLogicalKey(logicalKey):
-			report.CommitmentNodes++
-			if len(value) != common.HashLength {
-				return false, fmt.Errorf("pruning: latest commitment node %x has bad length %d", logicalKey, len(value))
 			}
 		case rawdb.IsLatestStateCommitmentCheckpointLogicalKey(logicalKey):
 			cp, ok, err := checkpointCfg.ReadHotLatestCommitmentCheckpoint(c.DB)
