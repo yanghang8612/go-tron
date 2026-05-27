@@ -266,6 +266,18 @@ func DefaultDomainRegistry() DomainRegistry {
 			DeleteHotCommitmentCheckpoint:     rawdb.DeleteStateCommitmentCheckpoint,
 		},
 		{
+			Name:                  "CommitmentBranch",
+			Dataset:               SegmentDatasetCommitmentBranch,
+			LatestPathStem:        "commitment/branch",
+			LatestPathExt:         ".json",
+			HasLatest:             true,
+			HasLatestAccessor:     false,
+			HasLatestBTree:        false,
+			TracksCommitmentFlush: true,
+			BuildLatest:           buildCommitmentBranchLatest,
+			CheckLatest:           checkCommitmentBranchSegment,
+		},
+		{
 			Name:                    "HistoryDomain",
 			Dataset:                 SegmentDatasetStateDomainChange,
 			HistoryPathStem:         "history/state-domain-change",

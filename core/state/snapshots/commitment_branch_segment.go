@@ -12,16 +12,16 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 // SegmentDatasetCommitmentBranch labels the staged commitment engine's
 // branch-row snapshot family. It streams the dedicated
 // state-commitment-branch-v1- keyspace (hex-trie prefix -> encoded BranchData),
 // which the legacy CommitmentNode family (tree/node/ logical keys, 32-byte hash
-// values) cannot represent. It is a STANDALONE family: it is intentionally NOT
-// registered in DefaultDomainRegistry's LatestConfigs and carries its own file
-// format, so adding it leaves the legacy snapshot pipeline (and its gate=false
-// byte-identity) untouched.
+// values) cannot represent. It is registered in DefaultDomainRegistry as a
+// single-file (JSON) latest dataset (HasLatest=true, HasLatestAccessor=false,
+// HasLatestBTree=false): one .json file per build, no binary companion files.
 const SegmentDatasetCommitmentBranch SegmentDataset = "commitment-branch"
 
 // CommitmentBranchSegmentVersion is the on-disk version of a branch segment.
@@ -218,6 +218,44 @@ func (s *CommitmentBranchSource) IterateCommitmentBranches(txNum uint64, fn func
 		return err
 	}
 	return seg.Iterate(fn)
+}
+
+// hasAnyCommitmentBranchRow reports whether the state-commitment-branch-v1-
+// keyspace is non-empty without materializing it.
+func hasAnyCommitmentBranchRow(db ethdb.Iteratee) (bool, error) {
+	found := false
+	if err := rawdb.IterateCommitmentBranches(db, func(_, _ []byte) (bool, error) {
+		found = true
+		return false, nil // stop after first row
+	}); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+// buildCommitmentBranchLatest is the registry LatestSnapshotBuilder adapter for
+// the CommitmentBranch family. It returns no ref (publishes nothing) when the
+// branch keyspace is empty, mirroring Runner.onePass's "no rows, return early".
+func buildCommitmentBranchLatest(db AggregatorDB, dir string, _ kvdomains.KVDomain, fromTxNum, toTxNum uint64, relPath string) ([]SegmentRef, error) {
+	has, err := hasAnyCommitmentBranchRow(db)
+	if err != nil {
+		return nil, err
+	}
+	if !has {
+		return nil, nil
+	}
+	ref, err := BuildCommitmentBranchSegmentFromDB(db, dir, relPath, fromTxNum, toTxNum)
+	if err != nil {
+		return nil, err
+	}
+	return []SegmentRef{ref}, nil
+}
+
+// checkCommitmentBranchSegment validates a published branch segment by opening
+// it (checksum + metadata) — the registry CheckLatest hook for the family.
+func checkCommitmentBranchSegment(dir string, ref SegmentRef) error {
+	_, err := OpenCommitmentBranchSegment(dir, ref)
+	return err
 }
 
 func validateBranchSegmentPath(path string) error {

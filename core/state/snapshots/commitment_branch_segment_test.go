@@ -95,6 +95,113 @@ func TestCommitmentBranchSegmentRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCommitmentBranchRidesLatestBuild verifies that a seeded branch keyspace
+// causes Aggregator.BuildLatest to produce a SegmentDatasetCommitmentBranch ref,
+// that the manifest validates cleanly, and that the segment round-trips all rows.
+func TestCommitmentBranchRidesLatestBuild(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	seedStagedBranchRows(t, db)
+
+	// Capture the seeded rows for later comparison.
+	want := map[string][]byte{}
+	if err := rawdb.IterateCommitmentBranches(db, func(prefix, encoded []byte) (bool, error) {
+		want[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate live branches: %v", err)
+	}
+	if len(want) == 0 {
+		t.Fatalf("no seeded branch rows found")
+	}
+
+	dir := t.TempDir()
+	agg := NewAggregator(dir)
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 100}); err != nil {
+		t.Fatalf("BuildLatest: %v", err)
+	}
+
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("manifest.Validate(): %v", err)
+	}
+
+	// Find the branch ref in the manifest.
+	var branchRef SegmentRef
+	for _, ref := range manifest.Segments {
+		if ref.Dataset == SegmentDatasetCommitmentBranch && ref.Kind == SegmentLatest {
+			branchRef = ref
+			break
+		}
+	}
+	if branchRef.Path == "" {
+		t.Fatalf("no CommitmentBranch ref found in manifest segments: %v", manifest.Segments)
+	}
+	if branchRef.FromTxNum != 1 || branchRef.ToTxNum != 100 {
+		t.Fatalf("branch ref tx range = [%d,%d], want [1,100]", branchRef.FromTxNum, branchRef.ToTxNum)
+	}
+
+	// Open the segment and verify rows round-trip.
+	seg, err := OpenCommitmentBranchSegment(dir, branchRef)
+	if err != nil {
+		t.Fatalf("OpenCommitmentBranchSegment: %v", err)
+	}
+	got := map[string][]byte{}
+	if err := seg.Iterate(func(prefix, encoded []byte) (bool, error) {
+		got[string(prefix)] = append([]byte(nil), encoded...)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("Iterate: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("round-trip row count = %d, want %d", len(got), len(want))
+	}
+	for k, wv := range want {
+		gv, ok := got[k]
+		if !ok {
+			t.Fatalf("round-trip missing prefix %x", []byte(k))
+		}
+		if !bytes.Equal(gv, wv) {
+			t.Fatalf("round-trip prefix %x value = %x, want %x", []byte(k), gv, wv)
+		}
+	}
+}
+
+// TestCommitmentBranchEmptyKeyspaceSkipped verifies that an empty branch
+// keyspace causes BuildLatest to publish no SegmentDatasetCommitmentBranch ref.
+// Other datasets (CommitmentRoot, etc.) may still produce refs; this test only
+// asserts no branch ref appears.
+func TestCommitmentBranchEmptyKeyspaceSkipped(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	// Seed only a commitment root so CommitmentRoot builder succeeds; leave the
+	// branch keyspace empty.
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, common.Hash{0x42}); err != nil {
+		t.Fatalf("seed commitment root: %v", err)
+	}
+
+	dir := t.TempDir()
+	agg := NewAggregator(dir)
+	if _, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: 100}); err != nil {
+		t.Fatalf("BuildLatest: %v", err)
+	}
+
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("manifest.Validate(): %v", err)
+	}
+
+	for _, ref := range manifest.Segments {
+		if ref.Dataset == SegmentDatasetCommitmentBranch {
+			t.Fatalf("expected no CommitmentBranch ref, found: %+v", ref)
+		}
+	}
+}
+
 // TestCommitmentBranchSourceComposes proves CommitmentBranchSource serves the
 // snapshot root (delegated to the embedded Manager) and the branch rows from
 // disk, and that txNum outside the segment range yields zero branch rows.

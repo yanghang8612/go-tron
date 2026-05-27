@@ -15,8 +15,8 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 	registry := DefaultDomainRegistry()
 
 	latest := registry.LatestConfigs()
-	if len(latest) != 6 {
-		t.Fatalf("latest configs = %d, want 6", len(latest))
+	if len(latest) != 7 {
+		t.Fatalf("latest configs = %d, want 7", len(latest))
 	}
 	for _, cfg := range latest {
 		if cfg.LatestPathStem == "" {
@@ -24,6 +24,10 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		}
 		if cfg.BuildLatest == nil {
 			t.Fatalf("%s missing latest builder", cfg.Dataset)
+		}
+		// CommitmentBranch is a JSON-only single-file dataset: no accessor/btree companions.
+		if !cfg.HasLatestAccessor && !cfg.HasLatestBTree {
+			continue
 		}
 		if !cfg.HasLatestAccessor || !cfg.HasLatestBTree {
 			t.Fatalf("%s latest companion flags accessor=%v btree=%v", cfg.Dataset, cfg.HasLatestAccessor, cfg.HasLatestBTree)
