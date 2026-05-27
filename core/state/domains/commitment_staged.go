@@ -37,6 +37,27 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 	return rawdb.DeleteCommitmentBranch(s.db, prefix)
 }
 
+// clear removes every persisted branch row in the commitment-branch keyspace.
+// Rebuild calls this before re-folding so a full latest-domain scan produces a
+// root that reflects exactly the current source rows, with no contribution from
+// branches left over from an earlier (e.g. pre-rewind) tip. Mirrors the legacy
+// engine's clearLatestDomainCommitmentNodes.
+func (s *rawdbBranchStore) clear() error {
+	var prefixes [][]byte
+	if err := rawdb.IterateCommitmentBranches(s.db, func(prefix, _ []byte) (bool, error) {
+		prefixes = append(prefixes, append([]byte(nil), prefix...))
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	for _, prefix := range prefixes {
+		if err := rawdb.DeleteCommitmentBranch(s.db, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // stagedCommitmentStore is the LatestCommitmentStore implementation backed by the
 // Erigon-style staged engine: a hex-patricia commitmentTrie over prefix-keyed
 // BranchData rows in the rawdb commitment-branch keyspace. The root row and
@@ -125,6 +146,13 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 // commit.
 func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 	s.bootstrapCount++
+	// Fold MERGES into existing branches, so a rebuild must start from a clean
+	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would
+	// contribute to the rebuilt root. Mirrors the legacy engine, which clears its
+	// tree/node/ rows in RebuildLatestDomainCommitment before re-applying.
+	if err := s.store.clear(); err != nil {
+		return common.Hash{}, err
+	}
 	var updates []Update
 	if err := rawdb.IterateLatestDomainCommitmentSources(s.db, func(key, value []byte) (bool, error) {
 		updates = append(updates, Update{

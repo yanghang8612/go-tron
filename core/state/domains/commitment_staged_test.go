@@ -137,6 +137,74 @@ func TestStagedCommitmentUpdateMatchesRebuild(t *testing.T) {
 	}
 }
 
+// TestStagedCommitmentRebuildClearsStaleBranches pins the rewind/fork-switch
+// fallback contract: Rebuild must reflect EXACTLY the current latest-domain
+// source rows, independent of any branch state left over from an earlier (taller)
+// tip. The legacy engine's RebuildLatestDomainCommitment clears its "tree/node/"
+// rows before re-folding; the staged engine must likewise clear its
+// state-commitment-branch-v1- rows, or an orphaned branch contribution survives
+// into the rebuilt root.
+//
+// Scenario: build branches for {A, B}, then make the latest-domain rows reflect
+// only {A} (B's account was deleted), then Rebuild() on the SAME store. The
+// rebuilt root must equal a from-scratch staged build over only {A}.
+func TestStagedCommitmentRebuildClearsStaleBranches(t *testing.T) {
+	ownerA := common.Address{0x41, 0x01}
+	ownerB := common.Address{0x41, 0x02}
+	valA := []byte("acctA")
+	valB := []byte("acctB")
+
+	// Reference: a fresh staged store whose only source row is A. This is the
+	// root Rebuild() must reproduce after B is rewound out.
+	refDB := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateAccountLatest(refDB, ownerA, valA); err != nil {
+		t.Fatal(err)
+	}
+	refRoot, err := newStagedCommitmentStore(refDB).Rebuild()
+	if err != nil {
+		t.Fatalf("reference Rebuild: %v", err)
+	}
+	if refRoot == (common.Hash{}) {
+		t.Fatalf("reference Rebuild produced zero root")
+	}
+
+	// Subject: a store that first holds branches for {A, B}, then has B's source
+	// row removed, then is rebuilt.
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStateAccountLatest(db, ownerA, valA); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateAccountLatest(db, ownerB, valB); err != nil {
+		t.Fatal(err)
+	}
+	store := newStagedCommitmentStore(db)
+	tallRoot, err := store.Rebuild()
+	if err != nil {
+		t.Fatalf("initial Rebuild over {A,B}: %v", err)
+	}
+	if tallRoot == refRoot {
+		t.Fatalf("test precondition broken: {A,B} root must differ from {A}-only root")
+	}
+
+	// Rewind: B's account is gone from the latest-domain source rows. Its branch
+	// rows, however, are still persisted from the {A,B} Rebuild above.
+	if err := rawdb.DeleteStateAccountLatest(db, ownerB); err != nil {
+		t.Fatalf("delete B source row: %v", err)
+	}
+
+	rebuiltRoot, err := store.Rebuild()
+	if err != nil {
+		t.Fatalf("Rebuild after rewind: %v", err)
+	}
+	if rebuiltRoot != refRoot {
+		t.Fatalf("Rebuild after rewind = %x, want from-scratch {A}-only root %x "+
+			"(stale B branch survived)", rebuiltRoot, refRoot)
+	}
+	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db); err != nil || !ok || stored != refRoot {
+		t.Fatalf("rebuilt root row = %x ok=%v err=%v, want %x", stored, ok, err, refRoot)
+	}
+}
+
 // TestStagedCommitmentNoBootstrapOnNormalCommit is C4.4 (HEADLINE): the staged
 // engine commits incrementally off persisted branch state. The orchestrator may
 // bootstrap (full latest-domain scan) once on the first commit when no branch

@@ -21,7 +21,8 @@ type DatabaseConfig struct {
 	// It is bound once at database construction for a given DB and must not be
 	// flipped on a DB that already holds commitment rows (fresh-DB-only; see
 	// docs/superpowers/specs/2026-05-25-erigon-state-architecture-gap.md #6).
-	// Currently inert: no commit/apply path branches on it yet.
+	// StateDB.latestCommitmentStore branches on it at commit time; the default
+	// (false) keeps the legacy binary-radix engine as the production path.
 	StagedCommitment bool
 }
 

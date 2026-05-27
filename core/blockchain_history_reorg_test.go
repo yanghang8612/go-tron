@@ -50,6 +50,14 @@ import (
 // is reachable via bc.genesisBlock.Hash() if a caller needs it.
 func newHistoryReorgChain(t *testing.T) (*BlockChain, tcommon.Address) {
 	t.Helper()
+	return newHistoryReorgChainWithConfig(t, state.DatabaseConfig{})
+}
+
+// newHistoryReorgChainWithConfig is newHistoryReorgChain with an explicit
+// state.DatabaseConfig, so a test can exercise the same fork-rewind fixture
+// under the Erigon-style staged commitment engine (StagedCommitment: true).
+func newHistoryReorgChainWithConfig(t *testing.T, dbcfg state.DatabaseConfig) (*BlockChain, tcommon.Address) {
+	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
 	cfg.HistoryEnabled = true
@@ -76,7 +84,7 @@ func newHistoryReorgChain(t *testing.T) (*BlockChain, tcommon.Address) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatalf("SetupGenesisBlock: %v", err)
 	}
-	sdb := state.NewDatabase(diskdb)
+	sdb := state.NewDatabaseWithConfig(diskdb, dbcfg)
 	bc, err := NewBlockChain(diskdb, sdb, cfg)
 	if err != nil {
 		t.Fatalf("NewBlockChain: %v", err)

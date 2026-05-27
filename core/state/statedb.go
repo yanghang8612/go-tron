@@ -455,8 +455,9 @@ type AccountSnapshot struct {
 }
 
 // stagedCommitment reports whether this StateDB's database selects the
-// Erigon-style staged commitment engine. Currently inert: no commit/apply path
-// branches on it yet (wired in a later task).
+// Erigon-style staged commitment engine. When true, latestCommitmentStore
+// routes commits through the staged store instead of the legacy binary-radix
+// store.
 func (s *StateDB) stagedCommitment() bool {
 	return s.db != nil && s.db.StagedCommitment()
 }
