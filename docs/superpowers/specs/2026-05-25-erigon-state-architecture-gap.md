@@ -515,10 +515,22 @@ Remaining gap:
   range errors instead of corrupting. Also fixed a latent restart-sync bug:
   `ResetMutableState` now clears the commitment branch keyspace (it previously kept
   stale branches that could let `RestoreRootFromNodes` skip `Rebuild` with the prior
-  run's root). Slice 2 (still open) wires a consumer (`BlockChain.UnwindTo`); until
-  then the "rewind without rebuild" acceptance is met only vacuously — no current path
-  rewinds into the old Rebuild fallback (fork-switch uses the buffer; restart-sync
-  replays from genesis).
+  run's root). Slice 2 landed 2026-05-27: the unwind primitive now has a REAL
+  consumer — `RestartSyncFromHeight` (the historical-sync restart path) takes a fast
+  incremental branch (`canIncrementalUnwind` gate → `incrementalUnwindTo`) when
+  `HistoryEnabled` and the changeset window covers `(target, head]`, rewinding via
+  `UnwindCommitment` + flat block-keyed truncation + `total-tx-count` subtraction +
+  `resetRuntimeStateLocked`, instead of reset-to-genesis + replay. (Chosen over a
+  standalone `BlockChain.UnwindTo`, which would have had no production caller.)
+  History-off / pruned-window nodes fall through to the unchanged, always-correct
+  reset+replay path. So the "rewind/unwind without rebuilding the entire latest
+  state" acceptance is now met NON-vacuously for history-enabled nodes. A new test
+  proves the incremental branch is taken (rebuild-spy never fires; phases are
+  `reset/unwind/flush/done`, no `genesis`/`replay`), reaches byte-identical end state
+  to the reset+replay path, and lands the same head state root as a from-scratch
+  chain built straight to the target (equivalence anchor). Known limitation
+  (documented): the incremental path does not scrub TAPOS ring slots in
+  `(target, target+65536]` — self-healing via the 65536-slot overwrite ring.
 - Legacy-engine removal (Phase 2) — DONE 2026-05-27 (commits `bb99cb6`→`e9abd5c`,
   full `go test ./...` green). The legacy binary-radix engine is entirely gone: the
   store + db-wrappers, the `StagedCommitment` gate, the dead `UnwindStateDomainChanges`
