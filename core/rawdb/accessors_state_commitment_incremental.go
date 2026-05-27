@@ -48,6 +48,38 @@ func StateKVGenerationCommitmentKey(owner common.Address) []byte {
 	return stateKVGenerationKey(owner)
 }
 
+// IterateLatestDomainCommitmentSources iterates every row in the three
+// latest-domain source tables (account-latest, KV-generation, KV-latest) in a
+// deterministic prefix order and calls fn with the physical (key, value) of
+// each row. The physical key is exactly what NewStateCommitmentPut expects as a
+// commitment key, matching how RebuildLatestDomainCommitment derives the
+// latest-domain commitment. Iteration stops when fn returns (false, nil) or an
+// error. It exists so callers outside rawdb can bootstrap a commitment engine
+// from the latest-domain rows without duplicating the unexported prefix
+// literals.
+func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value []byte) (bool, error)) error {
+	for _, prefix := range [][]byte{stateAccountLatestPrefix, stateKVGenerationPrefix, stateKVLatestPrefix} {
+		it := db.NewIterator(prefix, nil)
+		for it.Next() {
+			cont, err := fn(it.Key(), it.Value())
+			if err != nil {
+				it.Release()
+				return err
+			}
+			if !cont {
+				it.Release()
+				return nil
+			}
+		}
+		err := it.Error()
+		it.Release()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func RebuildLatestDomainCommitment(db latestDomainCommitmentStore) (common.Hash, error) {
 	if err := clearLatestDomainCommitmentNodes(db); err != nil {
 		return common.Hash{}, err

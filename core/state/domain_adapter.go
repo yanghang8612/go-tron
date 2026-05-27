@@ -370,7 +370,8 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
-	root, err := statedomains.ApplyLatestCommitment(index, updates)
+	store := d.state.latestCommitmentStore(index)
+	root, err := statedomains.ApplyLatestCommitmentWithStore(store, updates)
 	return tcommon.Hash(root), err
 }
 

@@ -17,7 +17,12 @@ type CommitmentDB interface {
 	ethdb.Iteratee
 }
 
-type latestCommitmentStore interface {
+// LatestCommitmentStore is the engine-agnostic persistence seam the latest-domain
+// commitment orchestrator drives. Both the legacy incremental binary-radix store
+// and the Erigon-style staged store implement it; callers select between them via
+// the constructors below and feed the chosen store to the With-Store apply
+// entries.
+type LatestCommitmentStore interface {
 	ReadRoot() (common.Hash, bool, error)
 	WriteRoot(root common.Hash) error
 	RootNodePresent(root common.Hash) (bool, error)
@@ -43,7 +48,9 @@ type rawDBLatestCommitmentStore struct {
 	db CommitmentDB
 }
 
-func newRawDBLatestCommitmentStore(db CommitmentDB) latestCommitmentStore {
+// NewRawDBLatestCommitmentStore builds the legacy incremental binary-radix
+// LatestCommitmentStore over db. This is the gate=false path.
+func NewRawDBLatestCommitmentStore(db CommitmentDB) LatestCommitmentStore {
 	return rawDBLatestCommitmentStore{db: db}
 }
 
@@ -113,21 +120,37 @@ func ApplyLatestCommitment(db CommitmentDB, updates []rawdb.StateCommitmentUpdat
 	if db == nil {
 		return common.Hash{}, ErrNilCommitmentStore
 	}
-	return applyLatestCommitment(newRawDBLatestCommitmentStore(db), updates)
+	return ApplyLatestCommitmentWithStore(NewRawDBLatestCommitmentStore(db), updates)
 }
 
 func ApplyLatestCommitmentWithSnapshotRepair(db CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
 	if db == nil {
 		return common.Hash{}, ErrNilCommitmentStore
 	}
-	return applyLatestCommitmentWithRepair(newRawDBLatestCommitmentStore(db), updates, repair)
+	return ApplyLatestCommitmentWithStoreAndRepair(NewRawDBLatestCommitmentStore(db), updates, repair)
 }
 
-func applyLatestCommitment(store latestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
+// ApplyLatestCommitmentWithStore drives the engine-agnostic orchestrator over an
+// explicitly-chosen LatestCommitmentStore. Callers pick the store implementation
+// (legacy vs staged) and pass it in.
+func ApplyLatestCommitmentWithStore(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
+	return ApplyLatestCommitmentWithStoreAndRepair(store, updates, CommitmentSnapshotRepair{})
+}
+
+// ApplyLatestCommitmentWithStoreAndRepair is ApplyLatestCommitmentWithStore plus
+// a snapshot-repair source for restoring pruned branch state before the update.
+func ApplyLatestCommitmentWithStoreAndRepair(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
+	if store == nil {
+		return common.Hash{}, ErrNilCommitmentStore
+	}
+	return applyLatestCommitmentWithRepair(store, updates, repair)
+}
+
+func applyLatestCommitment(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
 	return applyLatestCommitmentWithRepair(store, updates, CommitmentSnapshotRepair{})
 }
 
-func applyLatestCommitmentWithRepair(store latestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
+func applyLatestCommitmentWithRepair(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
 	if store == nil {
 		return common.Hash{}, ErrNilCommitmentStore
 	}
@@ -209,10 +232,10 @@ func SeekLatestCommitment(db CommitmentDB, txNumAtBlockEnd func(blockNum uint64)
 	if db == nil {
 		return 0, 0, ErrNilCommitmentStore
 	}
-	return seekLatestCommitment(newRawDBLatestCommitmentStore(db), txNumAtBlockEnd)
+	return seekLatestCommitment(NewRawDBLatestCommitmentStore(db), txNumAtBlockEnd)
 }
 
-func seekLatestCommitment(store latestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
+func seekLatestCommitment(store LatestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
 	if store == nil {
 		return 0, 0, ErrNilCommitmentStore
 	}

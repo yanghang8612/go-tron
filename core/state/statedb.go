@@ -2747,8 +2747,19 @@ func (s *StateDB) applyLatestDomainCommitment(updates []rawdb.StateCommitmentUpd
 		Source: s.commitmentColdHistory,
 		TxNum:  s.commitmentColdTxNum,
 	}
-	root, err := statedomains.ApplyLatestCommitmentWithSnapshotRepair(index, updates, repair)
+	store := s.latestCommitmentStore(index)
+	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
 	return tcommon.Hash(root), err
+}
+
+// latestCommitmentStore selects the commitment engine for this StateDB's
+// database: the Erigon-style staged store when StagedCommitment is set, else the
+// legacy incremental binary-radix store.
+func (s *StateDB) latestCommitmentStore(index statedomains.CommitmentDB) statedomains.LatestCommitmentStore {
+	if s.stagedCommitment() {
+		return statedomains.NewStagedCommitmentStore(index)
+	}
+	return statedomains.NewRawDBLatestCommitmentStore(index)
 }
 
 // SetAccountName sets the account name.
