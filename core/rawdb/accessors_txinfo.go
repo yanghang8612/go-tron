@@ -93,3 +93,18 @@ func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
 	num := binary.BigEndian.Uint64(data)
 	return &num
 }
+
+// DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.
+func DeleteTransactionInfo(db ethdb.KeyValueWriter, txID []byte) error {
+	return db.Delete(txInfoKey(txID))
+}
+
+// DeleteTransactionInfosByBlock removes the per-block TransactionRet row for blockNum.
+func DeleteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64) error {
+	return db.Delete(txInfoBlockKey(blockNum))
+}
+
+// DeleteTransactionIndex removes the tx-hash→block-number reverse index row.
+func DeleteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte) error {
+	return db.Delete(txKey(txHash))
+}

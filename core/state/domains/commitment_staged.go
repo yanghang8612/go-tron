@@ -193,6 +193,11 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 // rebuild path was taken.
 var rebuildSpyHook func()
 
+// SetRebuildSpyHook installs fn as the rebuild spy for tests. Pass nil to clear.
+// This is the only exported interface to rebuildSpyHook; production code never
+// calls it.
+func SetRebuildSpyHook(fn func()) { rebuildSpyHook = fn }
+
 // Rebuild bootstraps the full staged trie from every latest-domain source row,
 // writes the root row, and returns the root. This is the one-time fallback used
 // when no branch state is present; it must not run on a normal incremental
