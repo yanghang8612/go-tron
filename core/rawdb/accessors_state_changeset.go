@@ -523,27 +523,6 @@ func stateDomainChangeCommitmentValue(change *StateDomainChange, value []byte) (
 	}
 }
 
-func unwindStateDomainChange(db stateKVLatestStore, change *StateDomainChange) (StateCommitmentUpdate, error) {
-	latestKey, err := stateDomainChangeLatestKey(change)
-	if err != nil {
-		return StateCommitmentUpdate{}, err
-	}
-	if !change.PrevExists {
-		if err := deleteStateDomainLatestRow(db, change); err != nil {
-			return StateCommitmentUpdate{}, err
-		}
-		return NewStateCommitmentDelete(latestKey), nil
-	}
-	commitmentValue, err := stateDomainChangeCommitmentValue(change, change.Prev)
-	if err != nil {
-		return StateCommitmentUpdate{}, err
-	}
-	if err := writeStateDomainLatestRow(db, change); err != nil {
-		return StateCommitmentUpdate{}, err
-	}
-	return NewStateCommitmentPut(latestKey, commitmentValue), nil
-}
-
 func writeStateDomainLatestRow(db stateKVLatestStore, change *StateDomainChange) error {
 	switch change.FlatDomain {
 	case StateFlatDomainAccountLatest:
@@ -621,37 +600,6 @@ func stateBlockIntersectsTxWindow(db ethdb.KeyValueReader, blockNum, targetTxNum
 		return false, err
 	}
 	return endTxNum > targetTxNum && beginTxNum <= headTxNum, nil
-}
-
-// UnwindStateDomainChanges restores the physical latest-state rows to the
-// state before blockNum for every flat-domain row captured in that block. It
-// intentionally leaves the change-set rows themselves intact; callers decide
-// whether they are pruning history or merely checking an unwind candidate.
-func UnwindStateDomainChanges(db stateKVLatestStore, blockNum uint64) error {
-	var changes []*StateDomainChange
-	if err := IterateStateDomainChanges(db, blockNum, func(change *StateDomainChange) (bool, error) {
-		changes = append(changes, change)
-		return true, nil
-	}); err != nil {
-		return err
-	}
-	commitmentUpdates := make([]StateCommitmentUpdate, 0, len(changes))
-	for i := len(changes) - 1; i >= 0; i-- {
-		change := changes[i]
-		update, err := unwindStateDomainChange(db, change)
-		if err != nil {
-			return err
-		}
-		commitmentUpdates = append(commitmentUpdates, update)
-	}
-	if _, ok, err := ReadLatestDomainCommitmentRoot(db); err != nil {
-		return err
-	} else if ok {
-		if _, err := UpdateLatestDomainCommitment(db, commitmentUpdates); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ReadStateKVAsOf reconstructs one account-KV latest value at the end of
