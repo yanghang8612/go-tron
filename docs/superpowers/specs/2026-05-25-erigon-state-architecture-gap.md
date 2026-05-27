@@ -502,9 +502,23 @@ Remaining gap:
   wired into the chain drives restore. An e2e test proves restore folds from the
   snapshot with no full-scan rebuild and yields the same root as the rebuild path
   (see #7 for the latest-build driver).
-- Incremental rewind without rebuild: fork-switch is correct, but any rewind not
-  covered by an in-memory buffer layer still relies on rebuild rather than
-  Erigon-style staged branch materialization from persisted commitment progress.
+- Incremental rewind without rebuild — slice 1 landed 2026-05-27: an inverse-delta
+  unwind primitive (`rawdb.CollectStateUnwind` + `domains.UnwindCommitment`) rewinds
+  the latest-domain tables and staged commitment branches from the tip to a target
+  block by folding the INVERSE of the persisted `StateDomainChange` pre-images
+  (`Prev`/`Next`, within `HistoryPruneWindow`), touching only changed branch paths —
+  no full `Rebuild` scan, no new persistence. A property test proves rewind-to-N
+  reproduces the from-scratch branch keyspace BYTE-for-byte (12 rows incl.
+  intermediate branch create/collapse), the same root, and that forward commits from
+  the rewound state match a from-scratch store. The unwind self-verifies the re-folded
+  root against the target block's persisted internal root, so an incomplete/pruned
+  range errors instead of corrupting. Also fixed a latent restart-sync bug:
+  `ResetMutableState` now clears the commitment branch keyspace (it previously kept
+  stale branches that could let `RestoreRootFromNodes` skip `Rebuild` with the prior
+  run's root). Slice 2 (still open) wires a consumer (`BlockChain.UnwindTo`); until
+  then the "rewind without rebuild" acceptance is met only vacuously — no current path
+  rewinds into the old Rebuild fallback (fork-switch uses the buffer; restart-sync
+  replays from genesis).
 - Legacy-engine removal (Phase 2) — DONE 2026-05-27 (commits `bb99cb6`→`e9abd5c`,
   full `go test ./...` green). The legacy binary-radix engine is entirely gone: the
   store + db-wrappers, the `StagedCommitment` gate, the dead `UnwindStateDomainChanges`
