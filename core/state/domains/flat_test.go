@@ -210,7 +210,7 @@ func TestFlatStoreWithCommitmentTracksPutDeletePrefix(t *testing.T) {
 	if err != nil || !ok || root == (common.Hash{}) {
 		t.Fatalf("commitment root after puts = %x ok=%v err=%v", root, ok, err)
 	}
-	want, err := rawdb.RebuildLatestDomainCommitment(db)
+	want, err := NewStagedCommitmentStore(db).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild after puts: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestFlatStoreWithCommitmentTracksPutDeletePrefix(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("commitment root after delete prefix ok=%v err=%v", ok, err)
 	}
-	want, err = rawdb.RebuildLatestDomainCommitment(db)
+	want, err = NewStagedCommitmentStore(db).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild after delete prefix: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestApplyLatestCommitmentRestoresMissingRootFromNodes(t *testing.T) {
 		t.Fatalf("root before restore ok=%v err=%v", ok, err)
 	}
 
-	restored, err := ApplyLatestCommitment(db, nil)
+	restored, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), nil)
 	if err != nil {
 		t.Fatalf("restore via commitment helper: %v", err)
 	}

@@ -351,7 +351,7 @@ func (d *DomainCommitmentState) SeekCommitment(ctx context.Context) (uint64, uin
 		return 0, 0, nil
 	}
 	index := d.state.accountKVIndex()
-	return statedomains.SeekLatestCommitment(index, func(blockNum uint64) (uint64, error) {
+	return statedomains.SeekLatestCommitmentWithStore(statedomains.NewStagedCommitmentStore(index), func(blockNum uint64) (uint64, error) {
 		return snapshots.StateDomainHistoryTxNumAtBlockEnd(index, blockNum)
 	})
 }
@@ -370,7 +370,8 @@ func (d *DomainCommitmentState) ComputeCommitment(ctx context.Context, blockNum,
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
-	root, err := statedomains.ApplyLatestCommitment(index, updates)
+	store := d.state.latestCommitmentStore(index)
+	root, err := statedomains.ApplyLatestCommitmentWithStore(store, updates)
 	return tcommon.Hash(root), err
 }
 

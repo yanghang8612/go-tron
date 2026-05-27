@@ -125,6 +125,18 @@ Affected fields: `TotalProduced`, `TotalMissed`, `LatestBlockNum`,
 The following five writers explicitly remain on the disk-direct path until
 slice 2:
 
+> **Superseded (2026-05-27) — rooted-state refactor.** The DynamicProperties
+> items below (`BLOCK_FILLED_SLOTS`, `total_create_witness_cost`,
+> `burn_trx_amount`, and the `LatestSolidifiedBlockNum` DP set) were *not*
+> retrofitted onto `bc.buffer`. Instead, the rooted-state refactor stages every
+> consensus DP key into the rooted `SystemDynamicProperty` KV via
+> `DynamicProperties.FlushRooted` *before* state `Commit`, so they enter the
+> internal full-state root and rewind with it on reorgs — a cleaner mechanism
+> than the per-writer buffer pattern. `DynamicProperties.Flush` now only mirrors
+> the four derived runtime keys to the flat `dp-` store (diagnostic; rebuilt
+> from the rooted KV on load). The non-DP writers (reward-maintenance state,
+> total-tx-count) flow through the rooted state commit / `bc.buffer`.
+
 - [ ] `state.DynamicProperties.Flush` — including `BLOCK_FILLED_SLOTS` (set via
       `dp.ApplyBlockToFilledSlots` in `ApplyBlockStatistics`),
       `total_create_witness_cost`, `burn_trx_amount`. Slice 1 does **not** fix

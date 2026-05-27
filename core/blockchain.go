@@ -903,10 +903,14 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// Update witness production counters + BLOCK_FILLED_SLOTS rolling window
 	// (mirrors java-tron StatisticManager.applyBlock). The per-witness
 	// counter writes go through bc.buffer so switchFork can rewind them on
-	// reorgs (slice 1 of the fork-rewind fix). The BLOCK_FILLED_SLOTS ring
-	// is updated on dynProps in-memory and lands via dynProps.Flush(bc.db)
-	// below — not yet retrofitted onto the buffer (see slice 2 backlog in
-	// docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md).
+	// reorgs (slice 1 of the fork-rewind fix). The BLOCK_FILLED_SLOTS ring is
+	// updated on dynProps in-memory and, like every other consensus dynamic
+	// property, lands in the rooted SystemDynamicProperty KV via
+	// dynProps.FlushRooted below (before state Commit) — so it enters the
+	// internal full-state root and rewinds with it on reorgs. This supersedes
+	// the old fork-rewind "slice 2 / move the writer onto bc.buffer" plan
+	// (docs/superpowers/specs/2026-04-30-fork-rewind-fix-design.md): the rooted
+	// refactor rewinds these keys via the state root, not a buffer layer.
 	dpos.ApplyBlockStatistics(statedb, dynProps, block, previousHeadTimestamp,
 		bc.ActiveWitnesses(), bc.GenesisTimestamp(), prevIsMaintenance)
 	stats.mark(&stats.Execute)
@@ -1055,11 +1059,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 
 	stats.mark(&stats.StateCommit)
 
-	// Land DP changes into the active buffer layer (slice 2). This includes
-	// block_filled_slots (from ApplyBlockStatistics), latest_block_header_*,
-	// latest_solidified_block_num, burn_trx_amount (from burnFee actuators),
-	// total_create_witness_cost (from witness create), maintenance-touched
-	// keys, etc. — every dirty DP key.
+	// Mirror the derived runtime DP keys to the flat dp- store. dynProps.Flush
+	// → flushDerived writes ONLY the four derived keys (latest_block_header_
+	// number/timestamp/hash and latest_solidified_block_num) for legacy and
+	// diagnostic point reads. Every consensus DP key — block_filled_slots (from
+	// ApplyBlockStatistics), burn_trx_amount (from burnFee actuators),
+	// total_create_witness_cost (from witness create), maintenance-touched keys,
+	// etc. — was already staged into the rooted SystemDynamicProperty KV by
+	// FlushRooted above (before Commit), which is the consensus source of truth.
+	// The dp- mirror is not consensus-relevant and is rebuilt from the rooted KV
+	// on load (loadDynamicPropertiesFromDerivedStore).
 	dynProps.Flush(bc.buffer)
 
 	stats.mark(&stats.DPUpdate)

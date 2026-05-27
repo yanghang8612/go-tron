@@ -25,6 +25,10 @@ func TestDefaultDomainRegistryDrivesSnapshotFamilies(t *testing.T) {
 		if cfg.BuildLatest == nil {
 			t.Fatalf("%s missing latest builder", cfg.Dataset)
 		}
+		// CommitmentBranch is a JSON-only single-file dataset: no accessor/btree companions.
+		if !cfg.HasLatestAccessor && !cfg.HasLatestBTree {
+			continue
+		}
 		if !cfg.HasLatestAccessor || !cfg.HasLatestBTree {
 			t.Fatalf("%s latest companion flags accessor=%v btree=%v", cfg.Dataset, cfg.HasLatestAccessor, cfg.HasLatestBTree)
 		}
@@ -185,13 +189,8 @@ func TestDomainRegistryHotLatestReaders(t *testing.T) {
 func TestDomainRegistryHotCommitmentLifecycle(t *testing.T) {
 	db := ethrawdb.NewMemoryDatabase()
 	root := common.Hash{0x01}
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte("node")...)
-	nodeValue := common.Hash{0x02}
 	checkpointHash := common.Hash{0x03}
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateCommitmentDomain(db, nodeKey, nodeValue.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
@@ -204,29 +203,6 @@ func TestDomainRegistryHotCommitmentLifecycle(t *testing.T) {
 	}
 
 	registry := DefaultDomainRegistry()
-	commitmentCfg, ok := registry.Dataset(SegmentDatasetCommitmentNode)
-	if !ok || commitmentCfg.IterateHotCommitmentDomain == nil {
-		t.Fatalf("commitment domain lifecycle missing: %+v", commitmentCfg)
-	}
-	var rootSeen, nodeSeen, checkpointRowSeen, latestPointerSeen bool
-	if err := commitmentCfg.IterateHotCommitmentDomain(db, nil, func(logicalKey, value []byte) (bool, error) {
-		switch {
-		case rawdb.IsLatestDomainCommitmentRootLogicalKey(logicalKey):
-			rootSeen = bytes.Equal(value, root.Bytes())
-		case bytes.Equal(logicalKey, nodeKey):
-			nodeSeen = bytes.Equal(value, nodeValue.Bytes())
-		case rawdb.IsLatestStateCommitmentCheckpointLogicalKey(logicalKey):
-			latestPointerSeen = true
-		case rawdb.IsStateCommitmentCheckpointLogicalKey(logicalKey):
-			checkpointRowSeen = true
-		}
-		return true, nil
-	}); err != nil {
-		t.Fatalf("iterate commitment domain: %v", err)
-	}
-	if !rootSeen || !nodeSeen || !checkpointRowSeen || !latestPointerSeen {
-		t.Fatalf("commitment iteration root=%v node=%v checkpoint=%v latestPointer=%v", rootSeen, nodeSeen, checkpointRowSeen, latestPointerSeen)
-	}
 	checkpointCfg, ok := registry.Dataset(SegmentDatasetCommitmentCheckpoint)
 	if !ok || checkpointCfg.WriteHotCommitmentCheckpoint == nil || checkpointCfg.ReadHotLatestCommitmentCheckpoint == nil ||
 		checkpointCfg.IterateHotCommitmentCheckpoints == nil || checkpointCfg.DeleteHotCommitmentCheckpoint == nil {

@@ -235,15 +235,6 @@ var (
 	// Value: empty
 	stateChangeInversePrefix = []byte("state-change-index-v2-")
 
-	// stateCommitmentPrefix is the legacy checkpoint prefix for the transitional
-	// commitment engine. Fresh databases write checkpoints into
-	// stateCommitmentDomainPrefix under logical "checkpoint/" keys; this prefix
-	// remains only so mutable-state reset can clear older local dev databases.
-	//
-	// Key:   state-commitment-v1- || blockNum u64
-	// Value: RLP(StateCommitmentCheckpoint)
-	stateCommitmentPrefix = []byte("state-commitment-v1-")
-
 	// stateCommitmentDomainPrefix is the independent physical commitment
 	// domain, modelled after Erigon's CommitmentDomain. Rows are opaque to
 	// rawdb; callers own the logical key layout and value encoding.
@@ -251,6 +242,25 @@ var (
 	// Key:   state-commitment-domain-v1- || logical key
 	// Value: opaque bytes, including empty-but-present values.
 	stateCommitmentDomainPrefix = []byte("state-commitment-domain-v1-")
+
+	// stateCommitmentBranchPrefix stores prefix-keyed branch node rows for the
+	// Erigon-style staged commitment engine. Each row maps a hex-trie prefix
+	// (variable length) to an encoded BranchData value. This is a dedicated
+	// top-level keyspace, kept separate from the legacy incremental engine's
+	// "tree/node/" rows under stateCommitmentDomainPrefix so that retiring the
+	// legacy engine is a single-prefix sweep.
+	//
+	// Key:   state-commitment-branch-v1- || hex-trie prefix bytes
+	// Value: BranchData.Encode() bytes
+	stateCommitmentBranchPrefix = []byte("state-commitment-branch-v1-")
+
+	// stateCommitmentEngineStateKey is the singleton row that persists the
+	// rewindable staged-engine state (opaque bytes; the engine defines the
+	// structure when wired in a later task).
+	//
+	// Key:   state-commitment-engine-state-v1 (no suffix — one row)
+	// Value: opaque bytes
+	stateCommitmentEngineStateKey = []byte("state-commitment-engine-state-v1")
 
 	// stateKVGenerationPrefix stores the latest physical generation observed
 	// for an account. It lets a later recreate pick generation+1 without
@@ -598,13 +608,6 @@ func stateChangeSetBlockPrefix(blockNum uint64) []byte {
 	k := make([]byte, len(stateChangeSetPrefix)+8)
 	copy(k, stateChangeSetPrefix)
 	binary.BigEndian.PutUint64(k[len(stateChangeSetPrefix):], blockNum)
-	return k
-}
-
-func stateCommitmentCheckpointKey(blockNum uint64) []byte {
-	k := make([]byte, len(stateCommitmentPrefix)+8)
-	copy(k, stateCommitmentPrefix)
-	binary.BigEndian.PutUint64(k[len(stateCommitmentPrefix):], blockNum)
 	return k
 }
 

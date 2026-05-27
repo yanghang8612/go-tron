@@ -222,7 +222,7 @@ func TestStateDBCommitRepairsMissingCommitmentRootFromNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit v2: %v", err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(disk)
+	rebuilt, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestDomainCommitmentStateRecordsLogicalDomainTouches(t *testing.T) {
 			t.Fatalf("write latest %s: %v", key, err)
 		}
 	}
-	initialRoot, err := rawdb.RebuildLatestDomainCommitment(disk)
+	initialRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("initial commitment: %v", err)
 	}
@@ -280,11 +280,11 @@ func TestDomainCommitmentStateRecordsLogicalDomainTouches(t *testing.T) {
 	if len(updates) != 3 {
 		t.Fatalf("touch-derived updates = %+v, want deletes for prefix/1,prefix/2 and put for prefix/3", updates)
 	}
-	updatedRoot, err := rawdb.UpdateLatestDomainCommitment(disk, updates)
+	updatedRoot, err := statedomains.NewStagedCommitmentStore(disk).Update(updates)
 	if err != nil {
 		t.Fatalf("update commitment from touches: %v", err)
 	}
-	rebuiltRoot, err := rawdb.RebuildLatestDomainCommitment(disk)
+	rebuiltRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild commitment: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestDomainCommitmentStateRecordsAccountAndGenerationTouches(t *testing.T) {
 	if err := rawdb.WriteStateKVGeneration(disk, owner, 1); err != nil {
 		t.Fatal(err)
 	}
-	initialRoot, err := rawdb.RebuildLatestDomainCommitment(disk)
+	initialRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("initial commitment: %v", err)
 	}
@@ -338,11 +338,11 @@ func TestDomainCommitmentStateRecordsAccountAndGenerationTouches(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("touch-derived updates = %+v, want account latest put and KV generation delete", updates)
 	}
-	updatedRoot, err := rawdb.UpdateLatestDomainCommitment(disk, updates)
+	updatedRoot, err := statedomains.NewStagedCommitmentStore(disk).Update(updates)
 	if err != nil {
 		t.Fatalf("update commitment from touches: %v", err)
 	}
-	rebuiltRoot, err := rawdb.RebuildLatestDomainCommitment(disk)
+	rebuiltRoot, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild commitment: %v", err)
 	}

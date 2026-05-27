@@ -221,6 +221,13 @@ Acceptance:
 - A large latest snapshot build, restore, or check has peak memory bounded by
   iterator buffers and a small offset buffer or streamed accessor writer.
 
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. Production
+build/restore/check stream via `writeLatestBinarySegmentAndAccessor` (offsets +
+`.bt` spilled to temp files), `restoreLatestBinarySegmentToStore` (per-record
+reader), and `checkLatestBinarySegment`/`checkLatestBinaryAccessor` (per-record
+`ReadAt`) — no whole-dataset `[]LatestEntry`; full materialization survives only on
+the JSON/legacy-compat path, which the production aggregator never emits.
+
 ### 2. Latest Accessor Is Ordered Offsets, Not Full Erigon BTree/Recsplit
 
 The `.lidx` file stores ordered record offsets and binary-searches by reading
@@ -237,12 +244,16 @@ Status update:
 
 Next step:
 
-- Evaluate whether a recsplit/hash accessor is still needed after `.bt`.
-- Preserve ordered cursor support for prefix/range APIs; hash-only indexes are
-  not enough for gtron because `IterateKVLatestPrefix` and
-  `IterateCommitmentNodes` are required.
+- Recsplit/hash accessor evaluation CONCLUDED (2026-05-27 audit): not adopted.
+  `Manager.getLatestValueFromRef`/`iterateLatestPrefix` prefer `.bt` (bounded
+  leaf-block scan for point lookup, BTree floor seek for prefix), then `.lidx`,
+  then a full scan only when no companion exists — so both acceptance criteria
+  are already met. A hash-only recsplit index cannot replace this because gtron
+  requires ordered cursors for `IterateKVLatestPrefix` and
+  `IterateCommitmentNodes`; `.bt` provides ordered seek that a hash index would
+  not. Revisit only if a profile shows `.bt` point-lookup cost dominates.
 
-Acceptance:
+Acceptance (met):
 
 - Point lookup does not require `O(log n)` disk key reads for every query.
 - Prefix iteration can seek to the first matching key without scanning from the
@@ -303,6 +314,13 @@ Acceptance:
   history changes in a segment.
 - Missing binary companion files are fatal for production manifests.
 
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. Keyed/range
+history reads (`iterateStateDomainChangeBinarySegmentByAccessorFile`,
+`...TxRangeByIndexFile`) use `sort.Search` + per-record `ReadAt` over `.kv`/`.idx`,
+no whole-segment changes/accessor slice. `LoadProductionManifest` →
+`validateHistoryBinaryCompanionTriples` returns a hard error (not a warning) when a
+registered history `.seg` is missing its `.idx`/`.kv` companion.
+
 ### 4. Domain Registry Is Only Partially Applied
 
 `DomainRegistry` exists and now describes registered latest/history families,
@@ -347,6 +365,15 @@ Acceptance:
 - Latest/history/accessor naming and validation are generated from domain
   config.
 
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. The aggregator
+build loop (`buildLatestSegments`/history over `registry.LatestConfigs()`/
+`HistoryConfigs()`), manifest validation (`validate*SegmentRefDataset`,
+`validateHistoryBinaryCompanionTriples` via `registry.ConfigForRef`), and the
+pruning checker (`latestDomainConfig` + `CheckRegisteredSegment` dispatch) all read
+from `DomainCfg` (path stems, companion flags, codec ops, `Check*` hooks) — no
+per-dataset switch. The lone residual switch (`validateLatestStreamRef`) is
+JSON-compat-only and off the binary production path.
+
 ### 5. Code Domain Retention Still Needs A Final Policy
 
 Code is content-addressed in rawdb, account envelopes reference `CodeHash`, and
@@ -377,9 +404,18 @@ Remaining gap:
 
 Next step:
 
-- Document CodeDomain as content-addressed latest retention plus account-envelope
-  temporal selection, unless future java-tron parity tests prove code needs a
-  separate temporal changeset.
+- **Done (2026-05-27):** CodeDomain is documented as the intended final
+  content-addressed latest-retention policy (plus account-envelope temporal
+  selection) — see the docstring on the `CodeDomain` registry entry in
+  `core/state/snapshots/domain_registry.go`. The content-addressed model has a
+  behavioral anchor (`TestPersistentHistoryReaderReadsCodeFromColdCodeDomain`
+  proves the cold CodeDomain retains a superseded bytecode version, so historical
+  `CodeAt` across an in-place overwrite is served by account-envelope history
+  selecting the right hash plus content-addressed retention of every referenced
+  hash), and the snapshot-coverage deletion gate is now locked from the negative
+  direction by `TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage`
+  (uncovered hot code is never pruned). No separate temporal code changeset is
+  needed.
 - Add java-tron parity fixtures for historical contract code if future
   compatibility work finds a case where content-addressed retention is
   insufficient.
@@ -449,13 +485,92 @@ CommitmentNode snapshot before applying touched-key updates. The full-latest
 rebuild path is now reserved for stores without a matching cold branch snapshot
 or with stale/corrupt snapshot data.
 
+Status update (2026-05-27):
+
+- An Erigon-style staged commitment engine now exists behind the
+  `DatabaseConfig.StagedCommitment` gate (now the default — see the flip note
+  below): prefix-keyed `BranchData`
+  nodes in a dedicated `state-commitment-branch-v1-` keyspace, a hex-patricia
+  fold engine (`core/state/domains/commitment_tree.go`, fuzz-proven that
+  incremental folds equal a from-scratch recompute), wired through the existing
+  `LatestCommitmentStore` seam via `ApplyLatestCommitmentWithStore[AndRepair]`
+  and selected at commit time by `StateDB.stagedCommitment()`.
+- A normal commit folds incrementally over persisted branch state and does NOT
+  trigger a full-latest rebuild (regression-guarded by the staged-engine
+  "no bootstrap on normal commit" test).
+- Fork-switch/rewind is correct for the staged engine: the block buffer discards
+  orphan-branch layers (including their branch + root rows) keyspace-agnostically,
+  so replay folds onto LCA-restored branches; `stagedCommitmentStore.Rebuild`
+  clears stale branches before re-folding. A gate=true fork-switch test asserts
+  the post-switch root matches the head state root and a from-scratch staged
+  rebuild.
+- The internal staged root stays decoupled from java-tron's `accountStateRoot`
+  (via `core.StateRootAdapter`), so the engine choice is consensus-safe regardless
+  of which one runs.
+- Default flipped to staged 2026-05-27: `NewDatabase` now constructs the staged
+  engine, and the `StagedCommitment` gate has since been removed entirely (staged
+  is the only engine). Within-engine equivalence oracles (incremental commit ==
+  from-scratch staged rebuild) were repointed off the legacy
+  `RebuildLatestDomainCommitment`; full `go test ./...` is green.
+
 Remaining gap:
 
-- Replace the current gtron-specific incremental tree over latest commitment
-  keys with Erigon's staged commitment branch calculation.
-- Replace the remaining full-latest rebuild fallback for non-empty updates when
-  no matching CommitmentDomain snapshot exists with Erigon-style staged branch
-  materialization from persisted commitment progress.
+- Staged cold restore is a full production path as of 2026-05-27 (commits
+  `87298e3`→`0ddb73f`): `RestoreNodesFromSnapshot` restores branch rows from a
+  `CommitmentBranchSnapshotSource` and self-verifies by re-folding to the expected
+  root, degrading to `Rebuild` only when no snapshot matches. The production
+  latest-snapshot driver builds + publishes `CommitmentBranch` segments and the
+  snapshot `Manager` implements `CommitmentBranchSnapshotSource` (resolving the
+  covering branch ref against the current manifest per call), so the bare `Manager`
+  wired into the chain drives restore. An e2e test proves restore folds from the
+  snapshot with no full-scan rebuild and yields the same root as the rebuild path
+  (see #7 for the latest-build driver).
+- Incremental rewind without rebuild — slice 1 landed 2026-05-27: an inverse-delta
+  unwind primitive (`rawdb.CollectStateUnwind` + `domains.UnwindCommitment`) rewinds
+  the latest-domain tables and staged commitment branches from the tip to a target
+  block by folding the INVERSE of the persisted `StateDomainChange` pre-images
+  (`Prev`/`Next`, within `HistoryPruneWindow`), touching only changed branch paths —
+  no full `Rebuild` scan, no new persistence. A property test proves rewind-to-N
+  reproduces the from-scratch branch keyspace BYTE-for-byte (12 rows incl.
+  intermediate branch create/collapse), the same root, and that forward commits from
+  the rewound state match a from-scratch store. The unwind self-verifies the re-folded
+  root against the target block's persisted internal root, so an incomplete/pruned
+  range errors instead of corrupting. Also fixed a latent restart-sync bug:
+  `ResetMutableState` now clears the commitment branch keyspace (it previously kept
+  stale branches that could let `RestoreRootFromNodes` skip `Rebuild` with the prior
+  run's root). Slice 2 landed 2026-05-27: the unwind primitive now has a REAL
+  consumer — `RestartSyncFromHeight` (the historical-sync restart path) takes a fast
+  incremental branch (`canIncrementalUnwind` gate → `incrementalUnwindTo`) when
+  `HistoryEnabled` and the changeset window covers `(target, head]`, rewinding via
+  `UnwindCommitment` + flat block-keyed truncation + `total-tx-count` subtraction +
+  `resetRuntimeStateLocked`, instead of reset-to-genesis + replay. (Chosen over a
+  standalone `BlockChain.UnwindTo`, which would have had no production caller.)
+  History-off / pruned-window nodes fall through to the unchanged, always-correct
+  reset+replay path. So the "rewind/unwind without rebuilding the entire latest
+  state" acceptance is now met NON-vacuously for history-enabled nodes. A new test
+  proves the incremental branch is taken (rebuild-spy never fires; phases are
+  `reset/unwind/flush/done`, no `genesis`/`replay`), reaches byte-identical end state
+  to the reset+replay path, and lands the same head state root as a from-scratch
+  chain built straight to the target (equivalence anchor). Known limitation
+  (documented): the incremental path does not scrub TAPOS ring slots in
+  `(target, target+65536]` — self-healing via the 65536-slot overwrite ring.
+- Legacy-engine removal (Phase 2) — DONE 2026-05-27 (commits `bb99cb6`→`e9abd5c`,
+  full `go test ./...` green). The legacy binary-radix engine is entirely gone: the
+  store + db-wrappers, the `StagedCommitment` gate, the dead `UnwindStateDomainChanges`
+  path, all bit-tree rawdb helpers (`Rebuild/UpdateLatestDomainCommitment`,
+  `ComputeAndWriteLatestDomainRoot`, `tree/node` prefix), the `CommitmentNode`
+  (`tree/node/`) snapshot family across `snapshots/{manifest,latest_segment,
+  latest_binary,domain_registry}.go`, and the `latestDomainCommitmentStore` interface.
+  The pruning checker iterates the commitment domain directly
+  (`rawdb.IterateStateCommitmentDomain`) for the engine-agnostic root + checkpoint
+  validation, and additionally counts published `CommitmentBranch` snapshot rows
+  and warns on staleness; staged branch rows are derived state and are never pruned.
+- Snapshot-streaming production path (DONE 2026-05-27): the aggregator builds +
+  the `Manager` serves staged `CommitmentBranch` snapshots in production. Operator
+  note: latest snapshots are built from the live DB without a consistent read
+  snapshot, so a build can capture a cross-dataset-inconsistent dump — self-detected
+  via the restore re-fold/expected-root check (falls back to `Rebuild`), so it never
+  corrupts state. Inherent to the latest-snapshot design (shared by all latest datasets).
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
@@ -490,6 +605,26 @@ Status update:
 - The node now registers one ordered snapshot/prune lifecycle that runs cold
   history build/publish/compaction before hot pruning, so snap mode cannot prune
   history rows before the same pass has made snapshot coverage visible.
+- The lifecycle now also runs a production LATEST-snapshot build pass (landed
+  2026-05-27, commits `87298e3`→`0ddb73f`): `Aggregator.BuildLatest` builds every
+  registered latest dataset (accounts, KV, KV-generation, code,
+  commitment-root/checkpoint, and `CommitmentBranch`) at the solidified head,
+  integrates them, and writes latest/commitment-flush stage progress. It is gated
+  by the `LatestBuildBlocks` cadence knob (default ~33h of blocks; all latest
+  datasets share one cadence), seeded to the current solidified block on start to
+  skip a startup full-scan. This closes the gap where the latest-build path
+  (`Aggregator.Build`) had no production caller — only the history pass ran.
+  Latest-build watermark persistence landed 2026-05-27 (commit `42f08d4`): a
+  forward-only `StageSnapshotLatestBuild` block stage is written after each latest
+  build and seeded on `Runner.Start`, so a restart resumes the cadence gate instead
+  of re-seeding to the current head (fresh nodes still fall back to the head, so no
+  startup full-scan / no migration). The step-aggregator capabilities (collate,
+  build, publish, prune, compact, watermarks) already run in order under
+  `SnapshotLifecycle.OnePass` with shared manifest + `StageSnapshot*` watermarks, so
+  #7's Acceptance (resume without guessing; retention explainable by watermarks) is
+  met. Consolidating `Runner`+`Pruner` into a single "aggregator" type was
+  intentionally skipped — Acceptance is behavioral, not a class layout, and merging
+  the two clean concerns (build vs. delete) is churn with no behavior change.
 - Canonical execution stage progress is written through a typed
   `stageProgressStore` boundary and restart-sync rewind explicitly rewinds
   `Headers`, `Bodies`, `Execution`, `Commitment`, and `Finish` stage progress to
@@ -765,11 +900,21 @@ Next step:
 
 - Keep shrinking lower-level rawdb-specific historical reconstruction helpers
   until they are only compatibility shims behind the registered domain path.
-- Finalize the CodeDomain policy: either document the current
-  content-addressed latest-retention model as the intended Erigon-style domain
-  for TRON code, or add a distinct temporal CodeDomain if java-tron parity
-  fixtures prove account-envelope history plus hash-bound code retention is not
-  enough.
+- **Done (2026-05-27):** the CodeDomain policy is finalized and documented as
+  content-addressed latest retention (see gap #5 and the `CodeDomain` registry
+  docstring); the coverage-gated deletion path is locked by
+  `TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage`.
+- **Done (2026-05-27):** corrected the stale `InsertBlock` comments that claimed
+  `block_filled_slots` "lands via `dynProps.Flush(bc.db)`" and was "not yet
+  retrofitted onto the buffer (slice 2 backlog)". A consensus-key enumeration
+  confirmed every dirty DP key is staged into the rooted `SystemDynamicProperty`
+  KV by `FlushRooted` (before Commit, so it rewinds with the internal state root)
+  and that every production DP write key is reloaded on restart; `Flush` only
+  mirrors the four derived runtime keys to flat `dp-`. The rooted/derived split is
+  already guarded by `dynamic_properties_rooted_test.go` (e.g.
+  `TestDynPropFlatFlushWritesOnlyDerivedRuntimeKeys`,
+  `TestDynPropFlushDerivedUsesTypedStoreBoundary`). The fork-rewind design doc's
+  "slice 2" DP backlog is annotated as superseded by this rooted mechanism.
 - Keep reducing residual per-block repair paths that bypass the stage pipeline
   or registered domains.
 
@@ -866,6 +1011,19 @@ Acceptance:
 - Rawdb state accessors are either deleted, test-only, or clearly marked as
   compatibility adapters.
 
+**Acceptance CLOSED 2026-05-27.** Both criteria met against code. (1) Actuators/
+StateDB no longer mutate consensus state through rawdb prefixes — the rooted
+refactor routes accounts, dynamic properties, witness schedule, delegation,
+rewards, shielded state, and fork votes through typed stores. (2) The remaining
+rawdb state accessors are clearly-marked compatibility adapters (`latest_hot_store`,
+`account_kv_rawdb_store`, `domains/flat_rawdb_store`) behind the typed-store
+boundary, or immutable-chain-data reads (genesis witnesses, block hashes). The one
+flagged execution-path violation — the incremental-unwind path's direct
+`DeleteStateDomainChanges`/`DeleteStateTxRange` calls — now dispatches through the
+registered `HistoryDomain.DeleteHotHistoryBlock`/`DeleteHotHistoryTxRange` hooks,
+like the pruner. The "keep shrinking shims" Next step is ongoing maintenance
+discipline, but no open acceptance gate remains.
+
 ### 10. Conformance Coverage Must Catch Root And Archive Semantics
 
 The architecture can be file-compatible with Erigon and still be consensus-wrong
@@ -886,13 +1044,36 @@ Status update:
 - Fork-switch coverage now verifies the internal CommitmentDomain root after
   rewind/replay: the stored latest commitment root must match the canonical
   block-state root and a rebuild from the visible latest-domain rows.
+- Contract storage update/delete/recreate is covered: a mid-life slot overwrite
+  (non-zero -> different non-zero) is historically distinguished by
+  `TenBlockSweep` (slot 0x03 at block 3 -> 0x07 at block 7), and the
+  delete/recreate lifecycle by `AccountDeletedThenRecreated`.
+- Historical code reconstruction across an in-place bytecode overwrite is now
+  pinned both hot and cold: `TestPersistentHistoryReader_CodeUpdateHistory`
+  reconstructs codeA at block 1 and codeB at block 2 through the historical
+  reader (verified non-tautological), and
+  `TestPersistentHistoryReaderReadsCodeFromColdCodeDomain` now asserts that both
+  code versions reconstruct from the cold CodeDomain after the hot code bytes
+  are deleted, i.e. the cold CodeDomain retains the superseded version.
 
 Next step:
 
-- Add golden tests for:
-  - contract storage update/delete/recreate
-  - code update and historical `CodeAt`
-  - account-KV generation changes
+- account-KV generation changes are covered end-to-end:
+  `TestRecreatedAccountDoesNotLeakOldGenerationSlots` proves a destroy+recreate
+  bumps the per-account generation (persisted via the account envelope and read
+  back as generation+1 on reopen), so the recreated account reads a fresh
+  namespace and does NOT leak a prior-incarnation slot, while the orphaned gen-0
+  rows survive on disk (Erigon-incarnation style, no O(N) prefix delete).
+  `TestArchiveStorageAgreesWithLiveAcrossRecreate` proves the archive
+  `StorageAt` path agrees with live reads across the recreate.
+  Benign residual: the standalone generation-as-of row reader
+  (`ReadStateKVGenerationAsOfTxNum`, which reads the separate `KVGeneration` row
+  rather than the envelope) can return a stale generation after a recreate,
+  because the recreate bump is persisted via the envelope, not that row, and
+  `ResetAccountKV` (the only writer that marks the row dirty) has no callers. The
+  storage reconstruction path does not consume that row (proven by the
+  archive-vs-live storage test), so no storage/leak divergence is observable;
+  this is a latent inconsistency in a non-storage accessor, not a correctness bug.
 - Keep java-tron fixture replay as the final compatibility gate.
 
 Acceptance:
@@ -900,6 +1081,21 @@ Acceptance:
 - Full tests pass with hot history deleted for covered cold ranges.
 - Fixture replay proves block/state compatibility across root-sensitive
   transactions.
+
+**Status 2026-05-27 — distinct from #1–#9 (this is conformance *coverage*, not
+data-architecture *implementation*; the data-architecture gaps #1–#9 are all now
+closed).** Criterion 1 is MET: the persistent-history reader, archive-vs-live,
+fork-switch internal-root, and code/storage/generation create-delete-recreate
+suites listed above pass with hot history deleted for covered cold ranges (`make
+test` green). Criterion 2 (java-tron fixture replay) is operationalized by the
+existing cross-impl stress harness (`scripts/system_test_stress.sh` driving the
+java-tron TestNG suite against a private chain) and is an ONGOING compatibility
+gate by nature, not a one-time closure. The architecture changes landed for #1–#9
+are consensus-safe by construction: the internal commitment/staged root is
+decoupled from java-tron's block-header `accountStateRoot` via
+`core.StateRootAdapter`, so internal storage-model changes cannot alter wire/
+consensus output. Remaining conformance work is incremental fixture expansion
+around root-relevant blocks/contracts, tracked as continuous cross-impl testing.
 
 ## Priority Roadmap
 

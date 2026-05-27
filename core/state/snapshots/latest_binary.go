@@ -2058,8 +2058,6 @@ func latestBinaryDatasetCode(dataset SegmentDataset) (uint16, error) {
 		return 6, nil
 	case SegmentDatasetCommitmentRoot:
 		return 4, nil
-	case SegmentDatasetCommitmentNode:
-		return 5, nil
 	case SegmentDatasetCommitmentCheckpoint:
 		return 7, nil
 	default:
@@ -2079,8 +2077,6 @@ func latestBinaryDataset(code uint16) (SegmentDataset, error) {
 		return SegmentDatasetCode, nil
 	case 4:
 		return SegmentDatasetCommitmentRoot, nil
-	case 5:
-		return SegmentDatasetCommitmentNode, nil
 	case 7:
 		return SegmentDatasetCommitmentCheckpoint, nil
 	default:

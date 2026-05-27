@@ -93,9 +93,6 @@ func TestLatestSegmentBuildsAccountKVDomainsFromHotStore(t *testing.T) {
 	code := []byte{0x60, 0x01, 0x60, 0x00}
 	codeHash := common.Keccak256(code)
 	root := common.BytesToHash(bytes.Repeat([]byte{0x56}, common.HashLength))
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte("typed-node")...)
-	nodeValue := common.BytesToHash(bytes.Repeat([]byte{0x57}, common.HashLength)).Bytes()
-	checkpointKey := append(rawdb.StateCommitmentCheckpointLogicalPrefix(), []byte{0, 0, 0, 0, 0, 0, 0, 9}...)
 	store := &recordingLatestHotStore{
 		accounts: []latestHotAccountRow{
 			{owner: owner1, value: []byte("account-1")},
@@ -113,10 +110,6 @@ func TestLatestSegmentBuildsAccountKVDomainsFromHotStore(t *testing.T) {
 			{hash: codeHash, code: code},
 		},
 		commitmentRoot: root,
-		commitmentRows: []latestHotCommitmentRow{
-			{key: nodeKey, value: nodeValue},
-			{key: checkpointKey, value: []byte("checkpoint")},
-		},
 	}
 
 	accountRef, err := buildAccountLatestSegmentFromStore(store, dir, 1, 10, "latest/accounts.json")
@@ -185,21 +178,6 @@ func TestLatestSegmentBuildsAccountKVDomainsFromHotStore(t *testing.T) {
 	}
 	if got, ok, err := rootSeg.Get(rawdb.LatestDomainCommitmentRootLogicalKey()); err != nil || !ok || !bytes.Equal(got, root.Bytes()) {
 		t.Fatalf("commitment root from store = %x ok=%v err=%v, want %x,true,nil", got, ok, err, root.Bytes())
-	}
-
-	nodeRef, err := buildCommitmentDomainSegmentFromStore(store, SegmentDatasetCommitmentNode, rawdb.LatestDomainCommitmentNodeLogicalPrefix(), dir, 1, 10, "commitment/nodes.json")
-	if err != nil {
-		t.Fatalf("build commitment nodes from store: %v", err)
-	}
-	nodeSeg, err := OpenLatestSegment(dir, nodeRef)
-	if err != nil {
-		t.Fatalf("open commitment nodes: %v", err)
-	}
-	if got, ok, err := nodeSeg.Get(nodeKey); err != nil || !ok || !bytes.Equal(got, nodeValue) {
-		t.Fatalf("commitment node from store = %x ok=%v err=%v, want %x,true,nil", got, ok, err, nodeValue)
-	}
-	if _, ok, err := nodeSeg.Get(checkpointKey); err != nil || ok {
-		t.Fatalf("checkpoint leaked into node segment ok=%v err=%v", ok, err)
 	}
 }
 
@@ -307,20 +285,6 @@ func TestLatestSegmentRestoreUsesHotStore(t *testing.T) {
 	}
 	if got := store.writtenCode[codeHash]; !bytes.Equal(got, code) {
 		t.Fatalf("written code = %x, want %x", got, code)
-	}
-
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte("typed-restore")...)
-	nodeValue := common.BytesToHash(bytes.Repeat([]byte{0x58}, common.HashLength)).Bytes()
-	commitmentSeg := &LatestSegment{
-		Version: LatestSegmentVersion,
-		Dataset: SegmentDatasetCommitmentNode,
-		Entries: []LatestEntry{{Key: nodeKey, Value: nodeValue}},
-	}
-	if err := commitmentSeg.restoreToStore(store); err != nil {
-		t.Fatalf("restore commitment through store: %v", err)
-	}
-	if got := store.writtenCommitment[string(nodeKey)]; !bytes.Equal(got, nodeValue) {
-		t.Fatalf("written commitment = %x, want %x", got, nodeValue)
 	}
 }
 
@@ -532,11 +496,6 @@ func TestFlatLatestSegmentsBuildServeAndRestore(t *testing.T) {
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
 		t.Fatal(err)
 	}
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte{0x00, 0x80}...)
-	nodeHash := common.BytesToHash(bytes.Repeat([]byte{0xcd}, common.HashLength))
-	if err := rawdb.WriteStateCommitmentDomain(db, nodeKey, nodeHash.Bytes()); err != nil {
-		t.Fatal(err)
-	}
 
 	var refs []SegmentRef
 	builders := []func() (SegmentRef, error){
@@ -551,9 +510,6 @@ func TestFlatLatestSegmentsBuildServeAndRestore(t *testing.T) {
 		},
 		func() (SegmentRef, error) {
 			return BuildCommitmentRootSegmentFromDB(db, dir, 100, 120, "commitment/root.json")
-		},
-		func() (SegmentRef, error) {
-			return BuildCommitmentNodeSegmentFromDB(db, dir, 100, 120, "commitment/nodes.json")
 		},
 	}
 	for _, build := range builders {
@@ -583,9 +539,6 @@ func TestFlatLatestSegmentsBuildServeAndRestore(t *testing.T) {
 	if got, ok, err := mgr.GetCommitmentRoot(110); err != nil || !ok || got != root {
 		t.Fatalf("commitment root = %x ok=%v err=%v", got, ok, err)
 	}
-	if got, ok, err := mgr.GetCommitmentNode(nodeKey, 110); err != nil || !ok || !bytes.Equal(got, nodeHash.Bytes()) {
-		t.Fatalf("commitment node = %x ok=%v err=%v", got, ok, err)
-	}
 	if _, ok, err := mgr.GetKVLatest(kvdomains.SystemReward, owner, 7, []byte("ignored"), 110); err != nil || ok {
 		t.Fatalf("unbuilt kv domain hit ok=%v err=%v", ok, err)
 	}
@@ -605,9 +558,6 @@ func TestFlatLatestSegmentsBuildServeAndRestore(t *testing.T) {
 	}
 	if got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(restored); err != nil || !ok || got != root {
 		t.Fatalf("restored root = %x ok=%v err=%v", got, ok, err)
-	}
-	if got, ok, err := rawdb.ReadStateCommitmentDomain(restored, nodeKey); err != nil || !ok || !bytes.Equal(got, nodeHash.Bytes()) {
-		t.Fatalf("restored node = %x ok=%v err=%v", got, ok, err)
 	}
 	if _, ok, err := rawdb.ReadStateKVLatest(restored, owner, 7, kvdomains.SystemReward, []byte("ignored")); err != nil || ok {
 		t.Fatalf("restored unbuilt domain ok=%v err=%v", ok, err)

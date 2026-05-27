@@ -2,7 +2,6 @@ package domains
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -17,7 +16,12 @@ type CommitmentDB interface {
 	ethdb.Iteratee
 }
 
-type latestCommitmentStore interface {
+// LatestCommitmentStore is the engine-agnostic persistence seam the latest-domain
+// commitment orchestrator drives. Both the legacy incremental binary-radix store
+// and the Erigon-style staged store implement it; callers select between them via
+// the constructors below and feed the chosen store to the With-Store apply
+// entries.
+type LatestCommitmentStore interface {
 	ReadRoot() (common.Hash, bool, error)
 	WriteRoot(root common.Hash) error
 	RootNodePresent(root common.Hash) (bool, error)
@@ -31,7 +35,19 @@ type latestCommitmentStore interface {
 
 type CommitmentSnapshotSource interface {
 	GetCommitmentRoot(txNum uint64) (common.Hash, bool, error)
-	IterateCommitmentNodes(logicalPrefix []byte, txNum uint64, fn func(logicalKey, value []byte) (bool, error)) error
+}
+
+// CommitmentBranchSnapshotSource is the staged engine's snapshot restore seam.
+// It pairs the snapshot root with an iterator over the snapshotted
+// state-commitment-branch-v1- rows (hex-trie prefix -> encoded BranchData),
+// which the legacy CommitmentSnapshotSource (tree/node/ logical keys) cannot
+// express. A source may satisfy both interfaces — the production snapshot
+// Manager does — so stagedCommitmentStore.RestoreNodesFromSnapshot type-asserts
+// to this shape and declines gracefully when it is not implemented, leaving the
+// LatestCommitmentStore interface and CommitmentSnapshotRepair unchanged.
+type CommitmentBranchSnapshotSource interface {
+	GetCommitmentRoot(txNum uint64) (common.Hash, bool, error)
+	IterateCommitmentBranches(txNum uint64, fn func(prefix, encoded []byte) (bool, error)) error
 }
 
 type CommitmentSnapshotRepair struct {
@@ -39,95 +55,27 @@ type CommitmentSnapshotRepair struct {
 	TxNum  uint64
 }
 
-type rawDBLatestCommitmentStore struct {
-	db CommitmentDB
+// ApplyLatestCommitmentWithStore drives the engine-agnostic orchestrator over an
+// explicitly-chosen LatestCommitmentStore. Callers pick the store implementation
+// (legacy vs staged) and pass it in.
+func ApplyLatestCommitmentWithStore(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
+	return ApplyLatestCommitmentWithStoreAndRepair(store, updates, CommitmentSnapshotRepair{})
 }
 
-func newRawDBLatestCommitmentStore(db CommitmentDB) latestCommitmentStore {
-	return rawDBLatestCommitmentStore{db: db}
-}
-
-func (s rawDBLatestCommitmentStore) ReadRoot() (common.Hash, bool, error) {
-	return rawdb.ReadLatestDomainCommitmentRoot(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) WriteRoot(root common.Hash) error {
-	return rawdb.WriteLatestDomainCommitmentRoot(s.db, root)
-}
-
-func (s rawDBLatestCommitmentStore) RootNodePresent(root common.Hash) (bool, error) {
-	return rawdb.LatestDomainCommitmentRootNodePresent(s.db, root)
-}
-
-func (s rawDBLatestCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error) {
-	return rawdb.RestoreLatestDomainCommitmentRootFromNodes(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapshotSource, txNum uint64, expectedRoot common.Hash) (bool, error) {
-	if source == nil || expectedRoot == (common.Hash{}) {
-		return false, nil
-	}
-	snapshotRoot, ok, err := source.GetCommitmentRoot(txNum)
-	if err != nil || !ok || snapshotRoot != expectedRoot {
-		return false, err
-	}
-	restored := 0
-	if err := source.IterateCommitmentNodes(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), txNum, func(logicalKey, value []byte) (bool, error) {
-		if !rawdb.IsLatestDomainCommitmentNodeLogicalKey(logicalKey) {
-			return false, fmt.Errorf("domains: snapshot commitment node has unexpected key %x", logicalKey)
-		}
-		if len(value) != common.HashLength {
-			return false, fmt.Errorf("domains: snapshot commitment node %x has bad hash length %d", logicalKey, len(value))
-		}
-		if err := rawdb.WriteStateCommitmentDomain(s.db, logicalKey, value); err != nil {
-			return false, err
-		}
-		restored++
-		return true, nil
-	}); err != nil {
-		return false, err
-	}
-	if restored == 0 {
-		return false, nil
-	}
-	return s.RootNodePresent(expectedRoot)
-}
-
-func (s rawDBLatestCommitmentStore) Rebuild() (common.Hash, error) {
-	return rawdb.RebuildLatestDomainCommitment(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) Update(updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
-	return rawdb.UpdateLatestDomainCommitment(s.db, updates)
-}
-
-func (s rawDBLatestCommitmentStore) ReadLatestCheckpoint() (*rawdb.StateCommitmentCheckpoint, bool, error) {
-	return rawdb.ReadLatestStateCommitmentCheckpoint(s.db)
-}
-
-func (s rawDBLatestCommitmentStore) IterateCheckpoints(fn func(*rawdb.StateCommitmentCheckpoint) (bool, error)) error {
-	return rawdb.IterateStateCommitmentCheckpoints(s.db, fn)
-}
-
-func ApplyLatestCommitment(db CommitmentDB, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
-	if db == nil {
+// ApplyLatestCommitmentWithStoreAndRepair is ApplyLatestCommitmentWithStore plus
+// a snapshot-repair source for restoring pruned branch state before the update.
+func ApplyLatestCommitmentWithStoreAndRepair(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
+	if store == nil {
 		return common.Hash{}, ErrNilCommitmentStore
 	}
-	return applyLatestCommitment(newRawDBLatestCommitmentStore(db), updates)
+	return applyLatestCommitmentWithRepair(store, updates, repair)
 }
 
-func ApplyLatestCommitmentWithSnapshotRepair(db CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
-	if db == nil {
-		return common.Hash{}, ErrNilCommitmentStore
-	}
-	return applyLatestCommitmentWithRepair(newRawDBLatestCommitmentStore(db), updates, repair)
-}
-
-func applyLatestCommitment(store latestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
+func applyLatestCommitment(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate) (common.Hash, error) {
 	return applyLatestCommitmentWithRepair(store, updates, CommitmentSnapshotRepair{})
 }
 
-func applyLatestCommitmentWithRepair(store latestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
+func applyLatestCommitmentWithRepair(store LatestCommitmentStore, updates []rawdb.StateCommitmentUpdate, repair CommitmentSnapshotRepair) (common.Hash, error) {
 	if store == nil {
 		return common.Hash{}, ErrNilCommitmentStore
 	}
@@ -205,14 +153,13 @@ func applyLatestCommitmentWithRepair(store latestCommitmentStore, updates []rawd
 	return store.Update(updates)
 }
 
-func SeekLatestCommitment(db CommitmentDB, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
-	if db == nil {
-		return 0, 0, ErrNilCommitmentStore
-	}
-	return seekLatestCommitment(newRawDBLatestCommitmentStore(db), txNumAtBlockEnd)
+// SeekLatestCommitmentWithStore is the store-injecting variant of
+// SeekLatestCommitment, so callers can select the commitment engine.
+func SeekLatestCommitmentWithStore(store LatestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
+	return seekLatestCommitment(store, txNumAtBlockEnd)
 }
 
-func seekLatestCommitment(store latestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
+func seekLatestCommitment(store LatestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
 	if store == nil {
 		return 0, 0, ErrNilCommitmentStore
 	}

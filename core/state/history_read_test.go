@@ -176,6 +176,12 @@ func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
 		s.SetCode(addr, code2)
 	})
+	// Block 3: unrelated mutation so blocks 1 and 2 sit below head and resolve
+	// through historical reconstruction (and thus the cold CodeDomain) rather
+	// than the live read at head.
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(testAddr(0x74), 1)
+	})
 
 	range1, ok, err := rawdb.ReadStateTxRange(f.disk, 1)
 	if err != nil || !ok {
@@ -212,6 +218,16 @@ func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	}
 	if !bytes.Equal(code, code1) {
 		t.Fatalf("CodeAt block 1 = %x, want %x", code, code1)
+	}
+	// The updated bytecode must also reconstruct from the cold CodeDomain: the
+	// account envelope as-of block 2 references codeHash2, and the cold snapshot
+	// (built before hot deletion) retains both content-addressed versions.
+	code2Got, err := r.CodeAt(addr, 2)
+	if err != nil {
+		t.Fatalf("CodeAt block 2: %v", err)
+	}
+	if !bytes.Equal(code2Got, code2) {
+		t.Fatalf("CodeAt block 2 = %x, want %x", code2Got, code2)
 	}
 }
 
@@ -709,6 +725,48 @@ func TestPersistentHistoryReader_AccountDeletedThenRecreated(t *testing.T) {
 		t.Fatalf("StorageAt(addr, slot, 9): %v", err)
 	} else if got != newSlotValue {
 		t.Errorf("StorageAt(addr, slot, 9) = %x, want new generation value %x", got, newSlotValue)
+	}
+}
+
+// TestPersistentHistoryReader_CodeUpdateHistory pins historical code
+// reconstruction across an in-place bytecode overwrite (gap doc item #10):
+// a contract whose code is replaced (codeA -> codeB, both non-empty) must
+// reconstruct the correct bytes at each historical block. TenBlockSweep only
+// covers empty->code creation; this covers a true update where both the
+// before- and after-bytes are non-empty and must be told apart.
+//
+// All queried blocks are strictly below head so they exercise the historical
+// reconstruction path (accountAndCodeFromStateDomain), not the live read.
+func TestPersistentHistoryReader_CodeUpdateHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0xC1)
+	other := testAddr(0xC2)
+	codeA := []byte{0x60, 0x01}
+	codeB := []byte{0x60, 0x02, 0x60, 0x03}
+
+	// Block 1: deploy with codeA. Block 2: overwrite in place with codeB.
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.SetCode(contract, codeA)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SetCode(contract, codeB)
+	})
+	// Block 3: unrelated mutation so blocks 1 and 2 are below head and resolve
+	// through the historical reconstruction path rather than the live read.
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	r := f.reader()
+	if got, err := r.CodeAt(contract, 1); err != nil {
+		t.Fatalf("CodeAt(contract, 1): %v", err)
+	} else if !bytes.Equal(got, codeA) {
+		t.Errorf("CodeAt(contract, 1) = %x, want codeA %x", got, codeA)
+	}
+	if got, err := r.CodeAt(contract, 2); err != nil {
+		t.Fatalf("CodeAt(contract, 2): %v", err)
+	} else if !bytes.Equal(got, codeB) {
+		t.Errorf("CodeAt(contract, 2) = %x, want codeB %x", got, codeB)
 	}
 }
 

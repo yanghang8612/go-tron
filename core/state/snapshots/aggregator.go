@@ -55,7 +55,7 @@ func (a *Aggregator) Build(db AggregatorDB, opts AggregatorBuildOptions) (*Aggre
 	}, nil
 }
 
-func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions) ([]SegmentRef, error) {
+func (a *Aggregator) buildLatestSegments(db AggregatorDB, opts AggregatorBuildOptions) ([]SegmentRef, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
@@ -73,13 +73,6 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 	kvLatestDomains[SegmentDatasetKVLatest] = domains
 
 	var refs []SegmentRef
-	buildLatest := func(latestRef, accessorRef, btreeRef SegmentRef, err error) error {
-		if err != nil {
-			return err
-		}
-		refs = append(refs, latestRef, accessorRef, btreeRef)
-		return nil
-	}
 	registry := DefaultDomainRegistry()
 	for _, cfg := range registry.LatestConfigs() {
 		if cfg.BuildLatest == nil {
@@ -87,16 +80,29 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 		}
 		if cfg.DomainSpecific {
 			for _, domain := range kvLatestDomains[cfg.Dataset] {
-				if err := buildLatest(cfg.BuildLatest(db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts))); err != nil {
+				built, err := cfg.BuildLatest(db, a.dir, domain, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(domain), opts, cfg.latestPathExt()))
+				if err != nil {
 					return nil, err
 				}
+				refs = append(refs, built...)
 			}
 			continue
 		}
-		if err := buildLatest(cfg.BuildLatest(db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts))); err != nil {
+		built, err := cfg.BuildLatest(db, a.dir, 0, opts.FromTxNum, opts.ToTxNum, aggregateLatestPath(cfg.LatestPathBase(0), opts, cfg.latestPathExt()))
+		if err != nil {
 			return nil, err
 		}
+		refs = append(refs, built...)
 	}
+	return refs, nil
+}
+
+func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions) ([]SegmentRef, error) {
+	refs, err := a.buildLatestSegments(db, opts)
+	if err != nil {
+		return nil, err
+	}
+	registry := DefaultDomainRegistry()
 	for _, cfg := range registry.HistoryConfigs() {
 		if cfg.BuildHistory == nil {
 			return nil, fmt.Errorf("snapshots: history domain %s has no builder", cfg.Dataset)
@@ -109,6 +115,30 @@ func (a *Aggregator) BuildSegments(db AggregatorDB, opts AggregatorBuildOptions)
 	}
 	sortSegments(refs)
 	return refs, nil
+}
+
+// BuildLatest builds only the registered latest-domain segments for [FromTxNum,
+// ToTxNum] and integrates them into the manifest. History segments are owned by
+// the cold history Runner pass and are not touched here.
+func (a *Aggregator) BuildLatest(db AggregatorDB, opts AggregatorBuildOptions) (*AggregatorBuildResult, error) {
+	refs, err := a.buildLatestSegments(db, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return &AggregatorBuildResult{}, nil
+	}
+	sortSegments(refs)
+	manifest, err := a.Integrate(opts.FromTxNum, opts.ToTxNum, refs)
+	if err != nil {
+		return nil, err
+	}
+	if writer, ok := db.(ethdb.KeyValueWriter); ok {
+		if err := WriteManifestProgressStages(writer, manifest.Progress); err != nil {
+			return nil, err
+		}
+	}
+	return &AggregatorBuildResult{Manifest: manifest, Segments: append([]SegmentRef(nil), refs...)}, nil
 }
 
 func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {
@@ -301,8 +331,11 @@ func aggregatePath(base string, opts AggregatorBuildOptions) string {
 	return fmt.Sprintf("%s-%d-%d.json", base, opts.FromTxNum, opts.ToTxNum)
 }
 
-func aggregateLatestPath(base string, opts AggregatorBuildOptions) string {
-	return fmt.Sprintf("%s-%d-%d.seg", base, opts.FromTxNum, opts.ToTxNum)
+func aggregateLatestPath(base string, opts AggregatorBuildOptions, ext string) string {
+	if ext == "" {
+		ext = ".seg"
+	}
+	return fmt.Sprintf("%s-%d-%d%s", base, opts.FromTxNum, opts.ToTxNum, ext)
 }
 
 func segmentOverlapsAnyFamily(ref SegmentRef, refs []SegmentRef) bool {

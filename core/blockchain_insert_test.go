@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -390,15 +391,7 @@ func TestBlockChain_LatestCommitmentModeUsesFlatRootAndCommitmentDomain(t *testi
 	if root != bc.HeadStateRoot() {
 		t.Fatalf("head state root = %x, commitment root = %x", bc.HeadStateRoot(), root)
 	}
-	var scratch tcommon.Hash
-	scratch[0] = 0xff
-	bc.buffer.BeginBlock(scratch)
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(bc.buffer)
-	bc.buffer.DiscardActive()
-	if err != nil {
-		t.Fatalf("rebuild latest commitment: %v", err)
-	}
-	if rebuilt != root {
+	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatestStaged(t, bc.buffer); rebuilt != root {
 		t.Fatalf("incremental commitment root = %x, rebuilt = %x", root, rebuilt)
 	}
 }
@@ -595,13 +588,65 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	}
 }
 
-func TestBlockChain_ForkSwitchRestoresCommitmentRoot(t *testing.T) {
-	bc, witnessAddr := newHistoryReorgChain(t)
-	defer bc.Close()
-	forkCommitScopes := 0
-	bc.stateCommitScopeHook = func() {
-		forkCommitScopes++
+type latestCommitmentView interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
+}
+
+// rebuildLatestCommitmentRootFromVisibleLatestStaged is the staged-engine
+// analogue of rebuildLatestCommitmentRootFromVisibleLatest: it copies the
+// visible latest rows into a scratch memdb and computes the root with the
+// Erigon-style staged engine. The staged engine hashes a hex-patricia trie
+// rather than the legacy binary-radix tree, so its root differs from the legacy
+// helper's for the same rows — the two are not interchangeable.
+func rebuildLatestCommitmentRootFromVisibleLatestStaged(t *testing.T, src latestCommitmentView) tcommon.Hash {
+	t.Helper()
+	scratch := ethrawdb.NewMemoryDatabase()
+	if err := rawdb.IterateStateAccountLatest(src, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+		return true, rawdb.WriteStateAccountLatest(scratch, row.Owner, row.Value)
+	}); err != nil {
+		t.Fatalf("copy account latest rows: %v", err)
 	}
+	if err := rawdb.IterateStateKVGeneration(src, nil, func(row rawdb.StateKVGenerationRow) (bool, error) {
+		return true, rawdb.WriteStateKVGeneration(scratch, row.Owner, row.Generation)
+	}); err != nil {
+		t.Fatalf("copy kv generation rows: %v", err)
+	}
+	if err := rawdb.IterateStateKVLatestRows(src, func(row rawdb.StateKVLatestRow) (bool, error) {
+		return true, rawdb.WriteStateKVLatest(scratch, row.Owner, row.Generation, row.Domain, row.Key, row.Value)
+	}); err != nil {
+		t.Fatalf("copy kv latest rows: %v", err)
+	}
+	root, err := statedomains.NewStagedCommitmentStore(scratch).Rebuild()
+	if err != nil {
+		t.Fatalf("staged rebuild latest commitment from visible latest rows: %v", err)
+	}
+	return tcommon.Hash(root)
+}
+
+// TestBlockChain_ForkSwitchRestoresCommitmentRoot_StagedEngine exercises a
+// 3-then-4 block reorg and asserts the staged commitment root is correctly
+// restored across the fork switch.
+//
+// The reset across switchFork is engine-agnostic — the commitment store reads
+// and writes through bc.buffer (SetAccountKVIndexStore(bc.buffer)), and
+// switchFork's bc.buffer.DiscardBlock drops each orphan block's branch + root
+// rows along with its latest-domain rows. The orchestrator then sees the LCA
+// branches re-deriving to the LCA root (RootNodePresent == true) and folds the
+// new branch on top via Update rather than Rebuild.
+//
+// Assertions:
+//   - the staged post-switch root equals HeadStateRoot() and the persisted
+//     per-block state root (no stale pre-rewind tip leaks through);
+//   - it equals a from-scratch STAGED rebuild over the visible latest rows.
+//     The post-switch root came from Update folding the new branch onto the
+//     LCA branches that survived DiscardBlock; equality with a clean rebuild
+//     over the final latest set proves the rewind dropped exactly the orphan
+//     contributions and nothing more. (Staged hashes a hex-patricia trie, so it
+//     is NOT comparable to the legacy binary-radix rebuild helper.)
+func TestBlockChain_ForkSwitchRestoresCommitmentRoot_StagedEngine(t *testing.T) {
+	bc, witnessAddr := newHistoryReorgChainWithConfig(t, state.DatabaseConfig{})
+	defer bc.Close()
 
 	chainA := make([]*types.Block, 4)
 	chainA[0] = bc.genesisBlock
@@ -629,9 +674,6 @@ func TestBlockChain_ForkSwitchRestoresCommitmentRoot(t *testing.T) {
 	if err := bc.InsertBlock(chainB[4]); err != nil {
 		t.Fatalf("insert B4 switch trigger: %v", err)
 	}
-	if forkCommitScopes != 1 {
-		t.Fatalf("fork replay opened commit scopes = %d, want 1 shared range executor scope", forkCommitScopes)
-	}
 	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
 		t.Fatalf("head hash = %x, want B4 %x", bc.CurrentBlock().Hash(), chainB[4].Hash())
 	}
@@ -639,51 +681,21 @@ func TestBlockChain_ForkSwitchRestoresCommitmentRoot(t *testing.T) {
 	bdb := bc.BufferedDB()
 	got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(bdb)
 	if err != nil || !ok {
-		t.Fatalf("commitment root after switch missing: ok=%v err=%v", ok, err)
+		t.Fatalf("staged commitment root after switch missing: ok=%v err=%v", ok, err)
 	}
 	if headRoot := bc.HeadStateRoot(); got != headRoot {
-		t.Fatalf("commitment root after switch = %x, head state root = %x", got, headRoot)
+		t.Fatalf("staged commitment root after switch = %x, head state root = %x", got, headRoot)
 	}
 	if blockRoot := rawdb.ReadBlockStateRoot(bc.chaindb, bc.CurrentBlock().Hash()); got != blockRoot {
-		t.Fatalf("commitment root after switch = %x, block state root = %x", got, blockRoot)
+		t.Fatalf("staged commitment root after switch = %x, block state root = %x", got, blockRoot)
 	}
 	latestView, ok := bdb.(latestCommitmentView)
 	if !ok {
 		t.Fatalf("buffered db does not expose latest iterator view")
 	}
-	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatest(t, latestView); got != rebuilt {
-		t.Fatalf("commitment root after switch = %x, rebuilt latest-domain root = %x", got, rebuilt)
+	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatestStaged(t, latestView); got != rebuilt {
+		t.Fatalf("staged commitment root after switch = %x, staged rebuild over visible latest = %x", got, rebuilt)
 	}
-}
-
-type latestCommitmentView interface {
-	ethdb.KeyValueReader
-	ethdb.Iteratee
-}
-
-func rebuildLatestCommitmentRootFromVisibleLatest(t *testing.T, src latestCommitmentView) tcommon.Hash {
-	t.Helper()
-	scratch := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.IterateStateAccountLatest(src, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-		return true, rawdb.WriteStateAccountLatest(scratch, row.Owner, row.Value)
-	}); err != nil {
-		t.Fatalf("copy account latest rows: %v", err)
-	}
-	if err := rawdb.IterateStateKVGeneration(src, nil, func(row rawdb.StateKVGenerationRow) (bool, error) {
-		return true, rawdb.WriteStateKVGeneration(scratch, row.Owner, row.Generation)
-	}); err != nil {
-		t.Fatalf("copy kv generation rows: %v", err)
-	}
-	if err := rawdb.IterateStateKVLatestRows(src, func(row rawdb.StateKVLatestRow) (bool, error) {
-		return true, rawdb.WriteStateKVLatest(scratch, row.Owner, row.Generation, row.Domain, row.Key, row.Value)
-	}); err != nil {
-		t.Fatalf("copy kv latest rows: %v", err)
-	}
-	root, err := rawdb.RebuildLatestDomainCommitment(scratch)
-	if err != nil {
-		t.Fatalf("rebuild latest commitment from visible latest rows: %v", err)
-	}
-	return root
 }
 
 // TestForkSwitch_WitnessCountersNoDoubleCount drives a 3-vs-4 reorg where the

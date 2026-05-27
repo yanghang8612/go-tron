@@ -15,8 +15,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x66}, common.AccountIDLength)...))
 	root := common.BytesToHash(bytes.Repeat([]byte{0xab}, common.HashLength))
-	nodeKey := append(rawdb.LatestDomainCommitmentNodeLogicalPrefix(), []byte{0x01, 0x02}...)
-	nodeHash := common.BytesToHash(bytes.Repeat([]byte{0xcd}, common.HashLength))
 	code := []byte{0x60, 0x00, 0x60, 0x01}
 	codeHash := common.Keccak256(code)
 
@@ -33,9 +31,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateCommitmentDomain(db, nodeKey, nodeHash.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
@@ -72,7 +67,7 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build aggregate snapshot: %v", err)
 	}
-	if result.Manifest == nil || len(result.Segments) != 24 {
+	if result.Manifest == nil || len(result.Segments) != 21 {
 		t.Fatalf("aggregate result = %+v", result)
 	}
 	loaded, err := LoadManifest(dir)
@@ -94,9 +89,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentLatest)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentAccessor)
-	assertSegmentRef(t, loaded, SegmentDatasetCommitmentNode, 0, SegmentBTree)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
 	assertSegmentRef(t, loaded, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
@@ -147,9 +139,6 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 	if got, ok, err := mgr.GetCommitmentRoot(15); err != nil || !ok || got != root {
 		t.Fatalf("manager root = %x ok=%v err=%v", got, ok, err)
-	}
-	if got, ok, err := mgr.GetCommitmentNode(nodeKey, 15); err != nil || !ok || !bytes.Equal(got, nodeHash.Bytes()) {
-		t.Fatalf("manager node = %x ok=%v err=%v", got, ok, err)
 	}
 	var historyReads []*rawdb.StateDomainChange
 	if err := mgr.IterateStateDomainChanges(15, 15, func(change *rawdb.StateDomainChange) (bool, error) {
@@ -227,6 +216,115 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 }
 
+func TestAggregatorBuildLatestOnly(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x77}, common.AccountIDLength)...))
+	root := common.BytesToHash(bytes.Repeat([]byte{0xcd}, common.HashLength))
+	code := []byte{0x60, 0x00, 0x60, 0x02}
+	codeHash := common.Keccak256(code)
+
+	if err := rawdb.WriteStateAccountLatest(db, owner, []byte("account-v1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVGeneration(db, owner, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 5, kvdomains.ContractStorage, []byte("slot/b"), []byte("storage-v1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCode(db, codeHash, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
+		BlockNum:  4,
+		BlockHash: common.Hash{0x04},
+		Root:      root,
+		Scheme:    rawdb.LatestDomainCommitmentScheme,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 4, common.Hash{0x04}, 10, 20); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a history row to prove BuildLatest ignores available history data.
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   4,
+		BlockHash:  common.Hash{0x04},
+		TxNum:      15,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainKVLatest,
+		Owner:      owner,
+		Generation: 5,
+		Domain:     kvdomains.ContractStorage,
+		Key:        []byte("slot/b"),
+		PrevExists: true,
+		Prev:       []byte("storage-v0"),
+		NextExists: true,
+		Next:       []byte("storage-v1"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agg := NewAggregator(dir)
+	result, err := agg.BuildLatest(db, AggregatorBuildOptions{FromTxNum: 10, ToTxNum: 20})
+	if err != nil {
+		t.Fatalf("BuildLatest: %v", err)
+	}
+	if result.Manifest == nil {
+		t.Fatal("BuildLatest returned nil manifest")
+	}
+
+	// (a) Verify expected latest/accessor/btree refs are present.
+	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetAccountLatest, 0, SegmentBTree)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentBTree)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCode, 0, SegmentBTree)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentBTree)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentRoot, 0, SegmentBTree)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentAccessor)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetCommitmentCheckpoint, 0, SegmentBTree)
+
+	// (b) Assert NO history-kind refs are present.
+	for _, ref := range result.Manifest.Segments {
+		if ref.Kind == SegmentHistory || ref.Kind == SegmentInverted {
+			t.Errorf("BuildLatest produced history ref: %+v", ref)
+		}
+	}
+
+	// (c) Verify progress values.
+	if result.Manifest.Progress == nil {
+		t.Fatal("BuildLatest manifest has nil Progress")
+	}
+	if result.Manifest.Progress.LatestBuildTxNum != 20 {
+		t.Errorf("LatestBuildTxNum = %d, want 20", result.Manifest.Progress.LatestBuildTxNum)
+	}
+	if result.Manifest.Progress.HistoryBuildTxNum != 0 {
+		t.Errorf("HistoryBuildTxNum = %d, want 0", result.Manifest.Progress.HistoryBuildTxNum)
+	}
+
+	// Verify stage progress was written to rawdb for latest, not for history.
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatest); err != nil || !ok || got != 20 {
+		t.Errorf("StageSnapshotLatest progress = %d ok=%v err=%v, want 20", got, ok, err)
+	}
+	if got, ok, _ := rawdb.ReadStageProgress(db, rawdb.StageSnapshotHistory); ok {
+		t.Errorf("StageSnapshotHistory progress = %d, want absent", got)
+	}
+}
+
 func TestWriteManifestProgressStagesUsesStageProgressStore(t *testing.T) {
 	store := &recordingSnapshotStageProgressStore{}
 	progress := &Progress{
@@ -268,6 +366,10 @@ type recordingSnapshotStageProgressStore struct {
 func (s *recordingSnapshotStageProgressStore) Write(stage rawdb.StageID, blockNum uint64) error {
 	s.writes = append(s.writes, snapshotStageProgressWrite{stage: stage, blockNum: blockNum})
 	return nil
+}
+
+func (s *recordingSnapshotStageProgressStore) Read(_ rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	return rawdb.StageProgress{}, false, nil
 }
 
 func assertSegmentRef(t *testing.T, manifest *Manifest, dataset SegmentDataset, domain kvdomains.KVDomain, kind SegmentKind) SegmentRef {

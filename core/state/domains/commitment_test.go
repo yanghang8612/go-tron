@@ -5,8 +5,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/state/kvdomains"
-	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
 func TestApplyLatestCommitmentUsesTypedStoreWhenRootExists(t *testing.T) {
@@ -204,117 +202,6 @@ func TestApplyLatestCommitmentUsesCheckpointRootForSnapshotRepair(t *testing.T) 
 	}
 }
 
-func TestApplyLatestCommitmentWithPrunedBranchMatchesRebuild(t *testing.T) {
-	owner := common.Address{0x41, 0x42}
-	key := []byte("slot")
-	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStateKVGeneration(db, owner, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte("v1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rawdb.RebuildLatestDomainCommitment(db); err != nil {
-		t.Fatalf("initial rebuild: %v", err)
-	}
-	deleteCommitmentNodes(t, db)
-
-	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte("v2")); err != nil {
-		t.Fatal(err)
-	}
-	commitmentKey := rawdb.StateKVLatestCommitmentKey(owner, 0, kvdomains.ContractStorage, key)
-	commitmentValue := rawdb.EncodeStateKVLatestValue([]byte("v2"))
-	root, err := ApplyLatestCommitment(db, []rawdb.StateCommitmentUpdate{
-		rawdb.NewStateCommitmentPut(commitmentKey, commitmentValue),
-	})
-	if err != nil {
-		t.Fatalf("apply latest commitment after branch prune: %v", err)
-	}
-
-	wantDB := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStateKVGeneration(wantDB, owner, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateKVLatest(wantDB, owner, 0, kvdomains.ContractStorage, key, []byte("v2")); err != nil {
-		t.Fatal(err)
-	}
-	want, err := rawdb.RebuildLatestDomainCommitment(wantDB)
-	if err != nil {
-		t.Fatalf("rebuild expected commitment: %v", err)
-	}
-	if root != want {
-		t.Fatalf("root after pruned-branch repair = %x, want rebuild %x", root, want)
-	}
-	if stored, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db); err != nil || !ok || stored != want {
-		t.Fatalf("stored root = %x ok=%v err=%v, want %x", stored, ok, err, want)
-	}
-}
-
-func TestApplyLatestCommitmentRestoresPrunedBranchFromSnapshot(t *testing.T) {
-	owner := common.Address{0x41, 0x43}
-	key := []byte("slot/snapshot")
-	db := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStateKVGeneration(db, owner, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte("v1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rawdb.RebuildLatestDomainCommitment(db); err != nil {
-		t.Fatalf("initial rebuild: %v", err)
-	}
-	dir := t.TempDir()
-	rootRef, rootAccessorRef, rootBTreeRef, err := snapshots.BuildCommitmentRootSegmentFilesFromDB(db, dir, 10, 10, "commitment/root-10-10.seg")
-	if err != nil {
-		t.Fatalf("build commitment root snapshot: %v", err)
-	}
-	nodeRef, nodeAccessorRef, nodeBTreeRef, err := snapshots.BuildCommitmentNodeSegmentFilesFromDB(db, dir, 10, 10, "commitment/nodes-10-10.seg")
-	if err != nil {
-		t.Fatalf("build commitment node snapshot: %v", err)
-	}
-	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 10, []snapshots.SegmentRef{
-		rootRef, rootAccessorRef, rootBTreeRef,
-		nodeRef, nodeAccessorRef, nodeBTreeRef,
-	})); err != nil {
-		t.Fatalf("publish commitment snapshots: %v", err)
-	}
-	mgr, err := snapshots.OpenManager(dir)
-	if err != nil {
-		t.Fatalf("open snapshot manager: %v", err)
-	}
-	deleteCommitmentNodes(t, db)
-
-	if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte("v2")); err != nil {
-		t.Fatal(err)
-	}
-	commitmentKey := rawdb.StateKVLatestCommitmentKey(owner, 0, kvdomains.ContractStorage, key)
-	commitmentValue := rawdb.EncodeStateKVLatestValue([]byte("v2"))
-	root, err := ApplyLatestCommitmentWithSnapshotRepair(db, []rawdb.StateCommitmentUpdate{
-		rawdb.NewStateCommitmentPut(commitmentKey, commitmentValue),
-	}, CommitmentSnapshotRepair{Source: mgr, TxNum: 10})
-	if err != nil {
-		t.Fatalf("apply latest commitment with snapshot branch repair: %v", err)
-	}
-
-	wantDB := rawdb.NewMemoryDatabase()
-	if err := rawdb.WriteStateKVGeneration(wantDB, owner, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := rawdb.WriteStateKVLatest(wantDB, owner, 0, kvdomains.ContractStorage, key, []byte("v2")); err != nil {
-		t.Fatal(err)
-	}
-	want, err := rawdb.RebuildLatestDomainCommitment(wantDB)
-	if err != nil {
-		t.Fatalf("rebuild expected commitment: %v", err)
-	}
-	if root != want {
-		t.Fatalf("root after snapshot branch repair = %x, want rebuild %x", root, want)
-	}
-	if ok, err := rawdb.LatestDomainCommitmentRootNodePresent(db, root); err != nil || !ok {
-		t.Fatalf("restored branch root present = %v err=%v", ok, err)
-	}
-}
-
 func TestSeekLatestCommitmentUsesTypedStoreCheckpoints(t *testing.T) {
 	store := &recordingCommitmentStore{
 		checkpoints: []*rawdb.StateCommitmentCheckpoint{
@@ -470,32 +357,4 @@ type noopCommitmentSnapshotSource struct{}
 
 func (noopCommitmentSnapshotSource) GetCommitmentRoot(uint64) (common.Hash, bool, error) {
 	return common.Hash{}, false, nil
-}
-
-func (noopCommitmentSnapshotSource) IterateCommitmentNodes([]byte, uint64, func(logicalKey, value []byte) (bool, error)) error {
-	return nil
-}
-
-func deleteCommitmentNodes(t *testing.T, db CommitmentDB) {
-	t.Helper()
-	var keys [][]byte
-	if err := rawdb.IterateStateCommitmentDomain(db, rawdb.LatestDomainCommitmentNodeLogicalPrefix(), func(logicalKey, _ []byte) (bool, error) {
-		keys = append(keys, append([]byte(nil), logicalKey...))
-		return true, nil
-	}); err != nil {
-		t.Fatalf("iterate commitment nodes: %v", err)
-	}
-	if len(keys) == 0 {
-		t.Fatal("no commitment nodes to delete")
-	}
-	for _, key := range keys {
-		if err := rawdb.DeleteStateCommitmentDomain(db, key); err != nil {
-			t.Fatalf("delete commitment node %x: %v", key, err)
-		}
-	}
-	if ok, err := rawdb.LatestDomainCommitmentRootNodePresent(db, common.Hash{0xff}); err != nil {
-		t.Fatalf("check deleted root node: %v", err)
-	} else if ok {
-		t.Fatal("commitment root node still present after delete")
-	}
 }

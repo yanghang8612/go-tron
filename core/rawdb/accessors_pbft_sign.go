@@ -12,6 +12,13 @@ import (
 
 var latestPbftBlockNumKey = []byte("LATEST_PBFT_BLOCK_NUM")
 
+// DeleteLatestPbftBlockNum removes the LATEST_PBFT_BLOCK_NUM singleton key.
+// Called by incremental unwind (and by ResetMutableState's singleton list) to
+// reset PBFT tracking when the chain is rewound past the last solid block.
+func DeleteLatestPbftBlockNum(db ethdb.KeyValueWriter) error {
+	return db.Delete(latestPbftBlockNumKey)
+}
+
 // WriteLatestPbftBlockNum records the highest PBFT-confirmed block number.
 // Only-increases: if num <= current stored value the write is skipped, matching
 // java-tron commonDataBase semantics.

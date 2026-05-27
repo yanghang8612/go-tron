@@ -20,6 +20,11 @@ const (
 	defaultColdSnapshotBatchBlocks = uint64(5_000)
 )
 
+// DefaultLatestBuildBlocks is the default latest-snapshot build cadence
+// (~33h of TRON blocks). Coarse because latest builds full-scan every latest
+// keyspace; CommitmentBranch shares this cadence too.
+const DefaultLatestBuildBlocks = defaultColdSnapshotBatchBlocks * 8 // 40_000
+
 // ChainSource is the narrow chain surface needed by the cold snapshot builder.
 type ChainSource interface {
 	DB() AggregatorDB
@@ -37,11 +42,17 @@ type Config struct {
 	CompactMinSegments     int
 	CompactMaxTxSpan       uint64
 	RetainObsoleteSegments bool
+	// LatestBuildBlocks is the minimum number of solidified blocks that must
+	// elapse between production latest-snapshot builds. 0 disables the latest
+	// build pass entirely. Latest builds are full-keyspace scans, so all latest
+	// datasets share this single coarse cadence rather than rebuilding every tick.
+	LatestBuildBlocks uint64
 }
 
 // PassResult describes a single cold snapshot builder pass.
 type PassResult struct {
 	Built             bool
+	LatestBuilt       bool
 	Compaction        HistoryCompactionResult
 	FromTxNum         uint64
 	ToTxNum           uint64
@@ -79,15 +90,16 @@ type Runner struct {
 	passMu    sync.Mutex
 	startErr  error
 
-	passesCompleted   atomic.Uint64
-	segmentsBuilt     atomic.Uint64
-	segmentsCompacted atomic.Uint64
-	lastSolidified    atomic.Uint64
-	lastCutoffBlock   atomic.Uint64
-	lastVisibleTxEnd  atomic.Uint64
-	lastFromTxNum     atomic.Uint64
-	lastToTxNum       atomic.Uint64
-	lastPassDuration  atomic.Int64
+	passesCompleted      atomic.Uint64
+	segmentsBuilt        atomic.Uint64
+	segmentsCompacted    atomic.Uint64
+	lastSolidified       atomic.Uint64
+	lastCutoffBlock      atomic.Uint64
+	lastVisibleTxEnd     atomic.Uint64
+	lastFromTxNum        atomic.Uint64
+	lastToTxNum          atomic.Uint64
+	lastPassDuration     atomic.Int64
+	lastLatestBuildBlock atomic.Uint64
 }
 
 func NewRunner(chain ChainSource, cfg Config) *Runner {
@@ -171,6 +183,16 @@ func (r *Runner) Start() error {
 			r.startErr = errors.New("snapshots: nil cold builder chain or database")
 			return
 		}
+		// Seed lastLatestBuildBlock from the persisted stage first (survives
+		// restarts); fall back to the current solidified block for fresh nodes
+		// that have never run a latest build (self-heals after the first build).
+		if r.cfg.LatestBuildBlocks > 0 {
+			if row, ok, err := newRawDBStageProgressReader(r.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
+				r.lastLatestBuildBlock.Store(row.BlockNum)
+			} else if block, _, ok, werr := r.latestBuildWatermark(); werr == nil && ok {
+				r.lastLatestBuildBlock.Store(block)
+			}
+		}
 		go r.loop()
 		coldSnapshotLog.Info("History cold snapshot builder started",
 			"dir", r.cfg.Dir,
@@ -220,7 +242,8 @@ func (r *Runner) Snapshot() Stats {
 	}
 }
 
-// OnePass builds at most one registered history segment.
+// OnePass builds at most one registered history segment, then compacts history,
+// then runs one latest-snapshot build pass if the cadence interval has elapsed.
 func (r *Runner) OnePass() (PassResult, error) {
 	if r == nil {
 		return PassResult{}, nil
@@ -232,6 +255,14 @@ func (r *Runner) OnePass() (PassResult, error) {
 	result, err := r.onePass()
 	if err == nil {
 		result.Compaction, err = r.compactHistory()
+	}
+	if err == nil {
+		built, perr := r.latestPass()
+		if perr != nil {
+			err = perr
+		} else {
+			result.LatestBuilt = built
+		}
 	}
 	r.recordPass(result, start)
 	return result, err
@@ -379,6 +410,47 @@ func (r *Runner) compactHistory() (HistoryCompactionResult, error) {
 	})
 }
 
+func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, err error) {
+	solidified := r.chain.LatestSolidifiedBlockNum()
+	if solidified <= 0 {
+		return 0, 0, false, nil
+	}
+	tx, err := StateDomainHistoryTxNumAtBlockEnd(r.chain.DB(), uint64(solidified))
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return uint64(solidified), tx, tx > 0, nil
+}
+
+func (r *Runner) latestPass() (bool, error) {
+	if r == nil || !r.cfg.Enabled || r.cfg.LatestBuildBlocks == 0 {
+		return false, nil
+	}
+	db := r.chain.DB()
+	if db == nil {
+		return false, errors.New("snapshots: nil cold builder database")
+	}
+	block, txNum, ok, err := r.latestBuildWatermark()
+	if err != nil || !ok {
+		return false, err
+	}
+	prevBlock := r.lastLatestBuildBlock.Load()
+	if prevBlock != 0 && block < prevBlock+r.cfg.LatestBuildBlocks {
+		return false, nil // not enough blocks elapsed
+	}
+	res, err := NewAggregator(r.cfg.Dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 1, ToTxNum: txNum})
+	if err != nil {
+		return false, err
+	}
+	r.lastLatestBuildBlock.Store(block)
+	if writer, ok := db.(ethdb.KeyValueWriter); ok {
+		if err := newRawDBStageProgressStore(writer).Write(rawdb.StageSnapshotLatestBuild, block); err != nil {
+			return false, err
+		}
+	}
+	return res != nil && len(res.Segments) > 0, nil
+}
+
 func (r *Runner) loop() {
 	defer close(r.done)
 
@@ -396,6 +468,8 @@ func (r *Runner) loop() {
 			"fromTx", result.Compaction.FromTxNum,
 			"toTx", result.Compaction.ToTxNum,
 			"segments", result.Compaction.SegmentsMerged)
+	} else if result.LatestBuilt {
+		coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 	}
 
 	ticker := time.NewTicker(r.cfg.Interval)
@@ -418,6 +492,8 @@ func (r *Runner) loop() {
 					"fromTx", result.Compaction.FromTxNum,
 					"toTx", result.Compaction.ToTxNum,
 					"segments", result.Compaction.SegmentsMerged)
+			} else if result.LatestBuilt {
+				coldSnapshotLog.Info("Latest cold snapshot pass built", "dataset", "all-latest", "toBlock", r.lastLatestBuildBlock.Load())
 			}
 		case <-r.quit:
 			return
