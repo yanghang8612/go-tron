@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/domains"
+	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 )
@@ -296,14 +297,21 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 		return fmt.Errorf("write flat-delete batch: %w", err)
 	}
 
-	// 6. Delete changeset + tx-range rows for orphan blocks. These are outside
-	//    the batch above because DeleteStateDomainChanges uses its own iteration
-	//    loop which does not compose with a batch.
+	// 6. Delete changeset + tx-range rows for orphan blocks through the registered
+	//    StateDomainChange history-domain hooks (not direct rawdb), so the rewind
+	//    path dispatches through the DomainRegistry like the pruner does
+	//    (erigon gap #9). These are outside the batch above because the registered
+	//    block deleter uses its own iteration loop which does not compose with a
+	//    batch.
+	histCfg, ok := snapshots.DefaultDomainRegistry().Dataset(snapshots.SegmentDatasetStateDomainChange)
+	if !ok || histCfg.DeleteHotHistoryBlock == nil || histCfg.DeleteHotHistoryTxRange == nil {
+		return errors.New("incremental unwind: StateDomainChange history-domain delete hooks unavailable")
+	}
 	for _, b := range orphans {
-		if err := rawdb.DeleteStateDomainChanges(bc.db, b.Number()); err != nil {
+		if err := histCfg.DeleteHotHistoryBlock(bc.db, b.Number()); err != nil {
 			return fmt.Errorf("delete state domain changes %d: %w", b.Number(), err)
 		}
-		if err := rawdb.DeleteStateTxRange(bc.db, b.Number()); err != nil {
+		if err := histCfg.DeleteHotHistoryTxRange(bc.db, b.Number()); err != nil {
 			return fmt.Errorf("delete state tx range %d: %w", b.Number(), err)
 		}
 	}
