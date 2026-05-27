@@ -495,19 +495,24 @@ Remaining gap:
 - Incremental rewind without rebuild: fork-switch is correct, but any rewind not
   covered by an in-memory buffer layer still relies on rebuild rather than
   Erigon-style staged branch materialization from persisted commitment progress.
-- Legacy-engine removal (Phase 2, in progress 2026-05-27 — 5/7 tasks done): production
-  now routes commitment exclusively through the staged engine; the legacy store
-  (`rawDBLatestCommitmentStore`) + its db-wrappers + the `StagedCommitment` gate + the
-  dead `UnwindStateDomainChanges` path + the unused legacy rawdb hash helpers
-  (`ComputeAndWriteLatestDomainRoot` etc.) are deleted (commits `bb99cb6`→`fe4df6f`).
-  Remaining: (a) delete the legacy `CommitmentNode` (`tree/node/`) snapshot family
-  across `snapshots/{manifest,latest_segment,latest_binary,domain_registry}.go` and
-  update `pruning/checker.go` — this needs a design check on whether the staged
-  `CommitmentBranch` snapshot family needs equivalent checker validation; (b) repoint
-  the 12 remaining legacy-oracle tests (`domain_adapter_test` ×6, `account_kv_test`,
-  `pruning/worker_test` ×5) then delete the residual bit-tree shim
-  (`RebuildLatestDomainCommitment`/`UpdateLatestDomainCommitment`). Roadmap +
-  per-symbol map: `docs/superpowers/plans/2026-05-27-erigon-legacy-commitment-removal.md`.
+- Legacy-engine removal (Phase 2) — DONE 2026-05-27 (commits `bb99cb6`→`e9abd5c`,
+  full `go test ./...` green). The legacy binary-radix engine is entirely gone: the
+  store + db-wrappers, the `StagedCommitment` gate, the dead `UnwindStateDomainChanges`
+  path, all bit-tree rawdb helpers (`Rebuild/UpdateLatestDomainCommitment`,
+  `ComputeAndWriteLatestDomainRoot`, `tree/node` prefix), the `CommitmentNode`
+  (`tree/node/`) snapshot family across `snapshots/{manifest,latest_segment,
+  latest_binary,domain_registry}.go`, and the `latestDomainCommitmentStore` interface.
+  The pruning checker now iterates the commitment domain directly
+  (`rawdb.IterateStateCommitmentDomain`) for the engine-agnostic root + checkpoint
+  validation; staged branches are derived state and are not pruning-validated. Design
+  note: the production snapshot `Manager` does not yet implement
+  `CommitmentBranchSnapshotSource`, so staged cold-restore still falls back to `Rebuild`
+  — integrating staged branch snapshots into the aggregator/checker is the remaining
+  "snapshot-streaming production path" work below.
+- Remaining staged-engine work (not legacy-removal): the file-native snapshot-streaming
+  production path so the aggregator builds + the `Manager` serves staged
+  `CommitmentBranch` snapshots (today only the per-commit branch rows + cold-restore
+  primitive exist; production always `Rebuild`s). Tracked under gaps #3/#7.
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
