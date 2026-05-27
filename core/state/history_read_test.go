@@ -1150,3 +1150,207 @@ var (
 	_ ethdb.KeyValueReader = (*countingDB)(nil)
 	_ ethdb.Iteratee       = (*countingDB)(nil)
 )
+
+// TestPersistentHistoryReader_RecreatedMultiSlotStorageNoLeak is the CONTROL for
+// the account-KV "generation" investigation. PersistentHistoryReader.StorageAt
+// threads the account envelope's generation (storageFromStateDomain in
+// history.go reads envelope.AccountKVGeneration), which IS bumped on recreate.
+// So contract storage must NOT leak across a destroy+recreate, even when the
+// recreated account rewrites only one of the original slots. This passing test
+// proves the envelope-threaded archive path is already correct.
+func TestPersistentHistoryReader_RecreatedMultiSlotStorageNoLeak(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x72)
+	other := testAddr(0x73)
+	// java storage row keys are addrHash[:16] || slotKey[16:], so distinct slots
+	// must differ in the low 16 bytes (byte 31 here), not the high half.
+	slotA := tcommon.Hash{31: 0xA1}
+	slotB := tcommon.Hash{31: 0xB1}
+	oldA := tcommon.Hash{0x0A}
+	oldB := tcommon.Hash{0x0B}
+	newA := tcommon.Hash{0x1A}
+
+	// Block 1: create addr at generation 0 with two storage slots.
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 100)
+		s.SetState(addr, slotA, oldA)
+		s.SetState(addr, slotB, oldB)
+	})
+	// Block 2: filler.
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) { s.AddBalance(other, 1) })
+	// Block 3: destroy addr.
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) { s.SelfDestruct(addr) })
+	// Block 4: recreate addr, rewriting ONLY slotA. slotB is left untouched at
+	// the new generation, so it must read as empty.
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(addr, 999)
+		s.SetState(addr, slotA, newA)
+	})
+	// Block 5: filler.
+	f.applyBlock(tcommon.Hash{0x05}, func(s *StateDB) { s.AddBalance(other, 1) })
+
+	r := f.reader()
+
+	// Before deletion (block 1): both old slots visible.
+	if got, err := r.StorageAt(addr, slotA, 1); err != nil || got != oldA {
+		t.Errorf("StorageAt(slotA, 1) = %x err=%v, want %x", got, err, oldA)
+	}
+	if got, err := r.StorageAt(addr, slotB, 1); err != nil || got != oldB {
+		t.Errorf("StorageAt(slotB, 1) = %x err=%v, want %x", got, err, oldB)
+	}
+	// While destroyed (block 3): both zero.
+	if got, err := r.StorageAt(addr, slotA, 3); err != nil || got != (tcommon.Hash{}) {
+		t.Errorf("StorageAt(slotA, 3) = %x err=%v, want zero", got, err)
+	}
+	if got, err := r.StorageAt(addr, slotB, 3); err != nil || got != (tcommon.Hash{}) {
+		t.Errorf("StorageAt(slotB, 3) = %x err=%v, want zero", got, err)
+	}
+	// After recreation (block 4): slotA is the NEW value; slotB must be empty
+	// (the old-generation value must NOT leak into the recreated account).
+	if got, err := r.StorageAt(addr, slotA, 4); err != nil || got != newA {
+		t.Errorf("StorageAt(slotA, 4) = %x err=%v, want new %x", got, err, newA)
+	}
+	if got, err := r.StorageAt(addr, slotB, 4); err != nil || got != (tcommon.Hash{}) {
+		t.Errorf("StorageAt(slotB, 4) = %x err=%v, want zero (old-generation slotB must not leak)", got, err)
+	}
+}
+
+// TestStateDB_RecreatedAccountKVAsOfDoesNotLeakOldGeneration exposes the
+// account-KV generation divergence on the GENERIC archive read path
+// (StateDB.GetAccountKVAsOf -> rawdb.ReadStateAccountKVAsOfTxNum), which seeds
+// the generation from the separate KVGeneration row instead of the account
+// envelope. GetOrCreateAccount bumps the generation on recreate but never marks
+// it dirty, so the recreate bump is never persisted to the KVGeneration row or
+// its change-set. Live reads use the bumped envelope generation; the archive
+// read used the stale row and leaked the destroyed account's storage.
+//
+// ContractRuntimeState models a CREATE2-resurrected contract's per-account KV.
+func TestStateDB_RecreatedAccountKVAsOfDoesNotLeakOldGeneration(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x74)
+	other := testAddr(0x75)
+	domain := kvdomains.ContractRuntimeState
+	keyA := []byte("slotA")
+	keyB := []byte("slotB")
+
+	mustSet := func(s *StateDB, key, val []byte) {
+		t.Helper()
+		if err := s.SetAccountKV(addr, domain, key, val); err != nil {
+			t.Fatalf("SetAccountKV(%s): %v", key, err)
+		}
+	}
+
+	// Block 1: create addr at generation 0 with two KV entries.
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 100)
+		mustSet(s, keyA, []byte("a0"))
+		mustSet(s, keyB, []byte("b0"))
+	})
+	// Block 2: filler.
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) { s.AddBalance(other, 1) })
+	// Block 3: destroy addr.
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) { s.SelfDestruct(addr) })
+	// Block 4: recreate addr at the next generation, rewriting ONLY keyA.
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(addr, 999)
+		mustSet(s, keyA, []byte("a1"))
+	})
+	// Block 5: filler.
+	f.applyBlock(tcommon.Hash{0x05}, func(s *StateDB) { s.AddBalance(other, 1) })
+
+	// Root-cause visibility: the persisted KVGeneration row. Before the fix it
+	// is the stale pre-delete value (0); after the fix it tracks the envelope (1).
+	if gen, ok, err := rawdb.ReadStateKVGeneration(f.disk, addr); err != nil {
+		t.Fatalf("ReadStateKVGeneration: %v", err)
+	} else if !ok || gen != 1 {
+		t.Fatalf("persisted KVGeneration row = %d exists=%v, want 1 (must track the envelope/live generation)", gen, ok)
+	}
+
+	// Live reads (head): recreated account at generation 1.
+	if got, ok, err := f.state.GetAccountKV(addr, domain, keyA); err != nil || !ok || string(got) != "a1" {
+		t.Fatalf("live GetAccountKV(keyA) = %q ok=%v err=%v, want \"a1\"", got, ok, err)
+	}
+	if _, ok, err := f.state.GetAccountKV(addr, domain, keyB); err != nil || ok {
+		t.Fatalf("live GetAccountKV(keyB) ok=%v err=%v, want absent (not rewritten at the new generation)", ok, err)
+	}
+
+	// Archive read at the post-recreate block (4) must AGREE with the live read:
+	// keyA is the new value, keyB is absent. Before the fix the archive read
+	// seeds the stale generation (0) and leaks the destroyed account's storage.
+	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyA, 4, f.head); err != nil {
+		t.Fatalf("GetAccountKVAsOf(keyA, 4): %v", err)
+	} else if !ok || string(got) != "a1" {
+		t.Errorf("archive GetAccountKVAsOf(keyA, 4) = %q ok=%v, want \"a1\" (stale old-generation value leaked)", got, ok)
+	}
+	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyB, 4, f.head); err != nil {
+		t.Fatalf("GetAccountKVAsOf(keyB, 4): %v", err)
+	} else if ok {
+		t.Errorf("archive GetAccountKVAsOf(keyB, 4) = %q ok=true, want absent (destroyed account's slot leaked into recreated account)", got)
+	}
+
+	// Guard: the pre-destruction history (block 1) must STILL reconstruct the
+	// original generation-0 values after the fix bumps the row, i.e. the
+	// backward generation-boundary replay stays correct.
+	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyA, 1, f.head); err != nil || !ok || string(got) != "a0" {
+		t.Errorf("archive GetAccountKVAsOf(keyA, 1) = %q ok=%v err=%v, want \"a0\"", got, ok, err)
+	}
+	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyB, 1, f.head); err != nil || !ok || string(got) != "b0" {
+		t.Errorf("archive GetAccountKVAsOf(keyB, 1) = %q ok=%v err=%v, want \"b0\"", got, ok, err)
+	}
+}
+
+// TestGetOrCreateAccount_RecreateGenerationRevert verifies snapshot revert of
+// the generation bump GetOrCreateAccount records on recreate (the kvResetChange
+// journal entry added for archive parity). Reverting must restore the destroyed
+// account, must not corrupt generation accounting, and must not panic on the
+// reset overlay (kvResetChange.revert assigns prevDirty directly to kvDirty, so
+// it must be a non-nil map).
+func TestGetOrCreateAccount_RecreateGenerationRevert(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x76)
+	domain := kvdomains.ContractRuntimeState
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 100)
+		if err := s.SetAccountKV(addr, domain, []byte("k"), []byte("v0")); err != nil {
+			t.Fatalf("SetAccountKV: %v", err)
+		}
+	})
+	// Destroy in its own block so the committed object is marked deleted; only
+	// then does GetOrCreateAccount take the recreate path (a same-block
+	// SELFDESTRUCT leaves the object self-destructed-but-not-deleted).
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) { s.SelfDestruct(addr) })
+
+	s := f.state
+	if s.Exist(addr) {
+		t.Fatalf("addr should be destroyed before recreate")
+	}
+	snap := s.Snapshot()
+	if err := s.SetAccountKV(addr, domain, []byte("k"), []byte("v1")); err != nil {
+		t.Fatalf("recreate SetAccountKV: %v", err)
+	}
+	s.AddBalance(addr, 5)
+	if !s.Exist(addr) {
+		t.Fatalf("addr should exist after recreate")
+	}
+	if got, ok, err := s.GetAccountKV(addr, domain, []byte("k")); err != nil || !ok || string(got) != "v1" {
+		t.Fatalf("recreated GetAccountKV(k) = %q ok=%v err=%v, want \"v1\"", got, ok, err)
+	}
+
+	s.RevertToSnapshot(snap)
+
+	if s.Exist(addr) {
+		t.Fatalf("addr should be destroyed again after revert")
+	}
+	if _, ok, err := s.GetAccountKV(addr, domain, []byte("k")); err != nil || ok {
+		t.Fatalf("after revert GetAccountKV(k) ok=%v err=%v, want absent", ok, err)
+	}
+	// A fresh recreate after revert must still work (reset overlay usable, no
+	// nil-map panic) and recompute the generation.
+	if err := s.SetAccountKV(addr, domain, []byte("k"), []byte("v2")); err != nil {
+		t.Fatalf("recreate-after-revert SetAccountKV: %v", err)
+	}
+	if got, ok, err := s.GetAccountKV(addr, domain, []byte("k")); err != nil || !ok || string(got) != "v2" {
+		t.Fatalf("recreate-after-revert GetAccountKV(k) = %q ok=%v err=%v, want \"v2\"", got, ok, err)
+	}
+}
