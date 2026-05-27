@@ -1082,6 +1082,21 @@ Acceptance:
 - Fixture replay proves block/state compatibility across root-sensitive
   transactions.
 
+**Status 2026-05-27 — distinct from #1–#9 (this is conformance *coverage*, not
+data-architecture *implementation*; the data-architecture gaps #1–#9 are all now
+closed).** Criterion 1 is MET: the persistent-history reader, archive-vs-live,
+fork-switch internal-root, and code/storage/generation create-delete-recreate
+suites listed above pass with hot history deleted for covered cold ranges (`make
+test` green). Criterion 2 (java-tron fixture replay) is operationalized by the
+existing cross-impl stress harness (`scripts/system_test_stress.sh` driving the
+java-tron TestNG suite against a private chain) and is an ONGOING compatibility
+gate by nature, not a one-time closure. The architecture changes landed for #1–#9
+are consensus-safe by construction: the internal commitment/staged root is
+decoupled from java-tron's block-header `accountStateRoot` via
+`core.StateRootAdapter`, so internal storage-model changes cannot alter wire/
+consensus output. Remaining conformance work is incremental fixture expansion
+around root-relevant blocks/contracts, tracked as continuous cross-impl testing.
+
 ## Priority Roadmap
 
 ### Phase A: Finish File-Native Snapshot Access
