@@ -188,11 +188,19 @@ func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapsh
 	return true, nil
 }
 
+// rebuildSpyHook, when non-nil, fires at the start of Rebuild. It is nil in
+// production (zero overhead) and set by tests to assert whether the full-scan
+// rebuild path was taken.
+var rebuildSpyHook func()
+
 // Rebuild bootstraps the full staged trie from every latest-domain source row,
 // writes the root row, and returns the root. This is the one-time fallback used
 // when no branch state is present; it must not run on a normal incremental
 // commit.
 func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
+	if rebuildSpyHook != nil {
+		rebuildSpyHook()
+	}
 	s.bootstrapCount++
 	// Fold MERGES into existing branches, so a rebuild must start from a clean
 	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would

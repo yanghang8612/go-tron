@@ -9,6 +9,36 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
+// buildManagerWithBranchSnapshot builds a CommitmentRoot snapshot PLUS a
+// branch-row snapshot for db's current staged state, publishes BOTH into the
+// manifest, and returns an opened bare *snapshots.Manager whose
+// IterateCommitmentBranches will serve the branch rows. This is the production
+// wiring: the bare Manager passed to the orchestrator, rather than the older
+// CommitmentBranchSource wrapper that bypasses the manifest.
+func buildManagerWithBranchSnapshot(t *testing.T, db CommitmentDB, dir string, txNum uint64) *snapshots.Manager {
+	t.Helper()
+	rootRef, rootAccessorRef, rootBTreeRef, err := snapshots.BuildCommitmentRootSegmentFilesFromDB(db, dir, txNum, txNum, "commitment/root-snap.seg")
+	if err != nil {
+		t.Fatalf("build commitment root snapshot: %v", err)
+	}
+	branchRef, err := snapshots.BuildCommitmentBranchSegmentFromDB(db, dir, "commitment/branches-snap.json", txNum, txNum)
+	if err != nil {
+		t.Fatalf("build commitment branch snapshot: %v", err)
+	}
+	// Include branchRef in the manifest so Manager.IterateCommitmentBranches
+	// finds it via coveringCommitmentBranchRef.
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(txNum, txNum, []snapshots.SegmentRef{
+		rootRef, rootAccessorRef, rootBTreeRef, branchRef,
+	})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	return mgr
+}
+
 // buildStagedCommitmentRootSnapshot builds and publishes a CommitmentRoot
 // snapshot plus a branch-row snapshot for db's current staged state, returning an
 // opened CommitmentBranchSource over both. txNum is the visible tx of the
@@ -175,5 +205,139 @@ func TestStagedApplyFallsBackToRebuildOnAbsentSnapshot(t *testing.T) {
 	}
 	if root != want {
 		t.Fatalf("root after Rebuild fallback = %x, want %x", root, want)
+	}
+}
+
+// TestStagedColdRestoreUsesSnapshotNotRebuild is the end-to-end proof that the
+// pipeline restores staged commitment branches from a cold snapshot rather than
+// running a full Rebuild scan. The test has three parts:
+//
+//  1. Snapshot path: the bare *snapshots.Manager is passed as the repair source.
+//     The spy hook must fire zero times (RestoreNodesFromSnapshot succeeds; Rebuild
+//     is never entered).
+//
+//  2. Negative control: repair.Source == nil, so the orchestrator falls through to
+//     Rebuild.  The spy hook must fire exactly once.
+//
+//  3. Equivalence oracle: R1 (snapshot path) == R2 (rebuild path), proving that
+//     the snapshot restore produces a correct root, not just a fast one.
+func TestStagedColdRestoreUsesSnapshotNotRebuild(t *testing.T) {
+	const txNum = uint64(20)
+
+	owner := common.Address{0x41, 0x70}
+	key := []byte("slot/cold-restore")
+
+	// ---- helpers -----------------------------------------------------------
+
+	// seedDB seeds a DB with a known latest-domain row and returns the commit-
+	// ment update that represents it.
+	seedDB := func(t *testing.T, db CommitmentDB, value string) rawdb.StateCommitmentUpdate {
+		t.Helper()
+		if err := rawdb.WriteStateKVGeneration(db, owner, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := rawdb.WriteStateKVLatest(db, owner, 0, kvdomains.ContractStorage, key, []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		commitKey := rawdb.StateKVLatestCommitmentKey(owner, 0, kvdomains.ContractStorage, key)
+		commitVal := rawdb.EncodeStateKVLatestValue([]byte(value))
+		return rawdb.NewStateCommitmentPut(commitKey, commitVal)
+	}
+
+	// buildAndPruneStore seeds a DB with "v1", builds branch state via Rebuild,
+	// takes a full snapshot (root + branches, both in manifest), prunes hot branch
+	// rows, and returns the store + update-for-v2 ready for the orchestrator run.
+	buildAndPruneStore := func(t *testing.T, snapshotDir string) (*stagedCommitmentStore, rawdb.StateCommitmentUpdate, *snapshots.Manager) {
+		t.Helper()
+		db := rawdb.NewMemoryDatabase()
+		seedDB(t, db, "v1")
+
+		store := newStagedCommitmentStore(db)
+		if _, err := store.Rebuild(); err != nil {
+			t.Fatalf("initial Rebuild: %v", err)
+		}
+
+		// Take the snapshot BEFORE pruning: captures the v1 branch rows.
+		mgr := buildManagerWithBranchSnapshot(t, db, snapshotDir, txNum)
+
+		// Confirm the snapshot was built with branch rows.
+		var branchCount int
+		if err := mgr.IterateCommitmentBranches(txNum, func(_, _ []byte) (bool, error) {
+			branchCount++
+			return true, nil
+		}); err != nil {
+			t.Fatalf("IterateCommitmentBranches: %v", err)
+		}
+		if branchCount == 0 {
+			t.Fatal("precondition: snapshot contains no branch rows")
+		}
+
+		// Prune hot branch rows. Root row must survive.
+		deleteStagedBranchRows(t, db)
+		if _, ok, err := store.store.GetBranch(nil); err != nil || ok {
+			t.Fatalf("precondition: root branch still present after prune (ok=%v err=%v)", ok, err)
+		}
+
+		// Advance the source row to v2 so the update slice is non-empty.
+		update := seedDB(t, db, "v2")
+		return store, update, mgr
+	}
+
+	// ---- install spy hook --------------------------------------------------
+	var calls int
+	rebuildSpyHook = func() { calls++ }
+	t.Cleanup(func() { rebuildSpyHook = nil })
+
+	// ======================================================================
+	// Part 1: snapshot path — bare *Manager as repair source.
+	// ======================================================================
+	dir1 := t.TempDir()
+	store1, update1, mgr1 := buildAndPruneStore(t, dir1)
+
+	calls = 0
+	r1, err := applyLatestCommitmentWithRepair(store1, []rawdb.StateCommitmentUpdate{update1},
+		CommitmentSnapshotRepair{Source: mgr1, TxNum: txNum})
+	if err != nil {
+		t.Fatalf("snapshot path: applyLatestCommitmentWithRepair: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("snapshot path: Rebuild fired %d time(s), want 0 (restore must use snapshot, not full scan)", calls)
+	}
+	if r1 == (common.Hash{}) {
+		t.Fatal("snapshot path: root is zero")
+	}
+	// Hot branch keyspace must be repopulated after restore.
+	var branchRows int
+	if err := rawdb.IterateCommitmentBranches(store1.db, func(_, _ []byte) (bool, error) {
+		branchRows++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("snapshot path: iterate branches: %v", err)
+	}
+	if branchRows == 0 {
+		t.Fatal("snapshot path: branch keyspace empty after restore — restore did not repopulate")
+	}
+
+	// ======================================================================
+	// Part 2: negative control — nil repair source forces Rebuild.
+	// ======================================================================
+	dir2 := t.TempDir()
+	store2, update2, _ := buildAndPruneStore(t, dir2)
+
+	calls = 0
+	r2, err := applyLatestCommitmentWithRepair(store2, []rawdb.StateCommitmentUpdate{update2},
+		CommitmentSnapshotRepair{Source: nil, TxNum: txNum})
+	if err != nil {
+		t.Fatalf("negative control: applyLatestCommitmentWithRepair: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("negative control: Rebuild fired %d time(s), want exactly 1 (no snapshot → fallback must rebuild)", calls)
+	}
+
+	// ======================================================================
+	// Part 3: equivalence oracle — both paths must produce the same root.
+	// ======================================================================
+	if r1 != r2 {
+		t.Fatalf("snapshot-restore root %x != rebuild root %x — restore path is incorrect", r1, r2)
 	}
 }
