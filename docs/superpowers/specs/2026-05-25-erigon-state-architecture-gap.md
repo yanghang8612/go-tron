@@ -1011,16 +1011,18 @@ Acceptance:
 - Rawdb state accessors are either deleted, test-only, or clearly marked as
   compatibility adapters.
 
-**Verified 2026-05-27 — substantially done; residual is incremental cleanup, not
-an architectural gap.** Actuators/StateDB no longer mutate consensus state through
-rawdb prefixes (rooted refactor: accounts/dynprops/witness-schedule/etc. flow
-through typed stores), and the remaining rawdb state accessors are isolated
-compat adapters (`latest_hot_store`, `account_kv_rawdb_store`,
-`domains/flat_rawdb_store`) or immutable-chain-data reads. This gap is perpetual
-by nature ("keep shrinking shims") so it has no single closure point. Known
-residual: `core/blockchain_rewind.go`'s incremental unwind path calls
-`rawdb.DeleteStateDomainChanges`/`DeleteStateTxRange` directly rather than through
-the registered `HistoryDomain` delete hooks — a tracked follow-up.
+**Acceptance CLOSED 2026-05-27.** Both criteria met against code. (1) Actuators/
+StateDB no longer mutate consensus state through rawdb prefixes — the rooted
+refactor routes accounts, dynamic properties, witness schedule, delegation,
+rewards, shielded state, and fork votes through typed stores. (2) The remaining
+rawdb state accessors are clearly-marked compatibility adapters (`latest_hot_store`,
+`account_kv_rawdb_store`, `domains/flat_rawdb_store`) behind the typed-store
+boundary, or immutable-chain-data reads (genesis witnesses, block hashes). The one
+flagged execution-path violation — the incremental-unwind path's direct
+`DeleteStateDomainChanges`/`DeleteStateTxRange` calls — now dispatches through the
+registered `HistoryDomain.DeleteHotHistoryBlock`/`DeleteHotHistoryTxRange` hooks,
+like the pruner. The "keep shrinking shims" Next step is ongoing maintenance
+discipline, but no open acceptance gate remains.
 
 ### 10. Conformance Coverage Must Catch Root And Archive Semantics
 
