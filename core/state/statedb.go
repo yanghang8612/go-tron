@@ -700,6 +700,34 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	nextGeneration := s.nextAccountKVGeneration(addr, obj)
 	obj = newEmptyStateObject(addr)
 	obj.accountKVGeneration = nextGeneration
+	// A non-zero generation means this is a recreate after SELFDESTRUCT: the
+	// counter was bumped past the destroyed incarnation, which is semantically a
+	// generation reset (a fresh KV namespace). Record it exactly as
+	// ResetAccountKV does so the bump is reflected everywhere archive history is
+	// built:
+	//   - mark the generation dirty so Commit writes the bumped KVGeneration row
+	//     (writeAccountKVGeneration);
+	//   - journal a kvResetChange so the journal-capture path emits the
+	//     StateFlatDomainKVGeneration change-set entry (collectJournalDomainChanges
+	//     only derives generation changes from kvResetChange).
+	// Without the change-set entry, row-seeded archive readers
+	// (rawdb.ReadStateAccountKVAsOfTxNum, reached via GetAccountKVAsOf) cannot
+	// cross the generation boundary and leak the destroyed account's storage into
+	// the recreated account. Live execution and StorageAt read the generation
+	// from the in-memory object / envelope, so this never affected execution or
+	// the java AccountStateRoot. A fresh account (generation 0) records nothing,
+	// matching prior behavior.
+	if nextGeneration > 0 {
+		s.journal.append(kvResetChange{
+			address:              addr,
+			prevRoot:             EmptyKVRoot,
+			prevGeneration:       nextGeneration - 1,
+			prevGenerationExists: true,
+			prevGenerationDirty:  false,
+			prevDirty:            make(map[string]kvEntry),
+		})
+		obj.accountKVGenerationDirty = true
+	}
 	// Recreating an address after SELFDESTRUCT must not resurrect stale code
 	// or contract metadata from rawdb. java-tron deletes CodeStore and
 	// ContractStore alongside the account; keep that deletion intent on the
