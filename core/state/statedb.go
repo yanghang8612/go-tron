@@ -454,6 +454,13 @@ type AccountSnapshot struct {
 	CodeHash            tcommon.Hash
 }
 
+// stagedCommitment reports whether this StateDB's database selects the
+// Erigon-style staged commitment engine. Currently inert: no commit/apply path
+// branches on it yet (wired in a later task).
+func (s *StateDB) stagedCommitment() bool {
+	return s.db != nil && s.db.StagedCommitment()
+}
+
 // New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	return &StateDB{
