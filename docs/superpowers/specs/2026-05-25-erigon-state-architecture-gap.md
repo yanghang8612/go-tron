@@ -487,11 +487,16 @@ Status update (2026-05-27):
 
 Remaining gap:
 
-- Cold restore for the staged engine landed 2026-05-27:
-  `RestoreNodesFromSnapshot` restores branch rows from a
-  `CommitmentBranchSnapshotSource` and self-verifies by re-folding to the
-  expected root. The remaining work is the file-native snapshot-streaming
-  production path (tracked under gaps #3/#7).
+- Staged cold restore is a full production path as of 2026-05-27 (commits
+  `87298e3`→`0ddb73f`): `RestoreNodesFromSnapshot` restores branch rows from a
+  `CommitmentBranchSnapshotSource` and self-verifies by re-folding to the expected
+  root, degrading to `Rebuild` only when no snapshot matches. The production
+  latest-snapshot driver builds + publishes `CommitmentBranch` segments and the
+  snapshot `Manager` implements `CommitmentBranchSnapshotSource` (resolving the
+  covering branch ref against the current manifest per call), so the bare `Manager`
+  wired into the chain drives restore. An e2e test proves restore folds from the
+  snapshot with no full-scan rebuild and yields the same root as the rebuild path
+  (see #7 for the latest-build driver).
 - Incremental rewind without rebuild: fork-switch is correct, but any rewind not
   covered by an in-memory buffer layer still relies on rebuild rather than
   Erigon-style staged branch materialization from persisted commitment progress.
@@ -502,17 +507,16 @@ Remaining gap:
   `ComputeAndWriteLatestDomainRoot`, `tree/node` prefix), the `CommitmentNode`
   (`tree/node/`) snapshot family across `snapshots/{manifest,latest_segment,
   latest_binary,domain_registry}.go`, and the `latestDomainCommitmentStore` interface.
-  The pruning checker now iterates the commitment domain directly
+  The pruning checker iterates the commitment domain directly
   (`rawdb.IterateStateCommitmentDomain`) for the engine-agnostic root + checkpoint
-  validation; staged branches are derived state and are not pruning-validated. Design
-  note: the production snapshot `Manager` does not yet implement
-  `CommitmentBranchSnapshotSource`, so staged cold-restore still falls back to `Rebuild`
-  — integrating staged branch snapshots into the aggregator/checker is the remaining
-  "snapshot-streaming production path" work below.
-- Remaining staged-engine work (not legacy-removal): the file-native snapshot-streaming
-  production path so the aggregator builds + the `Manager` serves staged
-  `CommitmentBranch` snapshots (today only the per-commit branch rows + cold-restore
-  primitive exist; production always `Rebuild`s). Tracked under gaps #3/#7.
+  validation, and additionally counts published `CommitmentBranch` snapshot rows
+  and warns on staleness; staged branch rows are derived state and are never pruned.
+- Snapshot-streaming production path (DONE 2026-05-27): the aggregator builds +
+  the `Manager` serves staged `CommitmentBranch` snapshots in production. Operator
+  note: latest snapshots are built from the live DB without a consistent read
+  snapshot, so a build can capture a cross-dataset-inconsistent dump — self-detected
+  via the restore re-fold/expected-root check (falls back to `Rebuild`), so it never
+  corrupts state. Inherent to the latest-snapshot design (shared by all latest datasets).
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
@@ -547,6 +551,19 @@ Status update:
 - The node now registers one ordered snapshot/prune lifecycle that runs cold
   history build/publish/compaction before hot pruning, so snap mode cannot prune
   history rows before the same pass has made snapshot coverage visible.
+- The lifecycle now also runs a production LATEST-snapshot build pass (landed
+  2026-05-27, commits `87298e3`→`0ddb73f`): `Aggregator.BuildLatest` builds every
+  registered latest dataset (accounts, KV, KV-generation, code,
+  commitment-root/checkpoint, and `CommitmentBranch`) at the solidified head,
+  integrates them, and writes latest/commitment-flush stage progress. It is gated
+  by the `LatestBuildBlocks` cadence knob (default ~33h of blocks; all latest
+  datasets share one cadence), seeded to the current solidified block on start to
+  skip a startup full-scan. This closes the gap where the latest-build path
+  (`Aggregator.Build`) had no production caller — only the history pass ran.
+  Remaining #7 work: a single step-driven aggregator loop unifying history + latest
+  + prune under shared watermarks, and persisting the latest-build watermark across
+  restarts (today it re-seeds, so a restart can delay the next latest build by one
+  interval).
 - Canonical execution stage progress is written through a typed
   `stageProgressStore` boundary and restart-sync rewind explicitly rewinds
   `Headers`, `Bodies`, `Execution`, `Commitment`, and `Finish` stage progress to
