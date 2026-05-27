@@ -39,6 +39,19 @@ type CommitmentSnapshotSource interface {
 	IterateCommitmentNodes(logicalPrefix []byte, txNum uint64, fn func(logicalKey, value []byte) (bool, error)) error
 }
 
+// CommitmentBranchSnapshotSource is the staged engine's snapshot restore seam.
+// It pairs the snapshot root with an iterator over the snapshotted
+// state-commitment-branch-v1- rows (hex-trie prefix -> encoded BranchData),
+// which the legacy CommitmentSnapshotSource (tree/node/ logical keys) cannot
+// express. A source may satisfy both interfaces — the production snapshot
+// Manager does — so stagedCommitmentStore.RestoreNodesFromSnapshot type-asserts
+// to this shape and declines gracefully when it is not implemented, leaving the
+// LatestCommitmentStore interface and CommitmentSnapshotRepair unchanged.
+type CommitmentBranchSnapshotSource interface {
+	GetCommitmentRoot(txNum uint64) (common.Hash, bool, error)
+	IterateCommitmentBranches(txNum uint64, fn func(prefix, encoded []byte) (bool, error)) error
+}
+
 type CommitmentSnapshotRepair struct {
 	Source CommitmentSnapshotSource
 	TxNum  uint64

@@ -1,6 +1,8 @@
 package domains
 
 import (
+	"fmt"
+
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -133,11 +135,58 @@ func (s *stagedCommitmentStore) RestoreRootFromNodes() (common.Hash, bool, error
 	return root, true, nil
 }
 
-// RestoreNodesFromSnapshot is a no-op for the staged engine: branch snapshots
-// are a later task. The orchestrator falls through to Rebuild when branch state
-// is missing and no snapshot restore succeeds.
+// RestoreNodesFromSnapshot restores the staged engine's branch rows from a cold
+// snapshot so a pruned-then-restored store re-derives expectedRoot WITHOUT a full
+// latest-domain Rebuild scan.
+//
+// The supplied source is the engine-agnostic CommitmentSnapshotSource the
+// orchestrator carries; the staged engine needs the branch-row iterator, so we
+// type-assert to CommitmentBranchSnapshotSource and decline gracefully (false,
+// nil) when it is absent, letting the orchestrator fall through to Rebuild. The
+// restore is self-verifying: it confirms the snapshot root matches expectedRoot,
+// writes the branch rows back via WriteCommitmentBranch, and returns true only
+// when re-folding the restored branches (Fold(nil), no latest-domain scan)
+// reproduces expectedRoot. On any mismatch or empty snapshot it returns (false,
+// nil); the orchestrator's Rebuild then clears the branch keyspace before
+// re-folding, so partially-written rows from a failed restore cannot survive.
 func (s *stagedCommitmentStore) RestoreNodesFromSnapshot(source CommitmentSnapshotSource, txNum uint64, expectedRoot common.Hash) (bool, error) {
-	return false, nil
+	if source == nil || expectedRoot == (common.Hash{}) {
+		return false, nil
+	}
+	branchSource, ok := source.(CommitmentBranchSnapshotSource)
+	if !ok {
+		return false, nil
+	}
+	snapshotRoot, ok, err := branchSource.GetCommitmentRoot(txNum)
+	if err != nil || !ok || snapshotRoot != expectedRoot {
+		return false, err
+	}
+	restored := 0
+	if err := branchSource.IterateCommitmentBranches(txNum, func(prefix, encoded []byte) (bool, error) {
+		// Validate the encoded value decodes to a BranchData before persisting,
+		// so a corrupt snapshot is rejected rather than poisoning the keyspace.
+		if _, decodeErr := DecodeBranchData(encoded); decodeErr != nil {
+			return false, fmt.Errorf("domains: snapshot branch %x: %w", prefix, decodeErr)
+		}
+		if err := rawdb.WriteCommitmentBranch(s.db, prefix, encoded); err != nil {
+			return false, err
+		}
+		restored++
+		return true, nil
+	}); err != nil {
+		return false, err
+	}
+	if restored == 0 {
+		return false, nil
+	}
+	rederived, err := s.trie.Fold(nil)
+	if err != nil {
+		return false, err
+	}
+	if rederived != expectedRoot {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Rebuild bootstraps the full staged trie from every latest-domain source row,
