@@ -560,10 +560,17 @@ Status update:
   datasets share one cadence), seeded to the current solidified block on start to
   skip a startup full-scan. This closes the gap where the latest-build path
   (`Aggregator.Build`) had no production caller — only the history pass ran.
-  Remaining #7 work: a single step-driven aggregator loop unifying history + latest
-  + prune under shared watermarks, and persisting the latest-build watermark across
-  restarts (today it re-seeds, so a restart can delay the next latest build by one
-  interval).
+  Latest-build watermark persistence landed 2026-05-27 (commit `42f08d4`): a
+  forward-only `StageSnapshotLatestBuild` block stage is written after each latest
+  build and seeded on `Runner.Start`, so a restart resumes the cadence gate instead
+  of re-seeding to the current head (fresh nodes still fall back to the head, so no
+  startup full-scan / no migration). The step-aggregator capabilities (collate,
+  build, publish, prune, compact, watermarks) already run in order under
+  `SnapshotLifecycle.OnePass` with shared manifest + `StageSnapshot*` watermarks, so
+  #7's Acceptance (resume without guessing; retention explainable by watermarks) is
+  met. Consolidating `Runner`+`Pruner` into a single "aggregator" type was
+  intentionally skipped — Acceptance is behavioral, not a class layout, and merging
+  the two clean concerns (build vs. delete) is churn with no behavior change.
 - Canonical execution stage progress is written through a typed
   `stageProgressStore` boundary and restart-sync rewind explicitly rewinds
   `Headers`, `Bodies`, `Execution`, `Commitment`, and `Finish` stage progress to
