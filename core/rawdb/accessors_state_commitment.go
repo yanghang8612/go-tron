@@ -215,12 +215,3 @@ func IsStateCommitmentCheckpointLogicalKey(logicalKey []byte) bool {
 	return bytes.HasPrefix(logicalKey, stateCommitmentCheckpointLogicalPfx) &&
 		len(logicalKey) == len(stateCommitmentCheckpointLogicalPfx)+8
 }
-
-// latestDomainCommitmentStore is the read/write/iterate surface the binary-radix
-// latest-domain commitment routines (RebuildLatestDomainCommitment /
-// UpdateLatestDomainCommitment) operate over.
-type latestDomainCommitmentStore interface {
-	ethdb.KeyValueReader
-	ethdb.KeyValueWriter
-	ethdb.Iteratee
-}

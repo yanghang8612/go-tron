@@ -511,7 +511,7 @@ func TestCommitScopePrefixDeleteRecordsPendingLatestTouches(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit prefix-delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}

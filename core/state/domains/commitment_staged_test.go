@@ -140,10 +140,8 @@ func TestStagedCommitmentUpdateMatchesRebuild(t *testing.T) {
 // TestStagedCommitmentRebuildClearsStaleBranches pins the rewind/fork-switch
 // fallback contract: Rebuild must reflect EXACTLY the current latest-domain
 // source rows, independent of any branch state left over from an earlier (taller)
-// tip. The legacy engine's RebuildLatestDomainCommitment clears its "tree/node/"
-// rows before re-folding; the staged engine must likewise clear its
-// state-commitment-branch-v1- rows, or an orphaned branch contribution survives
-// into the rebuilt root.
+// tip. Rebuild must clear its state-commitment-branch-v1- rows before
+// re-folding, or an orphaned branch contribution survives into the rebuilt root.
 //
 // Scenario: build branches for {A, B}, then make the latest-domain rows reflect
 // only {A} (B's account was deleted), then Rebuild() on the SAME store. The

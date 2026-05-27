@@ -42,8 +42,7 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 // clear removes every persisted branch row in the commitment-branch keyspace.
 // Rebuild calls this before re-folding so a full latest-domain scan produces a
 // root that reflects exactly the current source rows, with no contribution from
-// branches left over from an earlier (e.g. pre-rewind) tip. Mirrors the legacy
-// engine's clearLatestDomainCommitmentNodes.
+// branches left over from an earlier (e.g. pre-rewind) tip.
 func (s *rawdbBranchStore) clear() error {
 	var prefixes [][]byte
 	if err := rawdb.IterateCommitmentBranches(s.db, func(prefix, _ []byte) (bool, error) {
@@ -197,8 +196,7 @@ func (s *stagedCommitmentStore) Rebuild() (common.Hash, error) {
 	s.bootstrapCount++
 	// Fold MERGES into existing branches, so a rebuild must start from a clean
 	// branch keyspace; otherwise rows from an earlier (e.g. pre-rewind) tip would
-	// contribute to the rebuilt root. Mirrors the legacy engine, which clears its
-	// tree/node/ rows in RebuildLatestDomainCommitment before re-applying.
+	// contribute to the rebuilt root.
 	if err := s.store.clear(); err != nil {
 		return common.Hash{}, err
 	}
