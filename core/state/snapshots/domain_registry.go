@@ -211,6 +211,19 @@ func DefaultDomainRegistry() DomainRegistry {
 			ReadHotKVGeneration:    rawdb.ReadStateKVGeneration,
 			IterateHotKVGeneration: rawdb.IterateStateKVGeneration,
 		},
+		// CodeDomain is content-addressed: contract bytecode is a latest-only
+		// snapshot family keyed by code hash. Historical CodeAt is served by
+		// account-envelope history selecting the right hash plus content-addressed
+		// retention of every referenced hash — there is deliberately no separate
+		// temporal code changeset. This is the intended final retention policy
+		// (erigon-gap #5 / #8 in
+		// docs/superpowers/specs/2026-05-25-erigon-state-architecture-gap.md), not
+		// a transitional stage. Snap-mode pruning may delete a hot state-code row
+		// ONLY once it is backed by a CodeDomain snapshot (the
+		// codeHashAvailableInSnapshot gate in core/state/pruning) — coverage is the
+		// sole deletion path, locked by TestWorkerSnapPreservesHotCodeWithout-
+		// CodeDomainCoverage. Add a distinct temporal CodeDomain only if a
+		// java-tron parity fixture proves hash-bound retention is insufficient.
 		{
 			Name:              "CodeDomain",
 			Dataset:           SegmentDatasetCode,

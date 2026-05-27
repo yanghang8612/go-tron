@@ -381,13 +381,18 @@ Remaining gap:
 
 Next step:
 
-- Document CodeDomain as content-addressed latest retention plus account-envelope
-  temporal selection, unless future java-tron parity tests prove code needs a
-  separate temporal changeset. The content-addressed model now has a behavioral
-  anchor: `TestPersistentHistoryReaderReadsCodeFromColdCodeDomain` proves the
-  cold CodeDomain retains a superseded bytecode version, so historical `CodeAt`
-  across an in-place overwrite is served by account-envelope history selecting
-  the right code hash plus content-addressed retention of every referenced hash.
+- **Done (2026-05-27):** CodeDomain is documented as the intended final
+  content-addressed latest-retention policy (plus account-envelope temporal
+  selection) — see the docstring on the `CodeDomain` registry entry in
+  `core/state/snapshots/domain_registry.go`. The content-addressed model has a
+  behavioral anchor (`TestPersistentHistoryReaderReadsCodeFromColdCodeDomain`
+  proves the cold CodeDomain retains a superseded bytecode version, so historical
+  `CodeAt` across an in-place overwrite is served by account-envelope history
+  selecting the right hash plus content-addressed retention of every referenced
+  hash), and the snapshot-coverage deletion gate is now locked from the negative
+  direction by `TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage`
+  (uncovered hot code is never pruned). No separate temporal code changeset is
+  needed.
 - Add java-tron parity fixtures for historical contract code if future
   compatibility work finds a case where content-addressed retention is
   insufficient.
@@ -846,11 +851,21 @@ Next step:
 
 - Keep shrinking lower-level rawdb-specific historical reconstruction helpers
   until they are only compatibility shims behind the registered domain path.
-- Finalize the CodeDomain policy: either document the current
-  content-addressed latest-retention model as the intended Erigon-style domain
-  for TRON code, or add a distinct temporal CodeDomain if java-tron parity
-  fixtures prove account-envelope history plus hash-bound code retention is not
-  enough.
+- **Done (2026-05-27):** the CodeDomain policy is finalized and documented as
+  content-addressed latest retention (see gap #5 and the `CodeDomain` registry
+  docstring); the coverage-gated deletion path is locked by
+  `TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage`.
+- **Done (2026-05-27):** corrected the stale `InsertBlock` comments that claimed
+  `block_filled_slots` "lands via `dynProps.Flush(bc.db)`" and was "not yet
+  retrofitted onto the buffer (slice 2 backlog)". A consensus-key enumeration
+  confirmed every dirty DP key is staged into the rooted `SystemDynamicProperty`
+  KV by `FlushRooted` (before Commit, so it rewinds with the internal state root)
+  and that every production DP write key is reloaded on restart; `Flush` only
+  mirrors the four derived runtime keys to flat `dp-`. The rooted/derived split is
+  already guarded by `dynamic_properties_rooted_test.go` (e.g.
+  `TestDynPropFlatFlushWritesOnlyDerivedRuntimeKeys`,
+  `TestDynPropFlushDerivedUsesTypedStoreBoundary`). The fork-rewind design doc's
+  "slice 2" DP backlog is annotated as superseded by this rooted mechanism.
 - Keep reducing residual per-block repair paths that bypass the stage pipeline
   or registered domains.
 

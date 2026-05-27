@@ -525,6 +525,60 @@ func TestWorkerSnapPrunesCurrentLatestStateCodeCoveredByCodeDomain(t *testing.T)
 	}
 }
 
+// TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage is the negative guard
+// for the CodeDomain retention policy: snapshot coverage is the ONLY path that
+// authorizes deleting a hot state-code row. It mirrors the historical positive
+// case (TestWorkerSnapPrunesHistoricalStateCodeCoveredByCodeDomain) exactly —
+// same referenced hash, same history coverage — but publishes a manifest with
+// NO CodeDomain segment. With the hash not snapshot-backed, the worker must keep
+// the hot code bytes. A regression that drops the codeHashAvailableInSnapshot
+// gate (deleting code regardless of coverage) flips DeletedStateCodeRows to 1.
+func TestWorkerSnapPreservesHotCodeWithoutCodeDomainCoverage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x4b}, common.AccountIDLength)...))
+	code := []byte{0x60, 0x09}
+	hash := common.Keccak256(code)
+	if err := rawdb.WriteStateCode(db, hash, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 2, common.Hash{0x02}, 2, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateDomainChange(db, &rawdb.StateDomainChange{
+		BlockNum:   2,
+		BlockHash:  common.Hash{0x02},
+		TxNum:      2,
+		Seq:        1,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      owner,
+		PrevExists: true,
+		Prev:       accountLatestEnvelopeBytes(t, hash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Publish history coverage but DELIBERATELY omit the CodeDomain segment, so
+	// the referenced code hash is not backed by any snapshot.
+	historyRefs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 2, 2, "history/state-domain-change-2-2.seg")
+	if err != nil {
+		t.Fatalf("build history snapshot: %v", err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(2, 2, historyRefs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+
+	stats, err := Worker{DB: db, Policy: SnapPolicy(2, 1), SnapshotDir: dir}.PruneTo(5)
+	if err != nil {
+		t.Fatalf("snap prune: %v", err)
+	}
+	if stats.DeletedStateCodeRows != 0 {
+		t.Fatalf("stats = %+v, want zero code rows deleted without CodeDomain coverage", stats)
+	}
+	if got := rawdb.ReadStateCode(db, hash); got == nil {
+		t.Fatal("hot code wrongly pruned despite no CodeDomain snapshot coverage")
+	}
+}
+
 func TestPrunerPassUsesSolidifiedBlockAndBatch(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	for _, blockNum := range []uint64{1, 2, 3} {
