@@ -480,11 +480,10 @@ Status update (2026-05-27):
   (via `core.StateRootAdapter`), so the engine choice is consensus-safe regardless
   of which one runs.
 - Default flipped to staged 2026-05-27: `NewDatabase` now constructs the staged
-  engine. The legacy binary-radix engine and the `StagedCommitment` gate are
-  retained only as a dead opt-out pending separate removal. Within-engine
-  equivalence oracles (incremental commit == from-scratch staged rebuild) were
-  repointed off the legacy `RebuildLatestDomainCommitment`; full `go test ./...`
-  is green.
+  engine, and the `StagedCommitment` gate has since been removed entirely (staged
+  is the only engine). Within-engine equivalence oracles (incremental commit ==
+  from-scratch staged rebuild) were repointed off the legacy
+  `RebuildLatestDomainCommitment`; full `go test ./...` is green.
 
 Remaining gap:
 
@@ -496,9 +495,19 @@ Remaining gap:
 - Incremental rewind without rebuild: fork-switch is correct, but any rewind not
   covered by an in-memory buffer layer still relies on rebuild rather than
   Erigon-style staged branch materialization from persisted commitment progress.
-- Legacy-engine removal (separate sub-project): delete `rawDBLatestCommitmentStore`,
-  the binary-radix tree accessors, `ComputeAndWriteLatestDomainRoot`, and the
-  `StagedCommitment` gate, then repoint the remaining legacy-oracle unit tests.
+- Legacy-engine removal (Phase 2, in progress 2026-05-27 — 5/7 tasks done): production
+  now routes commitment exclusively through the staged engine; the legacy store
+  (`rawDBLatestCommitmentStore`) + its db-wrappers + the `StagedCommitment` gate + the
+  dead `UnwindStateDomainChanges` path + the unused legacy rawdb hash helpers
+  (`ComputeAndWriteLatestDomainRoot` etc.) are deleted (commits `bb99cb6`→`fe4df6f`).
+  Remaining: (a) delete the legacy `CommitmentNode` (`tree/node/`) snapshot family
+  across `snapshots/{manifest,latest_segment,latest_binary,domain_registry}.go` and
+  update `pruning/checker.go` — this needs a design check on whether the staged
+  `CommitmentBranch` snapshot family needs equivalent checker validation; (b) repoint
+  the 12 remaining legacy-oracle tests (`domain_adapter_test` ×6, `account_kv_test`,
+  `pruning/worker_test` ×5) then delete the residual bit-tree shim
+  (`RebuildLatestDomainCommitment`/`UpdateLatestDomainCommitment`). Roadmap +
+  per-symbol map: `docs/superpowers/plans/2026-05-27-erigon-legacy-commitment-removal.md`.
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
