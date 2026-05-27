@@ -14,18 +14,19 @@ import (
 )
 
 type CheckReport struct {
-	LatestRows            int
-	AccountLatestRows     int
-	KVLatestRows          int
-	KVGenerationRows      int
-	CommitmentDomainRows  int
-	CommitmentRootPresent bool
-	ReferencedCodeHashes  int
-	RetainedTxRanges      int
-	RetainedDomainChanges int
-	CommitmentCheckpoints int
-	SnapshotSegments      int
-	Warnings              []string
+	LatestRows                     int
+	AccountLatestRows              int
+	KVLatestRows                   int
+	KVGenerationRows               int
+	CommitmentDomainRows           int
+	CommitmentRootPresent          bool
+	ReferencedCodeHashes           int
+	RetainedTxRanges               int
+	RetainedDomainChanges          int
+	CommitmentCheckpoints          int
+	SnapshotSegments               int
+	CommitmentBranchSnapshotRows   uint64
+	Warnings                       []string
 }
 
 type Checker struct {
@@ -399,6 +400,44 @@ func (c Checker) checkSnapshots(report *CheckReport) error {
 		if err := c.checkSnapshotFile(ref); err != nil {
 			return err
 		}
+	}
+	return c.checkCommitmentBranchSnapshot(report, manifest)
+}
+
+func (c Checker) checkCommitmentBranchSnapshot(report *CheckReport, manifest *snapshots.Manifest) error {
+	// Find the newest CommitmentBranch/latest ref by highest ToTxNum.
+	var branchRef snapshots.SegmentRef
+	found := false
+	for _, ref := range manifest.Segments {
+		if ref.Dataset != snapshots.SegmentDatasetCommitmentBranch || ref.Kind != snapshots.SegmentLatest {
+			continue
+		}
+		if !found || ref.ToTxNum > branchRef.ToTxNum {
+			branchRef = ref
+			found = true
+		}
+	}
+	if !found {
+		// No branch snapshot yet is normal — not an error, not a warning.
+		return nil
+	}
+	// Open and count rows; a checksum/metadata error is fatal corruption.
+	seg, err := snapshots.OpenCommitmentBranchSegment(c.SnapshotDir, branchRef)
+	if err != nil {
+		return err
+	}
+	if err := seg.Iterate(func(_, _ []byte) (bool, error) {
+		report.CommitmentBranchSnapshotRows++
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	// Staleness warning (non-fatal): branch snapshot lags committed commitment progress.
+	if manifest.Progress != nil && branchRef.ToTxNum < manifest.Progress.CommitmentFlushTxNum {
+		report.Warnings = append(report.Warnings, fmt.Sprintf(
+			"commitment branch snapshot toTx %d lags commitment flush progress %d",
+			branchRef.ToTxNum, manifest.Progress.CommitmentFlushTxNum,
+		))
 	}
 	return nil
 }
