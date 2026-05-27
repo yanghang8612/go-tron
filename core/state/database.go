@@ -35,9 +35,11 @@ type Database struct {
 	stagedCommitment bool
 }
 
-// NewDatabase creates a state database.
+// NewDatabase creates a state database. The Erigon-style staged commitment
+// engine is the default production path; the legacy binary-radix engine is being
+// retired (fresh-DB-only, no migration).
 func NewDatabase(diskdb ethdb.Database) *Database {
-	return NewDatabaseWithConfig(diskdb, DatabaseConfig{})
+	return NewDatabaseWithConfig(diskdb, DatabaseConfig{StagedCommitment: true})
 }
 
 // NewDatabaseWithConfig creates a state database with explicit trie cache

@@ -222,7 +222,7 @@ func TestStateDBCommitRepairsMissingCommitmentRootFromNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit v2: %v", err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(disk)
+	rebuilt, err := statedomains.NewStagedCommitmentStore(disk).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}

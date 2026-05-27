@@ -391,15 +391,7 @@ func TestBlockChain_LatestCommitmentModeUsesFlatRootAndCommitmentDomain(t *testi
 	if root != bc.HeadStateRoot() {
 		t.Fatalf("head state root = %x, commitment root = %x", bc.HeadStateRoot(), root)
 	}
-	var scratch tcommon.Hash
-	scratch[0] = 0xff
-	bc.buffer.BeginBlock(scratch)
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(bc.buffer)
-	bc.buffer.DiscardActive()
-	if err != nil {
-		t.Fatalf("rebuild latest commitment: %v", err)
-	}
-	if rebuilt != root {
+	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatestStaged(t, bc.buffer); rebuilt != root {
 		t.Fatalf("incremental commitment root = %x, rebuilt = %x", root, rebuilt)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/blockbuffer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -208,7 +209,7 @@ func TestCommitScopeUsesPlanSuppliedLatestDomainFlush(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("latest after plan supplied flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestCommitScopeComputesRootFromUnflushedLatestBatch(t *testing.T) {
 	if got, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || !ok || !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("disk latest after explicit scoped flush = %q ok=%v err=%v, want v", got, ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestCommitScopeComputesDeleteRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("k")); err != nil || ok {
 		t.Fatalf("disk latest after explicit delete flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestCommitScopeComputesAccountRootFromUnflushedLatestBatch(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateAccountLatest(sdb.db.DiskDB(), addr); err != nil || !ok {
 		t.Fatalf("disk account latest after explicit scoped flush ok=%v err=%v, want visible", ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -385,7 +386,7 @@ func TestCommitScopeComputesGenerationRootFromUnflushedLatestBatch(t *testing.T)
 	if generation, ok, err := rawdb.ReadStateKVGeneration(sdb.db.DiskDB(), addr); err != nil || !ok || generation != 1 {
 		t.Fatalf("disk generation after explicit scoped flush = %d ok=%v err=%v, want 1", generation, ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}
@@ -596,7 +597,7 @@ func TestCommitScopeStateDBPrefixDeleteSeesUnflushedPriorCommit(t *testing.T) {
 	if _, ok, err := rawdb.ReadStateKVLatest(sdb.db.DiskDB(), addr, 0, kvdomains.SystemDynamicProperty, []byte("prefix/1")); err != nil || ok {
 		t.Fatalf("disk latest after explicit range flush ok=%v err=%v, want missing", ok, err)
 	}
-	rebuilt, err := rawdb.RebuildLatestDomainCommitment(sdb.db.DiskDB())
+	rebuilt, err := statedomains.NewStagedCommitmentStore(sdb.db.DiskDB()).Rebuild()
 	if err != nil {
 		t.Fatalf("rebuild latest commitment: %v", err)
 	}

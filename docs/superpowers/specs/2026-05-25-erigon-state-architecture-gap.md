@@ -460,7 +460,8 @@ or with stale/corrupt snapshot data.
 Status update (2026-05-27):
 
 - An Erigon-style staged commitment engine now exists behind the
-  `DatabaseConfig.StagedCommitment` gate (default off): prefix-keyed `BranchData`
+  `DatabaseConfig.StagedCommitment` gate (now the default — see the flip note
+  below): prefix-keyed `BranchData`
   nodes in a dedicated `state-commitment-branch-v1-` keyspace, a hex-patricia
   fold engine (`core/state/domains/commitment_tree.go`, fuzz-proven that
   incremental folds equal a from-scratch recompute), wired through the existing
@@ -476,20 +477,28 @@ Status update (2026-05-27):
   the post-switch root matches the head state root and a from-scratch staged
   rebuild.
 - The internal staged root stays decoupled from java-tron's `accountStateRoot`
-  (via `core.StateRootAdapter`); gate=false (legacy binary-radix engine) remains
-  the production path and is unchanged (full `core` suite green).
+  (via `core.StateRootAdapter`), so the engine choice is consensus-safe regardless
+  of which one runs.
+- Default flipped to staged 2026-05-27: `NewDatabase` now constructs the staged
+  engine. The legacy binary-radix engine and the `StagedCommitment` gate are
+  retained only as a dead opt-out pending separate removal. Within-engine
+  equivalence oracles (incremental commit == from-scratch staged rebuild) were
+  repointed off the legacy `RebuildLatestDomainCommitment`; full `go test ./...`
+  is green.
 
 Remaining gap:
 
-- Cold restore for the staged engine: `RestoreNodesFromSnapshot` is currently a
-  no-op, so a pruned-then-restored staged store falls back to bootstrap rebuild
-  instead of streaming branch rows from a CommitmentNode-style snapshot (the
-  snapshot-streaming step).
+- Cold restore for the staged engine landed 2026-05-27:
+  `RestoreNodesFromSnapshot` restores branch rows from a
+  `CommitmentBranchSnapshotSource` and self-verifies by re-folding to the
+  expected root. The remaining work is the file-native snapshot-streaming
+  production path (tracked under gaps #3/#7).
 - Incremental rewind without rebuild: fork-switch is correct, but any rewind not
   covered by an in-memory buffer layer still relies on rebuild rather than
   Erigon-style staged branch materialization from persisted commitment progress.
-- Flip `StagedCommitment` to default-on once cold restore lands and a soak
-  validates parity — a deliberate, separate decision.
+- Legacy-engine removal (separate sub-project): delete `rawDBLatestCommitmentStore`,
+  the binary-radix tree accessors, `ComputeAndWriteLatestDomainRoot`, and the
+  `StagedCommitment` gate, then repoint the remaining legacy-oracle unit tests.
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
