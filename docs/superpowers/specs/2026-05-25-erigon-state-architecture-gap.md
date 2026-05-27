@@ -221,6 +221,13 @@ Acceptance:
 - A large latest snapshot build, restore, or check has peak memory bounded by
   iterator buffers and a small offset buffer or streamed accessor writer.
 
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. Production
+build/restore/check stream via `writeLatestBinarySegmentAndAccessor` (offsets +
+`.bt` spilled to temp files), `restoreLatestBinarySegmentToStore` (per-record
+reader), and `checkLatestBinarySegment`/`checkLatestBinaryAccessor` (per-record
+`ReadAt`) — no whole-dataset `[]LatestEntry`; full materialization survives only on
+the JSON/legacy-compat path, which the production aggregator never emits.
+
 ### 2. Latest Accessor Is Ordered Offsets, Not Full Erigon BTree/Recsplit
 
 The `.lidx` file stores ordered record offsets and binary-searches by reading
@@ -307,6 +314,13 @@ Acceptance:
   history changes in a segment.
 - Missing binary companion files are fatal for production manifests.
 
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. Keyed/range
+history reads (`iterateStateDomainChangeBinarySegmentByAccessorFile`,
+`...TxRangeByIndexFile`) use `sort.Search` + per-record `ReadAt` over `.kv`/`.idx`,
+no whole-segment changes/accessor slice. `LoadProductionManifest` →
+`validateHistoryBinaryCompanionTriples` returns a hard error (not a warning) when a
+registered history `.seg` is missing its `.idx`/`.kv` companion.
+
 ### 4. Domain Registry Is Only Partially Applied
 
 `DomainRegistry` exists and now describes registered latest/history families,
@@ -350,6 +364,15 @@ Acceptance:
   editing every builder/checker/manifest switch.
 - Latest/history/accessor naming and validation are generated from domain
   config.
+
+**Verified CLOSED 2026-05-27:** both criteria confirmed against code. The aggregator
+build loop (`buildLatestSegments`/history over `registry.LatestConfigs()`/
+`HistoryConfigs()`), manifest validation (`validate*SegmentRefDataset`,
+`validateHistoryBinaryCompanionTriples` via `registry.ConfigForRef`), and the
+pruning checker (`latestDomainConfig` + `CheckRegisteredSegment` dispatch) all read
+from `DomainCfg` (path stems, companion flags, codec ops, `Check*` hooks) — no
+per-dataset switch. The lone residual switch (`validateLatestStreamRef`) is
+JSON-compat-only and off the binary production path.
 
 ### 5. Code Domain Retention Still Needs A Final Policy
 
@@ -987,6 +1010,17 @@ Acceptance:
 - Actuators and StateDB do not mutate consensus state through rawdb prefixes.
 - Rawdb state accessors are either deleted, test-only, or clearly marked as
   compatibility adapters.
+
+**Verified 2026-05-27 — substantially done; residual is incremental cleanup, not
+an architectural gap.** Actuators/StateDB no longer mutate consensus state through
+rawdb prefixes (rooted refactor: accounts/dynprops/witness-schedule/etc. flow
+through typed stores), and the remaining rawdb state accessors are isolated
+compat adapters (`latest_hot_store`, `account_kv_rawdb_store`,
+`domains/flat_rawdb_store`) or immutable-chain-data reads. This gap is perpetual
+by nature ("keep shrinking shims") so it has no single closure point. Known
+residual: `core/blockchain_rewind.go`'s incremental unwind path calls
+`rawdb.DeleteStateDomainChanges`/`DeleteStateTxRange` directly rather than through
+the registered `HistoryDomain` delete hooks — a tracked follow-up.
 
 ### 10. Conformance Coverage Must Catch Root And Archive Semantics
 
