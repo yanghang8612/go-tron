@@ -453,13 +453,39 @@ CommitmentNode snapshot before applying touched-key updates. The full-latest
 rebuild path is now reserved for stores without a matching cold branch snapshot
 or with stale/corrupt snapshot data.
 
+Status update (2026-05-27):
+
+- An Erigon-style staged commitment engine now exists behind the
+  `DatabaseConfig.StagedCommitment` gate (default off): prefix-keyed `BranchData`
+  nodes in a dedicated `state-commitment-branch-v1-` keyspace, a hex-patricia
+  fold engine (`core/state/domains/commitment_tree.go`, fuzz-proven that
+  incremental folds equal a from-scratch recompute), wired through the existing
+  `LatestCommitmentStore` seam via `ApplyLatestCommitmentWithStore[AndRepair]`
+  and selected at commit time by `StateDB.stagedCommitment()`.
+- A normal commit folds incrementally over persisted branch state and does NOT
+  trigger a full-latest rebuild (regression-guarded by the staged-engine
+  "no bootstrap on normal commit" test).
+- Fork-switch/rewind is correct for the staged engine: the block buffer discards
+  orphan-branch layers (including their branch + root rows) keyspace-agnostically,
+  so replay folds onto LCA-restored branches; `stagedCommitmentStore.Rebuild`
+  clears stale branches before re-folding. A gate=true fork-switch test asserts
+  the post-switch root matches the head state root and a from-scratch staged
+  rebuild.
+- The internal staged root stays decoupled from java-tron's `accountStateRoot`
+  (via `core.StateRootAdapter`); gate=false (legacy binary-radix engine) remains
+  the production path and is unchanged (full `core` suite green).
+
 Remaining gap:
 
-- Replace the current gtron-specific incremental tree over latest commitment
-  keys with Erigon's staged commitment branch calculation.
-- Replace the remaining full-latest rebuild fallback for non-empty updates when
-  no matching CommitmentDomain snapshot exists with Erigon-style staged branch
-  materialization from persisted commitment progress.
+- Cold restore for the staged engine: `RestoreNodesFromSnapshot` is currently a
+  no-op, so a pruned-then-restored staged store falls back to bootstrap rebuild
+  instead of streaming branch rows from a CommitmentNode-style snapshot (the
+  snapshot-streaming step).
+- Incremental rewind without rebuild: fork-switch is correct, but any rewind not
+  covered by an in-memory buffer layer still relies on rebuild rather than
+  Erigon-style staged branch materialization from persisted commitment progress.
+- Flip `StagedCommitment` to default-on once cold restore lands and a soak
+  validates parity — a deliberate, separate decision.
 - Expand java-tron fixture coverage around root-relevant blocks and contracts.
 
 Acceptance:
