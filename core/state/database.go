@@ -15,31 +15,19 @@ type DatabaseConfig struct {
 	// java-tron accountStateRoot trie reads/writes. Internal full state no
 	// longer uses a trie-backed root.
 	CleanTrieCacheSizeBytes int
-
-	// StagedCommitment selects the Erigon-style staged commitment engine
-	// (prefix-keyed BranchData) over the legacy incremental binary-radix tree.
-	// It is bound once at database construction for a given DB and must not be
-	// flipped on a DB that already holds commitment rows (fresh-DB-only; see
-	// docs/superpowers/specs/2026-05-25-erigon-state-architecture-gap.md #6).
-	// StateDB.latestCommitmentStore branches on it at commit time; the default
-	// (false) keeps the legacy binary-radix engine as the production path.
-	StagedCommitment bool
 }
 
 // Database wraps state storage plus the independent java-tron accountStateRoot trie.
 type Database struct {
-	disk             ethdb.Database
-	trieDisk         ethdb.Database
-	trieDB           *triedb.Database
-	trieNodeCache    *fastcache.Cache
-	stagedCommitment bool
+	disk          ethdb.Database
+	trieDisk      ethdb.Database
+	trieDB        *triedb.Database
+	trieNodeCache *fastcache.Cache
 }
 
-// NewDatabase creates a state database. The Erigon-style staged commitment
-// engine is the default production path; the legacy binary-radix engine is being
-// retired (fresh-DB-only, no migration).
+// NewDatabase creates a state database.
 func NewDatabase(diskdb ethdb.Database) *Database {
-	return NewDatabaseWithConfig(diskdb, DatabaseConfig{StagedCommitment: true})
+	return NewDatabaseWithConfig(diskdb, DatabaseConfig{})
 }
 
 // NewDatabaseWithConfig creates a state database with explicit trie cache
@@ -64,19 +52,12 @@ func NewDatabaseWithConfig(diskdb ethdb.Database, cfg DatabaseConfig) *Database 
 	}
 	trieDB := triedb.NewDatabase(trieDisk, trieDBCfg)
 	db := &Database{
-		disk:             diskdb,
-		trieDisk:         trieDisk,
-		trieDB:           trieDB,
-		trieNodeCache:    trieNodeCache,
-		stagedCommitment: cfg.StagedCommitment,
+		disk:          diskdb,
+		trieDisk:      trieDisk,
+		trieDB:        trieDB,
+		trieNodeCache: trieNodeCache,
 	}
 	return db
-}
-
-// StagedCommitment reports whether this database selects the Erigon-style
-// staged commitment engine. Bound at construction; see DatabaseConfig.
-func (db *Database) StagedCommitment() bool {
-	return db.stagedCommitment
 }
 
 // OpenTrie opens the independent java-tron accountStateRoot trie at root.

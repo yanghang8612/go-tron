@@ -454,14 +454,6 @@ type AccountSnapshot struct {
 	CodeHash            tcommon.Hash
 }
 
-// stagedCommitment reports whether this StateDB's database selects the
-// Erigon-style staged commitment engine. When true, latestCommitmentStore
-// routes commits through the staged store instead of the legacy binary-radix
-// store.
-func (s *StateDB) stagedCommitment() bool {
-	return s.db != nil && s.db.StagedCommitment()
-}
-
 // New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	return &StateDB{

@@ -624,10 +624,9 @@ func rebuildLatestCommitmentRootFromVisibleLatestStaged(t *testing.T, src latest
 	return tcommon.Hash(root)
 }
 
-// TestBlockChain_ForkSwitchRestoresCommitmentRoot_StagedEngine is the gate=true
-// analogue of TestBlockChain_ForkSwitchRestoresCommitmentRoot: the same 3-then-4
-// block reorg, but the chain's state Database selects the Erigon-style staged
-// commitment engine (StagedCommitment: true).
+// TestBlockChain_ForkSwitchRestoresCommitmentRoot_StagedEngine exercises a
+// 3-then-4 block reorg and asserts the staged commitment root is correctly
+// restored across the fork switch.
 //
 // The reset across switchFork is engine-agnostic — the commitment store reads
 // and writes through bc.buffer (SetAccountKVIndexStore(bc.buffer)), and
@@ -646,11 +645,8 @@ func rebuildLatestCommitmentRootFromVisibleLatestStaged(t *testing.T, src latest
 //     contributions and nothing more. (Staged hashes a hex-patricia trie, so it
 //     is NOT comparable to the legacy binary-radix rebuild helper.)
 func TestBlockChain_ForkSwitchRestoresCommitmentRoot_StagedEngine(t *testing.T) {
-	bc, witnessAddr := newHistoryReorgChainWithConfig(t, state.DatabaseConfig{StagedCommitment: true})
+	bc, witnessAddr := newHistoryReorgChainWithConfig(t, state.DatabaseConfig{})
 	defer bc.Close()
-	if !bc.StateDB().StagedCommitment() {
-		t.Fatalf("test precondition: chain state DB is not using the staged engine")
-	}
 
 	chainA := make([]*types.Block, 4)
 	chainA[0] = bc.genesisBlock

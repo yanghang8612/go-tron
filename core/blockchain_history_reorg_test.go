@@ -55,7 +55,7 @@ func newHistoryReorgChain(t *testing.T) (*BlockChain, tcommon.Address) {
 
 // newHistoryReorgChainWithConfig is newHistoryReorgChain with an explicit
 // state.DatabaseConfig, so a test can exercise the same fork-rewind fixture
-// under the Erigon-style staged commitment engine (StagedCommitment: true).
+// with custom database settings.
 func newHistoryReorgChainWithConfig(t *testing.T, dbcfg state.DatabaseConfig) (*BlockChain, tcommon.Address) {
 	t.Helper()
 	diskdb := ethrawdb.NewMemoryDatabase()
