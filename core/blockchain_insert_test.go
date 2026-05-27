@@ -588,95 +588,9 @@ func TestBlockChain_ForkSwitch_10Block(t *testing.T) {
 	}
 }
 
-func TestBlockChain_ForkSwitchRestoresCommitmentRoot(t *testing.T) {
-	bc, witnessAddr := newHistoryReorgChain(t)
-	defer bc.Close()
-	forkCommitScopes := 0
-	bc.stateCommitScopeHook = func() {
-		forkCommitScopes++
-	}
-
-	chainA := make([]*types.Block, 4)
-	chainA[0] = bc.genesisBlock
-	for n := int64(1); n <= 3; n++ {
-		b := buildTransferBlock(t, n, n*3000, chainA[n-1].Hash(), witnessAddr, n*100)
-		if err := bc.InsertBlock(b); err != nil {
-			t.Fatalf("insert A%d: %v", n, err)
-		}
-		chainA[n] = b
-	}
-
-	chainB := make([]*types.Block, 5)
-	chainB[0] = bc.genesisBlock
-	for n := int64(1); n <= 4; n++ {
-		chainB[n] = buildTransferBlock(t, n, n*3000+1, chainB[n-1].Hash(), witnessAddr, n*1000)
-	}
-	for n := 1; n <= 3; n++ {
-		if err := bc.InsertBlock(chainB[n]); err != nil {
-			t.Fatalf("insert B%d pre-switch: %v", n, err)
-		}
-	}
-	if bc.CurrentBlock().Hash() != chainA[3].Hash() {
-		t.Fatalf("chain A should remain canonical before longer fork arrives")
-	}
-	if err := bc.InsertBlock(chainB[4]); err != nil {
-		t.Fatalf("insert B4 switch trigger: %v", err)
-	}
-	if forkCommitScopes != 1 {
-		t.Fatalf("fork replay opened commit scopes = %d, want 1 shared range executor scope", forkCommitScopes)
-	}
-	if bc.CurrentBlock().Hash() != chainB[4].Hash() {
-		t.Fatalf("head hash = %x, want B4 %x", bc.CurrentBlock().Hash(), chainB[4].Hash())
-	}
-
-	bdb := bc.BufferedDB()
-	got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(bdb)
-	if err != nil || !ok {
-		t.Fatalf("commitment root after switch missing: ok=%v err=%v", ok, err)
-	}
-	if headRoot := bc.HeadStateRoot(); got != headRoot {
-		t.Fatalf("commitment root after switch = %x, head state root = %x", got, headRoot)
-	}
-	if blockRoot := rawdb.ReadBlockStateRoot(bc.chaindb, bc.CurrentBlock().Hash()); got != blockRoot {
-		t.Fatalf("commitment root after switch = %x, block state root = %x", got, blockRoot)
-	}
-	latestView, ok := bdb.(latestCommitmentView)
-	if !ok {
-		t.Fatalf("buffered db does not expose latest iterator view")
-	}
-	if rebuilt := rebuildLatestCommitmentRootFromVisibleLatest(t, latestView); got != rebuilt {
-		t.Fatalf("commitment root after switch = %x, rebuilt latest-domain root = %x", got, rebuilt)
-	}
-}
-
 type latestCommitmentView interface {
 	ethdb.KeyValueReader
 	ethdb.Iteratee
-}
-
-func rebuildLatestCommitmentRootFromVisibleLatest(t *testing.T, src latestCommitmentView) tcommon.Hash {
-	t.Helper()
-	scratch := ethrawdb.NewMemoryDatabase()
-	if err := rawdb.IterateStateAccountLatest(src, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
-		return true, rawdb.WriteStateAccountLatest(scratch, row.Owner, row.Value)
-	}); err != nil {
-		t.Fatalf("copy account latest rows: %v", err)
-	}
-	if err := rawdb.IterateStateKVGeneration(src, nil, func(row rawdb.StateKVGenerationRow) (bool, error) {
-		return true, rawdb.WriteStateKVGeneration(scratch, row.Owner, row.Generation)
-	}); err != nil {
-		t.Fatalf("copy kv generation rows: %v", err)
-	}
-	if err := rawdb.IterateStateKVLatestRows(src, func(row rawdb.StateKVLatestRow) (bool, error) {
-		return true, rawdb.WriteStateKVLatest(scratch, row.Owner, row.Generation, row.Domain, row.Key, row.Value)
-	}); err != nil {
-		t.Fatalf("copy kv latest rows: %v", err)
-	}
-	root, err := rawdb.RebuildLatestDomainCommitment(scratch)
-	if err != nil {
-		t.Fatalf("rebuild latest commitment from visible latest rows: %v", err)
-	}
-	return root
 }
 
 // rebuildLatestCommitmentRootFromVisibleLatestStaged is the staged-engine

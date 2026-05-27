@@ -171,6 +171,6 @@ func (s *FlatStore) updateCommitment(db latestStateDB, updates []rawdb.StateComm
 	if s == nil || !s.commitment {
 		return nil
 	}
-	_, err := ApplyLatestCommitment(db, updates)
+	_, err := ApplyLatestCommitmentWithStore(NewStagedCommitmentStore(db), updates)
 	return err
 }

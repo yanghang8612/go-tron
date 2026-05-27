@@ -248,6 +248,12 @@ func SeekLatestCommitment(db CommitmentDB, txNumAtBlockEnd func(blockNum uint64)
 	return seekLatestCommitment(NewRawDBLatestCommitmentStore(db), txNumAtBlockEnd)
 }
 
+// SeekLatestCommitmentWithStore is the store-injecting variant of
+// SeekLatestCommitment, so callers can select the commitment engine.
+func SeekLatestCommitmentWithStore(store LatestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
+	return seekLatestCommitment(store, txNumAtBlockEnd)
+}
+
 func seekLatestCommitment(store LatestCommitmentStore, txNumAtBlockEnd func(blockNum uint64) (uint64, error)) (uint64, uint64, error) {
 	if store == nil {
 		return 0, 0, ErrNilCommitmentStore
