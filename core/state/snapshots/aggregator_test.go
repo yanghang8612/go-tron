@@ -368,6 +368,10 @@ func (s *recordingSnapshotStageProgressStore) Write(stage rawdb.StageID, blockNu
 	return nil
 }
 
+func (s *recordingSnapshotStageProgressStore) Read(_ rawdb.StageID) (rawdb.StageProgress, bool, error) {
+	return rawdb.StageProgress{}, false, nil
+}
+
 func assertSegmentRef(t *testing.T, manifest *Manifest, dataset SegmentDataset, domain kvdomains.KVDomain, kind SegmentKind) SegmentRef {
 	t.Helper()
 	for _, ref := range manifest.Segments {

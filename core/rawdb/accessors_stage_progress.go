@@ -20,6 +20,15 @@ const (
 	StageSnapshotBuild StageID = "SnapshotBuild"
 	StageSnapshotPrune StageID = "SnapshotPrune"
 
+	// StageSnapshotLatestBuild records the solidified block at which the last
+	// production latest-snapshot build ran, so the LatestBuildBlocks cadence gate
+	// resumes across restarts instead of re-seeding to the current head (which
+	// would delay the next build by one interval). Block-valued, forward-only
+	// (never rewound), mirroring StageSnapshotBuild. NOTE: if an operator raises
+	// LatestBuildBlocks a lot, the next build may be far out even when state is
+	// stale — that is expected (gate = block >= prev + interval), not a stuck stage.
+	StageSnapshotLatestBuild StageID = "SnapshotLatestBuild"
+
 	StageSnapshotLatest          StageID = "SnapshotLatest"
 	StageSnapshotHistory         StageID = "SnapshotHistory"
 	StageSnapshotAccessor        StageID = "SnapshotAccessor"

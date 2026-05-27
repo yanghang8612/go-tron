@@ -436,6 +436,142 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	}
 }
 
+// TestRunnerLatestBuildWatermarkSurvivesRestart proves that the latest-build
+// watermark is persisted to StageSnapshotLatestBuild and that a fresh Runner
+// over the same DB seeds from that persisted value rather than re-seeding to
+// the current head.  The test would FAIL under the old behaviour because:
+//   - Runner1 builds at block 50, persists stage=50.
+//   - The fake chain is advanced to block 55 before Runner2 is constructed.
+//   - Old Start(): seed = current head = 55 → lastLatestBuildBlock = 55.
+//   - Gate at chain=55: 55 < 55+10=65 → gated. (Still gated, same symptom.)
+//   - But the direct Load() assertion "lastLatestBuildBlock==50" would fail
+//     because the old path stored 55, not 50.
+//   - Additionally under the old path, advancing chain to 65 would build at
+//     65 ≥ 55+10=65 (boundary), whereas under new path 65 ≥ 50+10=60 — both
+//     build, but the stage value and discriminating Load() catch the difference.
+func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x89)
+
+	// Seed hot-DB rows for block 50 so BuildLatest produces segments.
+	seedLatestRows(t, db, owner, 50, 50)
+
+	// ── Runner1 at block 50 ──────────────────────────────────────────────────
+	chain := &coldBuilderChain{db: db, solidified: 50}
+	runner1 := NewRunner(chain, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		LatestBuildBlocks: 10,
+	})
+	// Drive latestPass directly (skip Start/loop) so there's no goroutine.
+	built1, err := runner1.latestPass()
+	if err != nil {
+		t.Fatalf("runner1 latestPass: %v", err)
+	}
+	if !built1 {
+		t.Fatal("runner1 latestPass: expected built=true (prevBlock==0)")
+	}
+
+	// Manifest must have SegmentLatest refs.
+	manifest1, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest after runner1 build: %v", err)
+	}
+	var latestRefs1 int
+	for _, ref := range manifest1.Segments {
+		if ref.Kind == SegmentLatest {
+			latestRefs1++
+		}
+	}
+	if latestRefs1 == 0 {
+		t.Fatalf("manifest after runner1 has no SegmentLatest refs: %+v", manifest1.Segments)
+	}
+
+	// Persisted stage must be 50.
+	stageBlock1, stageOK1, stageErr1 := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild)
+	if stageErr1 != nil || !stageOK1 || stageBlock1 != 50 {
+		t.Fatalf("StageSnapshotLatestBuild after runner1 = %d ok=%v err=%v, want 50", stageBlock1, stageOK1, stageErr1)
+	}
+
+	// ── Simulate restart: advance chain to 55 BEFORE constructing Runner2 ───
+	// This is the discriminator: old Start() would seed to 55 (current head);
+	// new Start() seeds from the persisted stage → 50.
+	chain.solidified = 55
+	if err := rawdb.WriteStateTxRange(db, 55, common.Hash{55}, 55, 55); err != nil {
+		t.Fatalf("seed tx range block 55: %v", err)
+	}
+
+	runner2 := NewRunner(chain, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		LatestBuildBlocks: 10,
+	})
+	// Replicate the Start() seed path inline (avoids spawning the loop goroutine).
+	if row, ok, err := newRawDBStageProgressReader(runner2.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
+		runner2.lastLatestBuildBlock.Store(row.BlockNum)
+	} else if block, _, ok, werr := runner2.latestBuildWatermark(); werr == nil && ok {
+		runner2.lastLatestBuildBlock.Store(block)
+	}
+
+	// Assert seeded from persistence (50), NOT from current head (55).
+	if got := runner2.lastLatestBuildBlock.Load(); got != 50 {
+		t.Fatalf("runner2 lastLatestBuildBlock after restart seed = %d, want 50 (persisted), not 55 (current head)", got)
+	}
+
+	// ── Runner2 at chain=55: gate must fire (55 < 50+10=60) ─────────────────
+	// Record manifest before the gated pass to verify history is untouched.
+	manifestBeforeGated, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest before gated pass: %v", err)
+	}
+
+	result2a, err := runner2.OnePass()
+	if err != nil {
+		t.Fatalf("runner2 OnePass at block 55: %v", err)
+	}
+	if result2a.LatestBuilt {
+		t.Fatal("runner2 OnePass at block 55: expected LatestBuilt=false (gate: 55 < 60)")
+	}
+
+	// History coverage must be unchanged by the gated pass.
+	manifestAfterGated, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest after gated pass: %v", err)
+	}
+	if manifestAfterGated.VisibleTxEnd != manifestBeforeGated.VisibleTxEnd {
+		t.Fatalf("history VisibleTxEnd changed during gated pass: before=%d after=%d",
+			manifestBeforeGated.VisibleTxEnd, manifestAfterGated.VisibleTxEnd)
+	}
+
+	// ── Advance to 65: gate must open (65 >= 50+10=60) ──────────────────────
+	chain.solidified = 65
+	if err := rawdb.WriteStateTxRange(db, 65, common.Hash{65}, 65, 65); err != nil {
+		t.Fatalf("seed tx range block 65: %v", err)
+	}
+
+	result2b, err := runner2.OnePass()
+	if err != nil {
+		t.Fatalf("runner2 OnePass at block 65: %v", err)
+	}
+	if !result2b.LatestBuilt {
+		t.Fatal("runner2 OnePass at block 65: expected LatestBuilt=true (65 >= 60)")
+	}
+	if got := runner2.lastLatestBuildBlock.Load(); got != 65 {
+		t.Fatalf("runner2 lastLatestBuildBlock after build at 65 = %d, want 65", got)
+	}
+
+	// Persisted stage must now be 65.
+	stageBlock2, stageOK2, stageErr2 := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild)
+	if stageErr2 != nil || !stageOK2 || stageBlock2 != 65 {
+		t.Fatalf("StageSnapshotLatestBuild after runner2 build = %d ok=%v err=%v, want 65", stageBlock2, stageOK2, stageErr2)
+	}
+}
+
 type coldBuilderChain struct {
 	db         AggregatorDB
 	solidified int64

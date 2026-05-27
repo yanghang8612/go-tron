@@ -183,11 +183,13 @@ func (r *Runner) Start() error {
 			r.startErr = errors.New("snapshots: nil cold builder chain or database")
 			return
 		}
-		// Seed lastLatestBuildBlock to the current solidified block so the first
-		// production latest build happens one interval later, avoiding a startup
-		// full-scan. Persisting this across restarts is a follow-up.
+		// Seed lastLatestBuildBlock from the persisted stage first (survives
+		// restarts); fall back to the current solidified block for fresh nodes
+		// that have never run a latest build (self-heals after the first build).
 		if r.cfg.LatestBuildBlocks > 0 {
-			if block, _, ok, err := r.latestBuildWatermark(); err == nil && ok {
+			if row, ok, err := newRawDBStageProgressReader(r.chain.DB()).Read(rawdb.StageSnapshotLatestBuild); err == nil && ok {
+				r.lastLatestBuildBlock.Store(row.BlockNum)
+			} else if block, _, ok, werr := r.latestBuildWatermark(); werr == nil && ok {
 				r.lastLatestBuildBlock.Store(block)
 			}
 		}
@@ -441,6 +443,11 @@ func (r *Runner) latestPass() (bool, error) {
 		return false, err
 	}
 	r.lastLatestBuildBlock.Store(block)
+	if writer, ok := db.(ethdb.KeyValueWriter); ok {
+		if err := newRawDBStageProgressStore(writer).Write(rawdb.StageSnapshotLatestBuild, block); err != nil {
+			return false, err
+		}
+	}
 	return res != nil && len(res.Segments) > 0, nil
 }
 
