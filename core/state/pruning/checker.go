@@ -409,7 +409,7 @@ func (c Checker) checkCommitmentBranchSnapshot(report *CheckReport, manifest *sn
 	var branchRef snapshots.SegmentRef
 	found := false
 	for _, ref := range manifest.Segments {
-		if ref.Dataset != snapshots.SegmentDatasetCommitmentBranch || ref.Kind != snapshots.SegmentLatest {
+		if ref.NormalizedDataset() != snapshots.SegmentDatasetCommitmentBranch || ref.Kind != snapshots.SegmentLatest {
 			continue
 		}
 		if !found || ref.ToTxNum > branchRef.ToTxNum {
