@@ -2520,7 +2520,10 @@ func (s *StateDB) writeFlatAccountLatestWithPlan(plan *accountCommitPlan, flatRo
 		return nil
 	}
 	generationDirty := obj.accountKVGenerationDirty
-	needsAccountLatestUpdate := plan.accountLatestDirty || flatRoot
+	// Flat latest-domain layout keeps accountKVRoot fixed at EmptyKVRoot.
+	// Pure account-KV mutations are represented by KV latest rows, so they do
+	// not need to rewrite the account envelope or touch account commitment keys.
+	needsAccountLatestUpdate := plan.accountLatestDirty
 	if generationDirty {
 		if err := s.writeAccountKVGeneration(obj, commitment, latestWriter); err != nil {
 			return err

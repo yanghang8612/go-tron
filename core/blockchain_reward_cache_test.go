@@ -5,6 +5,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -55,5 +56,23 @@ func TestWitnessBlockCacheReloadsAfterClear(t *testing.T) {
 	bc.clearWitnessBlockCache()
 	if got := bc.cachedWitnessLatestBlock(statedb, addr); got != 9 {
 		t.Fatalf("cached latest block after clear = %d, want 9", got)
+	}
+}
+
+func TestWitnessBlockCacheFallsBackToCapsuleLatestBlock(t *testing.T) {
+	statedb := newTestStateDB(t)
+	addr := tcommon.BytesToAddress([]byte{0x41, 0x04})
+	if err := statedb.WriteWitnessLatestBlock(addr, 7); err != nil {
+		t.Fatal(err)
+	}
+	witness := types.NewWitness(addr, "http://sr-cache")
+	witness.SetLatestBlockNum(11)
+	if err := statedb.SetWitnessCapsule(witness); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := &BlockChain{}
+	if got := bc.cachedWitnessLatestBlock(statedb, addr); got != 11 {
+		t.Fatalf("cached latest block from capsule = %d, want authoritative capsule value 11", got)
 	}
 }

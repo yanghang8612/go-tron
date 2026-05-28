@@ -2137,7 +2137,7 @@ func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
 	a.dynProps.SetRemoveThePowerOfTheGr(v)
 }
 
-// updateSolidifiedBlock updates the per-witness latest-block cursor and
+// updateSolidifiedBlock updates the per-witness latest-block cache and
 // recomputes the solidified block number using the java-tron algorithm:
 //
 //	sort all active witnesses by their latest produced block number and
@@ -2147,8 +2147,6 @@ func (a *chainHeaderAdapter) SetRemoveThePowerOfTheGr(v int64) {
 // number always equals that SR's latest block (i.e. the current head).
 // Mirrors java-tron Manager.updateSolidifiedBlock().
 func (bc *BlockChain) updateSolidifiedBlock(statedb *state.StateDB, producerAddr tcommon.Address, blockNum int64, dynProps *state.DynamicProperties) {
-	// The rooted cursor is canonical for rewind and historical restart.
-	_ = statedb.WriteWitnessLatestBlock(producerAddr, blockNum)
 	if bc.witnessBlockCache == nil {
 		bc.witnessBlockCache = make(map[tcommon.Address]int64)
 	}

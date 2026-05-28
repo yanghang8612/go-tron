@@ -38,14 +38,20 @@ func (s *StateDB) SetWitnessCapsule(w *types.Witness) error {
 	return s.SetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessCapsuleStateKey(addr), data)
 }
 
-// ReadWitnessLatestBlock returns the native rooted latest-produced-block cursor
-// for a witness.
+// ReadWitnessLatestBlock returns the latest produced block for a witness.
+//
+// The witness capsule is authoritative. Older latest-domain databases may
+// contain a dedicated rooted cursor; it is used only as a fallback because new
+// writes no longer keep that duplicate row current.
 func (s *StateDB) ReadWitnessLatestBlock(addr tcommon.Address) int64 {
-	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr))
-	if err != nil || !ok || len(raw) != 8 {
-		return 0
+	if w := s.GetWitness(addr); w != nil {
+		return w.LatestBlockNum()
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	raw, ok, err := s.GetAccountKV(addr, kvdomains.WitnessCapsule, rawdb.WitnessLatestBlockStateKey(addr))
+	if err == nil && ok && len(raw) == 8 {
+		return int64(binary.BigEndian.Uint64(raw))
+	}
+	return 0
 }
 
 // WriteWitnessLatestBlock stages the native rooted latest-produced-block cursor.
