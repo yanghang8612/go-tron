@@ -19,6 +19,16 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+type syncTrackingDatabase struct {
+	ethdb.Database
+	syncs int
+}
+
+func (db *syncTrackingDatabase) SyncKeyValue() error {
+	db.syncs++
+	return nil
+}
+
 func testInsertAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41
@@ -256,6 +266,31 @@ func TestBlockChainRejectsInsertAfterClose(t *testing.T) {
 	}
 	if err := bc.InsertBlocks([]*types.Block{block}); !errors.Is(err, ErrBlockChainClosed) {
 		t.Fatalf("InsertBlocks after Close err = %v, want %v", err, ErrBlockChainClosed)
+	}
+}
+
+func TestBlockChainCloseSyncsCleanShutdownMarker(t *testing.T) {
+	diskdb := &syncTrackingDatabase{Database: ethrawdb.NewMemoryDatabase()}
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := bc.CurrentBlock()
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if diskdb.syncs < 2 {
+		t.Fatalf("SyncKeyValue called %d times, want at least marker clear and write barriers", diskdb.syncs)
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != head.Hash() {
+		t.Fatalf("clean shutdown marker = %s, want %s", got, head.Hash())
 	}
 }
 

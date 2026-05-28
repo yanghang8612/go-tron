@@ -552,6 +552,16 @@ func repairMaterializedRootFromNodes(db ethdb.KeyValueStore, expected tcommon.Ha
 	return true, nil
 }
 
+func syncKeyValueStore(db ethdb.KeyValueStore) error {
+	type keyValueSyncer interface {
+		SyncKeyValue() error
+	}
+	if syncer, ok := db.(keyValueSyncer); ok {
+		return syncer.SyncKeyValue()
+	}
+	return nil
+}
+
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
@@ -1511,6 +1521,9 @@ func (bc *BlockChain) Close() error {
 		return nil
 	}
 	rawdb.DeleteCleanShutdownHeadHash(bc.db)
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return fmt.Errorf("close: clear clean shutdown marker: %w", err)
+	}
 	bc.WaitForFlushSettled()
 	bc.stopFlushWorkerLocked()
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
@@ -1539,13 +1552,31 @@ func (bc *BlockChain) Close() error {
 			}
 		}
 		if checked && matches {
+			if repaired, err := repairMaterializedRootFromNodes(bc.db, expected); err != nil {
+				return fmt.Errorf("close: rewrite latest-domain root: %w", err)
+			} else if !repaired {
+				matches = false
+			}
+		}
+		if checked && matches {
 			rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
-			log.Info("Clean shutdown marker written",
-				"head", head.Number(), "root", actual)
-		} else {
+			if err := syncKeyValueStore(bc.db); err != nil {
+				rawdb.DeleteCleanShutdownHeadHash(bc.db)
+				_ = syncKeyValueStore(bc.db)
+				return fmt.Errorf("close: sync clean shutdown marker: %w", err)
+			}
+			expected, actual, matches, checked = materializedRootMatchesBlock(bc.db, bc.chaindb, head)
+		}
+		if !checked || !matches {
 			rawdb.DeleteCleanShutdownHeadHash(bc.db)
+			if err := syncKeyValueStore(bc.db); err != nil {
+				return fmt.Errorf("close: sync clean shutdown marker removal: %w", err)
+			}
 			log.Warn("Clean shutdown marker skipped: materialized state root mismatch",
 				"head", head.Number(), "expectedRoot", expected, "materializedRoot", actual, "checked", checked)
+		} else {
+			log.Info("Clean shutdown marker written",
+				"head", head.Number(), "root", actual)
 		}
 	}
 	return nil
