@@ -41,6 +41,19 @@ cd /Users/asuka/Projects/tron/java-tron
 ./gradlew clean build -x test
 ```
 
+For local stage-C dailyBuild runs, apply the java-tron local harness patch
+before building:
+
+```bash
+cd /Users/asuka/Projects/tron/java-tron
+git apply /Users/asuka/Projects/asuka/go/go-tron/docs/dev/java-tron-dailybuild-local.patch
+./gradlew clean build -x test
+```
+
+The patch is intentionally kept outside the java-tron worktree so that the
+java-tron checkout can be returned to a clean upstream `develop` state after
+building the local `FullNode.jar`.
+
 The default jar path expected by the harness is:
 
 ```text
@@ -139,6 +152,46 @@ do not match, it creates and approves one proposal before dailyBuild starts. The
 fixture uses `maintenance_time_interval = 300000` and
 `proposal_expire_time = 300000`, so that fallback executes in minutes instead
 of the mainnet 6-hour maintenance cycle.
+
+## java-tron local patch
+
+The source-level java-tron changes needed by the local harness are captured in
+[`java-tron-dailybuild-local.patch`](./java-tron-dailybuild-local.patch). The
+patch is based on java-tron `develop` at `381d369b43` and contains only local
+harness support:
+
+- `genesis.block.dynamicProperties` parsing for `energy_fee`,
+  `max_fee_limit`, and `max_create_account_tx_size`.
+- genesis-time writes into `DynamicPropertiesStore`, including
+  `energy_price_history` when `energy_fee` is seeded.
+- reference `config.conf`/`reference.conf` comments documenting the optional
+  keys.
+- tests for the config parser and genesis dynamic-property application.
+- a local-test peer reconnect tweak that disables java-tron's short peer ban
+  on disconnect, useful during repeated stage-C restarts.
+
+Recreate the patch from a deliberately modified java-tron checkout with:
+
+```bash
+cd /Users/asuka/Projects/tron/java-tron
+git diff -- \
+  common/src/main/java/org/tron/core/config/args/GenesisConfig.java \
+  common/src/main/resources/reference.conf \
+  common/src/test/java/org/tron/core/config/args/GenesisConfigTest.java \
+  framework/src/main/java/org/tron/core/db/Manager.java \
+  framework/src/main/java/org/tron/core/net/peer/PeerConnection.java \
+  framework/src/main/resources/config.conf \
+  framework/src/test/java/org/tron/core/db/ManagerMockTest.java \
+  > /Users/asuka/Projects/asuka/go/go-tron/docs/dev/java-tron-dailybuild-local.patch
+```
+
+After building the jar, restore java-tron to a clean checkout:
+
+```bash
+cd /Users/asuka/Projects/tron/java-tron
+git reset --hard
+git clean -fd
+```
 
 ## Fixture notes
 

@@ -1,0 +1,387 @@
+diff --git a/common/src/main/java/org/tron/core/config/args/GenesisConfig.java b/common/src/main/java/org/tron/core/config/args/GenesisConfig.java
+index a17e06d5c0..a12caf95aa 100644
+--- a/common/src/main/java/org/tron/core/config/args/GenesisConfig.java
++++ b/common/src/main/java/org/tron/core/config/args/GenesisConfig.java
+@@ -1,12 +1,20 @@
+ package org.tron.core.config.args;
+
++import static org.tron.core.Constant.CREATE_ACCOUNT_TRANSACTION_MAX_BYTE_SIZE;
++import static org.tron.core.Constant.CREATE_ACCOUNT_TRANSACTION_MIN_BYTE_SIZE;
++import static org.tron.core.exception.TronError.ErrCode.PARAMETER_INIT;
++
+ import com.typesafe.config.Config;
+ import com.typesafe.config.ConfigBeanFactory;
+ import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ import lombok.Getter;
+ import lombok.Setter;
+ import lombok.extern.slf4j.Slf4j;
++import org.tron.core.exception.TronError;
+
+ /**
+  * Genesis block configuration bean.
+@@ -15,14 +23,21 @@ import lombok.extern.slf4j.Slf4j;
+  * (e.g. Base58Check) is done in the bridge method, not here.
+  */
+ @Slf4j
+-@Getter
+-@Setter
+ public class GenesisConfig {
+
++  @Getter
++  @Setter
+   private String timestamp = "";
++  @Getter
++  @Setter
+   private String parentHash = "";
++  @Getter
++  @Setter
+   private List<AssetConfig> assets = new ArrayList<>();
++  @Getter
++  @Setter
+   private List<WitnessConfig> witnesses = new ArrayList<>();
++  private DynamicPropertiesConfig dynamicProperties = new DynamicPropertiesConfig();
+
+   @Getter
+   @Setter
+@@ -41,10 +56,82 @@ public class GenesisConfig {
+     private long voteCount = 0;
+   }
+
++  @Getter
++  @Setter
++  public static class DynamicPropertiesConfig {
++
++    private static final String ENERGY_FEE = "energy_fee";
++    private static final String MAX_FEE_LIMIT = "max_fee_limit";
++    private static final String MAX_CREATE_ACCOUNT_TX_SIZE = "max_create_account_tx_size";
++    private static final Set<String> ALLOWED_KEYS = new HashSet<>(
++        Arrays.asList(ENERGY_FEE, MAX_FEE_LIMIT, MAX_CREATE_ACCOUNT_TX_SIZE));
++
++    private Long energyFee;
++    private Long maxFeeLimit;
++    private Long maxCreateAccountTxSize;
++
++    public boolean hasUpdates() {
++      return energyFee != null || maxFeeLimit != null || maxCreateAccountTxSize != null;
++    }
++
++    private static DynamicPropertiesConfig fromConfig(Config genesisBlockSection) {
++      DynamicPropertiesConfig dynamicProperties = new DynamicPropertiesConfig();
++      if (!genesisBlockSection.hasPath("dynamicProperties")) {
++        return dynamicProperties;
++      }
++
++      Config section = genesisBlockSection.getConfig("dynamicProperties");
++      for (String key : section.root().keySet()) {
++        if (!ALLOWED_KEYS.contains(key)) {
++          throw new TronError("Unsupported genesis.block.dynamicProperties key: " + key,
++              PARAMETER_INIT);
++        }
++      }
++
++      if (section.hasPath(ENERGY_FEE)) {
++        dynamicProperties.setEnergyFee(getNonNegativeLong(section, ENERGY_FEE));
++      }
++      if (section.hasPath(MAX_FEE_LIMIT)) {
++        dynamicProperties.setMaxFeeLimit(getNonNegativeLong(section, MAX_FEE_LIMIT));
++      }
++      if (section.hasPath(MAX_CREATE_ACCOUNT_TX_SIZE)) {
++        long value = getNonNegativeLong(section, MAX_CREATE_ACCOUNT_TX_SIZE);
++        if (value < CREATE_ACCOUNT_TRANSACTION_MIN_BYTE_SIZE
++            || value > CREATE_ACCOUNT_TRANSACTION_MAX_BYTE_SIZE) {
++          throw new TronError("The value[genesis.block.dynamicProperties."
++              + MAX_CREATE_ACCOUNT_TX_SIZE + "] is only allowed to be greater than or equal to "
++              + CREATE_ACCOUNT_TRANSACTION_MIN_BYTE_SIZE + " and less than or equal to "
++              + CREATE_ACCOUNT_TRANSACTION_MAX_BYTE_SIZE + "!", PARAMETER_INIT);
++        }
++        dynamicProperties.setMaxCreateAccountTxSize(value);
++      }
++
++      return dynamicProperties;
++    }
++
++    private static long getNonNegativeLong(Config section, String path) {
++      long value = section.getLong(path);
++      if (value < 0) {
++        throw new TronError("The value[genesis.block.dynamicProperties." + path
++            + "] must not be negative.", PARAMETER_INIT);
++      }
++      return value;
++    }
++  }
++
+   // Defaults come from reference.conf (loaded globally via Configuration.java)
+
++  @java.beans.Transient
++  public DynamicPropertiesConfig getDynamicProperties() {
++    return dynamicProperties;
++  }
++
+   public static GenesisConfig fromConfig(Config config) {
+     Config section = config.getConfig("genesis.block");
+-    return ConfigBeanFactory.create(section, GenesisConfig.class);
++    Config beanSection = section.hasPath("dynamicProperties")
++        ? section.withoutPath("dynamicProperties") : section;
++    GenesisConfig genesisConfig = ConfigBeanFactory.create(beanSection, GenesisConfig.class);
++    genesisConfig.dynamicProperties = DynamicPropertiesConfig.fromConfig(section);
++    return genesisConfig;
+   }
+ }
+diff --git a/common/src/main/resources/reference.conf b/common/src/main/resources/reference.conf
+index 688e159078..cf93c0f974 100644
+--- a/common/src/main/resources/reference.conf
++++ b/common/src/main/resources/reference.conf
+@@ -653,6 +653,14 @@ genesis.block = {
+   timestamp = "0"
+
+   parentHash = "0xe58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f"
++
++  # Optional genesis-only dynamic properties for local networks.
++  # Applied only when creating the genesis block on an empty database.
++  dynamicProperties = {
++    # energy_fee = 420
++    # max_fee_limit = 15000000000
++    # max_create_account_tx_size = 1500
++  }
+ }
+
+ # Optional. Used when the witness account has set witnessPermission.
+diff --git a/common/src/test/java/org/tron/core/config/args/GenesisConfigTest.java b/common/src/test/java/org/tron/core/config/args/GenesisConfigTest.java
+index 5e653a79b7..29e87c545a 100644
+--- a/common/src/test/java/org/tron/core/config/args/GenesisConfigTest.java
++++ b/common/src/test/java/org/tron/core/config/args/GenesisConfigTest.java
+@@ -2,11 +2,13 @@ package org.tron.core.config.args;
+
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertThrows;
+ import static org.junit.Assert.assertTrue;
+
+ import com.typesafe.config.Config;
+ import com.typesafe.config.ConfigFactory;
+ import org.junit.Test;
++import org.tron.core.exception.TronError;
+
+ public class GenesisConfigTest {
+
+@@ -26,6 +28,7 @@ public class GenesisConfigTest {
+     assertEquals("0", gc.getTimestamp());
+     assertFalse(gc.getAssets().isEmpty());  // reference.conf has seed accounts
+     assertFalse(gc.getWitnesses().isEmpty()); // reference.conf has seed witnesses
++    assertFalse(gc.getDynamicProperties().hasUpdates());
+   }
+
+   @Test
+@@ -56,4 +59,41 @@ public class GenesisConfigTest {
+     assertTrue(gc.getAssets().isEmpty());
+     assertTrue(gc.getWitnesses().isEmpty());
+   }
++
++  @Test
++  public void testDynamicProperties() {
++    Config config = withRef(
++        "genesis.block { timestamp = \"0\", parentHash = \"0x00\","
++            + " assets = [], witnesses = [],"
++            + " dynamicProperties {"
++            + " energy_fee = 420,"
++            + " max_fee_limit = 15000000000,"
++            + " max_create_account_tx_size = 1500"
++            + " } }");
++    GenesisConfig gc = GenesisConfig.fromConfig(config);
++    assertTrue(gc.getDynamicProperties().hasUpdates());
++    assertEquals(Long.valueOf(420L), gc.getDynamicProperties().getEnergyFee());
++    assertEquals(Long.valueOf(15_000_000_000L), gc.getDynamicProperties().getMaxFeeLimit());
++    assertEquals(Long.valueOf(1500L),
++        gc.getDynamicProperties().getMaxCreateAccountTxSize());
++  }
++
++  @Test
++  public void testDynamicPropertiesRejectUnknownKey() {
++    Config config = withRef(
++        "genesis.block { timestamp = \"0\", parentHash = \"0x00\","
++            + " assets = [], witnesses = [], dynamicProperties { transaction_fee = 20 } }");
++
++    assertThrows(TronError.class, () -> GenesisConfig.fromConfig(config));
++  }
++
++  @Test
++  public void testDynamicPropertiesRejectInvalidCreateAccountTxSize() {
++    Config config = withRef(
++        "genesis.block { timestamp = \"0\", parentHash = \"0x00\","
++            + " assets = [], witnesses = [],"
++            + " dynamicProperties { max_create_account_tx_size = 100 } }");
++
++    assertThrows(TronError.class, () -> GenesisConfig.fromConfig(config));
++  }
+ }
+diff --git a/framework/src/main/java/org/tron/core/db/Manager.java b/framework/src/main/java/org/tron/core/db/Manager.java
+index a534b9d1c5..586673a2b6 100644
+--- a/framework/src/main/java/org/tron/core/db/Manager.java
++++ b/framework/src/main/java/org/tron/core/db/Manager.java
+@@ -103,6 +103,7 @@ import org.tron.core.capsule.utils.TransactionUtil;
+ import org.tron.core.config.Parameter;
+ import org.tron.core.config.Parameter.ChainConstant;
+ import org.tron.core.config.args.Args;
++import org.tron.core.config.args.GenesisConfig;
+ import org.tron.core.consensus.ProposalController;
+ import org.tron.core.db.KhaosDatabase.KhaosBlock;
+ import org.tron.core.db.accountstate.TrieService;
+@@ -634,6 +635,7 @@ public class Manager {
+             genesisBlock.getBlockId().getByteString());
+         chainBaseManager.getDynamicPropertiesStore().saveLatestBlockHeaderTimestamp(
+             genesisBlock.getTimeStamp());
++        this.applyGenesisDynamicProperties();
+         this.initAccount();
+         this.initWitness();
+         this.khaosDb.start(genesisBlock);
+@@ -643,6 +645,26 @@ public class Manager {
+     }
+   }
+
++  private void applyGenesisDynamicProperties() {
++    GenesisConfig genesisConfig = Args.getGenesisConfig();
++    if (genesisConfig == null || !genesisConfig.getDynamicProperties().hasUpdates()) {
++      return;
++    }
++
++    GenesisConfig.DynamicPropertiesConfig dynamicProperties = genesisConfig.getDynamicProperties();
++    DynamicPropertiesStore store = chainBaseManager.getDynamicPropertiesStore();
++    if (dynamicProperties.getEnergyFee() != null) {
++      store.saveEnergyFee(dynamicProperties.getEnergyFee());
++      store.saveEnergyPriceHistory("0:" + dynamicProperties.getEnergyFee());
++    }
++    if (dynamicProperties.getMaxFeeLimit() != null) {
++      store.saveMaxFeeLimit(dynamicProperties.getMaxFeeLimit());
++    }
++    if (dynamicProperties.getMaxCreateAccountTxSize() != null) {
++      store.saveMaxCreateAccountTxSize(dynamicProperties.getMaxCreateAccountTxSize());
++    }
++  }
++
+   /**
+    * save account into database.
+    */
+diff --git a/framework/src/main/java/org/tron/core/net/peer/PeerConnection.java b/framework/src/main/java/org/tron/core/net/peer/PeerConnection.java
+index 8d7818d160..3988778875 100644
+--- a/framework/src/main/java/org/tron/core/net/peer/PeerConnection.java
++++ b/framework/src/main/java/org/tron/core/net/peer/PeerConnection.java
+@@ -297,10 +297,13 @@ public class PeerConnection {
+       case BAD_PROTOCOL:
+       case BAD_BLOCK:
+       case BAD_TX:
+-        channel.close(BAD_PEER_BAN_TIME);
++        channel.close(0);
+         break;
+       default:
+-        channel.close();
++        // Local-test patch: 0 disables libp2p's 60s DEFAULT_BAN_TIME so frequent
++        // restarts during the stage-C stress harness can reconnect immediately.
++        // Upstream calls channel.close() which delegates to close(DEFAULT_BAN_TIME).
++        channel.close(0);
+         break;
+     }
+     MetricsUtil.counterInc(MetricsKey.NET_DISCONNECTION_COUNT);
+diff --git a/framework/src/main/resources/config.conf b/framework/src/main/resources/config.conf
+index d00f334f4c..73ce644fde 100644
+--- a/framework/src/main/resources/config.conf
++++ b/framework/src/main/resources/config.conf
+@@ -685,6 +685,14 @@ genesis.block = {
+   timestamp = "0" # Genesis block timestamp, milli seconds
+
+   parentHash = "0xe58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f"
++
++  # Optional genesis-only dynamic properties for local networks.
++  # Applied only when creating the genesis block on an empty database.
++  dynamicProperties = {
++    # energy_fee = 420
++    # max_fee_limit = 15000000000
++    # max_create_account_tx_size = 1500
++  }
+ }
+
+ # Optional. The default is empty. It is used when the witness account has set the witnessPermission.
+diff --git a/framework/src/test/java/org/tron/core/db/ManagerMockTest.java b/framework/src/test/java/org/tron/core/db/ManagerMockTest.java
+index e3de0441c9..589fda925c 100644
+--- a/framework/src/test/java/org/tron/core/db/ManagerMockTest.java
++++ b/framework/src/test/java/org/tron/core/db/ManagerMockTest.java
+@@ -11,10 +11,13 @@ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.mockConstruction;
+ import static org.mockito.Mockito.mockStatic;
+ import static org.mockito.Mockito.spy;
++import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+
+ import com.google.protobuf.Any;
+ import com.google.protobuf.ByteString;
++import com.typesafe.config.Config;
++import com.typesafe.config.ConfigFactory;
+
+ import java.lang.reflect.Field;
+ import java.lang.reflect.InvocationTargetException;
+@@ -49,6 +52,7 @@ import org.tron.core.capsule.TransactionCapsule;
+ import org.tron.core.capsule.TransactionInfoCapsule;
+ import org.tron.core.capsule.utils.TransactionUtil;
+ import org.tron.core.config.args.Args;
++import org.tron.core.config.args.GenesisConfig;
+ import org.tron.core.exception.ContractSizeNotEqualToOneException;
+ import org.tron.core.exception.DupTransactionException;
+ import org.tron.core.exception.ItemNotFoundException;
+@@ -170,6 +174,47 @@ public class ManagerMockTest {
+     }
+   }
+
++  @Test
++  public void testApplyGenesisDynamicProperties() throws Exception {
++    Config config = ConfigFactory.parseString(
++        "genesis.block { timestamp = \"0\", parentHash = \"0x00\","
++            + " assets = [], witnesses = [],"
++            + " dynamicProperties {"
++            + " energy_fee = 420,"
++            + " max_fee_limit = 15000000000,"
++            + " max_create_account_tx_size = 1500"
++            + " } }")
++        .withFallback(ConfigFactory.defaultReference());
++    GenesisConfig genesisConfig = GenesisConfig.fromConfig(config);
++
++    Field genesisConfigField = Args.class.getDeclaredField("genesisConfig");
++    genesisConfigField.setAccessible(true);
++    Object originalGenesisConfig = genesisConfigField.get(null);
++    try {
++      genesisConfigField.set(null, genesisConfig);
++
++      Manager dbManager = spy(new Manager());
++      ChainBaseManager chainBaseManagerMock = mock(ChainBaseManager.class);
++      DynamicPropertiesStore dynamicPropertiesStoreMock = mock(DynamicPropertiesStore.class);
++      when(chainBaseManagerMock.getDynamicPropertiesStore()).thenReturn(dynamicPropertiesStoreMock);
++
++      Field chainBaseManagerField = Manager.class.getDeclaredField("chainBaseManager");
++      chainBaseManagerField.setAccessible(true);
++      chainBaseManagerField.set(dbManager, chainBaseManagerMock);
++
++      Method privateMethod = Manager.class.getDeclaredMethod("applyGenesisDynamicProperties");
++      privateMethod.setAccessible(true);
++      privateMethod.invoke(dbManager);
++
++      verify(dynamicPropertiesStoreMock).saveEnergyFee(420L);
++      verify(dynamicPropertiesStoreMock).saveEnergyPriceHistory("0:420");
++      verify(dynamicPropertiesStoreMock).saveMaxFeeLimit(15_000_000_000L);
++      verify(dynamicPropertiesStoreMock).saveMaxCreateAccountTxSize(1500L);
++    } finally {
++      genesisConfigField.set(null, originalGenesisConfig);
++    }
++  }
++
+   private void initMockEnv(Manager dbManager, long headNum, long headTime,
+                            long exitHeight, long exitCount, String blockTime)
+       throws Exception {
+@@ -564,4 +609,4 @@ public class ManagerMockTest {
+     }
+   }
+
+-}
+\ No newline at end of file
++}
