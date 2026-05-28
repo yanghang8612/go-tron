@@ -269,9 +269,11 @@ func (dp *DynamicProperties) Copy() *DynamicProperties {
 	return out
 }
 
-// derivedDPKeys are dynamic properties that are also mirrored to flat dp- for
-// startup/diagnostic readers that do not have a state root in hand. They are
-// still staged into the rooted system account before Commit.
+// derivedDPKeys are runtime head pointers mirrored to flat dp- for startup,
+// crash recovery, and diagnostic readers that do not have a state root in hand.
+// They are intentionally not part of the rooted SystemDynamicProperty domain:
+// they can be re-derived from the canonical head and would otherwise add several
+// high-frequency writes to every historical block.
 var derivedDPKeys = map[string]struct{}{
 	"latest_block_header_number":    {},
 	"latest_block_header_timestamp": {},
@@ -281,34 +283,31 @@ var derivedDPKeys = map[string]struct{}{
 
 func isDerivedDPKey(k string) bool { _, ok := derivedDPKeys[k]; return ok }
 
-// FlushRooted stages every dirty dynamic property into the system account's
-// SystemDynamicProperty KV (committed by statedb.Commit, thus part of the
-// internal full-state root). Derived keys are intentionally left dirty so the
-// post-Commit Flush(db) still mirrors them to flat dp-.
+// FlushRooted stages dirty non-derived dynamic properties into the system
+// account's SystemDynamicProperty KV (committed by statedb.Commit, thus part of
+// the internal full-state root). Derived keys are intentionally left dirty so
+// the post-Commit Flush(db) mirrors them to flat dp- only.
 // Encoding matches dp-: int64 → 8-byte BE, string → raw bytes.
 func (dp *DynamicProperties) FlushRooted(s *StateDB) error {
 	buf := make([]byte, 8)
 	for k := range dp.dirty {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		binary.BigEndian.PutUint64(buf, uint64(dp.props[k]))
 		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(k), buf); err != nil {
 			return err
 		}
-		if !isDerivedDPKey(k) {
-			delete(dp.dirty, k)
-		}
+		delete(dp.dirty, k)
 	}
 	for k := range dp.stringDirty {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(k), []byte(dp.stringProps[k])); err != nil {
 			return err
 		}
-		if !isDerivedDPKey(k) {
-			delete(dp.stringDirty, k)
-		}
-	}
-	if dp.hashDirty {
-		if err := s.setAccountKVFinalNoRead(common.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"), dp.latestBlockHeaderHash.Bytes()); err != nil {
-			return err
-		}
+		delete(dp.stringDirty, k)
 	}
 	return nil
 }
@@ -332,9 +331,9 @@ func (dp *DynamicProperties) loadDerived(store derivedDynamicPropertyReader) {
 	}
 }
 
-// LoadDynamicProperties builds DynamicProperties from persisted state. Flat
-// dp- supplies a fallback mirror; the rooted system account KV wins whenever a
-// state root is available.
+// LoadDynamicProperties builds DynamicProperties from persisted state. Flat dp-
+// supplies the derived/runtime keys; the rooted system account KV supplies the
+// non-derived governance/economic keys whenever a state root is available.
 func LoadDynamicProperties(db ethdb.KeyValueReader, sysKV *StateDB) *DynamicProperties {
 	return loadDynamicPropertiesFromDerivedStore(newRawDBDerivedDynamicPropertyReader(db), sysKV)
 }
@@ -347,28 +346,36 @@ func loadDynamicPropertiesFromDerivedStore(store derivedDynamicPropertyReader, s
 	}
 	keys := make([][]byte, 0, len(defaultProps)+len(defaultStringProps))
 	for k := range defaultProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		keys = append(keys, []byte(k))
 	}
 	for k := range defaultStringProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		keys = append(keys, []byte(k))
 	}
-	keys = append(keys, []byte("latest_block_header_hash"))
 	vals, err := sysKV.SystemKVGetBatch(kvdomains.SystemDynamicProperty, keys)
 	if err != nil {
 		return dp
 	}
 	for k := range defaultProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		if v, ok := vals[k]; ok && len(v) == 8 {
 			dp.props[k] = int64(binary.BigEndian.Uint64(v))
 		}
 	}
 	for k := range defaultStringProps {
+		if isDerivedDPKey(k) {
+			continue
+		}
 		if v, ok := vals[k]; ok {
 			dp.stringProps[k] = string(v)
 		}
-	}
-	if v, ok := vals["latest_block_header_hash"]; ok && len(v) == common.HashLength {
-		dp.latestBlockHeaderHash = common.BytesToHash(v)
 	}
 	return dp
 }

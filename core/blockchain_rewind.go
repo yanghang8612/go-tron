@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -115,7 +116,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := writeGenesisMaterializedState(bc.db, genesis, genesisBlock, genesisRoot, genesisDP); err != nil {
 		return fmt.Errorf("restart sync: write genesis state: %w", err)
 	}
-	bc.resetRuntimeStateLocked(genesisBlock, genesisRoot)
+	if err := bc.resetRuntimeStateLocked(genesisBlock, genesisRoot); err != nil {
+		return err
+	}
 
 	for start := uint64(1); start <= height; {
 		end := start + restartSyncReplayBatchSize - 1
@@ -186,7 +189,9 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := rewindCanonicalStagePipeline(bc.db, height, final.Hash()); err != nil {
 		return fmt.Errorf("restart sync: rewind canonical stage progress: %w", err)
 	}
-	bc.resetRuntimeStateLocked(final, bc.HeadStateRoot())
+	if err := bc.resetRuntimeStateLocked(final, bc.HeadStateRoot()); err != nil {
+		return err
+	}
 	emit("done", height)
 	return nil
 }
@@ -200,6 +205,10 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 // not yet reached height+1, and — since pruning proceeds oldest-first — the
 // entire window [height+1, currentHead] is covered.
 //
+// The current-cycle reward accumulator is intentionally non-rooted and not part
+// of commitment changesets. If it is non-empty at head, the conservative
+// reset+replay path is required to rebuild it for the target height.
+//
 // This is a pure optimization gate: false forces the always-correct reset+replay.
 func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	if bc.config == nil || !bc.config.HistoryEnabled {
@@ -207,6 +216,9 @@ func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
 	}
 	if height >= currentHead {
 		return false // nothing to unwind, or invalid
+	}
+	if _, pending, ok, err := rawdb.ReadCycleRewardPending(bc.buffer); err != nil || ok && len(pending) > 0 {
+		return false
 	}
 	// Use height+1's StateTxRange as a coverage proxy. Pruning deletes both the
 	// tx-range and its corresponding changeset rows together, so if the tx-range
@@ -329,19 +341,69 @@ func (bc *BlockChain) incrementalUnwindTo(target *types.Block, currentHead uint6
 		return fmt.Errorf("delete latest pbft block num: %w", err)
 	}
 
-	// 9. Head pointer + canonical stage rewind + runtime cache reload.
+	// 9. Head pointer + derived DP mirror + canonical stage rewind + runtime
+	//    cache reload.
 	//    rewindCanonicalStagePipeline and resetRuntimeStateLocked are the same
 	//    final-sequence calls used by the reset+replay path.
 	emit("flush", height)
 	rawdb.WriteHeadBlockHash(bc.db, target.Hash())
+	if err := bc.rewriteDerivedDynPropsAtHead(target, expectedRoot); err != nil {
+		return fmt.Errorf("rewrite derived dynamic properties: %w", err)
+	}
 	if err := rewindCanonicalStagePipeline(bc.db, height, target.Hash()); err != nil {
 		return fmt.Errorf("rewind canonical stage progress: %w", err)
 	}
-	bc.resetRuntimeStateLocked(target, expectedRoot)
+	if err := bc.resetRuntimeStateLocked(target, expectedRoot); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Hash) {
+func (bc *BlockChain) rewriteDerivedDynPropsAtHead(head *types.Block, root tcommon.Hash) error {
+	if head == nil {
+		return errors.New("head is nil")
+	}
+	statedb, err := bc.openState(root)
+	if err != nil {
+		return fmt.Errorf("open head state %x: %w", root, err)
+	}
+	dp := state.LoadDynamicProperties(bc.db, statedb)
+	dp.SetLatestBlockHeaderNumber(int64(head.Number()))
+	dp.SetLatestBlockHeaderTimestamp(head.Timestamp())
+	dp.SetLatestBlockHeaderHash(head.Hash())
+
+	// latest_solidified_block_num is a derived runtime mirror. During normal
+	// block execution it is monotonic, but an offline rewind must be allowed to
+	// lower it. Recompute the current active-witness threshold from the rewound
+	// rooted witness cursors. This is conservative across maintenance rotations:
+	// it cannot exceed the exact historical value, and it recovers naturally as
+	// new blocks advance the witness cursors after restart.
+	dp.SetLatestSolidifiedBlockNum(solidifiedBlockFromRootedWitnessState(statedb))
+	dp.Flush(bc.db)
+	return nil
+}
+
+func solidifiedBlockFromRootedWitnessState(statedb *state.StateDB) int64 {
+	if statedb == nil {
+		return 0
+	}
+	active := statedb.ReadActiveWitnesses()
+	if len(active) == 0 {
+		return 0
+	}
+	nums := make([]int64, 0, len(active))
+	for _, addr := range active {
+		nums = append(nums, statedb.ReadWitnessLatestBlock(addr))
+	}
+	sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
+	pos := int(float64(len(nums)) * 0.3)
+	if pos >= len(nums) {
+		pos = len(nums) - 1
+	}
+	return nums[pos]
+}
+
+func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Hash) error {
 	bc.genesisWitnesses = bc.genesisWitnesses[:0]
 	for _, gw := range rawdb.ReadGenesisWitnesses(bc.db) {
 		bc.genesisWitnesses = append(bc.genesisWitnesses, consensus.GenesisWitnessInfo{
@@ -356,10 +418,14 @@ func (bc *BlockChain) resetRuntimeStateLocked(head *types.Block, root tcommon.Ha
 	bc.activeWitnesses.Store([]tcommon.Address(nil))
 	bc.reloadActiveWitnesses(root)
 	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(root)))
+	if err := bc.reloadCycleRewardsFromBuffer(); err != nil {
+		return fmt.Errorf("reload cycle reward pending accumulator: %w", err)
+	}
 	bc.fc = forks.NewForkController(bc.buffer)
 	bc.invalidateStandbyPayCache()
 	bc.clearSystemAccountCache()
 	bc.clearRewardAccountCache()
 	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
+	return nil
 }

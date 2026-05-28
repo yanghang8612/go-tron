@@ -51,6 +51,9 @@ func LookupRootedStateKey(key []byte) (RootedStateKey, bool) {
 
 	switch {
 	case bytes.HasPrefix(key, dynPropPrefix):
+		if isDerivedDynamicPropertyName(string(bytes.TrimPrefix(key, dynPropPrefix))) {
+			return RootedStateKey{}, false
+		}
 		return rootedSystem(kvdomains.SystemDynamicProperty, key), true
 	case bytes.Equal(key, witnessScheduleKey):
 		return rootedSystem(kvdomains.SystemWitnessSchedule, key), true
@@ -82,6 +85,18 @@ func rooted(owner common.Address, domain kvdomains.KVDomain, key []byte) RootedS
 
 func rootedSystem(domain kvdomains.KVDomain, key []byte) RootedStateKey {
 	return rooted(common.SystemAccountAddress, domain, key)
+}
+
+func isDerivedDynamicPropertyName(name string) bool {
+	switch name {
+	case "latest_block_header_number",
+		"latest_block_header_timestamp",
+		"latest_block_header_hash",
+		"latest_solidified_block_num":
+		return true
+	default:
+		return false
+	}
 }
 
 func ownerAfterPrefix(key, prefix []byte) (common.Address, bool) {

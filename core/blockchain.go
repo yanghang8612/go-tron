@@ -148,6 +148,7 @@ type BlockChain struct {
 	rewardAcctAddrs   []tcommon.Address
 	witnessBlockCache map[tcommon.Address]int64
 	forkStatsCache    map[int32][]byte
+	cycleRewards      *cycleRewardAccumulator
 	fc                *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
@@ -328,6 +329,11 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
 		witnessBlockCache: make(map[tcommon.Address]int64),
 		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
+	}
+	var err error
+	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
+	if err != nil {
+		return nil, fmt.Errorf("load cycle reward pending accumulator: %w", err)
 	}
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
@@ -774,8 +780,17 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// layers via DiscardBlock. On any error path the active layer is discarded;
 	// on success it is promoted via CommitBlock.
 	bc.buffer.BeginBlock(block.Hash())
+	if bc.cycleRewards == nil {
+		bc.cycleRewards = newEmptyCycleRewardAccumulator()
+	}
+	rewardSnap := bc.cycleRewards.Snapshot()
+	statedb.SetCycleRewardSink(bc.cycleRewards)
 	defer func() {
+		statedb.SetCycleRewardSink(nil)
 		if retErr != nil {
+			if bc.cycleRewards != nil {
+				bc.cycleRewards.Restore(rewardSnap)
+			}
 			bc.buffer.DiscardActive()
 			bc.clearSystemAccountCache()
 			bc.clearWitnessBlockCache()
@@ -967,6 +982,11 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// java-tron accumulates reward VI before VotesStore old/new deltas
 			// are folded into WitnessStore, then snapshots cycle vote counts
 			// after those deltas are applied.
+			if bc.cycleRewards != nil {
+				if err := bc.cycleRewards.FlushCycleToState(statedb, dynProps.CurrentCycleNumber()); err != nil {
+					return fmt.Errorf("flush current-cycle rewards: %w", err)
+				}
+			}
 			applyRewardVI(bc.buffer, statedb, dynProps)
 			hasPendingVotes := applyPendingVotes(statedb)
 			statedb.FlushWitnesses()
@@ -1018,10 +1038,10 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		return err
 	}
 
-	// Update dynamic properties and fork-vote state before Commit so every
-	// mutable consensus store touched by this block is included in the full
-	// internal state root. Replay-derived TAPOS/metric rows are staged into
-	// the active buffer below, but intentionally stay outside the state root.
+	// Update dynamic properties and fork-vote state before Commit. Non-derived
+	// dynamic properties and fork votes enter the full internal state root;
+	// head-pointer DP keys plus replay-derived TAPOS/metric rows are staged
+	// into the active buffer below and intentionally stay outside the root.
 	dynProps.SetLatestBlockHeaderNumber(int64(block.Number()))
 	dynProps.SetLatestBlockHeaderTimestamp(block.Timestamp())
 	dynProps.SetLatestBlockHeaderHash(block.Hash())
@@ -1035,8 +1055,8 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
 	}
 
-	// Stage dynamic properties into the system account's KV BEFORE Commit so
-	// they enter the internal full-state root (and thus rewind with it).
+	// Stage non-derived dynamic properties into the system account's KV BEFORE
+	// Commit so they enter the internal full-state root (and thus rewind with it).
 	if err := dynProps.FlushRooted(statedb); err != nil {
 		return fmt.Errorf("flush rooted dynamic properties: %w", err)
 	}
@@ -1060,16 +1080,18 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	stats.mark(&stats.StateCommit)
 
 	// Mirror the derived runtime DP keys to the flat dp- store. dynProps.Flush
-	// → flushDerived writes ONLY the four derived keys (latest_block_header_
-	// number/timestamp/hash and latest_solidified_block_num) for legacy and
-	// diagnostic point reads. Every consensus DP key — block_filled_slots (from
-	// ApplyBlockStatistics), burn_trx_amount (from burnFee actuators),
-	// total_create_witness_cost (from witness create), maintenance-touched keys,
-	// etc. — was already staged into the rooted SystemDynamicProperty KV by
-	// FlushRooted above (before Commit), which is the consensus source of truth.
-	// The dp- mirror is not consensus-relevant and is rebuilt from the rooted KV
-	// on load (loadDynamicPropertiesFromDerivedStore).
+	// writes ONLY the four derived keys (latest_block_header_number/timestamp/
+	// hash and latest_solidified_block_num) for startup, crash recovery, and
+	// diagnostic point reads. Every non-derived DP key — block_filled_slots,
+	// burn_trx_amount, total_create_witness_cost, maintenance-touched keys, etc.
+	// — was already staged into the rooted SystemDynamicProperty KV by
+	// FlushRooted above.
 	dynProps.Flush(bc.buffer)
+	if bc.cycleRewards != nil {
+		if err := bc.cycleRewards.Write(bc.buffer); err != nil {
+			return fmt.Errorf("stage cycle reward pending accumulator: %w", err)
+		}
+	}
 
 	stats.mark(&stats.DPUpdate)
 
@@ -1461,6 +1483,9 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// stale even though witness is_jobs and DP correctly rewound.)
 	bc.reloadActiveWitnesses(lcaRoot)
 	bc.reloadDynPropsCache(lcaRoot)
+	if err := bc.reloadCycleRewardsFromBuffer(); err != nil {
+		return fmt.Errorf("reload cycle reward pending accumulator: %w", err)
+	}
 	bc.invalidateStandbyPayCache()
 	bc.clearSystemAccountCache()
 	bc.clearRewardAccountCache()
@@ -1755,6 +1780,15 @@ func (bc *BlockChain) SetDynPropsCacheForTest(dp *state.DynamicProperties) {
 // HeadStateRoot() would still point at the pre-switch head.
 func (bc *BlockChain) reloadDynPropsCache(rootAt tcommon.Hash) {
 	bc.storeDynPropsCache(state.LoadDynamicProperties(bc.buffer, bc.sysKVAt(rootAt)))
+}
+
+func (bc *BlockChain) reloadCycleRewardsFromBuffer() error {
+	acc, err := newCycleRewardAccumulator(bc.buffer)
+	if err != nil {
+		return err
+	}
+	bc.cycleRewards = acc
+	return nil
 }
 
 func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {

@@ -37,14 +37,14 @@ func flushAndReload(t *testing.T, dp *DynamicProperties) *DynamicProperties {
 	return LoadDynamicProperties(sdb.db.DiskDB(), reopened)
 }
 
-// FlushRooted stages every dynamic property into the system account's KV
-// (rooted into the committed state root); derived keys are also left dirty for
-// the flat dp- mirror.
-func TestDynPropRootedFlushIncludesDerived(t *testing.T) {
+// FlushRooted stages only non-derived dynamic properties into the system
+// account's KV. Derived head-pointer keys remain dirty for the flat dp- mirror.
+func TestDynPropRootedFlushSkipsDerived(t *testing.T) {
 	sdb := newTestStateDB(t)
 	dp := NewDynamicProperties()
 	dp.Set("next_maintenance_time", 12345) // rooted
 	dp.SetLatestBlockHeaderNumber(7)       // derived
+	dp.SetLatestBlockHeaderHash(tcommon.HexToHash("1234"))
 
 	if err := dp.FlushRooted(sdb); err != nil {
 		t.Fatalf("flush rooted: %v", err)
@@ -65,11 +65,26 @@ func TestDynPropRootedFlushIncludesDerived(t *testing.T) {
 		t.Fatalf("rooted value = %v, want BE(12345)", got)
 	}
 	got, ok, err = reopened.SystemKVGet(kvdomains.SystemDynamicProperty, []byte("latest_block_header_number"))
-	if err != nil || !ok {
-		t.Fatalf("rooted latest_block_header_number missing: ok=%v err=%v", ok, err)
+	if err != nil {
+		t.Fatalf("read rooted derived number: %v", err)
 	}
-	if len(got) != 8 || int64(binary.BigEndian.Uint64(got)) != 7 {
-		t.Fatalf("rooted derived value = %v, want BE(7)", got)
+	if ok {
+		t.Fatalf("derived latest_block_header_number must not be rooted, got %x", got)
+	}
+	got, ok, err = reopened.SystemKVGet(kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"))
+	if err != nil {
+		t.Fatalf("read rooted derived hash: %v", err)
+	}
+	if ok {
+		t.Fatalf("derived latest_block_header_hash must not be rooted, got %x", got)
+	}
+
+	dp.Flush(sdb.db.DiskDB())
+	if v := rawdb.ReadDynamicProperty(sdb.db.DiskDB(), "latest_block_header_number"); len(v) != 8 {
+		t.Fatalf("derived number must be in dp-, got %x", v)
+	}
+	if v := rawdb.ReadDynamicProperty(sdb.db.DiskDB(), "latest_block_header_hash"); len(v) != tcommon.HashLength {
+		t.Fatalf("derived hash must be in dp-, got %x", v)
 	}
 }
 
@@ -148,7 +163,8 @@ func TestDynPropFlushDerivedUsesTypedStoreBoundary(t *testing.T) {
 	}
 }
 
-// LoadDynamicProperties merges rooted (system-KV) + derived (dp-).
+// LoadDynamicProperties merges rooted (system-KV) + derived (dp-), with
+// derived keys loaded only from dp- even if a stale rooted copy exists.
 func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	sdb := newTestStateDB(t)
 	dp := NewDynamicProperties()
@@ -157,11 +173,20 @@ func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	if err := dp.FlushRooted(sdb); err != nil {
 		t.Fatalf("flush rooted: %v", err)
 	}
+	if err := sdb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("latest_block_header_number"), be8(7)); err != nil {
+		t.Fatalf("seed stale rooted derived number: %v", err)
+	}
+	staleHash := tcommon.HexToHash("0x07")
+	if err := sdb.SystemKVPut(kvdomains.SystemDynamicProperty, []byte("latest_block_header_hash"), staleHash.Bytes()); err != nil {
+		t.Fatalf("seed stale rooted derived hash: %v", err)
+	}
 	root, _ := sdb.Commit()
 	reopened, _ := New(root, sdb.db)
 
 	// derived key lives in flat dp-
 	rawdb.WriteDynamicProperty(sdb.db.DiskDB(), "latest_block_header_number", be8(42))
+	flatHash := tcommon.HexToHash("0x42")
+	rawdb.WriteDynamicProperty(sdb.db.DiskDB(), "latest_block_header_hash", flatHash.Bytes())
 
 	loaded := LoadDynamicProperties(sdb.db.DiskDB(), reopened)
 	if loaded.NextMaintenanceTime() != 777 {
@@ -172,6 +197,9 @@ func TestDynPropLoadMergesRootedAndDerived(t *testing.T) {
 	}
 	if loaded.LatestBlockHeaderNumber() != 42 {
 		t.Fatalf("derived not loaded: %d", loaded.LatestBlockHeaderNumber())
+	}
+	if loaded.LatestBlockHeaderHash() != flatHash {
+		t.Fatalf("derived hash = %x, want flat %x", loaded.LatestBlockHeaderHash(), flatHash)
 	}
 }
 

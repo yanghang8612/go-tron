@@ -912,10 +912,11 @@ Next step:
 - **Done (2026-05-27):** corrected the stale `InsertBlock` comments that claimed
   `block_filled_slots` "lands via `dynProps.Flush(bc.db)`" and was "not yet
   retrofitted onto the buffer (slice 2 backlog)". A consensus-key enumeration
-  confirmed every dirty DP key is staged into the rooted `SystemDynamicProperty`
-  KV by `FlushRooted` (before Commit, so it rewinds with the internal state root)
-  and that every production DP write key is reloaded on restart; `Flush` only
-  mirrors the four derived runtime keys to flat `dp-`. The rooted/derived split is
+  confirmed every non-derived dirty DP key is staged into the rooted
+  `SystemDynamicProperty` KV by `FlushRooted` (before Commit, so it rewinds with
+  the internal state root) and that every production DP write key is reloaded on
+  restart; `Flush` only mirrors the four derived runtime keys to flat `dp-`.
+  The rooted/derived split is
   already guarded by `dynamic_properties_rooted_test.go` (e.g.
   `TestDynPropFlatFlushWritesOnlyDerivedRuntimeKeys`,
   `TestDynPropFlushDerivedUsesTypedStoreBoundary`). The fork-rewind design doc's

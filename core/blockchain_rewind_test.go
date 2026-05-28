@@ -109,6 +109,19 @@ func TestBlockChainRestartSyncFromHeightRebuildsMaterializedState(t *testing.T) 
 	if got := bc.DynProps().LatestBlockHeaderNumber(); got != 2 {
 		t.Fatalf("dynprops latest block = %d, want 2", got)
 	}
+	dpDisk := state.LoadDynamicProperties(diskdb, nil)
+	if got := dpDisk.LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("disk dynprops latest block = %d, want 2", got)
+	}
+	if got := dpDisk.LatestBlockHeaderTimestamp(); got != blocks[2].Timestamp() {
+		t.Fatalf("disk dynprops latest timestamp = %d, want %d", got, blocks[2].Timestamp())
+	}
+	if got := dpDisk.LatestBlockHeaderHash(); got != blocks[2].Hash() {
+		t.Fatalf("disk dynprops latest hash = %x, want %x", got, blocks[2].Hash())
+	}
+	if got := dpDisk.LatestSolidifiedBlockNum(); got != 2 {
+		t.Fatalf("disk dynprops latest solidified = %d, want 2", got)
+	}
 	if got := readWitnessLatestBlockAtHead(t, bc, witness); got != 2 {
 		t.Fatalf("witness latest after rewind = %d, want 2", got)
 	}
@@ -330,6 +343,19 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 	}
 	if got := bc.DynProps().LatestBlockHeaderNumber(); got != 2 {
 		t.Fatalf("dynprops latest block = %d, want 2", got)
+	}
+	dpDisk := state.LoadDynamicProperties(diskdb, nil)
+	if got := dpDisk.LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("disk dynprops latest block = %d, want 2", got)
+	}
+	if got := dpDisk.LatestBlockHeaderTimestamp(); got != blocks[2].Timestamp() {
+		t.Fatalf("disk dynprops latest timestamp = %d, want %d", got, blocks[2].Timestamp())
+	}
+	if got := dpDisk.LatestBlockHeaderHash(); got != blocks[2].Hash() {
+		t.Fatalf("disk dynprops latest hash = %x, want %x", got, blocks[2].Hash())
+	}
+	if got := dpDisk.LatestSolidifiedBlockNum(); got != 2 {
+		t.Fatalf("disk dynprops latest solidified = %d, want 2", got)
 	}
 	if got := readWitnessLatestBlockAtHead(t, bc, witness); got != 2 {
 		t.Fatalf("witness latest after rewind = %d, want 2", got)

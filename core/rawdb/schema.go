@@ -133,6 +133,12 @@ var (
 	// voter beginCycle/endCycle cursors used by the reward v2 algorithm.
 	delegRewardPrefix = []byte("dl-")
 
+	// cycleRewardPendingKey stores the non-rooted current-cycle voter reward
+	// pool accumulator. It is a replay/runtime mirror used to avoid rooting
+	// dl-<cycle>-<witness>-reward on every historical block; maintenance flushes
+	// the accumulated values back to SystemReward before VI is computed.
+	cycleRewardPendingKey = []byte("cycle-reward-pending-v1")
+
 	// abiPrefix (abi-) maps to java-tron's AbiStore (db "abi"). When
 	// allow_account_asset_optimization is active, contract ABIs are moved
 	// OUT of the inline SmartContract proto and stored here so the main

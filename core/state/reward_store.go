@@ -11,6 +11,19 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
+// CycleRewardSink can intercept block-final writes to the current-cycle reward
+// pool. BlockChain uses it to batch the hot dl-<cycle>-<witness>-reward keys
+// outside the rooted SystemReward domain until the next maintenance boundary.
+type CycleRewardSink interface {
+	AddCycleReward(cycle int64, addr tcommon.Address, delta int64) (bool, error)
+	AddCycleRewards(cycle int64, deltas map[tcommon.Address]int64) (bool, error)
+	PendingCycleReward(cycle int64, addr tcommon.Address) (int64, bool)
+}
+
+func (s *StateDB) SetCycleRewardSink(sink CycleRewardSink) {
+	s.cycleRewardSink = sink
+}
+
 func (s *StateDB) readSystemReward(key []byte) ([]byte, bool) {
 	raw, ok, err := s.readSystemRewardWithError(key)
 	if err != nil || !ok {
@@ -29,10 +42,18 @@ func (s *StateDB) writeSystemReward(key, value []byte) error {
 
 func (s *StateDB) ReadCycleReward(cycle int64, addr []byte) int64 {
 	raw, ok := s.readSystemReward(rawdb.CycleRewardStateKey(cycle, addr))
+	base := int64(0)
 	if !ok || len(raw) != 8 {
-		return 0
+		base = 0
+	} else {
+		base = int64(binary.BigEndian.Uint64(raw))
 	}
-	return int64(binary.BigEndian.Uint64(raw))
+	if s.cycleRewardSink != nil {
+		if pending, ok := s.cycleRewardSink.PendingCycleReward(cycle, tcommon.BytesToAddress(addr)); ok {
+			base += pending
+		}
+	}
+	return base
 }
 
 func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tcommon.Address]int64 {
@@ -49,6 +70,11 @@ func (s *StateDB) ReadCycleRewards(cycle int64, addrs []tcommon.Address) map[tco
 		raw := values[string(keys[i])]
 		if len(raw) == 8 {
 			out[addr] = int64(binary.BigEndian.Uint64(raw))
+		}
+		if s.cycleRewardSink != nil {
+			if pending, ok := s.cycleRewardSink.PendingCycleReward(cycle, addr); ok {
+				out[addr] += pending
+			}
 		}
 	}
 	return out
@@ -87,6 +113,12 @@ func (s *StateDB) AddCycleReward(cycle int64, addr []byte, delta int64) error {
 }
 
 func (s *StateDB) AddCycleRewardFinal(cycle int64, addr []byte, delta int64) error {
+	if s.cycleRewardSink != nil {
+		handled, err := s.cycleRewardSink.AddCycleReward(cycle, tcommon.BytesToAddress(addr), delta)
+		if err != nil || handled {
+			return err
+		}
+	}
 	key := rawdb.CycleRewardStateKey(cycle, addr)
 	raw, exists, err := s.readSystemRewardWithError(key)
 	if err != nil {
@@ -106,6 +138,12 @@ func (s *StateDB) AddCycleRewardsFinal(cycle int64, deltas map[tcommon.Address]i
 func (s *StateDB) addCycleRewards(cycle int64, deltas map[tcommon.Address]int64, final bool) error {
 	if len(deltas) == 0 {
 		return nil
+	}
+	if final && s.cycleRewardSink != nil {
+		handled, err := s.cycleRewardSink.AddCycleRewards(cycle, deltas)
+		if err != nil || handled {
+			return err
+		}
 	}
 	addrs := make([]tcommon.Address, 0, len(deltas))
 	for addr, delta := range deltas {

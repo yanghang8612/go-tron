@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -878,12 +879,11 @@ func TestForkSwitch_WitnessCountersNoDoubleCount(t *testing.T) {
 		t.Fatalf("after switchFork: buffer holds %d layers, want 4 (canonical-only)", got)
 	}
 
-	// burn_trx_amount and total_create_witness_cost (also DP keys) flow
-	// through the same dp.Flush(bc.buffer) → DiscardBlock path as
-	// latest_block_header_number, so the LatestBlockHeaderNumber rewind
-	// above is the property test for all DP-tracked counters. We don't
-	// duplicate the assertion for every DP key; the fork-rewind retrofit
-	// is uniform across `dp.dirty`.
+	// The head-pointer DP keys are derived-only and rewind through the buffer
+	// layer above. Governance/economic DP keys such as burn_trx_amount and
+	// total_create_witness_cost rewind through the rooted SystemDynamicProperty
+	// state root, so they are covered by the rooted-state tests instead of this
+	// flat latest_block_header_number assertion.
 }
 
 // TestForkSwitch_ActiveWitnessesRewindAcrossMaintenance pins the fork-rewind
@@ -1366,6 +1366,10 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var systemRewardPuts []int
+	bc.AddApplyStatsHook(func(_ *types.Block, stats ApplyStats) {
+		systemRewardPuts = append(systemRewardPuts, stats.StateCommitDetail.Mutations.KVDomain(kvdomains.SystemReward).Puts)
+	})
 
 	// Default brokerage is 20% per java-tron MortgageService. With the
 	// default `witness_pay_per_block` = 32_000_000, voter pool per block
@@ -1393,20 +1397,31 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 		chainA[i] = b
 	}
 
-	readCycleRewardAtHead := func() int64 {
+	readCycleRewardAtHead := func() (int64, int64) {
 		t.Helper()
 		statedb, err := bc.openState(bc.HeadStateRoot())
 		if err != nil {
 			t.Fatalf("open head state: %v", err)
 		}
-		return statedb.ReadCycleReward(7, witnessAddr.Bytes())
+		rooted := statedb.ReadCycleReward(7, witnessAddr.Bytes())
+		pending := int64(0)
+		if bc.cycleRewards != nil {
+			if amount, ok := bc.cycleRewards.PendingCycleReward(7, witnessAddr); ok {
+				pending = amount
+			}
+		}
+		return rooted, pending
 	}
 
-	// Sanity: cycle reward reflects 3 chain-A blocks in the canonical state root.
-	gotA := readCycleRewardAtHead()
+	// Sanity: current-cycle reward reflects 3 chain-A blocks, but remains out
+	// of rooted SystemReward until the next maintenance boundary.
+	rootedA, pendingA := readCycleRewardAtHead()
 	wantA := 3 * voterPerBlock
-	if gotA != wantA {
-		t.Fatalf("after chain A: cycle 7 reward = %d, want %d", gotA, wantA)
+	if rootedA != 0 {
+		t.Fatalf("after chain A: rooted cycle 7 reward = %d, want 0", rootedA)
+	}
+	if pendingA != wantA {
+		t.Fatalf("after chain A: pending cycle 7 reward = %d, want %d", pendingA, wantA)
 	}
 
 	// Build chain B: 4 blocks branching from genesis (offset timestamps).
@@ -1437,11 +1452,94 @@ func TestForkSwitch_AddCycleRewardRollback(t *testing.T) {
 
 	// Without slice-3 buffer routing, this would be (3 + 4) × voterPerBlock.
 	// With the fix, only chain B's 4 blocks survive.
-	gotB := readCycleRewardAtHead()
+	rootedB, pendingB := readCycleRewardAtHead()
 	wantB := 4 * voterPerBlock
-	if gotB != wantB {
-		t.Fatalf("after switchFork: cycle 7 reward = %d, want %d "+
-			"(orphan AddCycleReward writes must NOT leak)", gotB, wantB)
+	if rootedB != 0 {
+		t.Fatalf("after switchFork: rooted cycle 7 reward = %d, want 0", rootedB)
+	}
+	if pendingB != wantB {
+		t.Fatalf("after switchFork: pending cycle 7 reward = %d, want %d "+
+			"(orphan AddCycleReward writes must NOT leak)", pendingB, wantB)
+	}
+	for i, puts := range systemRewardPuts {
+		if puts != 0 {
+			t.Fatalf("non-maintenance block %d rooted SystemReward puts = %d, want 0", i+1, puts)
+		}
+	}
+}
+
+func TestCycleRewardPendingFlushesAtMaintenance(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1000, URL: "sr1"},
+		},
+		DynamicProperties: map[string]int64{
+			"change_delegation":         1,
+			"current_cycle_number":      7,
+			"next_maintenance_time":     6000,
+			"witness_127_pay_per_block": 0,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const voterPerBlock int64 = 32_000_000 - (32_000_000 * 20 / 100)
+	insert := func(number uint64, timestamp int64) {
+		t.Helper()
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(number),
+					Timestamp:      timestamp,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witnessAddr.Bytes(),
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("insert block %d: %v", number, err)
+		}
+	}
+	readRooted := func(cycle int64) int64 {
+		t.Helper()
+		statedb, err := bc.openState(bc.HeadStateRoot())
+		if err != nil {
+			t.Fatalf("open head state: %v", err)
+		}
+		return statedb.ReadCycleReward(cycle, witnessAddr.Bytes())
+	}
+
+	insert(1, 3000)
+	if got := readRooted(7); got != 0 {
+		t.Fatalf("after block 1 rooted cycle reward = %d, want 0", got)
+	}
+	if pending, ok := bc.cycleRewards.PendingCycleReward(7, witnessAddr); !ok || pending != voterPerBlock {
+		t.Fatalf("after block 1 pending reward = %d ok=%v, want %d/true", pending, ok, voterPerBlock)
+	}
+
+	insert(2, 6000)
+	if got := readRooted(7); got != 2*voterPerBlock {
+		t.Fatalf("after maintenance rooted cycle reward = %d, want %d", got, 2*voterPerBlock)
+	}
+	if pending, ok := bc.cycleRewards.PendingCycleReward(7, witnessAddr); ok || pending != 0 {
+		t.Fatalf("after maintenance pending old-cycle reward = %d ok=%v, want 0/false", pending, ok)
+	}
+	if _, rewards, ok, err := rawdb.ReadCycleRewardPending(bc.buffer); err != nil || ok && len(rewards) > 0 {
+		t.Fatalf("after maintenance sidecar = %#v ok=%v err=%v, want empty", rewards, ok, err)
 	}
 }
 

@@ -82,6 +82,8 @@ type StateDB struct {
 
 	commitmentColdHistory statedomains.CommitmentSnapshotSource
 	commitmentColdTxNum   uint64
+
+	cycleRewardSink CycleRewardSink
 }
 
 // CommitStats breaks StateDB.Commit wall-clock time into the write phases that

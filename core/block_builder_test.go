@@ -542,8 +542,12 @@ func TestBuildThenInsert_NoDuplicateReward(t *testing.T) {
 			gotAllowance, wantAllowance, wantAllowance*2)
 	}
 
-	// Read cycle reward from the rooted post-apply state.
+	// Read cycle reward from rooted state plus the non-rooted current-cycle
+	// pending accumulator. Non-maintenance blocks no longer root this hot key.
 	gotCycleReward := postState.ReadCycleReward(curCycle, witnessAddr.Bytes())
+	if pending, ok := bc.cycleRewards.PendingCycleReward(curCycle, witnessAddr); ok {
+		gotCycleReward += pending
+	}
 	if gotCycleReward != wantCycleReward {
 		t.Errorf("cycleReward[%d][witness]: got %d, want %d (double-write would give %d)",
 			curCycle, gotCycleReward, wantCycleReward, wantCycleReward*2)

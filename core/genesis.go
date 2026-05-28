@@ -230,9 +230,9 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 
 	// Build the rooted dynamic properties (governance/economic params) and
 	// stage them into the system account's KV BEFORE Commit, so they enter the
-	// genesis state root. The 4 derived head-pointer keys need the genesis
-	// block hash (set post-build), so the caller flushes those to flat dp-;
-	// we return dp for that. Mirrors java-tron Manager.initGenesis ordering.
+	// genesis state root. The 4 derived head-pointer keys stay outside the
+	// state root and are flushed to flat dp- by the caller after the genesis
+	// block hash is known. Mirrors java-tron Manager.initGenesis ordering.
 	var dp *state.DynamicProperties
 	if g.DynamicProperties != nil {
 		dp = state.NewDynamicProperties()
@@ -325,27 +325,6 @@ func genesisBlockAndStateRoot(g *params.Genesis, db *state.Database) (*types.Blo
 		BlockHeader:  &corepb.BlockHeader{RawData: header},
 		Transactions: txs,
 	})
-
-	// The genesis block hash is available only after the block is built, but
-	// the DP head keys include it in the rooted state. Commit a small second
-	// state transition; the root stays out-of-band, so the java-tron genesis
-	// block bytes remain unchanged.
-	finalState, err := state.New(stateRoot, db)
-	if err != nil {
-		return nil, tcommon.Hash{}, nil, err
-	}
-	if dp != nil {
-		dp.SetLatestBlockHeaderNumber(0)
-		dp.SetLatestBlockHeaderTimestamp(g.Timestamp)
-		dp.SetLatestBlockHeaderHash(block.Hash())
-		if err := dp.FlushRooted(finalState); err != nil {
-			return nil, tcommon.Hash{}, nil, fmt.Errorf("root genesis derived dynamic properties: %w", err)
-		}
-	}
-	stateRoot, err = finalState.Commit()
-	if err != nil {
-		return nil, tcommon.Hash{}, nil, err
-	}
 
 	return block, stateRoot, dp, nil
 }
