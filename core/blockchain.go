@@ -29,9 +29,10 @@ import (
 var log = gtronlog.NewModule("core/chain")
 
 var (
-	ErrKnownBlock    = errors.New("block already known")
-	ErrInvalidParent = errors.New("parent block not found")
-	ErrInvalidNumber = errors.New("invalid block number")
+	ErrKnownBlock       = errors.New("block already known")
+	ErrInvalidParent    = errors.New("parent block not found")
+	ErrInvalidNumber    = errors.New("invalid block number")
+	ErrBlockChainClosed = errors.New("blockchain closed")
 )
 
 // InsertBlocksError reports the first block that failed inside InsertBlocks.
@@ -147,6 +148,7 @@ type BlockChain struct {
 	currentBlock   atomic.Pointer[types.Block]
 	chainmu        sync.Mutex // serializes block insertion
 	lastInsertNano atomic.Int64
+	closed         atomic.Bool
 
 	genesisBlock      *types.Block
 	genesisWitnesses  []consensus.GenesisWitnessInfo
@@ -606,6 +608,9 @@ func (bc *BlockChain) InsertBlockWithoutVerify(block *types.Block) error {
 
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return ErrBlockChainClosed
+	}
 
 	current := bc.CurrentBlock()
 
@@ -663,6 +668,9 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return ErrBlockChainClosed
+	}
 
 	return bc.insertBlockLocked(block)
 }
@@ -678,6 +686,9 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 	}
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if bc.closed.Load() {
+		return ErrBlockChainClosed
+	}
 
 	return bc.insertBlocksLocked(blocks)
 }
@@ -720,6 +731,9 @@ func (bc *BlockChain) insertBlockLocked(block *types.Block) error {
 func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor *canonicalRangeExecutor) error {
 	if block == nil {
 		return errors.New("block is nil")
+	}
+	if bc.closed.Load() {
+		return ErrBlockChainClosed
 	}
 	current := bc.CurrentBlock()
 
@@ -1478,6 +1492,10 @@ func (bc *BlockChain) WaitForFlushSettled() {
 func (bc *BlockChain) Close() error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
+	if bc.closed.Swap(true) {
+		return nil
+	}
+	rawdb.DeleteCleanShutdownHeadHash(bc.db)
 	bc.WaitForFlushSettled()
 	bc.stopFlushWorkerLocked()
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
@@ -1492,6 +1510,8 @@ func (bc *BlockChain) Close() error {
 		expected, actual, matches, checked := materializedRootMatchesBlock(bc.db, bc.chaindb, head)
 		if checked && matches {
 			rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
+			log.Info("Clean shutdown marker written",
+				"head", head.Number(), "root", actual)
 		} else {
 			rawdb.DeleteCleanShutdownHeadHash(bc.db)
 			log.Warn("Clean shutdown marker skipped: materialized state root mismatch",

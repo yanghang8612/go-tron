@@ -225,6 +225,40 @@ func TestBlockChain_InsertBlocksReportsFirstFailedIndex(t *testing.T) {
 	}
 }
 
+func TestBlockChainRejectsInsertAfterClose(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+	genesis := &params.Genesis{
+		Config: params.MainnetChainConfig,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := bc.InsertBlock(block); !errors.Is(err, ErrBlockChainClosed) {
+		t.Fatalf("InsertBlock after Close err = %v, want %v", err, ErrBlockChainClosed)
+	}
+	if err := bc.InsertBlocks([]*types.Block{block}); !errors.Is(err, ErrBlockChainClosed) {
+		t.Fatalf("InsertBlocks after Close err = %v, want %v", err, ErrBlockChainClosed)
+	}
+}
+
 func TestBlockChain_InsertBlocksPlansStateTxRangesOnce(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()

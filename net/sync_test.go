@@ -22,6 +22,19 @@ func TestBuildChainSummary(t *testing.T) {
 	}
 }
 
+func TestSyncServiceStopConsumesInboundBlocks(t *testing.T) {
+	ss := NewSyncService(makeTestChain(t), nil)
+	ss.Stop()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{Number: 1},
+		},
+	})
+	if !ss.HandleBlock(nil, block) {
+		t.Fatal("stopped sync service should consume inbound blocks during shutdown")
+	}
+}
+
 func TestBuildChainSummaryMultipleBlocks(t *testing.T) {
 	bc := makeTestChain(t)
 

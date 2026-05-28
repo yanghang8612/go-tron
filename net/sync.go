@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -86,8 +87,10 @@ type SyncService struct {
 	handler *TronHandler
 
 	drainMu    sync.Mutex
+	drainCond  *sync.Cond
 	draining   bool
 	drainAgain bool
+	stopping   atomic.Bool
 
 	mu         sync.Mutex
 	syncing    bool
@@ -162,6 +165,7 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 		stats:        tsync.NewStats(),
 		fetchTimeout: tsync.SyncFetchTimeout,
 	}
+	ss.drainCond = sync.NewCond(&ss.drainMu)
 	ss.watchdog = tsync.NewWatchdog(
 		chainStatusAdapter{chain: chain},
 		watchdogPeerSource{handler: handler},
@@ -218,19 +222,23 @@ func (ss *SyncService) onApplyStats(_ *types.Block, s core.ApplyStats) {
 
 // Start launches the isolation watchdog goroutine.
 func (ss *SyncService) Start() {
+	ss.stopping.Store(false)
 	if ss.watchdog != nil {
 		ss.watchdog.Start()
 	}
 }
 
-// Stop shuts down the sync service and cancels any in-progress sync.
+// Stop shuts down the sync service, cancels any in-progress sync, and waits
+// for the active drain to leave InsertBlocks before shutdown continues.
 func (ss *SyncService) Stop() {
+	ss.stopping.Store(true)
 	if ss.watchdog != nil {
 		ss.watchdog.Stop()
 	}
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
+	ss.waitForDrain()
 }
 
 // IsSyncing returns whether sync is in progress.
@@ -287,6 +295,9 @@ func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
 // StartSync initiates sync with a peer that has a higher head block.
 func (ss *SyncService) StartSync(peer *p2p.Peer) {
 	if peer == nil {
+		return
+	}
+	if ss.stopping.Load() {
 		return
 	}
 	if ss.pause.Paused() {
@@ -902,6 +913,9 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 // HandleBlock processes a received block during sync.
 // Returns true if the block was consumed by sync, false if it should be handled as a broadcast.
 func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
+	if ss.stopping.Load() {
+		return true
+	}
 	ss.mu.Lock()
 	if !ss.syncing {
 		ss.mu.Unlock()
@@ -988,6 +1002,9 @@ func (ss *SyncService) drainBufferedBlocks() {
 		ss.drainMu.Lock()
 		if !ss.drainAgain {
 			ss.draining = false
+			if ss.drainCond != nil {
+				ss.drainCond.Broadcast()
+			}
 			ss.drainMu.Unlock()
 			return
 		}
@@ -1052,6 +1069,17 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		ss.recordImportedBatch(batch, applied, insertElapsed)
 	}
 	ss.sendOutboundRequests(out)
+}
+
+func (ss *SyncService) waitForDrain() {
+	ss.drainMu.Lock()
+	if ss.draining {
+		ss.drainAgain = true
+	}
+	for ss.draining {
+		ss.drainCond.Wait()
+	}
+	ss.drainMu.Unlock()
 }
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
