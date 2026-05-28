@@ -56,6 +56,16 @@ func (e *InsertBlocksError) Unwrap() error {
 	return e.Err
 }
 
+// StartupRecovery describes an unsafe-startup repair detected while opening the
+// chain. Callers must rebuild materialized state to To before exposing the node
+// to peers or APIs.
+type StartupRecovery struct {
+	From         uint64
+	To           uint64
+	AppliedState int64
+	Solidified   int64
+}
+
 // ApplyStats reports per-phase wall-clock time spent inside applyBlock.
 //
 // Subscribers should treat ApplyStats as read-only. The fields are exported so
@@ -150,6 +160,7 @@ type BlockChain struct {
 	forkStatsCache    map[int32][]byte
 	cycleRewards      *cycleRewardAccumulator
 	fc                *forks.ForkController
+	startupRecovery   *StartupRecovery
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -351,7 +362,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	}
 
 	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
-	head = recoverHeadToAppliedState(db, chaindb, head, bc.genesisBlock)
+	head, bc.startupRecovery = recoverHeadToAppliedState(db, chaindb, head, bc.genesisBlock)
 	bc.currentBlock.Store(head)
 
 	// Seed the dynprops cache now that the head is known: rooted keys load from
@@ -399,14 +410,14 @@ func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Bl
 	return block
 }
 
-func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, head, genesis *types.Block) *types.Block {
+func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, head, genesis *types.Block) (*types.Block, *StartupRecovery) {
 	if head == nil {
-		return genesis
+		return genesis, nil
 	}
 	cleanHead := rawdb.ReadCleanShutdownHeadHash(db)
 	dynProps := state.LoadDynamicProperties(db, nil)
 	if cleanHead == head.Hash() {
-		return head
+		return head, nil
 	}
 
 	targetNum := head.Number()
@@ -419,7 +430,7 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		targetNum = uint64(solidified)
 	}
 	if targetNum >= head.Number() {
-		return head
+		return head, nil
 	}
 
 	recovered := rawdb.ReadBlock(chaindb, targetNum)
@@ -427,13 +438,13 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		log.Warn("Head recovery: block missing, keeping disk head",
 			"diskHead", head.Number(), "target", targetNum,
 			"appliedState", appliedNum, "solidified", solidified)
-		return head
+		return head, nil
 	}
 	if appliedHash := dynProps.LatestBlockHeaderHash(); uint64(appliedNum) == targetNum && appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
 		log.Warn("Head recovery: hash mismatch, keeping disk head",
 			"diskHead", head.Number(), "appliedState", appliedNum,
 			"dpHash", appliedHash, "blockHash", recovered.Hash())
-		return head
+		return head, nil
 	}
 
 	rawdb.WriteHeadBlockHash(db, recovered.Hash())
@@ -441,12 +452,27 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	log.Info("Head recovered to applied state",
 		"from", head.Number(), "to", recovered.Number(),
 		"appliedState", appliedNum, "solidified", solidified)
-	return recovered
+	return recovered, &StartupRecovery{
+		From:         head.Number(),
+		To:           recovered.Number(),
+		AppliedState: appliedNum,
+		Solidified:   solidified,
+	}
 }
 
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
+}
+
+// StartupRecovery returns the unsafe-startup repair detected during
+// construction, if any. The caller should run RestartSyncFromHeight(rec.To, ...)
+// before starting networking or serving APIs.
+func (bc *BlockChain) StartupRecovery() (StartupRecovery, bool) {
+	if bc == nil || bc.startupRecovery == nil {
+		return StartupRecovery{}, false
+	}
+	return *bc.startupRecovery, true
 }
 
 // GetBlockByNumber retrieves a block by its number.

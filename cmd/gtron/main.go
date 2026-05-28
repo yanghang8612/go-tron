@@ -445,11 +445,36 @@ func gtron(ctx *cli.Context) error {
 				log.Info("Historical sync restart phase", "phase", p.Phase, "block", p.Block, "target", p.Target)
 			}
 		}); err != nil {
-			_ = bc.Close()
+			// RestartSyncFromHeight may have reset or partially replayed mutable
+			// state. Do not call bc.Close here: Close writes the clean-shutdown
+			// marker, which would hide the failed recovery on the next startup.
 			closeStores()
 			return err
 		}
 		log.Info("Historical sync restart complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
+	} else if recovery, ok := bc.StartupRecovery(); ok {
+		lastProgress := uint64(0)
+		log.Warn("Unsafe startup recovery requires materialized state rebuild",
+			"from", recovery.From, "target", recovery.To,
+			"appliedState", recovery.AppliedState, "solidified", recovery.Solidified)
+		if err := bc.RestartSyncFromHeight(recovery.To, genesis, ancientStore, func(p core.RestartSyncProgress) {
+			switch p.Phase {
+			case "replay":
+				if p.Block == p.Target || p.Block-lastProgress >= 10000 {
+					lastProgress = p.Block
+					log.Info("Startup recovery replaying", "block", p.Block, "target", p.Target)
+				}
+			default:
+				log.Info("Startup recovery phase", "phase", p.Phase, "block", p.Block, "target", p.Target)
+			}
+		}); err != nil {
+			// Same as explicit --sync.restart-from: a failed recovery must remain
+			// visibly unclean so the next startup retries instead of trusting a
+			// partial materialized image.
+			closeStores()
+			return fmt.Errorf("startup recovery rebuild to %d: %w", recovery.To, err)
+		}
+		log.Info("Startup recovery complete", "head", bc.CurrentBlock().Number(), "hash", fmt.Sprintf("%x", bc.CurrentBlock().Hash()))
 	}
 
 	// Create transaction pool

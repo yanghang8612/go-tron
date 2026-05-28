@@ -86,6 +86,8 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		if err := bc.incrementalUnwindTo(target, current.Number(), ancient, emit); err != nil {
 			return fmt.Errorf("restart sync: incremental unwind to %d: %w", height, err)
 		}
+		rawdb.WriteCleanShutdownHeadHash(bc.db, target.Hash())
+		bc.startupRecovery = nil
 		emit("done", height)
 		return nil
 	}
@@ -192,6 +194,8 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := bc.resetRuntimeStateLocked(final, bc.HeadStateRoot()); err != nil {
 		return err
 	}
+	rawdb.WriteCleanShutdownHeadHash(bc.db, final.Hash())
+	bc.startupRecovery = nil
 	emit("done", height)
 	return nil
 }

@@ -1894,6 +1894,9 @@ func TestGracefulShutdown_FlushesLayersAboveSolidified(t *testing.T) {
 	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != bc2.CurrentBlock().Hash() {
 		t.Fatalf("clean shutdown marker = %x, want head %x", got, bc2.CurrentBlock().Hash())
 	}
+	if rec, ok := bc2.StartupRecovery(); ok {
+		t.Fatalf("clean restart should not request startup recovery: %+v", rec)
+	}
 }
 
 func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
@@ -1924,11 +1927,14 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var block5 *types.Block
+	var block2, block5 *types.Block
 	for i := 1; i <= 5; i++ {
 		b := buildTestBlock(bc, witnessAddr, int64(i)*3000)
 		if err := bc.InsertBlock(b); err != nil {
 			t.Fatalf("block %d: %v", i, err)
+		}
+		if i == 2 {
+			block2 = b
 		}
 		if i == 5 {
 			block5 = b
@@ -1958,6 +1964,13 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 	if got := bc2.CurrentBlock().Number(); got != 2 {
 		t.Fatalf("restart recovered head = %d, want solidified 2", got)
 	}
+	rec, ok := bc2.StartupRecovery()
+	if !ok {
+		t.Fatal("restart should request materialized startup recovery")
+	}
+	if rec.From != 5 || rec.To != 2 || rec.Solidified != 2 {
+		t.Fatalf("startup recovery = %+v, want from=5 to=2 solidified=2", rec)
+	}
 	headHash := rawdb.ReadHeadBlockHash(diskdb)
 	headNum := rawdb.ReadBlockNumber(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), headHash)
 	if headNum == nil || *headNum != 2 {
@@ -1965,5 +1978,32 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 	}
 	if got := bc2.GetBlockByNumber(5); got != nil {
 		t.Fatal("stale block body above recovered head should not be returned as canonical")
+	}
+
+	if err := bc2.RestartSyncFromHeight(rec.To, genesis, nil, nil); err != nil {
+		t.Fatalf("startup materialized recovery: %v", err)
+	}
+	if rec, ok := bc2.StartupRecovery(); ok {
+		t.Fatalf("startup recovery should be cleared after rebuild: %+v", rec)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("post-rebuild head = %d, want 2", got)
+	}
+	if got := bc2.CurrentBlock().Hash(); got != block2.Hash() {
+		t.Fatalf("post-rebuild head hash = %x, want block2 %x", got, block2.Hash())
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != block2.Hash() {
+		t.Fatalf("clean shutdown marker after rebuild = %x, want block2 %x", got, block2.Hash())
+	}
+	w := readWitnessAtHead(t, bc2, witnessAddr)
+	if got := w.TotalProduced(); got != 2 {
+		t.Fatalf("post-rebuild rooted TotalProduced = %d, want 2", got)
+	}
+	if got := w.LatestBlockNum(); got != 2 {
+		t.Fatalf("post-rebuild rooted LatestBlockNum = %d, want 2", got)
+	}
+	dpDisk := state.LoadDynamicProperties(diskdb, nil)
+	if got := dpDisk.LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("post-rebuild latest block header number = %d, want 2", got)
 	}
 }
