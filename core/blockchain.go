@@ -537,6 +537,21 @@ func materializedRootMatchesBlock(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB
 	return expected, actual, true, true
 }
 
+func repairMaterializedRootFromNodes(db ethdb.KeyValueStore, expected tcommon.Hash) (bool, error) {
+	if expected == (tcommon.Hash{}) {
+		return false, nil
+	}
+	store := domains.NewStagedCommitmentStore(db)
+	present, err := store.RootNodePresent(expected)
+	if err != nil || !present {
+		return false, err
+	}
+	if err := store.WriteRoot(expected); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
@@ -1505,9 +1520,24 @@ func (bc *BlockChain) Close() error {
 		return fmt.Errorf("close: flush pending buffer: %w", err)
 	}
 	bc.buffer.Discard()
+	if err := bc.stateDB.Close(); err != nil {
+		return fmt.Errorf("close: state trie database: %w", err)
+	}
 	if head := bc.CurrentBlock(); head != nil {
 		rawdb.WriteHeadBlockHash(bc.db, head.Hash())
 		expected, actual, matches, checked := materializedRootMatchesBlock(bc.db, bc.chaindb, head)
+		if checked && !matches {
+			repaired, err := repairMaterializedRootFromNodes(bc.db, expected)
+			if err != nil {
+				return fmt.Errorf("close: repair latest-domain root: %w", err)
+			}
+			if repaired {
+				before := actual
+				expected, actual, matches, checked = materializedRootMatchesBlock(bc.db, bc.chaindb, head)
+				log.Warn("Latest-domain root row repaired after state DB close",
+					"head", head.Number(), "expectedRoot", expected, "before", before, "after", actual, "matches", matches)
+			}
+		}
 		if checked && matches {
 			rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
 			log.Info("Clean shutdown marker written",
@@ -1517,9 +1547,6 @@ func (bc *BlockChain) Close() error {
 			log.Warn("Clean shutdown marker skipped: materialized state root mismatch",
 				"head", head.Number(), "expectedRoot", expected, "materializedRoot", actual, "checked", checked)
 		}
-	}
-	if err := bc.stateDB.Close(); err != nil {
-		return fmt.Errorf("close: state trie database: %w", err)
 	}
 	return nil
 }

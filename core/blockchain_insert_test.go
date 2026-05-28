@@ -259,6 +259,44 @@ func TestBlockChainRejectsInsertAfterClose(t *testing.T) {
 	}
 }
 
+func TestRepairMaterializedRootFromNodesRestoresExpectedRoot(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	owner := testInsertAddr(1)
+	store := statedomains.NewStagedCommitmentStore(diskdb)
+	expected, err := store.Update([]rawdb.StateCommitmentUpdate{
+		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(owner), []byte("account")),
+	})
+	if err != nil {
+		t.Fatalf("seed staged commitment: %v", err)
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(diskdb, tcommon.Hash{0x99}); err != nil {
+		t.Fatalf("write stale root: %v", err)
+	}
+
+	repaired, err := repairMaterializedRootFromNodes(diskdb, expected)
+	if err != nil {
+		t.Fatalf("repair materialized root: %v", err)
+	}
+	if !repaired {
+		t.Fatal("repairMaterializedRootFromNodes returned false, want true")
+	}
+	got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(diskdb)
+	if err != nil || !ok || got != expected {
+		t.Fatalf("latest-domain root = %x ok=%v err=%v, want %x", got, ok, err, expected)
+	}
+}
+
+func TestRepairMaterializedRootFromNodesRejectsMissingBranch(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	repaired, err := repairMaterializedRootFromNodes(diskdb, tcommon.Hash{0x42})
+	if err != nil {
+		t.Fatalf("repair materialized root: %v", err)
+	}
+	if repaired {
+		t.Fatal("repairMaterializedRootFromNodes repaired missing branch")
+	}
+}
+
 func TestBlockChain_InsertBlocksPlansStateTxRangesOnce(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	cfg := cloneMainnetChainConfig()
