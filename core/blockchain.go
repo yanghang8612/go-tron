@@ -18,6 +18,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -435,6 +436,16 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		appliedStateAhead := appliedNum >= 0 && uint64(appliedNum) > head.Number()
 		appliedHashMismatchAtHead := appliedNum >= 0 && uint64(appliedNum) == head.Number() && !appliedHashMatchesHead
 		if appliedStateAhead || appliedHashMismatchAtHead {
+			if appliedStateAhead {
+				if appliedHead, ok := materializedAppliedHead(db, chaindb, appliedNum, appliedHash); ok {
+					rawdb.WriteHeadBlockHash(db, appliedHead.Hash())
+					rawdb.WriteCleanShutdownHeadHash(db, appliedHead.Hash())
+					log.Info("Head advanced to materialized applied state",
+						"from", head.Number(), "to", appliedHead.Number(),
+						"appliedState", appliedNum, "solidified", solidified)
+					return appliedHead, nil
+				}
+			}
 			rawdb.DeleteCleanShutdownHeadHash(db)
 			log.Info("Head requires materialized state rebuild",
 				"head", head.Number(), "appliedState", appliedNum,
@@ -474,6 +485,29 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		AppliedState: appliedNum,
 		Solidified:   solidified,
 	}
+}
+
+func materializedAppliedHead(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, appliedNum int64, appliedHash tcommon.Hash) (*types.Block, bool) {
+	if appliedNum < 0 || appliedHash == (tcommon.Hash{}) {
+		return nil, false
+	}
+	block := rawdb.ReadBlock(chaindb, uint64(appliedNum))
+	if block == nil || block.Hash() != appliedHash {
+		return nil, false
+	}
+	expectedRoot := rawdb.ReadBlockStateRoot(chaindb, block.Hash())
+	if expectedRoot == (tcommon.Hash{}) {
+		return nil, false
+	}
+	store := domains.NewStagedCommitmentStore(db)
+	root, ok, err := store.ReadRoot()
+	if err != nil || !ok || root != expectedRoot {
+		return nil, false
+	}
+	if ok, err := store.RootNodePresent(root); err != nil || !ok {
+		return nil, false
+	}
+	return block, true
 }
 
 // CurrentBlock returns the head of the canonical chain.

@@ -17,7 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 )
 
-const restartSyncReplayBatchSize = 100
+const restartSyncReplayBatchSize = 1000
 
 // RestartSyncProgress is emitted by RestartSyncFromHeight after each major
 // phase and replayed block. Block is meaningful for replay/done phases.
@@ -35,9 +35,9 @@ type RestartSyncProgress struct {
 // the same staged range importer used by sync and therefore would otherwise
 // re-fire apply hooks.
 //
-// Fast incremental path: when HistoryEnabled is true and changesets covering
-// (height, currentHead] are present, the chain is rewound via inverse-delta
-// commitment unwind (domains.UnwindCommitment) rather than reset+genesis+replay.
+// Fast incremental path: when changesets covering (height, currentHead] are
+// present, the chain is rewound via inverse-delta commitment unwind
+// (domains.UnwindCommitment) rather than reset+genesis+replay.
 // The gate is canIncrementalUnwind; false forces the conservative path.
 //
 // Known limitation (incremental path only): TAPOS ring slots in
@@ -80,10 +80,15 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		return fmt.Errorf("restart sync: pending async flush failed: %w", *errPtr)
 	}
 
-	// Fast incremental path: skip reset+replay when history is on and changesets
-	// cover the full (height, currentHead] window.
-	if bc.canIncrementalUnwind(height, current.Number()) {
-		if err := bc.incrementalUnwindTo(target, current.Number(), ancient, emit); err != nil {
+	materializedHead := bc.restartSyncMaterializedHead(height, current.Number())
+
+	// Fast incremental path: skip reset+replay when changesets cover the full
+	// (height, materializedHead] window. During startup recovery the canonical
+	// head may already have been repaired down to height while the latest-domain
+	// tables are still materialized at a higher appliedState; in that case
+	// materializedHead intentionally comes from the recovery metadata.
+	if bc.canIncrementalUnwind(height, materializedHead) {
+		if err := bc.incrementalUnwindTo(target, materializedHead, ancient, emit); err != nil {
 			return fmt.Errorf("restart sync: incremental unwind to %d: %w", height, err)
 		}
 		rawdb.WriteCleanShutdownHeadHash(bc.db, target.Hash())
@@ -200,14 +205,31 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	return nil
 }
 
+func (bc *BlockChain) restartSyncMaterializedHead(height, currentHead uint64) uint64 {
+	if bc == nil || bc.startupRecovery == nil {
+		return currentHead
+	}
+	rec := bc.startupRecovery
+	if rec.To != height || rec.AppliedState < 0 {
+		return currentHead
+	}
+	appliedHead := uint64(rec.AppliedState)
+	if rec.From == appliedHead && appliedHead > currentHead {
+		return appliedHead
+	}
+	return currentHead
+}
+
 // canIncrementalUnwind reports whether RestartSyncFromHeight can rewind to
 // height by inverse-delta commitment unwind instead of reset+replay.
 //
-// Requires HistoryEnabled (so changesets were captured) AND changeset coverage
-// for every block in (height, currentHead] (i.e. the window has not been
-// pruned). The proxy: if height+1's StateTxRange row is present, pruning has
-// not yet reached height+1, and — since pruning proceeds oldest-first — the
-// entire window [height+1, currentHead] is covered.
+// Requires changeset coverage for every block in (height, currentHead] (i.e.
+// the window has not been pruned). The proxy: if height+1's StateTxRange row is
+// present, pruning has not yet reached height+1, and — since pruning proceeds
+// oldest-first — the entire window [height+1, currentHead] is covered. Normal
+// imports only write these rows when HistoryEnabled is true, but the gate checks
+// the data rather than the current config so restart can use an existing history
+// window if the flag changed between runs.
 //
 // The current-cycle reward accumulator is intentionally non-rooted and not part
 // of commitment changesets. If it is non-empty at head, the conservative
@@ -215,9 +237,6 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 //
 // This is a pure optimization gate: false forces the always-correct reset+replay.
 func (bc *BlockChain) canIncrementalUnwind(height, currentHead uint64) bool {
-	if bc.config == nil || !bc.config.HistoryEnabled {
-		return false
-	}
 	if height >= currentHead {
 		return false // nothing to unwind, or invalid
 	}

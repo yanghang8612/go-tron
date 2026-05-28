@@ -440,3 +440,238 @@ func TestRestartSyncFromHeightIncrementalUnwind(t *testing.T) {
 		t.Fatalf("rewound root %x != anchor (straight-to-2) root %x — orphan state leaked", got, anchorRoot)
 	}
 }
+
+func TestStartupAdvancesToMaterializedAppliedStateWhenRootMatches(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witness := testInsertAddr(1)
+	owner := testInsertAddr(2)
+	genesisBalance := int64(100_000_000)
+
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witness, Balance: 1_000_000},
+			{Address: owner, Balance: genesisBalance},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1000, URL: "http://w"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, cfg)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+
+	blocks := make([]*types.Block, 6)
+	blocks[0] = bc.CurrentBlock()
+	for i := uint64(1); i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witness.Bytes(),
+					Version:        params.BlockVersion,
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("InsertBlock(%d): %v", i, err)
+		}
+		blocks[i] = block
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 5 {
+		t.Fatalf("precondition latest block header number = %d, want 5", got)
+	}
+
+	rawdb.WriteHeadBlockHash(diskdb, blocks[2].Hash())
+	rawdb.WriteCleanShutdownHeadHash(diskdb, blocks[2].Hash())
+
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, cfg)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer bc2.Close()
+	if rec, ok := bc2.StartupRecovery(); ok {
+		t.Fatalf("root-matched applied state should not request startup recovery: %+v", rec)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 5 {
+		t.Fatalf("restart head = %d, want applied state 5", got)
+	}
+	if got := bc2.CurrentBlock().Hash(); got != blocks[5].Hash() {
+		t.Fatalf("restart head hash = %x, want block5 %x", got, blocks[5].Hash())
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != blocks[5].Hash() {
+		t.Fatalf("clean shutdown marker = %x, want applied block5 %x", got, blocks[5].Hash())
+	}
+	if got := readWitnessAtHead(t, bc2, witness).TotalProduced(); got != 5 {
+		t.Fatalf("rooted TotalProduced = %d, want 5", got)
+	}
+}
+
+func TestRestartSyncFromHeightStartupAppliedStateAheadUsesIncrementalUnwind(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witness := testInsertAddr(1)
+	owner := testInsertAddr(2)
+	receiver := testInsertAddr(3)
+	genesisBalance := int64(100_000_000)
+
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witness, Balance: 1_000_000},
+			{Address: owner, Balance: genesisBalance},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1000, URL: "http://w"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, cfg)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+
+	blocks := make([]*types.Block, 6)
+	blocks[0] = bc.CurrentBlock()
+	var tx4Hash tcommon.Hash
+	for i := uint64(1); i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		var txs []*corepb.Transaction
+		if i == 4 {
+			tx := testRestartTransferTx(t, owner, receiver, 7_000_000)
+			tx4Hash = types.NewTransactionFromPB(tx).Hash()
+			txs = append(txs, tx)
+		}
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witness.Bytes(),
+					Version:        params.BlockVersion,
+				},
+			},
+			Transactions: txs,
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("InsertBlock(%d): %v", i, err)
+		}
+		blocks[i] = block
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(diskdb, 3); err != nil || !ok {
+		t.Fatalf("precondition StateTxRange(3) ok=%v err=%v, want ok", ok, err)
+	}
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 5 {
+		t.Fatalf("precondition latest block header number = %d, want 5", got)
+	}
+	rawdb.DeleteBlockStateRoot(diskdb, blocks[5].Hash())
+
+	// Simulate the production failure mode: the canonical head and clean marker
+	// were repaired to a safe block, but latest-domain materialized state still
+	// describes the higher applied state.
+	rawdb.WriteHeadBlockHash(diskdb, blocks[2].Hash())
+	rawdb.WriteCleanShutdownHeadHash(diskdb, blocks[2].Hash())
+
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, cfg)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer bc2.Close()
+
+	rec, ok := bc2.StartupRecovery()
+	if !ok {
+		t.Fatal("applied-state-ahead restart should request materialized recovery")
+	}
+	if rec.From != 5 || rec.To != 2 || rec.AppliedState != 5 {
+		t.Fatalf("startup recovery = %+v, want from=5 to=2 applied=5", rec)
+	}
+
+	rebuildCalled := false
+	domains.SetRebuildSpyHook(func() { rebuildCalled = true })
+	defer domains.SetRebuildSpyHook(nil)
+
+	var progress []coreRestartEvent
+	if err := bc2.RestartSyncFromHeight(rec.To, genesis, nil, func(p RestartSyncProgress) {
+		progress = append(progress, coreRestartEvent{phase: p.Phase, block: p.Block})
+	}); err != nil {
+		t.Fatalf("startup materialized recovery: %v", err)
+	}
+	if rebuildCalled {
+		t.Error("Rebuild was called during startup incremental unwind")
+	}
+	wantProgress := []coreRestartEvent{
+		{phase: "reset", block: 0},
+		{phase: "unwind", block: 2},
+		{phase: "flush", block: 2},
+		{phase: "done", block: 2},
+	}
+	if len(progress) != len(wantProgress) {
+		t.Fatalf("progress = %+v, want %+v", progress, wantProgress)
+	}
+	for i := range wantProgress {
+		if progress[i] != wantProgress[i] {
+			t.Fatalf("progress[%d] = %+v, want %+v (all=%+v)", i, progress[i], wantProgress[i], progress)
+		}
+	}
+
+	if rec, ok := bc2.StartupRecovery(); ok {
+		t.Fatalf("startup recovery should be cleared after incremental rewind: %+v", rec)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("head number = %d, want 2", got)
+	}
+	if got := bc2.CurrentBlock().Hash(); got != blocks[2].Hash() {
+		t.Fatalf("head hash = %x, want block2 %x", got, blocks[2].Hash())
+	}
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("post-recovery latest block header number = %d, want 2", got)
+	}
+	if got := readWitnessAtHead(t, bc2, witness).TotalProduced(); got != 2 {
+		t.Fatalf("post-recovery rooted TotalProduced = %d, want 2", got)
+	}
+	if got := bc2.GetBlockByNumber(3); got != nil {
+		t.Fatalf("block 3 should be hidden above recovered head, got %x", got.Hash())
+	}
+	if info := rawdb.ReadTransactionInfo(bc2.ChainDB(), tx4Hash[:]); info != nil {
+		t.Fatalf("future tx info survived startup rewind: block=%d", info.BlockNumber)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(diskdb, 3); err != nil || ok {
+		t.Fatalf("orphan StateTxRange(3) ok=%v err=%v, want deleted", ok, err)
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != blocks[2].Hash() {
+		t.Fatalf("clean shutdown marker = %x, want block2 %x", got, blocks[2].Hash())
+	}
+}
