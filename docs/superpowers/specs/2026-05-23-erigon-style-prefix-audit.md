@@ -2,7 +2,10 @@
 
 Date: 2026-05-23
 
-Status: Phase 0 audit baseline
+Status: historical Phase 0 audit baseline. Current implementation status is
+tracked in `2026-05-25-erigon-state-architecture-gap.md`; statements below
+about `RootedStore` bridges and account/KV MPT roots describe the audited
+starting point, not the current production execution path.
 
 Scope: fresh database only. No migration path is required. This audit classifies
 every hot-KV key prefix and singleton currently defined by `core/rawdb`, plus the
@@ -69,7 +72,7 @@ compatibility path instead of mutating `StateDB`.
 | `psd-` | `runtime` | PBFT quorum signatures arrive through async network paths, not deterministic block execution. | Delete; recover by PBFT data sync or explicit finality backfill. |
 | `LATEST_PBFT_BLOCK_NUM` | `runtime` | Local finality cursor derived from PBFT messages. | Delete; recompute from PBFT sign data if a future service needs immediate RPC availability. |
 | `tps-` | `derived` | 65536-slot TAPOS recent-block ring, deterministically rebuilt from block hash history. | Delete and rebuild during replay. |
-| `state-kv-latest-v2-` | `derived` | Prefix-iterable physical latest-state mirror for rooted account KV. The account/KV MPT roots remain the commitment source in this phase. | Delete and rebuild from genesis plus canonical block replay. Unsolidified writes route through `blockbuffer`. |
+| `state-kv-latest-v2-` | `derived` | Prefix-iterable physical latest-state table for account KV. In the current architecture, CommitmentDomain folds these rows into the internal full-state root; the old account/KV MPT-root wording applied only to the Phase 0 baseline. | Delete and rebuild from genesis plus canonical block replay. Unsolidified writes route through `blockbuffer`. |
 | `state-kv-generation-v2-` | `derived` | Per-account KV generation high-water used to assign generation+1 after delete/recreate without scanning old latest rows. | Delete and rebuild from account commit replay. |
 | `at-` | `history` | Account balance audit trail gated by history lookup config. | Delete and rebuild through history backfill. |
 | `btrace-` | `history` | Per-block balance trace for audit APIs. | Delete and rebuild through history backfill. |

@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -344,6 +345,30 @@ func (r *PersistentHistoryReader) StorageAt(addr tcommon.Address, slot tcommon.H
 		return h, nil
 	}
 	return tcommon.Hash{}, ErrStateDomainHistoryUnavailable
+}
+
+// AccountKVAt returns an account-owned domain value at the end of blockNum.
+// It is the generic-KV companion to AccountAt/StorageAt for callers that need a
+// rooted system-domain value, such as historical DynamicProperties reads.
+func (r *PersistentHistoryReader) AccountKVAt(owner tcommon.Address, domain kvdomains.KVDomain, key []byte, blockNum uint64) ([]byte, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	if !kvdomains.IsRegistered(domain) {
+		return nil, false, fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
+	}
+	if blockNum >= r.headNum {
+		generation, _, err := r.hotLatest().KVGeneration(owner)
+		if err != nil {
+			return nil, false, err
+		}
+		return r.hotLatest().KVLatest(owner, generation, domain, key)
+	}
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	return r.readStateAccountKVAsOf(owner, domain, key, blockNum, r.headNum)
 }
 
 // accountAndCode walks the addr inverse index once and reconstructs both

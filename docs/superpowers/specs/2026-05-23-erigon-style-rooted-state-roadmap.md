@@ -2,7 +2,10 @@
 
 Date: 2026-05-23
 
-Status: development roadmap
+Status: historical development roadmap. Current implementation status is
+tracked in `2026-05-25-erigon-state-architecture-gap.md`; the MPT and
+`RootedStore` baseline below describes intermediate milestones, not the current
+production execution path.
 
 Scope: fresh database only. No migration path is required. Java-tron wire
 compatibility remains non-negotiable: protobuf messages, block/transaction bytes,

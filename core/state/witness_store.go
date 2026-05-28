@@ -23,7 +23,7 @@ func (s *StateDB) readWitnessCapsule(addr tcommon.Address) (*types.Witness, erro
 
 // SetWitnessCapsule stages a full witness capsule in the witness-owned
 // WitnessCapsule domain. It is the native typed replacement for writing the
-// legacy w- key through RootedStore.
+// legacy w- compatibility key.
 func (s *StateDB) SetWitnessCapsule(w *types.Witness) error {
 	if w == nil {
 		return nil

@@ -2,7 +2,11 @@
 
 Date: 2026-05-21
 
-Status: design draft
+Status: historical design draft. It has been superseded by the Erigon-style
+flat latest / temporal-domain architecture tracked in
+`2026-05-25-erigon-state-architecture-gap.md`. References below to account
+tries or per-account KV roots are design-stage context, not the current
+production state-read model.
 
 Scope: fresh database only. This design intentionally does not include migration from
 the current flat state layout.

@@ -10,9 +10,10 @@ clean-shutdown path.
 **First documented:** 2026-04-29 (during M11.1 review)
 **Owner:** TBD
 
-## Problem
+## Original problem (resolved by the slices above)
 
-`BlockChain.applyBlock` writes several pieces of post-block state directly to
+At the time this note was opened, `BlockChain.applyBlock` wrote several pieces
+of post-block state directly to
 `rawdb.KeyValueStore` (the persistent Pebble store), not into the
 `StateDB` MPT or any in-memory buffer:
 

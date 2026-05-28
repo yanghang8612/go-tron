@@ -173,10 +173,11 @@ var (
 	// a prefix iterator hands the latest trace back on first hit.
 	accountTracePrefix = []byte("at-")
 
-	// stateKVLatestPrefix is the Erigon-style physical latest-state index for
-	// generic account KV. It is not the commitment itself; the account KV MPT
-	// root in StateAccountV2 remains authoritative in this phase. The index is
-	// a prefix-iterable mirror used for domain iteration and prefix deletion.
+	// stateKVLatestPrefix is the Erigon-style physical latest-state table for
+	// generic account KV. CommitmentDomain folds these rows into the internal
+	// full-state root; StateAccountV2 only carries the current generation and
+	// the retained EmptyKVRoot compatibility field. The table is prefix-iterable
+	// for domain iteration and prefix deletion.
 	//
 	// Key:   state-kv-latest-v2- || owner AccountID20 || generation u64
 	//        || domain u16 || logical key

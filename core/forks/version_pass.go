@@ -12,10 +12,9 @@ import (
 // VoteUpgrade for versions > Version4_0; legacy versions require every
 // slot upgraded.
 //
-// The bitmap is read directly from rawdb under the same `fv-` prefix
-// ForkController writes through; concurrent ForkController.Update
-// callers serialise via Pebble's per-key consistency, so this read does
-// not need the controller's mutex.
+// The rawdb reader is the legacy/stateless entry point. Production actuators and
+// block processing should use PassVersionFromStore with StateDB so the bitmap is
+// read from the rooted SystemForkVote domain.
 func PassVersion(db ethdb.KeyValueReader, version int32, latestBlockTime, maintenanceIntervalMs int64) bool {
 	return PassVersionFromStore(rawDBForkStatsReader{db: db}, version, latestBlockTime, maintenanceIntervalMs)
 }

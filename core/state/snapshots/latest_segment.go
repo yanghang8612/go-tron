@@ -133,6 +133,7 @@ func buildLatestDomainSegmentFromStore(store latestHotStore, dir string, domain 
 	if store == nil {
 		return SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
+	currentGeneration := latestKVGenerationFilter(store)
 	return writeLatestSegmentFromIterator(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
@@ -142,6 +143,13 @@ func buildLatestDomainSegmentFromStore(store latestHotStore, dir string, domain 
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return store.IterateKVLatestDomain(domain, func(owner common.Address, generation uint64, key, value []byte) (bool, error) {
+			current, err := currentGeneration(owner, generation)
+			if err != nil {
+				return false, err
+			}
+			if !current {
+				return true, nil
+			}
 			if err := yield(LatestEntry{Key: AccountKVSnapshotKey(owner, generation, key), Value: value}); err != nil {
 				return false, err
 			}
@@ -161,6 +169,7 @@ func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, do
 	if store == nil {
 		return SegmentRef{}, SegmentRef{}, SegmentRef{}, errors.New("snapshots: nil latest hot store")
 	}
+	currentGeneration := latestKVGenerationFilter(store)
 	return writeLatestBinarySegmentAndAccessor(dir, SegmentRef{
 		Dataset:   SegmentDatasetKVLatest,
 		Domain:    domain,
@@ -170,12 +179,44 @@ func buildLatestDomainSegmentFilesFromStore(store latestHotStore, dir string, do
 		Path:      relPath,
 	}, func(yield func(LatestEntry) error) error {
 		return store.IterateKVLatestDomain(domain, func(owner common.Address, generation uint64, key, value []byte) (bool, error) {
+			current, err := currentGeneration(owner, generation)
+			if err != nil {
+				return false, err
+			}
+			if !current {
+				return true, nil
+			}
 			if err := yield(LatestEntry{Key: AccountKVSnapshotKey(owner, generation, key), Value: value}); err != nil {
 				return false, err
 			}
 			return true, nil
 		})
 	})
+}
+
+func latestKVGenerationFilter(store latestHotStore) func(owner common.Address, generation uint64) (bool, error) {
+	var (
+		cachedOwner      common.Address
+		cachedGeneration uint64
+		cachedExists     bool
+		cached           bool
+	)
+	return func(owner common.Address, generation uint64) (bool, error) {
+		if !cached || cachedOwner != owner {
+			current, ok, err := store.ReadKVGeneration(owner)
+			if err != nil {
+				return false, err
+			}
+			cachedOwner = owner
+			cachedGeneration = current
+			cachedExists = ok
+			cached = true
+		}
+		if !cachedExists {
+			return true, nil
+		}
+		return generation == cachedGeneration, nil
+	}
 }
 
 func BuildKVGenerationSegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {

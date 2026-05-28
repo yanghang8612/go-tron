@@ -350,6 +350,39 @@ func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	}
 }
 
+func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5f}, common.AccountIDLength)...))
+	if err := rawdb.WriteStateKVGeneration(db, owner, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 1, kvdomains.ContractStorage, []byte("stale"), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateKVLatest(db, owner, 2, kvdomains.ContractStorage, []byte("live"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	ref, accessorRef, btreeRef, err := BuildLatestDomainSegmentFilesFromDB(db, dir, kvdomains.ContractStorage, 1, 10, "latest/contract-storage.seg")
+	if err != nil {
+		t.Fatalf("build latest binary segment: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, []SegmentRef{ref, accessorRef, btreeRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	if _, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 1, []byte("stale"), 5); err != nil || ok {
+		t.Fatalf("stale generation hit ok:%v err:%v", ok, err)
+	}
+	got, ok, err := mgr.GetKVLatest(kvdomains.ContractStorage, owner, 2, []byte("live"), 5)
+	if err != nil || !ok || string(got) != "new" {
+		t.Fatalf("current generation value = %q ok:%v err:%v", got, ok, err)
+	}
+}
+
 func TestLatestBinaryManagerReadsWithoutMaterializingSegment(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -692,6 +725,15 @@ func (s *recordingLatestHotStore) WriteKVLatest(owner common.Address, generation
 	}
 	s.writtenKV[recordingLatestKVKey(owner, generation, domain, key)] = append([]byte(nil), value...)
 	return nil
+}
+
+func (s *recordingLatestHotStore) ReadKVGeneration(owner common.Address) (uint64, bool, error) {
+	for _, row := range s.generations {
+		if row.owner == owner {
+			return row.generation, true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 func (s *recordingLatestHotStore) IterateKVGeneration(fn func(owner common.Address, generation uint64) (bool, error)) error {

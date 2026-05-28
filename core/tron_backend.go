@@ -14,6 +14,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/txpool"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -148,10 +149,11 @@ func (b *TronBackend) GetAccount(addr tcommon.Address) (*types.Account, error) {
 // served by the same history reader, which delegates to the current flat
 // StateDB.
 func (b *TronBackend) GetAccountAt(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
-	reader, headNum, err := b.historyReaderAt()
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
 	if err != nil {
 		return nil, err
 	}
+	defer releaseHistory()
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		return nil, err
 	}
@@ -379,14 +381,34 @@ func (b *TronBackend) GetAccountResource(addr tcommon.Address) (*tronapi.Account
 	return b.accountResourceAtRoot(addr, b.chain.HeadStateRoot())
 }
 
-// GetAccountResourceAt opens state at the post-apply root of the bound
-// block (solid or PBFT-confirmed) and returns the snapshot from there.
+// GetAccountResourceAt returns the resource view at the bound block (solid or
+// PBFT-confirmed). Flat latest roots are commitments, not historical snapshots,
+// so non-head reads use temporal domain history.
 func (b *TronBackend) GetAccountResourceAt(addr tcommon.Address, blockNum uint64) (*tronapi.AccountResource, error) {
-	root := b.chain.StateRootAtBlock(blockNum)
-	if root == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("no state root for block %d", blockNum)
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
+	if err != nil {
+		return nil, err
 	}
-	return b.accountResourceAtRoot(addr, root)
+	defer releaseHistory()
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return nil, err
+	}
+	if blockNum == headNum {
+		root := b.chain.StateRootAtBlock(headNum)
+		if root == (tcommon.Hash{}) {
+			return nil, fmt.Errorf("no state root for block %d", headNum)
+		}
+		return b.accountResourceAtRoot(addr, root)
+	}
+	acc, err := reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account resource at block %d: %w", blockNum, err)
+	}
+	dynProps, err := b.dynamicPropertiesAt(reader, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct dynamic properties at block %d: %w", blockNum, err)
+	}
+	return accountResourceFromAccount(acc, dynProps), nil
 }
 
 func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.AccountResource, error) {
@@ -394,8 +416,8 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	// Read rooted dynprops at the SAME root as the account state so resource
-	// limits stay consistent with the queried (live or solid) head.
+	// Read rooted dynprops through the same latest StateDB view so resource
+	// limits stay consistent with the live account state.
 	dynProps := state.LoadDynamicProperties(b.chain.db, statedb)
 	return &tronapi.AccountResource{
 		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
@@ -404,6 +426,38 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 		TotalNetLimit:    dynProps.TotalNetLimit(),
 		TotalEnergyLimit: dynProps.TotalEnergyCurrentLimit(),
 	}, nil
+}
+
+func accountResourceFromAccount(acc *types.Account, dynProps *state.DynamicProperties) *tronapi.AccountResource {
+	res := &tronapi.AccountResource{}
+	if acc != nil {
+		res.FreeNetUsed = acc.FreeNetUsage()
+		res.NetUsed = acc.NetUsage()
+	}
+	if dynProps != nil {
+		res.FreeNetLimit = dynProps.FreeNetLimit()
+		res.TotalNetLimit = dynProps.TotalNetLimit()
+		res.TotalEnergyLimit = dynProps.TotalEnergyCurrentLimit()
+	}
+	return res
+}
+
+func (b *TronBackend) dynamicPropertiesAt(reader *state.PersistentHistoryReader, blockNum uint64) (*state.DynamicProperties, error) {
+	dp := state.NewDynamicProperties()
+	for _, key := range []string{"free_net_limit", "total_net_limit", "total_energy_current_limit"} {
+		value, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(key), blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if len(value) != 8 {
+			return nil, fmt.Errorf("dynamic property %s has length %d", key, len(value))
+		}
+		dp.Set(key, int64(binary.BigEndian.Uint64(value)))
+	}
+	return dp, nil
 }
 
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
@@ -740,14 +794,25 @@ func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, erro
 	return b.rewardAtRoot(addr, b.chain.HeadStateRoot())
 }
 
-// GetRewardAt opens state at the bound block's root for the /walletsolidity/
+// GetRewardAt returns the allowance at the bound block for the /walletsolidity/
 // and /walletpbft/ variants.
 func (b *TronBackend) GetRewardAt(addr tcommon.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
-	root := b.chain.StateRootAtBlock(blockNum)
-	if root == (tcommon.Hash{}) {
-		return nil, fmt.Errorf("no state root for block %d", blockNum)
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
+	if err != nil {
+		return nil, err
 	}
-	return b.rewardAtRoot(addr, root)
+	defer releaseHistory()
+	if err := b.requireArchive(blockNum, headNum); err != nil {
+		return nil, err
+	}
+	acc, err := reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct reward at block %d: %w", blockNum, err)
+	}
+	if acc == nil {
+		return &tronapi.RewardInfo{}, nil
+	}
+	return &tronapi.RewardInfo{Reward: acc.Allowance()}, nil
 }
 
 func (b *TronBackend) rewardAtRoot(addr tcommon.Address, root tcommon.Hash) (*tronapi.RewardInfo, error) {
@@ -1303,25 +1368,25 @@ var ErrArchiveHistoryPruned = fmt.Errorf("archive history pruned for requested b
 //     account view the reader rolls domain changes back from, the same
 //     baseline the live GetBalance/GetCode reads use.
 //
-// headNum and the live root are tied to a single head number rather than
-// read independently. Calling CurrentBlock().Number() and HeadStateRoot()
-// separately lets a concurrent InsertBlock advance the head between the two
-// loads, pairing headNum=N with the root of block N+1; because the reader
-// only rolls deltas back to headNum, that newer base would leave block
-// N+1's writes un-rolled-back and corrupt an older-block answer.
-// StateRootAtBlock(headNum) resolves the root for that exact number, so the
-// baseline and the threshold can no longer skew.
+// The chain mutex is held until the caller finishes the query. StateDB opens
+// against a committed root marker, but latest flat rows are still resolved
+// lazily through the buffer-backed latest domains. Releasing the mutex before
+// AccountAt/CodeAt/StorageAt would let a concurrent InsertBlock advance those
+// latest rows while headNum still points at the older threshold, leaving the
+// new block's writes un-rolled-back in historical answers.
 //
 // The caller is responsible for the flat-history availability gate (see
-// requireArchive); this helper only assembles the reader.
-func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, error) {
+// requireArchive) and must call the returned release function.
+func (b *TronBackend) historyReaderAt() (*state.PersistentHistoryReader, uint64, func(), error) {
+	b.chain.chainmu.Lock()
 	headNum := b.chain.CurrentBlock().Number()
 	root := b.chain.StateRootAtBlock(headNum)
 	live, err := b.chain.openState(root)
 	if err != nil {
-		return nil, 0, fmt.Errorf("open head state: %w", err)
+		b.chain.chainmu.Unlock()
+		return nil, 0, nil, fmt.Errorf("open head state: %w", err)
 	}
-	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, nil
+	return state.NewPersistentHistoryReaderWithColdHistory(b.chain.buffer, live, headNum, b.stateColdHistory), headNum, b.chain.chainmu.Unlock, nil
 }
 
 // requireArchive enforces the block range and flat-history gates for a query
@@ -1387,10 +1452,11 @@ func (b *TronBackend) archiveStateTxRangeAvailable(blockNum uint64) (bool, error
 // ErrArchiveHistoryDisabled. A non-existent account at that height returns
 // (0, nil) — matching the live GetBalance "no account ⇒ 0" convention.
 func (b *TronBackend) GetBalanceAt(addr tcommon.Address, blockNum uint64) (int64, error) {
-	reader, headNum, err := b.historyReaderAt()
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
 	if err != nil {
 		return 0, err
 	}
+	defer releaseHistory()
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		return 0, err
 	}
@@ -1408,10 +1474,11 @@ func (b *TronBackend) GetBalanceAt(addr tcommon.Address, blockNum uint64) (int64
 // Same gating as GetBalanceAt. Returns (nil, nil) for an account that had
 // no code (or did not exist) at that height.
 func (b *TronBackend) GetCodeAt(addr tcommon.Address, blockNum uint64) ([]byte, error) {
-	reader, headNum, err := b.historyReaderAt()
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
 	if err != nil {
 		return nil, err
 	}
+	defer releaseHistory()
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		return nil, err
 	}
@@ -1423,10 +1490,11 @@ func (b *TronBackend) GetCodeAt(addr tcommon.Address, blockNum uint64) ([]byte, 
 // slot or a non-existent account at that height. Named GetStorageAtBlock
 // (not GetStorageAt) so it doesn't collide with the live single-arg reader.
 func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash, blockNum uint64) (tcommon.Hash, error) {
-	reader, headNum, err := b.historyReaderAt()
+	reader, headNum, releaseHistory, err := b.historyReaderAt()
 	if err != nil {
 		return tcommon.Hash{}, err
 	}
+	defer releaseHistory()
 	if err := b.requireArchive(blockNum, headNum); err != nil {
 		return tcommon.Hash{}, err
 	}

@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -184,6 +185,112 @@ func TestArchiveQuery_GetAccountAtFallsBackToHistory(t *testing.T) {
 	if senderGot.Balance() != senderWant {
 		t.Errorf("archive-fallback GetAccountAt(sender, %d).Balance() = %d, want %d",
 			prunedHeight, senderGot.Balance(), senderWant)
+	}
+}
+
+func TestArchiveQuery_RewardAtUsesHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	const numBlocks = 4
+	parent := bc.genesisBlock.Hash()
+	for n := int64(1); n <= numBlocks; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+	}
+
+	wantAcc, err := b.GetAccountAt(witness, 1)
+	if err != nil {
+		t.Fatalf("GetAccountAt(witness, 1): %v", err)
+	}
+	headAcc, err := b.GetAccountAt(witness, numBlocks)
+	if err != nil {
+		t.Fatalf("GetAccountAt(witness, head): %v", err)
+	}
+	if wantAcc.Allowance() == headAcc.Allowance() {
+		t.Fatalf("test setup did not change allowance: block1=%d head=%d", wantAcc.Allowance(), headAcc.Allowance())
+	}
+	got, err := b.GetRewardAt(witness, 1)
+	if err != nil {
+		t.Fatalf("GetRewardAt(witness, 1): %v", err)
+	}
+	if got.Reward != wantAcc.Allowance() {
+		t.Fatalf("GetRewardAt(witness, 1) = %d, want %d", got.Reward, wantAcc.Allowance())
+	}
+}
+
+func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	sender := testInsertAddr(1)
+
+	const numBlocks = 4
+	parent := bc.genesisBlock.Hash()
+	for n := int64(1); n <= numBlocks; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+	}
+
+	wantAcc, err := b.GetAccountAt(sender, 1)
+	if err != nil {
+		t.Fatalf("GetAccountAt(sender, 1): %v", err)
+	}
+	headAcc, err := b.GetAccountAt(sender, numBlocks)
+	if err != nil {
+		t.Fatalf("GetAccountAt(sender, head): %v", err)
+	}
+	if wantAcc.FreeNetUsage() == headAcc.FreeNetUsage() && wantAcc.NetUsage() == headAcc.NetUsage() {
+		t.Fatalf("test setup did not change resource usage: block1 free=%d net=%d head free=%d net=%d",
+			wantAcc.FreeNetUsage(), wantAcc.NetUsage(), headAcc.FreeNetUsage(), headAcc.NetUsage())
+	}
+	got, err := b.GetAccountResourceAt(sender, 1)
+	if err != nil {
+		t.Fatalf("GetAccountResourceAt(sender, 1): %v", err)
+	}
+	if got.FreeNetUsed != wantAcc.FreeNetUsage() || got.NetUsed != wantAcc.NetUsage() {
+		t.Fatalf("GetAccountResourceAt(sender, 1) usage free=%d net=%d, want free=%d net=%d",
+			got.FreeNetUsed, got.NetUsed, wantAcc.FreeNetUsage(), wantAcc.NetUsage())
+	}
+}
+
+func TestArchiveQuery_HistoryReaderHoldsChainMutex(t *testing.T) {
+	b, _, _ := archiveBackend(t)
+
+	reader, _, releaseHistory, err := b.historyReaderAt()
+	if err != nil {
+		t.Fatalf("historyReaderAt: %v", err)
+	}
+	if reader == nil {
+		t.Fatal("historyReaderAt returned nil reader")
+	}
+
+	locked := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		b.chain.chainmu.Lock()
+		close(locked)
+		b.chain.chainmu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-locked:
+		t.Fatal("historyReaderAt returned without holding chainmu")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseHistory()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("chainmu was not released")
 	}
 }
 

@@ -14,6 +14,7 @@ type latestHotStore interface {
 	WriteAccountLatest(owner common.Address, value []byte) error
 	IterateKVLatestDomain(domain kvdomains.KVDomain, fn func(owner common.Address, generation uint64, key, value []byte) (bool, error)) error
 	WriteKVLatest(owner common.Address, generation uint64, domain kvdomains.KVDomain, key, value []byte) error
+	ReadKVGeneration(owner common.Address) (uint64, bool, error)
 	IterateKVGeneration(fn func(owner common.Address, generation uint64) (bool, error)) error
 	WriteKVGeneration(owner common.Address, generation uint64) error
 	IterateCode(fn func(hash common.Hash, code []byte) (bool, error)) error
@@ -77,6 +78,13 @@ func (s rawDBLatestHotStore) WriteKVLatest(owner common.Address, generation uint
 		return fmt.Errorf("snapshots latest hot store: nil writer")
 	}
 	return rawdb.WriteStateKVLatest(s.writer, owner, generation, domain, key, value)
+}
+
+func (s rawDBLatestHotStore) ReadKVGeneration(owner common.Address) (uint64, bool, error) {
+	if s.reader == nil {
+		return 0, false, nil
+	}
+	return rawdb.ReadStateKVGeneration(s.reader, owner)
 }
 
 func (s rawDBLatestHotStore) IterateKVGeneration(fn func(owner common.Address, generation uint64) (bool, error)) error {

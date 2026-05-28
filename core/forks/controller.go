@@ -12,7 +12,9 @@ import (
 // ForkController tallies per-block SR votes for software fork versions and
 // answers Pass(version) against java-tron's activation rules (hardForkTime
 // + rate quorum for versions > VERSION_4_0; strict all-slots-upgrade for
-// older versions). State is stored in rawdb under the `fv-` prefix.
+// older versions). Production block execution binds the controller to StateDB's
+// rooted SystemForkVote domain; the rawdb-backed constructor remains for tests
+// and compatibility readers that do not have a StateDB handle.
 //
 // Callers: producer path feeds it via Update(blockVersion, slot, n); reader
 // paths query via Pass. IsActive composes Pass with a DP soft-flag check —

@@ -206,6 +206,11 @@ Status update:
   It validates accessor checksum/size, header metadata, referenced segment
   size, and strictly increasing record offsets without calling
   `readLatestBinaryAccessor`.
+- Account-KV latest segment builders filter rows through the current
+  `KVGenerationDomain` value when one exists, so stale rows from older
+  generations are not published into latest snapshots after account
+  delete/recreate or KV reset. Missing generation rows still preserve the
+  implicit generation-0 compatibility case.
 
 Next step:
 
@@ -1055,6 +1060,12 @@ Status update:
   `TestPersistentHistoryReaderReadsCodeFromColdCodeDomain` now asserts that both
   code versions reconstruct from the cold CodeDomain after the hot code bytes
   are deleted, i.e. the cold CodeDomain retains the superseded version.
+- Solidity/PBFT account resource and reward archive variants now use
+  `PersistentHistoryReader` instead of opening a historical root against the flat
+  latest view. `historyReaderAt` holds `chainmu` through the query so the live
+  baseline and `headNum` cannot skew while an insert is in progress, and
+  historical resource limits start from java-tron defaults before overlaying
+  `SystemDynamicProperty` values from temporal account-KV history.
 
 Next step:
 
