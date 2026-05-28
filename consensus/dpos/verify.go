@@ -100,8 +100,17 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 		slot -= int64(params.MaintenanceSkipSlots)
 	}
 	witnesses := chain.ActiveWitnesses()
+	if len(witnesses) == 0 {
+		log.Warn("DPoS scheduled witness check failed: no active witnesses",
+			"number", block.Number(), "slot", slot, "stateFlag", dp.StateFlag(),
+			"parent", parent.Number(), "parentTs", parent.Timestamp(), "blockTs", block.Timestamp())
+		return ErrInvalidWitness
+	}
 	idx := WitnessIndex(slot, len(witnesses))
-	if idx >= len(witnesses) {
+	if idx < 0 || idx >= len(witnesses) {
+		log.Warn("DPoS scheduled witness index out of range",
+			"number", block.Number(), "slot", slot, "idx", idx, "activeWitnesses", len(witnesses),
+			"stateFlag", dp.StateFlag(), "parent", parent.Number(), "parentTs", parent.Timestamp(), "blockTs", block.Timestamp())
 		return ErrInvalidWitness
 	}
 	// Match java-tron DposService.validBlock: compare the schedule against
@@ -109,6 +118,10 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 	// block.witness_address). This phrasing yields the more intuitive
 	// ErrInvalidWitness when an SR mints in a slot that doesn't belong to it.
 	if witnesses[idx] != block.WitnessAddress() {
+		log.Warn("DPoS scheduled witness mismatch",
+			"number", block.Number(), "slot", slot, "idx", idx, "activeWitnesses", len(witnesses),
+			"scheduled", witnesses[idx], "actual", block.WitnessAddress(),
+			"stateFlag", dp.StateFlag(), "parent", parent.Number(), "parentTs", parent.Timestamp(), "blockTs", block.Timestamp())
 		return ErrInvalidWitness
 	}
 	return nil

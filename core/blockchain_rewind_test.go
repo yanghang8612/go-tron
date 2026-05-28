@@ -526,6 +526,81 @@ func TestStartupAdvancesToMaterializedAppliedStateWhenRootMatches(t *testing.T) 
 	}
 }
 
+func TestStartupIgnoresCleanMarkerWhenMaterializedRootMismatchesHead(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witness := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witness, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1000, URL: "http://w"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	for i := uint64(1); i <= 3; i++ {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witness.Bytes(),
+					Version:        params.BlockVersion,
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("InsertBlock(%d): %v", i, err)
+		}
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	head := rawdb.ReadBlock(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), 3)
+	if head == nil {
+		t.Fatal("missing head block")
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != head.Hash() {
+		t.Fatalf("precondition clean marker = %x, want head %x", got, head.Hash())
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(diskdb, tcommon.Hash{0x99}); err != nil {
+		t.Fatalf("corrupt latest root: %v", err)
+	}
+
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer bc2.Close()
+	rec, ok := bc2.StartupRecovery()
+	if !ok {
+		t.Fatal("root mismatch should request startup recovery")
+	}
+	if rec.To != 3 || rec.AppliedState != 3 {
+		t.Fatalf("startup recovery = %+v, want target/applied 3", rec)
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != (tcommon.Hash{}) {
+		t.Fatalf("stale clean marker survived: %x", got)
+	}
+}
+
 func TestRestartSyncFromHeightStartupAppliedStateAheadUsesIncrementalUnwind(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witness := testInsertAddr(1)

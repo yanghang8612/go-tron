@@ -420,8 +420,15 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	appliedNum := dynProps.LatestBlockHeaderNumber()
 	appliedHash := dynProps.LatestBlockHeaderHash()
 	appliedHashMatchesHead := appliedHash == (tcommon.Hash{}) || appliedHash == head.Hash()
+	rootExpected, rootActual, rootMatches, rootChecked := materializedRootMatchesBlock(db, chaindb, head)
+	rootMismatchAtHead := rootChecked && !rootMatches
 	if cleanHead == head.Hash() && appliedNum == int64(head.Number()) && appliedHashMatchesHead {
-		return head, nil
+		if !rootMismatchAtHead {
+			return head, nil
+		}
+		rawdb.DeleteCleanShutdownHeadHash(db)
+		log.Warn("Clean shutdown marker ignored: materialized state root mismatch",
+			"head", head.Number(), "expectedRoot", rootExpected, "materializedRoot", rootActual)
 	}
 
 	targetNum := head.Number()
@@ -435,7 +442,7 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	if targetNum >= head.Number() {
 		appliedStateAhead := appliedNum >= 0 && uint64(appliedNum) > head.Number()
 		appliedHashMismatchAtHead := appliedNum >= 0 && uint64(appliedNum) == head.Number() && !appliedHashMatchesHead
-		if appliedStateAhead || appliedHashMismatchAtHead {
+		if appliedStateAhead || appliedHashMismatchAtHead || rootMismatchAtHead {
 			if appliedStateAhead {
 				if appliedHead, ok := materializedAppliedHead(db, chaindb, appliedNum, appliedHash); ok {
 					rawdb.WriteHeadBlockHash(db, appliedHead.Hash())
@@ -449,7 +456,8 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 			rawdb.DeleteCleanShutdownHeadHash(db)
 			log.Info("Head requires materialized state rebuild",
 				"head", head.Number(), "appliedState", appliedNum,
-				"appliedHash", appliedHash, "headHash", head.Hash(), "solidified", solidified)
+				"appliedHash", appliedHash, "headHash", head.Hash(), "solidified", solidified,
+				"expectedRoot", rootExpected, "materializedRoot", rootActual)
 			return head, &StartupRecovery{
 				From:         uint64(appliedNum),
 				To:           head.Number(),
@@ -495,19 +503,36 @@ func materializedAppliedHead(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, app
 	if block == nil || block.Hash() != appliedHash {
 		return nil, false
 	}
-	expectedRoot := rawdb.ReadBlockStateRoot(chaindb, block.Hash())
-	if expectedRoot == (tcommon.Hash{}) {
-		return nil, false
-	}
-	store := domains.NewStagedCommitmentStore(db)
-	root, ok, err := store.ReadRoot()
-	if err != nil || !ok || root != expectedRoot {
-		return nil, false
-	}
-	if ok, err := store.RootNodePresent(root); err != nil || !ok {
+	if _, _, matches, checked := materializedRootMatchesBlock(db, chaindb, block); !checked || !matches {
 		return nil, false
 	}
 	return block, true
+}
+
+func materializedRootMatchesBlock(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, block *types.Block) (expected, actual tcommon.Hash, matches bool, checked bool) {
+	if block == nil {
+		return tcommon.Hash{}, tcommon.Hash{}, false, false
+	}
+	expected = rawdb.ReadBlockStateRoot(chaindb, block.Hash())
+	if expected == (tcommon.Hash{}) && block.Number() == 0 {
+		expected = rawdb.ReadGenesisStateRoot(db)
+	}
+	if expected == (tcommon.Hash{}) {
+		return expected, actual, false, false
+	}
+	store := domains.NewStagedCommitmentStore(db)
+	root, ok, err := store.ReadRoot()
+	if err != nil || !ok {
+		return expected, actual, false, true
+	}
+	actual = root
+	if actual != expected {
+		return expected, actual, false, true
+	}
+	if present, err := store.RootNodePresent(actual); err != nil || !present {
+		return expected, actual, false, true
+	}
+	return expected, actual, true, true
 }
 
 // CurrentBlock returns the head of the canonical chain.
@@ -1464,7 +1489,14 @@ func (bc *BlockChain) Close() error {
 	bc.buffer.Discard()
 	if head := bc.CurrentBlock(); head != nil {
 		rawdb.WriteHeadBlockHash(bc.db, head.Hash())
-		rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
+		expected, actual, matches, checked := materializedRootMatchesBlock(bc.db, bc.chaindb, head)
+		if checked && matches {
+			rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
+		} else {
+			rawdb.DeleteCleanShutdownHeadHash(bc.db)
+			log.Warn("Clean shutdown marker skipped: materialized state root mismatch",
+				"head", head.Number(), "expectedRoot", expected, "materializedRoot", actual, "checked", checked)
+		}
 	}
 	if err := bc.stateDB.Close(); err != nil {
 		return fmt.Errorf("close: state trie database: %w", err)
