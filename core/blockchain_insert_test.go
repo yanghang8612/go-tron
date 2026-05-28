@@ -2007,3 +2007,87 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 		t.Fatalf("post-rebuild latest block header number = %d, want 2", got)
 	}
 }
+
+func TestRestartWithoutCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	sdb := state.NewDatabase(diskdb)
+	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var block2, block5 *types.Block
+	for i := 1; i <= 5; i++ {
+		b := buildTestBlock(bc, witnessAddr, int64(i)*3000)
+		if err := bc.InsertBlock(b); err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+		if i == 2 {
+			block2 = b
+		}
+		if i == 5 {
+			block5 = b
+		}
+	}
+	if err := bc.flushBufferUpToSolidified(2); err != nil {
+		t.Fatalf("flush up to 2: %v", err)
+	}
+
+	// Simulate a database already repaired by the pointer-only startup fix:
+	// LastBlock is back at the safe height, but derived latest-domain rows still
+	// describe the higher applied state. This must still trigger a materialized
+	// rebuild to head before sync resumes.
+	dp := state.LoadDynamicProperties(diskdb, nil)
+	dp.SetLatestBlockHeaderNumber(int64(block5.Number()))
+	dp.SetLatestBlockHeaderTimestamp(block5.Timestamp())
+	dp.SetLatestBlockHeaderHash(block5.Hash())
+	dp.SetLatestSolidifiedBlockNum(int64(block2.Number()))
+	dp.Flush(diskdb)
+	rawdb.WriteHeadBlockHash(diskdb, block2.Hash())
+	rawdb.DeleteCleanShutdownHeadHash(diskdb)
+
+	sdb2 := state.NewDatabase(diskdb)
+	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 2 {
+		t.Fatalf("restart head = %d, want 2", got)
+	}
+	rec, ok := bc2.StartupRecovery()
+	if !ok {
+		t.Fatal("applied-state-ahead restart should request materialized recovery")
+	}
+	if rec.From != 5 || rec.To != 2 || rec.AppliedState != 5 || rec.Solidified != 2 {
+		t.Fatalf("startup recovery = %+v, want from=5 to=2 applied=5 solidified=2", rec)
+	}
+	if err := bc2.RestartSyncFromHeight(rec.To, genesis, nil, nil); err != nil {
+		t.Fatalf("startup materialized recovery: %v", err)
+	}
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 2 {
+		t.Fatalf("post-rebuild latest block header number = %d, want 2", got)
+	}
+	if got := readWitnessAtHead(t, bc2, witnessAddr).TotalProduced(); got != 2 {
+		t.Fatalf("post-rebuild rooted TotalProduced = %d, want 2", got)
+	}
+}

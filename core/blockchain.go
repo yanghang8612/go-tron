@@ -430,6 +430,17 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		targetNum = uint64(solidified)
 	}
 	if targetNum >= head.Number() {
+		if appliedNum >= 0 && uint64(appliedNum) > head.Number() {
+			rawdb.DeleteCleanShutdownHeadHash(db)
+			log.Info("Head requires materialized state rebuild",
+				"head", head.Number(), "appliedState", appliedNum, "solidified", solidified)
+			return head, &StartupRecovery{
+				From:         uint64(appliedNum),
+				To:           head.Number(),
+				AppliedState: appliedNum,
+				Solidified:   solidified,
+			}
+		}
 		return head, nil
 	}
 
