@@ -416,12 +416,14 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	}
 	cleanHead := rawdb.ReadCleanShutdownHeadHash(db)
 	dynProps := state.LoadDynamicProperties(db, nil)
-	if cleanHead == head.Hash() {
+	appliedNum := dynProps.LatestBlockHeaderNumber()
+	appliedHash := dynProps.LatestBlockHeaderHash()
+	appliedHashMatchesHead := appliedHash == (tcommon.Hash{}) || appliedHash == head.Hash()
+	if cleanHead == head.Hash() && appliedNum == int64(head.Number()) && appliedHashMatchesHead {
 		return head, nil
 	}
 
 	targetNum := head.Number()
-	appliedNum := dynProps.LatestBlockHeaderNumber()
 	if appliedNum >= 0 && uint64(appliedNum) < targetNum {
 		targetNum = uint64(appliedNum)
 	}
@@ -430,10 +432,13 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 		targetNum = uint64(solidified)
 	}
 	if targetNum >= head.Number() {
-		if appliedNum >= 0 && uint64(appliedNum) > head.Number() {
+		appliedStateAhead := appliedNum >= 0 && uint64(appliedNum) > head.Number()
+		appliedHashMismatchAtHead := appliedNum >= 0 && uint64(appliedNum) == head.Number() && !appliedHashMatchesHead
+		if appliedStateAhead || appliedHashMismatchAtHead {
 			rawdb.DeleteCleanShutdownHeadHash(db)
 			log.Info("Head requires materialized state rebuild",
-				"head", head.Number(), "appliedState", appliedNum, "solidified", solidified)
+				"head", head.Number(), "appliedState", appliedNum,
+				"appliedHash", appliedHash, "headHash", head.Hash(), "solidified", solidified)
 			return head, &StartupRecovery{
 				From:         uint64(appliedNum),
 				To:           head.Number(),
@@ -451,7 +456,7 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 			"appliedState", appliedNum, "solidified", solidified)
 		return head, nil
 	}
-	if appliedHash := dynProps.LatestBlockHeaderHash(); uint64(appliedNum) == targetNum && appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
+	if uint64(appliedNum) == targetNum && appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
 		log.Warn("Head recovery: hash mismatch, keeping disk head",
 			"diskHead", head.Number(), "appliedState", appliedNum,
 			"dpHash", appliedHash, "blockHash", recovered.Hash())

@@ -2008,7 +2008,7 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 	}
 }
 
-func TestRestartWithoutCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing.T) {
+func TestRestartWithStaleCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
 
@@ -2054,9 +2054,10 @@ func TestRestartWithoutCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing
 	}
 
 	// Simulate a database already repaired by the pointer-only startup fix:
-	// LastBlock is back at the safe height, but derived latest-domain rows still
-	// describe the higher applied state. This must still trigger a materialized
-	// rebuild to head before sync resumes.
+	// LastBlock is back at the safe height and a later shutdown wrote a clean
+	// marker there, but derived latest-domain rows still describe the higher
+	// applied state. This must still trigger a materialized rebuild to head
+	// before sync resumes.
 	dp := state.LoadDynamicProperties(diskdb, nil)
 	dp.SetLatestBlockHeaderNumber(int64(block5.Number()))
 	dp.SetLatestBlockHeaderTimestamp(block5.Timestamp())
@@ -2064,7 +2065,7 @@ func TestRestartWithoutCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing
 	dp.SetLatestSolidifiedBlockNum(int64(block2.Number()))
 	dp.Flush(diskdb)
 	rawdb.WriteHeadBlockHash(diskdb, block2.Hash())
-	rawdb.DeleteCleanShutdownHeadHash(diskdb)
+	rawdb.WriteCleanShutdownHeadHash(diskdb, block2.Hash())
 
 	sdb2 := state.NewDatabase(diskdb)
 	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
