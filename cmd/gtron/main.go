@@ -740,9 +740,9 @@ func gtron(ctx *cli.Context) error {
 	broadcaster.Stop()
 	syncService.Stop()
 	stack.Stop()
-	// Flush the BlockChain's per-block buffer up to the solidified line
-	// before closing the underlying store. Layers above solidified are
-	// dropped — see core.BlockChain.Close for the trade-off rationale.
+	// Flush the BlockChain's per-block buffer before closing the underlying
+	// store so LastBlock, state roots, and latest-domain rows restart from the
+	// same head.
 	if err := bc.Close(); err != nil {
 		log.Error("Blockchain close failed", "err", err)
 	}

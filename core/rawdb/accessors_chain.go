@@ -20,6 +20,22 @@ func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 	return common.BytesToHash(data)
 }
 
+func WriteCleanShutdownHeadHash(db ethdb.KeyValueWriter, hash common.Hash) {
+	_ = db.Put(cleanShutdownHeadKey, hash.Bytes())
+}
+
+func ReadCleanShutdownHeadHash(db ethdb.KeyValueReader) common.Hash {
+	data, err := db.Get(cleanShutdownHeadKey)
+	if err != nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(data)
+}
+
+func DeleteCleanShutdownHeadHash(db ethdb.KeyValueWriter) {
+	_ = db.Delete(cleanShutdownHeadKey)
+}
+
 func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
 	db.Put(headSolidBlockKey, hash.Bytes())
 }

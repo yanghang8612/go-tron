@@ -11,6 +11,7 @@ import (
 var (
 	headBlockKey             = []byte("LastBlock")
 	headSolidBlockKey        = []byte("LastSolidBlock")
+	cleanShutdownHeadKey     = []byte("clean-shutdown-head")
 	totalTransactionCountKey = []byte("total-tx-count")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does

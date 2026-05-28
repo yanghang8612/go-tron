@@ -1707,12 +1707,9 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 	}
 }
 
-// TestGracefulShutdown_FlushesSolidified exercises slice-3 sub-task C: a
-// clean shutdown via bc.Close() must persist every buffer layer at or
-// below `latest_solidified_block_num` to disk and drop everything above.
-// On restart, the new BlockChain reads the solidified-line state from
-// disk and matches what slice-1's direct-write path would have produced
-// for a chain frozen at solidified.
+// TestGracefulShutdown_FlushesSolidified covers the no-pending-layers close
+// path: when solidified == head, the async worker has already persisted every
+// block layer and Close is idempotent apart from writing the clean marker.
 //
 // Setup: 27 active witnesses, only one produces. floor(27 × 0.3) = 8;
 // after 9 produced blocks by witnessAddr, the witness's WitnessLatestBlock
@@ -1722,10 +1719,8 @@ func TestForkSwitch_AssetIssueActuatorRollback(t *testing.T) {
 // 1 active witness so solidified == head every block, giving a non-trivial
 // flush window for each call.
 //
-// We then produce 5 blocks WITHOUT going through Close (they all flush
-// immediately due to solidified=head), and 5 more after temporarily
-// adding a second silent witness (still solidified=head with 1 producer
-// and 1 other since floor(2×0.3)=0). Close() runs, restart, assert state.
+// We then produce 5 blocks (all flush immediately due to solidified=head),
+// Close, restart, and assert state.
 func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
@@ -1814,16 +1809,16 @@ func TestGracefulShutdown_FlushesSolidified(t *testing.T) {
 	}
 }
 
-// TestGracefulShutdown_DropsLayersAboveSolidified exercises the harder
-// branch of slice-3 sub-task C: when applyBlock leaves layers above the
-// solidified line in memory, Close must flush only up to solidified and
-// drop the higher layers. After restart, the canonical head reflects the
-// solidified-line state — NOT the unflushed in-memory state.
+// TestGracefulShutdown_FlushesLayersAboveSolidified pins the restart contract:
+// clean shutdown flushes pending layers above solidified too, so disk LastBlock
+// and latest-domain state restart at the same head. Older code dropped these
+// layers while block roots/bodies could still point past the flushed state,
+// causing DPoS schedule mismatches immediately after restart.
 //
 // 3 active witnesses (where only one produces) keeps solidified at 0
 // across every applyBlock — same configuration as the slice-2 reorg test.
-// All 5 layers stay in memory. Close() drops them.
-func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
+// All 5 layers stay in memory. Close() flushes them.
+func TestGracefulShutdown_FlushesLayersAboveSolidified(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
 
@@ -1873,7 +1868,7 @@ func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
 		t.Fatalf("pre-Close: buffer holds %d layers, want 5", got)
 	}
 
-	// Close: flushes up to solidified=0 (no-op) and drops the 5 layers.
+	// Close: flushes every pending layer and writes a clean-shutdown marker.
 	if err := bc.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -1881,30 +1876,27 @@ func TestGracefulShutdown_DropsLayersAboveSolidified(t *testing.T) {
 		t.Fatalf("post-Close: buffer holds %d layers, want 0", got)
 	}
 
-	// Restart: disk-side state reflects ZERO post-applyBlock counters,
-	// because none of the 5 layers were flushed. The persisted head also
-	// stays at the flushed state so sync refetches and re-applies the
-	// missing range from peers.
+	// Restart: disk-side latest-domain state and LastBlock both reflect block 5.
 	sdb2 := state.NewDatabase(diskdb)
 	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	if got := bc2.CurrentBlock().Number(); got != 0 {
-		t.Fatalf("restart: head = %d, want 0", got)
+	if got := bc2.CurrentBlock().Number(); got != 5 {
+		t.Fatalf("restart: head = %d, want 5", got)
 	}
-	if got := bc2.GetBlockByNumber(5); got != nil {
-		t.Fatal("stale block body above recovered head should not be returned as canonical")
+	if got := bc2.GetBlockByNumber(5); got == nil {
+		t.Fatal("block body at clean-shutdown head should be canonical")
 	}
-	// Witness counter is back at the recovered head root; the dropped layers
-	// never became persisted head state.
-	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 0 {
-		t.Fatalf("rooted TotalProduced = %d, want 0 "+
-			"(layers above solidified were dropped on Close)", w.TotalProduced())
+	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 5 {
+		t.Fatalf("rooted TotalProduced = %d, want 5", w.TotalProduced())
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != bc2.CurrentBlock().Hash() {
+		t.Fatalf("clean shutdown marker = %x, want head %x", got, bc2.CurrentBlock().Hash())
 	}
 }
 
-func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
+func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
 
@@ -1945,13 +1937,18 @@ func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
 	if err := bc.flushBufferUpToSolidified(2); err != nil {
 		t.Fatalf("flush up to 2: %v", err)
 	}
-	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 2 {
-		t.Fatalf("disk latest_block_header_number = %d, want 2", got)
+	dp := state.LoadDynamicProperties(diskdb, nil)
+	dp.SetLatestSolidifiedBlockNum(2)
+	dp.Flush(diskdb)
+	if got := state.LoadDynamicProperties(diskdb, nil).LatestSolidifiedBlockNum(); got != 2 {
+		t.Fatalf("disk latest_solidified_block_num = %d, want 2", got)
 	}
 
 	// Simulate a database produced by the old direct-head write path: the
-	// block body and LastBlock point past the latest flushed DP state.
+	// block body and LastBlock point past the last known-safe materialized
+	// state, but no clean-shutdown marker proves a full head flush.
 	rawdb.WriteHeadBlockHash(diskdb, block5.Hash())
+	rawdb.DeleteCleanShutdownHeadHash(diskdb)
 
 	sdb2 := state.NewDatabase(diskdb)
 	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
@@ -1959,7 +1956,7 @@ func TestRestartRecoversHeadToLatestFlushedHeader(t *testing.T) {
 		t.Fatalf("restart: %v", err)
 	}
 	if got := bc2.CurrentBlock().Number(); got != 2 {
-		t.Fatalf("restart recovered head = %d, want 2", got)
+		t.Fatalf("restart recovered head = %d, want solidified 2", got)
 	}
 	headHash := rawdb.ReadHeadBlockHash(diskdb)
 	headNum := rawdb.ReadBlockNumber(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), headHash)

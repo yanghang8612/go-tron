@@ -403,21 +403,33 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	if head == nil {
 		return genesis
 	}
-	// Reads only latest_block_header_number (a derived key in flat dp-), so no
-	// system-KV reader is needed.
+	cleanHead := rawdb.ReadCleanShutdownHeadHash(db)
 	dynProps := state.LoadDynamicProperties(db, nil)
-	appliedNum := dynProps.LatestBlockHeaderNumber()
-	if appliedNum < 0 || uint64(appliedNum) >= head.Number() {
+	if cleanHead == head.Hash() {
 		return head
 	}
 
-	recovered := rawdb.ReadBlock(chaindb, uint64(appliedNum))
-	if recovered == nil {
-		log.Warn("Head recovery: block missing, keeping disk head",
-			"diskHead", head.Number(), "appliedState", appliedNum)
+	targetNum := head.Number()
+	appliedNum := dynProps.LatestBlockHeaderNumber()
+	if appliedNum >= 0 && uint64(appliedNum) < targetNum {
+		targetNum = uint64(appliedNum)
+	}
+	solidified := dynProps.LatestSolidifiedBlockNum()
+	if solidified >= 0 && uint64(solidified) < targetNum {
+		targetNum = uint64(solidified)
+	}
+	if targetNum >= head.Number() {
 		return head
 	}
-	if appliedHash := dynProps.LatestBlockHeaderHash(); appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
+
+	recovered := rawdb.ReadBlock(chaindb, targetNum)
+	if recovered == nil {
+		log.Warn("Head recovery: block missing, keeping disk head",
+			"diskHead", head.Number(), "target", targetNum,
+			"appliedState", appliedNum, "solidified", solidified)
+		return head
+	}
+	if appliedHash := dynProps.LatestBlockHeaderHash(); uint64(appliedNum) == targetNum && appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
 		log.Warn("Head recovery: hash mismatch, keeping disk head",
 			"diskHead", head.Number(), "appliedState", appliedNum,
 			"dpHash", appliedHash, "blockHash", recovered.Hash())
@@ -425,8 +437,10 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	}
 
 	rawdb.WriteHeadBlockHash(db, recovered.Hash())
+	rawdb.DeleteCleanShutdownHeadHash(db)
 	log.Info("Head recovered to applied state",
-		"from", head.Number(), "to", recovered.Number())
+		"from", head.Number(), "to", recovered.Number(),
+		"appliedState", appliedNum, "solidified", solidified)
 	return recovered
 }
 
@@ -1354,28 +1368,12 @@ func (bc *BlockChain) WaitForFlushSettled() {
 	bc.flushPending.wait()
 }
 
-// Close performs a graceful shutdown of the BlockChain: it acquires
-// chainmu, flushes every buffer layer at or below the current solidified
-// block to disk, and drops layers above solidified.
-//
-// We deliberately do NOT flush past solidified — the layers above the
-// solidified line could in principle still be reorged out from under us
-// on the next start (java-tron's `Manager.eraseBlock` invariant: cannot
-// pop past solidified, but may pop the in-memory window above it). After
-// restart, `NewBlockChain` reloads from `rawdb.ReadHeadBlockHash` whose
-// most-recent fully-flushed image is at the solidified line, and the
-// node re-syncs the post-solidified blocks from peers. This matches
-// java-tron's behavior on a clean shutdown — `revokingStore` sessions
-// above solidified are dropped (they were never persisted).
-//
-// Trade-off accepted: a clean shutdown loses up to `head - solidified`
-// blocks of post-applyBlock counters. On mainnet (27 SRs) this is ~19
-// blocks; recovery is automatic via re-sync. The alternative — flushing
-// everything — would persist non-solidified state that a post-restart
-// reorg could no longer rewind, which is the worse failure mode.
-//
-// Callers should invoke Close before closing the underlying KeyValueStore.
-// Slice 3 of the fork-rewind fix.
+// Close performs a graceful shutdown of the BlockChain: it acquires chainmu and
+// flushes every pending buffer layer to disk so the persisted head hash, block
+// state root, latest-domain rows, and derived runtime mirrors describe the same
+// block. The clean-shutdown marker lets startup distinguish this fully flushed
+// head from older/crashed databases whose LastBlock points past the latest
+// materialized state.
 func (bc *BlockChain) Close() error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
@@ -1384,17 +1382,14 @@ func (bc *BlockChain) Close() error {
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("close: async buffer flush failed: %w", *errPtr)
 	}
-	// Reads only latest_solidified_block_num (a derived key in flat dp-), so no
-	// system-KV reader is needed.
-	dynProps := state.LoadDynamicProperties(bc.buffer, nil)
-	if err := bc.flushBufferUpToSolidified(dynProps.LatestSolidifiedBlockNum()); err != nil {
-		return fmt.Errorf("close: flush up to solidified: %w", err)
+	if err := bc.buffer.Flush(bc.db); err != nil {
+		return fmt.Errorf("close: flush pending buffer: %w", err)
 	}
-	// Drop any leftover layers above solidified — they would otherwise
-	// retain memory and (more importantly) be silently dropped on the
-	// next Buffer mutation. Discard explicitly so reads after Close fall
-	// straight through to disk.
 	bc.buffer.Discard()
+	if head := bc.CurrentBlock(); head != nil {
+		rawdb.WriteHeadBlockHash(bc.db, head.Hash())
+		rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
+	}
 	if err := bc.stateDB.Close(); err != nil {
 		return fmt.Errorf("close: state trie database: %w", err)
 	}
