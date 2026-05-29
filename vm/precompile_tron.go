@@ -2,8 +2,10 @@ package vm
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"math"
 	"math/big"
+	"os"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -525,10 +527,30 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 		copy(leaves[i][:], cm)
 	}
 
-	if err := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
+	// TEMP DEBUG (Nile 6,498,505 stall): trace which branch of the shielded
+	// transfer precompile is taken during replay. Revert once captured.
+	verr := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value)
+	trusted := trustedShieldedTRC20Replay(tvm)
+	var gh tcommon.Hash
+	var bn uint64
+	var trustRet bool
+	var expRet corepb.Transaction_ResultContractResult
+	if tvm != nil {
+		gh, bn, trustRet, expRet = tvm.GenesisHash, tvm.BlockNumber, tvm.TrustTransactionRet, tvm.ExpectedContractRet
+	}
+	fmt.Fprintf(os.Stderr, "[SHIELD-DBG] transfer blk=%d avail=%v verr=%v trusted=%v trustRet=%v expRet=%d genMatch=%v spends=%d recv=%d leaf=%d inLen=%d\n",
+		bn, zksnark.Available(), verr, trusted, trustRet, expRet, gh == params.NileGenesisHash, spendCount, receiveCount, leafCount, len(input))
+	if verr != nil && !trusted {
+		fmt.Fprintln(os.Stderr, "[SHIELD-DBG] transfer -> FAILURE payload (verify failed, not trusted)")
 		return shieldedFailurePayload(), cost, nil
 	}
-	return shieldedInsertLeaves(frontier, leafCount, leaves), cost, nil
+	out := shieldedInsertLeaves(frontier, leafCount, leaves)
+	fw := byte(255)
+	if len(out) > 31 {
+		fw = out[31]
+	}
+	fmt.Fprintf(os.Stderr, "[SHIELD-DBG] transfer -> insertLeaves firstWord=%d outLen=%d\n", fw, len(out))
+	return out, cost, nil
 }
 
 type verifyBurnProof struct{}
