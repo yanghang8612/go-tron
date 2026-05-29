@@ -213,10 +213,26 @@ func TestProcessBlock_WithTransactions(t *testing.T) {
 }
 
 func TestProcessBlock_PassesGenesisHashToProposalValidation(t *testing.T) {
-	const nileShieldedActivationBlock int64 = 1_628_391
 	nileGenesisHash := tcommon.HexToHash("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
+	type historicalProposalCase struct {
+		name        string
+		blockNumber int64
+		proposal    map[int64]int64
+	}
+	cases := []historicalProposalCase{
+		{
+			name:        "shielded transaction",
+			blockNumber: 1_628_391,
+			proposal:    map[int64]int64{27: 1},
+		},
+		{
+			name:        "shielded TRC20",
+			blockNumber: 6_360_101,
+			proposal:    map[int64]int64{39: 1},
+		},
+	}
 
-	run := func(genesisHash tcommon.Hash) error {
+	run := func(tc historicalProposalCase, genesisHash tcommon.Hash) error {
 		diskdb := ethrawdb.NewMemoryDatabase()
 		statedb, err := state.New(tcommon.Hash(ethtypes.EmptyRootHash), state.NewDatabase(diskdb))
 		if err != nil {
@@ -227,11 +243,11 @@ func TestProcessBlock_PassesGenesisHashToProposalValidation(t *testing.T) {
 		statedb.CreateAccount(owner, corepb.AccountType_Normal)
 		statedb.PutWitness(owner, "http://w.com")
 
-		tx := makeTestProposalCreateTx(owner, map[int64]int64{27: 1})
+		tx := makeTestProposalCreateTx(owner, tc.proposal)
 		block := types.NewBlockFromPB(&corepb.Block{
 			BlockHeader: &corepb.BlockHeader{
 				RawData: &corepb.BlockHeaderRaw{
-					Number:    nileShieldedActivationBlock,
+					Number:    tc.blockNumber,
 					Timestamp: 3_000,
 				},
 			},
@@ -241,11 +257,15 @@ func TestProcessBlock_PassesGenesisHashToProposalValidation(t *testing.T) {
 		return err
 	}
 
-	if err := run(tcommon.Hash{}); err == nil {
-		t.Fatal("expected id 27 proposal to fail without the Nile genesis hash")
-	}
-	if err := run(nileGenesisHash); err != nil {
-		t.Fatalf("Nile historical id 27 proposal rejected: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := run(tc, tcommon.Hash{}); err == nil {
+				t.Fatal("expected historical proposal to fail without the Nile genesis hash")
+			}
+			if err := run(tc, nileGenesisHash); err != nil {
+				t.Fatalf("Nile historical proposal rejected: %v", err)
+			}
+		})
 	}
 }
 

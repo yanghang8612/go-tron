@@ -52,6 +52,7 @@ The machinery behind each column:
 | Proposal ID | DP key | Scope | Reason |
 |---|---|---|---|
 | 27 | `allow_shielded_transaction` | Nile block 1,628,391 only | Nile java-tron temporarily accepted `ALLOW_SHIELDED_TRANSACTION` at that exact height, then later commented the enum out again. go-tron keeps a height-locked validation path so replay matches Nile without reopening the retired proposal generally. |
+| 39 | `allow_shielded_trc20_transaction` | Nile block 6,360,101 only | Nile accepted `ALLOW_SHIELDED_TRC20_TRANSACTION=1` while producers were still writing block version 16, before current java-tron's `VERSION_4_0_1` proposal gate. go-tron keeps an exact-height replay exception and still requires the historical value `1`. |
 
 ## go-tron specific (no java-tron proposal)
 

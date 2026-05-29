@@ -157,6 +157,33 @@ func TestProposalCreateAcceptsHistoricalNileShieldedActivation(t *testing.T) {
 	}
 }
 
+func TestProposalCreateAcceptsHistoricalNileShieldedTrc20Activation(t *testing.T) {
+	ctx, act := newProposalCreateValidationContext(t, map[int64]int64{
+		39: 1, // ALLOW_SHIELDED_TRC20_TRANSACTION, accepted by Nile before VERSION_4_0_1.
+	})
+	ctx.BlockNumber = proposalNileShieldedTrc20Block
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected historical shielded TRC20 proposal to be rejected off Nile")
+	}
+
+	ctx.GenesisHash = proposalNileGenesisHash
+	if err := act.Validate(ctx); err != nil {
+		t.Fatalf("validate historical Nile shielded TRC20 proposal failed: %v", err)
+	}
+
+	ctx.BlockNumber = proposalNileShieldedTrc20Block - 1
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected historical shielded TRC20 proposal to be rejected at a different block")
+	}
+
+	ctx, act = newProposalCreateValidationContext(t, map[int64]int64{39: 0})
+	ctx.BlockNumber = proposalNileShieldedTrc20Block
+	ctx.GenesisHash = proposalNileGenesisHash
+	if err := act.Validate(ctx); err == nil {
+		t.Fatal("expected historical shielded TRC20 proposal to require value 1")
+	}
+}
+
 func newProposalCreateValidationContext(t *testing.T, params map[int64]int64) (*Context, *ProposalCreateActuator) {
 	t.Helper()
 	owner := makeTestAddr(1)

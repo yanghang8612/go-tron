@@ -25,6 +25,7 @@ const (
 	proposalMaintenanceIntervalMinMillis int64  = 3 * 27 * 1000
 	proposalMaintenanceIntervalMaxMillis int64  = 24 * 3600 * 1000
 	proposalNileShieldedActivationBlock  uint64 = 1_628_391
+	proposalNileShieldedTrc20Block       uint64 = 6_360_101
 )
 
 var proposalNileGenesisHash = common.HexToHash("0000000000000000d698d4192c56cb6be724a558448e2684802de4d6cd8690dc")
@@ -67,7 +68,12 @@ func validateProposalParameter(ctx *Context, id, value int64) error {
 		return validateProposalRequires(dp.AllowSameTokenName(), "allow_same_token_name", id)
 	case 22, 23:
 		return validateProposalRange(id, value, 0, proposalMaxSupply)
-	case 24, 25, 30, 39, 48, 49:
+	case 24, 25, 30, 48, 49:
+		return validateProposalZeroOrOne(id, value)
+	case 39:
+		if isHistoricalNileShieldedTrc20Activation(ctx) {
+			return validateProposalOne(id, value)
+		}
 		return validateProposalZeroOrOne(id, value)
 	case 26:
 		if err := validateProposalOne(id, value); err != nil {
@@ -253,6 +259,17 @@ func isHistoricalNileShieldedActivation(ctx *Context) bool {
 	return genesisHash == proposalNileGenesisHash
 }
 
+func isHistoricalNileShieldedTrc20Activation(ctx *Context) bool {
+	if ctx == nil || ctx.BlockNumber != proposalNileShieldedTrc20Block {
+		return false
+	}
+	genesisHash := ctx.GenesisHash
+	if genesisHash == (common.Hash{}) && ctx.DB != nil {
+		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
+	}
+	return genesisHash == proposalNileGenesisHash
+}
+
 var proposalRequiredVersion = map[int64]int32{
 	19: 6,
 	20: 7, 21: 7, 22: 7, 23: 7,
@@ -289,6 +306,10 @@ func validateProposalForkGate(ctx *Context, id int64) error {
 			return fmt.Errorf("bad chain parameter id %d", id)
 		}
 		return nil
+	case 39:
+		if isHistoricalNileShieldedTrc20Activation(ctx) {
+			return nil
+		}
 	}
 	version, ok := proposalRequiredVersion[id]
 	if !ok {
