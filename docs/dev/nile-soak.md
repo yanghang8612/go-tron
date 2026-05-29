@@ -56,6 +56,23 @@ tail -F /Users/asuka/gtron-soak/logs/soak-monitor.log
 curl -s http://127.0.0.1:8090/wallet/getnowblock | jq -r '.block_header.raw_data.number'
 ```
 
+## Shielded TRC20 Replay Recovery
+
+If a Nile node was already synced past the shielded TRC20 activation window
+with an older binary, rebuilding the binary alone does not rewrite contract
+storage that was materialized by earlier blocks. Rewind and replay from the
+block immediately before proposal #39:
+
+```bash
+# One-shot recovery flag. Remove it after the node has replayed past the
+# failing shielded TRC20 block range.
+--sync.restart-from 6360100
+```
+
+This replays the historical proposal at block 6,360,101 and every subsequent
+shielded TRC20 mint/transfer with the current Sapling-enabled precompile
+implementation.
+
 ## Linux Sync Service Profile
 
 For a dedicated Nile sync host with roughly 60 GiB RAM, the current profiling
