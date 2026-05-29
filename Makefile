@@ -1,4 +1,4 @@
-.PHONY: gtron gtron-replay all test test-sapling lint proto clean fixtures fixtures-list \
+.PHONY: gtron gtron-pure gtron-replay all test test-sapling lint proto clean fixtures fixtures-list \
         conformance-replay conformance-replay-exit-gate txsign system-test-flows \
         system-test-cross system-test-cross-flows zksnark-deps gtron-sapling
 
@@ -10,7 +10,9 @@ GOFLAGS =
 # `make CGO_ENABLED=1 ...` when they explicitly want cgo.
 CGO_ENABLED ?= 0
 
-gtron:
+gtron: gtron-sapling
+
+gtron-pure:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron."
 	@echo "Run \"$(GOBIN)/gtron\" to launch."
@@ -122,5 +124,9 @@ zksnark-deps:
 # `gofuzz` tag. Without this tag, go-ethereum compiles vendored libsecp256k1
 # when cgo is on, which is slow and has stalled on small build servers.
 gtron-sapling:
+	@if [ ! -f third_party/librustzcash/target/release/librustzcash.a ]; then \
+		echo "Sapling static library missing - run \`make zksnark-deps\` before building gtron."; \
+		exit 1; \
+	fi
 	CGO_ENABLED=1 $(GO) build -tags='sapling gofuzz' $(GOFLAGS) -o $(GOBIN)/gtron ./cmd/gtron
 	@echo "Done building gtron with Sapling support."
