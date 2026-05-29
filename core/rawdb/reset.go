@@ -35,7 +35,6 @@ var resetMutablePrefixes = [][]byte{
 	txPrefix,
 	txInfoPrefix,
 	txInfoBlockPrefix,
-	cleanShutdownHeadKey,
 	cycleRewardPendingKey,
 	accountPrefix,
 	witnessPrefix,

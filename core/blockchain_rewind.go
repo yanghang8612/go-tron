@@ -30,7 +30,8 @@ type RestartSyncProgress struct {
 // RestartSyncFromHeight rewinds the local materialized state to height and
 // leaves the chain ready to request height+1 from peers.
 //
-// This is an offline startup operation. Call it before P2P, producer, PBFT, and
+// This is an operator-initiated offline startup operation, driven only by the
+// explicit --sync.restart-from flag. Call it before P2P, producer, PBFT, and
 // API hooks are registered; it intentionally replays canonical blocks through
 // the same staged range importer used by sync and therefore would otherwise
 // re-fire apply hooks.
@@ -67,13 +68,6 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if target == nil {
 		return fmt.Errorf("restart sync: canonical block %d not found", height)
 	}
-	if err := rawdb.WriteStartupRecoveryTarget(bc.db, height, target.Hash()); err != nil {
-		return fmt.Errorf("restart sync: write recovery target: %w", err)
-	}
-	rawdb.DeleteCleanShutdownHeadHash(bc.db)
-	if err := syncKeyValueStore(bc.db); err != nil {
-		return fmt.Errorf("restart sync: sync recovery target: %w", err)
-	}
 
 	emit := func(phase string, block uint64) {
 		if progressFn != nil {
@@ -87,25 +81,17 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		return fmt.Errorf("restart sync: pending async flush failed: %w", *errPtr)
 	}
 
-	materializedHead := bc.restartSyncMaterializedHead(height, current.Number())
+	materializedHead := current.Number()
 
 	// Fast incremental path: skip reset+replay when changesets cover the full
-	// (height, materializedHead] window. During startup recovery the canonical
-	// head may already have been repaired down to height while the latest-domain
-	// tables are still materialized at a higher appliedState; in that case
-	// materializedHead intentionally comes from the recovery metadata.
+	// (height, materializedHead] window.
 	if bc.canIncrementalUnwind(height, materializedHead) {
 		if err := bc.incrementalUnwindTo(target, materializedHead, ancient, emit); err != nil {
 			return fmt.Errorf("restart sync: incremental unwind to %d: %w", height, err)
 		}
-		rawdb.WriteCleanShutdownHeadHash(bc.db, target.Hash())
-		if err := rawdb.DeleteStartupRecoveryTarget(bc.db); err != nil {
-			return fmt.Errorf("restart sync: clear recovery target: %w", err)
-		}
 		if err := syncKeyValueStore(bc.db); err != nil {
-			return fmt.Errorf("restart sync: sync recovery completion: %w", err)
+			return fmt.Errorf("restart sync: sync rewind completion: %w", err)
 		}
-		bc.startupRecovery = nil
 		emit("done", height)
 		return nil
 	}
@@ -212,31 +198,11 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if err := bc.resetRuntimeStateLocked(final, bc.HeadStateRoot()); err != nil {
 		return err
 	}
-	rawdb.WriteCleanShutdownHeadHash(bc.db, final.Hash())
-	if err := rawdb.DeleteStartupRecoveryTarget(bc.db); err != nil {
-		return fmt.Errorf("restart sync: clear recovery target: %w", err)
-	}
 	if err := syncKeyValueStore(bc.db); err != nil {
-		return fmt.Errorf("restart sync: sync recovery completion: %w", err)
+		return fmt.Errorf("restart sync: sync rewind completion: %w", err)
 	}
-	bc.startupRecovery = nil
 	emit("done", height)
 	return nil
-}
-
-func (bc *BlockChain) restartSyncMaterializedHead(height, currentHead uint64) uint64 {
-	if bc == nil || bc.startupRecovery == nil {
-		return currentHead
-	}
-	rec := bc.startupRecovery
-	if rec.To != height || rec.AppliedState < 0 {
-		return currentHead
-	}
-	appliedHead := uint64(rec.AppliedState)
-	if rec.From == appliedHead && appliedHead > currentHead {
-		return appliedHead
-	}
-	return currentHead
 }
 
 // canIncrementalUnwind reports whether RestartSyncFromHeight can rewind to

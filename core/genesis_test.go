@@ -498,10 +498,11 @@ func TestSetupGenesisBlockExistingDoesNotMutateLatestState(t *testing.T) {
 	if rootBefore != expectedRoot {
 		t.Fatalf("precondition latest root = %x, want block root %x", rootBefore, expectedRoot)
 	}
-	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != head.Hash() {
-		t.Fatalf("clean shutdown marker = %x, want %x", got, head.Hash())
-	}
 
+	// Idempotent restart validation must NOT commit genesis state through the
+	// live DB: doing so overwrote the single global latest-domain commitment
+	// root with the genesis root, the bug that used to wedge startup into a
+	// full state rebuild on every restart.
 	if _, _, err := SetupGenesisBlockWithAncient(diskdb, rawdb.NoopAncient{}, genesis); err != nil {
 		t.Fatalf("restart setup genesis: %v", err)
 	}
@@ -518,9 +519,6 @@ func TestSetupGenesisBlockExistingDoesNotMutateLatestState(t *testing.T) {
 		t.Fatalf("restart NewBlockChain: %v", err)
 	}
 	defer restarted.Close()
-	if rec, ok := restarted.StartupRecovery(); ok {
-		t.Fatalf("restart requested recovery after clean shutdown: %+v", rec)
-	}
 	if got := restarted.CurrentBlock().Hash(); got != head.Hash() {
 		t.Fatalf("restart head = %x, want %x", got, head.Hash())
 	}

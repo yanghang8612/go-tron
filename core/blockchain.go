@@ -18,7 +18,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
-	"github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -56,16 +55,6 @@ func (e *InsertBlocksError) Unwrap() error {
 		return nil
 	}
 	return e.Err
-}
-
-// StartupRecovery describes an unsafe-startup repair detected while opening the
-// chain. Callers must rebuild materialized state to To before exposing the node
-// to peers or APIs.
-type StartupRecovery struct {
-	From         uint64
-	To           uint64
-	AppliedState int64
-	Solidified   int64
 }
 
 // ApplyStats reports per-phase wall-clock time spent inside applyBlock.
@@ -163,7 +152,6 @@ type BlockChain struct {
 	forkStatsCache    map[int32][]byte
 	cycleRewards      *cycleRewardAccumulator
 	fc                *forks.ForkController
-	startupRecovery   *StartupRecovery
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -364,8 +352,15 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		})
 	}
 
+	// Trust the persisted head. Every per-block write (LastBlock pointer,
+	// applied dynamic properties, commitment root, account-KV, commitment
+	// branches) lands in the same blockbuffer layer and is flushed to disk
+	// atomically per layer, so the on-disk image is always self-consistent at
+	// a block boundary — whether the node was closed cleanly (full buffer
+	// flush to head) or crashed (last async flush to a solidified block).
+	// Block bodies written ahead of the flushed head are harmless orphans that
+	// re-sync re-applies. No startup state rebuild is required.
 	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
-	head, bc.startupRecovery = recoverHeadToAppliedState(db, chaindb, head, bc.genesisBlock)
 	bc.currentBlock.Store(head)
 
 	// Seed the dynprops cache now that the head is known: rooted keys load from
@@ -413,177 +408,6 @@ func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Bl
 	return block
 }
 
-func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, head, genesis *types.Block) (*types.Block, *StartupRecovery) {
-	if head == nil {
-		return genesis, nil
-	}
-	cleanHead := rawdb.ReadCleanShutdownHeadHash(db)
-	dynProps := state.LoadDynamicProperties(db, nil)
-	appliedNum := dynProps.LatestBlockHeaderNumber()
-	appliedHash := dynProps.LatestBlockHeaderHash()
-	solidified := dynProps.LatestSolidifiedBlockNum()
-	if targetNum, targetHash, ok, err := rawdb.ReadStartupRecoveryTarget(db); err != nil {
-		log.Warn("Startup recovery marker ignored: invalid target", "err", err)
-		_ = rawdb.DeleteStartupRecoveryTarget(db)
-	} else if ok {
-		target := rawdb.ReadBlock(chaindb, targetNum)
-		if target == nil || target.Hash() != targetHash {
-			rawdb.DeleteCleanShutdownHeadHash(db)
-			_ = rawdb.DeleteStartupRecoveryTarget(db)
-			log.Warn("Startup recovery marker ignored: target block missing or hash mismatch",
-				"target", targetNum, "targetHash", targetHash)
-		} else {
-			appliedHashMatchesTarget := appliedHash == (tcommon.Hash{}) || appliedHash == target.Hash()
-			_, _, rootMatches, rootChecked := materializedRootMatchesBlock(db, chaindb, target)
-			if cleanHead == target.Hash() && appliedNum == int64(target.Number()) && appliedHashMatchesTarget && rootChecked && rootMatches {
-				if err := rawdb.DeleteStartupRecoveryTarget(db); err != nil {
-					log.Warn("Startup recovery marker cleanup failed", "err", err)
-				}
-				return target, nil
-			}
-			rawdb.WriteHeadBlockHash(db, target.Hash())
-			rawdb.DeleteCleanShutdownHeadHash(db)
-			log.Info("Startup recovery marker found; resuming original target",
-				"from", head.Number(), "target", target.Number(),
-				"appliedState", appliedNum, "solidified", solidified)
-			return target, &StartupRecovery{
-				From:         head.Number(),
-				To:           target.Number(),
-				AppliedState: appliedNum,
-				Solidified:   solidified,
-			}
-		}
-	}
-	appliedHashMatchesHead := appliedHash == (tcommon.Hash{}) || appliedHash == head.Hash()
-	rootExpected, rootActual, rootMatches, rootChecked := materializedRootMatchesBlock(db, chaindb, head)
-	rootMismatchAtHead := rootChecked && !rootMatches
-	if cleanHead == head.Hash() && appliedNum == int64(head.Number()) && appliedHashMatchesHead {
-		if !rootMismatchAtHead {
-			return head, nil
-		}
-		rawdb.DeleteCleanShutdownHeadHash(db)
-		log.Warn("Clean shutdown marker ignored: materialized state root mismatch",
-			"head", head.Number(), "expectedRoot", rootExpected, "materializedRoot", rootActual)
-	}
-
-	targetNum := head.Number()
-	if appliedNum >= 0 && uint64(appliedNum) < targetNum {
-		targetNum = uint64(appliedNum)
-	}
-	if solidified >= 0 && uint64(solidified) < targetNum {
-		targetNum = uint64(solidified)
-	}
-	if targetNum >= head.Number() {
-		appliedStateAhead := appliedNum >= 0 && uint64(appliedNum) > head.Number()
-		appliedHashMismatchAtHead := appliedNum >= 0 && uint64(appliedNum) == head.Number() && !appliedHashMatchesHead
-		if appliedStateAhead || appliedHashMismatchAtHead || rootMismatchAtHead {
-			if appliedStateAhead {
-				if appliedHead, ok := materializedAppliedHead(db, chaindb, appliedNum, appliedHash); ok {
-					rawdb.WriteHeadBlockHash(db, appliedHead.Hash())
-					rawdb.WriteCleanShutdownHeadHash(db, appliedHead.Hash())
-					log.Info("Head advanced to materialized applied state",
-						"from", head.Number(), "to", appliedHead.Number(),
-						"appliedState", appliedNum, "solidified", solidified)
-					return appliedHead, nil
-				}
-			}
-			rawdb.DeleteCleanShutdownHeadHash(db)
-			log.Info("Head requires materialized state rebuild",
-				"head", head.Number(), "appliedState", appliedNum,
-				"appliedHash", appliedHash, "headHash", head.Hash(), "solidified", solidified,
-				"expectedRoot", rootExpected, "materializedRoot", rootActual)
-			return head, &StartupRecovery{
-				From:         uint64(appliedNum),
-				To:           head.Number(),
-				AppliedState: appliedNum,
-				Solidified:   solidified,
-			}
-		}
-		return head, nil
-	}
-
-	recovered := rawdb.ReadBlock(chaindb, targetNum)
-	if recovered == nil {
-		log.Warn("Head recovery: block missing, keeping disk head",
-			"diskHead", head.Number(), "target", targetNum,
-			"appliedState", appliedNum, "solidified", solidified)
-		return head, nil
-	}
-	if uint64(appliedNum) == targetNum && appliedHash != (tcommon.Hash{}) && recovered.Hash() != appliedHash {
-		log.Warn("Head recovery: hash mismatch, keeping disk head",
-			"diskHead", head.Number(), "appliedState", appliedNum,
-			"dpHash", appliedHash, "blockHash", recovered.Hash())
-		return head, nil
-	}
-
-	rawdb.WriteHeadBlockHash(db, recovered.Hash())
-	rawdb.DeleteCleanShutdownHeadHash(db)
-	log.Info("Head recovered to applied state",
-		"from", head.Number(), "to", recovered.Number(),
-		"appliedState", appliedNum, "solidified", solidified)
-	return recovered, &StartupRecovery{
-		From:         head.Number(),
-		To:           recovered.Number(),
-		AppliedState: appliedNum,
-		Solidified:   solidified,
-	}
-}
-
-func materializedAppliedHead(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, appliedNum int64, appliedHash tcommon.Hash) (*types.Block, bool) {
-	if appliedNum < 0 || appliedHash == (tcommon.Hash{}) {
-		return nil, false
-	}
-	block := rawdb.ReadBlock(chaindb, uint64(appliedNum))
-	if block == nil || block.Hash() != appliedHash {
-		return nil, false
-	}
-	if _, _, matches, checked := materializedRootMatchesBlock(db, chaindb, block); !checked || !matches {
-		return nil, false
-	}
-	return block, true
-}
-
-func materializedRootMatchesBlock(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, block *types.Block) (expected, actual tcommon.Hash, matches bool, checked bool) {
-	if block == nil {
-		return tcommon.Hash{}, tcommon.Hash{}, false, false
-	}
-	expected = rawdb.ReadBlockStateRoot(chaindb, block.Hash())
-	if expected == (tcommon.Hash{}) && block.Number() == 0 {
-		expected = rawdb.ReadGenesisStateRoot(db)
-	}
-	if expected == (tcommon.Hash{}) {
-		return expected, actual, false, false
-	}
-	store := domains.NewStagedCommitmentStore(db)
-	root, ok, err := store.ReadRoot()
-	if err != nil || !ok {
-		return expected, actual, false, true
-	}
-	actual = root
-	if actual != expected {
-		return expected, actual, false, true
-	}
-	if present, err := store.RootNodePresent(actual); err != nil || !present {
-		return expected, actual, false, true
-	}
-	return expected, actual, true, true
-}
-
-func repairMaterializedRootFromNodes(db ethdb.KeyValueStore, expected tcommon.Hash) (bool, error) {
-	if expected == (tcommon.Hash{}) {
-		return false, nil
-	}
-	store := domains.NewStagedCommitmentStore(db)
-	present, err := store.RootNodePresent(expected)
-	if err != nil || !present {
-		return false, err
-	}
-	if err := store.WriteRoot(expected); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func syncKeyValueStore(db ethdb.KeyValueStore) error {
 	type keyValueSyncer interface {
 		SyncKeyValue() error
@@ -597,16 +421,6 @@ func syncKeyValueStore(db ethdb.KeyValueStore) error {
 // CurrentBlock returns the head of the canonical chain.
 func (bc *BlockChain) CurrentBlock() *types.Block {
 	return bc.currentBlock.Load()
-}
-
-// StartupRecovery returns the unsafe-startup repair detected during
-// construction, if any. The caller should run RestartSyncFromHeight(rec.To, ...)
-// before starting networking or serving APIs.
-func (bc *BlockChain) StartupRecovery() (StartupRecovery, bool) {
-	if bc == nil || bc.startupRecovery == nil {
-		return StartupRecovery{}, false
-	}
-	return *bc.startupRecovery, true
 }
 
 // GetBlockByNumber retrieves a block by its number.
@@ -1540,21 +1354,18 @@ func (bc *BlockChain) WaitForFlushSettled() {
 	bc.flushPending.wait()
 }
 
-// Close performs a graceful shutdown of the BlockChain: it acquires chainmu and
-// flushes every pending buffer layer to disk so the persisted head hash, block
-// state root, latest-domain rows, and derived runtime mirrors describe the same
-// block. The clean-shutdown marker lets startup distinguish this fully flushed
-// head from older/crashed databases whose LastBlock points past the latest
-// materialized state.
+// Close performs a graceful shutdown of the BlockChain: it drains the async
+// flush worker, flushes every pending buffer layer to disk, and persists the
+// head pointer. Because the head pointer, applied dynamic properties, and the
+// commitment root all live in the same buffer layer and flush atomically per
+// layer, the on-disk image is self-consistent at the head block after Close —
+// and equally self-consistent at the last async-flushed block after a crash,
+// so startup can trust the persisted head without any state rebuild.
 func (bc *BlockChain) Close() error {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	if bc.closed.Swap(true) {
 		return nil
-	}
-	rawdb.DeleteCleanShutdownHeadHash(bc.db)
-	if err := syncKeyValueStore(bc.db); err != nil {
-		return fmt.Errorf("close: clear clean shutdown marker: %w", err)
 	}
 	bc.WaitForFlushSettled()
 	bc.stopFlushWorkerLocked()
@@ -1570,46 +1381,11 @@ func (bc *BlockChain) Close() error {
 	}
 	if head := bc.CurrentBlock(); head != nil {
 		rawdb.WriteHeadBlockHash(bc.db, head.Hash())
-		expected, actual, matches, checked := materializedRootMatchesBlock(bc.db, bc.chaindb, head)
-		if checked && !matches {
-			repaired, err := repairMaterializedRootFromNodes(bc.db, expected)
-			if err != nil {
-				return fmt.Errorf("close: repair latest-domain root: %w", err)
-			}
-			if repaired {
-				before := actual
-				expected, actual, matches, checked = materializedRootMatchesBlock(bc.db, bc.chaindb, head)
-				log.Warn("Latest-domain root row repaired after state DB close",
-					"head", head.Number(), "expectedRoot", expected, "before", before, "after", actual, "matches", matches)
-			}
+		if err := syncKeyValueStore(bc.db); err != nil {
+			return fmt.Errorf("close: sync head: %w", err)
 		}
-		if checked && matches {
-			if repaired, err := repairMaterializedRootFromNodes(bc.db, expected); err != nil {
-				return fmt.Errorf("close: rewrite latest-domain root: %w", err)
-			} else if !repaired {
-				matches = false
-			}
-		}
-		if checked && matches {
-			rawdb.WriteCleanShutdownHeadHash(bc.db, head.Hash())
-			if err := syncKeyValueStore(bc.db); err != nil {
-				rawdb.DeleteCleanShutdownHeadHash(bc.db)
-				_ = syncKeyValueStore(bc.db)
-				return fmt.Errorf("close: sync clean shutdown marker: %w", err)
-			}
-			expected, actual, matches, checked = materializedRootMatchesBlock(bc.db, bc.chaindb, head)
-		}
-		if !checked || !matches {
-			rawdb.DeleteCleanShutdownHeadHash(bc.db)
-			if err := syncKeyValueStore(bc.db); err != nil {
-				return fmt.Errorf("close: sync clean shutdown marker removal: %w", err)
-			}
-			log.Warn("Clean shutdown marker skipped: materialized state root mismatch",
-				"head", head.Number(), "expectedRoot", expected, "materializedRoot", actual, "checked", checked)
-		} else {
-			log.Info("Clean shutdown marker written",
-				"head", head.Number(), "root", actual)
-		}
+		log.Info("Clean shutdown",
+			"head", head.Number(), "root", rawdb.ReadBlockStateRoot(bc.chaindb, head.Hash()))
 	}
 	return nil
 }

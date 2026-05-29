@@ -3,7 +3,6 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -19,44 +18,6 @@ func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 		return common.Hash{}
 	}
 	return common.BytesToHash(data)
-}
-
-func WriteCleanShutdownHeadHash(db ethdb.KeyValueWriter, hash common.Hash) {
-	_ = db.Put(cleanShutdownHeadKey, hash.Bytes())
-}
-
-func ReadCleanShutdownHeadHash(db ethdb.KeyValueReader) common.Hash {
-	data, err := db.Get(cleanShutdownHeadKey)
-	if err != nil {
-		return common.Hash{}
-	}
-	return common.BytesToHash(data)
-}
-
-func DeleteCleanShutdownHeadHash(db ethdb.KeyValueWriter) {
-	_ = db.Delete(cleanShutdownHeadKey)
-}
-
-func WriteStartupRecoveryTarget(db ethdb.KeyValueWriter, number uint64, hash common.Hash) error {
-	var data [8 + common.HashLength]byte
-	binary.BigEndian.PutUint64(data[:8], number)
-	copy(data[8:], hash.Bytes())
-	return db.Put(startupRecoveryTargetKey, data[:])
-}
-
-func ReadStartupRecoveryTarget(db ethdb.KeyValueReader) (uint64, common.Hash, bool, error) {
-	data, err := db.Get(startupRecoveryTargetKey)
-	if err != nil {
-		return 0, common.Hash{}, false, nil
-	}
-	if len(data) != 8+common.HashLength {
-		return 0, common.Hash{}, false, fmt.Errorf("startup recovery target: bad length %d", len(data))
-	}
-	return binary.BigEndian.Uint64(data[:8]), common.BytesToHash(data[8:]), true, nil
-}
-
-func DeleteStartupRecoveryTarget(db ethdb.KeyValueWriter) error {
-	return db.Delete(startupRecoveryTargetKey)
 }
 
 func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {

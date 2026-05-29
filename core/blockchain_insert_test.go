@@ -19,16 +19,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-type syncTrackingDatabase struct {
-	ethdb.Database
-	syncs int
-}
-
-func (db *syncTrackingDatabase) SyncKeyValue() error {
-	db.syncs++
-	return nil
-}
-
 func testInsertAddr(b byte) tcommon.Address {
 	var addr tcommon.Address
 	addr[0] = 0x41
@@ -266,69 +256,6 @@ func TestBlockChainRejectsInsertAfterClose(t *testing.T) {
 	}
 	if err := bc.InsertBlocks([]*types.Block{block}); !errors.Is(err, ErrBlockChainClosed) {
 		t.Fatalf("InsertBlocks after Close err = %v, want %v", err, ErrBlockChainClosed)
-	}
-}
-
-func TestBlockChainCloseSyncsCleanShutdownMarker(t *testing.T) {
-	diskdb := &syncTrackingDatabase{Database: ethrawdb.NewMemoryDatabase()}
-	genesis := &params.Genesis{
-		Config:            params.MainnetChainConfig,
-		DynamicProperties: map[string]int64{},
-	}
-	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
-		t.Fatal(err)
-	}
-	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	head := bc.CurrentBlock()
-	if err := bc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if diskdb.syncs < 2 {
-		t.Fatalf("SyncKeyValue called %d times, want at least marker clear and write barriers", diskdb.syncs)
-	}
-	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != head.Hash() {
-		t.Fatalf("clean shutdown marker = %s, want %s", got, head.Hash())
-	}
-}
-
-func TestRepairMaterializedRootFromNodesRestoresExpectedRoot(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
-	owner := testInsertAddr(1)
-	store := statedomains.NewStagedCommitmentStore(diskdb)
-	expected, err := store.Update([]rawdb.StateCommitmentUpdate{
-		rawdb.NewStateCommitmentPut(rawdb.StateAccountLatestCommitmentKey(owner), []byte("account")),
-	})
-	if err != nil {
-		t.Fatalf("seed staged commitment: %v", err)
-	}
-	if err := rawdb.WriteLatestDomainCommitmentRoot(diskdb, tcommon.Hash{0x99}); err != nil {
-		t.Fatalf("write stale root: %v", err)
-	}
-
-	repaired, err := repairMaterializedRootFromNodes(diskdb, expected)
-	if err != nil {
-		t.Fatalf("repair materialized root: %v", err)
-	}
-	if !repaired {
-		t.Fatal("repairMaterializedRootFromNodes returned false, want true")
-	}
-	got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(diskdb)
-	if err != nil || !ok || got != expected {
-		t.Fatalf("latest-domain root = %x ok=%v err=%v, want %x", got, ok, err, expected)
-	}
-}
-
-func TestRepairMaterializedRootFromNodesRejectsMissingBranch(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
-	repaired, err := repairMaterializedRootFromNodes(diskdb, tcommon.Hash{0x42})
-	if err != nil {
-		t.Fatalf("repair materialized root: %v", err)
-	}
-	if repaired {
-		t.Fatal("repairMaterializedRootFromNodes repaired missing branch")
 	}
 }
 
@@ -1975,7 +1902,7 @@ func TestGracefulShutdown_FlushesLayersAboveSolidified(t *testing.T) {
 		t.Fatalf("pre-Close: buffer holds %d layers, want 5", got)
 	}
 
-	// Close: flushes every pending layer and writes a clean-shutdown marker.
+	// Close: flushes every pending layer to disk.
 	if err := bc.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -1993,20 +1920,21 @@ func TestGracefulShutdown_FlushesLayersAboveSolidified(t *testing.T) {
 		t.Fatalf("restart: head = %d, want 5", got)
 	}
 	if got := bc2.GetBlockByNumber(5); got == nil {
-		t.Fatal("block body at clean-shutdown head should be canonical")
+		t.Fatal("block body at the flushed head should be canonical")
 	}
 	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 5 {
 		t.Fatalf("rooted TotalProduced = %d, want 5", w.TotalProduced())
 	}
-	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != bc2.CurrentBlock().Hash() {
-		t.Fatalf("clean shutdown marker = %x, want head %x", got, bc2.CurrentBlock().Hash())
-	}
-	if rec, ok := bc2.StartupRecovery(); ok {
-		t.Fatalf("clean restart should not request startup recovery: %+v", rec)
-	}
 }
 
-func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
+// TestRestartAfterCrashTrustsLastFlushedHead proves the startup path needs no
+// state-rebuild recovery. Every per-block write — the LastBlock head pointer,
+// applied dynamic properties, the commitment root, and rooted witness state —
+// lands in one blockbuffer layer and is flushed to disk atomically per layer.
+// A crash that persisted only up to the last async-flushed block therefore
+// leaves the on-disk image self-consistent at that block. Restart trusts the
+// persisted head, serves its materialized state, and resumes applying blocks.
+func TestRestartAfterCrashTrustsLastFlushedHead(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	witnessAddr := testInsertAddr(1)
 
@@ -2028,174 +1956,70 @@ func TestRestartWithoutCleanMarkerRecoversToSolidifiedState(t *testing.T) {
 	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
 		t.Fatal(err)
 	}
-	sdb := state.NewDatabase(diskdb)
-	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var block2, block5 *types.Block
+	var block2, block3 *types.Block
 	for i := 1; i <= 5; i++ {
 		b := buildTestBlock(bc, witnessAddr, int64(i)*3000)
 		if err := bc.InsertBlock(b); err != nil {
 			t.Fatalf("block %d: %v", i, err)
 		}
-		if i == 2 {
+		switch i {
+		case 2:
 			block2 = b
-		}
-		if i == 5 {
-			block5 = b
+		case 3:
+			block3 = b
 		}
 	}
+
+	// Simulate the async flush worker persisting only up to block 2 (3 SRs / 1
+	// producer keeps the natural solidified line at 0, so nothing flushed on its
+	// own). The atomic per-layer flush leaves disk LastBlock, applied DP, and the
+	// commitment root all at block 2. Layers 3-5 remain in memory.
 	if err := bc.flushBufferUpToSolidified(2); err != nil {
 		t.Fatalf("flush up to 2: %v", err)
 	}
-	dp := state.LoadDynamicProperties(diskdb, nil)
-	dp.SetLatestSolidifiedBlockNum(2)
-	dp.Flush(diskdb)
-	if got := state.LoadDynamicProperties(diskdb, nil).LatestSolidifiedBlockNum(); got != 2 {
-		t.Fatalf("disk latest_solidified_block_num = %d, want 2", got)
-	}
 
-	// Simulate a database produced by the old direct-head write path: the
-	// block body and LastBlock point past the last known-safe materialized
-	// state, but no clean-shutdown marker proves a full head flush.
-	rawdb.WriteHeadBlockHash(diskdb, block5.Hash())
-	rawdb.DeleteCleanShutdownHeadHash(diskdb)
-
-	sdb2 := state.NewDatabase(diskdb)
-	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
+	// Crash: abandon bc without Close, dropping in-memory layers 3-5. Reopen
+	// against the same disk — no clean marker, no recovery — and the restart
+	// must trust the persisted head, which the flush left consistent at block 2.
+	bc2, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	if got := bc2.CurrentBlock().Number(); got != 2 {
-		t.Fatalf("restart recovered head = %d, want solidified 2", got)
-	}
-	rec, ok := bc2.StartupRecovery()
-	if !ok {
-		t.Fatal("restart should request materialized startup recovery")
-	}
-	if rec.From != 5 || rec.To != 2 || rec.Solidified != 2 {
-		t.Fatalf("startup recovery = %+v, want from=5 to=2 solidified=2", rec)
-	}
-	headHash := rawdb.ReadHeadBlockHash(diskdb)
-	headNum := rawdb.ReadBlockNumber(rawdb.NewChainDB(diskdb, rawdb.NoopAncient{}), headHash)
-	if headNum == nil || *headNum != 2 {
-		t.Fatalf("disk LastBlock not repaired: num=%v hash=%x", headNum, headHash)
-	}
-	if got := bc2.GetBlockByNumber(5); got != nil {
-		t.Fatal("stale block body above recovered head should not be returned as canonical")
-	}
-
-	if err := bc2.RestartSyncFromHeight(rec.To, genesis, nil, nil); err != nil {
-		t.Fatalf("startup materialized recovery: %v", err)
-	}
-	if rec, ok := bc2.StartupRecovery(); ok {
-		t.Fatalf("startup recovery should be cleared after rebuild: %+v", rec)
-	}
-	if got := bc2.CurrentBlock().Number(); got != 2 {
-		t.Fatalf("post-rebuild head = %d, want 2", got)
+		t.Fatalf("restart head = %d, want last-flushed 2", got)
 	}
 	if got := bc2.CurrentBlock().Hash(); got != block2.Hash() {
-		t.Fatalf("post-rebuild head hash = %x, want block2 %x", got, block2.Hash())
+		t.Fatalf("restart head hash = %x, want block2 %x", got, block2.Hash())
 	}
-	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != block2.Hash() {
-		t.Fatalf("clean shutdown marker after rebuild = %x, want block2 %x", got, block2.Hash())
-	}
-	w := readWitnessAtHead(t, bc2, witnessAddr)
-	if got := w.TotalProduced(); got != 2 {
-		t.Fatalf("post-rebuild rooted TotalProduced = %d, want 2", got)
-	}
-	if got := w.LatestBlockNum(); got != 2 {
-		t.Fatalf("post-rebuild rooted LatestBlockNum = %d, want 2", got)
-	}
-	dpDisk := state.LoadDynamicProperties(diskdb, nil)
-	if got := dpDisk.LatestBlockHeaderNumber(); got != 2 {
-		t.Fatalf("post-rebuild latest block header number = %d, want 2", got)
-	}
-}
-
-func TestRestartWithStaleCleanMarkerRebuildsWhenAppliedStateAheadOfHead(t *testing.T) {
-	diskdb := ethrawdb.NewMemoryDatabase()
-	witnessAddr := testInsertAddr(1)
-
-	genesis := &params.Genesis{
-		Config:    params.MainnetChainConfig,
-		Timestamp: 0,
-		Accounts: []params.GenesisAccount{
-			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
-		},
-		Witnesses: []params.GenesisWitness{
-			{Address: witnessAddr, VoteCount: 1, URL: "test"},
-			{Address: testInsertAddr(2), VoteCount: 1, URL: "sr2"},
-			{Address: testInsertAddr(3), VoteCount: 1, URL: "sr3"},
-		},
-		DynamicProperties: map[string]int64{
-			"next_maintenance_time": 1<<62 - 1,
-		},
-	}
-	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
-		t.Fatal(err)
-	}
-	sdb := state.NewDatabase(diskdb)
-	bc, err := NewBlockChain(diskdb, sdb, params.MainnetChainConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var block2, block5 *types.Block
-	for i := 1; i <= 5; i++ {
-		b := buildTestBlock(bc, witnessAddr, int64(i)*3000)
-		if err := bc.InsertBlock(b); err != nil {
-			t.Fatalf("block %d: %v", i, err)
-		}
-		if i == 2 {
-			block2 = b
-		}
-		if i == 5 {
-			block5 = b
-		}
-	}
-	if err := bc.flushBufferUpToSolidified(2); err != nil {
-		t.Fatalf("flush up to 2: %v", err)
-	}
-
-	// Simulate a database already repaired by the pointer-only startup fix:
-	// LastBlock is back at the safe height and a later shutdown wrote a clean
-	// marker there, but derived latest-domain rows still describe the higher
-	// applied state. This must still trigger a materialized rebuild to head
-	// before sync resumes.
-	dp := state.LoadDynamicProperties(diskdb, nil)
-	dp.SetLatestBlockHeaderNumber(int64(block5.Number()))
-	dp.SetLatestBlockHeaderTimestamp(block5.Timestamp())
-	dp.SetLatestBlockHeaderHash(block5.Hash())
-	dp.SetLatestSolidifiedBlockNum(int64(block2.Number()))
-	dp.Flush(diskdb)
-	rawdb.WriteHeadBlockHash(diskdb, block2.Hash())
-	rawdb.WriteCleanShutdownHeadHash(diskdb, block2.Hash())
-
-	sdb2 := state.NewDatabase(diskdb)
-	bc2, err := NewBlockChain(diskdb, sdb2, params.MainnetChainConfig)
-	if err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if got := bc2.CurrentBlock().Number(); got != 2 {
-		t.Fatalf("restart head = %d, want 2", got)
-	}
-	rec, ok := bc2.StartupRecovery()
-	if !ok {
-		t.Fatal("applied-state-ahead restart should request materialized recovery")
-	}
-	if rec.From != 5 || rec.To != 2 || rec.AppliedState != 5 || rec.Solidified != 2 {
-		t.Fatalf("startup recovery = %+v, want from=5 to=2 applied=5 solidified=2", rec)
-	}
-	if err := bc2.RestartSyncFromHeight(rec.To, genesis, nil, nil); err != nil {
-		t.Fatalf("startup materialized recovery: %v", err)
+	// Materialized state is readable and consistent at the restarted head.
+	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 2 {
+		t.Fatalf("rooted TotalProduced at restart = %d, want 2", w.TotalProduced())
 	}
 	if got := state.LoadDynamicProperties(diskdb, nil).LatestBlockHeaderNumber(); got != 2 {
-		t.Fatalf("post-rebuild latest block header number = %d, want 2", got)
+		t.Fatalf("disk latest_block_header_number = %d, want 2", got)
 	}
-	if got := readWitnessAtHead(t, bc2, witnessAddr).TotalProduced(); got != 2 {
-		t.Fatalf("post-rebuild rooted TotalProduced = %d, want 2", got)
+	// Orphan bodies written ahead of the flushed head are hidden, not canonical.
+	if got := bc2.GetBlockByNumber(5); got != nil {
+		t.Fatal("orphan block body above head must not be canonical")
+	}
+
+	// The node resumes normally: re-applying block 3 on top of the trusted head
+	// advances both the chain and its rooted state, with no rebuild.
+	if err := bc2.InsertBlock(block3); err != nil {
+		t.Fatalf("re-apply block 3 after restart: %v", err)
+	}
+	if got := bc2.CurrentBlock().Number(); got != 3 {
+		t.Fatalf("post-resume head = %d, want 3", got)
+	}
+	if w := readWitnessAtHead(t, bc2, witnessAddr); w.TotalProduced() != 3 {
+		t.Fatalf("rooted TotalProduced after resume = %d, want 3", w.TotalProduced())
+	}
+	if err := bc2.Close(); err != nil {
+		t.Fatalf("close after resume: %v", err)
 	}
 }
