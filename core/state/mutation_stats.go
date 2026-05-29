@@ -303,7 +303,19 @@ func summarizeCommitMutations(plans []*accountCommitPlan) CommitMutationStats {
 		}
 		for _, item := range plan.kvPlan.items {
 			stats.addKV(item.domain, item.entry.deleted)
+			// Push to the per-key hotspot tracker for /debug/state-hotspots.
+			// The tracker is a thin atomic-gated path when enabled; it bails
+			// out immediately when disabled, so the hot commit loop pays no
+			// cost in the disabled state.
+			recordHotspot(item.domain, item.logicalKey, item.entry.deleted, len(item.entry.val))
 		}
 	}
 	return stats
+}
+
+// recordHotspot forwards one final-plan KV mutation to the process-wide
+// KVHotspotTracker. Pulled out to keep summarizeCommitMutations readable;
+// the function is inlined by the compiler.
+func recordHotspot(domain kvdomains.KVDomain, key []byte, deleted bool, valueLen int) {
+	defaultKVHotspotTracker.Record(domain, key, deleted, valueLen)
 }

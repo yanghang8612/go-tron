@@ -21,15 +21,20 @@ package debugapi
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"runtime"
 	runtimepprof "runtime/pprof"
+	"strconv"
 	"time"
 
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
 var log = gtronlog.NewModule("debugapi")
@@ -87,6 +92,17 @@ func NewServer(addr string) *Server {
 		runtimepprof.Lookup("goroutine").WriteTo(w, 2)
 	})
 
+	// /debug/state-hotspots: per-(domain,key) write activity since process
+	// start. Supports query params:
+	//   ?top=N            limit results (default 100; 0 = unlimited)
+	//   ?sort=activity|puts|deletes|bytes  (default activity)
+	//   ?domain=Name      filter to a single KVDomain (e.g. SystemDynamicProperty)
+	//   ?enabled=true|false  toggle tracker recording (POST/GET both honored)
+	//   ?reset=true       clear all tracked entries (no-op when false/absent)
+	// Returns JSON: { enabled: bool, count: int, top: [ { domain, keyHex,
+	// puts, deletes, putBytes } ] }
+	mux.HandleFunc("/debug/state-hotspots", stateHotspotsHandler)
+
 	return &Server{
 		httpServer: &http.Server{
 			Addr:    addr,
@@ -124,4 +140,67 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// stateHotspotsHandler serves /debug/state-hotspots. Uses the process
+// singleton state.DefaultKVHotspotTracker.
+func stateHotspotsHandler(w http.ResponseWriter, r *http.Request) {
+	tracker := state.DefaultKVHotspotTracker()
+	q := r.URL.Query()
+
+	if v := q.Get("enabled"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			tracker.SetEnabled(b)
+		}
+	}
+	if v := q.Get("reset"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil && b {
+			tracker.Reset()
+		}
+	}
+
+	top := parseIntDefault(q.Get("top"), 100)
+	sortKey := state.HotspotSortByActivity
+	switch q.Get("sort") {
+	case "puts":
+		sortKey = state.HotspotSortByPuts
+	case "deletes":
+		sortKey = state.HotspotSortByDeletes
+	case "bytes":
+		sortKey = state.HotspotSortByBytes
+	}
+	domainFilter := q.Get("domain")
+
+	entries := tracker.Top(top, sortKey, domainFilter)
+
+	type row struct {
+		Domain   string `json:"domain"`
+		KeyHex   string `json:"keyHex"`
+		Puts     uint64 `json:"puts"`
+		Deletes  uint64 `json:"deletes"`
+		PutBytes uint64 `json:"putBytes"`
+	}
+	out := struct {
+		Enabled bool  `json:"enabled"`
+		Count   int   `json:"count"`
+		Top     []row `json:"top"`
+	}{
+		Enabled: tracker.Enabled(),
+		Count:   len(entries),
+		Top:     make([]row, 0, len(entries)),
+	}
+	for _, e := range entries {
+		out.Top = append(out.Top, row{
+			Domain:   kvdomains.Name(e.Domain),
+			KeyHex:   hex.EncodeToString(e.Key),
+			Puts:     e.Puts,
+			Deletes:  e.Deletes,
+			PutBytes: e.PutBytes,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
 }
