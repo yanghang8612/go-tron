@@ -67,6 +67,27 @@ bool librustzcash_sapling_final_check(void *ctx,
                                       const unsigned char *bindingSig,
                                       const unsigned char *sighashValue);
 
+bool librustzcash_sapling_check_spend_new(const unsigned char *cv,
+                                          const unsigned char *anchor,
+                                          const unsigned char *nullifier,
+                                          const unsigned char *rk,
+                                          const unsigned char *zkproof,
+                                          const unsigned char *spendAuthSig,
+                                          const unsigned char *sighashValue);
+
+bool librustzcash_sapling_check_output_new(const unsigned char *cv,
+                                           const unsigned char *cm,
+                                           const unsigned char *ephemeralKey,
+                                           const unsigned char *zkproof);
+
+bool librustzcash_sapling_final_check_new(int64_t valueBalance,
+                                          const unsigned char *bindingSig,
+                                          const unsigned char *sighashValue,
+                                          const unsigned char *spendCv,
+                                          size_t spendCvLen,
+                                          const unsigned char *outputCv,
+                                          size_t outputCvLen);
+
 void librustzcash_sapling_verification_ctx_free(void *ctx);
 
 #ifdef __cplusplus

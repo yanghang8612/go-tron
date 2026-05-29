@@ -9,6 +9,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -376,6 +377,8 @@ func permissionWeight(perm *corepb.Permission, addr tcommon.Address) int64 {
 
 // ── 0x01000001–0x01000004 Shielded token precompiles ─────────────────────────
 
+const shieldedTreeWidth = uint64(1) << 32
+
 type verifyMintProof struct{}
 
 func (c *verifyMintProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
@@ -384,12 +387,29 @@ func (c *verifyMintProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy ui
 		return nil, energy, ErrOutOfEnergy
 	}
 	if len(input) != 1504 {
-		return make([]byte, 32), cost, nil
+		return shieldedFailurePayload(), cost, nil
 	}
-	// Full Sapling proof verification requires java-tron's librustzcash
-	// equivalent. Until it is wired in, return the same value java-tron returns
-	// for malformed or failed proofs instead of turning the call into a VM error.
-	return make([]byte, 32), cost, nil
+	cm := input[0:32]
+	cv := input[32:64]
+	epk := input[64:96]
+	proof := input[96:288]
+	bindingSig := input[288:352]
+	value := parseInt64FromWord(input, 352)
+	signHash := input[384:416]
+	frontier, ok := shieldedParseFrontier(input, 416)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	leafCount := parseUint64FromWord(input, 1472)
+	if leafCount >= shieldedTreeWidth {
+		return shieldedFailurePayload(), cost, nil
+	}
+	if err := zksnark.VerifyShieldedTRC20Mint(cm, cv, epk, proof, bindingSig, signHash, value); err != nil {
+		return shieldedFailurePayload(), cost, nil
+	}
+	var leaf zksnark.PedersenHash
+	copy(leaf[:], cm)
+	return shieldedInsertLeaves(frontier, leafCount, []zksnark.PedersenHash{leaf}), cost, nil
 }
 
 type verifyTransferProof struct{}
@@ -399,7 +419,113 @@ func (c *verifyTransferProof) Run(_ *TVM, _ tcommon.Address, input []byte, energ
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
 	}
-	return make([]byte, 32), cost, nil
+	switch len(input) {
+	case 2080, 2368, 2464, 2752:
+	default:
+		return shieldedFailurePayload(), cost, nil
+	}
+
+	spendOffset, ok := shieldedParseOffset(input, 0)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	spendAuthSigOffset, ok := shieldedParseOffset(input, 32)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	receiveOffset, ok := shieldedParseOffset(input, 64)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	bindingSig := input[96:160]
+	signHash := input[160:192]
+	value := parseInt64FromWord(input, 192)
+	frontier, ok := shieldedParseFrontier(input, 224)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	leafCount := parseUint64FromWord(input, 1280)
+	if leafCount >= shieldedTreeWidth-1 {
+		return shieldedFailurePayload(), cost, nil
+	}
+
+	spendCount, ok := shieldedParseCount(input, spendOffset)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	spendAuthSigCount, ok := shieldedParseCount(input, spendAuthSigOffset)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	receiveCount, ok := shieldedParseCount(input, receiveOffset)
+	if !ok {
+		return shieldedFailurePayload(), cost, nil
+	}
+	if spendCount != spendAuthSigCount || spendCount < 1 || spendCount > 2 || receiveCount < 1 || receiveCount > 2 {
+		return shieldedFailurePayload(), cost, nil
+	}
+
+	spends := make([]zksnark.ShieldedTRC20Spend, spendCount)
+	seenNullifiers := make(map[string]struct{}, spendCount)
+	spendOffset += 32
+	for i := 0; i < spendCount; i++ {
+		base := spendOffset + 320*i
+		spendData, ok := shieldedSlice(input, base, 320)
+		if !ok {
+			return shieldedFailurePayload(), cost, nil
+		}
+		nullifier := spendData[0:32]
+		if _, exists := seenNullifiers[string(nullifier)]; exists {
+			return shieldedFailurePayload(), cost, nil
+		}
+		seenNullifiers[string(nullifier)] = struct{}{}
+		spends[i] = zksnark.ShieldedTRC20Spend{
+			Nullifier:               nullifier,
+			Anchor:                  spendData[32:64],
+			ValueCommitment:         spendData[64:96],
+			Rk:                      spendData[96:128],
+			Proof:                   spendData[128:320],
+			SpendAuthoritySignature: nil,
+		}
+	}
+	spendAuthSigOffset += 32
+	for i := 0; i < spendCount; i++ {
+		base := spendAuthSigOffset + 64*i
+		sig, ok := shieldedSlice(input, base, 64)
+		if !ok {
+			return shieldedFailurePayload(), cost, nil
+		}
+		spends[i].SpendAuthoritySignature = sig
+	}
+
+	receives := make([]zksnark.ShieldedTRC20Receive, receiveCount)
+	leaves := make([]zksnark.PedersenHash, receiveCount)
+	seenCommitments := make(map[string]struct{}, receiveCount)
+	receiveOffset += 32
+	for i := 0; i < receiveCount; i++ {
+		base := receiveOffset + 288*i
+		receiveData, ok := shieldedSlice(input, base, 288)
+		if !ok {
+			return shieldedFailurePayload(), cost, nil
+		}
+		cm := receiveData[0:32]
+		if _, exists := seenCommitments[string(cm)]; exists {
+			return shieldedFailurePayload(), cost, nil
+		}
+		seenCommitments[string(cm)] = struct{}{}
+		receives[i] = zksnark.ShieldedTRC20Receive{
+			NoteCommitment:  cm,
+			ValueCommitment: receiveData[32:64],
+			Epk:             receiveData[64:96],
+			Proof:           receiveData[96:288],
+		}
+		copy(leaves[i][:], cm)
+	}
+
+	if err := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value); err != nil {
+		return shieldedFailurePayload(), cost, nil
+	}
+	return shieldedInsertLeaves(frontier, leafCount, leaves), cost, nil
 }
 
 type verifyBurnProof struct{}
@@ -410,9 +536,23 @@ func (c *verifyBurnProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy ui
 		return nil, energy, ErrOutOfEnergy
 	}
 	if len(input) != 512 {
-		return make([]byte, 32), cost, nil
+		return shieldedFailurePayload(), cost, nil
 	}
-	return make([]byte, 32), cost, nil
+	spend := zksnark.ShieldedTRC20Spend{
+		Nullifier:               input[0:32],
+		Anchor:                  input[32:64],
+		ValueCommitment:         input[64:96],
+		Rk:                      input[96:128],
+		Proof:                   input[128:320],
+		SpendAuthoritySignature: input[320:384],
+	}
+	value := parseInt64FromWord(input, 384)
+	bindingSig := input[416:480]
+	signHash := input[480:512]
+	if err := zksnark.VerifyShieldedTRC20Burn(spend, bindingSig, signHash, value); err != nil {
+		return shieldedFailurePayload(), cost, nil
+	}
+	return shieldedSuccessPayload(), cost, nil
 }
 
 type shieldedMerkleHash struct{}
@@ -430,10 +570,169 @@ func (c *shieldedMerkleHash) RunWithStatus(_ *TVM, _ tcommon.Address, input []by
 	if len(input) < 96 {
 		return nil, cost, false, nil
 	}
-	// Pedersen Merkle hashing is part of the same librustzcash surface as the
-	// shielded proof checks. Return the java failure payload until native parity
-	// is available.
-	return nil, cost, false, nil
+	level, ok := shieldedParseIntWord(input, 0)
+	if !ok || level < 0 || level > 62 {
+		return nil, cost, false, nil
+	}
+	var left, right zksnark.PedersenHash
+	copy(left[:], input[32:64])
+	copy(right[:], input[64:96])
+	hash, err := zksnark.Combine(level, left, right)
+	if err != nil {
+		return nil, cost, false, nil
+	}
+	out := make([]byte, 32)
+	copy(out, hash[:])
+	return out, cost, true, nil
+}
+
+func shieldedFailurePayload() []byte {
+	return make([]byte, 32)
+}
+
+func shieldedSuccessPayload() []byte {
+	out := make([]byte, 32)
+	out[31] = 1
+	return out
+}
+
+func shieldedParseOffset(input []byte, offset int) (int, bool) {
+	value, ok := shieldedParseIntWord(input, offset)
+	if !ok || value < 0 || value > len(input) {
+		return 0, false
+	}
+	return value, true
+}
+
+func shieldedParseCount(input []byte, offset int) (int, bool) {
+	value, ok := shieldedParseIntWord(input, offset)
+	if !ok || value < 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func shieldedParseIntWord(input []byte, offset int) (int, bool) {
+	if _, ok := shieldedSlice(input, offset, 32); !ok {
+		return 0, false
+	}
+	value := parseUint64FromWord(input, offset)
+	if value > uint64(int(^uint(0)>>1)) {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func shieldedSlice(input []byte, offset, size int) ([]byte, bool) {
+	if offset < 0 || size < 0 || offset > len(input) || size > len(input)-offset {
+		return nil, false
+	}
+	return input[offset : offset+size], true
+}
+
+func shieldedParseFrontier(input []byte, offset int) ([33]zksnark.PedersenHash, bool) {
+	var frontier [33]zksnark.PedersenHash
+	for i := range frontier {
+		word, ok := shieldedSlice(input, offset+i*32, 32)
+		if !ok {
+			return frontier, false
+		}
+		copy(frontier[i][:], word)
+	}
+	return frontier, true
+}
+
+func shieldedFrontierSlot(leafIndex uint64) int {
+	if leafIndex%2 == 0 {
+		return 0
+	}
+	exp := 1
+	pow1 := uint64(2)
+	pow2 := pow1 << 1
+	for {
+		if (leafIndex+1-pow1)%pow2 == 0 {
+			return exp
+		}
+		pow1 = pow2
+		pow2 <<= 1
+		exp++
+	}
+}
+
+func shieldedInsertLeaves(frontier [33]zksnark.PedersenHash, leafCount uint64, leaves []zksnark.PedersenHash) []byte {
+	if len(leaves) == 0 {
+		return shieldedFailurePayload()
+	}
+	empties, err := zksnark.EmptyRoots()
+	if err != nil {
+		return shieldedFailurePayload()
+	}
+
+	slots := make([]int, len(leaves))
+	resultWords := 1 // final root
+	for i := range leaves {
+		slots[i] = shieldedFrontierSlot(leafCount + uint64(i))
+		resultWords += slots[i] + 1
+	}
+	result := make([]byte, resultWords*32)
+
+	offset := 0
+	var nodeIndex uint64
+	var nodeValue zksnark.PedersenHash
+	for i, leaf := range leaves {
+		copy(result[offset:offset+32], int64ToBytes32(int64(slots[i])))
+		offset += 32
+		nodeIndex = leafCount + uint64(i) + shieldedTreeWidth - 1
+		nodeValue = leaf
+		if slots[i] == 0 {
+			frontier[0] = nodeValue
+			continue
+		}
+		for level := 1; level <= slots[i]; level++ {
+			var left, right zksnark.PedersenHash
+			if nodeIndex%2 == 0 {
+				left = frontier[level-1]
+				right = nodeValue
+				nodeIndex = (nodeIndex - 1) / 2
+			} else {
+				left = nodeValue
+				right = empties[level-1]
+				nodeIndex /= 2
+			}
+			hash, err := zksnark.Combine(level-1, left, right)
+			if err != nil {
+				return shieldedFailurePayload()
+			}
+			nodeValue = hash
+			copy(result[offset:offset+32], hash[:])
+			offset += 32
+		}
+		frontier[slots[i]] = nodeValue
+	}
+
+	for level := slots[len(slots)-1] + 1; level <= zksnark.Depth; level++ {
+		var left, right zksnark.PedersenHash
+		if nodeIndex%2 == 0 {
+			left = frontier[level-1]
+			right = nodeValue
+			nodeIndex = (nodeIndex - 1) / 2
+		} else {
+			left = nodeValue
+			right = empties[level-1]
+			nodeIndex /= 2
+		}
+		hash, err := zksnark.Combine(level-1, left, right)
+		if err != nil {
+			return shieldedFailurePayload()
+		}
+		nodeValue = hash
+	}
+	copy(result[offset:offset+32], nodeValue[:])
+
+	out := make([]byte, 32+len(result))
+	out[31] = 1
+	copy(out[32:], result)
+	return out
 }
 
 // ── 0x01000005 RewardBalance ──────────────────────────────────────────────────

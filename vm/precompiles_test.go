@@ -179,6 +179,26 @@ func TestShieldedPrecompileOutOfEnergy(t *testing.T) {
 	}
 }
 
+func TestShieldedFrontierSlotMatchesJavaPattern(t *testing.T) {
+	tests := map[uint64]int{
+		0:             0,
+		1:             1,
+		2:             0,
+		3:             2,
+		4:             0,
+		5:             1,
+		7:             3,
+		15:            4,
+		(1 << 32) - 2: 0,
+		(1 << 32) - 1: 32,
+	}
+	for leafIndex, want := range tests {
+		if got := shieldedFrontierSlot(leafIndex); got != want {
+			t.Fatalf("slot(%d): got %d, want %d", leafIndex, got, want)
+		}
+	}
+}
+
 func TestP256VerifyPrecompileOsakaGateAndValidVector(t *testing.T) {
 	addr := addrFromUint(0x0100)
 	if p := getPrecompile(addr, TVMConfig{}); p != nil {
