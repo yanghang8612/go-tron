@@ -20,7 +20,10 @@ func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
 }
 
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
-	encoded, ok, err := rawdb.ReadCommitmentBranch(s.db, prefix)
+	// NoCopy avoids the per-Get defensive copy; DecodeBranchData consumes the
+	// bytes immediately and copies the leafKey field, so the aliased slice is
+	// not retained past this function.
+	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
 	if err != nil || !ok {
 		return BranchData{}, ok, err
 	}
@@ -32,7 +35,13 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 }
 
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
-	return rawdb.WriteCommitmentBranch(s.db, prefix, b.Encode())
+	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
+	// copies the value into its own arena during the call, so the buffer is
+	// safe to return as soon as WriteCommitmentBranch returns.
+	bp := borrowEncodeBuf()
+	defer returnEncodeBuf(bp)
+	*bp = b.EncodeTo((*bp)[:0])
+	return rawdb.WriteCommitmentBranch(s.db, prefix, *bp)
 }
 
 func (s *rawdbBranchStore) DelBranch(prefix []byte) error {

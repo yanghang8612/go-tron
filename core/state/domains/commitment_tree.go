@@ -32,6 +32,27 @@ func returnKeccak(h hash.Hash) {
 	keccakPool.Put(h)
 }
 
+// encodeBufPool reuses byte buffers for BranchData.Encode output during a fold.
+// Each branch persisted via PutBranch grabs a buffer here, fills it via EncodeTo,
+// hands it to the KV writer, then returns it. PutBranch holds the buffer for the
+// entire writer call — pebble batches copy the value into their internal arena
+// during Put, so reuse after that call is safe. The pool typically settles at
+// the few largest branch sizes seen during a fold (root + per-segment hot
+// branches), avoiding the ~29 GB/300s Encode-output allocation seen on Nile sync.
+var encodeBufPool = sync.Pool{
+	New: func() any { b := make([]byte, 0, 256); return &b },
+}
+
+func borrowEncodeBuf() *[]byte {
+	bp := encodeBufPool.Get().(*[]byte)
+	*bp = (*bp)[:0]
+	return bp
+}
+
+func returnEncodeBuf(bp *[]byte) {
+	encodeBufPool.Put(bp)
+}
+
 // childKind distinguishes the two child types stored in a BranchData node.
 const (
 	kindHash = uint8(0) // 32-byte intermediate hash
@@ -90,6 +111,14 @@ func (b *BranchData) SetLeafChild(nibble uint8, key []byte, valHash common.Hash)
 //	  if kind == leaf:
 //	    [keyLen binary.Uvarint][key bytes][32-byte valHash]
 func (b *BranchData) Encode() []byte {
+	return b.EncodeTo(nil)
+}
+
+// EncodeTo appends BranchData's wire encoding to dst and returns the resulting
+// slice. Allocates only if dst lacks the capacity. The bulk-sync writer path
+// uses this with a sync.Pool-backed buffer to avoid 29 GB/300s of fresh
+// per-PutBranch allocations observed on Nile sync.
+func (b *BranchData) EncodeTo(dst []byte) []byte {
 	// Compute childMask.
 	var mask uint16
 	for i := uint8(0); i < 16; i++ {
@@ -98,7 +127,7 @@ func (b *BranchData) Encode() []byte {
 		}
 	}
 
-	// Pre-compute required capacity for a single allocation.
+	// Pre-compute required capacity for a single grow.
 	size := 2 // childMask
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
@@ -113,11 +142,14 @@ func (b *BranchData) Encode() []byte {
 			size += binary.MaxVarintLen64 + len(c.leafKey) + common.HashLength
 		}
 	}
-
-	out := make([]byte, 0, size)
+	if cap(dst)-len(dst) < size {
+		grown := make([]byte, len(dst), len(dst)+size)
+		copy(grown, dst)
+		dst = grown
+	}
 
 	// Write childMask.
-	out = append(out, byte(mask>>8), byte(mask))
+	dst = append(dst, byte(mask>>8), byte(mask))
 
 	// Write children low→high nibble.
 	for i := uint8(0); i < 16; i++ {
@@ -125,18 +157,18 @@ func (b *BranchData) Encode() []byte {
 		if !c.present {
 			continue
 		}
-		out = append(out, c.kind)
+		dst = append(dst, c.kind)
 		if c.kind == kindHash {
-			out = append(out, c.hashVal[:]...)
+			dst = append(dst, c.hashVal[:]...)
 		} else {
 			var uvBuf [binary.MaxVarintLen64]byte
 			n := binary.PutUvarint(uvBuf[:], uint64(len(c.leafKey)))
-			out = append(out, uvBuf[:n]...)
-			out = append(out, c.leafKey...)
-			out = append(out, c.leafValHash[:]...)
+			dst = append(dst, uvBuf[:n]...)
+			dst = append(dst, c.leafKey...)
+			dst = append(dst, c.leafValHash[:]...)
 		}
 	}
-	return out
+	return dst
 }
 
 // Equal reports whether b and other represent the same branch node.
