@@ -4,11 +4,33 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"sort"
+	"sync"
 
 	"github.com/tronprotocol/go-tron/common"
 	"golang.org/x/crypto/sha3"
 )
+
+// keccakPool reuses sha3.NewLegacyKeccak256 hashers across fold passes. A
+// single Nile-sync segment allocates ~16 GB of hashers via this constructor
+// (1 per nodeHash/keyPath/leafValueHash call); the pool turns those into
+// Reset-and-reuse and cuts that source of GC pressure to near zero. Safe
+// because the commitment fold is single-threaded per commit (see Fold below),
+// and the borrow/return cycle is strictly nested inside each hash function.
+var keccakPool = sync.Pool{
+	New: func() any { return sha3.NewLegacyKeccak256() },
+}
+
+func borrowKeccak() hash.Hash {
+	h := keccakPool.Get().(hash.Hash)
+	h.Reset()
+	return h
+}
+
+func returnKeccak(h hash.Hash) {
+	keccakPool.Put(h)
+}
 
 // childKind distinguishes the two child types stored in a BranchData node.
 const (
@@ -264,7 +286,8 @@ func (b *BranchData) onlyChildNibble() uint8 {
 // where childHash is the hash child's stored hash, or the leaf child's value
 // hash.
 func (b *BranchData) nodeHash() common.Hash {
-	h := sha3.NewLegacyKeccak256()
+	h := borrowKeccak()
+	defer returnKeccak(h)
 	_, _ = h.Write([]byte{0x01})
 	for i := uint8(0); i < 16; i++ {
 		c := &b.children[i]
@@ -632,7 +655,8 @@ func appendNibble(prefix []byte, nb uint8) []byte {
 // keyPath expands keccak256(lenPrefixed(key)) into pathLen nibbles, high nibble
 // first.
 func keyPath(key []byte) [pathLen]byte {
-	h := sha3.NewLegacyKeccak256()
+	h := borrowKeccak()
+	defer returnKeccak(h)
 	writeLen8Prefixed(h, key)
 	var sum common.Hash
 	h.Sum(sum[:0])
@@ -647,7 +671,8 @@ func keyPath(key []byte) [pathLen]byte {
 // leafValueHash is the value hash of a key: keccak256(0x00 || lenPrefixed(key) ||
 // lenPrefixed(value)).
 func leafValueHash(key, value []byte) common.Hash {
-	h := sha3.NewLegacyKeccak256()
+	h := borrowKeccak()
+	defer returnKeccak(h)
 	_, _ = h.Write([]byte{0x00})
 	writeLen8Prefixed(h, key)
 	writeLen8Prefixed(h, value)
