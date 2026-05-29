@@ -377,11 +377,14 @@ func permissionWeight(perm *corepb.Permission, addr tcommon.Address) int64 {
 
 // ── 0x01000001–0x01000004 Shielded token precompiles ─────────────────────────
 
-const shieldedTreeWidth = uint64(1) << 32
+const (
+	shieldedTreeWidth                = uint64(1) << 32
+	shieldedTRC20NileActivationBlock = 6_360_101
+)
 
 type verifyMintProof struct{}
 
-func (c *verifyMintProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 150000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -404,7 +407,7 @@ func (c *verifyMintProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy ui
 	if leafCount >= shieldedTreeWidth {
 		return shieldedFailurePayload(), cost, nil
 	}
-	if err := zksnark.VerifyShieldedTRC20Mint(cm, cv, epk, proof, bindingSig, signHash, value); err != nil {
+	if err := zksnark.VerifyShieldedTRC20Mint(cm, cv, epk, proof, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
 		return shieldedFailurePayload(), cost, nil
 	}
 	var leaf zksnark.PedersenHash
@@ -414,7 +417,7 @@ func (c *verifyMintProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy ui
 
 type verifyTransferProof struct{}
 
-func (c *verifyTransferProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 200000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -522,7 +525,7 @@ func (c *verifyTransferProof) Run(_ *TVM, _ tcommon.Address, input []byte, energ
 		copy(leaves[i][:], cm)
 	}
 
-	if err := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value); err != nil {
+	if err := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
 		return shieldedFailurePayload(), cost, nil
 	}
 	return shieldedInsertLeaves(frontier, leafCount, leaves), cost, nil
@@ -530,7 +533,7 @@ func (c *verifyTransferProof) Run(_ *TVM, _ tcommon.Address, input []byte, energ
 
 type verifyBurnProof struct{}
 
-func (c *verifyBurnProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *verifyBurnProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 150000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -549,7 +552,7 @@ func (c *verifyBurnProof) Run(_ *TVM, _ tcommon.Address, input []byte, energy ui
 	value := parseInt64FromWord(input, 384)
 	bindingSig := input[416:480]
 	signHash := input[480:512]
-	if err := zksnark.VerifyShieldedTRC20Burn(spend, bindingSig, signHash, value); err != nil {
+	if err := zksnark.VerifyShieldedTRC20Burn(spend, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
 		return shieldedFailurePayload(), cost, nil
 	}
 	return shieldedSuccessPayload(), cost, nil
@@ -594,6 +597,14 @@ func shieldedSuccessPayload() []byte {
 	out := make([]byte, 32)
 	out[31] = 1
 	return out
+}
+
+func trustedShieldedTRC20Replay(tvm *TVM) bool {
+	return tvm != nil &&
+		tvm.TrustTransactionRet &&
+		tvm.ExpectedContractRet == corepb.Transaction_Result_SUCCESS &&
+		tvm.GenesisHash == params.NileGenesisHash &&
+		tvm.BlockNumber >= shieldedTRC20NileActivationBlock
 }
 
 func shieldedParseOffset(input []byte, offset int) (int, bool) {

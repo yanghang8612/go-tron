@@ -222,6 +222,11 @@ func setReplayOutOfTimeResult(result *Result, energyLimit uint64) {
 func configureTVMExecutionContext(evm *vm.TVM, ctx *Context) {
 	evm.HeadSlot = ctx.HeadSlot
 	evm.HasHeadSlot = ctx.HasHeadSlot
+	evm.GenesisHash = ctx.GenesisHash
+	evm.TrustTransactionRet = ctx.TrustTransactionRet
+	if ret, ok := expectedContractRet(ctx); ok {
+		evm.ExpectedContractRet = ret
+	}
 	evm.SetDB(ctx.DB)
 	evm.SetRootTransactionID(ctx.Tx.Hash())
 	if ctx.State != nil {

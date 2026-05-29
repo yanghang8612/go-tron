@@ -39,6 +39,9 @@ type TVM struct {
 	Depth                int    // call depth
 	Nonce                uint64 // java-tron Program nonce for internal transactions
 	RootTxID             tcommon.Hash
+	GenesisHash          tcommon.Hash
+	TrustTransactionRet  bool
+	ExpectedContractRet  corepb.Transaction_ResultContractResult
 	BlackholeAddress     tcommon.Address
 	Logs                 []Log // accumulated log events from this execution
 	InternalTransactions []*corepb.InternalTransaction

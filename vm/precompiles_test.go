@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -195,6 +196,37 @@ func TestShieldedFrontierSlotMatchesJavaPattern(t *testing.T) {
 	for leafIndex, want := range tests {
 		if got := shieldedFrontierSlot(leafIndex); got != want {
 			t.Fatalf("slot(%d): got %d, want %d", leafIndex, got, want)
+		}
+	}
+}
+
+func TestShieldedTRC20TrustedNileReplayFallback(t *testing.T) {
+	input := make([]byte, 512)
+	trusted := &TVM{
+		TrustTransactionRet: true,
+		ExpectedContractRet: corepb.Transaction_Result_SUCCESS,
+		GenesisHash:         params.NileGenesisHash,
+		BlockNumber:         shieldedTRC20NileActivationBlock,
+	}
+	out, cost, err := (&verifyBurnProof{}).Run(trusted, zeroCaller, input, 150000)
+	if err != nil {
+		t.Fatalf("trusted burn fallback returned error: %v", err)
+	}
+	if cost != 150000 {
+		t.Fatalf("cost: got %d, want 150000", cost)
+	}
+	if len(out) != 32 || out[31] != 1 {
+		t.Fatalf("trusted fallback output = %x, want true payload", out)
+	}
+
+	untrusted := nullEVM()
+	out, _, err = (&verifyBurnProof{}).Run(untrusted, zeroCaller, input, 150000)
+	if err != nil {
+		t.Fatalf("untrusted burn returned error: %v", err)
+	}
+	for _, b := range out {
+		if b != 0 {
+			t.Fatalf("untrusted fallback must stay disabled, got %x", out)
 		}
 	}
 }
