@@ -70,8 +70,11 @@ func SetupGenesisBlockWithAncient(db ethdb.KeyValueStore, ancient rawdb.AncientR
 	if storedBlock != nil {
 		storedHash := storedBlock.Hash()
 
-		// Compute expected hash to validate
-		sdb := state.NewDatabase(rawdb.WrapKeyValueStore(db))
+		// Compute the expected hash on a scratch store. genesisBlockAndStateRoot
+		// commits the genesis state as part of building the block, so running it
+		// against the live DB would mutate latest-domain state during the
+		// idempotent startup validation path.
+		sdb := state.NewDatabase(rawdb.WrapKeyValueStore(rawdb.NewMemoryDatabase()))
 		expectedBlock, _, _, err := genesisBlockAndStateRoot(genesis, sdb)
 		if err != nil {
 			return genesis.Config, storedHash, nil // Can't verify, trust stored

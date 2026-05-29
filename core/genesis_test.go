@@ -454,6 +454,78 @@ func TestSetupGenesisBlockWithAncientFindsFrozenGenesis(t *testing.T) {
 	}
 }
 
+func TestSetupGenesisBlockExistingDoesNotMutateLatestState(t *testing.T) {
+	witnessAddr := testInsertAddr(1)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	diskdb := ethrawdb.NewMemoryDatabase()
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("setup genesis: %v", err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), genesis.Config)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	block := buildTestBlock(bc, witnessAddr, 3000)
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("close chain: %v", err)
+	}
+
+	chaindb := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
+	head := rawdb.ReadBlock(chaindb, block.Number())
+	if head == nil {
+		t.Fatal("head block missing after close")
+	}
+	expectedRoot := rawdb.ReadBlockStateRoot(chaindb, head.Hash())
+	rootBefore, ok, err := rawdb.ReadLatestDomainCommitmentRoot(diskdb)
+	if err != nil || !ok {
+		t.Fatalf("read latest-domain root before setup: ok=%v err=%v", ok, err)
+	}
+	if rootBefore != expectedRoot {
+		t.Fatalf("precondition latest root = %x, want block root %x", rootBefore, expectedRoot)
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != head.Hash() {
+		t.Fatalf("clean shutdown marker = %x, want %x", got, head.Hash())
+	}
+
+	if _, _, err := SetupGenesisBlockWithAncient(diskdb, rawdb.NoopAncient{}, genesis); err != nil {
+		t.Fatalf("restart setup genesis: %v", err)
+	}
+	rootAfter, ok, err := rawdb.ReadLatestDomainCommitmentRoot(diskdb)
+	if err != nil || !ok {
+		t.Fatalf("read latest-domain root after setup: ok=%v err=%v", ok, err)
+	}
+	if rootAfter != rootBefore {
+		t.Fatalf("SetupGenesisBlock mutated latest-domain root: before %x after %x", rootBefore, rootAfter)
+	}
+
+	restarted, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), genesis.Config)
+	if err != nil {
+		t.Fatalf("restart NewBlockChain: %v", err)
+	}
+	defer restarted.Close()
+	if rec, ok := restarted.StartupRecovery(); ok {
+		t.Fatalf("restart requested recovery after clean shutdown: %+v", rec)
+	}
+	if got := restarted.CurrentBlock().Hash(); got != head.Hash() {
+		t.Fatalf("restart head = %x, want %x", got, head.Hash())
+	}
+}
+
 // TestGenesisToBlock_MatchesJavaTronPrivateChain pins the genesis block hash
 // against a live java-tron private chain at /Users/asuka/Works/Tests/TVM/run.
 //
