@@ -421,6 +421,39 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	dynProps := state.LoadDynamicProperties(db, nil)
 	appliedNum := dynProps.LatestBlockHeaderNumber()
 	appliedHash := dynProps.LatestBlockHeaderHash()
+	solidified := dynProps.LatestSolidifiedBlockNum()
+	if targetNum, targetHash, ok, err := rawdb.ReadStartupRecoveryTarget(db); err != nil {
+		log.Warn("Startup recovery marker ignored: invalid target", "err", err)
+		_ = rawdb.DeleteStartupRecoveryTarget(db)
+	} else if ok {
+		target := rawdb.ReadBlock(chaindb, targetNum)
+		if target == nil || target.Hash() != targetHash {
+			rawdb.DeleteCleanShutdownHeadHash(db)
+			_ = rawdb.DeleteStartupRecoveryTarget(db)
+			log.Warn("Startup recovery marker ignored: target block missing or hash mismatch",
+				"target", targetNum, "targetHash", targetHash)
+		} else {
+			appliedHashMatchesTarget := appliedHash == (tcommon.Hash{}) || appliedHash == target.Hash()
+			_, _, rootMatches, rootChecked := materializedRootMatchesBlock(db, chaindb, target)
+			if cleanHead == target.Hash() && appliedNum == int64(target.Number()) && appliedHashMatchesTarget && rootChecked && rootMatches {
+				if err := rawdb.DeleteStartupRecoveryTarget(db); err != nil {
+					log.Warn("Startup recovery marker cleanup failed", "err", err)
+				}
+				return target, nil
+			}
+			rawdb.WriteHeadBlockHash(db, target.Hash())
+			rawdb.DeleteCleanShutdownHeadHash(db)
+			log.Info("Startup recovery marker found; resuming original target",
+				"from", head.Number(), "target", target.Number(),
+				"appliedState", appliedNum, "solidified", solidified)
+			return target, &StartupRecovery{
+				From:         head.Number(),
+				To:           target.Number(),
+				AppliedState: appliedNum,
+				Solidified:   solidified,
+			}
+		}
+	}
 	appliedHashMatchesHead := appliedHash == (tcommon.Hash{}) || appliedHash == head.Hash()
 	rootExpected, rootActual, rootMatches, rootChecked := materializedRootMatchesBlock(db, chaindb, head)
 	rootMismatchAtHead := rootChecked && !rootMatches
@@ -437,7 +470,6 @@ func recoverHeadToAppliedState(db ethdb.KeyValueStore, chaindb *rawdb.ChainDB, h
 	if appliedNum >= 0 && uint64(appliedNum) < targetNum {
 		targetNum = uint64(appliedNum)
 	}
-	solidified := dynProps.LatestSolidifiedBlockNum()
 	if solidified >= 0 && uint64(solidified) < targetNum {
 		targetNum = uint64(solidified)
 	}

@@ -67,6 +67,13 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 	if target == nil {
 		return fmt.Errorf("restart sync: canonical block %d not found", height)
 	}
+	if err := rawdb.WriteStartupRecoveryTarget(bc.db, height, target.Hash()); err != nil {
+		return fmt.Errorf("restart sync: write recovery target: %w", err)
+	}
+	rawdb.DeleteCleanShutdownHeadHash(bc.db)
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return fmt.Errorf("restart sync: sync recovery target: %w", err)
+	}
 
 	emit := func(phase string, block uint64) {
 		if progressFn != nil {
@@ -92,6 +99,12 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 			return fmt.Errorf("restart sync: incremental unwind to %d: %w", height, err)
 		}
 		rawdb.WriteCleanShutdownHeadHash(bc.db, target.Hash())
+		if err := rawdb.DeleteStartupRecoveryTarget(bc.db); err != nil {
+			return fmt.Errorf("restart sync: clear recovery target: %w", err)
+		}
+		if err := syncKeyValueStore(bc.db); err != nil {
+			return fmt.Errorf("restart sync: sync recovery completion: %w", err)
+		}
 		bc.startupRecovery = nil
 		emit("done", height)
 		return nil
@@ -200,6 +213,12 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 		return err
 	}
 	rawdb.WriteCleanShutdownHeadHash(bc.db, final.Hash())
+	if err := rawdb.DeleteStartupRecoveryTarget(bc.db); err != nil {
+		return fmt.Errorf("restart sync: clear recovery target: %w", err)
+	}
+	if err := syncKeyValueStore(bc.db); err != nil {
+		return fmt.Errorf("restart sync: sync recovery completion: %w", err)
+	}
 	bc.startupRecovery = nil
 	emit("done", height)
 	return nil

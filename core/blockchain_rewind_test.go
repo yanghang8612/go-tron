@@ -750,3 +750,139 @@ func TestRestartSyncFromHeightStartupAppliedStateAheadUsesIncrementalUnwind(t *t
 		t.Fatalf("clean shutdown marker = %x, want block2 %x", got, blocks[2].Hash())
 	}
 }
+
+func TestStartupRecoveryMarkerResumesOriginalTargetAfterInterruptedReplay(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	witness := testInsertAddr(1)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witness, Balance: 1_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witness, VoteCount: 1000, URL: "http://w"},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	blocks := make([]*types.Block, 6)
+	blocks[0] = bc.CurrentBlock()
+	for i := uint64(1); i <= 5; i++ {
+		parent := bc.CurrentBlock()
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:         int64(i),
+					Timestamp:      int64(i) * 3000,
+					ParentHash:     parent.Hash().Bytes(),
+					WitnessAddress: witness.Bytes(),
+					Version:        params.BlockVersion,
+				},
+			},
+		})
+		if err := bc.InsertBlock(block); err != nil {
+			t.Fatalf("InsertBlock(%d): %v", i, err)
+		}
+		blocks[i] = block
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Simulate an interrupted reset+replay recovery whose original target was
+	// block 5, but whose last flushed replay progress only reached block 3. The
+	// recovery marker is the durable contract that must make the next startup
+	// resume block 5 instead of treating block 3 as the new target.
+	if err := rawdb.ResetMutableState(diskdb); err != nil {
+		t.Fatalf("reset mutable state: %v", err)
+	}
+	genesisBlock, genesisRoot, genesisDP, err := genesisBlockAndStateRoot(genesis, state.NewDatabase(diskdb))
+	if err != nil {
+		t.Fatalf("rebuild genesis state: %v", err)
+	}
+	if err := writeGenesisMaterializedState(diskdb, genesis, genesisBlock, genesisRoot, genesisDP); err != nil {
+		t.Fatalf("write genesis materialized state: %v", err)
+	}
+	partial, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("partial NewBlockChain: %v", err)
+	}
+	for i := uint64(1); i <= 3; i++ {
+		if err := partial.InsertBlock(blocks[i]); err != nil {
+			t.Fatalf("partial InsertBlock(%d): %v", i, err)
+		}
+	}
+	partial.WaitForFlushSettled()
+	partial.chainmu.Lock()
+	partial.stopFlushWorkerLocked()
+	partial.closed.Store(true)
+	partial.chainmu.Unlock()
+	if err := partial.stateDB.Close(); err != nil {
+		t.Fatalf("partial state close: %v", err)
+	}
+	if err := rawdb.WriteStartupRecoveryTarget(diskdb, 5, blocks[5].Hash()); err != nil {
+		t.Fatalf("write recovery target: %v", err)
+	}
+	rawdb.DeleteCleanShutdownHeadHash(diskdb)
+
+	restarted, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("restart NewBlockChain: %v", err)
+	}
+	defer restarted.Close()
+	rec, ok := restarted.StartupRecovery()
+	if !ok {
+		t.Fatal("startup should resume recovery marker")
+	}
+	if rec.To != 5 {
+		t.Fatalf("startup recovery target = %d, want original target 5", rec.To)
+	}
+	if got := restarted.CurrentBlock().Hash(); got != blocks[5].Hash() {
+		t.Fatalf("restart head hash = %x, want target block5 %x", got, blocks[5].Hash())
+	}
+	if got := rawdb.ReadHeadBlockHash(diskdb); got != blocks[5].Hash() {
+		t.Fatalf("disk head hash = %x, want target block5 %x", got, blocks[5].Hash())
+	}
+
+	ancient := &recordingAncientWriter{}
+	if err := restarted.RestartSyncFromHeight(rec.To, genesis, ancient, nil); err != nil {
+		t.Fatalf("resume recovery: %v", err)
+	}
+	if len(ancient.truncateHeads) != 1 || ancient.truncateHeads[0] != 6 {
+		t.Fatalf("ancient truncates = %+v, want [6] (target+1, not partial+1)", ancient.truncateHeads)
+	}
+	if _, _, ok, err := rawdb.ReadStartupRecoveryTarget(diskdb); err != nil || ok {
+		t.Fatalf("recovery target after success ok=%v err=%v, want cleared", ok, err)
+	}
+	if got := rawdb.ReadCleanShutdownHeadHash(diskdb); got != blocks[5].Hash() {
+		t.Fatalf("clean marker = %x, want block5 %x", got, blocks[5].Hash())
+	}
+}
+
+type recordingAncientWriter struct {
+	truncateHeads []uint64
+	syncs         int
+}
+
+func (w *recordingAncientWriter) ModifyAncients(func(rawdb.AncientWriteOp) error) (int64, error) {
+	return 0, nil
+}
+
+func (w *recordingAncientWriter) TruncateHead(items uint64) (uint64, error) {
+	w.truncateHeads = append(w.truncateHeads, items)
+	return items, nil
+}
+
+func (w *recordingAncientWriter) Sync() error {
+	w.syncs++
+	return nil
+}
