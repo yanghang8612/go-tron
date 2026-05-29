@@ -53,6 +53,36 @@ func returnEncodeBuf(bp *[]byte) {
 	encodeBufPool.Put(bp)
 }
 
+// branchPool reuses BranchData values during a fold descent. applyOnHash's
+// `var child BranchData; &child` was the single largest allocation source on
+// Nile sync (~246 GB / 300s, ~24% of all heap allocation): taking the address
+// of a stack-local BranchData forces escape to the heap, and the fold makes
+// one such call per hash-child descent on every block. The pool turns those
+// per-descent allocations into a small reusable set.
+//
+// Safety: borrowed pointers are always local to one applyOnHash /
+// insertIntoEmpty / applyOnLeaf call frame. linkChild consumes the data
+// (PutBranch copies the value, DelBranch only uses the prefix) and never
+// retains the pointer past return. Recursive descent borrows separate objects
+// per level. sync.Pool is goroutine-safe; the fold itself is single-threaded
+// per commit.
+var branchPool = sync.Pool{
+	New: func() any { return new(BranchData) },
+}
+
+func borrowBranch() *BranchData {
+	b := branchPool.Get().(*BranchData)
+	*b = BranchData{}
+	return b
+}
+
+func returnBranch(b *BranchData) {
+	if b == nil {
+		return
+	}
+	branchPool.Put(b)
+}
+
 // childKind distinguishes the two child types stored in a BranchData node.
 const (
 	kindHash = uint8(0) // 32-byte intermediate hash
@@ -192,8 +222,19 @@ func (b BranchData) Equal(other BranchData) bool {
 // a keyLen that exceeds the remaining input.
 func DecodeBranchData(data []byte) (BranchData, error) {
 	var b BranchData
+	if err := DecodeBranchDataInto(data, &b); err != nil {
+		return BranchData{}, err
+	}
+	return b, nil
+}
+
+// DecodeBranchDataInto is DecodeBranchData written directly into *dst (zeroed
+// first). Used by GetBranchInto on the bulk-sync hot path to avoid the
+// return-by-value copy of the ~1.5 KB BranchData struct.
+func DecodeBranchDataInto(data []byte, dst *BranchData) error {
+	*dst = BranchData{}
 	if len(data) < 2 {
-		return b, errors.New("commitment_tree: input too short for childMask")
+		return errors.New("commitment_tree: input too short for childMask")
 	}
 	mask := uint16(data[0])<<8 | uint16(data[1])
 	rest := data[2:]
@@ -204,7 +245,7 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 		}
 		// Read kind byte.
 		if len(rest) < 1 {
-			return b, errors.New("commitment_tree: truncated at kind byte")
+			return errors.New("commitment_tree: truncated at kind byte")
 		}
 		kind := rest[0]
 		rest = rest[1:]
@@ -212,32 +253,32 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 		switch kind {
 		case kindHash:
 			if len(rest) < common.HashLength {
-				return b, errors.New("commitment_tree: truncated at hash child")
+				return errors.New("commitment_tree: truncated at hash child")
 			}
 			var h common.Hash
 			copy(h[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
-			b.children[i] = branchChild{present: true, kind: kindHash, hashVal: h}
+			dst.children[i] = branchChild{present: true, kind: kindHash, hashVal: h}
 
 		case kindLeaf:
 			// Decode keyLen via Uvarint; bound by remaining slice length.
 			keyLen, n := binary.Uvarint(rest)
 			if n <= 0 {
-				return b, errors.New("commitment_tree: invalid uvarint for keyLen")
+				return errors.New("commitment_tree: invalid uvarint for keyLen")
 			}
 			rest = rest[n:]
 			if keyLen > uint64(len(rest)) {
-				return b, errors.New("commitment_tree: keyLen exceeds remaining input")
+				return errors.New("commitment_tree: keyLen exceeds remaining input")
 			}
 			key := append([]byte(nil), rest[:keyLen]...)
 			rest = rest[keyLen:]
 			if len(rest) < common.HashLength {
-				return b, errors.New("commitment_tree: truncated at leaf valHash")
+				return errors.New("commitment_tree: truncated at leaf valHash")
 			}
 			var vh common.Hash
 			copy(vh[:], rest[:common.HashLength])
 			rest = rest[common.HashLength:]
-			b.children[i] = branchChild{
+			dst.children[i] = branchChild{
 				present:     true,
 				kind:        kindLeaf,
 				leafKey:     key,
@@ -245,14 +286,14 @@ func DecodeBranchData(data []byte) (BranchData, error) {
 			}
 
 		default:
-			return b, errors.New("commitment_tree: unknown child kind byte")
+			return errors.New("commitment_tree: unknown child kind byte")
 		}
 	}
 
 	if len(rest) != 0 {
-		return b, errors.New("commitment_tree: trailing bytes after decode")
+		return errors.New("commitment_tree: trailing bytes after decode")
 	}
-	return b, nil
+	return nil
 }
 
 // ----------------------------------------------------------------------------
@@ -346,6 +387,10 @@ func (b *BranchData) nodeHash() common.Hash {
 // trie prefix (nibble path from root, one byte per nibble, value 0..15).
 type branchStore interface {
 	GetBranch(prefix []byte) (BranchData, bool, error)
+	// GetBranchInto reads a branch into *dst (zeroed first). The hot fold path
+	// uses this with a pool-borrowed *BranchData so the ~1.5 KB struct stays
+	// out of the heap.
+	GetBranchInto(prefix []byte, dst *BranchData) (bool, error)
 	PutBranch(prefix []byte, b BranchData) error
 	DelBranch(prefix []byte) error
 }
@@ -547,12 +592,15 @@ func (t *commitmentTrie) insertIntoEmpty(branch *BranchData, nb uint8, childPref
 		branch.SetLeafChild(nb, puts[0].key, puts[0].valHash)
 		return nil
 	default:
-		// Build a fresh child subtree rooted at childPrefix.
-		child, err := t.apply(childPrefix, childDepth, nil, puts)
+		// Build a fresh child subtree rooted at childPrefix, borrowing the
+		// branch from the pool so the descent doesn't escape to the heap.
+		child := borrowBranch()
+		defer returnBranch(child)
+		updated, err := t.apply(childPrefix, childDepth, child, puts)
 		if err != nil {
 			return err
 		}
-		return t.linkChild(branch, nb, childPrefix, child)
+		return t.linkChild(branch, nb, childPrefix, updated)
 	}
 }
 
@@ -594,28 +642,38 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 			all = append(all, o)
 		}
 		sortOps(all)
-		child, err := t.apply(childPrefix, childDepth, nil, all)
+		child := borrowBranch()
+		defer returnBranch(child)
+		updated, err := t.apply(childPrefix, childDepth, child, all)
 		if err != nil {
 			return err
 		}
-		return t.linkChild(branch, nb, childPrefix, child)
+		return t.linkChild(branch, nb, childPrefix, updated)
 	}
 }
 
 // applyOnHash resolves group against an existing hash child (a child subtree) at
-// nb.
+// nb. The child branch is borrowed from branchPool so the per-descent ~1.5 KB
+// BranchData allocation (formerly the #1 alloc source at ~24% of fold heap
+// pressure) becomes pool reuse. linkChild consumes the data and never retains
+// the pointer past return, so the deferred release is unconditional.
 func (t *commitmentTrie) applyOnHash(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, group []op) error {
-	child, ok, err := t.store.GetBranch(childPrefix)
+	child := borrowBranch()
+	defer returnBranch(child)
+	ok, err := t.store.GetBranchInto(childPrefix, child)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return fmt.Errorf("commitment_tree: missing hash child at prefix %x", childPrefix)
 	}
-	updated, err := t.apply(childPrefix, childDepth, &child, group)
+	updated, err := t.apply(childPrefix, childDepth, child, group)
 	if err != nil {
 		return err
 	}
+	// updated is either child (mutated) or nil (subtree collapsed). linkChild
+	// handles both. defer returnBranch(child) above releases child after
+	// linkChild returns regardless of which case fired.
 	return t.linkChild(branch, nb, childPrefix, updated)
 }
 

@@ -19,6 +19,16 @@ func newMapBranchStore() *mapBranchStore {
 	return &mapBranchStore{m: make(map[string]BranchData)}
 }
 
+func (s *mapBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
+	b, ok, err := s.GetBranch(prefix)
+	if err != nil || !ok {
+		*dst = BranchData{}
+		return ok, err
+	}
+	*dst = b
+	return true, nil
+}
+
 func (s *mapBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	b, ok := s.m[string(prefix)]
 	if !ok {

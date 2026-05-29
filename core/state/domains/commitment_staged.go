@@ -34,6 +34,20 @@ func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	return b, true, nil
 }
 
+// GetBranchInto is GetBranch but writes into *dst instead of returning the
+// value. The bulk-sync fold uses this with a pool-borrowed *BranchData to keep
+// the ~1.5 KB struct off the heap; see branchPool in commitment_tree.go.
+func (s *rawdbBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (bool, error) {
+	encoded, ok, err := rawdb.ReadCommitmentBranchNoCopy(s.db, prefix)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if err := DecodeBranchDataInto(encoded, dst); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *rawdbBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	// Reuse a pooled encode buffer. The KV writer (pebble batch or direct Put)
 	// copies the value into its own arena during the call, so the buffer is
