@@ -1283,7 +1283,7 @@ func TestAccountKVLatestIndexCanBeBufferedAndDiscarded(t *testing.T) {
 	buf := blockbuffer.New(sdb.db.DiskDB())
 	var blockHash tcommon.Hash
 	blockHash[0] = 0x01
-	buf.BeginBlock(blockHash)
+	buf.BeginBlock(blockHash, 1)
 	sdb.SetAccountKVIndexStore(buf)
 
 	sdb.CreateAccount(addr, corepb.AccountType_Normal)

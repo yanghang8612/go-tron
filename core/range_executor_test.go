@@ -50,7 +50,7 @@ func advanceToExecution(t *testing.T, pipeline *canonicalStagePipeline) {
 func TestCanonicalCommitStateDefersScopedLatestFlushUntilClose(t *testing.T) {
 	sdb, scope, buf, addr := testRangeState(t)
 	block := testRangeBlock(1, tcommon.Hash{})
-	buf.BeginBlock(block.Hash())
+	buf.BeginBlock(block.Hash(), block.Number())
 	pipeline := newCanonicalStagePipeline(buf, block.Number(), block.Hash())
 	advanceToExecution(t, pipeline)
 	plan := &canonicalBlockExecution{
@@ -92,7 +92,7 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 	var lastPlan *canonicalBlockExecution
 
 	for i, block := range blocks {
-		buf.BeginBlock(block.Hash())
+		buf.BeginBlock(block.Hash(), block.Number())
 		pipeline := newCanonicalStagePipeline(buf, block.Number(), block.Hash())
 		advanceToExecution(t, pipeline)
 		lastPlan = &canonicalBlockExecution{
@@ -111,17 +111,7 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 		buf.CommitBlock()
 	}
 
-	numberOf := func(h tcommon.Hash) (uint64, bool) {
-		switch h {
-		case blocks[0].Hash():
-			return 1, true
-		case blocks[1].Hash():
-			return 2, true
-		default:
-			return 0, false
-		}
-	}
-	if err := lastPlan.FlushLatestUpTo(1, numberOf); err != nil {
+	if err := lastPlan.FlushLatestUpTo(1); err != nil {
 		t.Fatalf("flush latest up to block 1: %v", err)
 	}
 	if got, ok, err := rawdb.ReadStateKVLatest(buf, addr, 0, kvdomains.SystemDynamicProperty, []byte("a")); err != nil || !ok || !bytes.Equal(got, []byte("1")) {
@@ -144,7 +134,7 @@ func TestCanonicalCommitStateFlushesLatestBeforeSolidifiedLayerDrop(t *testing.T
 func TestCanonicalRangeAbortFlushesCommittedLatestAndDropsFailedActiveLayer(t *testing.T) {
 	sdb, scope, buf, addr := testRangeState(t)
 	block1 := testRangeBlock(1, tcommon.Hash{})
-	buf.BeginBlock(block1.Hash())
+	buf.BeginBlock(block1.Hash(), block1.Number())
 	pipeline1 := newCanonicalStagePipeline(buf, block1.Number(), block1.Hash())
 	advanceToExecution(t, pipeline1)
 	plan1 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline1}
@@ -157,7 +147,7 @@ func TestCanonicalRangeAbortFlushesCommittedLatestAndDropsFailedActiveLayer(t *t
 	buf.CommitBlock()
 
 	block2 := testRangeBlock(2, block1.Hash())
-	buf.BeginBlock(block2.Hash())
+	buf.BeginBlock(block2.Hash(), block2.Number())
 	pipeline2 := newCanonicalStagePipeline(buf, block2.Number(), block2.Hash())
 	advanceToExecution(t, pipeline2)
 	plan2 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline2}
@@ -193,7 +183,7 @@ func TestCanonicalRangeAbortFlushesCommittedAccountLatestAndDropsFailedActiveLay
 	failedAddr := testInsertAddr(0xe2)
 
 	block1 := testRangeBlock(1, tcommon.Hash{})
-	buf.BeginBlock(block1.Hash())
+	buf.BeginBlock(block1.Hash(), block1.Number())
 	pipeline1 := newCanonicalStagePipeline(buf, block1.Number(), block1.Hash())
 	advanceToExecution(t, pipeline1)
 	plan1 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline1}
@@ -205,7 +195,7 @@ func TestCanonicalRangeAbortFlushesCommittedAccountLatestAndDropsFailedActiveLay
 	buf.CommitBlock()
 
 	block2 := testRangeBlock(2, block1.Hash())
-	buf.BeginBlock(block2.Hash())
+	buf.BeginBlock(block2.Hash(), block2.Number())
 	pipeline2 := newCanonicalStagePipeline(buf, block2.Number(), block2.Hash())
 	advanceToExecution(t, pipeline2)
 	plan2 := &canonicalBlockExecution{state: sdb, commit: scope, pipeline: pipeline2}

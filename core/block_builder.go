@@ -60,7 +60,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 	// BuildBlock would write to bc.db directly, then applyBlock would read those
 	// values and add again — doubling cycleReward[N][witness] and allowance.
 	buildBuf := blockbuffer.New(bc.buffer)
-	buildBuf.BeginBlock(tcommon.Hash{}) // sentinel hash; this layer is never committed
+	buildBuf.BeginBlock(tcommon.Hash{}, 0) // sentinel hash; this layer is never committed
 	statedb.SetAccountKVIndexStore(buildBuf)
 	statedb.SetAccountKVIndexReads(true)
 

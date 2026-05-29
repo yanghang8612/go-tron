@@ -42,15 +42,17 @@ var ErrNotFound = errors.New("blockbuffer: not found")
 // layer is a single applyBlock's worth of buffered mutations.
 type layer struct {
 	blockHash common.Hash
+	number    uint64
 	writes    map[string][]byte
 	deletes   map[string]struct{}
 }
 
 const maxFlushBatchValueSize = 1 << 20
 
-func newLayer(hash common.Hash) *layer {
+func newLayer(hash common.Hash, number uint64) *layer {
 	return &layer{
 		blockHash: hash,
+		number:    number,
 		writes:    make(map[string][]byte),
 		deletes:   make(map[string]struct{}),
 	}
@@ -201,16 +203,16 @@ func bufferBatchOpSize(op bufferBatchOp) int {
 // layer belongs to a block at or below cutoff. Operations for newer committed
 // layers or the active layer remain queued. Unlike Write, this is intended for
 // range-owned batches that must land writes before FlushUpTo drops old layers.
-func (b *bufferBatch) WriteUpTo(cutoff uint64, numberOf func(common.Hash) (uint64, bool)) (int, error) {
+//
+// The layer carries its block number (captured at BeginBlock), so this is a
+// single integer compare per op — the earlier numberOf callback variant cost a
+// pebble Get + key allocation per op, which dominated bulk-sync profiles.
+func (b *bufferBatch) WriteUpTo(cutoff uint64) (int, error) {
 	if b.closed {
 		return 0, errors.New("blockbuffer: batch closed")
 	}
-	if numberOf == nil {
-		return len(b.ops), errors.New("blockbuffer: nil block number resolver")
-	}
 	return b.writeFiltered(func(target *layer) bool {
-		n, ok := numberOf(target.blockHash)
-		return ok && n <= cutoff
+		return target.number <= cutoff
 	}, false)
 }
 
@@ -327,15 +329,17 @@ func (b *Buffer) layerCommittedLocked(target *layer) bool {
 	return false
 }
 
-// BeginBlock opens a fresh active layer for the given block hash.
-// Panics if a layer is already active.
-func (b *Buffer) BeginBlock(hash common.Hash) {
+// BeginBlock opens a fresh active layer for the given block hash and number.
+// The number is captured so subsequent FlushUpTo / WriteUpTo cutoffs can be
+// evaluated without a per-op block-hash → block-number lookup. Panics if a
+// layer is already active.
+func (b *Buffer) BeginBlock(hash common.Hash, number uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.active != nil {
 		panic("blockbuffer: BeginBlock called while a layer is already active")
 	}
-	b.active = newLayer(hash)
+	b.active = newLayer(hash, number)
 }
 
 // CommitBlock promotes the active layer onto the layered stack.
@@ -562,7 +566,6 @@ func (b *Buffer) Flush(w ethdb.KeyValueWriter) error {
 // prefix and are preserved by the count-based drop in step 3.
 func (b *Buffer) FlushUpTo(
 	cutoff uint64,
-	numberOf func(common.Hash) (uint64, bool),
 	w ethdb.KeyValueWriter,
 ) error {
 	b.flushMu.Lock()
@@ -578,12 +581,11 @@ func (b *Buffer) FlushUpTo(
 	}
 
 	// Step 2: lock-free disk I/O. Layers are immutable post-commit, so
-	// reading blockHash + write/delete maps without b.mu is race-free, and
-	// readers can RLock concurrently.
+	// reading blockHash + number + write/delete maps without b.mu is race-free,
+	// and readers can RLock concurrently.
 	eligible := 0
 	for _, l := range snapshot {
-		n, ok := numberOf(l.blockHash)
-		if !ok || n > cutoff {
+		if l.number > cutoff {
 			break
 		}
 		eligible++

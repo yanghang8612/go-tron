@@ -779,7 +779,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// rawdb-shaped mirror writes so that switchFork can drop orphan-branch
 	// layers via DiscardBlock. On any error path the active layer is discarded;
 	// on success it is promoted via CommitBlock.
-	bc.buffer.BeginBlock(block.Hash())
+	bc.buffer.BeginBlock(block.Hash(), block.Number())
 	if bc.cycleRewards == nil {
 		bc.cycleRewards = newEmptyCycleRewardAccumulator()
 	}
@@ -1151,7 +1151,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
 	// invariant that Manager.eraseBlock can never pop past solidified.
 	solidified := dynProps.LatestSolidifiedBlockNum()
-	if err := plan.FlushLatestUpTo(solidified, bc.blockNumberOf); err != nil {
+	if err := plan.FlushLatestUpTo(solidified); err != nil {
 		return err
 	}
 	if err := bc.postFlush(solidified); err != nil {
@@ -1247,15 +1247,7 @@ func (bc *BlockChain) flushBufferUpToSolidified(solidified int64) error {
 	if solidified <= 0 {
 		return nil
 	}
-	return bc.buffer.FlushUpTo(uint64(solidified), bc.blockNumberOf, bc.db)
-}
-
-func (bc *BlockChain) blockNumberOf(h tcommon.Hash) (uint64, bool) {
-	p := rawdb.ReadBlockNumber(bc.chaindb, h)
-	if p == nil {
-		return 0, false
-	}
-	return *p, true
+	return bc.buffer.FlushUpTo(uint64(solidified), bc.db)
 }
 
 // startFlushWorker spawns the background goroutine that drains flushQueue

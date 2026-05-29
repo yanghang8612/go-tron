@@ -283,7 +283,7 @@ func TestHistoryReorgRejectsMismatchedStageHeadBeforeSwitch(t *testing.T) {
 	if bc.CurrentBlock().Hash() != chainA[2].Hash() {
 		t.Fatalf("chain A should remain canonical before longer fork arrives")
 	}
-	bc.buffer.BeginBlock(tcommon.Hash{0xfe})
+	bc.buffer.BeginBlock(tcommon.Hash{0xfe}, 0) // sentinel; layer not committed for flush
 	if err := rawdb.WriteStageProgressWithHash(bc.buffer, rawdb.StageFinish, chainA[2].Number(), tcommon.Hash{0xee}); err != nil {
 		t.Fatalf("corrupt finish stage: %v", err)
 	}

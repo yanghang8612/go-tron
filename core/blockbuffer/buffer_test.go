@@ -117,7 +117,7 @@ func TestBuffer_ReadThroughToBase(t *testing.T) {
 func TestBuffer_WriteThenReadInActiveLayer(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	if err := b.Put([]byte("k"), []byte("v")); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestBuffer_WriteThenReadInActiveLayer(t *testing.T) {
 func TestBufferBatchWritesActiveLayer(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 
 	batch := b.NewBatch()
 	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
@@ -169,14 +169,14 @@ func TestBufferBatchWritesToCapturedLayerAfterCommit(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	batch := b.NewBatch()
 	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
 		t.Fatal(err)
 	}
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	if err := batch.Put([]byte("k2"), []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestBufferBatchRejectsWriteAfterCapturedLayerDropped(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	batch := b.NewBatch()
 	if err := batch.Put([]byte("k1"), []byte("v1")); err != nil {
 		t.Fatal(err)
@@ -215,10 +215,10 @@ func TestBufferBatchWriteUpToAppliesOnlyEligibleCommittedLayers(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	batch := b.NewBatch()
 	layerBatch, ok := batch.(interface {
-		WriteUpTo(uint64, func(common.Hash) (uint64, bool)) (int, error)
+		WriteUpTo(uint64) (int, error)
 	})
 	if !ok {
 		t.Fatal("buffer batch missing WriteUpTo")
@@ -228,22 +228,13 @@ func TestBufferBatchWriteUpToAppliesOnlyEligibleCommittedLayers(t *testing.T) {
 	}
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	if err := batch.Put([]byte("k2"), []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
 	b.CommitBlock()
 
-	remaining, err := layerBatch.WriteUpTo(1, func(h common.Hash) (uint64, bool) {
-		switch h {
-		case bufHash(1):
-			return 1, true
-		case bufHash(2):
-			return 2, true
-		default:
-			return 0, false
-		}
-	})
+	remaining, err := layerBatch.WriteUpTo(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +254,7 @@ func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	batch := b.NewBatch()
 	layerBatch, ok := batch.(interface {
 		WriteCommitted(bool) (int, error)
@@ -276,7 +267,7 @@ func TestBufferBatchWriteCommittedDropsStaleActiveLayerOps(t *testing.T) {
 	}
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	if err := batch.Put([]byte("discarded"), []byte("v2")); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +289,7 @@ func TestBuffer_DeleteTombstonesBaseKey(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	base.Put([]byte("k"), []byte("base-value"))
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	if err := b.Delete([]byte("k")); err != nil {
 		t.Fatal(err)
 	}
@@ -315,18 +306,18 @@ func TestBuffer_LayerStacking(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("layer1"))
 	b.CommitBlock()
 	mustGet(t, b, []byte("k"), []byte("layer1"))
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("k"), []byte("layer2"))
 	b.CommitBlock()
 	mustGet(t, b, []byte("k"), []byte("layer2"))
 
 	// Active layer overrides committed layers.
-	b.BeginBlock(bufHash(3))
+	b.BeginBlock(bufHash(3), 3)
 	b.Put([]byte("k"), []byte("active"))
 	mustGet(t, b, []byte("k"), []byte("active"))
 }
@@ -335,11 +326,11 @@ func TestBuffer_LayerStacking(t *testing.T) {
 func TestBuffer_DiscardActive(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("layer1"))
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("k"), []byte("active-but-doomed"))
 	mustGet(t, b, []byte("k"), []byte("active-but-doomed"))
 	b.DiscardActive()
@@ -351,15 +342,15 @@ func TestBuffer_DiscardActive(t *testing.T) {
 func TestBuffer_DiscardBlockRemovesOnlyTargetLayer(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("a"), []byte("1a"))
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("b"), []byte("2b"))
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(3))
+	b.BeginBlock(bufHash(3), 3)
 	b.Put([]byte("c"), []byte("3c"))
 	b.CommitBlock()
 
@@ -386,11 +377,11 @@ func TestBuffer_DiscardBlockRemovesOnlyTargetLayer(t *testing.T) {
 // DiscardBlock with a layer at the most-recent index also drops correctly.
 func TestBuffer_DiscardBlockTopLayer(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("v1"))
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("k"), []byte("v2"))
 	b.CommitBlock()
 
@@ -403,10 +394,10 @@ func TestBuffer_DiscardAll(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	base.Put([]byte("k"), []byte("base"))
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("layer1"))
 	b.CommitBlock()
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("k"), []byte("active"))
 
 	b.Discard()
@@ -437,8 +428,8 @@ func TestBuffer_DoubleBeginBlockPanics(t *testing.T) {
 		}
 	}()
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(1), 1)
+	b.BeginBlock(bufHash(2), 2)
 }
 
 // Put without an active layer panics.
@@ -469,11 +460,11 @@ func TestBuffer_FlushDrainsOldestFirst(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
 
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("oldest"))
 	b.CommitBlock()
 
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("k"), []byte("newest"))
 	b.CommitBlock()
 
@@ -499,7 +490,7 @@ func TestBuffer_FlushTombstones(t *testing.T) {
 	dst.Put([]byte("k"), []byte("present"))
 
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Delete([]byte("k"))
 	b.CommitBlock()
 
@@ -518,24 +509,15 @@ func TestBuffer_FlushUpTo_FlushesOnlyMatchingLayers(t *testing.T) {
 	// Three layers at heights 1, 2, 3.
 	hashes := []common.Hash{bufHash(1), bufHash(2), bufHash(3)}
 	for i, h := range hashes {
-		b.BeginBlock(h)
+		b.BeginBlock(h, uint64(i+1))
 		if err := b.Put([]byte{byte('a' + i)}, []byte{byte('A' + i)}); err != nil {
 			t.Fatal(err)
 		}
 		b.CommitBlock()
 	}
 
-	numberOf := func(h common.Hash) (uint64, bool) {
-		for i, x := range hashes {
-			if x == h {
-				return uint64(i + 1), true
-			}
-		}
-		return 0, false
-	}
-
 	dst := rawdb.NewMemoryDatabase()
-	if err := b.FlushUpTo(2, numberOf, dst); err != nil {
+	if err := b.FlushUpTo(2, dst); err != nil {
 		t.Fatal(err)
 	}
 
@@ -559,34 +541,29 @@ func TestBuffer_FlushUpTo_FlushesOnlyMatchingLayers(t *testing.T) {
 	mustGet(t, b, []byte("c"), []byte("C"))
 }
 
-// FlushUpTo with an unknown hash conservatively keeps the layer.
-func TestBuffer_FlushUpTo_UnknownHashKeepsLayer(t *testing.T) {
+// FlushUpTo stops at the first layer whose number exceeds the cutoff and
+// keeps later layers intact. Verifies the loop's "stop at first ineligible"
+// invariant: with cutoff=1, layer 2 must NOT be flushed even though cutoff=99
+// would have included it — the predicate must stop BEFORE evaluating layer 2.
+func TestBuffer_FlushUpTo_StopsAtFirstAboveCutoff(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("a"), []byte("A"))
 	b.CommitBlock()
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("b"), []byte("B"))
 	b.CommitBlock()
 
-	// numberOf returns (_, false) for hash2 — should stop iteration there.
-	numberOf := func(h common.Hash) (uint64, bool) {
-		if h == bufHash(1) {
-			return 1, true
-		}
-		return 0, false
-	}
-
 	dst := rawdb.NewMemoryDatabase()
-	if err := b.FlushUpTo(99, numberOf, dst); err != nil {
+	if err := b.FlushUpTo(1, dst); err != nil {
 		t.Fatal(err)
 	}
-	// Layer 1 flushed, layer 2 kept (unknown number).
+	// Layer 1 flushed (number=1 ≤ 1), layer 2 kept (number=2 > 1).
 	if got, _ := dst.Get([]byte("a")); !bytes.Equal(got, []byte("A")) {
 		t.Fatalf("layer 1 not flushed")
 	}
 	if has, _ := dst.Has([]byte("b")); has {
-		t.Fatal("layer 2 unexpectedly flushed (its number is unknown)")
+		t.Fatal("layer 2 unexpectedly flushed (its number exceeds cutoff)")
 	}
 	if pending := b.PendingBlocks(); len(pending) != 1 || pending[0] != bufHash(2) {
 		t.Fatalf("pending = %v, want [hash2]", pending)
@@ -596,23 +573,16 @@ func TestBuffer_FlushUpTo_UnknownHashKeepsLayer(t *testing.T) {
 // FlushUpTo is idempotent.
 func TestBuffer_FlushUpTo_Idempotent(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("k"), []byte("v"))
 	b.CommitBlock()
 
-	numberOf := func(h common.Hash) (uint64, bool) {
-		if h == bufHash(1) {
-			return 1, true
-		}
-		return 0, false
-	}
-
 	dst := rawdb.NewMemoryDatabase()
-	if err := b.FlushUpTo(5, numberOf, dst); err != nil {
+	if err := b.FlushUpTo(5, dst); err != nil {
 		t.Fatal(err)
 	}
 	// Second call: zero matching layers (already flushed).
-	if err := b.FlushUpTo(5, numberOf, dst); err != nil {
+	if err := b.FlushUpTo(5, dst); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.PendingBlocks()) != 0 {
@@ -624,25 +594,15 @@ func TestBuffer_FlushUpTo_Idempotent(t *testing.T) {
 // still be discarded via DiscardBlock after a partial flush.
 func TestBuffer_FlushUpTo_KeepsHigherLayersRewindable(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("a"), []byte("flushed"))
 	b.CommitBlock()
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("b"), []byte("orphan"))
 	b.CommitBlock()
 
-	numberOf := func(h common.Hash) (uint64, bool) {
-		switch h {
-		case bufHash(1):
-			return 1, true
-		case bufHash(2):
-			return 2, true
-		}
-		return 0, false
-	}
-
 	// Flush up to 1.
-	if err := b.FlushUpTo(1, numberOf, rawdb.NewMemoryDatabase()); err != nil {
+	if err := b.FlushUpTo(1, rawdb.NewMemoryDatabase()); err != nil {
 		t.Fatal(err)
 	}
 	// Discard layer 2 — orphan rewind.
@@ -657,24 +617,15 @@ func TestBuffer_FlushUpToBatchesEligibleLayers(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
 	hashes := []common.Hash{bufHash(1), bufHash(2), bufHash(3)}
 	for i, h := range hashes {
-		b.BeginBlock(h)
+		b.BeginBlock(h, uint64(i+1))
 		if err := b.Put([]byte("k"), []byte{byte('A' + i)}); err != nil {
 			t.Fatal(err)
 		}
 		b.CommitBlock()
 	}
 
-	numberOf := func(h common.Hash) (uint64, bool) {
-		for i, x := range hashes {
-			if x == h {
-				return uint64(i + 1), true
-			}
-		}
-		return 0, false
-	}
-
 	dst := &countingBatcher{KeyValueStore: rawdb.NewMemoryDatabase()}
-	if err := b.FlushUpTo(3, numberOf, dst); err != nil {
+	if err := b.FlushUpTo(3, dst); err != nil {
 		t.Fatal(err)
 	}
 	if got := dst.batches.Load(); got != 1 {
@@ -739,7 +690,7 @@ func TestBuffer_NewIterator_BaseOnly(t *testing.T) {
 // NewIterator merges overlay-only keys (no disk hit) into the result.
 func TestBuffer_NewIterator_OverlayOnly(t *testing.T) {
 	b := New(rawdb.NewMemoryDatabase())
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("dp-current_cycle_number"), []byte("42"))
 	b.CommitBlock()
 
@@ -757,10 +708,10 @@ func TestBuffer_NewIterator_LayerOverride(t *testing.T) {
 	base.Put([]byte("dp-allow_pbft"), []byte("base"))
 
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("dp-allow_pbft"), []byte("committed"))
 	b.CommitBlock()
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("dp-allow_pbft"), []byte("active"))
 
 	got := drainIterator(t, b, []byte("dp-"), nil)
@@ -779,7 +730,7 @@ func TestBuffer_NewIterator_TombstoneSuppressesBase(t *testing.T) {
 	base.Put([]byte("dp-bar"), []byte("base-bar"))
 
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Delete([]byte("dp-foo"))
 	b.CommitBlock()
 
@@ -830,7 +781,7 @@ func TestBuffer_NewIterator_StartHonoredForOverlay(t *testing.T) {
 	base.Put([]byte("dp-zen_token_id"), []byte("base-zen"))
 
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	// Overlay write at "dp-zen_token_id" — must override the base value when
 	// start=m places "dp-zen_token_id" inside the range.
 	b.Put([]byte("dp-zen_token_id"), []byte("overlay-zen"))
@@ -920,16 +871,15 @@ func TestBuffer_SatisfiesEthdbInterfaces(t *testing.T) {
 func TestBuffer_FlushUpToDoesNotBlockReaders(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("dp-k1"), []byte("v1"))
 	b.CommitBlock()
 
-	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
 	w := newBlockingWriter()
 
 	flushDone := make(chan struct{})
 	go func() {
-		_ = b.FlushUpTo(1, numberOf, w)
+		_ = b.FlushUpTo(1, w)
 		close(flushDone)
 	}()
 
@@ -961,16 +911,15 @@ func TestBuffer_FlushUpToDoesNotBlockReaders(t *testing.T) {
 func TestBuffer_FlushUpToDoesNotBlockIterator(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("dp-k1"), []byte("v1"))
 	b.CommitBlock()
 
-	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
 	w := newBlockingWriter()
 
 	flushDone := make(chan struct{})
 	go func() {
-		_ = b.FlushUpTo(1, numberOf, w)
+		_ = b.FlushUpTo(1, w)
 		close(flushDone)
 	}()
 	<-w.started
@@ -999,22 +948,21 @@ func TestBuffer_FlushUpToDoesNotBlockIterator(t *testing.T) {
 func TestBuffer_FlushUpToPreservesConcurrentCommit(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
 	b := New(base)
-	b.BeginBlock(bufHash(1))
+	b.BeginBlock(bufHash(1), 1)
 	b.Put([]byte("dp-old"), []byte("v1"))
 	b.CommitBlock()
 
-	numberOf := func(common.Hash) (uint64, bool) { return 1, true }
 	w := newBlockingWriter()
 
 	flushDone := make(chan struct{})
 	go func() {
-		_ = b.FlushUpTo(1, numberOf, w)
+		_ = b.FlushUpTo(1, w)
 		close(flushDone)
 	}()
 	<-w.started // flush is mid-I/O on layer 1, holding only flushMu
 
 	// Append a new committed layer while the flush is in flight.
-	b.BeginBlock(bufHash(2))
+	b.BeginBlock(bufHash(2), 2)
 	b.Put([]byte("dp-new"), []byte("v2"))
 	b.CommitBlock()
 

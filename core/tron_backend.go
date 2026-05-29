@@ -1725,7 +1725,7 @@ func (b *TronBackend) ValidateTransaction(tx *types.Transaction) error {
 	}
 
 	validationBuf := blockbuffer.New(b.chain.buffer)
-	validationBuf.BeginBlock(tcommon.Hash{})
+	validationBuf.BeginBlock(tcommon.Hash{}, 0) // sentinel; validation layer, never committed
 	defer validationBuf.DiscardActive()
 
 	// statedb is opened at the head root; reuse it as the system-KV reader so

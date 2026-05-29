@@ -207,11 +207,11 @@ func (scope *CommitScope) FlushLatest() error {
 	return scope.latestWriter.flush()
 }
 
-func (scope *CommitScope) FlushLatestUpTo(cutoff uint64, numberOf func(tcommon.Hash) (uint64, bool)) error {
+func (scope *CommitScope) FlushLatestUpTo(cutoff uint64) error {
 	if scope == nil || scope.latestWriter == nil {
 		return nil
 	}
-	return scope.latestWriter.flushUpTo(cutoff, numberOf)
+	return scope.latestWriter.flushUpTo(cutoff)
 }
 
 func (scope *CommitScope) Abort() error {

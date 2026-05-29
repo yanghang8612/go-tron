@@ -81,7 +81,7 @@ type accountKVIndexStore interface {
 }
 
 type accountKVLayerBatch interface {
-	WriteUpTo(cutoff uint64, numberOf func(tcommon.Hash) (uint64, bool)) (remaining int, err error)
+	WriteUpTo(cutoff uint64) (remaining int, err error)
 	WriteCommitted(dropStale bool) (remaining int, err error)
 }
 
@@ -279,7 +279,7 @@ func (w *accountKVLatestBatch) flush() error {
 	return nil
 }
 
-func (w *accountKVLatestBatch) flushUpTo(cutoff uint64, numberOf func(tcommon.Hash) (uint64, bool)) error {
+func (w *accountKVLatestBatch) flushUpTo(cutoff uint64) error {
 	if w == nil || w.batch == nil || w.ops == 0 {
 		return nil
 	}
@@ -287,7 +287,7 @@ func (w *accountKVLatestBatch) flushUpTo(cutoff uint64, numberOf func(tcommon.Ha
 	if !ok {
 		return w.flush()
 	}
-	remaining, err := layerBatch.WriteUpTo(cutoff, numberOf)
+	remaining, err := layerBatch.WriteUpTo(cutoff)
 	if err != nil {
 		return err
 	}

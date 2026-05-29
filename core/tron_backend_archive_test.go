@@ -362,7 +362,7 @@ func TestArchiveQuery_PruneFloorRejectsUnavailableHistory(t *testing.T) {
 		}
 	}
 
-	bc.buffer.BeginBlock(tcommon.Hash{0xEE})
+	bc.buffer.BeginBlock(tcommon.Hash{0xEE}, 0) // sentinel; archive test layer
 	for n := uint64(1); n <= 3; n++ {
 		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
 			t.Fatalf("DeleteStateDomainChanges(%d): %v", n, err)
@@ -432,7 +432,7 @@ func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
 	}
 	b.SetStateColdHistory(mgr)
 
-	bc.buffer.BeginBlock(tcommon.Hash{0xCF})
+	bc.buffer.BeginBlock(tcommon.Hash{0xCF}, 0) // sentinel; archive test layer
 	for n := uint64(2); n <= 3; n++ {
 		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
 			t.Fatalf("DeleteStateDomainChanges(%d): %v", n, err)

@@ -104,11 +104,11 @@ func (p *canonicalBlockExecution) CommitState(writer ethdb.KeyValueWriter, block
 	return canonicalCommitResult{Root: root, Stats: stats}, nil
 }
 
-func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64, numberOf func(tcommon.Hash) (uint64, bool)) error {
+func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 	if p == nil || p.commit == nil || cutoff <= 0 {
 		return nil
 	}
-	return p.commit.FlushLatestUpTo(uint64(cutoff), numberOf)
+	return p.commit.FlushLatestUpTo(uint64(cutoff))
 }
 
 // canonicalRangeExecutor owns the reusable state surfaces for one canonical
