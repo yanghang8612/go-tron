@@ -12,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -149,6 +150,49 @@ func TestValidateTxCommon_ExpirationAndSize(t *testing.T) {
 	if err := ValidateTxCommon(tx, 1000); !errors.Is(err, ErrTransactionTooLarge) {
 		t.Fatalf("expected oversized tx rejection, got %v", err)
 	}
+}
+
+func TestValidateTxCommon_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
+	_, owner := keyAndAddr(t)
+	_, recipient := keyAndAddr(t)
+
+	tx := buildTransferTx(t, owner, recipient, 100, 0)
+	tx.Proto().RawData.Expiration = 1001
+	padTxDataToLargestValidSize(t, tx)
+
+	withoutRet := proto.Clone(tx.Proto()).(*corepb.Transaction)
+	withoutRet.Ret = nil
+	withResultSize := int64(proto.Size(withoutRet)) + maxResultSizeInTx + maxResultSizeInTx
+	if got := int64(tx.Size()); got > transactionMaxByteSize {
+		t.Fatalf("test transaction wire size = %d, want <= %d", got, transactionMaxByteSize)
+	}
+	if withResultSize <= transactionMaxByteSize {
+		t.Fatalf("test transaction synthetic result size = %d, want > %d", withResultSize, transactionMaxByteSize)
+	}
+
+	if err := validateTxCommon(tx, 1000, false); err != nil {
+		t.Fatalf("pre-consensus in-block validation rejected tx: %v", err)
+	}
+	if err := validateTxCommon(tx, 1000, true); !errors.Is(err, ErrTransactionTooLarge) {
+		t.Fatalf("expected result-size validation to reject tx, got %v", err)
+	}
+}
+
+func padTxDataToLargestValidSize(t *testing.T, tx *types.Transaction) {
+	t.Helper()
+	low, high := 0, int(transactionMaxByteSize)
+	best := 0
+	for low <= high {
+		mid := low + (high-low)/2
+		tx.Proto().RawData.Data = make([]byte, mid)
+		if int64(tx.Size()) <= transactionMaxByteSize {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	tx.Proto().RawData.Data = make([]byte, best)
 }
 
 // TestValidateTxEnvelope_DefaultPermission_WrongKey: same shape, but signed

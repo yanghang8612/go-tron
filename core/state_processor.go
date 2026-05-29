@@ -72,7 +72,13 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		forks.PassVersionFromStore(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
 	}
-	if err := ValidateTxCommon(tx, prevBlockTime); err != nil {
+	// java-tron Manager.validateCommon applies the synthetic "clear ret +
+	// two MAX_RESULT_SIZE_IN_TX slots" size gate to pending transactions,
+	// but only applies it to in-block transactions after
+	// consensus_logic_optimization. Older mainnet blocks can otherwise fail
+	// replay even though their actual protobuf bytes are below 500 KiB.
+	validateResultSize := !trustTransactionRet || dynProps.ConsensusLogicOptimization()
+	if err := validateTxCommon(tx, prevBlockTime, validateResultSize); err != nil {
 		return nil, err
 	}
 

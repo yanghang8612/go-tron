@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/tronprotocol/go-tron/vm"
@@ -122,6 +123,35 @@ func TestApplyTransaction_ValidationFails(t *testing.T) {
 	_, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true, false)
 	if err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestApplyTransaction_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
+	run := func(consensusLogicOptimization bool) error {
+		statedb := newTestState(t)
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetConsensusLogicOptimization(consensusLogicOptimization)
+
+		statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+		statedb.AddBalance(testProcessorAddr(1), 20_000_000)
+		statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+		tx := makeTestTransferTx(1, 2, 1)
+		tx.Proto().RawData.Expiration = 1001
+		padTxDataToLargestValidSize(t, tx)
+
+		_, err := applyTransaction(
+			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, true, false, true,
+		)
+		return err
+	}
+
+	if err := run(false); err != nil {
+		t.Fatalf("pre-consensus in-block transaction rejected: %v", err)
+	}
+	if err := run(true); !errors.Is(err, ErrTransactionTooLarge) {
+		t.Fatalf("expected post-consensus result-size rejection, got %v", err)
 	}
 }
 

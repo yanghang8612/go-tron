@@ -232,15 +232,21 @@ func ValidateContractCount(tx *types.Transaction) error {
 }
 
 func ValidateTxCommon(tx *types.Transaction, headBlockTime int64) error {
+	return validateTxCommon(tx, headBlockTime, true)
+}
+
+func validateTxCommon(tx *types.Transaction, headBlockTime int64, validateResultSize bool) error {
 	if err := ValidateContractCount(tx); err != nil {
 		return err
 	}
 	pb := tx.Proto()
-	withoutRet := proto.Clone(pb).(*corepb.Transaction)
-	withoutRet.Ret = nil
-	generalBytesSize := int64(proto.Size(withoutRet)) + maxResultSizeInTx + maxResultSizeInTx
-	if generalBytesSize > transactionMaxByteSize {
-		return ErrTransactionTooLarge
+	if validateResultSize {
+		withoutRet := proto.Clone(pb).(*corepb.Transaction)
+		withoutRet.Ret = nil
+		generalBytesSize := int64(proto.Size(withoutRet)) + maxResultSizeInTx + maxResultSizeInTx
+		if generalBytesSize > transactionMaxByteSize {
+			return ErrTransactionTooLarge
+		}
 	}
 	if int64(tx.Size()) > transactionMaxByteSize {
 		return ErrTransactionTooLarge
