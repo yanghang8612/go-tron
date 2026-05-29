@@ -68,7 +68,7 @@ rm -rf "$deploy_build_dir"
 mkdir -p "$deploy_build_dir" "$REPO_DIR/build/bin"
 
 log "building sapling-enabled gtron"
-make GOBIN="$deploy_build_dir" gtron-sapling
+make GOBIN="$deploy_build_dir" gtron
 
 log "installing binary"
 install -m 0755 "$deploy_build_dir/gtron" "$REPO_DIR/build/bin/gtron.new"
