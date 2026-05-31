@@ -422,9 +422,8 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
 	}
-	switch len(input) {
-	case 2080, 2368, 2464, 2752:
-	default:
+	frontierOffset, leafCountOffset, hasValueBalance, validLen := shieldedTransferLayout(len(input))
+	if !validLen {
 		return shieldedFailurePayload(), cost, nil
 	}
 
@@ -442,12 +441,15 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	}
 	bindingSig := input[96:160]
 	signHash := input[160:192]
-	value := parseInt64FromWord(input, 192)
-	frontier, ok := shieldedParseFrontier(input, 224)
+	value := int64(0)
+	if hasValueBalance {
+		value = parseInt64FromWord(input, 192)
+	}
+	frontier, ok := shieldedParseFrontier(input, frontierOffset)
 	if !ok {
 		return shieldedFailurePayload(), cost, nil
 	}
-	leafCount := parseUint64FromWord(input, 1280)
+	leafCount := parseUint64FromWord(input, leafCountOffset)
 	if leafCount >= shieldedTreeWidth-1 {
 		return shieldedFailurePayload(), cost, nil
 	}
@@ -597,6 +599,25 @@ func shieldedSuccessPayload() []byte {
 	out := make([]byte, 32)
 	out[31] = 1
 	return out
+}
+
+// shieldedTransferLayout maps a verifyTransferProof input length to its field
+// offsets. java-tron commit d2ab1c7304 (2020-06-16) inserted a 32-byte
+// valueBalance word: shielded TRC20 contracts compiled before it emit the
+// original layout (no valueBalance; frontier at 192, leafCount at 1248) and
+// ones compiled after emit the current layout (valueBalance at 192, frontier at
+// 224, leafCount at 1280). The two size sets are disjoint, so the length
+// selects the layout — replaying Nile/mainnet history requires accepting both
+// (e.g. Nile block 6,498,505 predates the change and emits the legacy layout).
+func shieldedTransferLayout(inputLen int) (frontierOffset, leafCountOffset int, hasValueBalance, ok bool) {
+	switch inputLen {
+	case 2080, 2368, 2464, 2752:
+		return 224, 1280, true, true
+	case 2048, 2336, 2432, 2720:
+		return 192, 1248, false, true
+	default:
+		return 0, 0, false, false
+	}
 }
 
 func trustedShieldedTRC20Replay(tvm *TVM) bool {
