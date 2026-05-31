@@ -2,13 +2,11 @@ package vm
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"math"
 	"math/big"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
-	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -384,9 +382,6 @@ const (
 	shieldedTRC20NileActivationBlock = 6_360_101
 )
 
-// TEMP DEBUG (Nile 6,498,505 stall): remove with the transfer trace below.
-var shieldDbgLog = gtronlog.NewModule("vm/shielded")
-
 type verifyMintProof struct{}
 
 func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
@@ -422,41 +417,14 @@ func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy 
 
 type verifyTransferProof struct{}
 
-func (c *verifyTransferProof) Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 200000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
 	}
-	// TEMP DEBUG (Nile 6,498,505 stall): trace the shielded transfer replay
-	// branch; remove together with shieldDbgLog.
-	var dbgGenesis tcommon.Hash
-	var dbgBlock uint64
-	var dbgTrustRet bool
-	var dbgExpRet corepb.Transaction_ResultContractResult
-	if tvm != nil {
-		dbgGenesis, dbgBlock, dbgTrustRet, dbgExpRet = tvm.GenesisHash, tvm.BlockNumber, tvm.TrustTransactionRet, tvm.ExpectedContractRet
-	}
-	shieldDbgLog.Error("[SHIELD-DBG] transfer ENTER", "blk", dbgBlock, "inLen", len(input),
-		"avail", zksnark.Available(), "trustRet", dbgTrustRet, "expRet", dbgExpRet,
-		"genMatch", dbgGenesis == params.NileGenesisHash)
-	if tvm != nil && tvm.StateDB != nil {
-		cc := tvm.StateDB.GetCode(caller)
-		ccSum := sha256.Sum256(cc)
-		shieldDbgLog.Error("[SHIELD-DBG] transfer CALLER-CODE", "caller", hex.EncodeToString(caller[:]),
-			"codeLen", len(cc), "sha256", hex.EncodeToString(ccSum[:]), "codeHash", tvm.StateDB.GetCodeHash(caller))
-	}
 	switch len(input) {
 	case 2080, 2368, 2464, 2752:
 	default:
-		// TEMP DEBUG (Nile 6,498,505): unexpected length — dump the layout the
-		// contract built so we can locate the missing 32 bytes vs java's 2080.
-		if len(input) >= 1312 {
-			shieldDbgLog.Error("[SHIELD-DBG] transfer BADLEN", "inLen", len(input),
-				"spendOff", parseUint64FromWord(input, 0), "sigOff", parseUint64FromWord(input, 32),
-				"recvOff", parseUint64FromWord(input, 64), "value", parseInt64FromWord(input, 192),
-				"leafCount@1248", parseUint64FromWord(input, 1248), "leafCount@1280", parseUint64FromWord(input, 1280))
-		}
-		shieldDbgLog.Error("[SHIELD-DBG] transfer BADLEN-HEX", "hex", hex.EncodeToString(input))
 		return shieldedFailurePayload(), cost, nil
 	}
 
@@ -557,21 +525,10 @@ func (c *verifyTransferProof) Run(tvm *TVM, caller tcommon.Address, input []byte
 		copy(leaves[i][:], cm)
 	}
 
-	verr := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value)
-	trusted := trustedShieldedTRC20Replay(tvm)
-	if verr != nil && !trusted {
-		shieldDbgLog.Error("[SHIELD-DBG] transfer FAILURE (verify failed, not trusted)",
-			"blk", dbgBlock, "verr", verr, "spends", spendCount, "recv", receiveCount, "leaf", leafCount)
+	if err := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value); err != nil && !trustedShieldedTRC20Replay(tvm) {
 		return shieldedFailurePayload(), cost, nil
 	}
-	out := shieldedInsertLeaves(frontier, leafCount, leaves)
-	fw := byte(255)
-	if len(out) > 31 {
-		fw = out[31]
-	}
-	shieldDbgLog.Error("[SHIELD-DBG] transfer OK", "blk", dbgBlock, "verr", verr, "trusted", trusted,
-		"firstWord", fw, "outLen", len(out), "spends", spendCount, "recv", receiveCount, "leaf", leafCount)
-	return out, cost, nil
+	return shieldedInsertLeaves(frontier, leafCount, leaves), cost, nil
 }
 
 type verifyBurnProof struct{}
