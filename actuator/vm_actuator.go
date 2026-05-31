@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -12,6 +13,8 @@ import (
 	"github.com/tronprotocol/go-tron/vm"
 	"google.golang.org/protobuf/proto"
 )
+
+var elDbgLog = gtronlog.NewModule("actuator/eldbg") // TEMP (Nile 8,825,873 energy-limit divergence)
 
 // multiSigCheckV2Pass evaluates VERSION_4_7_1 against the per-tx context.
 // Returns false when DB or DynProps is missing (defensive — unit tests that
@@ -473,6 +476,10 @@ func triggerEnergyLimit(ctx *Context, caller, contractAddr common.Address, feeLi
 	if !ctx.State.AccountExists(origin) && ctx.DynProps.AllowTvmConstantinople() {
 		return accountEnergyLimit(ctx, caller, feeLimit, callValue, result)
 	}
+	if ctx.BlockNumber == 8825873 {
+		elDbgLog.Error("[EL-DBG] triggerEnergyLimit", "blk", ctx.BlockNumber, "fixRatio", energyLimitHardForkActive(ctx),
+			"feeLimit", feeLimit, "sunPerEnergy", vmEnergyFee(ctx), "userPct", clampPercent(contract.ConsumeUserResourcePercent))
+	}
 	if energyLimitHardForkActive(ctx) {
 		return totalEnergyLimitWithFixRatio(ctx, origin, caller, contractAddr, feeLimit, callValue, result)
 	}
@@ -510,6 +517,10 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 			bigMulDivInt64(callerEnergyLimit, originPercent, userPercent),
 			minInt64(originEnergyLeft, originLimit),
 		)
+	}
+	if ctx.BlockNumber == 8825873 {
+		elDbgLog.Error("[EL-DBG] FixRatio", "callerLimit", callerEnergyLimit, "userPct", userPercent, "originPct", originPercent,
+			"originLeft", originEnergyLeft, "originLimit", originLimit, "originContrib", originEnergyLimit, "total", callerEnergyLimit+originEnergyLimit)
 	}
 	return callerEnergyLimit + originEnergyLimit
 }
