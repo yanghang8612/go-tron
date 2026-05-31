@@ -36,7 +36,16 @@ type KVHotspotTracker struct {
 
 const (
 	hotspotShardCount      = 16
-	hotspotMaxKeysPerShard = 4096
+	hotspotMaxKeysPerShard = 65536
+	// hotspotEvictSampleSize is the number of random map entries inspected on
+	// each eviction. Sampled-LRU (Redis-style) picks the lowest-activity entry
+	// among the sample and deletes it: O(sampleSize) per evict instead of
+	// O(len(shard)). Sample size 5 closely approximates true LRU eviction
+	// quality while keeping the path cheap. The first iteration of the tracker
+	// used a full linear scan over the shard map, which on a node tracking
+	// many short-lived unique keys (e.g. ContractStorage during real sync)
+	// became a 2%+ CPU drain — sampling eliminates that.
+	hotspotEvictSampleSize = 5
 )
 
 type hotspotShard struct {
@@ -208,14 +217,25 @@ func makeMapKey(domain kvdomains.KVDomain, key []byte) string {
 	return string(hdr[:]) + string(key)
 }
 
+// evictLowestActivity removes one entry from m using Redis-style sampled-LRU:
+// inspect hotspotEvictSampleSize random entries (Go map iteration order is
+// randomized per range), evict the lowest-activity one. O(sampleSize) per
+// call, independent of map size. The prior O(len(m)) full-scan implementation
+// showed up at ~2.2% CPU on a heavily-loaded sync because the shard was
+// constantly at capacity and every new unique key triggered a full scan.
 func evictLowestActivity(m map[string]*KVHotspotEntry) {
 	var lowestKey string
 	var lowestActivity uint64 = ^uint64(0)
+	i := 0
 	for k, e := range m {
 		act := e.Activity()
 		if act < lowestActivity {
 			lowestActivity = act
 			lowestKey = k
+		}
+		i++
+		if i >= hotspotEvictSampleSize {
+			break
 		}
 	}
 	if lowestKey != "" {
