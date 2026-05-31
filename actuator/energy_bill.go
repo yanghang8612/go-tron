@@ -2,7 +2,6 @@ package actuator
 
 import (
 	"fmt"
-	"math"
 	"math/big"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -177,10 +176,17 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 	oldTime := ctx.State.GetLatestConsumeTimeForEnergy(addr)
 
 	if dp == nil || !dp.SupportUnfreezeDelay() {
-		// Pre-Stake-2.0: global-window recovery, no per-account window. Mirrors
-		// java EnergyProcessor.useEnergy's static-increase branch.
-		recovered := recoverEnergyUsageForDP(oldUsage, oldTime, now, dp)
-		ctx.State.SetEnergyUsage(addr, recovered+usage)
+		// Pre-Stake-2.0: global-window recovery + add, no per-account window.
+		// Mirrors java EnergyProcessor.useEnergy's two increase() calls — recover
+		// usage to `now`, then add `usage` at lastTime==now — both over the global
+		// 28800-slot window (precision-averaging, NOT truncate). The success/
+		// failure settle shapes collapse here: every increase() already
+		// recovers-then-adds, so a committed pre-charge and a discarded one yield
+		// the same result.
+		harden := dp != nil && dp.AllowHardenResourceCalculation()
+		recovered := computeEnergyIncreaseGlobal(oldUsage, 0, oldTime, now, harden)
+		final := computeEnergyIncreaseGlobal(recovered, usage, now, now, harden)
+		ctx.State.SetEnergyUsage(addr, final)
 		ctx.State.SetLatestConsumeTimeForEnergy(addr, now)
 		ctx.State.SetLatestOperationTime(addr, ctx.PrevBlockTime)
 		return
@@ -350,7 +356,11 @@ func recoveredEnergyUsage(s *state.StateDB, dp *state.DynamicProperties, acct *t
 	oldUsage := s.GetEnergyUsage(addr)
 	oldTime := s.GetLatestConsumeTimeForEnergy(addr)
 	if dp == nil || !dp.SupportUnfreezeDelay() {
-		return recoverEnergyUsageForDP(oldUsage, oldTime, now, dp)
+		// Pre-Stake-2.0: java getAccountLeftEnergyFromFreeze -> recovery() ->
+		// increase(usage,0,…) over the global 28800-slot window. Must match the
+		// settle's recovery exactly, or limit-time available energy diverges.
+		harden := dp != nil && dp.AllowHardenResourceCalculation()
+		return computeEnergyIncreaseGlobal(oldUsage, 0, oldTime, now, harden)
 	}
 	recovered, _, _ := computeEnergyIncrease(
 		acct.RawEnergyWindowSize(), acct.EnergyWindowOptimized(),
@@ -384,42 +394,6 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 		return 0
 	}
 	return calculateEnergyLimitV1(frozen, totalLimit, totalWeight, harden)
-}
-
-// recoverEnergyUsage applies the sliding-window recovery to a stored
-// energy_usage value. Identical math to core.recoverUsage (window =
-// 86_400_000ms = 1 day). Inlined to keep actuator -> core import-free.
-func recoverEnergyUsage(oldUsage, lastTime, now int64) int64 {
-	return recoverEnergyUsageWithHarden(oldUsage, lastTime, now, false)
-}
-
-func recoverEnergyUsageForDP(oldUsage, lastTime, now int64, dp *state.DynamicProperties) int64 {
-	return recoverEnergyUsageWithHarden(oldUsage, lastTime, now, dp != nil && dp.AllowHardenResourceCalculation())
-}
-
-func recoverEnergyUsageWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
-	if oldUsage <= 0 {
-		return 0
-	}
-	windowSize := int64(params.WindowSizeSlots)
-	elapsed := now - lastTime
-	if elapsed >= windowSize {
-		return 0
-	}
-	if elapsed <= 0 {
-		return oldUsage
-	}
-	remaining := windowSize - elapsed
-	if harden {
-		averageLastUsage := divideCeilBigInt(
-			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecisionForEnergy)),
-			big.NewInt(windowSize),
-		)
-		decay := float64(remaining) / float64(windowSize)
-		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
-		return bigMulDivInt64(averageLastUsage, windowSize, resourcePrecisionForEnergy)
-	}
-	return oldUsage * remaining / windowSize
 }
 
 const resourcePrecisionForEnergy = int64(1_000_000)
