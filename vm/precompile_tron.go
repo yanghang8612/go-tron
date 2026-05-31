@@ -422,7 +422,7 @@ func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy 
 
 type verifyTransferProof struct{}
 
-func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
+func (c *verifyTransferProof) Run(tvm *TVM, caller tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
 	const cost = 200000
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
@@ -439,6 +439,12 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	shieldDbgLog.Error("[SHIELD-DBG] transfer ENTER", "blk", dbgBlock, "inLen", len(input),
 		"avail", zksnark.Available(), "trustRet", dbgTrustRet, "expRet", dbgExpRet,
 		"genMatch", dbgGenesis == params.NileGenesisHash)
+	if tvm != nil && tvm.StateDB != nil {
+		cc := tvm.StateDB.GetCode(caller)
+		ccSum := sha256.Sum256(cc)
+		shieldDbgLog.Error("[SHIELD-DBG] transfer CALLER-CODE", "caller", hex.EncodeToString(caller[:]),
+			"codeLen", len(cc), "sha256", hex.EncodeToString(ccSum[:]), "codeHash", tvm.StateDB.GetCodeHash(caller))
+	}
 	switch len(input) {
 	case 2080, 2368, 2464, 2752:
 	default:
