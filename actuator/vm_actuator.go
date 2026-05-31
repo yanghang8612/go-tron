@@ -519,8 +519,14 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 		)
 	}
 	if ctx.BlockNumber == 8825873 {
-		elDbgLog.Error("[EL-DBG] FixRatio", "callerLimit", callerEnergyLimit, "userPct", userPercent, "originPct", originPercent,
-			"originLeft", originEnergyLeft, "originLimit", originLimit, "originContrib", originEnergyLimit, "total", callerEnergyLimit+originEnergyLimit)
+		oa := ctx.State.GetAccount(origin)
+		sl := calcAccountEnergyLimit(oa, ctx.DynProps)
+		elDbgLog.Error("[EL-DBG] FixRatio", "callerLimit", callerEnergyLimit, "userPct", userPercent,
+			"originLeft", originEnergyLeft, "originContrib", originEnergyLimit, "total", callerEnergyLimit+originEnergyLimit,
+			"stakeLimit", sl, "recovered", sl-originEnergyLeft, "usage", ctx.State.GetEnergyUsage(origin),
+			"lastTime", ctx.State.GetLatestConsumeTimeForEnergy(origin), "now", ctx.ResourceTime(),
+			"frozen", allFrozenBalanceForEnergy(oa), "totalWeight", ctx.DynProps.TotalEnergyWeight(),
+			"totalLimit", ctx.DynProps.TotalEnergyCurrentLimit(), "harden", ctx.DynProps.AllowHardenResourceCalculation())
 	}
 	return callerEnergyLimit + originEnergyLimit
 }
