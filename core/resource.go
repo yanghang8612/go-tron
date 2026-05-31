@@ -1,7 +1,6 @@
 package core
 
 import (
-	"math"
 	"math/big"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -101,17 +100,14 @@ func recoverUsageWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
 	if elapsed <= 0 {
 		return oldUsage
 	}
-	remaining := windowSize - elapsed
+	// java ResourceProcessor.increase(oldUsage, 0, lastTime, now, windowSize):
+	// precision-averaging recovery over the global 28800-slot window, NOT a
+	// plain truncate. The truncate drifted ~1 unit per recovered block,
+	// compounding to a free-vs-burn bandwidth fork (NET twin of energy 6cfc163).
 	if harden {
-		averageLastUsage := divideCeilBig(
-			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourcePrecision)),
-			big.NewInt(windowSize),
-		)
-		decay := float64(remaining) / float64(windowSize)
-		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
-		return bigMulDivInt64(averageLastUsage, windowSize, resourcePrecision)
+		return increaseHardened(oldUsage, 0, lastTime, now, windowSize)
 	}
-	return oldUsage * remaining / windowSize
+	return increase(oldUsage, 0, lastTime, now, windowSize)
 }
 
 func calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight int64, harden bool) int64 {
