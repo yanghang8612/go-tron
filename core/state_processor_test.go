@@ -142,7 +142,7 @@ func TestApplyTransaction_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
 
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, true, false, true,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
 		)
 		return err
 	}

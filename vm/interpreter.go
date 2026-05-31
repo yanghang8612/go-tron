@@ -1,16 +1,12 @@
 package vm
 
 import (
-	"encoding/hex"
 	"errors"
 
 	"github.com/holiman/uint256"
 
-	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/types"
 )
-
-var cfDbgLog = gtronlog.NewModule("vm/cfdbg") // TEMP (Nile 7,799,482 divergence)
 
 // Interpreter executes TVM bytecode.
 type Interpreter struct {
@@ -127,31 +123,12 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 			return nil, err
 		}
 
-		// TEMP CF-DBG: trace failed sub-calls at the divergent Nile block.
-		if in.tvm != nil && in.tvm.BlockNumber == 7799482 {
-			switch op {
-			case CALL, STATICCALL, CALLCODE, DELEGATECALL, CALLTOKEN:
-				if stack.len() > 0 && stack.back(0).IsZero() {
-					cfDbgLog.Error("[CF-DBG] sub-call FAILED", "op", op.String(), "in", hex.EncodeToString(contract.Address[:]), "depth", in.tvm.Depth)
-				}
-			}
-		}
-
 		// Terminal opcodes
 		if op == STOP || op == RETURN || op == REVERT || op == SELFDESTRUCT {
 			if in.tvmConfig.DynamicEnergy {
 				recordContractEnergyUsage(in.tvm, contract.Address, int64(in.rawEnergyUsed))
 			}
 			if op == REVERT {
-				if in.tvm != nil && in.tvm.BlockNumber == 7799482 {
-					reason := ""
-					if len(ret) >= 68 && ret[0] == 0x08 && ret[1] == 0xc3 && ret[2] == 0x79 && ret[3] == 0xa0 {
-						if n := int(ret[67]); 68+n <= len(ret) {
-							reason = string(ret[68 : 68+n])
-						}
-					}
-					cfDbgLog.Error("[CF-DBG] REVERT", "in", hex.EncodeToString(contract.Address[:]), "depth", in.tvm.Depth, "reason", reason, "rawLen", len(ret))
-				}
 				return ret, ErrExecutionReverted
 			}
 			return ret, nil

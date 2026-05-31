@@ -52,6 +52,10 @@ type Context struct {
 	HeadSlot    int64
 	HasHeadSlot bool
 	BlockNumber uint64
+	// Coinbase is the block producer's witness address, surfaced to the VM's
+	// COINBASE opcode. java-tron derives it from the block header's
+	// witnessAddress (ProgramInvokeFactory). Zero outside block processing.
+	Coinbase common.Address
 	// GenesisHash identifies the chain for narrow historical exceptions.
 	// Production block processing can derive it from DB when this is zero;
 	// tests may set it explicitly when they do not materialize genesis.
