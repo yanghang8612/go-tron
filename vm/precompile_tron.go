@@ -2,6 +2,7 @@ package vm
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"math/big"
 
@@ -441,6 +442,15 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	switch len(input) {
 	case 2080, 2368, 2464, 2752:
 	default:
+		// TEMP DEBUG (Nile 6,498,505): unexpected length — dump the layout the
+		// contract built so we can locate the missing 32 bytes vs java's 2080.
+		if len(input) >= 1312 {
+			shieldDbgLog.Error("[SHIELD-DBG] transfer BADLEN", "inLen", len(input),
+				"spendOff", parseUint64FromWord(input, 0), "sigOff", parseUint64FromWord(input, 32),
+				"recvOff", parseUint64FromWord(input, 64), "value", parseInt64FromWord(input, 192),
+				"leafCount@1248", parseUint64FromWord(input, 1248), "leafCount@1280", parseUint64FromWord(input, 1280))
+		}
+		shieldDbgLog.Error("[SHIELD-DBG] transfer BADLEN-HEX", "hex", hex.EncodeToString(input))
 		return shieldedFailurePayload(), cost, nil
 	}
 
