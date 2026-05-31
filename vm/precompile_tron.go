@@ -2,13 +2,12 @@ package vm
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"math"
 	"math/big"
-	"os"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/core/zksnark"
@@ -384,6 +383,9 @@ const (
 	shieldedTRC20NileActivationBlock = 6_360_101
 )
 
+// TEMP DEBUG (Nile 6,498,505 stall): remove with the transfer trace below.
+var shieldDbgLog = gtronlog.NewModule("vm/shielded")
+
 type verifyMintProof struct{}
 
 func (c *verifyMintProof) Run(tvm *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
@@ -424,6 +426,18 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	if energy < cost {
 		return nil, energy, ErrOutOfEnergy
 	}
+	// TEMP DEBUG (Nile 6,498,505 stall): trace the shielded transfer replay
+	// branch; remove together with shieldDbgLog.
+	var dbgGenesis tcommon.Hash
+	var dbgBlock uint64
+	var dbgTrustRet bool
+	var dbgExpRet corepb.Transaction_ResultContractResult
+	if tvm != nil {
+		dbgGenesis, dbgBlock, dbgTrustRet, dbgExpRet = tvm.GenesisHash, tvm.BlockNumber, tvm.TrustTransactionRet, tvm.ExpectedContractRet
+	}
+	shieldDbgLog.Error("[SHIELD-DBG] transfer ENTER", "blk", dbgBlock, "inLen", len(input),
+		"avail", zksnark.Available(), "trustRet", dbgTrustRet, "expRet", dbgExpRet,
+		"genMatch", dbgGenesis == params.NileGenesisHash)
 	switch len(input) {
 	case 2080, 2368, 2464, 2752:
 	default:
@@ -527,21 +541,11 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 		copy(leaves[i][:], cm)
 	}
 
-	// TEMP DEBUG (Nile 6,498,505 stall): trace which branch of the shielded
-	// transfer precompile is taken during replay. Revert once captured.
 	verr := zksnark.VerifyShieldedTRC20Transfer(spends, receives, bindingSig, signHash, value)
 	trusted := trustedShieldedTRC20Replay(tvm)
-	var gh tcommon.Hash
-	var bn uint64
-	var trustRet bool
-	var expRet corepb.Transaction_ResultContractResult
-	if tvm != nil {
-		gh, bn, trustRet, expRet = tvm.GenesisHash, tvm.BlockNumber, tvm.TrustTransactionRet, tvm.ExpectedContractRet
-	}
-	fmt.Fprintf(os.Stderr, "[SHIELD-DBG] transfer blk=%d avail=%v verr=%v trusted=%v trustRet=%v expRet=%d genMatch=%v spends=%d recv=%d leaf=%d inLen=%d\n",
-		bn, zksnark.Available(), verr, trusted, trustRet, expRet, gh == params.NileGenesisHash, spendCount, receiveCount, leafCount, len(input))
 	if verr != nil && !trusted {
-		fmt.Fprintln(os.Stderr, "[SHIELD-DBG] transfer -> FAILURE payload (verify failed, not trusted)")
+		shieldDbgLog.Error("[SHIELD-DBG] transfer FAILURE (verify failed, not trusted)",
+			"blk", dbgBlock, "verr", verr, "spends", spendCount, "recv", receiveCount, "leaf", leafCount)
 		return shieldedFailurePayload(), cost, nil
 	}
 	out := shieldedInsertLeaves(frontier, leafCount, leaves)
@@ -549,7 +553,8 @@ func (c *verifyTransferProof) Run(tvm *TVM, _ tcommon.Address, input []byte, ene
 	if len(out) > 31 {
 		fw = out[31]
 	}
-	fmt.Fprintf(os.Stderr, "[SHIELD-DBG] transfer -> insertLeaves firstWord=%d outLen=%d\n", fw, len(out))
+	shieldDbgLog.Error("[SHIELD-DBG] transfer OK", "blk", dbgBlock, "verr", verr, "trusted", trusted,
+		"firstWord", fw, "outLen", len(out), "spends", spendCount, "recv", receiveCount, "leaf", leafCount)
 	return out, cost, nil
 }
 
