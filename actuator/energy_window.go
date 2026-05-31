@@ -89,6 +89,26 @@ func computeEnergyIncrease(rawWindow int64, optimized bool, lastUsage, usage, la
 	return newUsage, nw, optimized
 }
 
+// computeEnergyIncreaseGlobal ports java-tron ResourceProcessor.increase(lastUsage,
+// usage, lastTime, now) — the 4-arg overload that runs over the GLOBAL windowSize
+// (WINDOW_SIZE_MS / BLOCK_INTERVAL = 28800 slots) with no per-account window. This
+// is the pre-Stake-2.0 (supportUnfreezeDelay == false) recovery/settle formula:
+// EnergyProcessor.useEnergy calls increase(usage,0,…) to recover, then
+// increase(R,energy,now,now) to add — both reduce to this helper.
+//
+// It is the precision-averaging formula (divideCeil*PRECISION + round(decay) +
+// getUsage), NOT the plain truncate gtron used before; the truncate drifted ~1
+// unit per recovered block, compounding to a consensus fork on busy contracts
+// (see project_pre_stake2_energy_recovery_drift). It degenerates from
+// computeEnergyIncrease with rawWindow==0 (oldWindowSize==windowSize==28800), so
+// newUsage == getUsage(averageLastUsage+averageUsage, 28800) == java's increase.
+// The recomputed window is discarded — the global window is never persisted
+// per-account before Stake 2.0.
+func computeEnergyIncreaseGlobal(lastUsage, usage, lastTime, now int64, harden bool) int64 {
+	newUsage, _, _ := computeEnergyIncrease(0, false, lastUsage, usage, lastTime, now, harden, false)
+	return newUsage
+}
+
 // windowSizeV1View mirrors AccountCapsule.getWindowSize(ENERGY) on a raw field.
 func windowSizeV1View(raw int64, optimized bool) int64 {
 	if raw == 0 {

@@ -208,11 +208,68 @@ func TestUseEnergyForBill_NonV2_GlobalWindowUnchanged(t *testing.T) {
 
 	useEnergyForBill(ctx, owner, 50_000, true)
 
-	// global-window recovery: 1_000_000 * (28800-7200)/28800 = 750000, + 50000.
+	// Global-window precision-averaging recovery then add (java increase x2):
+	// recover 1_000_000 over 7200/28800 -> 750000, add 50000 at now==now ->
+	// 800000. At these round inputs the precision-averaging and the old truncate
+	// coincide; TestComputeEnergyIncreaseGlobal_PreStake2Golden covers a case
+	// where they diverge.
 	if got := ctx.State.GetEnergyUsage(owner); got != 800_000 {
 		t.Fatalf("non-V2 energy_usage = %d, want 800000 (global window preserved)", got)
 	}
 	if got := ctx.State.GetAccount(owner).RawEnergyWindowSize(); got != 0 {
 		t.Fatalf("non-V2 path wrote energy_window_size = %d, want 0 (must stay untouched)", got)
+	}
+}
+
+// TestComputeEnergyIncreaseGlobal_PreStake2Golden pins the pre-Stake-2.0 energy
+// recovery/settle against java-tron ResourceProcessor.increase (the 4-arg,
+// global 28800-slot window, precision-averaging: divideCeil*1e6 + round(decay) +
+// getUsage). The numbers come from the real Nile fork at block 8,825,873: a busy
+// contract owner with energy_usage=852,710,572 recovered one slot later. java's
+// increase keeps usage at 852,680,964; go-tron's previous truncate
+// (oldUsage*(W-delta)/W) gave 852,680,963 — one unit low. That ~1/recovered-block
+// bias compounded over ~8.8M blocks into a ~249,705 drift that flipped an
+// OUT_OF_ENERGY into a SUCCESS (see project_pre_stake2_energy_recovery_drift).
+func TestComputeEnergyIncreaseGlobal_PreStake2Golden(t *testing.T) {
+	const U = int64(852_710_572)
+
+	// Recovery (usage==0), 1 slot elapsed. The whole point of the fix:
+	if got := computeEnergyIncreaseGlobal(U, 0, 0, 1, false); got != 852_680_964 {
+		t.Fatalf("recovery(delta=1) = %d, want 852680964 (java increase); old truncate gave 852680963", got)
+	}
+	// Two-step settle: recover, then add a 13818-energy charge at lastTime==now.
+	rec := computeEnergyIncreaseGlobal(U, 0, 0, 1, false)
+	if got := computeEnergyIncreaseGlobal(rec, 13_818, 1, 1, false); got != 852_694_782 {
+		t.Fatalf("settle(delta=1,+13818) = %d, want 852694782 (java two-step)", got)
+	}
+	// Boundary cases: no decay at lastTime==now; full decay once delta>=window.
+	if got := computeEnergyIncreaseGlobal(U, 0, 5, 5, false); got != U {
+		t.Fatalf("recovery(delta=0) = %d, want %d (no decay at lastTime==now)", got, U)
+	}
+	if got := computeEnergyIncreaseGlobal(U, 0, 0, 28_800, false); got != 0 {
+		t.Fatalf("recovery(delta>=window) = %d, want 0 (fully decayed)", got)
+	}
+}
+
+// TestUseEnergyForBill_PreStake2RecoverDrift drives the settle entry point through
+// the pre-Stake-2.0 path with the Nile fork's diverging inputs and asserts the
+// stored energy_usage matches java's two-step increase (852_694_782), not the old
+// truncate result (852_694_781). Guards the consensus path end-to-end.
+func TestUseEnergyForBill_PreStake2RecoverDrift(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x77, 0x06}
+	ctx := newEnergyBillCtx(t, owner)
+	ctx.HeadSlot = 1_000_000 // UnfreezeDelay NOT set -> SupportUnfreezeDelay() == false
+
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.SetEnergyUsage(owner, 852_710_572)
+	ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.HeadSlot-1) // delta=1 slot
+
+	useEnergyForBill(ctx, owner, 13_818, true)
+
+	if got := ctx.State.GetEnergyUsage(owner); got != 852_694_782 {
+		t.Fatalf("pre-Stake-2.0 settle energy_usage = %d, want 852694782 (java); old truncate gave 852694781", got)
+	}
+	if got := ctx.State.GetAccount(owner).RawEnergyWindowSize(); got != 0 {
+		t.Fatalf("pre-Stake-2.0 path wrote energy_window_size = %d, want 0 (global window, untouched)", got)
 	}
 }
