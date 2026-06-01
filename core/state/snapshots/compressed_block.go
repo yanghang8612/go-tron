@@ -304,6 +304,78 @@ func (r *compressedBlockReader) RecordTailAt(offset uint64) ([]byte, error) {
 	return append([]byte(nil), blk[intra:]...), nil
 }
 
+// ReadAt implements io.ReaderAt over the uncompressed logical content: it fills p
+// with bytes starting at uncompressed offset off, decompressing whatever blocks
+// the range spans (one-block cache makes a sequential scan decompress each block
+// once). This is the seam that lets existing offset/ReadAt-based readers operate
+// over a compressed segment unchanged: store the segment's plain bytes through
+// compressBlobToFile, then hand the reader this ReadAt and the logical size.
+func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("snapshots: negative compressed-block read offset")
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	uoff := uint64(off)
+	if uoff >= r.uncSize {
+		return 0, io.EOF
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for n < len(p) {
+		cur := uoff + uint64(n)
+		if cur >= r.uncSize {
+			return n, io.EOF
+		}
+		i := r.findBlock(cur)
+		if i < 0 {
+			return n, fmt.Errorf("snapshots: no compressed block for offset %d", cur)
+		}
+		blk, err := r.blockBytes(i)
+		if err != nil {
+			return n, err
+		}
+		intra := cur - r.table[i].uncompressedStart
+		if intra >= uint64(len(blk)) {
+			return n, io.ErrUnexpectedEOF
+		}
+		n += copy(p[n:], blk[intra:])
+	}
+	return n, nil
+}
+
+// UncompressedSize returns the total uncompressed logical size, i.e. the value a
+// caller passes as fileSize to a bounded reader operating over ReadAt.
+func (r *compressedBlockReader) UncompressedSize() uint64 { return r.uncSize }
+
+// compressBlobToFile stores blob block-compressed at path, chunked into chunkSize
+// pieces (one block each). The result is byte-addressable via ReadAt at the same
+// offsets as the original blob — so an existing segment's serialized bytes can be
+// compressed on disk while its .idx/.kv accessor offsets stay valid.
+func compressBlobToFile(dir, path string, blob []byte, chunkSize int) error {
+	if chunkSize <= 0 {
+		chunkSize = 16384
+	}
+	w, err := newCompressedBlockWriter(dir, 1)
+	if err != nil {
+		return err
+	}
+	for off := 0; off < len(blob); off += chunkSize {
+		end := off + chunkSize
+		if end > len(blob) {
+			end = len(blob)
+		}
+		if _, err := w.Append(blob[off:end]); err != nil {
+			_ = w.tmp.Close()
+			_ = os.Remove(w.tmpName)
+			return err
+		}
+	}
+	return w.Finish(path)
+}
+
 // BlockAt returns a private copy of the decompressed block containing offset plus
 // that block's uncompressed start. Used for sequential range iteration: the
 // caller walks records across blocks, calling BlockAt(start+len(block)) next.
