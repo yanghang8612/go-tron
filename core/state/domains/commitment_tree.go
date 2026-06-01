@@ -432,6 +432,16 @@ type Update struct {
 // by a branchStore. Branch nodes are keyed by their nibble prefix from the root.
 type commitmentTrie struct {
 	store branchStore
+
+	// parallelMinOps, when > 0, folds the root's 16 first-nibble subtries
+	// concurrently for any Fold with at least this many resolved ops. 0 (the
+	// default for a bare newCommitmentTrie) keeps the fold fully sequential, so
+	// existing callers and tests are unaffected; the staged store opts in. Both
+	// paths produce byte-identical roots and branch rows (see applyRootParallel).
+	parallelMinOps int
+	// parallelLimit caps concurrent subtrie folds. <= 0 means GOMAXPROCS, itself
+	// capped at the 16-way branching factor.
+	parallelLimit int
 }
 
 func newCommitmentTrie(store branchStore) *commitmentTrie {
@@ -471,7 +481,11 @@ func (t *commitmentTrie) Fold(updates []Update) (common.Hash, error) {
 		if hasRoot {
 			rootPtr = &root
 		}
-		rootPtr, err = t.apply(nil, 0, rootPtr, ops)
+		if t.parallelMinOps > 0 && len(ops) >= t.parallelMinOps {
+			rootPtr, err = t.applyRootParallel(rootPtr, ops)
+		} else {
+			rootPtr, err = t.apply(nil, 0, rootPtr, ops)
+		}
 		if err != nil {
 			return common.Hash{}, err
 		}

@@ -62,6 +62,14 @@ func (s *rawdbBranchStore) DelBranch(prefix []byte) error {
 	return rawdb.DeleteCommitmentBranch(s.db, prefix)
 }
 
+// putBranchEncoded writes an already-encoded BranchData row, skipping the
+// Decode→re-Encode round trip. The parallel root fold uses this at flush time so
+// the per-branch encode stays inside the (parallel) subtrie goroutines while the
+// serial flush is a bare KV write. Implements encodedBranchPutter.
+func (s *rawdbBranchStore) putBranchEncoded(prefix, encoded []byte) error {
+	return rawdb.WriteCommitmentBranch(s.db, prefix, encoded)
+}
+
 // clear removes every persisted branch row in the commitment-branch keyspace.
 // Rebuild calls this before re-folding so a full latest-domain scan produces a
 // root that reflects exactly the current source rows, with no contribution from
@@ -106,10 +114,16 @@ func NewStagedCommitmentStore(db CommitmentDB) LatestCommitmentStore {
 
 func newStagedCommitmentStore(db CommitmentDB) *stagedCommitmentStore {
 	branchStore := newRawdbBranchStore(db)
+	trie := newCommitmentTrie(branchStore)
+	// Opt into the parallel root fold for production commits. The keccak-bound
+	// fold runs single-threaded otherwise; splitting the 16 first-nibble subtries
+	// across cores recovers idle CPU on the sync hot path. ParallelFoldMinOps is
+	// the threshold/kill switch; both paths yield identical roots and branch rows.
+	trie.parallelMinOps = ParallelFoldMinOps
 	return &stagedCommitmentStore{
 		db:    db,
 		store: branchStore,
-		trie:  newCommitmentTrie(branchStore),
+		trie:  trie,
 	}
 }
 
