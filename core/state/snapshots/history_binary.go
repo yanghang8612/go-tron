@@ -208,6 +208,102 @@ func writeStateDomainChangeBinaryFilesWithAccessor(dir string, ref SegmentRef, c
 	return segRef, idxRef, accessorRef, nil
 }
 
+// historyCompressChunkSize is the uncompressed chunk size per compressed block
+// in a cold history .seg. ~16 KiB balances ratio against per-lookup decompress
+// cost; record frames span chunks freely (ReadAt is multi-block-safe).
+const historyCompressChunkSize = 16384
+
+// writeStateDomainChangeBinaryCompressedSegmentFiles writes a cold history
+// segment whose .seg payload is block-compressed (magic gtcblk01) while its .idx
+// and .kv accessors are byte-identical to the uncompressed writer's — they store
+// the same uncompressed record offsets, which the codec's ReadAt resolves. A
+// reader opened via openHistorySegmentForRead serves both formats transparently.
+func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange) (SegmentRef, SegmentRef, SegmentRef, error) {
+	if ref.Kind == "" {
+		ref.Kind = SegmentHistory
+	}
+	if ref.Dataset == "" {
+		ref.Dataset = SegmentDatasetStateDomainChange
+	}
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	segmentData, index, accessor, err := encodeStateDomainChangeBinarySegment(ref.FromTxNum, ref.ToTxNum, normalized)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	indexData, err := encodeStateDomainChangeBinaryIndex(ref.FromTxNum, ref.ToTxNum, index)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(ref.FromTxNum, ref.ToTxNum, accessor)
+	if err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+
+	// Compress the seg payload to a temp file, then content-address by the
+	// compressed file's checksum.
+	segRef := ref
+	tmpAbs := filepath.Join(dir, ref.Path) + ".cbtmp"
+	if err := os.MkdirAll(filepath.Dir(tmpAbs), 0o755); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	if err := compressBlobToFile(dir, tmpAbs, segmentData, historyCompressChunkSize); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(tmpAbs)
+	if err != nil {
+		_ = os.Remove(tmpAbs)
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	segRef.Size = size
+	segRef.Checksum = checksum
+	segRef.Path = contentAddressedSnapshotPath(ref.Path, checksum)
+	if err := validateSegment(segRef, segRef.FromTxNum, segRef.ToTxNum); err != nil {
+		_ = os.Remove(tmpAbs)
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	finalAbs := filepath.Join(dir, segRef.Path)
+	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
+		_ = os.Remove(tmpAbs)
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	if err := os.Rename(tmpAbs, finalAbs); err != nil {
+		_ = os.Remove(tmpAbs)
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+
+	idxRef := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentInverted,
+		FromTxNum: ref.FromTxNum,
+		ToTxNum:   ref.ToTxNum,
+		Path:      stateDomainChangeBinaryIndexPath(segRef.Path),
+	}
+	setStateDomainChangeBinaryRefMetadata(&idxRef, indexData)
+	accessorRef := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentAccessor,
+		FromTxNum: ref.FromTxNum,
+		ToTxNum:   ref.ToTxNum,
+		Path:      stateDomainChangeBinaryAccessorPath(segRef.Path),
+	}
+	setStateDomainChangeBinaryRefMetadata(&accessorRef, accessorData)
+
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, idxRef.Path), indexData); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	if err := writeStateDomainChangeBinaryFile(filepath.Join(dir, accessorRef.Path), accessorData); err != nil {
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, err
+	}
+	return segRef, idxRef, accessorRef, nil
+}
+
 type stateDomainChangeBinaryCompactionSource struct {
 	history         SegmentRef
 	index           SegmentRef
@@ -1349,28 +1445,11 @@ func iterateStateDomainChangeBinarySegmentTxRangeByIndexFile(dir string, ref Seg
 	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
 		return err
 	}
-	segmentFile, err := os.Open(filepath.Join(dir, ref.Path))
+	segmentFile, segmentSize, _, err := openHistorySegmentForRead(dir, ref)
 	if err != nil {
 		return err
 	}
 	defer segmentFile.Close()
-	stat, err := segmentFile.Stat()
-	if err != nil {
-		return err
-	}
-	segmentSize := uint64(stat.Size())
-	if ref.Size != 0 {
-		if uint64(stat.Size()) != ref.Size {
-			return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
-		}
-	}
-	segmentHeader, err := readStateDomainChangeBinaryHeaderAt(segmentFile, stateDomainChangeBinarySegmentMagic)
-	if err != nil {
-		return err
-	}
-	if segmentHeader.fromTxNum != ref.FromTxNum || segmentHeader.toTxNum != ref.ToTxNum {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q range [%d,%d], want [%d,%d]", ref.Path, segmentHeader.fromTxNum, segmentHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
-	}
 
 	indexFile, indexHeader, err := openStateDomainChangeBinaryIndexReader(dir, indexRef)
 	if err != nil {
@@ -1529,28 +1608,11 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
 		return err
 	}
-	segmentFile, err := os.Open(filepath.Join(dir, ref.Path))
+	segmentFile, segmentSize, _, err := openHistorySegmentForRead(dir, ref)
 	if err != nil {
 		return err
 	}
 	defer segmentFile.Close()
-	stat, err := segmentFile.Stat()
-	if err != nil {
-		return err
-	}
-	segmentSize := uint64(stat.Size())
-	if ref.Size != 0 {
-		if uint64(stat.Size()) != ref.Size {
-			return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
-		}
-	}
-	segmentHeader, err := readStateDomainChangeBinaryHeaderAt(segmentFile, stateDomainChangeBinarySegmentMagic)
-	if err != nil {
-		return err
-	}
-	if segmentHeader.fromTxNum != ref.FromTxNum || segmentHeader.toTxNum != ref.ToTxNum {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q range [%d,%d], want [%d,%d]", ref.Path, segmentHeader.fromTxNum, segmentHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
-	}
 
 	accessorFile, accessorHeader, err := openStateDomainChangeBinaryAccessorReader(dir, accessorRef)
 	if err != nil {
@@ -1827,6 +1889,71 @@ func readStateDomainChangeBinaryHeaderAt(r io.ReaderAt, magic [8]byte) (stateDom
 	}
 	decoded, _, err := decodeStateDomainChangeBinaryHeader(header, magic)
 	return decoded, err
+}
+
+// historySegmentReader is the io.ReaderAt + Closer a read path uses for a
+// (possibly compressed) state-domain-change .seg. *os.File satisfies it for
+// legacy segments; *compressedBlockReader satisfies it for compressed ones.
+type historySegmentReader interface {
+	io.ReaderAt
+	io.Closer
+}
+
+// openHistorySegmentForRead opens a state-domain-change history .seg for reading
+// records at uncompressed offsets. A legacy segment (magic gtsdcseg) is served
+// straight from the file; a compressed segment (magic gtcblk01) is served through
+// the block codec's ReadAt over its uncompressed logical bytes. Either way the
+// returned reader and logicalSize address records at the SAME offsets the .idx /
+// .kv accessors store, so downstream readers are identical for both formats.
+func openHistorySegmentForRead(dir string, ref SegmentRef) (historySegmentReader, uint64, stateDomainChangeBinaryHeader, error) {
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
+		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return nil, 0, stateDomainChangeBinaryHeader{}, err
+	}
+	path := filepath.Join(dir, ref.Path)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, stateDomainChangeBinaryHeader{}, err
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, stateDomainChangeBinaryHeader{}, err
+	}
+	if ref.Size != 0 && uint64(stat.Size()) != ref.Size {
+		_ = file.Close()
+		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
+	}
+	var magic [8]byte
+	if _, err := file.ReadAt(magic[:], 0); err != nil {
+		_ = file.Close()
+		return nil, 0, stateDomainChangeBinaryHeader{}, err
+	}
+
+	var reader historySegmentReader = file
+	logicalSize := uint64(stat.Size())
+	if string(magic[:]) == compressedBlockMagic {
+		_ = file.Close() // the codec reopens path itself
+		cr, err := openCompressedBlockReader(path)
+		if err != nil {
+			return nil, 0, stateDomainChangeBinaryHeader{}, err
+		}
+		reader = cr
+		logicalSize = cr.UncompressedSize()
+	}
+
+	header, err := readStateDomainChangeBinaryHeaderAt(reader, stateDomainChangeBinarySegmentMagic)
+	if err != nil {
+		_ = reader.Close()
+		return nil, 0, stateDomainChangeBinaryHeader{}, err
+	}
+	if header.fromTxNum != ref.FromTxNum || header.toTxNum != ref.ToTxNum {
+		_ = reader.Close()
+		return nil, 0, stateDomainChangeBinaryHeader{}, fmt.Errorf("snapshots: state-domain-change binary segment %q range [%d,%d], want [%d,%d]", ref.Path, header.fromTxNum, header.toTxNum, ref.FromTxNum, ref.ToTxNum)
+	}
+	return reader, logicalSize, header, nil
 }
 
 func openStateDomainChangeBinarySegmentReader(dir string, ref SegmentRef) (*os.File, stateDomainChangeBinaryHeader, uint64, error) {
