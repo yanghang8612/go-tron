@@ -152,3 +152,81 @@ func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 	t.Logf("history segment %d -> %d bytes (%.2fx), %d records",
 		len(segmentData), st.Size(), float64(len(segmentData))/float64(st.Size()), len(accessor))
 }
+
+// TestCompressedHistorySegmentProductionReadPaths writes a real cold segment both
+// uncompressed and compressed, then drives the ACTUAL production read functions
+// (range via the .idx, keyed via the .kv) over each — asserting the compressed
+// segment yields byte-identical records through the routed openHistorySegmentForRead
+// seam, while being smaller on disk.
+func TestCompressedHistorySegmentProductionReadPaths(t *testing.T) {
+	changes := buildHistoryStructs(300, 50)
+	from, to := uint64(9_000_000), uint64(9_000_000+299)
+	baseRef := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: from,
+		ToTxNum:   to,
+		Path:      "sdc.seg",
+	}
+
+	dirU, dirC := t.TempDir(), t.TempDir()
+	segU, idxU, accU, err := writeStateDomainChangeBinaryFilesWithAccessor(dirU, baseRef, changes)
+	if err != nil {
+		t.Fatalf("write uncompressed: %v", err)
+	}
+	segC, idxC, accC, err := writeStateDomainChangeBinaryCompressedSegmentFiles(dirC, baseRef, changes)
+	if err != nil {
+		t.Fatalf("write compressed: %v", err)
+	}
+	if segC.Size >= segU.Size {
+		t.Fatalf("compressed seg %d not smaller than uncompressed %d", segC.Size, segU.Size)
+	}
+	t.Logf("cold seg uncompressed %d -> compressed %d (%.2fx)", segU.Size, segC.Size, float64(segU.Size)/float64(segC.Size))
+
+	collectRange := func(dir string, seg, idx SegmentRef) [][]byte {
+		var got [][]byte
+		if err := iterateStateDomainChangeBinarySegmentTxRangeByIndexFile(dir, seg, idx, from, to, func(ch *rawdb.StateDomainChange) (bool, error) {
+			enc, _ := encodeStateDomainChangeRecord(ch)
+			got = append(got, enc)
+			return true, nil
+		}); err != nil {
+			t.Fatalf("range read: %v", err)
+		}
+		return got
+	}
+	gotU, gotC := collectRange(dirU, segU, idxU), collectRange(dirC, segC, idxC)
+	if len(gotU) != len(gotC) || len(gotU) != len(changes) {
+		t.Fatalf("range counts u=%d c=%d want %d", len(gotU), len(gotC), len(changes))
+	}
+	for i := range gotU {
+		if !bytes.Equal(gotU[i], gotC[i]) {
+			t.Fatalf("range record %d differs between compressed and uncompressed", i)
+		}
+	}
+
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	lookupKey := stateDomainChangeBinaryAccessorKey(normalized[len(normalized)/2])
+	collectKeyed := func(dir string, seg, acc SegmentRef) [][]byte {
+		var got [][]byte
+		if err := iterateStateDomainChangeBinarySegmentByAccessorFile(dir, seg, acc, lookupKey, from, to, func(ch *rawdb.StateDomainChange) (bool, error) {
+			enc, _ := encodeStateDomainChangeRecord(ch)
+			got = append(got, enc)
+			return true, nil
+		}); err != nil {
+			t.Fatalf("keyed read: %v", err)
+		}
+		return got
+	}
+	kU, kC := collectKeyed(dirU, segU, accU), collectKeyed(dirC, segC, accC)
+	if len(kU) == 0 {
+		t.Fatal("keyed read returned nothing for a present key")
+	}
+	if len(kU) != len(kC) {
+		t.Fatalf("keyed counts u=%d c=%d", len(kU), len(kC))
+	}
+	for i := range kU {
+		if !bytes.Equal(kU[i], kC[i]) {
+			t.Fatalf("keyed record %d differs between compressed and uncompressed", i)
+		}
+	}
+}
