@@ -40,9 +40,27 @@ func ReadCommitmentBranch(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool,
 // until the next operation on db. The commitment fold's GetBranch consumes the
 // bytes immediately (decodes and copies the leaf-key field) before any further
 // DB access, so it can use this variant to skip the per-Get heap copy.
+// noCopyKeyValueReader is an optional fast path. A reader whose Get would
+// otherwise defensively copy the value (blockbuffer.Buffer is the hot one —
+// during block application the commitment DB IS the buffer) can expose GetNoCopy
+// to hand back its internal slice, so the fold decodes straight from buffer
+// storage and skips the ~1.5 KB copy per branch read. Backends without it
+// (pebble, memorydb — whose Get already aliases until the next op) use Get.
+type noCopyKeyValueReader interface {
+	GetNoCopy(key []byte) ([]byte, error)
+}
+
 func ReadCommitmentBranchNoCopy(db ethdb.KeyValueReader, prefix []byte) ([]byte, bool, error) {
 	var buf [branchKeyStackBufLen]byte
-	raw, err := db.Get(commitmentBranchKeyInto(buf[:0], prefix))
+	key := commitmentBranchKeyInto(buf[:0], prefix)
+	if nc, ok := db.(noCopyKeyValueReader); ok {
+		raw, err := nc.GetNoCopy(key)
+		if err != nil {
+			return nil, false, nil
+		}
+		return raw, true, nil
+	}
+	raw, err := db.Get(key)
 	if err != nil {
 		// go-ethereum memorydb / pebble both return an error on missing keys.
 		return nil, false, nil

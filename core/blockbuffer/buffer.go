@@ -442,6 +442,48 @@ func (b *Buffer) Get(key []byte) ([]byte, error) {
 	return b.base.Get(key)
 }
 
+// GetNoCopy is Get without the defensive value copy: on a buffer hit it returns
+// the layer's internal value slice directly (aliasing buffer storage), saving
+// the per-Get allocation that dominates the commitment-fold read path. The
+// returned slice MUST be consumed (decoded, or copied) by the caller and MUST
+// NOT be mutated; it is only guaranteed stable until the same key is next
+// written. The commitment store satisfies this: DecodeBranchData copies every
+// field it retains and never holds the input past the decode. Reads that fall
+// through to the base reader use the base's own (copying) Get.
+func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
+	// Index the maps with string(key) inline: the compiler elides the string
+	// allocation for map lookup/comma-ok index expressions, so this read is
+	// fully allocation-free on a buffer hit (unlike Get, which both allocates
+	// the key string and copies the value).
+	b.mu.RLock()
+	if b.active != nil {
+		if _, tomb := b.active.deletes[string(key)]; tomb {
+			b.mu.RUnlock()
+			return nil, ErrNotFound
+		}
+		if v, ok := b.active.writes[string(key)]; ok {
+			b.mu.RUnlock()
+			return v, nil
+		}
+	}
+	for i := len(b.layers) - 1; i >= 0; i-- {
+		l := b.layers[i]
+		if _, tomb := l.deletes[string(key)]; tomb {
+			b.mu.RUnlock()
+			return nil, ErrNotFound
+		}
+		if v, ok := l.writes[string(key)]; ok {
+			b.mu.RUnlock()
+			return v, nil
+		}
+	}
+	b.mu.RUnlock()
+	if b.base == nil {
+		return nil, ErrNotFound
+	}
+	return b.base.Get(key)
+}
+
 // Has reports whether key exists, honoring tombstones. Safe to call
 // concurrently with mutators.
 func (b *Buffer) Has(key []byte) (bool, error) {
