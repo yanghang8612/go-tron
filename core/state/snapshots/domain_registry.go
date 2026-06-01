@@ -3,6 +3,7 @@ package snapshots
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -157,7 +158,29 @@ type HotAccountKVPrefixAsOfIterator func(db rawdb.StateKVHistoryReader, owner co
 
 type SnapshotRefChecker func(dir string, ref SegmentRef) error
 
+// DefaultDomainRegistry returns the process-wide snapshot-domain registry. The
+// registry is immutable static configuration — read-only lookups, value-copied
+// DomainCfg, freshly-built result slices — so one shared instance is safe to
+// read concurrently. It is built once instead of being reconstructed (closures,
+// map and slice) on every call; the old per-call rebuild showed up as a hot
+// allocation site on the block-apply path.
 func DefaultDomainRegistry() DomainRegistry {
+	defaultDomainRegistryOnce.Do(func() {
+		defaultDomainRegistry = buildDefaultDomainRegistry()
+	})
+	return defaultDomainRegistry
+}
+
+// Lazy package-level singleton. The reference to buildDefaultDomainRegistry
+// lives in the function body above (not in a var initializer) to avoid a static
+// initialization cycle: the builder transitively references DefaultDomainRegistry
+// via the manifest validators.
+var (
+	defaultDomainRegistryOnce sync.Once
+	defaultDomainRegistry     DomainRegistry
+)
+
+func buildDefaultDomainRegistry() DomainRegistry {
 	cfgs := []DomainCfg{
 		{
 			Name:              "AccountsDomain",
