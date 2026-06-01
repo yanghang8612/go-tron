@@ -21,7 +21,7 @@ type Contract struct {
 	EnergyUsed uint64 // energy consumed so far
 	Version    int32  // java-tron SmartContract.version for this code frame
 
-	jumpdests map[uint64]bool // cached valid JUMPDEST positions
+	jumpdests bitvec // valid JUMPDEST positions, 1 bit per code offset
 }
 
 // NewContract creates a new contract execution context.
@@ -61,7 +61,7 @@ func (c *Contract) IsValidJumpdest(pos uint64) bool {
 	if pos >= uint64(len(c.Code)) {
 		return false
 	}
-	return c.jumpdests[pos]
+	return c.jumpdests.isSet(pos)
 }
 
 // GetOp returns the opcode at position pos in the code.
@@ -72,16 +72,27 @@ func (c *Contract) GetOp(pos uint64) OpCode {
 	return OpCode(c.Code[pos])
 }
 
-// analyzeJumpdests finds all valid JUMPDEST positions, skipping PUSH data.
-func analyzeJumpdests(code []byte) map[uint64]bool {
-	dests := make(map[uint64]bool)
+// bitvec is a compact 1-bit-per-code-offset set of valid JUMPDEST positions. It
+// replaces the former map[uint64]bool: identical valid-dest set, but one flat
+// []byte instead of a per-dest map node, so each contract load allocates
+// ceil(len(code)/8) bytes instead of O(#jumpdests) map entries.
+type bitvec []byte
+
+func (bv bitvec) set(pos uint64)        { bv[pos/8] |= 1 << (pos % 8) }
+func (bv bitvec) isSet(pos uint64) bool { return bv[pos/8]&(1<<(pos%8)) != 0 }
+
+// analyzeJumpdests finds all valid JUMPDEST positions, skipping PUSH data. The
+// scan is identical to the reference map implementation pinned in
+// contract_jumpdest_test.go; only the storage representation is a bitvec.
+func analyzeJumpdests(code []byte) bitvec {
+	bv := make(bitvec, len(code)/8+1)
 	for i := 0; i < len(code); i++ {
 		op := OpCode(code[i])
 		if op == JUMPDEST {
-			dests[uint64(i)] = true
+			bv.set(uint64(i))
 		} else if op >= PUSH1 && op <= PUSH32 {
 			i += int(op - PUSH1 + 1)
 		}
 	}
-	return dests
+	return bv
 }
