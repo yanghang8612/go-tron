@@ -476,6 +476,65 @@ func historyCompactionCompanion(candidate historyCompactionCandidate, kind Segme
 	return SegmentRef{}, false
 }
 
+// finalizeCompactedHistoryFile publishes a freshly-built compaction temp as
+// either block-compressed or raw, per CompressHistorySegments — so merges keep
+// the compression that cold builds emit (otherwise retired/merged segments, the
+// archive bulk over time, would silently revert to uncompressed). contentAddress
+// appends the file checksum to the path (the .seg does this; the .kv/.idx derive
+// their path from the .seg). The temp's bytes are the uncompressed logical
+// content, so the published file is byte-addressable at the same offsets.
+func finalizeCompactedHistoryFile(dir string, ref SegmentRef, tmp *os.File, tmpName string, contentAddress bool) (SegmentRef, error) {
+	if !CompressHistorySegments {
+		size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
+		if err != nil {
+			return SegmentRef{}, err
+		}
+		return publishStateDomainChangeBinaryFinal(dir, ref, tmpName, size, checksum, contentAddress)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return SegmentRef{}, err
+	}
+	raw, err := os.ReadFile(tmpName)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	compTmp := tmpName + ".cb"
+	if err := compressBlobToFile(dir, compTmp, raw, historyCompressChunkSize); err != nil {
+		return SegmentRef{}, err
+	}
+	defer os.Remove(compTmp)
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(compTmp)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	return publishStateDomainChangeBinaryFinal(dir, ref, compTmp, size, checksum, contentAddress)
+}
+
+// publishStateDomainChangeBinaryFinal renames src into its final (optionally
+// content-addressed) path and stamps the ref's path/size/checksum.
+func publishStateDomainChangeBinaryFinal(dir string, ref SegmentRef, src string, size uint64, checksum string, contentAddress bool) (SegmentRef, error) {
+	finalRel := ref.Path
+	if contentAddress {
+		finalAbs := contentAddressedSnapshotPath(filepath.Join(dir, ref.Path), checksum)
+		rel, err := filepath.Rel(dir, finalAbs)
+		if err != nil {
+			return SegmentRef{}, err
+		}
+		finalRel = filepath.ToSlash(rel)
+	}
+	if err := publishStateDomainChangeBinaryTemp(src, filepath.Join(dir, finalRel)); err != nil {
+		return SegmentRef{}, err
+	}
+	ref.Path = finalRel
+	ref.Size = size
+	ref.Checksum = checksum
+	return ref, nil
+}
+
 func writeCompactedStateDomainChangeBinarySegment(dir string, cfg DomainCfg, selection historyCompactionSelection, sources []stateDomainChangeBinaryCompactionSource) (SegmentRef, error) {
 	ref := SegmentRef{
 		Dataset:   SegmentDatasetStateDomainChange,
@@ -516,21 +575,16 @@ func writeCompactedStateDomainChangeBinarySegment(dir string, cfg DomainCfg, sel
 		}
 		recordIndexBase += sources[i].segmentHeader.count
 	}
-	size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
+	ref, err = finalizeCompactedHistoryFile(dir, ref, tmp, tmpName, true)
 	if err != nil {
 		return SegmentRef{}, err
 	}
-	finalAbs := contentAddressedSnapshotPath(filepath.Join(dir, ref.Path), checksum)
-	if err := publishStateDomainChangeBinaryTemp(tmpName, finalAbs); err != nil {
-		return SegmentRef{}, err
+	if CompressHistorySegments {
+		if err := validateCompressedHistorySegmentReadable(dir, ref); err != nil {
+			_ = os.Remove(filepath.Join(dir, ref.Path))
+			return SegmentRef{}, fmt.Errorf("snapshots: compacted compressed segment self-check failed: %w", err)
+		}
 	}
-	rel, err := filepath.Rel(dir, finalAbs)
-	if err != nil {
-		return SegmentRef{}, err
-	}
-	ref.Path = filepath.ToSlash(rel)
-	ref.Size = size
-	ref.Checksum = checksum
 	return ref, nil
 }
 
@@ -643,16 +697,7 @@ func writeCompactedStateDomainChangeBinaryAccessor(dir string, segRef SegmentRef
 		_ = tmp.Close()
 		return SegmentRef{}, fmt.Errorf("snapshots: compacted state-domain-change accessor wrote %d entries, want %d", outIndex, totalRecords)
 	}
-	size, checksum, err := closeAndHashStateDomainChangeBinaryTemp(tmp, tmpName)
-	if err != nil {
-		return SegmentRef{}, err
-	}
-	if err := publishStateDomainChangeBinaryTemp(tmpName, filepath.Join(dir, ref.Path)); err != nil {
-		return SegmentRef{}, err
-	}
-	ref.Size = size
-	ref.Checksum = checksum
-	return ref, nil
+	return finalizeCompactedHistoryFile(dir, ref, tmp, tmpName, false)
 }
 
 func stateDomainChangeBinaryCompactionRecordCount(sources []stateDomainChangeBinaryCompactionSource) (uint64, error) {
