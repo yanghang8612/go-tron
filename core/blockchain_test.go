@@ -542,7 +542,15 @@ func TestBlockChainInsertBlock_MaintenanceFiresOncePerBoundary(t *testing.T) {
 
 	// next_maintenance_time must advance to exactly 2*interval after one
 	// fire (round=0 in CalcNextMaintenanceTime, since blockTime − currentMaint
-	// < interval).
+	// < interval). It is a rooted key, so loadDPAtRoot reads it from the head
+	// state root through the disk-backed StateDB — but block state reaches disk
+	// via the async buffer flush. Wait for that flush to settle first, else the
+	// read can observe the pre-maintenance value (= interval) the flusher hasn't
+	// overwritten yet. This is intermittent under full-package / -count runs,
+	// where sibling tests' CPU/GC pressure delays this chain's flush worker past
+	// the read. Mirrors the guard the sibling maintenance/rewind tests already
+	// use before their rooted-head reads.
+	bc.WaitForFlushSettled()
 	dynProps := loadDPAtRoot(t, diskdb, bc.StateDB(), bc.HeadStateRoot())
 	if got, want := dynProps.NextMaintenanceTime(), 2*interval; got != want {
 		t.Fatalf("next_maintenance_time after fire: got %d, want %d", got, want)
