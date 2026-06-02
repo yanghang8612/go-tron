@@ -350,6 +350,51 @@ func (r *compressedBlockReader) ReadAt(p []byte, off int64) (int, error) {
 // caller passes as fileSize to a bounded reader operating over ReadAt.
 func (r *compressedBlockReader) UncompressedSize() uint64 { return r.uncSize }
 
+// isCompressedBlockBlob reports whether data begins with the compressed-block
+// magic — i.e. whether a segment file is compressed.
+func isCompressedBlockBlob(data []byte) bool {
+	return len(data) >= len(compressedBlockMagic) && string(data[:len(compressedBlockMagic)]) == compressedBlockMagic
+}
+
+// decompressBlockBlob returns the full uncompressed logical content of an
+// in-memory compressed-block blob (the inverse of compressBlobToFile). Used by
+// the whole-segment readers/checkers that scan the entire segment in memory.
+func decompressBlockBlob(data []byte) ([]byte, error) {
+	if len(data) < compressedBlockHeaderSize || !isCompressedBlockBlob(data) {
+		return nil, errors.New("snapshots: not a compressed-block blob")
+	}
+	_, dec, err := cbCodec()
+	if err != nil {
+		return nil, err
+	}
+	blockCount := binary.BigEndian.Uint64(data[24:32])
+	uncSize := binary.BigEndian.Uint64(data[32:40])
+	dataOff := binary.BigEndian.Uint64(data[40:48])
+	tableEnd := uint64(compressedBlockHeaderSize) + blockCount*compressedBlockTableEntry
+	if blockCount > (uint64(1)<<40) || tableEnd > uint64(len(data)) || dataOff < tableEnd || dataOff > uint64(len(data)) {
+		return nil, errors.New("snapshots: corrupt compressed-block blob header")
+	}
+	out := make([]byte, 0, uncSize)
+	for i := uint64(0); i < blockCount; i++ {
+		o := uint64(compressedBlockHeaderSize) + i*compressedBlockTableEntry
+		compStart := binary.BigEndian.Uint64(data[o+8 : o+16])
+		compLen := binary.BigEndian.Uint64(data[o+16 : o+24])
+		start := dataOff + compStart
+		if start > uint64(len(data)) || compLen > uint64(len(data))-start {
+			return nil, errors.New("snapshots: corrupt compressed-block blob block")
+		}
+		dst, err := dec.DecodeAll(data[start:start+compLen], nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, dst...)
+	}
+	if uint64(len(out)) != uncSize {
+		return nil, fmt.Errorf("snapshots: compressed-block blob decompressed to %d bytes, want %d", len(out), uncSize)
+	}
+	return out, nil
+}
+
 // compressBlobToFile stores blob block-compressed at path, chunked into chunkSize
 // pieces (one block each). The result is byte-addressable via ReadAt at the same
 // offsets as the original blob — so an existing segment's serialized bytes can be
