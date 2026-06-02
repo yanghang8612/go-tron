@@ -191,10 +191,20 @@ type compressedBlockReader struct {
 	dataOff   uint64
 	table     []cbBlock
 
-	mu       sync.Mutex
-	cacheIdx int
-	cache    []byte
+	mu    sync.Mutex
+	cache []cbCacheEntry // small MRU-ordered decompressed-block cache (front = newest)
 }
+
+type cbCacheEntry struct {
+	idx   int
+	bytes []byte
+}
+
+// cbCacheBlocks bounds the decompressed-block cache. 1 is optimal for sequential
+// scans (range reads); a keyed binary search probes ~2·log N random blocks and a
+// 1-block cache thrashes, so a small MRU cache lets the search's narrowing phase
+// re-hit recent blocks. ~16 × block-size of transient memory per open reader.
+const cbCacheBlocks = 16
 
 func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 	f, err := os.Open(path)
@@ -225,7 +235,6 @@ func openCompressedBlockReader(path string) (*compressedBlockReader, error) {
 		blockSize: int(binary.BigEndian.Uint32(hdr[12:16])),
 		recCount:  binary.BigEndian.Uint64(hdr[16:24]),
 		dataOff:   binary.BigEndian.Uint64(hdr[40:48]),
-		cacheIdx:  -1,
 	}
 	blockCount := binary.BigEndian.Uint64(hdr[24:32])
 	r.uncSize = binary.BigEndian.Uint64(hdr[32:40])
@@ -263,8 +272,13 @@ func (r *compressedBlockReader) findBlock(offset uint64) int {
 // blockBytes returns the decompressed bytes of block i (caller holds r.mu). The
 // returned slice aliases the cache and must not be retained past the unlock.
 func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
-	if r.cacheIdx == i {
-		return r.cache, nil
+	for j := range r.cache {
+		if r.cache[j].idx == i {
+			e := r.cache[j]
+			copy(r.cache[1:j+1], r.cache[:j]) // move to front (MRU)
+			r.cache[0] = e
+			return e.bytes, nil
+		}
 	}
 	b := r.table[i]
 	comp := make([]byte, b.compressedLen)
@@ -275,8 +289,11 @@ func (r *compressedBlockReader) blockBytes(i int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.cacheIdx = i
-	r.cache = dst
+	if len(r.cache) < cbCacheBlocks {
+		r.cache = append(r.cache, cbCacheEntry{})
+	}
+	copy(r.cache[1:], r.cache[:len(r.cache)-1]) // shift down, evicting the tail
+	r.cache[0] = cbCacheEntry{idx: i, bytes: dst}
 	return dst, nil
 }
 

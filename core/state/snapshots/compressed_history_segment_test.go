@@ -198,6 +198,47 @@ func TestCompressHistorySegmentsGate(t *testing.T) {
 	}
 }
 
+// benchmarkKeyedLookup measures a keyed .kv lookup (binary search + iterate) over
+// a compressed vs uncompressed segment. Compression made the binary search probe
+// land in random compressed blocks (~2·log N decompressions/lookup); this puts a
+// real number on that latency, which the .kv-shrink decision (recsplit O(1) vs
+// implicit-key O(log N)) hinges on.
+func benchmarkKeyedLookup(b *testing.B, compress bool) {
+	prev := CompressHistorySegments
+	CompressHistorySegments = compress
+	defer func() { CompressHistorySegments = prev }()
+
+	changes := buildHistoryStructs(400, 50) // 20000 distinct keys → ~14-deep search
+	from, to := uint64(9_000_000), uint64(9_000_399)
+	dir := b.TempDir()
+	seg, _, acc, err := writeHistorySegmentFiles(dir, SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: from, ToTxNum: to, Path: "sdc.seg",
+	}, changes)
+	if err != nil {
+		b.Fatal(err)
+	}
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	keys := make([][]byte, 256)
+	for i := range keys {
+		keys[i] = stateDomainChangeBinaryAccessorKey(normalized[i*len(normalized)/len(keys)])
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		found := 0
+		if err := iterateStateDomainChangeBinarySegmentByAccessorFile(dir, seg, acc, keys[i%len(keys)], from, to,
+			func(*rawdb.StateDomainChange) (bool, error) { found++; return true, nil }); err != nil {
+			b.Fatal(err)
+		}
+		if found == 0 {
+			b.Fatal("present key not found")
+		}
+	}
+}
+
+func BenchmarkKeyedLookupCompressed(b *testing.B)   { benchmarkKeyedLookup(b, true) }
+func BenchmarkKeyedLookupUncompressed(b *testing.B) { benchmarkKeyedLookup(b, false) }
+
 // TestCompactionMergesCompressedSources proves the compactor reads COMPRESSED
 // source segments (copyPayload decompresses instead of raw-copying) and emits a
 // compressed merged seg+kv that reads back — so compression survives merges
