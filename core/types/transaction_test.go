@@ -3,8 +3,10 @@ package types
 import (
 	"encoding/hex"
 	"errors"
+	"sync"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -190,6 +192,95 @@ func TestRecoverSigners_RejectsShortSignature(t *testing.T) {
 	})
 	if _, err := tx.RecoverSigners(); err != ErrBadSignatureLength {
 		t.Fatalf("err = %v, want ErrBadSignatureLength", err)
+	}
+	// The memoized error must be byte-for-byte the same on the second call —
+	// the parallel pre-pass warms this and the serial path must observe the
+	// identical rejection.
+	if _, err := tx.RecoverSigners(); err != ErrBadSignatureLength {
+		t.Fatalf("memoized err = %v, want ErrBadSignatureLength", err)
+	}
+}
+
+// TestRecoverSigners_MemoIsIdentical proves the RecoverSigners memo returns a
+// value identical to a fresh, un-memoized recovery — the invariant the parallel
+// pre-verification pass relies on (warm a memo, serial path reads it, identical
+// accept/reject). Uses the same golden vector as TestRecoverSigners_JavaSignatureV.
+func TestRecoverSigners_MemoIsIdentical(t *testing.T) {
+	rawDataHex := "0a02dc902208d3638f92df8a2be94090a0eafb8a2e5a69080112650a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412340a1541b0e03d96eec5aba4037e4fca2431da6fdba85068121541b03c7de5f60a49a2f3098463691ca2e137d822d618e0d691d01270bfa9cdd28a2e"
+	sigHex := "c37ebd8ba2abfdcd2945d3f63994165bf778fe35415dd6aed37b77446ef9783170f0742aa17d7fa56fb98c65e67db7190b927272a95e2de72dee1cb9d166c6441c"
+	rawData, _ := hex.DecodeString(rawDataHex)
+	rawPB := &corepb.TransactionRaw{}
+	if err := proto.Unmarshal(rawData, rawPB); err != nil {
+		t.Fatalf("unmarshal rawData: %v", err)
+	}
+	sig, _ := hex.DecodeString(sigHex)
+
+	mk := func() *Transaction {
+		return NewTransactionFromPB(&corepb.Transaction{RawData: proto.Clone(rawPB).(*corepb.TransactionRaw), Signature: [][]byte{append([]byte(nil), sig...)}})
+	}
+	// Reference: a fresh tx, first (cold) recovery.
+	want, err := mk().RecoverSigners()
+	if err != nil {
+		t.Fatalf("reference recovery: %v", err)
+	}
+
+	// A second tx: warm it once, then read it again — both reads must equal the
+	// cold reference. (Same instance is what Block.Transactions() now returns.)
+	tx := mk()
+	warm1, err := tx.RecoverSigners()
+	if err != nil {
+		t.Fatalf("warm recovery: %v", err)
+	}
+	warm2, _ := tx.RecoverSigners()
+	if len(warm1) != len(want) || len(warm2) != len(want) {
+		t.Fatalf("len mismatch: cold=%d warm1=%d warm2=%d", len(want), len(warm1), len(warm2))
+	}
+	for i := range want {
+		if warm1[i] != want[i] || warm2[i] != want[i] {
+			t.Fatalf("addr[%d] mismatch: cold=%x warm1=%x warm2=%x", i, want[i], warm1[i], warm2[i])
+		}
+	}
+}
+
+// TestRecoverSigners_ConcurrentWarmIsRaceFree exercises the sync.Once memo under
+// many concurrent callers (the parallel pre-pass shape) — run with -race. All
+// goroutines must observe the same recovered address.
+func TestRecoverSigners_ConcurrentWarmIsRaceFree(t *testing.T) {
+	rawDataHex := "0a02dc902208d3638f92df8a2be94090a0eafb8a2e5a69080112650a2d747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e5472616e73666572436f6e747261637412340a1541b0e03d96eec5aba4037e4fca2431da6fdba85068121541b03c7de5f60a49a2f3098463691ca2e137d822d618e0d691d01270bfa9cdd28a2e"
+	sigHex := "c37ebd8ba2abfdcd2945d3f63994165bf778fe35415dd6aed37b77446ef9783170f0742aa17d7fa56fb98c65e67db7190b927272a95e2de72dee1cb9d166c6441c"
+	rawData, _ := hex.DecodeString(rawDataHex)
+	rawPB := &corepb.TransactionRaw{}
+	if err := proto.Unmarshal(rawData, rawPB); err != nil {
+		t.Fatalf("unmarshal rawData: %v", err)
+	}
+	sig, _ := hex.DecodeString(sigHex)
+	tx := NewTransactionFromPB(&corepb.Transaction{RawData: rawPB, Signature: [][]byte{sig}})
+
+	const n = 32
+	results := make([][]common.Address, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			addrs, err := tx.RecoverSigners()
+			if err != nil {
+				t.Errorf("goroutine %d: %v", i, err)
+				return
+			}
+			results[i] = addrs
+		}(i)
+	}
+	wg.Wait()
+	for i := 1; i < n; i++ {
+		if len(results[i]) != len(results[0]) {
+			t.Fatalf("goroutine %d len mismatch", i)
+		}
+		for j := range results[0] {
+			if results[i][j] != results[0][j] {
+				t.Fatalf("goroutine %d addr[%d] diverged: %x vs %x", i, j, results[i][j], results[0][j])
+			}
+		}
 	}
 }
 

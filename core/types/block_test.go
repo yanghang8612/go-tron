@@ -170,3 +170,63 @@ func TestBlock_ResetHash(t *testing.T) {
 		t.Fatal("hash should change after ResetHash + modified RawData")
 	}
 }
+
+// TestBlock_TransactionsAreStable verifies Transactions() memoizes the wrapped
+// slice and returns the SAME *Transaction instances every call. This identity
+// is what lets the parallel pre-pass warm a tx's signers memo and have the
+// serial execution path (which re-fetches via Transactions()) read the warm
+// result.
+func TestBlock_TransactionsAreStable(t *testing.T) {
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3000}},
+		Transactions: []*corepb.Transaction{
+			{RawData: &corepb.TransactionRaw{Timestamp: 1}},
+			{RawData: &corepb.TransactionRaw{Timestamp: 2}},
+		},
+	})
+	a := block.Transactions()
+	b := block.Transactions()
+	if len(a) != 2 || len(b) != 2 {
+		t.Fatalf("len: a=%d b=%d, want 2", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Transactions()[%d] not stable: %p vs %p", i, a[i], b[i])
+		}
+	}
+}
+
+// TestBlock_CachedRecoveredWitness verifies the witness-recovery memo: the
+// supplied recover func runs exactly once, the cached (addr, err) is returned
+// thereafter, and SetWitnessSignature / ResetHash invalidate it so a re-signed
+// block re-derives.
+func TestBlock_CachedRecoveredWitness(t *testing.T) {
+	block := NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{Number: 1, Timestamp: 3000}},
+	})
+	var calls int
+	want := common.Address{0x41, 0x07}
+	rec := func(*Block) (common.Address, error) { calls++; return want, nil }
+
+	if got, _ := block.CachedRecoveredWitness(rec); got != want {
+		t.Fatalf("addr = %x, want %x", got, want)
+	}
+	if got, _ := block.CachedRecoveredWitness(rec); got != want {
+		t.Fatalf("cached addr = %x, want %x", got, want)
+	}
+	if calls != 1 {
+		t.Fatalf("recover called %d times, want 1 (memoized)", calls)
+	}
+
+	// SetWitnessSignature must invalidate the memo (re-sign re-derives).
+	block.SetWitnessSignature(make([]byte, 65))
+	if _, _ = block.CachedRecoveredWitness(rec); calls != 2 {
+		t.Fatalf("recover called %d times after SetWitnessSignature, want 2", calls)
+	}
+
+	// ResetHash must invalidate too.
+	block.ResetHash()
+	if _, _ = block.CachedRecoveredWitness(rec); calls != 3 {
+		t.Fatalf("recover called %d times after ResetHash, want 3", calls)
+	}
+}
