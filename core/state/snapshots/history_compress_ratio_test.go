@@ -182,6 +182,53 @@ func zstdBlockCompress(t *testing.T, records [][]byte, blockSize int) (raw, comp
 	return raw, compressed
 }
 
+// TestKvKeyDuplicationCost measures the recsplit upside for the .kv accessor: how
+// much of the (already zstd-compressed) .kv is the duplicated 32-byte keccak key
+// per record, which zstd cannot compress (random) but an Erigon-style recsplit
+// .kvi would drop entirely (key→offset via a minimal perfect hash, verified by
+// reading the key back from the .seg). This is the go/no-go for whether the large
+// recsplit/efII port is worth it on top of the 2.56x already achieved.
+func TestKvKeyDuplicationCost(t *testing.T) {
+	changes := buildHistoryStructs(400, 50)
+	from, to := uint64(9_000_000), uint64(9_000_399)
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	_, _, accessor, err := encodeStateDomainChangeBinarySegment(from, to, normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessorData, err := encodeStateDomainChangeBinaryAccessor(from, to, accessor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// keyless = just the per-entry ints (txNum, seq, offset, recordIndex) a
+	// recsplit-backed accessor would still need; the key is gone.
+	var keyless bytes.Buffer
+	keyBytes := 0
+	for _, e := range accessor {
+		var b [32]byte
+		binary.BigEndian.PutUint64(b[0:8], e.txNum)
+		binary.BigEndian.PutUint64(b[8:16], e.seq)
+		binary.BigEndian.PutUint64(b[16:24], e.offset)
+		binary.BigEndian.PutUint64(b[24:32], e.recordIndex)
+		keyless.Write(b[:])
+		keyBytes += len(e.key)
+	}
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	fullC := len(enc.EncodeAll(accessorData, nil))
+	keylessC := len(enc.EncodeAll(keyless.Bytes(), nil))
+	mphfBytes := len(accessor) * 3 / 8 // ~3 bits/key recsplit MPHF
+	recsplitEst := keylessC + mphfBytes
+	t.Logf("entries=%d  raw-key-bytes=%d  raw-kv=%d", len(accessor), keyBytes, len(accessorData))
+	t.Logf("  .kv zstd (with keys)        = %8d", fullC)
+	t.Logf("  .kv zstd (keyless ints)     = %8d  (%.0f%% of full)", keylessC, 100*float64(keylessC)/float64(fullC))
+	t.Logf("  recsplit est (keyless+MPHF) = %8d  -> .kv %.2fx smaller", recsplitEst, float64(fullC)/float64(recsplitEst))
+	t.Logf("  => keys are ~%.0f%% of the compressed .kv", 100*(1-float64(keylessC)/float64(fullC)))
+}
+
 // TestHistoryCompressionRatioGate is the go/no-go measurement (not a pass/fail
 // test): it reports the zstd block-compression ratio of real-encoded
 // StateDomainChange history records across dataset profiles and block sizes, so
