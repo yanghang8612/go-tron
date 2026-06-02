@@ -153,6 +153,51 @@ func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 		len(segmentData), st.Size(), float64(len(segmentData))/float64(st.Size()), len(accessor))
 }
 
+// TestCompressedHistorySegmentFullReadAndCheck proves the whole-segment readers
+// and the integrity checkers accept a compressed segment: the full read
+// decompresses + decodes byte-identically, and both the seg and .kv checkers pass
+// (checksum over physical bytes, structure over the logical view).
+func TestCompressedHistorySegmentFullReadAndCheck(t *testing.T) {
+	changes := buildHistoryStructs(200, 40)
+	from, to := uint64(9_000_000), uint64(9_000_000+199)
+	baseRef := SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: from,
+		ToTxNum:   to,
+		Path:      "sdc.seg",
+	}
+	dir := t.TempDir()
+	segC, idxC, accC, err := writeStateDomainChangeBinaryCompressedSegmentFiles(dir, baseRef, changes)
+	if err != nil {
+		t.Fatalf("write compressed: %v", err)
+	}
+
+	got, err := readStateDomainChangeBinarySegment(dir, segC)
+	if err != nil {
+		t.Fatalf("full read of compressed seg: %v", err)
+	}
+	normalized := normalizeStateDomainChangesForBinary(changes)
+	if len(got) != len(normalized) {
+		t.Fatalf("full read count %d, want %d", len(got), len(normalized))
+	}
+	for i := range got {
+		wEnc, _ := encodeStateDomainChangeRecord(normalized[i])
+		gEnc, _ := encodeStateDomainChangeRecord(got[i])
+		if !bytes.Equal(wEnc, gEnc) {
+			t.Fatalf("full read record %d mismatch", i)
+		}
+	}
+
+	if err := checkStateDomainChangeBinarySegment(dir, segC); err != nil {
+		t.Fatalf("seg checker rejected compressed segment: %v", err)
+	}
+	if err := checkStateDomainChangeBinaryAccessor(dir, accC); err != nil {
+		t.Fatalf("accessor checker rejected compressed .kv: %v", err)
+	}
+	_ = idxC
+}
+
 // TestCompressedHistorySegmentProductionReadPaths writes a real cold segment both
 // uncompressed and compressed, then drives the ACTUAL production read functions
 // (range via the .idx, keyed via the .kv) over each — asserting the compressed
