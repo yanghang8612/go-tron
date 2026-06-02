@@ -153,6 +153,50 @@ func TestCompressedHistorySegmentReaderEquivalence(t *testing.T) {
 		len(segmentData), st.Size(), float64(len(segmentData))/float64(st.Size()), len(accessor))
 }
 
+// TestCompressHistorySegmentsGate proves the emission gate: on (default) writes a
+// compressed-magic .seg, off writes the legacy magic. Both remain readable (the
+// rest of the suite, running with the gate on by default, exercises that).
+func TestCompressHistorySegmentsGate(t *testing.T) {
+	changes := buildHistoryStructs(50, 20)
+	baseRef := SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: 9_000_000, ToTxNum: 9_000_049, Path: "sdc.seg",
+	}
+	firstMagic := func(dir, rel string) string {
+		f, err := os.Open(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		var m [8]byte
+		if _, err := f.ReadAt(m[:], 0); err != nil {
+			t.Fatal(err)
+		}
+		return string(m[:])
+	}
+	defer func(prev bool) { CompressHistorySegments = prev }(CompressHistorySegments)
+
+	CompressHistorySegments = true
+	dirOn := t.TempDir()
+	segOn, _, _, err := writeHistorySegmentFiles(dirOn, baseRef, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := firstMagic(dirOn, segOn.Path); got != compressedBlockMagic {
+		t.Fatalf("gate on: seg magic %q, want compressed %q", got, compressedBlockMagic)
+	}
+
+	CompressHistorySegments = false
+	dirOff := t.TempDir()
+	segOff, _, _, err := writeHistorySegmentFiles(dirOff, baseRef, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := firstMagic(dirOff, segOff.Path); got == compressedBlockMagic {
+		t.Fatalf("gate off: seg should be uncompressed, got compressed magic")
+	}
+}
+
 // TestCompressedHistorySegmentFullReadAndCheck proves the whole-segment readers
 // and the integrity checkers accept a compressed segment: the full read
 // decompresses + decodes byte-identically, and both the seg and .kv checkers pass
