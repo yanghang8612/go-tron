@@ -77,7 +77,7 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 		Path:      relPath,
 	}
 	if isStateDomainChangeBinarySegmentPath(relPath) {
-		segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, ref, changes)
+		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, ref, changes)
 		if err != nil {
 			return nil, err
 		}

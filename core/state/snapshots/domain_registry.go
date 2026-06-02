@@ -328,7 +328,7 @@ func buildDefaultDomainRegistry() DomainRegistry {
 			HistoryIndexPath:                stateDomainChangeBinaryIndexPath,
 			HistoryAccessorPath:             stateDomainChangeBinaryAccessorPath,
 			OpenHistory:                     openStateDomainChangeHistoryChanges,
-			WriteHistory:                    writeStateDomainChangeBinaryFilesWithAccessor,
+			WriteHistory:                    writeHistorySegmentFiles,
 			CompactHistory:                  compactStateDomainChangeBinaryHistoryRun,
 			ReadHistoryRange:                readStateDomainChangeHistoryRange,
 			ReadHistoryByKey:                readStateDomainChangeHistoryByKey,

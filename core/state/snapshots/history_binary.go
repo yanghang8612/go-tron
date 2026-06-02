@@ -208,6 +208,24 @@ func writeStateDomainChangeBinaryFilesWithAccessor(dir string, ref SegmentRef, c
 	return segRef, idxRef, accessorRef, nil
 }
 
+// CompressHistorySegments gates whether new cold history segments are written
+// block-compressed (gtcblk01 .seg + compressed .kv) vs the legacy uncompressed
+// format. Both are readable regardless (readers magic-dispatch), so this is a
+// pure emission knob / kill switch — flipping it never breaks reads of segments
+// already on disk. Default on: compression is the archive feature, the realized
+// .seg+.idx+.kv reduction is ~2.5x, and history is derived data validated by the
+// integrity checker. Set false to emit legacy uncompressed segments.
+var CompressHistorySegments = true
+
+// writeHistorySegmentFiles is the cold-build emission entry point; it chooses the
+// compressed or legacy writer per CompressHistorySegments.
+func writeHistorySegmentFiles(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange) (SegmentRef, SegmentRef, SegmentRef, error) {
+	if CompressHistorySegments {
+		return writeStateDomainChangeBinaryCompressedSegmentFiles(dir, ref, changes)
+	}
+	return writeStateDomainChangeBinaryFilesWithAccessor(dir, ref, changes)
+}
+
 // historyCompressChunkSize is the uncompressed chunk size per compressed block
 // in a cold history .seg. ~16 KiB balances ratio against per-lookup decompress
 // cost; record frames span chunks freely (ReadAt is multi-block-safe).
@@ -625,24 +643,25 @@ func copyStateDomainChangeBinarySegmentPayload(dir string, dst *os.File, source 
 	if source.segmentSize < stateDomainChangeBinaryHeaderSize {
 		return fmt.Errorf("snapshots: state-domain-change binary segment %q size %d below header size", source.history.Path, source.segmentSize)
 	}
-	payloadSize := source.segmentSize - uint64(stateDomainChangeBinaryHeaderSize)
-	if payloadSize > math.MaxInt64 {
-		return fmt.Errorf("snapshots: state-domain-change binary segment %q payload too large: %d", source.history.Path, payloadSize)
-	}
-	src, err := os.Open(filepath.Join(dir, source.history.Path))
+	// source.segmentSize is the LOGICAL (uncompressed) size. Read the source's
+	// logical content — decompressing a compressed source — and copy the payload
+	// after the header. A raw byte copy would corrupt a compressed source (its
+	// physical bytes are zstd blocks, not records).
+	data, err := os.ReadFile(filepath.Join(dir, source.history.Path))
 	if err != nil {
 		return err
 	}
-	defer src.Close()
-	if _, err := src.Seek(stateDomainChangeBinaryHeaderSize, io.SeekStart); err != nil {
-		return err
+	logical := data
+	if isCompressedBlockBlob(data) {
+		if logical, err = decompressBlockBlob(data); err != nil {
+			return err
+		}
 	}
-	written, err := io.CopyN(dst, src, int64(payloadSize))
-	if err != nil {
-		return err
+	if uint64(len(logical)) != source.segmentSize {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q logical size %d, want %d", source.history.Path, len(logical), source.segmentSize)
 	}
-	if uint64(written) != payloadSize {
-		return io.ErrUnexpectedEOF
+	if _, err := dst.Write(logical[stateDomainChangeBinaryHeaderSize:]); err != nil {
+		return err
 	}
 	return nil
 }
