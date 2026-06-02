@@ -1,8 +1,7 @@
 package rawdb
 
 import (
-	"bytes"
-	"sort"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -71,6 +70,16 @@ func IterateLatestDomainCommitmentSources(db ethdb.Iteratee, fn func(key, value 
 	return nil
 }
 
+// CoalesceStateCommitmentUpdates deduplicates updates per key (last-writer-wins)
+// and returns them sorted by key. Both callers
+// (DomainCommitmentState.latestUpdatesFromTouches and the unwind builder)
+// construct every element via NewStateCommitmentPut / NewStateCommitmentDelete,
+// which already allocate fresh, single-use copies of Key and Value that nothing
+// else aliases — so this re-uses the input element values directly rather than
+// re-cloning them. The downstream commitment fold (buildOps) makes its own copy
+// of every Key and only reads Value, so it never retains an alias to the input
+// bytes past its own copy. The returned slice may therefore share backing arrays
+// with the caller's input elements.
 func CoalesceStateCommitmentUpdates(updates []StateCommitmentUpdate) []StateCommitmentUpdate {
 	if len(updates) == 0 {
 		return nil
@@ -80,7 +89,7 @@ func CoalesceStateCommitmentUpdates(updates []StateCommitmentUpdate) []StateComm
 		if len(update.Key) == 0 {
 			continue
 		}
-		byKey[string(update.Key)] = cloneStateCommitmentUpdate(update)
+		byKey[string(update.Key)] = update
 	}
 	if len(byKey) == 0 {
 		return nil
@@ -89,20 +98,14 @@ func CoalesceStateCommitmentUpdates(updates []StateCommitmentUpdate) []StateComm
 	for key := range byKey {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return bytes.Compare([]byte(keys[i]), []byte(keys[j])) < 0
-	})
+	// slices.Sort on []string orders lexicographically by byte content — the same
+	// total order as bytes.Compare on the underlying key bytes — without the
+	// reflect-backed sort.Slice closure and its per-comparison []byte(string)
+	// conversions, which together dominated this function's allocation.
+	slices.Sort(keys)
 	out := make([]StateCommitmentUpdate, 0, len(keys))
 	for _, key := range keys {
 		out = append(out, byKey[key])
 	}
 	return out
-}
-
-func cloneStateCommitmentUpdate(update StateCommitmentUpdate) StateCommitmentUpdate {
-	return StateCommitmentUpdate{
-		Key:    append([]byte(nil), update.Key...),
-		Value:  append([]byte(nil), update.Value...),
-		Delete: update.Delete,
-	}
 }

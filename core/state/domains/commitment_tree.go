@@ -709,17 +709,40 @@ func (t *commitmentTrie) applyOnLeaf(branch *BranchData, nb uint8, childPrefix [
 		branch.SetLeafChild(nb, only.key, only.valHash)
 		return nil
 	default:
-		// Multiple survivors → build a child subtree. sortOps gives a
-		// deterministic traversal so apply's bucket sort is stable.
-		sortOps(survivors)
-		child := borrowBranch()
-		defer returnBranch(child)
-		updated, err := t.apply(childPrefix, childDepth, child, survivors)
-		if err != nil {
-			return err
-		}
-		return t.linkChild(branch, nb, childPrefix, updated)
+		// Multiple survivors → build a child subtree in a separate frame.
+		// Keeping the recursive apply/sortOps calls out of this function frame is
+		// what lets the survivors `stack` array above stay on the stack: Go's
+		// escape analysis is per-function, so passing `survivors` to an escaping
+		// callee here would force the whole 16-op array to the heap on EVERY
+		// applyOnLeaf call — including the common 0/1-survivor cases that never
+		// recurse (the dominant fold allocation, ~15% of insertion heap). The
+		// multi-survivor branch borrows a pooled op buffer instead.
+		return t.applyLeafSplit(branch, nb, childPrefix, childDepth, survivors)
 	}
+}
+
+// applyLeafSplit handles the multi-survivor case of applyOnLeaf: the slot's
+// existing leaf plus incoming ops resolve to ≥2 distinct keys, so a child
+// subtree must be built. Split into its own frame so applyOnLeaf's survivor
+// scratch stays stack-allocated (see the call site). The survivors slice aliases
+// the caller's stack array, so it is copied into a pooled buffer before the
+// recursive descent (which sorts in place and may retain ordering across the
+// fold); the pooled buffer is returned at frame exit.
+func (t *commitmentTrie) applyLeafSplit(branch *BranchData, nb uint8, childPrefix []byte, childDepth int, survivors []op) error {
+	bufP := borrowOpsBuf(len(survivors))
+	defer returnOpsBuf(bufP)
+	buf := *bufP
+	copy(buf, survivors)
+
+	// sortOps gives a deterministic traversal so apply's bucket sort is stable.
+	sortOps(buf)
+	child := borrowBranch()
+	defer returnBranch(child)
+	updated, err := t.apply(childPrefix, childDepth, child, buf)
+	if err != nil {
+		return err
+	}
+	return t.linkChild(branch, nb, childPrefix, updated)
 }
 
 // applyOnHash resolves group against an existing hash child (a child subtree) at
