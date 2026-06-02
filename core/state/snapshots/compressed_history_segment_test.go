@@ -182,6 +182,14 @@ func TestCompressedHistorySegmentProductionReadPaths(t *testing.T) {
 		t.Fatalf("compressed seg %d not smaller than uncompressed %d", segC.Size, segU.Size)
 	}
 	t.Logf("cold seg uncompressed %d -> compressed %d (%.2fx)", segU.Size, segC.Size, float64(segU.Size)/float64(segC.Size))
+	// The honest archive number is the whole trio (.seg+.idx+.kv); the writer now
+	// compresses .kv too, so this should be well above the seg-only 1.67x.
+	trioU := segU.Size + idxU.Size + accU.Size
+	trioC := segC.Size + idxC.Size + accC.Size
+	if trioC >= trioU {
+		t.Fatalf("compressed trio %d not smaller than uncompressed %d", trioC, trioU)
+	}
+	t.Logf("cold trio (seg+idx+kv) uncompressed %d -> compressed %d (%.2fx)", trioU, trioC, float64(trioU)/float64(trioC))
 
 	collectRange := func(dir string, seg, idx SegmentRef) [][]byte {
 		var got [][]byte
