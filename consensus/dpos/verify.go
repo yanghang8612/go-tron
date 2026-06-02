@@ -64,7 +64,11 @@ func VerifyHeaderWithDynProps(chain consensus.ChainReader, block *types.Block, d
 		}
 	}
 
-	witness, err := recoverWitness(block)
+	// Recover through the block's memo so a parallel pre-verification pass can
+	// move this ECDSA recovery off the serial critical path. On a cache miss
+	// (e.g. fork-replay blocks the pre-pass never saw) this computes inline via
+	// recoverWitness — identical result either way.
+	witness, err := block.CachedRecoveredWitness(recoverWitness)
 	if err != nil {
 		return ErrInvalidSignature
 	}

@@ -19,6 +19,16 @@ type Transaction struct {
 	pb       *corepb.Transaction
 	hash     common.Hash
 	hashOnce sync.Once
+
+	// signers memoizes RecoverSigners' ECDSA output (recovered addresses or
+	// the first recovery error) so the parallel pre-verification pass in
+	// InsertBlocks can warm it off the serial critical path. The result is a
+	// pure function of pb.RawData + pb.Signature, both immutable after
+	// construction, so the cached value is identical-by-construction to an
+	// inline recompute — this is a performance memo, never a semantics change.
+	signersOnce sync.Once
+	signers     []common.Address
+	signersErr  error
 }
 
 func NewTransactionFromPB(pb *corepb.Transaction) *Transaction {
@@ -146,6 +156,17 @@ func CanonicalSignatureKey(sig []byte) (string, error) {
 // Match the parity rule: require len(sig) >= 65, normalize v like java-tron,
 // then pass a geth-compatible recovery id to crypto.SigToPub.
 func (tx *Transaction) RecoverSigners() ([]common.Address, error) {
+	tx.signersOnce.Do(func() {
+		tx.signers, tx.signersErr = tx.recoverSigners()
+	})
+	return tx.signers, tx.signersErr
+}
+
+// recoverSigners performs the actual per-signature ECDSA recovery. It is a pure
+// function of the transaction's immutable raw data and signatures, so its result
+// is safe to memoize (see RecoverSigners) and to compute concurrently across
+// transactions during pre-verification.
+func (tx *Transaction) recoverSigners() ([]common.Address, error) {
 	hash := tx.Hash()
 	sigs := tx.Signatures()
 	addrs := make([]common.Address, 0, len(sigs))

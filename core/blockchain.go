@@ -213,6 +213,20 @@ func (bc *BlockChain) SetEngine(eng consensus.Engine) {
 	bc.engine = eng
 }
 
+// headerSigPrewarmer returns the consensus engine as a headerSignaturePrewarmer
+// for the parallel signature pre-pass, or nil when no engine is wired (test
+// path) or the engine doesn't implement header-signature prewarming. When nil,
+// the pre-pass warms only transaction senders; header recovery (also skipped
+// without an engine) happens inline. Mirrors the bc.engine != nil guard that
+// gates VerifyHeaderWithDynProps.
+func (bc *BlockChain) headerSigPrewarmer() headerSignaturePrewarmer {
+	if bc.engine == nil {
+		return nil
+	}
+	pw, _ := bc.engine.(headerSignaturePrewarmer)
+	return pw
+}
+
 // AddBlockHook registers a callback called after each successfully inserted block.
 func (bc *BlockChain) AddBlockHook(fn func(*types.Block)) {
 	bc.blockHookMu.Lock()
@@ -567,6 +581,13 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
+	// Parallel signature pre-verification: warm every tx's sender recovery and
+	// every block's witness-signature recovery ahead of serial execution, off
+	// the critical path. Pure cache-warming — the serial path (envelope
+	// validation, header verification) still owns every accept/reject decision
+	// and reads an identical recovered value, computing inline on any miss.
+	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
+
 	executor := newCanonicalRangeExecutor(bc, true)
 	defer func() {
 		if closeErr := executor.Close(); closeErr != nil {

@@ -24,6 +24,17 @@ func (d *DPoS) VerifyHeader(chain consensus.ChainReader, block *types.Block) err
 	return VerifyHeader(chain, block)
 }
 
+// PrewarmHeaderSignature warms the block's witness-recovery memo, performing the
+// (otherwise serial) SR-signature ECDSA recovery ahead of VerifyHeaderWithDynProps.
+// It makes no accept/reject decision — VerifyHeaderWithDynProps still owns every
+// header check and re-reads the recovered signer from the same memo. Errors are
+// captured in the memo and surfaced (identically) by verification. Used by the
+// parallel pre-verification pass in core; satisfies the optional
+// headerSignaturePrewarmer interface there via duck typing.
+func (d *DPoS) PrewarmHeaderSignature(block *types.Block) {
+	_, _ = block.CachedRecoveredWitness(recoverWitness)
+}
+
 // VerifyHeaderWithDynProps lets hot-path callers (applyBlock) thread an
 // already-loaded dynamic-properties snapshot through verification, avoiding
 // the redundant LoadDynamicProperties that the chain.DynProps() fallback in

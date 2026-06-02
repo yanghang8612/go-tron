@@ -28,6 +28,26 @@ type Block struct {
 	hash     common.Hash
 	hashDone bool
 	hashMu   sync.Mutex
+
+	// txs memoizes the wrapped Transaction slice so the same *Transaction
+	// instances are returned on every Transactions() call. This is what lets a
+	// parallel signer-recovery pre-pass warm each tx's signers memo and have the
+	// serial execution path observe the warm result (it re-fetches via
+	// Transactions()). pb.Transactions is never mutated after construction
+	// (block_builder builds the full slice before NewBlockFromPB; sync blocks
+	// come from UnmarshalBlock), so caching the wrappers is safe.
+	txsOnce sync.Once
+	txs     []*Transaction
+
+	// witness memoizes the ECDSA recovery of the block's witness signature
+	// (recovered address or error), keyed by this block's identity. Header
+	// verification reads it through CachedRecoveredWitness so the parallel
+	// pre-pass can move the single per-block SR-signature recovery off the
+	// serial critical path. SetWitnessSignature / ResetHash clear it.
+	witnessMu       sync.Mutex
+	witnessDone     bool
+	witnessAddr     common.Address
+	witnessRecovErr error
 }
 
 func NewBlockFromPB(pb *corepb.Block) *Block {
@@ -86,11 +106,14 @@ func (b *Block) Version() int32 {
 }
 
 func (b *Block) Transactions() []*Transaction {
-	txs := make([]*Transaction, len(b.pb.Transactions))
-	for i, pb := range b.pb.Transactions {
-		txs[i] = NewTransactionFromPB(pb)
-	}
-	return txs
+	b.txsOnce.Do(func() {
+		txs := make([]*Transaction, len(b.pb.Transactions))
+		for i, pb := range b.pb.Transactions {
+			txs[i] = NewTransactionFromPB(pb)
+		}
+		b.txs = txs
+	})
+	return b.txs
 }
 
 // Hash returns the canonical block identifier: SHA-256 of serialized
@@ -124,12 +147,33 @@ func (b *Block) ID() BlockID {
 	return BlockID{Hash: b.Hash(), Num: b.Number()}
 }
 
-// SetWitnessSignature sets the witness signature on the block header.
+// CachedRecoveredWitness returns the address recovered from this block's witness
+// signature, memoizing the result. On a cache miss it calls recover (which owns
+// the actual ECDSA recovery, living in the consensus package) exactly once; the
+// stored (addr, err) is returned on every subsequent call. Recovery is a pure
+// function of the immutable BlockHeader.RawData + WitnessSignature, so the memo
+// is identical-by-construction to an inline recompute — a performance memo only.
+// SetWitnessSignature / ResetHash clear it.
+func (b *Block) CachedRecoveredWitness(recover func(*Block) (common.Address, error)) (common.Address, error) {
+	b.witnessMu.Lock()
+	defer b.witnessMu.Unlock()
+	if !b.witnessDone {
+		b.witnessAddr, b.witnessRecovErr = recover(b)
+		b.witnessDone = true
+	}
+	return b.witnessAddr, b.witnessRecovErr
+}
+
+// SetWitnessSignature sets the witness signature on the block header. It clears
+// the cached witness recovery so a re-signed block re-derives the signer.
 func (b *Block) SetWitnessSignature(sig []byte) {
 	if b.pb.BlockHeader == nil {
 		b.pb.BlockHeader = &corepb.BlockHeader{}
 	}
 	b.pb.BlockHeader.WitnessSignature = sig
+	b.witnessMu.Lock()
+	b.witnessDone = false
+	b.witnessMu.Unlock()
 }
 
 // SetAccountStateRoot sets the account state root in the block header raw data.
@@ -144,10 +188,15 @@ func (b *Block) SetAccountStateRoot(root common.Hash) {
 }
 
 // ResetHash clears the cached hash so it will be recomputed on next Hash() call.
+// It also clears the cached witness recovery, since a header-raw change (the
+// reason to reset the hash) invalidates the recovered signer.
 func (b *Block) ResetHash() {
 	b.hashMu.Lock()
 	b.hashDone = false
 	b.hashMu.Unlock()
+	b.witnessMu.Lock()
+	b.witnessDone = false
+	b.witnessMu.Unlock()
 }
 
 func (b *Block) Marshal() ([]byte, error) {

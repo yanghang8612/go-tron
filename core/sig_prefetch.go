@@ -1,0 +1,152 @@
+package core
+
+import (
+	"runtime"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tronprotocol/go-tron/core/types"
+)
+
+// ParallelSigVerifyMinTxs gates the parallel signature pre-verification pass run
+// at the top of InsertBlocks. When the total transaction count across the batch
+// is at least this value, every transaction's sender recovery (and every block's
+// witness-signature recovery) is computed concurrently on a bounded worker pool,
+// warming the per-tx / per-block memos so the serial execution path reads them
+// instead of doing ECDSA on the critical hot path. Below the threshold the pass
+// is skipped and recovery happens inline during execution.
+//
+// 0 disables the parallel pre-pass entirely (pure inline recovery, the original
+// behavior) — an operational kill switch, never a consensus toggle. Both paths
+// reject EXACTLY the same signatures: the pre-pass only *warms* memos, it makes
+// no accept/reject decision; the serial path still owns every check and observes
+// an identical recovered value whether it was precomputed or computed inline.
+//
+// The default is a small positive threshold so a batch of a few txs (single-block
+// extension in steady state) stays serial and never pays goroutine-spawn
+// overhead, while a real sync batch (up to maxFetchBatch blocks, each up to
+// hundreds of txs) fans the ECDSA work out across idle cores. Signature recovery
+// is ~6-10% of the single-threaded sync hot path; this split moves it off the
+// critical path.
+var ParallelSigVerifyMinTxs = defaultParallelSigVerifyMinTxs
+
+const defaultParallelSigVerifyMinTxs = 16
+
+// headerSignaturePrewarmer is the optional capability a consensus engine exposes
+// to let the pre-pass warm a block's header-signature recovery. The DPoS engine
+// implements it; engines (or test mocks) that don't are simply skipped — the
+// header signer is then recovered inline during VerifyHeaderWithDynProps, with an
+// identical result. Kept as a duck-typed interface so the mandatory consensus
+// .Engine interface (and its test mocks) need no change.
+type headerSignaturePrewarmer interface {
+	PrewarmHeaderSignature(block *types.Block)
+}
+
+// sigPrewarmJobHook, when non-nil, is invoked once per recovery job executed by
+// the parallel pre-pass. It is nil in production (a single branch-predicted
+// nil-check, no state) and is set only by tests to assert the cache is actually
+// warmed on the happy path / not touched when the kill switch is off.
+var sigPrewarmJobHook func()
+
+// prewarmBlockSignatures concurrently warms the ECDSA-recovery memos for a
+// contiguous batch of blocks: each transaction's recovered signers and (when the
+// engine supports it) each block's recovered witness. It is a pure cache-warming
+// step — it returns nothing and never aborts on a bad signature; a recovery error
+// is captured in the memo and surfaced, identically, by the serial verification /
+// envelope-validation path when it reaches that block/tx in order.
+//
+// Concurrency safety: the per-tx signers memo (sync.Once) and the per-block
+// witness memo (mutex-guarded) are each populated at most once and are pure
+// functions of immutable proto fields, so warming them from many goroutines races
+// with nothing and yields the same value the serial path would compute. Blocks the
+// pre-pass never sees (e.g. fork-replay) just miss the cache and recover inline.
+func prewarmBlockSignatures(blocks []*types.Block, engine headerSignaturePrewarmer) {
+	if ParallelSigVerifyMinTxs <= 0 || len(blocks) == 0 {
+		return
+	}
+
+	// Flatten the batch into independent recovery jobs so work is balanced
+	// across goroutines regardless of how txs are distributed between blocks.
+	// A block job (negative txIndex sentinel) warms the header signature; a tx
+	// job warms one transaction's signers.
+	type job struct {
+		block   *types.Block
+		txs     []*types.Transaction
+		txIndex int // -1 → header-signature job; >=0 → index into txs
+	}
+	var (
+		jobs    []job
+		totalTx int
+	)
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		if engine != nil {
+			jobs = append(jobs, job{block: block, txIndex: -1})
+		}
+		txs := block.Transactions()
+		totalTx += len(txs)
+		for i := range txs {
+			jobs = append(jobs, job{txs: txs, txIndex: i})
+		}
+	}
+	// Gate on transaction volume: a near-empty batch is cheaper to recover
+	// inline than to fan out. Header-only jobs don't count toward the gate.
+	if totalTx < ParallelSigVerifyMinTxs || len(jobs) == 0 {
+		return
+	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	// Single worker collapses to the serial warm — still off the execution
+	// path's later read, but no goroutine churn.
+	if workers == 1 {
+		for i := range jobs {
+			runSigJob(jobs[i].block, jobs[i].txs, jobs[i].txIndex, engine)
+		}
+		return
+	}
+
+	var (
+		wg   sync.WaitGroup
+		next atomic.Int64
+	)
+	n := int64(len(jobs))
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				idx := next.Add(1) - 1
+				if idx >= n {
+					return
+				}
+				j := &jobs[idx]
+				runSigJob(j.block, j.txs, j.txIndex, engine)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// runSigJob executes one recovery job. txIndex < 0 means warm the block's header
+// signature; otherwise warm txs[txIndex]'s signers. Errors are intentionally
+// discarded here — they are memoized and resurfaced by the serial path.
+func runSigJob(block *types.Block, txs []*types.Transaction, txIndex int, engine headerSignaturePrewarmer) {
+	if sigPrewarmJobHook != nil {
+		sigPrewarmJobHook()
+	}
+	if txIndex < 0 {
+		if engine != nil && block != nil {
+			engine.PrewarmHeaderSignature(block)
+		}
+		return
+	}
+	_, _ = txs[txIndex].RecoverSigners()
+}
