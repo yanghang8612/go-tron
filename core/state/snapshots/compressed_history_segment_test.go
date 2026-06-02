@@ -198,6 +198,80 @@ func TestCompressHistorySegmentsGate(t *testing.T) {
 	}
 }
 
+// TestCompactionMergesCompressedSources proves the compactor reads COMPRESSED
+// source segments (copyPayload decompresses instead of raw-copying) and emits a
+// compressed merged seg+kv that reads back — so compression survives merges
+// rather than decaying to uncompressed on every retire.
+func TestCompactionMergesCompressedSources(t *testing.T) {
+	if !CompressHistorySegments {
+		t.Skip("compression disabled")
+	}
+	dir := t.TempDir()
+	mk := func(from, to uint64, changes ...*rawdb.StateDomainChange) []SegmentRef {
+		seg, idx, acc, err := writeHistorySegmentFiles(dir, SegmentRef{
+			Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+			FromTxNum: from, ToTxNum: to, Path: stateDomainChangeHistorySegmentPath(from, to),
+		}, changes)
+		if err != nil {
+			t.Fatalf("write compressed source [%d,%d]: %v", from, to, err)
+		}
+		// Sources must be compressed for this test to mean anything.
+		f, _ := os.Open(filepath.Join(dir, seg.Path))
+		var m [8]byte
+		_, _ = f.ReadAt(m[:], 0)
+		_ = f.Close()
+		if string(m[:]) != compressedBlockMagic {
+			t.Fatalf("source seg not compressed")
+		}
+		return []SegmentRef{seg, acc, idx}
+	}
+	var refs []SegmentRef
+	refs = append(refs, mk(1, 1, binaryStateDomainChange(1, 1, 1, "a"))...)
+	refs = append(refs, mk(2, 2, binaryStateDomainChange(2, 2, 1, "b"))...)
+	refs = append(refs, mk(3, 3, binaryStateDomainChange(3, 3, 1, "c"))...)
+	if err := PublishManifest(dir, NewManifest(1, 3, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+
+	result, err := CompactHistoryDomain(dir, SegmentDatasetStateDomainChange, CompactionConfig{
+		MinSegments: 3, DeleteObsolete: true,
+	})
+	if err != nil {
+		t.Fatalf("compact compressed sources: %v", err)
+	}
+	if !result.Merged {
+		t.Fatal("compaction did not merge")
+	}
+	mergedSeg := compactionRefByKind(t, result, SegmentHistory)
+	mergedAcc := compactionRefByKind(t, result, SegmentAccessor)
+
+	assertMagic := func(rel string) {
+		f, err := os.Open(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		var m [8]byte
+		if _, err := f.ReadAt(m[:], 0); err != nil {
+			t.Fatal(err)
+		}
+		if string(m[:]) != compressedBlockMagic {
+			t.Fatalf("merged %s not compressed (magic %q)", rel, m)
+		}
+	}
+	assertMagic(mergedSeg.Path)
+	assertMagic(mergedAcc.Path)
+
+	// The merged compressed seg reads back with all three records.
+	got, err := readStateDomainChangeBinarySegment(dir, mergedSeg)
+	if err != nil {
+		t.Fatalf("read merged compressed seg: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("merged seg has %d records, want 3", len(got))
+	}
+}
+
 // TestCompressedHistorySegmentSelfCheckCatchesCorruption proves the build-time
 // self-check rejects an unreadable segment — the invariant that makes default-on
 // compression safe against snap-mode pruning (which deletes hot rows trusting
