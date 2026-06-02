@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -194,6 +195,43 @@ func TestCompressHistorySegmentsGate(t *testing.T) {
 	}
 	if got := firstMagic(dirOff, segOff.Path); got == compressedBlockMagic {
 		t.Fatalf("gate off: seg should be uncompressed, got compressed magic")
+	}
+}
+
+// TestCompressedHistorySegmentSelfCheckCatchesCorruption proves the build-time
+// self-check rejects an unreadable segment — the invariant that makes default-on
+// compression safe against snap-mode pruning (which deletes hot rows trusting
+// manifest coverage, without re-decoding the cold segment).
+func TestCompressedHistorySegmentSelfCheckCatchesCorruption(t *testing.T) {
+	changes := buildHistoryStructs(100, 30)
+	baseRef := SegmentRef{
+		Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory,
+		FromTxNum: 9_000_000, ToTxNum: 9_000_099, Path: "sdc.seg",
+	}
+	dir := t.TempDir()
+	segC, _, _, err := writeStateDomainChangeBinaryCompressedSegmentFiles(dir, baseRef, changes)
+	if err != nil {
+		t.Fatalf("write (and its own self-check) failed on valid input: %v", err)
+	}
+	// A valid segment passes the explicit check.
+	if err := validateCompressedHistorySegmentReadable(dir, segC); err != nil {
+		t.Fatalf("self-check rejected a valid segment: %v", err)
+	}
+	// Corrupt bytes inside the first compressed block; the ReadAt walk must fail.
+	path := filepath.Join(dir, segC.Path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataOff := binary.BigEndian.Uint64(data[40:48])
+	for i := dataOff; i < dataOff+64 && i < uint64(len(data)); i++ {
+		data[i] = 0
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCompressedHistorySegmentReadable(dir, segC); err == nil {
+		t.Fatal("self-check accepted a corrupted compressed segment — pruning could delete hot rows backed by it")
 	}
 }
 
