@@ -49,12 +49,31 @@ const maxFoldNibbles = 16
 //     is concurrent-safe, and go-ethereum memorydb guards reads with an RWMutex.
 type bufferedBranchStore struct {
 	base branchStore
-	puts map[string][]byte   // prefix (one byte per nibble) -> encoded BranchData
+	puts map[string]cbSpan   // prefix (one byte per nibble) -> encoded span in arena
 	dels map[string]struct{} // prefix -> tombstone
+	// arenaP holds every buffered branch's encoded bytes back-to-back in one
+	// pooled buffer; puts stores [off,end) spans into *arenaP. This replaces a
+	// fresh []byte per PutBranch (the single largest fold allocation), since the
+	// buffered bytes are retained only until flush.
+	arenaP *[]byte
 }
 
+type cbSpan struct{ off, end int }
+
+// cbArenaPool reuses the per-subtrie encode arena across folds. Borrowed in
+// newBufferedBranchStore, returned at flush; sync.Pool is goroutine-safe and the
+// borrow/return both happen on the main goroutine (around the parallel phase).
+var cbArenaPool = sync.Pool{New: func() any { b := make([]byte, 0, 8192); return &b }}
+
+// cbArenaMaxCap bounds what the pool retains: an arena grown past this by a large
+// fold is dropped (GC'd) instead of pooled, so the pool can't hold a few huge
+// buffers that cut GC headroom under a binding GOMEMLIMIT (the live-node regime).
+const cbArenaMaxCap = 1 << 16
+
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
-	return &bufferedBranchStore{base: base}
+	ap := cbArenaPool.Get().(*[]byte)
+	*ap = (*ap)[:0]
+	return &bufferedBranchStore{base: base, arenaP: ap}
 }
 
 func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -62,8 +81,8 @@ func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error)
 	if _, tomb := s.dels[k]; tomb {
 		return BranchData{}, false, nil
 	}
-	if enc, ok := s.puts[k]; ok {
-		b, err := DecodeBranchData(enc)
+	if sp, ok := s.puts[k]; ok {
+		b, err := DecodeBranchData((*s.arenaP)[sp.off:sp.end])
 		if err != nil {
 			return BranchData{}, false, err
 		}
@@ -78,8 +97,8 @@ func (s *bufferedBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (boo
 		*dst = BranchData{}
 		return false, nil
 	}
-	if enc, ok := s.puts[k]; ok {
-		if err := DecodeBranchDataInto(enc, dst); err != nil {
+	if sp, ok := s.puts[k]; ok {
+		if err := DecodeBranchDataInto((*s.arenaP)[sp.off:sp.end], dst); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -91,11 +110,15 @@ func (s *bufferedBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	k := string(prefix)
 	delete(s.dels, k)
 	if s.puts == nil {
-		s.puts = make(map[string][]byte)
+		s.puts = make(map[string]cbSpan)
 	}
-	// Encode eagerly: the caller (linkChild) returns *child to branchPool right
-	// after PutBranch, so the value must not be retained by reference.
-	s.puts[k] = b.Encode()
+	// Encode eagerly into the arena: the caller (linkChild) returns *child to
+	// branchPool right after PutBranch, so the value must not be retained by
+	// reference. EncodeTo appends; if it grows the arena the spans stay valid
+	// because they index the current *arenaP, read only via that field.
+	off := len(*s.arenaP)
+	*s.arenaP = b.EncodeTo(*s.arenaP)
+	s.puts[k] = cbSpan{off: off, end: len(*s.arenaP)}
 	return nil
 }
 
@@ -109,11 +132,20 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 	return nil
 }
 
-// flush applies the buffered mutations to base. dels and puts hold disjoint
-// prefixes, and across all sibling buffers every prefix is written at most once,
-// so the resulting base state is independent of flush order; the sorted iteration
-// only makes the emitted write stream deterministic.
-func (s *bufferedBranchStore) flush(base branchStore) error {
+// flush applies the buffered mutations to base, then returns the arena to the
+// pool. dels and puts hold disjoint prefixes, and across all sibling buffers
+// every prefix is written at most once, so the resulting base state is
+// independent of flush order; the sorted iteration only makes the emitted write
+// stream deterministic.
+func (s *bufferedBranchStore) flush(base branchStore) (err error) {
+	defer func() {
+		if s.arenaP != nil {
+			if cap(*s.arenaP) <= cbArenaMaxCap {
+				cbArenaPool.Put(s.arenaP)
+			}
+			s.arenaP = nil
+		}
+	}()
 	if len(s.dels) > 0 {
 		keys := make([]string, 0, len(s.dels))
 		for k := range s.dels {
@@ -137,14 +169,16 @@ func (s *bufferedBranchStore) flush(base branchStore) error {
 		// subtrie goroutine and the serial flush is just a KV write.
 		if ep, ok := base.(encodedBranchPutter); ok {
 			for _, k := range keys {
-				if err := ep.putBranchEncoded([]byte(k), s.puts[k]); err != nil {
+				sp := s.puts[k]
+				if err := ep.putBranchEncoded([]byte(k), (*s.arenaP)[sp.off:sp.end]); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
 		for _, k := range keys {
-			b, err := DecodeBranchData(s.puts[k])
+			sp := s.puts[k]
+			b, err := DecodeBranchData((*s.arenaP)[sp.off:sp.end])
 			if err != nil {
 				return err
 			}
@@ -179,9 +213,11 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 		branch = &BranchData{}
 	}
 
-	// Bucket ops by first nibble via the same counting sort apply uses, but into
-	// a dedicated backing slice (not the pooled scratch) because the per-nibble
-	// groups must stay alive and isolated for the whole concurrent phase.
+	// Bucket ops by first nibble via the same counting sort apply uses. The
+	// per-nibble groups must stay alive and isolated for the whole concurrent
+	// phase, so this borrows a SEPARATE long-lived ops buffer from the pool
+	// (distinct from the short-lived scratch each inner apply borrows/returns),
+	// released at function exit after the flush.
 	var counts [maxFoldNibbles]int
 	for i := range ops {
 		counts[ops[i].path[0]]++
@@ -190,7 +226,9 @@ func (t *commitmentTrie) applyRootParallel(branch *BranchData, ops []op) (*Branc
 	for i := 1; i < maxFoldNibbles; i++ {
 		starts[i] = starts[i-1] + counts[i-1]
 	}
-	grouped := make([]op, len(ops))
+	groupedP := borrowOpsBuf(len(ops))
+	defer returnOpsBuf(groupedP)
+	grouped := *groupedP
 	heads := starts
 	for i := range ops {
 		nb := ops[i].path[0]
