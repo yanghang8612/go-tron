@@ -332,7 +332,45 @@ func writeStateDomainChangeBinaryCompressedSegmentFiles(dir string, ref SegmentR
 	}
 	accessorRef.Size = accSize
 	accessorRef.Checksum = accChecksum
+
+	// Self-validate: walk the just-written compressed segment back through the
+	// production ReadAt path before returning. Snap-mode hot-history pruning
+	// deletes hot rows on manifest coverage ALONE (no decode-walk), so an
+	// unreadable compressed segment reaching the manifest would let pruning
+	// delete hot rows whose only cold copy can't be read back — data loss. This
+	// catches any writer/codec edge case at build time (bounded memory: ReadAt
+	// decompresses one block at a time), so a bad segment never gets published.
+	if err := validateCompressedHistorySegmentReadable(dir, segRef); err != nil {
+		_ = os.Remove(finalAbs)
+		_ = os.Remove(accessorAbs)
+		_ = os.Remove(filepath.Join(dir, idxRef.Path))
+		return SegmentRef{}, SegmentRef{}, SegmentRef{}, fmt.Errorf("snapshots: compressed history segment self-check failed: %w", err)
+	}
 	return segRef, idxRef, accessorRef, nil
+}
+
+// validateCompressedHistorySegmentReadable walks every record of a written
+// history segment through the production ReadAt decode path (block-by-block,
+// bounded memory), confirming the segment is fully readable and its record
+// frames chain to exactly the logical end.
+func validateCompressedHistorySegmentReadable(dir string, segRef SegmentRef) error {
+	reader, logicalSize, header, err := openHistorySegmentForRead(dir, segRef)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	offset := uint64(stateDomainChangeBinaryHeaderSize)
+	for i := uint64(0); i < header.count; i++ {
+		_, next, err := readStateDomainChangeBinaryRecordAtBounded(reader, offset, logicalSize)
+		if err != nil {
+			return fmt.Errorf("record %d: %w", i, err)
+		}
+		offset = next
+	}
+	if offset != logicalSize {
+		return fmt.Errorf("record frames end at %d, want logical size %d", offset, logicalSize)
+	}
+	return nil
 }
 
 type stateDomainChangeBinaryCompactionSource struct {
