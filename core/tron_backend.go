@@ -417,8 +417,12 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 		return nil, fmt.Errorf("open state: %w", err)
 	}
 	// Read rooted dynprops through the same latest StateDB view so resource
-	// limits stay consistent with the live account state.
-	dynProps := state.LoadDynamicProperties(b.chain.db, statedb)
+	// limits stay consistent with the live account state. Use the buffer
+	// overlay (not bc.db) as the derived dp- reader so those keys are as
+	// fresh as the rooted reads even before the async flush settles —
+	// matching cachedDynProps / block_builder. (Only rooted limit keys are
+	// returned today, so this is defensive alignment, not a behaviour change.)
+	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
 	return &tronapi.AccountResource{
 		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
 		FreeNetLimit:     dynProps.FreeNetLimit(),
