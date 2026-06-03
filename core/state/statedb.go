@@ -1165,6 +1165,69 @@ func (s *StateDB) UnfreezeV1DelegatedEnergy(owner, receiver tcommon.Address, amo
 	recvObj.markDirty()
 }
 
+// trxPrecisionState is SUN per TRX, used for V1 delegated-weight rounding.
+const trxPrecisionState = 1_000_000
+
+// UnfreezeV1DelegatedOwner decrements ONLY the owner's delegated frozen balance
+// for the resource. The receiver's acquired-delegated balance is handled
+// separately (see DecrementReceiverAcquired) so the actuator can mirror
+// java-tron UnfreezeBalanceActuator's contract-receiver skip: for a Contract
+// receiver under allow_tvm_constantinople java never touches the receiver.
+func (s *StateDB) UnfreezeV1DelegatedOwner(owner tcommon.Address, amount int64, resource corepb.ResourceCode) {
+	obj := s.getStateObject(owner)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(owner, obj)
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		obj.account.SetDelegatedFrozenBandwidth(obj.account.DelegatedFrozenBandwidth() - amount)
+	case corepb.ResourceCode_ENERGY:
+		obj.account.SetDelegatedFrozenEnergy(obj.account.DelegatedFrozenEnergy() - amount)
+	}
+	obj.markDirty()
+}
+
+// DecrementReceiverAcquired mirrors java-tron UnfreezeBalanceActuator's
+// non-contract receiver branch: it decrements the receiver's acquired-delegated
+// frozen balance for the resource and returns the exact weight delta
+// (newWeight - oldWeight, in TRX). With AllowTvmSolidity059 active the acquired
+// balance is clamped to 0 on underflow and oldWeight is taken as amount/TRX
+// (java's underflow guard); otherwise it decrements raw (may go negative,
+// matching java's pre-Solidity059 addAcquired(-amount)).
+func (s *StateDB) DecrementReceiverAcquired(receiver tcommon.Address, amount int64, resource corepb.ResourceCode, solidity059 bool) int64 {
+	obj := s.getStateObject(receiver)
+	if obj == nil {
+		return 0
+	}
+	s.journalAccount(receiver, obj)
+	var acquired int64
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		acquired = obj.account.AcquiredDelegatedFrozenBandwidth()
+	case corepb.ResourceCode_ENERGY:
+		acquired = obj.account.AcquiredDelegatedFrozenEnergy()
+	default:
+		return 0
+	}
+	var oldW, newAcquired int64
+	if solidity059 && acquired < amount {
+		oldW = amount / trxPrecisionState
+		newAcquired = 0
+	} else {
+		oldW = acquired / trxPrecisionState
+		newAcquired = acquired - amount
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		obj.account.SetAcquiredDelegatedFrozenBandwidth(newAcquired)
+	case corepb.ResourceCode_ENERGY:
+		obj.account.SetAcquiredDelegatedFrozenEnergy(newAcquired)
+	}
+	obj.markDirty()
+	return newAcquired/trxPrecisionState - oldW
+}
+
 // GetStateObject returns the account for addr (nil if not found). Used by tests and later tasks.
 func (s *StateDB) GetStateObject(addr tcommon.Address) *types.Account {
 	obj := s.getStateObject(addr)

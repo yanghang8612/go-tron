@@ -125,7 +125,6 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	var receiverAddr common.Address
 	if delegated {
 		receiverAddr = common.BytesToAddress(uc.ReceiverAddress)
-		oldWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, uc.Resource)
 	}
 	if !delegated {
 		switch uc.Resource {
@@ -147,12 +146,12 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 			removed = dr.FrozenBalanceForBandwidth
 			dr.FrozenBalanceForBandwidth = 0
 			dr.ExpireTimeForBandwidth = 0
-			ctx.State.UnfreezeV1DelegatedBandwidth(ownerAddr, receiverAddr, removed)
+			ctx.State.UnfreezeV1DelegatedOwner(ownerAddr, removed, corepb.ResourceCode_BANDWIDTH)
 		case corepb.ResourceCode_ENERGY:
 			removed = dr.FrozenBalanceForEnergy
 			dr.FrozenBalanceForEnergy = 0
 			dr.ExpireTimeForEnergy = 0
-			ctx.State.UnfreezeV1DelegatedEnergy(ownerAddr, receiverAddr, removed)
+			ctx.State.UnfreezeV1DelegatedOwner(ownerAddr, removed, corepb.ResourceCode_ENERGY)
 		}
 		if dr.FrozenBalanceForBandwidth == 0 && dr.FrozenBalanceForEnergy == 0 {
 			if err := ctx.State.DeleteDelegatedResourceLegacy(ownerAddr, receiverAddr); err != nil {
@@ -180,12 +179,32 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	// Shrink global weight by the amount returned to liquid balance.
 	// Intentionally NOT gated on allow_new_resource_model — historical V1
 	// unfreezes must stay reachable post-fork.
-	newWeight := v1FrozenResourceWeight(ctx.State, ownerAddr, uc.Resource)
-	if delegated {
-		newWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, uc.Resource)
-	}
 	traceWeightEvent(ctx.BlockNumber, ownerAddr, receiverAddr, delegated, uc.Resource, -removed)
-	addV1ResourceWeight(ctx.DynProps, uc.Resource, -removed, oldWeight, newWeight)
+	if delegated {
+		// Mirror java-tron UnfreezeBalanceActuator's delegated branch. The
+		// owner's delegated balance was already decremented above. The
+		// receiver's acquired balance is touched ONLY when it is not a Contract
+		// under allow_tvm_constantinople — otherwise java leaves the receiver's
+		// acquired balance untouched (it accumulates). The weight delta is the
+		// exact newWeight-oldWeight for a touched receiver, or -removed/TRX for
+		// a skipped contract receiver. Under the floor model (pre allow_new_reward)
+		// java always uses -removed/TRX.
+		var decrease int64
+		receiver := ctx.State.GetAccount(receiverAddr)
+		if ctx.DynProps.AllowTvmConstantinople() && receiver != nil && receiver.Type() == corepb.AccountType_Contract {
+			decrease = -removed / trxPrecisionActuator
+		} else {
+			decrease = ctx.State.DecrementReceiverAcquired(receiverAddr, removed, uc.Resource, ctx.DynProps.AllowTvmSolidity059())
+		}
+		weight := decrease
+		if !ctx.DynProps.AllowNewReward() {
+			weight = -removed / trxPrecisionActuator
+		}
+		addResourceWeight(ctx.DynProps, uc.Resource, weight)
+	} else {
+		newWeight := v1FrozenResourceWeight(ctx.State, ownerAddr, uc.Resource)
+		addV1ResourceWeight(ctx.DynProps, uc.Resource, -removed, oldWeight, newWeight)
+	}
 
 	needToClearVote := true
 	if ctx.DynProps.AllowNewResourceModel() {

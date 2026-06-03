@@ -94,6 +94,82 @@ func TestDelegatedEnergyTopUpFloorAsymmetry(t *testing.T) {
 	}
 }
 
+// TestDelegatedEnergyUnfreezeContractReceiverLeak is the regression test for the
+// Nile-8,825,873 total_energy_weight drift. Under allow_new_reward (exact weight
+// method) + allow_tvm_constantinople, java-tron's UnfreezeBalanceActuator does
+// NOT decrement a Contract receiver's acquired-delegated balance and uses
+// decrease = -unfreezeBalance/TRX. gtron previously always decremented the
+// receiver and computed newWeight-oldWeight, which is 1 lower whenever
+// frac(acquired) < frac(removed) — accumulating ~3,091 low over Nile history and
+// flipping the origin's OUT_OF_ENERGY to SUCCESS at block 8,825,873.
+//
+// Scenario chosen so frac(acquired)=0 < frac(removed)=0.5, where old gtron gave
+// tw=1 but java gives tw=2:
+//   A delegates 2.5 TRX energy to contract C  -> tw += floor(2.5)-0          = 2
+//   B delegates 1.5 TRX energy to contract C  -> tw += floor(4.0)-floor(2.5) = 2  (tw=4)
+//   constantinople ON; A unfreezes its 2.5    -> java decrease = -floor(2.5) = -2 (tw=2)
+//                                                old gtron decremented C 4.0->1.5:
+//                                                floor(1.5)-floor(4.0) = -3 (tw=1, the bug)
+func TestDelegatedEnergyUnfreezeContractReceiverLeak(t *testing.T) {
+	sdb := setupStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowDelegateResource(true)
+	dp.SetAllowNewReward(true)
+	// constantinople OFF during the freezes so delegating to a contract is allowed.
+	cSeed := byte(22)
+	cAddr := makeTestAddr(22)
+	seedAccount(sdb, makeTestAddr(20), 100_000_000)
+	seedAccount(sdb, makeTestAddr(21), 100_000_000)
+	sdb.CreateAccount(cAddr, corepb.AccountType_Contract)
+
+	execFreeze(t, sdb, dp, 20, 2_500_000, 3, corepb.ResourceCode_ENERGY, &cSeed, 1_000_000)
+	execFreeze(t, sdb, dp, 21, 1_500_000, 3, corepb.ResourceCode_ENERGY, &cSeed, 1_000_000)
+	if got := dp.TotalEnergyWeight(); got != 4 {
+		t.Fatalf("after 2 delegations to contract: tw=%d want 4", got)
+	}
+
+	// Now constantinople + solidity059 active (the regime at Nile block 8.8M).
+	dp.SetAllowTvmConstantinople(true)
+	dp.SetAllowTvmSolidity059(true)
+
+	execUnfreeze(t, sdb, dp, 20, corepb.ResourceCode_ENERGY, &cSeed, 1_000_000+4*86_400_000)
+
+	if got := dp.TotalEnergyWeight(); got != 2 {
+		t.Errorf("after contract-receiver unfreeze: tw=%d want 2 (java leaves receiver acquired; the pre-fix gtron drifted to 1)", got)
+	}
+	// The contract receiver's acquired must NOT have been decremented (java leak).
+	if acq := sdb.GetAccount(cAddr).AcquiredDelegatedFrozenEnergy(); acq != 4_000_000 {
+		t.Errorf("contract receiver acquired: got %d want 4_000_000 (java does not touch a contract receiver)", acq)
+	}
+}
+
+// TestDelegatedEnergyUnfreezeNonContractReceiver confirms a NORMAL receiver is
+// still decremented and the exact weight delta is unchanged by the fix.
+func TestDelegatedEnergyUnfreezeNonContractReceiver(t *testing.T) {
+	sdb := setupStateDB(t)
+	dp := state.NewDynamicProperties()
+	dp.SetAllowDelegateResource(true)
+	dp.SetAllowNewReward(true)
+	dp.SetAllowTvmConstantinople(true)
+	dp.SetAllowTvmSolidity059(true)
+	rSeed := byte(24)
+	rAddr := makeTestAddr(24)
+	seedAccount(sdb, makeTestAddr(23), 100_000_000)
+	seedAccount(sdb, rAddr, 1_000_000) // normal receiver
+
+	execFreeze(t, sdb, dp, 23, 3_000_000, 3, corepb.ResourceCode_ENERGY, &rSeed, 1_000_000)
+	if got := dp.TotalEnergyWeight(); got != 3 {
+		t.Fatalf("after delegation to normal receiver: tw=%d want 3", got)
+	}
+	execUnfreeze(t, sdb, dp, 23, corepb.ResourceCode_ENERGY, &rSeed, 1_000_000+4*86_400_000)
+	if got := dp.TotalEnergyWeight(); got != 0 {
+		t.Errorf("after normal-receiver unfreeze: tw=%d want 0", got)
+	}
+	if acq := sdb.GetAccount(rAddr).AcquiredDelegatedFrozenEnergy(); acq != 0 {
+		t.Errorf("normal receiver acquired: got %d want 0 (decremented)", acq)
+	}
+}
+
 // Sanity: ensure a fresh DynProps reads zero and the address helper is stable.
 var _ = tcommon.Address{}
 var _ = (*types.Transaction)(nil)
