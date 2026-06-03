@@ -269,6 +269,62 @@ func TestProcessBlock_PassesGenesisHashToProposalValidation(t *testing.T) {
 	}
 }
 
+func TestApplyHistoricalDynamicPropertyCorrections_NileEnergyWeight(t *testing.T) {
+	blockAtCorrection := func(number uint64) *types.Block {
+		return types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number: int64(number),
+				},
+			},
+		})
+	}
+
+	t.Run("applies at canonical Nile point", func(t *testing.T) {
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetTotalEnergyWeight(nileEnergyWeightCorrectionBefore)
+
+		applyHistoricalDynamicPropertyCorrections(dynProps, blockAtCorrection(nileEnergyWeightCorrectionBlock), params.NileGenesisHash)
+
+		if got := dynProps.TotalEnergyWeight(); got != nileEnergyWeightCorrectionAfter {
+			t.Fatalf("total energy weight: got %d, want %d", got, nileEnergyWeightCorrectionAfter)
+		}
+	})
+
+	t.Run("skips non Nile genesis", func(t *testing.T) {
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetTotalEnergyWeight(nileEnergyWeightCorrectionBefore)
+
+		applyHistoricalDynamicPropertyCorrections(dynProps, blockAtCorrection(nileEnergyWeightCorrectionBlock), tcommon.Hash{})
+
+		if got := dynProps.TotalEnergyWeight(); got != nileEnergyWeightCorrectionBefore {
+			t.Fatalf("total energy weight changed on non Nile chain: got %d, want %d", got, nileEnergyWeightCorrectionBefore)
+		}
+	})
+
+	t.Run("skips other blocks", func(t *testing.T) {
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetTotalEnergyWeight(nileEnergyWeightCorrectionBefore)
+
+		applyHistoricalDynamicPropertyCorrections(dynProps, blockAtCorrection(nileEnergyWeightCorrectionBlock-1), params.NileGenesisHash)
+
+		if got := dynProps.TotalEnergyWeight(); got != nileEnergyWeightCorrectionBefore {
+			t.Fatalf("total energy weight changed at wrong block: got %d, want %d", got, nileEnergyWeightCorrectionBefore)
+		}
+	})
+
+	t.Run("skips unexpected pre value", func(t *testing.T) {
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetTotalEnergyWeight(nileEnergyWeightCorrectionAfter)
+
+		applyHistoricalDynamicPropertyCorrections(dynProps, blockAtCorrection(nileEnergyWeightCorrectionBlock), params.NileGenesisHash)
+
+		if got := dynProps.TotalEnergyWeight(); got != nileEnergyWeightCorrectionAfter {
+			t.Fatalf("total energy weight changed from unexpected pre value: got %d, want %d", got, nileEnergyWeightCorrectionAfter)
+		}
+	})
+}
+
 func TestProcessBlock_FailingTxRevertsState(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
