@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -140,6 +141,14 @@ func (a *ExchangeInjectActuator) Execute(ctx *Context) (*Result, error) {
 		otherBalance = ex.FirstTokenBalance
 	}
 
+	// java-tron's execute multiplies the two int64 operands with multiplyExact
+	// BEFORE dividing, throwing on int64 PRODUCT overflow (an uncaught
+	// ArithmeticException => block rejection) even when the final quotient fits
+	// int64. Reproduce that so a go-tron producer cannot pack a tx java rejects.
+	// Operands are >0 after Validate; the positive-overflow guard suffices.
+	if otherBalance != 0 && (c.Quant > math.MaxInt64/otherBalance || c.Quant < math.MinInt64/otherBalance) {
+		return nil, errors.New("multiplyExact overflow")
+	}
 	anotherBig := new(big.Int).Mul(big.NewInt(otherBalance), big.NewInt(c.Quant))
 	anotherBig.Div(anotherBig, big.NewInt(thisBalance))
 	if !anotherBig.IsInt64() {

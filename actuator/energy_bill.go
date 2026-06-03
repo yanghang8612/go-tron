@@ -380,40 +380,27 @@ func calcAccountEnergyLimit(acct *types.Account, dp *state.DynamicProperties) in
 	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
 	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 
+	// The IN-VM energy-limit duplicate in java-tron is
+	// RepositoryImpl.calculateGlobalEnergyLimit (actuator module), which is
+	// UNCONDITIONALLY V1 integer-truncated plain-float — NO supportUnfreezeDelay
+	// (V2 fractional) branch and NO harden (BigInteger) branch. (The chainbase
+	// EnergyProcessor V2 path mirrored by core/resource.go::availableAccountEnergy
+	// is the separate RPC path and stays V2.) Keeping the sub-TRX fraction here
+	// over-grants the in-VM energy limit for non-whole-TRX stakes and can flip
+	// OUT_OF_ENERGY -> SUCCESS (same class as the 8,825,873 stall).
+	if frozen < params.TRXPrecision {
+		return 0
+	}
 	totalWeight := dp.TotalEnergyWeight()
 	if totalWeight <= 0 {
 		return 0
 	}
 	totalLimit := dp.TotalEnergyCurrentLimit()
-	harden := dp.AllowHardenResourceCalculation()
-
-	if dp.UnfreezeDelayDays() > 0 {
-		return calculateEnergyLimitV2(frozen, totalLimit, totalWeight, harden)
-	}
-	if frozen < params.TRXPrecision {
-		return 0
-	}
-	return calculateEnergyLimitV1(frozen, totalLimit, totalWeight, harden)
+	weight := frozen / params.TRXPrecision
+	return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
 }
 
 const resourcePrecisionForEnergy = int64(1_000_000)
-
-func calculateEnergyLimitV1(frozen, totalLimit, totalWeight int64, harden bool) int64 {
-	weight := frozen / params.TRXPrecision
-	if !harden {
-		return int64(float64(weight) * (float64(totalLimit) / float64(totalWeight)))
-	}
-	return bigMulDivInt64(weight, totalLimit, totalWeight)
-}
-
-func calculateEnergyLimitV2(frozen, totalLimit, totalWeight int64, harden bool) int64 {
-	if !harden {
-		weight := float64(frozen) / float64(params.TRXPrecision)
-		return int64(weight * (float64(totalLimit) / float64(totalWeight)))
-	}
-	denominator := new(big.Int).Mul(big.NewInt(params.TRXPrecision), big.NewInt(totalWeight))
-	return bigMulDivBigInt64(big.NewInt(frozen), big.NewInt(totalLimit), denominator)
-}
 
 func divideCeilBigInt(numerator, denominator *big.Int) int64 {
 	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))

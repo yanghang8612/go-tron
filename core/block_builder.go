@@ -136,7 +136,7 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), timestamp, forks.NewForkControllerFromState(statedb)); err != nil {
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb)); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{

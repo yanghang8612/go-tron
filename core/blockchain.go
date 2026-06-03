@@ -1077,7 +1077,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records and governance side-effects live in rooted
 			// StateDB domains.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), block.Timestamp(), bc.forkControllerForState(statedb)); err != nil {
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb)); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
 			adapter := &chainHeaderAdapter{

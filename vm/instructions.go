@@ -754,6 +754,20 @@ func opPush0(pc *uint64, interpreter *Interpreter, contract *Contract, memory *M
 func makeLog(topicCount int) executionFunc {
 	return func(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 		offset, size := stack.pop(), stack.pop()
+
+		// java getLogCost charges the data-energy (size*8) against remaining
+		// energy and throws OUT_OF_ENERGY BEFORE the 3MB memory-overflow check.
+		// Mirror that order so a huge size operand yields OUT_OF_ENERGY (contractRet
+		// 10), not OUT_OF_MEMORY (4). Operate in uint256 so size*8 cannot wrap.
+		if !size.IsUint64() {
+			return nil, ErrOutOfEnergy
+		}
+		var dataCost uint256.Int
+		dataCost.Mul(&size, uint256.NewInt(EnergyLogData))
+		if !dataCost.IsUint64() || dataCost.Uint64() > contract.Energy {
+			return nil, ErrOutOfEnergy
+		}
+
 		off, sz, memCost, err := checkedMemoryExpansionCostWords(memory, &offset, &size, LOG0+OpCode(topicCount))
 		if err != nil {
 			return nil, err
