@@ -184,6 +184,7 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	if delegated {
 		newWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, uc.Resource)
 	}
+	traceWeightEvent(ctx.BlockNumber, ownerAddr, receiverAddr, delegated, uc.Resource, -removed)
 	addV1ResourceWeight(ctx.DynProps, uc.Resource, -removed, oldWeight, newWeight)
 
 	needToClearVote := true
