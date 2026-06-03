@@ -158,7 +158,6 @@ func (a *FreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	if delegated {
 		newWeight = v1AcquiredDelegatedWeight(ctx.State, receiverAddr, fc.Resource)
 	}
-	traceWeightEvent(ctx.BlockNumber, ownerAddr, receiverAddr, delegated, fc.Resource, fc.FrozenBalance)
 	addV1ResourceWeight(ctx.DynProps, fc.Resource, fc.FrozenBalance, oldWeight, newWeight)
 
 	return &Result{Fee: 0, ContractRet: 1}, nil

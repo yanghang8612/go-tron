@@ -1253,7 +1253,6 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	bc.lastInsertNano.Store(time.Now().UnixNano())
 
 	bc.storeDynPropsCache(dynProps)
-	traceTotalWeights(block.Number(), dynProps.TotalEnergyWeight(), dynProps.TotalNetWeight())
 	stats.mark(&stats.Persist)
 
 	// Fire maintenance hooks first so the SRL PBFT message goes out before

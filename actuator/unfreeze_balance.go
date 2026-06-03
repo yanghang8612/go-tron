@@ -179,7 +179,6 @@ func (a *UnfreezeBalanceActuator) Execute(ctx *Context) (*Result, error) {
 	// Shrink global weight by the amount returned to liquid balance.
 	// Intentionally NOT gated on allow_new_resource_model — historical V1
 	// unfreezes must stay reachable post-fork.
-	traceWeightEvent(ctx.BlockNumber, ownerAddr, receiverAddr, delegated, uc.Resource, -removed)
 	if delegated {
 		// Mirror java-tron UnfreezeBalanceActuator's delegated branch. The
 		// owner's delegated balance was already decremented above. The
