@@ -26,6 +26,16 @@ const (
 
 var errVoteWitnessMemoryLength = errors.New("TVM VoteWitness: memory array length do not match length parameter")
 
+func tvmLatestBlockHeaderTimestamp(tvm *TVM) int64 {
+	if tvm != nil && tvm.DynProps != nil {
+		return tvm.DynProps.LatestBlockHeaderTimestamp()
+	}
+	if tvm != nil {
+		return tvm.Timestamp
+	}
+	return 0
+}
+
 // ── 0x5C TLOAD ────────────────────────────────────────────────────────────────
 
 func opTLoad(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
@@ -261,14 +271,11 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	if in.tvm.DynProps != nil && in.tvm.DynProps.MinFrozenTime() > 0 {
 		durationDays = in.tvm.DynProps.MinFrozenTime()
 	}
-	expireMs := in.tvm.Timestamp + durationDays*86400_000
+	nowMs := tvmLatestBlockHeaderTimestamp(in.tvm)
+	expireMs := nowMs + durationDays*86400_000
 	delegated := receiver != caller
 	if delegated && !in.tvm.StateDB.AccountExists(receiver) {
-		createTime := in.tvm.Timestamp
-		if in.tvm.DynProps != nil {
-			createTime = in.tvm.DynProps.LatestBlockHeaderTimestamp()
-		}
-		in.tvm.StateDB.CreateAccountWithTime(receiver, corepb.AccountType_Normal, createTime)
+		in.tvm.StateDB.CreateAccountWithTime(receiver, corepb.AccountType_Normal, nowMs)
 		if in.tvm.DynProps != nil && in.tvm.DynProps.AllowMultiSign() {
 			in.tvm.StateDB.ApplyDefaultAccountPermissions(receiver, in.tvm.DynProps)
 		}
@@ -331,6 +338,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	resourceType := int64(resourceWord.Uint64())
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
+	nowMs := tvmLatestBlockHeaderTimestamp(in.tvm)
 
 	var unfrozen int64
 	delegated := receiver != caller
@@ -342,7 +350,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 		}
 		switch resourceType {
 		case 0:
-			if dr.FrozenBalanceForBandwidth <= 0 || dr.ExpireTimeForBandwidth > in.tvm.Timestamp {
+			if dr.FrozenBalanceForBandwidth <= 0 || dr.ExpireTimeForBandwidth > nowMs {
 				stack.push(uint256.NewInt(0))
 				return nil, nil
 			}
@@ -351,7 +359,7 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 			dr.ExpireTimeForBandwidth = 0
 			in.tvm.StateDB.UnfreezeV1DelegatedBandwidth(caller, receiver, unfrozen)
 		case 1:
-			if dr.FrozenBalanceForEnergy <= 0 || dr.ExpireTimeForEnergy > in.tvm.Timestamp {
+			if dr.FrozenBalanceForEnergy <= 0 || dr.ExpireTimeForEnergy > nowMs {
 				stack.push(uint256.NewInt(0))
 				return nil, nil
 			}
@@ -371,9 +379,9 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	} else {
 		switch resourceType {
 		case 0:
-			unfrozen = in.tvm.StateDB.UnfreezeV1Bandwidth(caller, in.tvm.Timestamp)
+			unfrozen = in.tvm.StateDB.UnfreezeV1Bandwidth(caller, nowMs)
 		case 1:
-			unfrozen = in.tvm.StateDB.UnfreezeV1Energy(caller, in.tvm.Timestamp)
+			unfrozen = in.tvm.StateDB.UnfreezeV1Energy(caller, nowMs)
 		default:
 			stack.push(uint256.NewInt(0))
 			return nil, nil
