@@ -68,27 +68,53 @@ func newLayer(hash common.Hash, number uint64) *layer {
 //
 // Concurrency model:
 //
-// Mutators (Begin/Commit/Discard*/Put/Delete/Flush*) assume the caller
-// serializes them — typically via core.BlockChain's chainmu. The internal
-// mu guards the layers slice and per-layer maps so that uncoordinated
-// readers (RPC handlers, metrics, txpool) can call Get/Has/PendingBlocks
-// concurrently with a writer holding chainmu without triggering a Go race
-// detector report. This matches the slice-1 documented "single-writer"
-// model — the lock is added in slice 2 because the buffer is now read by
-// callers outside chainmu (BlockChain.DynProps for RPC, etc.).
+// Foreground mutators (Begin/CommitBlock/DiscardActive/Put/Delete) assume the
+// caller serializes them — typically via core.BlockChain's chainmu. The
+// internal mu guards the inflight/layers slices and per-layer maps so that
+// uncoordinated readers (RPC handlers, metrics, txpool) can call
+// Get/Has/PendingBlocks concurrently with a writer holding chainmu without
+// triggering a Go race detector report.
+//
+// Multi-active-layer (async commit): the buffer can hold more than one
+// in-flight (begun-but-uncommitted) layer at once — `inflight` is an ordered
+// set (oldest→newest). The newest in-flight layer is the foreground's "active"
+// layer; Put/Delete/BeginBlock/DiscardActive operate on it exactly as the
+// single-active model did. When async commit is enabled, a serial commit worker
+// holds a handle to an OLDER in-flight layer (block N) and writes it via
+// ViewLayer/LayerWriter while the foreground writes the newer layer (N+1); the
+// worker promotes its layer with CommitInflight or drops it with DiscardInflight.
+// The two threads target DISJOINT layers and every method takes mu, so the
+// per-layer maps and the slices stay race-free. With maxInflight==1 (the
+// default) only one layer is ever in flight, so this degenerates to the
+// single-active model and is byte-identical to it.
+//
+// flushMu serializes FlushUpTo/Flush calls against each other so the
+// snapshot→disk-I/O→drop phases of two concurrent flushers can't
+// interleave (double-flush / double-drop). It is held across the whole
+// flush, but mu is released during the disk I/O so readers
+// (Get/Has/NewIterator — the LoadDynamicProperties path) proceed
+// concurrently. FlushUpTo callers are the async-flush worker, the
+// inline fallback, and Close; only one runs the body at a time.
+//
+// FlushUpTo/Flush/DiscardBlock operate on COMMITTED layers only and never
+// touch in-flight layers, so the lock-free immutable-committed-layer read in
+// FlushUpTo is unaffected by the multi-active-layer change: a layer becomes
+// committed (and thus flush-eligible) only after its fold completes and
+// CommitBlock/CommitInflight promotes it.
 type Buffer struct {
-	base ethdb.KeyValueReader
-	mu   sync.RWMutex
-	// flushMu serializes FlushUpTo/Flush calls against each other so the
-	// snapshot→disk-I/O→drop phases of two concurrent flushers can't
-	// interleave (double-flush / double-drop). It is held across the whole
-	// flush, but mu is released during the disk I/O so readers
-	// (Get/Has/NewIterator — the LoadDynamicProperties path) proceed
-	// concurrently. FlushUpTo callers are the async-flush worker, the
-	// inline fallback, and Close; only one runs the body at a time.
+	base    ethdb.KeyValueReader
+	mu      sync.RWMutex
 	flushMu sync.Mutex
 	layers  []*layer
-	active  *layer
+	// inflight holds begun-but-uncommitted layers, oldest→newest. The newest
+	// is the foreground's active layer. Empty or length 1 under the default
+	// maxInflight==1; the async commit worker raises maxInflight to allow a
+	// second concurrent layer.
+	inflight []*layer
+	// maxInflight bounds how many layers may be in flight at once. Zero is
+	// treated as 1 (single-active, the default). BeginBlock panics past it,
+	// preserving the legacy double-Begin guard in the default configuration.
+	maxInflight int
 }
 
 type bufferBatchOp struct {
@@ -168,7 +194,7 @@ func (b *bufferBatch) Write() error {
 	for _, op := range b.ops {
 		target := op.target
 		if target == nil {
-			target = b.parent.active
+			target = b.parent.newestInflightLocked()
 		}
 		if target == nil {
 			panic("blockbuffer: batch Write called with no active layer")
@@ -237,7 +263,7 @@ func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale 
 	for _, op := range b.ops {
 		target := op.target
 		if target == nil {
-			target = b.parent.active
+			target = b.parent.newestInflightLocked()
 		}
 		if target == nil {
 			if dropStale {
@@ -299,17 +325,60 @@ func (b *Buffer) activeLayer() *layer {
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.active
+	return b.newestInflightLocked()
+}
+
+// newestInflightLocked returns the newest in-flight layer (the foreground's
+// active layer) or nil if none. Caller holds b.mu (read or write).
+func (b *Buffer) newestInflightLocked() *layer {
+	if n := len(b.inflight); n > 0 {
+		return b.inflight[n-1]
+	}
+	return nil
+}
+
+// effectiveMaxInflight treats the zero value as 1 so a freshly New'd buffer
+// keeps the single-active-layer semantics (BeginBlock panics on a second begin).
+func (b *Buffer) effectiveMaxInflight() int {
+	if b.maxInflight < 1 {
+		return 1
+	}
+	return b.maxInflight
+}
+
+// SetMaxInflight raises the number of layers that may be in flight at once.
+// The async commit worker sets this to 2 (one committing, one executing). A
+// value < 1 restores the single-active default. Must be called before any
+// concurrent buffer use (e.g. at BlockChain construction).
+func (b *Buffer) SetMaxInflight(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.maxInflight = n
 }
 
 func (b *Buffer) layerPendingLocked(target *layer) bool {
 	if b == nil || target == nil {
 		return false
 	}
-	if b.active == target {
-		return true
+	for _, l := range b.inflight {
+		if l == target {
+			return true
+		}
 	}
 	for _, l := range b.layers {
+		if l == target {
+			return true
+		}
+	}
+	return false
+}
+
+// layerInflightLocked reports whether target is currently an in-flight layer.
+func (b *Buffer) layerInflightLocked(target *layer) bool {
+	if b == nil || target == nil {
+		return false
+	}
+	for _, l := range b.inflight {
 		if l == target {
 			return true
 		}
@@ -331,35 +400,121 @@ func (b *Buffer) layerCommittedLocked(target *layer) bool {
 
 // BeginBlock opens a fresh active layer for the given block hash and number.
 // The number is captured so subsequent FlushUpTo / WriteUpTo cutoffs can be
-// evaluated without a per-op block-hash → block-number lookup. Panics if a
-// layer is already active.
+// evaluated without a per-op block-hash → block-number lookup. Panics if the
+// number of in-flight layers would exceed maxInflight (1 by default) — this
+// preserves the legacy "double BeginBlock" guard for the single-active case.
 func (b *Buffer) BeginBlock(hash common.Hash, number uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active != nil {
-		panic("blockbuffer: BeginBlock called while a layer is already active")
+	if len(b.inflight) >= b.effectiveMaxInflight() {
+		panic("blockbuffer: BeginBlock would exceed maxInflight in-flight layers")
 	}
-	b.active = newLayer(hash, number)
+	b.inflight = append(b.inflight, newLayer(hash, number))
 }
 
-// CommitBlock promotes the active layer onto the layered stack.
-// Panics if no layer is active.
+// CommitBlock promotes the OLDEST in-flight layer onto the committed stack
+// (FIFO). With the default single-active configuration this is the only
+// in-flight layer, matching the legacy behaviour. Panics if none is in flight.
+// The async commit worker uses CommitInflight(handle) instead so it can assert
+// it is committing the specific layer it folded.
 func (b *Buffer) CommitBlock() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active == nil {
+	if len(b.inflight) == 0 {
 		panic("blockbuffer: CommitBlock called with no active layer")
 	}
-	b.layers = append(b.layers, b.active)
-	b.active = nil
+	b.promoteOldestInflightLocked()
 }
 
-// DiscardActive drops the active layer without promoting it.
-// No-op if no layer is active.
+// promoteOldestInflightLocked moves inflight[0] onto the committed stack. The
+// committed stack stays ordered by block number because in-flight layers are
+// begun in block order and committed FIFO. Caller holds b.mu.
+func (b *Buffer) promoteOldestInflightLocked() {
+	l := b.inflight[0]
+	copy(b.inflight, b.inflight[1:])
+	b.inflight[len(b.inflight)-1] = nil
+	b.inflight = b.inflight[:len(b.inflight)-1]
+	b.layers = append(b.layers, l)
+}
+
+// DiscardActive drops the NEWEST in-flight layer without promoting it (the
+// foreground's current block, dropped on an applyBlock error). No-op if no
+// layer is in flight.
 func (b *Buffer) DiscardActive() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.active = nil
+	if n := len(b.inflight); n > 0 {
+		b.inflight[n-1] = nil
+		b.inflight = b.inflight[:n-1]
+	}
+}
+
+// InflightHandle is an opaque reference to an in-flight (begun-but-uncommitted)
+// layer. The async commit worker obtains one via NewestInflight at handoff and
+// uses it with ViewLayer/LayerWriter/CommitInflight/DiscardInflight to operate
+// on that specific layer while the foreground writes a newer one. The zero
+// handle is invalid (Valid() == false).
+type InflightHandle struct {
+	l      *layer
+	hash   common.Hash
+	number uint64
+}
+
+// Valid reports whether the handle references a layer.
+func (h InflightHandle) Valid() bool { return h.l != nil }
+
+// Number returns the block number captured when the layer was begun.
+func (h InflightHandle) Number() uint64 { return h.number }
+
+// Hash returns the block hash captured when the layer was begun.
+func (h InflightHandle) Hash() common.Hash { return h.hash }
+
+// NewestInflight returns a handle to the newest in-flight layer (the layer the
+// foreground just finished writing, before it begins the next block). ok is
+// false if no layer is in flight. The async commit worker calls this at the
+// fold handoff point to capture the layer it will own.
+func (b *Buffer) NewestInflight() (InflightHandle, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	l := b.newestInflightLocked()
+	if l == nil {
+		return InflightHandle{}, false
+	}
+	return InflightHandle{l: l, hash: l.blockHash, number: l.number}, true
+}
+
+// CommitInflight promotes the in-flight layer referenced by h onto the
+// committed stack. It asserts h is the OLDEST in-flight layer so the committed
+// stack stays block-number ordered (the worker commits FIFO, in fold order).
+// Returns an error if h is no longer in flight (e.g. already discarded by a
+// reorg drain) or is not the oldest. Used by the async commit worker.
+func (b *Buffer) CommitInflight(h InflightHandle) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.layerInflightLocked(h.l) {
+		return errors.New("blockbuffer: CommitInflight handle is not in flight")
+	}
+	if b.inflight[0] != h.l {
+		return errors.New("blockbuffer: CommitInflight handle is not the oldest in-flight layer")
+	}
+	b.promoteOldestInflightLocked()
+	return nil
+}
+
+// DiscardInflight drops the in-flight layer referenced by h without promoting
+// it (the worker's error path, or a reorg discarding an orphan-branch layer
+// before it commits). No-op if h is no longer in flight.
+func (b *Buffer) DiscardInflight(h InflightHandle) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, l := range b.inflight {
+		if l == h.l {
+			copy(b.inflight[i:], b.inflight[i+1:])
+			b.inflight[len(b.inflight)-1] = nil
+			b.inflight = b.inflight[:len(b.inflight)-1]
+			return
+		}
+	}
 }
 
 // DiscardBlock removes the layer with the given block hash from the layered
@@ -387,7 +542,10 @@ func (b *Buffer) DiscardBlock(hash common.Hash) {
 func (b *Buffer) Discard() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.active = nil
+	for i := range b.inflight {
+		b.inflight[i] = nil
+	}
+	b.inflight = b.inflight[:0]
 	for i := range b.layers {
 		b.layers[i] = nil
 	}
@@ -412,12 +570,15 @@ func (b *Buffer) PendingBlocks() []common.Hash {
 func (b *Buffer) Get(key []byte) ([]byte, error) {
 	k := string(key)
 	b.mu.RLock()
-	if b.active != nil {
-		if _, tomb := b.active.deletes[k]; tomb {
+	// In-flight layers first, newest-first (the foreground's active layer wins
+	// over an older worker-owned layer), then committed layers newest-first.
+	for i := len(b.inflight) - 1; i >= 0; i-- {
+		l := b.inflight[i]
+		if _, tomb := l.deletes[k]; tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := b.active.writes[k]; ok {
+		if v, ok := l.writes[k]; ok {
 			out := append([]byte(nil), v...)
 			b.mu.RUnlock()
 			return out, nil
@@ -456,12 +617,13 @@ func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 	// fully allocation-free on a buffer hit (unlike Get, which both allocates
 	// the key string and copies the value).
 	b.mu.RLock()
-	if b.active != nil {
-		if _, tomb := b.active.deletes[string(key)]; tomb {
+	for i := len(b.inflight) - 1; i >= 0; i-- {
+		l := b.inflight[i]
+		if _, tomb := l.deletes[string(key)]; tomb {
 			b.mu.RUnlock()
 			return nil, ErrNotFound
 		}
-		if v, ok := b.active.writes[string(key)]; ok {
+		if v, ok := l.writes[string(key)]; ok {
 			b.mu.RUnlock()
 			return v, nil
 		}
@@ -489,12 +651,13 @@ func (b *Buffer) GetNoCopy(key []byte) ([]byte, error) {
 func (b *Buffer) Has(key []byte) (bool, error) {
 	k := string(key)
 	b.mu.RLock()
-	if b.active != nil {
-		if _, tomb := b.active.deletes[k]; tomb {
+	for i := len(b.inflight) - 1; i >= 0; i-- {
+		l := b.inflight[i]
+		if _, tomb := l.deletes[k]; tomb {
 			b.mu.RUnlock()
 			return false, nil
 		}
-		if _, ok := b.active.writes[k]; ok {
+		if _, ok := l.writes[k]; ok {
 			b.mu.RUnlock()
 			return true, nil
 		}
@@ -522,12 +685,13 @@ func (b *Buffer) Has(key []byte) (bool, error) {
 func (b *Buffer) Put(key, value []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active == nil {
+	active := b.newestInflightLocked()
+	if active == nil {
 		panic("blockbuffer: Put called with no active layer")
 	}
 	k := string(key)
-	delete(b.active.deletes, k)
-	b.active.writes[k] = append([]byte(nil), value...)
+	delete(active.deletes, k)
+	active.writes[k] = append([]byte(nil), value...)
 	return nil
 }
 
@@ -536,12 +700,13 @@ func (b *Buffer) Put(key, value []byte) error {
 func (b *Buffer) Delete(key []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.active == nil {
+	active := b.newestInflightLocked()
+	if active == nil {
 		panic("blockbuffer: Delete called with no active layer")
 	}
 	k := string(key)
-	delete(b.active.writes, k)
-	b.active.deletes[k] = struct{}{}
+	delete(active.writes, k)
+	active.deletes[k] = struct{}{}
 	return nil
 }
 
@@ -784,68 +949,75 @@ func closeBatch(batch ethdb.Batch) {
 // store is expected — most importantly, state.LoadDynamicProperties can
 // recognize it and replace its 133 point Gets per applyBlock with one scan.
 func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
-	pfx := string(prefix)
-	// ethdb.Iteratee contract: `start` is RELATIVE to `prefix`. The absolute
-	// lower bound is therefore `prefix + start`, matching what
-	// ethdb/memorydb does:
-	//   st := string(append(prefix, start...))
-	// Comparing overlay keys against bare `start` would incorrectly drop
-	// every overlay entry whose key happens to sort before `start` even
-	// though it sits in the `prefix` range — and worse, tombstones in that
-	// window would also be skipped, so masked base keys would leak through.
-	lo := string(prefix) + string(start)
-
+	// Step 1: collect the overlay newest-first (in-flight newest→oldest, then
+	// committed newest→oldest) under a brief read lock. Step 2-4 (base merge +
+	// sort) are shared with LayerView via finishIterator.
 	b.mu.RLock()
-	// Step 1: collect the overlay newest-first. The first time we see a key
-	// wins; older layers are masked. `seen` tracks both writes and deletes so
-	// a Delete in a newer layer suppresses the value in an older layer (and
-	// in the base).
-	type overlayOp struct {
-		value   []byte
-		deleted bool
+	overlay := newOverlayState()
+	for i := len(b.inflight) - 1; i >= 0; i-- {
+		overlay.walk(b.inflight[i], prefix, start)
 	}
-	overlay := make(map[string]overlayOp)
+	for i := len(b.layers) - 1; i >= 0; i-- {
+		overlay.walk(b.layers[i], prefix, start)
+	}
+	b.mu.RUnlock()
+	return b.finishIterator(overlay, prefix, start)
+}
+
+// overlayOp is one resolved overlay entry: a value write, or a tombstone.
+type overlayOp struct {
+	value   []byte
+	deleted bool
+}
+
+// overlayState resolves a newest-first walk of layers into a single overlay map
+// (the first time a key is seen wins, so newer layers mask older ones). Shared
+// by Buffer.NewIterator and LayerView.NewIterator.
+type overlayState struct {
+	m map[string]overlayOp
+}
+
+func newOverlayState() *overlayState { return &overlayState{m: make(map[string]overlayOp)} }
+
+// walk folds layer l into the overlay, keeping only keys in [prefix+start, …)
+// that have the given prefix. Caller holds the buffer read lock.
+func (o *overlayState) walk(l *layer, prefix, start []byte) {
+	if l == nil {
+		return
+	}
+	pfx := string(prefix)
+	lo := string(prefix) + string(start)
 	matches := func(k string) bool {
 		if pfx != "" && !strings.HasPrefix(k, pfx) {
 			return false
 		}
-		if k < lo {
-			return false
-		}
-		return true
+		return k >= lo
 	}
-	walk := func(l *layer) {
-		if l == nil {
-			return
+	for k, v := range l.writes {
+		if !matches(k) {
+			continue
 		}
-		for k, v := range l.writes {
-			if !matches(k) {
-				continue
-			}
-			if _, set := overlay[k]; set {
-				continue
-			}
-			overlay[k] = overlayOp{value: append([]byte(nil), v...)}
+		if _, set := o.m[k]; set {
+			continue
 		}
-		for k := range l.deletes {
-			if !matches(k) {
-				continue
-			}
-			if _, set := overlay[k]; set {
-				continue
-			}
-			overlay[k] = overlayOp{deleted: true}
-		}
+		o.m[k] = overlayOp{value: append([]byte(nil), v...)}
 	}
-	walk(b.active)
-	for i := len(b.layers) - 1; i >= 0; i-- {
-		walk(b.layers[i])
+	for k := range l.deletes {
+		if !matches(k) {
+			continue
+		}
+		if _, set := o.m[k]; set {
+			continue
+		}
+		o.m[k] = overlayOp{deleted: true}
 	}
-	b.mu.RUnlock()
+}
 
-	// Step 2: pull base keys that match the prefix/start window. Disk keys
-	// that the overlay shadows are dropped here; overlay keys not present on
-	// disk are merged in afterwards.
+// finishIterator merges the resolved overlay with the base keys in the
+// [prefix, prefix+start) window and returns a snapshot iterator. Runs lock-free
+// (the base store has its own concurrency control; overlay is already a private
+// copy). Shared by Buffer.NewIterator and LayerView.NewIterator.
+func (b *Buffer) finishIterator(overlay *overlayState, prefix, start []byte) ethdb.Iterator {
 	type kv struct{ key, value []byte }
 	var entries []kv
 	if b.base != nil {
@@ -853,14 +1025,14 @@ func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 			it := iter.NewIterator(prefix, start)
 			for it.Next() {
 				k := string(it.Key())
-				if op, masked := overlay[k]; masked {
+				if op, masked := overlay.m[k]; masked {
 					if !op.deleted {
 						entries = append(entries, kv{
 							key:   append([]byte(nil), it.Key()...),
 							value: op.value,
 						})
 					}
-					delete(overlay, k)
+					delete(overlay.m, k)
 					continue
 				}
 				entries = append(entries, kv{
@@ -878,21 +1050,18 @@ func (b *Buffer) NewIterator(prefix, start []byte) ethdb.Iterator {
 		// surfaced. This matches the contract that NewIterator on a reader
 		// with no iteration support cannot synthesize one.
 	}
-	// Step 3: overlay-only keys (no disk hit). Tombstones for non-existent
-	// disk keys contribute nothing.
-	for k, op := range overlay {
+	// Overlay-only keys (no disk hit). Tombstones for non-existent disk keys
+	// contribute nothing.
+	for k, op := range overlay.m {
 		if op.deleted {
 			continue
 		}
-		entries = append(entries, kv{
-			key:   []byte(k),
-			value: op.value,
-		})
+		entries = append(entries, kv{key: []byte(k), value: op.value})
 	}
 
-	// Step 4: sort ascending by key. The disk leg arrives already sorted; the
-	// overlay leg is map-order. One sort.Slice on the combined list is
-	// cleaner than maintaining a merge-cursor for small N.
+	// Sort ascending by key. The disk leg arrives already sorted; the overlay
+	// leg is map-order. One sort over the combined list is cleaner than a
+	// merge-cursor for small N.
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].key, entries[j].key) < 0
 	})

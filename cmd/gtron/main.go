@@ -430,6 +430,16 @@ func gtron(ctx *cli.Context) error {
 		closeStores()
 		return fmt.Errorf("create blockchain: %w", err)
 	}
+	// Async/pipelined commit is OFF by default and DELIBERATELY not a
+	// chain-config / proposal value (it changes only the internal commit
+	// schedule, never any wire-observable byte). It is enabled ops-only via an
+	// environment variable for the live re-sync validation described in
+	// docs (async-commit validation protocol). Experimental; do not enable on a
+	// production node until that validation passes.
+	if os.Getenv("GTRON_ASYNC_COMMIT") == "1" {
+		bc.SetAsyncCommit(true)
+		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use")
+	}
 	if ctx.IsSet("sync.restart-from") {
 		target := ctx.Uint64("sync.restart-from")
 		lastProgress := uint64(0)

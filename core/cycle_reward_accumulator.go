@@ -120,6 +120,18 @@ func (a *cycleRewardAccumulator) Write(writer ethdb.KeyValueWriter) error {
 	return rawdb.WriteCycleRewardPending(writer, a.cycle, a.rewards)
 }
 
+// Write persists a captured snapshot of the pending accumulator. The async
+// commit worker captures bc.cycleRewards.Snapshot() at handoff (a deep copy)
+// and writes it to the committing block's buffer layer, so it is unaffected by
+// the foreground advancing bc.cycleRewards for the next block. Byte-identical
+// to (*cycleRewardAccumulator).Write for the same contents.
+func (snap cycleRewardAccumulatorSnapshot) Write(writer ethdb.KeyValueWriter) error {
+	if len(snap.rewards) == 0 {
+		return rawdb.DeleteCycleRewardPending(writer)
+	}
+	return rawdb.WriteCycleRewardPending(writer, snap.cycle, snap.rewards)
+}
+
 func (a *cycleRewardAccumulator) canTrackCycle(cycle int64) bool {
 	if a == nil {
 		return false

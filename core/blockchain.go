@@ -194,6 +194,25 @@ type BlockChain struct {
 	flushClosed   bool
 	flushErr      atomic.Pointer[error]
 
+	// Async-commit plumbing (default OFF — see SetAsyncCommit). When enabled,
+	// applyBlockWithPlan runs only the foreground half (exec + maintenance +
+	// latest-domain capture into the in-memory scope) and hands the commitment
+	// fold + ordered publish tail (root write, head advance, hooks, CommitBlock,
+	// solidified flush) to a single serial commit worker, so the ~55% commit
+	// cost overlaps the next block's execution. The buffer's multi-active-layer
+	// support (SetMaxInflight(2)) lets the worker write block N's layer while the
+	// foreground writes block N+1's. Mirrors the flush worker lifecycle: a queue,
+	// a cond-var barrier (post/wait), a fail-fast error pointer, and a WaitGroup.
+	//
+	// With asyncCommit false (the default) the guard in applyBlockWithPlan is not
+	// taken and the synchronous commit path runs unchanged — byte-identical.
+	asyncCommit    bool
+	commitQueue    chan *commitJob
+	commitPending  *flushBarrier
+	commitWorkerWg sync.WaitGroup
+	commitClosed   bool
+	commitErr      atomic.Pointer[error]
+
 	blockHookMu sync.Mutex
 	blockHooks  []func(*types.Block) // called after each successful InsertBlock
 
@@ -340,6 +359,8 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		buffer:            buffer,
 		flushQueue:        make(chan uint64, flushQueueCap),
 		flushPending:      newFlushBarrier(),
+		commitQueue:       make(chan *commitJob, commitQueueCap),
+		commitPending:     newFlushBarrier(),
 		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
 		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
 		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
@@ -402,6 +423,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// deferring resource start until the constructor is guaranteed to
 	// succeed.
 	bc.startFlushWorker()
+	bc.startCommitWorker()
 
 	return bc, nil
 }
@@ -589,15 +611,46 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
 	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
 
 	executor := newCanonicalRangeExecutor(bc, true)
-	defer func() {
-		if closeErr := executor.Close(); closeErr != nil {
-			if err == nil {
-				err = closeErr
-			} else {
-				err = fmt.Errorf("%w; close range executor: %v", err, closeErr)
+	if bc.asyncCommit {
+		// Async commit: settle the range at its boundary in one ordered defer so
+		// the persistent state matches the synchronous path exactly. The
+		// per-block flush lags by one (the in-flight layer's scope rows are not
+		// flushable yet), so the final block would otherwise be left in the
+		// buffer; here we drain, flush the scope into the committed layers, and
+		// then flush buffer layers up to the head's solidified height — for a
+		// single-SR chain (solidified == head) that flushes the final layer too,
+		// converging to the synchronous on-disk image so a subsequent reorg
+		// discards/rewinds identical state. For multi-SR the extra flush is a
+		// no-op (already flushed ≤ solidified; the unsolidified tail stays
+		// rewindable in the buffer, same as sync). Also bounds the worker's lag
+		// to one range and guarantees the next range reads a fresh dynPropsCache.
+		defer func() {
+			bc.WaitForCommitSettled()
+			if errPtr := bc.commitErr.Load(); errPtr != nil && err == nil {
+				err = fmt.Errorf("async commit failed: %w", *errPtr)
 			}
-		}
-	}()
+			if closeErr := executor.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+			if err == nil {
+				if solidified := bc.cachedDynProps().LatestSolidifiedBlockNum(); solidified > 0 {
+					if flushErr := bc.postFlush(solidified); flushErr != nil {
+						err = flushErr
+					}
+				}
+			}
+		}()
+	} else {
+		defer func() {
+			if closeErr := executor.Close(); closeErr != nil {
+				if err == nil {
+					err = closeErr
+				} else {
+					err = fmt.Errorf("%w; close range executor: %v", err, closeErr)
+				}
+			}
+		}()
+	}
 	for i, block := range blocks {
 		if err := bc.insertBlockLockedWithExecutor(block, executor); err != nil {
 			var blockNum uint64
@@ -627,7 +680,16 @@ func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor
 	if bc.closed.Load() {
 		return ErrBlockChainClosed
 	}
+	// Fork-detection runs against the range-local tip, not bc.CurrentBlock().
+	// With async commit off they are identical (executor.tip() defaults to
+	// bc.CurrentBlock() and the foreground advances currentBlock synchronously);
+	// with async commit on the published currentBlock lags the executed tip, so
+	// the duplicate / nothing-to-apply / parent-mismatch checks below must use
+	// the tip the executor actually built on.
 	current := bc.CurrentBlock()
+	if executor != nil {
+		current = executor.tip()
+	}
 
 	// Duplicate check: already committed on the canonical chain.
 	if block.Number() <= current.Number() && bc.khaosDB.ContainsInMiniStore(block.Hash()) {
@@ -688,9 +750,19 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 // same object represents the new head and can be reused by the next block in a
 // canonicalRangeExecutor.
 func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBlockExecution) (retErr error) {
-	current := bc.CurrentBlock()
+	// The parent this block builds on is the range-local tip captured in the
+	// plan, NOT bc.CurrentBlock() (which lags under async commit). Falls back to
+	// the live head for callers that did not plan a parent; with async commit
+	// off the two are identical.
+	current := plan.parent
+	if current == nil {
+		current = bc.CurrentBlock()
+	}
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("async buffer flush failed: %w", *errPtr)
+	}
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		return fmt.Errorf("async commit failed: %w", *errPtr)
 	}
 	historyEnabled := bc.config != nil && bc.config.HistoryEnabled
 	if err := plan.Validate(block, historyEnabled); err != nil {
@@ -774,7 +846,18 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// feeds VerifyHeaderWithDynProps below, replacing the redundant
 	// chain.DynProps() scan that the legacy VerifyHeader entry point would
 	// otherwise perform on the same buffer.
-	dynProps := bc.cachedDynProps()
+	// Async commit threads the previous block's finalized dynamic properties
+	// directly into this block (decision-b): the commit worker publishes
+	// dynPropsCache lazily, so reading the cache here could observe a stale,
+	// not-yet-published value from several blocks back. With async off,
+	// parentDynProps is nil and this reads the head cache exactly as before —
+	// byte-identical.
+	var dynProps *state.DynamicProperties
+	if plan.parentDynProps != nil {
+		dynProps = plan.parentDynProps.Copy()
+	} else {
+		dynProps = bc.cachedDynProps()
+	}
 
 	// Header verification (signature recovery, scheduled-witness match, and
 	// post-fork timestamp alignment) runs here rather than at the top of
@@ -809,6 +892,15 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	defer func() {
 		statedb.SetCycleRewardSink(nil)
 		if retErr != nil {
+			// Async commit: a foreground failure (e.g. exec of a speculative
+			// block) can race in-flight commits of earlier blocks. Quiesce the
+			// worker first so currentBlock/HeadStateRoot reflect every committed
+			// block and their layers are promoted; only this failed block's layer
+			// then remains in flight for DiscardActive to drop, and the witness
+			// reload reads the correct (caught-up) head root.
+			if bc.asyncCommit {
+				bc.WaitForCommitSettled()
+			}
 			if bc.cycleRewards != nil {
 				bc.cycleRewards.Restore(rewardSnap)
 			}
@@ -1087,8 +1179,33 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		}
 	}
 
+	// dynProps is now finalized for this block. Carry it forward so the next
+	// block in an async range threads it directly (decision-b) instead of
+	// reading the lazily-published dynPropsCache.
+	plan.finalDynProps = dynProps
+
 	// Commit state (includes both tx execution and maintenance changes).
 	commitOpts := bc.stateCommitOptions(block, wasMaintenanceBlock)
+
+	// Async commit: hand the fold + ordered publish tail to the serial commit
+	// worker so it overlaps the next block's execution. The foreground has
+	// finished every shared step (exec, maintenance, rooted-DP flush, TAPOS/tx
+	// count) and the latest-domain rows are written into the in-memory scope;
+	// only the commitment fold and the publish tail remain, and they are
+	// severable (see commitAsync).
+	//
+	// Gated on plan.commit != nil — i.e. the shared-commit RANGE path
+	// (InsertBlocks / fork re-apply), which reuses one executor so the previous
+	// block's finalized dynProps can be threaded forward (decision-b). The
+	// single-block path (producer, gossip, restart) builds a fresh executor per
+	// block with no DP to thread, and is out of the async scope (bulk sync only);
+	// it falls through to the synchronous commit below. With async off this guard
+	// is skipped entirely and the synchronous commit runs unchanged —
+	// byte-identical.
+	if bc.asyncCommit && plan.commit != nil {
+		return bc.commitAsync(block, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
+	}
+
 	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
 	if err != nil {
 		return err
@@ -1381,8 +1498,15 @@ func (bc *BlockChain) Close() error {
 	if bc.closed.Swap(true) {
 		return nil
 	}
+	// Drain the commit worker first: each completed commit posts a solidified
+	// flush, so commits must settle before we wait on the flush queue.
+	bc.WaitForCommitSettled()
 	bc.WaitForFlushSettled()
+	bc.stopCommitWorkerLocked()
 	bc.stopFlushWorkerLocked()
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		return fmt.Errorf("close: async commit failed: %w", *errPtr)
+	}
 	if errPtr := bc.flushErr.Load(); errPtr != nil {
 		return fmt.Errorf("close: async buffer flush failed: %w", *errPtr)
 	}
@@ -1419,6 +1543,17 @@ func (bc *BlockChain) stopFlushWorkerLocked() {
 // tip, then re-applies the new branch on top of LCA state.
 // Callers must hold bc.chainmu.
 func (bc *BlockChain) switchFork(newHead *types.Block) error {
+	// Drain the async commit worker before anything else: an in-flight commit
+	// still owns an uncommitted buffer layer (it folds + publishes block N),
+	// and currentBlock/HeadStateRoot may still be lagging the executed tip.
+	// Waiting here quiesces the worker so every executed block is committed and
+	// its layer promoted before the rewind reads the tip and discards orphan
+	// layers. Mirrors the flush-drain rationale below. Safe (no deadlock): the
+	// worker takes only the buffer's internal mu and the barriers, never chainmu.
+	bc.WaitForCommitSettled()
+	if errPtr := bc.commitErr.Load(); errPtr != nil {
+		return fmt.Errorf("async commit failed before fork rewind: %w", *errPtr)
+	}
 	// Drain any in-flight async flushes before rewinding buffer layers.
 	// Without this, the worker may still be holding solidified-but-not-yet-
 	// flushed layers in bc.buffer when DiscardBlock runs; DiscardBlock would
@@ -1523,9 +1658,30 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 				for _, kb := range newBranch {
 					bc.khaosDB.RemoveBlk(kb.block.Hash())
 				}
+				if bc.asyncCommit {
+					bc.WaitForCommitSettled()
+					// A concurrent worker commit failure may be the root cause of
+					// the foreground apply error; surface it so the caller sees the
+					// real reason rather than a downstream symptom.
+					if errPtr := bc.commitErr.Load(); errPtr != nil {
+						forkExecutor.Reset()
+						return fmt.Errorf("apply fork block %d: %w; async commit failed: %v", b.Number(), err, *errPtr)
+					}
+				}
 				forkExecutor.Reset()
 				return fmt.Errorf("apply fork block %d: %w", b.Number(), err)
 			}
+		}
+	}
+	// Drain the commit worker before closing the fork executor's scope, so the
+	// re-applied branch is fully committed (head/root caught up) and the scope
+	// FlushLatest below sees a quiesced buffer. switchFork must return a settled
+	// canonical state, matching the synchronous re-apply it replaces.
+	if bc.asyncCommit {
+		bc.WaitForCommitSettled()
+		if errPtr := bc.commitErr.Load(); errPtr != nil {
+			forkExecutor.Reset()
+			return fmt.Errorf("async commit failed during fork re-apply: %w", *errPtr)
 		}
 	}
 	return forkExecutor.Close()

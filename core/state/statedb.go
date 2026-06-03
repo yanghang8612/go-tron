@@ -62,6 +62,17 @@ type StateDB struct {
 	// Commit (or the root passed to New).
 	originRoot ethcommon.Hash
 
+	// deferFold, when set, makes commitWithStatsOptions stop after capturing the
+	// commitment-fold inputs instead of folding inline: it stashes them in
+	// capturedFold (consumed synchronously by the same goroutine via
+	// TakeCapturedFold before the next block runs) and resets the journal so the
+	// reused StateDB can proceed. The async commit worker then runs the fold off
+	// the chainmu critical path. With deferFold false (the default) the commit
+	// path is byte-identical to the synchronous one — the deferFold branch is
+	// simply not taken. See FoldLatestCommitment / CapturedCommit.
+	deferFold    bool
+	capturedFold *CapturedCommit
+
 	// accountKVIndexStore is the physical latest-state index view. It defaults
 	// to the disk DB, but block application points it at blockbuffer so latest
 	// rows rewind with unsolidified blocks.
@@ -2815,6 +2826,30 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		}
 		return tcommon.Hash{}, stats, err
 	}
+	if s.deferFold {
+		// Async commit: capture the fold inputs and hand the fold to the commit
+		// worker. Reset the journal/snapshots now (the fold reads neither, so
+		// this is byte-identical to resetting after the fold) so the reused
+		// StateDB can begin the next block. The captured slot is read
+		// synchronously by the same goroutine (TakeCapturedFold) before the next
+		// block runs, so no cross-block race. originRoot is left unchanged — it
+		// is write-only (no read path consumes it), and the worker computes the
+		// real root via FoldLatestCommitment.
+		//
+		// deferFold is SINGLE-SHOT: cleared here so it must be re-armed (by
+		// CommitStateCapture) for each deferred commit. This is a safety guard —
+		// if a block on the reused StateDB ever falls back to the synchronous
+		// commit path (e.g. a non-range single-block insert), a leftover sticky
+		// deferFold would otherwise make it return a zero root instead of
+		// folding. Re-arming per block keeps the async path correct while making
+		// any accidental sync commit fold normally.
+		s.capturedFold = &CapturedCommit{updates: touchUpdates, repair: s.commitmentRepair()}
+		s.deferFold = false
+		s.journal = newJournal()
+		s.snapshots = s.snapshots[:0]
+		mark(&stats.AccountTrieCommit)
+		return tcommon.Hash{}, stats, nil
+	}
 	root, err := s.applyLatestDomainCommitment(touchUpdates)
 	if err != nil {
 		if scope != nil {
@@ -2830,13 +2865,66 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	return root, stats, nil
 }
 
+// CapturedCommit holds the self-contained inputs to a deferred commitment fold:
+// the latest-domain updates produced by a block's commit (deep-copied key/value
+// byte slices) and the cold-history repair inputs. It is severable from the
+// StateDB — FoldLatestCommitment(index, c.updates, c.repair) reproduces the
+// exact root the synchronous path would have computed — so the async commit
+// worker can fold it against a buffer LayerView while the foreground proceeds.
+type CapturedCommit struct {
+	updates []rawdb.StateCommitmentUpdate
+	repair  statedomains.CommitmentSnapshotRepair
+}
+
+// Fold runs the captured commitment fold against index and returns the root.
+func (c *CapturedCommit) Fold(index statedomains.CommitmentDB) (tcommon.Hash, error) {
+	return FoldLatestCommitment(index, c.updates, c.repair)
+}
+
+// SetDeferFold toggles deferred-fold mode (async commit). When set, the next
+// commit captures its fold inputs instead of folding inline; the caller must
+// consume them with TakeCapturedFold and run the fold itself (the commit
+// worker). The default (false) is the synchronous, byte-identical path.
+func (s *StateDB) SetDeferFold(defer_ bool) { s.deferFold = defer_ }
+
+// TakeCapturedFold returns and clears the fold inputs captured by the most
+// recent deferred commit, or nil if none. Must be called synchronously by the
+// committing goroutine before the next block reuses this StateDB.
+func (s *StateDB) TakeCapturedFold() *CapturedCommit {
+	c := s.capturedFold
+	s.capturedFold = nil
+	return c
+}
+
 func (s *StateDB) applyLatestDomainCommitment(updates []rawdb.StateCommitmentUpdate) (tcommon.Hash, error) {
-	index := s.accountKVIndex()
-	repair := statedomains.CommitmentSnapshotRepair{
+	return FoldLatestCommitment(s.accountKVIndex(), updates, s.commitmentRepair())
+}
+
+// commitmentRepair captures the cold-history snapshot-repair inputs for the
+// commitment fold. They are stable for the lifetime of the StateDB (set once at
+// open via SetCommitmentColdHistory and never mutated per block), so they can be
+// captured at the async-commit handoff and consumed by the commit worker
+// without racing the foreground's continued use of the StateDB.
+func (s *StateDB) commitmentRepair() statedomains.CommitmentSnapshotRepair {
+	return statedomains.CommitmentSnapshotRepair{
 		Source: s.commitmentColdHistory,
 		TxNum:  s.commitmentColdTxNum,
 	}
-	store := s.latestCommitmentStore(index)
+}
+
+// FoldLatestCommitment runs the latest-domain commitment fold against an
+// explicit commitment-branch index and returns the new root. It is the
+// severable unit the async commit worker runs on its own goroutine: it touches
+// NO StateDB state — only the supplied index, the captured updates, and the
+// captured repair inputs — so the foreground may continue mutating the (reused)
+// StateDB for the next block while this runs.
+//
+// The synchronous path calls it inline with s.accountKVIndex() (= bc.buffer's
+// single active layer); the async path calls it with a buffer LayerView bound
+// to the committing block's in-flight layer, so the fold writes that block's
+// commitment-branch rows while the foreground writes the next block's layer.
+func FoldLatestCommitment(index statedomains.CommitmentDB, updates []rawdb.StateCommitmentUpdate, repair statedomains.CommitmentSnapshotRepair) (tcommon.Hash, error) {
+	store := statedomains.NewStagedCommitmentStore(index)
 	root, err := statedomains.ApplyLatestCommitmentWithStoreAndRepair(store, updates, repair)
 	return tcommon.Hash(root), err
 }

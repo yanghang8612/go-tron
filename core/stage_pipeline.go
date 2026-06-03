@@ -27,6 +27,20 @@ func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, has
 	}
 }
 
+// SetWriter re-points the pipeline at a new stage-progress writer, preserving
+// the advance ordinal. Used by the async commit worker to redirect the
+// post-execution stage advances (StageCommitment, StageFinish) at the
+// committing block's buffer layer view, so they land in that block's layer
+// rather than whatever layer is newest when the worker runs. No-op semantics
+// for the synchronous path, which never calls it (writes go to bc.buffer, the
+// only in-flight layer).
+func (p *canonicalStagePipeline) SetWriter(writer ethdb.KeyValueWriter) {
+	if p == nil {
+		return
+	}
+	p.progress = newRawDBStageProgressWriter(writer)
+}
+
 func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 	if p == nil {
 		return fmt.Errorf("canonical stage pipeline: nil pipeline")
