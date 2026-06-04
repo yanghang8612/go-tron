@@ -9,11 +9,11 @@ import (
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
-// These tests probe the Nile-8,825,873 total_energy_weight drift (gtron ends
-// 3,091 below canonical). Each replays a freeze/unfreeze sequence through the
-// REAL actuators and asserts total_energy_weight matches java-tron v4.0.1's
-// floor method: freeze adds floor(thisAmount/1e6), unfreeze subtracts
-// floor(storedTotal/1e6). A mismatch localizes the runtime divergence.
+// These tests lock V1 freeze/unfreeze total_energy_weight rounding. They were
+// added while investigating the Nile 8,825,873 stall; later /jn comparison
+// showed that stall's direct cause was origin energy_usage drift, not
+// total_energy_weight. Keep the tests because they still guard real java-tron
+// parity rules for V1 resource accounting.
 
 func execFreeze(t *testing.T, sdb *state.StateDB, dp *state.DynamicProperties, owner byte, amount, dur int64, res corepb.ResourceCode, recv *byte, blockTime int64) {
 	t.Helper()
@@ -94,14 +94,13 @@ func TestDelegatedEnergyTopUpFloorAsymmetry(t *testing.T) {
 	}
 }
 
-// TestDelegatedEnergyUnfreezeContractReceiverLeak is the regression test for the
-// Nile-8,825,873 total_energy_weight drift. Under allow_new_reward (exact weight
-// method) + allow_tvm_constantinople, java-tron's UnfreezeBalanceActuator does
-// NOT decrement a Contract receiver's acquired-delegated balance and uses
-// decrease = -unfreezeBalance/TRX. gtron previously always decremented the
-// receiver and computed newWeight-oldWeight, which is 1 lower whenever
-// frac(acquired) < frac(removed) — accumulating ~3,091 low over Nile history and
-// flipping the origin's OUT_OF_ENERGY to SUCCESS at block 8,825,873.
+// TestDelegatedEnergyUnfreezeContractReceiverLeak is the regression test for a
+// java-tron compatibility quirk: under allow_new_reward (exact weight method) +
+// allow_tvm_constantinople, UnfreezeBalanceActuator does NOT decrement a
+// Contract receiver's acquired-delegated balance and uses decrease =
+// -unfreezeBalance/TRX. gtron previously always decremented the receiver and
+// computed newWeight-oldWeight, which is 1 lower whenever frac(acquired) <
+// frac(removed).
 //
 // Scenario chosen so frac(acquired)=0 < frac(removed)=0.5, where old gtron gave
 // tw=1 but java gives tw=2:
