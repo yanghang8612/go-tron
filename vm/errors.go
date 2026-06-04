@@ -30,6 +30,13 @@ var (
 	ErrInvalidTokenIDTransfer = errors.New("invalid token id")
 	errPrecompileFailure      = errors.New("precompile returned failure")
 	errExecutionFailed        = errors.New("execution failed")
+	// ErrPrecompileUnknown models an uncaught RuntimeException escaping a
+	// java-tron precompile's execute() (e.g. ValidateMultiSign's words[0..3]
+	// access on a short input). java's RuntimeImpl.setResultCode maps such a raw
+	// exception to contractResult.UNKNOWN(13) with spendAllEnergy + tx failure;
+	// gtron mirrors that by surfacing this sentinel, which contractRetFromError
+	// maps to its default UNKNOWN(13) and which propagates from sub-calls.
+	ErrPrecompileUnknown = errors.New("precompiled contract: uncaught exception")
 )
 
 type invalidJumpError struct {
@@ -149,6 +156,7 @@ func isTransferFailure(err error) bool {
 func shouldPropagateCallError(err error) bool {
 	return isFatalVMError(err) ||
 		errors.Is(err, ErrPrecompiledContract) ||
+		errors.Is(err, ErrPrecompileUnknown) ||
 		isTransferFailure(err)
 }
 

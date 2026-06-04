@@ -566,6 +566,12 @@ func TestContractRetFromTransferFailed(t *testing.T) {
 	if got := contractRetFromError(vm.ErrInvalidTokenID); got != int32(corepb.Transaction_Result_UNKNOWN) {
 		t.Fatalf("plain invalid token id ret: got %d", got)
 	}
+	// ValidateMultiSign short/malformed input → java raises an uncaught
+	// RuntimeException → RuntimeImpl.setResultCode falls through to UNKNOWN(13).
+	// Pin the mapping so a future reorder of the switch can't silently demote it.
+	if got := contractRetFromError(vm.ErrPrecompileUnknown); got != int32(corepb.Transaction_Result_UNKNOWN) {
+		t.Fatalf("precompile uncaught-exception ret: got %d, want UNKNOWN(13)", got)
+	}
 	if got := string(runtimeMessageFromError(vm.ErrTokenTransferFailed)); got != "transfer trc10 failed: Cannot transfer asset to yourself." {
 		t.Fatalf("TRC10 transfer failed message: got %q", got)
 	}

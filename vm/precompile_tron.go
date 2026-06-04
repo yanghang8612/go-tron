@@ -242,8 +242,17 @@ func (c *validateMultiSign) executeWithStatus(tvm *TVM, input []byte) ([]byte, b
 	trueResult := make([]byte, 32)
 	trueResult[31] = 1
 
+	// java PrecompiledContracts.ValidateMultiSign.execute reads words[0..3]
+	// (DataWord.parseArray) BEFORE its inner try/catch, so an input shorter than
+	// 4 words throws an uncaught ArrayIndexOutOfBoundsException → spendAllEnergy +
+	// tx failure with contractResult.UNKNOWN(13). gtron previously returned
+	// DATA_FALSE+success here — a latent fork. Surface the uncaught-exception
+	// sentinel instead. (DEFERRED, needs a faithful extractBytesArray port: the
+	// restriction-ON oob-sigsOffset direct index words[sigsOffset/32] and the
+	// in-loop words[offset+i+1] accesses also throw; restriction-OFF already
+	// matches java because extractBytesArray bounds-checks offset → DATA_FALSE.)
 	if len(input) < 128 {
-		return falseResult, true, nil
+		return nil, false, ErrPrecompileUnknown
 	}
 	if tvm != nil && tvm.cfg.Osaka && !validAbiEncoding(input, 5, 5) {
 		return nil, false, nil
