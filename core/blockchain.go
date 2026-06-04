@@ -974,7 +974,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	energyLimitForkBlockNum := bc.config.EnergyLimitForkBlockNum()
 	var standbyPaySet *standbyWitnessPaySet
 	if dynProps.ChangeDelegation() && dynProps.Witness127PayPerBlock() > 0 {
-		standbyPaySet = bc.cachedStandbyPaySet(statedb, dynProps.CurrentCycleNumber())
+		standbyPaySet = bc.cachedStandbyPaySet(statedb, dynProps.CurrentCycleNumber(), dynProps.ConsensusLogicOptimization())
 	}
 	rewardAcctAddrs := bc.rewardAccountAddresses(block.WitnessAddress(), standbyPaySet)
 	bc.preloadRewardAccounts(statedb, rewardAcctAddrs)
@@ -1959,9 +1959,9 @@ func (bc *BlockChain) effectiveGenesisHash() tcommon.Hash {
 	return tcommon.Hash{}
 }
 
-func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB, cycle int64) *standbyWitnessPaySet {
+func (bc *BlockChain) cachedStandbyPaySet(statedb *state.StateDB, cycle int64, sortOpt bool) *standbyWitnessPaySet {
 	if bc.standbyPayCache == nil || bc.standbyPayCache.cycle != cycle {
-		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb, cycle)
+		bc.standbyPayCache = buildStandbyWitnessPaySet(bc.buffer, statedb, cycle, sortOpt)
 	}
 	return bc.standbyPayCache
 }
