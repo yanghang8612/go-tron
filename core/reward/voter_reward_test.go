@@ -120,6 +120,94 @@ func TestComputeVoterReward_HybridAcrossEffectiveCycle(t *testing.T) {
 	}
 }
 
+// TestComputeVoterReward_OldRewardOpt_TruncationDrift pins divergence #4: with
+// allowOldRewardOpt (#79) OFF, go-tron truncates the voter share per cycle
+// (java's legacy computeReward); with it ON, java telescopes the cumulative VI
+// over the whole old segment and floors ONCE. reward=20/cycle, totalVote=3,
+// userVote=1, two old cycles [1,3) (E=3):
+//   - opt OFF: floor(20*1/3)=6 per cycle x2 = 12.
+//   - opt ON:  viSum = 2*floor(20e18/3)=13333333333333333332; floor(viSum/1e18)=13.
+//
+// The +1 is the latent reward (balance) fork once #79 activates on Nile/mainnet.
+func TestComputeVoterReward_OldRewardOpt_TruncationDrift(t *testing.T) {
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	setup := func() *state.StateDB {
+		store := newRewardTestStore(t)
+		for c := int64(1); c < 3; c++ {
+			_ = store.WriteCycleVote(c, witness.Bytes(), 3)
+			_ = store.WriteCycleReward(c, witness.Bytes(), 20)
+		}
+		return store
+	}
+	votes := []VoteEntry{{Witness: witness, Count: 1}}
+
+	dpOff := state.NewDynamicProperties()
+	dpOff.SetNewRewardAlgorithmEffectiveCycle(3)
+	if got := ComputeVoterReward(setup(), dpOff, votes, 1, 3); got != 12 {
+		t.Fatalf("opt OFF: got %d, want 12 (legacy per-cycle truncate)", got)
+	}
+
+	dpOn := state.NewDynamicProperties()
+	dpOn.SetNewRewardAlgorithmEffectiveCycle(3)
+	dpOn.SetAllowOldRewardOpt(true)
+	if got := ComputeVoterReward(setup(), dpOn, votes, 1, 3); got != 13 {
+		t.Fatalf("opt ON: got %d, want 13 (java VI telescoping); +1 vs legacy is the fork", got)
+	}
+}
+
+// TestComputeVoterReward_OldRewardOpt_ThreeCycleDrift — three old cycles [1,4):
+// opt ON viSum = 3*floor(20e18/3)=19999999999999999998 -> floor(/1e18)=19 (one
+// floor at the end); legacy floors each cycle -> 6*3 = 18.
+func TestComputeVoterReward_OldRewardOpt_ThreeCycleDrift(t *testing.T) {
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	setup := func() *state.StateDB {
+		store := newRewardTestStore(t)
+		for c := int64(1); c < 4; c++ {
+			_ = store.WriteCycleVote(c, witness.Bytes(), 3)
+			_ = store.WriteCycleReward(c, witness.Bytes(), 20)
+		}
+		return store
+	}
+	votes := []VoteEntry{{Witness: witness, Count: 1}}
+
+	dpOff := state.NewDynamicProperties()
+	dpOff.SetNewRewardAlgorithmEffectiveCycle(4)
+	if got := ComputeVoterReward(setup(), dpOff, votes, 1, 4); got != 18 {
+		t.Fatalf("opt OFF three cycles: got %d, want 18", got)
+	}
+	dpOn := state.NewDynamicProperties()
+	dpOn.SetNewRewardAlgorithmEffectiveCycle(4)
+	dpOn.SetAllowOldRewardOpt(true)
+	if got := ComputeVoterReward(setup(), dpOn, votes, 1, 4); got != 19 {
+		t.Fatalf("opt ON three cycles: got %d, want 19", got)
+	}
+}
+
+// TestComputeVoterReward_OldRewardOpt_AcrossEffectiveCycle proves the opt old
+// segment composes with the unchanged new (stored-VI) segment across E. E=3,
+// voter span [1,5): old [1,3) telescopes to 13 (vs legacy 12); new [3,5) reads
+// stored VI[2]=0,VI[4]=7e18 -> 7. opt total = 20 (legacy would be 19), and the
+// per-segment floors stay separate exactly as java does.
+func TestComputeVoterReward_OldRewardOpt_AcrossEffectiveCycle(t *testing.T) {
+	witness := tcommon.BytesToAddress([]byte{0x41, 0x01})
+	store := newRewardTestStore(t)
+	for c := int64(1); c < 3; c++ {
+		_ = store.WriteCycleVote(c, witness.Bytes(), 3)
+		_ = store.WriteCycleReward(c, witness.Bytes(), 20)
+	}
+	_ = store.WriteWitnessVI(2, witness.Bytes(), new(big.Int))
+	_ = store.WriteWitnessVI(4, witness.Bytes(), new(big.Int).Mul(big.NewInt(7), DecimalOfViReward))
+
+	dp := state.NewDynamicProperties()
+	dp.SetNewRewardAlgorithmEffectiveCycle(3)
+	dp.SetAllowOldRewardOpt(true)
+
+	votes := []VoteEntry{{Witness: witness, Count: 1}}
+	if got := ComputeVoterReward(store, dp, votes, 1, 5); got != 20 {
+		t.Fatalf("opt across E: got %d, want 20 (13 telescoped old + 7 new)", got)
+	}
+}
+
 func TestComputeVoterReward_MultipleWitnesses(t *testing.T) {
 	store := newRewardTestStore(t)
 	dp := state.NewDynamicProperties()
