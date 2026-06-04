@@ -391,6 +391,70 @@ func (a *Account) SetEnergyWindow(raw int64, optimized bool) {
 	a.pb.AccountResource.EnergyWindowOptimized = optimized
 }
 
+// Per-account bandwidth (NET) recovery window. Mirrors java-tron AccountCapsule's
+// getWindowSize / getWindowSizeV2 / setNewWindowSize / setNewWindowSizeV2 for the
+// BANDWIDTH resource. The raw field is net_window_size (a top-level Account field,
+// unlike energy_window_size which lives under AccountResource); when
+// net_window_optimized is set the raw value is stored in V2 units
+// (slots * WindowSizePrecision).
+
+// RawNetWindowSize returns the stored field verbatim (0 when never written).
+func (a *Account) RawNetWindowSize() int64 {
+	return a.pb.GetNetWindowSize()
+}
+
+// NetWindowOptimized reports whether the window is stored in V2 units.
+func (a *Account) NetWindowOptimized() bool {
+	return a.pb.GetNetWindowOptimized()
+}
+
+// NetWindowSize returns the window in slots (java getWindowSize(BANDWIDTH)).
+func (a *Account) NetWindowSize() int64 {
+	raw := a.pb.GetNetWindowSize()
+	if raw == 0 {
+		return params.WindowSizeSlots
+	}
+	if a.pb.GetNetWindowOptimized() {
+		if raw < params.WindowSizePrecision {
+			return params.WindowSizeSlots
+		}
+		return raw / params.WindowSizePrecision
+	}
+	return raw
+}
+
+// NetWindowSizeV2 returns the window in V2 units (java getWindowSizeV2(BANDWIDTH)).
+func (a *Account) NetWindowSizeV2() int64 {
+	raw := a.pb.GetNetWindowSize()
+	if raw == 0 {
+		return params.WindowSizeSlots * params.WindowSizePrecision
+	}
+	if a.pb.GetNetWindowOptimized() {
+		return raw
+	}
+	return raw * params.WindowSizePrecision
+}
+
+// SetNewNetWindowSize sets the raw window (V1 form; leaves the optimized flag
+// untouched). Mirrors setNewWindowSize(BANDWIDTH, v).
+func (a *Account) SetNewNetWindowSize(v int64) {
+	a.pb.NetWindowSize = v
+}
+
+// SetNewNetWindowSizeV2 sets the raw window and marks it optimized (V2).
+// Mirrors setNewWindowSizeV2(BANDWIDTH, v).
+func (a *Account) SetNewNetWindowSizeV2(v int64) {
+	a.pb.NetWindowSize = v
+	a.pb.NetWindowOptimized = true
+}
+
+// SetNetWindow sets the raw window and optimized flag together (used by the
+// StateDB setter to persist a computed window).
+func (a *Account) SetNetWindow(raw int64, optimized bool) {
+	a.pb.NetWindowSize = raw
+	a.pb.NetWindowOptimized = optimized
+}
+
 // Allowance (witness rewards) accessors.
 func (a *Account) Allowance() int64              { return a.pb.Allowance }
 func (a *Account) SetAllowance(v int64)          { a.pb.Allowance = v }

@@ -1997,6 +1997,19 @@ func (s *StateDB) SetEnergyWindow(addr tcommon.Address, raw int64, optimized boo
 	obj.markDirty()
 }
 
+// SetNetWindow sets the per-account bandwidth recovery window (raw field +
+// optimized flag) for an account. Mirrors java-tron's
+// setNewWindowSize / setNewWindowSizeV2 persistence for BANDWIDTH.
+func (s *StateDB) SetNetWindow(addr tcommon.Address, raw int64, optimized bool) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetNetWindow(raw, optimized)
+	obj.markDirty()
+}
+
 // --- Contract support ---
 
 var (
