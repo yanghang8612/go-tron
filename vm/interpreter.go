@@ -26,6 +26,13 @@ type Interpreter struct {
 	// at the end of execution — mirroring java-tron VM.play's energyUsage.
 	factor        int64
 	rawEnergyUsed uint64
+
+	// opBaseAccum accumulates the current opcode's pre-penalty base cost across
+	// its (possibly multiple) useEnergy calls. The dynamic-energy penalty is
+	// charged INCREMENTALLY so its running total equals a single floor over the
+	// whole op cost — matching java VM.play, which computes one
+	// `energy*factor/DECIMAL - energy` over the full op cost. Reset per op.
+	opBaseAccum uint64
 }
 
 // NewInterpreter creates a new interpreter.
@@ -83,6 +90,8 @@ func (in *Interpreter) Run(contract *Contract) ([]byte, error) {
 		}
 		in.currentOp = op
 		in.energyErr = nil
+		// Per-op base accumulator for the single-floor dynamic-energy penalty.
+		in.opBaseAccum = 0
 
 		// Fork gate
 		if operation.enabledFn != nil && !operation.enabledFn(in.tvmConfig) {
@@ -195,7 +204,13 @@ func (in *Interpreter) useEnergy(contract *Contract, baseCost uint64) bool {
 	hasPenalty := false
 	if in.tvmConfig.DynamicEnergy && in.factor > types.DynamicEnergyFactorDecimal {
 		hasPenalty = true
-		penalty = applyDynamicEnergyPenalty(baseCost, in.factor)
+		// Charge the penalty INCREMENTALLY so the running total over this op is a
+		// SINGLE floor of (totalBase*factor/DECIMAL - totalBase), matching java
+		// VM.play (one penalty over the full op cost). Flooring each useEnergy
+		// chunk independently undercharges by up to (chunks-1).
+		prevPenalty := applyDynamicEnergyPenalty(in.opBaseAccum, in.factor)
+		in.opBaseAccum += baseCost
+		penalty = applyDynamicEnergyPenalty(in.opBaseAccum, in.factor) - prevPenalty
 		cost += penalty
 	}
 	if contract.UseEnergy(cost) {
