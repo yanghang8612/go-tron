@@ -43,6 +43,9 @@ import (
 // modeled here — would need a fork gate if M0″ Phase 2 covers blocks
 // from that era.
 func PayEnergyBill(ctx *Context, result *Result) error {
+	if result != nil {
+		result.OriginEnergyUsage = 0
+	}
 	if result.EnergyUsageTotal <= 0 {
 		return nil
 	}

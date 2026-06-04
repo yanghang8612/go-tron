@@ -273,3 +273,50 @@ func TestUseEnergyForBill_PreStake2RecoverDrift(t *testing.T) {
 		t.Fatalf("pre-Stake-2.0 path wrote energy_window_size = %d, want 0 (global window, untouched)", got)
 	}
 }
+
+// TestNile8825873CanonicalParentStateLeavesTx3OutOfEnergyBudget pins the static
+// /jn vs /gn diagnosis for Nile block 8,825,873. java-tron's parent state leaves
+// the origin with 102,680 energy; the first three same-contract deposit() calls
+// each consume 27,461, so tx3 must enter the VM with only 20,297 energy and fail
+// at SSTORE. A lower parent energy_usage gives the 269,969 limit seen in the
+// stale gtron DB and incorrectly turns the tx into SUCCESS.
+func TestNile8825873CanonicalParentStateLeavesTx3OutOfEnergyBudget(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x95, 0x37, 0x6a, 0x34, 0xfc, 0x88, 0x95, 0xaf, 0xab, 0x95, 0x96, 0x47, 0x2d, 0x5f, 0x65, 0x8b, 0xf9, 0x5d, 0xae, 0x7c}
+	origin := tcommon.Address{0x41, 0x84, 0x29, 0x2b, 0x9e, 0xe2, 0xe6, 0x85, 0x59, 0x1a, 0x92, 0x6b, 0x82, 0xf2, 0xed, 0x4d, 0xbc, 0xac, 0x06, 0xe3, 0xc1}
+	contractAddr := tcommon.Address{0x41, 0x55, 0x22, 0x30, 0x72, 0xbd, 0x8b, 0x36, 0x89, 0x93, 0x10, 0xda, 0xcc, 0x80, 0x36, 0x7d, 0xed, 0xf8, 0x51, 0xfc, 0x34}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.HeadSlot = 533_104_559
+	ctx.DynProps.SetLatestBlockHeaderNumber(8_825_872)
+	ctx.DynProps.SetTotalEnergyWeight(10_550_584)
+	ctx.DynProps.SetTotalEnergyLimit(90_000_000_000)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(90_000_000_000)
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.GetAccount(origin).AddFrozenEnergy(100_000_000_000, 1_591_612_749_000)
+	ctx.State.SetEnergyUsage(origin, 852_930_668)
+	ctx.State.SetLatestConsumeTimeForEnergy(origin, ctx.HeadSlot)
+	installOriginContract(t, ctx, contractAddr, origin, 0, 10_000_000)
+
+	if got := calcAccountEnergyLimit(ctx.State.GetAccount(origin), ctx.DynProps); got != 853_033_348 {
+		t.Fatalf("origin energy limit = %d, want 853033348", got)
+	}
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime()); got != 102_680 {
+		t.Fatalf("parent origin energy left = %d, want 102680 from java /jn parent state", got)
+	}
+
+	for i := 0; i < 3; i++ {
+		useEnergyForBill(ctx, origin, 27_461, true)
+	}
+
+	if got := ctx.State.GetEnergyUsage(origin); got != 853_013_051 {
+		t.Fatalf("origin usage after three deposits = %d, want 853013051", got)
+	}
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime()); got != 20_297 {
+		t.Fatalf("origin energy left before tx3 = %d, want 20297", got)
+	}
+	if got := triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, &Result{}); got != 20_297 {
+		t.Fatalf("tx3 invoke energy limit = %d, want 20297; 27461-energy deposit must be OUT_OF_ENERGY", got)
+	}
+}

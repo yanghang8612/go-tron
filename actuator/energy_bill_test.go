@@ -376,16 +376,16 @@ func TestPayEnergyBill_NoEnergyNoOp(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.AddBalance(owner, 50_000_000)
 
-	result := &Result{EnergyUsageTotal: 0, ContractRet: 1}
+	result := &Result{EnergyUsageTotal: 0, ContractRet: 1, OriginEnergyUsage: 12345}
 	if err := PayEnergyBill(ctx, result); err != nil {
 		t.Fatalf("PayEnergyBill: %v", err)
 	}
 	if got := ctx.State.GetBalance(owner); got != 50_000_000 {
 		t.Errorf("balance = %d, want untouched", got)
 	}
-	if result.EnergyUsed != 0 || result.EnergyFee != 0 {
-		t.Errorf("expected zero energy fields, got EnergyUsed=%d EnergyFee=%d",
-			result.EnergyUsed, result.EnergyFee)
+	if result.EnergyUsed != 0 || result.EnergyFee != 0 || result.OriginEnergyUsage != 0 {
+		t.Errorf("expected zero energy fields, got EnergyUsed=%d EnergyFee=%d OriginEnergyUsage=%d",
+			result.EnergyUsed, result.EnergyFee, result.OriginEnergyUsage)
 	}
 }
 
