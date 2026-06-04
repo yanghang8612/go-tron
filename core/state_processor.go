@@ -11,7 +11,6 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
-	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // ErrExchangeRejected is returned by ApplyTransaction when an
@@ -182,151 +181,6 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	result.Fee += multiSignFee + memoFee
 
 	return result, nil
-}
-
-func logVMRetMismatch(blockNum uint64, txIndex int, tx *types.Transaction, result *actuator.Result, s *state.StateDB, dp *state.DynamicProperties, resourceTime int64, actual corepb.Transaction_ResultContractResult, preFields []interface{}) {
-	if tx == nil || result == nil {
-		return
-	}
-	ret := tx.Proto().GetRet()
-	if len(ret) == 0 {
-		return
-	}
-	expected := ret[0].GetContractRet()
-
-	fields := []interface{}{
-		"number", blockNum,
-		"txIndex", txIndex,
-		"tx", tx.Hash(),
-		"expected", expected,
-		"actual", actual,
-		"energyUsageTotal", result.EnergyUsageTotal,
-		"energyUsed", result.EnergyUsed,
-		"originEnergyUsage", result.OriginEnergyUsage,
-		"energyFee", result.EnergyFee,
-		"hasCallerEnergyLeft", result.HasCallerEnergyLeft,
-		"callerEnergyLeft", result.CallerEnergyLeft,
-		"hasOriginEnergyLeft", result.HasOriginEnergyLeft,
-		"originEnergyLeft", result.OriginEnergyLeft,
-		"resourceTime", resourceTime,
-	}
-	if dp != nil {
-		fields = append(fields,
-			"supportUnfreezeDelay", dp.SupportUnfreezeDelay(),
-			"allowNewReward", dp.AllowNewReward(),
-			"allowTvmConstantinople", dp.AllowTvmConstantinople(),
-			"allowTvmSolidity059", dp.AllowTvmSolidity059(),
-			"allowTvmFreeze", dp.AllowTvmFreeze(),
-			"totalEnergyWeight", dp.TotalEnergyWeight(),
-			"totalEnergyLimit", dp.TotalEnergyCurrentLimit(),
-			"totalNetWeight", dp.TotalNetWeight(),
-			"totalNetLimit", dp.TotalNetLimit(),
-			"latestBlockHeaderTimestamp", dp.LatestBlockHeaderTimestamp(),
-		)
-	}
-	if len(preFields) > 0 {
-		fields = append(fields, preFields...)
-	}
-
-	caller, contractAddr, origin, userPct, originLimit := vmRetMismatchParties(tx, s)
-	fields = append(fields,
-		"caller", caller,
-		"contract", contractAddr,
-		"origin", origin,
-		"userPct", userPct,
-		"originLimit", originLimit,
-	)
-	fields = appendEnergyAccountDiag(fields, "caller", s, dp, caller, resourceTime)
-	fields = appendEnergyAccountDiag(fields, "origin", s, dp, origin, resourceTime)
-
-	log.Error("VM contractRet mismatch diagnostics", fields...)
-}
-
-func captureVMRetMismatchPreDiag(tx *types.Transaction, s *state.StateDB, dp *state.DynamicProperties, resourceTime int64) []interface{} {
-	if tx == nil || !isVMContractType(tx.ContractType()) {
-		return nil
-	}
-	caller, contractAddr, origin, userPct, originLimit := vmRetMismatchParties(tx, s)
-	fields := []interface{}{
-		"preCaller", caller,
-		"preContract", contractAddr,
-		"preOrigin", origin,
-		"preUserPct", userPct,
-		"preOriginLimit", originLimit,
-	}
-	fields = appendEnergyAccountDiag(fields, "preCaller", s, dp, caller, resourceTime)
-	fields = appendEnergyAccountDiag(fields, "preOrigin", s, dp, origin, resourceTime)
-	return fields
-}
-
-func vmRetMismatchParties(tx *types.Transaction, s *state.StateDB) (caller, contractAddr, origin tcommon.Address, userPct, originLimit int64) {
-	if tx == nil || tx.Contract() == nil || tx.Contract().Parameter == nil {
-		return
-	}
-	switch tx.ContractType() {
-	case corepb.Transaction_Contract_TriggerSmartContract:
-		tsc := &contractpb.TriggerSmartContract{}
-		if err := tx.Contract().Parameter.UnmarshalTo(tsc); err != nil {
-			return
-		}
-		caller = tcommon.BytesToAddress(tsc.OwnerAddress)
-		contractAddr = tcommon.BytesToAddress(tsc.ContractAddress)
-		if s != nil {
-			if meta := s.GetContract(contractAddr); meta != nil {
-				origin = tcommon.BytesToAddress(meta.OriginAddress)
-				userPct = meta.ConsumeUserResourcePercent
-				originLimit = meta.OriginEnergyLimit
-			}
-		}
-	case corepb.Transaction_Contract_CreateSmartContract:
-		csc := &contractpb.CreateSmartContract{}
-		if err := tx.Contract().Parameter.UnmarshalTo(csc); err != nil {
-			return
-		}
-		caller = tcommon.BytesToAddress(csc.OwnerAddress)
-		origin = caller
-	}
-	return
-}
-
-func appendEnergyAccountDiag(fields []interface{}, prefix string, s *state.StateDB, dp *state.DynamicProperties, addr tcommon.Address, resourceTime int64) []interface{} {
-	fields = append(fields, prefix+"Addr", addr)
-	if s == nil || addr == (tcommon.Address{}) {
-		return fields
-	}
-	acct := s.GetAccount(addr)
-	if acct == nil {
-		return append(fields, prefix+"Exists", false)
-	}
-	energyUsage := s.GetEnergyUsage(addr)
-	energyLatestConsumeTime := s.GetLatestConsumeTimeForEnergy(addr)
-	energyLimit := int64(0)
-	energyRecovered := int64(0)
-	energyLeft := int64(0)
-	if dp != nil {
-		energyLimit = availableAccountEnergy(acct, dp)
-		energyRecovered = recoverUsageForDP(energyUsage, energyLatestConsumeTime, resourceTime, dp)
-		energyLeft = energyLimit - energyRecovered
-		if energyLeft < 0 {
-			energyLeft = 0
-		}
-	}
-	return append(fields,
-		prefix+"Exists", true,
-		prefix+"Type", acct.Type(),
-		prefix+"EnergyUsage", energyUsage,
-		prefix+"EnergyLatestConsumeTime", energyLatestConsumeTime,
-		prefix+"EnergyLimitCalc", energyLimit,
-		prefix+"EnergyRecoveredAtResourceTime", energyRecovered,
-		prefix+"EnergyLeftCalc", energyLeft,
-		prefix+"FrozenEnergy", acct.FrozenEnergyAmount(),
-		prefix+"FrozenEnergyExpire", acct.FrozenEnergyExpireTime(),
-		prefix+"DelegatedFrozenEnergy", acct.DelegatedFrozenEnergy(),
-		prefix+"AcquiredDelegatedFrozenEnergy", acct.AcquiredDelegatedFrozenEnergy(),
-		prefix+"FrozenV2Energy", acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY),
-		prefix+"DelegatedFrozenV2Energy", acct.DelegatedFrozenV2BalanceForEnergy(),
-		prefix+"AcquiredDelegatedFrozenV2Energy", acct.AcquiredDelegatedFrozenV2BalanceForEnergy(),
-	)
 }
 
 // buildTransactionInfo constructs a TransactionInfo proto from the execution result.
@@ -571,14 +425,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
-		preMismatchDiag := captureVMRetMismatchPreDiag(tx, statedb, dynProps, prevBlockHeadSlot)
 		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
-		actualRet := corepb.Transaction_ResultContractResult(result.ContractRet)
-		if err := ValidateTxVMContractRet(tx, actualRet); err != nil {
-			logVMRetMismatch(block.Number(), i, tx, result, statedb, dynProps, prevBlockHeadSlot, actualRet, preMismatchDiag)
+		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
