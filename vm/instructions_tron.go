@@ -97,21 +97,19 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !in.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !in.useEnergy(contract, retMemCost) {
+	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
+	// calcMemEnergy(oldMemSize, in.max(out)); separate in/ret charges
+	// double-count the overlap.
+	if memCost := combinedMemoryExpansionCost(mem, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !in.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
