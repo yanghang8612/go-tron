@@ -36,8 +36,9 @@ type stubBackend struct {
 	pendingTxList      []*corepb.Transaction
 	nodes              []*tronapi.PeerInfo
 	// M5.1 PR-1
-	accountByID *types.Account
-	accountNet  *apipb.AccountNetMessage
+	accountByID     *types.Account
+	accountNet      *apipb.AccountNetMessage
+	accountResource *tronapi.AccountResource
 	// For inspecting what contract was passed to BuildContractTransaction
 	lastContractType corepb.Transaction_Contract_ContractType
 	lastContract     proto.Message
@@ -90,7 +91,7 @@ func (s *stubBackend) EstimateEnergy(owner, contract common.Address, data []byte
 	return 0, nil
 }
 func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
-	return nil, nil
+	return s.accountResource, nil
 }
 func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
@@ -615,6 +616,56 @@ func TestGetAccountNet(t *testing.T) {
 	// protojson encodes int64 as string
 	if result["freeNetUsed"] != "100" {
 		t.Fatalf("unexpected freeNetUsed: %v", result)
+	}
+}
+
+// TestGetAccountResource_PopulatedFields pins the HTTP JSON contract for the
+// fields that previously always came back empty: each must appear under its
+// java-matching key (casing matters for SDKs), and an omitempty field left at
+// zero must be omitted rather than emitted.
+func TestGetAccountResource_PopulatedFields(t *testing.T) {
+	stub := &stubBackend{
+		accountResource: &tronapi.AccountResource{
+			NetLimit:             5000,
+			TotalNetWeight:       1000,
+			TotalTronPowerWeight: 3000,
+			TronPowerUsed:        100,
+			TronPowerLimit:       800,
+			EnergyUsed:           333,
+			EnergyLimit:          9000,
+			TotalEnergyWeight:    2000,
+			StorageUsed:          555,
+			// StorageLimit deliberately left 0 to assert omitempty omits it.
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	result := postJSON(t, srv.URL+"/wallet/getaccountresource", `{"address":"4101"}`)
+
+	want := map[string]float64{
+		"NetLimit":             5000,
+		"TotalNetWeight":       1000,
+		"TotalTronPowerWeight": 3000,
+		"tronPowerUsed":        100,
+		"tronPowerLimit":       800,
+		"EnergyUsed":           333,
+		"EnergyLimit":          9000,
+		"TotalEnergyWeight":    2000,
+		"storageUsed":          555,
+	}
+	for key, v := range want {
+		got, ok := result[key]
+		if !ok {
+			t.Errorf("missing field %q in response %v", key, result)
+			continue
+		}
+		if got.(float64) != v {
+			t.Errorf("%s = %v, want %v", key, got, v)
+		}
+	}
+	if _, ok := result["storageLimit"]; ok {
+		t.Errorf("storageLimit should be omitted when zero, got %v", result["storageLimit"])
 	}
 }
 
