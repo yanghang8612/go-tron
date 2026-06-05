@@ -41,6 +41,10 @@ var (
 	// .validateSignature: a transfer FROM a shielded address (no transparent
 	// owner) must carry NO transparent ECDSA signatures.
 	ErrShieldedUnexpectedSignature = errors.New("shielded transfer must not carry transparent signatures")
+	// ErrTransactionResultTooLarge mirrors java BandwidthProcessor.consume's
+	// always-on getResultSerializedSize() > MAX_RESULT_SIZE_IN_TX*contractCount
+	// guard (TooBigTransactionResultException).
+	ErrTransactionResultTooLarge = errors.New("transaction result size exceeds maximum")
 )
 
 // ValidateTxEnvelope verifies the signature(s) on a transaction match the

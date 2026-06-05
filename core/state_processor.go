@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrExchangeRejected is returned by ApplyTransaction when an
@@ -97,6 +98,24 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		}
 		if tx.Expiration() < prevBlockTime+slotCount*params.BlockProducedInterval {
 			return nil, ErrTransactionExpiration
+		}
+	}
+
+	// java BandwidthProcessor.consume always rejects (in-block too) a tx whose
+	// serialized result exceeds MAX_RESULT_SIZE_IN_TX(64) per contract —
+	// getResultSerializedSize() = sum of each Result's serialized size. gtron
+	// strips ret for the 500KB byte-size gate but lacked this per-ret guard.
+	// proto.Size(r) == java result.getSerializedSize() for the same message, and
+	// canonical blocks always satisfy it (java enforces at produce), so this only
+	// rejects a crafted block carrying an oversized ret.
+	{
+		retPB := tx.Proto()
+		var retSize int64
+		for _, r := range retPB.GetRet() {
+			retSize += int64(proto.Size(r))
+		}
+		if retSize > maxResultSizeInTx*int64(len(retPB.GetRawData().GetContract())) {
+			return nil, ErrTransactionResultTooLarge
 		}
 	}
 

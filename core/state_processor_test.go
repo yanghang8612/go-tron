@@ -189,6 +189,36 @@ func TestApplyTransaction_InBlockExpirationLowerBound(t *testing.T) {
 	}
 }
 
+// TestApplyTransaction_RejectsOversizedResult pins java BandwidthProcessor
+// .consume's always-on (in-block) getResultSerializedSize() > 64*contractCount
+// reject. A normal/no ret passes; a result padded past 64 bytes is rejected.
+func TestApplyTransaction_RejectsOversizedResult(t *testing.T) {
+	run := func(orderIDLen int) error {
+		statedb := newTestState(t)
+		dynProps := state.NewDynamicProperties()
+		statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+		statedb.AddBalance(testProcessorAddr(1), 20_000_000)
+		statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+		tx := makeTestTransferTx(1, 2, 1)
+		if orderIDLen > 0 {
+			tx.Proto().Ret = []*corepb.Transaction_Result{{OrderId: make([]byte, orderIDLen)}}
+		}
+		_, err := applyTransaction(
+			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+		)
+		return err
+	}
+
+	if err := run(0); err != nil {
+		t.Fatalf("no ret: expected accept, got %v", err)
+	}
+	if err := run(100); !errors.Is(err, ErrTransactionResultTooLarge) {
+		t.Fatalf("oversized ret (100-byte OrderId > 64): expected ErrTransactionResultTooLarge, got %v", err)
+	}
+}
+
 func TestProcessBlock_WithTransactions(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
