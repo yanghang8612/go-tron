@@ -105,7 +105,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// That transferUsage is deducted from the receiver and folded into the
 	// owner's usage so neither party gets a free ride.
 	resourceTime := ctx.ResourceTime()
-	transferUsage := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, resourceTime)
+	transferUsage, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiverAddr, c.Resource, c.Balance, resourceTime)
 
 	// Return to owner's frozen balance
 	ctx.State.AddFreezeV2(ownerAddr, c.Resource, c.Balance)
@@ -114,9 +114,9 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// Reduce incoming delegation on receiver
 	ctx.State.SubAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
 
-	if transferUsage > 0 {
-		delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, transferUsage, resourceTime)
-	}
+	// java unDelegateIncrease is called UNCONDITIONALLY (it recovers + writes the
+	// owner's window even at transferUsage==0) and blends in the receiver's window.
+	delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, ownerAddr, c.Resource, transferUsage, recvRawWindow, recvOptimized, resourceTime)
 
 	// Update delegation record
 	if err := ctx.State.UnlockExpiredDelegatedResource(ownerAddr, receiverAddr, ctx.PrevBlockTime); err != nil {

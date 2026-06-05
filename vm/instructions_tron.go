@@ -1139,13 +1139,12 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// back to the owner. Mirrors java-tron UnDelegateResourceActuator.execute.
 	dp := in.tvm.StateDB.DynamicProperties()
 	resourceTime := in.tvm.ResourceTime()
-	transfer := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
+	transfer, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
-	if transfer > 0 {
-		delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, transfer, resourceTime)
-	}
+	// java unDelegateIncrease runs UNCONDITIONALLY and blends the receiver window.
+	delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, recvRawWindow, recvOptimized, resourceTime)
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
