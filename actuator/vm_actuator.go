@@ -420,7 +420,10 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 	}
 	sunPerEnergy := vmEnergyFee(ctx)
 	leftFrozenEnergy := availableAccountEnergyForBill(ctx.State, ctx.DynProps, account, ctx.ResourceTime())
-	if result != nil && vmReceiptEnergyLeftMode(ctx) {
+	// Diagnostic (cross-impl parity): record caller available energy at exec
+	// start unconditionally (incl. pre-Stake-2.0). Billing still gates its reads
+	// on vmReceiptEnergyLeftMode, so this only populates the receipt field.
+	if result != nil {
 		result.CallerEnergyLeft = leftFrozenEnergy
 		result.HasCallerEnergyLeft = true
 	}
@@ -496,7 +499,9 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	}
 
 	originEnergyLeft := availableAccountEnergyForBill(ctx.State, ctx.DynProps, origin, ctx.ResourceTime())
-	if result != nil && vmReceiptEnergyLeftMode(ctx) {
+	// Diagnostic (cross-impl parity): record origin available energy at exec
+	// start unconditionally (incl. pre-Stake-2.0). Billing still gates its reads.
+	if result != nil {
 		result.OriginEnergyLeft = originEnergyLeft
 		result.HasOriginEnergyLeft = true
 	}

@@ -205,6 +205,10 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			EnergyUsageTotal:  result.EnergyUsageTotal,
 			NetUsage:          result.NetUsage,
 			NetFee:            result.NetFee,
+			// Diagnostic (cross-impl parity): available energy of origin/caller
+			// at contract execution start; set unconditionally in vm_actuator.
+			OriginEnergyLeft: result.OriginEnergyLeft,
+			CallerEnergyLeft: result.CallerEnergyLeft,
 		},
 	}
 	if isVMContract {

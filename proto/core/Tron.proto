@@ -324,6 +324,12 @@ message ResourceReceipt {
   int64 net_fee = 6;
   Transaction.Result.contractResult result = 7;
   int64 energy_penalty_total = 8;
+  // Diagnostic (cross-impl parity): available energy of the contract origin /
+  // caller captured at the start of contract execution, before the energy bill.
+  // Recorded unconditionally (incl. pre-Stake-2.0) to pinpoint energy-recovery
+  // divergences vs java-tron during a Nile re-sync. Not consensus-hashed.
+  int64 origin_energy_left = 9;
+  int64 caller_energy_left = 10;
 }
 
 message MarketOrderDetail {
