@@ -363,16 +363,21 @@ func (s *Server) GetAccountResource(_ context.Context, in *corepb.Account) (*api
 		return &apipb.AccountResourceMessage{}, nil
 	}
 	return &apipb.AccountResourceMessage{
-		FreeNetUsed:       res.FreeNetUsed,
-		FreeNetLimit:      res.FreeNetLimit,
-		NetUsed:           res.NetUsed,
-		NetLimit:          res.NetLimit,
-		TotalNetLimit:     res.TotalNetLimit,
-		TotalNetWeight:    res.TotalNetWeight,
-		EnergyUsed:        res.EnergyUsed,
-		EnergyLimit:       res.EnergyLimit,
-		TotalEnergyLimit:  res.TotalEnergyLimit,
-		TotalEnergyWeight: res.TotalEnergyWeight,
+		FreeNetUsed:          res.FreeNetUsed,
+		FreeNetLimit:         res.FreeNetLimit,
+		NetUsed:              res.NetUsed,
+		NetLimit:             res.NetLimit,
+		TotalNetLimit:        res.TotalNetLimit,
+		TotalNetWeight:       res.TotalNetWeight,
+		TotalTronPowerWeight: res.TotalTronPowerWeight,
+		TronPowerUsed:        res.TronPowerUsed,
+		TronPowerLimit:       res.TronPowerLimit,
+		EnergyUsed:           res.EnergyUsed,
+		EnergyLimit:          res.EnergyLimit,
+		TotalEnergyLimit:     res.TotalEnergyLimit,
+		TotalEnergyWeight:    res.TotalEnergyWeight,
+		StorageUsed:          res.StorageUsed,
+		StorageLimit:         res.StorageLimit,
 	}, nil
 }
 

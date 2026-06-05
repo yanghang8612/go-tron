@@ -423,32 +423,63 @@ func (b *TronBackend) accountResourceAtRoot(addr tcommon.Address, root tcommon.H
 	// matching cachedDynProps / block_builder. (Only rooted limit keys are
 	// returned today, so this is defensive alignment, not a behaviour change.)
 	dynProps := state.LoadDynamicProperties(b.chain.buffer, statedb)
-	return &tronapi.AccountResource{
-		FreeNetUsed:      statedb.GetFreeNetUsage(addr),
-		FreeNetLimit:     dynProps.FreeNetLimit(),
-		NetUsed:          statedb.GetNetUsage(addr),
-		TotalNetLimit:    dynProps.TotalNetLimit(),
-		TotalEnergyLimit: dynProps.TotalEnergyCurrentLimit(),
-	}, nil
+	return accountResourceFromAccount(statedb.GetAccount(addr), dynProps), nil
 }
 
+// accountResourceFromAccount builds the getaccountresource view, mirroring
+// java-tron Wallet.getAccountResource. It is the single source of truth shared
+// by the live-head and archive paths. A nil account yields zero usages with the
+// global limits still populated (the per-account share helpers return 0 for a
+// nil account).
+//
+// Known parity gaps versus java (all out of scope for the empty-value fix):
+//   - asset_net_used / asset_net_limit TRC10 maps are not ported (they need
+//     asset-issue-store lookups).
+//   - usages are the raw stored values; java runs Bandwidth/EnergyProcessor
+//     updateUsage first, decaying them toward the head block time.
+//   - a missing account returns the global limits here, whereas java returns
+//     null (the servlet emits "{}"). The callers preserve that legacy behaviour.
 func accountResourceFromAccount(acc *types.Account, dynProps *state.DynamicProperties) *tronapi.AccountResource {
 	res := &tronapi.AccountResource{}
 	if acc != nil {
 		res.FreeNetUsed = acc.FreeNetUsage()
 		res.NetUsed = acc.NetUsage()
+		res.EnergyUsed = acc.EnergyUsage()
+		res.TronPowerUsed = acc.TronPowerUsage()
+		res.TronPowerLimit = acc.AllTronPower() / trxPrecision
+		res.StorageUsed = acc.StorageUsage()
+		res.StorageLimit = acc.StorageLimit()
 	}
 	if dynProps != nil {
 		res.FreeNetLimit = dynProps.FreeNetLimit()
 		res.TotalNetLimit = dynProps.TotalNetLimit()
+		res.TotalNetWeight = dynProps.TotalNetWeight()
+		res.TotalTronPowerWeight = dynProps.TotalTronPowerWeight()
 		res.TotalEnergyLimit = dynProps.TotalEnergyCurrentLimit()
+		res.TotalEnergyWeight = dynProps.TotalEnergyWeight()
+		res.NetLimit = availableAccountNet(acc, dynProps)
+		res.EnergyLimit = availableAccountEnergy(acc, dynProps)
 	}
 	return res
 }
 
+// accountResourceDynamicPropertyKeys are the dynamic-property keys the
+// getaccountresource view reads. The archive path reconstructs only these from
+// temporal history, so it must stay in sync with the dynProps getters consumed
+// by accountResourceFromAccount — a missing key silently zeroes a limit/weight
+// on archive reads while the live path (full dynProps) still works.
+var accountResourceDynamicPropertyKeys = []string{
+	"free_net_limit",
+	"total_net_limit",
+	"total_net_weight",
+	"total_energy_current_limit",
+	"total_energy_weight",
+	"total_tron_power_weight",
+}
+
 func (b *TronBackend) dynamicPropertiesAt(reader *state.PersistentHistoryReader, blockNum uint64) (*state.DynamicProperties, error) {
 	dp := state.NewDynamicProperties()
-	for _, key := range []string{"free_net_limit", "total_net_limit", "total_energy_current_limit"} {
+	for _, key := range accountResourceDynamicPropertyKeys {
 		value, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(key), blockNum)
 		if err != nil {
 			return nil, err

@@ -194,6 +194,22 @@ func (a *Account) AllTronPower() int64 {
 	}
 }
 
+// TronPowerUsage returns the Tron Power the account has spent voting (the sum
+// of its vote counts), mirroring java-tron AccountCapsule.getTronPowerUsage().
+func (a *Account) TronPowerUsage() int64 {
+	var total int64
+	for _, v := range a.pb.Votes {
+		total += v.GetVoteCount()
+	}
+	return total
+}
+
+// StorageLimit returns the account's exchanged-storage byte limit.
+func (a *Account) StorageLimit() int64 { return a.pb.GetAccountResource().GetStorageLimit() }
+
+// StorageUsage returns the account's consumed exchanged storage in bytes.
+func (a *Account) StorageUsage() int64 { return a.pb.GetAccountResource().GetStorageUsage() }
+
 // InitializeOldTronPower snapshots the current LegacyTronPower into old_tron_power,
 // or sets -1 if the legacy power is zero. Mirrors AccountCapsule.initializeOldTronPower().
 func (a *Account) InitializeOldTronPower() {

@@ -20,16 +20,21 @@ type TriggerResult struct {
 }
 
 type AccountResource struct {
-	FreeNetUsed       int64 `json:"freeNetUsed"`
-	FreeNetLimit      int64 `json:"freeNetLimit"`
-	NetUsed           int64 `json:"NetUsed"`
-	NetLimit          int64 `json:"NetLimit"`
-	TotalNetLimit     int64 `json:"TotalNetLimit"`
-	TotalNetWeight    int64 `json:"TotalNetWeight"`
-	EnergyUsed        int64 `json:"EnergyUsed"`
-	EnergyLimit       int64 `json:"EnergyLimit"`
-	TotalEnergyLimit  int64 `json:"TotalEnergyLimit"`
-	TotalEnergyWeight int64 `json:"TotalEnergyWeight"`
+	FreeNetUsed          int64 `json:"freeNetUsed"`
+	FreeNetLimit         int64 `json:"freeNetLimit"`
+	NetUsed              int64 `json:"NetUsed"`
+	NetLimit             int64 `json:"NetLimit"`
+	TotalNetLimit        int64 `json:"TotalNetLimit"`
+	TotalNetWeight       int64 `json:"TotalNetWeight"`
+	TotalTronPowerWeight int64 `json:"TotalTronPowerWeight,omitempty"`
+	TronPowerUsed        int64 `json:"tronPowerUsed,omitempty"`
+	TronPowerLimit       int64 `json:"tronPowerLimit,omitempty"`
+	EnergyUsed           int64 `json:"EnergyUsed"`
+	EnergyLimit          int64 `json:"EnergyLimit"`
+	TotalEnergyLimit     int64 `json:"TotalEnergyLimit"`
+	TotalEnergyWeight    int64 `json:"TotalEnergyWeight"`
+	StorageUsed          int64 `json:"storageUsed,omitempty"`
+	StorageLimit         int64 `json:"storageLimit,omitempty"`
 }
 
 type ChainParameter struct {
