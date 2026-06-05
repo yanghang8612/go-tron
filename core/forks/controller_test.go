@@ -257,3 +257,37 @@ func TestForkController_UpdateBatchesReadsAndSkipsNoopWrites(t *testing.T) {
 		t.Fatalf("repeat update writes = %d, want 0", store.writes)
 	}
 }
+
+// TestForkController_Reset_BoundaryTimestampSensitivity pins the fix for the
+// reset-timestamp source: java Manager calls forkController.reset() BEFORE
+// updateDynamicProperties, so reset's pass() reads the PREVIOUS block's
+// timestamp. At the maintenance boundary that first crosses a version's aligned
+// hard-fork time, a rate-met bitmap must be CLEARED (pass(prevTs<aligned)=false),
+// not KEPT — otherwise gtron reports pass(version)=true ~1 cycle before java.
+func TestForkController_Reset_BoundaryTimestampSensitivity(t *testing.T) {
+	vp, _ := lookupVersion(35)
+	aligned := ((vp.HardForkTime-1)/maintenanceInterval + 1) * maintenanceInterval
+	const required = 19 // ceil(70% * 27) for VERSION_4_8_1_1
+
+	// prevTs (aligned-1): java's reset timestamp at the crossing boundary → CLEAR.
+	dbPrev := rawdb.NewMemoryDatabase()
+	fcPrev := NewForkController(dbPrev)
+	for i := 0; i < required; i++ {
+		fcPrev.Update(35, i, 27)
+	}
+	fcPrev.Reset(aligned-1, maintenanceInterval, 27)
+	if fcPrev.Pass(35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("Reset at prev-block ts (< aligned) must CLEAR the rate-met bitmap (java parity)")
+	}
+
+	// currentTs (aligned): the old gtron behavior kept the bitmap.
+	dbCur := rawdb.NewMemoryDatabase()
+	fcCur := NewForkController(dbCur)
+	for i := 0; i < required; i++ {
+		fcCur.Update(35, i, 27)
+	}
+	fcCur.Reset(aligned, maintenanceInterval, 27)
+	if !fcCur.Pass(35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("sanity: Reset at >= aligned with rate met keeps the bitmap")
+	}
+}

@@ -1138,7 +1138,15 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// skipped.
 	if wasMaintenanceBlock {
 		dynProps.SetStateFlag(1)
-		bc.forkControllerForState(statedb).Reset(block.Timestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
+		// java Manager.processBlock calls forkController.reset() BEFORE
+		// updateDynamicProperties, so reset's pass() check reads the PREVIOUS
+		// block's timestamp (latest_block_header_timestamp is updated to this
+		// block only at line 1159 below). Passing block.Timestamp() here used the
+		// CURRENT block's time, so at the maintenance boundary that first crosses
+		// a version's aligned hard-fork time, gtron KEPT a vote bitmap java CLEARS
+		// (pass(currentTs)=true vs pass(prevTs)=false) — a ~1-cycle pass(version)
+		// divergence at activation boundaries (e.g. exchange's pass(33)).
+		bc.forkControllerForState(statedb).Reset(dynProps.LatestBlockHeaderTimestamp(), dynProps.MaintenanceTimeInterval(), len(bc.ActiveWitnesses()))
 	} else {
 		dynProps.SetStateFlag(0)
 	}
