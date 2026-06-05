@@ -37,7 +37,7 @@ var KnownVersions = []VersionParam{
 	{32, 1596780000000, 80}, // VERSION_4_8_0
 	{33, 1596780000000, 70}, // VERSION_4_8_0_1
 	{34, 1596780000000, 80}, // VERSION_4_8_1
-	{35, 1596780000000, 80}, // VERSION_4_8_2
+	{35, 1596780000000, 70}, // VERSION_4_8_1_1 (java ForkBlockVersionEnum: rate 70, not 80; ordinal 35 is 4.8.1.1, not "4.8.2")
 }
 
 // Version4_0 is the boundary java-tron uses to switch between passOld

@@ -78,26 +78,26 @@ func TestForkController_Pass_TimeGateBlocksEarly(t *testing.T) {
 func TestForkController_Pass_RateGateRequiresQuorum(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	fc := NewForkController(db)
-	// 21 of 27 slots vote upgrade — just under 80% (21.6).
-	for i := 0; i < 21; i++ {
+	// v35 (VERSION_4_8_1_1) requires 70%: ceil(0.70*27)=19. 18 is just under.
+	for i := 0; i < 18; i++ {
 		fc.Update(35, i, 27)
 	}
 	now := blockTimeAfterFork(35)
 	if fc.Pass(35, now, maintenanceInterval) {
-		t.Error("Pass(35) with 21/27 votes (< 22 required) must be false")
+		t.Error("Pass(35) with 18/27 votes (< 19 required) must be false")
 	}
 }
 
 func TestForkController_Pass_AtThreshold(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	fc := NewForkController(db)
-	// 22 of 27 = ceil(80% * 27) = 22.
-	for i := 0; i < 22; i++ {
+	// 19 of 27 = ceil(70% * 27) = 19 (v35 VERSION_4_8_1_1 rate).
+	for i := 0; i < 19; i++ {
 		fc.Update(35, i, 27)
 	}
 	now := blockTimeAfterFork(35)
 	if !fc.Pass(35, now, maintenanceInterval) {
-		t.Error("Pass(35) with 22/27 votes must be true (== ceil(80% * 27))")
+		t.Error("Pass(35) with 19/27 votes must be true (== ceil(70% * 27))")
 	}
 }
 

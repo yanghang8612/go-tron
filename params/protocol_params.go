@@ -20,9 +20,9 @@ const (
 	// java-tron's ForkController tallies these across recent blocks to
 	// activate version-gated features. Bumping this value implies a
 	// coordinated network upgrade — see core/forks/versions.go.
-	BlockVersion = 35 // VERSION_4_8_2, mirrors java-tron ChainConstant.BLOCK_VERSION
-	WindowSizeMs               = 86_400_000
-	WindowSizeSlots            = WindowSizeMs / BlockProducedInterval
+	BlockVersion    = 35 // VERSION_4_8_1_1, mirrors java-tron Parameter.BLOCK_VERSION
+	WindowSizeMs    = 86_400_000
+	WindowSizeSlots = WindowSizeMs / BlockProducedInterval
 	// WindowSizePrecision scales the per-account resource recovery window when
 	// it is stored in "optimized" (V2) form. Mirrors java-tron
 	// ChainConstant.WINDOW_SIZE_PRECISION.
