@@ -105,6 +105,49 @@ func TestValidateTxEnvelope_DefaultPermission_NewAccount(t *testing.T) {
 	}
 }
 
+// TestValidateTxEnvelope_ShieldedRejectsTransparentSignature pins java
+// TransactionCapsule.validateSignature: a transfer FROM a shielded address
+// (no transparent owner) is accepted with NO transparent signatures but
+// REJECTED if it carries any. gtron previously skipped envelope validation
+// for fully-shielded txs entirely, accepting bogus transparent signatures.
+func TestValidateTxEnvelope_ShieldedRejectsTransparentSignature(t *testing.T) {
+	statedb, _ := newValidatorState(t)
+	build := func(withSig bool) *types.Transaction {
+		sc := &contractpb.ShieldedTransferContract{} // fully shielded: empty transparent_from_address
+		param, err := anypb.New(sc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pbTx := &corepb.Transaction{
+			RawData: &corepb.TransactionRaw{
+				Expiration: 60_000,
+				Contract: []*corepb.Transaction_Contract{{
+					Type:      corepb.Transaction_Contract_ShieldedTransferContract,
+					Parameter: param,
+				}},
+			},
+		}
+		tx := types.NewTransactionFromPB(pbTx)
+		if withSig {
+			k, _ := keyAndAddr(t)
+			hash := tx.Hash()
+			sig, err := crypto.Sign(hash[:], k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx.Proto().Signature = append(tx.Proto().Signature, sig)
+		}
+		return tx
+	}
+
+	if err := ValidateTxEnvelope(build(false), statedb, true); err != nil {
+		t.Fatalf("fully-shielded without transparent sig: expected accept, got %v", err)
+	}
+	if err := ValidateTxEnvelope(build(true), statedb, true); !errors.Is(err, ErrShieldedUnexpectedSignature) {
+		t.Fatalf("fully-shielded WITH transparent sig: expected ErrShieldedUnexpectedSignature, got %v", err)
+	}
+}
+
 func TestValidateTxEnvelope_RejectsContractCountNotEqualToOne(t *testing.T) {
 	statedb, _ := newValidatorState(t)
 	ownerKey, owner := keyAndAddr(t)

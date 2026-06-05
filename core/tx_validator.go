@@ -37,6 +37,10 @@ var (
 	ErrUnauthorizedSigner        = errors.New("signer not in permission key set")
 	ErrInvalidTxSignature        = errors.New("invalid transaction signature")
 	ErrDuplicateSignature        = errors.New("transaction has duplicate signer")
+	// ErrShieldedUnexpectedSignature mirrors java TransactionCapsule
+	// .validateSignature: a transfer FROM a shielded address (no transparent
+	// owner) must carry NO transparent ECDSA signatures.
+	ErrShieldedUnexpectedSignature = errors.New("shielded transfer must not carry transparent signatures")
 )
 
 // ValidateTxEnvelope verifies the signature(s) on a transaction match the
@@ -80,7 +84,13 @@ func ValidateTxEnvelope(tx *types.Transaction, statedb *state.StateDB, multiSigB
 	}
 	if isShielded && len(ownerBytes) == 0 {
 		// Fully shielded transfer: no ECDSA signer; zk-proof check is the
-		// actuator's responsibility. Skip envelope validation.
+		// actuator's responsibility. But java TransactionCapsule.validateSignature
+		// still REJECTS a shielded-source tx that carries transparent signatures
+		// ("there should be no signatures ... when transfer from shielded address");
+		// gtron previously skipped envelope validation entirely, accepting it.
+		if len(tx.Proto().GetSignature()) > 0 {
+			return ErrShieldedUnexpectedSignature
+		}
 		return nil
 	}
 	if len(ownerBytes) == 0 {
