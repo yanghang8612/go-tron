@@ -1102,9 +1102,11 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-	// Refresh owner's usage before their frozen pool shifts. Mirrors
-	// java-tron Program.java:645 / DelegateResourceActuator.java:155.
-	delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, 0, in.tvm.ResourceTime())
+	// java's DelegateResourceProcessor (VM native contract) does NOT recover or
+	// persist the owner's usage on delegate: validate() mutates a getAccount()
+	// byte-snapshot copy that is never put back, and execute() only adjusts the
+	// frozen/delegated balances. Recovering+writing the owner usage here diverged
+	// from java (a Stake-2.0 state difference); leave the owner's usage untouched.
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)

@@ -100,6 +100,47 @@ func TestDelegateResourceExecute(t *testing.T) {
 	}
 }
 
+// TestDelegateResourceExecute_DoesNotRecoverOwnerUsage pins the fix: java
+// DelegateResourceActuator.execute (and the VM native-contract path) does NOT
+// recover or persist the owner's net_usage / latest_consume_time on delegate —
+// updateUsageForDelegated runs only in validate() on a non-persisted capsule.
+// go previously recovered+wrote them here (FoldUsageIntoOwner(…,0)), a Stake-2.0
+// state divergence. After the fix only the frozen-balance bookkeeping changes.
+func TestDelegateResourceExecute_DoesNotRecoverOwnerUsage(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x01}
+	receiver := tcommon.Address{0x41, 0x02}
+	c := &contractpb.DelegateResourceContract{
+		OwnerAddress:    owner[:],
+		ReceiverAddress: receiver[:],
+		Resource:        corepb.ResourceCode_BANDWIDTH,
+		Balance:         1_000_000,
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_DelegateResourceContract, c, 0)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.HeadSlot = 14_400 // half the 28800 window so the old recovery would halve usage
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.CreateAccount(receiver, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 5_000_000)
+	ctx.State.SetNetUsage(owner, 600)
+	ctx.State.SetLatestConsumeTime(owner, 0) // elapsed = 14400 → old code would recover 600→300
+
+	if _, err := (&DelegateResourceActuator{}).Execute(ctx); err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	// java leaves the owner's usage + consume-time untouched on delegate.
+	if got := ctx.State.GetNetUsage(owner); got != 600 {
+		t.Fatalf("owner net_usage = %d, want 600 (delegate must not recover/write owner usage)", got)
+	}
+	if got := ctx.State.GetLatestConsumeTime(owner); got != 0 {
+		t.Fatalf("owner latest_consume_time = %d, want 0 (delegate must not touch it)", got)
+	}
+	// sanity: the delegation bookkeeping still happened.
+	if ctx.State.GetFrozenV2Amount(owner, corepb.ResourceCode_BANDWIDTH) != 4_000_000 {
+		t.Fatalf("owner frozen not reduced by delegate")
+	}
+}
+
 func TestDelegateResourceValidate_UsesRemainingFrozenOnly(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	receiver := tcommon.Address{0x41, 0x02}
