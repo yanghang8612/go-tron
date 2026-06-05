@@ -81,6 +81,24 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	if err := validateTxCommon(tx, prevBlockTime, validateResultSize); err != nil {
 		return nil, err
 	}
+	// java Manager.validateCommon adds an in-block expiration LOWER bound once
+	// consensus_logic_optimization is active: the tx must not already be expired
+	// as of the next block slot. nextSlotTime = latestBlockHeaderTimestamp +
+	// slotCount*BLOCK_INTERVAL, slotCount = 1 (+ MaintenanceSkipSlots when the head
+	// was a maintenance block, StateFlag==1). During in-block validation both impls
+	// read the head's (prev block's) timestamp + state flag, so prevBlockTime +
+	// dynProps.StateFlag() here match java's getNextBlockSlotTime. Canonical blocks
+	// never contain a sub-slot-expiration tx (java rejects at produce), so this only
+	// adds java's reject of a non-canonical block.
+	if dynProps.ConsensusLogicOptimization() {
+		slotCount := int64(1)
+		if dynProps.StateFlag() == 1 {
+			slotCount += int64(params.MaintenanceSkipSlots)
+		}
+		if tx.Expiration() < prevBlockTime+slotCount*params.BlockProducedInterval {
+			return nil, ErrTransactionExpiration
+		}
+	}
 
 	act, err := actuator.CreateActuator(tx)
 	if err != nil {
