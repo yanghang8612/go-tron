@@ -260,9 +260,21 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 
 	userPercent := clampPercent(contract.ConsumeUserResourcePercent)
 	originPercent := 100 - userPercent
-	if originPercent <= 0 {
-		return common.Address{}, 0, totalEnergy
-	}
+	// Do NOT early-return when originPercent <= 0 (consume_user_resource_percent
+	// == 100, caller pays everything). java-tron's TransactionTrace.pay computes
+	// percent = max(100 - consumeUserResourcePercent, 0) = 0 here, yet
+	// ReceiptCapsule.payEnergyBill STILL runs its caller != origin branch and
+	// calls energyProcessor.useEnergy(origin, 0, now). That zero-charge call
+	// recovers the origin's energy_usage to `now` and resets its
+	// latest_consume_time_for_energy. Skipping it (returning the zero address so
+	// PayEnergyBill never touches the origin) leaves the origin's recovery window
+	// frozen. Sliding-window recovery is sub-multiplicative
+	// (∏(W-δᵢ)/W > (W-Σδᵢ)/W), so a deferred single decay recovers MORE than the
+	// per-call refreshes java applies — gtron's origin then carries a lower
+	// energy_usage / higher available energy and eventually flips an
+	// OUT_OF_ENERGY boundary to SUCCESS (the block 8,825,873 Nile stall).
+	// Returning (originAddr, 0, totalEnergy) lets PayEnergyBill call
+	// useEnergyForBill(origin, 0, now), mirroring java exactly.
 
 	want := totalEnergy * originPercent / 100
 
@@ -272,12 +284,12 @@ func splitOriginCallerUsage(ctx *Context, result *Result, caller common.Address,
 		originStakeLeft = result.OriginEnergyLeft
 	}
 
-	cap := originStakeLeft
-	if originLimit > 0 && originLimit < cap {
-		cap = originLimit
+	capLeft := originStakeLeft
+	if originLimit > 0 && originLimit < capLeft {
+		capLeft = originLimit
 	}
-	if want > cap {
-		want = cap
+	if want > capLeft {
+		want = capLeft
 	}
 	if want < 0 {
 		want = 0

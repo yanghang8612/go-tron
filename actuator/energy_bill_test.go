@@ -646,6 +646,85 @@ func TestPayEnergyBill_OriginSplit_PercentHundredBillsCaller(t *testing.T) {
 	if got := ctx.State.GetEnergyUsage(origin); got != 0 {
 		t.Errorf("origin energy_usage = %d, want 0", got)
 	}
+	// Origin pays nothing, but java still refreshes its recovery window via
+	// useEnergy(origin, 0, now). This is the V2-path (unfreeze_delay_days=14)
+	// counterpart of the 8,825,873 stall fix: latest_consume_time must advance.
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(origin); got != ctx.HeadSlot {
+		t.Errorf("origin latest_consume_time_for_energy = %d, want %d (refreshed even at percent=100)", got, ctx.HeadSlot)
+	}
+}
+
+// TestPayEnergyBill_OriginSplit_PercentHundred_RefreshesStaleOrigin is the
+// regression guard for the block 8,825,873 Nile stall. When a percent=100
+// contract (caller pays 100%) is invoked by a NON-owner, java-tron still calls
+// energyProcessor.useEnergy(origin, 0, now): a zero-charge refresh that recovers
+// the origin's energy_usage to `now` and resets latest_consume_time_for_energy.
+// gtron used to skip the origin entirely (splitOriginCallerUsage early-returned
+// the zero address for originPercent <= 0), leaving the origin's recovery window
+// frozen. Because sliding-window recovery is sub-multiplicative, the deferred
+// single decay recovers MORE than java's per-call refreshes, so the origin
+// carried a lower energy_usage / higher available energy and eventually flipped
+// an OUT_OF_ENERGY boundary to SUCCESS. This test pins the refresh in the
+// pre-Stake-2.0 global-window regime (the 8.8M regime: unfreeze_delay_days == 0,
+// allowTvmFreeze == false).
+func TestPayEnergyBill_OriginSplit_PercentHundred_RefreshesStaleOrigin(t *testing.T) {
+	caller := tcommon.Address{0x41, 0xAA, 0x07}
+	origin := tcommon.Address{0x41, 0xBB, 0x07}
+	contractAddr := tcommon.Address{0x41, 0x02}
+
+	ctx := newEnergyBillCtx(t, caller)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+	// Pre-Stake-2.0 global recovery window. newEnergyBillCtx already leaves
+	// unfreeze_delay_days == 0 (SupportUnfreezeDelay false) and allowTvmFreeze
+	// false, and pins the head at blockNumForEnergyLimit (ENERGY_LIMIT fork
+	// active), which is exactly the block 8,825,873 regime.
+	const headSlot = int64(30_000)
+	const oldLct = int64(20_000) // delta 10_000 < 28_800 -> decay, not reset
+	ctx.HeadSlot = headSlot
+
+	installOriginContract(t, ctx, contractAddr, origin, 100, 10_000_000)
+
+	// Caller pays the whole bill from balance (no caller stake).
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+
+	// Origin (the percent=100 contract's deployer) carries a stale, non-zero
+	// energy_usage from an earlier charge at oldLct.
+	const staleUsage = int64(700_000)
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.SetEnergyUsage(origin, staleUsage)
+	ctx.State.SetLatestConsumeTimeForEnergy(origin, oldLct)
+
+	const totalEnergy = int64(12_979) // mirrors the live 41187902 trc20 call @8801970
+	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+
+	// Origin pays no energy (percent=100, caller pays all) ...
+	if result.OriginEnergyUsage != 0 {
+		t.Errorf("OriginEnergyUsage = %d, want 0", result.OriginEnergyUsage)
+	}
+	if result.EnergyFee != totalEnergy*100 {
+		t.Errorf("EnergyFee = %d, want %d (caller pays all from balance)", result.EnergyFee, totalEnergy*100)
+	}
+	// ... but the origin's recovery window MUST be refreshed to `now`.
+	// Expected usage = recover(staleUsage, oldLct -> headSlot) then add 0.
+	want := computeEnergyIncreaseGlobal(
+		computeEnergyIncreaseGlobal(staleUsage, 0, oldLct, headSlot, false),
+		0, headSlot, headSlot, false)
+	if want >= staleUsage {
+		t.Fatalf("test setup error: expected recovered usage %d < stale %d", want, staleUsage)
+	}
+	if got := ctx.State.GetEnergyUsage(origin); got != want {
+		t.Errorf("origin energy_usage = %d, want %d (recovered to now; 0 means the bug — origin left frozen)", got, want)
+	}
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(origin); got != headSlot {
+		t.Errorf("origin latest_consume_time_for_energy = %d, want %d (refreshed)", got, headSlot)
+	}
+	if got := ctx.State.GetLatestOperationTime(origin); got != ctx.PrevBlockTime {
+		t.Errorf("origin latest_opration_time = %d, want %d (refreshed)", got, ctx.PrevBlockTime)
+	}
 }
 
 // TestPayEnergyBill_OriginSplit_CallerEqualsOrigin: when caller IS the
