@@ -114,6 +114,26 @@ func TestApplyTransaction_Transfer(t *testing.T) {
 	}
 }
 
+func TestApplyTransaction_CapturesOwnerSnapshot(t *testing.T) {
+	statedb := newTestState(t)
+	dynProps := state.NewDynamicProperties()
+
+	statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+	statedb.AddBalance(testProcessorAddr(1), 1_000_000)
+	statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+	tx := makeTestTransferTx(1, 2, 300_000)
+	result, err := ApplyTransaction(statedb, dynProps, tx, 3000, 3000, 1, nil, nil, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The diagnostic snapshot is taken at execution start, so it must report the
+	// owner's pre-transfer balance (1_000_000) — NOT the post-transfer 700_000.
+	if result.OwnerBalance != 1_000_000 {
+		t.Fatalf("OwnerBalance = %d, want 1000000 (pre-tx snapshot, not post-transfer 700000)", result.OwnerBalance)
+	}
+}
+
 func TestApplyTransaction_ValidationFails(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
@@ -577,6 +597,44 @@ func TestBuildTransactionInfo_IncludesEmptyVMContractResult(t *testing.T) {
 	}
 	if got := string(info.ResMessage); got != "Already Time Out" {
 		t.Fatalf("resMessage: got %q", got)
+	}
+}
+
+func TestBuildTransactionInfo_DiagnosticReceiptFields(t *testing.T) {
+	tx := makeTestTransferTx(1, 2, 100)
+	result := &actuator.Result{
+		ContractRet:                 int32(corepb.Transaction_Result_SUCCESS),
+		OwnerBalance:                5_000_000,
+		OwnerFreeNetLeft:            400,
+		OwnerFrozenNetLeft:          700,
+		OwnerNetLastConsumeTime:     111,
+		OwnerFreeNetLastConsumeTime: 222,
+		OwnerFrozenForNet:           1_000_000,
+		OwnerFrozenForEnergy:        2_000_000,
+		OriginEnergyWindow:          28_800,
+		CallerEnergyWindow:          14_400,
+	}
+
+	r := buildTransactionInfo(tx, result, 1, 3000, false).Receipt
+	checks := []struct {
+		name string
+		got  int64
+		want int64
+	}{
+		{"OwnerBalance", r.GetOwnerBalance(), 5_000_000},
+		{"OwnerFreeNetLeft", r.GetOwnerFreeNetLeft(), 400},
+		{"OwnerFrozenNetLeft", r.GetOwnerFrozenNetLeft(), 700},
+		{"OwnerNetLastConsumeTime", r.GetOwnerNetLastConsumeTime(), 111},
+		{"OwnerFreeNetLastConsumeTime", r.GetOwnerFreeNetLastConsumeTime(), 222},
+		{"OwnerFrozenForNet", r.GetOwnerFrozenForNet(), 1_000_000},
+		{"OwnerFrozenForEnergy", r.GetOwnerFrozenForEnergy(), 2_000_000},
+		{"OriginEnergyWindow", r.GetOriginEnergyWindow(), 28_800},
+		{"CallerEnergyWindow", r.GetCallerEnergyWindow(), 14_400},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("receipt.%s = %d, want %d", c.name, c.got, c.want)
+		}
 	}
 }
 

@@ -261,6 +261,54 @@ func TestVMActuatorTriggerEnergyLimit_FixRatioCapsByBalanceAndOrigin(t *testing.
 	}
 }
 
+func TestVMActuatorTriggerEnergyLimit_FixRatioCapturesEnergyWindows(t *testing.T) {
+	caller := tcommon.Address{0x41, 0x10}
+	origin := tcommon.Address{0x41, 0x20}
+	contractAddr := tcommon.Address{0x41, 0x30}
+
+	tsc := &contractpb.TriggerSmartContract{
+		OwnerAddress:    caller[:],
+		ContractAddress: contractAddr[:],
+	}
+	ctx := newTestContext(t, corepb.Transaction_Contract_TriggerSmartContract, tsc, 1_000_000_000)
+	enableVM(ctx)
+	ctx.DynProps.SetLatestBlockHeaderNumber(blockNumForEnergyLimit)
+	ctx.DynProps.SetAllowTvmFreeze(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetTotalEnergyWeight(1_000_000_000_000)
+	ctx.DynProps.Set("total_energy_current_limit", 1_000_000_000_000)
+
+	ctx.State.CreateAccount(caller, corepb.AccountType_Normal)
+	ctx.State.AddBalance(caller, 100_000_000)
+	ctx.State.AddFreezeV2(caller, corepb.ResourceCode_ENERGY, 3_253_937_000_000)
+
+	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
+	ctx.State.AddFreezeV2(origin, corepb.ResourceCode_ENERGY, 20_000_000_000)
+
+	ctx.State.SetContract(contractAddr, &contractpb.SmartContract{
+		OriginAddress:              origin[:],
+		ContractAddress:            contractAddr[:],
+		ConsumeUserResourcePercent: 0,
+		OriginEnergyLimit:          10_000,
+	})
+
+	// Distinct, explicitly-set recovery windows (set last, after AddFreezeV2)
+	// so the captured values can't be confused with the 28800-slot default or
+	// with each other.
+	ctx.State.SetEnergyWindow(caller, 12_345, false)
+	ctx.State.SetEnergyWindow(origin, 6_789, false)
+
+	result := &Result{}
+	triggerEnergyLimit(ctx, caller, contractAddr, ctx.Tx.FeeLimit(), 0, result)
+
+	if result.CallerEnergyWindow != 12_345 {
+		t.Fatalf("CallerEnergyWindow = %d, want 12345", result.CallerEnergyWindow)
+	}
+	if result.OriginEnergyWindow != 6_789 {
+		t.Fatalf("OriginEnergyWindow = %d, want 6789", result.OriginEnergyWindow)
+	}
+}
+
 func TestVMActuatorTriggerExecute(t *testing.T) {
 	owner := tcommon.Address{0x41, 0x01}
 	contractAddr := tcommon.Address{0x41, 0x02}
