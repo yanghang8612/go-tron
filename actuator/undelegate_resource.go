@@ -115,7 +115,7 @@ func (a *UnDelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	ctx.State.SubAcquiredDelegatedFrozenV2(receiverAddr, c.Resource, c.Balance)
 
 	if transferUsage > 0 {
-		delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, transferUsage, resourceTime)
+		delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, ownerAddr, c.Resource, transferUsage, resourceTime)
 	}
 
 	// Update delegation record

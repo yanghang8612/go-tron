@@ -315,6 +315,61 @@ func TestPayEnergyBill_PureStakeNoBalanceDebit(t *testing.T) {
 	}
 }
 
+func TestPayEnergyBill_Nile8736434WindowRecoveryAvoidsEnergyFee(t *testing.T) {
+	// Regression for the Nile sync pause at block 9,220,578. The stalled DB had
+	// over-billed this account on txs 23ca291d... (block 8,736,434) and
+	// 07f0a349... (block 8,736,593): each spent 12,278 energy, but old global
+	// recovery saw no stake left and charged 122,780 SUN. java-tron recovered
+	// against the per-account energy window, paid the full 12,278 from stake, and
+	// charged fee=0.
+	owner := tcommon.BytesToAddress(tcommon.FromHex("419a807c99c7cfb94b1fa96efbaf43eedfb58c1923"))
+	ctx := newEnergyBillCtx(t, owner)
+	ctx.DynProps.Set("energy_fee", 10)
+	ctx.DynProps.SetAllowBlackHoleOptimization(true)
+	ctx.DynProps.SetUnfreezeDelayDays(14)
+	ctx.DynProps.SetAllowCancelAllUnfreezeV2(true)
+	ctx.HeadSlot = 17_199
+
+	const (
+		initialBalance = int64(100_000_000)
+		usageBefore    = int64(1_000_000)
+		lastSlot       = int64(9_999)
+		rawWindowV2    = int64(14_400_000) // 14,400 slots, optimized/V2 units.
+		energyLimit    = int64(512_278)
+		txEnergy       = int64(12_278)
+	)
+
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	ctx.State.AddBalance(owner, initialBalance)
+	ctx.State.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, params.TRXPrecision)
+	ctx.State.SetEnergyUsage(owner, usageBefore)
+	ctx.State.SetLatestConsumeTimeForEnergy(owner, lastSlot)
+	ctx.State.GetAccount(owner).SetNewEnergyWindowSizeV2(rawWindowV2)
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(energyLimit)
+
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime()); got != txEnergy {
+		t.Fatalf("availableAccountEnergyForBill = %d, want %d", got, txEnergy)
+	}
+
+	result := &Result{EnergyUsageTotal: txEnergy, ContractRet: int32(corepb.Transaction_Result_SUCCESS)}
+	if err := PayEnergyBill(ctx, result); err != nil {
+		t.Fatalf("PayEnergyBill: %v", err)
+	}
+	if result.EnergyFee != 0 {
+		t.Fatalf("EnergyFee = %d, want 0; old global-window path charged 122780", result.EnergyFee)
+	}
+	if result.EnergyUsed != txEnergy {
+		t.Fatalf("EnergyUsed = %d, want %d", result.EnergyUsed, txEnergy)
+	}
+	if got := ctx.State.GetBalance(owner); got != initialBalance {
+		t.Fatalf("balance = %d, want %d (no TRX debit)", got, initialBalance)
+	}
+	if got := ctx.DynProps.BurnTrxAmount(); got != 0 {
+		t.Fatalf("burn_trx_amount = %d, want 0", got)
+	}
+}
+
 // TestPayEnergyBill_PartialStakeOverage asserts the mixed path: stake
 // covers some energy, the remainder is billed in TRX. Tests both fields
 // of the Result split (EnergyUsed = stake portion, EnergyFee = SUN bill

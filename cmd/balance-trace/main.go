@@ -16,10 +16,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/common/log"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -52,16 +56,17 @@ func main() {
 		log.Crit("open pebble", "err", err)
 	}
 	defer db.Close()
-	// Slice 2 of the freezer plan: chain readers take *ChainDB. The
-	// balance-trace CLI opens raw Pebble; until slice 3 ships a freezer
-	// reader we wrap with NoopAncient so reads behave identically to the
-	// pre-slice-2 KV-only path.
-	//
-	// TODO(slice-3): once the freezer goroutine starts deleting from
-	// Pebble, this tool will silently miss frozen blocks. Either teach
-	// it to open the ancient store too, or fail loudly when the freezer
-	// is present on disk. Tracked in docs/dev/chain-freezer-accessor-audit.md.
-	chaindb := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	var ancient rawdb.AncientReader = rawdb.NoopAncient{}
+	ancientPath := filepath.Join(*datadir, "gtron", "ancient")
+	if info, err := os.Stat(ancientPath); err == nil && info.IsDir() {
+		fz, err := rawdbfreezer.NewFreezer(ancientPath, "", true, rawdbfreezer.FreezerTableSize, chainfreezer.FreezerTableSet())
+		if err != nil {
+			log.Crit("open ancient", "path", ancientPath, "err", err)
+		}
+		defer fz.Close()
+		ancient = rawdb.NewFreezerReader(fz)
+	}
+	chaindb := rawdb.NewChainDB(db, ancient)
 
 	headHash := rawdb.ReadHeadBlockHash(db)
 	if headHash == (tcommon.Hash{}) {
@@ -93,7 +98,7 @@ func main() {
 			fmt.Printf("[%d] WITNESS=%x produced this block (txs=%d)\n", h, target.Bytes(), len(blk.Transactions()))
 		}
 		for i, tx := range blk.Transactions() {
-			if !inspectTx(h, i, tx, target) {
+			if !inspectTx(h, i, tx, target, chaindb, db) {
 				continue
 			}
 			hits++
@@ -136,7 +141,7 @@ func main() {
 // inspectTx tries each known contract type and prints a one-line summary if
 // the contract references the target. Returns true when at least one match
 // was printed.
-func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.Address) bool {
+func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.Address, chaindb *rawdb.ChainDB, kv ethdb.KeyValueReader) bool {
 	c := tx.Contract()
 	if c == nil {
 		return false
@@ -152,7 +157,7 @@ func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.A
 				} else {
 					dir = "→ IN"
 				}
-				fmt.Printf("[%d.%d] Transfer %s amount=%d from=%x to=%x\n", blockNum, idx, dir, v.Amount, v.OwnerAddress, v.ToAddress)
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "Transfer %s amount=%d from=%x to=%x", dir, v.Amount, v.OwnerAddress, v.ToAddress)
 				return true
 			}
 		}
@@ -160,26 +165,26 @@ func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.A
 		v := &contractpb.TransferAssetContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil {
 			if eq(v.OwnerAddress, target) || eq(v.ToAddress, target) {
-				fmt.Printf("[%d.%d] TransferAsset asset=%q amount=%d from=%x to=%x\n", blockNum, idx, string(v.AssetName), v.Amount, v.OwnerAddress, v.ToAddress)
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "TransferAsset asset=%q amount=%d from=%x to=%x", string(v.AssetName), v.Amount, v.OwnerAddress, v.ToAddress)
 				return true
 			}
 		}
 	case corepb.Transaction_Contract_FreezeBalanceContract:
 		v := &contractpb.FreezeBalanceContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
-			fmt.Printf("[%d.%d] FreezeBalance amount=%d duration=%d resource=%v\n", blockNum, idx, v.FrozenBalance, v.FrozenDuration, v.Resource)
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "FreezeBalance amount=%d duration=%d resource=%v", v.FrozenBalance, v.FrozenDuration, v.Resource)
 			return true
 		}
 	case corepb.Transaction_Contract_UnfreezeBalanceContract:
 		v := &contractpb.UnfreezeBalanceContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
-			fmt.Printf("[%d.%d] UnfreezeBalance resource=%v\n", blockNum, idx, v.Resource)
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "UnfreezeBalance resource=%v", v.Resource)
 			return true
 		}
 	case corepb.Transaction_Contract_WithdrawBalanceContract:
 		v := &contractpb.WithdrawBalanceContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
-			fmt.Printf("[%d.%d] WithdrawBalance owner=%x\n", blockNum, idx, v.OwnerAddress)
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "WithdrawBalance owner=%x", v.OwnerAddress)
 			return true
 		}
 	case corepb.Transaction_Contract_VoteWitnessContract:
@@ -193,38 +198,72 @@ func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.A
 				}
 			}
 			if matchOwner || matchVoted {
-				fmt.Printf("[%d.%d] VoteWitness owner=%x votes=%d (matchOwner=%v matchVoted=%v)\n",
-					blockNum, idx, v.OwnerAddress, len(v.Votes), matchOwner, matchVoted)
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "VoteWitness owner=%x votes=%d matchOwner=%v matchVoted=%v",
+					v.OwnerAddress, len(v.Votes), matchOwner, matchVoted)
 				return true
 			}
 		}
 	case corepb.Transaction_Contract_WitnessCreateContract:
 		v := &contractpb.WitnessCreateContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
-			fmt.Printf("[%d.%d] WitnessCreate url=%q\n", blockNum, idx, string(v.Url))
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "WitnessCreate url=%q", string(v.Url))
 			return true
 		}
 	case corepb.Transaction_Contract_AccountCreateContract:
 		v := &contractpb.AccountCreateContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil {
 			if eq(v.OwnerAddress, target) || eq(v.AccountAddress, target) {
-				fmt.Printf("[%d.%d] AccountCreate owner=%x new=%x\n", blockNum, idx, v.OwnerAddress, v.AccountAddress)
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "AccountCreate owner=%x new=%x", v.OwnerAddress, v.AccountAddress)
 				return true
 			}
 		}
 	case corepb.Transaction_Contract_AssetIssueContract:
 		v := &contractpb.AssetIssueContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
-			fmt.Printf("[%d.%d] AssetIssue owner=%x name=%q totalSupply=%d\n", blockNum, idx, v.OwnerAddress, string(v.Name), v.TotalSupply)
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "AssetIssue owner=%x name=%q totalSupply=%d", v.OwnerAddress, string(v.Name), v.TotalSupply)
 			return true
 		}
 	case corepb.Transaction_Contract_ParticipateAssetIssueContract:
 		v := &contractpb.ParticipateAssetIssueContract{}
 		if err := c.Parameter.UnmarshalTo(v); err == nil {
 			if eq(v.OwnerAddress, target) || eq(v.ToAddress, target) {
-				fmt.Printf("[%d.%d] ParticipateAssetIssue from=%x to=%x asset=%q amount=%d\n", blockNum, idx, v.OwnerAddress, v.ToAddress, string(v.AssetName), v.Amount)
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "ParticipateAssetIssue from=%x to=%x asset=%q amount=%d", v.OwnerAddress, v.ToAddress, string(v.AssetName), v.Amount)
 				return true
 			}
+		}
+	case corepb.Transaction_Contract_CreateSmartContract:
+		v := &contractpb.CreateSmartContract{}
+		if err := c.Parameter.UnmarshalTo(v); err == nil {
+			contractAddr := []byte(nil)
+			if v.NewContract != nil {
+				contractAddr = v.NewContract.ContractAddress
+			}
+			if eq(v.OwnerAddress, target) || eq(contractAddr, target) {
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "CreateSmartContract owner=%x contract=%x", v.OwnerAddress, contractAddr)
+				return true
+			}
+		}
+	case corepb.Transaction_Contract_TriggerSmartContract:
+		v := &contractpb.TriggerSmartContract{}
+		if err := c.Parameter.UnmarshalTo(v); err == nil {
+			matchOwner := eq(v.OwnerAddress, target)
+			matchContract := eq(v.ContractAddress, target)
+			matchData := bytes.Contains(v.Data, target.Bytes()[1:])
+			if matchOwner || matchContract || matchData {
+				selector := v.Data
+				if len(selector) > 4 {
+					selector = selector[:4]
+				}
+				printTxLine(blockNum, idx, tx, target, chaindb, kv, "TriggerSmartContract owner=%x contract=%x callValue=%d selector=%x matchOwner=%v matchContract=%v matchData=%v",
+					v.OwnerAddress, v.ContractAddress, v.CallValue, selector, matchOwner, matchContract, matchData)
+				return true
+			}
+		}
+	case corepb.Transaction_Contract_AccountPermissionUpdateContract:
+		v := &contractpb.AccountPermissionUpdateContract{}
+		if err := c.Parameter.UnmarshalTo(v); err == nil && eq(v.OwnerAddress, target) {
+			printTxLine(blockNum, idx, tx, target, chaindb, kv, "AccountPermissionUpdate owner=%x", v.OwnerAddress)
+			return true
 		}
 	default:
 		// Fallback: unmarshal Parameter.Value bytes and search the marshaled
@@ -240,10 +279,67 @@ func inspectTx(blockNum uint64, idx int, tx *types.Transaction, target tcommon.A
 		if !bytes.Contains(bs, target.Bytes()) {
 			return false
 		}
-		fmt.Printf("[%d.%d] %v contract references target (unmarshaled scan)\n", blockNum, idx, c.Type)
+		printTxLine(blockNum, idx, tx, target, chaindb, kv, "%v contract references target (unmarshaled scan)", c.Type)
 		return true
 	}
 	return false
+}
+
+func printTxLine(blockNum uint64, idx int, tx *types.Transaction, target tcommon.Address, chaindb *rawdb.ChainDB, kv ethdb.KeyValueReader, format string, args ...interface{}) {
+	fmt.Printf("%s %s\n", txPrefix(blockNum, idx, tx, target, chaindb, kv), fmt.Sprintf(format, args...))
+}
+
+func txPrefix(blockNum uint64, idx int, tx *types.Transaction, target tcommon.Address, chaindb *rawdb.ChainDB, kv ethdb.KeyValueReader) string {
+	hash := tx.Hash()
+	parts := []string{
+		fmt.Sprintf("[%d.%d]", blockNum, idx),
+		fmt.Sprintf("tx=%x", hash[:]),
+	}
+	if info := rawdb.ReadTransactionInfo(chaindb, hash[:]); info != nil {
+		receipt := info.GetReceipt()
+		parts = append(parts, fmt.Sprintf(
+			"infoFee=%d netFee=%d netUsage=%d energyFee=%d energyUsage=%d energyUsageTotal=%d result=%v",
+			info.GetFee(),
+			receipt.GetNetFee(),
+			receipt.GetNetUsage(),
+			receipt.GetEnergyFee(),
+			receipt.GetEnergyUsage(),
+			receipt.GetEnergyUsageTotal(),
+			receipt.GetResult(),
+		))
+	} else {
+		parts = append(parts, "info=<missing>")
+	}
+	if bal, ok := rawdb.ReadAccountTrace(kv, target.Bytes(), int64(blockNum)); ok {
+		parts = append(parts, fmt.Sprintf("accountTraceBalance=%d", bal))
+	}
+	if ops := balanceTraceOps(kv, blockNum, hash, target); ops != "" {
+		parts = append(parts, ops)
+	}
+	return strings.Join(parts, " ")
+}
+
+func balanceTraceOps(kv ethdb.KeyValueReader, blockNum uint64, hash tcommon.Hash, target tcommon.Address) string {
+	trace := rawdb.ReadBlockBalanceTrace(kv, int64(blockNum))
+	if trace == nil {
+		return ""
+	}
+	var ops []string
+	for _, txTrace := range trace.TransactionBalanceTrace {
+		if txTrace == nil || !bytes.Equal(txTrace.TransactionIdentifier, hash[:]) {
+			continue
+		}
+		for _, op := range txTrace.Operation {
+			if op == nil || !bytes.Equal(op.Address, target.Bytes()) {
+				continue
+			}
+			ops = append(ops, fmt.Sprintf("%d:%d", op.OperationIdentifier, op.Amount))
+		}
+	}
+	if len(ops) == 0 {
+		return ""
+	}
+	return "balanceTraceOps=" + strings.Join(ops, ",")
 }
 
 func eq(b []byte, addr tcommon.Address) bool {

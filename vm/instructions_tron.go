@@ -1106,7 +1106,7 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	}
 	// Refresh owner's usage before their frozen pool shifts. Mirrors
 	// java-tron Program.java:645 / DelegateResourceActuator.java:155.
-	delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, 0, in.tvm.ResourceTime())
+	delegation.FoldUsageIntoOwner(in.tvm.StateDB, in.tvm.DynProps, caller, resource, 0, in.tvm.ResourceTime())
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)
@@ -1144,7 +1144,7 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
 	if transfer > 0 {
-		delegation.FoldUsageIntoOwner(in.tvm.StateDB, caller, resource, transfer, resourceTime)
+		delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, resourceTime)
 	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil

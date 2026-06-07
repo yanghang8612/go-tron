@@ -192,12 +192,54 @@ The "skip the pre-charge" model is justified because java's pre-charge +
 Pinned in `actuator/energy_window_divergence_test.go` and
 `vm/energy_window_divergence_test.go`.
 
+## Nile incident 2026-06-07
+
+A server Nile node paused at block `9,220,578` with:
+
+```
+validate: insufficient balance
+```
+
+The failing tx was the first transaction in block `9,220,578`
+(`d8199192774c355967fb2c1d91f076bdfcd899b4f16856fec474726cd1c5ef53`):
+
+- owner `419a807c99c7cfb94b1fa96efbaf43eedfb58c1923`
+- transfer amount `98,143,095,656` SUN
+- java-tron receipt fee `2,700` SUN
+
+The downloaded gtron DB stopped at `9,220,577` with local balance
+`98,142,853,756` SUN. Full local-vs-Nile receipt comparison for the 405
+transactions sent by that account found exactly two mismatches:
+
+| block.tx | tx | gtron local | java-tron/Nile |
+|---|---|---|---|
+| `8,736,434.0` | `23ca291d33fe0715bd2208dc61ca03a48d8d12197710647b78df98d682e5e0f4` | `fee=122780 energy_fee=122780 energy_usage=0/12278` | `fee=0 energy_fee=0 energy_usage=12278/12278` |
+| `8,736,593.0` | `07f0a34953744e2f05b1e686cbf62a1accc0889e951f106d3c4fe44baafa2788` | `fee=122780 energy_fee=122780 energy_usage=0/12278` | `fee=0 energy_fee=0 energy_usage=12278/12278` |
+
+The two overcharges total `245,560` SUN. Adding that back gives an expected
+balance of `98,143,099,316` SUN, enough to pay the block `9,220,578` transfer
+amount and its `2,700` SUN bandwidth fee, with `960` SUN remaining.
+
+`TestPayEnergyBill_Nile8736434WindowRecoveryAvoidsEnergyFee` pins this exact
+failure shape: with the per-account energy window, the caller has exactly
+`12,278` recovered stake-energy left and must not pay the old `122,780` SUN
+balance fee.
+
+Operationally, a DB that already executed these blocks with the old logic is
+not safe to continue by restart. The state has diverged before the sync pause;
+restart with a fixed binary from a clean DB or from a trusted snapshot before
+block `8,736,434`.
+
 ### Known remaining (out of scope; follow-ups)
 
 - **Bandwidth** `net_window_size` has the identical structural gap (recovery uses
   the global window, never written). Same fix shape; deferred.
 - **Delegation/undelegation** window reshuffle (TODO §1.5 / java
-  `unDelegateIncrease`) still uses the global window.
+  `unDelegateIncrease`) still uses the global window and does not read/write
+  per-account window fields. The global-window recovery formula in
+  `core/delegation/usage.go` was moved from simple truncate to java's
+  precision-averaging formula on 2026-06-07, so the remaining gap is the
+  account-window state, not the global-window arithmetic.
 - **Non-harden vs harden recovery formula:** go-tron's *legacy* (`recoverUsage`,
   pre-Stake-2.0, and the vm staking-query precompile `recoverStakingUsage`) uses
   the simple `usage*remaining/window` form, which diverges from java's scaled

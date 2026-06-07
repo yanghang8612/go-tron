@@ -141,7 +141,7 @@ func (a *DelegateResourceActuator) Execute(ctx *Context) (*Result, error) {
 	// refresh owner's usage counter before their frozen pool shifts, so
 	// the sliding-window decay keeps tracking from the correct anchor.
 	// Passing transferUsage=0 just writes back the recovered value.
-	delegation.FoldUsageIntoOwner(ctx.State, ownerAddr, c.Resource, 0, ctx.ResourceTime())
+	delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, ownerAddr, c.Resource, 0, ctx.ResourceTime())
 
 	// Subtract from owner's frozen balance
 	ctx.State.ReduceFreezeV2(ownerAddr, c.Resource, c.Balance)

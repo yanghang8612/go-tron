@@ -136,7 +136,7 @@ func TestFoldUsageIntoOwner_AddsOnTopOfRecovered(t *testing.T) {
 	now := int64(params.WindowSizeSlots / 2)
 	ctx := ctxFor(statedb, dp, now)
 
-	delegation.FoldUsageIntoOwner(ctx.State, owner, corepb.ResourceCode_BANDWIDTH, 100, ctx.BlockTime)
+	delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, owner, corepb.ResourceCode_BANDWIDTH, 100, ctx.BlockTime)
 
 	// Recovered = 400 × (window - halfWindow) / window = 200.
 	// + transferred 100 = 300.
@@ -260,5 +260,16 @@ func TestRecoverUsageWindow_EdgeCases(t *testing.T) {
 	// Mid-window: half decay.
 	if got := delegation.RecoverUsageWindow(1000, 0, int64(params.WindowSizeSlots/2)); got != 500 {
 		t.Fatalf("half decay: got %d", got)
+	}
+}
+
+func TestRecoverUsageWindow_PrecisionAveragingMatchesJava(t *testing.T) {
+	for _, harden := range []bool{false, true} {
+		if got := delegation.RecoverUsageWindowWithHarden(299, 0, 1, harden); got != 299 {
+			t.Fatalf("recover(299, delta=1, harden=%v) = %d, want 299; old truncate gave 298", harden, got)
+		}
+		if got := delegation.RecoverUsageWindowWithHarden(852_710_572, 0, 1, harden); got != 852_680_964 {
+			t.Fatalf("recover(852710572, delta=1, harden=%v) = %d, want 852680964", harden, got)
+		}
 	}
 }

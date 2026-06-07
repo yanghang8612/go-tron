@@ -5,6 +5,7 @@
 package delegation
 
 import (
+	"math"
 	"math/big"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -43,7 +44,7 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 		totalFrozen = totalEnergyFrozen(acct)
 	}
 
-	recovered := RecoverUsageWindow(usage, lastTime, now)
+	recovered := recoverUsageWindowForDP(usage, lastTime, now, dp)
 
 	var transfer int64
 	if totalFrozen > 0 && recovered > 0 {
@@ -76,7 +77,7 @@ func TransferUsageFromReceiver(statedb *state.StateDB, dp *state.DynamicProperti
 // side. Passing transferUsage == 0 refreshes owner's recovered usage
 // without adding anything — useful when delegating (mirrors java-tron's
 // processor.updateUsageForDelegated(ownerCapsule) call).
-func FoldUsageIntoOwner(statedb *state.StateDB, owner tcommon.Address, resource corepb.ResourceCode, transferUsage, now int64) {
+func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resource corepb.ResourceCode, transferUsage, now int64) {
 	var usage, lastTime int64
 	if resource == corepb.ResourceCode_BANDWIDTH {
 		usage = statedb.GetNetUsage(owner)
@@ -85,7 +86,7 @@ func FoldUsageIntoOwner(statedb *state.StateDB, owner tcommon.Address, resource 
 		usage = statedb.GetEnergyUsage(owner)
 		lastTime = statedb.GetLatestConsumeTimeForEnergy(owner)
 	}
-	recovered := RecoverUsageWindow(usage, lastTime, now)
+	recovered := recoverUsageWindowForDP(usage, lastTime, now, dp)
 	newUsage := recovered + transferUsage
 	if resource == corepb.ResourceCode_BANDWIDTH {
 		statedb.SetNetUsage(owner, newUsage)
@@ -119,14 +120,14 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 	var usage, v1OwnFrozen, v1AcquiredFrozen, v2AcquiredFrozen, totalLimit, totalWeight int64
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
-		usage = RecoverUsageWindow(statedb.GetNetUsage(owner), statedb.GetLatestConsumeTime(owner), now)
+		usage = recoverUsageWindowForDP(statedb.GetNetUsage(owner), statedb.GetLatestConsumeTime(owner), now, dp)
 		v1OwnFrozen = acct.TotalFrozenBandwidth()
 		v1AcquiredFrozen = acct.AcquiredDelegatedFrozenBandwidth()
 		v2AcquiredFrozen = acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
 		totalLimit = dp.TotalNetLimit()
 		totalWeight = dp.TotalNetWeight()
 	case corepb.ResourceCode_ENERGY:
-		usage = RecoverUsageWindow(statedb.GetEnergyUsage(owner), statedb.GetLatestConsumeTimeForEnergy(owner), now)
+		usage = recoverUsageWindowForDP(statedb.GetEnergyUsage(owner), statedb.GetLatestConsumeTimeForEnergy(owner), now, dp)
 		v1OwnFrozen = acct.FrozenEnergyAmount()
 		v1AcquiredFrozen = acct.AcquiredDelegatedFrozenEnergy()
 		v2AcquiredFrozen = acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
@@ -148,10 +149,18 @@ func AvailableFrozenV2ForDelegation(statedb *state.StateDB, dp *state.DynamicPro
 	return available
 }
 
-// RecoverUsageWindow applies the sliding-window linear decay java-tron uses
-// for resource usage. `lastTime` and `now` are head-slot values, not
+// RecoverUsageWindow applies java-tron's precision-averaging global-window
+// recovery for resource usage. `lastTime` and `now` are head-slot values, not
 // millisecond timestamps (duplicated here to avoid import cycles).
 func RecoverUsageWindow(oldUsage, lastTime, now int64) int64 {
+	return RecoverUsageWindowWithHarden(oldUsage, lastTime, now, false)
+}
+
+// RecoverUsageWindowWithHarden mirrors ResourceProcessor.increase(oldUsage, 0,
+// lastTime, now, windowSize) over the global 28,800-slot window. The hardened
+// branch uses BigInteger-style arithmetic, matching java's
+// allow_harden_resource_calculation path.
+func RecoverUsageWindowWithHarden(oldUsage, lastTime, now int64, harden bool) int64 {
 	if oldUsage <= 0 {
 		return 0
 	}
@@ -163,8 +172,47 @@ func RecoverUsageWindow(oldUsage, lastTime, now int64) int64 {
 	if elapsed <= 0 {
 		return oldUsage
 	}
-	remaining := windowSize - elapsed
-	return oldUsage * remaining / windowSize
+
+	var averageLastUsage int64
+	if harden {
+		averageLastUsage = divideCeilBigInt(
+			new(big.Int).Mul(big.NewInt(oldUsage), big.NewInt(resourceWindowPrecision)),
+			big.NewInt(windowSize),
+		)
+	} else {
+		averageLastUsage = divideCeilInt(oldUsage*resourceWindowPrecision, windowSize)
+	}
+	decay := float64(windowSize-elapsed) / float64(windowSize)
+	averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+
+	if harden {
+		n := new(big.Int).Mul(big.NewInt(averageLastUsage), big.NewInt(windowSize))
+		n.Quo(n, big.NewInt(resourceWindowPrecision))
+		return n.Int64()
+	}
+	return averageLastUsage * windowSize / resourceWindowPrecision
+}
+
+func recoverUsageWindowForDP(oldUsage, lastTime, now int64, dp *state.DynamicProperties) int64 {
+	return RecoverUsageWindowWithHarden(oldUsage, lastTime, now, dp != nil && dp.AllowHardenResourceCalculation())
+}
+
+const resourceWindowPrecision = int64(1_000_000)
+
+func divideCeilInt(numerator, denominator int64) int64 {
+	result := numerator / denominator
+	if numerator%denominator > 0 {
+		result++
+	}
+	return result
+}
+
+func divideCeilBigInt(numerator, denominator *big.Int) int64 {
+	q, r := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	if r.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	return q.Int64()
 }
 
 func resourceUsageToFrozenBalance(usage, totalLimit, totalWeight int64, harden bool) int64 {
