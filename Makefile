@@ -32,13 +32,16 @@ test-sapling:
 lint:
 	golangci-lint run ./...
 
+# core/contract/common.proto is an unused byte-for-byte duplicate of
+# core/common.proto (both define protocol.ResourceCode), imported by nothing and
+# with no committed *.pb.go. Exclude it: compiling it alongside core/common.proto
+# (pulled in by core/Tron.proto) is a duplicate-symbol error.
 proto:
 	@echo "Generating protobuf Go code..."
 	cd proto && protoc --go_out=. --go_opt=paths=source_relative \
 		core/Tron.proto \
 		core/Discover.proto \
-		core/historystate/historystate.proto \
-		core/contract/*.proto
+		$$(ls core/contract/*.proto | grep -v 'contract/common\.proto')
 	cd proto && protoc \
 		--proto_path=. \
 		--go_out=. --go_opt=paths=source_relative \
