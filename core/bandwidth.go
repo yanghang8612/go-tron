@@ -71,10 +71,7 @@ func availableAccountNet(acct *types.Account, dp *state.DynamicProperties) int64
 	if acct == nil {
 		return 0
 	}
-	frozen := acct.TotalFrozenBandwidth()
-	frozen += acct.AcquiredDelegatedFrozenBandwidth()
-	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH)
-	frozen += acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+	frozen := frozenForNet(acct)
 
 	totalWeight := dp.TotalNetWeight()
 	if totalWeight <= 0 {

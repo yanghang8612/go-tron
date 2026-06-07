@@ -105,15 +105,28 @@ func (ctx *Context) ResourceTime() int64 {
 //     create, etc.). Bandwidth NetFee is *not* included
 //     here — it's added in buildTransactionInfo.
 type Result struct {
-	Fee                           int64
-	EnergyUsageTotal              int64
-	EnergyUsed                    int64
-	EnergyFee                     int64
-	OriginEnergyUsage             int64
-	CallerEnergyLeft              int64
-	OriginEnergyLeft              int64
-	HasCallerEnergyLeft           bool
-	HasOriginEnergyLeft           bool
+	Fee                 int64
+	EnergyUsageTotal    int64
+	EnergyUsed          int64
+	EnergyFee           int64
+	OriginEnergyUsage   int64
+	CallerEnergyLeft    int64
+	OriginEnergyLeft    int64
+	HasCallerEnergyLeft bool
+	HasOriginEnergyLeft bool
+	// Diagnostic (cross-impl parity), non-consensus — surfaced in
+	// TransactionInfo.ResourceReceipt fields 11-19. Owner* describe the tx
+	// fee-payer and are filled for every tx type (set in core.applyTransaction);
+	// *EnergyWindow are filled for smart-contract txs (set in vm_actuator).
+	OwnerBalance                  int64
+	OwnerFreeNetLeft              int64
+	OwnerFrozenNetLeft            int64
+	OwnerNetLastConsumeTime       int64
+	OwnerFreeNetLastConsumeTime   int64
+	OwnerFrozenForNet             int64
+	OwnerFrozenForEnergy          int64
+	OriginEnergyWindow            int64
+	CallerEnergyWindow            int64
 	NetUsage                      int64
 	NetFee                        int64
 	NetFeeForBandwidth            bool

@@ -2794,8 +2794,42 @@ type ResourceReceipt struct {
 	// divergences vs java-tron during a Nile re-sync. Not consensus-hashed.
 	OriginEnergyLeft int64 `protobuf:"varint,9,opt,name=origin_energy_left,json=originEnergyLeft,proto3" json:"origin_energy_left,omitempty"`
 	CallerEnergyLeft int64 `protobuf:"varint,10,opt,name=caller_energy_left,json=callerEnergyLeft,proto3" json:"caller_energy_left,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Diagnostic (cross-impl parity) — fields 11-19, all non-consensus, never
+	// hashed (TransactionInfo is side data, not in txTrieRoot). Captured at
+	// execution start so a stalled Nile re-sync can be diffed against java-tron
+	// without re-running gtron with extra logging. proto3 omits zero values, so
+	// these cost nothing on the wire when unset; readers treat absent as 0.
+	//
+	// Fields 11-17 describe the transaction owner (fee-payer) and are populated
+	// for EVERY transaction type (every tx has an owner that pays bandwidth):
+	//
+	//	owner_balance               TRX balance at execution start
+	//	owner_free_net_left         free-tier bandwidth remaining (post-recovery)
+	//	owner_frozen_net_left       staked-tier bandwidth remaining (post-recovery)
+	//	owner_net_last_consume_time staked-net recovery timestamp (recovery input)
+	//	owner_free_net_last_consume_time free-net recovery timestamp
+	//	owner_frozen_for_net        frozen balance feeding the net limit
+	//	owner_frozen_for_energy     frozen balance feeding the energy limit
+	//
+	// Caveat: owner_*_net_left report the owner's OWN free/staked bandwidth pools.
+	// TransferAssetContract (TRC10 asset-net allowance) and create-new-account
+	// txs charge a different pool, so for those these are account facts, not the
+	// pool this tx actually drew from.
+	// Fields 18-19 describe the contract origin/caller energy recovery window
+	// (slots) and are populated only for smart-contract transactions; they
+	// complement origin_energy_left/caller_energy_left (the window is the state
+	// that drifts in per-account energy-window forks).
+	OwnerBalance                int64 `protobuf:"varint,11,opt,name=owner_balance,json=ownerBalance,proto3" json:"owner_balance,omitempty"`
+	OwnerFreeNetLeft            int64 `protobuf:"varint,12,opt,name=owner_free_net_left,json=ownerFreeNetLeft,proto3" json:"owner_free_net_left,omitempty"`
+	OwnerFrozenNetLeft          int64 `protobuf:"varint,13,opt,name=owner_frozen_net_left,json=ownerFrozenNetLeft,proto3" json:"owner_frozen_net_left,omitempty"`
+	OwnerNetLastConsumeTime     int64 `protobuf:"varint,14,opt,name=owner_net_last_consume_time,json=ownerNetLastConsumeTime,proto3" json:"owner_net_last_consume_time,omitempty"`
+	OwnerFreeNetLastConsumeTime int64 `protobuf:"varint,15,opt,name=owner_free_net_last_consume_time,json=ownerFreeNetLastConsumeTime,proto3" json:"owner_free_net_last_consume_time,omitempty"`
+	OwnerFrozenForNet           int64 `protobuf:"varint,16,opt,name=owner_frozen_for_net,json=ownerFrozenForNet,proto3" json:"owner_frozen_for_net,omitempty"`
+	OwnerFrozenForEnergy        int64 `protobuf:"varint,17,opt,name=owner_frozen_for_energy,json=ownerFrozenForEnergy,proto3" json:"owner_frozen_for_energy,omitempty"`
+	OriginEnergyWindow          int64 `protobuf:"varint,18,opt,name=origin_energy_window,json=originEnergyWindow,proto3" json:"origin_energy_window,omitempty"`
+	CallerEnergyWindow          int64 `protobuf:"varint,19,opt,name=caller_energy_window,json=callerEnergyWindow,proto3" json:"caller_energy_window,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *ResourceReceipt) Reset() {
@@ -2894,6 +2928,69 @@ func (x *ResourceReceipt) GetOriginEnergyLeft() int64 {
 func (x *ResourceReceipt) GetCallerEnergyLeft() int64 {
 	if x != nil {
 		return x.CallerEnergyLeft
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerBalance() int64 {
+	if x != nil {
+		return x.OwnerBalance
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerFreeNetLeft() int64 {
+	if x != nil {
+		return x.OwnerFreeNetLeft
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerFrozenNetLeft() int64 {
+	if x != nil {
+		return x.OwnerFrozenNetLeft
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerNetLastConsumeTime() int64 {
+	if x != nil {
+		return x.OwnerNetLastConsumeTime
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerFreeNetLastConsumeTime() int64 {
+	if x != nil {
+		return x.OwnerFreeNetLastConsumeTime
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerFrozenForNet() int64 {
+	if x != nil {
+		return x.OwnerFrozenForNet
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOwnerFrozenForEnergy() int64 {
+	if x != nil {
+		return x.OwnerFrozenForEnergy
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetOriginEnergyWindow() int64 {
+	if x != nil {
+		return x.OriginEnergyWindow
+	}
+	return 0
+}
+
+func (x *ResourceReceipt) GetCallerEnergyWindow() int64 {
+	if x != nil {
+		return x.CallerEnergyWindow
 	}
 	return 0
 }
@@ -7505,7 +7602,7 @@ const file_core_Tron_proto_rawDesc = "" +
 	"\x04vout\x18\x02 \x01(\x03R\x04vout\x12\x16\n" +
 	"\x06pubKey\x18\x03 \x01(\fR\x06pubKey\"9\n" +
 	"\tTXOutputs\x12,\n" +
-	"\aoutputs\x18\x01 \x03(\v2\x12.protocol.TXOutputR\aoutputs\"\xba\x03\n" +
+	"\aoutputs\x18\x01 \x03(\v2\x12.protocol.TXOutputR\aoutputs\"\x92\a\n" +
 	"\x0fResourceReceipt\x12!\n" +
 	"\fenergy_usage\x18\x01 \x01(\x03R\venergyUsage\x12\x1d\n" +
 	"\n" +
@@ -7518,7 +7615,16 @@ const file_core_Tron_proto_rawDesc = "" +
 	"\x14energy_penalty_total\x18\b \x01(\x03R\x12energyPenaltyTotal\x12,\n" +
 	"\x12origin_energy_left\x18\t \x01(\x03R\x10originEnergyLeft\x12,\n" +
 	"\x12caller_energy_left\x18\n" +
-	" \x01(\x03R\x10callerEnergyLeft\"\xb1\x01\n" +
+	" \x01(\x03R\x10callerEnergyLeft\x12#\n" +
+	"\rowner_balance\x18\v \x01(\x03R\fownerBalance\x12-\n" +
+	"\x13owner_free_net_left\x18\f \x01(\x03R\x10ownerFreeNetLeft\x121\n" +
+	"\x15owner_frozen_net_left\x18\r \x01(\x03R\x12ownerFrozenNetLeft\x12<\n" +
+	"\x1bowner_net_last_consume_time\x18\x0e \x01(\x03R\x17ownerNetLastConsumeTime\x12E\n" +
+	" owner_free_net_last_consume_time\x18\x0f \x01(\x03R\x1bownerFreeNetLastConsumeTime\x12/\n" +
+	"\x14owner_frozen_for_net\x18\x10 \x01(\x03R\x11ownerFrozenForNet\x125\n" +
+	"\x17owner_frozen_for_energy\x18\x11 \x01(\x03R\x14ownerFrozenForEnergy\x120\n" +
+	"\x14origin_energy_window\x18\x12 \x01(\x03R\x12originEnergyWindow\x120\n" +
+	"\x14caller_energy_window\x18\x13 \x01(\x03R\x12callerEnergyWindow\"\xb1\x01\n" +
 	"\x11MarketOrderDetail\x12\"\n" +
 	"\fmakerOrderId\x18\x01 \x01(\fR\fmakerOrderId\x12\"\n" +
 	"\ftakerOrderId\x18\x02 \x01(\fR\ftakerOrderId\x12*\n" +

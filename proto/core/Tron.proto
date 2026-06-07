@@ -330,6 +330,38 @@ message ResourceReceipt {
   // divergences vs java-tron during a Nile re-sync. Not consensus-hashed.
   int64 origin_energy_left = 9;
   int64 caller_energy_left = 10;
+  // Diagnostic (cross-impl parity) — fields 11-19, all non-consensus, never
+  // hashed (TransactionInfo is side data, not in txTrieRoot). Captured at
+  // execution start so a stalled Nile re-sync can be diffed against java-tron
+  // without re-running gtron with extra logging. proto3 omits zero values, so
+  // these cost nothing on the wire when unset; readers treat absent as 0.
+  //
+  // Fields 11-17 describe the transaction owner (fee-payer) and are populated
+  // for EVERY transaction type (every tx has an owner that pays bandwidth):
+  //   owner_balance               TRX balance at execution start
+  //   owner_free_net_left         free-tier bandwidth remaining (post-recovery)
+  //   owner_frozen_net_left       staked-tier bandwidth remaining (post-recovery)
+  //   owner_net_last_consume_time staked-net recovery timestamp (recovery input)
+  //   owner_free_net_last_consume_time free-net recovery timestamp
+  //   owner_frozen_for_net        frozen balance feeding the net limit
+  //   owner_frozen_for_energy     frozen balance feeding the energy limit
+  // Caveat: owner_*_net_left report the owner's OWN free/staked bandwidth pools.
+  // TransferAssetContract (TRC10 asset-net allowance) and create-new-account
+  // txs charge a different pool, so for those these are account facts, not the
+  // pool this tx actually drew from.
+  // Fields 18-19 describe the contract origin/caller energy recovery window
+  // (slots) and are populated only for smart-contract transactions; they
+  // complement origin_energy_left/caller_energy_left (the window is the state
+  // that drifts in per-account energy-window forks).
+  int64 owner_balance = 11;
+  int64 owner_free_net_left = 12;
+  int64 owner_frozen_net_left = 13;
+  int64 owner_net_last_consume_time = 14;
+  int64 owner_free_net_last_consume_time = 15;
+  int64 owner_frozen_for_net = 16;
+  int64 owner_frozen_for_energy = 17;
+  int64 origin_energy_window = 18;
+  int64 caller_energy_window = 19;
 }
 
 message MarketOrderDetail {

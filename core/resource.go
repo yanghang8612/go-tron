@@ -18,10 +18,7 @@ func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) in
 	if acct == nil {
 		return 0
 	}
-	frozen := acct.FrozenEnergyAmount()
-	frozen += acct.AcquiredDelegatedFrozenEnergy()
-	frozen += acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY)
-	frozen += acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
+	frozen := frozenForEnergy(acct)
 
 	totalWeight := dp.TotalEnergyWeight()
 	if totalWeight <= 0 {
@@ -37,6 +34,75 @@ func availableAccountEnergy(acct *types.Account, dp *state.DynamicProperties) in
 		return 0
 	}
 	return calculateGlobalResourceLimitV1(frozen, totalLimit, totalWeight, harden)
+}
+
+// ownerResourceSnapshot holds the pre-execution balance and bandwidth state of
+// a transaction's fee-payer (owner). Captured per-tx for cross-impl diagnostics
+// and surfaced in TransactionInfo.ResourceReceipt — non-consensus, never hashed.
+// The "left" values are post-recovery available bandwidth; the timestamps and
+// frozen sums are the recovery/limit inputs, so a stalled re-sync can be diffed
+// against java-tron without re-running gtron with extra logging.
+type ownerResourceSnapshot struct {
+	Balance                int64
+	FreeNetLeft            int64
+	FrozenNetLeft          int64
+	NetLastConsumeTime     int64
+	FreeNetLastConsumeTime int64
+	FrozenForNet           int64
+	FrozenForEnergy        int64
+}
+
+// captureOwnerResourceSnapshot reads the owner's balance and bandwidth state at
+// execution start. It mirrors consumeBandwidth's recovery math (so the "left"
+// values match what the bandwidth charge will see) but mutates nothing. A
+// missing account yields the zero snapshot.
+func captureOwnerResourceSnapshot(statedb *state.StateDB, dp *state.DynamicProperties, owner tcommon.Address, resourceTime int64) ownerResourceSnapshot {
+	if !statedb.AccountExists(owner) {
+		return ownerResourceSnapshot{}
+	}
+	acct := statedb.GetAccount(owner)
+	snap := ownerResourceSnapshot{
+		Balance:                statedb.GetBalance(owner),
+		NetLastConsumeTime:     statedb.GetLatestConsumeTime(owner),
+		FreeNetLastConsumeTime: statedb.GetLatestConsumeFreeTime(owner),
+		FrozenForNet:           frozenForNet(acct),
+		FrozenForEnergy:        frozenForEnergy(acct),
+	}
+
+	frozenLimit := availableAccountNet(acct, dp)
+	frozenUsed := recoverUsageForDP(statedb.GetNetUsage(owner), snap.NetLastConsumeTime, resourceTime, dp)
+	snap.FrozenNetLeft = max(0, frozenLimit-frozenUsed)
+
+	freeLimit := dp.FreeNetLimit()
+	freeUsed := recoverUsageForDP(statedb.GetFreeNetUsage(owner), snap.FreeNetLastConsumeTime, resourceTime, dp)
+	snap.FreeNetLeft = max(0, freeLimit-freeUsed)
+
+	return snap
+}
+
+// frozenForNet sums the frozen balances that contribute to an account's net
+// (bandwidth) limit, matching availableAccountNet's java
+// AccountCapsule.getAllFrozenBalanceForBandwidth sources.
+func frozenForNet(acct *types.Account) int64 {
+	if acct == nil {
+		return 0
+	}
+	return acct.TotalFrozenBandwidth() +
+		acct.AcquiredDelegatedFrozenBandwidth() +
+		acct.GetFrozenV2Amount(corepb.ResourceCode_BANDWIDTH) +
+		acct.AcquiredDelegatedFrozenV2BalanceForBandwidth()
+}
+
+// frozenForEnergy sums the frozen balances that contribute to an account's
+// energy limit, matching availableAccountEnergy's frozen sources.
+func frozenForEnergy(acct *types.Account) int64 {
+	if acct == nil {
+		return 0
+	}
+	return acct.FrozenEnergyAmount() +
+		acct.AcquiredDelegatedFrozenEnergy() +
+		acct.GetFrozenV2Amount(corepb.ResourceCode_ENERGY) +
+		acct.AcquiredDelegatedFrozenV2BalanceForEnergy()
 }
 
 // ResourceProcessor handles bandwidth and energy consumption/recovery.

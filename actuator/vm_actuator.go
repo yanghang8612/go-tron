@@ -426,6 +426,10 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 	if result != nil {
 		result.CallerEnergyLeft = leftFrozenEnergy
 		result.HasCallerEnergyLeft = true
+		// Diagnostic: caller energy recovery window (slots) at exec start. The
+		// window is the per-account state that drifts in energy-window forks;
+		// recovery reads but never persists it, so this is the pristine value.
+		result.CallerEnergyWindow = acct.EnergyWindowSize()
 	}
 	if callValue < 0 {
 		callValue = 0
@@ -504,6 +508,10 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 	if result != nil {
 		result.OriginEnergyLeft = originEnergyLeft
 		result.HasOriginEnergyLeft = true
+		// Diagnostic: origin energy recovery window (slots) at exec start.
+		if originAcct := ctx.State.GetAccount(origin); originAcct != nil {
+			result.OriginEnergyWindow = originAcct.EnergyWindowSize()
+		}
 	}
 
 	originLimit := contractOriginEnergyLimit(contract)

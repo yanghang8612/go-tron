@@ -137,6 +137,13 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	}
 
 	resourceTime := ctx.ResourceTime()
+	// Diagnostic (cross-impl parity), non-consensus: snapshot the owner's
+	// balance + bandwidth state at execution start — before bandwidth is
+	// consumed — so a stalled Nile re-sync can be diffed against java-tron
+	// without re-running gtron with extra logging. Read-only; assigned onto
+	// result after Execute. Owner-less txs (e.g. shielded) snapshot to zero.
+	ownerSnap := captureOwnerResourceSnapshot(statedb, dynProps, extractSender(tx), resourceTime)
+
 	bwResult, err := consumeBandwidthWithResourceTime(statedb, dynProps, tx, prevBlockTime, resourceTime)
 	if err != nil {
 		revertTx()
@@ -180,6 +187,15 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	result.NetFeeForBandwidth = bwResult.NetFeeForBandwidth
 	result.Fee += multiSignFee + memoFee
 
+	// Owner diagnostic snapshot taken at execution start (see above).
+	result.OwnerBalance = ownerSnap.Balance
+	result.OwnerFreeNetLeft = ownerSnap.FreeNetLeft
+	result.OwnerFrozenNetLeft = ownerSnap.FrozenNetLeft
+	result.OwnerNetLastConsumeTime = ownerSnap.NetLastConsumeTime
+	result.OwnerFreeNetLastConsumeTime = ownerSnap.FreeNetLastConsumeTime
+	result.OwnerFrozenForNet = ownerSnap.FrozenForNet
+	result.OwnerFrozenForEnergy = ownerSnap.FrozenForEnergy
+
 	return result, nil
 }
 
@@ -209,6 +225,19 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			// at contract execution start; set unconditionally in vm_actuator.
 			OriginEnergyLeft: result.OriginEnergyLeft,
 			CallerEnergyLeft: result.CallerEnergyLeft,
+			// Diagnostic (cross-impl parity), non-consensus. Owner* are the
+			// fee-payer's balance/bandwidth state at exec start (set for every
+			// tx type in applyTransaction); *EnergyWindow are the origin/caller
+			// energy recovery windows (set for VM txs in vm_actuator).
+			OwnerBalance:                result.OwnerBalance,
+			OwnerFreeNetLeft:            result.OwnerFreeNetLeft,
+			OwnerFrozenNetLeft:          result.OwnerFrozenNetLeft,
+			OwnerNetLastConsumeTime:     result.OwnerNetLastConsumeTime,
+			OwnerFreeNetLastConsumeTime: result.OwnerFreeNetLastConsumeTime,
+			OwnerFrozenForNet:           result.OwnerFrozenForNet,
+			OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
+			OriginEnergyWindow:          result.OriginEnergyWindow,
+			CallerEnergyWindow:          result.CallerEnergyWindow,
 		},
 	}
 	if isVMContract {
