@@ -97,21 +97,19 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(mem, &inOffsetWord, &inSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(mem, &retOffsetWord, &retSizeWord, CALLTOKEN)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !in.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !in.useEnergy(contract, retMemCost) {
+	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
+	// calcMemEnergy(oldMemSize, in.max(out)); separate in/ret charges
+	// double-count the overlap.
+	if memCost := combinedMemoryExpansionCost(mem, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !in.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -1104,9 +1102,11 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
-	// Refresh owner's usage before their frozen pool shifts. Mirrors
-	// java-tron Program.java:645 / DelegateResourceActuator.java:155.
-	delegation.FoldUsageIntoOwner(in.tvm.StateDB, in.tvm.DynProps, caller, resource, 0, in.tvm.ResourceTime())
+	// java's DelegateResourceProcessor (VM native contract) does NOT recover or
+	// persist the owner's usage on delegate: validate() mutates a getAccount()
+	// byte-snapshot copy that is never put back, and execute() only adjusts the
+	// frozen/delegated balances. Recovering+writing the owner usage here diverged
+	// from java (a Stake-2.0 state difference); leave the owner's usage untouched.
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)
@@ -1139,13 +1139,12 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	// back to the owner. Mirrors java-tron UnDelegateResourceActuator.execute.
 	dp := in.tvm.StateDB.DynamicProperties()
 	resourceTime := in.tvm.ResourceTime()
-	transfer := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
+	transfer, recvRawWindow, recvOptimized := delegation.TransferUsageFromReceiver(in.tvm.StateDB, dp, receiver, resource, amount, resourceTime)
 	in.tvm.StateDB.SubDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.SubAcquiredDelegatedFrozenV2(receiver, resource, amount)
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
-	if transfer > 0 {
-		delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, resourceTime)
-	}
+	// java unDelegateIncrease runs UNCONDITIONALLY and blends the receiver window.
+	delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, recvRawWindow, recvOptimized, resourceTime)
 	stack.push(uint256.NewInt(1))
 	return nil, nil
 }

@@ -115,6 +115,31 @@ func checkedMemoryExpansionCostWords(mem *Memory, offset, size *uint256.Int, op 
 	return off, sz, cost, err
 }
 
+// combinedMemoryExpansionCost returns the SINGLE memory-expansion charge for a
+// CALL-family op covering both the input and return regions, mirroring java-tron
+// EnergyCost.getCalculateCallCost: `calcMemEnergy(oldMemSize, in.max(out))`.
+// Charging the input and return expansions separately (each baselined on the
+// un-resized memory) double-counts the overlapping region — a consensus
+// over-charge. Callers must have already validated both (offset,size) pairs via
+// checkedMemoryExpansionCostWords (so offset+size cannot overflow uint64). A
+// zero-size region contributes nothing (java memNeeded(_, 0) == 0).
+func combinedMemoryExpansionCost(mem *Memory, inOff, inSz, retOff, retSz uint64) uint64 {
+	var maxEnd uint64
+	if inSz > 0 {
+		maxEnd = inOff + inSz
+	}
+	if retSz > 0 {
+		if end := retOff + retSz; end > maxEnd {
+			maxEnd = end
+		}
+	}
+	cur := uint64(mem.len())
+	if maxEnd == 0 || cur >= maxEnd {
+		return 0
+	}
+	return memoryEnergyCost(maxEnd) - memoryEnergyCost(cur)
+}
+
 func checkedMemoryExpansionCostFixed(mem *Memory, offset *uint256.Int, size uint64, op OpCode) (uint64, uint64, error) {
 	if size == 0 {
 		return offset.Uint64(), 0, nil

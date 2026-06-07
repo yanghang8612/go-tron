@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrExchangeRejected is returned by ApplyTransaction when an
@@ -80,6 +81,42 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	validateResultSize := !trustTransactionRet || dynProps.ConsensusLogicOptimization()
 	if err := validateTxCommon(tx, prevBlockTime, validateResultSize); err != nil {
 		return nil, err
+	}
+	// java Manager.validateCommon adds an in-block expiration LOWER bound once
+	// consensus_logic_optimization is active: the tx must not already be expired
+	// as of the next block slot. nextSlotTime = latestBlockHeaderTimestamp +
+	// slotCount*BLOCK_INTERVAL, slotCount = 1 (+ MaintenanceSkipSlots when the head
+	// was a maintenance block, StateFlag==1). During in-block validation both impls
+	// read the head's (prev block's) timestamp + state flag, so prevBlockTime +
+	// dynProps.StateFlag() here match java's getNextBlockSlotTime. Canonical blocks
+	// never contain a sub-slot-expiration tx (java rejects at produce), so this only
+	// adds java's reject of a non-canonical block.
+	if dynProps.ConsensusLogicOptimization() {
+		slotCount := int64(1)
+		if dynProps.StateFlag() == 1 {
+			slotCount += int64(params.MaintenanceSkipSlots)
+		}
+		if tx.Expiration() < prevBlockTime+slotCount*params.BlockProducedInterval {
+			return nil, ErrTransactionExpiration
+		}
+	}
+
+	// java BandwidthProcessor.consume always rejects (in-block too) a tx whose
+	// serialized result exceeds MAX_RESULT_SIZE_IN_TX(64) per contract —
+	// getResultSerializedSize() = sum of each Result's serialized size. gtron
+	// strips ret for the 500KB byte-size gate but lacked this per-ret guard.
+	// proto.Size(r) == java result.getSerializedSize() for the same message, and
+	// canonical blocks always satisfy it (java enforces at produce), so this only
+	// rejects a crafted block carrying an oversized ret.
+	{
+		retPB := tx.Proto()
+		var retSize int64
+		for _, r := range retPB.GetRet() {
+			retSize += int64(proto.Size(r))
+		}
+		if retSize > maxResultSizeInTx*int64(len(retPB.GetRawData().GetContract())) {
+			return nil, ErrTransactionResultTooLarge
+		}
 	}
 
 	act, err := actuator.CreateActuator(tx)

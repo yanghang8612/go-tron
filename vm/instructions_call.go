@@ -122,21 +122,19 @@ func opCall(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Me
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALL)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALL)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALL)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALL)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !interpreter.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !interpreter.useEnergy(contract, retMemCost) {
+	// Single combined expansion to max(inEnd, retEnd) — java EnergyCost
+	// calcMemEnergy(oldMemSize, in.max(out)). Charging in and ret separately
+	// double-counts the overlapping region.
+	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -199,21 +197,16 @@ func opCallCode(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALLCODE)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, CALLCODE)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALLCODE)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, CALLCODE)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !interpreter.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !interpreter.useEnergy(contract, retMemCost) {
+	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -269,21 +262,16 @@ func opDelegateCall(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, DELEGATECALL)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, DELEGATECALL)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, DELEGATECALL)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, DELEGATECALL)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !interpreter.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !interpreter.useEnergy(contract, retMemCost) {
+	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}
@@ -332,21 +320,16 @@ func opStaticCall(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 		return nil, ErrOutOfEnergy
 	}
 
-	inOff, inSz, inMemCost, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, STATICCALL)
+	inOff, inSz, _, err := checkedMemoryExpansionCostWords(memory, &inOffset, &inSize, STATICCALL)
 	if err != nil {
 		return nil, err
 	}
-	retOff, retSz, retMemCost, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, STATICCALL)
+	retOff, retSz, _, err := checkedMemoryExpansionCostWords(memory, &retOffset, &retSize, STATICCALL)
 	if err != nil {
 		return nil, err
 	}
-	if inMemCost > 0 {
-		if !interpreter.useEnergy(contract, inMemCost) {
-			return nil, ErrOutOfEnergy
-		}
-	}
-	if retMemCost > 0 {
-		if !interpreter.useEnergy(contract, retMemCost) {
+	if memCost := combinedMemoryExpansionCost(memory, inOff, inSz, retOff, retSz); memCost > 0 {
+		if !interpreter.useEnergy(contract, memCost) {
 			return nil, ErrOutOfEnergy
 		}
 	}

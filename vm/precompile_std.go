@@ -24,27 +24,37 @@ func (c *ecRecover) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) 
 	// Input: hash(32) + v(32) + r(32) + s(32)
 	in := getInput(input, 0, 128)
 	hash := in[0:32]
-	v := in[63] // last byte of v word
 	r := in[64:96]
 	s := in[96:128]
 
-	// Normalize v from 27/28 to 0/1
-	if v >= 27 {
-		v -= 27
+	// java ECRecover.validateV: every byte of the v word except the last must be
+	// zero. A dirty high byte → reject (gtron previously read only in[63]).
+	for _, b := range in[32:63] {
+		if b != 0 {
+			return nil, cost, nil
+		}
 	}
-	if v > 1 {
-		return make([]byte, 32), cost, nil
+	// java ECKey.validateComponents: v must be exactly 27 or 28 (gtron previously
+	// also accepted the raw recovery ids 0/1). r,s ∈ [1,N) is enforced identically
+	// by ethcrypto.Ecrecover (libsecp256k1 rejects r/s == 0 or >= N), so no
+	// explicit range check is needed to match validateComponents.
+	v := in[63]
+	if v != 27 && v != 28 {
+		return nil, cost, nil
 	}
 
-	// Build 65-byte [r | s | v] signature (go-ethereum convention)
+	// Build 65-byte [r | s | v] signature (go-ethereum convention, v in {0,1})
 	sig := make([]byte, 65)
 	copy(sig[0:32], r)
 	copy(sig[32:64], s)
-	sig[64] = v
+	sig[64] = v - 27
 
 	pubBytes, err := ethcrypto.Ecrecover(hash, sig)
 	if err != nil || len(pubBytes) != 65 {
-		return make([]byte, 32), cost, nil
+		// java returns EMPTY_BYTE_ARRAY on any failure; gtron previously returned
+		// 32 zero bytes (diverging from both java and go-ethereum) — RETURNDATASIZE
+		// and the CALL output buffer differed. Return empty to match java.
+		return nil, cost, nil
 	}
 
 	// Keccak256 of the uncompressed public key (skip the 0x04 prefix byte)

@@ -43,28 +43,28 @@ func TestPassVersion_TimeGateBlocksEarly(t *testing.T) {
 
 func TestPassVersion_RateGateRequiresQuorum(t *testing.T) {
 	db := gerawdb.NewMemoryDatabase()
-	// 27 witnesses, 80% required for v35. 21 upgrade votes is just under
-	// ceil(0.80 * 27) = 22 → must return false.
+	// 27 witnesses, v35 (VERSION_4_8_1_1) requires 70%. 18 upgrade votes is just
+	// under ceil(0.70 * 27) = 19 → must return false.
 	stats := make([]byte, 27)
-	for i := 0; i < 21; i++ {
+	for i := 0; i < 18; i++ {
 		stats[i] = VoteUpgrade
 	}
 	rawdb.WriteForkStats(db, 35, stats)
 	if PassVersion(db, 35, blockTimeAfterFork(35), maintenanceInterval) {
-		t.Fatal("21/27 upgrade votes must not pass v35 (80% quorum)")
+		t.Fatal("18/27 upgrade votes must not pass v35 (70% quorum)")
 	}
 }
 
 func TestPassVersion_AtThreshold(t *testing.T) {
 	db := gerawdb.NewMemoryDatabase()
-	// 22/27 = 81.5%, just clears 80% ceil → should pass.
+	// 19/27 = 70.4%, just clears the 70% ceil (ceil(0.70*27)=19) → should pass.
 	stats := make([]byte, 27)
-	for i := 0; i < 22; i++ {
+	for i := 0; i < 19; i++ {
 		stats[i] = VoteUpgrade
 	}
 	rawdb.WriteForkStats(db, 35, stats)
 	if !PassVersion(db, 35, blockTimeAfterFork(35), maintenanceInterval) {
-		t.Fatal("22/27 upgrade votes must pass v35 quorum")
+		t.Fatal("19/27 upgrade votes must pass v35 (70% quorum)")
 	}
 }
 

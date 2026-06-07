@@ -1,12 +1,11 @@
 package core
 
 import (
-	"bytes"
 	"math/big"
-	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/consensus/dpos"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 )
@@ -95,39 +94,48 @@ type standbyWitnessPaySet struct {
 	cycle     int64
 }
 
-func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle int64) *standbyWitnessPaySet {
-	// Gather all known witnesses from the index, sort by vote count desc,
-	// take the top N. Matches java-tron's WitnessStore.getWitnessStandby
-	// for the non-optimized path.
+func buildStandbyWitnessPaySet(db kvReadWriter, statedb *state.StateDB, cycle int64, sortOpt bool) *standbyWitnessPaySet {
+	// Mirrors java WitnessStore.getWitnessStandby(allowWitnessSortOptimization()):
+	// sort ALL witnesses (votes DESC, then the opt-aware address tiebreak), take
+	// the top 127, then drop any with voteCount < 1. The tiebreak is the SAME
+	// comparator as the active-set selection — java's allowWitnessSortOptimization()
+	// == allowConsensusLogicOptimization() (DynamicPropertiesStore.java:2928), which
+	// gtron exposes as dynProps.ConsensusLogicOptimization() — so we reuse
+	// dpos.SortWitnessesByVotesWithOptimization (hex-DESC when set, javaByteStringHash
+	// DESC when not). The previous hand-rolled bytes.Compare ASC tiebreak ignored the
+	// flag AND was direction-reversed from java, a latent standby-allowance state-root
+	// fork whenever a vote tie straddled the rank-127 cut.
 	addrs := statedb.ReadWitnessIndex()
 	if len(addrs) == 0 {
 		return nil
 	}
-	all := make([]standbyWitnessVote, 0, len(addrs))
+	votes := make([]dpos.WitnessVote, 0, len(addrs))
 	for _, a := range addrs {
 		w := statedb.GetWitness(a)
 		if w == nil {
 			continue
 		}
-		all = append(all, standbyWitnessVote{addr: a, votes: w.VoteCount()})
+		votes = append(votes, dpos.WitnessVote{Address: a, Votes: w.VoteCount()})
 	}
-	// Descending by vote; stable tiebreak by address to match java-tron's
-	// deterministic sort.
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].votes != all[j].votes {
-			return all[i].votes > all[j].votes
-		}
-		return bytes.Compare(all[i].addr[:], all[j].addr[:]) < 0
-	})
+	sorted := dpos.SortWitnessesByVotesWithOptimization(votes, sortOpt)
 	const standbyN = 127
-	if len(all) > standbyN {
-		all = all[:standbyN]
+	if len(sorted) > standbyN {
+		sorted = sorted[:standbyN]
 	}
 
+	all := make([]standbyWitnessVote, 0, len(sorted))
 	var voteSum int64
-	for i, v := range all {
-		voteSum += v.votes
-		all[i].brokerage = statedb.ReadCycleBrokerage(cycle, v.addr.Bytes())
+	for _, v := range sorted {
+		// java getWitnessStandby: removeIf(voteCount < 1) AFTER the 127-cut.
+		if v.Votes < 1 {
+			continue
+		}
+		voteSum += v.Votes
+		all = append(all, standbyWitnessVote{
+			addr:      v.Address,
+			votes:     v.Votes,
+			brokerage: statedb.ReadCycleBrokerage(cycle, v.Address.Bytes()),
+		})
 	}
 	if voteSum < 1 {
 		return nil
@@ -149,7 +157,7 @@ func payStandbyWitnessWithSet(db kvReadWriter, statedb *state.StateDB, dp *state
 	}
 	cycle := dp.CurrentCycleNumber()
 	if set == nil || set.cycle != cycle {
-		set = buildStandbyWitnessPaySet(db, statedb, cycle)
+		set = buildStandbyWitnessPaySet(db, statedb, cycle, dp.ConsensusLogicOptimization())
 	}
 	if set == nil || set.voteSum < 1 {
 		return

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -19,7 +20,9 @@ var zeroCaller tcommon.Address
 
 func TestPrecompileECRecover(t *testing.T) {
 	p := &ecRecover{}
-	// Empty input → should return 32 zero bytes, no error.
+	// Empty input → recovery fails. java ECRecover returns EMPTY_BYTE_ARRAY (0
+	// bytes), not 32 zeros — the CALL returndata/output buffer and RETURNDATASIZE
+	// must match. (gtron previously returned 32 zero bytes, diverging from java.)
 	result, cost, err := p.Run(nullEVM(), zeroCaller, nil, 10000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -27,14 +30,59 @@ func TestPrecompileECRecover(t *testing.T) {
 	if cost != 3000 {
 		t.Fatalf("expected cost 3000, got %d", cost)
 	}
-	if len(result) != 32 {
-		t.Fatalf("expected 32 bytes, got %d", len(result))
+	if len(result) != 0 {
+		t.Fatalf("failed recovery must return empty (java), got %d bytes", len(result))
 	}
-	// All zeros means recovery failed (which is correct for empty input).
-	for _, b := range result {
-		if b != 0 {
-			t.Fatalf("expected zero result for empty input")
-		}
+}
+
+// TestPrecompileECRecoverJavaParity pins divergence findings against java's
+// ECRecover.validateV + ECKey.validateComponents: a clean v word with v∈{27,28}
+// recovers; raw recovery ids 0/1, a dirty high byte in the v word, and any
+// failed recovery all return EMPTY (gtron previously accepted 0/1 and dirty
+// high bytes, and returned 32 zeros on failure).
+func TestPrecompileECRecoverJavaParity(t *testing.T) {
+	p := &ecRecover{}
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := make([]byte, 32)
+	msg[31] = 0x42
+	sig, err := crypto.Sign(msg, key) // 65-byte [r|s|v], v == recovery id in {0,1}
+	if err != nil {
+		t.Fatal(err)
+	}
+	recid := sig[64]
+
+	vWord := func(v byte) []byte { w := make([]byte, 32); w[31] = v; return w }
+	build := func(word []byte) []byte {
+		in := make([]byte, 128)
+		copy(in[0:32], msg)
+		copy(in[32:64], word)
+		copy(in[64:96], sig[0:32])
+		copy(in[96:128], sig[32:64])
+		return in
+	}
+
+	// Valid v (27/28) recovers a 32-byte (right-aligned) address.
+	out, _, err := p.Run(nullEVM(), zeroCaller, build(vWord(27+recid)), 10000)
+	if err != nil {
+		t.Fatalf("valid recovery error: %v", err)
+	}
+	if len(out) != 32 {
+		t.Fatalf("valid v∈{27,28} must recover 32 bytes, got %d", len(out))
+	}
+
+	// Raw recovery id 0/1: java validateComponents requires v∈{27,28} → EMPTY.
+	if out, _, _ := p.Run(nullEVM(), zeroCaller, build(vWord(recid)), 10000); len(out) != 0 {
+		t.Fatalf("raw recovery id v=%d must return empty (java validateComponents), got %x", recid, out)
+	}
+
+	// Dirty high byte in the v word: java validateV → EMPTY.
+	dirty := vWord(27 + recid)
+	dirty[0] = 0x01
+	if out, _, _ := p.Run(nullEVM(), zeroCaller, build(dirty), 10000); len(out) != 0 {
+		t.Fatalf("dirty v-word high byte must return empty (java validateV), got %x", out)
 	}
 }
 

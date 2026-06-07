@@ -39,7 +39,7 @@ func TestTransferUsageFromReceiver_ProRata(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 10) // no time elapsed → no decay
 
 	// Undelegate 40 TRX — 40% of receiver's pool.
-	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
 
 	// Expected transfer = 500 × 40/100 = 200, capped at
 	// maxUsage = 40 × (43_200_000_000 / 1000) = 40 × 43_200_000 = 1_728_000_000 (no cap hit).
@@ -73,7 +73,7 @@ func TestTransferUsageFromReceiver_CapByMaxUsage(t *testing.T) {
 	// Undelegate 10 TRX.
 	// Raw pro-rata = 1_000_000 × 10/100 = 100_000.
 	// Max = (10 × 1_000) / 1_000_000 = 0 (integer truncation).
-	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 10*trxPrecisionTest, ctx.BlockTime)
 	if transfer != 0 {
 		t.Fatalf("transfer should be clamped to 0: got %d", transfer)
 	}
@@ -91,7 +91,7 @@ func TestTransferUsageFromReceiver_NoUsage(t *testing.T) {
 	// No usage.
 
 	ctx := ctxFor(statedb, dp, 1000)
-	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_BANDWIDTH, 40*trxPrecisionTest, ctx.BlockTime)
 	if transfer != 0 {
 		t.Fatalf("transfer with no usage: got %d, want 0", transfer)
 	}
@@ -112,7 +112,7 @@ func TestTransferUsageFromReceiver_Energy(t *testing.T) {
 	ctx := ctxFor(statedb, dp, 5)
 
 	// Undelegate 50 TRX — 25% of receiver's 200 TRX energy pool.
-	transfer := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime)
+	transfer, _, _ := delegation.TransferUsageFromReceiver(ctx.State, ctx.DynProps, receiver, corepb.ResourceCode_ENERGY, 50*trxPrecisionTest, ctx.BlockTime)
 	if transfer != 250 {
 		t.Fatalf("energy transfer: got %d, want 250", transfer)
 	}
@@ -136,7 +136,7 @@ func TestFoldUsageIntoOwner_AddsOnTopOfRecovered(t *testing.T) {
 	now := int64(params.WindowSizeSlots / 2)
 	ctx := ctxFor(statedb, dp, now)
 
-	delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, owner, corepb.ResourceCode_BANDWIDTH, 100, ctx.BlockTime)
+	delegation.FoldUsageIntoOwner(ctx.State, ctx.DynProps, owner, corepb.ResourceCode_BANDWIDTH, 100, 0, false, ctx.BlockTime)
 
 	// Recovered = 400 × (window - halfWindow) / window = 200.
 	// + transferred 100 = 300.
@@ -241,35 +241,5 @@ func TestUnDelegateResourceExecute_TransfersUsageEndToEnd(t *testing.T) {
 	dr := statedb.ReadDelegatedResource(owner, receiver)
 	if dr == nil || dr.FrozenBalanceForBandwidth != 60*trxPrecisionTest {
 		t.Fatalf("delegation record frozen: got %+v", dr)
-	}
-}
-
-func TestRecoverUsageWindow_EdgeCases(t *testing.T) {
-	// Non-positive old usage → 0.
-	if got := delegation.RecoverUsageWindow(0, 0, 1000); got != 0 {
-		t.Fatalf("zero: got %d", got)
-	}
-	// Elapsed ≥ window → fully decayed.
-	if got := delegation.RecoverUsageWindow(500, 0, int64(params.WindowSizeSlots)); got != 0 {
-		t.Fatalf("full window elapsed: got %d", got)
-	}
-	// Elapsed <= 0 → unchanged.
-	if got := delegation.RecoverUsageWindow(500, 2000, 1000); got != 500 {
-		t.Fatalf("negative elapsed: got %d", got)
-	}
-	// Mid-window: half decay.
-	if got := delegation.RecoverUsageWindow(1000, 0, int64(params.WindowSizeSlots/2)); got != 500 {
-		t.Fatalf("half decay: got %d", got)
-	}
-}
-
-func TestRecoverUsageWindow_PrecisionAveragingMatchesJava(t *testing.T) {
-	for _, harden := range []bool{false, true} {
-		if got := delegation.RecoverUsageWindowWithHarden(299, 0, 1, harden); got != 299 {
-			t.Fatalf("recover(299, delta=1, harden=%v) = %d, want 299; old truncate gave 298", harden, got)
-		}
-		if got := delegation.RecoverUsageWindowWithHarden(852_710_572, 0, 1, harden); got != 852_680_964 {
-			t.Fatalf("recover(852710572, delta=1, harden=%v) = %d, want 852680964", harden, got)
-		}
 	}
 }

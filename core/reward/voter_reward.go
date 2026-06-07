@@ -47,7 +47,16 @@ func ComputeVoterReward(store SnapshotReader, dp *state.DynamicProperties, votes
 		if newAlgoCycle < oldEnd {
 			oldEnd = newAlgoCycle
 		}
-		reward += oldRewardSum(store, votes, beginCycle, oldEnd)
+		// java MortgageService.getOldReward branches on allowOldRewardOpt (#79):
+		// when ON it telescopes the cumulative VI over the whole old segment with a
+		// SINGLE divide; when OFF it truncates per cycle. The legacy per-cycle floor
+		// loses up to 1 SUN per old cycle relative to java's opt path — a latent
+		// reward (balance) fork once #79 is active.
+		if dp.AllowOldRewardOpt() {
+			reward += oldRewardSumOpt(store, votes, beginCycle, oldEnd)
+		} else {
+			reward += oldRewardSum(store, votes, beginCycle, oldEnd)
+		}
 		beginCycle = oldEnd
 	}
 	if beginCycle < endCycle {
@@ -62,6 +71,46 @@ func ComputeVoterReward(store SnapshotReader, dp *state.DynamicProperties, votes
 			share.Quo(share, DecimalOfViReward)
 			reward += share.Int64()
 		}
+	}
+	return reward
+}
+
+// oldRewardSumOpt computes the old-segment voter reward via VI telescoping, the
+// path java takes when allowOldRewardOpt (#79) is ON. java reads two cumulative
+// VI snapshots from the offline reward-vi store —
+// getNewRewardAlgorithmReward = (getWitnessVi(end-1) - getWitnessVi(begin-1)) *
+// vote / DECIMAL — but that difference is exactly the sum of the per-cycle VI
+// deltas over [begin, end), so we recompute it on demand from the per-cycle
+// reward/vote snapshots go-tron already keeps (the same ones oldRewardSum reads).
+// This is byte-identical to java's two-store scheme (the cumulative offset
+// getWitnessVi(begin-1) cancels) WITHOUT changing the maintenance write set.
+//
+// The per-cycle delta and skip conditions mirror RewardViCalService
+// .accumulateWitnessVi exactly: delta = reward * 1e18 / vote (floor), skipping a
+// cycle only when reward == 0 || vote == 0 (getReward returns 0 and getWitnessVote
+// returns REMARK == -1 when absent, so an absent cycle has reward == 0 and is
+// skipped). The whole-segment delta is floored ONCE per witness, matching java's
+// single divide and signum guard.
+func oldRewardSumOpt(store SnapshotReader, votes []VoteEntry, begin, end int64) int64 {
+	var reward int64
+	for _, v := range votes {
+		viSum := new(big.Int)
+		for cycle := begin; cycle < end; cycle++ {
+			totalReward := store.ReadCycleReward(cycle, v.Witness.Bytes())
+			totalVote := store.ReadCycleVote(cycle, v.Witness.Bytes())
+			if totalReward == 0 || totalVote == 0 {
+				continue
+			}
+			delta := new(big.Int).Mul(big.NewInt(totalReward), DecimalOfViReward)
+			delta.Quo(delta, big.NewInt(totalVote))
+			viSum.Add(viSum, delta)
+		}
+		if viSum.Sign() <= 0 {
+			continue
+		}
+		share := new(big.Int).Mul(viSum, big.NewInt(v.Count))
+		share.Quo(share, DecimalOfViReward)
+		reward += share.Int64()
 	}
 	return reward
 }

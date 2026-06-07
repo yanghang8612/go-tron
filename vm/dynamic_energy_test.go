@@ -250,6 +250,31 @@ func newTestTVMWithFactor(t *testing.T, addr tcommon.Address, factor int64) (*TV
 // table; only the inline `contract.UseEnergy` path charged them, bypassing
 // the factor entirely. java-tron VM.play charges factor on the full
 // `op.getEnergyCost(program)` return value.
+// TestUseEnergy_DynamicPenaltySingleFloorAcrossChunks pins the fix for the
+// per-chunk penalty truncation: an opcode that charges its base across multiple
+// useEnergy calls must accrue a penalty equal to a SINGLE floor over the whole
+// op cost (java VM.play computes one `energy*factor/DECIMAL - energy`). Two base-3
+// chunks at 1.5×: java penalty = floor(6*1.5)-6 = 3 → total 9; the old per-chunk
+// flooring gave (floor(4.5)-3)+(floor(4.5)-3) = 1+1 = 2 → total 8 (undercharge).
+func TestUseEnergy_DynamicPenaltySingleFloorAcrossChunks(t *testing.T) {
+	tvm, _, _ := newTestTVMWithDB(t)
+	in := tvm.interpreter
+	in.tvmConfig.DynamicEnergy = true
+	in.factor = 15000  // 1.5×
+	in.opBaseAccum = 0 // start of an op (loop resets this per op)
+
+	contract := NewContract(tcommon.Address{}, tcommon.Address{0x41, 0x01}, 0, 1_000_000)
+	if !in.useEnergy(contract, 3) {
+		t.Fatal("chunk1 out of energy")
+	}
+	if !in.useEnergy(contract, 3) {
+		t.Fatal("chunk2 out of energy")
+	}
+	if used := uint64(1_000_000) - contract.Energy; used != 9 {
+		t.Fatalf("two base-3 chunks at 1.5x: charged %d, want 9 (single floor); old per-chunk gave 8", used)
+	}
+}
+
 func TestInterpreter_DynamicEnergyPenalty_MemoryOps(t *testing.T) {
 	// Factor 5000 → effective multiplier 15000/10000 = 1.5×.
 	// All arithmetic below is verified against java-tron's VM.play formula:

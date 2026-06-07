@@ -2,6 +2,7 @@ package vm
 
 import (
 	"crypto/sha256"
+	"errors"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -9,6 +10,35 @@ import (
 	"github.com/tronprotocol/go-tron/crypto"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
+
+// TestValidateMultiSignShortInputRaisesUnknown pins divergence #5: java
+// PrecompiledContracts.ValidateMultiSign reads words[0..3] (DataWord.parseArray)
+// BEFORE its inner try/catch, so an input shorter than 4 words (128 bytes) throws
+// an uncaught ArrayIndexOutOfBoundsException → VM.java spendAllEnergy + rethrow →
+// RuntimeImpl.setResultCode falls through to contractResult.UNKNOWN(13). gtron
+// previously returned DATA_FALSE+success — a latent fork. The fix surfaces
+// ErrPrecompileUnknown (maps to UNKNOWN(13) via contractRetFromError's default and
+// propagates from sub-calls so the whole tx fails, mirroring java).
+func TestValidateMultiSignShortInputRaisesUnknown(t *testing.T) {
+	tvm, _, _ := newTestTVMWithDB(t)
+	for _, n := range []int{0, 1, 32, 64, 96, 127} {
+		_, _, success, err := (&validateMultiSign{}).RunWithStatus(tvm, zeroCaller, make([]byte, n), 1500)
+		if !errors.Is(err, ErrPrecompileUnknown) {
+			t.Fatalf("len=%d: err = %v, want ErrPrecompileUnknown (java UNKNOWN path)", n, err)
+		}
+		if success {
+			t.Fatalf("len=%d: success = true, want false (uncaught exception)", n)
+		}
+	}
+	// Exactly 4 words (128 bytes) clears the words[0..3] access — must NOT raise.
+	if _, _, _, err := (&validateMultiSign{}).RunWithStatus(tvm, zeroCaller, make([]byte, 128), 1500); errors.Is(err, ErrPrecompileUnknown) {
+		t.Fatalf("len=128 (4 words) must not raise the short-input exception, got %v", err)
+	}
+	// java fails the whole tx (the AIOOBE is not contained at the CALL boundary).
+	if !shouldPropagateCallError(ErrPrecompileUnknown) {
+		t.Fatal("ErrPrecompileUnknown must propagate from sub-calls")
+	}
+}
 
 func validateMultiSignInput(owner tcommon.Address, permID int64, msgData, sig []byte) []byte {
 	input := make([]byte, 10*32)

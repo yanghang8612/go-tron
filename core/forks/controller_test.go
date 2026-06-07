@@ -78,26 +78,26 @@ func TestForkController_Pass_TimeGateBlocksEarly(t *testing.T) {
 func TestForkController_Pass_RateGateRequiresQuorum(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	fc := NewForkController(db)
-	// 21 of 27 slots vote upgrade — just under 80% (21.6).
-	for i := 0; i < 21; i++ {
+	// v35 (VERSION_4_8_1_1) requires 70%: ceil(0.70*27)=19. 18 is just under.
+	for i := 0; i < 18; i++ {
 		fc.Update(35, i, 27)
 	}
 	now := blockTimeAfterFork(35)
 	if fc.Pass(35, now, maintenanceInterval) {
-		t.Error("Pass(35) with 21/27 votes (< 22 required) must be false")
+		t.Error("Pass(35) with 18/27 votes (< 19 required) must be false")
 	}
 }
 
 func TestForkController_Pass_AtThreshold(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	fc := NewForkController(db)
-	// 22 of 27 = ceil(80% * 27) = 22.
-	for i := 0; i < 22; i++ {
+	// 19 of 27 = ceil(70% * 27) = 19 (v35 VERSION_4_8_1_1 rate).
+	for i := 0; i < 19; i++ {
 		fc.Update(35, i, 27)
 	}
 	now := blockTimeAfterFork(35)
 	if !fc.Pass(35, now, maintenanceInterval) {
-		t.Error("Pass(35) with 22/27 votes must be true (== ceil(80% * 27))")
+		t.Error("Pass(35) with 19/27 votes must be true (== ceil(70% * 27))")
 	}
 }
 
@@ -255,5 +255,39 @@ func TestForkController_UpdateBatchesReadsAndSkipsNoopWrites(t *testing.T) {
 	}
 	if store.writes != 0 {
 		t.Fatalf("repeat update writes = %d, want 0", store.writes)
+	}
+}
+
+// TestForkController_Reset_BoundaryTimestampSensitivity pins the fix for the
+// reset-timestamp source: java Manager calls forkController.reset() BEFORE
+// updateDynamicProperties, so reset's pass() reads the PREVIOUS block's
+// timestamp. At the maintenance boundary that first crosses a version's aligned
+// hard-fork time, a rate-met bitmap must be CLEARED (pass(prevTs<aligned)=false),
+// not KEPT — otherwise gtron reports pass(version)=true ~1 cycle before java.
+func TestForkController_Reset_BoundaryTimestampSensitivity(t *testing.T) {
+	vp, _ := lookupVersion(35)
+	aligned := ((vp.HardForkTime-1)/maintenanceInterval + 1) * maintenanceInterval
+	const required = 19 // ceil(70% * 27) for VERSION_4_8_1_1
+
+	// prevTs (aligned-1): java's reset timestamp at the crossing boundary → CLEAR.
+	dbPrev := rawdb.NewMemoryDatabase()
+	fcPrev := NewForkController(dbPrev)
+	for i := 0; i < required; i++ {
+		fcPrev.Update(35, i, 27)
+	}
+	fcPrev.Reset(aligned-1, maintenanceInterval, 27)
+	if fcPrev.Pass(35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("Reset at prev-block ts (< aligned) must CLEAR the rate-met bitmap (java parity)")
+	}
+
+	// currentTs (aligned): the old gtron behavior kept the bitmap.
+	dbCur := rawdb.NewMemoryDatabase()
+	fcCur := NewForkController(dbCur)
+	for i := 0; i < required; i++ {
+		fcCur.Update(35, i, 27)
+	}
+	fcCur.Reset(aligned, maintenanceInterval, 27)
+	if !fcCur.Pass(35, blockTimeAfterFork(35), maintenanceInterval) {
+		t.Fatal("sanity: Reset at >= aligned with rate met keeps the bitmap")
 	}
 }

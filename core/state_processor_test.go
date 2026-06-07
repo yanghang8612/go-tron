@@ -175,6 +175,70 @@ func TestApplyTransaction_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
 	}
 }
 
+// TestApplyTransaction_InBlockExpirationLowerBound pins java Manager.validateCommon's
+// in-block expiration LOWER bound (active once consensus_logic_optimization is on):
+// the tx must not be expired as of the next block slot. With prevBlockTime=1000 and
+// StateFlag=0, nextSlotTime = 1000 + 1*3000 = 4000, so an expiration in (1000, 4000)
+// is accepted with the flag off but rejected with it on.
+func TestApplyTransaction_InBlockExpirationLowerBound(t *testing.T) {
+	run := func(clo bool, expiration int64) error {
+		statedb := newTestState(t)
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetConsensusLogicOptimization(clo)
+		statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+		statedb.AddBalance(testProcessorAddr(1), 20_000_000)
+		statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+		tx := makeTestTransferTx(1, 2, 1)
+		tx.Proto().RawData.Expiration = expiration
+		_, err := applyTransaction(
+			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+		)
+		return err
+	}
+
+	if err := run(false, 2000); err != nil {
+		t.Fatalf("CLO off: sub-slot expiration must pass (base bound only), got %v", err)
+	}
+	if err := run(true, 2000); !errors.Is(err, ErrTransactionExpiration) {
+		t.Fatalf("CLO on: expiration < nextSlotTime must be rejected, got %v", err)
+	}
+	if err := run(true, 5000); err != nil {
+		t.Fatalf("CLO on: expiration >= nextSlotTime must pass, got %v", err)
+	}
+}
+
+// TestApplyTransaction_RejectsOversizedResult pins java BandwidthProcessor
+// .consume's always-on (in-block) getResultSerializedSize() > 64*contractCount
+// reject. A normal/no ret passes; a result padded past 64 bytes is rejected.
+func TestApplyTransaction_RejectsOversizedResult(t *testing.T) {
+	run := func(orderIDLen int) error {
+		statedb := newTestState(t)
+		dynProps := state.NewDynamicProperties()
+		statedb.CreateAccount(testProcessorAddr(1), corepb.AccountType_Normal)
+		statedb.AddBalance(testProcessorAddr(1), 20_000_000)
+		statedb.CreateAccount(testProcessorAddr(2), corepb.AccountType_Normal)
+
+		tx := makeTestTransferTx(1, 2, 1)
+		if orderIDLen > 0 {
+			tx.Proto().Ret = []*corepb.Transaction_Result{{OrderId: make([]byte, orderIDLen)}}
+		}
+		_, err := applyTransaction(
+			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+		)
+		return err
+	}
+
+	if err := run(0); err != nil {
+		t.Fatalf("no ret: expected accept, got %v", err)
+	}
+	if err := run(100); !errors.Is(err, ErrTransactionResultTooLarge) {
+		t.Fatalf("oversized ret (100-byte OrderId > 64): expected ErrTransactionResultTooLarge, got %v", err)
+	}
+}
+
 func TestProcessBlock_WithTransactions(t *testing.T) {
 	statedb := newTestState(t)
 	dynProps := state.NewDynamicProperties()
