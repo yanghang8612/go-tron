@@ -64,9 +64,32 @@ type syncPeerState struct {
 	done            bool
 }
 
+// bufferedSyncBlock holds an out-of-order sync block awaiting contiguous
+// drain. It stores the raw wire bytes (one []byte, no inner pointers) plus
+// light metadata rather than the decoded *types.Block: a decoded block pins its
+// whole proto tree (~80k pointer-rich objects), so on a busy chain the buffered
+// backlog balloons the GC mark set (≈12 GB / 161 M live objects observed on
+// the Nile node, ~70% CPU in GC). The full block is decoded lazily at drain.
 type bufferedSyncBlock struct {
-	block *types.Block
-	peer  *p2p.Peer
+	raw  []byte
+	hash tcommon.Hash
+	num  uint64
+	peer *p2p.Peer
+}
+
+// bufferRawBlockBytes returns a self-owned copy of the block's wire bytes for
+// the sync buffer. `raw` is the exact payload received off the wire; we copy it
+// so the buffer never aliases a frame the p2p codec may later reuse. Callers
+// without the original bytes (tests, or any non-wire path) pass nil and we
+// re-marshal from the decoded block.
+func bufferRawBlockBytes(block *types.Block, raw []byte) []byte {
+	if len(raw) == 0 {
+		b, _ := block.Marshal()
+		return b
+	}
+	out := make([]byte, len(raw))
+	copy(out, raw)
+	return out
 }
 
 type bufferedSyncBatch struct {
@@ -911,8 +934,11 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 }
 
 // HandleBlock processes a received block during sync.
-// Returns true if the block was consumed by sync, false if it should be handled as a broadcast.
-func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
+// Returns true if the block was consumed by sync, false if it should be handled
+// as a broadcast. `raw` is the block's exact wire bytes (the decode source);
+// the buffer stores those rather than the decoded block. Callers without the
+// original bytes may pass nil — they are re-marshaled from `block`.
+func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byte) bool {
 	if ss.stopping.Load() {
 		return true
 	}
@@ -964,12 +990,17 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block) bool {
 	if blockNum > ss.chain.CurrentBlock().Number() {
 		bid := types.BlockID{Hash: blockHash, Num: blockNum}
 		if existing, ok := ss.blockBuffer[blockNum]; ok {
-			if existing.block.Hash() != blockHash {
+			if existing.hash != blockHash {
 				syncLog.Debug("Dropping conflicting buffered sync block",
-					"number", blockNum, "hash", blockHash, "kept", existing.block.Hash(), "peer", peer.ID())
+					"number", blockNum, "hash", blockHash, "kept", existing.hash, "peer", peer.ID())
 			}
 		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
-			ss.blockBuffer[blockNum] = bufferedSyncBlock{block: block, peer: peer}
+			ss.blockBuffer[blockNum] = bufferedSyncBlock{
+				raw:  bufferRawBlockBytes(block, raw),
+				hash: blockHash,
+				num:  blockNum,
+				peer: peer,
+			}
 			ss.bufferedHash[blockHash] = struct{}{}
 		}
 	}
@@ -1023,7 +1054,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		batch := ss.popBufferedSyncBatchLocked(now)
-		if len(batch.blocks) == 0 {
+		if len(batch.buffered) == 0 {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
@@ -1040,6 +1071,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.mu.Unlock()
+		// Decode off-lock — see decodeBatchBlocks. Keeps the heavy proto work
+		// off the central sync mutex so receiving peers aren't stalled.
+		ss.decodeBatchBlocks(&batch)
+		if len(batch.blocks) == 0 {
+			// Every popped block failed to decode (can't happen for validated
+			// wire bytes). The entries were already removed at pop, so loop to
+			// re-pop the next run or hit the gap.
+			continue
+		}
 		for _, wait := range batch.bufferWaits {
 			ss.stats.AddBufferWait(wait)
 		}
@@ -1056,11 +1096,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			}
 			applied = failed
 			ss.recordImportedBatch(batch, applied, insertElapsed)
-			failedBlock := batch.buffered[failed].block
-			var failedNum uint64
-			if failedBlock != nil {
-				failedNum = failedBlock.Number()
-			} else if rangeErr != nil {
+			failedNum := batch.buffered[failed].num
+			if failedNum == 0 && rangeErr != nil {
 				failedNum = rangeErr.BlockNumber
 			}
 			ss.pauseSync(batch.buffered[failed].peer, failedNum, insertErr)
@@ -1085,21 +1122,45 @@ func (ss *SyncService) waitForDrain() {
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
 	var batch bufferedSyncBatch
-	for len(batch.blocks) < maxFetchBatch {
+	for len(batch.buffered) < maxFetchBatch {
 		buffered, ok := ss.blockBuffer[next]
 		if !ok {
 			break
 		}
 		batch.bufferWaits = append(batch.bufferWaits, ss.endBufferWaitLocked(next, now))
 		delete(ss.blockBuffer, next)
-		if buffered.block != nil {
-			delete(ss.bufferedHash, buffered.block.Hash())
-		}
+		// Drop the path reservation too. Without this blockPath grows by one
+		// entry per synced block for the whole session (never pruned until
+		// Stop) — a ~1 GB leak on a from-genesis re-sync. Once a block is
+		// popped for insertion the canonical chain (or the sticky pause on
+		// failure) owns that number, so the fork-conflict guard no longer
+		// needs the reservation.
+		delete(ss.blockPath, next)
+		delete(ss.bufferedHash, buffered.hash)
 		batch.buffered = append(batch.buffered, buffered)
-		batch.blocks = append(batch.blocks, buffered.block)
 		next++
 	}
 	return batch
+}
+
+// decodeBatchBlocks decodes the popped raw blocks into batch.blocks. It runs
+// OFF ss.mu — a full proto decode per block (up to maxFetchBatch, and largest
+// in exactly the full-block era this raw buffer targets) is far too heavy to
+// hold the sync lock across, and InsertBlocks already runs off-lock. A decode
+// error (can't happen for bytes that already decoded at receive) truncates the
+// batch; the dropped suffix was removed from the buffer at pop, so it is simply
+// re-fetched.
+func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
+	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
+	for i := range batch.buffered {
+		blk, err := types.UnmarshalBlock(batch.buffered[i].raw)
+		if err != nil {
+			syncLog.Error("Dropping undecodable buffered sync block",
+				"number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
+			return
+		}
+		batch.blocks = append(batch.blocks, blk)
+	}
 }
 
 func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration) {
@@ -1107,8 +1168,8 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 		return
 	}
 	var txs int
-	for i := 0; i < applied; i++ {
-		if block := batch.buffered[i].block; block != nil {
+	for i := 0; i < applied && i < len(batch.blocks); i++ {
+		if block := batch.blocks[i]; block != nil {
 			txs += len(block.Transactions())
 		}
 	}
@@ -1136,11 +1197,7 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 
 	if emit {
 		last := batch.buffered[applied-1]
-		var head uint64
-		if last.block != nil {
-			head = last.block.Number()
-		}
-		ss.reportSegment(snap, diag, head, remain, last.peer)
+		ss.reportSegment(snap, diag, last.num, remain, last.peer)
 	}
 }
 

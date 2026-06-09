@@ -505,8 +505,10 @@ func (h *TronHandler) handleBlock(peer *p2p.Peer, payload []byte) {
 	}
 	block := types.NewBlockFromPB(&pbBlock)
 
-	// If sync service handles it (sequential sync), defer to it
-	if h.syncService != nil && h.syncService.HandleBlock(peer, block) {
+	// If sync service handles it (sequential sync), defer to it. Pass the raw
+	// wire payload so the sync buffer can retain the undecoded bytes instead of
+	// the pointer-rich decoded block.
+	if h.syncService != nil && h.syncService.HandleBlock(peer, block, payload) {
 		return
 	}
 
