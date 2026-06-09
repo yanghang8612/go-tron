@@ -188,6 +188,21 @@ func useEnergyForBill(ctx *Context, addr common.Address, usage int64, success bo
 		// the same result.
 		harden := dp != nil && dp.AllowHardenResourceCalculation()
 		recovered := computeEnergyIncreaseGlobal(oldUsage, 0, oldTime, now, harden)
+		// Mirror java EnergyProcessor.useEnergy's early `return false`: in the
+		// pre-AllowTvmFreeze (and pre-Stake-2.0) era, when the charge cannot be
+		// covered from the entitled limit (`usage > limit - recovered`), java exits
+		// WITHOUT persisting — it leaves energy_usage + latestConsumeTime stale and
+		// defers the decay. go-tron must do the same: an eager per-call recover+write
+		// here preserves MORE usage than java's single deferred decay (sliding-window
+		// recovery is sub-multiplicative), drifting the account's available stake-
+		// energy low and burning energy java covers (the Nile 9,220,578 stall, where a
+		// 10M-TRX energy stake collapsed the limit far below stored usage).
+		if dp != nil && !dp.AllowTvmFreeze() {
+			if acct := ctx.State.GetAccount(addr); acct != nil &&
+				usage > calcAccountEnergyLimit(acct, dp)-recovered {
+				return
+			}
+		}
 		final := computeEnergyIncreaseGlobal(recovered, usage, now, now, harden)
 		ctx.State.SetEnergyUsage(addr, final)
 		ctx.State.SetLatestConsumeTimeForEnergy(addr, now)

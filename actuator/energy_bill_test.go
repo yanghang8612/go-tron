@@ -749,6 +749,15 @@ func TestPayEnergyBill_OriginSplit_PercentHundred_RefreshesStaleOrigin(t *testin
 	ctx.State.CreateAccount(origin, corepb.AccountType_Normal)
 	ctx.State.SetEnergyUsage(origin, staleUsage)
 	ctx.State.SetLatestConsumeTimeForEnergy(origin, oldLct)
+	// Give the origin a real energy stake so it is NOT over-depleted — only then does
+	// java's useEnergy(origin,0) actually WRITE the refresh (it return-false-skips a
+	// no-stake/over-depleted account). The real 8,825,873 origin had stake; this keeps
+	// the test guarding 684b952 (the zero-charge refresh CALL) under the java-faithful
+	// over-depleted write-skip.
+	originAcct := ctx.State.GetAccount(origin)
+	originAcct.AddFrozenEnergy(params.TRXPrecision, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1_000_000_000) // origin limit 1e9 >> recovered
 
 	const totalEnergy = int64(12_979) // mirrors the live 41187902 trc20 call @8801970
 	result := &Result{EnergyUsageTotal: totalEnergy, ContractRet: 1}
@@ -809,5 +818,81 @@ func TestPayEnergyBill_OriginSplit_CallerEqualsOrigin(t *testing.T) {
 	expectedFee := totalEnergy * 100
 	if result.EnergyFee != expectedFee {
 		t.Errorf("EnergyFee = %d, want %d", result.EnergyFee, expectedFee)
+	}
+}
+
+// ── over-depleted burn: mirror java EnergyProcessor.useEnergy return-false-NO-WRITE ──
+//
+// When stored energy_usage already exceeds the entitled limit (over-depleted — e.g.
+// right after a large stake-for-energy elsewhere collapses TotalEnergyWeight, the
+// Nile 9,220,578 stall) AND AllowTvmFreeze is not yet active AND pre-Stake-2.0,
+// java's useEnergy `return false`s WITHOUT persisting: it leaves energy_usage +
+// latestConsumeTime stale and DEFERS the decay. go-tron's useEnergyForBill must do
+// the same — its eager per-call recover+write preserves more usage than java's single
+// deferred decay (sliding-window recovery is sub-multiplicative), drifting available
+// stake-energy low and burning energy java would have covered.
+
+// setupOverDepleted builds a ctx where `owner` has a 1-TRX energy stake (limit 1000)
+// and stored energy_usage `oldUsage` at slot `oldLct`, with now = slot 1000.
+func setupOverDepleted(t *testing.T, owner tcommon.Address, oldUsage, oldLct int64) *Context {
+	t.Helper()
+	ctx := newEnergyBillCtx(t, owner)
+	ctx.HeadSlot = 1000 // now
+	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
+	acct := ctx.State.GetAccount(owner)
+	acct.AddFrozenEnergy(params.TRXPrecision, ctx.BlockTime+10_000_000) // 1 TRX self-stake
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1000) // limit = 1 * 1000/1 = 1000
+	ctx.State.SetEnergyUsage(owner, oldUsage)
+	ctx.State.SetLatestConsumeTimeForEnergy(owner, oldLct)
+	return ctx
+}
+
+func TestUseEnergyForBill_overDepletedBurn_doesNotWrite(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x99, 0x07}
+	const oldUsage, oldLct = int64(5000), int64(100) // usage 5000 > limit 1000 → over-depleted
+	ctx := setupOverDepleted(t, owner, oldUsage, oldLct)
+	// pre-AllowTvmFreeze, pre-Stake-2.0 (both default false)
+
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime()); got != 0 {
+		t.Fatalf("precondition: available = %d, want 0 (over-depleted)", got)
+	}
+
+	useEnergyForBill(ctx, owner, 0, false) // burn (stakeUsed == 0)
+
+	if got := ctx.State.GetEnergyUsage(owner); got != oldUsage {
+		t.Errorf("energy_usage = %d, want %d unchanged (java defers the decay, no write)", got, oldUsage)
+	}
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(owner); got != oldLct {
+		t.Errorf("latest_consume_time_for_energy = %d, want %d unchanged", got, oldLct)
+	}
+}
+
+func TestUseEnergyForBill_overDepletedBurn_writesWhenAllowTvmFreeze(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x99, 0x08}
+	const oldUsage, oldLct = int64(5000), int64(100)
+	ctx := setupOverDepleted(t, owner, oldUsage, oldLct)
+	ctx.DynProps.SetAllowTvmFreeze(true) // java's skip guard requires AllowTvmFreeze==0; with it on, java writes
+
+	useEnergyForBill(ctx, owner, 0, false)
+
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(owner); got != ctx.HeadSlot {
+		t.Errorf("latest_consume_time_for_energy = %d, want %d (AllowTvmFreeze on → write, not skip)", got, ctx.HeadSlot)
+	}
+}
+
+func TestUseEnergyForBill_notOverDepleted_writes(t *testing.T) {
+	owner := tcommon.Address{0x41, 0x99, 0x0a}
+	const oldUsage, oldLct = int64(500), int64(100) // usage 500 < limit 1000 → NOT over-depleted
+	ctx := setupOverDepleted(t, owner, oldUsage, oldLct)
+
+	if got := availableAccountEnergyForBill(ctx.State, ctx.DynProps, owner, ctx.ResourceTime()); got <= 0 {
+		t.Fatalf("precondition: available = %d, want > 0 (not over-depleted)", got)
+	}
+
+	useEnergyForBill(ctx, owner, 0, false)
+
+	if got := ctx.State.GetLatestConsumeTimeForEnergy(owner); got != ctx.HeadSlot {
+		t.Errorf("latest_consume_time_for_energy = %d, want %d (not over-depleted → refreshes)", got, ctx.HeadSlot)
 	}
 }

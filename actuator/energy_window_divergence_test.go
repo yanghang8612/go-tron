@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -205,6 +206,13 @@ func TestUseEnergyForBill_NonV2_GlobalWindowUnchanged(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetEnergyUsage(owner, 1_000_000)
 	ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.HeadSlot-7_200)
+	// Stake enough that the account is NOT over-depleted, so the settle WRITES (this
+	// test exercises the recover+add formula). java's useEnergy return-false-skips a
+	// no-stake/over-depleted account; the recover/add values are stake-independent.
+	acct := ctx.State.GetAccount(owner)
+	acct.AddFrozenEnergy(params.TRXPrecision, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1_000_000_000)
 
 	useEnergyForBill(ctx, owner, 50_000, true)
 
@@ -263,6 +271,15 @@ func TestUseEnergyForBill_PreStake2RecoverDrift(t *testing.T) {
 	ctx.State.CreateAccount(owner, corepb.AccountType_Normal)
 	ctx.State.SetEnergyUsage(owner, 852_710_572)
 	ctx.State.SetLatestConsumeTimeForEnergy(owner, ctx.HeadSlot-1) // delta=1 slot
+	// Stake enough that the account is NOT over-depleted (limit >> recovered+usage), so
+	// the settle WRITES — this test exercises the recover+add FORMULA, not the skip path.
+	// java's useEnergy only return-false-skips when the charge exceeds the available limit
+	// (see TestUseEnergyForBill_overDepletedBurn_* in energy_bill_test.go); the real
+	// 8,825,873 origin had stake. recover/add values are stake-independent (852_694_782).
+	acct := ctx.State.GetAccount(owner)
+	acct.AddFrozenEnergy(params.TRXPrecision, ctx.BlockTime+10_000_000)
+	ctx.DynProps.SetTotalEnergyWeight(1)
+	ctx.DynProps.SetTotalEnergyCurrentLimit(1_000_000_000) // limit 1e9 >> recovered+usage
 
 	useEnergyForBill(ctx, owner, 13_818, true)
 
