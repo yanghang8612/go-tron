@@ -144,7 +144,10 @@ func (b *TronBackend) TotalTransaction() int64 {
 |------|-----------|
 | `TestConsumeMultiSignFee_charged` | Multi-sig tx with allow_multi_sign=1: owner balance decreases by multi_sign_fee |
 | `TestConsumeMultiSignFee_skipped_single_sig` | Single-sig tx: no fee charged |
-| `TestConsumeMultiSignFee_skipped_flag_off` | allow_multi_sign=0: no fee charged |
+| `TestConsumeMultiSignFee_charged_regardless_of_allow_multisign` | allow_multi_sign=0 but >1 sig: fee STILL charged (java has no AllowMultiSign guard) |
+| `TestConsumeMultiSignFee_shielded_transparent_from` | 2-sig ShieldedTransferContract (Nile blk 1,818,883): transparent_from owner charged 1,000,000 |
+| `TestConsumeMemoFee_shielded_transparent_from` | Shielded tx with memo + transparent_from: owner charged memo_fee |
+| `TestConsumeFee_shielded_empty_transparent_from` | Fully-shielded (empty transparent_from): no multi-sign/memo fee (java getOwner → new byte[0]) |
 | `TestConsumeMemoFee_charged` | Tx with non-empty data, memo_fee=500: owner balance decreases by 500 |
 | `TestConsumeMemoFee_skipped_empty` | Tx with empty data: no fee charged |
 | `TestConsumeMemoFee_skipped_zero_fee` | memo_fee=0: no fee charged |
