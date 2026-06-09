@@ -75,7 +75,7 @@ func TestPartialBatchRearmsFetchTimer(t *testing.T) {
 	// Peer delivers only block 1 of the batch and then goes silent. The
 	// HandleBlock path used to stop the timer without re-arming — leaving
 	// inflight=1 and no timer.
-	consumed := ss.HandleBlock(peer, first)
+	consumed := ss.HandleBlock(peer, first, nil)
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}
@@ -120,7 +120,7 @@ func TestUnrequestedSyncPeerBlockDoesNotPauseOrDrainBatch(t *testing.T) {
 	ss.pending = map[tcommon.Hash]uint64{requested.Hash(): requested.Number()}
 	ss.mu.Unlock()
 
-	consumed := ss.HandleBlock(peer, unrequested)
+	consumed := ss.HandleBlock(peer, unrequested, nil)
 	if !consumed {
 		t.Fatal("unexpected block from sync peer should be consumed and dropped")
 	}
@@ -334,7 +334,7 @@ func TestInsertFailurePausesSync(t *testing.T) {
 	ss.pending = map[tcommon.Hash]uint64{badBlock.Hash(): badBlock.Number()}
 	ss.mu.Unlock()
 
-	consumed := ss.HandleBlock(peer, badBlock)
+	consumed := ss.HandleBlock(peer, badBlock, nil)
 	if !consumed {
 		t.Fatal("HandleBlock should have consumed the block while syncing")
 	}

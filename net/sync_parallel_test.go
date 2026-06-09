@@ -77,14 +77,14 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	markPendingLocked(ss, psB, block2.ID())
 	ss.mu.Unlock()
 
-	if !ss.HandleBlock(peerB, block2) {
+	if !ss.HandleBlock(peerB, block2, nil) {
 		t.Fatal("block 2 should be consumed by sync")
 	}
 	if got := bc.CurrentBlock().Number(); got != 0 {
 		t.Fatalf("out-of-order block should stay buffered, head=%d", got)
 	}
 
-	if !ss.HandleBlock(peerA, block1) {
+	if !ss.HandleBlock(peerA, block1, nil) {
 		t.Fatal("block 1 should be consumed by sync")
 	}
 	if got := bc.CurrentBlock().Number(); got != 2 {
@@ -114,8 +114,8 @@ func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	ss.blockBuffer[1] = bufferedSyncBlock{block: block1, peer: peer}
-	ss.blockBuffer[2] = bufferedSyncBlock{block: block2, peer: peer}
+	ss.blockBuffer[1] = bufferedSyncBlock{raw: rawOf(t, block1), num: 1, hash: block1.Hash(), peer: peer}
+	ss.blockBuffer[2] = bufferedSyncBlock{raw: rawOf(t, block2), num: 2, hash: block2.Hash(), peer: peer}
 	ss.bufferedHash[block1.Hash()] = struct{}{}
 	ss.bufferedHash[block2.Hash()] = struct{}{}
 	ss.mu.Unlock()

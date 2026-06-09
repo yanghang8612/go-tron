@@ -68,7 +68,7 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 		}
 		ss.pending[blk.Hash()] = uint64(i)
 		ss.mu.Unlock()
-		if !ss.HandleBlock(peer, blk) {
+		if !ss.HandleBlock(peer, blk, nil) {
 			t.Fatalf("HandleBlock(%d) returned false", i)
 		}
 		parent = blk.Hash()

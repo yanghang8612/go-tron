@@ -30,7 +30,7 @@ func TestSyncServiceStopConsumesInboundBlocks(t *testing.T) {
 			RawData: &corepb.BlockHeaderRaw{Number: 1},
 		},
 	})
-	if !ss.HandleBlock(nil, block) {
+	if !ss.HandleBlock(nil, block, nil) {
 		t.Fatal("stopped sync service should consume inbound blocks during shutdown")
 	}
 }
