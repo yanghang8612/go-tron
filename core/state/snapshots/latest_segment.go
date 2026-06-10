@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -930,22 +931,31 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 	if manifest == nil {
 		return nil
 	}
+	collector, err := etl.NewCollector(etl.Options{})
+	if err != nil {
+		return fmt.Errorf("snapshots: create latest restore ETL collector: %w", err)
+	}
+	defer collector.Close()
+
+	var matched bool
+	restoreWriter := ethdb.KeyValueWriter(collector)
 	for _, ref := range manifest.Segments {
 		if ref.Kind != SegmentLatest || txNum < ref.FromTxNum || txNum > ref.ToTxNum {
 			continue
 		}
+		matched = true
 		if ref.NormalizedDataset() == SegmentDatasetCommitmentBranch {
 			seg, err := OpenCommitmentBranchSegment(m.dir, ref)
 			if err != nil {
 				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 			}
-			if err := seg.Restore(db); err != nil {
+			if err := seg.Restore(restoreWriter); err != nil {
 				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 			}
 			continue
 		}
 		if isLatestBinarySegmentPath(ref.Path) {
-			if err := restoreLatestBinarySegmentToStore(m.dir, ref, newRawDBLatestHotRestoreStore(db)); err != nil {
+			if err := restoreLatestBinarySegmentToStore(m.dir, ref, newRawDBLatestHotRestoreStore(restoreWriter)); err != nil {
 				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 			}
 			continue
@@ -954,9 +964,15 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 		if err != nil {
 			return err
 		}
-		if err := seg.Restore(db); err != nil {
+		if err := seg.Restore(restoreWriter); err != nil {
 			return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
 		}
+	}
+	if !matched {
+		return nil
+	}
+	if _, err := collector.Load(db); err != nil {
+		return fmt.Errorf("snapshots: load latest restore ETL collector: %w", err)
 	}
 	return nil
 }

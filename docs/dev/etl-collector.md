@@ -1,8 +1,8 @@
 # ETL Collector Runbook
 
-Status: initial library support. The collector is ready for restore, backfill,
-and derived-index builders that need sorted KV writes, but existing callers
-must be migrated deliberately and benchmarked per path.
+Status: initial production integration. Snapshot latest-domain restore now
+loads through the collector; history restore, backfill, and derived-index
+builders still need deliberate migration and path-specific benchmarks.
 
 ## Purpose
 
@@ -18,8 +18,15 @@ key-ordered database writes. go-tron's equivalent starts in
   when the target DB supports batches
 
 This reduces write amplification for large snapshot restore, history backfill,
-and derived index construction once those paths switch from direct unordered
+and derived index construction when those paths switch from direct unordered
 writes to collector-backed loads.
+
+## Current Callers
+
+- `snapshots.Manager.RestoreLatest` restores account-latest, account-KV latest,
+  generation, code, commitment root/checkpoint, and commitment branch latest
+  segments through one collector, then loads the final rawdb key stream in
+  physical key order.
 
 ## Usage
 
@@ -49,7 +56,7 @@ metrics.
 
 ## Migration Targets
 
-- snapshot latest/history restore paths that rebuild many hot rows
+- snapshot history restore paths that rebuild many hot rows
 - chain-index and future transaction-info/event-log sidecar builders
 - derived account/balance trace index backfills
 - any future RPC index build where input order follows block execution rather

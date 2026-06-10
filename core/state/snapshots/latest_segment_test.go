@@ -288,6 +288,134 @@ func TestLatestSegmentRestoreUsesHotStore(t *testing.T) {
 	}
 }
 
+func TestManagerRestoreLatestLoadsThroughSortedETL(t *testing.T) {
+	dir := t.TempDir()
+	owner := latestStoreTestAddress(0x36)
+	code := []byte{0x60, 0x03, 0x60, 0x00}
+	codeHash := common.Keccak256(code)
+
+	type restoreInput struct {
+		ref      SegmentRef
+		entries  []LatestEntry
+		writeRaw func(*latestRestoreOrderWriter) error
+	}
+	inputs := []restoreInput{
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetAccountLatest,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/account.json",
+			},
+			entries: []LatestEntry{{Key: AccountSnapshotKey(owner), Value: []byte("account")}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateAccountLatest(w, owner, []byte("account"))
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetKVLatest,
+				Domain:    kvdomains.SystemReward,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/kv.json",
+			},
+			entries: []LatestEntry{{Key: AccountKVSnapshotKey(owner, 9, []byte("reward/a")), Value: []byte("reward")}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateKVLatest(w, owner, 9, kvdomains.SystemReward, []byte("reward/a"), []byte("reward"))
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetKVGeneration,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/generation.json",
+			},
+			entries: []LatestEntry{{Key: KVGenerationSnapshotKey(owner), Value: rawdb.EncodeStateKVGenerationValue(9)}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateKVGeneration(w, owner, 9)
+			},
+		},
+		{
+			ref: SegmentRef{
+				Dataset:   SegmentDatasetCode,
+				Kind:      SegmentLatest,
+				FromTxNum: 1,
+				ToTxNum:   10,
+				Path:      "latest/code.json",
+			},
+			entries: []LatestEntry{{Key: CodeSnapshotKey(codeHash), Value: code}},
+			writeRaw: func(w *latestRestoreOrderWriter) error {
+				return rawdb.WriteStateCode(w, codeHash, code)
+			},
+		},
+	}
+
+	type keyedRef struct {
+		key []byte
+		ref SegmentRef
+	}
+	refsByPhysicalKey := make([]keyedRef, 0, len(inputs))
+	for _, input := range inputs {
+		ref, err := WriteLatestSegment(dir, input.ref, input.entries)
+		if err != nil {
+			t.Fatalf("write latest segment %s: %v", input.ref.Path, err)
+		}
+		recorder := newLatestRestoreOrderWriter()
+		if err := input.writeRaw(recorder); err != nil {
+			t.Fatalf("capture raw key for %s: %v", input.ref.Path, err)
+		}
+		if len(recorder.putKeys) != 1 {
+			t.Fatalf("capture raw key for %s wrote %d keys, want 1", input.ref.Path, len(recorder.putKeys))
+		}
+		refsByPhysicalKey = append(refsByPhysicalKey, keyedRef{
+			key: recorder.putKeys[0],
+			ref: ref,
+		})
+	}
+	sort.Slice(refsByPhysicalKey, func(i, j int) bool {
+		return bytes.Compare(refsByPhysicalKey[i].key, refsByPhysicalKey[j].key) < 0
+	})
+
+	manifestRefs := make([]SegmentRef, 0, len(refsByPhysicalKey))
+	directOrder := make([][]byte, 0, len(refsByPhysicalKey))
+	for i := len(refsByPhysicalKey) - 1; i >= 0; i-- {
+		manifestRefs = append(manifestRefs, refsByPhysicalKey[i].ref)
+		directOrder = append(directOrder, refsByPhysicalKey[i].key)
+	}
+	if sort.SliceIsSorted(directOrder, func(i, j int) bool {
+		return bytes.Compare(directOrder[i], directOrder[j]) < 0
+	}) {
+		t.Fatal("test setup produced already-sorted direct restore order")
+	}
+	if err := PublishManifest(dir, NewManifest(1, 10, manifestRefs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+
+	writer := newLatestRestoreOrderWriter()
+	if err := mgr.RestoreLatest(writer, 5); err != nil {
+		t.Fatalf("RestoreLatest: %v", err)
+	}
+	expectedKeys := make([][]byte, 0, len(refsByPhysicalKey))
+	for _, keyed := range refsByPhysicalKey {
+		expectedKeys = append(expectedKeys, keyed.key)
+	}
+	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
+		t.Fatalf("restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)
+	}
+	if len(writer.deleteKeys) != 0 {
+		t.Fatalf("restore deletes = %d, want 0", len(writer.deleteKeys))
+	}
+}
+
 func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -348,6 +476,37 @@ func TestLatestSegmentBuildPublishAndRead(t *testing.T) {
 	if _, err := OpenLatestSegment(filepath.Join(dir, "missing"), ref); err == nil {
 		t.Fatal("missing segment accepted")
 	}
+}
+
+type latestRestoreOrderWriter struct {
+	putKeys    [][]byte
+	deleteKeys [][]byte
+}
+
+func newLatestRestoreOrderWriter() *latestRestoreOrderWriter {
+	return &latestRestoreOrderWriter{}
+}
+
+func (w *latestRestoreOrderWriter) Put(key, value []byte) error {
+	w.putKeys = append(w.putKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func (w *latestRestoreOrderWriter) Delete(key []byte) error {
+	w.deleteKeys = append(w.deleteKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func byteSlicesEqual(a, b [][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestLatestBinaryBuildSkipsStaleKVGenerations(t *testing.T) {

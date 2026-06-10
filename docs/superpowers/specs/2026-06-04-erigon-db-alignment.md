@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. The generic temp-run collector is available; restore/backfill/index callers still need migration and benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain snapshot restore now loads through the collector; history restore/backfill/index callers still need migration and benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -591,11 +591,15 @@ Status:
   `ethdb.KeyValueWriter` with optional `ethdb.Batcher` support.
 - Unit coverage pins sorted output order, duplicate-key collapse, delete
   tombstones, multi-run spills, batch flushing, and temporary-directory cleanup.
+- `snapshots.Manager.RestoreLatest` now restores latest-domain snapshot
+  segments through one collector and loads the resulting rawdb writes in
+  physical key order. Regression coverage forces manifest segment order to
+  differ from physical key order and asserts the final restore stream is sorted.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
 
-- Migrate high-volume snapshot restore, history backfill, chain-index build,
+- Migrate state-domain history restore, history backfill, chain-index build,
   and derived RPC index build paths onto the collector where benchmarks show
   lower Pebble write amplification.
 - Add path-specific benchmark samples comparing direct unordered writes versus
