@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders and batches exist. | Partial. No general ETL collector/temp-sort insertion layer. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. The generic temp-run collector is available; restore/backfill/index callers still need migration and benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -582,12 +582,24 @@ Remaining:
 Snapshot builders stream today, but large backfills and derived indexes still
 need a general sorted-ingestion layer.
 
-Needed:
+Status:
 
-- Temp-file collector API for `(key,value)` rows larger than memory.
-- Stable sorting and duplicate merge policy per domain.
-- Batch insertion in key order for Pebble, reducing write amplification during
-  snapshot restore, history backfill, and derived index builds.
+- `core/rawdb/etl` now provides a generic temp-run collector for unordered
+  `Put`/`Delete` operations. It spills sorted runs once the memory buffer fills,
+  k-way merges runs by key, collapses duplicate keys with latest-input-wins
+  semantics, and loads the final key-ordered stream through
+  `ethdb.KeyValueWriter` with optional `ethdb.Batcher` support.
+- Unit coverage pins sorted output order, duplicate-key collapse, delete
+  tombstones, multi-run spills, batch flushing, and temporary-directory cleanup.
+- The runbook is `docs/dev/etl-collector.md`.
+
+Remaining:
+
+- Migrate high-volume snapshot restore, history backfill, chain-index build,
+  and derived RPC index build paths onto the collector where benchmarks show
+  lower Pebble write amplification.
+- Add path-specific benchmark samples comparing direct unordered writes versus
+  collector loads.
 
 ### P3: Accessor Format Evaluation
 
