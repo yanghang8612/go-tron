@@ -656,11 +656,11 @@ func stateChangeInverseKeyPrefix(latestKey []byte) []byte {
 }
 
 // sectionBloomKey builds the section-bloom key: java-tron encodes the
-// (section, bitIndex) composite as a single decimal integer
-// section*1_000_000 + bitIndex, then takes its ASCII bytes.
+// (section, bitIndex) composite as section*1_000_000 + bitIndex, formats it
+// with Long.toHexString, then takes its ASCII bytes.
 func sectionBloomKey(section, bitIndex uint64) []byte {
 	composite := section*1_000_000 + bitIndex
-	return append(append([]byte{}, sectionBloomPrefix...), []byte(strconv.FormatUint(composite, 10))...)
+	return append(append([]byte{}, sectionBloomPrefix...), []byte(strconv.FormatUint(composite, 16))...)
 }
 
 // treeBlockIndexKey builds the tree-block-index key: blockNum big-endian.

@@ -57,6 +57,24 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbRebuildTxIndexesCmd,
 			},
+			{
+				Name:  "rebuild-section-blooms",
+				Usage: "Rebuild java-tron section bloom rows from TransactionInfo logs",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					dbFromBlockFlag,
+					dbToBlockFlag,
+					dbETLTempDirFlag,
+					dbETLBufferMiBFlag,
+					dbETLBatchMiBFlag,
+				},
+				Action: dbRebuildSectionBloomsCmd,
+			},
 		},
 	}
 }
@@ -96,6 +114,50 @@ func dbRebuildTxIndexesCmd(ctx *cli.Context) error {
 		result.TransactionsIndexed,
 		result.BlocksWithTxInfo,
 		result.TransactionInfosIndexed,
+		result.ETL.Applied,
+		result.ETL.SpilledRuns,
+	)
+	return nil
+}
+
+func dbRebuildSectionBloomsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	fromBlock := ctx.Uint64("db.from-block")
+	toBlock, err := dbRebuildToBlock(ctx, chainDB)
+	if err != nil {
+		return err
+	}
+	opts, err := dbETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := rawdb.RebuildSectionBloomsFromTransactionInfos(chainDB, db, db, fromBlock, toBlock, opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Section blooms rebuilt: blocks=[%d,%d] scanned=%d txInfoBlocks=%d logBlocks=%d logs=%d bloomItems=%d bloomBits=%d rows=%d etlApplied=%d etlRuns=%d\n",
+		result.FromBlock,
+		result.ToBlock,
+		result.BlocksScanned,
+		result.BlocksWithTransactionInfos,
+		result.BlocksWithLogs,
+		result.LogEntriesIndexed,
+		result.BloomItemsIndexed,
+		result.BloomBitsIndexed,
+		result.SectionBloomRows,
 		result.ETL.Applied,
 		result.ETL.SpilledRuns,
 	)

@@ -129,6 +129,116 @@ func TestRebuildTransactionDerivedIndexesRejectsBadInputs(t *testing.T) {
 	}
 }
 
+func TestRebuildSectionBloomsFromTransactionInfos(t *testing.T) {
+	db := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	infos[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: []byte{0x11, 0x22, 0x33, 0x44, 0x55},
+		Topics: [][]byte{
+			{0xaa, 0xbb, 0xcc},
+			{0x01, 0x02, 0x03, 0x04},
+		},
+	}}
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	bitIndexes, _, _ := sectionBloomBitsFromTransactionInfos(infos)
+	if len(bitIndexes) == 0 {
+		t.Fatal("test fixture produced no section bloom bits")
+	}
+
+	result, err := RebuildSectionBloomsFromTransactionInfos(db, db, db, 1, 1, etl.Options{
+		TempDir:     t.TempDir(),
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("RebuildSectionBloomsFromTransactionInfos: %v", err)
+	}
+	if result.BlocksScanned != 1 || result.BlocksWithTransactionInfos != 1 ||
+		result.BlocksWithLogs != 1 || result.LogEntriesIndexed != 1 ||
+		result.BloomItemsIndexed != 3 || result.SectionBloomRows != uint64(len(bitIndexes)) {
+		t.Fatalf("result = %+v, want one block/log and %d rows", result, len(bitIndexes))
+	}
+	if result.ETL.SpilledRuns == 0 {
+		t.Fatalf("ETL spilled runs = %d, want forced spill", result.ETL.SpilledRuns)
+	}
+	for _, bitIndex := range bitIndexes {
+		bitset, ok, err := ReadSectionBloomBitSet(db, 0, bitIndex)
+		if err != nil {
+			t.Fatalf("ReadSectionBloomBitSet %d: %v", bitIndex, err)
+		}
+		if !ok {
+			t.Fatalf("missing section bloom row for bit %d", bitIndex)
+		}
+		if !sectionBloomBitSetHas(bitset, 1) {
+			t.Fatalf("section bloom bit %d does not include block offset 1: %x", bitIndex, bitset)
+		}
+	}
+}
+
+func TestRebuildSectionBloomsPreservesExistingSectionBits(t *testing.T) {
+	db := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	infos[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: []byte{0x99, 0x88, 0x77},
+	}}
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	bitIndexes, _, _ := sectionBloomBitsFromTransactionInfos(infos)
+	preservedBit := bitIndexes[0]
+	preserved := setSectionBloomBit(nil, 12)
+	encoded, err := EncodeSectionBloomBitSet(preserved)
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+	}
+	if err := WriteSectionBloom(db, 0, preservedBit, encoded); err != nil {
+		t.Fatalf("WriteSectionBloom preserved row: %v", err)
+	}
+
+	if _, err := RebuildSectionBloomsFromTransactionInfos(db, db, db, 1, 1, etl.Options{TempDir: t.TempDir()}); err != nil {
+		t.Fatalf("RebuildSectionBloomsFromTransactionInfos: %v", err)
+	}
+	got, ok, err := ReadSectionBloomBitSet(db, 0, preservedBit)
+	if err != nil {
+		t.Fatalf("ReadSectionBloomBitSet: %v", err)
+	}
+	if !ok {
+		t.Fatal("preserved row missing after rebuild")
+	}
+	if !sectionBloomBitSetHas(got, 12) {
+		t.Fatalf("existing block offset 12 was cleared: %x", got)
+	}
+	if !sectionBloomBitSetHas(got, 1) {
+		t.Fatalf("new block offset 1 was not added: %x", got)
+	}
+}
+
+func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
+	db := NewMemoryChainDB()
+	if _, err := RebuildSectionBloomsFromTransactionInfos(nil, db, db, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil chain accepted")
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(db, nil, db, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil reader accepted")
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(db, db, nil, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil writer accepted")
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(db, db, db, 2, 1, etl.Options{}); err == nil || !strings.Contains(err.Error(), "inverted") {
+		t.Fatalf("inverted range err = %v, want inverted", err)
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(db, db, db, 9, 9, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "missing block 9") {
+		t.Fatalf("missing block err = %v, want missing block 9", err)
+	}
+}
+
 func derivedRebuildTestBlock(t *testing.T, number uint64, txCount int) (*types.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txs := make([]*corepb.Transaction, 0, txCount)
@@ -166,6 +276,14 @@ func derivedRebuildTestBlock(t *testing.T, number uint64, txCount int) (*types.B
 		}
 	}
 	return block, infos
+}
+
+func sectionBloomBitSetHas(bitset []byte, bit uint64) bool {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		return false
+	}
+	return bitset[byteIndex]&(1<<(bit%8)) != 0
 }
 
 func BenchmarkRebuildTransactionDerivedIndexes(b *testing.B) {

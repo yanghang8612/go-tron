@@ -6,10 +6,10 @@ chain-freezer hot lookup index restore uses the collector for its `bh-`, `tx-`,
 and `ti-` rows. Chain-index sidecar builds now use the collector for external
 hash-order sorting. `rawdb.DerivedIndexCollector` provides the typed bulk-load
 entry point for transaction lookup/info, account trace, balance trace, and
-section bloom backfills. Transaction lookup/info rebuild from retained blocks
-now uses that collector and is exposed through `gtron db rebuild-tx-indexes`.
-Remaining backfill commands still need deliberate migration and path-specific
-benchmarks.
+section bloom backfills. Transaction lookup/info and section-bloom rebuilds
+from retained chain data now use that collector and are exposed through `gtron
+db`. Remaining account/balance trace backfill commands still need deliberate
+migration and path-specific benchmarks.
 
 ## Purpose
 
@@ -61,6 +61,14 @@ writes to collector-backed loads.
 - `gtron db rebuild-tx-indexes` is the operator entry point for that rebuild.
   It opens the datadir hot store plus read-only ancient freezer rows and writes
   the rebuilt hot `tx-`, `tib-`, and `ti-` rows through sorted ETL.
+- `rawdb.RebuildSectionBloomsFromTransactionInfos` rebuilds java-tron-compatible
+  section-bloom rows from retained canonical blocks plus hot or ancient
+  per-block `TransactionRet` log payloads. Partial-range rebuilds read existing
+  section rows first and OR in new block offsets so they do not clear other
+  blocks in the same section.
+- `gtron db rebuild-section-blooms` exposes that section-bloom rebuild. It uses
+  the same datadir, ancient freezer, range, and ETL scratch-space flags as
+  `rebuild-tx-indexes`.
 
 ## Benchmarking
 
@@ -141,11 +149,27 @@ gtron db rebuild-tx-indexes \
 Omit `--db.to-block` to rebuild through the current head. The command fails on
 missing blocks rather than silently publishing partial transaction indexes.
 
+Section bloom rebuild uses the same flags and rebuilds the java-tron
+`section-bloom` rows from stored `TransactionInfo.log` payloads:
+
+```bash
+gtron db rebuild-section-blooms \
+  --datadir /path/to/datadir \
+  --db.from-block 1 \
+  --db.to-block 1000000 \
+  --db.etl.tempdir /path/to/fast-scratch \
+  --db.etl.buffer 256
+```
+
+Omit `--db.to-block` to rebuild through the current head. The command fails on
+missing blocks and preserves existing block bits outside the requested range
+when a section row already exists.
+
 ## Migration Targets
 
 - event-log sidecar builders
-- commands that rebuild account/balance trace or section bloom indexes from
-  retained blocks
+- commands that rebuild account/balance trace indexes from retained execution
+  data
 - any future RPC index build where input order follows block execution rather
   than target DB key order
 

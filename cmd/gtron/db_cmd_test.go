@@ -71,6 +71,56 @@ func TestDBRebuildTxIndexesCmdDefaultsToHead(t *testing.T) {
 	}
 }
 
+func TestDBRebuildSectionBloomsCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	txInfos[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: []byte{0x11, 0x22, 0x33, 0x44},
+		Topics: [][]byte{
+			{0xaa, 0xbb, 0xcc},
+			{0x01, 0x02, 0x03, 0x04},
+		},
+	}}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, txInfos[:2]); err != nil {
+		t.Fatalf("rewrite block1 tx infos with logs: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.etl.tempdir", filepath.Join(t.TempDir(), "etl"),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbRebuildSectionBloomsCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildSectionBloomsCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	rows := 0
+	for bitIndex := uint64(0); bitIndex < rawdb.SectionBloomBitSize; bitIndex++ {
+		bitset, ok, err := rawdb.ReadSectionBloomBitSet(reopened, 0, bitIndex)
+		if err != nil {
+			t.Fatalf("ReadSectionBloomBitSet %d: %v", bitIndex, err)
+		}
+		if !ok {
+			continue
+		}
+		rows++
+		if !dbTestSectionBloomBitSetHas(bitset, 1) {
+			t.Fatalf("section bloom row %d does not include block offset 1: %x", bitIndex, bitset)
+		}
+	}
+	if rows == 0 {
+		t.Fatal("section bloom rebuild wrote no rows")
+	}
+}
+
 func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (ethdb.KeyValueStore, []*corepb.TransactionInfo) {
 	t.Helper()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -164,4 +214,12 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse flags: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func dbTestSectionBloomBitSetHas(bitset []byte, bit uint64) bool {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		return false
+	}
+	return bitset[byteIndex]&(1<<(bit%8)) != 0
 }

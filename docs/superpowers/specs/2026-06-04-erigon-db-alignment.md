@@ -624,6 +624,16 @@ Status:
   operators. It opens hot Pebble plus read-only ancient freezer rows, supports
   explicit or head-derived block ranges, and routes the rebuild through sorted
   ETL scratch-space options.
+- Section-bloom key encoding now matches java-tron's
+  `Long.toHexString(section*1_000_000 + bitIndex)` layout, and
+  `rawdb.RebuildSectionBloomsFromTransactionInfos` rebuilds compressed
+  java-compatible section bitsets from retained block `TransactionInfo.log`
+  payloads through `DerivedIndexCollector`. Partial-range rebuilds preserve
+  existing block bits in the same section by reading and ORing existing rows.
+- `gtron db rebuild-section-blooms` exposes that section-bloom rebuild to
+  operators. It opens hot Pebble plus read-only ancient freezer rows, supports
+  explicit or head-derived block ranges, and routes the rebuilt `sb-` rows
+  through sorted ETL scratch-space options.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore, and now includes chain-index sidecar build
@@ -643,9 +653,9 @@ Status:
 Remaining:
 
 - Migrate history backfill commands and the remaining derived RPC index build
-  paths, especially account/balance trace and section bloom rebuilds, onto the
-  collector-backed helpers where benchmarks show lower Pebble write
-  amplification.
+  paths, especially account/balance trace rebuilds and broader event/log cold
+  accessors, onto the collector-backed helpers where benchmarks show lower
+  Pebble write amplification.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 
