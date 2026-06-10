@@ -309,6 +309,7 @@ var app = &cli.App{
 			},
 			Action: initCmd,
 		},
+		dbCommand(),
 		snapshotCommand(),
 	},
 }

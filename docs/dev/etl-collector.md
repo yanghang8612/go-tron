@@ -7,8 +7,9 @@ and `ti-` rows. Chain-index sidecar builds now use the collector for external
 hash-order sorting. `rawdb.DerivedIndexCollector` provides the typed bulk-load
 entry point for transaction lookup/info, account trace, balance trace, and
 section bloom backfills. Transaction lookup/info rebuild from retained blocks
-now uses that collector. Remaining backfill commands still need deliberate
-migration and path-specific benchmarks.
+now uses that collector and is exposed through `gtron db rebuild-tx-indexes`.
+Remaining backfill commands still need deliberate migration and path-specific
+benchmarks.
 
 ## Purpose
 
@@ -57,6 +58,9 @@ writes to collector-backed loads.
 - `rawdb.RebuildTransactionDerivedIndexesFromBlocks` rebuilds transaction
   reverse lookup and transaction-info rows from retained blocks plus hot or
   ancient per-block `TransactionRet` rows through `DerivedIndexCollector`.
+- `gtron db rebuild-tx-indexes` is the operator entry point for that rebuild.
+  It opens the datadir hot store plus read-only ancient freezer rows and writes
+  the rebuilt hot `tx-`, `tib-`, and `ti-` rows through sorted ETL.
 
 ## Benchmarking
 
@@ -121,6 +125,21 @@ opts := snapshots.RestoreVerifiedSnapshotOptions{
 
 Zero values preserve collector defaults. For production bootstrap, point
 `TempDir` at a filesystem with enough free space for temporary sorted runs.
+
+Transaction index rebuild accepts the same scratch-space shape through CLI
+flags:
+
+```bash
+gtron db rebuild-tx-indexes \
+  --datadir /path/to/datadir \
+  --db.from-block 1 \
+  --db.to-block 1000000 \
+  --db.etl.tempdir /path/to/fast-scratch \
+  --db.etl.buffer 256
+```
+
+Omit `--db.to-block` to rebuild through the current head. The command fails on
+missing blocks rather than silently publishing partial transaction indexes.
 
 ## Migration Targets
 
