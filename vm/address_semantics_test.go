@@ -175,16 +175,25 @@ func TestCreate2DepthCheckRequiresCompatibleEVM(t *testing.T) {
 	caller := tcommon.Address{0x41, 0x01}
 	var salt [32]byte
 
+	// tvm.Depth is 1-based during frame execution; java refuses when
+	// getCallDeep() == MAX_DEPTH, i.e. inside the frame at Depth
+	// maxCallDepth+1.
 	tvm, _, _ := newTestTVMForCreate(t, TVMConfig{Constantinople: true}, nil)
-	tvm.Depth = maxCallDepth
+	tvm.Depth = maxCallDepth + 1
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != nil {
 		t.Fatalf("legacy CREATE2 depth check: got %v, want nil", err)
 	}
 
 	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
-	tvm.Depth = maxCallDepth
+	tvm.Depth = maxCallDepth + 1
 	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != ErrDepthExceeded {
 		t.Fatalf("compatible CREATE2 depth check: got %v want %v", err, ErrDepthExceeded)
+	}
+
+	tvm, _, _ = newTestTVMForCreate(t, TVMConfig{Constantinople: true, Compatibility: true}, nil)
+	tvm.Depth = maxCallDepth // deepest allowed frame may still spawn
+	if _, _, _, err := tvm.Create2(caller, nil, 1_000_000, 0, salt); err != nil {
+		t.Fatalf("compatible CREATE2 at deepest allowed frame: got %v, want nil", err)
 	}
 }
 

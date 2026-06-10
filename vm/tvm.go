@@ -14,7 +14,15 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-const maxCallDepth = 1024
+// maxCallDepth mirrors java-tron Program.MAX_DEPTH = 64: the TVM caps the
+// message-call/create stack at 64 nested frames, NOT the EVM's 1024. With no
+// 63/64 energy reservation in TRON a deep self-recursion only terminates via
+// this limit, so the geth value let recursion run ~10× deeper than java and
+// flipped results (Nile block 11,359,658: java REVERT vs gtron OUT_OF_ENERGY).
+// tvm.Depth is 1-based while a frame executes (runContract increments before
+// Run); java's getCallDeep() is 0-based. java refuses a spawn when
+// `getCallDeep() == MAX_DEPTH`, which maps to `tvm.Depth > maxCallDepth`.
+const maxCallDepth = 64
 
 // KVReadWriter is the narrow ethdb capability the TVM still needs for
 // immutable chain data lookups such as BLOCKHASH. Mutable contract runtime
@@ -267,7 +275,7 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 
 // Create deploys a new contract.
 func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value int64) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
@@ -278,7 +286,7 @@ func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value
 }
 
 func (tvm *TVM) createWithVersion(caller tcommon.Address, code []byte, energy uint64, value int64, version int32) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
@@ -293,7 +301,7 @@ func (tvm *TVM) createWithVersion(caller tcommon.Address, code []byte, energy ui
 // transaction raw-data hash and owner address in the actuator, while VM CREATE
 // opcodes continue to use Create's nonce-based derivation.
 func (tvm *TVM) CreateAt(caller, contractAddr tcommon.Address, code []byte, energy uint64, value int64) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 	return tvm.create(caller, contractAddr, code, energy, value, 0, 0, false, false, nil, 0)
@@ -304,7 +312,7 @@ func (tvm *TVM) CreateAt(caller, contractAddr tcommon.Address, code []byte, ener
 // and call_token_value to the new contract before constructor execution, and
 // ProgramInvoke exposes tokenId/tokenValue through CALLTOKENID/CALLTOKENVALUE.
 func (tvm *TVM) CreateAtWithToken(caller, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, nil, 0)
@@ -314,7 +322,7 @@ func (tvm *TVM) CreateAtWithToken(caller, contractAddr tcommon.Address, code []b
 // the SmartContract metadata that java-tron exposes during constructor
 // execution.
 func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Address, code []byte, energy uint64, value int64, tokenID int64, tokenValue int64, contractMeta *contractpb.SmartContract) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 	return tvm.create(caller, contractAddr, code, energy, value, tokenID, tokenValue, false, false, contractMeta, 0)
@@ -322,7 +330,7 @@ func (tvm *TVM) CreateAtWithTokenAndContract(caller, contractAddr tcommon.Addres
 
 // Create2 deploys a new contract with a deterministic address.
 func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.cfg.Compatibility && tvm.Depth >= maxCallDepth {
+	if tvm.cfg.Compatibility && tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
@@ -333,7 +341,7 @@ func (tvm *TVM) Create2(caller tcommon.Address, code []byte, energy uint64, valu
 }
 
 func (tvm *TVM) create2WithVersion(caller, addressSeed tcommon.Address, code []byte, energy uint64, value int64, salt [32]byte, version int32) ([]byte, tcommon.Address, uint64, error) {
-	if tvm.cfg.Compatibility && tvm.Depth >= maxCallDepth {
+	if tvm.cfg.Compatibility && tvm.Depth > maxCallDepth {
 		return nil, tcommon.Address{}, energy, ErrDepthExceeded
 	}
 
@@ -557,7 +565,7 @@ func (tvm *TVM) isNewContract(addr tcommon.Address) bool {
 
 // Call executes a contract call.
 func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, value int64) ([]byte, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
 
@@ -652,7 +660,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 
 // CallToken executes a contract call with a TRC-10 token transfer.
 func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uint64, value int64, tokenID int64, tokenValue int64) ([]byte, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
 
@@ -787,7 +795,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 
 // StaticCall executes a call without state modifications.
 func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
 
@@ -858,7 +866,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 // DELEGATECALL uses the parent caller plus the current contract context,
 // while CALLCODE uses the current contract for both.
 func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte, energy uint64, value int64, internalValue int64) ([]byte, uint64, error) {
-	if tvm.Depth >= maxCallDepth {
+	if tvm.Depth > maxCallDepth {
 		return nil, energy, ErrDepthExceeded
 	}
 
