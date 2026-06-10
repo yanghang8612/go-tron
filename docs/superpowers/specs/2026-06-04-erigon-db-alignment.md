@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain and state-domain history snapshot restore now load through the collector; backfill/index callers still need migration and benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, and chain-freezer hot lookup snapshot restore now load through the collector; backfill/index callers still need migration and benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -600,6 +600,11 @@ Status:
   loads the resulting rawdb writes in physical key order. Regression coverage
   proves the previous direct row/index/tx-range order would be unsorted and the
   final restore stream is sorted.
+- `snapshots.RestoreChainFreezerIndexes` now restores historical block-hash,
+  transaction-hash, and per-transaction-info hot lookup rows through one
+  collector and loads the resulting rawdb writes in physical key order.
+  Regression coverage proves the previous direct block/tx/info order would be
+  unsorted and the final restore stream is sorted.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

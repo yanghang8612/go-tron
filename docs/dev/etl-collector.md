@@ -1,9 +1,10 @@
 # ETL Collector Runbook
 
 Status: initial production integration. Snapshot latest-domain restore now
-loads through the collector, and state-domain history restore does the same.
-Backfill and derived-index builders still need deliberate migration and
-path-specific benchmarks.
+loads through the collector, state-domain history restore does the same, and
+chain-freezer hot lookup index restore uses the collector for its `bh-`, `tx-`,
+and `ti-` rows. Backfill and derived-index builders still need deliberate
+migration and path-specific benchmarks.
 
 ## Purpose
 
@@ -31,6 +32,9 @@ writes to collector-backed loads.
 - `snapshots.Manager.RestoreStateDomainHistory` restores StateDomainChange hot
   rows, inverse indexes, and StateTxRange rows through one collector, then
   loads the final rawdb key stream in physical key order.
+- `snapshots.RestoreChainFreezerIndexes` restores block-hash, transaction-hash,
+  and per-transaction-info hot lookup rows through one collector, then loads
+  the final rawdb key stream in physical key order.
 
 ## Usage
 

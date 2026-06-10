@@ -1,12 +1,14 @@
 package snapshots
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -160,6 +162,56 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	}
 	if !second.AlreadyInstalled || second.BlocksRestored != 0 || second.BlockIndexesRestored != 2 || second.TxIndexesRestored != 1 || second.TxInfosRestored != 1 {
 		t.Fatalf("second restore result = %+v, want already installed plus rebuilt indexes", second)
+	}
+}
+
+func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, _, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+
+	direct := newChainFreezerIndexOrderWriter()
+	if err := iterateChainFreezerSegmentRows(snapshotDir, ref, func(row chainFreezerRow) error {
+		_, err := restoreChainFreezerIndexesForRow(direct, row)
+		return err
+	}); err != nil {
+		t.Fatalf("capture direct chain-freezer index order: %v", err)
+	}
+	if sort.SliceIsSorted(direct.putKeys, func(i, j int) bool {
+		return bytes.Compare(direct.putKeys[i], direct.putKeys[j]) < 0
+	}) {
+		t.Fatal("test setup produced already-sorted direct chain-freezer index order")
+	}
+	expectedKeys := append([][]byte(nil), direct.putKeys...)
+	sort.Slice(expectedKeys, func(i, j int) bool {
+		return bytes.Compare(expectedKeys[i], expectedKeys[j]) < 0
+	})
+
+	writer := newChainFreezerIndexOrderWriter()
+	result, err := RestoreChainFreezerIndexes(writer, snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("RestoreChainFreezerIndexes: %v", err)
+	}
+	if result.BlockIndexesRestored != 2 || result.TxIndexesRestored != 1 || result.TxInfosRestored != 1 {
+		t.Fatalf("restore result = %+v, want 2 block indexes, 1 tx index, 1 tx info", result)
+	}
+	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
+		t.Fatalf("chain-freezer index restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)
+	}
+	if len(writer.deleteKeys) != 0 {
+		t.Fatalf("chain-freezer index restore deletes = %d, want 0", len(writer.deleteKeys))
 	}
 }
 
@@ -496,6 +548,25 @@ func assertChainFreezerRowsEqual(t *testing.T, wantStore, gotStore *rawdbfreezer
 			}
 		}
 	}
+}
+
+type chainFreezerIndexOrderWriter struct {
+	putKeys    [][]byte
+	deleteKeys [][]byte
+}
+
+func newChainFreezerIndexOrderWriter() *chainFreezerIndexOrderWriter {
+	return &chainFreezerIndexOrderWriter{}
+}
+
+func (w *chainFreezerIndexOrderWriter) Put(key, value []byte) error {
+	w.putKeys = append(w.putKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func (w *chainFreezerIndexOrderWriter) Delete(key []byte) error {
+	w.deleteKeys = append(w.deleteKeys, append([]byte(nil), key...))
+	return nil
 }
 
 func chainFreezerTestIdentity() ChainIdentity {

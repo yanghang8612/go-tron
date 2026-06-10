@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -499,8 +500,15 @@ func RestoreChainFreezerIndexes(db ethdb.KeyValueWriter, dir string, ref Segment
 	if err := CheckChainFreezerSegment(dir, ref); err != nil {
 		return result, err
 	}
-	err := iterateChainFreezerSegmentRows(dir, ref, func(row chainFreezerRow) error {
-		counts, err := restoreChainFreezerIndexesForRow(db, row)
+	collector, err := etl.NewCollector(etl.Options{})
+	if err != nil {
+		return result, fmt.Errorf("snapshots: create chain-freezer index restore ETL collector: %w", err)
+	}
+	defer collector.Close()
+	restoreWriter := ethdb.KeyValueWriter(collector)
+
+	err = iterateChainFreezerSegmentRows(dir, ref, func(row chainFreezerRow) error {
+		counts, err := restoreChainFreezerIndexesForRow(restoreWriter, row)
 		if err != nil {
 			return err
 		}
@@ -509,7 +517,13 @@ func RestoreChainFreezerIndexes(db ethdb.KeyValueWriter, dir string, ref Segment
 		result.TxInfosRestored += counts.TxInfosRestored
 		return nil
 	})
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	if _, err := collector.Load(db); err != nil {
+		return result, fmt.Errorf("snapshots: load chain-freezer index restore ETL collector: %w", err)
+	}
+	return result, nil
 }
 
 func restoreChainFreezerIndexesForRow(db ethdb.KeyValueWriter, row chainFreezerRow) (RestoreChainFreezerSegmentResult, error) {
