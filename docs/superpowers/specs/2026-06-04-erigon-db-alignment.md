@@ -497,17 +497,21 @@ Status:
   keeps hot lookup rows.
 - `scripts/dev/storage_benchmark.sh` is now the repeatable measurement harness
   for producer-time, follower sync catch-up, and datadir size split by hot
-  Pebble, ancient freezer, and state snapshots across prune modes. The matching
-  runbook is `docs/dev/erigon-storage-benchmark.md`, with the first smoke
-  sample recorded in
+  Pebble, ancient freezer, and state snapshots across prune modes. Its
+  `--signed-cold-prune` drill builds cold chain-freezer coverage, signs the
+  catalog, prunes hot chain lookup rows through the verified signer, and
+  restarts `minimal` once so the tail-prune lifecycle can report the post-prune
+  boundary. The matching runbook is `docs/dev/erigon-storage-benchmark.md`,
+  with the first smoke sample recorded in
   `docs/dev/erigon-storage-benchmark-results-2026-06-10.md`.
 
 Remaining:
 
-- Teach `blocks` and `minimal` distinct block-retention behavior in production.
-  The freezer and chain-freezer table set now have the tested virtual-tail
-  primitive, physical shard reclamation primitive, planner, runtime apply path,
-  and cold chain-freezer segment fallback reads with block-number accessors, but
+- Promote `blocks`/`minimal` block-retention behavior from tested primitives
+  and dev harness coverage to production-complete status. The freezer and
+  chain-freezer table set now have the tested virtual-tail primitive, physical
+  shard reclamation primitive, planner, runtime apply path, and cold
+  chain-freezer segment fallback reads with block-number accessors, but
   production still needs collected long-running soak/space samples and
   acceptance thresholds before old block file reclamation is considered
   production-complete under `minimal`.

@@ -32,6 +32,14 @@ The output path is printed at startup. Each JSON row contains:
 - `snapshotBytes`
 - `ancientFiles`
 - `snapshotFiles`
+- `coldFreezerToBlock`
+- `signedColdPrune`
+- `chainLookupPruneToBlock`
+- `chainLookupBlockIndexes`
+- `chainLookupTxIndexes`
+- `tailPrunedThroughBlock`
+- `tailPrunedFiles`
+- `historyWindow`
 
 `--build-cold-freezer` runs `gtron snapshot build-freezer` after stopping each
 producer so cold chain-freezer snapshot bytes are included in the size split.
@@ -39,6 +47,29 @@ The freezer build writes or preserves the manifest chain identity, so the output
 can be signed in a follow-up drill. It does not sign catalogs or mark
 lookup-prune progress by itself; it is a measurement step, not a production
 prune workflow.
+
+## Signed Cold Prune Drill
+
+Run the producer profile with `--signed-cold-prune` to exercise the minimum
+operator prune workflow in one sample:
+
+```bash
+scripts/dev/storage_benchmark.sh \
+  --profile producer \
+  --modes minimal \
+  --target-blocks 120 \
+  --freezer-margin 3 \
+  --freezer-interval 1s \
+  --signed-cold-prune \
+  --history-window 8 \
+  --keep
+```
+
+This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, runs
+`gtron snapshot prune-chain-lookups` with the catalog signer as a trusted key,
+and then restarts `minimal` once so the tail-prune lifecycle can run. Use a
+small `--history-window` for short dev samples; production and soak runs should
+use the intended retention window.
 
 ## Sync Profile
 
@@ -63,9 +94,9 @@ under test, which isolates mode impact on sync/import and local storage.
   chain data.
 - `blocks`: should preserve complete local chain-freezer history while allowing
   state/history and hot lookup pruning once cold coverage exists.
-- `minimal`: should be evaluated with a separate production prune drill after
-  verified cold coverage exists; the harness measures baseline size and can
-  include cold freezer snapshot bytes.
+- `minimal`: should be evaluated with `--signed-cold-prune` after verified cold
+  coverage exists; the drill reports lookup-prune coverage and the restart-time
+  tail-prune boundary.
 - `archive`: should retain all temporal state rows and is expected to consume
   more hot storage.
 

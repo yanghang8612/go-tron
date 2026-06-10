@@ -21,12 +21,23 @@ FREEZER_MARGIN=3
 FREEZER_INTERVAL="1s"
 FREEZER_BATCH=256
 BUILD_COLD_FREEZER=0
+SIGNED_COLD_PRUNE=0
+SNAPSHOT_SIGNING_SEED="1111111111111111111111111111111111111111111111111111111111111111"
 SYNC_MAX_DIFF=2
+HISTORY_WINDOW=0
 
 # Fixed dev witness key also used by scripts/system_test.sh.
 WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
 
 PIDS=()
+STARTED_PID=""
+RUN_COLD_FREEZER_TO_BLOCK=-1
+RUN_SIGNED_COLD_PRUNE=0
+RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
+RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
+RUN_CHAIN_LOOKUP_TX_INDEXES=0
+RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
+RUN_TAIL_PRUNED_FILES=0
 
 usage() {
   cat <<'EOF'
@@ -51,7 +62,10 @@ Options:
   --freezer-interval DURATION    Freezer pass interval (default: 1s)
   --freezer-batch N              Max blocks frozen per pass (default: 256)
   --build-cold-freezer           After producer run, build chain-freezer snapshot
+  --signed-cold-prune            Build freezer snapshot, sign catalog, prune hot lookups
+  --snapshot-signing-seed HEX    Ed25519 seed/private key for signed-cold-prune
   --sync-max-diff N              Sync profile success threshold (default: 2)
+  --history-window N             Inject [history] prune_window for short prune drills
 
 Examples:
   scripts/dev/storage_benchmark.sh --modes full,minimal,archive --target-blocks 80
@@ -80,7 +94,10 @@ while [ "$#" -gt 0 ]; do
     --freezer-interval) FREEZER_INTERVAL="${2:?}"; shift 2 ;;
     --freezer-batch) FREEZER_BATCH="${2:?}"; shift 2 ;;
     --build-cold-freezer) BUILD_COLD_FREEZER=1; shift ;;
+    --signed-cold-prune) SIGNED_COLD_PRUNE=1; BUILD_COLD_FREEZER=1; shift ;;
+    --snapshot-signing-seed) SNAPSHOT_SIGNING_SEED="${2:?}"; shift 2 ;;
     --sync-max-diff) SYNC_MAX_DIFF="${2:?}"; shift 2 ;;
+    --history-window) HISTORY_WINDOW="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -90,6 +107,9 @@ case "$PROFILE" in
   producer|sync) ;;
   *) die "unknown profile $PROFILE" ;;
 esac
+if [ "$SIGNED_COLD_PRUNE" -eq 1 ] && [ "$PROFILE" != "producer" ]; then
+  die "--signed-cold-prune is only supported with --profile producer"
+fi
 
 if [ -z "$WORKDIR" ]; then
   WORKDIR="$(mktemp -d)"
@@ -133,6 +153,16 @@ http_get() {
 
 json_field() {
   python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null
+}
+
+reset_run_metrics() {
+  RUN_COLD_FREEZER_TO_BLOCK=-1
+  RUN_SIGNED_COLD_PRUNE=0
+  RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
+  RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
+  RUN_CHAIN_LOOKUP_TX_INDEXES=0
+  RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
+  RUN_TAIL_PRUNED_FILES=0
 }
 
 block_num() {
@@ -216,6 +246,20 @@ file_count() {
   find "$path" -type f | wc -l | tr -d ' '
 }
 
+history_config_arg() {
+  local datadir="$1"
+  if [ "$HISTORY_WINDOW" -le 0 ]; then
+    return
+  fi
+  local cfg="$datadir/history-benchmark.toml"
+  mkdir -p "$datadir"
+  cat >"$cfg" <<EOF
+[history]
+prune_window = $HISTORY_WINDOW
+EOF
+  printf '%s\n' "$cfg"
+}
+
 start_node() {
   local name="$1"
   local mode="$2"
@@ -240,6 +284,11 @@ start_node() {
     --freezer.margin "$FREEZER_MARGIN"
     --freezer.batch "$FREEZER_BATCH"
   )
+  local history_cfg
+  history_cfg="$(history_config_arg "$datadir")"
+  if [ -n "$history_cfg" ]; then
+    args+=(--config "$history_cfg")
+  fi
   if [ "$witness" = "1" ]; then
     args+=(--witness)
   fi
@@ -249,7 +298,7 @@ start_node() {
   "$GTRON" "${args[@]}" >"$log_path" 2>&1 &
   local pid=$!
   PIDS+=("$pid")
-  echo "$pid"
+  STARTED_PID="$pid"
   wait_for_http "$http" "$name"
 }
 
@@ -269,18 +318,101 @@ maybe_build_cold_freezer() {
   fi
   if [ "$height" -le "$FREEZER_MARGIN" ]; then
     echo "skip cold freezer build: height $height <= freezer margin $FREEZER_MARGIN" >>"$log_path"
+    if [ "$SIGNED_COLD_PRUNE" -eq 1 ]; then
+      die "signed cold prune requires height > freezer margin"
+    fi
     return
   fi
   local to_block=$((height - FREEZER_MARGIN - 1))
   if [ "$to_block" -lt 0 ]; then
     return
   fi
+  RUN_COLD_FREEZER_TO_BLOCK="$to_block"
   echo "building cold chain-freezer snapshot through block $to_block" >>"$log_path"
   "$GTRON" snapshot build-freezer \
+    --dev \
+    --witness.key "$WITNESS_KEY" \
     --datadir "$datadir" \
     --snapshot.from-block 0 \
     --snapshot.to-block "$to_block" \
-    >>"$log_path" 2>&1 || echo "warning: snapshot build-freezer failed; see $log_path" >&2
+    >>"$log_path" 2>&1 || {
+      if [ "$SIGNED_COLD_PRUNE" -eq 1 ]; then
+        die "snapshot build-freezer failed; see $log_path"
+      fi
+      echo "warning: snapshot build-freezer failed; see $log_path" >&2
+    }
+}
+
+run_logged() {
+  local out="$1"
+  shift
+  if "$@" >"$out" 2>&1; then
+    cat "$out"
+    return 0
+  fi
+  cat "$out"
+  return 1
+}
+
+run_signed_cold_prune_drill() {
+  local mode="$1"
+  local idx="$2"
+  local datadir="$3"
+  local log_path="$4"
+  if [ "$SIGNED_COLD_PRUNE" -ne 1 ]; then
+    return
+  fi
+  if [ "$RUN_COLD_FREEZER_TO_BLOCK" -lt 0 ]; then
+    die "signed cold prune requested but no cold freezer snapshot was built"
+  fi
+  RUN_SIGNED_COLD_PRUNE=1
+
+  local publish_out="$WORKDIR/$mode-publish-catalog.out"
+  echo "publishing signed snapshot catalog" >>"$log_path"
+  if ! run_logged "$publish_out" "$GTRON" snapshot publish-catalog \
+    --datadir "$datadir" \
+    --snapshot.signing-key "$SNAPSHOT_SIGNING_SEED" >>"$log_path"; then
+    die "snapshot publish-catalog failed; see $log_path"
+  fi
+  local signer
+  signer="$(sed -n 's/.*signer=\([0-9a-fA-F]*\).*/\1/p' "$publish_out" | tail -1)"
+  [ -n "$signer" ] || die "could not parse snapshot catalog signer from $publish_out"
+
+  local prune_out="$WORKDIR/$mode-prune-chain-lookups.out"
+  echo "pruning hot chain lookup rows using signed catalog signer $signer" >>"$log_path"
+  if ! run_logged "$prune_out" "$GTRON" snapshot prune-chain-lookups \
+    --dev \
+    --witness.key "$WITNESS_KEY" \
+    --datadir "$datadir" \
+    --snapshot.trusted-key "$signer" >>"$log_path"; then
+    die "snapshot prune-chain-lookups failed; see $log_path"
+  fi
+  local range_to block_indexes tx_indexes
+  range_to="$(sed -n 's/.*range=\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p' "$prune_out" | tail -1)"
+  block_indexes="$(sed -n 's/.*blockIndexes=\([0-9][0-9]*\).*/\1/p' "$prune_out" | tail -1)"
+  tx_indexes="$(sed -n 's/.*txIndexes=\([0-9][0-9]*\).*/\1/p' "$prune_out" | tail -1)"
+  if [ -n "$range_to" ]; then
+    RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK="$range_to"
+  fi
+  RUN_CHAIN_LOOKUP_BLOCK_INDEXES="${block_indexes:-0}"
+  RUN_CHAIN_LOOKUP_TX_INDEXES="${tx_indexes:-0}"
+
+  if [ "$mode" = "minimal" ]; then
+    local port_base=$((BASE_PORT + idx * 20))
+    local restart_log="$WORKDIR/$mode-producer-post-prune-restart.log"
+    echo "restarting minimal node once so tail-prune lifecycle can run" >>"$log_path"
+    local restart_pid
+    start_node "$mode post-prune restart" "$mode" "$datadir" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 13))" 1 "" "$restart_log"
+    restart_pid="$STARTED_PID"
+    sleep 3
+    stop_pid "$restart_pid"
+    cat "$restart_log" >>"$log_path"
+    local pruned_through pruned_files
+    pruned_through="$(sed -n 's/.*prunedThroughBlock[= ]\([0-9][0-9]*\).*/\1/p' "$restart_log" | tail -1)"
+    pruned_files="$(sed -n 's/.*prunedTailFiles[= ]\([0-9][0-9]*\).*/\1/p' "$restart_log" | tail -1)"
+    RUN_TAIL_PRUNED_THROUGH_BLOCK="${pruned_through:--1}"
+    RUN_TAIL_PRUNED_FILES="${pruned_files:-0}"
+  fi
 }
 
 emit_result() {
@@ -301,16 +433,30 @@ emit_result() {
   ancient_files="$(file_count "$datadir/gtron/ancient")"
   snapshot_files="$(file_count "$datadir/gtron/state-snapshots")"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
-    "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" "$datadir" "$log_path" <<'PY'
+    "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
+    "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
+    "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
+    "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
+    "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
 keys = [
     "profile", "mode", "role", "status", "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
-    "ancientFiles", "snapshotFiles", "datadir", "log",
+    "ancientFiles", "snapshotFiles",
+    "coldFreezerToBlock", "signedColdPrune", "chainLookupPruneToBlock",
+    "chainLookupBlockIndexes", "chainLookupTxIndexes",
+    "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
+    "datadir", "log",
 ]
 values = sys.argv[2:]
-ints = {"targetBlock", "height", "elapsedSeconds", "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes", "ancientFiles", "snapshotFiles"}
+ints = {
+    "targetBlock", "height", "elapsedSeconds",
+    "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
+    "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "signedColdPrune",
+    "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
+    "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
+}
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
     row[key] = int(value) if key in ints else value
@@ -327,15 +473,18 @@ run_producer_mode() {
   local port_base=$((BASE_PORT + idx * 20))
   local datadir="$WORKDIR/$mode-producer"
   local log_path="$WORKDIR/$mode-producer.log"
+  reset_run_metrics
   mkdir -p "$datadir"
   local start=$SECONDS
   local pid
-  pid="$(start_node "$mode producer" "$mode" "$datadir" "$((port_base + 1))" "$((port_base + 2))" "$((port_base + 3))" 1 "" "$log_path")"
+  start_node "$mode producer" "$mode" "$datadir" "$((port_base + 1))" "$((port_base + 2))" "$((port_base + 3))" 1 "" "$log_path"
+  pid="$STARTED_PID"
   local height
   height="$(wait_for_block "$((port_base + 1))" "$TARGET_BLOCKS" "$mode producer")"
   local elapsed=$((SECONDS - start))
   stop_pid "$pid"
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
+  run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
 }
 
@@ -347,15 +496,18 @@ run_sync_mode() {
   local node_dir="$WORKDIR/$mode-sync-follower"
   local sr_log="$WORKDIR/$mode-sync-sr.log"
   local node_log="$WORKDIR/$mode-sync-follower.log"
+  reset_run_metrics
   mkdir -p "$sr_dir" "$node_dir"
 
   local sr_pid
-  sr_pid="$(start_node "$mode sync sr" "full" "$sr_dir" "$((port_base + 1))" "$((port_base + 2))" "$((port_base + 3))" 1 "" "$sr_log")"
+  start_node "$mode sync sr" "full" "$sr_dir" "$((port_base + 1))" "$((port_base + 2))" "$((port_base + 3))" 1 "" "$sr_log"
+  sr_pid="$STARTED_PID"
   wait_for_block "$((port_base + 1))" "$TARGET_BLOCKS" "$mode sync sr" >/dev/null
 
   local start=$SECONDS
   local node_pid
-  node_pid="$(start_node "$mode sync follower" "$mode" "$node_dir" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 13))" 0 "127.0.0.1:$((port_base + 2))" "$node_log")"
+  start_node "$mode sync follower" "$mode" "$node_dir" "$((port_base + 11))" "$((port_base + 12))" "$((port_base + 13))" 0 "127.0.0.1:$((port_base + 2))" "$node_log"
+  node_pid="$STARTED_PID"
   local height
   height="$(wait_for_sync_close "$((port_base + 1))" "$((port_base + 11))")"
   local elapsed=$((SECONDS - start))

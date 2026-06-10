@@ -494,7 +494,12 @@ func snapshotPruneChainLookupsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Chain lookup rows pruned: coldIndexSegments=%d blockIndexes=%d stateRoots=%d txIndexes=%d txInfos=%d\n",
+	prunedRange := "none"
+	if result.HasRange {
+		prunedRange = fmt.Sprintf("[%d,%d]", result.FromBlock, result.ToBlock)
+	}
+	fmt.Printf("Chain lookup rows pruned: range=%s coldIndexSegments=%d blockIndexes=%d stateRoots=%d txIndexes=%d txInfos=%d\n",
+		prunedRange,
 		result.ColdIndexSegments,
 		result.BlockIndexesDeleted,
 		result.StateRootsDeleted,
