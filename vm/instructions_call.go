@@ -41,7 +41,18 @@ func opCreate(pc *uint64, interpreter *Interpreter, contract *Contract, memory *
 		result = addressToUint256(addr)
 	}
 	stack.push(&result)
-	interpreter.returnData = ret
+	// CREATE resets the return buffer UNCONDITIONALLY before the call
+	// (java-tron Program.createContract:797), so a successful or
+	// exceptionally-failed CREATE leaves the buffer empty; only a REVERTing
+	// child exposes its output through RETURNDATA* (Program.java:965). The
+	// success return value here is the deployed runtime code, which java
+	// never exposes. NOTE: CREATE2 differs — its reset is Osaka-gated; see
+	// opCreate2.
+	if err == ErrExecutionReverted {
+		interpreter.returnData = ret
+	} else {
+		interpreter.returnData = nil
+	}
 	return nil, nil
 }
 
@@ -93,7 +104,21 @@ func opCreate2(pc *uint64, interpreter *Interpreter, contract *Contract, memory 
 		result = addressToUint256(addr)
 	}
 	stack.push(&result)
-	interpreter.returnData = ret
+	// CREATE2 resets the return buffer only under Osaka (java-tron
+	// Program.createContract2:1619 gates the reset on allowTvmOsaka). On
+	// every TRON network before Osaka — including all of Nile history and
+	// the current head — a successful or exceptionally-failed CREATE2
+	// therefore leaves the CALLER's prior return data INTACT; only a
+	// REVERTing child overwrites it (Program.java:965). The per-frame Run()
+	// reset already isolated the constructor and the defer restored the
+	// caller's pre-CREATE2 value, so we overwrite only on REVERT, or clear
+	// to empty once Osaka is active (matching CREATE). This asymmetry with
+	// CREATE is a java-tron historical quirk, not an oversight.
+	if err == ErrExecutionReverted {
+		interpreter.returnData = ret
+	} else if interpreter.tvm.cfg.Osaka {
+		interpreter.returnData = nil
+	}
 	return nil, nil
 }
 
