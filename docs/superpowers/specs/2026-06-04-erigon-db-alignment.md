@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, and rawdb derived-index bulk loads now use the collector; actual backfill commands still need migration and larger benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, and transaction lookup/info rebuild now use the collector; remaining backfill commands still need migration and larger benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -616,6 +616,10 @@ Status:
   account trace, balance trace, and section bloom rows. Future backfill commands
   can add rows in block execution order and still load the final rawdb stream in
   physical key order.
+- `rawdb.RebuildTransactionDerivedIndexesFromBlocks` now rebuilds transaction
+  reverse lookup, per-block `TransactionRet`, and per-tx `TransactionInfo` rows
+  from retained blocks plus hot or ancient per-block info rows through
+  `DerivedIndexCollector`.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore, and now includes chain-index sidecar build
@@ -623,7 +627,9 @@ Status:
   recorded in `docs/dev/etl-collector-benchmark-results-2026-06-10.md`.
 - `BenchmarkDerivedIndexCollector` compares direct block-order writes against
   collector-backed sorted loads for transaction lookup/info, account trace,
-  balance trace, and section bloom rows. The first smoke result is recorded in
+  balance trace, and section bloom rows. It also compares direct block-order
+  transaction lookup/info rebuild with the collector-backed rebuild path. The
+  first smoke result is recorded in
   `docs/dev/etl-derived-index-benchmark-results-2026-06-10.md`.
 - Snapshot restore APIs now expose `RestoreETLOptions` so callers can control
   the collector temp directory, buffer limit, and batch size for large
@@ -632,9 +638,9 @@ Status:
 
 Remaining:
 
-- Migrate history backfill commands and concrete derived RPC index build paths
-  onto the collector-backed helpers where benchmarks show lower Pebble write
-  amplification.
+- Migrate history backfill commands and the remaining derived RPC index build
+  paths onto the collector-backed helpers where benchmarks show lower Pebble
+  write amplification.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

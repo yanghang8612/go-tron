@@ -6,7 +6,8 @@ chain-freezer hot lookup index restore uses the collector for its `bh-`, `tx-`,
 and `ti-` rows. Chain-index sidecar builds now use the collector for external
 hash-order sorting. `rawdb.DerivedIndexCollector` provides the typed bulk-load
 entry point for transaction lookup/info, account trace, balance trace, and
-section bloom backfills. Remaining backfill commands still need deliberate
+section bloom backfills. Transaction lookup/info rebuild from retained blocks
+now uses that collector. Remaining backfill commands still need deliberate
 migration and path-specific benchmarks.
 
 ## Purpose
@@ -53,6 +54,9 @@ writes to collector-backed loads.
   balance trace, and section bloom rows. Backfill tools can add rows in block
   execution order, then `Load` writes the final rawdb key stream in physical
   key order.
+- `rawdb.RebuildTransactionDerivedIndexesFromBlocks` rebuilds transaction
+  reverse lookup and transaction-info rows from retained blocks plus hot or
+  ancient per-block `TransactionRet` rows through `DerivedIndexCollector`.
 
 ## Benchmarking
 
@@ -121,8 +125,8 @@ Zero values preserve collector defaults. For production bootstrap, point
 ## Migration Targets
 
 - event-log sidecar builders
-- commands that rebuild transaction lookup/info, account/balance trace, or
-  section bloom indexes from retained blocks
+- commands that rebuild account/balance trace or section bloom indexes from
+  retained blocks
 - any future RPC index build where input order follows block execution rather
   than target DB key order
 
