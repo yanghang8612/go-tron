@@ -163,6 +163,92 @@ func TestApplyBlock_HistoryEnabledRoutesToBuffer(t *testing.T) {
 	}
 }
 
+func TestApplyBlock_HistoryEnabledWritesBalanceTrace(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	cfg := cloneMainnetChainConfig()
+	cfg.HistoryEnabled = true
+	sender := testInsertAddr(1)
+	receiver := testInsertAddr(2)
+	amount := int64(5_000_000)
+
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: sender, Balance: 99_000_000_000_000_000},
+			{Address: receiver, Balance: 1},
+		},
+		DynamicProperties: map[string]int64{
+			"next_maintenance_time": 1<<62 - 1,
+		},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block1 := buildTransferBlock(t, 1, 3000, genesisHash, tcommon.Address{}, amount)
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+
+	trace := rawdb.ReadBlockBalanceTrace(bc.db, 1)
+	if trace == nil {
+		t.Fatal("BlockBalanceTrace missing")
+	}
+	if got := trace.GetBlockIdentifier().GetNumber(); got != 1 {
+		t.Fatalf("trace block number = %d, want 1", got)
+	}
+	if string(trace.GetBlockIdentifier().GetHash()) != string(block1.Hash().Bytes()) {
+		t.Fatalf("trace block hash = %x, want %x", trace.GetBlockIdentifier().GetHash(), block1.Hash())
+	}
+	if got := trace.GetTimestamp(); got != block1.Timestamp() {
+		t.Fatalf("trace timestamp = %d, want %d", got, block1.Timestamp())
+	}
+	if got := len(trace.GetTransactionBalanceTrace()); got != 1 {
+		t.Fatalf("tx traces = %d, want 1", got)
+	}
+	txTrace := trace.GetTransactionBalanceTrace()[0]
+	txHash := block1.Transactions()[0].Hash()
+	if string(txTrace.GetTransactionIdentifier()) != string(txHash.Bytes()) {
+		t.Fatalf("tx id = %x, want %x", txTrace.GetTransactionIdentifier(), txHash)
+	}
+	if got := txTrace.GetType(); got != "TransferContract" {
+		t.Fatalf("tx type = %q, want TransferContract", got)
+	}
+	if got := txTrace.GetStatus(); got != "SUCCESS" {
+		t.Fatalf("tx status = %q, want SUCCESS", got)
+	}
+
+	var sawSender, sawReceiver bool
+	for _, op := range txTrace.GetOperation() {
+		switch {
+		case string(op.GetAddress()) == string(sender.Bytes()) && op.GetAmount() == -amount:
+			sawSender = true
+		case string(op.GetAddress()) == string(receiver.Bytes()) && op.GetAmount() == amount:
+			sawReceiver = true
+		}
+	}
+	if !sawSender || !sawReceiver {
+		t.Fatalf("transfer balance ops missing: sender=%v receiver=%v ops=%v", sawSender, sawReceiver, txTrace.GetOperation())
+	}
+
+	headState, err := bc.openState(bc.HeadStateRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := rawdb.ReadAccountTrace(bc.db, sender.Bytes(), 1); !ok || got != headState.GetBalance(sender) {
+		t.Fatalf("sender AccountTrace = %d ok=%v, want final %d", got, ok, headState.GetBalance(sender))
+	}
+	if got, ok := rawdb.ReadAccountTrace(bc.db, receiver.Bytes(), 1); !ok || got != headState.GetBalance(receiver) {
+		t.Fatalf("receiver AccountTrace = %d ok=%v, want final %d", got, ok, headState.GetBalance(receiver))
+	}
+}
+
 // TestApplyBlock_HistoryDisabledNoRows asserts that with the default config
 // (HistoryEnabled=false) no temporal domain rows are written for an inserted
 // block.
@@ -211,6 +297,12 @@ func TestApplyBlock_HistoryDisabledNoRows(t *testing.T) {
 	}
 	if domainChanges != 0 {
 		t.Errorf("StateDomainChange rows leaked despite HistoryEnabled=false: %d", domainChanges)
+	}
+	if trace := rawdb.ReadBlockBalanceTrace(bc.db, 1); trace != nil {
+		t.Fatalf("BlockBalanceTrace leaked despite HistoryEnabled=false: %+v", trace)
+	}
+	if _, ok := rawdb.ReadAccountTrace(bc.db, testInsertAddr(1).Bytes(), 1); ok {
+		t.Fatal("AccountTrace leaked despite HistoryEnabled=false")
 	}
 }
 

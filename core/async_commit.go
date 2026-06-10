@@ -36,6 +36,7 @@ type commitJob struct {
 	dynProps          *state.DynamicProperties
 	cycleRewards      cycleRewardAccumulatorSnapshot
 	txInfos           []*corepb.TransactionInfo
+	balanceTrace      *blockBalanceTraceData
 	wasMaintenance    bool
 	maintNewWitnesses []tcommon.Address
 	checkpoint        bool
@@ -105,6 +106,7 @@ func (bc *BlockChain) commitAsync(
 	maintNewWitnesses []tcommon.Address,
 	rewardAcctAddrs []tcommon.Address,
 	txInfos []*corepb.TransactionInfo,
+	balanceTrace *blockBalanceTraceData,
 ) error {
 	// 1. Write latest-domain rows to the scope + capture the fold inputs.
 	commitStats, err := plan.CommitStateCapture(block, commitOpts)
@@ -149,6 +151,7 @@ func (bc *BlockChain) commitAsync(
 		dynProps:          dynProps.Copy(),
 		cycleRewards:      bc.cycleRewards.Snapshot(),
 		txInfos:           txInfos,
+		balanceTrace:      balanceTrace,
 		wasMaintenance:    wasMaintenanceBlock,
 		maintNewWitnesses: maintNewWitnesses,
 		checkpoint:        bc.config.StateCommitmentCheckpoints,
@@ -254,7 +257,7 @@ func (bc *BlockChain) runCommitJob(job *commitJob) {
 	// Out-of-band metadata batch to disk (block, state root, TAPOS, tx infos,
 	// tx index) — durable BEFORE the head pointer advances, preserving the
 	// head=N ⟹ root[N] durable invariant for off-lock readers.
-	if err := bc.writeBlockMetadataBatch(job.block, root, job.txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(job.block, root, job.txInfos, job.balanceTrace); err != nil {
 		bc.failCommit(job, fmt.Errorf("async commit metadata block %d: %w", job.block.Number(), err))
 		return
 	}

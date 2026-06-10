@@ -50,8 +50,12 @@ type StateDB struct {
 	// marks per change — the saved IO doesn't justify the complexity.
 	dirtyWitnesses map[tcommon.Address]struct{}
 
-	journal   *journal
-	snapshots []int // journal length at each snapshot
+	journal      *journal
+	snapshots    []int // journal length at each snapshot
+	balanceTrace *balanceTraceRecorder
+	// balanceTraceSnapshots mirrors snapshots so balance history capture rolls
+	// back with StateDB snapshots used by TVM calls and failed transactions.
+	balanceTraceSnapshots []balanceTraceSnapshot
 	// domainChangeNoJournal mirrors block-final writes that intentionally
 	// bypass the snapshot/revert journal but still need temporal change rows.
 	domainChangeNoJournal []journalChange
@@ -766,6 +770,7 @@ func (s *StateDB) AddBalance(addr tcommon.Address, amount int64) {
 	s.journalAccount(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() + amount)
 	obj.markDirty()
+	s.recordBalanceTraceChange(addr, amount)
 }
 
 // SubBalance subtracts amount from the account's balance.
@@ -780,6 +785,7 @@ func (s *StateDB) SubBalance(addr tcommon.Address, amount int64) error {
 	s.journalAccount(addr, obj)
 	obj.account.SetBalance(obj.account.Balance() - amount)
 	obj.markDirty()
+	s.recordBalanceTraceChange(addr, -amount)
 	return nil
 }
 
@@ -1370,6 +1376,11 @@ func (s *StateDB) SetDynamicProperties(dp *DynamicProperties) {
 func (s *StateDB) Snapshot() int {
 	id := len(s.snapshots)
 	s.snapshots = append(s.snapshots, s.journal.length())
+	if s.balanceTrace != nil {
+		s.balanceTraceSnapshots = append(s.balanceTraceSnapshots, s.balanceTrace.snapshot())
+	} else {
+		s.balanceTraceSnapshots = append(s.balanceTraceSnapshots, balanceTraceSnapshot{})
+	}
 	return id
 }
 
@@ -1389,6 +1400,16 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	journalLen := s.snapshots[id]
 	s.journal.revert(s.stateObjects, s.witnesses, journalLen)
 	s.snapshots = s.snapshots[:id]
+	if id < len(s.balanceTraceSnapshots) {
+		snap := s.balanceTraceSnapshots[id]
+		if snap.recorder == nil {
+			s.balanceTrace = nil
+		} else {
+			s.balanceTrace = snap.recorder
+			s.balanceTrace.revert(snap)
+		}
+		s.balanceTraceSnapshots = s.balanceTraceSnapshots[:id]
+	}
 }
 
 // FinalizeTransaction mirrors java-tron's rootRepository.commit() boundary for
@@ -2286,6 +2307,8 @@ func (s *StateDB) DeleteAccount(addr tcommon.Address) {
 	if obj == nil {
 		return
 	}
+	s.recordBalanceTraceChange(addr, -obj.account.Balance())
+	s.touchBalanceTraceAccount(addr)
 	prevCode := append([]byte(nil), s.GetCode(addr)...)
 	var prevMeta *contractpb.SmartContract
 	if meta := s.GetContract(addr); meta != nil {
@@ -2860,6 +2883,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		s.deferFold = false
 		s.journal = newJournal()
 		s.snapshots = s.snapshots[:0]
+		s.balanceTraceSnapshots = s.balanceTraceSnapshots[:0]
 		mark(&stats.AccountTrieCommit)
 		return tcommon.Hash{}, stats, nil
 	}
@@ -2873,6 +2897,7 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	s.originRoot = ethcommon.Hash(root)
 	s.journal = newJournal()
 	s.snapshots = s.snapshots[:0]
+	s.balanceTraceSnapshots = s.balanceTraceSnapshots[:0]
 	mark(&stats.AccountTrieCommit)
 
 	return root, stats, nil

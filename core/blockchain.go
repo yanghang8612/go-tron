@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -899,6 +900,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	defer func() {
 		statedb.SetCycleRewardSink(nil)
 		if retErr != nil {
+			statedb.ClearBalanceTrace()
 			// Async commit: a foreground failure (e.g. exec of a speculative
 			// block) can race in-flight commits of earlier blocks. Quiesce the
 			// worker first so currentBlock/HeadStateRoot reflect every committed
@@ -996,6 +998,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		if err != nil {
 			return fmt.Errorf("begin domain change stage: %w", err)
 		}
+		statedb.BeginBalanceTrace(int64(block.Number()), block.Hash().Bytes(), block.Timestamp())
 	}
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
@@ -1193,6 +1196,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			return fmt.Errorf("flush block-final domain changes: %w", err)
 		}
 	}
+	var balanceTraceData *blockBalanceTraceData
+	if historyEnabled {
+		trace, accountBalances := statedb.FinishBalanceTrace()
+		if trace != nil {
+			balanceTraceData = &blockBalanceTraceData{
+				trace:           trace,
+				accountBalances: accountBalances,
+			}
+		}
+	}
 
 	// dynProps is now finalized for this block. Carry it forward so the next
 	// block in an async range threads it directly (decision-b) instead of
@@ -1218,7 +1231,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// is skipped entirely and the synchronous commit runs unchanged —
 	// byte-identical.
 	if bc.asyncCommit && plan.commit != nil {
-		return bc.commitAsync(block, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos)
+		return bc.commitAsync(block, plan, statedb, dynProps, &stats, commitOpts, wasMaintenanceBlock, maintNewWitnesses, rewardAcctAddrs, txInfos, balanceTraceData)
 	}
 
 	commitResult, err := plan.CommitState(bc.buffer, block, commitOpts, bc.config.StateCommitmentCheckpoints)
@@ -1256,7 +1269,7 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// will write a different value into the same slot when the alternate
 	// branch's block #N applies — overwrite, not delete, matches java's
 	// ring semantics.
-	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos); err != nil {
+	if err := bc.writeBlockMetadataBatch(block, newRoot, txInfos, balanceTraceData); err != nil {
 		return err
 	}
 	rawdb.WriteHeadBlockHash(bc.buffer, block.Hash())
@@ -1353,7 +1366,7 @@ func (a *stateTxRangeAllocator) next(block *types.Block) (*rawdb.StateTxRange, e
 	}, nil
 }
 
-func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo) error {
+func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcommon.Hash, txInfos []*corepb.TransactionInfo, balanceTrace *blockBalanceTraceData) error {
 	batch := bc.db.NewBatch()
 
 	// The root is persisted out-of-band — we do NOT mutate
@@ -1380,6 +1393,25 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 		h := tx.Hash()
 		if err := rawdb.WriteTransactionIndex(batch, h[:], block.Number()); err != nil {
 			return fmt.Errorf("write tx index: %w", err)
+		}
+	}
+	if balanceTrace != nil {
+		if balanceTrace.trace != nil {
+			rawdb.WriteBlockBalanceTrace(batch, int64(block.Number()), balanceTrace.trace)
+		}
+		if len(balanceTrace.accountBalances) > 0 {
+			addrs := make([]tcommon.Address, 0, len(balanceTrace.accountBalances))
+			for addr := range balanceTrace.accountBalances {
+				addrs = append(addrs, addr)
+			}
+			sort.Slice(addrs, func(i, j int) bool {
+				return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0
+			})
+			for _, addr := range addrs {
+				if err := rawdb.WriteAccountTrace(batch, addr.Bytes(), int64(block.Number()), balanceTrace.accountBalances[addr]); err != nil {
+					return fmt.Errorf("write account trace: %w", err)
+				}
+			}
 		}
 	}
 	if err := batch.Write(); err != nil {

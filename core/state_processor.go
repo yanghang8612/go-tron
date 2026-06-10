@@ -539,6 +539,8 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
+		txHash := tx.Hash()
+		statedb.BeginBalanceTraceTransaction(txHash.Bytes(), tx.ContractType().String())
 		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
@@ -546,9 +548,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		if err := ValidateTxVMContractRet(tx, corepb.Transaction_ResultContractResult(result.ContractRet)); err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
+		balanceTraceStatus := balanceTraceTransactionStatus(result)
 		info := buildTransactionInfo(tx, result, block.Number(), block.Timestamp(), dynProps.AllowTransactionFeePool())
 		txInfos = append(txInfos, info)
 		statedb.FinalizeTransaction()
+		statedb.EndBalanceTraceTransaction(balanceTraceStatus)
 		if domainChanges != nil {
 			if err := domainChanges.FlushOrdinal(domainChangeMark, uint64(i)); err != nil {
 				return nil, tcommon.Hash{}, fmt.Errorf("tx %d domain changes: %w", i, err)
@@ -592,6 +596,21 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 
 	return txInfos, javaAccountStateRoot, nil
+}
+
+func balanceTraceTransactionStatus(result *actuator.Result) string {
+	if result == nil {
+		return "SUCCESS"
+	}
+	ret := corepb.Transaction_ResultContractResult(result.ContractRet)
+	if ret == corepb.Transaction_Result_DEFAULT {
+		return "SUCCESS"
+	}
+	status := ret.String()
+	if status == "" {
+		return "SUCCESS"
+	}
+	return status
 }
 
 func newProcessBlockPrefetcher(db actuator.BufferedKVStore, cfg processBlockPrefetchConfig, txCount int) *state.StatePrefetcher {

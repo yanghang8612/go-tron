@@ -86,6 +86,96 @@ func TestStateDBSnapshotRevertNewAccount(t *testing.T) {
 	}
 }
 
+func TestStateDBBalanceTraceRecordsAndRevertsSnapshots(t *testing.T) {
+	sdb := newTestStateDB(t)
+	from := testAddr(1)
+	to := testAddr(2)
+	reverted := testAddr(3)
+
+	sdb.GetOrCreateAccount(from)
+	sdb.AddBalance(from, 1000)
+
+	sdb.BeginBalanceTrace(7, []byte{0xaa}, 1234)
+	sdb.BeginBalanceTraceTransaction([]byte{0x01}, "TransferContract")
+	if err := sdb.SubBalance(from, 100); err != nil {
+		t.Fatal(err)
+	}
+	sdb.AddBalance(to, 100)
+
+	snap := sdb.Snapshot()
+	sdb.AddBalance(reverted, 50)
+	sdb.RevertToSnapshot(snap)
+	sdb.EndBalanceTraceTransaction("")
+
+	trace, balances := sdb.FinishBalanceTrace()
+	if trace == nil {
+		t.Fatal("FinishBalanceTrace returned nil trace")
+	}
+	if got := trace.GetBlockIdentifier().GetNumber(); got != 7 {
+		t.Fatalf("block number = %d, want 7", got)
+	}
+	if got := trace.GetTimestamp(); got != 1234 {
+		t.Fatalf("timestamp = %d, want 1234", got)
+	}
+	if got := len(trace.GetTransactionBalanceTrace()); got != 1 {
+		t.Fatalf("tx traces = %d, want 1", got)
+	}
+	txTrace := trace.GetTransactionBalanceTrace()[0]
+	if got := txTrace.GetStatus(); got != "SUCCESS" {
+		t.Fatalf("status = %q, want SUCCESS", got)
+	}
+	if got := len(txTrace.GetOperation()); got != 2 {
+		t.Fatalf("operations = %d, want 2", got)
+	}
+	ops := txTrace.GetOperation()
+	if ops[0].GetOperationIdentifier() != 0 || string(ops[0].GetAddress()) != string(from.Bytes()) || ops[0].GetAmount() != -100 {
+		t.Fatalf("op0 = %+v, want from -100", ops[0])
+	}
+	if ops[1].GetOperationIdentifier() != 1 || string(ops[1].GetAddress()) != string(to.Bytes()) || ops[1].GetAmount() != 100 {
+		t.Fatalf("op1 = %+v, want to +100", ops[1])
+	}
+	if got := balances[from]; got != 900 {
+		t.Fatalf("from final balance = %d, want 900", got)
+	}
+	if got := balances[to]; got != 100 {
+		t.Fatalf("to final balance = %d, want 100", got)
+	}
+	if _, ok := balances[reverted]; ok {
+		t.Fatal("reverted account leaked into balance trace accounts")
+	}
+}
+
+func TestStateDBBalanceTraceDeleteAccountFinalBalance(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(4)
+	sdb.GetOrCreateAccount(addr)
+	sdb.AddBalance(addr, 500)
+
+	sdb.BeginBalanceTrace(8, []byte{0xbb}, 2000)
+	sdb.BeginBalanceTraceTransaction([]byte{0x02}, "TriggerSmartContract")
+	sdb.DeleteAccount(addr)
+	sdb.EndBalanceTraceTransaction("REVERT")
+
+	trace, balances := sdb.FinishBalanceTrace()
+	if got := len(trace.GetTransactionBalanceTrace()); got != 1 {
+		t.Fatalf("tx traces = %d, want 1", got)
+	}
+	txTrace := trace.GetTransactionBalanceTrace()[0]
+	if got := txTrace.GetStatus(); got != "REVERT" {
+		t.Fatalf("status = %q, want REVERT", got)
+	}
+	ops := txTrace.GetOperation()
+	if got := len(ops); got != 1 {
+		t.Fatalf("operations = %d, want 1", got)
+	}
+	if string(ops[0].GetAddress()) != string(addr.Bytes()) || ops[0].GetAmount() != -500 {
+		t.Fatalf("delete op = %+v, want addr -500", ops[0])
+	}
+	if got := balances[addr]; got != 0 {
+		t.Fatalf("deleted account final balance = %d, want 0", got)
+	}
+}
+
 func TestStateDBCommitChangesRoot(t *testing.T) {
 	sdb := newTestStateDB(t)
 	emptyRoot := ethcommon.Hash(ethtypes.EmptyRootHash)
