@@ -20,6 +20,11 @@ type fakeAncient struct {
 	rows map[string]map[uint64][]byte
 }
 
+type fakeChainIndex struct {
+	blocks map[common.Hash]uint64
+	txs    map[common.Hash]uint64
+}
+
 func newFakeAncient() *fakeAncient {
 	return &fakeAncient{rows: make(map[string]map[uint64][]byte)}
 }
@@ -94,6 +99,22 @@ func (f *fakeAncient) HasAncient(kind string, number uint64) (bool, error) {
 	return ok, nil
 }
 
+func (f *fakeChainIndex) BlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	if f == nil {
+		return 0, false, nil
+	}
+	num, ok := f.blocks[hash]
+	return num, ok, nil
+}
+
+func (f *fakeChainIndex) TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error) {
+	if f == nil {
+		return 0, false, nil
+	}
+	num, ok := f.txs[hash]
+	return num, ok, nil
+}
+
 // newBlockProto builds a minimal *corepb.Block at the given number whose
 // hash is deterministic. The slice-2 tests don't care about transaction
 // content; they need the proto to round-trip through ReadBlock and to
@@ -139,6 +160,20 @@ func TestReadBlock_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadBlockRaw_AncientFallthrough(t *testing.T) {
+	t.Parallel()
+
+	want := []byte("raw-block-7")
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 7, want)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	got := ReadBlockRaw(cdb, 7)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadBlockRaw = %q, want %q", got, want)
+	}
+}
+
 // TestReadBlock_KVPath verifies that ReadBlock reads from the hot KV
 // store when no ancient entry exists (the slice-2 default with
 // NoopAncient).
@@ -164,10 +199,29 @@ func TestReadBlock_KVPath(t *testing.T) {
 	}
 }
 
-// TestReadBlockNumber_KVOnly confirms ReadBlockNumber is KV-only — slice
-// 1 of the freezer spec keeps `bh-<hash>` hot, so an ancient hit must
-// not satisfy this read.
-func TestReadBlockNumber_KVOnly(t *testing.T) {
+func TestReadBlockHashByNumber_AncientFallthrough(t *testing.T) {
+	t.Parallel()
+
+	pb := newBlockProto(13, 33333)
+	block := types.NewBlockFromPB(pb)
+	data, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	anc := newFakeAncient()
+	anc.put(ancientBlocks, 13, data)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	got := ReadBlockHashByNumber(cdb, 13)
+	if got != block.Hash() {
+		t.Fatalf("hash: got %x, want %x", got, block.Hash())
+	}
+}
+
+// TestReadBlockNumber_KVPath confirms ReadBlockNumber still prefers the hot
+// bh-<hash> row. An ancient block body alone must not satisfy hash lookup.
+func TestReadBlockNumber_KVPath(t *testing.T) {
 	t.Parallel()
 
 	cdb := NewMemoryChainDB()
@@ -191,6 +245,21 @@ func TestReadBlockNumber_KVOnly(t *testing.T) {
 	cdb2 := NewChainDB(NewMemoryDatabase(), anc)
 	if got := ReadBlockNumber(cdb2, block.Hash()); got != nil {
 		t.Fatalf("unknown-hash with ancient populated: want nil, got *%d", *got)
+	}
+}
+
+func TestReadBlockNumber_ColdIndexFallback(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(33, 2026))
+	cdb := NewMemoryChainDB()
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blocks: map[common.Hash]uint64{block.Hash(): 33},
+	})
+
+	got := ReadBlockNumber(cdb, block.Hash())
+	if got == nil || *got != 33 {
+		t.Fatalf("cold chain-index fallback: got %v, want *33", got)
 	}
 }
 
@@ -227,6 +296,20 @@ func TestReadTransactionInfosByBlock_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosRaw_AncientFallthrough(t *testing.T) {
+	t.Parallel()
+
+	want := []byte("raw-tx-infos-5")
+	anc := newFakeAncient()
+	anc.put(ancientTxInfos, 5, want)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	got := ReadTransactionInfosRaw(cdb, 5)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadTransactionInfosRaw = %q, want %q", got, want)
+	}
+}
+
 // TestReadTransactionInfosByBlock_KVPath verifies the same accessor
 // reads from Pebble when no ancient row exists.
 func TestReadTransactionInfosByBlock_KVPath(t *testing.T) {
@@ -244,9 +327,9 @@ func TestReadTransactionInfosByBlock_KVPath(t *testing.T) {
 	}
 }
 
-// TestReadTransactionInfo_KVOnly proves the per-tx index accessor never
-// consults the freezer (slice 1 leaves `ti-<txid>` hot).
-func TestReadTransactionInfo_KVOnly(t *testing.T) {
+// TestReadTransactionInfo_KVPath proves the hot per-tx info row is still
+// preferred.
+func TestReadTransactionInfo_KVPath(t *testing.T) {
 	t.Parallel()
 
 	cdb := NewMemoryChainDB()
@@ -260,9 +343,37 @@ func TestReadTransactionInfo_KVOnly(t *testing.T) {
 	}
 }
 
-// TestReadTransactionIndex_KVOnly mirrors TestReadTransactionInfo_KVOnly
-// for the tx-hash → block-number reverse index.
-func TestReadTransactionIndex_KVOnly(t *testing.T) {
+func TestReadTransactionInfo_ColdIndexAndAncientBlockFallback(t *testing.T) {
+	t.Parallel()
+
+	txID := bytes.Repeat([]byte{0xBD}, 32)
+	ret := &corepb.TransactionRet{
+		BlockNumber: 88,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x01}, 32), Fee: 1, BlockNumber: 88},
+			{Id: txID, Fee: 888, BlockNumber: 88},
+		},
+	}
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	anc := newFakeAncient()
+	anc.put(ancientTxInfos, 88, data)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{common.BytesToHash(txID): 88},
+	})
+
+	got := ReadTransactionInfo(cdb, txID)
+	if got == nil || got.Fee != 888 {
+		t.Fatalf("cold tx info fallback: got %#v, want fee 888", got)
+	}
+}
+
+// TestReadTransactionIndex_KVPath mirrors TestReadTransactionInfo_KVPath
+// for the tx-hash -> block-number reverse index.
+func TestReadTransactionIndex_KVPath(t *testing.T) {
 	t.Parallel()
 
 	cdb := NewMemoryChainDB()
@@ -272,6 +383,21 @@ func TestReadTransactionIndex_KVOnly(t *testing.T) {
 	got := ReadTransactionIndex(cdb, txHash)
 	if got == nil || *got != 42 {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestReadTransactionIndex_ColdIndexFallback(t *testing.T) {
+	t.Parallel()
+
+	cdb := NewMemoryChainDB()
+	txHash := common.HexToHash("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{txHash: 77},
+	})
+
+	got := ReadTransactionIndex(cdb, txHash[:])
+	if got == nil || *got != 77 {
+		t.Fatalf("cold tx-index fallback: got %v, want *77", got)
 	}
 }
 
@@ -302,6 +428,42 @@ func TestReadBlockStateRoot_AncientFallthrough(t *testing.T) {
 	got := ReadBlockStateRoot(cdb, hash)
 	if got != want {
 		t.Fatalf("ancient state root: got %x, want %x", got, want)
+	}
+}
+
+func TestReadBlockStateRoot_ColdIndexFallback(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(19, 0))
+	want := common.HexToHash("9090909090909090909090909090909090909090909090909090909090909090")
+	anc := newFakeAncient()
+	anc.put(ancientStateRoots, 19, want.Bytes())
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blocks: map[common.Hash]uint64{block.Hash(): 19},
+	})
+
+	got := ReadBlockStateRoot(cdb, block.Hash())
+	if got != want {
+		t.Fatalf("cold state root fallback: got %x, want %x", got, want)
+	}
+}
+
+func TestReadBlockStateRootRaw_ColdIndexFallback(t *testing.T) {
+	t.Parallel()
+
+	block := types.NewBlockFromPB(newBlockProto(29, 0))
+	want := common.HexToHash("2929292929292929292929292929292929292929292929292929292929292929")
+	anc := newFakeAncient()
+	anc.put(ancientStateRoots, 29, want.Bytes())
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		blocks: map[common.Hash]uint64{block.Hash(): 29},
+	})
+
+	got := ReadBlockStateRootRaw(cdb, block.Hash())
+	if !bytes.Equal(got, want.Bytes()) {
+		t.Fatalf("ReadBlockStateRootRaw = %x, want %x", got, want.Bytes())
 	}
 }
 

@@ -20,6 +20,13 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	if err := WriteStateAccountLatest(db, addr, []byte("acct")); err != nil {
 		t.Fatal(err)
 	}
+	if err := WriteHistoryPruneMode(db, "archive"); err != nil {
+		t.Fatal(err)
+	}
+	staged := testSyncStagedBlock(1, common.Hash{0x01})
+	if err := WriteSyncStagedBlock(db, staged); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := ResetMutableState(db); err != nil {
 		t.Fatalf("reset: %v", err)
@@ -39,5 +46,11 @@ func TestResetMutableStateClearsCommitmentBranches(t *testing.T) {
 	// Sanity: the root row and latest row are cleared too (already covered, just assert).
 	if _, ok, err := ReadLatestDomainCommitmentRoot(db); err != nil || ok {
 		t.Fatalf("commitment root survived reset: ok=%v err=%v", ok, err)
+	}
+	if mode, ok, err := ReadHistoryPruneMode(db); err != nil || !ok || mode != "archive" {
+		t.Fatalf("history prune mode should survive reset: mode=%q ok=%v err=%v", mode, ok, err)
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, staged.Number()); err != nil || ok {
+		t.Fatalf("sync staged block survived reset: ok=%v err=%v", ok, err)
 	}
 }

@@ -12,12 +12,20 @@ package freezer
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
 var testTables = map[string]TableConfig{
 	"raw": {NoSnappy: true},
 	"cmp": {NoSnappy: false},
+}
+
+var prunableTestTables = map[string]TableConfig{
+	"raw": {NoSnappy: true, Prunable: true},
+	"cmp": {NoSnappy: false, Prunable: true},
 }
 
 func newTestFreezer(t *testing.T) *Freezer {
@@ -194,6 +202,396 @@ func TestFreezerTruncateHead(t *testing.T) {
 		if _, err := f.Ancient(kind, 9); err != nil {
 			t.Fatalf("read at new head-1 on %s: %v", kind, err)
 		}
+	}
+}
+
+func TestFreezerTruncateTail(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f, err := NewFreezer(dir, "", false, 2049, prunableTestTables)
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+
+	const N = 64
+	_, err = f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < N; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(128, int(i))); err != nil {
+				return err
+			}
+			if err := op.AppendRaw("cmp", i, getChunk(128, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	old, err := f.TruncateTail(10)
+	if err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if old != 0 {
+		t.Fatalf("TruncateTail returned old=%d, want 0", old)
+	}
+	tail, err := f.Tail()
+	if err != nil || tail != 10 {
+		t.Fatalf("tail after truncate = %d/%v, want 10", tail, err)
+	}
+	for _, kind := range []string{"raw", "cmp"} {
+		got, _ := f.AncientCount(kind)
+		if got != N {
+			t.Fatalf("%s count after tail truncate: want %d, got %d", kind, N, got)
+		}
+		if ok, err := f.HasAncient(kind, 9); err != nil || ok {
+			t.Fatalf("%s HasAncient(9) = %v/%v, want false", kind, ok, err)
+		}
+		if _, err := f.Ancient(kind, 9); !errors.Is(err, ErrOutOfBounds) {
+			t.Fatalf("read before tail on %s: %v", kind, err)
+		}
+		if ok, err := f.HasAncient(kind, 10); err != nil || !ok {
+			t.Fatalf("%s HasAncient(10) = %v/%v, want true", kind, ok, err)
+		}
+		if _, err := f.Ancient(kind, 10); err != nil {
+			t.Fatalf("read at tail on %s: %v", kind, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 2049, prunableTestTables)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	tail, err = reopened.Tail()
+	if err != nil || tail != 10 {
+		t.Fatalf("reopened tail = %d/%v, want 10", tail, err)
+	}
+	if _, err := reopened.Ancient("raw", 9); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("reopened read before tail: %v", err)
+	}
+	if _, err := reopened.Ancient("raw", 10); err != nil {
+		t.Fatalf("reopened read at tail: %v", err)
+	}
+}
+
+func TestFreezerPruneTailFilesDeletesCompleteTailShards(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tables := map[string]TableConfig{"raw": {NoSnappy: true, Prunable: true}}
+	f, err := NewFreezer(dir, "", false, 50, tables)
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+
+	const N = 10
+	_, err = f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < N; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(15, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	for _, file := range []string{"raw.0000.rdat", "raw.0001.rdat", "raw.0002.rdat"} {
+		if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+			t.Fatalf("expected %s before prune: %v", file, err)
+		}
+	}
+
+	if _, err := f.TruncateTail(7); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	removed, err := f.PruneTailFiles()
+	if err != nil {
+		t.Fatalf("PruneTailFiles: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("PruneTailFiles removed %d files, want 2", removed)
+	}
+	for _, file := range []string{"raw.0000.rdat", "raw.0001.rdat"} {
+		if _, err := os.Stat(filepath.Join(dir, file)); !os.IsNotExist(err) {
+			t.Fatalf("%s after prune err = %v, want not exist", file, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "raw.0002.rdat")); err != nil {
+		t.Fatalf("retained shard missing after prune: %v", err)
+	}
+	if _, err := f.Ancient("raw", 6); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("read hidden item 6: %v, want ErrOutOfBounds", err)
+	}
+	got, err := f.Ancient("raw", 7)
+	if err != nil {
+		t.Fatalf("read visible item 7: %v", err)
+	}
+	if want := getChunk(15, 7); !bytes.Equal(got, want) {
+		t.Fatalf("item 7 = %x, want %x", got, want)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 7 {
+		t.Fatalf("tail after prune = %d/%v, want 7/nil", tail, err)
+	}
+	if count, err := f.AncientCount("raw"); err != nil || count != N {
+		t.Fatalf("count after prune = %d/%v, want %d/nil", count, err, N)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 50, tables)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if _, err := reopened.Ancient("raw", 6); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("reopened read hidden item 6: %v, want ErrOutOfBounds", err)
+	}
+	got, err = reopened.Ancient("raw", 7)
+	if err != nil {
+		t.Fatalf("reopened read visible item 7: %v", err)
+	}
+	if want := getChunk(15, 7); !bytes.Equal(got, want) {
+		t.Fatalf("reopened item 7 = %x, want %x", got, want)
+	}
+	if tail, err := reopened.Tail(); err != nil || tail != 7 {
+		t.Fatalf("reopened tail = %d/%v, want 7/nil", tail, err)
+	}
+}
+
+func TestFreezerPruneTailFilesAllHiddenTruncatesHead(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tables := map[string]TableConfig{"raw": {NoSnappy: true, Prunable: true}}
+	f, err := NewFreezer(dir, "", false, 50, tables)
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+
+	_, err = f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < 3; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(15, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	dataPath := filepath.Join(dir, "raw.0000.rdat")
+	stat, err := os.Stat(dataPath)
+	if err != nil {
+		t.Fatalf("head shard before prune stat: %v", err)
+	}
+	if stat.Size() != 45 {
+		t.Fatalf("head shard before prune size = %d, want 45", stat.Size())
+	}
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	removed, err := f.PruneTailFiles()
+	if err != nil {
+		t.Fatalf("PruneTailFiles: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("PruneTailFiles removed %d files, want 0", removed)
+	}
+	stat, err = os.Stat(dataPath)
+	if err != nil {
+		t.Fatalf("head shard after prune stat: %v", err)
+	}
+	if stat.Size() != 0 {
+		t.Fatalf("head shard after prune size = %d, want 0", stat.Size())
+	}
+	if _, err := f.Ancient("raw", 2); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("read hidden item 2: %v, want ErrOutOfBounds", err)
+	}
+	if _, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		return op.AppendRaw("raw", 3, getChunk(15, 3))
+	}); err != nil {
+		t.Fatalf("append after full-tail prune: %v", err)
+	}
+	got, err := f.Ancient("raw", 3)
+	if err != nil {
+		t.Fatalf("read appended item 3: %v", err)
+	}
+	if want := getChunk(15, 3); !bytes.Equal(got, want) {
+		t.Fatalf("item 3 = %x, want %x", got, want)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 50, tables)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if tail, err := reopened.Tail(); err != nil || tail != 3 {
+		t.Fatalf("reopened tail = %d/%v, want 3/nil", tail, err)
+	}
+	if count, err := reopened.AncientCount("raw"); err != nil || count != 4 {
+		t.Fatalf("reopened count = %d/%v, want 4/nil", count, err)
+	}
+	if _, err := reopened.Ancient("raw", 2); !errors.Is(err, ErrOutOfBounds) {
+		t.Fatalf("reopened read hidden item 2: %v, want ErrOutOfBounds", err)
+	}
+	got, err = reopened.Ancient("raw", 3)
+	if err != nil {
+		t.Fatalf("reopened read appended item 3: %v", err)
+	}
+	if want := getChunk(15, 3); !bytes.Equal(got, want) {
+		t.Fatalf("reopened item 3 = %x, want %x", got, want)
+	}
+}
+
+func TestFreezerTruncateTailRejectsNonPrunableTables(t *testing.T) {
+	t.Parallel()
+	f := newTestFreezer(t)
+
+	_, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		if err := op.AppendRaw("raw", 0, getChunk(128, 0)); err != nil {
+			return err
+		}
+		return op.AppendRaw("cmp", 0, getChunk(128, 0))
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if _, err := f.TruncateTail(1); err == nil || !strings.Contains(err.Error(), "not prunable") {
+		t.Fatalf("TruncateTail on non-prunable tables err = %v, want not prunable", err)
+	}
+}
+
+func TestFreezerTruncateTailPreflightsAllTables(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tables := map[string]TableConfig{
+		"raw": {NoSnappy: true, Prunable: true},
+		"cmp": {NoSnappy: true},
+	}
+	f, err := NewFreezer(dir, "", false, 2049, tables)
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	_, err = f.ModifyAncients(func(op AncientWriteOp) error {
+		if err := op.AppendRaw("raw", 0, getChunk(128, 0)); err != nil {
+			return err
+		}
+		return op.AppendRaw("cmp", 0, getChunk(128, 0))
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if _, err := f.TruncateTail(1); err == nil || !strings.Contains(err.Error(), "not prunable") {
+		t.Fatalf("TruncateTail on mixed tables err = %v, want not prunable", err)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 0 {
+		t.Fatalf("tail after failed mixed truncate = %d/%v, want 0", tail, err)
+	}
+	if ok, err := f.HasAncient("raw", 0); err != nil || !ok {
+		t.Fatalf("raw HasAncient(0) after failed mixed truncate = %v/%v, want true", ok, err)
+	}
+}
+
+func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	rawOnly := map[string]TableConfig{"raw": {NoSnappy: true}}
+	allTables := map[string]TableConfig{"raw": {NoSnappy: true}, "cmp": {NoSnappy: true}}
+
+	empty, err := NewFreezer(dir, "", false, 2049, allTables)
+	if err != nil {
+		t.Fatalf("NewFreezer empty all-tables: %v", err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("close empty all-tables: %v", err)
+	}
+
+	f, err := NewFreezer(dir, "", false, 2049, rawOnly)
+	if err != nil {
+		t.Fatalf("NewFreezer raw-only: %v", err)
+	}
+	if _, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < 5; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(32, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify raw-only: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close raw-only: %v", err)
+	}
+
+	reopened, err := NewFreezer(dir, "", false, 2049, allTables)
+	if err != nil {
+		t.Fatalf("reopen with all tables: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	for _, kind := range []string{"raw", "cmp"} {
+		got, err := reopened.AncientCount(kind)
+		if err != nil {
+			t.Fatalf("AncientCount(%s): %v", kind, err)
+		}
+		if got != 0 {
+			t.Fatalf("%s count after repair = %d, want 0", kind, got)
+		}
+	}
+}
+
+func TestFreezerReadonlyRejectsTableCardinalityMismatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	rawOnly := map[string]TableConfig{"raw": {NoSnappy: true}}
+	allTables := map[string]TableConfig{"raw": {NoSnappy: true}, "cmp": {NoSnappy: true}}
+
+	empty, err := NewFreezer(dir, "", false, 2049, allTables)
+	if err != nil {
+		t.Fatalf("NewFreezer empty all-tables: %v", err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("close empty all-tables: %v", err)
+	}
+
+	f, err := NewFreezer(dir, "", false, 2049, rawOnly)
+	if err != nil {
+		t.Fatalf("NewFreezer raw-only: %v", err)
+	}
+	if _, err := f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < 3; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(32, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify raw-only: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close raw-only: %v", err)
+	}
+
+	if _, err := NewFreezer(dir, "", true, 2049, allTables); err == nil {
+		t.Fatal("readonly reopen with mismatched tables succeeded, want error")
+	} else if !strings.Contains(err.Error(), "differing head") {
+		t.Fatalf("readonly mismatch error = %v, want differing head", err)
 	}
 }
 

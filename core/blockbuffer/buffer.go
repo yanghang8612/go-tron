@@ -102,10 +102,11 @@ func newLayer(hash common.Hash, number uint64) *layer {
 // committed (and thus flush-eligible) only after its fold completes and
 // CommitBlock/CommitInflight promotes it.
 type Buffer struct {
-	base    ethdb.KeyValueReader
-	mu      sync.RWMutex
-	flushMu sync.Mutex
-	layers  []*layer
+	base            ethdb.KeyValueReader
+	blockHashReader BlockHashReader
+	mu              sync.RWMutex
+	flushMu         sync.Mutex
+	layers          []*layer
 	// inflight holds begun-but-uncommitted layers, oldest→newest. The newest
 	// is the foreground's active layer. Empty or length 1 under the default
 	// maxInflight==1; the async commit worker raises maxInflight to allow a
@@ -131,9 +132,54 @@ type bufferBatch struct {
 	closed bool
 }
 
+// BlockHashReader is an optional cold-chain lookup capability carried by
+// buffers used as TVM rawdb readers. It lets BLOCKHASH keep the TVM's KV
+// surface narrow while still resolving frozen block bodies through ChainDB.
+type BlockHashReader interface {
+	BlockHashByNumber(number uint64) (common.Hash, bool)
+}
+
+// BlockHashReaderFunc adapts a function into BlockHashReader.
+type BlockHashReaderFunc func(number uint64) (common.Hash, bool)
+
+func (fn BlockHashReaderFunc) BlockHashByNumber(number uint64) (common.Hash, bool) {
+	if fn == nil {
+		return common.Hash{}, false
+	}
+	return fn(number)
+}
+
 // New creates a Buffer that falls through reads to base.
 func New(base ethdb.KeyValueReader) *Buffer {
-	return &Buffer{base: base}
+	b := &Buffer{base: base}
+	if reader, ok := base.(BlockHashReader); ok {
+		b.blockHashReader = reader
+	}
+	return b
+}
+
+// SetBlockHashReader wires the optional cold-chain block-hash reader used by
+// VM BLOCKHASH fallback. It is safe to call before concurrent buffer use.
+func (b *Buffer) SetBlockHashReader(reader BlockHashReader) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.blockHashReader = reader
+}
+
+// BlockHashByNumber resolves a canonical block hash through the optional cold
+// reader. Overlay writes are intentionally not checked here; callers should try
+// rawdb.ReadBlockKV on the buffer first so hot/in-flight layers win.
+func (b *Buffer) BlockHashByNumber(number uint64) (common.Hash, bool) {
+	if b == nil {
+		return common.Hash{}, false
+	}
+	b.mu.RLock()
+	reader := b.blockHashReader
+	b.mu.RUnlock()
+	if reader == nil {
+		return common.Hash{}, false
+	}
+	return reader.BlockHashByNumber(number)
 }
 
 // NewBatch creates a write batch whose operations are owned by the active layer

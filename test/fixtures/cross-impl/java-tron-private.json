@@ -2,6 +2,7 @@
   "_comment": "Mirrors genesis.block from /Users/asuka/Works/Tests/TVM/run/config.conf — single-SR java-tron private chain. Genesis BlockID 000000000000000075da3fe749503edb5d6121d96d450b980294a03648934988 cross-verified by p2p.TestProbeJavaTronGenesis on 2026-05-02.",
   "chain_id": 9999,
   "p2p_version": 0,
+  "block_num_for_energy_limit": 0,
   "timestamp_ms": 0,
   "parent_hash": "0xe58f33f9baf9305dc6f82b9f1934ea8f0ade2defb951258d50167028c780351f",
   "accounts": [

@@ -12,6 +12,7 @@ var (
 	headBlockKey             = []byte("LastBlock")
 	headSolidBlockKey        = []byte("LastSolidBlock")
 	totalTransactionCountKey = []byte("total-tx-count")
+	historyPruneModeKey      = []byte("history-prune-mode-v1")
 
 	// genesisStateRootKey holds the post-genesis state root. java-tron does
 	// not put account_state_root on the genesis block header (we mirror that
@@ -214,6 +215,14 @@ var (
 	// Key:   stage-progress-v1- || stage name
 	// Value: block number u64
 	stageProgressPrefix = []byte("stage-progress-v1-")
+
+	// syncStagedBlockPrefix stores block bodies accepted by the live sync
+	// downloader but not yet executed. It is a transient Erigon-style body stage:
+	// rows are deleted once the matching block imports successfully.
+	//
+	// Key:   sync-staged-block-v1- || block number u64
+	// Value: marshalled corepb.Block
+	syncStagedBlockPrefix = []byte("sync-staged-block-v1-")
 
 	// stateTxRangePrefix maps block numbers to the compact global txNum range
 	// used by flat temporal history. Each block consumes one txNum per
@@ -594,6 +603,13 @@ func stateCodeKey(hash common.Hash) []byte {
 
 func stageProgressKey(stage StageID) []byte {
 	return append(append([]byte{}, stageProgressPrefix...), []byte(stage)...)
+}
+
+func syncStagedBlockKey(number uint64) []byte {
+	k := make([]byte, len(syncStagedBlockPrefix)+8)
+	copy(k, syncStagedBlockPrefix)
+	binary.BigEndian.PutUint64(k[len(syncStagedBlockPrefix):], number)
+	return k
 }
 
 func stateTxRangeKey(blockNum uint64) []byte {

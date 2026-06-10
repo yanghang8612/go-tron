@@ -164,7 +164,7 @@ func DeleteBlockStateRoot(db ethdb.KeyValueWriter, blockHash common.Hash) {
 // num-keyed ancient is reached via the two-step
 // `bh-<hash>` → num → `state_roots[num]` fall-through encoded in
 // `ReadBlockStateRoot`.
-const ancientStateRoots = "state_roots"
+const ancientStateRoots = AncientStateRootsTable
 
 // ReadBlockStateRoot returns the post-apply state root for the given
 // block hash, or the zero hash if not stored.
@@ -179,13 +179,14 @@ func ReadBlockStateRoot(db *ChainDB, blockHash common.Hash) common.Hash {
 	if data, err := db.Get(blockStateRootKey(blockHash.Bytes())); err == nil {
 		return common.BytesToHash(data)
 	}
-	// KV miss: try the freezer via the still-hot bh-<hash> reverse index.
-	numBytes, err := db.Get(blockHashKey(blockHash.Bytes()))
-	if err != nil || len(numBytes) != 8 {
+	// KV miss: try the freezer via hash->number. Recent blocks use the hot
+	// bh-<hash> reverse index; historical blocks may resolve through the cold
+	// chain-index sidecar attached to ChainDB.
+	numPtr := ReadBlockNumber(db, blockHash)
+	if numPtr == nil {
 		return common.Hash{}
 	}
-	num := binary.BigEndian.Uint64(numBytes)
-	if data, ok := readAncient(db, ancientStateRoots, num); ok {
+	if data, ok := readAncient(db, ancientStateRoots, *numPtr); ok {
 		return common.BytesToHash(data)
 	}
 	return common.Hash{}

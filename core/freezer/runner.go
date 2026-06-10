@@ -405,12 +405,20 @@ func (r *Runner) OnePass() (uint64, error) {
 			if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), 0, leftoverHi); err != nil {
 				return 0, err
 			}
+			if err := r.writeChainFreezerStage(leftoverHi); err != nil {
+				return 0, err
+			}
 			start, limit := rawdb.BlockRangeBounds(0, leftoverHi)
 			if err := r.chain.DB().Compact(start, limit); err != nil {
 				log.Warn("Freezer: crash-leftover compact failed (rows still deleted)",
 					"to", leftoverHi, "err", err)
 			}
 			log.Info("Freezer: swept crash-leftover hot rows", "upTo", leftoverHi)
+		}
+	}
+	if freezeFromN > 0 {
+		if err := r.writeChainFreezerStage(freezeFromN - 1); err != nil {
+			return 0, err
 		}
 	}
 
@@ -479,6 +487,9 @@ func (r *Runner) OnePass() (uint64, error) {
 	if err := rawdb.DeleteFrozenBlockRange(r.chain.DB(), freezeFromN, frozenHi); err != nil {
 		return 0, err
 	}
+	if err := r.writeChainFreezerStage(frozenHi); err != nil {
+		return 0, err
+	}
 
 	// Phase 4: compact the freed range. Pebble turns DeleteRange into
 	// range tombstones, which are O(1) on the write path but only reclaim
@@ -503,6 +514,18 @@ func (r *Runner) OnePass() (uint64, error) {
 	r.blocksFrozen.Add(frozen)
 	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
 	return frozen, nil
+}
+
+func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
+	db := r.chain.DB()
+	current, ok, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	if err != nil {
+		return err
+	}
+	if ok && current >= blockNum {
+		return nil
+	}
+	return rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, blockNum)
 }
 
 // loop is the goroutine. Fires once on Start so a fresh-install backlog
@@ -557,15 +580,12 @@ func pebbleBlockNamespaceSize(db ethdb.Iteratee) uint64 {
 // that changes the prefix must update both places.
 var blockNamespacePrefix = []byte("b-")
 
-// rawdbAncient* mirrors core/rawdb's per-table ancient name constants.
-// They are package-private in rawdb because each accessor file owns its
-// own name; the runner needs all three. Mirrored here rather than
-// exported because the table set is a runner-side concern (the freezer
-// is content-agnostic).
+// rawdbAncient* aliases rawdb's per-table ancient name constants so the
+// runner, chain accessors, and snapshot installer stay on one table layout.
 const (
-	rawdbAncientBlocks     = "bodies"
-	rawdbAncientTxInfos    = "tx_infos"
-	rawdbAncientStateRoots = "state_roots"
+	rawdbAncientBlocks     = rawdb.AncientBlocksTable
+	rawdbAncientTxInfos    = rawdb.AncientTxInfosTable
+	rawdbAncientStateRoots = rawdb.AncientStateRootsTable
 )
 
 // FreezerTableSet returns the table-name/config map the runner expects
@@ -575,12 +595,14 @@ const (
 //
 // Compression is Snappy for `bodies` (proto blobs compress well) and
 // `tx_infos`; raw bytes for `state_roots` because 32-byte payloads
-// already sit below Snappy's per-row overhead.
+// already sit below Snappy's per-row overhead. All three tables are marked
+// prunable so minimal-mode retention can advance the ancient virtual tail
+// consistently across chain bodies, tx infos, and state roots.
 func FreezerTableSet() map[string]rawdbfreezer.TableConfig {
 	return map[string]rawdbfreezer.TableConfig{
-		rawdbAncientBlocks:     {NoSnappy: false},
-		rawdbAncientTxInfos:    {NoSnappy: false},
-		rawdbAncientStateRoots: {NoSnappy: true},
+		rawdbAncientBlocks:     {NoSnappy: false, Prunable: true},
+		rawdbAncientTxInfos:    {NoSnappy: false, Prunable: true},
+		rawdbAncientStateRoots: {NoSnappy: true, Prunable: true},
 	}
 }
 

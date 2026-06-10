@@ -442,6 +442,31 @@ func TestChainIDReturnsFullGenesisBlockIDBeforeOptimizedProposal(t *testing.T) {
 	}
 }
 
+func TestChainIDUsesContextGenesisHashWhenGenesisBlockFrozen(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	db := state.NewDatabase(diskdb)
+	sdb, err := state.New(tcommon.Hash{}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesisHash := tcommon.HexToHash("abababababababababababababababababababababababababababababababab")
+	evm := NewTVM(sdb, nil, tcommon.Address{}, 1, 1000, tcommon.Address{}, 0x01020304, TVMConfig{Istanbul: true})
+	evm.SetDB(diskdb)
+	evm.GenesisHash = genesisHash
+
+	code := []byte{byte(CHAINID), byte(PUSH1), 0x00, byte(MSTORE), byte(PUSH1), 0x20, byte(PUSH1), 0x00, byte(RETURN)}
+	contract := NewContract(tcommon.Address{0x41, 0x01}, tcommon.Address{0x41, 0x02}, 0, 100000)
+	contract.SetCode(tcommon.Address{0x41, 0x02}, code)
+
+	ret, err := evm.interpreter.Run(contract)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got, want := ret, genesisHash.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("chainid frozen-genesis fallback:\n got  %x\n want %x", got, want)
+	}
+}
+
 func TestChainIDOptimizedProposalReturnsLowFourBytes(t *testing.T) {
 	evm := newTestEVMWithConfig(t, TVMConfig{Istanbul: true, OptimizedReturnValueOfChainId: true})
 	evm.ChainID = 0x01020304

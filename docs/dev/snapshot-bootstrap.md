@@ -1,0 +1,107 @@
+# Verified Snapshot Bootstrap
+
+This runbook covers the operator flow for bootstrapping `gtron` from signed
+state and chain-freezer snapshots. It is intentionally explicit: a node must
+trust a catalog signer before it trusts any remote manifest path or segment
+file.
+
+## Inputs
+
+- Snapshot URL: the HTTP(S) directory containing `snapshot-catalog.json`,
+  `manifest.json`, and all referenced segment files.
+- Trusted catalog keys: Ed25519 public keys for snapshot catalogs.
+- Chain identity: selected by `--testnet`, `--genesis`, and optional
+  `--snapshot.fork-config-hash`.
+
+Official mainnet/testnet URLs and signer keys are release artifacts. Until they
+are published, operators should pass their deployment-specific URL and key set
+explicitly.
+
+## Trusted Key File
+
+Use `--snapshot.trusted-key-file` when more than one signer is trusted or during
+rotation. The file accepts one or more keys per line, comma-separated entries,
+blank lines, and `#` comments.
+
+```text
+# current production signer
+ed25519:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+# rotation overlap: old signer remains accepted until the next catalog cutover
+ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+Key rotation policy:
+
+1. Add the next signer to the key file before publishing catalogs signed by it.
+2. Publish catalogs signed by either old or new signer during the overlap.
+3. After every node has had time to update the key file, remove the retired key.
+4. Never reuse retired signer keys for future snapshot catalogs.
+
+## Preflight Local Snapshot
+
+After `snapshot fetch`, or before restoring a snapshot copied from another host:
+
+```bash
+gtron snapshot verify \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+This verifies the signed catalog, chain identity, manifest checksum, registered
+segment families, file sizes, checksums, and format-aware segment checks. It
+does not write chain state or freezer data.
+
+## Fetch Then Restore
+
+For a fresh datadir where you want to inspect the downloaded files first:
+
+```bash
+gtron snapshot fetch \
+  --datadir /path/to/datadir \
+  --snapshot.url https://snapshots.example.invalid/go-tron/mainnet/latest \
+  --snapshot.reset \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
+gtron snapshot verify \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
+gtron snapshot restore \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+`snapshot restore` refuses non-genesis datadirs. It restores state domains and
+state-domain history, installs chain-freezer rows, verifies the canonical
+boundary block, then advances canonical Headers/Bodies/Execution/Commitment/
+Finish stages only after chain data proves the boundary hash.
+
+## One-Step Bootstrap
+
+For the normal operator path:
+
+```bash
+gtron snapshot bootstrap \
+  --datadir /path/to/datadir \
+  --snapshot.url https://snapshots.example.invalid/go-tron/mainnet/latest \
+  --snapshot.reset \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+After bootstrap completes, start `gtron` normally. Sync resumes from the
+verified snapshot/freezer boundary and imports the recent tail from peers.
+
+## Safety Notes
+
+- Use `--snapshot.reset` only for the snapshot directory, not for chain data.
+  The command deletes the local snapshot directory before fetching the current
+  remote catalog.
+- Keep `archive` mode for RPC providers that need full historical state APIs.
+  `full`, `snap`, `blocks`, and `minimal` may prune hot rows once verified cold
+  coverage exists.
+- If the catalog carries `forkConfigHash`, pass the matching
+  `--snapshot.fork-config-hash sha256:<hex>` so a snapshot built for another
+  fork configuration cannot install.

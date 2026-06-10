@@ -12,6 +12,7 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
@@ -380,7 +381,10 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = make(map[uint64]tcommon.Hash)
-	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
+	head := ss.chain.CurrentBlock().Number()
+	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
+	ss.deleteImportedSyncBodiesThrough(head)
+	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch)
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
@@ -402,6 +406,62 @@ func (ss *SyncService) ensureSessionMapsLocked() {
 	}
 	if ss.blockPath == nil {
 		ss.blockPath = make(map[uint64]tcommon.Hash)
+	}
+}
+
+func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
+	if ss == nil || ss.chain == nil {
+		return head
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(ss.chain.DB(), rawdb.StageSyncInventory)
+	if err != nil {
+		syncLog.Warn("Read sync inventory stage progress failed", "err", err)
+		return head
+	}
+	if ok && row.BlockNum > head {
+		return row.BlockNum
+	}
+	return head
+}
+
+func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int) {
+	if ss == nil || ss.chain == nil || limit <= 0 {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	for n := start; limit > 0; n++ {
+		if buffered, ok := ss.blockBuffer[n]; ok {
+			if buffered.num > ss.targetHeadNum {
+				ss.targetHeadNum = buffered.num
+			}
+			limit--
+			continue
+		}
+		block, ok, err := rawdb.ReadSyncStagedBlock(db, n)
+		if err != nil {
+			syncLog.Warn("Read sync staged block failed", "number", n, "err", err)
+			return
+		}
+		if !ok {
+			return
+		}
+		bid := block.ID()
+		if !ss.reserveBlockPathLocked(bid) {
+			return
+		}
+		ss.blockBuffer[n] = bufferedSyncBlock{
+			raw:  bufferRawBlockBytes(block, nil),
+			hash: bid.Hash,
+			num:  n,
+		}
+		ss.bufferedHash[bid.Hash] = struct{}{}
+		if n > ss.targetHeadNum {
+			ss.targetHeadNum = n
+		}
+		limit--
 	}
 }
 
@@ -624,6 +684,8 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	//      their gap parent later arrives, KhaosDB.promoteUnlinked cascades
 	//      them into miniStore and InsertBlock's switchFork applies the
 	//      stretch in topological order, so refetching is never needed.
+	var stageInventoryTarget uint64
+
 	ss.mu.Lock()
 	if !ss.syncing {
 		ss.mu.Unlock()
@@ -682,6 +744,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 			if target > ss.targetHeadNum {
 				ss.targetHeadNum = target
 			}
+			stageInventoryTarget = ss.targetHeadNum
 		}
 	}
 
@@ -707,6 +770,10 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		ss.mirrorLegacyLocked()
 	}
 	ss.mu.Unlock()
+
+	if stageInventoryTarget > 0 {
+		ss.writeStageProgress(rawdb.StageSyncInventory, stageInventoryTarget, tcommon.Hash{}, false)
+	}
 
 	ss.sendOutboundRequests(out)
 	if restart {
@@ -995,6 +1062,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 					"number", blockNum, "hash", blockHash, "kept", existing.hash, "peer", peer.ID())
 			}
 		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
+			ss.stageSyncBody(block)
 			ss.blockBuffer[blockNum] = bufferedSyncBlock{
 				raw:  bufferRawBlockBytes(block, raw),
 				hash: blockHash,
@@ -1121,6 +1189,7 @@ func (ss *SyncService) waitForDrain() {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
+	ss.restoreSyncStagedBodiesLocked(next, maxFetchBatch)
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
 		buffered, ok := ss.blockBuffer[next]
@@ -1173,6 +1242,10 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 			txs += len(block.Transactions())
 		}
 	}
+	ss.deleteImportedSyncBodies(batch, applied)
+	if last := batch.buffered[applied-1]; last.num > 0 {
+		ss.writeStageProgress(rawdb.StageSyncImport, last.num, last.hash, true)
+	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -1198,6 +1271,81 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	if emit {
 		last := batch.buffered[applied-1]
 		ss.reportSegment(snap, diag, last.num, remain, last.peer)
+	}
+}
+
+func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash, hasHash bool) {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	var err error
+	if hasHash {
+		err = rawdb.WriteStageProgressWithHash(db, stage, blockNum, blockHash)
+	} else {
+		err = rawdb.WriteStageProgress(db, stage, blockNum)
+	}
+	if err != nil {
+		syncLog.Warn("Persist sync stage progress failed", "stage", stage, "block", blockNum, "err", err)
+	}
+}
+
+func (ss *SyncService) stageSyncBody(block *types.Block) {
+	if ss == nil || ss.chain == nil || block == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", err)
+		return
+	}
+	ss.writeStageProgress(rawdb.StageSyncBodies, block.Number(), block.Hash(), true)
+}
+
+func (ss *SyncService) deleteImportedSyncBodies(batch bufferedSyncBatch, applied int) {
+	if ss == nil || ss.chain == nil || applied <= 0 {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	for i := 0; i < applied && i < len(batch.buffered); i++ {
+		if err := rawdb.DeleteSyncStagedBlock(db, batch.buffered[i].num); err != nil {
+			syncLog.Warn("Delete sync staged block failed", "number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
+		}
+	}
+}
+
+func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	if _, err := rawdb.DeleteSyncStagedBlocksThrough(db, head); err != nil {
+		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", err)
+	}
+}
+
+func (ss *SyncService) deleteAllSyncBodies() {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	if _, err := rawdb.DeleteAllSyncStagedBlocks(db); err != nil {
+		syncLog.Warn("Delete sync staged blocks failed", "err", err)
 	}
 }
 
@@ -1522,6 +1670,7 @@ func (ss *SyncService) doReset() {
 	ss.targetHeadNum = 0
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
+	ss.deleteAllSyncBodies()
 }
 
 // armFetchTimer arms the fetch-response timeout. Must be called with ss.mu held.

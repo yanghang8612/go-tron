@@ -4,20 +4,23 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
 
 // makeHistoryFlagSet builds a flag.FlagSet pre-populated with the
-// gcmode + config flags that applyHistoryConfig consults. Tests parse
+// prune/gcmode + config flags that applyHistoryConfig consults. Tests parse
 // per-case argv into this set and then wrap it in a cli.Context the way
 // urfave/cli does in production.
 func makeHistoryFlagSet(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
 	app := cli.NewApp()
-	app.Flags = []cli.Flag{gcmodeFlag, historyEnabledFlag, configFileFlag}
+	app.Flags = []cli.Flag{gcmodeFlag, pruneModeFlag, historyEnabledFlag, configFileFlag}
 	set := flag.NewFlagSet("test", flag.ContinueOnError)
 	for _, f := range app.Flags {
 		if err := f.Apply(set); err != nil {
@@ -28,6 +31,46 @@ func makeHistoryFlagSet(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse argv: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func TestApplyHistoryConfig_PruneModeArchive(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--prune.mode", "archive"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err != nil {
+		t.Fatalf("applyHistoryConfig: %v", err)
+	}
+	if got := cfg.EffectiveHistoryMode(); got != params.HistoryModeArchive {
+		t.Errorf("--prune.mode archive: mode = %q, want %q", got, params.HistoryModeArchive)
+	}
+	if !cfg.HistoryEnabled {
+		t.Error("archive prune mode did not auto-enable HistoryEnabled")
+	}
+}
+
+func TestApplyHistoryConfig_PruneModeBlocksAndMinimal(t *testing.T) {
+	for _, mode := range []string{params.HistoryModeBlocks, params.HistoryModeMinimal} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := makeHistoryFlagSet(t, []string{"--prune.mode", mode})
+			cfg := &params.ChainConfig{}
+			if err := applyHistoryConfig(ctx, cfg); err != nil {
+				t.Fatalf("applyHistoryConfig: %v", err)
+			}
+			if got := cfg.EffectiveHistoryMode(); got != mode {
+				t.Errorf("--prune.mode %s: mode = %q, want %q", mode, got, mode)
+			}
+			if cfg.HistoryEnabled {
+				t.Error("blocks/minimal prune modes should not auto-enable state history capture")
+			}
+		})
+	}
+}
+
+func TestApplyHistoryConfig_PruneModeConflictsWithGcmode(t *testing.T) {
+	ctx := makeHistoryFlagSet(t, []string{"--gcmode", "archive", "--prune.mode", "full"})
+	cfg := &params.ChainConfig{}
+	if err := applyHistoryConfig(ctx, cfg); err == nil {
+		t.Fatal("expected conflicting --gcmode/--prune.mode to fail")
+	}
 }
 
 func TestApplyHistoryConfig_DefaultsToFull(t *testing.T) {
@@ -272,6 +315,16 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "blocks history capture needs pruning",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeBlocks, HistoryEnabled: true},
+			want: true,
+		},
+		{
+			name: "minimal history capture needs pruning",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeMinimal, HistoryEnabled: true},
+			want: true,
+		},
+		{
 			name: "archive never prunes",
 			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true, StateCommitmentCheckpoints: true},
 			want: false,
@@ -288,5 +341,162 @@ func TestShouldEnableDomainStatePruner(t *testing.T) {
 				t.Fatalf("shouldEnableDomainStatePruner = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestShouldEnableChainLookupPruner(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  params.ChainConfig
+		want bool
+	}{
+		{
+			name: "plain full prunes chain lookups",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull},
+			want: true,
+		},
+		{
+			name: "blocks prunes chain lookups without history capture",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeBlocks},
+			want: true,
+		},
+		{
+			name: "minimal prunes chain lookups without history capture",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeMinimal},
+			want: true,
+		},
+		{
+			name: "snap prunes chain lookups",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeSnap, HistoryEnabled: true},
+			want: true,
+		},
+		{
+			name: "archive keeps chain lookups",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldEnableChainLookupPruner(&tt.cfg); got != tt.want {
+				t.Fatalf("shouldEnableChainLookupPruner = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldEnableChainFreezerTailPruner(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  params.ChainConfig
+		want bool
+	}{
+		{
+			name: "full keeps local block freezer history",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeFull},
+			want: false,
+		},
+		{
+			name: "blocks keeps complete local block freezer history",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeBlocks},
+			want: false,
+		},
+		{
+			name: "minimal prunes local block freezer tail",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeMinimal},
+			want: true,
+		},
+		{
+			name: "snap keeps local block freezer history",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeSnap, HistoryEnabled: true},
+			want: false,
+		},
+		{
+			name: "archive keeps local block freezer history",
+			cfg:  params.ChainConfig{HistoryMode: params.HistoryModeArchive, HistoryEnabled: true},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldEnableChainFreezerTailPruner(&tt.cfg); got != tt.want {
+				t.Fatalf("shouldEnableChainFreezerTailPruner = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDomainStatePrunePolicyPreservesOperatorMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want statepruning.Mode
+	}{
+		{mode: params.HistoryModeFull, want: statepruning.ModeFull},
+		{mode: params.HistoryModeBlocks, want: statepruning.ModeBlocks},
+		{mode: params.HistoryModeMinimal, want: statepruning.ModeMinimal},
+		{mode: params.HistoryModeSnap, want: statepruning.ModeSnap},
+		{mode: params.HistoryModeArchive, want: statepruning.ModeArchive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			policy := domainStatePrunePolicy(&params.ChainConfig{
+				HistoryMode:        tt.mode,
+				HistoryPruneWindow: 10,
+			}, 3)
+			if policy.Mode != tt.want {
+				t.Fatalf("policy mode = %q, want %q", policy.Mode, tt.want)
+			}
+			if tt.want != statepruning.ModeArchive && (policy.HistoryWindow != 10 || policy.ReorgWindow != 3) {
+				t.Fatalf("policy windows = history:%d reorg:%d, want 10/3", policy.HistoryWindow, policy.ReorgWindow)
+			}
+		})
+	}
+}
+
+func TestDomainStatePrunePolicyCapsReorgWindow(t *testing.T) {
+	policy := domainStatePrunePolicy(&params.ChainConfig{
+		HistoryMode:        params.HistoryModeMinimal,
+		HistoryPruneWindow: 2,
+	}, 10)
+	if policy.Mode != statepruning.ModeMinimal || policy.HistoryWindow != 2 || policy.ReorgWindow != 2 {
+		t.Fatalf("policy = %+v, want minimal with capped 2/2 windows", policy)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedWritesInitialMode(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+
+	if err := ensureHistoryPruneModeLocked(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("ensureHistoryPruneModeLocked: %v", err)
+	}
+	mode, ok, err := rawdb.ReadHistoryPruneMode(db)
+	if err != nil || !ok || mode != params.HistoryModeArchive {
+		t.Fatalf("stored prune mode: mode=%q ok=%v err=%v", mode, ok, err)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedAllowsSameMode(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeSnap); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+
+	if err := ensureHistoryPruneModeLocked(db, params.HistoryModeSnap); err != nil {
+		t.Fatalf("ensureHistoryPruneModeLocked same mode: %v", err)
+	}
+}
+
+func TestEnsureHistoryPruneModeLockedRejectsModeChange(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteHistoryPruneMode(db, params.HistoryModeArchive); err != nil {
+		t.Fatalf("write prune mode: %v", err)
+	}
+
+	err := ensureHistoryPruneModeLocked(db, params.HistoryModeFull)
+	if err == nil {
+		t.Fatal("expected prune mode mismatch error")
+	}
+	if !strings.Contains(err.Error(), `stored "archive"`) || !strings.Contains(err.Error(), `requested "full"`) {
+		t.Fatalf("unexpected mismatch error: %v", err)
 	}
 }

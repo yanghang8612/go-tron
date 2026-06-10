@@ -13,7 +13,7 @@ import (
 // blobs keyed by block number. gtron's block proto is monolithic (header +
 // transaction list in a single message), so unlike geth we don't split
 // "headers" and "bodies" into separate ancient tables.
-const ancientBlocks = "bodies"
+const ancientBlocks = AncientBlocksTable
 
 func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	data, err := block.Marshal()
@@ -23,9 +23,17 @@ func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	if err := db.Put(blockKey(block.Number()), data); err != nil {
 		return err
 	}
+	return WriteBlockNumber(db, block.Hash(), block.Number())
+}
+
+func WriteBlockNumber(db ethdb.KeyValueWriter, hash common.Hash, number uint64) error {
 	num := make([]byte, 8)
-	binary.BigEndian.PutUint64(num, block.Number())
-	return db.Put(blockHashKey(block.Hash().Bytes()), num)
+	binary.BigEndian.PutUint64(num, number)
+	return db.Put(blockHashKey(hash.Bytes()), num)
+}
+
+func DeleteBlockNumber(db ethdb.KeyValueWriter, hash common.Hash) error {
+	return db.Delete(blockHashKey(hash.Bytes()))
 }
 
 // ReadBlock returns the block at the given number, consulting the freezer
@@ -56,17 +64,23 @@ func ReadBlock(db *ChainDB, number uint64) *types.Block {
 	return block
 }
 
-// ReadBlockNumber returns the block number persisted for the given block
-// hash, or nil if unknown. Slice 1 of the freezer design keeps `bh-<hash>`
-// hot, so this accessor is KV-only — the `*ChainDB` parameter exists for
-// signature uniformity with other chain readers.
+// ReadBlockNumber returns the block number persisted for the given block hash,
+// or nil if unknown. The hot `bh-<hash>` row is preferred; on a miss, a ChainDB
+// with an attached cold chain-index sidecar can resolve historical hashes
+// without requiring every old lookup row to stay in Pebble.
 func ReadBlockNumber(db *ChainDB, hash common.Hash) *uint64 {
 	data, err := db.Get(blockHashKey(hash.Bytes()))
-	if err != nil || len(data) != 8 {
-		return nil
+	if err == nil && len(data) == 8 {
+		num := binary.BigEndian.Uint64(data)
+		return &num
 	}
-	num := binary.BigEndian.Uint64(data)
-	return &num
+	if db != nil && db.chainIndex != nil {
+		num, ok, err := db.chainIndex.BlockNumberByHash(hash)
+		if err == nil && ok {
+			return &num
+		}
+	}
+	return nil
 }
 
 // readAncient is the per-accessor freezer probe. Returns (data, true) when

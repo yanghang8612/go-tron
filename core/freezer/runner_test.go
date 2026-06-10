@@ -200,6 +200,55 @@ func newFreezer(t *testing.T) *rawdbfreezer.Freezer {
 	return f
 }
 
+func TestFreezerTableSetSupportsVirtualTail(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	for i := uint64(0); i < 5; i++ {
+		if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, blockBytes(i)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, txInfosBytes(i)); err != nil {
+				return err
+			}
+			return op.AppendRaw(rawdb.AncientStateRootsTable, i, stateRootBytes(i))
+		}); err != nil {
+			t.Fatalf("ModifyAncients(%d): %v", i, err)
+		}
+	}
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 3 {
+		t.Fatalf("tail = %d/%v, want 3", tail, err)
+	}
+	if _, err := f.Ancient(rawdb.AncientBlocksTable, 2); !errors.Is(err, rawdbfreezer.ErrOutOfBounds) {
+		t.Fatalf("read before tail = %v, want ErrOutOfBounds", err)
+	}
+	if _, err := f.Ancient(rawdb.AncientBlocksTable, 3); err != nil {
+		t.Fatalf("read at tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if tail, err := reopened.Tail(); err != nil || tail != 3 {
+		t.Fatalf("reopened tail = %d/%v, want 3", tail, err)
+	}
+	if _, err := reopened.Ancient(rawdb.AncientBlocksTable, 2); !errors.Is(err, rawdbfreezer.ErrOutOfBounds) {
+		t.Fatalf("reopened read before tail = %v, want ErrOutOfBounds", err)
+	}
+}
+
 // freezerWriter wraps *rawdbfreezer.Freezer to satisfy FreezerStore.
 // The runner needs both AncientReader + AncientWriter; the slice-1
 // Freezer implements both shapes but doesn't expose them as the
@@ -271,6 +320,9 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 		t.Fatalf("Ancient state_roots[7]: %v", err)
 	} else if string(data) != string(stateRootBytes(7)) {
 		t.Fatalf("state_roots[7] mismatch: %x", data)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 32 {
+		t.Fatalf("StageChainFreezer after freeze = %d ok=%v err=%v, want 32", got, ok, err)
 	}
 	// KV rows for frozen blocks should be gone.
 	for n := uint64(0); n <= 32; n++ {
@@ -503,6 +555,51 @@ func TestOnePass_CrashRecovery(t *testing.T) {
 	}
 }
 
+func TestOnePass_BackfillsChainFreezerStageFromAncientHead(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fc := newFakeChain()
+	fc.setSolidified(5)
+
+	f, err := rawdbfreezer.NewFreezer(dir, "", false, 2049, FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for n := uint64(0); n < 10; n++ {
+			if err := op.AppendRaw(rawdbAncientBlocks, n, blockBytes(n)); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, nil); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientStateRoots, n, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed ancient rows: %v", err)
+	}
+
+	r := New(fc, &freezerWriter{AncientReader: rawdb.NewFreezerReader(f), f: f}, Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  10,
+	})
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if frozen != 0 {
+		t.Fatalf("OnePass frozen=%d, want no new rows", frozen)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 9 {
+		t.Fatalf("StageChainFreezer backfill = %d ok=%v err=%v, want 9", got, ok, err)
+	}
+}
+
 // TestOnePass_CrashBetweenSyncAndDelete is the real crash-interleaving
 // regression: a prior pass died after Phase 2 (ancient Sync) but before
 // Phase 3 (Pebble DeleteRange), leaving blocks durably in ancient with
@@ -561,6 +658,9 @@ func TestOnePass_CrashBetweenSyncAndDelete(t *testing.T) {
 	})
 	if _, err := r.OnePass(); err != nil {
 		t.Fatalf("OnePass after crash: %v", err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got < 9 {
+		t.Fatalf("StageChainFreezer after crash reconciliation = %d ok=%v err=%v, want at least 9", got, ok, err)
 	}
 
 	// The leftover frozen rows b-0..b-9 must be gone from Pebble now.

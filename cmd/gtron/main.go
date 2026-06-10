@@ -144,8 +144,12 @@ var (
 	}
 	gcmodeFlag = &cli.StringFlag{
 		Name:  "gcmode",
-		Usage: "Flat temporal state retention: full (prune hot rows) | snap (prune hot rows after snapshot coverage) | archive (keep hot rows forever)",
+		Usage: "Deprecated alias for --prune.mode",
 		Value: params.HistoryModeFull,
+	}
+	pruneModeFlag = &cli.StringFlag{
+		Name:  "prune.mode",
+		Usage: "Erigon-style retention mode: full | blocks | minimal | snap | archive",
 	}
 	historyEnabledFlag = &cli.BoolFlag{
 		Name:  "history.enabled",
@@ -248,6 +252,7 @@ var app = &cli.App{
 		logFileFlag,
 		logModuleFlag,
 		gcmodeFlag,
+		pruneModeFlag,
 		historyEnabledFlag,
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
@@ -289,6 +294,7 @@ var app = &cli.App{
 			},
 			Action: initCmd,
 		},
+		snapshotCommand(),
 	},
 }
 
@@ -316,6 +322,11 @@ func initCmd(ctx *cli.Context) error {
 		defer fz.Close()
 		ancientReader = rawdb.NewFreezerReader(fz)
 	}
+	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open state snapshots: %w", err)
+	}
+	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
 
 	config, hash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
 	if err != nil {
@@ -381,6 +392,13 @@ func gtron(ctx *cli.Context) error {
 		}
 		ancientReader = rawdb.NewFreezerReader(ancientStore)
 	}
+	stateSnapshotDir := stateSnapshotsDir(cfg.DataDir)
+	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
+	if err != nil {
+		closeStores()
+		return fmt.Errorf("open state snapshots: %w", err)
+	}
+	ancientReader = rawdb.NewFallbackAncientReader(ancientReader, stateSnapshotManager)
 
 	// Setup genesis (idempotent)
 	chainConfig, _, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
@@ -395,6 +413,10 @@ func gtron(ctx *cli.Context) error {
 	// HistoryMode is operator-level (not consensus-relevant) so this
 	// mutation is safe.
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
+		closeStores()
+		return err
+	}
+	if err := ensureHistoryPruneModeLocked(db, chainConfig.EffectiveHistoryMode()); err != nil {
 		closeStores()
 		return err
 	}
@@ -476,15 +498,9 @@ func gtron(ctx *cli.Context) error {
 
 	// Create backend + API server
 	backend := core.NewTronBackend(bc, pool)
-	stateSnapshotDir := stateSnapshotsDir(cfg.DataDir)
-	stateSnapshotManager, err := statesnapshots.OpenManager(stateSnapshotDir)
-	if err != nil {
-		_ = bc.Close()
-		closeStores()
-		return fmt.Errorf("open state snapshots: %w", err)
-	}
 	bc.SetStateCodeColdHistory(stateSnapshotManager)
 	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
+	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
 	backend.SetStateColdHistory(stateSnapshotManager)
 	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
 		log.Info("State snapshots loaded",
@@ -611,23 +627,16 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(handler.PbftHandler())
 	stack.RegisterLifecycle(pbftDataSync)
 
+	chainLookupPruneLifecycleWired := false
 	if shouldEnableDomainStatePruner(chainConfig) {
-		historyWindow := chainConfig.EffectiveHistoryPruneWindow()
-		reorgWindow := domainStateReorgWindow
-		if historyWindow < reorgWindow {
-			reorgWindow = historyWindow
-		}
-		prunePolicy := statepruning.FullPolicy(historyWindow, reorgWindow)
-		if chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap {
-			prunePolicy = statepruning.SnapPolicy(historyWindow, reorgWindow)
-		}
+		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
 		domainLifecycle := statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
 				Dir:            stateSnapshotDir,
 				Enabled:        chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 				HistoryDataset: historyDataset,
-				HistoryWindow:  historyWindow,
+				HistoryWindow:  prunePolicy.HistoryWindow,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.
@@ -636,19 +645,55 @@ func gtron(ctx *cli.Context) error {
 			Pruner: statepruning.PrunerConfig{
 				Policy:      prunePolicy,
 				SnapshotDir: stateSnapshotDir,
-				MaxSyncLag:  historyWindow,
+				MaxSyncLag:  prunePolicy.HistoryWindow,
+			},
+			ChainLookupPrune: func() (*statesnapshots.PruneHotChainLookupResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotChainLookupsWithProgress(db, stateSnapshotDir, manifest)
 			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
+		chainLookupPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+			"chainLookupPrune", true,
 			"dataset", historyDataset,
-			"historyWindow", historyWindow,
-			"reorgWindow", reorgWindow,
+			"historyWindow", prunePolicy.HistoryWindow,
+			"reorgWindow", prunePolicy.ReorgWindow,
 			"snapshotDir", stateSnapshotDir)
 	} else {
 		log.Info("Domain state pruning disabled", "mode", chainConfig.EffectiveHistoryMode())
+	}
+	if !chainLookupPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewChainLookupPruneLifecycle(db, statesnapshots.ChainLookupPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Chain lookup prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if ancientStore != nil && shouldEnableChainFreezerTailPruner(chainConfig) {
+		retainBlocks := chainConfig.EffectiveHistoryPruneWindow()
+		stack.RegisterLifecycle(statesnapshots.NewChainFreezerTailPruneLifecycle(db, ancientStore, stateSnapshotManager, statesnapshots.ChainFreezerTailPruneLifecycleConfig{
+			RetainBlocks: retainBlocks,
+			HeadBlock: func() uint64 {
+				if head := bc.CurrentBlock(); head != nil {
+					return head.Number()
+				}
+				return 0
+			},
+		}))
+		log.Info("Chain freezer tail prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"retainBlocks", retainBlocks,
+			"snapshotDir", stateSnapshotDir)
 	}
 
 	if ancientStore != nil && freezerCfg.Enabled {

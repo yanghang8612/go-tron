@@ -20,6 +20,23 @@ const (
 	StageSnapshotBuild StageID = "SnapshotBuild"
 	StageSnapshotPrune StageID = "SnapshotPrune"
 
+	// StageChainFreezer records the highest block whose num-keyed chain rows
+	// (`b-<num>` and `tib-<num>`) are covered by the local ancient store and no
+	// longer need hot KV copies. Hash-keyed lookup pruning has its own stage.
+	StageChainFreezer StageID = "ChainFreezer"
+
+	// StageSyncInventory records the highest block target observed from peer
+	// CHAIN_INVENTORY messages. It is downloader progress, not canonical proof.
+	StageSyncInventory StageID = "SyncInventory"
+	// StageSyncBodies records the highest sync block body accepted into the
+	// transient downloader staging table. It is not canonical Headers/Bodies
+	// progress and does not imply the staged bodies are contiguous.
+	StageSyncBodies StageID = "SyncBodies"
+	// StageSyncImport records the latest block successfully imported by
+	// SyncService. Canonical execution stages are advanced separately by chain
+	// insertion and snapshot restore paths.
+	StageSyncImport StageID = "SyncImport"
+
 	// StageSnapshotLatestBuild records the solidified block at which the last
 	// production latest-snapshot build ran, so the LatestBuildBlocks cadence gate
 	// resumes across restarts instead of re-seeding to the current head (which
@@ -34,6 +51,20 @@ const (
 	StageSnapshotAccessor        StageID = "SnapshotAccessor"
 	StageSnapshotCommitmentFlush StageID = "SnapshotCommitmentFlush"
 	StageSnapshotHotPrune        StageID = "SnapshotHotPrune"
+	// StageSnapshotChainLookupPrune records the highest chain-freezer block
+	// whose hash-keyed hot lookup rows have been pruned after verified cold
+	// chain-index coverage was published.
+	StageSnapshotChainLookupPrune StageID = "SnapshotChainLookupPrune"
+	// StageSnapshotChainFreezerTailPrune records the highest local freezer
+	// block hidden by the virtual tail after verified cold chain-freezer
+	// coverage existed. In minimal mode this also means any fully-hidden data
+	// shards have been physically reclaimed where the freezer supports it.
+	StageSnapshotChainFreezerTailPrune StageID = "SnapshotChainFreezerTailPrune"
+
+	// StageSnapshotInstall records the txNum boundary of an installed verified
+	// snapshot. It is txNum-valued like the snapshot domain stages; canonical
+	// Headers/Bodies/Execution stages must still be advanced only by chain data.
+	StageSnapshotInstall StageID = "SnapshotInstall"
 )
 
 type StageProgress struct {

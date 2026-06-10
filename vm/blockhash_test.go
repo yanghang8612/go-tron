@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -32,6 +33,18 @@ func runBlockHashOpcode(t *testing.T, tvm *TVM, index *uint256.Int) [32]byte {
 	}
 	got := stack.pop()
 	return got.Bytes32()
+}
+
+type blockHashFallbackDB struct {
+	ethdb.KeyValueStore
+	hashes map[uint64]tcommon.Hash
+	calls  int
+}
+
+func (db *blockHashFallbackDB) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	db.calls++
+	hash, ok := db.hashes[number]
+	return hash, ok
 }
 
 func TestBlockHashOpcodeReadsJavaHistoryWindow(t *testing.T) {
@@ -70,6 +83,26 @@ func TestBlockHashOpcodeReadsJavaHistoryWindow(t *testing.T) {
 				t.Fatalf("block hash: got %x, want %x", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBlockHashOpcodeFallsBackToColdReader(t *testing.T) {
+	block44 := blockHashTestBlock(44)
+	db := &blockHashFallbackDB{
+		KeyValueStore: ethrawdb.NewMemoryDatabase(),
+		hashes: map[uint64]tcommon.Hash{
+			44: block44.Hash(),
+		},
+	}
+	tvm := NewTVM(nil, nil, tcommon.Address{}, 300, 0, tcommon.Address{}, 1, TVMConfig{})
+	tvm.SetDB(db)
+
+	got := runBlockHashOpcode(t, tvm, uint256.NewInt(44))
+	if !bytes.Equal(got[:], block44.Hash().Bytes()) {
+		t.Fatalf("cold block hash: got %x, want %x", got, block44.Hash().Bytes())
+	}
+	if db.calls != 1 {
+		t.Fatalf("cold reader calls = %d, want 1", db.calls)
 	}
 }
 

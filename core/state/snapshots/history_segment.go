@@ -30,6 +30,13 @@ type StateDomainChangeSegment struct {
 	Changes   []*rawdb.StateDomainChange `json:"changes"`
 }
 
+type RestoreStateDomainHistoryResult struct {
+	FromTxNum        uint64
+	ToTxNum          uint64
+	ChangesRestored  uint64
+	TxRangesRestored uint64
+}
+
 func BuildStateDomainChangeHistorySegmentFromDB(db ethdb.Iteratee, dir string, fromTxNum, toTxNum uint64, relPath string) (SegmentRef, error) {
 	refs, err := BuildStateDomainChangeHistorySegmentsFromDB(db, dir, fromTxNum, toTxNum, relPath)
 	if err != nil {
@@ -77,7 +84,7 @@ func BuildStateDomainChangeHistorySegmentsFromDB(db ethdb.Iteratee, dir string, 
 		Path:      relPath,
 	}
 	if isStateDomainChangeBinarySegmentPath(relPath) {
-		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, ref, changes)
+		segRef, idxRef, accessorRef, err := writeHistorySegmentFiles(dir, ref, changes, txRanges)
 		if err != nil {
 			return nil, err
 		}
@@ -159,12 +166,17 @@ func OpenStateDomainChangeSegment(dir string, ref SegmentRef) (*StateDomainChang
 		if err != nil {
 			return nil, err
 		}
+		txRanges, err := readStateDomainChangeBinaryTxRanges(dir, ref)
+		if err != nil {
+			return nil, err
+		}
 		return &StateDomainChangeSegment{
 			Version:   StateDomainChangeSegmentVersion,
 			Dataset:   SegmentDatasetStateDomainChange,
 			Kind:      SegmentHistory,
 			FromTxNum: ref.FromTxNum,
 			ToTxNum:   ref.ToTxNum,
+			TxRanges:  txRanges,
 			Changes:   changes,
 		}, nil
 	}
@@ -350,6 +362,127 @@ func (m *Manager) IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flat
 			}
 		}
 	}
+	return nil
+}
+
+func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, toTxNum uint64) (*RestoreStateDomainHistoryResult, error) {
+	if m == nil {
+		return nil, errors.New("snapshots: nil manager")
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil database")
+	}
+	if toTxNum < fromTxNum {
+		return nil, fmt.Errorf("snapshots: state-domain history restore range [%d,%d] is inverted", fromTxNum, toTxNum)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil {
+		return nil, err
+	}
+	if manifest == nil {
+		return nil, errors.New("snapshots: manifest missing")
+	}
+	if fromTxNum < manifest.VisibleTxStart || toTxNum > manifest.VisibleTxEnd {
+		return nil, fmt.Errorf("snapshots: state-domain history restore range [%d,%d] outside manifest visible range [%d,%d]",
+			fromTxNum, toTxNum, manifest.VisibleTxStart, manifest.VisibleTxEnd)
+	}
+	cfg, ok := DefaultDomainRegistry().Dataset(SegmentDatasetStateDomainChange)
+	if !ok || cfg.WriteHotHistoryRow == nil || cfg.WriteHotHistoryIndex == nil || cfg.WriteHotHistoryTxRange == nil {
+		return nil, errors.New("snapshots: missing state-domain hot history writers")
+	}
+
+	result := &RestoreStateDomainHistoryResult{
+		FromTxNum: fromTxNum,
+		ToTxNum:   toTxNum,
+	}
+	txRanges := make(map[uint64]*rawdb.StateTxRange)
+	if err := m.IterateStateDomainChanges(fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+		if err := cfg.WriteHotHistoryRow(db, change); err != nil {
+			return false, err
+		}
+		if err := cfg.WriteHotHistoryIndex(db, change); err != nil {
+			return false, err
+		}
+		if err := mergeStateTxRangeFromChange(txRanges, change); err != nil {
+			return false, err
+		}
+		result.ChangesRestored++
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := m.restoreExplicitStateTxRanges(txRanges, manifest, fromTxNum, toTxNum); err != nil {
+		return nil, err
+	}
+
+	blockNums := make([]uint64, 0, len(txRanges))
+	for blockNum := range txRanges {
+		blockNums = append(blockNums, blockNum)
+	}
+	sort.Slice(blockNums, func(i, j int) bool { return blockNums[i] < blockNums[j] })
+	for _, blockNum := range blockNums {
+		row := txRanges[blockNum]
+		if err := cfg.WriteHotHistoryTxRange(db, row.BlockNum, row.BlockHash, row.BeginTxNum, row.EndTxNum); err != nil {
+			return nil, err
+		}
+		result.TxRangesRestored++
+	}
+	return result, nil
+}
+
+func (m *Manager) restoreExplicitStateTxRanges(txRanges map[uint64]*rawdb.StateTxRange, manifest *Manifest, fromTxNum, toTxNum uint64) error {
+	for _, ref := range manifest.Segments {
+		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
+			continue
+		}
+		seg, err := OpenStateDomainChangeSegment(m.dir, ref)
+		if err != nil {
+			return err
+		}
+		for _, row := range seg.TxRanges {
+			if row == nil || row.BeginTxNum < fromTxNum || row.EndTxNum > toTxNum {
+				continue
+			}
+			if err := mergeStateTxRange(txRanges, cloneStateTxRangeForSegment(row)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mergeStateTxRangeFromChange(txRanges map[uint64]*rawdb.StateTxRange, change *rawdb.StateDomainChange) error {
+	if change == nil {
+		return nil
+	}
+	return mergeStateTxRange(txRanges, &rawdb.StateTxRange{
+		BlockNum:   change.BlockNum,
+		BlockHash:  change.BlockHash,
+		BeginTxNum: change.TxNum,
+		EndTxNum:   change.TxNum,
+	})
+}
+
+func mergeStateTxRange(txRanges map[uint64]*rawdb.StateTxRange, row *rawdb.StateTxRange) error {
+	if row == nil {
+		return nil
+	}
+	if row.EndTxNum < row.BeginTxNum {
+		return fmt.Errorf("snapshots: state tx range for block %d is inverted", row.BlockNum)
+	}
+	if existing := txRanges[row.BlockNum]; existing != nil {
+		if existing.BlockHash != row.BlockHash {
+			return fmt.Errorf("snapshots: state-domain history has multiple hashes for block %d", row.BlockNum)
+		}
+		if row.BeginTxNum < existing.BeginTxNum {
+			existing.BeginTxNum = row.BeginTxNum
+		}
+		if row.EndTxNum > existing.EndTxNum {
+			existing.EndTxNum = row.EndTxNum
+		}
+		return nil
+	}
+	txRanges[row.BlockNum] = cloneStateTxRangeForSegment(row)
 	return nil
 }
 

@@ -1,0 +1,359 @@
+package snapshots
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+)
+
+type VerifyManifestOptions struct {
+	ExpectedChain     *ChainIdentity
+	CheckRetired      bool
+	RequireRegistered bool
+	RequireChecksums  bool
+}
+
+type ManifestVerificationReport struct {
+	ActiveSegments  int
+	RetiredSegments int
+}
+
+type RestoreVerifiedLatestResult struct {
+	Verification  ManifestVerificationReport
+	RestoredTxNum uint64
+}
+
+type RestoreVerifiedHistoryResult struct {
+	Verification     ManifestVerificationReport
+	FromTxNum        uint64
+	ToTxNum          uint64
+	ChangesRestored  uint64
+	TxRangesRestored uint64
+}
+
+type RestoreVerifiedSnapshotResult struct {
+	Verification     ManifestVerificationReport
+	RestoredTxNum    uint64
+	ChangesRestored  uint64
+	TxRangesRestored uint64
+	Progress         *Progress
+}
+
+type VerifyRestoredSnapshotBoundaryOptions struct {
+	RequireIndependentCommitmentRoot bool
+	RebuildCommitmentRoot            func() (common.Hash, error)
+}
+
+type RestoreVerifiedSnapshotOptions struct {
+	Boundary VerifyRestoredSnapshotBoundaryOptions
+}
+
+// VerifyManifestFiles loads the production manifest in dir and verifies every
+// active segment file it references. Registered segment families are checked by
+// their format-aware checker; unregistered legacy refs fall back to path, size,
+// and optional checksum validation unless RequireRegistered is set.
+func VerifyManifestFiles(dir string, opts VerifyManifestOptions) (*ManifestVerificationReport, error) {
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	return VerifyLoadedManifestFiles(dir, manifest, opts)
+}
+
+// VerifyRemoteManifestFiles is the strict pre-install check for Erigon-style
+// snapshot bootstrap catalogs. It rejects manifests that lack chain identity,
+// reference unknown segment families, or omit per-file checksums.
+func VerifyRemoteManifestFiles(dir string, expected ChainIdentity) (*ManifestVerificationReport, error) {
+	return VerifyManifestFiles(dir, VerifyManifestOptions{
+		ExpectedChain:     &expected,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+}
+
+// RestoreLatestFromVerifiedManifest performs the strict remote-manifest
+// pre-install verification and restores all latest-domain segments visible at
+// the manifest boundary into db. It is intentionally limited to latest-domain
+// state; callers still own chain/freezer installation and sync resumption.
+func RestoreLatestFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, expected ChainIdentity) (*RestoreVerifiedLatestResult, error) {
+	return RestoreLatestFromVerifiedManifestWithOptions(db, dir, expected, RestoreVerifiedSnapshotOptions{})
+}
+
+func RestoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedLatestResult, error) {
+	report, err := VerifyRemoteManifestFiles(dir, expected)
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		return nil, err
+	}
+	manifest := mgr.Manifest()
+	if manifest == nil {
+		return nil, fmt.Errorf("snapshots: manifest missing after verification")
+	}
+	if err := mgr.RestoreLatest(db, manifest.VisibleTxEnd); err != nil {
+		return nil, err
+	}
+	reader, ok := db.(ethdb.KeyValueReader)
+	if !ok {
+		return nil, fmt.Errorf("snapshots: restored snapshot boundary cannot be verified with write-only database")
+	}
+	if err := VerifyRestoredSnapshotBoundaryWithOptions(reader, mgr, manifest, opts.Boundary); err != nil {
+		return nil, err
+	}
+	return &RestoreVerifiedLatestResult{
+		Verification:  *report,
+		RestoredTxNum: manifest.VisibleTxEnd,
+	}, nil
+}
+
+// RestoreHistoryFromVerifiedManifest performs the strict remote-manifest
+// pre-install verification and restores state-domain history rows, inverse
+// indexes, and block tx-range rows derivable from the history segments.
+func RestoreHistoryFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, expected ChainIdentity) (*RestoreVerifiedHistoryResult, error) {
+	report, err := VerifyRemoteManifestFiles(dir, expected)
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		return nil, err
+	}
+	manifest := mgr.Manifest()
+	if manifest == nil {
+		return nil, fmt.Errorf("snapshots: manifest missing after verification")
+	}
+	restored, err := mgr.RestoreStateDomainHistory(db, manifest.VisibleTxStart, manifest.VisibleTxEnd)
+	if err != nil {
+		return nil, err
+	}
+	return &RestoreVerifiedHistoryResult{
+		Verification:     *report,
+		FromTxNum:        restored.FromTxNum,
+		ToTxNum:          restored.ToTxNum,
+		ChangesRestored:  restored.ChangesRestored,
+		TxRangesRestored: restored.TxRangesRestored,
+	}, nil
+}
+
+// RestoreSnapshotFromVerifiedManifest performs the strict remote-manifest
+// pre-install verification, restores latest state and state-domain history into
+// db, then records the installed snapshot txNum boundary in stage progress.
+func RestoreSnapshotFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, expected ChainIdentity) (*RestoreVerifiedSnapshotResult, error) {
+	return RestoreSnapshotFromVerifiedManifestWithOptions(db, dir, expected, RestoreVerifiedSnapshotOptions{})
+}
+
+func RestoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedSnapshotResult, error) {
+	report, err := VerifyRemoteManifestFiles(dir, expected)
+	if err != nil {
+		return nil, err
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		return nil, err
+	}
+	manifest := mgr.Manifest()
+	if manifest == nil {
+		return nil, fmt.Errorf("snapshots: manifest missing after verification")
+	}
+	if err := mgr.RestoreLatest(db, manifest.VisibleTxEnd); err != nil {
+		return nil, err
+	}
+	reader, ok := db.(ethdb.KeyValueReader)
+	if !ok {
+		return nil, fmt.Errorf("snapshots: restored snapshot boundary cannot be verified with write-only database")
+	}
+	if err := VerifyRestoredSnapshotBoundaryWithOptions(reader, mgr, manifest, opts.Boundary); err != nil {
+		return nil, err
+	}
+	restoredHistory, err := mgr.RestoreStateDomainHistory(db, manifest.VisibleTxStart, manifest.VisibleTxEnd)
+	if err != nil {
+		return nil, err
+	}
+	progress, err := WriteSnapshotInstallProgress(db, manifest)
+	if err != nil {
+		return nil, err
+	}
+	return &RestoreVerifiedSnapshotResult{
+		Verification:     *report,
+		RestoredTxNum:    manifest.VisibleTxEnd,
+		ChangesRestored:  restoredHistory.ChangesRestored,
+		TxRangesRestored: restoredHistory.TxRangesRestored,
+		Progress:         progress,
+	}, nil
+}
+
+func VerifyRestoredSnapshotBoundary(db ethdb.KeyValueReader, mgr *Manager, manifest *Manifest) error {
+	return VerifyRestoredSnapshotBoundaryWithOptions(db, mgr, manifest, VerifyRestoredSnapshotBoundaryOptions{})
+}
+
+func VerifyRestoredSnapshotBoundaryWithOptions(db ethdb.KeyValueReader, mgr *Manager, manifest *Manifest, opts VerifyRestoredSnapshotBoundaryOptions) error {
+	if db == nil || mgr == nil || manifest == nil {
+		return nil
+	}
+	if manifestHasLatestDataset(manifest, SegmentDatasetCommitmentRoot) {
+		expected, ok, err := mgr.GetCommitmentRoot(manifest.VisibleTxEnd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("snapshots: commitment root segment present but no root at txNum %d", manifest.VisibleTxEnd)
+		}
+		got, ok, err := rawdb.ReadLatestDomainCommitmentRoot(db)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("snapshots: restored snapshot missing latest commitment root at txNum %d", manifest.VisibleTxEnd)
+		}
+		if got != expected {
+			return fmt.Errorf("snapshots: restored latest commitment root %x, want %x at txNum %d", got, expected, manifest.VisibleTxEnd)
+		}
+		if opts.RebuildCommitmentRoot == nil {
+			if opts.RequireIndependentCommitmentRoot {
+				return fmt.Errorf("snapshots: restored snapshot commitment root cannot be independently rebuilt without a rebuilder")
+			}
+		} else {
+			rebuilt, err := opts.RebuildCommitmentRoot()
+			if err != nil {
+				return err
+			}
+			if rebuilt != expected {
+				return fmt.Errorf("snapshots: rebuilt latest commitment root %x, want snapshot root %x at txNum %d", rebuilt, expected, manifest.VisibleTxEnd)
+			}
+		}
+	}
+	if manifestHasLatestDataset(manifest, SegmentDatasetCommitmentCheckpoint) {
+		expected, ok, err := mgr.getLatestValue(SegmentDatasetCommitmentCheckpoint, 0, rawdb.LatestStateCommitmentCheckpointLogicalKey(), manifest.VisibleTxEnd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("snapshots: commitment checkpoint segment present but no latest checkpoint pointer at txNum %d", manifest.VisibleTxEnd)
+		}
+		got, ok, err := rawdb.ReadLatestStateCommitmentCheckpoint(db)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("snapshots: restored snapshot missing latest commitment checkpoint at txNum %d", manifest.VisibleTxEnd)
+		}
+		encoded, err := rawdb.EncodeStateCommitmentCheckpointValue(got)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(encoded, expected) {
+			return fmt.Errorf("snapshots: restored latest commitment checkpoint does not match snapshot boundary at txNum %d", manifest.VisibleTxEnd)
+		}
+	}
+	return nil
+}
+
+func manifestHasLatestDataset(manifest *Manifest, dataset SegmentDataset) bool {
+	if manifest == nil {
+		return false
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentLatest && ref.NormalizedDataset() == dataset {
+			return true
+		}
+	}
+	return false
+}
+
+// VerifyLoadedManifestFiles verifies an already-loaded manifest against files
+// rooted at dir. This is useful for callers that fetched a manifest object from
+// a catalog and have already performed signature/authentication checks.
+func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManifestOptions) (*ManifestVerificationReport, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("snapshots: nil manifest")
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, err
+	}
+	if err := manifest.ValidateProduction(); err != nil {
+		return nil, err
+	}
+	if opts.ExpectedChain != nil {
+		if err := manifest.ValidateChainIdentity(*opts.ExpectedChain); err != nil {
+			return nil, err
+		}
+	}
+	report := &ManifestVerificationReport{}
+	for _, ref := range manifest.Segments {
+		if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
+			return nil, err
+		}
+		report.ActiveSegments++
+	}
+	if opts.CheckRetired {
+		for _, ref := range manifest.Retired {
+			if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
+				return nil, err
+			}
+			report.RetiredSegments++
+		}
+	}
+	return report, nil
+}
+
+func verifyManifestSegmentRef(dir string, ref SegmentRef, opts VerifyManifestOptions) error {
+	if opts.RequireChecksums && strings.TrimSpace(ref.Checksum) == "" {
+		return fmt.Errorf("snapshots: segment %q missing required checksum", ref.Path)
+	}
+	checked, err := CheckRegisteredSegment(dir, ref)
+	if err != nil {
+		return err
+	}
+	if checked {
+		return nil
+	}
+	if opts.RequireRegistered {
+		return fmt.Errorf("snapshots: segment %q has no registered checker for %s/%s", ref.Path, ref.NormalizedDataset(), ref.Kind)
+	}
+	return checkSegmentFileMetadata(dir, ref, opts.RequireChecksums)
+}
+
+func checkSegmentFileMetadata(dir string, ref SegmentRef, requireChecksum bool) error {
+	path := filepath.Join(dir, ref.Path)
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if stat.IsDir() {
+		return fmt.Errorf("snapshots: segment %q is a directory", ref.Path)
+	}
+	if ref.Size != 0 && uint64(stat.Size()) != ref.Size {
+		return fmt.Errorf("snapshots: segment %q size %d, want %d", ref.Path, stat.Size(), ref.Size)
+	}
+	if strings.TrimSpace(ref.Checksum) == "" {
+		if requireChecksum {
+			return fmt.Errorf("snapshots: segment %q missing required checksum", ref.Path)
+		}
+		return nil
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	got := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(got, ref.Checksum) {
+		return fmt.Errorf("snapshots: segment %q checksum %s, want %s", ref.Path, got, ref.Checksum)
+	}
+	return nil
+}

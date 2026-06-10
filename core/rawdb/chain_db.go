@@ -10,6 +10,7 @@ import (
 	"errors"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
 )
 
@@ -23,6 +24,15 @@ import (
 type ChainDB struct {
 	ethdb.KeyValueStore
 	AncientReader
+	chainIndex ChainIndexReader
+}
+
+// ChainIndexReader is an optional cold lookup sidecar. It is defined in rawdb
+// instead of snapshots so the chain accessors can use it without importing the
+// snapshot package and creating a package cycle.
+type ChainIndexReader interface {
+	BlockNumberByHash(hash common.Hash) (uint64, bool, error)
+	TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error)
 }
 
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
@@ -33,6 +43,15 @@ func NewChainDB(kv ethdb.KeyValueStore, anc AncientReader) *ChainDB {
 		anc = NoopAncient{}
 	}
 	return &ChainDB{KeyValueStore: kv, AncientReader: anc}
+}
+
+// SetChainIndexReader attaches a cold hash lookup sidecar. Passing nil disables
+// the sidecar and leaves all reads on the hot KV/freezer paths.
+func (db *ChainDB) SetChainIndexReader(reader ChainIndexReader) {
+	if db == nil {
+		return
+	}
+	db.chainIndex = reader
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's

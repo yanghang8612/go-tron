@@ -103,6 +103,13 @@ func mustNotFound(t *testing.T, b *Buffer, key []byte) {
 	}
 }
 
+type staticBlockHashReader map[uint64]common.Hash
+
+func (r staticBlockHashReader) BlockHashByNumber(number uint64) (common.Hash, bool) {
+	hash, ok := r[number]
+	return hash, ok
+}
+
 // Read-through: keys not in any layer fall through to base.
 func TestBuffer_ReadThroughToBase(t *testing.T) {
 	base := rawdb.NewMemoryDatabase()
@@ -111,6 +118,38 @@ func TestBuffer_ReadThroughToBase(t *testing.T) {
 	}
 	b := New(base)
 	mustGet(t, b, []byte("k1"), []byte("v1"))
+}
+
+func TestBufferBlockHashReader(t *testing.T) {
+	want := bufHash(7)
+	b := New(rawdb.NewMemoryDatabase())
+	b.SetBlockHashReader(staticBlockHashReader{42: want})
+
+	got, ok := b.BlockHashByNumber(42)
+	if !ok {
+		t.Fatal("BlockHashByNumber(42) ok = false, want true")
+	}
+	if got != want {
+		t.Fatalf("BlockHashByNumber(42) = %x, want %x", got, want)
+	}
+	if _, ok := b.BlockHashByNumber(43); ok {
+		t.Fatal("BlockHashByNumber(43) ok = true, want false")
+	}
+}
+
+func TestBufferBlockHashReaderInheritedFromBase(t *testing.T) {
+	want := bufHash(8)
+	base := New(rawdb.NewMemoryDatabase())
+	base.SetBlockHashReader(staticBlockHashReader{64: want})
+	child := New(base)
+
+	got, ok := child.BlockHashByNumber(64)
+	if !ok {
+		t.Fatal("BlockHashByNumber(64) ok = false, want true")
+	}
+	if got != want {
+		t.Fatalf("BlockHashByNumber(64) = %x, want %x", got, want)
+	}
 }
 
 // Writes in active layer are immediately visible to Get/Has.

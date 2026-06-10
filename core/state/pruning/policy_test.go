@@ -9,6 +9,12 @@ func TestPolicyValidate(t *testing.T) {
 	if err := FullPolicy(100, 20).Validate(); err != nil {
 		t.Fatalf("full validate: %v", err)
 	}
+	if err := BlocksPolicy(100, 20).Validate(); err != nil {
+		t.Fatalf("blocks validate: %v", err)
+	}
+	if err := MinimalPolicy(100, 20).Validate(); err != nil {
+		t.Fatalf("minimal validate: %v", err)
+	}
 	if err := SnapPolicy(100, 20).Validate(); err != nil {
 		t.Fatalf("snap validate: %v", err)
 	}
@@ -38,6 +44,14 @@ func TestPolicyHistoryAndReorgRetention(t *testing.T) {
 	if !full.RetainReorgData(98, 100) || full.RetainReorgData(97, 100) {
 		t.Fatal("full reorg retention boundary wrong")
 	}
+	for _, policy := range []Policy{BlocksPolicy(10, 3), MinimalPolicy(10, 3)} {
+		if !policy.RetainHistory(91, 100) || policy.RetainHistory(90, 100) {
+			t.Fatalf("%s history retention boundary wrong", policy.Mode)
+		}
+		if !policy.RetainReorgData(98, 100) || policy.RetainReorgData(97, 100) {
+			t.Fatalf("%s reorg retention boundary wrong", policy.Mode)
+		}
+	}
 }
 
 func TestPolicySnapshotRetention(t *testing.T) {
@@ -46,6 +60,12 @@ func TestPolicySnapshotRetention(t *testing.T) {
 	}
 	if FullPolicy(10, 3).RetainSnapshot(15, 10, 20) {
 		t.Fatal("full mode should not depend on immutable snapshots")
+	}
+	if BlocksPolicy(10, 3).RetainSnapshot(15, 10, 20) {
+		t.Fatal("blocks mode should not depend on immutable state snapshots")
+	}
+	if MinimalPolicy(10, 3).RetainSnapshot(15, 10, 20) {
+		t.Fatal("minimal mode should not depend on immutable state snapshots")
 	}
 	snap := SnapPolicy(10, 3)
 	if !snap.RetainSnapshot(15, 10, 20) {

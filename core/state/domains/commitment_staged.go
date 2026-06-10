@@ -19,6 +19,8 @@ func newRawdbBranchStore(db CommitmentDB) *rawdbBranchStore {
 	return &rawdbBranchStore{db: db}
 }
 
+func (*rawdbBranchStore) branchStoreParallelSafe() {}
+
 func (s *rawdbBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
 	// NoCopy avoids the per-Get defensive copy; DecodeBranchData consumes the
 	// bytes immediately and copies the leafKey field, so the aliased slice is

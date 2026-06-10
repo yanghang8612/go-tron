@@ -10,7 +10,7 @@ import (
 
 func TestPublishLoadManifestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	manifest := NewManifest(10, 30, []SegmentRef{
+	manifest := NewManifestForChain(10, 30, []SegmentRef{
 		{
 			Domain:    kvdomains.SystemReward,
 			Kind:      SegmentHistory,
@@ -35,6 +35,11 @@ func TestPublishLoadManifestRoundTrip(t *testing.T) {
 			ToTxNum:   30,
 			Path:      "latest/storage-10-30.json",
 		},
+	}, ChainIdentity{
+		ChainID:        1,
+		NetworkID:      11111,
+		GenesisHash:    "0x0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	})
 	if err := PublishManifest(dir, manifest); err != nil {
 		t.Fatalf("publish manifest: %v", err)
@@ -51,6 +56,79 @@ func TestPublishLoadManifestRoundTrip(t *testing.T) {
 	}
 	if len(loaded.Segments) != 3 {
 		t.Fatalf("loaded segments = %d", len(loaded.Segments))
+	}
+	if loaded.Chain == nil {
+		t.Fatal("loaded manifest missing chain identity")
+	}
+	if loaded.Chain.GenesisHash != "0000000000000000000000000000000000000000000000000000000000000001" {
+		t.Fatalf("loaded genesis hash not normalised: %q", loaded.Chain.GenesisHash)
+	}
+	if err := loaded.ValidateChainIdentity(ChainIdentity{
+		ChainID:        1,
+		NetworkID:      11111,
+		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}); err != nil {
+		t.Fatalf("chain identity validation failed: %v", err)
+	}
+	if err := loaded.ValidateChainIdentity(ChainIdentity{
+		ChainID:        1,
+		NetworkID:      201910292,
+		GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+		ForkConfigHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}); err == nil {
+		t.Fatal("wrong network id accepted by chain identity validation")
+	}
+}
+
+func TestManifestValidateChainIdentityRequiresIdentity(t *testing.T) {
+	manifest := NewManifest(1, 1, nil)
+	if err := manifest.ValidateChainIdentity(ChainIdentity{
+		ChainID:     1,
+		NetworkID:   11111,
+		GenesisHash: "0000000000000000000000000000000000000000000000000000000000000001",
+	}); err == nil {
+		t.Fatal("manifest without chain identity accepted")
+	}
+}
+
+func TestManifestRejectsInvalidChainIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		identity ChainIdentity
+	}{
+		{
+			name: "missing genesis",
+			identity: ChainIdentity{
+				ChainID:   1,
+				NetworkID: 11111,
+			},
+		},
+		{
+			name: "bad genesis hash",
+			identity: ChainIdentity{
+				ChainID:     1,
+				NetworkID:   11111,
+				GenesisHash: "not-hex",
+			},
+		},
+		{
+			name: "bad fork hash",
+			identity: ChainIdentity{
+				ChainID:        1,
+				NetworkID:      11111,
+				GenesisHash:    "0000000000000000000000000000000000000000000000000000000000000001",
+				ForkConfigHash: "not-sha256",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := NewManifestForChain(1, 1, nil, tt.identity)
+			if err := manifest.Validate(); err == nil {
+				t.Fatal("invalid chain identity accepted")
+			}
+		})
 	}
 }
 

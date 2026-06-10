@@ -118,7 +118,7 @@ type HistorySnapshotBuilder func(db AggregatorDB, dir string, fromTxNum, toTxNum
 
 type HistorySnapshotOpener func(dir string, ref SegmentRef) ([]*rawdb.StateDomainChange, error)
 
-type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange) (SegmentRef, SegmentRef, SegmentRef, error)
+type HistorySnapshotWriter func(dir string, ref SegmentRef, changes []*rawdb.StateDomainChange, txRanges ...[]*rawdb.StateTxRange) (SegmentRef, SegmentRef, SegmentRef, error)
 
 type HistoryCompactor func(dir string, cfg DomainCfg, selection historyCompactionSelection) ([]SegmentRef, error)
 
@@ -577,6 +577,15 @@ func IsLatestBTreeRef(ref SegmentRef) bool {
 }
 
 func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
+	if ref.Kind == SegmentChainFreezer {
+		return true, CheckChainFreezerSegment(dir, ref)
+	}
+	if ref.Kind == SegmentChainIndex {
+		return true, CheckChainIndexSegment(dir, ref)
+	}
+	if ref.Kind == SegmentChainFreezerAccessor {
+		return true, CheckChainFreezerAccessorSegment(dir, ref)
+	}
 	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 	if !ok {
 		return false, nil

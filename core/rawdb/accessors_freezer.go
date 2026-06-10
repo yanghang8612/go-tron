@@ -7,11 +7,10 @@
 // here next to the schema rather than reaching into private prefixes from
 // outside the package.
 //
-// Slice 1's freezer scope (per the design doc) keeps `bh-<hash>` and
-// `bsr-<hash>` hot in Pebble for wallet hot-path lookup. The freezer
-// therefore only deletes the num-keyed rows (`b-<num>`, `tib-<num>`); the
-// hash-keyed rows remain in Pebble until a future slice introduces a
-// num→hash reverse index inside ancient.
+// The freezer runner owns only the num-keyed hot rows (`b-<num>`,
+// `tib-<num>`). Hash-keyed lookup rows (`bh-<hash>`, `tx-<hash>`,
+// `ti-<txid>`, `bsr-<hash>`) are pruned later only when a verified cold
+// chain-index sidecar covers the same chain-freezer range.
 
 package rawdb
 
@@ -33,6 +32,11 @@ import (
 // Get always returns a copy), so the freezer batch may safely retain it
 // across the ModifyAncients call.
 func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
+	if cdb, ok := db.(*ChainDB); ok {
+		if data, ok := readAncient(cdb, ancientBlocks, number); ok {
+			return data
+		}
+	}
 	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return nil
@@ -50,6 +54,11 @@ func ReadBlockRaw(db ethdb.KeyValueReader, number uint64) []byte {
 // (`tx-<hash>`) remain hot, so they intentionally do not have a *Raw
 // counterpart here.
 func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
+	if cdb, ok := db.(*ChainDB); ok {
+		if data, ok := readAncient(cdb, ancientTxInfos, number); ok {
+			return data
+		}
+	}
 	data, err := db.Get(txInfoBlockKey(number))
 	if err != nil {
 		return nil
@@ -57,10 +66,10 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
-// ReadBlockHashByNumber returns the canonical block hash for the given
-// block number. Slice 1 stores `bh-<hash>` only as a reverse index, so the
-// forward lookup walks: read the block proto under `b-<num>` and
-// recompute the hash. Returns the zero hash when the block is unknown.
+// ReadBlockHashByNumber returns the canonical block hash for the given block
+// number. When the caller passes a ChainDB, this walks the normal ReadBlock
+// path, so frozen block bodies are served from ancient and hot bodies from KV.
+// Plain KV readers keep the original hot-only path.
 //
 // The freezer pass uses this to resolve the `bsr-<hash>` key for each
 // block in the freeze range — `bsr-<hash>` is the hash-keyed state-root
@@ -71,6 +80,13 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 // Cost: one Pebble Get + one proto Unmarshal + Hash() per call. Hot enough
 // for a per-block freezer pass; not intended for VM/RPC hot paths.
 func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
+	if cdb, ok := db.(*ChainDB); ok {
+		block := ReadBlock(cdb, number)
+		if block == nil {
+			return common.Hash{}
+		}
+		return block.Hash()
+	}
 	data, err := db.Get(blockKey(number))
 	if err != nil {
 		return common.Hash{}
@@ -87,21 +103,29 @@ func ReadBlockHashByNumber(db ethdb.KeyValueReader, number uint64) common.Hash {
 // row into the `state_roots` ancient table verbatim.
 func ReadBlockStateRootRaw(db ethdb.KeyValueReader, hash common.Hash) []byte {
 	data, err := db.Get(blockStateRootKey(hash.Bytes()))
-	if err != nil {
-		return nil
+	if err == nil {
+		return data
 	}
-	return data
+	if cdb, ok := db.(*ChainDB); ok {
+		numPtr := ReadBlockNumber(cdb, hash)
+		if numPtr == nil {
+			return nil
+		}
+		if data, ok := readAncient(cdb, ancientStateRoots, *numPtr); ok {
+			return data
+		}
+	}
+	return nil
 }
 
 // DeleteFrozenBlockRange removes the hot Pebble rows that the slice-3
 // freezer has just copied into ancient: `b-<num>` (block proto) and
 // `tib-<num>` (tx-info-per-block) for every num in [lo, hi].
 //
-// Per the slice-1 freezer design, `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`,
-// and `ti-<txid>` are intentionally left in Pebble — they are small,
-// hash-keyed wallet-hot rows that the freezer does not own. A future
-// slice may relocate them; until then this helper is deliberately
-// narrow.
+// `bh-<hash>`, `bsr-<hash>`, `tx-<hash>`, and `ti-<txid>` are intentionally
+// left to the chain-lookup prune lifecycle because deleting them safely
+// requires a verified chain-index sidecar. This helper stays narrow so the
+// freezer writer only deletes rows it copied in the same pass.
 //
 // Implementation: two DeleteRange calls — one per prefix — wrapping the
 // half-open `[prefix||lo, prefix||(hi+1))` window. Pebble turns each into
@@ -148,4 +172,3 @@ func BlockRangeBounds(lo, hi uint64) (start, limit []byte) {
 	}
 	return blockKey(lo), blockKey(endBlock)
 }
-

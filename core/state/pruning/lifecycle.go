@@ -14,23 +14,28 @@ var lifecycleLog = gtronlog.NewModule("core/state/lifecycle")
 // build and publish cold history files, compact old history files, then prune
 // hot data covered by the visible snapshot view.
 type SnapshotLifecycleConfig struct {
-	Snapshot snapshots.Config
-	Pruner   PrunerConfig
-	Interval time.Duration
+	Snapshot         snapshots.Config
+	Pruner           PrunerConfig
+	ChainLookupPrune ChainLookupPruneFunc
+	Interval         time.Duration
 }
+
+type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
 type SnapshotLifecyclePass struct {
-	Snapshot snapshots.PassResult
-	Prune    Stats
+	Snapshot         snapshots.PassResult
+	Prune            Stats
+	ChainLookupPrune *snapshots.PruneHotChainLookupResult
 }
 
 // SnapshotLifecycle owns the state snapshot builder/compactor and hot pruner
 // under one node.Lifecycle, so their progress advances in one ordered pass
 // instead of via independent background loops.
 type SnapshotLifecycle struct {
-	builder *snapshots.Runner
-	pruner  *Pruner
+	builder          *snapshots.Runner
+	pruner           *Pruner
+	chainLookupPrune ChainLookupPruneFunc
 
 	interval time.Duration
 	quit     chan struct{}
@@ -55,11 +60,12 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		builder = snapshots.NewRunner(snapshotChainSource{chain: chain}, cfg.Snapshot)
 	}
 	return &SnapshotLifecycle{
-		builder:  builder,
-		pruner:   NewPruner(chain, cfg.Pruner),
-		interval: interval,
-		quit:     make(chan struct{}),
-		done:     make(chan struct{}),
+		builder:          builder,
+		pruner:           NewPruner(chain, cfg.Pruner),
+		chainLookupPrune: cfg.ChainLookupPrune,
+		interval:         interval,
+		quit:             make(chan struct{}),
+		done:             make(chan struct{}),
 	}
 }
 
@@ -78,6 +84,7 @@ func (l *SnapshotLifecycle) Start() error {
 	go l.loop()
 	lifecycleLog.Info("Domain state snapshot/prune lifecycle started",
 		"snapshotEnabled", l.builder != nil,
+		"chainLookupPrune", l.chainLookupPrune != nil,
 		"mode", l.pruner.cfg.Policy.Mode,
 		"interval", l.interval,
 		"snapshotDir", l.pruner.cfg.SnapshotDir)
@@ -112,6 +119,13 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.Prune = stats
+	}
+	if l.chainLookupPrune != nil {
+		result, err := l.chainLookupPrune()
+		if err != nil {
+			return out, err
+		}
+		out.ChainLookupPrune = result
 	}
 	return out, nil
 }

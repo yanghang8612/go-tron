@@ -468,6 +468,10 @@ const (
 	javaMaxInt             = uint64(1<<31 - 1)
 )
 
+type blockHashByNumberReader interface {
+	BlockHashByNumber(number uint64) (tcommon.Hash, bool)
+}
+
 func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	num := stack.peek()
 	index := javaMaxInt
@@ -484,18 +488,18 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 		num.Clear()
 		return nil, nil
 	}
-	// opBlockHash reads at most 256 blocks back from current. The freezer
-	// margin (default 128 blocks below solidified) is much deeper than this
-	// window, so any block this opcode resolves is guaranteed to still be
-	// hot. Read directly via rawdb.ReadBlockKV to keep `tvm.DB` narrow
-	// (KVReadWriter — also used for contract-state writes) and avoid
-	// widening every TVM call site.
 	block := rawdb.ReadBlockKV(interpreter.tvm.DB, index)
-	if block == nil {
-		num.Clear()
+	if block != nil {
+		num.SetBytes(block.Hash().Bytes())
 		return nil, nil
 	}
-	num.SetBytes(block.Hash().Bytes())
+	if reader, ok := interpreter.tvm.DB.(blockHashByNumberReader); ok {
+		if hash, ok := reader.BlockHashByNumber(index); ok {
+			num.SetBytes(hash.Bytes())
+			return nil, nil
+		}
+	}
+	num.Clear()
 	return nil, nil
 }
 
@@ -529,10 +533,18 @@ func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 }
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) && interpreter.tvm.DB != nil {
-		if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
+	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) {
+		if interpreter.tvm.DB != nil {
+			if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
+				var v uint256.Int
+				v.SetBytes(genesis.Hash().Bytes())
+				stack.push(&v)
+				return nil, nil
+			}
+		}
+		if interpreter.tvm.GenesisHash != (tcommon.Hash{}) {
 			var v uint256.Int
-			v.SetBytes(genesis.Hash().Bytes())
+			v.SetBytes(interpreter.tvm.GenesisHash.Bytes())
 			stack.push(&v)
 			return nil, nil
 		}

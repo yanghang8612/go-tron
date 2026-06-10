@@ -1,9 +1,11 @@
 package rawdb
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -11,7 +13,7 @@ import (
 // ancientTxInfos names the freezer table holding marshalled
 // `corepb.TransactionRet` blobs keyed by block number (the same payload
 // `tib-<num>` stores in Pebble).
-const ancientTxInfos = "tx_infos"
+const ancientTxInfos = AncientTxInfosTable
 
 // WriteTransactionInfo stores a single TransactionInfo indexed by txID.
 func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) error {
@@ -22,19 +24,32 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 	return db.Put(txInfoKey(txID), data)
 }
 
-// ReadTransactionInfo retrieves a TransactionInfo by txID. The per-tx index
-// stays hot per the slice-1 freezer spec, so this accessor reads only from
-// Pebble; the `*ChainDB` parameter exists for signature uniformity.
+// ReadTransactionInfo retrieves a TransactionInfo by txID. The hot per-tx
+// `ti-<txid>` row is preferred; on a miss, a ChainDB with a cold chain-index
+// sidecar can resolve txID -> block number and scan that block's TransactionRet
+// payload from ancient or hot per-block storage.
 func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	data, err := db.Get(txInfoKey(txID))
-	if err != nil {
+	if err == nil {
+		info := &corepb.TransactionInfo{}
+		if err := proto.Unmarshal(data, info); err != nil {
+			return nil
+		}
+		return info
+	}
+	blockNum := ReadTransactionIndex(db, txID)
+	if blockNum == nil {
 		return nil
 	}
-	info := &corepb.TransactionInfo{}
-	if err := proto.Unmarshal(data, info); err != nil {
-		return nil
+	for _, info := range ReadTransactionInfosByBlock(db, *blockNum) {
+		if info == nil {
+			continue
+		}
+		if bytes.Equal(info.Id, txID) {
+			return info
+		}
 	}
-	return info
+	return nil
 }
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.
@@ -82,16 +97,25 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 	return db.Put(txKey(txHash), num)
 }
 
-// ReadTransactionIndex retrieves the block number for a tx hash. The tx
-// reverse index stays hot per the slice-1 freezer spec, so this accessor
-// reads only from Pebble.
+// ReadTransactionIndex retrieves the block number for a tx hash. The hot
+// `tx-<hash>` row is preferred; on a miss, an attached cold chain-index sidecar
+// can resolve historical tx hashes without keeping every old reverse index in
+// Pebble.
 func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
 	data, err := db.Get(txKey(txHash))
-	if err != nil || len(data) != 8 {
-		return nil
+	if err == nil && len(data) == 8 {
+		num := binary.BigEndian.Uint64(data)
+		return &num
 	}
-	num := binary.BigEndian.Uint64(data)
-	return &num
+	if db != nil && db.chainIndex != nil && len(txHash) == common.HashLength {
+		var hash common.Hash
+		copy(hash[:], txHash)
+		num, ok, err := db.chainIndex.TransactionBlockNumberByHash(hash)
+		if err == nil && ok {
+			return &num
+		}
+	}
+	return nil
 }
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.

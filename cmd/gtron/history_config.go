@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -14,7 +17,7 @@ import (
 // applyHistoryConfig wires the operator-level flat temporal-state retention
 // settings into a chain config. Precedence (highest first):
 //
-//  1. --gcmode CLI flag
+//  1. --prune.mode / --gcmode CLI flags
 //  2. [history] section in the TOML file (when --config is set)
 //  3. params.ChainConfig defaults
 //
@@ -26,10 +29,10 @@ import (
 // applyHistoryConfig also turns HistoryEnabled on whenever the operator has
 // explicitly asked for archive or snap mode (both need temporal capture to
 // answer as-of queries) OR has explicitly opted in via --history.enabled /
-// [history] enabled. Full mode is inert without one of those: the domain pruner
-// Lifecycle only registers when flat history or commitment checkpoints are
-// enabled. Plain full mode with no opt-in stays the zero-cost default (no
-// capture, no pruning).
+// [history] enabled. Full/blocks/minimal modes are inert without one of those:
+// the domain pruner Lifecycle only registers when flat history or commitment
+// checkpoints are enabled. These non-archive modes with no opt-in stay on the
+// zero-cost default path: no capture, no pruning.
 //
 // Precedence for the enable toggle: --history.enabled CLI flag (when set)
 // overrides [history] enabled TOML, which overrides the archive-implied
@@ -57,15 +60,13 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 		}
 	}
 
-	// Step 2: CLI flag overrides the TOML. cli/v2 treats flags with a
+	// Step 2: CLI flags override the TOML. cli/v2 treats flags with a
 	// default value as "set" even when the user didn't pass them; we
 	// detect explicit setting via IsSet so the TOML's value isn't
-	// trampled by the flag default.
-	if ctx.IsSet("gcmode") {
-		mode, err := normaliseHistoryMode(ctx.String("gcmode"))
-		if err != nil {
-			return err
-		}
+	// trampled by the --gcmode default.
+	if mode, ok, err := historyModeFromFlags(ctx); err != nil {
+		return err
+	} else if ok {
 		cfg.HistoryMode = mode
 	}
 	if ctx.IsSet("history.enabled") {
@@ -85,32 +86,136 @@ func applyHistoryConfig(ctx *cli.Context, cfg *params.ChainConfig) error {
 	return nil
 }
 
+func historyModeFromFlags(ctx *cli.Context) (string, bool, error) {
+	if ctx == nil {
+		return "", false, nil
+	}
+	var (
+		mode  string
+		found bool
+	)
+	if ctx.IsSet("gcmode") {
+		normalised, err := normaliseHistoryMode(ctx.String("gcmode"))
+		if err != nil {
+			return "", false, err
+		}
+		mode = normalised
+		found = true
+	}
+	if ctx.IsSet("prune.mode") {
+		normalised, err := normaliseHistoryMode(ctx.String("prune.mode"))
+		if err != nil {
+			return "", false, err
+		}
+		if found && normalised != mode {
+			return "", false, fmt.Errorf("--prune.mode %q conflicts with --gcmode %q", normalised, mode)
+		}
+		mode = normalised
+		found = true
+	}
+	return mode, found, nil
+}
+
 func shouldEnableDomainStatePruner(cfg *params.ChainConfig) bool {
 	if cfg == nil {
 		return false
 	}
 	switch cfg.EffectiveHistoryMode() {
-	case params.HistoryModeFull, params.HistoryModeSnap:
+	case params.HistoryModeFull, params.HistoryModeSnap, params.HistoryModeBlocks, params.HistoryModeMinimal:
 	default:
 		return false
 	}
 	return cfg.HistoryEnabled || cfg.StateCommitmentCheckpoints
 }
 
-// normaliseHistoryMode validates a user-supplied --gcmode value. The
-// canonical strings are "full" and "archive"; anything else is a hard
-// error rather than a silent fallback so a typo doesn't degrade an
-// archive node to full mode without warning.
+func shouldEnableChainLookupPruner(cfg *params.ChainConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	switch cfg.EffectiveHistoryMode() {
+	case params.HistoryModeFull, params.HistoryModeSnap, params.HistoryModeBlocks, params.HistoryModeMinimal:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldEnableChainFreezerTailPruner(cfg *params.ChainConfig) bool {
+	return cfg != nil && cfg.EffectiveHistoryMode() == params.HistoryModeMinimal
+}
+
+func domainStatePrunePolicy(cfg *params.ChainConfig, targetReorgWindow uint64) statepruning.Policy {
+	historyWindow := params.HistoryDefaultPruneWindow
+	mode := params.HistoryModeFull
+	if cfg != nil {
+		historyWindow = cfg.EffectiveHistoryPruneWindow()
+		mode = cfg.EffectiveHistoryMode()
+	}
+	reorgWindow := targetReorgWindow
+	if reorgWindow == 0 || historyWindow < reorgWindow {
+		reorgWindow = historyWindow
+	}
+	switch mode {
+	case params.HistoryModeArchive:
+		return statepruning.ArchivePolicy()
+	case params.HistoryModeBlocks:
+		return statepruning.BlocksPolicy(historyWindow, reorgWindow)
+	case params.HistoryModeMinimal:
+		return statepruning.MinimalPolicy(historyWindow, reorgWindow)
+	case params.HistoryModeSnap:
+		return statepruning.SnapPolicy(historyWindow, reorgWindow)
+	default:
+		return statepruning.FullPolicy(historyWindow, reorgWindow)
+	}
+}
+
+func ensureHistoryPruneModeLocked(db ethdb.KeyValueStore, requested string) error {
+	mode, err := normaliseHistoryMode(requested)
+	if err != nil {
+		return err
+	}
+	stored, ok, err := rawdb.ReadHistoryPruneMode(db)
+	if err != nil {
+		return fmt.Errorf("read persisted prune mode: %w", err)
+	}
+	if !ok {
+		if err := rawdb.WriteHistoryPruneMode(db, mode); err != nil {
+			return fmt.Errorf("persist prune mode: %w", err)
+		}
+		return nil
+	}
+	storedMode, err := normaliseHistoryMode(stored)
+	if err != nil {
+		return fmt.Errorf("persisted prune mode %q is invalid: %w", stored, err)
+	}
+	if storedMode != mode {
+		return fmt.Errorf("datadir prune mode mismatch: stored %q, requested %q; use --prune.mode=%s or a fresh datadir", storedMode, mode, storedMode)
+	}
+	if stored != storedMode {
+		if err := rawdb.WriteHistoryPruneMode(db, storedMode); err != nil {
+			return fmt.Errorf("canonicalise persisted prune mode: %w", err)
+		}
+	}
+	return nil
+}
+
+// normaliseHistoryMode validates a user-supplied --prune.mode / --gcmode value.
+// Unknown values are a hard error rather than a silent fallback so a typo
+// doesn't degrade an archive node to full mode without warning.
 func normaliseHistoryMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", params.HistoryModeFull:
 		return params.HistoryModeFull, nil
+	case params.HistoryModeBlocks:
+		return params.HistoryModeBlocks, nil
+	case params.HistoryModeMinimal:
+		return params.HistoryModeMinimal, nil
 	case params.HistoryModeSnap:
 		return params.HistoryModeSnap, nil
 	case params.HistoryModeArchive:
 		return params.HistoryModeArchive, nil
 	default:
-		return "", fmt.Errorf("--gcmode: unknown value %q (want full|snap|archive)", s)
+		return "", fmt.Errorf("unknown prune mode %q (want full|blocks|minimal|snap|archive)", s)
 	}
 }
 

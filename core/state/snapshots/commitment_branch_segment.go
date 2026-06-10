@@ -182,6 +182,15 @@ func (s *CommitmentBranchSegment) Iterate(fn func(prefix, encoded []byte) (bool,
 	return nil
 }
 
+func (s *CommitmentBranchSegment) Restore(db ethdb.KeyValueWriter) error {
+	if db == nil {
+		return errors.New("snapshots: nil database")
+	}
+	return s.Iterate(func(prefix, encoded []byte) (bool, error) {
+		return true, rawdb.WriteCommitmentBranch(db, prefix, encoded)
+	})
+}
+
 // CommitmentBranchSource adapts the cold-snapshot layer to the staged engine's
 // restore seam. It embeds *Manager for the snapshot root (GetCommitmentRoot) and
 // the legacy node iterator (so it also satisfies the engine-agnostic

@@ -20,9 +20,10 @@ type ChainConfig struct {
 	// java-tron proposal, so flipping it never affects consensus.
 	HistoryEnabled bool
 	// HistoryMode is the retention policy for StateDomainChange/StateTxRange
-	// rows captured by applyBlock. "full" prunes rows older than
-	// HistoryPruneWindow blocks (the default — recent-tip-only archive
-	// coverage); "archive" keeps every row forever.
+	// rows captured by applyBlock. "full", "blocks", and "minimal" prune rows
+	// older than HistoryPruneWindow blocks (the default — recent-tip-only
+	// archive coverage); "snap" prunes only after cold snapshot coverage;
+	// "archive" keeps every row forever.
 	//
 	// Ignored when HistoryEnabled is false (no rows to prune, no archive to
 	// keep).
@@ -45,13 +46,15 @@ type ChainConfig struct {
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
 
-// History retention modes for ChainConfig.HistoryMode. "full" prunes hot
-// history below the local window; "snap" prunes hot history only after cold
-// snapshot coverage exists; "archive" keeps every row.
+// History retention modes for ChainConfig.HistoryMode. "full", "blocks", and
+// "minimal" prune hot history below the local window; "snap" prunes hot history
+// only after cold snapshot coverage exists; "archive" keeps every row.
 const (
 	HistoryModeFull    = "full"
 	HistoryModeSnap    = "snap"
 	HistoryModeArchive = "archive"
+	HistoryModeBlocks  = "blocks"
+	HistoryModeMinimal = "minimal"
 )
 
 // State commitment modes. Latest is the only fresh-node state layout:
@@ -87,6 +90,10 @@ func (c *ChainConfig) EffectiveHistoryMode() string {
 		return HistoryModeArchive
 	case HistoryModeSnap:
 		return HistoryModeSnap
+	case HistoryModeBlocks:
+		return HistoryModeBlocks
+	case HistoryModeMinimal:
+		return HistoryModeMinimal
 	default:
 		return HistoryModeFull
 	}

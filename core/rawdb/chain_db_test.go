@@ -64,6 +64,40 @@ func TestChainDBNilAncient(t *testing.T) {
 	}
 }
 
+func TestFallbackAncientReaderUsesLaterSourceOnMiss(t *testing.T) {
+	t.Parallel()
+
+	local := newFakeAncient()
+	local.put("headers", 0, []byte("local-0"))
+	cold := newFakeAncient()
+	cold.put("headers", 0, []byte("cold-0"))
+	cold.put("headers", 1, []byte("cold-1"))
+
+	reader := NewFallbackAncientReader(local, cold)
+	if got, err := reader.Ancient("headers", 0); err != nil || !bytes.Equal(got, []byte("local-0")) {
+		t.Fatalf("Ancient local row = %q/%v, want local-0/nil", got, err)
+	}
+	if got, err := reader.Ancient("headers", 1); err != nil || !bytes.Equal(got, []byte("cold-1")) {
+		t.Fatalf("Ancient cold fallback row = %q/%v, want cold-1/nil", got, err)
+	}
+	if _, err := reader.Ancient("headers", 2); !errors.Is(err, ErrNotInAncient) {
+		t.Fatalf("Ancient missing row err = %v, want ErrNotInAncient", err)
+	}
+	if count, err := reader.AncientCount("headers"); err != nil || count != 2 {
+		t.Fatalf("AncientCount = %d/%v, want 2/nil", count, err)
+	}
+	if ok, err := reader.HasAncient("headers", 1); err != nil || !ok {
+		t.Fatalf("HasAncient cold fallback = %v/%v, want true/nil", ok, err)
+	}
+	rows, err := reader.AncientRange("headers", 0, 3, 0)
+	if err != nil {
+		t.Fatalf("AncientRange: %v", err)
+	}
+	if len(rows) != 2 || !bytes.Equal(rows[0], []byte("local-0")) || !bytes.Equal(rows[1], []byte("cold-1")) {
+		t.Fatalf("AncientRange rows = %q, want local-0,cold-1", rows)
+	}
+}
+
 // TestChainDBFreezerReader plumbs a real on-disk freezer through ChainDB and
 // confirms the error translation maps freezer.ErrOutOfBounds → ErrNotInAncient.
 func TestChainDBFreezerReader(t *testing.T) {

@@ -345,11 +345,18 @@ func NewBlockChain(db ethdb.KeyValueStore, stateDB *state.Database, config *para
 // reader. Production startup passes the freezer reader here so block and
 // transaction-info accessors can transparently fall through to frozen data.
 func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, config *params.ChainConfig, ancient rawdb.AncientReader) (*BlockChain, error) {
-	buffer := blockbuffer.New(db)
 	if ancient == nil {
 		ancient = rawdb.NoopAncient{}
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
+	buffer := blockbuffer.New(db)
+	buffer.SetBlockHashReader(blockbuffer.BlockHashReaderFunc(func(number uint64) (tcommon.Hash, bool) {
+		block := rawdb.ReadBlock(chaindb, number)
+		if block == nil {
+			return tcommon.Hash{}, false
+		}
+		return block.Hash(), true
+	}))
 	bc := &BlockChain{
 		db:                db,
 		chaindb:           chaindb,

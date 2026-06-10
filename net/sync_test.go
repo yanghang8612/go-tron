@@ -2,8 +2,10 @@ package net
 
 import (
 	"testing"
+	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -32,6 +34,89 @@ func TestSyncServiceStopConsumesInboundBlocks(t *testing.T) {
 	})
 	if !ss.HandleBlock(nil, block, nil) {
 		t.Fatal("stopped sync service should consume inbound blocks during shutdown")
+	}
+}
+
+func TestSyncServiceRestoresInventoryTargetProgress(t *testing.T) {
+	bc := makeTestChain(t)
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, 500); err != nil {
+		t.Fatalf("write sync inventory progress: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	got := ss.targetHeadNum
+	ss.mu.Unlock()
+
+	if got != 500 {
+		t.Fatalf("restored targetHeadNum = %d, want persisted inventory target 500", got)
+	}
+}
+
+func TestSyncServiceIgnoresStaleInventoryTargetProgress(t *testing.T) {
+	bc := makeChainWithBlocks(t, 10)
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, 7); err != nil {
+		t.Fatalf("write stale sync inventory progress: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	got := ss.targetHeadNum
+	ss.mu.Unlock()
+
+	if got != 10 {
+		t.Fatalf("targetHeadNum with stale persisted inventory = %d, want current head 10", got)
+	}
+}
+
+func TestSyncServiceRestoresStagedBodiesOnSessionStart(t *testing.T) {
+	bc := makeTestChain(t)
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write sync staged block %d: %v", block.Number(), err)
+		}
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	ss.mu.Unlock()
+	if buffered != 2 || target != 2 {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 2/2", buffered, target)
+	}
+
+	ss.drainBufferedBlocks()
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after staged body restore = %v, want block2 %x", got, block2.Hash())
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after import ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+}
+
+func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
+	bc := makeTestChain(t)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+		t.Fatalf("write sync staged block: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.doReset()
+	ss.mu.Unlock()
+
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+		t.Fatalf("staged block after reset ok=%v err=%v, want deleted", ok, err)
 	}
 }
 

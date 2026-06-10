@@ -1,12 +1,18 @@
 package core
 
 import (
+	"fmt"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	"github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -133,6 +139,155 @@ func TestTronBackend_GetTransactionByHash_NotFound(t *testing.T) {
 	if tx != nil || block != nil || idx != 0 {
 		t.Fatal("GetTransactionByHash should return nil for unknown hash")
 	}
+}
+
+func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	defer fz.Close()
+
+	owner := testInsertAddr(1)
+	receiver := testInsertAddr(2)
+	genesis := &params.Genesis{
+		Config:    params.MainnetChainConfig,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: owner, Balance: 100_000_000},
+		},
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, rawdb.NewFreezerReader(fz))
+	if err != nil {
+		t.Fatalf("NewBlockChainWithAncient: %v", err)
+	}
+	defer bc.Close()
+
+	txPB := testRestartTransferTx(t, owner, receiver, 7_000_000)
+	txHash := types.NewTransactionFromPB(txPB).Hash()
+	parent := bc.CurrentBlock()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3000,
+				ParentHash: parent.Hash().Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	if err := bc.InsertBlock(block); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+	wantRoot := rawdb.ReadBlockStateRoot(bc.ChainDB(), block.Hash())
+	if wantRoot == (tcommon.Hash{}) {
+		t.Fatalf("block state root missing before freeze")
+	}
+
+	if err := appendBackendColdLookupAncients(t, fz, diskdb, parent, block); err != nil {
+		t.Fatalf("append ancients: %v", err)
+	}
+	snapshotDir := t.TempDir()
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(fz), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{freezerRef, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	if err := rawdb.DeleteFrozenBlockRange(diskdb, 1, 1); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	if err := rawdb.DeleteBlockNumber(diskdb, block.Hash()); err != nil {
+		t.Fatalf("DeleteBlockNumber: %v", err)
+	}
+	rawdb.DeleteBlockStateRoot(diskdb, block.Hash())
+	if err := rawdb.DeleteTransactionIndex(diskdb, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfo(diskdb, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionInfo: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
+	if got := rawdb.ReadBlock(hotOnly, 1); got != nil {
+		t.Fatalf("hot block still present: %x", got.Hash())
+	}
+	if got := rawdb.ReadBlockNumber(hotOnly, block.Hash()); got != nil {
+		t.Fatalf("hot block lookup still present: %v", got)
+	}
+	if got := rawdb.ReadTransactionIndex(hotOnly, txHash[:]); got != nil {
+		t.Fatalf("hot tx lookup still present: %v", got)
+	}
+	if got := rawdb.ReadTransactionInfo(hotOnly, txHash[:]); got != nil {
+		t.Fatalf("hot tx info still present: %+v", got)
+	}
+	if got := rawdb.ReadBlockStateRoot(hotOnly, block.Hash()); got != (tcommon.Hash{}) {
+		t.Fatalf("hot state root still present: %x", got)
+	}
+
+	bc.ChainDB().SetChainIndexReader(mgr)
+	backend := &TronBackend{chain: bc}
+	gotBlock, err := backend.GetBlockByHash(block.Hash())
+	if err != nil || gotBlock == nil || gotBlock.Hash() != block.Hash() {
+		t.Fatalf("GetBlockByHash = %v/%v, want block %x", gotBlock, err, block.Hash())
+	}
+	gotTx, err := backend.GetTransactionByID(txHash)
+	if err != nil || gotTx == nil || types.NewTransactionFromPB(gotTx).Hash() != txHash {
+		t.Fatalf("GetTransactionByID = %v/%v, want tx %x", gotTx, err, txHash)
+	}
+	info, err := backend.GetTransactionInfoByID(txHash)
+	if err != nil || info == nil || uint64(info.BlockNumber) != block.Number() {
+		t.Fatalf("GetTransactionInfoByID = %+v/%v, want block %d", info, err, block.Number())
+	}
+	gotTx, gotBlock, idx, err := backend.GetTransactionByHash(txHash)
+	if err != nil || gotTx == nil || gotBlock == nil || idx != 0 {
+		t.Fatalf("GetTransactionByHash = tx:%v block:%v idx:%d err:%v, want tx/block/0", gotTx, gotBlock, idx, err)
+	}
+	if got := bc.StateRootAtBlock(block.Number()); got != wantRoot {
+		t.Fatalf("StateRootAtBlock = %x, want %x", got, wantRoot)
+	}
+}
+
+func appendBackendColdLookupAncients(t *testing.T, fz *rawdbfreezer.Freezer, db ethdb.KeyValueReader, blocks ...*types.Block) error {
+	t.Helper()
+	if _, err := fz.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		for _, block := range blocks {
+			if block == nil {
+				continue
+			}
+			blockRaw := rawdb.ReadBlockRaw(db, block.Number())
+			if len(blockRaw) == 0 {
+				return fmt.Errorf("hot block %d raw bytes missing", block.Number())
+			}
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, block.Number(), blockRaw); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, block.Number(), rawdb.ReadTransactionInfosRaw(db, block.Number())); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, block.Number(), rawdb.ReadBlockStateRootRaw(db, block.Hash())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return fz.Sync()
 }
 
 // TestTronBackend_GetLogs_EmptyRange verifies GetLogs returns empty slice for range with no logs.

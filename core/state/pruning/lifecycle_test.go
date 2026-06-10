@@ -58,3 +58,41 @@ func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T)
 		t.Fatalf("snapshot hot-prune stage = %d ok=%v err=%v, want 12", got, ok, err)
 	}
 }
+
+func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	chain := &fakePruneChain{db: db, solidified: 5}
+	sawHotPruneStage := false
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Pruner: PrunerConfig{
+			Policy:    FullPolicy(2, 1),
+			Interval:  time.Hour,
+			BatchSize: 10,
+		},
+		ChainLookupPrune: func() (*snapshots.PruneHotChainLookupResult, error) {
+			got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotPrune)
+			if err != nil {
+				return nil, err
+			}
+			sawHotPruneStage = ok && got == 5
+			return &snapshots.PruneHotChainLookupResult{
+				HasRange:          true,
+				FromBlock:         0,
+				ToBlock:           1,
+				ColdIndexSegments: 1,
+			}, nil
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !sawHotPruneStage {
+		t.Fatal("chain lookup prune hook ran before state hot-prune stage advanced")
+	}
+	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange || result.ChainLookupPrune.ToBlock != 1 {
+		t.Fatalf("chain lookup prune result = %+v, want hook result", result.ChainLookupPrune)
+	}
+}

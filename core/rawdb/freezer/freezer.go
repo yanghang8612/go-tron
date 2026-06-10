@@ -64,7 +64,7 @@ type AncientWriteOp interface {
 // tables when opening a freezer.
 type TableConfig struct {
 	NoSnappy bool // disables item compression
-	Prunable bool // true for tables that can be pruned by TruncateTail (unused in slice 1)
+	Prunable bool // true for tables that can be pruned by TruncateTail
 }
 
 func (c TableConfig) toInternal() freezerTableConfig {
@@ -97,8 +97,7 @@ type Freezer struct {
 //
 // The 'tables' argument defines the freezer tables and their configuration.
 // Each value is a TableConfig specifying whether snappy compression is
-// disabled (NoSnappy) and whether the table is prunable (Prunable; unused
-// in slice 1 but kept on the type to stay structurally aligned with geth).
+// disabled (NoSnappy) and whether the table is prunable from the virtual tail.
 func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize uint32, tables map[string]TableConfig) (*Freezer, error) {
 	// Create the initial freezer object
 	var (
@@ -331,6 +330,67 @@ func (f *Freezer) TruncateHead(items uint64) (uint64, error) {
 	return oitems, nil
 }
 
+// TruncateTail marks all ancient items below items as pruned from the virtual
+// tail. It only works when every freezer table was opened as prunable. The
+// operation hides old rows from Ancient/HasAncient immediately and persists the
+// new tail in table metadata. Call PruneTailFiles to reclaim fully-hidden data
+// shards from disk.
+func (f *Freezer) TruncateTail(items uint64) (uint64, error) {
+	if f.readonly {
+		return 0, errReadOnly
+	}
+	f.writeLock.Lock()
+	defer f.writeLock.Unlock()
+
+	head := f.head.Load()
+	if items > head {
+		return 0, errors.New("tail truncation above head")
+	}
+	otail := f.tail.Load()
+	if items <= otail {
+		return otail, nil
+	}
+	for kind, table := range f.tables {
+		if !table.config.prunable {
+			return 0, fmt.Errorf("freezer table %s is not prunable", kind)
+		}
+	}
+	for _, table := range f.tables {
+		if err := table.truncateTail(items); err != nil {
+			return 0, err
+		}
+	}
+	f.tail.Store(items)
+	return otail, nil
+}
+
+// PruneTailFiles physically deletes data shards that are completely below the
+// virtual tail. Tables with different compression ratios may advance their
+// physical offsets to different item numbers; the freezer-wide Tail remains the
+// virtual tail enforced by TruncateTail.
+func (f *Freezer) PruneTailFiles() (uint64, error) {
+	if f.readonly {
+		return 0, errReadOnly
+	}
+	f.writeLock.Lock()
+	defer f.writeLock.Unlock()
+
+	for kind, table := range f.tables {
+		if !table.config.prunable {
+			return 0, fmt.Errorf("freezer table %s is not prunable", kind)
+		}
+	}
+	var removed uint64
+	for _, table := range f.tables {
+		n, err := table.pruneTailFiles()
+		removed += n
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
 // Sync flushes all data tables to disk.
 func (f *Freezer) Sync() error {
 	var errs []error
@@ -415,9 +475,11 @@ func (f *Freezer) repair() error {
 				panic(fmt.Sprintf("non-prunable freezer table %s has non-zero tail: %v", kind, table.itemHidden.Load()))
 			}
 		}
-		// Slice 1 has no prunable tables, so we deliberately do NOT
-		// implement the truncateTail branch here. Re-enable when a
-		// pruning use-case lands (see go-ethereum's freezer.go::repair).
+		if table.config.prunable && table.itemHidden.Load() < prunedTail {
+			if err := table.truncateTail(prunedTail); err != nil {
+				return err
+			}
+		}
 	}
 
 	f.head.Store(head)

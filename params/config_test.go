@@ -51,6 +51,8 @@ func TestHistoryModeConfigDefaults(t *testing.T) {
 		{HistoryModeFull, HistoryModeFull},
 		{HistoryModeSnap, HistoryModeSnap},
 		{HistoryModeArchive, HistoryModeArchive},
+		{HistoryModeBlocks, HistoryModeBlocks},
+		{HistoryModeMinimal, HistoryModeMinimal},
 		{"unknown", HistoryModeFull},
 	} {
 		cfg.HistoryMode = tc.mode

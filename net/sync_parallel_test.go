@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -54,6 +55,9 @@ func TestMultiPeerChainInventorySplitsFetchBatches(t *testing.T) {
 			t.Fatalf("same block requested from both peers: %x", h)
 		}
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncInventory); err != nil || !ok || row.BlockNum != 1250 || row.HasBlockHash {
+		t.Fatalf("sync inventory stage = %+v ok=%v err=%v, want target block 1250 without hash", row, ok, err)
+	}
 }
 
 func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
@@ -83,6 +87,12 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	if got := bc.CurrentBlock().Number(); got != 0 {
 		t.Fatalf("out-of-order block should stay buffered, head=%d", got)
 	}
+	if staged, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block2.Number()); err != nil || !ok || staged.Hash() != block2.Hash() {
+		t.Fatalf("sync staged body for block2 = %v ok=%v err=%v, want %x", staged, ok, err, block2.Hash())
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync bodies stage = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
 
 	if !ss.HandleBlock(peerA, block1, nil) {
 		t.Fatal("block 1 should be consumed by sync")
@@ -92,6 +102,14 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	}
 	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != 2 {
 		t.Fatalf("sync stats total blocks after buffered range drain = %d, want 2", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync import stage = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("imported sync staged body #%d ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
 	}
 	ss.mu.Lock()
 	buffered := len(ss.blockBuffer)

@@ -141,6 +141,37 @@ func (a *Aggregator) BuildLatest(db AggregatorDB, opts AggregatorBuildOptions) (
 	return &AggregatorBuildResult{Manifest: manifest, Segments: append([]SegmentRef(nil), refs...)}, nil
 }
 
+func (a *Aggregator) BuildChainFreezer(reader rawdb.AncientReader, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	if a == nil || a.dir == "" {
+		return nil, errors.New("snapshots: nil aggregator or empty directory")
+	}
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(reader, a.dir, ChainFreezerSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	accessorRef, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(a.dir, freezerRef, ChainFreezerAccessorSegmentPath(fromBlock, toBlock))
+	if err != nil {
+		return nil, err
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(a.dir, freezerRef, ChainIndexSegmentPath(fromBlock, toBlock))
+	if err != nil {
+		return nil, err
+	}
+	refs := []SegmentRef{freezerRef, accessorRef, indexRef}
+	visibleStart, visibleEnd := uint64(0), uint64(0)
+	if old, err := LoadProductionManifest(a.dir); err == nil {
+		visibleStart = old.VisibleTxStart
+		visibleEnd = old.VisibleTxEnd
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	manifest, err := a.Integrate(visibleStart, visibleEnd, refs)
+	if err != nil {
+		return nil, err
+	}
+	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
+}
+
 func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
@@ -157,11 +188,13 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 	generation := uint64(1)
 	var retired []SegmentRef
 	var progress *Progress
+	var chain *ChainIdentity
 	if old, err := LoadProductionManifest(a.dir); err == nil {
 		visibleStart = min(visibleStart, old.VisibleTxStart)
 		visibleEnd = max(visibleEnd, old.VisibleTxEnd)
 		generation = old.Generation + 1
 		progress = cloneProgress(old.Progress)
+		chain = cloneChainIdentity(old.Chain)
 		retired = append(retired, old.Retired...)
 		for _, ref := range old.Segments {
 			if segmentOverlapsAnyFamily(ref, refs) {
@@ -175,6 +208,7 @@ func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRe
 	}
 	manifest := NewManifest(visibleStart, visibleEnd, segments)
 	manifest.Generation = generation
+	manifest.Chain = chain
 	manifest.Progress = mergeProgress(progress, progressFromRefs(refs, visibleEnd))
 	manifest.Retired = dedupeSegmentRefs(retired)
 	if err := PublishManifest(a.dir, manifest); err != nil {
@@ -210,6 +244,20 @@ func WriteManifestProgressStages(db ethdb.KeyValueWriter, progress *Progress) er
 	return writeManifestProgressStages(newRawDBStageProgressStore(db), progress)
 }
 
+func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (*Progress, error) {
+	if db == nil || manifest == nil {
+		return nil, nil
+	}
+	progress := progressForInstalledManifest(manifest)
+	if err := WriteManifestProgressStages(db, progress); err != nil {
+		return nil, err
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotInstall, manifest.VisibleTxEnd); err != nil {
+		return nil, err
+	}
+	return progress, nil
+}
+
 func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {
 	if store == nil || progress == nil {
 		return nil
@@ -233,6 +281,13 @@ func writeManifestProgressStages(store stageProgressStore, progress *Progress) e
 		}
 	}
 	return nil
+}
+
+func progressForInstalledManifest(manifest *Manifest) *Progress {
+	if manifest == nil {
+		return nil
+	}
+	return mergeProgress(cloneProgress(manifest.Progress), progressFromRefs(manifest.Segments, manifest.VisibleTxEnd))
 }
 
 func progressFromRefs(refs []SegmentRef, txNum uint64) *Progress {

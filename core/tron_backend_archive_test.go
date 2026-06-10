@@ -410,6 +410,50 @@ func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
 		want[n] = running
 	}
 
+	type resourceSnapshot struct {
+		freeNetUsed      int64
+		freeNetLimit     int64
+		netUsed          int64
+		totalNetLimit    int64
+		totalEnergyLimit int64
+	}
+	resourceAt := func(blockNum uint64) resourceSnapshot {
+		t.Helper()
+		res, err := b.GetAccountResourceAt(witness, blockNum)
+		if err != nil {
+			t.Fatalf("GetAccountResourceAt(witness, %d): %v", blockNum, err)
+		}
+		return resourceSnapshot{
+			freeNetUsed:      res.FreeNetUsed,
+			freeNetLimit:     res.FreeNetLimit,
+			netUsed:          res.NetUsed,
+			totalNetLimit:    res.TotalNetLimit,
+			totalEnergyLimit: res.TotalEnergyLimit,
+		}
+	}
+	resourceWant := map[uint64]resourceSnapshot{
+		2: resourceAt(2),
+		3: resourceAt(3),
+	}
+	if resourceWant[2].freeNetUsed == resourceWant[3].freeNetUsed && resourceWant[2].netUsed == resourceWant[3].netUsed {
+		t.Fatalf("test setup did not change resource usage: block2=%+v block3=%+v", resourceWant[2], resourceWant[3])
+	}
+	rewardAt := func(blockNum uint64) int64 {
+		t.Helper()
+		reward, err := b.GetRewardAt(witness, blockNum)
+		if err != nil {
+			t.Fatalf("GetRewardAt(witness, %d): %v", blockNum, err)
+		}
+		return reward.Reward
+	}
+	rewardWant := map[uint64]int64{
+		2: rewardAt(2),
+		3: rewardAt(3),
+	}
+	if rewardWant[2] == rewardWant[3] {
+		t.Fatalf("test setup did not change reward: block2=%d block3=%d", rewardWant[2], rewardWant[3])
+	}
+
 	range2, ok, err := rawdb.ReadStateTxRange(bc.buffer, 2)
 	if err != nil || !ok {
 		t.Fatalf("read block 2 tx range: ok=%v err=%v", ok, err)
@@ -450,6 +494,18 @@ func TestArchiveQuery_UsesColdStateDomainChangeSnapshots(t *testing.T) {
 		}
 		if got != want[n] {
 			t.Errorf("cold GetBalanceAt(recipient, %d) = %d, want %d", n, got, want[n])
+		}
+	}
+	for n, wantResource := range resourceWant {
+		gotResource := resourceAt(n)
+		if gotResource != wantResource {
+			t.Errorf("cold GetAccountResourceAt(witness, %d) = %+v, want %+v", n, gotResource, wantResource)
+		}
+	}
+	for n, wantReward := range rewardWant {
+		gotReward := rewardAt(n)
+		if gotReward != wantReward {
+			t.Errorf("cold GetRewardAt(witness, %d) = %d, want %d", n, gotReward, wantReward)
 		}
 	}
 }

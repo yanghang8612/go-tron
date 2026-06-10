@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,17 @@ const (
 	SegmentBTree    SegmentKind = "btree"
 	SegmentHistory  SegmentKind = "history"
 	SegmentInverted SegmentKind = "inverted"
+	// SegmentChainFreezer is a block-numbered chain-freezer snapshot family.
+	// SegmentRef.FromTxNum/ToTxNum carry freezer block numbers for this kind.
+	SegmentChainFreezer SegmentKind = "chain-freezer"
+	// SegmentChainIndex is a block-numbered read-only lookup sidecar for
+	// chain-freezer segments. SegmentRef.FromTxNum/ToTxNum carry freezer
+	// block numbers for this kind.
+	SegmentChainIndex SegmentKind = "chain-index"
+	// SegmentChainFreezerAccessor is a block-numbered offset sidecar for
+	// chain-freezer segments. SegmentRef.FromTxNum/ToTxNum carry freezer
+	// block numbers for this kind.
+	SegmentChainFreezerAccessor SegmentKind = "chain-freezer-accessor"
 )
 
 type SegmentDataset string
@@ -39,17 +51,26 @@ const (
 	SegmentDatasetCommitmentRoot       SegmentDataset = "commitment-root"
 	SegmentDatasetCommitmentCheckpoint SegmentDataset = "commitment-checkpoint"
 	SegmentDatasetStateDomainChange    SegmentDataset = "state-domain-change"
+	SegmentDatasetChainFreezer         SegmentDataset = "chain-freezer"
 )
 
 type Manifest struct {
-	Version        uint32       `json:"version"`
-	Generation     uint64       `json:"generation,omitempty"`
-	PublishedUnix  int64        `json:"publishedUnix"`
-	VisibleTxStart uint64       `json:"visibleTxStart"`
-	VisibleTxEnd   uint64       `json:"visibleTxEnd"`
-	Progress       *Progress    `json:"progress,omitempty"`
-	Segments       []SegmentRef `json:"segments"`
-	Retired        []SegmentRef `json:"retired,omitempty"`
+	Version        uint32         `json:"version"`
+	Generation     uint64         `json:"generation,omitempty"`
+	PublishedUnix  int64          `json:"publishedUnix"`
+	VisibleTxStart uint64         `json:"visibleTxStart"`
+	VisibleTxEnd   uint64         `json:"visibleTxEnd"`
+	Chain          *ChainIdentity `json:"chain,omitempty"`
+	Progress       *Progress      `json:"progress,omitempty"`
+	Segments       []SegmentRef   `json:"segments"`
+	Retired        []SegmentRef   `json:"retired,omitempty"`
+}
+
+type ChainIdentity struct {
+	ChainID        int64  `json:"chainId"`
+	NetworkID      int32  `json:"networkId"`
+	GenesisHash    string `json:"genesisHash"`
+	ForkConfigHash string `json:"forkConfigHash,omitempty"`
 }
 
 type Progress struct {
@@ -81,6 +102,13 @@ func NewManifest(visibleTxStart, visibleTxEnd uint64, segments []SegmentRef) *Ma
 		Segments:       append([]SegmentRef(nil), segments...),
 	}
 	sortSegments(out.Segments)
+	return out
+}
+
+func NewManifestForChain(visibleTxStart, visibleTxEnd uint64, segments []SegmentRef, identity ChainIdentity) *Manifest {
+	out := NewManifest(visibleTxStart, visibleTxEnd, segments)
+	out.Chain = &identity
+	normalizeManifest(out)
 	return out
 }
 
@@ -123,6 +151,7 @@ func PublishManifest(dir string, manifest *Manifest) error {
 	if manifest.Generation == 0 {
 		manifest.Generation = 1
 	}
+	normalizeChainIdentity(manifest.Chain)
 	if manifest.PublishedUnix == 0 {
 		manifest.PublishedUnix = time.Now().Unix()
 	}
@@ -168,6 +197,9 @@ func (m *Manifest) Validate() error {
 	if m.VisibleTxEnd < m.VisibleTxStart {
 		return fmt.Errorf("snapshots: visible range [%d,%d] is inverted", m.VisibleTxStart, m.VisibleTxEnd)
 	}
+	if err := validateChainIdentity(m.Chain); err != nil {
+		return err
+	}
 	seenPath := make(map[string]struct{}, len(m.Segments))
 	byFamily := make(map[segmentFamily][]SegmentRef)
 	for _, seg := range m.Segments {
@@ -208,6 +240,9 @@ func (m *Manifest) Validate() error {
 	if err := validateLatestBinaryCompanionTriples(m); err != nil {
 		return err
 	}
+	if err := validateChainIndexCompanions(m); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -216,6 +251,27 @@ func (m *Manifest) ValidateProduction() error {
 		return errors.New("snapshots: nil manifest")
 	}
 	return validateProductionHistorySegments(m)
+}
+
+func (m *Manifest) ValidateChainIdentity(expected ChainIdentity) error {
+	if m == nil {
+		return errors.New("snapshots: nil manifest")
+	}
+	normalizeChainIdentity(&expected)
+	if err := validateChainIdentity(&expected); err != nil {
+		return fmt.Errorf("snapshots: invalid expected chain identity: %w", err)
+	}
+	if m.Chain == nil {
+		return errors.New("snapshots: manifest has no chain identity")
+	}
+	got := *m.Chain
+	normalizeChainIdentity(&got)
+	if got != expected {
+		return fmt.Errorf("snapshots: manifest chain identity mismatch: got chainId=%d networkId=%d genesisHash=%s forkConfigHash=%s, want chainId=%d networkId=%d genesisHash=%s forkConfigHash=%s",
+			got.ChainID, got.NetworkID, got.GenesisHash, got.ForkConfigHash,
+			expected.ChainID, expected.NetworkID, expected.GenesisHash, expected.ForkConfigHash)
+	}
+	return nil
 }
 
 type segmentFamily struct {
@@ -228,6 +284,51 @@ func normalizeManifest(manifest *Manifest) {
 	if manifest.Generation == 0 {
 		manifest.Generation = 1
 	}
+	normalizeChainIdentity(manifest.Chain)
+}
+
+func normalizeChainIdentity(identity *ChainIdentity) {
+	if identity == nil {
+		return
+	}
+	identity.GenesisHash = normalizeHashLiteral(identity.GenesisHash)
+	identity.ForkConfigHash = strings.ToLower(strings.TrimSpace(identity.ForkConfigHash))
+}
+
+func validateChainIdentity(identity *ChainIdentity) error {
+	if identity == nil {
+		return nil
+	}
+	if identity.GenesisHash == "" {
+		return errors.New("snapshots: chain identity missing genesisHash")
+	}
+	if err := validateHexHash("genesisHash", identity.GenesisHash); err != nil {
+		return err
+	}
+	if identity.ForkConfigHash != "" {
+		if !strings.HasPrefix(identity.ForkConfigHash, "sha256:") {
+			return fmt.Errorf("snapshots: chain identity forkConfigHash %q must use sha256:<hex>", identity.ForkConfigHash)
+		}
+		if err := validateHexHash("forkConfigHash", strings.TrimPrefix(identity.ForkConfigHash, "sha256:")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeHashLiteral(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimPrefix(s, "0x")
+}
+
+func validateHexHash(field, value string) error {
+	if len(value) != 64 {
+		return fmt.Errorf("snapshots: chain identity %s has %d hex chars, want 64", field, len(value))
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("snapshots: chain identity %s is not hex: %w", field, err)
+	}
+	return nil
 }
 
 func validateHistoryBinaryCompanionTriples(manifest *Manifest) error {
@@ -337,6 +438,9 @@ func validateActiveSegment(seg SegmentRef, visibleStart, visibleEnd uint64) erro
 	if err := validateSegmentRef(seg); err != nil {
 		return err
 	}
+	if isChainBlockSegmentKind(seg.Kind) {
+		return nil
+	}
 	if seg.FromTxNum < visibleStart || seg.ToTxNum > visibleEnd {
 		return fmt.Errorf("snapshots: segment %q range [%d,%d] outside visible range [%d,%d]",
 			seg.Path, seg.FromTxNum, seg.ToTxNum, visibleStart, visibleEnd)
@@ -354,12 +458,16 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}
 	dataset := seg.normalizedDataset()
-	if seg.Kind == SegmentLatest {
+	if isChainBlockSegmentKind(seg.Kind) {
+		if err := validateChainFreezerSegmentRefDataset(seg, dataset); err != nil {
+			return err
+		}
+	} else if seg.Kind == SegmentLatest {
 		if err := validateLatestSegmentRefDataset(seg, dataset); err != nil {
 			return err
 		}
@@ -373,6 +481,20 @@ func validateSegmentRef(seg SegmentRef) error {
 	}
 	if seg.Path == "" || filepath.IsAbs(seg.Path) || filepath.Clean(seg.Path) != seg.Path || seg.Path == "." || hasParentDir(seg.Path) {
 		return fmt.Errorf("snapshots: invalid relative segment path %q", seg.Path)
+	}
+	return nil
+}
+
+func isChainBlockSegmentKind(kind SegmentKind) bool {
+	return kind == SegmentChainFreezer || kind == SegmentChainIndex || kind == SegmentChainFreezerAccessor
+}
+
+func validateChainFreezerSegmentRefDataset(seg SegmentRef, dataset SegmentDataset) error {
+	if dataset != SegmentDatasetChainFreezer {
+		return fmt.Errorf("snapshots: %s segment %q must use dataset %q, got %q", seg.Kind, seg.Path, SegmentDatasetChainFreezer, seg.Dataset)
+	}
+	if seg.Domain != 0 {
+		return fmt.Errorf("snapshots: %s segment %q must not set kv domain %#04x", dataset, seg.Path, uint16(seg.Domain))
 	}
 	return nil
 }

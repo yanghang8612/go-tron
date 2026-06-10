@@ -756,6 +756,10 @@ func (m *Manager) Manifest() *Manifest {
 		progress := *manifest.Progress
 		cp.Progress = &progress
 	}
+	if manifest.Chain != nil {
+		chain := *manifest.Chain
+		cp.Chain = &chain
+	}
 	cp.Segments = append([]SegmentRef(nil), manifest.Segments...)
 	cp.Retired = append([]SegmentRef(nil), manifest.Retired...)
 	return &cp
@@ -928,6 +932,16 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 	}
 	for _, ref := range manifest.Segments {
 		if ref.Kind != SegmentLatest || txNum < ref.FromTxNum || txNum > ref.ToTxNum {
+			continue
+		}
+		if ref.NormalizedDataset() == SegmentDatasetCommitmentBranch {
+			seg, err := OpenCommitmentBranchSegment(m.dir, ref)
+			if err != nil {
+				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
+			}
+			if err := seg.Restore(db); err != nil {
+				return fmt.Errorf("restore %s segment %q: %w", ref.normalizedDataset(), ref.Path, err)
+			}
 			continue
 		}
 		if isLatestBinarySegmentPath(ref.Path) {
