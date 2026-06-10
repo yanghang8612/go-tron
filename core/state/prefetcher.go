@@ -63,6 +63,10 @@ func AccountKVGenerationPrefetchKey(owner tcommon.Address, generation uint64, do
 	return k
 }
 
+func ContractMetadataPrefetchKey(owner tcommon.Address) PrefetchKey {
+	return AccountKVPrefetchKey(owner, kvdomains.ContractMetadata, contractMetaKVKey)
+}
+
 func ContractStoragePrefetchKey(owner tcommon.Address, slot tcommon.Hash) PrefetchKey {
 	return PrefetchKey{Kind: PrefetchContractStorage, Owner: owner, Slot: slot}
 }

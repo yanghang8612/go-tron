@@ -1,7 +1,8 @@
 # State prefetcher — design
 
-**Status:** Partial implementation: raw latest-domain prefetch driver landed;
-transaction-key audit and `ProcessBlock` wiring remain.
+**Status:** Partial implementation: raw latest-domain prefetch driver and
+`actuator.PrefetchKeysFor(tx)` envelope-key extraction landed; `ProcessBlock`
+wiring, benchmarks, and rollout gates remain.
 **Author:** yanghang8612
 **Date:** 2026-05-19
 **Inspiration:** [go-ethereum/core/state/trie_prefetcher.go](../../../../ethereum/go-ethereum/core/state/trie_prefetcher.go)
@@ -70,7 +71,7 @@ heavy blocks (DEX trade clusters, dapp activity bursts).
 ```
 main goroutine:        run tx N → run tx N+1 → run tx N+2
 prefetcher goroutine:  warm (tx N+1) → warm (tx N+2) → warm (tx N+3)
-                       ^ runs in parallel; populates state.StateDB cache
+                       ^ runs in parallel; warms raw KV/blockbuffer caches
 ```
 
 If the main goroutine catches up, prefetcher idles. If a tx execution is
@@ -96,16 +97,16 @@ guaranteed-read by `Validate + Execute`:
 | `ShieldedTransferContract` | merkle current/last tree, nullifier set (cheap; usually cached) |
 | (other ~20 types) | per-actuator audit |
 
-Each `actuator.Actuator` interface gains a new optional method:
+The first implementation uses a single dispatcher rather than extending every
+actuator:
 
 ```go
-type Prefetcher interface {
-    PrefetchKeys(tx *types.Transaction) []state.PrefetchKey
-}
+func actuator.PrefetchKeysFor(tx *types.Transaction) []state.PrefetchKey
 ```
 
-Actuators that don't implement it default to "no prefetch" (no harm; just
-no speedup for that contract type).
+The dispatcher emits best-effort hints and treats malformed payloads or invalid
+addresses as "no prefetch" for that field. That keeps prefetching out of the
+consensus validation path.
 
 ### Prefetcher driver
 

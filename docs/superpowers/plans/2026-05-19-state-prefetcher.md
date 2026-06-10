@@ -4,15 +4,16 @@
 
 ## Slice 1 — Audit + key types
 
-- [ ] Audit every actuator in [actuator/](../../../actuator) — list the
-      deterministic state reads in Validate + Execute per contract type
+- [x] Audit every actuator in [actuator/](../../../actuator) — first-pass
+      envelope-derived account, contract-metadata, and delegation rows are
+      listed in [state-prefetch-keys.md](../../dev/state-prefetch-keys.md)
 - [x] Define `state.PrefetchKey` carrier and first safe raw latest-domain
       key kinds: account latest, account-KV latest, and contract storage.
       Code/TRC10/witness key kinds remain for the actuator audit slices.
-- [ ] Write the audit doc `docs/dev/state-prefetch-keys.md` (one section
-      per contract type, copy-paste ready by future actuator authors)
-- [ ] Define `actuator.Prefetcher` interface; implement on every actuator
-      OR define a single dispatch function `actuator.PrefetchKeysFor(tx)
+- [x] Write the first-pass audit doc `docs/dev/state-prefetch-keys.md`,
+      covering implemented contract families and explicitly listing gaps for
+      future actuator/domain authors
+- [x] Define a single dispatch function `actuator.PrefetchKeysFor(tx)
       []state.PrefetchKey` keyed on contract type
 
 ## Slice 2 — Prefetcher driver
