@@ -36,6 +36,27 @@ writes to collector-backed loads.
   and per-transaction-info hot lookup rows through one collector, then loads
   the final rawdb key stream in physical key order.
 
+## Benchmarking
+
+Run the path-specific restore benchmark after changing the collector or any
+snapshot restore path:
+
+```bash
+go test ./core/state/snapshots -run '^$' \
+  -bench 'BenchmarkSnapshotRestoreETL' \
+  -benchtime=5x -count=3 -benchmem
+```
+
+The benchmark compares the former direct unordered write shape with the sorted
+collector load for latest-domain restore, state-domain history restore, and
+chain-freezer hot lookup index restore. The `out_of_order/put` metric should be
+greater than zero for the direct baselines and exactly zero for every
+`sorted_etl` variant.
+
+Recorded samples:
+
+- [2026-06-10 smoke sample](etl-collector-benchmark-results-2026-06-10.md)
+
 ## Usage
 
 ```go

@@ -605,6 +605,10 @@ Status:
   collector and loads the resulting rawdb writes in physical key order.
   Regression coverage proves the previous direct block/tx/info order would be
   unsorted and the final restore stream is sorted.
+- `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
+  against sorted collector loads for latest-domain, state-domain history, and
+  chain-freezer lookup restore. The first smoke result is recorded in
+  `docs/dev/etl-collector-benchmark-results-2026-06-10.md`.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
@@ -612,8 +616,8 @@ Remaining:
 - Migrate history backfill, chain-index build, and derived RPC index build
   paths onto the collector where benchmarks show lower Pebble write
   amplification.
-- Add path-specific benchmark samples comparing direct unordered writes versus
-  collector loads.
+- Collect longer Pebble-backed benchmark samples for large snapshot restore and
+  backfill workloads, then tune collector buffer/batch defaults.
 
 ### P3: Accessor Format Evaluation
 
@@ -640,7 +644,8 @@ Adopt only where profiles justify it:
    progress.
 6. Add derived history/index domains for receipts, logs, traces, tx lookup, and
    balance/account traces.
-7. Add ETL collector support for large sorted index builds and snapshot restore.
+7. Extend ETL collector usage to large backfill and derived-index builds, then
+   collect Pebble-backed restore/backfill samples.
 8. Collect storage/sync samples with `scripts/dev/storage_benchmark.sh`, then
    benchmark Pebble vs MDBX only after the storage interfaces above are stable.
 9. Evaluate recsplit/existence filters for point-heavy cold accessors.
