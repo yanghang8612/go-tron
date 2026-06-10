@@ -4,7 +4,9 @@ Status: initial production integration. Snapshot latest-domain restore now
 loads through the collector, state-domain history restore does the same, and
 chain-freezer hot lookup index restore uses the collector for its `bh-`, `tx-`,
 and `ti-` rows. Chain-index sidecar builds now use the collector for external
-hash-order sorting. Backfill and derived-index builders still need deliberate
+hash-order sorting. `rawdb.DerivedIndexCollector` provides the typed bulk-load
+entry point for transaction lookup/info, account trace, balance trace, and
+section bloom backfills. Remaining backfill commands still need deliberate
 migration and path-specific benchmarks.
 
 ## Purpose
@@ -46,6 +48,11 @@ writes to collector-backed loads.
   sorted block-hash and transaction-hash entries into the existing sidecar file
   format. Use `BuildChainIndexSegmentFromChainFreezerSegmentWithOptions` or
   `Aggregator.BuildChainFreezerWithOptions` to control ETL scratch space.
+- `rawdb.DerivedIndexCollector` is the typed bulk-load entry point for
+  replay-derived RPC indexes: transaction lookup/info rows, account trace,
+  balance trace, and section bloom rows. Backfill tools can add rows in block
+  execution order, then `Load` writes the final rawdb key stream in physical
+  key order.
 
 ## Benchmarking
 
@@ -68,6 +75,7 @@ zero for every restore `sorted_etl` variant.
 Recorded samples:
 
 - [2026-06-10 smoke sample](etl-collector-benchmark-results-2026-06-10.md)
+- [2026-06-10 derived-index smoke sample](etl-derived-index-benchmark-results-2026-06-10.md)
 
 ## Usage
 
@@ -112,8 +120,9 @@ Zero values preserve collector defaults. For production bootstrap, point
 
 ## Migration Targets
 
-- future transaction-info/event-log sidecar builders
-- derived account/balance trace index backfills
+- event-log sidecar builders
+- commands that rebuild transaction lookup/info, account/balance trace, or
+  section bloom indexes from retained blocks
 - any future RPC index build where input order follows block execution rather
   than target DB key order
 
