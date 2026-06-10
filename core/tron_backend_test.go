@@ -306,6 +306,128 @@ func TestTronBackend_GetLogs_EmptyRange(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsFallsBackWhenSectionBloomMissing(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x11)
+	topic := tcommon.Hash{0xaa}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x01, 0x02},
+	})
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs without section bloom rows returned %d logs, want 1", len(logs))
+	}
+}
+
+func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	addr := bytes20(0x22)
+	for _, bitIndex := range rawdb.SectionBloomBitIndexes(addr) {
+		bitset := testSectionBloomSetBit(nil, 5)
+		encoded, err := rawdb.EncodeSectionBloomBitSet(bitset)
+		if err != nil {
+			t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+		}
+		if err := rawdb.WriteSectionBloom(db, 0, bitIndex, encoded); err != nil {
+			t.Fatalf("WriteSectionBloom: %v", err)
+		}
+	}
+	matcher := newSectionBloomLogMatcher(db, jsonrpc.LogFilter{
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+	})
+	if matcher == nil {
+		t.Fatal("newSectionBloomLogMatcher returned nil")
+	}
+	if !matcher.mayContain(5) {
+		t.Fatal("mayContain(5) = false, want true for indexed block offset")
+	}
+	if matcher.mayContain(6) {
+		t.Fatal("mayContain(6) = true, want false when all required bloom rows exclude it")
+	}
+
+	missingTopic := tcommon.Hash{0xee}
+	matcher = newSectionBloomLogMatcher(db, jsonrpc.LogFilter{
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+		Topics:    [][]tcommon.Hash{{missingTopic}},
+	})
+	if !matcher.mayContain(5) {
+		t.Fatal("mayContain with missing topic rows must fall back to true")
+	}
+}
+
+func testBackendLogBlock(number uint64, logEntry *corepb.TransactionInfo_Log) (*types.Block, *corepb.TransactionInfo) {
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  int64(10_000 + number),
+			Expiration: int64(20_000 + number),
+			Data:       []byte{byte(number)},
+		},
+	}
+	tx := types.NewTransactionFromPB(txPB)
+	info := &corepb.TransactionInfo{
+		Id:             append([]byte(nil), tx.Hash().Bytes()...),
+		BlockNumber:    int64(number),
+		BlockTimeStamp: int64(30_000 + number),
+	}
+	if logEntry != nil {
+		info.Log = []*corepb.TransactionInfo_Log{logEntry}
+	}
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	return block, info
+}
+
+func bytes20(seed byte) []byte {
+	out := make([]byte, 20)
+	for i := range out {
+		out[i] = seed + byte(i)
+	}
+	return out
+}
+
+func testSectionBloomSetBit(bitset []byte, bit uint64) []byte {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		grown := make([]byte, byteIndex+1)
+		copy(grown, bitset)
+		bitset = grown
+	}
+	bitset[byteIndex] |= 1 << (bit % 8)
+	return bitset
+}
+
 // TestProposalParametersToList_SortedAscending verifies the proposal-parameters
 // helper emits a key-sorted slice so HTTP `/wallet/(get|list)proposal*` output
 // is deterministic — Go map iteration is randomized, so the sort is required

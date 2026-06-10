@@ -634,6 +634,11 @@ Status:
   operators. It opens hot Pebble plus read-only ancient freezer rows, supports
   explicit or head-derived block ranges, and routes the rebuilt `sb-` rows
   through sorted ETL scratch-space options.
+- `TronBackend.GetLogs` now consumes section-bloom rows as an optional
+  address/topic prefilter before reading block bodies and `TransactionRet`
+  payloads. Missing or malformed bloom rows are treated as unknown and fall
+  back to the old block scan, preserving correctness for older datadirs until
+  the rebuild command has populated the index.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore, and now includes chain-index sidecar build

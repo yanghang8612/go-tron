@@ -69,6 +69,11 @@ writes to collector-backed loads.
 - `gtron db rebuild-section-blooms` exposes that section-bloom rebuild. It uses
   the same datadir, ancient freezer, range, and ETL scratch-space flags as
   `rebuild-tx-indexes`.
+- `TronBackend.GetLogs` consumes those section-bloom rows as an optional
+  prefilter for address/topic-constrained log queries. Missing or malformed
+  bloom rows are treated as unknown and fall back to the pre-existing
+  block-by-block scan, so older datadirs remain correct until the operator runs
+  the rebuild.
 
 ## Benchmarking
 
@@ -163,7 +168,9 @@ gtron db rebuild-section-blooms \
 
 Omit `--db.to-block` to rebuild through the current head. The command fails on
 missing blocks and preserves existing block bits outside the requested range
-when a section row already exists.
+when a section row already exists. `eth_getLogs` and filter queries can then use
+the rebuilt rows to skip blocks that cannot match the requested address/topic
+bloom.
 
 ## Migration Targets
 

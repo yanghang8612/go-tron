@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 )
 
 const (
@@ -82,6 +83,30 @@ func ReadSectionBloomBitSet(db ethdb.KeyValueReader, section, bitIndex uint64) (
 		return nil, true, fmt.Errorf("section bloom %d/%d: decode: %w", section, bitIndex, err)
 	}
 	return bitset, true, nil
+}
+
+// SectionBloomBitIndexes returns the three section-bloom bit indexes set by
+// java-tron's Bloom.create(Hash.sha3(data)).
+func SectionBloomBitIndexes(data []byte) [3]uint64 {
+	hash := common.Keccak256(data)
+	return [3]uint64{
+		sectionBloomBitIndex((uint64(hash[0]&0x07) << 8) | uint64(hash[1])),
+		sectionBloomBitIndex((uint64(hash[2]&0x07) << 8) | uint64(hash[3])),
+		sectionBloomBitIndex((uint64(hash[4]&0x07) << 8) | uint64(hash[5])),
+	}
+}
+
+func SectionBloomBitSetHas(bitset []byte, bit uint64) bool {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		return false
+	}
+	return bitset[byteIndex]&(1<<(bit%8)) != 0
+}
+
+func sectionBloomBitIndex(movement uint64) uint64 {
+	byteIndex := SectionBloomByteSize - 1 - movement/8
+	return byteIndex*8 + movement%8
 }
 
 func trimTrailingZeroes(data []byte) []byte {

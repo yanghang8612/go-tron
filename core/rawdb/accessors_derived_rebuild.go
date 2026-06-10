@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -250,13 +249,8 @@ func sectionBloomBitsFromTransactionInfos(infos []*corepb.TransactionInfo) ([]ui
 	var logs uint64
 	var items uint64
 	add := func(data []byte) {
-		hash := common.Keccak256(data)
-		for _, movement := range []uint64{
-			(uint64(hash[0]&0x07) << 8) | uint64(hash[1]),
-			(uint64(hash[2]&0x07) << 8) | uint64(hash[3]),
-			(uint64(hash[4]&0x07) << 8) | uint64(hash[5]),
-		} {
-			seen[sectionBloomBitIndex(movement)] = struct{}{}
+		for _, bitIndex := range SectionBloomBitIndexes(data) {
+			seen[bitIndex] = struct{}{}
 		}
 		items++
 	}
@@ -284,11 +278,6 @@ func sectionBloomBitsFromTransactionInfos(infos []*corepb.TransactionInfo) ([]ui
 	}
 	sort.Slice(bits, func(i, j int) bool { return bits[i] < bits[j] })
 	return bits, logs, items
-}
-
-func sectionBloomBitIndex(movement uint64) uint64 {
-	byteIndex := SectionBloomByteSize - 1 - movement/8
-	return byteIndex*8 + movement%8
 }
 
 func setSectionBloomBit(bitset []byte, bit uint64) []byte {

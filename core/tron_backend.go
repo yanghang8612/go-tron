@@ -1632,8 +1632,12 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 	}
 
 	var logs []*jsonrpc.RPCLog
+	bloomMatcher := newSectionBloomLogMatcher(b.chain.chaindb, filter)
 
 	for num := fromBlock; num <= toBlock; num++ {
+		if bloomMatcher != nil && !bloomMatcher.mayContain(num) {
+			continue
+		}
 		block := b.chain.GetBlockByNumber(num)
 		if block == nil {
 			continue
@@ -1736,6 +1740,108 @@ func matchTopics(filterTopics [][]tcommon.Hash, logTopics [][]byte) bool {
 		}
 	}
 	return true
+}
+
+type sectionBloomLogMatcher struct {
+	db     *rawdb.ChainDB
+	groups [][][3]uint64
+	cache  map[sectionBloomCacheKey]sectionBloomCacheRow
+}
+
+type sectionBloomCacheKey struct {
+	section  uint64
+	bitIndex uint64
+}
+
+type sectionBloomCacheRow struct {
+	bitset []byte
+	ok     bool
+	err    error
+}
+
+func newSectionBloomLogMatcher(db *rawdb.ChainDB, filter jsonrpc.LogFilter) *sectionBloomLogMatcher {
+	if db == nil {
+		return nil
+	}
+	groups := make([][][3]uint64, 0, 1+len(filter.Topics))
+	if len(filter.Addresses) != 0 {
+		group := make([][3]uint64, 0, len(filter.Addresses))
+		for _, addr := range filter.Addresses {
+			addrBytes := addr.Bytes()
+			if len(addrBytes) > 20 {
+				addrBytes = addrBytes[len(addrBytes)-20:]
+			}
+			group = append(group, rawdb.SectionBloomBitIndexes(addrBytes))
+		}
+		groups = append(groups, group)
+	}
+	for _, requiredTopics := range filter.Topics {
+		if len(requiredTopics) == 0 {
+			continue
+		}
+		group := make([][3]uint64, 0, len(requiredTopics))
+		for _, topic := range requiredTopics {
+			group = append(group, rawdb.SectionBloomBitIndexes(topic[:]))
+		}
+		groups = append(groups, group)
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	return &sectionBloomLogMatcher{
+		db:     db,
+		groups: groups,
+		cache:  make(map[sectionBloomCacheKey]sectionBloomCacheRow),
+	}
+}
+
+func (m *sectionBloomLogMatcher) mayContain(blockNum uint64) bool {
+	section := blockNum / rawdb.SectionBloomBlockPerSection
+	blockOffset := blockNum % rawdb.SectionBloomBlockPerSection
+	for _, group := range m.groups {
+		groupMayMatch := false
+		groupUnknown := false
+		for _, itemBits := range group {
+			match, known := m.itemMayContain(section, blockOffset, itemBits)
+			if !known {
+				groupUnknown = true
+				continue
+			}
+			if match {
+				groupMayMatch = true
+				break
+			}
+		}
+		if groupMayMatch || groupUnknown {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (m *sectionBloomLogMatcher) itemMayContain(section, blockOffset uint64, bitIndexes [3]uint64) (match bool, known bool) {
+	for _, bitIndex := range bitIndexes {
+		row := m.read(section, bitIndex)
+		if row.err != nil || !row.ok {
+			return true, false
+		}
+		if !rawdb.SectionBloomBitSetHas(row.bitset, blockOffset) {
+			return false, true
+		}
+	}
+	return true, true
+}
+
+func (m *sectionBloomLogMatcher) read(section, bitIndex uint64) sectionBloomCacheRow {
+	key := sectionBloomCacheKey{section: section, bitIndex: bitIndex}
+	if row, ok := m.cache[key]; ok {
+		return row
+	}
+	bitset, ok, err := rawdb.ReadSectionBloomBitSet(m.db, section, bitIndex)
+	row := sectionBloomCacheRow{bitset: bitset, ok: ok, err: err}
+	m.cache[key] = row
+	return row
 }
 
 // ValidateTransaction validates a transaction's contract logic against current state.
