@@ -27,7 +27,25 @@ pre-prefetch block execution path.
 
 ## Benchmarking
 
-Run the focused ProcessBlock benchmark before changing defaults:
+Run the repeatable ProcessBlock benchmark harness before changing defaults:
+
+```bash
+scripts/dev/state_prefetch_benchmark.sh
+```
+
+For a quick smoke sample:
+
+```bash
+scripts/dev/state_prefetch_benchmark.sh --short --outdir /tmp/prefetch-smoke
+```
+
+The harness writes:
+
+- `metadata.txt` — commit, branch, Go version, host info, and exact command
+- `benchmark.txt` — raw `go test` benchmark output
+- `benchstat.txt` — optional summary when `benchstat` is installed
+
+The underlying focused benchmark command is:
 
 ```bash
 go test ./core -run '^$' \

@@ -48,6 +48,9 @@
   - [x] `BenchmarkProcessBlock_HeavyTRX_ColdState` (deterministic first-read
         latency wrapper)
   - [x] Variants: `prefetch=off`, `prefetch=on,workers=2`, `=4`, `=8`
+- [x] `scripts/dev/state_prefetch_benchmark.sh` repeatable sweep harness:
+      records commit/env metadata, raw benchmark output, and optional
+      `benchstat` summaries for comparing samples across machines and commits
 - [ ] Pick default `workers / lookahead` from benchmark sweep, document
       in the audit doc
 - [ ] Long-running soak: replay 100K Nile blocks with prefetch on/off,

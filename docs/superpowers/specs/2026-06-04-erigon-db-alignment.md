@@ -568,11 +568,14 @@ Status:
   `BenchmarkProcessBlock_HeavyTRX_ColdState` variants for prefetch off and
   worker counts 2/4/8. The operator runbook is
   `docs/dev/state-prefetcher.md`.
+- `scripts/dev/state_prefetch_benchmark.sh` now provides the repeatable sweep
+  harness for these benchmarks, recording commit/environment metadata, raw Go
+  benchmark output, and optional `benchstat` summaries.
 
 Remaining:
 
-- Add full benchmark sweeps and Nile/mainnet replay evidence before enabling
-  by default.
+- Collect full benchmark sweep samples across representative machines and add
+  Nile/mainnet replay evidence before enabling by default.
 
 ### P2: General ETL Layer
 

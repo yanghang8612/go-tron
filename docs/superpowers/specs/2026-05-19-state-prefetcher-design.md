@@ -1,9 +1,9 @@
 # State prefetcher — design
 
 **Status:** Partial implementation: raw latest-domain prefetch driver,
-`actuator.PrefetchKeysFor(tx)` envelope-key extraction, and opt-in
-`ProcessBlock` wiring landed. Benchmarks, long replay soak, and default-on
-rollout remain.
+`actuator.PrefetchKeysFor(tx)` envelope-key extraction, opt-in
+`ProcessBlock` wiring, focused benchmarks, and a repeatable benchmark harness
+landed. Long replay soak and default-on rollout remain.
 **Author:** yanghang8612
 **Date:** 2026-05-19
 **Inspiration:** [go-ethereum/core/state/trie_prefetcher.go](../../../../ethereum/go-ethereum/core/state/trie_prefetcher.go)
@@ -247,6 +247,9 @@ per actuator listing:
   - `BenchmarkProcessBlock_HeavyTRX_ColdState`
   - variants: `prefetch=off`, `prefetch=on_workers=2_lookahead=8`,
     `prefetch=on_workers=4_lookahead=8`, `prefetch=on_workers=8_lookahead=8`
+- Repeatable benchmark collection through
+  `scripts/dev/state_prefetch_benchmark.sh`, preserving raw output plus commit
+  and host metadata for later sweep comparisons
 - Default-on threshold:
   - on cold-state/heavy-block replay: ≥ 10% throughput improvement
   - on hot/light blocks: ≤ 1% overhead vs baseline
