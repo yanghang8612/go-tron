@@ -42,6 +42,17 @@ type ChainConfig struct {
 	// StateCommitmentMode is retained as an operator-facing label. Fresh nodes
 	// always use "latest": flat latest domains plus CommitmentDomain root.
 	StateCommitmentMode string
+	// StatePrefetchEnabled enables a non-consensus block-apply read warmup:
+	// upcoming transaction envelopes are scanned for deterministic account,
+	// account-KV, and contract metadata rows, and worker goroutines warm the
+	// raw latest-domain reader before the serial tx loop reaches them.
+	StatePrefetchEnabled bool
+	// StatePrefetchWorkers is the worker count. 0 lets the state prefetcher
+	// choose runtime.GOMAXPROCS(0)/2 capped at its internal maximum.
+	StatePrefetchWorkers int
+	// StatePrefetchLookahead is the number of future transactions to keep
+	// queued. 0 falls back to StatePrefetchDefaultLookahead.
+	StatePrefetchLookahead int
 }
 
 const DefaultBlockNumForEnergyLimit int64 = 4_727_890
@@ -68,6 +79,8 @@ const (
 // reorg horizon with a generous wallet-tx grace window. See the spec's
 // Pruning section for the sizing rationale.
 const HistoryDefaultPruneWindow uint64 = 27 * 1024
+
+const StatePrefetchDefaultLookahead = 8
 
 func chainConfigInt64(v int64) *int64 { return &v }
 
@@ -115,6 +128,20 @@ func (c *ChainConfig) EffectiveHistoryPruneWindow() uint64 {
 // old per-block MPT materialisation path by default.
 func (c *ChainConfig) EffectiveStateCommitmentMode() string {
 	return StateCommitmentModeLatest
+}
+
+func (c *ChainConfig) EffectiveStatePrefetchLookahead() int {
+	if c == nil || c.StatePrefetchLookahead <= 0 {
+		return StatePrefetchDefaultLookahead
+	}
+	return c.StatePrefetchLookahead
+}
+
+func (c *ChainConfig) EffectiveStatePrefetchWorkers() int {
+	if c == nil || c.StatePrefetchWorkers < 0 {
+		return 0
+	}
+	return c.StatePrefetchWorkers
 }
 
 var MainnetChainConfig = &ChainConfig{

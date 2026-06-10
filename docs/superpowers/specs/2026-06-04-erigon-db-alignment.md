@@ -556,11 +556,16 @@ Status:
   settings, vote witness, Stake 1.0/2.0, shielded transparent endpoints,
   owner-only actuators, account-create, and participate-asset-issue families.
   The detailed audit lives in `docs/dev/state-prefetch-keys.md`.
+- `core/state_processor.go::ProcessBlock` now has opt-in lookahead wiring:
+  `BlockChain.applyBlock` enables the prefetcher only when
+  `params.ChainConfig.StatePrefetchEnabled` is true, while the public
+  `ProcessBlock` helpers retain the previous prefetch-off behaviour. CLI and
+  TOML controls are available through `--state.prefetch.enabled`,
+  `--state.prefetch.workers`, `--state.prefetch.lookahead`, and
+  `[state.prefetch]`.
 
 Remaining:
 
-- Wire the driver into `ProcessBlock` behind config/CLI gates and prove
-  identical post-block roots with prefetch on/off.
 - Add race, benchmark, and Nile/mainnet replay evidence before enabling by
   default.
 

@@ -428,21 +428,21 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{})
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, processBlockPrefetchConfig{})
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, processBlockPrefetchConfig{})
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, processBlockPrefetchConfig{})
 }
 
 func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
@@ -452,7 +452,40 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+type processBlockPrefetchConfig struct {
+	Enabled   bool
+	Workers   int
+	Lookahead int
+}
+
+func processBlockPrefetchConfigFromChainConfig(cfg *params.ChainConfig) processBlockPrefetchConfig {
+	if cfg == nil || !cfg.StatePrefetchEnabled {
+		return processBlockPrefetchConfig{}
+	}
+	return normalizeProcessBlockPrefetchConfig(processBlockPrefetchConfig{
+		Enabled:   true,
+		Workers:   cfg.EffectiveStatePrefetchWorkers(),
+		Lookahead: cfg.EffectiveStatePrefetchLookahead(),
+	})
+}
+
+func normalizeProcessBlockPrefetchConfig(cfg processBlockPrefetchConfig) processBlockPrefetchConfig {
+	if !cfg.Enabled {
+		return processBlockPrefetchConfig{}
+	}
+	if cfg.Workers < 0 {
+		cfg.Workers = 0
+	}
+	if cfg.Lookahead <= 0 {
+		cfg.Lookahead = params.StatePrefetchDefaultLookahead
+	}
+	if cfg.Lookahead <= 0 {
+		cfg.Enabled = false
+	}
+	return cfg
+}
+
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {
@@ -477,8 +510,19 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 
 	writeHistoryBlockHash(statedb, dynProps, block.Number(), block.ParentHash())
 	accountStateMark := statedb.JournalMark()
+	txs := block.Transactions()
+	prefetchCfg = normalizeProcessBlockPrefetchConfig(prefetchCfg)
+	prefetcher := newProcessBlockPrefetcher(db, prefetchCfg, len(txs))
+	if prefetcher != nil {
+		defer prefetcher.Stop()
+		prefetcher.Start()
+	}
+	nextPrefetchTx := 0
 
-	for i, tx := range block.Transactions() {
+	for i, tx := range txs {
+		if prefetcher != nil {
+			nextPrefetchTx = enqueueProcessBlockPrefetch(prefetcher, txs, i, nextPrefetchTx, prefetchCfg.Lookahead)
+		}
 		domainChangeMark := statedb.DomainChangeJournalMark()
 		if domainChanges != nil {
 			domainChangeMark = domainChanges.JournalMark()
@@ -548,4 +592,30 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	}
 
 	return txInfos, javaAccountStateRoot, nil
+}
+
+func newProcessBlockPrefetcher(db actuator.BufferedKVStore, cfg processBlockPrefetchConfig, txCount int) *state.StatePrefetcher {
+	if !cfg.Enabled || db == nil || txCount <= 1 || cfg.Lookahead <= 0 {
+		return nil
+	}
+	return state.NewStatePrefetcher(db, state.StatePrefetcherConfig{Workers: cfg.Workers})
+}
+
+func enqueueProcessBlockPrefetch(p *state.StatePrefetcher, txs []*types.Transaction, current, next, lookahead int) int {
+	if p == nil || lookahead <= 0 {
+		return next
+	}
+	start := current + 1
+	if next < start {
+		next = start
+	}
+	end := current + lookahead
+	if end >= len(txs) {
+		end = len(txs) - 1
+	}
+	for next <= end {
+		p.Enqueue(actuator.PrefetchKeysFor(txs[next]))
+		next++
+	}
+	return next
 }

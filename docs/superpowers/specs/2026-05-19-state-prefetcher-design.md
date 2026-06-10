@@ -1,8 +1,9 @@
 # State prefetcher — design
 
-**Status:** Partial implementation: raw latest-domain prefetch driver and
-`actuator.PrefetchKeysFor(tx)` envelope-key extraction landed; `ProcessBlock`
-wiring, benchmarks, and rollout gates remain.
+**Status:** Partial implementation: raw latest-domain prefetch driver,
+`actuator.PrefetchKeysFor(tx)` envelope-key extraction, and opt-in
+`ProcessBlock` wiring landed. Benchmarks, long replay soak, and default-on
+rollout remain.
 **Author:** yanghang8612
 **Date:** 2026-05-19
 **Inspiration:** [go-ethereum/core/state/trie_prefetcher.go](../../../../ethereum/go-ethereum/core/state/trie_prefetcher.go)
@@ -127,28 +128,24 @@ func (p *StatePrefetcher) Enqueue(keys []PrefetchKey) int
 func (p *StatePrefetcher) Stats() StatePrefetcherStats
 ```
 
-Future `state_processor.go::ProcessBlock` wiring should pass the same
-`ethdb.KeyValueReader` surface used for block execution, normally `bc.buffer`,
-so prefetch reads see already-buffered previous-block writes without touching
-`StateDB` caches:
+`state_processor.go::ProcessBlock` passes the same `ethdb.KeyValueReader`
+surface used for block execution, normally `bc.buffer`, so prefetch reads see
+already-buffered previous-block writes without touching `StateDB` caches. The
+public test helpers keep prefetch disabled; production `BlockChain.applyBlock`
+uses `params.ChainConfig.StatePrefetchEnabled`.
 
 ```go
 prefetcher := state.NewStatePrefetcher(db, state.StatePrefetcherConfig{
     Workers: workers,
-    Queue:   queue,
 })
 defer prefetcher.Stop()
 prefetcher.Start()
 
-const lookahead = 8        // tunable
+nextPrefetchTx := 0
 for i, tx := range txs {
-    // Enqueue prefetch work for txs [i+1, i+lookahead]
-    for j := i + 1; j <= i+lookahead && j < len(txs); j++ {
-        if pfk, ok := actuatorPrefetchKeys(txs[j]); ok {
-            prefetcher.Enqueue(pfk)
-        }
-    }
-    // Execute current tx (synchronous, as today)
+    nextPrefetchTx = enqueueProcessBlockPrefetch(
+        prefetcher, txs, i, nextPrefetchTx, lookahead,
+    )
     runTx(i, tx)
 }
 ```
@@ -224,14 +221,14 @@ reads each.
 
 ```toml
 [state.prefetch]
-enabled    = true     # default
+enabled    = true     # currently opt-in; default is false until soak evidence
 workers    = 0        # 0 = GOMAXPROCS/2, capped at 8
 lookahead  = 8
 ```
 
-CLI: `--state.prefetch.disable`, `--state.prefetch.workers=4`, etc. The
-disable flag is the operator escape hatch if we discover a regression in
-production.
+CLI: `--state.prefetch.enabled`, `--state.prefetch.workers=4`, and
+`--state.prefetch.lookahead=8`. Leaving `enabled=false` recovers the prefetch-off
+behaviour exactly.
 
 ## Per-actuator audit format
 

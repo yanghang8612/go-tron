@@ -3,10 +3,11 @@
 Date: 2026-06-10
 
 Status: first actuator-envelope extractor landed in
-`actuator.PrefetchKeysFor(tx)`. The extractor is intentionally conservative:
-it only emits raw latest-domain hints derivable from the transaction envelope.
-Malformed payloads and invalid addresses produce fewer hints and never change
-actuator validation behaviour.
+`actuator.PrefetchKeysFor(tx)` and is wired into `ProcessBlock` behind the
+opt-in `state.prefetch.enabled` config. The extractor is intentionally
+conservative: it only emits raw latest-domain hints derivable from the
+transaction envelope. Malformed payloads and invalid addresses produce fewer
+hints and never change actuator validation behaviour.
 
 ## Implemented Key Kinds
 
@@ -53,5 +54,6 @@ The driver warms Pebble or blockbuffer raw reads only. It does not mutate
 
 - Over-prefetching is allowed because these are discarded read warmups.
 - Under-prefetching only leaves performance on the table.
-- The `ProcessBlock` integration must compare post-block state roots with
-  prefetch enabled and disabled before the feature can be enabled by default.
+- The `ProcessBlock` integration has a 100-tx prefetch-on/off root equality
+  regression test. Broader benchmarks and long replay soak are still required
+  before enabling it by default.

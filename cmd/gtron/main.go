@@ -169,9 +169,21 @@ var (
 		Usage: "Hash-trie clean-node cache size in MiB (-1 auto from --db.cache, 0 disables)",
 		Value: -1,
 	}
+	statePrefetchEnabledFlag = &cli.BoolFlag{
+		Name:  "state.prefetch.enabled",
+		Usage: "Enable experimental ProcessBlock state read prefetching",
+	}
+	statePrefetchWorkersFlag = &cli.IntFlag{
+		Name:  "state.prefetch.workers",
+		Usage: "State prefetch worker count (0 = auto)",
+	}
+	statePrefetchLookaheadFlag = &cli.IntFlag{
+		Name:  "state.prefetch.lookahead",
+		Usage: "Future transactions to enqueue for state prefetching (0 = default)",
+	}
 	configFileFlag = &cli.StringFlag{
 		Name:  "config",
-		Usage: "Path to a TOML config file (currently understood: [history] enabled, mode, prune_window)",
+		Usage: "Path to a TOML config file (currently understood: [history] and [state.prefetch])",
 	}
 	dbCacheFlag = &cli.IntFlag{
 		Name:  "db.cache",
@@ -257,6 +269,9 @@ var app = &cli.App{
 		stateCommitmentCheckpointsFlag,
 		stateCommitmentModeFlag,
 		stateTrieCacheFlag,
+		statePrefetchEnabledFlag,
+		statePrefetchWorkersFlag,
+		statePrefetchLookaheadFlag,
 		configFileFlag,
 		dbCacheFlag,
 		dbHandlesFlag,
@@ -413,6 +428,10 @@ func gtron(ctx *cli.Context) error {
 	// HistoryMode is operator-level (not consensus-relevant) so this
 	// mutation is safe.
 	if err := applyHistoryConfig(ctx, chainConfig); err != nil {
+		closeStores()
+		return err
+	}
+	if err := applyStatePrefetchConfig(ctx, chainConfig); err != nil {
 		closeStores()
 		return err
 	}

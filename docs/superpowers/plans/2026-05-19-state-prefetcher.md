@@ -32,11 +32,12 @@
 
 ## Slice 3 — Wire into ProcessBlock
 
-- [ ] `core/state_processor.go::ProcessBlock` — instantiate prefetcher,
+- [x] `core/state_processor.go::ProcessBlock` — instantiate prefetcher,
       enqueue keys for `lookahead` upcoming txs each iteration
-- [ ] Stop prefetcher on success + error paths (defer)
-- [ ] Gate behind `config.StatePrefetchEnabled` (default true)
-- [ ] Tests: existing block-apply tests stay green; one targeted test
+- [x] Stop prefetcher on success + error paths (defer)
+- [x] Gate behind `config.StatePrefetchEnabled` (currently opt-in; default
+      remains false until benchmark and soak evidence justify flipping it)
+- [x] Tests: existing block-apply tests stay green; one targeted test
       exercising a 100-tx block with prefetch on + off, asserting
       identical StateDB.Commit roots
 
@@ -54,8 +55,8 @@
 
 ## Slice 5 — Production rollout
 
-- [ ] CLI flags `--state.prefetch.{disable,workers,lookahead}`
-- [ ] `gtron.toml [state.prefetch]` section
+- [x] CLI flags `--state.prefetch.{enabled,workers,lookahead}`
+- [x] `gtron.toml [state.prefetch]` section
 - [ ] Operator doc `docs/dev/state-prefetcher.md`: when to disable,
       benchmark results, known gotchas
 - [ ] Default `true` after one full Nile soak with no regressions
@@ -66,4 +67,5 @@
 - [ ] ≤ 1% overhead on lightblock benchmark
 - [ ] Race detector clean across the full sweep
 - [ ] No semantic regressions on existing tests
-- [ ] Disable flag exactly recovers today's behaviour
+- [x] Leaving `state.prefetch.enabled=false` exactly recovers today's
+      behaviour
