@@ -6,8 +6,9 @@
 
 - [ ] Audit every actuator in [actuator/](../../../actuator) — list the
       deterministic state reads in Validate + Execute per contract type
-- [ ] Define `state.PrefetchKey` enum: `AccountKey | StorageKey | CodeKey
-      | TRC10Key | WitnessKey` + carrier struct
+- [x] Define `state.PrefetchKey` carrier and first safe raw latest-domain
+      key kinds: account latest, account-KV latest, and contract storage.
+      Code/TRC10/witness key kinds remain for the actuator audit slices.
 - [ ] Write the audit doc `docs/dev/state-prefetch-keys.md` (one section
       per contract type, copy-paste ready by future actuator authors)
 - [ ] Define `actuator.Prefetcher` interface; implement on every actuator
@@ -16,15 +17,17 @@
 
 ## Slice 2 — Prefetcher driver
 
-- [ ] `core/state/prefetcher.go` — `StatePrefetcher` struct + `Start /
+- [x] `core/state/prefetcher.go` — `StatePrefetcher` struct + `Start /
       Stop / Enqueue`
-- [ ] Worker pool: `runtime.GOMAXPROCS(0)/2` capped at 8, configurable
-- [ ] Idle-safe: `Stop()` is idempotent and drains in-flight work
-- [ ] Tests:
-  - [ ] `prefetcher_test.go` — basic enqueue/start/stop, cache
-        population assertions
+- [x] Worker pool: `runtime.GOMAXPROCS(0)/2` capped at 8, configurable
+- [x] Idle-safe: `Stop()` is idempotent and drains in-flight work
+- [x] Tests:
+  - [x] `prefetcher_test.go` — enqueue/start/stop, raw latest-domain
+        hit/miss/error/drop statistics
   - [ ] `prefetcher_race_test.go` — `go test -race -count=3` with
-        concurrent main reads + mutations
+        concurrent main reads + mutations. The current driver avoids
+        `StateDB` object-cache mutation from workers; direct cache warming
+        must not land without this.
 
 ## Slice 3 — Wire into ProcessBlock
 

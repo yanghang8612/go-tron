@@ -542,6 +542,24 @@ execution has stronger java-tron ordering constraints, so this must be staged:
   independent and the final journal order is byte-identical to serial java-tron
   execution.
 
+Status:
+
+- `core/state/prefetcher.go` now provides the first race-safe prefetch driver:
+  worker goroutines warm raw latest-domain account, account-KV, and contract
+  storage reads through `ethdb.KeyValueReader`, with bounded non-blocking
+  enqueue and hit/miss/drop/error stats. It deliberately avoids mutating
+  `StateDB` object caches because those maps do not yet have a concurrent
+  access model.
+
+Remaining:
+
+- Audit actuators and add deterministic prefetch-key extraction for tx
+  envelopes.
+- Wire the driver into `ProcessBlock` behind config/CLI gates and prove
+  identical post-block roots with prefetch on/off.
+- Add race, benchmark, and Nile/mainnet replay evidence before enabling by
+  default.
+
 ### P2: General ETL Layer
 
 Snapshot builders stream today, but large backfills and derived indexes still
