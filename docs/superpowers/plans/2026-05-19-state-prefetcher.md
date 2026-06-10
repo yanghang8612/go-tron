@@ -43,10 +43,11 @@
 
 ## Slice 4 — Benchmarks + tuning
 
-- [ ] `core/state_processor_bench_test.go`:
-  - [ ] `BenchmarkProcessBlock_HeavyTRX_HeavyState`
-  - [ ] `BenchmarkProcessBlock_HeavyTRX_ColdState` (forces disk reads)
-  - [ ] Variants: `prefetch=off`, `prefetch=on,workers=2`, `=4`, `=8`
+- [x] `core/state_processor_prefetch_bench_test.go`:
+  - [x] `BenchmarkProcessBlock_HeavyTRX_HeavyState`
+  - [x] `BenchmarkProcessBlock_HeavyTRX_ColdState` (deterministic first-read
+        latency wrapper)
+  - [x] Variants: `prefetch=off`, `prefetch=on,workers=2`, `=4`, `=8`
 - [ ] Pick default `workers / lookahead` from benchmark sweep, document
       in the audit doc
 - [ ] Long-running soak: replay 100K Nile blocks with prefetch on/off,
@@ -57,8 +58,8 @@
 
 - [x] CLI flags `--state.prefetch.{enabled,workers,lookahead}`
 - [x] `gtron.toml [state.prefetch]` section
-- [ ] Operator doc `docs/dev/state-prefetcher.md`: when to disable,
-      benchmark results, known gotchas
+- [x] Operator doc `docs/dev/state-prefetcher.md`: when to disable,
+      benchmark workflow, known gotchas
 - [ ] Default `true` after one full Nile soak with no regressions
 
 ## Acceptance criteria

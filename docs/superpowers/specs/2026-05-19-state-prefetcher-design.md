@@ -241,11 +241,15 @@ per actuator listing:
 
 ## Acceptance criteria
 
-- `go test -race ./core/state/... ./core/state_processor/...` clean
-- A new benchmark `BenchmarkProcessBlock_HeavyTRX/prefetch=on`:
-  - on `prefetch=off`: baseline
-  - on `prefetch=on`: ≥ 10% throughput improvement
-  - on `prefetch=on` lightblock: ≤ 1% overhead vs baseline
+- `go test -race ./core ./core/state -run 'TestProcessBlockStatePrefetch|TestStatePrefetcher' -count=1` clean
+- Focused benchmarks in `core/state_processor_prefetch_bench_test.go`:
+  - `BenchmarkProcessBlock_HeavyTRX_HeavyState`
+  - `BenchmarkProcessBlock_HeavyTRX_ColdState`
+  - variants: `prefetch=off`, `prefetch=on_workers=2_lookahead=8`,
+    `prefetch=on_workers=4_lookahead=8`, `prefetch=on_workers=8_lookahead=8`
+- Default-on threshold:
+  - on cold-state/heavy-block replay: ≥ 10% throughput improvement
+  - on hot/light blocks: ≤ 1% overhead vs baseline
 - Long-running Nile import (24h): no regressions in correctness, +5-15%
   in steady-state block import rate
 - Disable flag flips back to today's behaviour exactly

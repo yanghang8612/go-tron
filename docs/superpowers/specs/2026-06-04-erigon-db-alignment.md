@@ -563,11 +563,16 @@ Status:
   TOML controls are available through `--state.prefetch.enabled`,
   `--state.prefetch.workers`, `--state.prefetch.lookahead`, and
   `[state.prefetch]`.
+- `core/state_processor_prefetch_bench_test.go` now provides focused
+  `BenchmarkProcessBlock_HeavyTRX_HeavyState` and
+  `BenchmarkProcessBlock_HeavyTRX_ColdState` variants for prefetch off and
+  worker counts 2/4/8. The operator runbook is
+  `docs/dev/state-prefetcher.md`.
 
 Remaining:
 
-- Add race, benchmark, and Nile/mainnet replay evidence before enabling by
-  default.
+- Add full benchmark sweeps and Nile/mainnet replay evidence before enabling
+  by default.
 
 ### P2: General ETL Layer
 
