@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -23,9 +24,7 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 }
 
 // ReadAccountTrace returns the balance recorded for (owner, blockNum) or
-// 0 + false if no trace exists at that height. For "latest balance at or
-// before block N" use iteration with a prefix of accountTracePrefix ||
-// owner starting at the key for N — but that API isn't exposed yet.
+// 0 + false if no trace exists at that exact height.
 func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool) {
 	data, err := db.Get(accountTraceKey(owner, blockNum))
 	if err != nil || len(data) == 0 {
@@ -38,7 +37,58 @@ func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (in
 	return at.Balance, true
 }
 
+// ReadAccountTraceAtOrBefore returns the newest account-trace row whose block
+// number is <= blockNum. This mirrors java-tron's AccountTraceStore.getPrevBalance.
+func ReadAccountTraceAtOrBefore(db ethdb.Iteratee, owner []byte, blockNum int64) (traceBlock int64, balance int64, ok bool, err error) {
+	if db == nil {
+		return 0, 0, false, fmt.Errorf("account trace: nil database")
+	}
+	if len(owner) == 0 {
+		return 0, 0, false, fmt.Errorf("account trace: empty owner")
+	}
+	if blockNum < 0 {
+		return 0, 0, false, fmt.Errorf("account trace: negative block %d", blockNum)
+	}
+	prefix := accountTraceOwnerPrefix(owner)
+	start := accountTraceBlockSuffix(blockNum)
+	it := db.NewIterator(prefix, start)
+	defer it.Release()
+	if !it.Next() {
+		if err := it.Error(); err != nil {
+			return 0, 0, false, err
+		}
+		return 0, 0, false, nil
+	}
+	key := it.Key()
+	if len(key) != len(prefix)+8 {
+		return 0, 0, false, fmt.Errorf("account trace: malformed key length %d", len(key))
+	}
+	var at contractpb.AccountTrace
+	if err := proto.Unmarshal(it.Value(), &at); err != nil {
+		return 0, 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
+	}
+	return accountTraceBlockFromSuffix(key[len(prefix):]), at.Balance, true, nil
+}
+
 // DeleteAccountTrace removes the record.
 func DeleteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64) error {
 	return db.Delete(accountTraceKey(owner, blockNum))
+}
+
+func accountTraceOwnerPrefix(owner []byte) []byte {
+	k := make([]byte, 0, len(accountTracePrefix)+len(owner))
+	k = append(k, accountTracePrefix...)
+	return append(k, owner...)
+}
+
+func accountTraceBlockSuffix(blockNum int64) []byte {
+	const longMax int64 = 0x7FFFFFFFFFFFFFFF
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(blockNum^longMax))
+	return b[:]
+}
+
+func accountTraceBlockFromSuffix(suffix []byte) int64 {
+	const longMax int64 = 0x7FFFFFFFFFFFFFFF
+	return int64(binary.BigEndian.Uint64(suffix)) ^ longMax
 }

@@ -9,7 +9,9 @@ entry point for transaction lookup/info, account trace, balance trace, and
 section bloom backfills. Transaction lookup/info and section-bloom rebuilds
 from retained chain data now use that collector and are exposed through `gtron
 db`. Remaining account/balance trace backfill commands still need deliberate
-migration and path-specific benchmarks.
+migration and path-specific benchmarks. Wallet HTTP/gRPC account and block
+balance trace read paths can consume the rows once execution or backfill has
+populated them.
 
 ## Purpose
 
@@ -74,6 +76,10 @@ writes to collector-backed loads.
   bloom rows are treated as unknown and fall back to the pre-existing
   block-by-block scan, so older datadirs remain correct until the operator runs
   the rebuild.
+- `TronBackend.GetAccountBalanceTrace` and `GetBlockBalanceTrace` expose
+  retained account/balance trace rows through Wallet HTTP/gRPC APIs. They are
+  read paths only; account/balance trace population and backfill commands remain
+  migration targets below.
 
 ## Benchmarking
 

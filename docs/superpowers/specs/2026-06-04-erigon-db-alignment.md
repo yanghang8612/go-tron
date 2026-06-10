@@ -639,6 +639,12 @@ Status:
   payloads. Missing or malformed bloom rows are treated as unknown and fall
   back to the old block scan, preserving correctness for older datadirs until
   the rebuild command has populated the index.
+- Wallet HTTP/gRPC `getaccountbalance` and `getblockbalancetrace` now expose
+  the existing account-trace and block-balance-trace rawdb rows. Account
+  balance lookup follows java-tron's `getPrevBalance` ordering: if the request
+  block has no exact account trace, the response reports the newest trace block
+  at or before the requested height; if no prior row exists, it returns the
+  requested block identifier and zero balance.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore, and now includes chain-index sidecar build
@@ -660,7 +666,9 @@ Remaining:
 - Migrate history backfill commands and the remaining derived RPC index build
   paths, especially account/balance trace rebuilds and broader event/log cold
   accessors, onto the collector-backed helpers where benchmarks show lower
-  Pebble write amplification.
+  Pebble write amplification. The account/balance trace read APIs are wired,
+  but execution-time population, historical backfill, and operator rebuild
+  commands are still needed before the feature is archive-complete.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

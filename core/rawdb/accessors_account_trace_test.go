@@ -58,6 +58,40 @@ func TestAccountTrace_DistinctBlocksAndOwners(t *testing.T) {
 	}
 }
 
+func TestAccountTrace_ReadAtOrBefore(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	a := mustAddr(0xaa)
+	b := mustAddr(0xbb)
+	_ = WriteAccountTrace(db, a, 100, 100)
+	_ = WriteAccountTrace(db, a, 200, 200)
+	_ = WriteAccountTrace(db, a, 350, 350)
+	_ = WriteAccountTrace(db, b, 250, 999)
+
+	for _, tc := range []struct {
+		name      string
+		owner     []byte
+		blockNum  int64
+		wantBlock int64
+		wantBal   int64
+		wantOK    bool
+	}{
+		{name: "exact", owner: a, blockNum: 200, wantBlock: 200, wantBal: 200, wantOK: true},
+		{name: "previous", owner: a, blockNum: 300, wantBlock: 200, wantBal: 200, wantOK: true},
+		{name: "newest below", owner: a, blockNum: 400, wantBlock: 350, wantBal: 350, wantOK: true},
+		{name: "before first", owner: a, blockNum: 50, wantOK: false},
+		{name: "owner isolated", owner: b, blockNum: 300, wantBlock: 250, wantBal: 999, wantOK: true},
+	} {
+		gotBlock, gotBal, ok, err := ReadAccountTraceAtOrBefore(db, tc.owner, tc.blockNum)
+		if err != nil {
+			t.Fatalf("%s: ReadAccountTraceAtOrBefore error: %v", tc.name, err)
+		}
+		if ok != tc.wantOK || gotBlock != tc.wantBlock || gotBal != tc.wantBal {
+			t.Fatalf("%s: got block=%d balance=%d ok=%v, want block=%d balance=%d ok=%v",
+				tc.name, gotBlock, gotBal, ok, tc.wantBlock, tc.wantBal, tc.wantOK)
+		}
+	}
+}
+
 func TestAccountTrace_XOROrdering(t *testing.T) {
 	// The XOR-encoded suffix must make newer block numbers sort earlier
 	// lexicographically. Verify by comparing two keys for the same owner.

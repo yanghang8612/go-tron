@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -1356,6 +1357,55 @@ func (b *TronBackend) GetBalance(addr tcommon.Address) int64 {
 	return statedb.GetBalance(addr)
 }
 
+func (b *TronBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("account balance request required")
+	}
+	accountID := req.GetAccountIdentifier()
+	if accountID == nil || len(accountID.GetAddress()) == 0 {
+		return nil, fmt.Errorf("account_identifier address is null")
+	}
+	block, err := b.balanceTraceBlock(req.GetBlockIdentifier())
+	if err != nil {
+		return nil, err
+	}
+	requestedID := blockBalanceIdentifier(block)
+	traceBlock, balance, ok, err := rawdb.ReadAccountTraceAtOrBefore(b.chain.chaindb, accountID.GetAddress(), int64(block.Number()))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return &contractpb.AccountBalanceResponse{
+			Balance:         0,
+			BlockIdentifier: requestedID,
+		}, nil
+	}
+	responseID := requestedID
+	if uint64(traceBlock) != block.Number() {
+		traceBlockObj := b.chain.GetBlockByNumber(uint64(traceBlock))
+		if traceBlockObj == nil {
+			return nil, fmt.Errorf("account trace block %d not found", traceBlock)
+		}
+		responseID = blockBalanceIdentifier(traceBlockObj)
+	}
+	return &contractpb.AccountBalanceResponse{
+		Balance:         balance,
+		BlockIdentifier: responseID,
+	}, nil
+}
+
+func (b *TronBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	block, err := b.balanceTraceBlock(id)
+	if err != nil {
+		return nil, err
+	}
+	trace := rawdb.ReadBlockBalanceTrace(b.chain.chaindb, int64(block.Number()))
+	if trace == nil {
+		return nil, fmt.Errorf("block balance trace %d not found", block.Number())
+	}
+	return trace, nil
+}
+
 func (b *TronBackend) GetCode(addr tcommon.Address) []byte {
 	root := b.chain.HeadStateRoot()
 	statedb, err := b.chain.openState(root)
@@ -1372,6 +1422,36 @@ func (b *TronBackend) GetStorageAt(addr tcommon.Address, slot tcommon.Hash) tcom
 		return tcommon.Hash{}
 	}
 	return statedb.GetState(addr, slot)
+}
+
+func (b *TronBackend) balanceTraceBlock(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*types.Block, error) {
+	if id == nil {
+		return nil, fmt.Errorf("block_identifier null")
+	}
+	if id.GetNumber() < 0 {
+		return nil, fmt.Errorf("block_identifier number less than 0")
+	}
+	if len(id.GetHash()) != tcommon.HashLength {
+		return nil, fmt.Errorf("block_identifier hash length not equals 32")
+	}
+	block := b.chain.GetBlockByNumber(uint64(id.GetNumber()))
+	if block == nil {
+		return nil, fmt.Errorf("block %d not found", id.GetNumber())
+	}
+	if !bytes.Equal(block.Hash().Bytes(), id.GetHash()) {
+		return nil, fmt.Errorf("number and hash do not match")
+	}
+	return block, nil
+}
+
+func blockBalanceIdentifier(block *types.Block) *contractpb.BlockBalanceTrace_BlockIdentifier {
+	if block == nil {
+		return nil
+	}
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: int64(block.Number()),
+		Hash:   append([]byte(nil), block.Hash().Bytes()...),
+	}
 }
 
 // ErrArchiveHistoryDisabled is returned by the *At archive-query methods

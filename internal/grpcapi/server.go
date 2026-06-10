@@ -95,6 +95,22 @@ func (s *Server) GetAccount(_ context.Context, in *corepb.Account) (*corepb.Acco
 	return acc.Proto(), nil
 }
 
+func (s *Server) GetAccountBalance(_ context.Context, in *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	resp, err := s.backend.GetAccountBalanceTrace(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return resp, nil
+}
+
+func (s *Server) GetBlockBalanceTrace(_ context.Context, in *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	trace, err := s.backend.GetBlockBalanceTrace(in)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return trace, nil
+}
+
 // GetTransactionById returns the transaction with the given 32-byte hash.
 func (s *Server) GetTransactionById(_ context.Context, in *apipb.BytesMessage) (*corepb.Transaction, error) {
 	if in == nil || len(in.Value) == 0 {

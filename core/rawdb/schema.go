@@ -539,14 +539,10 @@ func accountAssetKey(owner []byte, tokenID int64) []byte {
 // ordering so a lexicographic iterator walks newest-first, matching
 // java-tron's AccountTraceStore key layout for recordBalanceWithBlock.
 func accountTraceKey(owner []byte, blockNum int64) []byte {
-	const longMax int64 = 0x7FFFFFFFFFFFFFFF
-	xored := blockNum ^ longMax
 	k := make([]byte, 0, len(accountTracePrefix)+len(owner)+8)
 	k = append(k, accountTracePrefix...)
 	k = append(k, owner...)
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], uint64(xored))
-	return append(k, b[:]...)
+	return append(k, accountTraceBlockSuffix(blockNum)...)
 }
 
 func stateKVLatestKey(owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) []byte {

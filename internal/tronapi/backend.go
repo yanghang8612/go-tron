@@ -168,6 +168,8 @@ type Backend interface {
 	// disk DP (effectively solid) since DynamicProperties only flushes
 	// on solidification.
 	GetAccountResourceAt(addr common.Address, blockNum uint64) (*AccountResource, error)
+	GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error)
+	GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error)
 	GetChainParameters() []ChainParameter
 	ListWitnesses() ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64

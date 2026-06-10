@@ -36,9 +36,13 @@ type stubBackend struct {
 	pendingTxList      []*corepb.Transaction
 	nodes              []*tronapi.PeerInfo
 	// M5.1 PR-1
-	accountByID     *types.Account
-	accountNet      *apipb.AccountNetMessage
-	accountResource *tronapi.AccountResource
+	accountByID             *types.Account
+	accountNet              *apipb.AccountNetMessage
+	accountResource         *tronapi.AccountResource
+	accountBalanceResp      *contractpb.AccountBalanceResponse
+	blockBalanceTrace       *contractpb.BlockBalanceTrace
+	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
+	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
 	// For inspecting what contract was passed to BuildContractTransaction
 	lastContractType corepb.Transaction_Contract_ContractType
 	lastContract     proto.Message
@@ -95,6 +99,14 @@ func (s *stubBackend) GetAccountResource(addr common.Address) (*tronapi.AccountR
 }
 func (s *stubBackend) GetAccountResourceAt(addr common.Address, blockNum uint64) (*tronapi.AccountResource, error) {
 	return nil, nil
+}
+func (s *stubBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	s.lastAccountBalanceReq = req
+	return s.accountBalanceResp, nil
+}
+func (s *stubBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	s.lastBlockBalanceTraceID = id
+	return s.blockBalanceTrace, nil
 }
 func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return nil }
 func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
@@ -320,6 +332,83 @@ func postJSON(t *testing.T, url, body string) map[string]interface{} {
 		t.Fatalf("decode JSON from %s: %v", url, err)
 	}
 	return result
+}
+
+func TestGetAccountBalanceTrace(t *testing.T) {
+	addr := make([]byte, common.AddressLength)
+	addr[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(addr); i++ {
+		addr[i] = byte(i)
+	}
+	hash := testBytes(common.HashLength, 0x80)
+	stub := &stubBackend{
+		accountBalanceResp: &contractpb.AccountBalanceResponse{
+			Balance: 123_456,
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 7,
+				Hash:   hash,
+			},
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"account_identifier":{"address":"%s"},"block_identifier":{"number":7,"hash":"%s"}}`,
+		hex.EncodeToString(addr), hex.EncodeToString(hash))
+	got := postJSON(t, srv.URL+"/wallet/getaccountbalance", body)
+	if got["balance"].(float64) != 123456 {
+		t.Fatalf("balance = %v, want 123456", got["balance"])
+	}
+	blockID := got["block_identifier"].(map[string]interface{})
+	if blockID["number"].(float64) != 7 || blockID["hash"].(string) != hex.EncodeToString(hash) {
+		t.Fatalf("block_identifier = %+v", blockID)
+	}
+	if stub.lastAccountBalanceReq == nil {
+		t.Fatal("backend was not called")
+	}
+	if hex.EncodeToString(stub.lastAccountBalanceReq.GetAccountIdentifier().GetAddress()) != hex.EncodeToString(addr) {
+		t.Fatalf("backend address = %x, want %x", stub.lastAccountBalanceReq.GetAccountIdentifier().GetAddress(), addr)
+	}
+	if stub.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != 7 ||
+		hex.EncodeToString(stub.lastAccountBalanceReq.GetBlockIdentifier().GetHash()) != hex.EncodeToString(hash) {
+		t.Fatalf("backend block id = %+v", stub.lastAccountBalanceReq.GetBlockIdentifier())
+	}
+}
+
+func TestGetBlockBalanceTrace(t *testing.T) {
+	hash := testBytes(common.HashLength, 0x33)
+	stub := &stubBackend{
+		blockBalanceTrace: &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 8,
+				Hash:   hash,
+			},
+			Timestamp: 99_999,
+		},
+	}
+	srv := newTestServer(t, stub)
+	defer srv.Close()
+
+	body := fmt.Sprintf(`{"number":8,"hash":"%s"}`, hex.EncodeToString(hash))
+	got := postJSON(t, srv.URL+"/wallet/getblockbalancetrace", body)
+	if got["timestamp"].(float64) != 99999 {
+		t.Fatalf("timestamp = %v, want 99999", got["timestamp"])
+	}
+	if stub.lastBlockBalanceTraceID == nil {
+		t.Fatal("backend was not called")
+	}
+	if stub.lastBlockBalanceTraceID.GetNumber() != 8 ||
+		hex.EncodeToString(stub.lastBlockBalanceTraceID.GetHash()) != hex.EncodeToString(hash) {
+		t.Fatalf("backend block id = %+v", stub.lastBlockBalanceTraceID)
+	}
+}
+
+func testBytes(n int, start byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = start + byte(i)
+	}
+	return out
 }
 
 // --- Tests: delegation group ---

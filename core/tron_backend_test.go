@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // newTestBlockchain creates an in-memory BlockChain with a genesis block for testing.
@@ -71,6 +73,99 @@ func TestTronBackend_GetBalance(t *testing.T) {
 	bal := b.GetBalance(addr)
 	if bal < 0 {
 		t.Fatalf("GetBalance should not return negative: %d", bal)
+	}
+}
+
+func TestTronBackend_GetAccountBalanceTrace(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	block1, _ := testBackendLogBlock(1, nil)
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	owner := testCoreAddr(9)
+	if err := rawdb.WriteAccountTrace(bc.db, owner.Bytes(), int64(block1.Number()), 12_345); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	backend := &TronBackend{chain: bc}
+	resp, err := backend.GetAccountBalanceTrace(&contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: owner.Bytes()},
+		BlockIdentifier:   testBackendBalanceBlockID(block2),
+	})
+	if err != nil {
+		t.Fatalf("GetAccountBalanceTrace: %v", err)
+	}
+	if resp.GetBalance() != 12_345 {
+		t.Fatalf("balance = %d, want 12345", resp.GetBalance())
+	}
+	if got := resp.GetBlockIdentifier().GetNumber(); got != int64(block1.Number()) {
+		t.Fatalf("response block number = %d, want %d", got, block1.Number())
+	}
+	if !bytes.Equal(resp.GetBlockIdentifier().GetHash(), block1.Hash().Bytes()) {
+		t.Fatalf("response block hash = %x, want %x", resp.GetBlockIdentifier().GetHash(), block1.Hash().Bytes())
+	}
+
+	missingOwner := testCoreAddr(10)
+	resp, err = backend.GetAccountBalanceTrace(&contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: missingOwner.Bytes()},
+		BlockIdentifier:   testBackendBalanceBlockID(block2),
+	})
+	if err != nil {
+		t.Fatalf("GetAccountBalanceTrace missing owner: %v", err)
+	}
+	if resp.GetBalance() != 0 || resp.GetBlockIdentifier().GetNumber() != int64(block2.Number()) {
+		t.Fatalf("missing owner response = balance %d block %d, want balance 0 block %d",
+			resp.GetBalance(), resp.GetBlockIdentifier().GetNumber(), block2.Number())
+	}
+
+	badID := testBackendBalanceBlockID(block2)
+	badID.Hash[0] ^= 0xff
+	if _, err := backend.GetAccountBalanceTrace(&contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: owner.Bytes()},
+		BlockIdentifier:   badID,
+	}); err == nil {
+		t.Fatal("GetAccountBalanceTrace accepted mismatched block hash")
+	}
+}
+
+func TestTronBackend_GetBlockBalanceTrace(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+
+	block1, _ := testBackendLogBlock(1, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	trace := &contractpb.BlockBalanceTrace{
+		BlockIdentifier: testBackendBalanceBlockID(block1),
+		Timestamp:       99_001,
+	}
+	rawdb.WriteBlockBalanceTrace(bc.db, int64(block1.Number()), trace)
+
+	got, err := (&TronBackend{chain: bc}).GetBlockBalanceTrace(testBackendBalanceBlockID(block1))
+	if err != nil {
+		t.Fatalf("GetBlockBalanceTrace: %v", err)
+	}
+	if got.GetTimestamp() != trace.GetTimestamp() {
+		t.Fatalf("timestamp = %d, want %d", got.GetTimestamp(), trace.GetTimestamp())
+	}
+
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if _, err := (&TronBackend{chain: bc}).GetBlockBalanceTrace(testBackendBalanceBlockID(block2)); err == nil {
+		t.Fatal("GetBlockBalanceTrace accepted missing trace row")
 	}
 }
 
@@ -407,6 +502,13 @@ func testBackendLogBlock(number uint64, logEntry *corepb.TransactionInfo_Log) (*
 		Transactions: []*corepb.Transaction{txPB},
 	})
 	return block, info
+}
+
+func testBackendBalanceBlockID(block *types.Block) *contractpb.BlockBalanceTrace_BlockIdentifier {
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: int64(block.Number()),
+		Hash:   append([]byte(nil), block.Hash().Bytes()...),
+	}
 }
 
 func bytes20(seed byte) []byte {

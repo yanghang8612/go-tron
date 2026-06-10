@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -49,6 +51,8 @@ func (api *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// Resource & chain queries
 	mux.HandleFunc("/wallet/getaccountresource", api.getAccountResource)
+	mux.HandleFunc("/wallet/getaccountbalance", api.getAccountBalance)
+	mux.HandleFunc("/wallet/getblockbalancetrace", api.getBlockBalanceTrace)
 	mux.HandleFunc("/wallet/getchainparameters", api.getChainParameters)
 	mux.HandleFunc("/wallet/listwitnesses", api.listWitnesses)
 	mux.HandleFunc("/wallet/getnextmaintenancetime", api.getNextMaintenanceTime)
@@ -842,6 +846,156 @@ func (api *API) getBlockByLimitNext(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getAccountResource(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountResource(w, r, nil)
+}
+
+func (api *API) getAccountBalance(w http.ResponseWriter, r *http.Request) {
+	req, err := parseAccountBalanceRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := api.backend.GetAccountBalanceTrace(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeTronJSON(w, resp)
+}
+
+func (api *API) getBlockBalanceTrace(w http.ResponseWriter, r *http.Request) {
+	id, err := parseBlockBalanceIdentifierRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	trace, err := api.backend.GetBlockBalanceTrace(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeTronJSON(w, trace)
+}
+
+type balanceTraceBlockIDJSON struct {
+	Number int64  `json:"number"`
+	Hash   string `json:"hash"`
+}
+
+type accountBalanceRequestJSON struct {
+	AccountIdentifier      *accountIdentifierJSON   `json:"account_identifier"`
+	AccountIdentifierCamel *accountIdentifierJSON   `json:"accountIdentifier"`
+	BlockIdentifier        *balanceTraceBlockIDJSON `json:"block_identifier"`
+	BlockIdentifierCamel   *balanceTraceBlockIDJSON `json:"blockIdentifier"`
+	Visible                bool                     `json:"visible"`
+}
+
+type accountIdentifierJSON struct {
+	Address string `json:"address"`
+}
+
+func parseAccountBalanceRequest(r *http.Request) (*contractpb.AccountBalanceRequest, error) {
+	visible := r.URL.Query().Get("visible") == "true"
+	if r.URL.Query().Get("address") != "" {
+		addr, err := parseAddress(r.URL.Query().Get("address"), visible)
+		if err != nil {
+			return nil, addressFieldErr("address", err)
+		}
+		id, err := parseBlockBalanceIdentifierValues(r.URL.Query().Get("number"), r.URL.Query().Get("hash"))
+		if err != nil {
+			return nil, err
+		}
+		return &contractpb.AccountBalanceRequest{
+			AccountIdentifier: &contractpb.AccountIdentifier{Address: addr.Bytes()},
+			BlockIdentifier:   id,
+		}, nil
+	}
+	var body accountBalanceRequestJSON
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if body.Visible {
+		visible = true
+	}
+	account := body.AccountIdentifier
+	if account == nil {
+		account = body.AccountIdentifierCamel
+	}
+	if account == nil || account.Address == "" {
+		return nil, fmt.Errorf("account_identifier address is null")
+	}
+	blockID := body.BlockIdentifier
+	if blockID == nil {
+		blockID = body.BlockIdentifierCamel
+	}
+	if blockID == nil {
+		return nil, fmt.Errorf("block_identifier null")
+	}
+	addr, err := parseAddress(account.Address, visible)
+	if err != nil {
+		return nil, addressFieldErr("account_identifier.address", err)
+	}
+	id, err := parseBlockBalanceIdentifier(blockID)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: addr.Bytes()},
+		BlockIdentifier:   id,
+	}, nil
+}
+
+func parseBlockBalanceIdentifierRequest(r *http.Request) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if r.URL.Query().Get("number") != "" || r.URL.Query().Get("hash") != "" {
+		return parseBlockBalanceIdentifierValues(r.URL.Query().Get("number"), r.URL.Query().Get("hash"))
+	}
+	var body balanceTraceBlockIDJSON
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return parseBlockBalanceIdentifier(&body)
+}
+
+func parseBlockBalanceIdentifier(id *balanceTraceBlockIDJSON) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if id == nil {
+		return nil, fmt.Errorf("block_identifier null")
+	}
+	hash, err := parseBlockIdentifierHash(id.Hash)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: id.Number,
+		Hash:   hash,
+	}, nil
+}
+
+func parseBlockBalanceIdentifierValues(number, hash string) (*contractpb.BlockBalanceTrace_BlockIdentifier, error) {
+	if number == "" {
+		return nil, fmt.Errorf("block_identifier number required")
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("block_identifier number: %w", err)
+	}
+	h, err := parseBlockIdentifierHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{Number: n, Hash: h}, nil
+}
+
+func parseBlockIdentifierHash(hash string) ([]byte, error) {
+	if hash == "" {
+		return nil, fmt.Errorf("block_identifier hash required")
+	}
+	raw, err := parseBytes(hash, false)
+	if err != nil {
+		return nil, fmt.Errorf("block_identifier hash: %w", err)
+	}
+	if len(raw) != common.HashLength {
+		return nil, fmt.Errorf("block_identifier hash length not equals 32")
+	}
+	return raw, nil
 }
 
 // handleGetAccountResource is the shared body for /wallet/, /walletsolidity/

@@ -24,15 +24,19 @@ const bufSize = 1 << 20
 
 // testBackend is a minimal stub implementation of tronapi.Backend for grpcapi tests.
 type testBackend struct {
-	block              *types.Block
-	blocks             []*types.Block // for range queries
-	account            *types.Account
-	tx                 *corepb.Transaction
-	params             []tronapi.ChainParameter
-	contract           *contractpb.SmartContract
-	witnesses          []*tronapi.WitnessInfo
-	nextMaint          int64
-	delegatedResources []*tronapi.DelegatedResourceInfo
+	block                   *types.Block
+	blocks                  []*types.Block // for range queries
+	account                 *types.Account
+	tx                      *corepb.Transaction
+	params                  []tronapi.ChainParameter
+	contract                *contractpb.SmartContract
+	witnesses               []*tronapi.WitnessInfo
+	nextMaint               int64
+	delegatedResources      []*tronapi.DelegatedResourceInfo
+	accountBalanceResp      *contractpb.AccountBalanceResponse
+	blockBalanceTrace       *contractpb.BlockBalanceTrace
+	lastAccountBalanceReq   *contractpb.AccountBalanceRequest
+	lastBlockBalanceTraceID *contractpb.BlockBalanceTrace_BlockIdentifier
 }
 
 func (b *testBackend) CurrentBlock() *types.Block                             { return b.block }
@@ -106,6 +110,14 @@ func (b *testBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronap
 }
 func (b *testBackend) GetAccountResource(addr common.Address) (*tronapi.AccountResource, error) {
 	return nil, nil
+}
+func (b *testBackend) GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error) {
+	b.lastAccountBalanceReq = req
+	return b.accountBalanceResp, nil
+}
+func (b *testBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error) {
+	b.lastBlockBalanceTraceID = id
+	return b.blockBalanceTrace, nil
 }
 func (b *testBackend) GetChainParameters() []tronapi.ChainParameter { return b.params }
 func (b *testBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
@@ -313,6 +325,64 @@ func TestGetAccount_Empty(t *testing.T) {
 	}
 }
 
+func TestGetAccountBalanceTrace(t *testing.T) {
+	hash := grpcTestBytes(common.HashLength, 0x44)
+	addr := grpcTestBytes(common.AddressLength, common.AddressPrefixMainnet)
+	backend := &testBackend{
+		accountBalanceResp: &contractpb.AccountBalanceResponse{
+			Balance: 77,
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 9,
+				Hash:   hash,
+			},
+		},
+	}
+	client := newTestClient(t, backend)
+	resp, err := client.GetAccountBalance(context.Background(), &contractpb.AccountBalanceRequest{
+		AccountIdentifier: &contractpb.AccountIdentifier{Address: addr},
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Number: 9,
+			Hash:   hash,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetAccountBalance: %v", err)
+	}
+	if resp.GetBalance() != 77 || resp.GetBlockIdentifier().GetNumber() != 9 {
+		t.Fatalf("response = %+v", resp)
+	}
+	if backend.lastAccountBalanceReq == nil || backend.lastAccountBalanceReq.GetBlockIdentifier().GetNumber() != 9 {
+		t.Fatalf("backend request = %+v", backend.lastAccountBalanceReq)
+	}
+}
+
+func TestGetBlockBalanceTrace(t *testing.T) {
+	hash := grpcTestBytes(common.HashLength, 0x55)
+	backend := &testBackend{
+		blockBalanceTrace: &contractpb.BlockBalanceTrace{
+			BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+				Number: 10,
+				Hash:   hash,
+			},
+			Timestamp: 1234,
+		},
+	}
+	client := newTestClient(t, backend)
+	resp, err := client.GetBlockBalanceTrace(context.Background(), &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Number: 10,
+		Hash:   hash,
+	})
+	if err != nil {
+		t.Fatalf("GetBlockBalanceTrace: %v", err)
+	}
+	if resp.GetTimestamp() != 1234 {
+		t.Fatalf("timestamp = %d, want 1234", resp.GetTimestamp())
+	}
+	if backend.lastBlockBalanceTraceID == nil || backend.lastBlockBalanceTraceID.GetNumber() != 10 {
+		t.Fatalf("backend block id = %+v", backend.lastBlockBalanceTraceID)
+	}
+}
+
 func TestGetTransactionById_NotFound(t *testing.T) {
 	client := newTestClient(t, &testBackend{tx: nil})
 	_, err := client.GetTransactionById(context.Background(), &apipb.BytesMessage{Value: make([]byte, 32)})
@@ -347,6 +417,14 @@ func makeBlock(num int64) *types.Block {
 			RawData: &corepb.BlockHeaderRaw{Number: num},
 		},
 	})
+}
+
+func grpcTestBytes(n int, start byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = start + byte(i)
+	}
+	return out
 }
 
 func TestGetNowBlock2_WithBlock(t *testing.T) {
