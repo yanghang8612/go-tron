@@ -3,7 +3,8 @@
 Status: initial production integration. Snapshot latest-domain restore now
 loads through the collector, state-domain history restore does the same, and
 chain-freezer hot lookup index restore uses the collector for its `bh-`, `tx-`,
-and `ti-` rows. Backfill and derived-index builders still need deliberate
+and `ti-` rows. Chain-index sidecar builds now use the collector for external
+hash-order sorting. Backfill and derived-index builders still need deliberate
 migration and path-specific benchmarks.
 
 ## Purpose
@@ -40,6 +41,11 @@ writes to collector-backed loads.
   `RestoreChainFreezerIndexesWithOptions`, `RestoreChainFreezerOptions.ETL`, or
   `RestoreVerifiedSnapshotOptions.ETL` to control ETL scratch space from higher
   restore entry points.
+- `snapshots.BuildChainIndexSegmentFromChainFreezerSegment` builds the
+  chain-freezer `chain-index` sidecar through one collector, then streams
+  sorted block-hash and transaction-hash entries into the existing sidecar file
+  format. Use `BuildChainIndexSegmentFromChainFreezerSegmentWithOptions` or
+  `Aggregator.BuildChainFreezerWithOptions` to control ETL scratch space.
 
 ## Benchmarking
 
@@ -54,9 +60,10 @@ go test ./core/state/snapshots -run '^$' \
 
 The benchmark compares the former direct unordered write shape with the sorted
 collector load for latest-domain restore, state-domain history restore, and
-chain-freezer hot lookup index restore. The `out_of_order/put` metric should be
-greater than zero for the direct baselines and exactly zero for every
-`sorted_etl` variant.
+chain-freezer hot lookup index restore. It also compares in-memory chain-index
+sidecar sorting with the collector-backed sidecar build. The `out_of_order/put`
+metric should be greater than zero for the direct restore baselines and exactly
+zero for every restore `sorted_etl` variant.
 
 Recorded samples:
 
@@ -105,7 +112,7 @@ Zero values preserve collector defaults. For production bootstrap, point
 
 ## Migration Targets
 
-- chain-index and future transaction-info/event-log sidecar builders
+- future transaction-info/event-log sidecar builders
 - derived account/balance trace index backfills
 - any future RPC index build where input order follows block execution rather
   than target DB key order

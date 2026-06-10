@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -22,6 +23,8 @@ const (
 	chainIndexHeaderSize     = 8 + 8 + 8 + 8 + 8
 	chainIndexBlockEntrySize = common.HashLength + 8
 	chainIndexTxEntrySize    = common.HashLength + 8 + 4 + 4
+	chainIndexETLBlockTag    = 0x00
+	chainIndexETLTxTag       = 0x01
 )
 
 var chainIndexMagic = [8]byte{'g', 't', 'c', 'i', 'd', 'x', '1', '\n'}
@@ -60,6 +63,10 @@ func ChainIndexSegmentPath(fromBlock, toBlock uint64) string {
 }
 
 func BuildChainIndexSegmentFromChainFreezerSegment(dir string, freezerRef SegmentRef, relPath string) (SegmentRef, error) {
+	return BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(dir, freezerRef, relPath, RestoreETLOptions{})
+}
+
+func BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(dir string, freezerRef SegmentRef, relPath string, opts RestoreETLOptions) (SegmentRef, error) {
 	if err := validateSegmentRef(freezerRef); err != nil {
 		return SegmentRef{}, err
 	}
@@ -83,8 +90,12 @@ func BuildChainIndexSegmentFromChainFreezerSegment(dir string, freezerRef Segmen
 	if err != nil {
 		return SegmentRef{}, err
 	}
-	blocks := make([]chainIndexBlockEntry, 0, expectedBlocks)
-	var txs []chainIndexTxEntry
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return SegmentRef{}, fmt.Errorf("snapshots: create chain-index build ETL collector: %w", err)
+	}
+	defer collector.Close()
+	var blocksSeen uint64
 	if err := iterateChainFreezerSegmentRows(dir, freezerRef, func(row chainFreezerRow) error {
 		block, err := types.UnmarshalBlock(row.blockRaw)
 		if err != nil {
@@ -93,28 +104,26 @@ func BuildChainIndexSegmentFromChainFreezerSegment(dir string, freezerRef Segmen
 		if block.Number() != row.blockNum {
 			return fmt.Errorf("snapshots: chain-freezer row %d contains block number %d", row.blockNum, block.Number())
 		}
-		blocks = append(blocks, chainIndexBlockEntry{hash: block.Hash(), blockNum: row.blockNum})
+		blocksSeen++
+		if err := collector.Put(chainIndexBlockETLKey(block.Hash(), row.blockNum), nil); err != nil {
+			return err
+		}
 		for i, tx := range block.Transactions() {
 			if uint64(i) > uint64(^uint32(0)) {
 				return fmt.Errorf("snapshots: block %d transaction index %d exceeds uint32", row.blockNum, i)
 			}
-			txs = append(txs, chainIndexTxEntry{hash: tx.Hash(), blockNum: row.blockNum, txIndex: uint32(i)})
+			if err := collector.Put(chainIndexTxETLKey(tx.Hash(), row.blockNum, uint32(i)), nil); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
 		return SegmentRef{}, err
 	}
-	if uint64(len(blocks)) != expectedBlocks {
-		return SegmentRef{}, fmt.Errorf("snapshots: chain index block entries %d, want %d", len(blocks), expectedBlocks)
+	if blocksSeen != expectedBlocks {
+		return SegmentRef{}, fmt.Errorf("snapshots: chain index block entries %d, want %d", blocksSeen, expectedBlocks)
 	}
-	sortChainIndexEntries(blocks, txs)
-	if err := validateUniqueChainIndexBlockEntries(blocks); err != nil {
-		return SegmentRef{}, err
-	}
-	if err := validateUniqueChainIndexTxEntries(txs); err != nil {
-		return SegmentRef{}, err
-	}
-	return writeChainIndexSegment(dir, ref, blocks, txs)
+	return writeChainIndexSegmentFromETL(dir, ref, collector, expectedBlocks)
 }
 
 func CheckChainIndexSegment(dir string, ref SegmentRef) error {
@@ -474,6 +483,211 @@ func writeChainIndexSegment(dir string, ref SegmentRef, blocks []chainIndexBlock
 		return SegmentRef{}, err
 	}
 	return ref, nil
+}
+
+func writeChainIndexSegmentFromETL(dir string, ref SegmentRef, collector *etl.Collector, expectedBlocks uint64) (SegmentRef, error) {
+	if err := validateSegmentRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	if ref.Kind != SegmentChainIndex {
+		return SegmentRef{}, fmt.Errorf("snapshots: chain-index writer got %s segment %q", ref.Kind, ref.Path)
+	}
+	if collector == nil {
+		return SegmentRef{}, errors.New("snapshots: nil chain-index ETL collector")
+	}
+	abs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return SegmentRef{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	writer := newChainIndexETLSegmentWriter(ref, tmp)
+	if err := writer.writePlaceholderHeader(); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if _, err := collector.Load(writer); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if writer.blockCount != expectedBlocks {
+		_ = tmp.Close()
+		return SegmentRef{}, fmt.Errorf("snapshots: chain index block entries %d, want %d", writer.blockCount, expectedBlocks)
+	}
+	if err := writer.flush(); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	header := chainIndexHeader{
+		fromBlock:  ref.FromTxNum,
+		toBlock:    ref.ToTxNum,
+		blockCount: writer.blockCount,
+		txCount:    writer.txCount,
+	}
+	if err := writeChainIndexHeader(tmp, header); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return SegmentRef{}, err
+	}
+
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(tmpName)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	ref.Size = size
+	ref.Checksum = checksum
+	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
+	finalAbs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
+		return SegmentRef{}, err
+	}
+	if err := os.Rename(tmpName, finalAbs); err != nil {
+		return SegmentRef{}, err
+	}
+	return ref, nil
+}
+
+type chainIndexETLSegmentWriter struct {
+	ref           SegmentRef
+	buf           *bufio.Writer
+	blockCount    uint64
+	txCount       uint64
+	sawTx         bool
+	haveBlockHash bool
+	haveTxHash    bool
+	prevBlockHash common.Hash
+	prevTxHash    common.Hash
+}
+
+func newChainIndexETLSegmentWriter(ref SegmentRef, w io.Writer) *chainIndexETLSegmentWriter {
+	return &chainIndexETLSegmentWriter{
+		ref: ref,
+		buf: bufio.NewWriter(w),
+	}
+}
+
+func (w *chainIndexETLSegmentWriter) writePlaceholderHeader() error {
+	return writeChainIndexHeader(w.buf, chainIndexHeader{
+		fromBlock: w.ref.FromTxNum,
+		toBlock:   w.ref.ToTxNum,
+	})
+}
+
+func (w *chainIndexETLSegmentWriter) Put(key, _ []byte) error {
+	tag, hash, blockNum, txIndex, err := decodeChainIndexETLKey(key)
+	if err != nil {
+		return err
+	}
+	if blockNum < w.ref.FromTxNum || blockNum > w.ref.ToTxNum {
+		return fmt.Errorf("snapshots: chain-index ETL key points to block %d outside [%d,%d]",
+			blockNum, w.ref.FromTxNum, w.ref.ToTxNum)
+	}
+	switch tag {
+	case chainIndexETLBlockTag:
+		if w.sawTx {
+			return errors.New("snapshots: chain-index ETL block entry after transaction entries")
+		}
+		if w.haveBlockHash {
+			cmp := bytes.Compare(w.prevBlockHash[:], hash[:])
+			if cmp == 0 {
+				return fmt.Errorf("snapshots: duplicate chain-index block hash %x", hash)
+			}
+			if cmp > 0 {
+				return errors.New("snapshots: chain-index ETL block entries are out of hash order")
+			}
+		}
+		if err := writeChainIndexBlockEntry(w.buf, chainIndexBlockEntry{hash: hash, blockNum: blockNum}); err != nil {
+			return err
+		}
+		w.prevBlockHash = hash
+		w.haveBlockHash = true
+		w.blockCount++
+	case chainIndexETLTxTag:
+		w.sawTx = true
+		if w.haveTxHash {
+			cmp := bytes.Compare(w.prevTxHash[:], hash[:])
+			if cmp == 0 {
+				return fmt.Errorf("snapshots: duplicate chain-index tx hash %x", hash)
+			}
+			if cmp > 0 {
+				return errors.New("snapshots: chain-index ETL tx entries are out of hash order")
+			}
+		}
+		if err := writeChainIndexTxEntry(w.buf, chainIndexTxEntry{hash: hash, blockNum: blockNum, txIndex: txIndex}); err != nil {
+			return err
+		}
+		w.prevTxHash = hash
+		w.haveTxHash = true
+		w.txCount++
+	default:
+		return fmt.Errorf("snapshots: unknown chain-index ETL tag %d", tag)
+	}
+	return nil
+}
+
+func (w *chainIndexETLSegmentWriter) Delete(key []byte) error {
+	return fmt.Errorf("snapshots: chain-index ETL delete unsupported for key %x", key)
+}
+
+func (w *chainIndexETLSegmentWriter) flush() error {
+	return w.buf.Flush()
+}
+
+func chainIndexBlockETLKey(hash common.Hash, blockNum uint64) []byte {
+	key := make([]byte, 1+common.HashLength+8)
+	key[0] = chainIndexETLBlockTag
+	copy(key[1:1+common.HashLength], hash[:])
+	binary.BigEndian.PutUint64(key[1+common.HashLength:], blockNum)
+	return key
+}
+
+func chainIndexTxETLKey(hash common.Hash, blockNum uint64, txIndex uint32) []byte {
+	key := make([]byte, 1+common.HashLength+8+4)
+	key[0] = chainIndexETLTxTag
+	copy(key[1:1+common.HashLength], hash[:])
+	binary.BigEndian.PutUint64(key[1+common.HashLength:1+common.HashLength+8], blockNum)
+	binary.BigEndian.PutUint32(key[1+common.HashLength+8:], txIndex)
+	return key
+}
+
+func decodeChainIndexETLKey(key []byte) (byte, common.Hash, uint64, uint32, error) {
+	var hash common.Hash
+	if len(key) != 1+common.HashLength+8 && len(key) != 1+common.HashLength+8+4 {
+		return 0, hash, 0, 0, fmt.Errorf("snapshots: malformed chain-index ETL key length %d", len(key))
+	}
+	tag := key[0]
+	copy(hash[:], key[1:1+common.HashLength])
+	blockNum := binary.BigEndian.Uint64(key[1+common.HashLength : 1+common.HashLength+8])
+	var txIndex uint32
+	switch tag {
+	case chainIndexETLBlockTag:
+		if len(key) != 1+common.HashLength+8 {
+			return 0, hash, 0, 0, fmt.Errorf("snapshots: malformed chain-index block ETL key length %d", len(key))
+		}
+	case chainIndexETLTxTag:
+		if len(key) != 1+common.HashLength+8+4 {
+			return 0, hash, 0, 0, fmt.Errorf("snapshots: malformed chain-index tx ETL key length %d", len(key))
+		}
+		txIndex = binary.BigEndian.Uint32(key[1+common.HashLength+8:])
+	default:
+		return 0, hash, 0, 0, fmt.Errorf("snapshots: unknown chain-index ETL tag %d", tag)
+	}
+	return tag, hash, blockNum, txIndex, nil
 }
 
 func sortChainIndexEntries(blocks []chainIndexBlockEntry, txs []chainIndexTxEntry) {

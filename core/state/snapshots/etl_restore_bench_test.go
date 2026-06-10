@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -19,6 +20,7 @@ func BenchmarkSnapshotRestoreETL(b *testing.B) {
 	latestRows := makeLatestRestoreBenchRows(256)
 	historyChanges, historyRanges := makeStateHistoryRestoreBenchRows(256)
 	freezerRows := makeChainFreezerIndexRestoreBenchRows(b, 256)
+	chainIndexBlocks, chainIndexTxs := makeChainIndexBuildBenchRows(256)
 
 	b.Run("latest/direct_unordered", func(b *testing.B) {
 		benchmarkRestoreWrites(b, false, func(w ethdb.KeyValueWriter, _ string) error {
@@ -78,6 +80,13 @@ func BenchmarkSnapshotRestoreETL(b *testing.B) {
 			_, err = collector.Load(w)
 			return err
 		})
+	})
+
+	b.Run("chain_index_build/direct_in_memory", func(b *testing.B) {
+		benchmarkChainIndexBuild(b, false, chainIndexBlocks, chainIndexTxs)
+	})
+	b.Run("chain_index_build/sorted_etl", func(b *testing.B) {
+		benchmarkChainIndexBuild(b, true, chainIndexBlocks, chainIndexTxs)
 	})
 }
 
@@ -291,6 +300,79 @@ func writeChainFreezerIndexRestoreBenchRows(w ethdb.KeyValueWriter, rows []chain
 		}
 	}
 	return nil
+}
+
+func makeChainIndexBuildBenchRows(n int) ([]chainIndexBlockEntry, []chainIndexTxEntry) {
+	blocks := make([]chainIndexBlockEntry, 0, n)
+	txs := make([]chainIndexTxEntry, 0, n*2)
+	for i := 0; i < n; i++ {
+		blockNum := uint64(i)
+		blocks = append(blocks, chainIndexBlockEntry{
+			hash:     common.BytesToHash([]byte(fmt.Sprintf("chain-index-block-%04d", i))),
+			blockNum: blockNum,
+		})
+		txs = append(txs, chainIndexTxEntry{
+			hash:     common.BytesToHash([]byte(fmt.Sprintf("chain-index-tx-%04d-a", i))),
+			blockNum: blockNum,
+			txIndex:  0,
+		})
+		txs = append(txs, chainIndexTxEntry{
+			hash:     common.BytesToHash([]byte(fmt.Sprintf("chain-index-tx-%04d-b", i))),
+			blockNum: blockNum,
+			txIndex:  1,
+		})
+	}
+	return blocks, txs
+}
+
+func benchmarkChainIndexBuild(b *testing.B, useETL bool, blocks []chainIndexBlockEntry, txs []chainIndexTxEntry) {
+	b.Helper()
+	b.ReportAllocs()
+	baseDir := b.TempDir()
+	for i := 0; i < b.N; i++ {
+		ref := SegmentRef{
+			Dataset:   SegmentDatasetChainFreezer,
+			Kind:      SegmentChainIndex,
+			FromTxNum: 0,
+			ToTxNum:   uint64(len(blocks) - 1),
+			Path:      fmt.Sprintf("chain/index-bench-%d.idx", i),
+		}
+		if useETL {
+			if err := benchmarkChainIndexBuildETL(baseDir, ref, blocks, txs); err != nil {
+				b.Fatal(err)
+			}
+			continue
+		}
+		blockCopy := append([]chainIndexBlockEntry(nil), blocks...)
+		txCopy := append([]chainIndexTxEntry(nil), txs...)
+		sortChainIndexEntries(blockCopy, txCopy)
+		if _, err := writeChainIndexSegment(baseDir, ref, blockCopy, txCopy); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkChainIndexBuildETL(baseDir string, ref SegmentRef, blocks []chainIndexBlockEntry, txs []chainIndexTxEntry) error {
+	collector, err := etl.NewCollector(etl.Options{
+		TempDir:     filepath.Join(baseDir, "etl"),
+		BufferLimit: 32 << 10,
+	})
+	if err != nil {
+		return err
+	}
+	defer collector.Close()
+	for _, block := range blocks {
+		if err := collector.Put(chainIndexBlockETLKey(block.hash, block.blockNum), nil); err != nil {
+			return err
+		}
+	}
+	for _, tx := range txs {
+		if err := collector.Put(chainIndexTxETLKey(tx.hash, tx.blockNum, tx.txIndex), nil); err != nil {
+			return err
+		}
+	}
+	_, err = writeChainIndexSegmentFromETL(baseDir, ref, collector, uint64(len(blocks)))
+	return err
 }
 
 func benchmarkAddress(i int) common.Address {

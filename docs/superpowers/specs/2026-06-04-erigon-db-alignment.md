@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, and chain-freezer hot lookup snapshot restore now load through the collector; backfill/index callers still need migration and benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, and chain-index sidecar build now use the collector; backfill/derived-index callers still need migration and benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -605,10 +605,17 @@ Status:
   collector and loads the resulting rawdb writes in physical key order.
   Regression coverage proves the previous direct block/tx/info order would be
   unsorted and the final restore stream is sorted.
+- `snapshots.BuildChainIndexSegmentFromChainFreezerSegment` now builds
+  chain-freezer `chain-index` sidecars through the collector and streams the
+  sorted block-hash and transaction-hash tables into the existing binary
+  sidecar format. `BuildChainIndexSegmentFromChainFreezerSegmentWithOptions`
+  and `Aggregator.BuildChainFreezerWithOptions` expose the same ETL scratch
+  controls for large freezer snapshot builds.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
-  chain-freezer lookup restore. The first smoke result is recorded in
-  `docs/dev/etl-collector-benchmark-results-2026-06-10.md`.
+  chain-freezer lookup restore, and now includes chain-index sidecar build
+  direct-memory vs sorted-ETL sub-benchmarks. The first smoke result is
+  recorded in `docs/dev/etl-collector-benchmark-results-2026-06-10.md`.
 - Snapshot restore APIs now expose `RestoreETLOptions` so callers can control
   the collector temp directory, buffer limit, and batch size for large
   bootstrap installs.
@@ -616,9 +623,8 @@ Status:
 
 Remaining:
 
-- Migrate history backfill, chain-index build, and derived RPC index build
-  paths onto the collector where benchmarks show lower Pebble write
-  amplification.
+- Migrate history backfill and derived RPC index build paths onto the collector
+  where benchmarks show lower Pebble write amplification.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

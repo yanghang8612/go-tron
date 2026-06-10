@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
 func TestChainIndexSegmentBuildVerifyLookup(t *testing.T) {
@@ -80,6 +81,66 @@ func TestManifestRejectsChainIndexWithoutFreezer(t *testing.T) {
 	manifest := NewManifestForChain(0, 0, []SegmentRef{ref}, chainFreezerTestIdentity())
 	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "no matching chain-freezer") {
 		t.Fatalf("manifest.Validate error = %v, want missing chain-freezer companion", err)
+	}
+}
+
+func TestBuildChainIndexSegmentWithOptionsUsesETLScratch(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, _, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: txInfoRaw},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	etlTemp := filepath.Join(root, "etl-scratch")
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(snapshotDir, freezerRef, "", RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegmentWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
+	}
+	if err := CheckChainIndexSegment(snapshotDir, indexRef); err != nil {
+		t.Fatalf("CheckChainIndexSegment: %v", err)
+	}
+	if err := VerifyChainIndexSegmentAgainstChainFreezer(snapshotDir, indexRef, freezerRef); err != nil {
+		t.Fatalf("VerifyChainIndexSegmentAgainstChainFreezer: %v", err)
+	}
+}
+
+func TestWriteChainIndexSegmentFromETLRejectsDuplicateBlockHashes(t *testing.T) {
+	collector, err := etl.NewCollector(etl.Options{TempDir: t.TempDir(), BufferLimit: 1})
+	if err != nil {
+		t.Fatalf("NewCollector: %v", err)
+	}
+	defer collector.Close()
+	hash := common.Hash{0xaa}
+	if err := collector.Put(chainIndexBlockETLKey(hash, 1), nil); err != nil {
+		t.Fatalf("collector.Put block 1: %v", err)
+	}
+	if err := collector.Put(chainIndexBlockETLKey(hash, 2), nil); err != nil {
+		t.Fatalf("collector.Put block 2: %v", err)
+	}
+	_, err = writeChainIndexSegmentFromETL(t.TempDir(), SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainIndex,
+		FromTxNum: 1,
+		ToTxNum:   2,
+		Path:      "chain/index-1-2.idx",
+	}, collector, 2)
+	if err == nil || !strings.Contains(err.Error(), "duplicate chain-index block hash") {
+		t.Fatalf("writeChainIndexSegmentFromETL error = %v, want duplicate hash rejection", err)
 	}
 }
 

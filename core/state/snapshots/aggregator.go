@@ -26,6 +26,10 @@ type AggregatorBuildOptions struct {
 	KVDomains []kvdomains.KVDomain
 }
 
+type AggregatorBuildChainFreezerOptions struct {
+	ETL RestoreETLOptions
+}
+
 type AggregatorBuildResult struct {
 	Manifest *Manifest
 	Segments []SegmentRef
@@ -142,6 +146,10 @@ func (a *Aggregator) BuildLatest(db AggregatorDB, opts AggregatorBuildOptions) (
 }
 
 func (a *Aggregator) BuildChainFreezer(reader rawdb.AncientReader, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	return a.BuildChainFreezerWithOptions(reader, fromBlock, toBlock, AggregatorBuildChainFreezerOptions{})
+}
+
+func (a *Aggregator) BuildChainFreezerWithOptions(reader rawdb.AncientReader, fromBlock, toBlock uint64, opts AggregatorBuildChainFreezerOptions) (*AggregatorBuildResult, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
@@ -153,7 +161,7 @@ func (a *Aggregator) BuildChainFreezer(reader rawdb.AncientReader, fromBlock, to
 	if err != nil {
 		return nil, err
 	}
-	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(a.dir, freezerRef, ChainIndexSegmentPath(fromBlock, toBlock))
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(a.dir, freezerRef, ChainIndexSegmentPath(fromBlock, toBlock), opts.ETL)
 	if err != nil {
 		return nil, err
 	}
