@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -239,6 +241,130 @@ func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
 	}
 }
 
+func TestRebuildAccountTracesFromBlockBalanceTraces(t *testing.T) {
+	db := NewMemoryChainDB()
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 2)
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	if err := WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := WriteBlock(db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	a := derivedRebuildAddress(0xa0)
+	b := derivedRebuildAddress(0xb0)
+	c := derivedRebuildAddress(0xc0)
+	WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block1, infos1,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, a, 100),
+			derivedRebuildBalanceOp(1, b, 200),
+		},
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, a, -30),
+		},
+	))
+	WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, a, 5),
+			derivedRebuildBalanceOp(1, b, -50),
+			derivedRebuildBalanceOp(2, c, 7),
+		},
+	))
+
+	result, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 1, 2, etl.Options{
+		TempDir:     t.TempDir(),
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("RebuildAccountTracesFromBlockBalanceTraces: %v", err)
+	}
+	if result.BlocksScanned != 2 || result.BlocksWithBalanceTrace != 2 ||
+		result.TransactionsScanned != 3 || result.OperationsApplied != 6 ||
+		result.AccountTraceRows != 5 {
+		t.Fatalf("result = %+v, want 2 blocks, 3 txs, 6 ops, 5 account rows", result)
+	}
+	if result.ETL.SpilledRuns == 0 {
+		t.Fatalf("ETL spilled runs = %d, want forced spill", result.ETL.SpilledRuns)
+	}
+	for _, tc := range []struct {
+		addr  []byte
+		block int64
+		want  int64
+	}{
+		{a, 1, 70},
+		{b, 1, 200},
+		{a, 2, 75},
+		{b, 2, 150},
+		{c, 2, 7},
+	} {
+		got, ok := ReadAccountTrace(db, tc.addr, tc.block)
+		if !ok || got != tc.want {
+			t.Fatalf("ReadAccountTrace addr=%x block=%d = %d/%v, want %d/true", tc.addr, tc.block, got, ok, tc.want)
+		}
+	}
+}
+
+func TestRebuildAccountTracesUsesExistingBaselineForPartialRange(t *testing.T) {
+	db := NewMemoryChainDB()
+	block2, infos2 := derivedRebuildTestBlock(t, 2, 1)
+	if err := WriteBlock(db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	a := derivedRebuildAddress(0xa1)
+	if err := WriteAccountTrace(db, a, 1, 70); err != nil {
+		t.Fatalf("WriteAccountTrace baseline: %v", err)
+	}
+	WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, a, 5),
+		},
+	))
+
+	result, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 2, 2, etl.Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("RebuildAccountTracesFromBlockBalanceTraces partial: %v", err)
+	}
+	if result.AccountTraceRows != 1 {
+		t.Fatalf("AccountTraceRows = %d, want 1", result.AccountTraceRows)
+	}
+	got, ok := ReadAccountTrace(db, a, 2)
+	if !ok || got != 75 {
+		t.Fatalf("ReadAccountTrace partial = %d/%v, want 75/true", got, ok)
+	}
+}
+
+func TestRebuildAccountTracesRejectsBadInputs(t *testing.T) {
+	db := NewMemoryChainDB()
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(nil, db, db, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil chain accepted")
+	}
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, nil, db, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil reader accepted")
+	}
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, nil, 1, 1, etl.Options{}); err == nil {
+		t.Fatal("nil writer accepted")
+	}
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 2, 1, etl.Options{}); err == nil || !strings.Contains(err.Error(), "inverted") {
+		t.Fatalf("inverted range err = %v, want inverted", err)
+	}
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 9, 9, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "missing block 9") {
+		t.Fatalf("missing block err = %v, want missing block 9", err)
+	}
+
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block, infos,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, []byte{0x41}, 1),
+		},
+	))
+	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "malformed balance trace address") {
+		t.Fatalf("malformed address err = %v, want malformed address", err)
+	}
+}
+
 func derivedRebuildTestBlock(t *testing.T, number uint64, txCount int) (*types.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txs := make([]*corepb.Transaction, 0, txCount)
@@ -276,6 +402,47 @@ func derivedRebuildTestBlock(t *testing.T, number uint64, txCount int) (*types.B
 		}
 	}
 	return block, infos
+}
+
+func derivedRebuildAddress(seed byte) []byte {
+	out := make([]byte, common.AddressLength)
+	out[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(out); i++ {
+		out[i] = seed + byte(i)
+	}
+	return out
+}
+
+func derivedRebuildBalanceOp(id int64, addr []byte, amount int64) *contractpb.TransactionBalanceTrace_Operation {
+	return &contractpb.TransactionBalanceTrace_Operation{
+		OperationIdentifier: id,
+		Address:             append([]byte(nil), addr...),
+		Amount:              amount,
+	}
+}
+
+func derivedRebuildBalanceTrace(block *types.Block, infos []*corepb.TransactionInfo, opSets ...[]*contractpb.TransactionBalanceTrace_Operation) *contractpb.BlockBalanceTrace {
+	traces := make([]*contractpb.TransactionBalanceTrace, 0, len(opSets))
+	for i, ops := range opSets {
+		txID := []byte(nil)
+		if i < len(infos) {
+			txID = append([]byte(nil), infos[i].Id...)
+		}
+		traces = append(traces, &contractpb.TransactionBalanceTrace{
+			TransactionIdentifier: txID,
+			Operation:             ops,
+			Type:                  "TransferContract",
+			Status:                "SUCCESS",
+		})
+	}
+	return &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block.Hash().Bytes()...),
+			Number: int64(block.Number()),
+		},
+		Timestamp:               int64(30_000 + block.Number()),
+		TransactionBalanceTrace: traces,
+	}
 }
 
 func sectionBloomBitSetHas(bitset []byte, bit uint64) bool {

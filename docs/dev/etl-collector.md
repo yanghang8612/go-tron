@@ -8,7 +8,9 @@ hash-order sorting. `rawdb.DerivedIndexCollector` provides the typed bulk-load
 entry point for transaction lookup/info, account trace, balance trace, and
 section bloom backfills. Transaction lookup/info and section-bloom rebuilds
 from retained chain data now use that collector and are exposed through `gtron
-db`. Remaining account/balance trace backfill commands still need deliberate
+db`. Account trace repair from retained block-balance trace rows also uses the
+collector and is exposed through `gtron db rebuild-account-traces`. Remaining
+block-balance-trace population/backfill commands still need deliberate
 migration and path-specific benchmarks. Wallet HTTP/gRPC account and block
 balance trace read paths can consume the rows once execution or backfill has
 populated them.
@@ -80,6 +82,13 @@ writes to collector-backed loads.
   retained account/balance trace rows through Wallet HTTP/gRPC APIs. They are
   read paths only; account/balance trace population and backfill commands remain
   migration targets below.
+- `rawdb.RebuildAccountTracesFromBlockBalanceTraces` rebuilds account-trace
+  rows from retained `BlockBalanceTrace` operation diffs through
+  `DerivedIndexCollector`.
+- `gtron db rebuild-account-traces` exposes that account-trace repair command
+  to operators. It opens the same hot Pebble plus read-only ancient freezer
+  stack as the other `db` rebuild commands and supports the shared block-range
+  and ETL scratch-space flags.
 
 ## Benchmarking
 
@@ -181,7 +190,7 @@ bloom.
 ## Migration Targets
 
 - event-log sidecar builders
-- commands that rebuild account/balance trace indexes from retained execution
+- commands that populate or rebuild block-balance traces from execution/replay
   data
 - any future RPC index build where input order follows block execution rather
   than target DB key order

@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/urfave/cli/v2"
 )
 
@@ -121,6 +123,86 @@ func TestDBRebuildSectionBloomsCmd(t *testing.T) {
 	}
 }
 
+func TestDBRebuildAccountTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	block2 := rawdb.ReadBlock(chainDB, 2)
+	if block1 == nil || block2 == nil {
+		t.Fatal("seeded blocks missing")
+	}
+	a := dbRebuildTraceAddress(0xa0)
+	b := dbRebuildTraceAddress(0xb0)
+	rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[0].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, 100),
+					dbRebuildBalanceOp(1, b, 50),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[1].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, -10),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+		},
+	})
+	rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block2),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
+			{
+				TransactionIdentifier: append([]byte(nil), txInfos[2].Id...),
+				Operation: []*contractpb.TransactionBalanceTrace_Operation{
+					dbRebuildBalanceOp(0, a, 3),
+				},
+				Type:   "TransferContract",
+				Status: "SUCCESS",
+			},
+		},
+	})
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.etl.tempdir", filepath.Join(t.TempDir(), "etl"),
+		"--db.etl.buffer", "1",
+	})
+	if err := dbRebuildAccountTracesCmd(ctx); err != nil {
+		t.Fatalf("dbRebuildAccountTracesCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	for _, tc := range []struct {
+		addr  []byte
+		block int64
+		want  int64
+	}{
+		{a, 1, 90},
+		{b, 1, 50},
+		{a, 2, 93},
+	} {
+		got, ok := rawdb.ReadAccountTrace(reopened, tc.addr, tc.block)
+		if !ok || got != tc.want {
+			t.Fatalf("ReadAccountTrace addr=%x block=%d = %d/%v, want %d/true", tc.addr, tc.block, got, ok, tc.want)
+		}
+	}
+}
+
 func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (ethdb.KeyValueStore, []*corepb.TransactionInfo) {
 	t.Helper()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -186,6 +268,30 @@ func dbRebuildTxIndexBlock(t *testing.T, number uint64, txCount int) (*coretypes
 		Transactions: txs,
 	})
 	return block, infos
+}
+
+func dbRebuildTraceAddress(seed byte) []byte {
+	out := make([]byte, common.AddressLength)
+	out[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(out); i++ {
+		out[i] = seed + byte(i)
+	}
+	return out
+}
+
+func dbRebuildBalanceOp(id int64, addr []byte, amount int64) *contractpb.TransactionBalanceTrace_Operation {
+	return &contractpb.TransactionBalanceTrace_Operation{
+		OperationIdentifier: id,
+		Address:             append([]byte(nil), addr...),
+		Amount:              amount,
+	}
+}
+
+func dbRebuildBlockBalanceID(block *coretypes.Block) *contractpb.BlockBalanceTrace_BlockIdentifier {
+	return &contractpb.BlockBalanceTrace_BlockIdentifier{
+		Hash:   append([]byte(nil), block.Hash().Bytes()...),
+		Number: int64(block.Number()),
+	}
 }
 
 func makeDBTestContext(t *testing.T, argv []string) *cli.Context {

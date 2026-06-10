@@ -1,13 +1,17 @@
 package rawdb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 type RebuildTransactionDerivedIndexesResult struct {
@@ -31,6 +35,22 @@ type RebuildSectionBloomsResult struct {
 	BloomBitsIndexed           uint64
 	SectionBloomRows           uint64
 	ETL                        etl.Stats
+}
+
+type RebuildAccountTracesResult struct {
+	FromBlock              uint64
+	ToBlock                uint64
+	BlocksScanned          uint64
+	BlocksWithBalanceTrace uint64
+	TransactionsScanned    uint64
+	OperationsApplied      uint64
+	AccountTraceRows       uint64
+	ETL                    etl.Stats
+}
+
+type accountTraceRebuildReader interface {
+	ethdb.KeyValueReader
+	ethdb.Iteratee
 }
 
 // RebuildTransactionDerivedIndexesFromBlocks rebuilds transaction lookup/info
@@ -87,6 +107,121 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 					return nil, err
 				}
 				result.TransactionInfosIndexed++
+			}
+		}
+		if blockNum == toBlock {
+			break
+		}
+	}
+	stats, err := collector.Load(writer)
+	if err != nil {
+		return nil, err
+	}
+	result.ETL = stats
+	return result, nil
+}
+
+// RebuildAccountTracesFromBlockBalanceTraces rebuilds AccountTrace rows from
+// retained BlockBalanceTrace operation diffs. It does not synthesize missing
+// BlockBalanceTrace rows; callers that do not have them must re-execute blocks
+// with history-balance capture enabled.
+func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader accountTraceRebuildReader, writer ethdb.KeyValueWriter, fromBlock, toBlock uint64, opts etl.Options) (*RebuildAccountTracesResult, error) {
+	if chain == nil {
+		return nil, errors.New("rawdb: nil chain db")
+	}
+	if traceReader == nil {
+		return nil, errors.New("rawdb: nil balance trace reader")
+	}
+	if writer == nil {
+		return nil, errors.New("rawdb: nil account trace writer")
+	}
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("rawdb: inverted account trace rebuild range [%d,%d]", fromBlock, toBlock)
+	}
+	if toBlock > math.MaxInt64 {
+		return nil, fmt.Errorf("rawdb: account trace rebuild to-block %d exceeds int64 block number range", toBlock)
+	}
+	collector, err := NewDerivedIndexCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer collector.Close()
+
+	result := &RebuildAccountTracesResult{
+		FromBlock: fromBlock,
+		ToBlock:   toBlock,
+	}
+	balances := make(map[string]int64)
+	loadBalance := func(addr []byte) (int64, error) {
+		key := string(addr)
+		if bal, ok := balances[key]; ok {
+			return bal, nil
+		}
+		if fromBlock == 0 {
+			balances[key] = 0
+			return 0, nil
+		}
+		_, bal, ok, err := ReadAccountTraceAtOrBefore(traceReader, addr, int64(fromBlock-1))
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			bal = 0
+		}
+		balances[key] = bal
+		return bal, nil
+	}
+
+	for blockNum := fromBlock; ; blockNum++ {
+		block := ReadBlock(chain, blockNum)
+		if block == nil {
+			return nil, fmt.Errorf("rawdb: missing block %d during account trace rebuild", blockNum)
+		}
+		result.BlocksScanned++
+		trace := ReadBlockBalanceTrace(traceReader, int64(blockNum))
+		if trace != nil {
+			if err := validateBlockBalanceTraceForRebuild(blockNum, block.Hash().Bytes(), trace); err != nil {
+				return nil, err
+			}
+			result.BlocksWithBalanceTrace++
+			touched := make(map[string][]byte)
+			for _, txTrace := range trace.GetTransactionBalanceTrace() {
+				if txTrace == nil {
+					continue
+				}
+				result.TransactionsScanned++
+				for _, op := range txTrace.GetOperation() {
+					if op == nil {
+						continue
+					}
+					addr := op.GetAddress()
+					if len(addr) != common.AddressLength {
+						return nil, fmt.Errorf("rawdb: malformed balance trace address length %d at block %d", len(addr), blockNum)
+					}
+					bal, err := loadBalance(addr)
+					if err != nil {
+						return nil, err
+					}
+					next, err := addBalanceTraceAmount(bal, op.GetAmount(), blockNum, addr)
+					if err != nil {
+						return nil, err
+					}
+					key := string(addr)
+					balances[key] = next
+					touched[key] = append([]byte(nil), addr...)
+					result.OperationsApplied++
+				}
+			}
+			keys := make([]string, 0, len(touched))
+			for key := range touched {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if err := collector.PutAccountTrace(touched[key], int64(blockNum), balances[key]); err != nil {
+					return nil, err
+				}
+				result.AccountTraceRows++
 			}
 		}
 		if blockNum == toBlock {
@@ -185,6 +320,40 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 	}
 	result.ETL = stats
 	return result, nil
+}
+
+func validateBlockBalanceTraceForRebuild(blockNum uint64, blockHash []byte, trace *contractpb.BlockBalanceTrace) error {
+	id := trace.GetBlockIdentifier()
+	if id == nil {
+		return nil
+	}
+	if id.GetNumber() != int64(blockNum) {
+		return fmt.Errorf("rawdb: block balance trace payload number %d does not match key %d", id.GetNumber(), blockNum)
+	}
+	if len(id.GetHash()) == 0 {
+		return nil
+	}
+	if len(id.GetHash()) != common.HashLength {
+		return fmt.Errorf("rawdb: block balance trace payload hash length %d at block %d", len(id.GetHash()), blockNum)
+	}
+	if !bytes.Equal(id.GetHash(), blockHash) {
+		return fmt.Errorf("rawdb: block balance trace payload hash does not match canonical block %d", blockNum)
+	}
+	return nil
+}
+
+func addBalanceTraceAmount(balance, amount int64, blockNum uint64, addr []byte) (int64, error) {
+	if amount > 0 && balance > math.MaxInt64-amount {
+		return 0, fmt.Errorf("rawdb: account trace balance overflow at block %d account %x", blockNum, addr)
+	}
+	if amount == math.MinInt64 || (amount < 0 && balance < -amount) {
+		return 0, fmt.Errorf("rawdb: negative account trace balance at block %d account %x", blockNum, addr)
+	}
+	next := balance + amount
+	if next < 0 {
+		return 0, fmt.Errorf("rawdb: negative account trace balance at block %d account %x", blockNum, addr)
+	}
+	return next, nil
 }
 
 type sectionBloomAccumulator struct {

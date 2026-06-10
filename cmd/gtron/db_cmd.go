@@ -75,6 +75,24 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbRebuildSectionBloomsCmd,
 			},
+			{
+				Name:  "rebuild-account-traces",
+				Usage: "Rebuild account balance trace rows from retained BlockBalanceTrace rows",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					dbFromBlockFlag,
+					dbToBlockFlag,
+					dbETLTempDirFlag,
+					dbETLBufferMiBFlag,
+					dbETLBatchMiBFlag,
+				},
+				Action: dbRebuildAccountTracesCmd,
+			},
 		},
 	}
 }
@@ -158,6 +176,48 @@ func dbRebuildSectionBloomsCmd(ctx *cli.Context) error {
 		result.BloomItemsIndexed,
 		result.BloomBitsIndexed,
 		result.SectionBloomRows,
+		result.ETL.Applied,
+		result.ETL.SpilledRuns,
+	)
+	return nil
+}
+
+func dbRebuildAccountTracesCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	fromBlock := ctx.Uint64("db.from-block")
+	toBlock, err := dbRebuildToBlock(ctx, chainDB)
+	if err != nil {
+		return err
+	}
+	opts, err := dbETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := rawdb.RebuildAccountTracesFromBlockBalanceTraces(chainDB, chainDB, db, fromBlock, toBlock, opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Account traces rebuilt: blocks=[%d,%d] scanned=%d balanceTraceBlocks=%d txTraces=%d operations=%d accountTraceRows=%d etlApplied=%d etlRuns=%d\n",
+		result.FromBlock,
+		result.ToBlock,
+		result.BlocksScanned,
+		result.BlocksWithBalanceTrace,
+		result.TransactionsScanned,
+		result.OperationsApplied,
+		result.AccountTraceRows,
 		result.ETL.Applied,
 		result.ETL.SpilledRuns,
 	)

@@ -645,6 +645,12 @@ Status:
   block has no exact account trace, the response reports the newest trace block
   at or before the requested height; if no prior row exists, it returns the
   requested block identifier and zero balance.
+- `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
+  `gtron db rebuild-account-traces` now repair account-trace rows from retained
+  java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
+  Partial ranges can use existing prior account-trace rows as their baseline;
+  full rebuilds should start at genesis so cumulative balance diffs are
+  self-contained.
 - `BenchmarkSnapshotRestoreETL` now compares direct unordered restore writes
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore, and now includes chain-index sidecar build
@@ -664,11 +670,13 @@ Status:
 Remaining:
 
 - Migrate history backfill commands and the remaining derived RPC index build
-  paths, especially account/balance trace rebuilds and broader event/log cold
-  accessors, onto the collector-backed helpers where benchmarks show lower
-  Pebble write amplification. The account/balance trace read APIs are wired,
-  but execution-time population, historical backfill, and operator rebuild
-  commands are still needed before the feature is archive-complete.
+  paths, especially block-balance-trace population/re-execution rebuilds and
+  broader event/log cold accessors, onto the collector-backed helpers where
+  benchmarks show lower Pebble write amplification. The account/balance trace
+  read APIs are wired and account traces can now be repaired from retained
+  block-balance traces, but execution-time population and historical
+  block-balance-trace backfill are still needed before the feature is
+  archive-complete.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 
