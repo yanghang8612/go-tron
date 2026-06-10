@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain snapshot restore now loads through the collector; history restore/backfill/index callers still need migration and benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain and state-domain history snapshot restore now load through the collector; backfill/index callers still need migration and benchmark evidence. |
 
 ## Important Non-Alignments By Design
 
@@ -595,13 +595,18 @@ Status:
   segments through one collector and loads the resulting rawdb writes in
   physical key order. Regression coverage forces manifest segment order to
   differ from physical key order and asserts the final restore stream is sorted.
+- `snapshots.Manager.RestoreStateDomainHistory` now restores StateDomainChange
+  hot rows, inverse indexes, and StateTxRange rows through one collector and
+  loads the resulting rawdb writes in physical key order. Regression coverage
+  proves the previous direct row/index/tx-range order would be unsorted and the
+  final restore stream is sorted.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
 
-- Migrate state-domain history restore, history backfill, chain-index build,
-  and derived RPC index build paths onto the collector where benchmarks show
-  lower Pebble write amplification.
+- Migrate history backfill, chain-index build, and derived RPC index build
+  paths onto the collector where benchmarks show lower Pebble write
+  amplification.
 - Add path-specific benchmark samples comparing direct unordered writes versus
   collector loads.
 

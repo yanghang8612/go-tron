@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
 
@@ -395,12 +396,19 @@ func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, 
 		FromTxNum: fromTxNum,
 		ToTxNum:   toTxNum,
 	}
+	collector, err := etl.NewCollector(etl.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("snapshots: create state-domain history restore ETL collector: %w", err)
+	}
+	defer collector.Close()
+	restoreWriter := ethdb.KeyValueWriter(collector)
+
 	txRanges := make(map[uint64]*rawdb.StateTxRange)
 	if err := m.IterateStateDomainChanges(fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
-		if err := cfg.WriteHotHistoryRow(db, change); err != nil {
+		if err := cfg.WriteHotHistoryRow(restoreWriter, change); err != nil {
 			return false, err
 		}
-		if err := cfg.WriteHotHistoryIndex(db, change); err != nil {
+		if err := cfg.WriteHotHistoryIndex(restoreWriter, change); err != nil {
 			return false, err
 		}
 		if err := mergeStateTxRangeFromChange(txRanges, change); err != nil {
@@ -422,10 +430,13 @@ func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, 
 	sort.Slice(blockNums, func(i, j int) bool { return blockNums[i] < blockNums[j] })
 	for _, blockNum := range blockNums {
 		row := txRanges[blockNum]
-		if err := cfg.WriteHotHistoryTxRange(db, row.BlockNum, row.BlockHash, row.BeginTxNum, row.EndTxNum); err != nil {
+		if err := cfg.WriteHotHistoryTxRange(restoreWriter, row.BlockNum, row.BlockHash, row.BeginTxNum, row.EndTxNum); err != nil {
 			return nil, err
 		}
 		result.TxRangesRestored++
+	}
+	if _, err := collector.Load(db); err != nil {
+		return nil, fmt.Errorf("snapshots: load state-domain history restore ETL collector: %w", err)
 	}
 	return result, nil
 }

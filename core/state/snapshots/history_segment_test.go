@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -225,6 +226,101 @@ func TestManagerIteratesStateDomainChangesByAccessorKey(t *testing.T) {
 	}
 }
 
+func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5a}, common.AccountIDLength)...))
+	changes := []*rawdb.StateDomainChange{
+		{
+			BlockNum:   20,
+			BlockHash:  common.Hash{0x20},
+			TxNum:      100,
+			Seq:        1,
+			FlatDomain: rawdb.StateFlatDomainKVLatest,
+			Owner:      owner,
+			Generation: 4,
+			Domain:     kvdomains.ContractStorage,
+			Key:        []byte("slot/a"),
+			PrevExists: true,
+			Prev:       []byte("old-a"),
+			NextExists: true,
+			Next:       []byte("new-a"),
+		},
+		{
+			BlockNum:   21,
+			BlockHash:  common.Hash{0x21},
+			TxNum:      101,
+			Seq:        1,
+			FlatDomain: rawdb.StateFlatDomainKVGeneration,
+			Owner:      owner,
+			PrevExists: true,
+			Prev:       rawdb.EncodeStateKVGenerationValue(3),
+			NextExists: true,
+			Next:       rawdb.EncodeStateKVGenerationValue(4),
+		},
+	}
+	explicitRanges := []*rawdb.StateTxRange{
+		{BlockNum: 19, BlockHash: common.Hash{0x19}, BeginTxNum: 99, EndTxNum: 99},
+		{BlockNum: 20, BlockHash: common.Hash{0x20}, BeginTxNum: 100, EndTxNum: 100},
+		{BlockNum: 21, BlockHash: common.Hash{0x21}, BeginTxNum: 101, EndTxNum: 101},
+	}
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 99,
+		ToTxNum:   101,
+		Path:      "history/state-domain-change-99-101.seg",
+	}, changes, explicitRanges)
+	if err != nil {
+		t.Fatalf("write binary history: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(99, 101, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+
+	direct := newHistoryRestoreOrderWriter()
+	for _, change := range changes {
+		if err := rawdb.WriteStateDomainChangeRow(direct, change); err != nil {
+			t.Fatalf("capture change row key: %v", err)
+		}
+		if err := rawdb.WriteStateDomainChangeInverseIndex(direct, change); err != nil {
+			t.Fatalf("capture inverse index key: %v", err)
+		}
+	}
+	for _, row := range explicitRanges {
+		if err := rawdb.WriteStateTxRange(direct, row.BlockNum, row.BlockHash, row.BeginTxNum, row.EndTxNum); err != nil {
+			t.Fatalf("capture tx-range key: %v", err)
+		}
+	}
+	if sort.SliceIsSorted(direct.putKeys, func(i, j int) bool {
+		return bytes.Compare(direct.putKeys[i], direct.putKeys[j]) < 0
+	}) {
+		t.Fatal("test setup produced already-sorted direct history restore order")
+	}
+	expectedKeys := append([][]byte(nil), direct.putKeys...)
+	sort.Slice(expectedKeys, func(i, j int) bool {
+		return bytes.Compare(expectedKeys[i], expectedKeys[j]) < 0
+	})
+
+	writer := newHistoryRestoreOrderWriter()
+	result, err := mgr.RestoreStateDomainHistory(writer, 99, 101)
+	if err != nil {
+		t.Fatalf("RestoreStateDomainHistory: %v", err)
+	}
+	if result.ChangesRestored != 2 || result.TxRangesRestored != 3 {
+		t.Fatalf("restore result = %+v, want 2 changes and 3 tx ranges", result)
+	}
+	if !byteSlicesEqual(writer.putKeys, expectedKeys) {
+		t.Fatalf("history restore put keys are not sorted by physical key\n got: %x\nwant: %x", writer.putKeys, expectedKeys)
+	}
+	if len(writer.deleteKeys) != 0 {
+		t.Fatalf("history restore deletes = %d, want 0", len(writer.deleteKeys))
+	}
+}
+
 func TestManagerIteratesStateDomainChangesStopsBeforeReadingRestOfBinaryRange(t *testing.T) {
 	dir := t.TempDir()
 	segRef, idxRef, accessorRef, changes := writeStreamingStopHistorySegment(t, dir, false)
@@ -319,4 +415,23 @@ func corruptStateDomainChangeBinaryRecordFrameLength(t *testing.T, dir string, s
 		t.Fatalf("write corrupted segment: %v", err)
 	}
 	return segRef
+}
+
+type historyRestoreOrderWriter struct {
+	putKeys    [][]byte
+	deleteKeys [][]byte
+}
+
+func newHistoryRestoreOrderWriter() *historyRestoreOrderWriter {
+	return &historyRestoreOrderWriter{}
+}
+
+func (w *historyRestoreOrderWriter) Put(key, value []byte) error {
+	w.putKeys = append(w.putKeys, append([]byte(nil), key...))
+	return nil
+}
+
+func (w *historyRestoreOrderWriter) Delete(key []byte) error {
+	w.deleteKeys = append(w.deleteKeys, append([]byte(nil), key...))
+	return nil
 }

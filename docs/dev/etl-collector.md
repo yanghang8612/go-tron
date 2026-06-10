@@ -1,8 +1,9 @@
 # ETL Collector Runbook
 
 Status: initial production integration. Snapshot latest-domain restore now
-loads through the collector; history restore, backfill, and derived-index
-builders still need deliberate migration and path-specific benchmarks.
+loads through the collector, and state-domain history restore does the same.
+Backfill and derived-index builders still need deliberate migration and
+path-specific benchmarks.
 
 ## Purpose
 
@@ -27,6 +28,9 @@ writes to collector-backed loads.
   generation, code, commitment root/checkpoint, and commitment branch latest
   segments through one collector, then loads the final rawdb key stream in
   physical key order.
+- `snapshots.Manager.RestoreStateDomainHistory` restores StateDomainChange hot
+  rows, inverse indexes, and StateTxRange rows through one collector, then
+  loads the final rawdb key stream in physical key order.
 
 ## Usage
 
@@ -56,7 +60,6 @@ metrics.
 
 ## Migration Targets
 
-- snapshot history restore paths that rebuild many hot rows
 - chain-index and future transaction-info/event-log sidecar builders
 - derived account/balance trace index backfills
 - any future RPC index build where input order follows block execution rather
