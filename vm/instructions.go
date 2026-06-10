@@ -484,12 +484,24 @@ func opBlockHash(pc *uint64, interpreter *Interpreter, contract *Contract, memor
 		num.Clear()
 		return nil, nil
 	}
-	// opBlockHash reads at most 256 blocks back from current. The freezer
-	// margin (default 128 blocks below solidified) is much deeper than this
-	// window, so any block this opcode resolves is guaranteed to still be
-	// hot. Read directly via rawdb.ReadBlockKV to keep `tvm.DB` narrow
-	// (KVReadWriter — also used for contract-state writes) and avoid
-	// widening every TVM call site.
+	// The 256-block lookback window reaches PAST the freezer line: with the
+	// default 128-block margin the slice-3 freezer deletes hot b-<num> rows
+	// older than (solidified - 128), so a bare KV read goes blind for the
+	// older part of the window. Nile stalled at block 16,745,722 exactly
+	// here — JustLink VRF mixes blockhash(head-211) into its seed, the row
+	// was already pruned, BLOCKHASH returned 0 and the proof check
+	// reverted while java-tron (whose RecentBlockStore always covers 256
+	// blocks) succeeded. Production paths hand the VM a store implementing
+	// rawdb.BlockHashReader whose lookup falls through to ancient; the raw
+	// KV read below remains as the fallback for tests with bare memdbs.
+	if bhr, ok := interpreter.tvm.DB.(rawdb.BlockHashReader); ok {
+		if h, found := bhr.BlockHashByNumber(index); found {
+			num.SetBytes(h.Bytes())
+		} else {
+			num.Clear()
+		}
+		return nil, nil
+	}
 	block := rawdb.ReadBlockKV(interpreter.tvm.DB, index)
 	if block == nil {
 		num.Clear()
@@ -530,7 +542,17 @@ func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) && interpreter.tvm.DB != nil {
-		if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
+		// Same freezer hazard as BLOCKHASH: once block 0 is frozen its hot
+		// row is pruned and a bare KV read would silently fall through to
+		// the (wrong) numeric ChainID. Resolve via BlockHashReader first.
+		if bhr, ok := interpreter.tvm.DB.(rawdb.BlockHashReader); ok {
+			if h, found := bhr.BlockHashByNumber(0); found {
+				var v uint256.Int
+				v.SetBytes(h.Bytes())
+				stack.push(&v)
+				return nil, nil
+			}
+		} else if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
 			var v uint256.Int
 			v.SetBytes(genesis.Hash().Bytes())
 			stack.push(&v)

@@ -92,15 +92,29 @@ func readAncient(db *ChainDB, kind string, number uint64) ([]byte, bool) {
 	return data, true
 }
 
+// BlockHashReader is an optional capability interface for the KV store the
+// VM holds (TVM.DB). When the store implements it, BLOCKHASH and the
+// genesis-hash read behind CHAINID resolve block hashes through it instead
+// of a raw blockKey row. The chain injects an implementation whose lookup
+// falls through to the ancient store: the slice-3 freezer deletes hot
+// b-<num> rows past (solidified - margin), and with the default 128-block
+// margin that line sits INSIDE the opcode's 256-block lookback window —
+// a bare KV read goes blind for the older part of the window (and for
+// genesis once block 0 is frozen).
+type BlockHashReader interface {
+	// BlockHashByNumber returns the block hash at the given height and
+	// whether it could be resolved at all.
+	BlockHashByNumber(number uint64) (common.Hash, bool)
+}
+
 // ReadBlockKV is the KV-only variant of ReadBlock, for callers that hold a
-// plain `ethdb.KeyValueReader` and know the block they want is hot (i.e.
-// above the freezer cutoff). The VM's BLOCKHASH opcode is the canonical
-// user: its 256-block lookback window sits above the 128-block freezer
-// margin, so reads here are guaranteed to land in Pebble.
-//
-// Slice-2's audit doc records this as a "intentionally KV-only" call
-// site; if the freezer margin is ever shrunk below 256 this site needs
-// revisiting.
+// plain `ethdb.KeyValueReader`. NOTE: hot b-<num> rows are deleted by the
+// slice-3 freezer once a block is frozen (default margin: 128 blocks below
+// solidified), so this CANNOT serve the full 256-block BLOCKHASH window —
+// production VM paths must hand the TVM a store implementing
+// BlockHashReader instead; this read remains as the fallback for tests
+// that seed a bare memdb. (The Nile 16,745,722 JustLink VRF stall came
+// from relying on this read alone.)
 func ReadBlockKV(db ethdb.KeyValueReader, number uint64) *types.Block {
 	data, err := db.Get(blockKey(number))
 	if err != nil {

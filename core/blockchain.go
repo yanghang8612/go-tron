@@ -10,6 +10,7 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/actuator"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/consensus"
@@ -992,9 +993,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.buffer, bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -2328,4 +2329,35 @@ func (bc *BlockChain) gatherWitnessVotes(statedb *state.StateDB) []dpos.WitnessV
 		}
 	}
 	return result
+}
+
+// vmKVStore augments a block-processing KV view (chain buffer, build buffer,
+// or a validation layer) with the ancient-aware block-hash lookup the VM
+// needs (rawdb.BlockHashReader). The slice-3 freezer prunes hot b-<num> rows
+// past (solidified - margin), which sits inside BLOCKHASH's 256-block window
+// and eventually covers genesis (CHAINID); the fall-through below keeps both
+// opcodes resolving after pruning. Plain KV reads and writes pass through to
+// the wrapped view unchanged.
+type vmKVStore struct {
+	actuator.BufferedKVStore
+	chaindb *rawdb.ChainDB
+}
+
+func (s vmKVStore) BlockHashByNumber(number uint64) (tcommon.Hash, bool) {
+	// Hot path: the wrapped view (buffer layers fall through to Pebble),
+	// covering everything the freezer has not pruned, including blocks of
+	// an in-flight insert batch that only exist in the buffer.
+	if blk := rawdb.ReadBlockKV(s.BufferedKVStore, number); blk != nil {
+		return blk.Hash(), true
+	}
+	// Frozen path: ancient-first ReadBlock (the hot row is already gone).
+	if blk := rawdb.ReadBlock(s.chaindb, number); blk != nil {
+		return blk.Hash(), true
+	}
+	return tcommon.Hash{}, false
+}
+
+// vmKV wraps a processing view for handoff to the actuator/VM layer.
+func (bc *BlockChain) vmKV(view actuator.BufferedKVStore) vmKVStore {
+	return vmKVStore{BufferedKVStore: view, chaindb: bc.chaindb}
 }
