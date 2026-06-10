@@ -55,6 +55,7 @@ type VerifyRestoredSnapshotBoundaryOptions struct {
 
 type RestoreVerifiedSnapshotOptions struct {
 	Boundary VerifyRestoredSnapshotBoundaryOptions
+	ETL      RestoreETLOptions
 }
 
 // VerifyManifestFiles loads the production manifest in dir and verifies every
@@ -101,7 +102,7 @@ func RestoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
-	if err := mgr.RestoreLatest(db, manifest.VisibleTxEnd); err != nil {
+	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
 		return nil, err
 	}
 	reader, ok := db.(ethdb.KeyValueReader)
@@ -121,6 +122,10 @@ func RestoreLatestFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir s
 // pre-install verification and restores state-domain history rows, inverse
 // indexes, and block tx-range rows derivable from the history segments.
 func RestoreHistoryFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, expected ChainIdentity) (*RestoreVerifiedHistoryResult, error) {
+	return RestoreHistoryFromVerifiedManifestWithOptions(db, dir, expected, RestoreVerifiedSnapshotOptions{})
+}
+
+func RestoreHistoryFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir string, expected ChainIdentity, opts RestoreVerifiedSnapshotOptions) (*RestoreVerifiedHistoryResult, error) {
 	report, err := VerifyRemoteManifestFiles(dir, expected)
 	if err != nil {
 		return nil, err
@@ -133,7 +138,7 @@ func RestoreHistoryFromVerifiedManifest(db ethdb.KeyValueWriter, dir string, exp
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
-	restored, err := mgr.RestoreStateDomainHistory(db, manifest.VisibleTxStart, manifest.VisibleTxEnd)
+	restored, err := mgr.RestoreStateDomainHistoryWithOptions(db, manifest.VisibleTxStart, manifest.VisibleTxEnd, opts.ETL)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +171,7 @@ func RestoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 	if manifest == nil {
 		return nil, fmt.Errorf("snapshots: manifest missing after verification")
 	}
-	if err := mgr.RestoreLatest(db, manifest.VisibleTxEnd); err != nil {
+	if err := mgr.RestoreLatestWithOptions(db, manifest.VisibleTxEnd, opts.ETL); err != nil {
 		return nil, err
 	}
 	reader, ok := db.(ethdb.KeyValueReader)
@@ -176,7 +181,7 @@ func RestoreSnapshotFromVerifiedManifestWithOptions(db ethdb.KeyValueWriter, dir
 	if err := VerifyRestoredSnapshotBoundaryWithOptions(reader, mgr, manifest, opts.Boundary); err != nil {
 		return nil, err
 	}
-	restoredHistory, err := mgr.RestoreStateDomainHistory(db, manifest.VisibleTxStart, manifest.VisibleTxEnd)
+	restoredHistory, err := mgr.RestoreStateDomainHistoryWithOptions(db, manifest.VisibleTxStart, manifest.VisibleTxEnd, opts.ETL)
 	if err != nil {
 		return nil, err
 	}

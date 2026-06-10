@@ -213,6 +213,17 @@ func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
 	if len(writer.deleteKeys) != 0 {
 		t.Fatalf("chain-freezer index restore deletes = %d, want 0", len(writer.deleteKeys))
 	}
+
+	etlTemp := filepath.Join(root, "etl-scratch")
+	if _, err := RestoreChainFreezerIndexesWithOptions(newChainFreezerIndexOrderWriter(), snapshotDir, ref, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	}); err != nil {
+		t.Fatalf("RestoreChainFreezerIndexesWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("custom chain-freezer index restore ETL temp dir stat: %v", err)
+	}
 }
 
 func TestRestoreChainFreezerManifestPrefersColdLookupIndexes(t *testing.T) {

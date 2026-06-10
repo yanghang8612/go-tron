@@ -924,6 +924,10 @@ func (m *Manager) IterateCodePrefix(hashPrefix []byte, txNum uint64, fn func(has
 }
 
 func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
+	return m.RestoreLatestWithOptions(db, txNum, RestoreETLOptions{})
+}
+
+func (m *Manager) RestoreLatestWithOptions(db ethdb.KeyValueWriter, txNum uint64, opts RestoreETLOptions) error {
 	manifest, err := m.currentManifest()
 	if err != nil {
 		return err
@@ -931,7 +935,7 @@ func (m *Manager) RestoreLatest(db ethdb.KeyValueWriter, txNum uint64) error {
 	if manifest == nil {
 		return nil
 	}
-	collector, err := etl.NewCollector(etl.Options{})
+	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
 		return fmt.Errorf("snapshots: create latest restore ETL collector: %w", err)
 	}

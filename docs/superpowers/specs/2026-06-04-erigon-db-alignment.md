@@ -609,6 +609,9 @@ Status:
   against sorted collector loads for latest-domain, state-domain history, and
   chain-freezer lookup restore. The first smoke result is recorded in
   `docs/dev/etl-collector-benchmark-results-2026-06-10.md`.
+- Snapshot restore APIs now expose `RestoreETLOptions` so callers can control
+  the collector temp directory, buffer limit, and batch size for large
+  bootstrap installs.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

@@ -28,13 +28,18 @@ writes to collector-backed loads.
 - `snapshots.Manager.RestoreLatest` restores account-latest, account-KV latest,
   generation, code, commitment root/checkpoint, and commitment branch latest
   segments through one collector, then loads the final rawdb key stream in
-  physical key order.
+  physical key order. Use `RestoreLatestWithOptions` to control ETL scratch
+  space.
 - `snapshots.Manager.RestoreStateDomainHistory` restores StateDomainChange hot
   rows, inverse indexes, and StateTxRange rows through one collector, then
-  loads the final rawdb key stream in physical key order.
+  loads the final rawdb key stream in physical key order. Use
+  `RestoreStateDomainHistoryWithOptions` to control ETL scratch space.
 - `snapshots.RestoreChainFreezerIndexes` restores block-hash, transaction-hash,
   and per-transaction-info hot lookup rows through one collector, then loads
-  the final rawdb key stream in physical key order.
+  the final rawdb key stream in physical key order. Use
+  `RestoreChainFreezerIndexesWithOptions`, `RestoreChainFreezerOptions.ETL`, or
+  `RestoreVerifiedSnapshotOptions.ETL` to control ETL scratch space from higher
+  restore entry points.
 
 ## Benchmarking
 
@@ -82,6 +87,21 @@ stats, err := collector.Load(db)
 `Load` is single-use. A caller should create a new collector for each logical
 restore/backfill stage, then record the returned `Stats` next to the stage
 metrics.
+
+Snapshot restore entry points accept `snapshots.RestoreETLOptions`:
+
+```go
+opts := snapshots.RestoreVerifiedSnapshotOptions{
+    ETL: snapshots.RestoreETLOptions{
+        TempDir:     "/path/to/fast-scratch",
+        BufferLimit: 256 << 20,
+        BatchSize:   ethdb.IdealBatchSize,
+    },
+}
+```
+
+Zero values preserve collector defaults. For production bootstrap, point
+`TempDir` at a filesystem with enough free space for temporary sorted runs.
 
 ## Migration Targets
 

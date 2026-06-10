@@ -56,6 +56,7 @@ type RestoreChainFreezerOptions struct {
 	IndexWriter       ethdb.KeyValueWriter
 	ProgressWriter    ethdb.KeyValueWriter
 	PreferColdIndexes bool
+	ETL               RestoreETLOptions
 }
 
 type RestoreChainFreezerSegmentResult struct {
@@ -468,7 +469,7 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 		}
 	}
 	if opts.IndexWriter != nil {
-		indexes, err := RestoreChainFreezerIndexes(opts.IndexWriter, dir, ref)
+		indexes, err := RestoreChainFreezerIndexesWithOptions(opts.IndexWriter, dir, ref, opts.ETL)
 		if err != nil {
 			return result, err
 		}
@@ -493,6 +494,10 @@ func writeChainFreezerStageProgress(db ethdb.KeyValueWriter, blockNum uint64) er
 }
 
 func RestoreChainFreezerIndexes(db ethdb.KeyValueWriter, dir string, ref SegmentRef) (RestoreChainFreezerSegmentResult, error) {
+	return RestoreChainFreezerIndexesWithOptions(db, dir, ref, RestoreETLOptions{})
+}
+
+func RestoreChainFreezerIndexesWithOptions(db ethdb.KeyValueWriter, dir string, ref SegmentRef, opts RestoreETLOptions) (RestoreChainFreezerSegmentResult, error) {
 	var result RestoreChainFreezerSegmentResult
 	if db == nil {
 		return result, errors.New("snapshots: nil chain-freezer index writer")
@@ -500,7 +505,7 @@ func RestoreChainFreezerIndexes(db ethdb.KeyValueWriter, dir string, ref Segment
 	if err := CheckChainFreezerSegment(dir, ref); err != nil {
 		return result, err
 	}
-	collector, err := etl.NewCollector(etl.Options{})
+	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
 		return result, fmt.Errorf("snapshots: create chain-freezer index restore ETL collector: %w", err)
 	}

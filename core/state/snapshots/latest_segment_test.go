@@ -414,6 +414,17 @@ func TestManagerRestoreLatestLoadsThroughSortedETL(t *testing.T) {
 	if len(writer.deleteKeys) != 0 {
 		t.Fatalf("restore deletes = %d, want 0", len(writer.deleteKeys))
 	}
+
+	etlTemp := filepath.Join(t.TempDir(), "etl-scratch")
+	if err := mgr.RestoreLatestWithOptions(newLatestRestoreOrderWriter(), 5, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	}); err != nil {
+		t.Fatalf("RestoreLatestWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("custom latest restore ETL temp dir stat: %v", err)
+	}
 }
 
 func TestLatestSegmentBuildPublishAndRead(t *testing.T) {

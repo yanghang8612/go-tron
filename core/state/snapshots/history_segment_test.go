@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -318,6 +319,17 @@ func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
 	}
 	if len(writer.deleteKeys) != 0 {
 		t.Fatalf("history restore deletes = %d, want 0", len(writer.deleteKeys))
+	}
+
+	etlTemp := filepath.Join(t.TempDir(), "etl-scratch")
+	if _, err := mgr.RestoreStateDomainHistoryWithOptions(newHistoryRestoreOrderWriter(), 99, 101, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	}); err != nil {
+		t.Fatalf("RestoreStateDomainHistoryWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("custom state history restore ETL temp dir stat: %v", err)
 	}
 }
 

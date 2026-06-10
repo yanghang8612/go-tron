@@ -367,6 +367,10 @@ func (m *Manager) IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flat
 }
 
 func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, toTxNum uint64) (*RestoreStateDomainHistoryResult, error) {
+	return m.RestoreStateDomainHistoryWithOptions(db, fromTxNum, toTxNum, RestoreETLOptions{})
+}
+
+func (m *Manager) RestoreStateDomainHistoryWithOptions(db ethdb.KeyValueWriter, fromTxNum, toTxNum uint64, opts RestoreETLOptions) (*RestoreStateDomainHistoryResult, error) {
 	if m == nil {
 		return nil, errors.New("snapshots: nil manager")
 	}
@@ -396,7 +400,7 @@ func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, 
 		FromTxNum: fromTxNum,
 		ToTxNum:   toTxNum,
 	}
-	collector, err := etl.NewCollector(etl.Options{})
+	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
 		return nil, fmt.Errorf("snapshots: create state-domain history restore ETL collector: %w", err)
 	}
