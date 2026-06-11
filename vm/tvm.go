@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 	"strconv"
 
@@ -271,6 +272,30 @@ func (tvm *TVM) maybeCreateNormalAccountForValueTransfer(addr tcommon.Address) {
 	if tvm.DynProps.AllowMultiSign() {
 		tvm.StateDB.ApplyDefaultAccountPermissions(addr, tvm.DynProps)
 	}
+}
+
+// validatePrecompileEndowment mirrors the transfer leg of java-tron
+// Program.callToPrecompiledAddress for a TRX endowment: MUtil.transfer ->
+// VMUtils.validateForSmartContract requires the TARGET account to already
+// exist ("Validate InternalTransfer error, no ToAccount...") and the credit
+// not to overflow long. Precompile addresses normally have no account and
+// are never auto-created on this path, so a value-bearing CALL into one
+// throws BytecodeExecutionException("transfer failure") in java — which is
+// not a TransferException, so VM.play spends ALL energy and the receipt
+// records UNKNOWN (Nile block 18,112,819, contract "Test".test(address(2))).
+// Returns nil for non-precompile targets; java's plain-contract path
+// auto-creates the recipient instead.
+func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) error {
+	if getPrecompile(addr, tvm.cfg) == nil {
+		return nil
+	}
+	if !tvm.StateDB.AccountExists(addr) {
+		return ErrPrecompileTransferFailure
+	}
+	if tvm.StateDB.GetBalance(addr) > math.MaxInt64-value {
+		return ErrPrecompileTransferFailure
+	}
+	return nil
 }
 
 // Create deploys a new contract.
@@ -593,6 +618,11 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrTransferFailed
 		}
+		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, 0, err
+		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
@@ -687,6 +717,11 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			tvm.RevertLogs(logSnap)
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrTransferFailed
+		}
+		if err := tvm.validatePrecompileEndowment(addr, value); err != nil {
+			tvm.RevertLogs(logSnap)
+			tvm.StateDB.RevertToSnapshot(snap)
+			return nil, 0, err
 		}
 		if err := tvm.StateDB.SubBalance(caller, value); err != nil {
 			tvm.StateDB.RevertToSnapshot(snap)

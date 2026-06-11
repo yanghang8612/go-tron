@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -832,25 +833,23 @@ func TestCreateAccountWithTime_FromCALL_PrecompileAddrUntouched(t *testing.T) {
 		t.Fatal("precondition: precompile address must not pre-exist")
 	}
 
-	// CALL with value > 0 to the precompile.
-	if _, _, err := tvm.Call(caller, precompileAddr, nil, 1_000_000, 50_000_000); err != nil {
-		t.Fatalf("Call: %v", err)
+	// CALL with value > 0 to the precompile. java routes this through
+	// callToPrecompiledAddress, whose MUtil.transfer rejects the credit
+	// ("no ToAccount") -> BytecodeExecutionException("transfer failure"),
+	// so the endowment never lands and the address stays untouched
+	// (Nile block 18,112,819).
+	if _, _, err := tvm.Call(caller, precompileAddr, nil, 1_000_000, 50_000_000); !errors.Is(err, ErrPrecompileTransferFailure) {
+		t.Fatalf("Call: got err=%v want ErrPrecompileTransferFailure", err)
 	}
 
-	// AddBalance auto-creates the precompile account via GetOrCreateAccount,
-	// but the slice-2c create-with-time path MUST NOT fire — create_time
-	// stays at 0 and no default permissions are installed (matching java's
-	// behavior where callToPrecompiledAddress doesn't call
-	// createAccountIfNotExist).
-	acc := sdb.GetAccount(precompileAddr)
-	if acc != nil && acc.CreateTime() != 0 {
-		t.Fatalf("create_time on precompile addr: got %d, want 0 (java skips createAccountIfNotExist for precompiles)", acc.CreateTime())
+	// The transfer was rejected before any AddBalance, so the precompile
+	// address must not exist at all — and in particular the slice-2c
+	// create-with-time path must not have fired.
+	if sdb.AccountExists(precompileAddr) {
+		t.Fatal("precompile address must stay non-existent after a rejected endowment")
 	}
-	if acc != nil && acc.OwnerPermission() != nil {
-		t.Fatal("Owner permission must NOT be installed on precompile addr (slice-2c path must skip precompiles)")
-	}
-	if acc != nil && len(acc.ActivePermission()) != 0 {
-		t.Fatal("Active permission must be empty on precompile addr")
+	if got := sdb.GetBalance(caller); got != 100_000_000 {
+		t.Fatalf("caller balance must be untouched, got %d", got)
 	}
 }
 

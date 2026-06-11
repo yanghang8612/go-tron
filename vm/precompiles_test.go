@@ -426,7 +426,11 @@ func TestPrecompileFailureStatusConsumesEnergyAndRevertsValue(t *testing.T) {
 	caller := tcommon.Address{0x41, 0x91}
 	tvm.StateDB.CreateAccount(caller, corepb.AccountType_Normal)
 	tvm.StateDB.AddBalance(caller, 1_000)
+	// Pre-create the precompile's account so the endowment passes java's
+	// validateForSmartContract (a missing account would now fail earlier
+	// with "transfer failure"); this test pins the EXECUTION-failure path.
 	target := addrFromUint(0x05)
+	tvm.StateDB.CreateAccount(target, corepb.AccountType_Normal)
 
 	input := make([]byte, 96)
 	input[30] = 0x04
