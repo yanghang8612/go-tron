@@ -344,3 +344,79 @@ func TestApplyBlock_HistoryReorgDropsOrphan(t *testing.T) {
 		}
 	}
 }
+
+// TestSwitchForkResetsProposalScanCache proves the wiring half of the
+// proposal-scan-cache reorg invariant: a rewind must drop every node-local
+// terminal mark so the re-applied branch re-reads proposal state from scratch
+// (a rewound proposal can revert terminal→PENDING on the new branch). The
+// unit-level reset semantics live in proposal_scan_cache_test.go; here we only
+// assert switchFork actually calls reset().
+func TestSwitchForkResetsProposalScanCache(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	cfg := cloneMainnetChainConfig()
+	witnessAddr := testInsertAddr(1)
+
+	genesis := &params.Genesis{
+		Config:    cfg,
+		Timestamp: 0,
+		Accounts: []params.GenesisAccount{
+			{Address: witnessAddr, Balance: 99_000_000_000_000_000},
+		},
+		Witnesses: []params.GenesisWitness{
+			{Address: witnessAddr, VoteCount: 1, URL: "test"},
+			{Address: testInsertAddr(20), VoteCount: 1, URL: "sr2"},
+			{Address: testInsertAddr(21), VoteCount: 1, URL: "sr3"},
+		},
+		// Three witnesses → solidified stays at 0, so every buffer layer stays
+		// in memory and switchFork can rewind them. Maintenance never fires.
+		DynamicProperties: map[string]int64{"next_maintenance_time": 1<<62 - 1},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mkBlock := func(num uint64, ts int64, parent tcommon.Hash) *types.Block {
+		return types.NewBlockFromPB(&corepb.Block{BlockHeader: &corepb.BlockHeader{RawData: &corepb.BlockHeaderRaw{
+			Number:         int64(num),
+			Timestamp:      ts,
+			ParentHash:     parent.Bytes(),
+			WitnessAddress: witnessAddr.Bytes(),
+		}}})
+	}
+
+	// Canonical chain A: one block on the tip.
+	blockA1 := mkBlock(1, 3000, genesisHash)
+	if err := bc.InsertBlock(blockA1); err != nil {
+		t.Fatalf("insert A1: %v", err)
+	}
+
+	// Warm the proposal scan cache as a prior maintenance scan would have. These
+	// non-maintenance inserts never touch it, so the marks survive to the reorg.
+	bc.proposalCache.markTerminal(1)
+	bc.proposalCache.markTerminal(7)
+	if !bc.proposalCache.isTerminal(1) {
+		t.Fatal("precondition: cache should be warm before reorg")
+	}
+
+	// Competing chain B (2 blocks) outgrows A → triggers switchFork on B2.
+	blockB1 := mkBlock(1, 3001, genesisHash)
+	if err := bc.InsertBlock(blockB1); err != nil {
+		t.Fatalf("insert B1: %v", err)
+	}
+	blockB2 := mkBlock(2, 6001, blockB1.Hash())
+	if err := bc.InsertBlock(blockB2); err != nil {
+		t.Fatalf("insert B2 (switch trigger): %v", err)
+	}
+	if bc.CurrentBlock().Hash() != blockB2.Hash() {
+		t.Fatalf("expected switchFork to B2; head = %x", bc.CurrentBlock().Hash())
+	}
+
+	if bc.proposalCache.isTerminal(1) || bc.proposalCache.isTerminal(7) {
+		t.Fatal("switchFork must reset the proposal scan cache, but terminal marks survived the rewind")
+	}
+}
