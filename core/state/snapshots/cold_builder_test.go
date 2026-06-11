@@ -9,6 +9,8 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // seedLatestRows writes the minimum set of hot-DB rows needed for BuildLatest
@@ -572,6 +574,68 @@ func TestRunnerLatestBuildWatermarkSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x42)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	addr := eventLogTestAddress(0x66)
+	topic := common.Hash{0xaa}
+	block, infos := coldBuilderEventLogBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x01}},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:            dir,
+		Enabled:        true,
+		HistoryWindow:  1,
+		BuildEventLogs: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || !result.EventLogBuilt || result.FromBlock != 1 || result.ToBlock != 1 {
+		t.Fatalf("result = %+v, want history+event-log build over block 1", result)
+	}
+	haveEventLog := false
+	for _, ref := range result.Segments {
+		if ref.Kind == SegmentEventLog {
+			haveEventLog = true
+		}
+	}
+	if !haveEventLog {
+		t.Fatalf("segments = %+v, want event-log segment with history", result.Segments)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var rows []EventLog
+	if err := mgr.IterateEventLogs(1, 1, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x01}) {
+		t.Fatalf("event rows = %+v, want one cold event log", rows)
+	}
+}
+
 type coldBuilderChain struct {
 	db         AggregatorDB
 	solidified int64
@@ -580,6 +644,34 @@ type coldBuilderChain struct {
 func (c *coldBuilderChain) DB() AggregatorDB { return c.db }
 
 func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidified }
+
+func coldBuilderEventLogBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
+	t.Helper()
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Timestamp:  int64(10_000 + number),
+			Expiration: int64(20_000 + number),
+			Data:       []byte{byte(number)},
+		},
+	}
+	tx := coretypes.NewTransactionFromPB(txPB)
+	info := &corepb.TransactionInfo{
+		Id:             append([]byte(nil), tx.Hash().Bytes()...),
+		BlockNumber:    int64(number),
+		BlockTimeStamp: int64(30_000 + number),
+		Log:            logs,
+	}
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(30_000 + number),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
+	return block, []*corepb.TransactionInfo{info}
+}
 
 func coldBuilderOwner(seed byte) common.Address {
 	return common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{seed}, common.AccountIDLength)...))

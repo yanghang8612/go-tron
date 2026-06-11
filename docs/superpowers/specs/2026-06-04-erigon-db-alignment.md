@@ -706,11 +706,13 @@ Status:
   positional-topic postings so filtered cold reads avoid scanning unrelated log
   payloads. `gtron snapshot build-event-logs` exposes the standalone operator
   build path, while `gtron snapshot build-derived-indexes` now emits event-log
-  sidecars together with balance-trace and section-bloom segments. Runtime
-  startup registers the manager on `ChainDB`, and `TronBackend.GetLogs` uses
-  the cold event-log stream when checker-verified manifest coverage fully spans
-  the query range, falling back to the hot scan on coverage gaps and surfacing
-  checker failures as archive data errors.
+  sidecars together with balance-trace and section-bloom segments. Production
+  snap-mode history passes can now publish the matching event-log sidecar in
+  the same manifest generation as the state-history segment before hot prune
+  runs. Runtime startup registers the manager on `ChainDB`, and
+  `TronBackend.GetLogs` uses the cold event-log stream when checker-verified
+  manifest coverage fully spans the query range, falling back to the hot scan
+  on coverage gaps and surfacing checker failures as archive data errors.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.

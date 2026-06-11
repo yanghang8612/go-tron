@@ -47,6 +47,9 @@ type Config struct {
 	// build pass entirely. Latest builds are full-keyspace scans, so all latest
 	// datasets share this single coarse cadence rather than rebuilding every tick.
 	LatestBuildBlocks uint64
+	// BuildEventLogs builds registered cold event-log sidecars for the same
+	// block range as each newly published state-history segment.
+	BuildEventLogs bool
 }
 
 // PassResult describes a single cold snapshot builder pass.
@@ -56,11 +59,14 @@ type PassResult struct {
 	Compaction        HistoryCompactionResult
 	FromTxNum         uint64
 	ToTxNum           uint64
+	FromBlock         uint64
+	ToBlock           uint64
 	CutoffBlock       uint64
 	SolidifiedBlock   uint64
 	PreviousVisibleTx uint64
 	Segment           SegmentRef
 	Segments          []SegmentRef
+	EventLogBuilt     bool
 	Manifest          *Manifest
 }
 
@@ -199,7 +205,8 @@ func (r *Runner) Start() error {
 			"dataset", r.cfg.HistoryDataset,
 			"interval", r.cfg.Interval,
 			"historyWindow", r.cfg.HistoryWindow,
-			"batchBlocks", r.cfg.BatchBlocks)
+			"batchBlocks", r.cfg.BatchBlocks,
+			"eventLogBuild", r.cfg.BuildEventLogs)
 	})
 	return r.startErr
 }
@@ -322,14 +329,14 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 
 	toTxNum := cutoffRange.EndTxNum
+	startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, cutoffBlock)
+	if err != nil {
+		return PassResult{}, err
+	}
+	if !ok {
+		return result, nil
+	}
 	if r.cfg.BatchBlocks > 0 {
-		startBlock, ok, err := firstHotHistoryTxRangeBlockAtOrAfterTx(historyCfg, db, fromTxNum, cutoffBlock)
-		if err != nil {
-			return PassResult{}, err
-		}
-		if !ok {
-			return result, nil
-		}
 		batchCutoffBlock := startBlock + r.cfg.BatchBlocks - 1
 		if batchCutoffBlock < startBlock || batchCutoffBlock > cutoffBlock {
 			batchCutoffBlock = cutoffBlock
@@ -361,6 +368,19 @@ func (r *Runner) onePass() (PassResult, error) {
 	if len(refs) == 0 {
 		return result, nil
 	}
+	eventLogBuilt := false
+	if r.cfg.BuildEventLogs {
+		chainDB, err := r.eventLogChainDB()
+		if err != nil {
+			return PassResult{}, err
+		}
+		ref, err := BuildEventLogSegmentFromChain(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		refs = append(refs, ref)
+		eventLogBuilt = true
+	}
 	manifest, err := NewAggregator(r.cfg.Dir).Integrate(fromTxNum, toTxNum, refs)
 	if err != nil {
 		return PassResult{}, err
@@ -368,8 +388,11 @@ func (r *Runner) onePass() (PassResult, error) {
 	result.Built = true
 	result.FromTxNum = fromTxNum
 	result.ToTxNum = toTxNum
+	result.FromBlock = startBlock
+	result.ToBlock = cutoffBlock
 	result.Segment = refs[0]
 	result.Segments = append([]SegmentRef(nil), refs...)
+	result.EventLogBuilt = eventLogBuilt
 	result.Manifest = manifest
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
 		stageProgress := newRawDBStageProgressStore(writer)
@@ -381,6 +404,25 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+type eventLogChainSource interface {
+	EventLogDB() *rawdb.ChainDB
+}
+
+func (r *Runner) eventLogChainDB() (*rawdb.ChainDB, error) {
+	if r == nil || r.chain == nil {
+		return nil, errors.New("snapshots: nil event log chain source")
+	}
+	if source, ok := r.chain.(eventLogChainSource); ok {
+		if db := source.EventLogDB(); db != nil {
+			return db, nil
+		}
+	}
+	if db, ok := r.chain.DB().(*rawdb.ChainDB); ok && db != nil {
+		return db, nil
+	}
+	return nil, errors.New("snapshots: event log build requires rawdb.ChainDB")
 }
 
 func (r *Runner) recordPass(result PassResult, start time.Time) {
@@ -461,7 +503,10 @@ func (r *Runner) loop() {
 			"dataset", r.cfg.HistoryDataset,
 			"fromTx", result.FromTxNum,
 			"toTx", result.ToTxNum,
-			"cutoffBlock", result.CutoffBlock)
+			"fromBlock", result.FromBlock,
+			"toBlock", result.ToBlock,
+			"cutoffBlock", result.CutoffBlock,
+			"eventLogBuilt", result.EventLogBuilt)
 	} else if result.Compaction.Merged {
 		coldSnapshotLog.Info("History cold snapshot initial pass compacted",
 			"dataset", result.Compaction.Dataset,
@@ -485,7 +530,10 @@ func (r *Runner) loop() {
 					"dataset", r.cfg.HistoryDataset,
 					"fromTx", result.FromTxNum,
 					"toTx", result.ToTxNum,
-					"cutoffBlock", result.CutoffBlock)
+					"fromBlock", result.FromBlock,
+					"toBlock", result.ToBlock,
+					"cutoffBlock", result.CutoffBlock,
+					"eventLogBuilt", result.EventLogBuilt)
 			} else if result.Compaction.Merged {
 				coldSnapshotLog.Info("History cold snapshot pass compacted",
 					"dataset", result.Compaction.Dataset,

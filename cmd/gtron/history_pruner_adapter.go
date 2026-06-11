@@ -5,6 +5,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	statepruning "github.com/tronprotocol/go-tron/core/state/pruning"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	tnet "github.com/tronprotocol/go-tron/net"
@@ -39,6 +40,13 @@ func newStateSnapshotChainSource(chain *core.BlockChain) statesnapshots.ChainSou
 
 func (a *prunerChainSource) DB() ethdb.KeyValueStore {
 	return a.chain.DB()
+}
+
+func (a *prunerChainSource) EventLogDB() *rawdb.ChainDB {
+	if a == nil || a.chain == nil {
+		return nil
+	}
+	return a.chain.ChainDB()
 }
 
 func (a *prunerChainSource) LatestSolidifiedBlockNum() int64 {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
 
@@ -197,6 +198,23 @@ func (s snapshotChainSource) DB() snapshots.AggregatorDB {
 		return nil
 	}
 	return s.chain.DB()
+}
+
+type eventLogDBSource interface {
+	EventLogDB() *rawdb.ChainDB
+}
+
+func (s snapshotChainSource) EventLogDB() *rawdb.ChainDB {
+	if s.chain == nil {
+		return nil
+	}
+	if source, ok := s.chain.(eventLogDBSource); ok {
+		return source.EventLogDB()
+	}
+	if db, ok := s.chain.DB().(*rawdb.ChainDB); ok {
+		return db
+	}
+	return nil
 }
 
 func (s snapshotChainSource) LatestSolidifiedBlockNum() int64 {

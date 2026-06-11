@@ -81,9 +81,12 @@ writes to collector-backed loads.
   postings, plus manager-side range filtering across registered segments.
   `gtron snapshot build-event-logs` exposes the builder, and
   `gtron snapshot build-derived-indexes` includes event-log sidecars alongside
-  balance-trace and section-bloom segments. `TronBackend.GetLogs` uses it when
-  checker-verified manifest coverage fully spans the query range; broader
-  global/recsplit-style address/topic point indexes remain follow-up work.
+  balance-trace and section-bloom segments. The production snap-mode history
+  builder can also publish the matching event-log sidecar in the same manifest
+  generation as the state-history segment before hot prune runs.
+  `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
+  spans the query range; broader global/recsplit-style address/topic point
+  indexes remain follow-up work.
 - `TronBackend.GetLogs` consumes those section-bloom rows as an optional
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing
