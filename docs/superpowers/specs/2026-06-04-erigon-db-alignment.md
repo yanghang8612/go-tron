@@ -505,9 +505,9 @@ Status:
 - `--gcmode` remains a deprecated alias.
 - The runtime pruning policy now preserves distinct internal mode labels for
   `full`, `blocks`, `minimal`, `snap`, and `archive`. `blocks` and `minimal`
-  still share `full`'s finite state-history retention window until block
-  retention enforcement lands, but lifecycle logs/checks no longer collapse
-  them to `full`.
+  share `full`'s finite state-history retention window for hot
+  `StateDomainChange`/`StateTxRange` pruning, and the Worker/Checker paths now
+  enforce and audit that retention without collapsing their mode labels.
 - `blocks` preserves complete local chain-freezer history while still allowing
   state/history and hot lookup pruning. `minimal` is the only mode that
   registers a chain-freezer tail-prune lifecycle. It applies virtual-tail

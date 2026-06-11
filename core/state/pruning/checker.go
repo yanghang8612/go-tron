@@ -14,19 +14,19 @@ import (
 )
 
 type CheckReport struct {
-	LatestRows                     int
-	AccountLatestRows              int
-	KVLatestRows                   int
-	KVGenerationRows               int
-	CommitmentDomainRows           int
-	CommitmentRootPresent          bool
-	ReferencedCodeHashes           int
-	RetainedTxRanges               int
-	RetainedDomainChanges          int
-	CommitmentCheckpoints          int
-	SnapshotSegments               int
-	CommitmentBranchSnapshotRows   uint64
-	Warnings                       []string
+	LatestRows                   int
+	AccountLatestRows            int
+	KVLatestRows                 int
+	KVGenerationRows             int
+	CommitmentDomainRows         int
+	CommitmentRootPresent        bool
+	ReferencedCodeHashes         int
+	RetainedTxRanges             int
+	RetainedDomainChanges        int
+	CommitmentCheckpoints        int
+	SnapshotSegments             int
+	CommitmentBranchSnapshotRows uint64
+	Warnings                     []string
 }
 
 type Checker struct {
@@ -156,7 +156,7 @@ func (c Checker) Check(headNum uint64) (CheckReport, error) {
 			return false, fmt.Errorf("pruning: state tx range for block %d is inverted", row.BlockNum)
 		}
 		if !c.Policy.RetainHistory(row.BlockNum, headNum) {
-			if c.Policy.Mode == ModeFull {
+			if c.Policy.Mode == ModeFull || c.Policy.Mode == ModeBlocks || c.Policy.Mode == ModeMinimal {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("state tx range for prunable block %d is still present", row.BlockNum))
 				return true, nil
 			}

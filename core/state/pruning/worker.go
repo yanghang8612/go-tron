@@ -61,7 +61,7 @@ func (w Worker) PruneTo(headNum uint64) (Stats, error) {
 				return snapshots.HotHistoryPruneDecision{}, nil
 			}
 			switch w.Policy.Mode {
-			case ModeFull:
+			case ModeFull, ModeBlocks, ModeMinimal:
 				return snapshots.HotHistoryPruneDecision{DeleteTxRange: true, DeleteHistoryBlock: true}, nil
 			case ModeSnap:
 				if !coverage.covers(row.BeginTxNum, row.EndTxNum) {

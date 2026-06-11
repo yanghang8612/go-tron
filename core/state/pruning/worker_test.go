@@ -92,6 +92,54 @@ func TestWorkerPrunesDomainHistoryAndCheckpoints(t *testing.T) {
 	}
 }
 
+func TestWorkerPrunesDomainHistoryForBlocksAndMinimalModes(t *testing.T) {
+	for _, policy := range []Policy{
+		BlocksPolicy(3, 2),
+		MinimalPolicy(3, 2),
+	} {
+		t.Run(string(policy.Mode), func(t *testing.T) {
+			db := rawdb.NewMemoryDatabase()
+			oldChange, _, _ := writeSnapPruningChange(t, db, 1, 10, 12)
+			recentChange, _, _ := writeSnapPruningChange(t, db, 4, 40, 42)
+
+			pre, err := Check(db, policy, 5, "")
+			if err != nil {
+				t.Fatalf("pre-prune check: %v", err)
+			}
+			if !hasWarning(pre.Warnings, "state tx range for prunable block 1 is still present") {
+				t.Fatalf("pre-prune warnings = %v, want stale tx-range warning", pre.Warnings)
+			}
+
+			stats, err := Worker{DB: db, Policy: policy}.PruneTo(5)
+			if err != nil {
+				t.Fatalf("prune %s: %v", policy.Mode, err)
+			}
+			if stats.DeletedTxRanges != 1 || stats.DeletedDomainChangeBlocks != 1 {
+				t.Fatalf("%s stats = %+v, want one history range and change block deleted", policy.Mode, stats)
+			}
+			if _, ok, err := rawdb.ReadStateTxRange(db, oldChange.BlockNum); err != nil || ok {
+				t.Fatalf("%s old tx range ok=%v err=%v, want deleted", policy.Mode, ok, err)
+			}
+			if _, ok, err := rawdb.ReadStateDomainChange(db, oldChange.BlockNum, oldChange.Seq); err != nil || ok {
+				t.Fatalf("%s old domain change ok=%v err=%v, want deleted", policy.Mode, ok, err)
+			}
+			if _, ok, err := rawdb.ReadStateTxRange(db, recentChange.BlockNum); err != nil || !ok {
+				t.Fatalf("%s recent tx range ok=%v err=%v, want retained", policy.Mode, ok, err)
+			}
+			if _, ok, err := rawdb.ReadStateDomainChange(db, recentChange.BlockNum, recentChange.Seq); err != nil || !ok {
+				t.Fatalf("%s recent domain change ok=%v err=%v, want retained", policy.Mode, ok, err)
+			}
+			post, err := Check(db, policy, 5, "")
+			if err != nil {
+				t.Fatalf("post-prune check: %v", err)
+			}
+			if len(post.Warnings) != 0 || post.RetainedTxRanges != 1 || post.RetainedDomainChanges != 1 {
+				t.Fatalf("%s post-prune report = %+v", policy.Mode, post)
+			}
+		})
+	}
+}
+
 func TestWorkerSnapPreservesHotChangesWithoutCompleteSnapshotCoverage(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	dir := t.TempDir()
@@ -844,4 +892,13 @@ func writeSnapPruningChange(t *testing.T, db ethdb.KeyValueWriter, blockNum, beg
 		t.Fatal(err)
 	}
 	return change, owner, key
+}
+
+func hasWarning(warnings []string, substr string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, substr) {
+			return true
+		}
+	}
+	return false
 }
