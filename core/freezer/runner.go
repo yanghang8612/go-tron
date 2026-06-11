@@ -8,7 +8,8 @@
 //  1. Read the chain's latest solidified block number from the supplied
 //     ChainSource.
 //  2. Compute `freezeTo = solidified - cfg.MarginBlocks` (don't get any
-//     closer to the live head than the configured margin).
+//     closer to the live head than the configured margin), then cap it at
+//     the verified hash-bound `StageFinish` row when that stage exists.
 //  3. `freezeFrom = freezer.AncientCount("bodies")` — the freezer's own
 //     position is the canonical resume point; all three slice-1 tables
 //     advance in lockstep via ModifyAncients, so `bodies` is enough.
@@ -34,6 +35,7 @@ package freezer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -381,6 +383,13 @@ func (r *Runner) OnePass() (uint64, error) {
 		return 0, nil
 	}
 	freezeTo := uint64(solid) - r.cfg.MarginBlocks // inclusive upper bound
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock()
+	if err != nil {
+		return 0, err
+	}
+	if hasFinishStage && finishStage < freezeTo {
+		freezeTo = finishStage
+	}
 
 	// Resume from the freezer's own canonical position. Reading
 	// AncientCount on every pass means we never need to persist a
@@ -388,6 +397,9 @@ func (r *Runner) OnePass() (uint64, error) {
 	freezeFromN, err := r.freezer.AncientCount(rawdbAncientBlocks)
 	if err != nil {
 		return 0, err
+	}
+	if hasFinishStage && freezeFromN > 0 && freezeFromN-1 > finishStage {
+		return 0, fmt.Errorf("freezer: ancient head %d exceeds verified finish stage %d", freezeFromN-1, finishStage)
 	}
 	// Startup reconciliation (once per process). A crash that landed
 	// between Phase 2 (ancient Sync) and Phase 3 (Pebble DeleteRange) of a
@@ -514,6 +526,27 @@ func (r *Runner) OnePass() (uint64, error) {
 	r.blocksFrozen.Add(frozen)
 	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
 	return frozen, nil
+}
+
+func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
+	if r == nil || r.chain == nil || r.chain.DB() == nil {
+		return 0, false, nil
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(r.chain.DB(), rawdb.StageFinish)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	if !row.HasBlockHash {
+		return 0, true, fmt.Errorf("freezer: finish stage %d is not hash-bound", row.BlockNum)
+	}
+	canonical := r.chain.ReadBlockHashByNumber(row.BlockNum)
+	if canonical == (tcommon.Hash{}) {
+		return 0, true, fmt.Errorf("freezer: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
+	}
+	if canonical != row.BlockHash {
+		return 0, true, fmt.Errorf("freezer: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonical)
+	}
+	return row.BlockNum, true, nil
 }
 
 func (r *Runner) writeChainFreezerStage(blockNum uint64) error {

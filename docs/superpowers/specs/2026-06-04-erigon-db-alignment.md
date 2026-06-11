@@ -352,6 +352,9 @@ Status:
   same stage after sweeping rows that were already ancient before a restart.
   On upgrade/restart it also backfills the stage from the local ancient head,
   so existing freezer coverage is visible even when no new blocks need freezing.
+  Live freezer passes are now capped at the verified hash-bound `StageFinish`
+  row and fail on finish-stage hash mismatches, matching the state pruner's
+  guard against moving hot data past the canonical execution boundary.
 - Verified chain-freezer snapshot restore writes the same `ChainFreezer` stage
   to the restored datadir after the segment is installed or verified as already
   present, so remote bootstrap and live freezer passes expose one cold-chain

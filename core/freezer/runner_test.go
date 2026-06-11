@@ -2,6 +2,7 @@ package freezer
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -338,6 +339,71 @@ func TestOnePass_FreezesToMargin(t *testing.T) {
 		if v, err := fc.db.Get(blockKVKey(n)); err != nil || len(v) == 0 {
 			t.Fatalf("Pebble lost b-%d (should still be hot)", n)
 		}
+	}
+}
+
+func TestOnePass_CapsFreezeToVerifiedFinishStage(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 50; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(40)
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 12, blockHash(12)); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if frozen != 13 {
+		t.Fatalf("frozen=%d, want 13 blocks through finish stage 12", frozen)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(fc.db, rawdb.StageChainFreezer); err != nil || !ok || got != 12 {
+		t.Fatalf("StageChainFreezer after finish cap = %d ok=%v err=%v, want 12", got, ok, err)
+	}
+	if v, err := fc.db.Get(blockKVKey(12)); err == nil && len(v) > 0 {
+		t.Fatal("Pebble still has b-12 after finish-capped freeze")
+	}
+	if v, err := fc.db.Get(blockKVKey(13)); err != nil || len(v) == 0 {
+		t.Fatalf("Pebble lost b-13 beyond finish stage: len=%d err=%v", len(v), err)
+	}
+}
+
+func TestOnePassRejectsFinishStageHashMismatch(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 20; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(15)
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 10, tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("write mismatched finish stage: %v", err)
+	}
+
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "finish stage 10 hash") {
+		t.Fatalf("OnePass error = %v, want finish stage hash mismatch", err)
+	}
+	if frozen != 0 {
+		t.Fatalf("frozen=%d, want 0 after finish hash mismatch", frozen)
+	}
+	if got, err := r.freezer.AncientCount(rawdbAncientBlocks); err != nil || got != 0 {
+		t.Fatalf("ancient blocks after rejected pass = %d err=%v, want 0", got, err)
+	}
+	if v, err := fc.db.Get(blockKVKey(0)); err != nil || len(v) == 0 {
+		t.Fatalf("Pebble lost b-0 despite rejected pass: len=%d err=%v", len(v), err)
 	}
 }
 
