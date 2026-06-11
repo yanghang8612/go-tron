@@ -190,6 +190,29 @@ func snapshotCommand() *cli.Command {
 				Action: snapshotBuildBalanceTracesCmd,
 			},
 			{
+				Name:  "build-section-blooms",
+				Usage: "Build a cold section-bloom snapshot segment from local rawdb bloom rows",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					testnetFlag,
+					genesisFileFlag,
+					devFlag,
+					witnessKeyFlag,
+					devFullFeaturesFlag,
+					devMaintenanceIntervalFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					snapshotDirFlag,
+					snapshotFromBlockFlag,
+					snapshotToBlockFlag,
+					snapshotForkConfigHashFlag,
+				},
+				Action: snapshotBuildSectionBloomsCmd,
+			},
+			{
 				Name:  "prune-chain-lookups",
 				Usage: "Delete hot block/transaction lookup indexes covered by verified chain-freezer sidecars",
 				Flags: []cli.Flag{
@@ -234,6 +257,29 @@ func snapshotCommand() *cli.Command {
 					snapshotForkConfigHashFlag,
 				},
 				Action: snapshotPruneBalanceTracesCmd,
+			},
+			{
+				Name:  "prune-section-blooms",
+				Usage: "Delete hot section-bloom rows covered by verified cold section-bloom segments",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					testnetFlag,
+					genesisFileFlag,
+					devFlag,
+					witnessKeyFlag,
+					devFullFeaturesFlag,
+					devMaintenanceIntervalFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					snapshotDirFlag,
+					snapshotTrustedCatalogKeyFlag,
+					snapshotTrustedCatalogKeyFileFlag,
+					snapshotForkConfigHashFlag,
+				},
+				Action: snapshotPruneSectionBloomsCmd,
 			},
 		},
 	}
@@ -566,6 +612,58 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 	return nil
 }
 
+func snapshotBuildSectionBloomsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	if !ctx.IsSet("snapshot.to-block") {
+		return errors.New("snapshot section bloom build requires --snapshot.to-block")
+	}
+	forkConfigHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, forkConfigHash)
+	if err != nil {
+		return err
+	}
+	fromBlock := ctx.Uint64("snapshot.from-block")
+	toBlock := ctx.Uint64("snapshot.to-block")
+	if toBlock < fromBlock {
+		return fmt.Errorf("snapshot section bloom block range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	dir := snapshotDir(ctx, cfg.DataDir)
+	result, err := statesnapshots.NewAggregator(dir).BuildSectionBlooms(db, fromBlock, toBlock)
+	if err != nil {
+		return err
+	}
+	if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(result.Segments))
+	for _, ref := range result.Segments {
+		paths = append(paths, ref.Path)
+	}
+	var generation uint64
+	var activeSegments int
+	if result.Manifest != nil {
+		generation = result.Manifest.Generation
+		activeSegments = len(result.Manifest.Segments)
+	}
+	fmt.Printf("Section bloom snapshot built: blocks=[%d,%d] paths=%s manifestGeneration=%d activeSegments=%d\n",
+		fromBlock,
+		toBlock,
+		strings.Join(paths, ","),
+		generation,
+		activeSegments,
+	)
+	return nil
+}
+
 func ensureSnapshotManifestChainIdentity(dir string, identity statesnapshots.ChainIdentity) error {
 	manifest, err := statesnapshots.LoadProductionManifest(dir)
 	if err != nil {
@@ -700,6 +798,66 @@ func pruneVerifiedHotBalanceTraces(db ethdb.KeyValueStore, dir string, identity 
 		return nil, err
 	}
 	return statesnapshots.PruneHotBalanceTraces(db, dir, manifest)
+}
+
+func snapshotPruneSectionBloomsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	genesis, err := snapshotGenesisFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	dir := snapshotDir(ctx, cfg.DataDir)
+	trustedKeys, err := snapshotTrustedCatalogKeys(ctx)
+	if err != nil {
+		return err
+	}
+	forkConfigHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(db, ancientReader, genesis)
+	if err != nil {
+		return fmt.Errorf("setup genesis: %w", err)
+	}
+	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
+	result, err := pruneVerifiedHotSectionBlooms(db, dir, identity, trustedKeys)
+	if err != nil {
+		return err
+	}
+	prunedRange := "none"
+	if result.HasRange {
+		prunedRange = fmt.Sprintf("[%d,%d]", result.FromSection, result.ToSection)
+	}
+	fmt.Printf("Section bloom rows pruned: sections=%s coldBloomSegments=%d rows=%d\n",
+		prunedRange,
+		result.ColdBloomSegments,
+		result.RowsDeleted,
+	)
+	return nil
+}
+
+func pruneVerifiedHotSectionBlooms(db ethdb.KeyValueStore, dir string, identity statesnapshots.ChainIdentity, trustedKeys []ed25519.PublicKey) (*statesnapshots.PruneHotSectionBloomResult, error) {
+	if _, _, err := statesnapshots.VerifySignedSnapshotCatalog(dir, identity, trustedKeys); err != nil {
+		return nil, err
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	return statesnapshots.PruneHotSectionBlooms(db, dir, manifest)
 }
 
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {

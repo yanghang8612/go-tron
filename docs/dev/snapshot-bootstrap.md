@@ -114,6 +114,12 @@ gtron snapshot build-balance-traces \
   --snapshot.from-block 1 \
   --snapshot.to-block 12345678
 
+gtron snapshot build-section-blooms \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 12345678
+
 gtron snapshot publish-catalog \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
@@ -141,20 +147,30 @@ the canonical boundary against local chain data, writes the boundary state
 root/head, and copies the recent block/TAPOS window so the first post-boundary
 block can validate without replaying from genesis.
 
-`snapshot fetch` and `snapshot verify` perform registered format checks for
-`balance-trace` segments. At runtime, `ChainDB` falls through to the snapshot
-manager for block/account balance trace reads when hot rows are absent.
+`snapshot build-section-blooms` freezes existing java-tron-compatible `sb-`
+rows for the source block range. It does not rebuild missing bloom rows; use
+`gtron db rebuild-section-blooms` first when the hot bloom index is absent or
+incomplete.
 
-After a signed catalog has been fetched and verified, hot trace rows covered by
-the cold segment can be reclaimed:
+`snapshot fetch` and `snapshot verify` perform registered format checks for
+`balance-trace` and `section-bloom` segments. At runtime, `ChainDB` falls
+through to the snapshot manager for block/account balance trace reads and
+section-bloom reads when hot rows are absent.
+
+After a signed catalog has been fetched and verified, hot trace and bloom rows
+covered by cold segments can be reclaimed:
 
 ```bash
 gtron snapshot prune-balance-traces \
   --datadir /path/to/datadir \
   --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
+gtron snapshot prune-section-blooms \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
 ```
 
-The prune command rechecks the signed catalog and compares each hot trace row
+The prune commands recheck the signed catalog and compare each covered hot row
 against the cold segment before deleting anything. A missing or different cold
 row aborts the prune.
 

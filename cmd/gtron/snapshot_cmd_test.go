@@ -669,6 +669,98 @@ func TestSnapshotBuildBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "0",
+		"--snapshot.to-block", fmt.Sprint(rawdb.SectionBloomBlockPerSection*2 - 1),
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	rowA := snapshotCmdSectionBloomEncodedBit(t, 5)
+	rowB := snapshotCmdSectionBloomEncodedBit(t, 9)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, rowA); err != nil {
+		t.Fatalf("WriteSectionBloom 0/42: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 1, 99, rowB); err != nil {
+		t.Fatalf("WriteSectionBloom 1/99: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if err := snapshotBuildSectionBloomsCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildSectionBloomsCmd: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 1 {
+		t.Fatalf("active segments = %d, want 1", report.ActiveSegments)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if len(manifest.Segments) != 1 || manifest.Segments[0].Kind != statesnapshots.SegmentSectionBloom {
+		t.Fatalf("manifest segments = %+v, want one section bloom segment", manifest.Segments)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	raw, ok, err := mgr.SectionBloom(1, 99)
+	if err != nil || !ok || !bytes.Equal(raw, rowB) {
+		t.Fatalf("manager SectionBloom = %x/%v/%v, want rowB", raw, ok, err)
+	}
+
+	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x33}, ed25519.SeedSize))
+	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	pruneCtx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", hex.EncodeToString(priv.Public().(ed25519.PublicKey)),
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	if err := snapshotPruneSectionBloomsCmd(pruneCtx); err != nil {
+		t.Fatalf("snapshotPruneSectionBloomsCmd: %v", err)
+	}
+	reopened, err := openPebbleDB(pruneCtx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	if got := rawdb.ReadSectionBloom(reopened, 1, 99); got != nil {
+		t.Fatalf("hot SectionBloom after prune = %x, want nil", got)
+	}
+	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
+	chainDB.SetSectionBloomReader(mgr)
+	bitset, ok, err := rawdb.ReadSectionBloomBitSet(chainDB, 1, 99)
+	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 9) {
+		t.Fatalf("cold SectionBloom after prune = %x/%v/%v, want bit 9", bitset, ok, err)
+	}
+}
+
 func TestSnapshotRestoreVerificationOptionsRebuildsCommitmentRoot(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
@@ -1443,4 +1535,24 @@ func snapshotCmdBlockWithTx(t *testing.T, number uint64) (*coretypes.Block, comm
 		t.Fatalf("marshal tx info: %v", err)
 	}
 	return block, txHash, txInfoRaw
+}
+
+func snapshotCmdSectionBloomEncodedBit(t *testing.T, bit uint64) []byte {
+	t.Helper()
+	encoded, err := rawdb.EncodeSectionBloomBitSet(snapshotCmdSectionBloomSetBit(nil, bit))
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+	}
+	return encoded
+}
+
+func snapshotCmdSectionBloomSetBit(bitset []byte, bit uint64) []byte {
+	byteIndex := bit / 8
+	if byteIndex >= uint64(len(bitset)) {
+		grown := make([]byte, byteIndex+1)
+		copy(grown, bitset)
+		bitset = grown
+	}
+	bitset[byteIndex] |= 1 << (bit % 8)
+	return bitset
 }

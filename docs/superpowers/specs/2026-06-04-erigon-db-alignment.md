@@ -674,6 +674,19 @@ Status:
   range against the cold segment and aborts before deletion if any row is
   missing or differs, so archive reads can move to cold storage without silent
   trace loss.
+- `rawdb.ChainDB` now also has an optional cold section-bloom reader. Registered
+  `section-bloom` snapshot segments freeze java-tron-compatible `sb-` rows by
+  source block range, `snapshots.Manager` serves those rows after hot misses,
+  and runtime startup attaches the manager so `TronBackend.GetLogs` can keep
+  using address/topic bloom prefilters after hot rows are reclaimed.
+- `gtron snapshot build-section-blooms --snapshot.from-block
+  --snapshot.to-block` builds registered cold section-bloom segments from local
+  hot `sb-` rows and records the same signed-snapshot chain identity as freezer
+  and trace sidecars.
+- `gtron snapshot prune-section-blooms` verifies the signed catalog and cold
+  segment format, compares every hot `sb-` row in the covered section range
+  byte-for-byte against the cold segment, and deletes the hot rows only after
+  that preflight succeeds.
 - `rawdb.AuditBlockBalanceTraceCoverage` and
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested
@@ -729,11 +742,13 @@ Remaining:
   account/balance trace read APIs are wired, history-enabled execution now
   populates new trace rows, account traces can be repaired from retained
   block-balance traces, rawdb readers can fall through to registered cold trace
-  segments after verified hot trace pruning, balance-trace snapshot builds now
-  reject incomplete source ranges, and isolated replay backfill has replay-DB
-  resume, collector-backed trace writes, and signed-snapshot checkpoint starts.
-  Production archive completeness still needs larger-datadir soak and an
-  archive/as-of state reader beyond the trace-specific checkpoint path.
+  and section-bloom segments after verified hot pruning, balance-trace snapshot
+  builds now reject incomplete source ranges, and isolated replay backfill has
+  replay-DB resume, collector-backed trace writes, and signed-snapshot
+  checkpoint starts. Production archive completeness still needs
+  larger-datadir soak, broader event/log cold accessors beyond the section
+  bloom prefilter, and an archive/as-of state reader beyond the trace-specific
+  checkpoint path.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 
