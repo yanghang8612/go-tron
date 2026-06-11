@@ -3,6 +3,8 @@ package pruning
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +162,39 @@ func TestWorkerSnapPrunesHotChangesWithSnapshotCoverageAndKeepsTxRange(t *testin
 	}
 	if len(report.Warnings) != 0 || report.RetainedTxRanges != 1 || report.RetainedDomainChanges != 0 {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestWorkerSnapRequiresReadableSnapshotCoverage(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	dir := t.TempDir()
+	_, _, _ = writeSnapPruningChange(t, db, 1, 10, 12)
+
+	refs, err := snapshots.BuildStateDomainChangeHistorySegmentsFromDB(db, dir, 10, 12, "history/state-domain-change-10-12.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshots.PublishManifest(dir, snapshots.NewManifest(10, 12, refs)); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range refs {
+		if ref.Kind == snapshots.SegmentHistory {
+			if err := os.Remove(filepath.Join(dir, ref.Path)); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+
+	stats, err := Worker{DB: db, Policy: SnapPolicy(3, 2), SnapshotDir: dir}.PruneTo(5)
+	if err == nil {
+		t.Fatalf("snap prune stats = %+v, want missing snapshot segment error", stats)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("state tx range after failed prune ok:%v err:%v, want retained", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || !ok {
+		t.Fatalf("domain change after failed prune ok:%v err:%v, want retained", ok, err)
 	}
 }
 

@@ -490,7 +490,11 @@ Status:
   `StageSnapshotChainFreezerTailPrune`, whose block value is `tail-1`, and log
   the same `prunedThroughBlock` boundary plus the count of physically reclaimed
   data files.
-- `snap` keeps go-tron's cold-snapshot-gated hot pruning.
+- `snap` keeps go-tron's cold-snapshot-gated hot pruning. State-domain hot
+  history pruning now builds its coverage map only from registered history
+  segments whose on-disk checker succeeds; if a manifest advertises a covered
+  range but the history file is missing or corrupt, pruning aborts before
+  deleting the hot `StateDomainChange` rows.
 - `archive` keeps every temporal state row and auto-enables history capture.
 - The selected mode is persisted in rawdb as `history-prune-mode-v1`; startup
   rejects incompatible mode changes for an existing datadir.
@@ -825,8 +829,8 @@ The Erigon import goal is complete when:
   and explicitly wallet-hot indexes.
 - Archive mode answers historical account, storage, code, resource, event, and
   transaction-info reads without scanning unrelated block ranges.
-- Full/snap/minimal modes prune hot history only after cold coverage is visible
-  and verified.
+- Full/snap/minimal modes prune hot history only after cold coverage is visible,
+  readable, and verified by the registered segment checkers.
 - Chain freezer or equivalent immutable block files cover old blocks and major
   block/transaction indexes.
 - Sync import is stage-resumable and range-batched.
