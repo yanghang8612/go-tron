@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"flag"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	corepkg "github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	corestate "github.com/tronprotocol/go-tron/core/state"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -347,6 +350,134 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 	}
 }
 
+func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+	snapshotDir := filepath.Join(t.TempDir(), "snapshot")
+	replayDir := filepath.Join(t.TempDir(), "replay")
+
+	sourceDB, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open source pebble: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(sourceDB, block1.Number(), block1.Hash(), 1, 1); err != nil {
+		t.Fatalf("WriteStateTxRange block1: %v", err)
+	}
+	trustedKey := writeDBBackfillReplaySeedSnapshot(t, sourceDB, genesisPath, snapshotDir, block1)
+
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	bc, err := corepkg.NewBlockChain(sourceDB, corestate.NewDatabase(rawdb.WrapKeyValueStore(sourceDB)), genesis.Config)
+	if err != nil {
+		t.Fatalf("NewBlockChain source: %v", err)
+	}
+	block2 := dbBackfillTransferBlock(t, 2, 6000, block1.Hash(), sender, receiver, 7_000_000)
+	if err := bc.InsertBlock(block2); err != nil {
+		t.Fatalf("InsertBlock block2: %v", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 2); got != nil {
+		t.Fatalf("pre-backfill BlockBalanceTrace 2 = %+v, want nil", got)
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("close source chain: %v", err)
+	}
+	sourceDB.Close()
+
+	rejectCtx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+		"--db.replay.dir", filepath.Join(t.TempDir(), "reject-replay"),
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", trustedKey,
+	})
+	if err := dbBackfillBalanceTracesCmd(rejectCtx); err == nil || !strings.Contains(err.Error(), "can only backfill from block 2 or later") {
+		t.Fatalf("dbBackfillBalanceTracesCmd boundary error = %v, want from-block rejection", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "2",
+		"--db.to-block", "2",
+		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", trustedKey,
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbBackfillBalanceTracesCmd snapshot seed: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen target pebble: %v", err)
+	}
+	defer reopened.Close()
+	if got := rawdb.ReadBlockBalanceTrace(reopened, 1); got != nil {
+		t.Fatalf("target BlockBalanceTrace 1 = %+v, want untouched", got)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(reopened, 2); got == nil {
+		t.Fatal("target BlockBalanceTrace 2 missing after snapshot-seeded backfill")
+	}
+
+	replayDB, err := rawdb.NewPebbleDB(replayDir, 256, 500)
+	if err != nil {
+		t.Fatalf("open replay pebble: %v", err)
+	}
+	defer replayDB.Close()
+	if got := rawdb.ReadBlockBalanceTrace(replayDB, 1); got != nil {
+		t.Fatalf("replay BlockBalanceTrace 1 = %+v, want no genesis-prefix replay", got)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(replayDB, 2); got == nil {
+		t.Fatal("replay BlockBalanceTrace 2 missing after replay from snapshot boundary")
+	}
+}
+
+func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
+	t.Helper()
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	if root, ok, err := rawdb.ReadLatestDomainCommitmentRoot(sourceDB); err != nil || !ok || root == (common.Hash{}) {
+		t.Fatalf("ReadLatestDomainCommitmentRoot = %x/%v/%v, want restored latest root", root, ok, err)
+	} else if err := rawdb.WriteStateCommitmentCheckpoint(sourceDB, &rawdb.StateCommitmentCheckpoint{
+		BlockNum:  boundary.Number(),
+		BlockHash: boundary.Hash(),
+		Root:      root,
+		Scheme:    rawdb.LatestDomainCommitmentScheme,
+	}); err != nil {
+		t.Fatalf("WriteStateCommitmentCheckpoint: %v", err)
+	}
+	refs, err := statesnapshots.NewAggregator(snapshotDir).BuildSegments(sourceDB, statesnapshots.AggregatorBuildOptions{
+		FromTxNum: 1,
+		ToTxNum:   1,
+	})
+	if err != nil {
+		t.Fatalf("BuildSegments: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromGenesis(genesis, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifestForChain(1, 1, refs, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	return hex.EncodeToString(pub)
+}
+
 func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (ethdb.KeyValueStore, []*corepb.TransactionInfo) {
 	t.Helper()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -542,6 +673,10 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbReplayTempDirFlag,
 		dbReplayDirFlag,
 		dbBalanceTraceOverwriteFlag,
+		snapshotDirFlag,
+		snapshotTrustedCatalogKeyFlag,
+		snapshotTrustedCatalogKeyFileFlag,
+		snapshotForkConfigHashFlag,
 		testnetFlag,
 		genesisFileFlag,
 		devFlag,

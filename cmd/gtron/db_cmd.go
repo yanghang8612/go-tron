@@ -1,15 +1,18 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
@@ -148,6 +151,10 @@ func dbCommand() *cli.Command {
 					dbReplayTempDirFlag,
 					dbReplayDirFlag,
 					dbBalanceTraceOverwriteFlag,
+					snapshotDirFlag,
+					snapshotTrustedCatalogKeyFlag,
+					snapshotTrustedCatalogKeyFileFlag,
+					snapshotForkConfigHashFlag,
 				},
 				Action: dbBackfillBalanceTracesCmd,
 			},
@@ -367,6 +374,27 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 		return err
 	}
 
+	seed, err := dbSeedBalanceTraceReplayFromSnapshot(ctx, cfg.DataDir, chainDB, replayDB, genesis, etlOpts)
+	if err != nil {
+		return err
+	}
+	if seed != nil {
+		if seed.Skipped {
+			fmt.Printf("Balance trace replay snapshot seed skipped: existingHead=%d snapshotDir=%s\n", seed.ExistingHeadBlock, seed.SnapshotDir)
+		} else {
+			if fromBlock <= seed.Boundary.BlockNum {
+				return fmt.Errorf("balance trace replay snapshot seed at block %d can only backfill from block %d or later; requested --db.from-block=%d", seed.Boundary.BlockNum, seed.Boundary.BlockNum+1, fromBlock)
+			}
+			fmt.Printf("Balance trace replay snapshot seeded: block=%d hash=%x txNum=%d copiedBlocks=%d snapshotDir=%s\n",
+				seed.Boundary.BlockNum,
+				seed.Boundary.BlockHash,
+				seed.Boundary.TxNum,
+				seed.CopiedRecentBlocks,
+				seed.SnapshotDir,
+			)
+		}
+	}
+
 	lastProgress := uint64(0)
 	result, err := core.BackfillBalanceTracesByReplay(chainDB, db, replayDB, genesis, core.BalanceTraceReplayBackfillOptions{
 		FromBlock: fromBlock,
@@ -399,6 +427,150 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 		replayDir,
 	)
 	return nil
+}
+
+type dbBalanceTraceReplaySnapshotSeedResult struct {
+	SnapshotDir        string
+	Boundary           *statesnapshots.RestoreCanonicalBoundaryResult
+	CopiedRecentBlocks uint64
+	ExistingHeadBlock  uint64
+	Skipped            bool
+}
+
+func dbSeedBalanceTraceReplayFromSnapshot(ctx *cli.Context, dataDir string, source *rawdb.ChainDB, replayDB ethdb.KeyValueStore, genesis *params.Genesis, etlOpts etl.Options) (*dbBalanceTraceReplaySnapshotSeedResult, error) {
+	if ctx == nil || !ctx.IsSet("snapshot.dir") {
+		return nil, nil
+	}
+	if source == nil {
+		return nil, errors.New("balance trace replay snapshot seed: nil source chain")
+	}
+	if replayDB == nil {
+		return nil, errors.New("balance trace replay snapshot seed: nil replay database")
+	}
+	if genesis == nil || genesis.Config == nil {
+		return nil, errors.New("balance trace replay snapshot seed: nil genesis")
+	}
+	dir := snapshotDir(ctx, dataDir)
+	result := &dbBalanceTraceReplaySnapshotSeedResult{SnapshotDir: dir}
+
+	replayChain := rawdb.NewChainDB(replayDB, rawdb.NoopAncient{})
+	headHash := rawdb.ReadHeadBlockHash(replayChain)
+	if headHash != (common.Hash{}) {
+		headNum := rawdb.ReadBlockNumber(replayChain, headHash)
+		if headNum == nil {
+			return nil, fmt.Errorf("balance trace replay snapshot seed: existing replay head %x has no block number", headHash)
+		}
+		if *headNum > 0 {
+			result.ExistingHeadBlock = *headNum
+			result.Skipped = true
+			return result, nil
+		}
+	}
+
+	trustedKeys, err := snapshotTrustedCatalogKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	forkConfigHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return nil, err
+	}
+	chainConfig, genesisHash, err := core.SetupGenesisBlockWithAncient(replayDB, rawdb.NoopAncient{}, genesis)
+	if err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed setup genesis: %w", err)
+	}
+	genesisRoot := rawdb.ReadGenesisStateRoot(replayDB)
+	if err := rawdb.ResetMutableState(replayDB); err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed reset mutable state: %w", err)
+	}
+	rawdb.WriteGenesisStateRoot(replayDB, genesisRoot)
+	dbWriteGenesisWitnesses(replayDB, genesis)
+
+	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
+	restoreOpts := snapshotRestoreVerificationOptions(replayDB)
+	restoreOpts.ETL = statesnapshots.RestoreETLOptions{
+		TempDir:     etlOpts.TempDir,
+		BufferLimit: etlOpts.BufferLimit,
+		BatchSize:   etlOpts.BatchSize,
+	}
+	if _, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(replayDB, dir, identity, trustedKeys, restoreOpts); err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed restore: %w", err)
+	}
+
+	boundary, err := statesnapshots.InstallCanonicalBoundaryFromVerifiedCatalog(replayDB, source, dir, identity, trustedKeys)
+	if err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed canonical boundary: %w", err)
+	}
+	if boundary.BlockNum == 0 {
+		return nil, errors.New("balance trace replay snapshot seed: snapshot boundary at genesis cannot seed block trace replay")
+	}
+	boundaryRoot, ok, err := rawdb.ReadLatestDomainCommitmentRoot(replayDB)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || boundaryRoot == (common.Hash{}) {
+		return nil, errors.New("balance trace replay snapshot seed: restored snapshot has no latest commitment root")
+	}
+	if sourceRoot := rawdb.ReadBlockStateRoot(source, boundary.BlockHash); sourceRoot != (common.Hash{}) && sourceRoot != boundaryRoot {
+		return nil, fmt.Errorf("balance trace replay snapshot seed: restored root %x does not match source block %d root %x", boundaryRoot, boundary.BlockNum, sourceRoot)
+	}
+	if err := rawdb.WriteBlockStateRoot(replayDB, boundary.BlockHash, boundaryRoot); err != nil {
+		return nil, fmt.Errorf("balance trace replay snapshot seed write boundary state root: %w", err)
+	}
+	copied, err := dbCopyReplayRecentChainWindow(source, replayDB, boundary.BlockNum)
+	if err != nil {
+		return nil, err
+	}
+	result.Boundary = boundary
+	result.CopiedRecentBlocks = copied
+	return result, nil
+}
+
+func dbWriteGenesisWitnesses(db ethdb.KeyValueWriter, genesis *params.Genesis) {
+	if db == nil || genesis == nil {
+		return
+	}
+	witnesses := make([]rawdb.GenesisWitness, 0, len(genesis.Witnesses))
+	for _, gw := range genesis.Witnesses {
+		witnesses = append(witnesses, rawdb.GenesisWitness{
+			Address:   gw.Address,
+			VoteCount: gw.VoteCount,
+		})
+	}
+	rawdb.WriteGenesisWitnesses(db, witnesses)
+}
+
+func dbCopyReplayRecentChainWindow(source *rawdb.ChainDB, target ethdb.KeyValueWriter, boundary uint64) (uint64, error) {
+	if source == nil {
+		return 0, errors.New("balance trace replay snapshot seed: nil source chain")
+	}
+	if target == nil {
+		return 0, errors.New("balance trace replay snapshot seed: nil replay target")
+	}
+	from := uint64(0)
+	if boundary > 0xffff {
+		from = boundary - 0xffff
+	}
+	var copied uint64
+	for blockNum := from; blockNum <= boundary; blockNum++ {
+		block := rawdb.ReadBlock(source, blockNum)
+		if block == nil {
+			return copied, fmt.Errorf("balance trace replay snapshot seed: missing source block %d for recent execution window", blockNum)
+		}
+		if err := rawdb.WriteBlock(target, block); err != nil {
+			return copied, fmt.Errorf("balance trace replay snapshot seed write block %d: %w", blockNum, err)
+		}
+		if err := rawdb.WriteTaposRef(target, blockNum, block.Hash()); err != nil {
+			return copied, fmt.Errorf("balance trace replay snapshot seed write tapos block %d: %w", blockNum, err)
+		}
+		if root := rawdb.ReadBlockStateRoot(source, block.Hash()); root != (common.Hash{}) {
+			if err := rawdb.WriteBlockStateRoot(target, block.Hash(), root); err != nil {
+				return copied, fmt.Errorf("balance trace replay snapshot seed write block %d state root: %w", blockNum, err)
+			}
+		}
+		copied++
+	}
+	return copied, nil
 }
 
 func dbBalanceTraceReplayDir(ctx *cli.Context) (string, func(), error) {

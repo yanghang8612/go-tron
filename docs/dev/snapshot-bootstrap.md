@@ -97,6 +97,17 @@ gtron db backfill-balance-traces \
   --db.replay.dir /path/to/datadir/gtron/balance-trace-replay \
   --db.etl.tempdir /path/to/fast/tmp
 
+# Optional tail-only acceleration when the replay DB can start from a verified
+# snapshot boundary instead of genesis. Set --db.from-block to boundary+1.
+gtron db backfill-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 12345679 \
+  --db.to-block 13000000 \
+  --db.replay.dir /path/to/datadir/gtron/balance-trace-replay \
+  --db.etl.tempdir /path/to/fast/tmp \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+
 gtron snapshot build-balance-traces \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
@@ -120,7 +131,15 @@ complete.
 
 Use `--db.replay.dir` for long backfills so interrupted runs can resume from
 the isolated replay database head. Use `--db.replay.tempdir` for one-shot runs
-that should discard the replay database after the command exits.
+that should discard the replay database after the command exits. If a verified
+state snapshot is available, pass `--snapshot.dir` plus the trusted catalog key
+flags to seed an empty/genesis-only replay database from the signed snapshot
+boundary before replay starts. Snapshot seeding can only backfill blocks after
+that boundary; it does not reconstruct balance traces for the already-restored
+prefix. The seed path restores latest state and state-domain history, verifies
+the canonical boundary against local chain data, writes the boundary state
+root/head, and copies the recent block/TAPOS window so the first post-boundary
+block can validate without replaying from genesis.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` segments. At runtime, `ChainDB` falls through to the snapshot

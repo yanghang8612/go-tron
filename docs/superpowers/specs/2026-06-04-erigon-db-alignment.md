@@ -689,6 +689,16 @@ Status:
   persistent and resumable from its canonical head; one-shot runs can still use
   `--db.replay.tempdir`. Existing differing trace rows are rejected unless the
   operator explicitly passes `--db.balance-trace.overwrite`.
+- `gtron db backfill-balance-traces` can also seed an empty/genesis-only replay
+  database from a verified signed snapshot before replay starts. Passing
+  `--snapshot.dir` plus the trusted catalog key flags restores latest
+  state/history through the same manifest verifier used by `snapshot restore`,
+  installs the canonical snapshot boundary against local chain data, writes the
+  boundary state root/head, and copies the recent block/TAPOS execution window.
+  This gives post-boundary archive trace backfills a checkpointed start point
+  instead of forcing a fresh replay directory to execute from genesis; blocks at
+  or before the snapshot boundary still need retained traces or a replay DB that
+  already contains that prefix.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -713,20 +723,17 @@ Status:
 
 Remaining:
 
-- Migrate history backfill commands and the remaining derived RPC index build
-  paths, especially the new isolated historical block-balance-trace replay
-  backfill and broader event/log cold accessors, onto the collector-backed
-  helpers where
-  benchmarks show lower Pebble write amplification. The account/balance trace
-  read APIs are wired, history-enabled execution now populates new trace rows,
-  account traces can be repaired from retained block-balance traces, and
-  rawdb readers can already fall through to registered cold trace segments after
-  verified hot trace pruning, balance-trace snapshot builds now reject
-  incomplete source ranges, and a safe isolated replay backfill exists with
-  replay-DB resume plus collector-backed trace writes. It is still expensive
-  because a fresh replay directory starts from genesis; production archive
-  completeness still needs larger-datadir soak and eventually an as-of state
-  reader or checkpointed replay start point.
+- Finish the remaining derived RPC index/cold data surface, especially broader
+  event/log cold accessors and any rebuild paths that still bypass the
+  collector where benchmarks show lower Pebble write amplification. The
+  account/balance trace read APIs are wired, history-enabled execution now
+  populates new trace rows, account traces can be repaired from retained
+  block-balance traces, rawdb readers can fall through to registered cold trace
+  segments after verified hot trace pruning, balance-trace snapshot builds now
+  reject incomplete source ranges, and isolated replay backfill has replay-DB
+  resume, collector-backed trace writes, and signed-snapshot checkpoint starts.
+  Production archive completeness still needs larger-datadir soak and an
+  archive/as-of state reader beyond the trace-specific checkpoint path.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 
