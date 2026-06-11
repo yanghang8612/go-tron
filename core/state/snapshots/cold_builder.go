@@ -47,6 +47,9 @@ type Config struct {
 	// build pass entirely. Latest builds are full-keyspace scans, so all latest
 	// datasets share this single coarse cadence rather than rebuilding every tick.
 	LatestBuildBlocks uint64
+	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
+	// the state-history cutoff has fully covered the source block section.
+	BuildSectionBlooms bool
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
@@ -66,6 +69,7 @@ type PassResult struct {
 	PreviousVisibleTx uint64
 	Segment           SegmentRef
 	Segments          []SegmentRef
+	SectionBloomBuilt bool
 	EventLogBuilt     bool
 	Manifest          *Manifest
 }
@@ -206,6 +210,7 @@ func (r *Runner) Start() error {
 			"interval", r.cfg.Interval,
 			"historyWindow", r.cfg.HistoryWindow,
 			"batchBlocks", r.cfg.BatchBlocks,
+			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
 			"eventLogBuild", r.cfg.BuildEventLogs)
 	})
 	return r.startErr
@@ -381,6 +386,17 @@ func (r *Runner) onePass() (PassResult, error) {
 		refs = append(refs, ref)
 		eventLogBuilt = true
 	}
+	sectionBloomBuilt := false
+	if r.cfg.BuildSectionBlooms {
+		sectionRefs, err := r.sectionBloomPass(db, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if len(sectionRefs) > 0 {
+			refs = append(refs, sectionRefs...)
+			sectionBloomBuilt = true
+		}
+	}
 	manifest, err := NewAggregator(r.cfg.Dir).Integrate(fromTxNum, toTxNum, refs)
 	if err != nil {
 		return PassResult{}, err
@@ -392,6 +408,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	result.ToBlock = cutoffBlock
 	result.Segment = refs[0]
 	result.Segments = append([]SegmentRef(nil), refs...)
+	result.SectionBloomBuilt = sectionBloomBuilt
 	result.EventLogBuilt = eventLogBuilt
 	result.Manifest = manifest
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
@@ -404,6 +421,53 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]SegmentRef, error) {
+	if r == nil || !r.cfg.BuildSectionBlooms {
+		return nil, nil
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil section bloom build database")
+	}
+	if cutoffBlock < rawdb.SectionBloomBlockPerSection-1 {
+		return nil, nil
+	}
+	manifest, err := LoadProductionManifest(r.cfg.Dir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	maxSection := cutoffBlock / rawdb.SectionBloomBlockPerSection
+	for section := uint64(0); section <= maxSection; section++ {
+		fromBlock := section * rawdb.SectionBloomBlockPerSection
+		toBlock := sectionBloomSectionEndBlock(section)
+		if toBlock > cutoffBlock {
+			break
+		}
+		if sectionBloomManifestCoversFullSection(manifest, section) {
+			continue
+		}
+		ref, err := BuildSectionBloomSegmentFromDB(db, r.cfg.Dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		if err != nil {
+			return nil, err
+		}
+		return []SegmentRef{ref}, nil
+	}
+	return nil, nil
+}
+
+func sectionBloomManifestCoversFullSection(manifest *Manifest, section uint64) bool {
+	if manifest == nil {
+		return false
+	}
+	fromBlock := section * rawdb.SectionBloomBlockPerSection
+	toBlock := sectionBloomSectionEndBlock(section)
+	for _, ref := range sectionBloomRefs(manifest) {
+		if ref.FromTxNum <= fromBlock && ref.ToTxNum >= toBlock {
+			return true
+		}
+	}
+	return false
 }
 
 type eventLogChainSource interface {
@@ -506,6 +570,7 @@ func (r *Runner) loop() {
 			"fromBlock", result.FromBlock,
 			"toBlock", result.ToBlock,
 			"cutoffBlock", result.CutoffBlock,
+			"sectionBloomBuilt", result.SectionBloomBuilt,
 			"eventLogBuilt", result.EventLogBuilt)
 	} else if result.Compaction.Merged {
 		coldSnapshotLog.Info("History cold snapshot initial pass compacted",
@@ -533,6 +598,7 @@ func (r *Runner) loop() {
 					"fromBlock", result.FromBlock,
 					"toBlock", result.ToBlock,
 					"cutoffBlock", result.CutoffBlock,
+					"sectionBloomBuilt", result.SectionBloomBuilt,
 					"eventLogBuilt", result.EventLogBuilt)
 			} else if result.Compaction.Merged {
 				coldSnapshotLog.Info("History cold snapshot pass compacted",

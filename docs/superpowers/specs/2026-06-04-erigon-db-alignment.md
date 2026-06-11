@@ -726,7 +726,10 @@ Status:
 - Production snapshot/prune lifecycle now runs section-bloom hot-row pruning
   with a persisted `SnapshotSectionBloomPrune` stage, so snap/full/block/minimal
   modes can keep reclaiming covered `sb-` rows across restarts without rescanning
-  already processed segments.
+  already processed segments. Snap-mode history passes can also publish
+  full-section `section-bloom` sidecars once the state-history cutoff fully
+  covers a bloom section, ensuring the later section-bloom prune hook has
+  verified cold coverage before deleting whole hot `sb-` rows.
 - `rawdb.AuditBlockBalanceTraceCoverage` and
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested

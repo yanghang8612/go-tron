@@ -659,11 +659,12 @@ func gtron(ctx *cli.Context) error {
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
 		domainLifecycle := statepruning.NewSnapshotLifecycle(newDomainPrunerChainSource(bc, syncService), statepruning.SnapshotLifecycleConfig{
 			Snapshot: statesnapshots.Config{
-				Dir:            stateSnapshotDir,
-				Enabled:        chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
-				HistoryDataset: historyDataset,
-				HistoryWindow:  prunePolicy.HistoryWindow,
-				BuildEventLogs: true,
+				Dir:                stateSnapshotDir,
+				Enabled:            chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
+				HistoryDataset:     historyDataset,
+				HistoryWindow:      prunePolicy.HistoryWindow,
+				BuildSectionBlooms: true,
+				BuildEventLogs:     true,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest
 				// datasets share this single coarse cadence. Operators may tune it.

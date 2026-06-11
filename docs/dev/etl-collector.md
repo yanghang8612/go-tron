@@ -91,7 +91,10 @@ writes to collector-backed loads.
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing
   block-by-block scan, so older datadirs remain correct until the operator runs
-  the rebuild.
+  the rebuild. Snap-mode history passes can now publish full-section cold
+  `section-bloom` sidecars once the state-history cutoff has crossed the full
+  bloom section; the hot prune hook still verifies the cold row byte-for-byte
+  before deleting hot `sb-` rows.
 - `TronBackend.GetAccountBalanceTrace` and `GetBlockBalanceTrace` expose
   retained account/balance trace rows through Wallet HTTP/gRPC APIs.
   History-enabled canonical replay now populates those rows during block

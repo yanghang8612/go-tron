@@ -636,6 +636,98 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	}
 }
 
+func TestColdBuilderBuildsSectionBloomsOnlyForCompleteSections(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x43)
+	sectionEnd := uint64(rawdb.SectionBloomBlockPerSection) - 1
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	if err := rawdb.WriteStateTxRange(db, sectionEnd, common.Hash{0xee}, sectionEnd, sectionEnd); err != nil {
+		t.Fatalf("WriteStateTxRange section end: %v", err)
+	}
+	row := sectionBloomTestEncodedBit(t, 5)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: int64(sectionEnd + 1)}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildSectionBlooms: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || !result.SectionBloomBuilt {
+		t.Fatalf("result = %+v, want history+section-bloom build", result)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	cold, ok, err := mgr.SectionBloom(0, 42)
+	if err != nil || !ok || !bytes.Equal(cold, row) {
+		t.Fatalf("cold SectionBloom = %x/%v/%v, want row", cold, ok, err)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	pruned, err := PruneHotSectionBloomsWithProgress(db, dir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotSectionBloomsWithProgress: %v", err)
+	}
+	if pruned == nil || pruned.RowsDeleted != 1 || pruned.ColdBloomSegments != 1 {
+		t.Fatalf("section bloom prune = %+v, want one deleted row", pruned)
+	}
+	if got := rawdb.ReadSectionBloom(db, 0, 42); got != nil {
+		t.Fatalf("hot section bloom survived = %x, want nil", got)
+	}
+	db.SetSectionBloomReader(mgr)
+	bitset, ok, err := rawdb.ReadSectionBloomBitSet(db, 0, 42)
+	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 5) {
+		t.Fatalf("cold ReadSectionBloomBitSet = %x/%v/%v, want bit 5", bitset, ok, err)
+	}
+}
+
+func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x44)
+	cutoff := uint64(rawdb.SectionBloomBlockPerSection) - 2
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	if err := rawdb.WriteStateTxRange(db, cutoff, common.Hash{0xdd}, cutoff, cutoff); err != nil {
+		t.Fatalf("WriteStateTxRange cutoff: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 0, 42, sectionBloomTestEncodedBit(t, 5)); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: int64(cutoff + 1)}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildSectionBlooms: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if result.SectionBloomBuilt {
+		t.Fatalf("result = %+v, want no section-bloom build for partial section", result)
+	}
+	for _, ref := range result.Segments {
+		if ref.Kind == SegmentSectionBloom {
+			t.Fatalf("segments = %+v, want no section-bloom segment before full section boundary", result.Segments)
+		}
+	}
+	if got := rawdb.ReadSectionBloom(db, 0, 42); got == nil {
+		t.Fatal("hot section bloom was removed despite no full-section cold coverage")
+	}
+}
+
 type coldBuilderChain struct {
 	db         AggregatorDB
 	solidified int64
