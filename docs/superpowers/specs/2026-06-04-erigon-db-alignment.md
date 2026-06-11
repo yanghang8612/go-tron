@@ -658,8 +658,20 @@ Status:
   `ReadAccountTrace`, and `ReadAccountTraceAtOrBefore` accessors prefer hot
   rawdb rows and fall through to that reader on misses, choosing the newest
   account trace across hot and cold sources for java-tron `getPrevBalance`
-  semantics. This keeps Wallet/API trace callers stable when future snapshot
-  trace segments provide the cold data.
+  semantics. A registered `balance-trace` snapshot segment now freezes hot
+  `BlockBalanceTrace` protobuf rows plus fixed-width account trace index rows,
+  `snapshots.Manager` implements the cold reader, and runtime startup attaches
+  it to `ChainDB` alongside the chain-index sidecar.
+- `gtron snapshot build-balance-traces --snapshot.from-block --snapshot.to-block`
+  now builds those registered cold trace segments from local rawdb trace rows,
+  validates/records the same snapshot chain identity used by freezer snapshots,
+  and leaves Wallet/API callers on the existing rawdb accessors.
+- `gtron snapshot prune-balance-traces` now deletes hot account/balance trace
+  rows only after verifying the signed snapshot catalog and registered
+  `balance-trace` segments. The prune preflights every hot row in the covered
+  range against the cold segment and aborts before deletion if any row is
+  missing or differs, so archive reads can move to cold storage without silent
+  trace loss.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -690,9 +702,9 @@ Remaining:
   benchmarks show lower Pebble write amplification. The account/balance trace
   read APIs are wired, history-enabled execution now populates new trace rows,
   account traces can be repaired from retained block-balance traces, and
-  rawdb readers can already fall through to a cold trace sidecar, but
-  historical block-balance-trace backfill plus actual trace snapshot
-  build/restore/attach plumbing are still needed before the feature is
+  rawdb readers can already fall through to registered cold trace segments after
+  verified hot trace pruning, but historical block-balance-trace backfill and
+  remote restore/install runbook coverage are still needed before the feature is
   archive-complete.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.

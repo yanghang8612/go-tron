@@ -79,6 +79,41 @@ state-domain history, installs chain-freezer rows, verifies the canonical
 boundary block, then advances canonical Headers/Bodies/Execution/Commitment/
 Finish stages only after chain data proves the boundary hash.
 
+## Optional Archive Trace Sidecars
+
+Archive operators that enable balance-history capture can publish cold
+account/balance trace sidecars with the same signed catalog:
+
+```bash
+gtron snapshot build-balance-traces \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 0 \
+  --snapshot.to-block 12345678
+
+gtron snapshot publish-catalog \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.signing-key <ed25519-seed-or-private-key-hex>
+```
+
+`snapshot fetch` and `snapshot verify` perform registered format checks for
+`balance-trace` segments. At runtime, `ChainDB` falls through to the snapshot
+manager for block/account balance trace reads when hot rows are absent.
+
+After a signed catalog has been fetched and verified, hot trace rows covered by
+the cold segment can be reclaimed:
+
+```bash
+gtron snapshot prune-balance-traces \
+  --datadir /path/to/datadir \
+  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+```
+
+The prune command rechecks the signed catalog and compares each hot trace row
+against the cold segment before deleting anything. A missing or different cold
+row aborts the prune.
+
 ## One-Step Bootstrap
 
 For the normal operator path:

@@ -521,6 +521,7 @@ func gtron(ctx *cli.Context) error {
 	bc.SetStateCodeColdHistory(stateSnapshotManager)
 	bc.SetStateCommitmentColdHistory(stateSnapshotManager)
 	bc.ChainDB().SetChainIndexReader(stateSnapshotManager)
+	bc.ChainDB().SetBalanceTraceReader(stateSnapshotManager)
 	backend.SetStateColdHistory(stateSnapshotManager)
 	if manifest := stateSnapshotManager.Manifest(); manifest != nil {
 		log.Info("State snapshots loaded",

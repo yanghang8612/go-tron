@@ -30,6 +30,7 @@ import (
 	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/urfave/cli/v2"
 	"google.golang.org/protobuf/proto"
 )
@@ -141,6 +142,18 @@ func TestSnapshotFetchCmdDownloadsSignedRemoteSnapshot(t *testing.T) {
 	}
 	for _, ref := range refs {
 		snapshotCmdAssertSameFile(t, filepath.Join(sourceDir, ref.Path), filepath.Join(destDir, ref.Path))
+	}
+	mgr, err := statesnapshots.OpenManager(destDir)
+	if err != nil {
+		t.Fatalf("OpenManager(downloaded): %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(1)
+	if err != nil || !ok || trace.GetTimestamp() != 101 {
+		t.Fatalf("downloaded balance trace = %+v/%v/%v, want timestamp 101", trace, ok, err)
+	}
+	traceBlock, balance, ok, err := mgr.AccountTraceAtOrBefore(snapshotCmdRemoteTraceOwner().Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 55 {
+		t.Fatalf("downloaded account trace = %d/%d/%v/%v, want 1/55/true/nil", traceBlock, balance, ok, err)
 	}
 }
 
@@ -505,6 +518,109 @@ func TestSnapshotBuildFreezerCmdWritesDevChainIdentity(t *testing.T) {
 	}
 	if catalog.Chain == nil {
 		t.Fatal("signed catalog chain identity is nil")
+	}
+}
+
+func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "10",
+		"--snapshot.to-block", "20",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	owner := common.Address{0x41, 0xaa}
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   bytes.Repeat([]byte{0x12}, common.HashLength),
+			Number: 12,
+		},
+		Timestamp: 1200,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 900); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if err := snapshotBuildBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildBalanceTracesCmd: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 1 {
+		t.Fatalf("active segments = %d, want 1", report.ActiveSegments)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	if len(manifest.Segments) != 1 || manifest.Segments[0].Kind != statesnapshots.SegmentBalanceTrace {
+		t.Fatalf("manifest segments = %+v, want one balance trace segment", manifest.Segments)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(12)
+	if err != nil || !ok || trace.GetTimestamp() != 1200 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1200", trace, ok, err)
+	}
+	block, balance, ok, err := mgr.AccountTraceAtOrBefore(owner.Bytes(), 20)
+	if err != nil || !ok || block != 12 || balance != 900 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%d/%v/%v, want 12/900/true/nil", block, balance, ok, err)
+	}
+
+	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
+	if _, err := statesnapshots.PublishSignedSnapshotCatalog(snapshotDir, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+	pruneCtx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.trusted-key", hex.EncodeToString(priv.Public().(ed25519.PublicKey)),
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	if err := snapshotPruneBalanceTracesCmd(pruneCtx); err != nil {
+		t.Fatalf("snapshotPruneBalanceTracesCmd: %v", err)
+	}
+	reopened, err := openPebbleDB(pruneCtx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	if got := rawdb.ReadBlockBalanceTrace(reopened, 12); got != nil {
+		t.Fatalf("hot BlockBalanceTrace after prune = %+v, want nil", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(reopened, owner.Bytes(), 12); ok || balance != 0 {
+		t.Fatalf("hot AccountTrace after prune = %d/%v, want 0/false", balance, ok)
+	}
+	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
+	chainDB.SetBalanceTraceReader(mgr)
+	if got := rawdb.ReadBlockBalanceTrace(chainDB, 12); got == nil || got.GetTimestamp() != 1200 {
+		t.Fatalf("cold BlockBalanceTrace after prune = %+v, want timestamp 1200", got)
 	}
 }
 
@@ -1108,6 +1224,7 @@ func snapshotTestSunToWeiHex(sun int64) string {
 func writeSnapshotCmdRemoteFetchSource(t *testing.T, sourceDir string) (statesnapshots.ChainIdentity, ed25519.PublicKey, *statesnapshots.SnapshotCatalog, []statesnapshots.SegmentRef) {
 	t.Helper()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x24}, common.AccountIDLength)...))
+	traceOwner := snapshotCmdRemoteTraceOwner()
 	sourceDB := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStateTxRange(sourceDB, 1, common.Hash{0x01}, 1, 1); err != nil {
 		t.Fatalf("WriteStateTxRange: %v", err)
@@ -1133,6 +1250,23 @@ func writeSnapshotCmdRemoteFetchSource(t *testing.T, sourceDir string) (statesna
 	if len(refs) != 3 {
 		t.Fatalf("history refs = %+v, want segment+index+accessor", refs)
 	}
+	if err := rawdb.WriteBlockBalanceTrace(sourceDB, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   bytes.Repeat([]byte{0x01}, common.HashLength),
+			Number: 1,
+		},
+		Timestamp: 101,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(sourceDB, traceOwner.Bytes(), 1, 55); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	traceRef, err := statesnapshots.BuildBalanceTraceSegmentFromDB(sourceDB, sourceDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB: %v", err)
+	}
+	refs = append(refs, traceRef)
 	identity, err := snapshotExpectedChainIdentityFromGenesis(params.DefaultMainnetGenesis(), "")
 	if err != nil {
 		t.Fatalf("snapshotExpectedChainIdentityFromGenesis: %v", err)
@@ -1149,6 +1283,10 @@ func writeSnapshotCmdRemoteFetchSource(t *testing.T, sourceDir string) (statesna
 		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
 	}
 	return identity, pub, catalog, refs
+}
+
+func snapshotCmdRemoteTraceOwner() common.Address {
+	return common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x25}, common.AccountIDLength)...))
 }
 
 func snapshotCmdAssertSameFile(t *testing.T, wantPath, gotPath string) {

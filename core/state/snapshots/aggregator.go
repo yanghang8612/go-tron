@@ -180,6 +180,31 @@ func (a *Aggregator) BuildChainFreezerWithOptions(reader rawdb.AncientReader, fr
 	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
 }
 
+func (a *Aggregator) BuildBalanceTraces(db AggregatorDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	if a == nil || a.dir == "" {
+		return nil, errors.New("snapshots: nil aggregator or empty directory")
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil database")
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(db, a.dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	visibleStart, visibleEnd := uint64(0), uint64(0)
+	if old, err := LoadProductionManifest(a.dir); err == nil {
+		visibleStart = old.VisibleTxStart
+		visibleEnd = old.VisibleTxEnd
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	manifest, err := a.Integrate(visibleStart, visibleEnd, []SegmentRef{ref})
+	if err != nil {
+		return nil, err
+	}
+	return &AggregatorBuildResult{Manifest: manifest, Segments: []SegmentRef{ref}}, nil
+}
+
 func (a *Aggregator) Integrate(visibleStart, visibleEnd uint64, refs []SegmentRef) (*Manifest, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")

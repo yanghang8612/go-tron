@@ -94,6 +94,48 @@ func DeleteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64) e
 	return db.Delete(accountTraceKey(owner, blockNum))
 }
 
+// IterateAccountTraceRows walks hot AccountTrace rows in raw key order, filtering
+// to the inclusive block range. It does not consult cold snapshot sidecars.
+func IterateAccountTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, fn func(owner []byte, blockNum int64, balance int64) (bool, error)) error {
+	if db == nil {
+		return fmt.Errorf("account trace: nil database")
+	}
+	if fn == nil {
+		return fmt.Errorf("account trace: nil callback")
+	}
+	if fromBlock < 0 || toBlock < 0 {
+		return fmt.Errorf("account trace: negative range [%d,%d]", fromBlock, toBlock)
+	}
+	if toBlock < fromBlock {
+		return fmt.Errorf("account trace: inverted range [%d,%d]", fromBlock, toBlock)
+	}
+	it := db.NewIterator(accountTracePrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		key := it.Key()
+		if len(key) <= len(accountTracePrefix)+8 {
+			return fmt.Errorf("account trace: malformed key length %d", len(key))
+		}
+		owner := key[len(accountTracePrefix) : len(key)-8]
+		blockNum := accountTraceBlockFromSuffix(key[len(key)-8:])
+		if blockNum < fromBlock || blockNum > toBlock {
+			continue
+		}
+		var at contractpb.AccountTrace
+		if err := proto.Unmarshal(it.Value(), &at); err != nil {
+			return fmt.Errorf("account trace: unmarshal block %d owner %x: %w", blockNum, owner, err)
+		}
+		keepGoing, err := fn(append([]byte(nil), owner...), blockNum, at.Balance)
+		if err != nil {
+			return err
+		}
+		if !keepGoing {
+			break
+		}
+	}
+	return it.Error()
+}
+
 func accountTraceOwnerPrefix(owner []byte) []byte {
 	k := make([]byte, 0, len(accountTracePrefix)+len(owner))
 	k = append(k, accountTracePrefix...)
