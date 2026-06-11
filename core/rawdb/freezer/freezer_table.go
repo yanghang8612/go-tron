@@ -1237,6 +1237,33 @@ func (t *freezerTable) size() (uint64, error) {
 	return t.sizeNolock()
 }
 
+// stats returns a diagnostic table status snapshot.
+func (t *freezerTable) stats() (TableStats, error) {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	hidden, err := t.sizeHidden()
+	if err != nil {
+		return TableStats{}, err
+	}
+	visible, err := t.sizeNolock()
+	if err != nil {
+		return TableStats{}, err
+	}
+	return TableStats{
+		Head:         t.items.Load(),
+		PhysicalTail: t.itemOffset.Load(),
+		HiddenTail:   t.itemHidden.Load(),
+		Prunable:     t.config.prunable,
+		NoSnappy:     t.config.noSnappy,
+		TailFile:     t.tailId,
+		HeadFile:     t.headId,
+		HeadBytes:    t.headBytes,
+		VisibleSize:  visible,
+		HiddenSize:   hidden,
+	}, nil
+}
+
 // sizeNolock returns the total data size in the freezer table. This function
 // assumes the lock is already held.
 func (t *freezerTable) sizeNolock() (uint64, error) {

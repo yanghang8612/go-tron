@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	corepkg "github.com/tronprotocol/go-tron/core"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	corestate "github.com/tronprotocol/go-tron/core/state"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
@@ -441,6 +444,59 @@ func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestDBFreezerStatusCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(dataDir), "", false, 50, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	_, err = f.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
+		for i := uint64(0); i < 5; i++ {
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, []byte{byte(i), byte(i + 1)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, []byte{byte(i + 2)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, i, []byte{byte(i + 3)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ModifyAncients: %v", err)
+	}
+	if _, err := f.TruncateTail(3); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerStatusCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbFreezerStatusCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Freezer status:",
+		"readonly=true",
+		"head=5",
+		"tail=3",
+		"name=" + rawdb.AncientBlocksTable,
+		"name=" + rawdb.AncientTxInfosTable,
+		"name=" + rawdb.AncientStateRootsTable,
+		"hiddenTail=3",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
 	t.Helper()
 	genesis, err := loadGenesisFile(genesisPath)
@@ -697,6 +753,33 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse flags: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func captureDBCmdStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+		_ = r.Close()
+	}()
+	runErr := fn()
+	closeErr := w.Close()
+	out, readErr := io.ReadAll(r)
+	if runErr != nil {
+		return string(out), runErr
+	}
+	if closeErr != nil {
+		return string(out), closeErr
+	}
+	if readErr != nil {
+		return string(out), readErr
+	}
+	return string(out), nil
 }
 
 func dbTestSectionBloomBitSetHas(bitset []byte, bit uint64) bool {

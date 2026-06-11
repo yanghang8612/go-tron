@@ -10,8 +10,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	chainfreezer "github.com/tronprotocol/go-tron/core/freezer"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
@@ -158,8 +160,38 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbBackfillBalanceTracesCmd,
 			},
+			{
+				Name:  "freezer-status",
+				Usage: "Print chain freezer head/tail and per-table physical prune status",
+				Flags: []cli.Flag{
+					dataDirFlag,
+				},
+				Action: dbFreezerStatusCmd,
+			},
 		},
 	}
+}
+
+func dbFreezerStatusCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(cfg.DataDir), "", true, freezerTableSize, chainfreezer.FreezerTableSet())
+	if err != nil {
+		return fmt.Errorf("open freezer: %w", err)
+	}
+	defer f.Close()
+
+	stats, err := f.Stats()
+	if err != nil {
+		return fmt.Errorf("read freezer status: %w", err)
+	}
+	fmt.Printf("Freezer status: datadir=%s readonly=%t head=%d tail=%d tables=%d\n",
+		stats.Datadir, stats.ReadOnly, stats.Head, stats.Tail, len(stats.Tables))
+	for _, table := range stats.Tables {
+		fmt.Printf("Freezer table: name=%s head=%d physicalTail=%d hiddenTail=%d prunable=%t noSnappy=%t tailFile=%d headFile=%d headBytes=%d visibleSize=%d hiddenSize=%d\n",
+			table.Name, table.Head, table.PhysicalTail, table.HiddenTail, table.Prunable, table.NoSnappy,
+			table.TailFile, table.HeadFile, table.HeadBytes, table.VisibleSize, table.HiddenSize)
+	}
+	return nil
 }
 
 func dbRebuildTxIndexesCmd(ctx *cli.Context) error {

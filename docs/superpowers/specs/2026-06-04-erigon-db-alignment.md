@@ -854,13 +854,20 @@ Remaining:
 go-tron's `.bt` latest accessor is correct for ordered prefix iteration.
 Erigon's recsplit/hash accessors are still useful for point-heavy indexes.
 
+Status:
+
+- Raw chain freezer tables now expose a diagnostic `Stats` snapshot with
+  freezer-wide head/tail plus per-table physical tail, hidden tail, prunable
+  flags, shard IDs, visible size, and hidden size. `gtron db freezer-status`
+  opens the chain freezer read-only and prints that state for benchmark and
+  soak sampling after minimal-mode tail pruning.
+
 Adopt only where profiles justify it:
 
 - tx hash to block lookup
 - event/log topic and address indexes
 - history accessor point lookup if `.kv` binary search becomes a bottleneck
-- per-table physical-tail observability and repair-event metrics for pruned
-  freezer tails
+- repair-event metrics for pruned freezer tails
 - existence filters for cold CodeDomain or commitment snapshots
 
 ## Recommended Implementation Order

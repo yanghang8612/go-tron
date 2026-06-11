@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -90,6 +91,36 @@ type Freezer struct {
 	tables       map[string]*freezerTable // Data tables for storing everything
 	instanceLock *flock.Flock             // File-system lock to prevent double opens
 	closeOnce    sync.Once
+}
+
+// Stats is a stable, read-only snapshot of freezer-wide and per-table bounds.
+// Head is the append head (exclusive), Tail is the freezer-wide virtual tail
+// enforced by TruncateTail, and Tables records each table's physical and
+// virtual tail state.
+type Stats struct {
+	Datadir  string
+	ReadOnly bool
+	Head     uint64
+	Tail     uint64
+	Tables   []TableStats
+}
+
+// TableStats describes one freezer table's storage bounds. PhysicalTail is the
+// first row still backed by local data files, while HiddenTail is the virtual
+// tail used to hide rows after TruncateTail and before/after physical shard
+// reclamation. VisibleSize excludes HiddenSize.
+type TableStats struct {
+	Name         string
+	Head         uint64
+	PhysicalTail uint64
+	HiddenTail   uint64
+	Prunable     bool
+	NoSnappy     bool
+	TailFile     uint32
+	HeadFile     uint32
+	HeadBytes    int64
+	VisibleSize  uint64
+	HiddenSize   uint64
 }
 
 // NewFreezer creates a freezer instance for maintaining immutable ordered
@@ -272,6 +303,36 @@ func (f *Freezer) AncientSize(kind string) (uint64, error) {
 		return table.size()
 	}
 	return 0, errUnknownTable
+}
+
+// Stats returns a point-in-time freezer status snapshot for operators and
+// tests. It is intentionally diagnostic and takes the freezer read lock.
+func (f *Freezer) Stats() (Stats, error) {
+	f.writeLock.RLock()
+	defer f.writeLock.RUnlock()
+
+	stats := Stats{
+		Datadir:  f.datadir,
+		ReadOnly: f.readonly,
+		Head:     f.head.Load(),
+		Tail:     f.tail.Load(),
+		Tables:   make([]TableStats, 0, len(f.tables)),
+	}
+	names := make([]string, 0, len(f.tables))
+	for name := range f.tables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		table := f.tables[name]
+		tableStats, err := table.stats()
+		if err != nil {
+			return Stats{}, err
+		}
+		tableStats.Name = name
+		stats.Tables = append(stats.Tables, tableStats)
+	}
+	return stats, nil
 }
 
 // ModifyAncients runs the given write operation.

@@ -71,6 +71,11 @@ and then restarts `minimal` once so the tail-prune lifecycle can run. Use a
 small `--history-window` for short dev samples; production and soak runs should
 use the intended retention window.
 
+After the drill, `gtron db freezer-status --datadir <dir>` prints the local
+freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and
+visible/hidden sizes. Capture this alongside the JSONL row when validating
+minimal-mode physical shard reclamation.
+
 ## Sync Profile
 
 Run one dev witness and one fresh follower per mode. The row measures follower

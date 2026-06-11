@@ -279,6 +279,94 @@ func TestFreezerTruncateTail(t *testing.T) {
 	}
 }
 
+func TestFreezerStatsExposeTailBounds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f, err := NewFreezer(dir, "", false, 50, prunableTestTables)
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	const N = 10
+	_, err = f.ModifyAncients(func(op AncientWriteOp) error {
+		for i := uint64(0); i < N; i++ {
+			if err := op.AppendRaw("raw", i, getChunk(15, int(i))); err != nil {
+				return err
+			}
+			if err := op.AppendRaw("cmp", i, getChunk(15, int(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("Stats before prune: %v", err)
+	}
+	if stats.Datadir != dir || stats.ReadOnly || stats.Head != N || stats.Tail != 0 {
+		t.Fatalf("stats before prune = %+v, want datadir/head/tail", stats)
+	}
+	if len(stats.Tables) != 2 || stats.Tables[0].Name != "cmp" || stats.Tables[1].Name != "raw" {
+		t.Fatalf("table order = %+v, want cmp/raw", stats.Tables)
+	}
+	if !stats.Tables[0].Prunable || stats.Tables[0].NoSnappy || !stats.Tables[1].Prunable || !stats.Tables[1].NoSnappy {
+		t.Fatalf("table flags = %+v", stats.Tables)
+	}
+	for _, table := range stats.Tables {
+		if table.Head != N || table.PhysicalTail != 0 || table.HiddenTail != 0 {
+			t.Fatalf("table before prune = %+v, want head=%d tails=0", table, N)
+		}
+		if table.VisibleSize == 0 {
+			t.Fatalf("table before prune visible size is zero: %+v", table)
+		}
+	}
+
+	if _, err := f.TruncateTail(7); err != nil {
+		t.Fatalf("TruncateTail: %v", err)
+	}
+	stats, err = f.Stats()
+	if err != nil {
+		t.Fatalf("Stats after truncate tail: %v", err)
+	}
+	if stats.Tail != 7 {
+		t.Fatalf("stats tail after truncate = %d, want 7", stats.Tail)
+	}
+	for _, table := range stats.Tables {
+		if table.PhysicalTail != 0 || table.HiddenTail != 7 {
+			t.Fatalf("table after virtual tail = %+v, want physical=0 hidden=7", table)
+		}
+		if table.HiddenSize == 0 {
+			t.Fatalf("table hidden size after virtual tail is zero: %+v", table)
+		}
+	}
+
+	if removed, err := f.PruneTailFiles(); err != nil {
+		t.Fatalf("PruneTailFiles: %v", err)
+	} else if removed == 0 {
+		t.Fatal("PruneTailFiles removed no files, want physical tail movement")
+	}
+	stats, err = f.Stats()
+	if err != nil {
+		t.Fatalf("Stats after physical prune: %v", err)
+	}
+	for _, table := range stats.Tables {
+		if table.HiddenTail != 7 {
+			t.Fatalf("table hidden tail after physical prune = %+v, want 7", table)
+		}
+		if table.PhysicalTail == 0 || table.PhysicalTail >= table.HiddenTail {
+			t.Fatalf("table physical tail after physical prune = %+v, want 0 < physical < hidden", table)
+		}
+		if table.TailFile == 0 {
+			t.Fatalf("table tail file after physical prune = %+v, want advanced tail file", table)
+		}
+	}
+}
+
 func TestFreezerPruneTailFilesDeletesCompleteTailShards(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
