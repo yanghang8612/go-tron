@@ -682,9 +682,11 @@ Status:
 - `core.BackfillBalanceTracesByReplay` and
   `gtron db backfill-balance-traces` now provide a safe historical
   `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the
-  command initializes a temporary replay database from the same genesis,
+  command initializes an isolated replay database from the same genesis,
   enables history capture there, replays canonical blocks from the source
   chain, and copies only the generated trace rows back to the operator DB.
+  `--db.replay.dir` makes that replay database persistent and resumable from
+  its canonical head; one-shot runs can still use `--db.replay.tempdir`.
   Existing differing trace rows are rejected unless the operator explicitly
   passes `--db.balance-trace.overwrite`.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
@@ -720,10 +722,11 @@ Remaining:
   account traces can be repaired from retained block-balance traces, and
   rawdb readers can already fall through to registered cold trace segments after
   verified hot trace pruning, balance-trace snapshot builds now reject
-  incomplete source ranges, and a safe isolated replay backfill exists. It is
-  still expensive because it replays from genesis into a temporary DB; production
-  archive completeness still needs resume/checkpoint support, larger-datadir
-  soak, and eventually an as-of state reader or checkpointed replay start point.
+  incomplete source ranges, and a safe isolated replay backfill exists with
+  replay-DB resume. It is still expensive because a fresh replay directory
+  starts from genesis; production archive completeness still needs
+  collector-backed trace writes, larger-datadir soak, and eventually an as-of
+  state reader or checkpointed replay start point.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

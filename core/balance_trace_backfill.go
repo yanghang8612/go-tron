@@ -29,6 +29,8 @@ type BalanceTraceReplayBackfillProgress struct {
 type BalanceTraceReplayBackfillResult struct {
 	FromBlock             uint64
 	ToBlock               uint64
+	ReplayStartBlock      uint64
+	ReplayHeadBlock       uint64
 	BlocksReplayed        uint64
 	BlocksBackfilled      uint64
 	BlockTraceRows        uint64
@@ -40,8 +42,9 @@ type BalanceTraceReplayBackfillResult struct {
 // BackfillBalanceTracesByReplay rebuilds java-tron-compatible block/account
 // balance trace rows by replaying canonical blocks into an isolated database.
 // The source chain is read-only; only trace rows for [FromBlock, ToBlock] are
-// copied back to target. The replay database must be empty or contain only the
-// same genesis material.
+// copied back to target. The replay database may be empty or may already hold a
+// replayed canonical prefix, letting interrupted backfills resume without
+// replaying from genesis again.
 func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueStore, replayDB ethdb.KeyValueStore, genesis *params.Genesis, opts BalanceTraceReplayBackfillOptions) (*BalanceTraceReplayBackfillResult, error) {
 	if source == nil {
 		return nil, errors.New("core: nil source chain db")
@@ -88,22 +91,45 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 	}
 	defer replayChain.Close()
 
+	replayHead := replayChain.CurrentBlock()
+	if replayHead == nil {
+		return nil, errors.New("core: replay blockchain has no head")
+	}
+	if replayHead.Number() > 0 {
+		sourceHead := rawdb.ReadBlock(source, replayHead.Number())
+		if sourceHead == nil {
+			return nil, fmt.Errorf("core: source missing replay head block %d", replayHead.Number())
+		}
+		if sourceHead.Hash() != replayHead.Hash() {
+			return nil, fmt.Errorf("core: replay head %d hash %x does not match source canonical hash %x", replayHead.Number(), replayHead.Hash(), sourceHead.Hash())
+		}
+	}
+	result.ReplayStartBlock = replayHead.Number() + 1
+	result.ReplayHeadBlock = replayHead.Number()
+
+	replayReader := rawdb.NewChainDB(replayDB, rawdb.NoopAncient{})
 	for blockNum := uint64(1); blockNum <= opts.ToBlock; blockNum++ {
 		block := rawdb.ReadBlock(source, blockNum)
 		if block == nil {
 			return nil, fmt.Errorf("core: missing canonical block %d during balance trace replay backfill", blockNum)
 		}
-		if opts.Progress != nil {
-			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "replay", Block: blockNum, Target: opts.ToBlock})
+		if blockNum > replayHead.Number() {
+			if opts.Progress != nil {
+				opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "replay", Block: blockNum, Target: opts.ToBlock})
+			}
+			if err := replayChain.InsertBlock(block); err != nil {
+				return nil, fmt.Errorf("replay block %d: %w", blockNum, err)
+			}
+			result.BlocksReplayed++
+			result.ReplayHeadBlock = blockNum
 		}
-		if err := replayChain.InsertBlock(block); err != nil {
-			return nil, fmt.Errorf("replay block %d: %w", blockNum, err)
-		}
-		result.BlocksReplayed++
 		if blockNum < opts.FromBlock {
 			continue
 		}
-		if err := copyReplayedBalanceTraceRows(target, replayChain.DB(), blockNum, block.Hash(), opts.Overwrite, result); err != nil {
+		if blockNum <= replayHead.Number() && opts.Progress != nil {
+			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "copy", Block: blockNum, Target: opts.ToBlock})
+		}
+		if err := copyReplayedBalanceTraceRows(target, replayReader, blockNum, block.Hash(), opts.Overwrite, result); err != nil {
 			return nil, err
 		}
 		result.BlocksBackfilled++

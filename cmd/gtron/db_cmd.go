@@ -40,6 +40,10 @@ var (
 		Name:  "db.replay.tempdir",
 		Usage: "Parent directory for temporary isolated replay databases",
 	}
+	dbReplayDirFlag = &cli.StringFlag{
+		Name:  "db.replay.dir",
+		Usage: "Persistent isolated replay database directory for resumable balance trace backfills",
+	}
 	dbBalanceTraceOverwriteFlag = &cli.BoolFlag{
 		Name:  "db.balance-trace.overwrite",
 		Usage: "Overwrite existing balance trace rows when replay output differs",
@@ -139,6 +143,7 @@ func dbCommand() *cli.Command {
 					dbFromBlockFlag,
 					dbToBlockFlag,
 					dbReplayTempDirFlag,
+					dbReplayDirFlag,
 					dbBalanceTraceOverwriteFlag,
 				},
 				Action: dbBackfillBalanceTracesCmd,
@@ -343,11 +348,11 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	replayDir, err := os.MkdirTemp(strings.TrimSpace(ctx.String("db.replay.tempdir")), "gtron-balance-trace-replay-*")
+	replayDir, cleanupReplay, err := dbBalanceTraceReplayDir(ctx)
 	if err != nil {
-		return fmt.Errorf("create replay tempdir: %w", err)
+		return err
 	}
-	defer os.RemoveAll(replayDir)
+	defer cleanupReplay()
 
 	replayDB, err := openPebbleDB(ctx, replayDir)
 	if err != nil {
@@ -361,29 +366,43 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 		ToBlock:   toBlock,
 		Overwrite: ctx.Bool("db.balance-trace.overwrite"),
 		Progress: func(p core.BalanceTraceReplayBackfillProgress) {
-			if p.Phase != "replay" {
-				return
-			}
 			if p.Block == p.Target || p.Block-lastProgress >= 10000 {
 				lastProgress = p.Block
-				fmt.Printf("Balance trace replay: block=%d target=%d\n", p.Block, p.Target)
+				fmt.Printf("Balance trace %s: block=%d target=%d\n", p.Phase, p.Block, p.Target)
 			}
 		},
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Balance traces backfilled: blocks=[%d,%d] replayed=%d backfilled=%d blockTraceRows=%d accountTraceRows=%d existingBlockTraces=%d existingAccountTraces=%d\n",
+	fmt.Printf("Balance traces backfilled: blocks=[%d,%d] replayStart=%d replayHead=%d replayed=%d backfilled=%d blockTraceRows=%d accountTraceRows=%d existingBlockTraces=%d existingAccountTraces=%d replayDir=%s\n",
 		result.FromBlock,
 		result.ToBlock,
+		result.ReplayStartBlock,
+		result.ReplayHeadBlock,
 		result.BlocksReplayed,
 		result.BlocksBackfilled,
 		result.BlockTraceRows,
 		result.AccountTraceRows,
 		result.ExistingBlockTraces,
 		result.ExistingAccountTraces,
+		replayDir,
 	)
 	return nil
+}
+
+func dbBalanceTraceReplayDir(ctx *cli.Context) (string, func(), error) {
+	if dir := strings.TrimSpace(ctx.String("db.replay.dir")); dir != "" {
+		if strings.TrimSpace(ctx.String("db.replay.tempdir")) != "" {
+			return "", func() {}, fmt.Errorf("--db.replay.dir and --db.replay.tempdir are mutually exclusive")
+		}
+		return dir, func() {}, nil
+	}
+	dir, err := os.MkdirTemp(strings.TrimSpace(ctx.String("db.replay.tempdir")), "gtron-balance-trace-replay-*")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create replay tempdir: %w", err)
+	}
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 func dbReplayGenesis(ctx *cli.Context) (*params.Genesis, error) {

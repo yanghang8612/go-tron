@@ -282,13 +282,14 @@ func TestDBAuditBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
 func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 	dataDir := t.TempDir()
 	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+	replayDir := filepath.Join(t.TempDir(), "replay")
 
 	ctx := makeDBTestContext(t, []string{
 		"--datadir", dataDir,
 		"--genesis", genesisPath,
 		"--db.from-block", "1",
 		"--db.to-block", "1",
-		"--db.replay.tempdir", t.TempDir(),
+		"--db.replay.dir", replayDir,
 	})
 	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
 		t.Fatalf("dbBackfillBalanceTracesCmd: %v", err)
@@ -298,7 +299,6 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen pebble: %v", err)
 	}
-	defer reopened.Close()
 	trace := rawdb.ReadBlockBalanceTrace(reopened, 1)
 	if trace == nil {
 		t.Fatal("BlockBalanceTrace missing after backfill")
@@ -311,6 +311,35 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 	}
 	if _, ok := rawdb.ReadAccountTrace(reopened, receiver.Bytes(), 1); !ok {
 		t.Fatal("receiver AccountTrace missing after backfill")
+	}
+	if err := rawdb.DeleteBlockBalanceTrace(reopened, 1); err != nil {
+		t.Fatalf("DeleteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.DeleteAccountTrace(reopened, sender.Bytes(), 1); err != nil {
+		t.Fatalf("DeleteAccountTrace sender: %v", err)
+	}
+	if err := rawdb.DeleteAccountTrace(reopened, receiver.Bytes(), 1); err != nil {
+		t.Fatalf("DeleteAccountTrace receiver: %v", err)
+	}
+	reopened.Close()
+
+	ctx = makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "1",
+		"--db.replay.dir", replayDir,
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("resume dbBackfillBalanceTracesCmd: %v", err)
+	}
+	reopened, err = rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble after resume: %v", err)
+	}
+	defer reopened.Close()
+	if trace := rawdb.ReadBlockBalanceTrace(reopened, 1); trace == nil {
+		t.Fatal("BlockBalanceTrace missing after replay-dir resume")
 	}
 }
 
@@ -507,6 +536,7 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbETLBufferMiBFlag,
 		dbETLBatchMiBFlag,
 		dbReplayTempDirFlag,
+		dbReplayDirFlag,
 		dbBalanceTraceOverwriteFlag,
 		testnetFlag,
 		genesisFileFlag,

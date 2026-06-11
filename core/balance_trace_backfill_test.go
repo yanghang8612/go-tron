@@ -92,6 +92,61 @@ func TestBackfillBalanceTracesByReplayRejectsExistingMismatch(t *testing.T) {
 	}
 }
 
+func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
+	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
+	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)
+	if err := sourceChain.InsertBlock(block2); err != nil {
+		t.Fatalf("InsertBlock source block2: %v", err)
+	}
+	replayDB := ethrawdb.NewMemoryDatabase()
+	scratchTarget := ethrawdb.NewMemoryDatabase()
+	if _, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		scratchTarget,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{FromBlock: 1, ToBlock: 1},
+	); err != nil {
+		t.Fatalf("prime replay DB: %v", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 1); got != nil {
+		t.Fatalf("source BlockBalanceTrace after replay prime = %+v, want nil", got)
+	}
+
+	var phases []string
+	result, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		sourceDB,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{
+			FromBlock: 1,
+			ToBlock:   2,
+			Progress: func(p BalanceTraceReplayBackfillProgress) {
+				phases = append(phases, p.Phase)
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("resume BackfillBalanceTracesByReplay: %v", err)
+	}
+	if result.ReplayStartBlock != 2 || result.ReplayHeadBlock != 2 || result.BlocksReplayed != 1 || result.BlocksBackfilled != 2 {
+		t.Fatalf("result = %+v, want resume from block 2 and backfill two blocks", result)
+	}
+	if strings.Join(phases, ",") != "copy,replay" {
+		t.Fatalf("progress phases = %v, want copy,replay", phases)
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		trace := rawdb.ReadBlockBalanceTrace(sourceDB, int64(block.Number()))
+		if trace == nil {
+			t.Fatalf("BlockBalanceTrace %d missing after resume", block.Number())
+		}
+		if string(trace.GetBlockIdentifier().GetHash()) != string(block.Hash().Bytes()) {
+			t.Fatalf("trace %d hash = %x, want %x", block.Number(), trace.GetBlockIdentifier().GetHash(), block.Hash())
+		}
+	}
+}
+
 func newBalanceTraceBackfillSource(t *testing.T) (ethdb.Database, *BlockChain, *params.Genesis, *types.Block) {
 	t.Helper()
 	sourceDB := ethrawdb.NewMemoryDatabase()
