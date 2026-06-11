@@ -515,6 +515,29 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	coverage, err := rawdb.AuditBlockBalanceTraceCoverage(chainDB, chainDB, fromBlock, toBlock, 10)
+	if err != nil {
+		return err
+	}
+	if !coverage.Complete() {
+		for _, issue := range coverage.Issues {
+			fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
+		}
+		return fmt.Errorf("snapshot balance trace build requires complete coverage over [%d,%d]: missing=%d mismatched=%d",
+			fromBlock,
+			toBlock,
+			coverage.MissingBlockBalanceTrace,
+			coverage.MismatchedBlockBalanceTrace,
+		)
+	}
+
 	dir := snapshotDir(ctx, cfg.DataDir)
 	result, err := statesnapshots.NewAggregator(dir).BuildBalanceTraces(db, fromBlock, toBlock)
 	if err != nil {

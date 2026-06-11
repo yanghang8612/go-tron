@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -204,6 +205,73 @@ func TestDBRebuildAccountTracesCmd(t *testing.T) {
 		if !ok || got != tc.want {
 			t.Fatalf("ReadAccountTrace addr=%x block=%d = %d/%v, want %d/true", tc.addr, tc.block, got, ok, tc.want)
 		}
+	}
+}
+
+func TestDBAuditBalanceTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, txInfos := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	block2 := rawdb.ReadBlock(chainDB, 2)
+	if block1 == nil || block2 == nil {
+		t.Fatal("seeded blocks missing")
+	}
+	addr := dbRebuildTraceAddress(0xc0)
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{{
+			TransactionIdentifier: append([]byte(nil), txInfos[0].Id...),
+			Operation: []*contractpb.TransactionBalanceTrace_Operation{
+				dbRebuildBalanceOp(0, addr, 1),
+			},
+			Type:   "TransferContract",
+			Status: "SUCCESS",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
+		BlockIdentifier:         dbRebuildBlockBalanceID(block2),
+		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+	})
+	if err := dbAuditBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbAuditBalanceTracesCmd: %v", err)
+	}
+}
+
+func TestDBAuditBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
+	dataDir := t.TempDir()
+	db, _ := seedDBRebuildTxIndexDatadir(t, dataDir, false)
+	chainDB := rawdb.NewChainDB(db, rawdb.NoopAncient{})
+	block1 := rawdb.ReadBlock(chainDB, 1)
+	if block1 == nil {
+		t.Fatal("seeded block1 missing")
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: dbRebuildBlockBalanceID(block1),
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	db.Close()
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--db.from-block", "1",
+		"--db.to-block", "2",
+	})
+	err := dbAuditBalanceTracesCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "coverage incomplete") {
+		t.Fatalf("dbAuditBalanceTracesCmd error = %v, want coverage incomplete", err)
 	}
 }
 

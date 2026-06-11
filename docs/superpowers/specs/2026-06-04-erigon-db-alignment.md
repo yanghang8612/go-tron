@@ -663,15 +663,22 @@ Status:
   `snapshots.Manager` implements the cold reader, and runtime startup attaches
   it to `ChainDB` alongside the chain-index sidecar.
 - `gtron snapshot build-balance-traces --snapshot.from-block --snapshot.to-block`
-  now builds those registered cold trace segments from local rawdb trace rows,
-  validates/records the same snapshot chain identity used by freezer snapshots,
-  and leaves Wallet/API callers on the existing rawdb accessors.
+  now audits canonical block coverage before building, rejects missing or
+  mismatched `BlockBalanceTrace` rows, builds those registered cold trace
+  segments from local rawdb trace rows, validates/records the same snapshot
+  chain identity used by freezer snapshots, and leaves Wallet/API callers on
+  the existing rawdb accessors.
 - `gtron snapshot prune-balance-traces` now deletes hot account/balance trace
   rows only after verifying the signed snapshot catalog and registered
   `balance-trace` segments. The prune preflights every hot row in the covered
   range against the cold segment and aborts before deletion if any row is
   missing or differs, so archive reads can move to cold storage without silent
   trace loss.
+- `rawdb.AuditBlockBalanceTraceCoverage` and
+  `gtron db audit-balance-traces` now give operators a pre-freeze coverage
+  check for archive trace sidecars: every canonical block in the requested
+  range must exist and have a block-balance trace whose payload block
+  identifier matches the canonical hash/number.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -703,9 +710,12 @@ Remaining:
   read APIs are wired, history-enabled execution now populates new trace rows,
   account traces can be repaired from retained block-balance traces, and
   rawdb readers can already fall through to registered cold trace segments after
-  verified hot trace pruning, but historical block-balance-trace backfill and
-  remote restore/install runbook coverage are still needed before the feature is
-  archive-complete.
+  verified hot trace pruning, and balance-trace snapshot builds now reject
+  incomplete source ranges, but historical block-balance-trace backfill is still
+  needed before the feature is archive-complete. A safe backfill cannot reuse
+  canonical `applyBlock` directly because the current flat latest read path is
+  head-oriented; it needs either an as-of state reader wired into replay or an
+  isolated replay database that exports trace rows.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

@@ -339,6 +339,54 @@ func TestRebuildAccountTracesUsesExistingBaselineForPartialRange(t *testing.T) {
 	}
 }
 
+func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
+	db := NewMemoryChainDB()
+	block1, infos1 := derivedRebuildTestBlock(t, 1, 1)
+	block2, _ := derivedRebuildTestBlock(t, 2, 0)
+	block3, infos3 := derivedRebuildTestBlock(t, 3, 1)
+	for _, block := range []*types.Block{block1, block2, block3} {
+		if err := WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	addr := derivedRebuildAddress(0xa2)
+	if err := WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block1, infos1,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, addr, 1),
+		},
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := WriteBlockBalanceTrace(db, 3, derivedRebuildBalanceTrace(block1, infos3,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, addr, 2),
+		},
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace mismatched block3: %v", err)
+	}
+
+	result, err := AuditBlockBalanceTraceCoverage(db, db, 1, 3, 8)
+	if err != nil {
+		t.Fatalf("AuditBlockBalanceTraceCoverage: %v", err)
+	}
+	if result.Complete() {
+		t.Fatal("coverage unexpectedly complete")
+	}
+	if result.BlocksScanned != 3 || result.BlocksWithBalanceTrace != 2 ||
+		result.MissingBlockBalanceTrace != 1 || result.MismatchedBlockBalanceTrace != 1 {
+		t.Fatalf("result = %+v, want scanned=3 trace=2 missing=1 mismatched=1", result)
+	}
+	if len(result.Issues) != 2 {
+		t.Fatalf("issues = %+v, want 2 examples", result.Issues)
+	}
+	if result.Issues[0].BlockNum != 2 || result.Issues[0].Kind != "missing" {
+		t.Fatalf("issue[0] = %+v, want missing block 2", result.Issues[0])
+	}
+	if result.Issues[1].BlockNum != 3 || result.Issues[1].Kind != "mismatch" {
+		t.Fatalf("issue[1] = %+v, want mismatch block 3", result.Issues[1])
+	}
+}
+
 func TestRebuildAccountTracesRejectsBadInputs(t *testing.T) {
 	db := NewMemoryChainDB()
 	if _, err := RebuildAccountTracesFromBlockBalanceTraces(nil, db, db, 1, 1, etl.Options{}); err == nil {

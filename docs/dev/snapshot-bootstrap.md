@@ -85,6 +85,11 @@ Archive operators that enable balance-history capture can publish cold
 account/balance trace sidecars with the same signed catalog:
 
 ```bash
+gtron db audit-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 0 \
+  --db.to-block 12345678
+
 gtron snapshot build-balance-traces \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
@@ -96,6 +101,12 @@ gtron snapshot publish-catalog \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
   --snapshot.signing-key <ed25519-seed-or-private-key-hex>
 ```
+
+`snapshot build-balance-traces` repeats the coverage audit and refuses to build
+if any canonical block in the requested range is missing a `BlockBalanceTrace`
+row or if the trace payload identifies a different block hash/number. Generate
+or repair the hot trace rows first; the cold sidecar is only safe when the
+source range is complete.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` segments. At runtime, `ChainDB` falls through to the snapshot

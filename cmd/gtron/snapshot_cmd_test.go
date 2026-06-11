@@ -528,8 +528,8 @@ func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
 		"--snapshot.dir", snapshotDir,
-		"--snapshot.from-block", "10",
-		"--snapshot.to-block", "20",
+		"--snapshot.from-block", "12",
+		"--snapshot.to-block", "12",
 		"--dev",
 		"--witness.key", snapshotTestWitnessKey,
 	})
@@ -538,9 +538,13 @@ func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
 		t.Fatalf("openPebbleDB: %v", err)
 	}
 	owner := common.Address{0x41, 0xaa}
+	block12 := snapshotCmdBlock(12)
+	if err := rawdb.WriteBlock(db, block12); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
 	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
 		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
-			Hash:   bytes.Repeat([]byte{0x12}, common.HashLength),
+			Hash:   append([]byte(nil), block12.Hash().Bytes()...),
 			Number: 12,
 		},
 		Timestamp: 1200,
@@ -621,6 +625,47 @@ func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
 	chainDB.SetBalanceTraceReader(mgr)
 	if got := rawdb.ReadBlockBalanceTrace(chainDB, 12); got == nil || got.GetTimestamp() != 1200 {
 		t.Fatalf("cold BlockBalanceTrace after prune = %+v, want timestamp 1200", got)
+	}
+}
+
+func TestSnapshotBuildBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "10",
+		"--snapshot.to-block", "11",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	block10 := snapshotCmdBlock(10)
+	block11 := snapshotCmdBlock(11)
+	for _, block := range []*coretypes.Block{block10, block11} {
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 10, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block10.Hash().Bytes()...),
+			Number: 10,
+		},
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	err = snapshotBuildBalanceTracesCmd(ctx)
+	if err == nil || !strings.Contains(err.Error(), "requires complete coverage") {
+		t.Fatalf("snapshotBuildBalanceTracesCmd error = %v, want complete coverage error", err)
 	}
 }
 

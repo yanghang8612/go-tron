@@ -48,6 +48,27 @@ type RebuildAccountTracesResult struct {
 	ETL                    etl.Stats
 }
 
+type BalanceTraceCoverageIssue struct {
+	BlockNum uint64
+	Kind     string
+	Detail   string
+}
+
+type AuditBlockBalanceTraceCoverageResult struct {
+	FromBlock                   uint64
+	ToBlock                     uint64
+	BlocksScanned               uint64
+	BlocksWithBalanceTrace      uint64
+	BlocksWithEmptyTxTrace      uint64
+	MissingBlockBalanceTrace    uint64
+	MismatchedBlockBalanceTrace uint64
+	Issues                      []BalanceTraceCoverageIssue
+}
+
+func (r *AuditBlockBalanceTraceCoverageResult) Complete() bool {
+	return r != nil && r.MissingBlockBalanceTrace == 0 && r.MismatchedBlockBalanceTrace == 0
+}
+
 type accountTraceRebuildReader interface {
 	ethdb.KeyValueReader
 	ethdb.Iteratee
@@ -233,6 +254,68 @@ func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader acco
 		return nil, err
 	}
 	result.ETL = stats
+	return result, nil
+}
+
+// AuditBlockBalanceTraceCoverage checks that every retained canonical block in
+// the range has a BlockBalanceTrace row whose payload identifies that block.
+// It does not require TransactionBalanceTrace entries: java-tron-compatible
+// history can legitimately emit an empty per-tx trace for blocks that only
+// touch balances outside a transaction or do not touch balances at all.
+func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueReader, fromBlock, toBlock uint64, maxIssues int) (*AuditBlockBalanceTraceCoverageResult, error) {
+	if chain == nil {
+		return nil, errors.New("rawdb: nil chain db")
+	}
+	if traceReader == nil {
+		return nil, errors.New("rawdb: nil balance trace reader")
+	}
+	if toBlock < fromBlock {
+		return nil, fmt.Errorf("rawdb: inverted balance trace coverage range [%d,%d]", fromBlock, toBlock)
+	}
+	if toBlock > math.MaxInt64 {
+		return nil, fmt.Errorf("rawdb: balance trace coverage to-block %d exceeds int64 block number range", toBlock)
+	}
+	if maxIssues < 0 {
+		maxIssues = 0
+	}
+	result := &AuditBlockBalanceTraceCoverageResult{
+		FromBlock: fromBlock,
+		ToBlock:   toBlock,
+	}
+	addIssue := func(blockNum uint64, kind, detail string) {
+		if maxIssues == 0 || len(result.Issues) >= maxIssues {
+			return
+		}
+		result.Issues = append(result.Issues, BalanceTraceCoverageIssue{
+			BlockNum: blockNum,
+			Kind:     kind,
+			Detail:   detail,
+		})
+	}
+	for blockNum := fromBlock; ; blockNum++ {
+		block := ReadBlock(chain, blockNum)
+		if block == nil {
+			return nil, fmt.Errorf("rawdb: missing block %d during balance trace coverage audit", blockNum)
+		}
+		result.BlocksScanned++
+		trace := ReadBlockBalanceTrace(traceReader, int64(blockNum))
+		if trace == nil {
+			result.MissingBlockBalanceTrace++
+			addIssue(blockNum, "missing", "missing BlockBalanceTrace")
+		} else {
+			result.BlocksWithBalanceTrace++
+			if len(trace.GetTransactionBalanceTrace()) == 0 {
+				result.BlocksWithEmptyTxTrace++
+			}
+			if err := validateBlockBalanceTraceForRebuild(blockNum, block.Hash().Bytes(), trace); err != nil {
+				result.MismatchedBlockBalanceTrace++
+				addIssue(blockNum, "mismatch", err.Error())
+			}
+		}
+		if blockNum == toBlock {
+			break
+		}
+	}
 	return result, nil
 }
 

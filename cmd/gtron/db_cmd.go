@@ -93,6 +93,21 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbRebuildAccountTracesCmd,
 			},
+			{
+				Name:  "audit-balance-traces",
+				Usage: "Audit canonical block coverage for retained BlockBalanceTrace rows",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					dbFromBlockFlag,
+					dbToBlockFlag,
+				},
+				Action: dbAuditBalanceTracesCmd,
+			},
 		},
 	}
 }
@@ -221,6 +236,51 @@ func dbRebuildAccountTracesCmd(ctx *cli.Context) error {
 		result.ETL.Applied,
 		result.ETL.SpilledRuns,
 	)
+	return nil
+}
+
+func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	fromBlock := ctx.Uint64("db.from-block")
+	toBlock, err := dbRebuildToBlock(ctx, chainDB)
+	if err != nil {
+		return err
+	}
+	result, err := rawdb.AuditBlockBalanceTraceCoverage(chainDB, chainDB, fromBlock, toBlock, 10)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Balance trace coverage: blocks=[%d,%d] scanned=%d traceBlocks=%d missing=%d mismatched=%d emptyTxTraceBlocks=%d\n",
+		result.FromBlock,
+		result.ToBlock,
+		result.BlocksScanned,
+		result.BlocksWithBalanceTrace,
+		result.MissingBlockBalanceTrace,
+		result.MismatchedBlockBalanceTrace,
+		result.BlocksWithEmptyTxTrace,
+	)
+	for _, issue := range result.Issues {
+		fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
+	}
+	if !result.Complete() {
+		return fmt.Errorf("balance trace coverage incomplete: missing=%d mismatched=%d",
+			result.MissingBlockBalanceTrace,
+			result.MismatchedBlockBalanceTrace,
+		)
+	}
 	return nil
 }
 
