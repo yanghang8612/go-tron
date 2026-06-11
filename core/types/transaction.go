@@ -175,11 +175,15 @@ func (tx *Transaction) recoverSigners() ([]common.Address, error) {
 		if err != nil {
 			return nil, err
 		}
-		pub, err := crypto.SigToPub(hash[:], recoverySig)
+		// SigToAddressJavaCompat mirrors java-tron's ECKey.signatureToAddress,
+		// including the point-at-infinity quirk where a recovery that lands on
+		// the infinity point resolves to keccak256("")[12:] rather than
+		// failing (Nile block 18,278,266). Genuine bad signatures still error.
+		addr, err := crypto.SigToAddressJavaCompat(hash[:], recoverySig)
 		if err != nil {
 			return nil, fmt.Errorf("transaction: recover signer: %w", err)
 		}
-		addrs = append(addrs, crypto.PubkeyToAddress(pub))
+		addrs = append(addrs, addr)
 	}
 	return addrs, nil
 }
