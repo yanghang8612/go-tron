@@ -2,6 +2,7 @@ package net
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -178,5 +179,28 @@ func TestSlowestStateCommitPhaseFallsBackToAccountTrieAggregate(t *testing.T) {
 	})
 	if phase != "accountTrieUpdate" || elapsed != 10*time.Second {
 		t.Fatalf("slowestStateCommitPhase = %s %v, want accountTrieUpdate 10s", phase, elapsed)
+	}
+}
+
+func TestSyncPauseHintDistinguishesExecutionFailure(t *testing.T) {
+	err := &core.InsertBlocksError{
+		Index:       0,
+		BlockNumber: 19716962,
+		Err:         errors.New("process block: tx 0: validate: insufficient balance"),
+	}
+	got := syncPauseHint(err)
+	for _, want := range []string{"block execution failed", "pre-divergence snapshot", "resync"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("syncPauseHint() = %q, want substring %q", got, want)
+		}
+	}
+	if got == "restart to resume" {
+		t.Fatalf("syncPauseHint() returned stale restart hint for InsertBlocksError")
+	}
+}
+
+func TestSyncPauseHintKeepsRestartHintForNonExecutionFailure(t *testing.T) {
+	if got := syncPauseHint(errors.New("temporary sync peer disconnect")); got != "restart to resume" {
+		t.Fatalf("syncPauseHint() = %q, want restart hint", got)
 	}
 }

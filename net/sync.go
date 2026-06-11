@@ -1466,7 +1466,7 @@ func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 		"number", num,
 		"peer", peerID,
 		"err", err,
-		"hint", "restart to resume")
+		"hint", syncPauseHint(err))
 	// Latch the gate outside ss.mu: lock order is ss.mu (outer) →
 	// pause.mu (inner) elsewhere, and Enter is sticky so the brief
 	// window between Enter and the doReset() that follows is fine —
@@ -1476,6 +1476,14 @@ func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 	ss.mu.Lock()
 	ss.doReset()
 	ss.mu.Unlock()
+}
+
+func syncPauseHint(err error) string {
+	var insertErr *core.InsertBlocksError
+	if errors.As(err, &insertErr) {
+		return "block execution failed; restart retries the same state, rebuild from a trusted pre-divergence snapshot or clean resync"
+	}
+	return "restart to resume"
 }
 
 func (ss *SyncService) estimatedRemainLocked() int64 {
