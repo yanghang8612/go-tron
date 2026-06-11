@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
@@ -29,6 +30,7 @@ func TestBackfillBalanceTracesByReplayWritesMissingRows(t *testing.T) {
 		BalanceTraceReplayBackfillOptions{
 			FromBlock: 1,
 			ToBlock:   1,
+			ETL:       etl.Options{TempDir: t.TempDir(), BufferLimit: 1},
 			Progress: func(p BalanceTraceReplayBackfillProgress) {
 				if p.Phase == "replay" {
 					progress = append(progress, p.Block)
@@ -42,6 +44,9 @@ func TestBackfillBalanceTracesByReplayWritesMissingRows(t *testing.T) {
 	if result.BlocksReplayed != 1 || result.BlocksBackfilled != 1 ||
 		result.BlockTraceRows != 1 || result.AccountTraceRows != 2 {
 		t.Fatalf("result = %+v, want one block trace and two account traces", result)
+	}
+	if result.ETL.Applied != 3 || result.ETL.SpilledRuns == 0 {
+		t.Fatalf("ETL stats = %+v, want 3 applied rows and forced spill", result.ETL)
 	}
 	if len(progress) != 1 || progress[0] != 1 {
 		t.Fatalf("progress = %v, want replay block 1", progress)

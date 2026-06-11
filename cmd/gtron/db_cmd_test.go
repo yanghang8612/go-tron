@@ -290,6 +290,8 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 		"--db.from-block", "1",
 		"--db.to-block", "1",
 		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
 	})
 	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
 		t.Fatalf("dbBackfillBalanceTracesCmd: %v", err)
@@ -329,6 +331,8 @@ func TestDBBackfillBalanceTracesCmd(t *testing.T) {
 		"--db.from-block", "1",
 		"--db.to-block", "1",
 		"--db.replay.dir", replayDir,
+		"--db.etl.tempdir", t.TempDir(),
+		"--db.etl.buffer", "1",
 	})
 	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
 		t.Fatalf("resume dbBackfillBalanceTracesCmd: %v", err)

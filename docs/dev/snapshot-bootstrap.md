@@ -94,7 +94,8 @@ gtron db backfill-balance-traces \
   --datadir /path/to/datadir \
   --db.from-block 1 \
   --db.to-block 12345678 \
-  --db.replay.dir /path/to/datadir/gtron/balance-trace-replay
+  --db.replay.dir /path/to/datadir/gtron/balance-trace-replay \
+  --db.etl.tempdir /path/to/fast/tmp
 
 gtron snapshot build-balance-traces \
   --datadir /path/to/datadir \
@@ -113,8 +114,9 @@ if any canonical block in the requested range is missing a `BlockBalanceTrace`
 row or if the trace payload identifies a different block hash/number. Generate
 or repair the hot trace rows first; `gtron db backfill-balance-traces` does
 this by replaying canonical blocks into an isolated replay database and then
-copying only the generated trace rows back into the operator datadir. The cold
-sidecar is only safe when the source range is complete.
+copying only the generated trace rows back into the operator datadir through
+the sorted ETL collector. The cold sidecar is only safe when the source range is
+complete.
 
 Use `--db.replay.dir` for long backfills so interrupted runs can resume from
 the isolated replay database head. Use `--db.replay.tempdir` for one-shot runs

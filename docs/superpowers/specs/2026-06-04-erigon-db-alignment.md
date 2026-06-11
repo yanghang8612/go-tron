@@ -684,11 +684,11 @@ Status:
   `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the
   command initializes an isolated replay database from the same genesis,
   enables history capture there, replays canonical blocks from the source
-  chain, and copies only the generated trace rows back to the operator DB.
-  `--db.replay.dir` makes that replay database persistent and resumable from
-  its canonical head; one-shot runs can still use `--db.replay.tempdir`.
-  Existing differing trace rows are rejected unless the operator explicitly
-  passes `--db.balance-trace.overwrite`.
+  chain, and copies only the generated trace rows back to the operator DB
+  through the sorted ETL collector. `--db.replay.dir` makes that replay database
+  persistent and resumable from its canonical head; one-shot runs can still use
+  `--db.replay.tempdir`. Existing differing trace rows are rejected unless the
+  operator explicitly passes `--db.balance-trace.overwrite`.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -723,10 +723,10 @@ Remaining:
   rawdb readers can already fall through to registered cold trace segments after
   verified hot trace pruning, balance-trace snapshot builds now reject
   incomplete source ranges, and a safe isolated replay backfill exists with
-  replay-DB resume. It is still expensive because a fresh replay directory
-  starts from genesis; production archive completeness still needs
-  collector-backed trace writes, larger-datadir soak, and eventually an as-of
-  state reader or checkpointed replay start point.
+  replay-DB resume plus collector-backed trace writes. It is still expensive
+  because a fresh replay directory starts from genesis; production archive
+  completeness still needs larger-datadir soak and eventually an as-of state
+  reader or checkpointed replay start point.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

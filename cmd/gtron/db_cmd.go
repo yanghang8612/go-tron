@@ -142,6 +142,9 @@ func dbCommand() *cli.Command {
 					dbL0StopFlag,
 					dbFromBlockFlag,
 					dbToBlockFlag,
+					dbETLTempDirFlag,
+					dbETLBufferMiBFlag,
+					dbETLBatchMiBFlag,
 					dbReplayTempDirFlag,
 					dbReplayDirFlag,
 					dbBalanceTraceOverwriteFlag,
@@ -359,12 +362,17 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 		return fmt.Errorf("open replay database: %w", err)
 	}
 	defer replayDB.Close()
+	etlOpts, err := dbETLOptions(ctx)
+	if err != nil {
+		return err
+	}
 
 	lastProgress := uint64(0)
 	result, err := core.BackfillBalanceTracesByReplay(chainDB, db, replayDB, genesis, core.BalanceTraceReplayBackfillOptions{
 		FromBlock: fromBlock,
 		ToBlock:   toBlock,
 		Overwrite: ctx.Bool("db.balance-trace.overwrite"),
+		ETL:       etlOpts,
 		Progress: func(p core.BalanceTraceReplayBackfillProgress) {
 			if p.Block == p.Target || p.Block-lastProgress >= 10000 {
 				lastProgress = p.Block
@@ -375,7 +383,7 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Balance traces backfilled: blocks=[%d,%d] replayStart=%d replayHead=%d replayed=%d backfilled=%d blockTraceRows=%d accountTraceRows=%d existingBlockTraces=%d existingAccountTraces=%d replayDir=%s\n",
+	fmt.Printf("Balance traces backfilled: blocks=[%d,%d] replayStart=%d replayHead=%d replayed=%d backfilled=%d blockTraceRows=%d accountTraceRows=%d existingBlockTraces=%d existingAccountTraces=%d etlApplied=%d etlRuns=%d replayDir=%s\n",
 		result.FromBlock,
 		result.ToBlock,
 		result.ReplayStartBlock,
@@ -386,6 +394,8 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 		result.AccountTraceRows,
 		result.ExistingBlockTraces,
 		result.ExistingAccountTraces,
+		result.ETL.Applied,
+		result.ETL.SpilledRuns,
 		replayDir,
 	)
 	return nil
