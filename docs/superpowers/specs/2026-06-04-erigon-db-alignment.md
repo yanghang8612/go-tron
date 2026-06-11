@@ -465,11 +465,10 @@ Status:
   and then rechecks account resource usage, DP-derived limits, and witness
   reward/allowance through the cold history manager.
 - The remaining production chain `rawdb.ReadBlockKV` call sites have been
-  audited. TVM `BLOCKHASH`/`CHAINID` now have cold fallbacks, and the pruning
-  finish-stage guard prefers `CanonicalBlockHash`; the `cmd/gtron` adapter
-  resolves that through `BlockChain.GetBlockByNumber`, which can read the chain
-  freezer. The direct KV read in the pruner is only a fallback for minimal test
-  sources and does not currently block aggressive hot chain lookup pruning.
+  eliminated outside rawdb itself. TVM `BLOCKHASH`/legacy `CHAINID` now resolve
+  through freezer-aware `BlockHashByNumber`/`ReadBlockHashByNumber`, and the
+  pruning finish-stage guard uses freezer-aware canonical hash lookups. A rawdb
+  source audit test now fails on new production `rawdb.ReadBlockKV` calls.
 
 Needed:
 

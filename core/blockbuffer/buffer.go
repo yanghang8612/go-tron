@@ -31,6 +31,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 // ErrNotFound is returned by Get/Has when the key is tombstoned in a layer.
@@ -166,12 +167,14 @@ func (b *Buffer) SetBlockHashReader(reader BlockHashReader) {
 	b.blockHashReader = reader
 }
 
-// BlockHashByNumber resolves a canonical block hash through the optional cold
-// reader. Overlay writes are intentionally not checked here; callers should try
-// rawdb.ReadBlockKV on the buffer first so hot/in-flight layers win.
+// BlockHashByNumber resolves a canonical block hash through the buffered/hot
+// view first, then through the optional cold reader.
 func (b *Buffer) BlockHashByNumber(number uint64) (common.Hash, bool) {
 	if b == nil {
 		return common.Hash{}, false
+	}
+	if hash := rawdb.ReadBlockHashByNumber(b, number); hash != (common.Hash{}) {
+		return hash, true
 	}
 	b.mu.RLock()
 	reader := b.blockHashReader

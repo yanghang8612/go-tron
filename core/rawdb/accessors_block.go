@@ -106,15 +106,10 @@ func readAncient(db *ChainDB, kind string, number uint64) ([]byte, bool) {
 	return data, true
 }
 
-// ReadBlockKV is the KV-only variant of ReadBlock, for callers that hold a
-// plain `ethdb.KeyValueReader` and know the block they want is hot (i.e.
-// above the freezer cutoff). The VM's BLOCKHASH opcode is the canonical
-// user: its 256-block lookback window sits above the 128-block freezer
-// margin, so reads here are guaranteed to land in Pebble.
-//
-// Slice-2's audit doc records this as a "intentionally KV-only" call
-// site; if the freezer margin is ever shrunk below 256 this site needs
-// revisiting.
+// ReadBlockKV is the KV-only variant of ReadBlock, for tests and narrow
+// callers that hold a plain ethdb.KeyValueReader and know the block they want
+// is hot. Production chain lookups should prefer ReadBlockHashByNumber or a
+// BlockHashByNumber-capable reader so frozen block bodies remain visible.
 func ReadBlockKV(db ethdb.KeyValueReader, number uint64) *types.Block {
 	data, err := db.Get(blockKey(number))
 	if err != nil {
