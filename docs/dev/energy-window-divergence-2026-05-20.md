@@ -230,6 +230,86 @@ not safe to continue by restart. The state has diverged before the sync pause;
 restart with a fixed binary from a clean DB or from a trusted snapshot before
 block `8,736,434`.
 
+## Nile incident 2026-06-11
+
+A remote gtron Nile node paused at block `19,716,962` with:
+
+```
+insert block range index 0 block 19716962: process block: tx 0: validate: insufficient balance
+```
+
+The node was queried through `/gn` at head `19,716,961`
+(`00000000012cdb619ed8b6f9a9720a10b6929466f2c2785e3715966bb2158cfd`).
+The failing transaction is tx 0 in Nile block `19,716,962`:
+
+- tx `e78c527291df957205a90512a1e6b336c9cfadbe9f1698af2d7c013e65bac4c1`
+- transfer owner `414b9dffa11306413f8a5c6092ada09d722e60da22`
+- amount `4,683,364,162` SUN
+
+At the stopped gtron head, the owner balance was `4,683,363,322` SUN, exactly
+`840` SUN short. Public Nile accepted the transfer with `net_usage=269` and no
+fee in the transaction receipt.
+
+A full receipt comparison of the owner's 153 outgoing transactions found exactly
+two gtron overcharges before the failed transfer:
+
+| block | tx | gtron fee | public Nile fee | delta |
+|---|---|---:|---:|---:|
+| `19,555,385` | `07674adbbaacf92e95e64d6959e7333abf740c9ac2a9bf87a4ec8f41f3a9e0e6` | `15,983,340` | `15,982,920` | `+420` |
+| `19,713,603` | `26238015137427dc240841d024a0ada8a2f53d286d6ab4fb3c275e52985ae45c` | `73,778,880` | `73,778,460` | `+420` |
+
+The chain energy price was `420` SUN per energy, so the two one-energy caller
+overcharges explain the `840` SUN shortfall exactly.
+
+Both mismatching transactions called `RootChainProxy`
+(`4133e0ad82ed723b7584b7df0338b708eb9be44966`), whose contract origin is
+`41e7d71e72ea48de9144dc2450e076415af0ea745f`, `origin_energy_limit=1,000,000,000`,
+and default `consume_user_resource_percent`. Scanning all 831 calls to that
+contract before the stop found 43 receipt mismatches. Every mismatch was capped by
+`origin_energy_left` with `origin_energy_window=28800`; the full contract net was
+`+2,940` SUN across all callers, while this owner's direct net was `+840` SUN.
+
+The first visible same-origin mismatch was earlier, at block `19,541,561`, tx
+`427f748acd872f11c427cb27e17bf363be46171f8bf598455f064d54a0939385`, calling
+`StakeManagerProxy` (`4172294e4c37c45c6e9b1d583e1d8c99af639b17b6`):
+
+| receipt field | gtron | public Nile |
+|---|---:|---:|
+| `fee` | `35,765,820` | `35,765,400` |
+| `energy_fee` | `35,225,820` | `35,225,400` |
+| `energy_usage_total` | `454,994` | `454,994` |
+| `origin_energy_usage` | `371,123` | `371,124` |
+
+This incident happened with `allow_tvm_freeze=1`, `unfreeze_delay_days=0`, and
+`allow_harden_resource_calculation=0`, so it is a pre-Stake-2.0 state divergence,
+not the V2 per-account-window path documented above. The operational conclusion is
+the same: the stopped DB has already diverged. Restarting it will retry the same
+state and fail again at block `19,716,962`. Rebuild from a clean DB or resync from a
+trusted snapshot before the first divergent block; for operations, a clean Nile
+resync with the current fixed binary is the safest path.
+
+Operational runbook for this specific node:
+
+1. Stop the `gtron` process and preserve the stopped DB only for forensic
+   comparison. Do not publish it as a recovery snapshot.
+2. Start from an empty Nile DB, or from a trusted snapshot produced before the
+   first observed divergence (`19,541,561`; clean genesis replay is preferred).
+3. Run a binary built from current `origin/master` or a later commit that includes
+   `86aa564`, `684b952`, `2bc1ccc`, and the VM `originEnergyLeft` receipt-cache
+   path.
+4. After replay reaches `19,716,962`, verify the failed transfer
+   `e78c527291df957205a90512a1e6b336c9cfadbe9f1698af2d7c013e65bac4c1` is present
+   and the public receipt reports `net_usage=269` with no fee.
+5. Run the forensic gate:
+
+   ```bash
+   SOCKS5_PROXY=127.0.0.1:1088 scripts/dev/nile_19716962_audit.py
+   ```
+
+   The stopped DB fails this gate with 10 checks: the block is missing, and the
+   two historical owner receipts still show the exact `+420` SUN overcharges.
+   A rebuilt node must pass all checks.
+
 ### Known remaining (out of scope; follow-ups)
 
 - **Bandwidth** `net_window_size` has the identical structural gap (recovery uses
@@ -240,12 +320,12 @@ block `8,736,434`.
   `core/delegation/usage.go` was moved from simple truncate to java's
   precision-averaging formula on 2026-06-07, so the remaining gap is the
   account-window state, not the global-window arithmetic.
-- **Non-harden vs harden recovery formula:** go-tron's *legacy* (`recoverUsage`,
-  pre-Stake-2.0, and the vm staking-query precompile `recoverStakingUsage`) uses
-  the simple `usage*remaining/window` form, which diverges from java's scaled
-  `increase` for non-harden inputs. The V2 settle/limit path now uses the scaled
-  form (java-correct); the precompile + pre-fork paths still use the simple form.
-  Pre-existing, non-harden-only; flagged separately.
+- **Staking-query precompile recovery formula:** the VM staking-query precompile
+  `recoverStakingUsage` still uses the simple `usage*remaining/window` form in
+  the non-harden branch, which can diverge from java's scaled `increase` for
+  query outputs. The consensus billing paths (`core/resource.go` and
+  `actuator/energy_bill.go`, including pre-Stake-2.0 global-window recovery) now
+  use the scaled form. Pre-existing, non-harden-only; flagged separately.
 - The rare `resetAccountUsage` suicide-area-merge branch (`mergedSize != currentSize`).
 
 ### Revert / suicide parity
