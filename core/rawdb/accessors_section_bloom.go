@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -26,12 +27,20 @@ func WriteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64, value 
 // ReadSectionBloom returns the raw stored section-bloom value or nil if absent.
 func ReadSectionBloom(db ethdb.KeyValueReader, section, bitIndex uint64) []byte {
 	data, err := db.Get(sectionBloomKey(section, bitIndex))
-	if err != nil || len(data) == 0 {
-		return nil
+	if err == nil && len(data) != 0 {
+		out := make([]byte, len(data))
+		copy(out, data)
+		return out
 	}
-	out := make([]byte, len(data))
-	copy(out, data)
-	return out
+	if cdb, ok := db.(*ChainDB); ok && cdb.sectionBloom != nil {
+		cold, ok, err := cdb.sectionBloom.SectionBloom(section, bitIndex)
+		if err == nil && ok && len(cold) != 0 {
+			out := make([]byte, len(cold))
+			copy(out, cold)
+			return out
+		}
+	}
+	return nil
 }
 
 // DeleteSectionBloom removes the (section, bitIndex) entry.
@@ -85,6 +94,28 @@ func ReadSectionBloomBitSet(db ethdb.KeyValueReader, section, bitIndex uint64) (
 	return bitset, true, nil
 }
 
+func IterateSectionBloomRows(db ethdb.Iteratee, fn func(section, bitIndex uint64, value []byte) (bool, error)) error {
+	if db == nil || fn == nil {
+		return nil
+	}
+	it := db.NewIterator(sectionBloomPrefix, nil)
+	defer it.Release()
+	for it.Next() {
+		section, bitIndex, ok := parseSectionBloomKey(it.Key())
+		if !ok {
+			continue
+		}
+		cont, err := fn(section, bitIndex, append([]byte(nil), it.Value()...))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return it.Error()
+}
+
 // SectionBloomBitIndexes returns the three section-bloom bit indexes set by
 // java-tron's Bloom.create(Hash.sha3(data)).
 func SectionBloomBitIndexes(data []byte) [3]uint64 {
@@ -115,4 +146,24 @@ func trimTrailingZeroes(data []byte) []byte {
 		end--
 	}
 	return data[:end]
+}
+
+func parseSectionBloomKey(key []byte) (uint64, uint64, bool) {
+	if !bytes.HasPrefix(key, sectionBloomPrefix) {
+		return 0, 0, false
+	}
+	compositeHex := string(key[len(sectionBloomPrefix):])
+	if compositeHex == "" {
+		return 0, 0, false
+	}
+	composite, err := strconv.ParseUint(compositeHex, 16, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	section := composite / 1_000_000
+	bitIndex := composite % 1_000_000
+	if bitIndex >= SectionBloomBitSize {
+		return 0, 0, false
+	}
+	return section, bitIndex, true
 }

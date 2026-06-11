@@ -589,6 +589,9 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 	if ref.Kind == SegmentBalanceTrace {
 		return true, CheckBalanceTraceSegment(dir, ref)
 	}
+	if ref.Kind == SegmentSectionBloom {
+		return true, CheckSectionBloomSegment(dir, ref)
+	}
 	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 	if !ok {
 		return false, nil

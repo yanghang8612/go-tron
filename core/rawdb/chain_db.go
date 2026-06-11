@@ -27,6 +27,7 @@ type ChainDB struct {
 	AncientReader
 	chainIndex   ChainIndexReader
 	balanceTrace BalanceTraceReader
+	sectionBloom SectionBloomReader
 }
 
 // ChainIndexReader is an optional cold lookup sidecar. It is defined in rawdb
@@ -43,6 +44,12 @@ type ChainIndexReader interface {
 type BalanceTraceReader interface {
 	BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error)
 	AccountTraceAtOrBefore(owner []byte, blockNum int64) (traceBlock int64, balance int64, ok bool, err error)
+}
+
+// SectionBloomReader is an optional cold section-bloom sidecar. It lets log
+// filters keep using section-bloom prefilters after hot `sb-` rows are pruned.
+type SectionBloomReader interface {
+	SectionBloom(section, bitIndex uint64) ([]byte, bool, error)
 }
 
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
@@ -71,6 +78,15 @@ func (db *ChainDB) SetBalanceTraceReader(reader BalanceTraceReader) {
 		return
 	}
 	db.balanceTrace = reader
+}
+
+// SetSectionBloomReader attaches a cold section-bloom sidecar. Passing nil
+// disables the sidecar and leaves bloom reads on hot rawdb rows only.
+func (db *ChainDB) SetSectionBloomReader(reader SectionBloomReader) {
+	if db == nil {
+		return
+	}
+	db.sectionBloom = reader
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's

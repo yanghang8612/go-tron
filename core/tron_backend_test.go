@@ -477,6 +477,46 @@ func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
 	}
 }
 
+func TestSectionBloomLogMatcherUsesColdRows(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	addr := bytes20(0x23)
+	rows := make(map[[2]uint64][]byte)
+	for _, bitIndex := range rawdb.SectionBloomBitIndexes(addr) {
+		bitset := testSectionBloomSetBit(nil, 5)
+		encoded, err := rawdb.EncodeSectionBloomBitSet(bitset)
+		if err != nil {
+			t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+		}
+		rows[[2]uint64{0, bitIndex}] = encoded
+	}
+	db.SetSectionBloomReader(testSectionBloomColdReader{rows: rows})
+
+	matcher := newSectionBloomLogMatcher(db, jsonrpc.LogFilter{
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+	})
+	if matcher == nil {
+		t.Fatal("newSectionBloomLogMatcher returned nil")
+	}
+	if !matcher.mayContain(5) {
+		t.Fatal("mayContain(5) = false, want true for cold indexed block offset")
+	}
+	if matcher.mayContain(6) {
+		t.Fatal("mayContain(6) = true, want false from cold section bloom rows")
+	}
+}
+
+type testSectionBloomColdReader struct {
+	rows map[[2]uint64][]byte
+}
+
+func (r testSectionBloomColdReader) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	value, ok := r.rows[[2]uint64{section, bitIndex}]
+	if !ok {
+		return nil, false, nil
+	}
+	return append([]byte(nil), value...), true, nil
+}
+
 func testBackendLogBlock(number uint64, logEntry *corepb.TransactionInfo_Log) (*types.Block, *corepb.TransactionInfo) {
 	txPB := &corepb.Transaction{
 		RawData: &corepb.TransactionRaw{
