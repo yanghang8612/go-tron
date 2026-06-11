@@ -16,6 +16,8 @@ import (
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestWorkerPrunesDomainHistoryAndCheckpoints(t *testing.T) {
@@ -821,6 +823,63 @@ func TestPrunerCapsHeadAtFinishStageProgress(t *testing.T) {
 	}
 }
 
+func TestPrunerCapsHeadAtFinishStageProgressFromRawDBFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishBlock := pruningTestBlock(5)
+	if err := rawdb.WriteBlock(db, finishBlock); err != nil {
+		t.Fatalf("write finish block: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, finishBlock.Number(), finishBlock.Hash()); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	pruner := NewPruner(&fallbackPruneChain{db: db, solidified: 10}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	stats, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("prune pass: %v", err)
+	}
+	if stats.DeletedTxRanges != 3 {
+		t.Fatalf("deleted tx ranges = %d, want 3", stats.DeletedTxRanges)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 3); err != nil || ok {
+		t.Fatalf("block 3 range after fallback prune ok=%v err=%v, want deleted", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 4); err != nil || !ok {
+		t.Fatalf("block 4 range after fallback prune ok=%v err=%v, want retained by finish-stage cap", ok, err)
+	}
+}
+
+func TestPrunerRejectsUnboundFinishStageProgress(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageFinish, 5); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	pruner := NewPruner(&fakePruneChain{db: db, solidified: 10, canonicalHashes: map[uint64]common.Hash{5: {0x05}}}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	if _, err := pruner.PrunePass(); err == nil || !strings.Contains(err.Error(), "finish stage 5 is not hash-bound") {
+		t.Fatalf("prune pass error = %v, want unbound finish-stage rejection", err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 1); err != nil || !ok {
+		t.Fatalf("block 1 range pruned despite unbound finish stage ok=%v err=%v", ok, err)
+	}
+}
+
 func TestPrunerRejectsFinishStageHashMismatch(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
@@ -863,6 +922,26 @@ func (f *fakePruneChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 
 func (f *fakePruneChain) SyncRemainingBlocks() (uint64, bool) {
 	return f.syncRemaining, f.syncRemainingOK
+}
+
+type fallbackPruneChain struct {
+	db         ethdb.KeyValueStore
+	solidified int64
+}
+
+func (f *fallbackPruneChain) DB() ethdb.KeyValueStore { return f.db }
+
+func (f *fallbackPruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }
+
+func pruningTestBlock(number uint64) *coretypes.Block {
+	return coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(number) * 3000,
+			},
+		},
+	})
 }
 
 func writeSnapPruningChange(t *testing.T, db ethdb.KeyValueWriter, blockNum, beginTxNum, endTxNum uint64) (*rawdb.StateDomainChange, common.Address, []byte) {

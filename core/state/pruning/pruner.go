@@ -210,14 +210,15 @@ func (p *Pruner) capPruneHeadAtVerifiedFinishStage(pruneHead uint64) (uint64, er
 	if err != nil || !ok {
 		return pruneHead, err
 	}
-	if row.HasBlockHash {
-		hash, ok := p.canonicalBlockHash(row.BlockNum)
-		if !ok {
-			return 0, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
-		}
-		if hash != row.BlockHash {
-			return 0, fmt.Errorf("pruning: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, hash)
-		}
+	if !row.HasBlockHash {
+		return 0, fmt.Errorf("pruning: finish stage %d is not hash-bound", row.BlockNum)
+	}
+	hash, ok := p.canonicalBlockHash(row.BlockNum)
+	if !ok {
+		return 0, fmt.Errorf("pruning: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
+	}
+	if hash != row.BlockHash {
+		return 0, fmt.Errorf("pruning: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, hash)
 	}
 	if row.BlockNum < pruneHead {
 		return row.BlockNum, nil
@@ -229,11 +230,11 @@ func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool) {
 	if source, ok := p.chain.(canonicalHashSource); ok {
 		return source.CanonicalBlockHash(blockNum)
 	}
-	block := rawdb.ReadBlockKV(p.chain.DB(), blockNum)
-	if block == nil {
+	hash := rawdb.ReadBlockHashByNumber(p.chain.DB(), blockNum)
+	if hash == (common.Hash{}) {
 		return common.Hash{}, false
 	}
-	return block.Hash(), true
+	return hash, true
 }
 
 func (p *Pruner) shouldSkipForCatchup() bool {

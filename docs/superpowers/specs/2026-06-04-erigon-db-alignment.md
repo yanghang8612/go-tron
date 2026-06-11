@@ -304,6 +304,9 @@ Status:
   `ReadVerifiedStageProgressBlock` helper for this hash-bound canonical-stage
   check, keeping StageFinish integrity rules centralized at the DB-accessor
   layer.
+- The state pruner now rejects legacy/unbound `StageFinish` rows instead of
+  pruning against an unverifiable height, and its fallback canonical-hash lookup
+  uses the freezer-aware rawdb block-hash accessor.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped
