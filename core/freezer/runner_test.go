@@ -13,6 +13,8 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // fakeChain implements ChainSource against an in-memory KV store plus
@@ -100,37 +102,42 @@ func (f *fakeChain) ReadBlockStateRootRaw(h tcommon.Hash) []byte {
 // deterministic functions of num so test assertions can recompute
 // expected values; the freezer just sees opaque bytes and appends them.
 //
-// Also writes the `b-<num>` and `tib-<num>` rows into the chain's KV so
-// the runner's DeleteFrozenBlockRange phase has something to remove.
-func (f *fakeChain) plantBlock(t *testing.T, n uint64) {
+// Also writes a valid canonical `b-<num>` row plus the `tib-<num>` row into the
+// chain's KV so the rawdb stage-progress verifier can recompute the block hash
+// and the runner's DeleteFrozenBlockRange phase has rows to remove. The fake
+// ChainSource methods still return the synthetic raw bytes above, so the
+// freezer append path keeps testing opaque-byte round trips.
+func (f *fakeChain) plantBlock(t *testing.T, n uint64) tcommon.Hash {
 	t.Helper()
 	blockBlob := blockBytes(n)
 	txBlob := txInfosBytes(n)
 	stateRoot := stateRootBytes(n)
-	hash := blockHash(n)
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(n),
+				Timestamp: int64(n) * 3000,
+			},
+		},
+	})
+	hash := block.Hash()
 	f.mu.Lock()
 	f.blockRaw[n] = blockBlob
 	f.txInfosRaw[n] = txBlob
 	f.stateRootRaw[n] = stateRoot
 	f.blockHashByNo[n] = hash
 	f.mu.Unlock()
-	// Mirror in Pebble so DeleteFrozenBlockRange has rows to drop and
-	// the post-freeze KV-namespace size sample is realistic.
-	if err := writeBlockKV(f.db, n, blockBlob); err != nil {
+	if err := rawdb.WriteBlock(f.db, block); err != nil {
 		t.Fatalf("plantBlock(%d): write block: %v", n, err)
 	}
 	if err := writeTxInfosKV(f.db, n, txBlob); err != nil {
 		t.Fatalf("plantBlock(%d): write tx infos: %v", n, err)
 	}
+	return hash
 }
 
-// writeBlockKV / writeTxInfosKV write through `b-<num>` / `tib-<num>` keys
-// using the same encoding rawdb's accessors use. Mirrored locally because
-// the rawdb helpers expect `*types.Block` / parsed protos; the freezer
-// tests want raw bytes round-tripped untouched.
-func writeBlockKV(db ethdb.KeyValueStore, n uint64, raw []byte) error {
-	return db.Put(blockKVKey(n), raw)
-}
+// writeTxInfosKV writes through `tib-<num>` keys using the same encoding
+// rawdb's accessors use.
 func writeTxInfosKV(db ethdb.KeyValueStore, n uint64, raw []byte) error {
 	return db.Put(txInfoBlockKVKey(n), raw)
 }
@@ -178,14 +185,6 @@ func stateRootBytes(n uint64) []byte {
 		out[i] = byte(n >> (56 - 8*i))
 	}
 	return out
-}
-func blockHash(n uint64) tcommon.Hash {
-	var h tcommon.Hash
-	for i := 0; i < 8; i++ {
-		h[i] = byte(n >> (56 - 8*i))
-	}
-	h[31] = 0xAB // distinguish from zero hash
-	return h
 }
 
 // newFreezer wires a temp-dir freezer with a 2 KiB shard size so even
@@ -349,7 +348,7 @@ func TestOnePass_CapsFreezeToVerifiedFinishStage(t *testing.T) {
 		fc.plantBlock(t, n)
 	}
 	fc.setSolidified(40)
-	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 12, blockHash(12)); err != nil {
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 12, fc.ReadBlockHashByNumber(12)); err != nil {
 		t.Fatalf("write finish stage: %v", err)
 	}
 

@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -43,6 +44,46 @@ func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadStageProgress(db, StageExecution); err != nil || ok {
 		t.Fatalf("deleted stage progress ok=%v err=%v", ok, err)
+	}
+}
+
+func TestReadVerifiedStageProgressBlock(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("write block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageFinish, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish)
+	if err != nil || !ok || got != block.Number() {
+		t.Fatalf("verified finish stage = %d ok=%v err=%v, want block %d", got, ok, err, block.Number())
+	}
+
+	if err := WriteStageProgress(db, StageFinish, block.Number()); err != nil {
+		t.Fatalf("write unbound finish stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish); err == nil || !ok || !strings.Contains(err.Error(), "finish stage 3 is not hash-bound") {
+		t.Fatalf("unbound verified finish stage ok=%v err=%v, want not hash-bound", ok, err)
+	}
+
+	if err := WriteStageProgressWithHash(db, StageFinish, block.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("write mismatched finish stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageFinish); err == nil || !ok || !strings.Contains(err.Error(), "finish stage 3 hash") {
+		t.Fatalf("mismatched verified finish stage ok=%v err=%v, want hash mismatch", ok, err)
+	}
+
+	if err := WriteStageProgressWithHash(db, StageCommitment, 9, common.Hash{0x09}); err != nil {
+		t.Fatalf("write missing-block commitment stage: %v", err)
+	}
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageCommitment); err == nil || !ok || !strings.Contains(err.Error(), "commitment stage 9 has hash") {
+		t.Fatalf("missing-block verified commitment stage ok=%v err=%v, want unavailable block", ok, err)
+	}
+
+	if _, ok, err := ReadVerifiedStageProgressBlock(db, StageExecution); err != nil || ok {
+		t.Fatalf("missing verified execution stage ok=%v err=%v, want absent", ok, err)
 	}
 }
 

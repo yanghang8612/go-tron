@@ -300,6 +300,10 @@ Status:
   Latest-domain snapshot watermarks use the same cap, so full-keyspace latest
   files are also labelled with the verified execution boundary rather than an
   unverified solidified-height estimate.
+- The freezer and snapshot builder now share the rawdb
+  `ReadVerifiedStageProgressBlock` helper for this hash-bound canonical-stage
+  check, keeping StageFinish integrity rules centralized at the DB-accessor
+  layer.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped

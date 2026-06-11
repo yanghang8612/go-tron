@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -179,6 +180,25 @@ func ReadStageProgressRow(db ethdb.KeyValueReader, stage StageID) (StageProgress
 		return StageProgress{}, false, err
 	}
 	return row, true, nil
+}
+
+func ReadVerifiedStageProgressBlock(db ethdb.KeyValueReader, stage StageID) (uint64, bool, error) {
+	row, ok, err := ReadStageProgressRow(db, stage)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	stageName := strings.ToLower(string(stage))
+	if !row.HasBlockHash {
+		return 0, true, fmt.Errorf("rawdb: %s stage %d is not hash-bound", stageName, row.BlockNum)
+	}
+	canonical := ReadBlockHashByNumber(db, row.BlockNum)
+	if canonical == (common.Hash{}) {
+		return 0, true, fmt.Errorf("rawdb: %s stage %d has hash %x but canonical block is unavailable", stageName, row.BlockNum, row.BlockHash)
+	}
+	if canonical != row.BlockHash {
+		return 0, true, fmt.Errorf("rawdb: %s stage %d hash %x does not match canonical hash %x", stageName, row.BlockNum, row.BlockHash, canonical)
+	}
+	return row.BlockNum, true, nil
 }
 
 func DeleteStageProgress(db ethdb.KeyValueWriter, stage StageID) error {

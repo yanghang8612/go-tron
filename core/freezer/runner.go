@@ -532,21 +532,11 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 	if r == nil || r.chain == nil || r.chain.DB() == nil {
 		return 0, false, nil
 	}
-	row, ok, err := rawdb.ReadStageProgressRow(r.chain.DB(), rawdb.StageFinish)
-	if err != nil || !ok {
-		return 0, false, err
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlock(r.chain.DB(), rawdb.StageFinish)
+	if err != nil {
+		return 0, ok, fmt.Errorf("freezer: %w", err)
 	}
-	if !row.HasBlockHash {
-		return 0, true, fmt.Errorf("freezer: finish stage %d is not hash-bound", row.BlockNum)
-	}
-	canonical := r.chain.ReadBlockHashByNumber(row.BlockNum)
-	if canonical == (tcommon.Hash{}) {
-		return 0, true, fmt.Errorf("freezer: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
-	}
-	if canonical != row.BlockHash {
-		return 0, true, fmt.Errorf("freezer: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonical)
-	}
-	return row.BlockNum, true, nil
+	return block, ok, nil
 }
 
 func (r *Runner) writeChainFreezerStage(blockNum uint64) error {
