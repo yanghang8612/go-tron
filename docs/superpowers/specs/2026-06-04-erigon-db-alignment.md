@@ -281,11 +281,18 @@ Status:
   watermark to the last continuous recovered block, keeping persisted downloader
   state hash-bound and contiguous after restart without rejecting out-of-order
   bodies in the still-running sync session.
+- `BlockChain` startup now verifies `Headers/Bodies/Execution/Commitment/Finish`
+  stage rows against the persisted head block and repairs missing, legacy, or
+  mismatched rows back to that hash-bound head. This makes canonical stage
+  progress a stable restart boundary for later prune/freezer/snapshot consumers,
+  while `SyncInventory`, `SyncBodies`, and `SyncImport` remain non-canonical
+  downloader diagnostics.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped
-  staged-body tails are dropped on restart, and imported block number/hash
-  progress is written after `InsertBlocks` succeeds.
+  staged-body tails are dropped on restart, corrupted startup canonical stages
+  are repaired to the stored head, and imported block number/hash progress is
+  written after `InsertBlocks` succeeds.
 
 Needed:
 

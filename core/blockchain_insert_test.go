@@ -189,6 +189,86 @@ func TestBlockChain_InsertBlocks_AdvancesCanonicalStages(t *testing.T) {
 	}
 }
 
+func TestNewBlockChainRepairsMissingCanonicalStagesToGenesis(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	_, genesisHash, err := SetupGenesisBlock(diskdb, genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(diskdb, stage)
+		if err != nil || !ok || row.BlockNum != 0 || !row.HasBlockHash || row.BlockHash != genesisHash {
+			t.Fatalf("%s startup progress = %+v ok=%v err=%v, want genesis hash-bound", stage, row, ok, err)
+		}
+	}
+}
+
+func TestNewBlockChainRepairsCanonicalStagesToStoredHead(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block1 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3000,
+				ParentHash: bc.CurrentBlock().Hash().Bytes(),
+			},
+		},
+	})
+	block2 := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     2,
+				Timestamp:  6000,
+				ParentHash: block1.Hash().Bytes(),
+			},
+		},
+	})
+	if err := bc.InsertBlocks([]*types.Block{block1, block2}); err != nil {
+		t.Fatalf("InsertBlocks: %v", err)
+	}
+	if err := bc.Close(); err != nil {
+		t.Fatalf("close chain: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(diskdb, rawdb.StageFinish, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("corrupt finish stage: %v", err)
+	}
+
+	reopened, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatalf("reopen chain: %v", err)
+	}
+	defer reopened.Close()
+	if got := reopened.CurrentBlock(); got == nil || got.Number() != block2.Number() || got.Hash() != block2.Hash() {
+		t.Fatalf("reopened head = %v, want block2 %x", got, block2.Hash())
+	}
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(diskdb, stage)
+		if err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
+			t.Fatalf("%s startup progress = %+v ok=%v err=%v, want block2 hash-bound", stage, row, ok, err)
+		}
+	}
+}
+
 func TestBlockChain_InsertBlocksReportsFirstFailedIndex(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	genesis := &params.Genesis{

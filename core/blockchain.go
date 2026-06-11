@@ -405,6 +405,9 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	// re-sync re-applies. No startup state rebuild is required.
 	head := loadStoredHeadBlock(chaindb, bc.genesisBlock)
 	bc.currentBlock.Store(head)
+	if err := bc.ensureCanonicalStageHead(head); err != nil {
+		return nil, err
+	}
 
 	// Seed the dynprops cache now that the head is known: rooted keys load from
 	// the system-KV at the head root, derived keys from the buffer.
@@ -434,6 +437,26 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 	bc.startCommitWorker()
 
 	return bc, nil
+}
+
+func (bc *BlockChain) ensureCanonicalStageHead(head *types.Block) error {
+	if bc == nil {
+		return errors.New("canonical stage startup repair: nil blockchain")
+	}
+	if head == nil {
+		return errors.New("canonical stage startup repair: nil head")
+	}
+	hash := head.Hash()
+	if err := verifyCanonicalStagePipelineHead(bc.db, head.Number(), hash); err == nil {
+		return nil
+	} else {
+		log.Debug("Repairing canonical stage progress to stored head",
+			"head", head.Number(), "hash", hash, "err", err)
+	}
+	if err := rewindCanonicalStagePipeline(bc.db, head.Number(), hash); err != nil {
+		return fmt.Errorf("repair canonical stage progress to stored head %d: %w", head.Number(), err)
+	}
+	return nil
 }
 
 func loadStoredHeadBlock(chaindb *rawdb.ChainDB, genesis *types.Block) *types.Block {
