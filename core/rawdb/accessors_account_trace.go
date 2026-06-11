@@ -26,19 +26,35 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 // ReadAccountTrace returns the balance recorded for (owner, blockNum) or
 // 0 + false if no trace exists at that exact height.
 func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool) {
-	data, err := db.Get(accountTraceKey(owner, blockNum))
-	if err != nil || len(data) == 0 {
+	balance, ok, err := readHotAccountTrace(db, owner, blockNum)
+	if err != nil || !ok {
 		traceBlock, balance, ok, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
 		if err != nil || !ok || traceBlock != blockNum {
 			return 0, false
 		}
 		return balance, true
 	}
+	return balance, true
+}
+
+func readHotAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool, error) {
+	if db == nil {
+		return 0, false, fmt.Errorf("account trace: nil database")
+	}
+	key := accountTraceKey(owner, blockNum)
+	exists, err := db.Has(key)
+	if err != nil || !exists {
+		return 0, false, err
+	}
+	data, err := db.Get(key)
+	if err != nil || len(data) == 0 {
+		return 0, false, err
+	}
 	var at contractpb.AccountTrace
 	if err := proto.Unmarshal(data, &at); err != nil {
-		return 0, false
+		return 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
 	}
-	return at.Balance, true
+	return at.Balance, true, nil
 }
 
 // ReadAccountTraceAtOrBefore returns the newest account-trace row whose block

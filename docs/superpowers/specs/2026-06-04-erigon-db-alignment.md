@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, and transaction lookup/info rebuild now use the collector; transaction rebuild has a `gtron db` operator entry point, while remaining backfill commands still need migration and larger benchmark evidence. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, and replayed balance-trace backfill now use the collector; larger benchmark evidence is still needed. |
 
 ## Important Non-Alignments By Design
 
@@ -685,7 +685,12 @@ Status:
 - Production snapshot/prune lifecycle now runs balance-trace hot-row pruning
   with a persisted `SnapshotBalanceTracePrune` stage, so covered
   `BlockBalanceTrace` and account-trace rows are reclaimed across restarts
-  without rescanning already processed segments.
+  without rescanning already processed segments. Snap-mode history passes now
+  also publish matching `balance-trace` sidecars when the same block range has
+  complete hash-matching hot `BlockBalanceTrace` coverage plus exact-height hot
+  `AccountTrace` rows for every touched account; incomplete legacy ranges are
+  skipped rather than publishing false cold coverage, and mismatched block
+  traces fail the pass before any hot trace rows are pruned.
 - `rawdb.ChainDB` now also has an optional cold section-bloom reader. Registered
   `section-bloom` snapshot segments freeze java-tron-compatible `sb-` rows by
   source block range, `snapshots.Manager` serves those rows after hot misses,

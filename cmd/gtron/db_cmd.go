@@ -313,12 +313,13 @@ func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Balance trace coverage: blocks=[%d,%d] scanned=%d traceBlocks=%d missing=%d mismatched=%d emptyTxTraceBlocks=%d\n",
+	fmt.Printf("Balance trace coverage: blocks=[%d,%d] scanned=%d traceBlocks=%d missingBlockTraces=%d missingAccountTraces=%d mismatched=%d emptyTxTraceBlocks=%d\n",
 		result.FromBlock,
 		result.ToBlock,
 		result.BlocksScanned,
 		result.BlocksWithBalanceTrace,
 		result.MissingBlockBalanceTrace,
+		result.MissingAccountTrace,
 		result.MismatchedBlockBalanceTrace,
 		result.BlocksWithEmptyTxTrace,
 	)
@@ -326,8 +327,9 @@ func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
 		fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
 	}
 	if !result.Complete() {
-		return fmt.Errorf("balance trace coverage incomplete: missing=%d mismatched=%d",
+		return fmt.Errorf("balance trace coverage incomplete: missingBlockTraces=%d missingAccountTraces=%d mismatched=%d",
 			result.MissingBlockBalanceTrace,
+			result.MissingAccountTrace,
 			result.MismatchedBlockBalanceTrace,
 		)
 	}

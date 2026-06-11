@@ -238,6 +238,9 @@ func TestDBAuditBalanceTracesCmd(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
 	}
+	if err := rawdb.WriteAccountTrace(db, addr, 1, 1); err != nil {
+		t.Fatalf("WriteAccountTrace block1: %v", err)
+	}
 	if err := rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
 		BlockIdentifier:         dbRebuildBlockBalanceID(block2),
 		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{},

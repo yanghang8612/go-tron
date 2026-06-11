@@ -50,6 +50,10 @@ type Config struct {
 	// BuildSectionBlooms builds full-section cold section-bloom sidecars once
 	// the state-history cutoff has fully covered the source block section.
 	BuildSectionBlooms bool
+	// BuildBalanceTraces builds cold balance-trace sidecars for the same block
+	// range as a newly published state-history segment, but only when every
+	// canonical block in that range already has a matching hot BlockBalanceTrace.
+	BuildBalanceTraces bool
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
@@ -70,6 +74,7 @@ type PassResult struct {
 	Segment           SegmentRef
 	Segments          []SegmentRef
 	SectionBloomBuilt bool
+	BalanceTraceBuilt bool
 	EventLogBuilt     bool
 	Manifest          *Manifest
 }
@@ -211,6 +216,7 @@ func (r *Runner) Start() error {
 			"historyWindow", r.cfg.HistoryWindow,
 			"batchBlocks", r.cfg.BatchBlocks,
 			"sectionBloomBuild", r.cfg.BuildSectionBlooms,
+			"balanceTraceBuild", r.cfg.BuildBalanceTraces,
 			"eventLogBuild", r.cfg.BuildEventLogs)
 	})
 	return r.startErr
@@ -373,12 +379,26 @@ func (r *Runner) onePass() (PassResult, error) {
 	if len(refs) == 0 {
 		return result, nil
 	}
-	eventLogBuilt := false
-	if r.cfg.BuildEventLogs {
-		chainDB, err := r.eventLogChainDB()
+	var chainDB *rawdb.ChainDB
+	if r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs {
+		chainDB, err = r.derivedIndexChainDB()
 		if err != nil {
 			return PassResult{}, err
 		}
+	}
+	balanceTraceBuilt := false
+	if r.cfg.BuildBalanceTraces {
+		traceRefs, err := r.balanceTracePass(chainDB, db, startBlock, cutoffBlock)
+		if err != nil {
+			return PassResult{}, err
+		}
+		if len(traceRefs) > 0 {
+			refs = append(refs, traceRefs...)
+			balanceTraceBuilt = true
+		}
+	}
+	eventLogBuilt := false
+	if r.cfg.BuildEventLogs {
 		ref, err := BuildEventLogSegmentFromChain(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock)
 		if err != nil {
 			return PassResult{}, err
@@ -409,6 +429,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	result.Segment = refs[0]
 	result.Segments = append([]SegmentRef(nil), refs...)
 	result.SectionBloomBuilt = sectionBloomBuilt
+	result.BalanceTraceBuilt = balanceTraceBuilt
 	result.EventLogBuilt = eventLogBuilt
 	result.Manifest = manifest
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
@@ -421,6 +442,37 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlock, toBlock uint64) ([]SegmentRef, error) {
+	if r == nil || !r.cfg.BuildBalanceTraces {
+		return nil, nil
+	}
+	if chain == nil {
+		return nil, errors.New("snapshots: nil balance trace chain database")
+	}
+	if db == nil {
+		return nil, errors.New("snapshots: nil balance trace build database")
+	}
+	coverage, err := rawdb.AuditBlockBalanceTraceCoverage(chain, db, fromBlock, toBlock, 1)
+	if err != nil {
+		return nil, err
+	}
+	if coverage.MismatchedBlockBalanceTrace > 0 {
+		detail := ""
+		if len(coverage.Issues) > 0 {
+			detail = ": " + coverage.Issues[0].Detail
+		}
+		return nil, fmt.Errorf("snapshots: balance trace coverage mismatch over [%d,%d]%s", fromBlock, toBlock, detail)
+	}
+	if coverage.MissingBlockBalanceTrace > 0 || coverage.MissingAccountTrace > 0 {
+		return nil, nil
+	}
+	ref, err := BuildBalanceTraceSegmentFromDB(db, r.cfg.Dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	if err != nil {
+		return nil, err
+	}
+	return []SegmentRef{ref}, nil
 }
 
 func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]SegmentRef, error) {
@@ -474,9 +526,9 @@ type eventLogChainSource interface {
 	EventLogDB() *rawdb.ChainDB
 }
 
-func (r *Runner) eventLogChainDB() (*rawdb.ChainDB, error) {
+func (r *Runner) derivedIndexChainDB() (*rawdb.ChainDB, error) {
 	if r == nil || r.chain == nil {
-		return nil, errors.New("snapshots: nil event log chain source")
+		return nil, errors.New("snapshots: nil derived index chain source")
 	}
 	if source, ok := r.chain.(eventLogChainSource); ok {
 		if db := source.EventLogDB(); db != nil {
@@ -486,7 +538,7 @@ func (r *Runner) eventLogChainDB() (*rawdb.ChainDB, error) {
 	if db, ok := r.chain.DB().(*rawdb.ChainDB); ok && db != nil {
 		return db, nil
 	}
-	return nil, errors.New("snapshots: event log build requires rawdb.ChainDB")
+	return nil, errors.New("snapshots: derived index build requires rawdb.ChainDB")
 }
 
 func (r *Runner) recordPass(result PassResult, start time.Time) {
@@ -571,6 +623,7 @@ func (r *Runner) loop() {
 			"toBlock", result.ToBlock,
 			"cutoffBlock", result.CutoffBlock,
 			"sectionBloomBuilt", result.SectionBloomBuilt,
+			"balanceTraceBuilt", result.BalanceTraceBuilt,
 			"eventLogBuilt", result.EventLogBuilt)
 	} else if result.Compaction.Merged {
 		coldSnapshotLog.Info("History cold snapshot initial pass compacted",
@@ -599,6 +652,7 @@ func (r *Runner) loop() {
 					"toBlock", result.ToBlock,
 					"cutoffBlock", result.CutoffBlock,
 					"sectionBloomBuilt", result.SectionBloomBuilt,
+					"balanceTraceBuilt", result.BalanceTraceBuilt,
 					"eventLogBuilt", result.EventLogBuilt)
 			} else if result.Compaction.Merged {
 				coldSnapshotLog.Info("History cold snapshot pass compacted",

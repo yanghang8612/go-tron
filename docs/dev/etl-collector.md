@@ -9,12 +9,12 @@ entry point for transaction lookup/info, account trace, balance trace, and
 section bloom backfills. Transaction lookup/info and section-bloom rebuilds
 from retained chain data now use that collector and are exposed through `gtron
 db`. Account trace repair from retained block-balance trace rows also uses the
-collector and is exposed through `gtron db rebuild-account-traces`. Remaining
-historical block-balance-trace backfill commands still need deliberate
-migration and path-specific benchmarks. History-enabled canonical replay now
-populates `BlockBalanceTrace` and final `AccountTrace` rows during execution,
-so Wallet HTTP/gRPC account and block balance trace read paths have a live data
-source for newly imported history-enabled blocks.
+collector and is exposed through `gtron db rebuild-account-traces`. Historical
+block-balance-trace repair is exposed through `gtron db backfill-balance-traces`
+with an isolated replay DB and collector-backed trace writes. History-enabled
+canonical replay now populates `BlockBalanceTrace` and final `AccountTrace`
+rows during execution, so Wallet HTTP/gRPC account and block balance trace read
+paths have a live data source for newly imported history-enabled blocks.
 
 ## Purpose
 
@@ -98,8 +98,12 @@ writes to collector-backed loads.
 - `TronBackend.GetAccountBalanceTrace` and `GetBlockBalanceTrace` expose
   retained account/balance trace rows through Wallet HTTP/gRPC APIs.
   History-enabled canonical replay now populates those rows during block
-  execution; historical block-balance-trace backfill remains a migration target
-  below.
+  execution. Snap-mode history passes now also build matching cold
+  `balance-trace` sidecars when every canonical block in the pass range has a
+  hash-matching hot `BlockBalanceTrace` and every account touched by those
+  operations has an exact-height hot `AccountTrace`; incomplete legacy ranges
+  are skipped instead of publishing false cold coverage, while mismatched block
+  traces fail the pass.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` rebuilds account-trace
   rows from retained `BlockBalanceTrace` operation diffs through
   `DerivedIndexCollector`.
@@ -107,6 +111,11 @@ writes to collector-backed loads.
   to operators. It opens the same hot Pebble plus read-only ancient freezer
   stack as the other `db` rebuild commands and supports the shared block-range
   and ETL scratch-space flags.
+- `gtron db backfill-balance-traces` fills missing `BlockBalanceTrace` and
+  `AccountTrace` rows by replaying retained canonical blocks in an isolated
+  database, optionally seeded from a verified signed snapshot. The generated
+  rows are copied back through `DerivedIndexCollector`, and
+  `--db.replay.dir` makes the replay database resumable.
 
 ## Benchmarking
 
@@ -209,8 +218,6 @@ bloom.
 
 - global/recsplit-style event-log address/topic accessors beyond segment-local
   postings
-- commands that populate or rebuild block-balance traces from execution/replay
-  data
 - any future RPC index build where input order follows block execution rather
   than target DB key order
 

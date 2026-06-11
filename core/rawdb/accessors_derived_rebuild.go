@@ -61,12 +61,13 @@ type AuditBlockBalanceTraceCoverageResult struct {
 	BlocksWithBalanceTrace      uint64
 	BlocksWithEmptyTxTrace      uint64
 	MissingBlockBalanceTrace    uint64
+	MissingAccountTrace         uint64
 	MismatchedBlockBalanceTrace uint64
 	Issues                      []BalanceTraceCoverageIssue
 }
 
 func (r *AuditBlockBalanceTraceCoverageResult) Complete() bool {
-	return r != nil && r.MissingBlockBalanceTrace == 0 && r.MismatchedBlockBalanceTrace == 0
+	return r != nil && r.MissingBlockBalanceTrace == 0 && r.MissingAccountTrace == 0 && r.MismatchedBlockBalanceTrace == 0
 }
 
 type accountTraceRebuildReader interface {
@@ -258,10 +259,12 @@ func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader acco
 }
 
 // AuditBlockBalanceTraceCoverage checks that every retained canonical block in
-// the range has a BlockBalanceTrace row whose payload identifies that block.
-// It does not require TransactionBalanceTrace entries: java-tron-compatible
-// history can legitimately emit an empty per-tx trace for blocks that only
-// touch balances outside a transaction or do not touch balances at all.
+// the range has a BlockBalanceTrace row whose payload identifies that block,
+// and that every account touched by those trace operations has an exact-height
+// hot AccountTrace row. It does not require TransactionBalanceTrace entries:
+// java-tron-compatible history can legitimately emit an empty per-tx trace for
+// blocks that only touch balances outside a transaction or do not touch
+// balances at all.
 func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueReader, fromBlock, toBlock uint64, maxIssues int) (*AuditBlockBalanceTraceCoverageResult, error) {
 	if chain == nil {
 		return nil, errors.New("rawdb: nil chain db")
@@ -310,6 +313,33 @@ func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueRe
 			if err := validateBlockBalanceTraceForRebuild(blockNum, block.Hash().Bytes(), trace); err != nil {
 				result.MismatchedBlockBalanceTrace++
 				addIssue(blockNum, "mismatch", err.Error())
+			} else {
+				touched := make(map[string][]byte)
+				for _, txTrace := range trace.GetTransactionBalanceTrace() {
+					if txTrace == nil {
+						continue
+					}
+					for _, op := range txTrace.GetOperation() {
+						if op == nil {
+							continue
+						}
+						addr := op.GetAddress()
+						if len(addr) != common.AddressLength {
+							result.MismatchedBlockBalanceTrace++
+							addIssue(blockNum, "mismatch", fmt.Sprintf("malformed balance trace address length %d", len(addr)))
+							continue
+						}
+						touched[string(addr)] = append([]byte(nil), addr...)
+					}
+				}
+				for _, addr := range touched {
+					if _, ok, err := readHotAccountTrace(traceReader, addr, int64(blockNum)); err != nil {
+						return nil, err
+					} else if !ok {
+						result.MissingAccountTrace++
+						addIssue(blockNum, "missing-account", fmt.Sprintf("missing AccountTrace owner=%x", addr))
+					}
+				}
 			}
 		}
 		if blockNum == toBlock {

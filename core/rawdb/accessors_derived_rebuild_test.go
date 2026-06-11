@@ -357,6 +357,9 @@ func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
 	}
+	if err := WriteAccountTrace(db, addr, 1, 1); err != nil {
+		t.Fatalf("WriteAccountTrace block1: %v", err)
+	}
 	if err := WriteBlockBalanceTrace(db, 3, derivedRebuildBalanceTrace(block1, infos3,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, addr, 2),
@@ -373,8 +376,8 @@ func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
 		t.Fatal("coverage unexpectedly complete")
 	}
 	if result.BlocksScanned != 3 || result.BlocksWithBalanceTrace != 2 ||
-		result.MissingBlockBalanceTrace != 1 || result.MismatchedBlockBalanceTrace != 1 {
-		t.Fatalf("result = %+v, want scanned=3 trace=2 missing=1 mismatched=1", result)
+		result.MissingBlockBalanceTrace != 1 || result.MissingAccountTrace != 0 || result.MismatchedBlockBalanceTrace != 1 {
+		t.Fatalf("result = %+v, want scanned=3 trace=2 missingBlock=1 missingAccount=0 mismatched=1", result)
 	}
 	if len(result.Issues) != 2 {
 		t.Fatalf("issues = %+v, want 2 examples", result.Issues)
@@ -384,6 +387,46 @@ func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
 	}
 	if result.Issues[1].BlockNum != 3 || result.Issues[1].Kind != "mismatch" {
 		t.Fatalf("issue[1] = %+v, want mismatch block 3", result.Issues[1])
+	}
+}
+
+func TestAuditBlockBalanceTraceCoverageRequiresAccountTraceRows(t *testing.T) {
+	db := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	addr := derivedRebuildAddress(0xa3)
+	if err := WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block, infos,
+		[]*contractpb.TransactionBalanceTrace_Operation{
+			derivedRebuildBalanceOp(0, addr, 1),
+		},
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	result, err := AuditBlockBalanceTraceCoverage(db, db, 1, 1, 8)
+	if err != nil {
+		t.Fatalf("AuditBlockBalanceTraceCoverage: %v", err)
+	}
+	if result.Complete() {
+		t.Fatal("coverage unexpectedly complete")
+	}
+	if result.MissingBlockBalanceTrace != 0 || result.MissingAccountTrace != 1 || result.MismatchedBlockBalanceTrace != 0 {
+		t.Fatalf("result = %+v, want one missing account trace", result)
+	}
+	if len(result.Issues) != 1 || result.Issues[0].Kind != "missing-account" || result.Issues[0].BlockNum != 1 {
+		t.Fatalf("issues = %+v, want one missing-account issue for block 1", result.Issues)
+	}
+	if err := WriteAccountTrace(db, addr, 1, 1); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	result, err = AuditBlockBalanceTraceCoverage(db, db, 1, 1, 8)
+	if err != nil {
+		t.Fatalf("second AuditBlockBalanceTraceCoverage: %v", err)
+	}
+	if !result.Complete() || result.MissingAccountTrace != 0 {
+		t.Fatalf("complete result = %+v, want no missing account trace", result)
 	}
 }
 

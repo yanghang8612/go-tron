@@ -664,6 +664,7 @@ func gtron(ctx *cli.Context) error {
 				HistoryDataset:     historyDataset,
 				HistoryWindow:      prunePolicy.HistoryWindow,
 				BuildSectionBlooms: true,
+				BuildBalanceTraces: true,
 				BuildEventLogs:     true,
 				// LatestBuildBlocks controls how often latest-dataset snapshots
 				// (accounts, KV, commitment-branch, etc.) are rebuilt; all latest

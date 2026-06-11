@@ -10,6 +10,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 func TestSnapshotLifecycleBuildsVisibleHistoryBeforePruningHotRows(t *testing.T) {
@@ -125,6 +126,81 @@ func TestSnapshotLifecycleBuildsEventLogsBeforePruningHotRows(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x01}) {
 		t.Fatalf("event rows = %+v, want one cold event log", rows)
+	}
+}
+
+func TestSnapshotLifecycleBuildsBalanceTracesBeforePruningHotRows(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	dir := t.TempDir()
+	writeSnapPruningChange(t, db, 1, 10, 12)
+	traceOwner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x77}, common.AccountIDLength)...))
+	block, _ := lifecycleEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, lifecycleBlockBalanceTrace(block, 40_001)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 444); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	chain := &fakePruneChain{db: db, solidified: 2}
+	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
+		Snapshot: snapshots.Config{
+			Dir:                dir,
+			Enabled:            true,
+			Interval:           time.Hour,
+			HistoryWindow:      1,
+			BuildBalanceTraces: true,
+		},
+		Pruner: PrunerConfig{
+			Policy:      SnapPolicy(1, 1),
+			Interval:    time.Hour,
+			SnapshotDir: dir,
+		},
+		BalanceTracePrune: func() (*snapshots.PruneHotBalanceTraceResult, error) {
+			manifest, err := snapshots.LoadProductionManifest(dir)
+			if err != nil {
+				return nil, err
+			}
+			return snapshots.PruneHotBalanceTracesWithProgress(db, dir, manifest)
+		},
+	})
+
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("lifecycle pass: %v", err)
+	}
+	if !result.Snapshot.BalanceTraceBuilt || result.Snapshot.FromBlock != 1 || result.Snapshot.ToBlock != 1 {
+		t.Fatalf("snapshot result = %+v, want balance-trace build over block 1", result.Snapshot)
+	}
+	if _, ok, err := rawdb.ReadStateDomainChange(db, 1, 1); err != nil || ok {
+		t.Fatalf("hot domain change survived ok=%v err=%v", ok, err)
+	}
+	if result.BalanceTracePrune == nil ||
+		result.BalanceTracePrune.BlockTracesDeleted != 1 ||
+		result.BalanceTracePrune.AccountTracesDeleted != 1 ||
+		result.BalanceTracePrune.ColdTraceSegments != 1 {
+		t.Fatalf("balance trace prune result = %+v, want one hot block/account trace deleted", result.BalanceTracePrune)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("hot BlockBalanceTrace survived = %+v, want nil", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(db, traceOwner.Bytes(), 1); ok || balance != 0 {
+		t.Fatalf("hot AccountTrace survived = %d/%v, want 0/false", balance, ok)
+	}
+	mgr, err := snapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	db.SetBalanceTraceReader(mgr)
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got == nil || got.GetTimestamp() != 40_001 {
+		t.Fatalf("cold ReadBlockBalanceTrace after prune = %+v, want timestamp 40001", got)
+	}
+	traceBlock, balance, ok, err := rawdb.ReadAccountTraceAtOrBefore(db, traceOwner.Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 444 {
+		t.Fatalf("cold ReadAccountTraceAtOrBefore = block %d balance %d ok %v err %v, want 1/444/true/nil", traceBlock, balance, ok, err)
 	}
 }
 
@@ -248,4 +324,17 @@ func lifecycleEventLogBlock(t *testing.T, number uint64, logs []*corepb.Transact
 		Transactions: []*corepb.Transaction{txPB},
 	})
 	return block, []*corepb.TransactionInfo{info}
+}
+
+func lifecycleBlockBalanceTrace(block *coretypes.Block, timestamp int64) *contractpb.BlockBalanceTrace {
+	if block == nil {
+		return &contractpb.BlockBalanceTrace{Timestamp: timestamp}
+	}
+	return &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block.Hash().Bytes()...),
+			Number: int64(block.Number()),
+		},
+		Timestamp: timestamp,
+	}
 }

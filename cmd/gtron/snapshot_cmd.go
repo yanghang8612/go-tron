@@ -631,10 +631,11 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 		for _, issue := range coverage.Issues {
 			fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
 		}
-		return fmt.Errorf("snapshot balance trace build requires complete coverage over [%d,%d]: missing=%d mismatched=%d",
+		return fmt.Errorf("snapshot balance trace build requires complete coverage over [%d,%d]: missingBlockTraces=%d missingAccountTraces=%d mismatched=%d",
 			fromBlock,
 			toBlock,
 			coverage.MissingBlockBalanceTrace,
+			coverage.MissingAccountTrace,
 			coverage.MismatchedBlockBalanceTrace,
 		)
 	}
@@ -816,10 +817,11 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 		for _, issue := range coverage.Issues {
 			fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
 		}
-		return fmt.Errorf("snapshot derived index build requires complete balance trace coverage over [%d,%d]: missing=%d mismatched=%d",
+		return fmt.Errorf("snapshot derived index build requires complete balance trace coverage over [%d,%d]: missingBlockTraces=%d missingAccountTraces=%d mismatched=%d",
 			fromBlock,
 			toBlock,
 			coverage.MissingBlockBalanceTrace,
+			coverage.MissingAccountTrace,
 			coverage.MismatchedBlockBalanceTrace,
 		)
 	}

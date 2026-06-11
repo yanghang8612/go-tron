@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // seedLatestRows writes the minimum set of hot-DB rows needed for BuildLatest
@@ -636,6 +639,206 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	}
 }
 
+func TestColdBuilderBuildsBalanceTracesWithHistorySegment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x45)
+	traceOwner := balanceTraceTestAddress(0x46)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	block, _ := coldBuilderEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	trace := coldBuilderBlockBalanceTrace(block, 10_001)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			OperationIdentifier: 0,
+			Address:             traceOwner.Bytes(),
+			Amount:              777,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 777); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildBalanceTraces: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built || !result.BalanceTraceBuilt || result.FromBlock != 1 || result.ToBlock != 1 {
+		t.Fatalf("result = %+v, want history+balance-trace build over block 1", result)
+	}
+	haveBalanceTrace := false
+	for _, ref := range result.Segments {
+		if ref.Kind == SegmentBalanceTrace {
+			haveBalanceTrace = true
+		}
+	}
+	if !haveBalanceTrace {
+		t.Fatalf("segments = %+v, want balance-trace segment with history", result.Segments)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(1)
+	if err != nil || !ok || trace.GetTimestamp() != 10_001 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 10001", trace, ok, err)
+	}
+	traceBlock, balance, ok, err := mgr.AccountTraceAtOrBefore(traceOwner.Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 777 {
+		t.Fatalf("AccountTraceAtOrBefore = block %d balance %d ok %v err %v, want 1/777/true/nil", traceBlock, balance, ok, err)
+	}
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	pruned, err := PruneHotBalanceTracesWithProgress(db, dir, manifest)
+	if err != nil {
+		t.Fatalf("PruneHotBalanceTracesWithProgress: %v", err)
+	}
+	if pruned == nil || pruned.BlockTracesDeleted != 1 || pruned.AccountTracesDeleted != 1 || pruned.ColdTraceSegments != 1 {
+		t.Fatalf("balance trace prune = %+v, want one block/account trace deleted", pruned)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("hot BlockBalanceTrace survived = %+v, want nil", got)
+	}
+	if balance, ok := rawdb.ReadAccountTrace(db, traceOwner.Bytes(), 1); ok || balance != 0 {
+		t.Fatalf("hot AccountTrace survived = %d/%v, want 0/false", balance, ok)
+	}
+	db.SetBalanceTraceReader(mgr)
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got == nil || got.GetTimestamp() != 10_001 {
+		t.Fatalf("cold ReadBlockBalanceTrace after prune = %+v, want timestamp 10001", got)
+	}
+	traceBlock, balance, ok, err = rawdb.ReadAccountTraceAtOrBefore(db, traceOwner.Bytes(), 1)
+	if err != nil || !ok || traceBlock != 1 || balance != 777 {
+		t.Fatalf("cold ReadAccountTraceAtOrBefore = block %d balance %d ok %v err %v, want 1/777/true/nil", traceBlock, balance, ok, err)
+	}
+}
+
+func TestColdBuilderSkipsBalanceTraceBuildWithoutCompleteCoverage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x47)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	block, _ := coldBuilderEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildBalanceTraces: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built {
+		t.Fatalf("result = %+v, want state-history build", result)
+	}
+	if result.BalanceTraceBuilt {
+		t.Fatalf("result = %+v, want no balance-trace build without complete coverage", result)
+	}
+	for _, ref := range result.Segments {
+		if ref.Kind == SegmentBalanceTrace {
+			t.Fatalf("segments = %+v, want no balance-trace segment without complete coverage", result.Segments)
+		}
+	}
+}
+
+func TestColdBuilderSkipsBalanceTraceBuildWithoutAccountTraceCoverage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x49)
+	traceOwner := balanceTraceTestAddress(0x4a)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	block, _ := coldBuilderEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	trace := coldBuilderBlockBalanceTrace(block, 10_003)
+	trace.TransactionBalanceTrace = []*contractpb.TransactionBalanceTrace{{
+		Operation: []*contractpb.TransactionBalanceTrace_Operation{{
+			OperationIdentifier: 0,
+			Address:             traceOwner.Bytes(),
+			Amount:              1,
+		}},
+	}}
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildBalanceTraces: true,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if !result.Built {
+		t.Fatalf("result = %+v, want state-history build", result)
+	}
+	if result.BalanceTraceBuilt {
+		t.Fatalf("result = %+v, want no balance-trace build without account trace coverage", result)
+	}
+	for _, ref := range result.Segments {
+		if ref.Kind == SegmentBalanceTrace {
+			t.Fatalf("segments = %+v, want no balance-trace segment without account trace coverage", result.Segments)
+		}
+	}
+}
+
+func TestColdBuilderRejectsMismatchedBalanceTraceCoverage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := coldBuilderOwner(0x48)
+	writeColdBuilderChange(t, db, owner, 1, 1, "next")
+	block, _ := coldBuilderEventLogBlock(t, 1, nil)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	badTrace := coldBuilderBlockBalanceTrace(block, 10_002)
+	badTrace.BlockIdentifier.Hash = bytes.Repeat([]byte{0xff}, common.HashLength)
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, badTrace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
+		Dir:                dir,
+		Enabled:            true,
+		HistoryWindow:      1,
+		BuildBalanceTraces: true,
+	})
+	_, err := runner.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "balance trace coverage mismatch") {
+		t.Fatalf("OnePass error = %v, want balance trace coverage mismatch", err)
+	}
+	if manifest, err := LoadProductionManifest(dir); err == nil {
+		for _, ref := range manifest.Segments {
+			if ref.Kind == SegmentBalanceTrace {
+				t.Fatalf("manifest segments = %+v, want no balance-trace segment after mismatch", manifest.Segments)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+}
+
 func TestColdBuilderBuildsSectionBloomsOnlyForCompleteSections(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
@@ -763,6 +966,19 @@ func coldBuilderEventLogBlock(t *testing.T, number uint64, logs []*corepb.Transa
 		Transactions: []*corepb.Transaction{txPB},
 	})
 	return block, []*corepb.TransactionInfo{info}
+}
+
+func coldBuilderBlockBalanceTrace(block *coretypes.Block, timestamp int64) *contractpb.BlockBalanceTrace {
+	if block == nil {
+		return &contractpb.BlockBalanceTrace{Timestamp: timestamp}
+	}
+	return &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block.Hash().Bytes()...),
+			Number: int64(block.Number()),
+		},
+		Timestamp: timestamp,
+	}
 }
 
 func coldBuilderOwner(seed byte) common.Address {
