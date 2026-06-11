@@ -152,6 +152,71 @@ func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
 	}
 }
 
+func TestBackfillBalanceTracesByReplaySkipsRestoredPrefixBeforeRange(t *testing.T) {
+	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
+	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)
+	if err := sourceChain.InsertBlock(block2); err != nil {
+		t.Fatalf("InsertBlock source block2: %v", err)
+	}
+	replayDB := ethrawdb.NewMemoryDatabase()
+	scratchTarget := ethrawdb.NewMemoryDatabase()
+	if _, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		scratchTarget,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{FromBlock: 1, ToBlock: 2},
+	); err != nil {
+		t.Fatalf("prime replay DB: %v", err)
+	}
+
+	sourceReads := &balanceTraceBackfillCountingAncient{reads: make(map[uint64]int)}
+	var phases []string
+	result, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, sourceReads),
+		sourceDB,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{
+			FromBlock: 2,
+			ToBlock:   2,
+			Progress: func(p BalanceTraceReplayBackfillProgress) {
+				phases = append(phases, p.Phase)
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("BackfillBalanceTracesByReplay covered range: %v", err)
+	}
+	if result.ReplayStartBlock != 3 || result.ReplayHeadBlock != 2 || result.BlocksReplayed != 0 || result.BlocksBackfilled != 1 {
+		t.Fatalf("result = %+v, want covered range copied without replay", result)
+	}
+	if strings.Join(phases, ",") != "copy" {
+		t.Fatalf("progress phases = %v, want copy only", phases)
+	}
+	if sourceReads.reads[1] != 0 {
+		t.Fatalf("source block 1 reads = %d, want restored prefix before range skipped", sourceReads.reads[1])
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 1); got != nil {
+		t.Fatalf("BlockBalanceTrace 1 = %+v, want skipped source target row", got)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 2); got == nil {
+		t.Fatal("BlockBalanceTrace 2 missing after covered range copy")
+	}
+}
+
+type balanceTraceBackfillCountingAncient struct {
+	rawdb.NoopAncient
+	reads map[uint64]int
+}
+
+func (a *balanceTraceBackfillCountingAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if kind == rawdb.AncientBlocksTable {
+		a.reads[number]++
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
 func newBalanceTraceBackfillSource(t *testing.T) (ethdb.Database, *BlockChain, *params.Genesis, *types.Block) {
 	t.Helper()
 	sourceDB := ethrawdb.NewMemoryDatabase()

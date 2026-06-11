@@ -116,26 +116,36 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 	result.ReplayHeadBlock = replayHead.Number()
 
 	replayReader := rawdb.NewChainDB(replayDB, rawdb.NoopAncient{})
-	for blockNum := uint64(1); blockNum <= opts.ToBlock; blockNum++ {
+
+	copyEnd := min(opts.ToBlock, replayHead.Number())
+	for blockNum := opts.FromBlock; blockNum <= copyEnd; blockNum++ {
+		block := rawdb.ReadBlock(source, blockNum)
+		if block == nil {
+			return nil, fmt.Errorf("core: missing canonical block %d during balance trace replay backfill copy", blockNum)
+		}
+		if opts.Progress != nil {
+			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "copy", Block: blockNum, Target: opts.ToBlock})
+		}
+		if err := collectReplayedBalanceTraceRows(target, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
+			return nil, err
+		}
+		result.BlocksBackfilled++
+	}
+	for blockNum := replayHead.Number() + 1; blockNum <= opts.ToBlock; blockNum++ {
 		block := rawdb.ReadBlock(source, blockNum)
 		if block == nil {
 			return nil, fmt.Errorf("core: missing canonical block %d during balance trace replay backfill", blockNum)
 		}
-		if blockNum > replayHead.Number() {
-			if opts.Progress != nil {
-				opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "replay", Block: blockNum, Target: opts.ToBlock})
-			}
-			if err := replayChain.InsertBlock(block); err != nil {
-				return nil, fmt.Errorf("replay block %d: %w", blockNum, err)
-			}
-			result.BlocksReplayed++
-			result.ReplayHeadBlock = blockNum
+		if opts.Progress != nil {
+			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "replay", Block: blockNum, Target: opts.ToBlock})
 		}
+		if err := replayChain.InsertBlock(block); err != nil {
+			return nil, fmt.Errorf("replay block %d: %w", blockNum, err)
+		}
+		result.BlocksReplayed++
+		result.ReplayHeadBlock = blockNum
 		if blockNum < opts.FromBlock {
 			continue
-		}
-		if blockNum <= replayHead.Number() && opts.Progress != nil {
-			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "copy", Block: blockNum, Target: opts.ToBlock})
 		}
 		if err := collectReplayedBalanceTraceRows(target, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
 			return nil, err
