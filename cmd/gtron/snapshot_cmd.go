@@ -213,6 +213,29 @@ func snapshotCommand() *cli.Command {
 				Action: snapshotBuildSectionBloomsCmd,
 			},
 			{
+				Name:  "build-derived-indexes",
+				Usage: "Build cold balance-trace and section-bloom snapshot segments from local rawdb rows",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					testnetFlag,
+					genesisFileFlag,
+					devFlag,
+					witnessKeyFlag,
+					devFullFeaturesFlag,
+					devMaintenanceIntervalFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					snapshotDirFlag,
+					snapshotFromBlockFlag,
+					snapshotToBlockFlag,
+					snapshotForkConfigHashFlag,
+				},
+				Action: snapshotBuildDerivedIndexesCmd,
+			},
+			{
 				Name:  "prune-chain-lookups",
 				Usage: "Delete hot block/transaction lookup indexes covered by verified chain-freezer sidecars",
 				Flags: []cli.Flag{
@@ -655,6 +678,84 @@ func snapshotBuildSectionBloomsCmd(ctx *cli.Context) error {
 		activeSegments = len(result.Manifest.Segments)
 	}
 	fmt.Printf("Section bloom snapshot built: blocks=[%d,%d] paths=%s manifestGeneration=%d activeSegments=%d\n",
+		fromBlock,
+		toBlock,
+		strings.Join(paths, ","),
+		generation,
+		activeSegments,
+	)
+	return nil
+}
+
+func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	if !ctx.IsSet("snapshot.to-block") {
+		return errors.New("snapshot derived index build requires --snapshot.to-block")
+	}
+	forkConfigHash, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		return err
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, forkConfigHash)
+	if err != nil {
+		return err
+	}
+	fromBlock := ctx.Uint64("snapshot.from-block")
+	toBlock := ctx.Uint64("snapshot.to-block")
+	if toBlock < fromBlock {
+		return fmt.Errorf("snapshot derived index block range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	coverage, err := rawdb.AuditBlockBalanceTraceCoverage(chainDB, chainDB, fromBlock, toBlock, 10)
+	if err != nil {
+		return err
+	}
+	if !coverage.Complete() {
+		for _, issue := range coverage.Issues {
+			fmt.Printf("Balance trace coverage issue: block=%d kind=%s detail=%s\n", issue.BlockNum, issue.Kind, issue.Detail)
+		}
+		return fmt.Errorf("snapshot derived index build requires complete balance trace coverage over [%d,%d]: missing=%d mismatched=%d",
+			fromBlock,
+			toBlock,
+			coverage.MissingBlockBalanceTrace,
+			coverage.MismatchedBlockBalanceTrace,
+		)
+	}
+
+	dir := snapshotDir(ctx, cfg.DataDir)
+	result, err := statesnapshots.NewAggregator(dir).BuildDerivedIndexes(db, fromBlock, toBlock, statesnapshots.AggregatorBuildDerivedOptions{
+		BalanceTraces: true,
+		SectionBlooms: true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := ensureSnapshotManifestChainIdentity(dir, identity); err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(result.Segments))
+	for _, ref := range result.Segments {
+		paths = append(paths, ref.Path)
+	}
+	var generation uint64
+	var activeSegments int
+	if result.Manifest != nil {
+		generation = result.Manifest.Generation
+		activeSegments = len(result.Manifest.Segments)
+	}
+	fmt.Printf("Derived snapshot indexes built: blocks=[%d,%d] paths=%s manifestGeneration=%d activeSegments=%d\n",
 		fromBlock,
 		toBlock,
 		strings.Join(paths, ","),

@@ -767,6 +767,99 @@ func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "12",
+		"--snapshot.to-block", "12",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	owner := common.Address{0x41, 0xbb}
+	block12 := snapshotCmdBlock(12)
+	if err := rawdb.WriteBlock(db, block12); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   append([]byte(nil), block12.Hash().Bytes()...),
+			Number: 12,
+		},
+		Timestamp: 1200,
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 910); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	bloomRow := snapshotCmdSectionBloomEncodedBit(t, 7)
+	if err := rawdb.WriteSectionBloom(db, 0, 42, bloomRow); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if err := snapshotBuildDerivedIndexesCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildDerivedIndexesCmd: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 2 {
+		t.Fatalf("active segments = %d, want 2", report.ActiveSegments)
+	}
+	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	var haveBalanceTrace, haveSectionBloom bool
+	for _, ref := range manifest.Segments {
+		switch ref.Kind {
+		case statesnapshots.SegmentBalanceTrace:
+			haveBalanceTrace = true
+		case statesnapshots.SegmentSectionBloom:
+			haveSectionBloom = true
+		}
+	}
+	if !haveBalanceTrace || !haveSectionBloom {
+		t.Fatalf("manifest segments = %+v, want balance trace and section bloom segments", manifest.Segments)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(12)
+	if err != nil || !ok || trace.GetTimestamp() != 1200 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1200", trace, ok, err)
+	}
+	block, balance, ok, err := mgr.AccountTraceAtOrBefore(owner.Bytes(), 12)
+	if err != nil || !ok || block != 12 || balance != 910 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%d/%v/%v, want 12/910/true/nil", block, balance, ok, err)
+	}
+	raw, ok, err := mgr.SectionBloom(0, 42)
+	if err != nil || !ok || !bytes.Equal(raw, bloomRow) {
+		t.Fatalf("SectionBloom = %x/%v/%v, want bloom row", raw, ok, err)
+	}
+}
+
 func TestSnapshotRestoreVerificationOptionsRebuildsCommitmentRoot(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))

@@ -687,6 +687,10 @@ Status:
   --snapshot.to-block` builds registered cold section-bloom segments from local
   hot `sb-` rows and records the same signed-snapshot chain identity as freezer
   and trace sidecars.
+- `gtron snapshot build-derived-indexes --snapshot.from-block
+  --snapshot.to-block` builds balance-trace and section-bloom sidecars together
+  and integrates them into one manifest generation, while retaining the
+  pre-freeze balance-trace coverage audit.
 - `gtron snapshot prune-section-blooms` verifies the signed catalog and cold
   segment format, compares every hot `sb-` row in the covered section range
   byte-for-byte against the cold segment, and deletes the hot rows only after

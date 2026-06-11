@@ -216,6 +216,59 @@ func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
 	}
 }
 
+func TestAggregatorBuildDerivedIndexes(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x88}, common.AccountIDLength)...))
+	bloomRow := sectionBloomTestEncodedBit(t, 9)
+
+	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(db, owner.Bytes(), 12, 900); err != nil {
+		t.Fatalf("WriteAccountTrace: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(db, 0, 42, bloomRow); err != nil {
+		t.Fatalf("WriteSectionBloom: %v", err)
+	}
+
+	result, err := NewAggregator(dir).BuildDerivedIndexes(db, 12, 12, AggregatorBuildDerivedOptions{
+		BalanceTraces: true,
+		SectionBlooms: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildDerivedIndexes: %v", err)
+	}
+	if len(result.Segments) != 2 {
+		t.Fatalf("segments = %d, want 2", len(result.Segments))
+	}
+	if result.Manifest == nil || len(result.Manifest.Segments) != 2 {
+		t.Fatalf("manifest = %+v, want two active segments", result.Manifest)
+	}
+	assertSegmentRef(t, result.Manifest, SegmentDatasetBalanceTrace, 0, SegmentBalanceTrace)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetSectionBloom, 0, SegmentSectionBloom)
+	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(12)
+	if err != nil || !ok || trace.GetTimestamp() != 1200 {
+		t.Fatalf("BlockBalanceTrace = %+v/%v/%v, want timestamp 1200", trace, ok, err)
+	}
+	_, balance, ok, err := mgr.AccountTraceAtOrBefore(owner.Bytes(), 12)
+	if err != nil || !ok || balance != 900 {
+		t.Fatalf("AccountTraceAtOrBefore = %d/%v/%v, want 900/true/nil", balance, ok, err)
+	}
+	raw, ok, err := mgr.SectionBloom(0, 42)
+	if err != nil || !ok || !bytes.Equal(raw, bloomRow) {
+		t.Fatalf("SectionBloom = %x/%v/%v, want bloom row", raw, ok, err)
+	}
+}
+
 func TestAggregatorBuildLatestOnly(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()

@@ -120,6 +120,13 @@ gtron snapshot build-section-blooms \
   --snapshot.from-block 1 \
   --snapshot.to-block 12345678
 
+# Equivalent one-pass manifest integration for both derived sidecars.
+gtron snapshot build-derived-indexes \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 12345678
+
 gtron snapshot publish-catalog \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
@@ -151,6 +158,12 @@ block can validate without replaying from genesis.
 rows for the source block range. It does not rebuild missing bloom rows; use
 `gtron db rebuild-section-blooms` first when the hot bloom index is absent or
 incomplete.
+
+`snapshot build-derived-indexes` builds the balance-trace and section-bloom
+sidecars together and integrates them into a single manifest generation. It
+uses the same balance-trace coverage audit as `snapshot build-balance-traces`;
+run the specific single-dataset commands when only one sidecar needs to be
+refreshed.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` and `section-bloom` segments. At runtime, `ChainDB` falls
