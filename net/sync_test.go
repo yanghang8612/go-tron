@@ -140,6 +140,76 @@ func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	}
 }
 
+func TestSyncServiceDropsMissingFirstStagedBodyProgressOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block2 := stubBlock(2, bc.CurrentBlock().Hash())
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodies, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	ss.mu.Unlock()
+	if buffered != 0 || target != 1 {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 0/1", buffered, target)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || ok {
+		t.Fatalf("sync bodies progress after missing first body = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
+func TestSyncServiceKeepsCanonicalSyncImportProgressOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 2)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write sync import progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport)
+	if err != nil || !ok || row.BlockNum != block1.Number() || !row.HasBlockHash || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync import progress after startup = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+}
+
+func TestSyncServiceDeletesStaleSyncImportProgressOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 2)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, block1.Number(), tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("write mismatched sync import progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || ok {
+		t.Fatalf("stale sync import progress after startup = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, 5, tcommon.Hash{0x05}); err != nil {
+		t.Fatalf("write ahead sync import progress: %v", err)
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || ok {
+		t.Fatalf("ahead sync import progress after startup = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	bc := makeTestChain(t)
 	block := stubBlock(1, bc.CurrentBlock().Hash())

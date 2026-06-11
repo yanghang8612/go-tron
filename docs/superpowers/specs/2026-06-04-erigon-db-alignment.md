@@ -280,7 +280,13 @@ Status:
   restore now truncates gapped staged-body tails and rewinds the `SyncBodies`
   watermark to the last continuous recovered block, keeping persisted downloader
   state hash-bound and contiguous after restart without rejecting out-of-order
-  bodies in the still-running sync session.
+  bodies in the still-running sync session. A `SyncBodies` watermark whose first
+  expected body is missing is dropped rather than left pointing at an unusable
+  staged range.
+- `SyncImport` startup repair now keeps only hash-bound rows that still resolve
+  to the current canonical chain; rows that point past the head, lack a hash, or
+  name an old fork hash are deleted. This keeps downloader import diagnostics
+  from masquerading as a resumable canonical stage after restart or fork repair.
 - `BlockChain` startup now verifies `Headers/Bodies/Execution/Commitment/Finish`
   stage rows against the persisted head block and repairs missing, legacy, or
   mismatched rows back to that hash-bound head. This makes canonical stage
@@ -290,9 +296,9 @@ Status:
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped
-  staged-body tails are dropped on restart, corrupted startup canonical stages
-  are repaired to the stored head, and imported block number/hash progress is
-  written after `InsertBlocks` succeeds.
+  staged-body tails and stale downloader watermarks are dropped on restart,
+  corrupted startup canonical stages are repaired to the stored head, and
+  imported block number/hash progress is written after `InsertBlocks` succeeds.
 
 Needed:
 

@@ -381,7 +381,15 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = make(map[uint64]tcommon.Hash)
-	head := ss.chain.CurrentBlock().Number()
+	headBlock := ss.chain.CurrentBlock()
+	if headBlock == nil {
+		headBlock = ss.chain.GetBlockByNumber(0)
+	}
+	var head uint64
+	if headBlock != nil {
+		head = headBlock.Number()
+	}
+	ss.repairSyncImportProgress(headBlock)
 	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
 	ss.deleteImportedSyncBodiesThrough(head)
 	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
@@ -424,6 +432,34 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	return head
 }
 
+func (ss *SyncService) repairSyncImportProgress(head *types.Block) {
+	if ss == nil || ss.chain == nil || head == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncImport)
+	if err != nil {
+		syncLog.Warn("Read sync import stage progress failed", "err", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	if row.HasBlockHash && row.BlockNum <= head.Number() {
+		if block := ss.chain.GetBlockByNumber(row.BlockNum); block != nil && block.Hash() == row.BlockHash {
+			return
+		}
+	}
+	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncImport); err != nil {
+		syncLog.Warn("Delete stale sync import stage progress failed", "block", row.BlockNum, "hash", row.BlockHash, "err", err)
+		return
+	}
+	syncLog.Debug("Deleted stale sync import stage progress", "block", row.BlockNum, "hash", row.BlockHash, "head", head.Number(), "headHash", head.Hash())
+}
+
 func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) {
 	if ss == nil || ss.chain == nil || limit <= 0 {
 		return
@@ -451,7 +487,7 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 		}
 		if !ok {
 			if pruneStaleTail {
-				ss.deleteStaleSyncBodiesFrom(n+1, lastRestored)
+				ss.deleteStaleSyncBodiesFrom(n, lastRestored)
 			}
 			return
 		}
