@@ -77,9 +77,11 @@ writes to collector-backed loads.
 - `snapshots.BuildEventLogSegmentFromChain` and `Aggregator.BuildEventLogs`
   now build registered cold `event-log` sidecars from retained blocks plus hot
   or ancient per-block `TransactionRet` payloads. The current segment is a
-  verified immutable log stream with manager-side address/topic filtering.
+  verified immutable log stream with segment-local address and positional-topic
+  postings, plus manager-side range filtering across registered segments.
   `TronBackend.GetLogs` uses it when manifest coverage fully spans the query
-  range; address/topic point indexes remain follow-up work.
+  range; global/recsplit-style address/topic point indexes remain follow-up
+  work.
 - `TronBackend.GetLogs` consumes those section-bloom rows as an optional
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing
@@ -197,7 +199,8 @@ bloom.
 
 ## Migration Targets
 
-- event-log point-heavy address/topic accessors
+- global/recsplit-style event-log address/topic accessors beyond segment-local
+  postings
 - commands that populate or rebuild block-balance traces from execution/replay
   data
 - any future RPC index build where input order follows block execution rather

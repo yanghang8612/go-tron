@@ -2,6 +2,8 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -103,6 +105,67 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 	if visited != 1 {
 		t.Fatalf("short-circuit visited %d rows, want 1", visited)
+	}
+}
+
+func TestEventLogSegmentTopicLookupSkipsNonCandidatePayloads(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x33)
+	topicA := common.Hash{0xaa}
+	topicB := common.Hash{0xbb}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topicA[:]}, Data: []byte{0x01}},
+		{Address: addr, Topics: [][]byte{topicB[:]}, Data: []byte{0x02}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	ref := result.Segments[0]
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment: %v", err)
+	}
+	firstEntry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, 0))
+	if err != nil {
+		t.Fatalf("read first index entry: %v", err)
+	}
+	if err := seg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, ref.Path), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := file.WriteAt(bytes.Repeat([]byte{0xff}, int(firstEntry.length)), int64(firstEntry.offset)); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt first payload: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close corrupting file: %v", err)
+	}
+
+	seg, err = OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment after corruption: %v", err)
+	}
+	defer seg.Close()
+	var rows []EventLog
+	if err := seg.IterateLogs(1, 1, EventLogFilter{Topics: [][]common.Hash{{topicB}}}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateLogs with topic lookup: %v", err)
+	}
+	if len(rows) != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x02}) {
+		t.Fatalf("topic lookup rows = %+v, want only topicB row", rows)
 	}
 }
 
