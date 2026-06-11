@@ -34,7 +34,7 @@ func TestProposalAllowTvmPragueDeploysHistoryBlockHash(t *testing.T) {
 		t.Fatalf("WriteProposalIndex: %v", err)
 	}
 
-	if err := ProcessProposals(db, statedb, dp, active, 1001, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, active, 1001, nil, nil); err != nil {
 		t.Fatalf("ProcessProposals: %v", err)
 	}
 

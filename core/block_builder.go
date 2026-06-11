@@ -136,7 +136,10 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 
 	// Run maintenance if at boundary (before commit so allowances are included)
 	if dynProps.NextMaintenanceTime() > 0 && timestamp >= dynProps.NextMaintenanceTime() {
-		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb)); err != nil {
+		// nil cache: the producer builds a single block, not a replay of many
+		// boundaries, so the terminal-skip cache has nothing to amortise. Result
+		// is identical to the cached path (the cache only elides redundant reads).
+		if err := ProcessProposals(buildBuf, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), forks.NewForkControllerFromState(statedb), nil); err != nil {
 			return nil, fmt.Errorf("process proposals: %w", err)
 		}
 		adapter := &chainHeaderAdapter{

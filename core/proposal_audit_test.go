@@ -48,7 +48,7 @@ func TestProcessProposals_C2_AdaptiveRatioMultiplier(t *testing.T) {
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
 
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 	p1 := approvedProposal(0, map[int64]int64{59: 1})
 	statedb.WriteProposal(0, p1)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.NewRewardAlgorithmEffectiveCycle(); got != 43 {
@@ -96,7 +96,7 @@ func TestProcessProposals_C3C4_TvmVoteLocksEffectiveCycle(t *testing.T) {
 	p2 := approvedProposal(1, map[int64]int64{67: 1})
 	statedb.WriteProposal(1, p2)
 	statedb.WriteProposalIndex([]int64{0, 1})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3001, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3001, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.NewRewardAlgorithmEffectiveCycle(); got != 43 {
@@ -115,7 +115,7 @@ func TestProcessProposals_C5_TotalCurrentEnergyLimitRoutes(t *testing.T) {
 	p := approvedProposal(0, map[int64]int64{19: 80_000_000_000})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -148,7 +148,7 @@ func TestProcessProposals_M1_AdaptiveEnergyReapprovalNoop(t *testing.T) {
 	p := approvedProposal(0, map[int64]int64{21: 1})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if got := dp.AdaptiveResourceLimitTargetRatio(); got != 43200 {
@@ -175,7 +175,7 @@ func TestProcessProposals_C5_TotalEnergyLimitV1Routes(t *testing.T) {
 	p := approvedProposal(0, map[int64]int64{17: 80_000_000_000})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestProcessProposals_M1_MultiSignReapprovalNoop(t *testing.T) {
 	p := approvedProposal(0, map[int64]int64{20: 1})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestProcessProposals_M3_MarketTransactionAddsBits52_53(t *testing.T) {
 	p := approvedProposal(0, map[int64]int64{44: 1})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestProcessProposals_M3_ChangeDelegationValueZeroStillAddsBit49(t *testing.
 	p := approvedProposal(0, map[int64]int64{30: 0})
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
-	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dp, auditActiveSet(), 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 

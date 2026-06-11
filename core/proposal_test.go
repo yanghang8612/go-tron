@@ -31,7 +31,7 @@ func TestProcessProposals_Approved(t *testing.T) {
 
 	// 3 approvals out of 4 SRs = 75% >= 70%
 	active := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active, 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestProcessProposals_Canceled(t *testing.T) {
 	statedb.WriteProposalIndex([]int64{0})
 
 	active4 := []tcommon.Address{{0x41, 0x01}, {0x41, 0x02}, {0x41, 0x03}, {0x41, 0x04}}
-	if err := ProcessProposals(db, statedb, dynProps, active4, 3000, nil); err != nil {
+	if err := ProcessProposals(db, statedb, dynProps, active4, 3000, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestProcessProposals_NotExpired(t *testing.T) {
 	statedb.WriteProposal(0, p)
 	statedb.WriteProposalIndex([]int64{0})
 
-	if err := ProcessProposals(db, statedb, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000, nil); err != nil { // maintenance time < expiration
+	if err := ProcessProposals(db, statedb, dynProps, []tcommon.Address{{0x41, 0x01}}, 1000, nil, nil); err != nil { // maintenance time < expiration
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestApplyProposalSideEffects_PriceHistory(t *testing.T) {
 		}
 		statedb.WriteProposal(p.ID, p)
 		statedb.WriteProposalIndex([]int64{p.ID})
-		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil); err != nil {
+		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil, nil); err != nil {
 			t.Fatalf("ProcessProposals: %v", err)
 		}
 		return dp
@@ -163,7 +163,7 @@ func TestApplyProposalSideEffects_AddSystemContract(t *testing.T) {
 		}
 		statedb.WriteProposal(p.ID, p)
 		statedb.WriteProposalIndex([]int64{p.ID})
-		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil); err != nil {
+		if err := ProcessProposals(db, statedb, dp, active, expirationTime+1, nil, nil); err != nil {
 			t.Fatalf("ProcessProposals: %v", err)
 		}
 		return dp

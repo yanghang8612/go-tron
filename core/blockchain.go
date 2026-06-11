@@ -152,7 +152,11 @@ type BlockChain struct {
 	witnessBlockCache map[tcommon.Address]int64
 	forkStatsCache    map[int32][]byte
 	cycleRewards      *cycleRewardAccumulator
-	fc                *forks.ForkController
+	// proposalCache skips re-reading already-resolved proposals during the
+	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
+	// failed apply. See proposalScanCache.
+	proposalCache *proposalScanCache
+	fc            *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -367,6 +371,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		rewardAcctAddrs:   make([]tcommon.Address, 0, 128),
 		witnessBlockCache: make(map[tcommon.Address]int64),
 		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
+		proposalCache:     newProposalScanCache(),
 	}
 	var err error
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
@@ -770,6 +775,17 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 		return err
 	}
 
+	// When this block runs maintenance, ProcessProposals records terminal
+	// proposal marks against the state it produces. If the apply then fails,
+	// that state is abandoned, so the marks may no longer match committed
+	// canonical state — drop the whole cache (it rebuilds lazily next boundary).
+	maintenanceProcessed := false
+	defer func() {
+		if retErr != nil && maintenanceProcessed {
+			bc.proposalCache.reset()
+		}
+	}()
+
 	stats := applyStats{last: time.Now()}
 	applyStart := stats.last
 	defer func() {
@@ -1078,9 +1094,13 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 			// PENDING` and `allow_creation_of_contracts = 0` (2026-05-09).
 			// Per-proposal records and governance side-effects live in rooted
 			// StateDB domains.
-			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb)); err != nil {
+			if err := ProcessProposals(bc.buffer, statedb, dynProps, bc.ActiveWitnesses(), dynProps.NextMaintenanceTime(), bc.forkControllerForState(statedb), bc.proposalCache); err != nil {
 				return fmt.Errorf("process proposals: %w", err)
 			}
+			// ProcessProposals may have recorded terminal marks against state
+			// that this block's apply could still abandon on a later error.
+			// Drop them if so (handled by the deferred reset below).
+			maintenanceProcessed = true
 			adapter := &chainHeaderAdapter{
 				statedb:          statedb,
 				dynProps:         dynProps,
@@ -1637,6 +1657,10 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	bc.clearRewardAccountCache()
 	bc.clearWitnessBlockCache()
 	bc.clearForkStatsCache()
+	// A rewound proposal may revert from terminal back to PENDING on the new
+	// branch; drop the node-local terminal-skip cache so the re-applied branch
+	// re-reads proposal state from scratch.
+	bc.proposalCache.reset()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)
