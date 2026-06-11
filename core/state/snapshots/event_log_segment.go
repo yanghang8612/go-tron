@@ -54,20 +54,8 @@ type eventLogRow struct {
 	log   *corepb.TransactionInfo_Log
 }
 
-type EventLogFilter struct {
-	Addresses []common.Address
-	Topics    [][]common.Hash
-}
-
-type EventLog struct {
-	BlockNum  uint64
-	TxIndex   uint64
-	LogIndex  uint64
-	TxHash    common.Hash
-	BlockHash common.Hash
-	Address   common.Address
-	Log       *corepb.TransactionInfo_Log
-}
+type EventLogFilter = rawdb.EventLogFilter
+type EventLog = rawdb.EventLog
 
 func EventLogSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("log/event-log-%d-%d.seg", fromBlock, toBlock)
@@ -262,6 +250,36 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 		}
 	}
 	return nil
+}
+
+func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return false, fmt.Errorf("snapshots: event log coverage range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return false, err
+	}
+	next := fromBlock
+	for _, ref := range eventLogRefs(manifest) {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false, nil
+		}
+		if ref.ToTxNum >= toBlock {
+			return true, nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return false, nil
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false, nil
 }
 
 func collectEventLogRows(chain *rawdb.ChainDB, fromBlock, toBlock uint64) ([]eventLogRow, error) {

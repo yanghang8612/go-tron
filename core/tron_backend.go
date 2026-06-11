@@ -1711,6 +1711,12 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		}
 	}
 
+	if logs, ok, err := b.getLogsFromColdEventLogs(fromBlock, toBlock, filter); err != nil {
+		return nil, err
+	} else if ok {
+		return logs, nil
+	}
+
 	var logs []*jsonrpc.RPCLog
 	bloomMatcher := newSectionBloomLogMatcher(b.chain.chaindb, filter)
 
@@ -1793,6 +1799,66 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 		logs = []*jsonrpc.RPCLog{}
 	}
 	return logs, nil
+}
+
+func (b *TronBackend) getLogsFromColdEventLogs(fromBlock, toBlock uint64, filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, bool, error) {
+	db := b.chain.chaindb
+	covered, err := db.EventLogRangeCovered(fromBlock, toBlock)
+	if err != nil {
+		return nil, false, err
+	}
+	if !covered {
+		return nil, false, nil
+	}
+	logs := make([]*jsonrpc.RPCLog, 0)
+	err = db.IterateEventLogs(fromBlock, toBlock, rawdb.EventLogFilter{
+		Addresses: filter.Addresses,
+		Topics:    filter.Topics,
+	}, func(row rawdb.EventLog) (bool, error) {
+		if filter.BlockHash != nil && row.BlockHash != *filter.BlockHash {
+			return true, nil
+		}
+		if row.Log == nil {
+			return false, fmt.Errorf("cold event log row block=%d tx=%d log=%d is nil", row.BlockNum, row.TxIndex, row.LogIndex)
+		}
+		logs = append(logs, rpcLogFromColdEventLog(row))
+		return true, nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	return logs, true, nil
+}
+
+func rpcLogFromColdEventLog(row rawdb.EventLog) *jsonrpc.RPCLog {
+	log := row.Log
+	return &jsonrpc.RPCLog{
+		Address:          rpcLogAddress(log.GetAddress()),
+		Topics:           rpcLogTopics(log.GetTopics()),
+		Data:             fmt.Sprintf("0x%x", log.GetData()),
+		BlockNumber:      fmt.Sprintf("0x%x", row.BlockNum),
+		TransactionHash:  fmt.Sprintf("0x%x", row.TxHash),
+		TransactionIndex: fmt.Sprintf("0x%x", row.TxIndex),
+		BlockHash:        fmt.Sprintf("0x%x", row.BlockHash),
+		LogIndex:         fmt.Sprintf("0x%x", row.LogIndex),
+		Removed:          false,
+	}
+}
+
+func rpcLogAddress(raw []byte) string {
+	addrStart := 0
+	if len(raw) > 20 {
+		addrStart = len(raw) - 20
+	}
+	return fmt.Sprintf("0x%x", raw[addrStart:])
+}
+
+func rpcLogTopics(rawTopics [][]byte) []string {
+	topics := make([]string, len(rawTopics))
+	for i, topic := range rawTopics {
+		topics[i] = fmt.Sprintf("0x%064x", topic)
+	}
+	return topics
 }
 
 // matchTopics returns true if the log topics match the filter topics.

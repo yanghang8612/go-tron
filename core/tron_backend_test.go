@@ -441,6 +441,73 @@ func TestTronBackend_GetLogsFallsBackWhenSectionBloomMissing(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x31)
+	topic := tcommon.Hash{0xcc}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x0a, 0x0b},
+	})
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	dir := t.TempDir()
+	if _, err := statesnapshots.NewAggregator(dir).BuildEventLogs(bc.ChainDB(), 1, 1); err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs from cold event log segment returned %d logs, want 1", len(logs))
+	}
+	got := logs[0]
+	if got.Address != fmt.Sprintf("0x%x", logAddress) {
+		t.Fatalf("address = %s, want 0x%x", got.Address, logAddress)
+	}
+	if got.Data != "0x0a0b" {
+		t.Fatalf("data = %s, want 0x0a0b", got.Data)
+	}
+	if got.BlockNumber != "0x1" || got.TransactionIndex != "0x0" || got.LogIndex != "0x0" {
+		t.Fatalf("position = block %s tx %s log %s, want 0x1/0x0/0x0", got.BlockNumber, got.TransactionIndex, got.LogIndex)
+	}
+	if got.BlockHash != fmt.Sprintf("0x%x", block1.Hash()) {
+		t.Fatalf("block hash = %s, want 0x%x", got.BlockHash, block1.Hash())
+	}
+	if got.TransactionHash != fmt.Sprintf("0x%x", block1.Transactions()[0].Hash()) {
+		t.Fatalf("tx hash = %s, want 0x%x", got.TransactionHash, block1.Transactions()[0].Hash())
+	}
+}
+
 func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
 	db := rawdb.NewMemoryChainDB()
 	addr := bytes20(0x22)

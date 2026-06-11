@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
@@ -28,6 +29,7 @@ type ChainDB struct {
 	chainIndex   ChainIndexReader
 	balanceTrace BalanceTraceReader
 	sectionBloom SectionBloomReader
+	eventLog     EventLogReader
 }
 
 // ChainIndexReader is an optional cold lookup sidecar. It is defined in rawdb
@@ -50,6 +52,33 @@ type BalanceTraceReader interface {
 // filters keep using section-bloom prefilters after hot `sb-` rows are pruned.
 type SectionBloomReader interface {
 	SectionBloom(section, bitIndex uint64) ([]byte, bool, error)
+}
+
+// EventLogFilter is the raw cold-event-log query shape shared by snapshots and
+// JSON-RPC. Topics[i] uses nil/empty as wildcard and non-empty as OR values.
+type EventLogFilter struct {
+	Addresses []common.Address
+	Topics    [][]common.Hash
+}
+
+// EventLog is a decoded cold TVM log row with enough positional metadata to
+// render an eth_getLogs-compatible response without scanning block bodies.
+type EventLog struct {
+	BlockNum  uint64
+	TxIndex   uint64
+	LogIndex  uint64
+	TxHash    common.Hash
+	BlockHash common.Hash
+	Address   common.Address
+	Log       *corepb.TransactionInfo_Log
+}
+
+// EventLogReader is an optional cold event-log sidecar. It lets log queries
+// read verified immutable event-log segments after hot TransactionRet rows have
+// been pruned or moved to ancient storage.
+type EventLogReader interface {
+	EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error)
+	IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error
 }
 
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
@@ -87,6 +116,29 @@ func (db *ChainDB) SetSectionBloomReader(reader SectionBloomReader) {
 		return
 	}
 	db.sectionBloom = reader
+}
+
+// SetEventLogReader attaches a cold event-log sidecar. Passing nil disables the
+// sidecar and leaves log queries on block/TransactionRet scan paths.
+func (db *ChainDB) SetEventLogReader(reader EventLogReader) {
+	if db == nil {
+		return
+	}
+	db.eventLog = reader
+}
+
+func (db *ChainDB) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	if db == nil || db.eventLog == nil {
+		return false, nil
+	}
+	return db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
+}
+
+func (db *ChainDB) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
+	if db == nil || db.eventLog == nil {
+		return nil
+	}
+	return db.eventLog.IterateEventLogs(fromBlock, toBlock, filter, fn)
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's

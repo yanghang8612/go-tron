@@ -694,8 +694,9 @@ Status:
 - Registered cold `event-log` snapshot segments can now be built from retained
   canonical blocks plus hot or ancient `TransactionRet` payloads.
   `snapshots.Manager` exposes address/topic-filtered event-log iteration over
-  those immutable files, giving the RPC path a cold accessor target beyond the
-  section-bloom prefilter.
+  those immutable files. Runtime startup registers the manager on `ChainDB`, and
+  `TronBackend.GetLogs` uses the cold event-log stream when manifest coverage
+  fully spans the query range, falling back to the hot scan otherwise.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
@@ -770,8 +771,7 @@ Remaining:
   traces, balance-trace snapshot builds now reject incomplete source ranges, and
   isolated replay backfill has replay-DB resume, collector-backed trace writes,
   and signed-snapshot checkpoint starts. Production archive completeness still needs
-  larger-datadir soak, RPC wiring for the cold event-log segment plus
-  point-heavy address/topic accessors, and an archive/as-of state reader beyond
+  larger-datadir soak, point-heavy event-log address/topic accessors, and an archive/as-of state reader beyond
   the trace-specific checkpoint path.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
