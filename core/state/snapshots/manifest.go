@@ -45,6 +45,9 @@ const (
 	// SegmentSectionBloom is a block-numbered cold section-bloom segment.
 	// SegmentRef.FromTxNum/ToTxNum carry the source block range.
 	SegmentSectionBloom SegmentKind = "section-bloom"
+	// SegmentEventLog is a block-numbered cold TVM event log segment.
+	// SegmentRef.FromTxNum/ToTxNum carry the source block range.
+	SegmentEventLog SegmentKind = "event-log"
 )
 
 type SegmentDataset string
@@ -60,6 +63,7 @@ const (
 	SegmentDatasetChainFreezer         SegmentDataset = "chain-freezer"
 	SegmentDatasetBalanceTrace         SegmentDataset = "balance-trace"
 	SegmentDatasetSectionBloom         SegmentDataset = "section-bloom"
+	SegmentDatasetEventLog             SegmentDataset = "event-log"
 )
 
 type Manifest struct {
@@ -466,7 +470,7 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}
@@ -477,6 +481,10 @@ func validateSegmentRef(seg SegmentRef) error {
 		}
 	} else if seg.Kind == SegmentSectionBloom {
 		if err := validateSectionBloomSegmentRefDataset(seg, dataset); err != nil {
+			return err
+		}
+	} else if seg.Kind == SegmentEventLog {
+		if err := validateEventLogSegmentRefDataset(seg, dataset); err != nil {
 			return err
 		}
 	} else if isChainBlockSegmentKind(seg.Kind) {
@@ -506,7 +514,7 @@ func isChainBlockSegmentKind(kind SegmentKind) bool {
 }
 
 func isBlockNumberedSegmentKind(kind SegmentKind) bool {
-	return isChainBlockSegmentKind(kind) || kind == SegmentBalanceTrace || kind == SegmentSectionBloom
+	return isChainBlockSegmentKind(kind) || kind == SegmentBalanceTrace || kind == SegmentSectionBloom || kind == SegmentEventLog
 }
 
 func validateChainFreezerSegmentRefDataset(seg SegmentRef, dataset SegmentDataset) error {
@@ -532,6 +540,16 @@ func validateBalanceTraceSegmentRefDataset(seg SegmentRef, dataset SegmentDatase
 func validateSectionBloomSegmentRefDataset(seg SegmentRef, dataset SegmentDataset) error {
 	if dataset != SegmentDatasetSectionBloom {
 		return fmt.Errorf("snapshots: %s segment %q must use dataset %q, got %q", seg.Kind, seg.Path, SegmentDatasetSectionBloom, seg.Dataset)
+	}
+	if seg.Domain != 0 {
+		return fmt.Errorf("snapshots: %s segment %q must not set kv domain %#04x", dataset, seg.Path, uint16(seg.Domain))
+	}
+	return nil
+}
+
+func validateEventLogSegmentRefDataset(seg SegmentRef, dataset SegmentDataset) error {
+	if dataset != SegmentDatasetEventLog {
+		return fmt.Errorf("snapshots: %s segment %q must use dataset %q, got %q", seg.Kind, seg.Path, SegmentDatasetEventLog, seg.Dataset)
 	}
 	if seg.Domain != 0 {
 		return fmt.Errorf("snapshots: %s segment %q must not set kv domain %#04x", dataset, seg.Path, uint16(seg.Domain))

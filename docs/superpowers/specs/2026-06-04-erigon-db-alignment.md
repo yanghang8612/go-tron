@@ -691,6 +691,11 @@ Status:
   --snapshot.to-block` builds balance-trace and section-bloom sidecars together
   and integrates them into one manifest generation, while retaining the
   pre-freeze balance-trace coverage audit.
+- Registered cold `event-log` snapshot segments can now be built from retained
+  canonical blocks plus hot or ancient `TransactionRet` payloads.
+  `snapshots.Manager` exposes address/topic-filtered event-log iteration over
+  those immutable files, giving the RPC path a cold accessor target beyond the
+  section-bloom prefilter.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
@@ -765,9 +770,9 @@ Remaining:
   traces, balance-trace snapshot builds now reject incomplete source ranges, and
   isolated replay backfill has replay-DB resume, collector-backed trace writes,
   and signed-snapshot checkpoint starts. Production archive completeness still needs
-  larger-datadir soak, broader event/log cold accessors beyond the section
-  bloom prefilter, and an archive/as-of state reader beyond the trace-specific
-  checkpoint path.
+  larger-datadir soak, RPC wiring for the cold event-log segment plus
+  point-heavy address/topic accessors, and an archive/as-of state reader beyond
+  the trace-specific checkpoint path.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

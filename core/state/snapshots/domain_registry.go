@@ -592,6 +592,9 @@ func CheckRegisteredSegment(dir string, ref SegmentRef) (bool, error) {
 	if ref.Kind == SegmentSectionBloom {
 		return true, CheckSectionBloomSegment(dir, ref)
 	}
+	if ref.Kind == SegmentEventLog {
+		return true, CheckEventLogSegment(dir, ref)
+	}
 	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
 	if !ok {
 		return false, nil

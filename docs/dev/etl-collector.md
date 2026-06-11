@@ -74,6 +74,11 @@ writes to collector-backed loads.
 - `gtron db rebuild-section-blooms` exposes that section-bloom rebuild. It uses
   the same datadir, ancient freezer, range, and ETL scratch-space flags as
   `rebuild-tx-indexes`.
+- `snapshots.BuildEventLogSegmentFromChain` and `Aggregator.BuildEventLogs`
+  now build registered cold `event-log` sidecars from retained blocks plus hot
+  or ancient per-block `TransactionRet` payloads. The current segment is a
+  verified immutable log stream with manager-side address/topic filtering; RPC
+  hot-path wiring and address/topic point indexes remain follow-up work.
 - `TronBackend.GetLogs` consumes those section-bloom rows as an optional
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing
@@ -191,7 +196,7 @@ bloom.
 
 ## Migration Targets
 
-- event-log sidecar builders
+- event-log RPC hot-path wiring and point-heavy address/topic accessors
 - commands that populate or rebuild block-balance traces from execution/replay
   data
 - any future RPC index build where input order follows block execution rather
