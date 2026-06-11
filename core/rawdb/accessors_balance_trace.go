@@ -1,6 +1,8 @@
 package rawdb
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/ethdb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -9,12 +11,15 @@ import (
 // WriteBlockBalanceTrace stores the per-block balance trace. Mirrors
 // java-tron BalanceTraceStore.putBlockBalanceTrace; gated on
 // isHistoryBalanceLookup — callers must check the flag before writing.
-func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *contractpb.BlockBalanceTrace) {
+func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *contractpb.BlockBalanceTrace) error {
+	if trace == nil {
+		return errors.New("rawdb: nil BlockBalanceTrace")
+	}
 	data, err := proto.Marshal(trace)
 	if err != nil {
-		return
+		return err
 	}
-	_ = db.Put(balanceTraceKey(blockNum), data)
+	return db.Put(balanceTraceKey(blockNum), data)
 }
 
 // ReadBlockBalanceTrace returns the BlockBalanceTrace for blockNum, or nil

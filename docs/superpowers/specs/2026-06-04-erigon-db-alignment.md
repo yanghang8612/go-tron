@@ -645,6 +645,14 @@ Status:
   block has no exact account trace, the response reports the newest trace block
   at or before the requested height; if no prior row exists, it returns the
   requested block identifier and zero balance.
+- History-enabled canonical block replay now records java-tron-compatible
+  `BlockBalanceTrace` transaction operations from actual StateDB balance
+  mutations and writes final `AccountTrace` rows for every account whose
+  balance changed or was deleted in the block. The recorder follows
+  `StateDB.Snapshot`/`RevertToSnapshot`, so reverted TVM/internal-call balance
+  changes do not leak into the trace. Synchronous and async commit paths persist
+  the trace rows in the block metadata batch, and the rawdb writer now surfaces
+  marshal/Put errors instead of silently dropping archive data.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -670,13 +678,13 @@ Status:
 Remaining:
 
 - Migrate history backfill commands and the remaining derived RPC index build
-  paths, especially block-balance-trace population/re-execution rebuilds and
+  paths, especially historical block-balance-trace re-execution rebuilds and
   broader event/log cold accessors, onto the collector-backed helpers where
   benchmarks show lower Pebble write amplification. The account/balance trace
-  read APIs are wired and account traces can now be repaired from retained
-  block-balance traces, but execution-time population and historical
-  block-balance-trace backfill are still needed before the feature is
-  archive-complete.
+  read APIs are wired, history-enabled execution now populates new trace rows,
+  and account traces can be repaired from retained block-balance traces, but
+  historical block-balance-trace backfill and cold trace storage are still
+  needed before the feature is archive-complete.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

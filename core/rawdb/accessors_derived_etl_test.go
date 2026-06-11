@@ -259,7 +259,9 @@ func writeDerivedIndexBenchRowsDirect(w *derivedIndexRecordingWriter, rows []der
 		if err := WriteTransactionInfosByBlock(w, row.blockNum, []*corepb.TransactionInfo{row.info}); err != nil {
 			return err
 		}
-		WriteBlockBalanceTrace(w, int64(row.blockNum), row.trace)
+		if err := WriteBlockBalanceTrace(w, int64(row.blockNum), row.trace); err != nil {
+			return err
+		}
 		if err := WriteAccountTrace(w, row.owner, int64(row.blockNum), row.info.Fee); err != nil {
 			return err
 		}

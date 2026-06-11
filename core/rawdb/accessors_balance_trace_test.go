@@ -22,7 +22,9 @@ func TestBlockBalanceTrace_RoundTrip(t *testing.T) {
 		t.Fatal("expected absent")
 	}
 
-	WriteBlockBalanceTrace(db, 1000, trace)
+	if err := WriteBlockBalanceTrace(db, 1000, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
 
 	if !HasBlockBalanceTrace(db, 1000) {
 		t.Fatal("expected present")
@@ -47,10 +49,22 @@ func TestBlockBalanceTrace_Absent(t *testing.T) {
 	}
 }
 
+func TestBlockBalanceTrace_RejectsNilWrite(t *testing.T) {
+	db := memorydb.New()
+	if err := WriteBlockBalanceTrace(db, 1, nil); err == nil {
+		t.Fatal("WriteBlockBalanceTrace accepted nil trace")
+	}
+	if HasBlockBalanceTrace(db, 1) {
+		t.Fatal("nil trace write created a row")
+	}
+}
+
 func TestBlockBalanceTrace_Delete(t *testing.T) {
 	db := memorydb.New()
 	trace := &contractpb.BlockBalanceTrace{Timestamp: 42}
-	WriteBlockBalanceTrace(db, 5, trace)
+	if err := WriteBlockBalanceTrace(db, 5, trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
 	if err := DeleteBlockBalanceTrace(db, 5); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +79,9 @@ func TestBlockBalanceTrace_Delete(t *testing.T) {
 func TestBlockBalanceTrace_MultiBlock(t *testing.T) {
 	db := memorydb.New()
 	for i := int64(1); i <= 5; i++ {
-		WriteBlockBalanceTrace(db, i, &contractpb.BlockBalanceTrace{Timestamp: i})
+		if err := WriteBlockBalanceTrace(db, i, &contractpb.BlockBalanceTrace{Timestamp: i}); err != nil {
+			t.Fatalf("WriteBlockBalanceTrace %d: %v", i, err)
+		}
 	}
 	for i := int64(1); i <= 5; i++ {
 		got := ReadBlockBalanceTrace(db, i)

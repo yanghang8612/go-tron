@@ -134,7 +134,7 @@ func TestDBRebuildAccountTracesCmd(t *testing.T) {
 	}
 	a := dbRebuildTraceAddress(0xa0)
 	b := dbRebuildTraceAddress(0xb0)
-	rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
+	if err := rawdb.WriteBlockBalanceTrace(db, 1, &contractpb.BlockBalanceTrace{
 		BlockIdentifier: dbRebuildBlockBalanceID(block1),
 		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
 			{
@@ -155,8 +155,10 @@ func TestDBRebuildAccountTracesCmd(t *testing.T) {
 				Status: "SUCCESS",
 			},
 		},
-	})
-	rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(db, 2, &contractpb.BlockBalanceTrace{
 		BlockIdentifier: dbRebuildBlockBalanceID(block2),
 		TransactionBalanceTrace: []*contractpb.TransactionBalanceTrace{
 			{
@@ -168,7 +170,9 @@ func TestDBRebuildAccountTracesCmd(t *testing.T) {
 				Status: "SUCCESS",
 			},
 		},
-	})
+	}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
 	db.Close()
 
 	ctx := makeDBTestContext(t, []string{

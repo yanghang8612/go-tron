@@ -10,10 +10,11 @@ section bloom backfills. Transaction lookup/info and section-bloom rebuilds
 from retained chain data now use that collector and are exposed through `gtron
 db`. Account trace repair from retained block-balance trace rows also uses the
 collector and is exposed through `gtron db rebuild-account-traces`. Remaining
-block-balance-trace population/backfill commands still need deliberate
-migration and path-specific benchmarks. Wallet HTTP/gRPC account and block
-balance trace read paths can consume the rows once execution or backfill has
-populated them.
+historical block-balance-trace backfill commands still need deliberate
+migration and path-specific benchmarks. History-enabled canonical replay now
+populates `BlockBalanceTrace` and final `AccountTrace` rows during execution,
+so Wallet HTTP/gRPC account and block balance trace read paths have a live data
+source for newly imported history-enabled blocks.
 
 ## Purpose
 
@@ -79,9 +80,10 @@ writes to collector-backed loads.
   block-by-block scan, so older datadirs remain correct until the operator runs
   the rebuild.
 - `TronBackend.GetAccountBalanceTrace` and `GetBlockBalanceTrace` expose
-  retained account/balance trace rows through Wallet HTTP/gRPC APIs. They are
-  read paths only; account/balance trace population and backfill commands remain
-  migration targets below.
+  retained account/balance trace rows through Wallet HTTP/gRPC APIs.
+  History-enabled canonical replay now populates those rows during block
+  execution; historical block-balance-trace backfill remains a migration target
+  below.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` rebuilds account-trace
   rows from retained `BlockBalanceTrace` operation diffs through
   `DerivedIndexCollector`.

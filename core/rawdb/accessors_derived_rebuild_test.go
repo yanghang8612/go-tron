@@ -254,7 +254,7 @@ func TestRebuildAccountTracesFromBlockBalanceTraces(t *testing.T) {
 	a := derivedRebuildAddress(0xa0)
 	b := derivedRebuildAddress(0xb0)
 	c := derivedRebuildAddress(0xc0)
-	WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block1, infos1,
+	if err := WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block1, infos1,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, a, 100),
 			derivedRebuildBalanceOp(1, b, 200),
@@ -262,14 +262,18 @@ func TestRebuildAccountTracesFromBlockBalanceTraces(t *testing.T) {
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, a, -30),
 		},
-	))
-	WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block1: %v", err)
+	}
+	if err := WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, a, 5),
 			derivedRebuildBalanceOp(1, b, -50),
 			derivedRebuildBalanceOp(2, c, 7),
 		},
-	))
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
 
 	result, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 1, 2, etl.Options{
 		TempDir:     t.TempDir(),
@@ -314,11 +318,13 @@ func TestRebuildAccountTracesUsesExistingBaselineForPartialRange(t *testing.T) {
 	if err := WriteAccountTrace(db, a, 1, 70); err != nil {
 		t.Fatalf("WriteAccountTrace baseline: %v", err)
 	}
-	WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
+	if err := WriteBlockBalanceTrace(db, 2, derivedRebuildBalanceTrace(block2, infos2,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, a, 5),
 		},
-	))
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace block2: %v", err)
+	}
 
 	result, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 2, 2, etl.Options{TempDir: t.TempDir()})
 	if err != nil {
@@ -355,11 +361,13 @@ func TestRebuildAccountTracesRejectsBadInputs(t *testing.T) {
 	if err := WriteBlock(db, block); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
-	WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block, infos,
+	if err := WriteBlockBalanceTrace(db, 1, derivedRebuildBalanceTrace(block, infos,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, []byte{0x41}, 1),
 		},
-	))
+	)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace malformed trace: %v", err)
+	}
 	if _, err := RebuildAccountTracesFromBlockBalanceTraces(db, db, db, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "malformed balance trace address") {
 		t.Fatalf("malformed address err = %v, want malformed address", err)
 	}

@@ -1397,7 +1397,9 @@ func (bc *BlockChain) writeBlockMetadataBatch(block *types.Block, stateRoot tcom
 	}
 	if balanceTrace != nil {
 		if balanceTrace.trace != nil {
-			rawdb.WriteBlockBalanceTrace(batch, int64(block.Number()), balanceTrace.trace)
+			if err := rawdb.WriteBlockBalanceTrace(batch, int64(block.Number()), balanceTrace.trace); err != nil {
+				return fmt.Errorf("write block balance trace: %w", err)
+			}
 		}
 		if len(balanceTrace.accountBalances) > 0 {
 			addrs := make([]tcommon.Address, 0, len(balanceTrace.accountBalances))

@@ -150,7 +150,9 @@ func TestTronBackend_GetBlockBalanceTrace(t *testing.T) {
 		BlockIdentifier: testBackendBalanceBlockID(block1),
 		Timestamp:       99_001,
 	}
-	rawdb.WriteBlockBalanceTrace(bc.db, int64(block1.Number()), trace)
+	if err := rawdb.WriteBlockBalanceTrace(bc.db, int64(block1.Number()), trace); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace: %v", err)
+	}
 
 	got, err := (&TronBackend{chain: bc}).GetBlockBalanceTrace(testBackendBalanceBlockID(block1))
 	if err != nil {
