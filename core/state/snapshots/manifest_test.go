@@ -222,6 +222,58 @@ func TestManifestAcceptsStateDomainChangeIndexedDatasets(t *testing.T) {
 	}
 }
 
+func TestManifestValidatesEventLogIndexCompanions(t *testing.T) {
+	valid := NewManifest(0, 0, []SegmentRef{
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 12, Path: "log/event-log-10-12.seg"},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 13, ToTxNum: 15, Path: "log/event-log-13-15.seg"},
+		{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+	})
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid event-log index companions rejected: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		segments []SegmentRef
+	}{
+		{
+			name: "orphan index",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 12, Path: "log/event-log-index-10-12.idx"},
+			},
+		},
+		{
+			name: "gap in coverage",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 11, Path: "log/event-log-10-11.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 13, ToTxNum: 15, Path: "log/event-log-13-15.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+		{
+			name: "prefix missing",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 11, ToTxNum: 15, Path: "log/event-log-11-15.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+		{
+			name: "suffix missing",
+			segments: []SegmentRef{
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLog, FromTxNum: 10, ToTxNum: 14, Path: "log/event-log-10-14.seg"},
+				{Dataset: SegmentDatasetEventLog, Kind: SegmentEventLogIndex, FromTxNum: 10, ToTxNum: 15, Path: "log/event-log-index-10-15.idx"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := NewManifest(0, 0, tt.segments).Validate(); err == nil {
+				t.Fatal("invalid event-log index companions accepted")
+			}
+		})
+	}
+}
+
 func TestProductionManifestRejectsJSONHistory(t *testing.T) {
 	manifest := NewManifest(100, 150, []SegmentRef{
 		{Dataset: SegmentDatasetStateDomainChange, Kind: SegmentHistory, FromTxNum: 100, ToTxNum: 150, Path: "history/state-domain-change-100-150.json"},

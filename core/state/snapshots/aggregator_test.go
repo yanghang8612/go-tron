@@ -252,15 +252,16 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDerivedIndexes: %v", err)
 	}
-	if len(result.Segments) != 3 {
-		t.Fatalf("segments = %d, want 3", len(result.Segments))
+	if len(result.Segments) != 4 {
+		t.Fatalf("segments = %d, want 4", len(result.Segments))
 	}
-	if result.Manifest == nil || len(result.Manifest.Segments) != 3 {
-		t.Fatalf("manifest = %+v, want three active segments", result.Manifest)
+	if result.Manifest == nil || len(result.Manifest.Segments) != 4 {
+		t.Fatalf("manifest = %+v, want four active segments", result.Manifest)
 	}
 	assertSegmentRef(t, result.Manifest, SegmentDatasetBalanceTrace, 0, SegmentBalanceTrace)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetSectionBloom, 0, SegmentSectionBloom)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetEventLog, 0, SegmentEventLog)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetEventLog, 0, SegmentEventLogIndex)
 	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}

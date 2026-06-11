@@ -836,14 +836,14 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}
-	if report.ActiveSegments != 3 {
-		t.Fatalf("active segments = %d, want 3", report.ActiveSegments)
+	if report.ActiveSegments != 4 {
+		t.Fatalf("active segments = %d, want 4", report.ActiveSegments)
 	}
 	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
 	if err != nil {
 		t.Fatalf("LoadProductionManifest: %v", err)
 	}
-	var haveBalanceTrace, haveSectionBloom, haveEventLog bool
+	var haveBalanceTrace, haveSectionBloom, haveEventLog, haveEventLogIndex bool
 	for _, ref := range manifest.Segments {
 		switch ref.Kind {
 		case statesnapshots.SegmentBalanceTrace:
@@ -852,10 +852,12 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 			haveSectionBloom = true
 		case statesnapshots.SegmentEventLog:
 			haveEventLog = true
+		case statesnapshots.SegmentEventLogIndex:
+			haveEventLogIndex = true
 		}
 	}
-	if !haveBalanceTrace || !haveSectionBloom || !haveEventLog {
-		t.Fatalf("manifest segments = %+v, want balance trace, section bloom, and event log segments", manifest.Segments)
+	if !haveBalanceTrace || !haveSectionBloom || !haveEventLog || !haveEventLogIndex {
+		t.Fatalf("manifest segments = %+v, want balance trace, section bloom, event log, and event log index segments", manifest.Segments)
 	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
@@ -944,8 +946,8 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}
-	if report.ActiveSegments != 1 {
-		t.Fatalf("active segments = %d, want 1", report.ActiveSegments)
+	if report.ActiveSegments != 2 {
+		t.Fatalf("active segments = %d, want 2", report.ActiveSegments)
 	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {

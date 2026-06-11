@@ -2,7 +2,13 @@ package core
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -508,6 +514,196 @@ func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x41)
+	otherAddress := bytes20(0x51)
+	topic := tcommon.Hash{0xdd}
+	otherTopic := tcommon.Hash{0xee}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x0c, 0x0d},
+	})
+	block2, info2 := testBackendLogBlock(2, &corepb.TransactionInfo_Log{
+		Address: otherAddress,
+		Topics:  [][]byte{otherTopic[:]},
+		Data:    []byte{0x2c, 0x2d},
+	})
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 2, []*corepb.TransactionInfo{info2}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block2: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	dir := t.TempDir()
+	ref1, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 1: %v", err)
+	}
+	ref2, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-2-2.seg", 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 2: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(dir, []statesnapshots.SegmentRef{ref1, ref2}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref1, ref2, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
+		t.Fatalf("remove unrelated event-log segment: %v", err)
+	}
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs with cold event-log-index returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x0c0d" || logs[0].BlockNumber != "0x1" {
+		t.Fatalf("log = %+v, want block1 data 0x0c0d", logs[0])
+	}
+}
+
+func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x61)
+	otherAddress := bytes20(0x71)
+	tronLogAddress := append([]byte{tcommon.AddressPrefixMainnet}, logAddress...)
+	otherTronAddress := append([]byte{tcommon.AddressPrefixMainnet}, otherAddress...)
+	topic := tcommon.Hash{0xab}
+	otherTopic := tcommon.Hash{0xcd}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: tronLogAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x01, 0xab},
+	})
+	block2, info2 := testBackendLogBlock(2, &corepb.TransactionInfo_Log{
+		Address: otherTronAddress,
+		Topics:  [][]byte{otherTopic[:]},
+		Data:    []byte{0x02, 0xcd},
+	})
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 2, []*corepb.TransactionInfo{info2}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block2: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	dir := t.TempDir()
+	ref1, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 1: %v", err)
+	}
+	ref2, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-2-2.seg", 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 2: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(dir, []statesnapshots.SegmentRef{ref1, ref2}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref1, ref2, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
+		t.Fatalf("remove unrelated event-log segment: %v", err)
+	}
+
+	backend := &TronBackend{chain: bc}
+	from, to := uint64(1), uint64(2)
+	directLogs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(tronLogAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("direct GetLogs: %v", err)
+	}
+	if len(directLogs) != 1 {
+		t.Fatalf("direct GetLogs with cold event-log-index returned %d logs, want 1", len(directLogs))
+	}
+	recordingBackend := &recordingLogBackend{TronBackend: backend}
+	rpcServer := jsonrpc.NewServer(recordingBackend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getLogs", []any{map[string]any{
+		"fromBlock": "0x1",
+		"toBlock":   "0x2",
+		"address":   "0x" + fmt.Sprintf("%x", tronLogAddress),
+		"topics":    []any{"0x" + hex.EncodeToString(topic.Bytes())},
+	}})
+	if recordingBackend.lastFilter == nil {
+		t.Fatal("eth_getLogs did not call backend.GetLogs")
+	}
+	recorded := *recordingBackend.lastFilter
+	if recorded.FromBlock == nil || *recorded.FromBlock != 1 || recorded.ToBlock == nil || *recorded.ToBlock != 2 ||
+		len(recorded.Addresses) != 1 || recorded.Addresses[0] != tcommon.BytesToAddress(tronLogAddress) ||
+		len(recorded.Topics) != 1 || len(recorded.Topics[0]) != 1 || recorded.Topics[0][0] != topic {
+		t.Fatalf("eth_getLogs filter = %+v, want block [1,2] address %x topic %x", recorded, tronLogAddress, topic.Bytes())
+	}
+	result, ok := resp["result"].([]any)
+	if !ok || len(result) != 1 {
+		t.Fatalf("eth_getLogs result = %v, want one log", resp["result"])
+	}
+	logObj, ok := result[0].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getLogs first result = %T %v, want object", result[0], result[0])
+	}
+	if logObj["data"] != "0x01ab" || logObj["blockNumber"] != "0x1" {
+		t.Fatalf("eth_getLogs log = %v, want block1 data 0x01ab", logObj)
+	}
+	if logObj["address"] != "0x"+fmt.Sprintf("%x", logAddress) {
+		t.Fatalf("eth_getLogs address = %v, want 0x%x", logObj["address"], logAddress)
+	}
+}
+
 func TestSectionBloomLogMatcherSkipsNonCandidateBlocks(t *testing.T) {
 	db := rawdb.NewMemoryChainDB()
 	addr := bytes20(0x22)
@@ -626,6 +822,46 @@ func bytes20(seed byte) []byte {
 		out[i] = seed + byte(i)
 	}
 	return out
+}
+
+func postCoreJSONRPC(t *testing.T, url, method string, params any) map[string]any {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+		"id":      1,
+	})
+	if err != nil {
+		t.Fatalf("marshal rpc body: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST rpc %s: %v", method, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST rpc %s status = %d, want 200", method, resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode rpc %s: %v", method, err)
+	}
+	if errValue, ok := out["error"]; ok {
+		t.Fatalf("rpc %s error: %v", method, errValue)
+	}
+	return out
+}
+
+type recordingLogBackend struct {
+	*TronBackend
+	lastFilter *jsonrpc.LogFilter
+}
+
+func (b *recordingLogBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, error) {
+	cp := filter
+	b.lastFilter = &cp
+	return b.TronBackend.GetLogs(filter)
 }
 
 func testSectionBloomSetBit(bitset []byte, bit uint64) []byte {

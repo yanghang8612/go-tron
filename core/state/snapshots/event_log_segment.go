@@ -19,10 +19,12 @@ import (
 
 const (
 	EventLogSegmentVersion = 2
+	EventLogIndexVersion   = 1
 
-	eventLogHeaderV1Size = 8 + 8 + 8 + 8 + 8 + 8
-	eventLogHeaderV2Size = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8
-	eventLogHeaderSize   = eventLogHeaderV2Size
+	eventLogHeaderV1Size    = 8 + 8 + 8 + 8 + 8 + 8
+	eventLogHeaderV2Size    = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8
+	eventLogHeaderSize      = eventLogHeaderV2Size
+	eventLogIndexHeaderSize = 8 + 8 + 8 + 8 + 8 + 8 + 8
 
 	eventLogIndexEntrySize       = 8 + 8 + 8 + common.HashLength + common.HashLength + common.AddressLength + 8 + 8
 	eventLogLookupHeaderSize     = 8
@@ -31,14 +33,21 @@ const (
 )
 
 var (
-	eventLogMagicV1 = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '1', '\n'}
-	eventLogMagicV2 = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '2', '\n'}
+	eventLogMagicV1    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '1', '\n'}
+	eventLogMagicV2    = [8]byte{'g', 't', 'e', 'v', 'l', 'g', '2', '\n'}
+	eventLogIndexMagic = [8]byte{'g', 't', 'e', 'v', 'l', 'x', '1', '\n'}
 )
 
 type EventLogSegment struct {
 	ref    SegmentRef
 	file   *os.File
 	header eventLogHeader
+}
+
+type EventLogIndexSegment struct {
+	ref    SegmentRef
+	file   *os.File
+	header eventLogIndexHeader
 }
 
 type eventLogHeader struct {
@@ -50,6 +59,15 @@ type eventLogHeader struct {
 	indexOffset        uint64
 	payloadOffset      uint64
 	payloadEnd         uint64
+	addressIndexOffset uint64
+	addressIndexLength uint64
+	topicIndexOffset   uint64
+	topicIndexLength   uint64
+}
+
+type eventLogIndexHeader struct {
+	fromBlock          uint64
+	toBlock            uint64
 	addressIndexOffset uint64
 	addressIndexLength uint64
 	topicIndexOffset   uint64
@@ -77,6 +95,10 @@ type EventLog = rawdb.EventLog
 
 func EventLogSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("log/event-log-%d-%d.seg", fromBlock, toBlock)
+}
+
+func EventLogIndexSegmentPath(fromBlock, toBlock uint64) string {
+	return fmt.Sprintf("log/event-log-index-%d-%d.idx", fromBlock, toBlock)
 }
 
 func BuildEventLogSegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
@@ -109,6 +131,57 @@ func BuildEventLogSegmentFromChain(chain *rawdb.ChainDB, dir, relPath string, fr
 	return writeEventLogSegmentRows(dir, ref, rows)
 }
 
+func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []SegmentRef, relPath string) (SegmentRef, error) {
+	if dir == "" {
+		return SegmentRef{}, errors.New("snapshots: event log index directory is empty")
+	}
+	eventRefs = append([]SegmentRef(nil), eventRefs...)
+	sortSegments(eventRefs)
+	if len(eventRefs) == 0 {
+		return SegmentRef{}, errors.New("snapshots: event log index requires event-log segments")
+	}
+	for _, ref := range eventRefs {
+		if err := validateEventLogRef(ref); err != nil {
+			return SegmentRef{}, err
+		}
+	}
+	fromBlock := eventRefs[0].FromTxNum
+	toBlock := eventRefs[len(eventRefs)-1].ToTxNum
+	if !eventLogRangeCoveredByRefs(eventRefs, fromBlock, toBlock) {
+		return SegmentRef{}, fmt.Errorf("snapshots: event log index range [%d,%d] is not continuously covered by event-log segments", fromBlock, toBlock)
+	}
+	if relPath == "" {
+		relPath = EventLogIndexSegmentPath(fromBlock, toBlock)
+	}
+	ref := SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: fromBlock,
+		ToTxNum:   toBlock,
+		Path:      filepath.ToSlash(relPath),
+	}
+	if err := validateSegmentRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	addressPostings := make(map[string][]uint64)
+	topicPostings := make(map[string][]uint64)
+	for _, eventRef := range eventRefs {
+		seg, err := OpenEventLogSegment(dir, eventRef)
+		if err != nil {
+			return SegmentRef{}, err
+		}
+		err = collectEventLogIndexPostings(seg, addressPostings, topicPostings)
+		closeErr := seg.Close()
+		if err != nil {
+			return SegmentRef{}, err
+		}
+		if closeErr != nil {
+			return SegmentRef{}, closeErr
+		}
+	}
+	return writeEventLogIndexSegment(dir, ref, addressPostings, topicPostings)
+}
+
 func CheckEventLogSegment(dir string, ref SegmentRef) error {
 	if err := validateEventLogRef(ref); err != nil {
 		return err
@@ -136,6 +209,38 @@ func CheckEventLogSegment(dir string, ref SegmentRef) error {
 	return checkEventLogIndex(file, ref, header, fileSize)
 }
 
+func CheckEventLogIndexSegment(dir string, ref SegmentRef) error {
+	if err := validateEventLogIndexRef(ref); err != nil {
+		return err
+	}
+	if err := checkSegmentFileMetadata(dir, ref, false); err != nil {
+		return err
+	}
+	file, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	header, err := readEventLogIndexHeader(file)
+	if err != nil {
+		return err
+	}
+	if err := validateEventLogIndexHeader(ref, header, uint64(stat.Size())); err != nil {
+		return err
+	}
+	if err := checkEventLogSegmentStartLookupIndex(file, ref, "address", header.addressIndexOffset, header.addressIndexLength, eventLogAddressLookupKeySize); err != nil {
+		return err
+	}
+	if err := checkEventLogSegmentStartLookupIndex(file, ref, "topic", header.topicIndexOffset, header.topicIndexLength, eventLogTopicLookupKeySize); err != nil {
+		return err
+	}
+	return nil
+}
+
 func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 	if err := validateEventLogRef(ref); err != nil {
 		return nil, err
@@ -161,7 +266,39 @@ func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 	return &EventLogSegment{ref: ref, file: file, header: header}, nil
 }
 
+func OpenEventLogIndexSegment(dir string, ref SegmentRef) (*EventLogIndexSegment, error) {
+	if err := validateEventLogIndexRef(ref); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(filepath.Join(dir, ref.Path))
+	if err != nil {
+		return nil, err
+	}
+	header, err := readEventLogIndexHeader(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := validateEventLogIndexHeader(ref, header, uint64(stat.Size())); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &EventLogIndexSegment{ref: ref, file: file, header: header}, nil
+}
+
 func (s *EventLogSegment) Close() error {
+	if s == nil || s.file == nil {
+		return nil
+	}
+	return s.file.Close()
+}
+
+func (s *EventLogIndexSegment) Close() error {
 	if s == nil || s.file == nil {
 		return nil
 	}
@@ -215,6 +352,52 @@ func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLog
 		}
 	}
 	return nil
+}
+
+func (s *EventLogIndexSegment) CandidateSegmentStarts(filter EventLogFilter) ([]uint64, bool, error) {
+	if s == nil || s.file == nil {
+		return nil, false, errors.New("snapshots: nil event log index segment")
+	}
+	var candidates []uint64
+	haveCandidates := false
+	if len(filter.Addresses) > 0 {
+		var union []uint64
+		for _, address := range filter.Addresses {
+			rows, err := readEventLogLookupRows(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKey(address))
+			if err != nil {
+				return nil, true, err
+			}
+			union = unionSortedUint64(union, rows)
+		}
+		candidates = union
+		haveCandidates = true
+	}
+	for position, required := range filter.Topics {
+		if len(required) == 0 {
+			continue
+		}
+		var union []uint64
+		for _, topic := range required {
+			rows, err := readEventLogLookupRows(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKey(uint64(position), topic))
+			if err != nil {
+				return nil, true, err
+			}
+			union = unionSortedUint64(union, rows)
+		}
+		if haveCandidates {
+			candidates = intersectSortedUint64(candidates, union)
+		} else {
+			candidates = union
+			haveCandidates = true
+		}
+		if len(candidates) == 0 {
+			return candidates, true, nil
+		}
+	}
+	if !haveCandidates {
+		return nil, false, nil
+	}
+	return candidates, true, nil
 }
 
 func (s *EventLogSegment) iterateLogsByLookupIndexes(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
@@ -334,8 +517,18 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 	if err != nil || manifest == nil {
 		return err
 	}
-	for _, ref := range eventLogRefs(manifest) {
-		if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+	refs, err := m.eventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
+	if err != nil {
+		return err
+	}
+	nextBlock := fromBlock
+	for _, ref := range refs {
+		if ref.ToTxNum < nextBlock || ref.FromTxNum > toBlock {
+			continue
+		}
+		iterFrom := max(nextBlock, ref.FromTxNum)
+		iterTo := min(toBlock, ref.ToTxNum)
+		if iterTo < iterFrom {
 			continue
 		}
 		seg, err := OpenEventLogSegment(m.dir, ref)
@@ -343,7 +536,7 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 			return err
 		}
 		stopped := false
-		err = seg.IterateLogs(fromBlock, toBlock, filter, func(row EventLog) (bool, error) {
+		err = seg.IterateLogs(iterFrom, iterTo, filter, func(row EventLog) (bool, error) {
 			cont, err := fn(row)
 			if err != nil {
 				return false, err
@@ -363,8 +556,60 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 		if stopped {
 			return nil
 		}
+		if ref.ToTxNum >= toBlock {
+			return nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return nil
+		}
+		nextBlock = ref.ToTxNum + 1
 	}
 	return nil
+}
+
+func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock uint64, filter EventLogFilter) ([]SegmentRef, error) {
+	refs := eventLogRefs(manifest)
+	if !eventLogFilterHasLookupKey(filter) {
+		return refs, nil
+	}
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
+			continue
+		}
+		index, err := OpenEventLogIndexSegment(m.dir, indexRef)
+		if err != nil {
+			return nil, err
+		}
+		starts, used, lookupErr := index.CandidateSegmentStarts(filter)
+		closeErr := index.Close()
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if !used {
+			continue
+		}
+		if len(starts) == 0 {
+			return nil, nil
+		}
+		candidates := make(map[uint64]struct{}, len(starts))
+		for _, start := range starts {
+			candidates[start] = struct{}{}
+		}
+		out := make([]SegmentRef, 0, len(starts))
+		for _, ref := range refs {
+			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+				continue
+			}
+			if _, ok := candidates[ref.FromTxNum]; ok {
+				out = append(out, ref)
+			}
+		}
+		return out, nil
+	}
+	return refs, nil
 }
 
 func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
@@ -398,6 +643,75 @@ func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) 
 		next = ref.ToTxNum + 1
 	}
 	return false, nil
+}
+
+func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return false, fmt.Errorf("snapshots: event log coverage range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	if !eventLogFilterHasLookupKey(filter) {
+		return m.EventLogRangeCovered(fromBlock, toBlock)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return false, err
+	}
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
+			continue
+		}
+		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
+			return false, err
+		}
+		index, err := OpenEventLogIndexSegment(m.dir, indexRef)
+		if err != nil {
+			return false, err
+		}
+		starts, used, lookupErr := index.CandidateSegmentStarts(filter)
+		closeErr := index.Close()
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		if !used {
+			continue
+		}
+		if len(starts) == 0 {
+			return true, nil
+		}
+		candidateStarts := make(map[uint64]struct{}, len(starts))
+		for _, start := range starts {
+			candidateStarts[start] = struct{}{}
+		}
+		seen := make(map[uint64]struct{}, len(starts))
+		for _, ref := range eventLogRefs(manifest) {
+			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+				continue
+			}
+			if _, ok := candidateStarts[ref.FromTxNum]; !ok {
+				continue
+			}
+			if err := CheckEventLogSegment(m.dir, ref); err != nil {
+				return false, err
+			}
+			seen[ref.FromTxNum] = struct{}{}
+		}
+		for start := range candidateStarts {
+			if start < fromBlock || start > toBlock {
+				continue
+			}
+			if _, ok := seen[start]; !ok {
+				return false, fmt.Errorf("snapshots: event-log-index %q points to missing event-log segment starting at block %d", indexRef.Path, start)
+			}
+		}
+		return true, nil
+	}
+	return m.EventLogRangeCovered(fromBlock, toBlock)
 }
 
 func collectEventLogRows(chain *rawdb.ChainDB, fromBlock, toBlock uint64) ([]eventLogRow, error) {
@@ -554,6 +868,105 @@ func writeEventLogSegmentRows(dir string, ref SegmentRef, rows []eventLogRow) (S
 	return ref, nil
 }
 
+func collectEventLogIndexPostings(seg *EventLogSegment, addressPostings, topicPostings map[string][]uint64) error {
+	if seg == nil || seg.file == nil {
+		return errors.New("snapshots: nil event log segment for index build")
+	}
+	segmentStart := seg.ref.FromTxNum
+	for i := uint64(0); i < seg.header.rowCount; i++ {
+		entry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, i))
+		if err != nil {
+			return err
+		}
+		addressKey := string(eventLogAddressLookupKey(entry.address))
+		addressPostings[addressKey] = appendEventLogSegmentPosting(addressPostings[addressKey], segmentStart)
+		log, err := seg.readLog(entry)
+		if err != nil {
+			return err
+		}
+		for position, rawTopic := range log.GetTopics() {
+			var topic common.Hash
+			copy(topic[:], rawTopic)
+			topicKey := string(eventLogTopicLookupKey(uint64(position), topic))
+			topicPostings[topicKey] = appendEventLogSegmentPosting(topicPostings[topicKey], segmentStart)
+		}
+	}
+	return nil
+}
+
+func appendEventLogSegmentPosting(rows []uint64, segmentStart uint64) []uint64 {
+	if len(rows) == 0 || rows[len(rows)-1] != segmentStart {
+		return append(rows, segmentStart)
+	}
+	return rows
+}
+
+func writeEventLogIndexSegment(dir string, ref SegmentRef, addressPostings, topicPostings map[string][]uint64) (SegmentRef, error) {
+	if err := validateEventLogIndexRef(ref); err != nil {
+		return SegmentRef{}, err
+	}
+	abs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return SegmentRef{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(make([]byte, eventLogIndexHeaderSize)); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	offset := uint64(eventLogIndexHeaderSize)
+	addressIndexOffset := offset
+	addressIndexLength, err := writeEventLogLookupIndexAt(tmp, addressIndexOffset, eventLogAddressLookupKeySize, addressPostings)
+	if err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	offset += addressIndexLength
+	topicIndexOffset := offset
+	topicIndexLength, err := writeEventLogLookupIndexAt(tmp, topicIndexOffset, eventLogTopicLookupKeySize, topicPostings)
+	if err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	header := eventLogIndexHeader{
+		fromBlock:          ref.FromTxNum,
+		toBlock:            ref.ToTxNum,
+		addressIndexOffset: addressIndexOffset,
+		addressIndexLength: addressIndexLength,
+		topicIndexOffset:   topicIndexOffset,
+		topicIndexLength:   topicIndexLength,
+	}
+	if err := writeEventLogIndexHeaderAt(tmp, header); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return SegmentRef{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return SegmentRef{}, err
+	}
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(tmpName)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	ref.Size = size
+	ref.Checksum = checksum
+	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
+	finalAbs := filepath.Join(dir, ref.Path)
+	if err := os.Rename(tmpName, finalAbs); err != nil {
+		return SegmentRef{}, err
+	}
+	return ref, nil
+}
+
 func eventLogRefs(manifest *Manifest) []SegmentRef {
 	if manifest == nil {
 		return nil
@@ -568,9 +981,68 @@ func eventLogRefs(manifest *Manifest) []SegmentRef {
 	return refs
 }
 
+func eventLogIndexRefs(manifest *Manifest) []SegmentRef {
+	if manifest == nil {
+		return nil
+	}
+	var refs []SegmentRef
+	for _, ref := range manifest.Segments {
+		if ref.Kind == SegmentEventLogIndex && ref.normalizedDataset() == SegmentDatasetEventLog {
+			refs = append(refs, ref)
+		}
+	}
+	sortSegments(refs)
+	return refs
+}
+
+func validateEventLogIndexCompanions(manifest *Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	eventRefs := eventLogRefs(manifest)
+	indexRefs := eventLogIndexRefs(manifest)
+	for _, indexRef := range indexRefs {
+		if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
+			return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
+				indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+	}
+	return nil
+}
+
+func eventLogRangeCoveredByRefs(refs []SegmentRef, fromBlock, toBlock uint64) bool {
+	if toBlock < fromBlock {
+		return false
+	}
+	next := fromBlock
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false
+		}
+		if ref.ToTxNum >= toBlock {
+			return true
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return false
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false
+}
+
 func validateEventLogRef(ref SegmentRef) error {
 	if ref.Kind != SegmentEventLog || ref.normalizedDataset() != SegmentDatasetEventLog {
 		return fmt.Errorf("snapshots: segment %q is %s/%s, want event-log/event-log", ref.Path, ref.Dataset, ref.Kind)
+	}
+	return validateSegmentRef(ref)
+}
+
+func validateEventLogIndexRef(ref SegmentRef) error {
+	if ref.Kind != SegmentEventLogIndex || ref.normalizedDataset() != SegmentDatasetEventLog {
+		return fmt.Errorf("snapshots: segment %q is %s/%s, want event-log/event-log-index", ref.Path, ref.Dataset, ref.Kind)
 	}
 	return validateSegmentRef(ref)
 }
@@ -624,6 +1096,30 @@ func validateEventLogHeader(ref SegmentRef, header eventLogHeader, fileSize uint
 	topicEnd, overflow := checkedAdd(header.topicIndexOffset, header.topicIndexLength)
 	if overflow || topicEnd != fileSize {
 		return fmt.Errorf("snapshots: event log segment %q topic index end %d, want file size %d", ref.Path, topicEnd, fileSize)
+	}
+	return nil
+}
+
+func validateEventLogIndexHeader(ref SegmentRef, header eventLogIndexHeader, fileSize uint64) error {
+	if header.fromBlock != ref.FromTxNum || header.toBlock != ref.ToTxNum {
+		return fmt.Errorf("snapshots: event log index %q range [%d,%d], want [%d,%d]", ref.Path, header.fromBlock, header.toBlock, ref.FromTxNum, ref.ToTxNum)
+	}
+	if header.toBlock < header.fromBlock {
+		return fmt.Errorf("snapshots: event log index %q inverted header range [%d,%d]", ref.Path, header.fromBlock, header.toBlock)
+	}
+	if header.addressIndexOffset != eventLogIndexHeaderSize {
+		return fmt.Errorf("snapshots: event log index %q address index offset %d, want %d", ref.Path, header.addressIndexOffset, eventLogIndexHeaderSize)
+	}
+	addressEnd, overflow := checkedAdd(header.addressIndexOffset, header.addressIndexLength)
+	if overflow || addressEnd > fileSize {
+		return fmt.Errorf("snapshots: event log index %q address index [%d,%d] outside file size %d", ref.Path, header.addressIndexOffset, addressEnd, fileSize)
+	}
+	if header.topicIndexOffset != addressEnd {
+		return fmt.Errorf("snapshots: event log index %q topic index offset %d, want address index end %d", ref.Path, header.topicIndexOffset, addressEnd)
+	}
+	topicEnd, overflow := checkedAdd(header.topicIndexOffset, header.topicIndexLength)
+	if overflow || topicEnd != fileSize {
+		return fmt.Errorf("snapshots: event log index %q topic index end %d, want file size %d", ref.Path, topicEnd, fileSize)
 	}
 	return nil
 }
@@ -682,6 +1178,18 @@ func eventLogAddressMatches(filter EventLogFilter, address common.Address) bool 
 	}
 	for _, candidate := range filter.Addresses {
 		if candidate == address {
+			return true
+		}
+	}
+	return false
+}
+
+func eventLogFilterHasLookupKey(filter EventLogFilter) bool {
+	if len(filter.Addresses) > 0 {
+		return true
+	}
+	for _, required := range filter.Topics {
+		if len(required) > 0 {
 			return true
 		}
 	}
@@ -1028,6 +1536,66 @@ func checkEventLogLookupIndex(file io.ReaderAt, ref SegmentRef, header eventLogH
 	return nil
 }
 
+func checkEventLogSegmentStartLookupIndex(file io.ReaderAt, ref SegmentRef, name string, offset, length uint64, keySize int) error {
+	if length < eventLogLookupHeaderSize {
+		return fmt.Errorf("snapshots: event log index %q %s lookup length %d smaller than header", ref.Path, name, length)
+	}
+	indexEnd, overflow := checkedAdd(offset, length)
+	if overflow {
+		return fmt.Errorf("snapshots: event log index %q %s lookup range [%d,+%d] overflows", ref.Path, name, offset, length)
+	}
+	count, err := readEventLogUint64At(file, offset)
+	if err != nil {
+		return err
+	}
+	entrySize := uint64(keySize + 16)
+	dirBytes, overflow := checkedMul(count, entrySize)
+	if overflow {
+		return fmt.Errorf("snapshots: event log index %q %s lookup directory overflows", ref.Path, name)
+	}
+	dirStart, overflow := checkedAdd(offset, eventLogLookupHeaderSize)
+	if overflow {
+		return fmt.Errorf("snapshots: event log index %q %s lookup directory start overflows", ref.Path, name)
+	}
+	dirEnd, overflow := checkedAdd(dirStart, dirBytes)
+	if overflow || dirEnd > indexEnd {
+		return fmt.Errorf("snapshots: event log index %q %s lookup directory [%d,%d] outside [%d,%d]", ref.Path, name, dirStart, dirEnd, offset, indexEnd)
+	}
+	var prevKey []byte
+	entryRaw := make([]byte, int(entrySize))
+	for i := uint64(0); i < count; i++ {
+		entryOffset := dirStart + i*entrySize
+		if _, err := file.ReadAt(entryRaw, int64(entryOffset)); err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.ErrUnexpectedEOF
+			}
+			return err
+		}
+		key := append([]byte(nil), entryRaw[:keySize]...)
+		if i > 0 && bytes.Compare(prevKey, key) >= 0 {
+			return fmt.Errorf("snapshots: event log index %q %s lookup key %d is not strictly sorted", ref.Path, name, i)
+		}
+		prevKey = key
+		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
+		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
+		rows, err := readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		if err != nil {
+			return err
+		}
+		var prevStart uint64
+		for j, segmentStart := range rows {
+			if segmentStart < ref.FromTxNum || segmentStart > ref.ToTxNum {
+				return fmt.Errorf("snapshots: event log index %q %s lookup segment start %d outside [%d,%d]", ref.Path, name, segmentStart, ref.FromTxNum, ref.ToTxNum)
+			}
+			if j > 0 && segmentStart <= prevStart {
+				return fmt.Errorf("snapshots: event log index %q %s lookup postings for key %d are not strictly sorted", ref.Path, name, i)
+			}
+			prevStart = segmentStart
+		}
+	}
+	return nil
+}
+
 func eventLogTopicBytes(raw []byte) []byte {
 	var topic common.Hash
 	copy(topic[:], raw)
@@ -1107,6 +1675,27 @@ func readEventLogHeader(r io.Reader) (eventLogHeader, error) {
 	}
 }
 
+func readEventLogIndexHeader(r io.Reader) (eventLogIndexHeader, error) {
+	var raw [eventLogIndexHeaderSize]byte
+	if _, err := io.ReadFull(r, raw[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			return eventLogIndexHeader{}, io.ErrUnexpectedEOF
+		}
+		return eventLogIndexHeader{}, err
+	}
+	if !bytes.Equal(raw[0:8], eventLogIndexMagic[:]) {
+		return eventLogIndexHeader{}, errors.New("snapshots: invalid event log index magic")
+	}
+	return eventLogIndexHeader{
+		fromBlock:          binary.BigEndian.Uint64(raw[8:16]),
+		toBlock:            binary.BigEndian.Uint64(raw[16:24]),
+		addressIndexOffset: binary.BigEndian.Uint64(raw[24:32]),
+		addressIndexLength: binary.BigEndian.Uint64(raw[32:40]),
+		topicIndexOffset:   binary.BigEndian.Uint64(raw[40:48]),
+		topicIndexLength:   binary.BigEndian.Uint64(raw[48:56]),
+	}, nil
+}
+
 func writeEventLogHeaderAt(file *os.File, header eventLogHeader) error {
 	var raw [eventLogHeaderV2Size]byte
 	copy(raw[0:8], eventLogMagicV2[:])
@@ -1120,6 +1709,19 @@ func writeEventLogHeaderAt(file *os.File, header eventLogHeader) error {
 	binary.BigEndian.PutUint64(raw[64:72], header.addressIndexLength)
 	binary.BigEndian.PutUint64(raw[72:80], header.topicIndexOffset)
 	binary.BigEndian.PutUint64(raw[80:88], header.topicIndexLength)
+	_, err := file.WriteAt(raw[:], 0)
+	return err
+}
+
+func writeEventLogIndexHeaderAt(file *os.File, header eventLogIndexHeader) error {
+	var raw [eventLogIndexHeaderSize]byte
+	copy(raw[0:8], eventLogIndexMagic[:])
+	binary.BigEndian.PutUint64(raw[8:16], header.fromBlock)
+	binary.BigEndian.PutUint64(raw[16:24], header.toBlock)
+	binary.BigEndian.PutUint64(raw[24:32], header.addressIndexOffset)
+	binary.BigEndian.PutUint64(raw[32:40], header.addressIndexLength)
+	binary.BigEndian.PutUint64(raw[40:48], header.topicIndexOffset)
+	binary.BigEndian.PutUint64(raw[48:56], header.topicIndexLength)
 	_, err := file.WriteAt(raw[:], 0)
 	return err
 }

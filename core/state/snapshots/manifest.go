@@ -48,6 +48,10 @@ const (
 	// SegmentEventLog is a block-numbered cold TVM event log segment.
 	// SegmentRef.FromTxNum/ToTxNum carry the source block range.
 	SegmentEventLog SegmentKind = "event-log"
+	// SegmentEventLogIndex is a block-numbered global lookup sidecar for
+	// event-log segments. It maps address/topic keys to candidate event-log
+	// segment start blocks, avoiding unrelated segment opens on filtered reads.
+	SegmentEventLogIndex SegmentKind = "event-log-index"
 )
 
 type SegmentDataset string
@@ -253,6 +257,9 @@ func (m *Manifest) Validate() error {
 		return err
 	}
 	if err := validateChainIndexCompanions(m); err != nil {
+		return err
+	}
+	if err := validateEventLogIndexCompanions(m); err != nil {
 		return err
 	}
 	return nil
@@ -470,7 +477,7 @@ func validateSegment(seg SegmentRef, visibleStart, visibleEnd uint64) error {
 
 func validateSegmentRef(seg SegmentRef) error {
 	switch seg.Kind {
-	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog:
+	case SegmentLatest, SegmentAccessor, SegmentBTree, SegmentHistory, SegmentInverted, SegmentChainFreezer, SegmentChainIndex, SegmentChainFreezerAccessor, SegmentBalanceTrace, SegmentSectionBloom, SegmentEventLog, SegmentEventLogIndex:
 	default:
 		return fmt.Errorf("snapshots: unknown segment kind %q", seg.Kind)
 	}
@@ -483,7 +490,7 @@ func validateSegmentRef(seg SegmentRef) error {
 		if err := validateSectionBloomSegmentRefDataset(seg, dataset); err != nil {
 			return err
 		}
-	} else if seg.Kind == SegmentEventLog {
+	} else if seg.Kind == SegmentEventLog || seg.Kind == SegmentEventLogIndex {
 		if err := validateEventLogSegmentRefDataset(seg, dataset); err != nil {
 			return err
 		}
@@ -514,7 +521,7 @@ func isChainBlockSegmentKind(kind SegmentKind) bool {
 }
 
 func isBlockNumberedSegmentKind(kind SegmentKind) bool {
-	return isChainBlockSegmentKind(kind) || kind == SegmentBalanceTrace || kind == SegmentSectionBloom || kind == SegmentEventLog
+	return isChainBlockSegmentKind(kind) || kind == SegmentBalanceTrace || kind == SegmentSectionBloom || kind == SegmentEventLog || kind == SegmentEventLogIndex
 }
 
 func validateChainFreezerSegmentRefDataset(seg SegmentRef, dataset SegmentDataset) error {

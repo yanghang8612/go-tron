@@ -709,15 +709,28 @@ Status:
   `snapshots.Manager` exposes address/topic-filtered event-log iteration over
   those immutable files, and v2 segments carry segment-local address plus
   positional-topic postings so filtered cold reads avoid scanning unrelated log
-  payloads. `gtron snapshot build-event-logs` exposes the standalone operator
+  payloads. A registered `event-log-index` sidecar now maps address/topic keys
+  to candidate cold event-log segment starts, so filtered manager reads can
+  skip unrelated immutable segment files before using the segment-local
+  postings. The manager walks continuous multi-segment coverage in block order,
+  clips each segment to the query range, and has regression coverage for
+  address/topic filters spanning adjacent immutable segments plus index-backed
+  skipping of unrelated segments. Manifest validation rejects orphaned,
+  prefix-missing, suffix-missing, or gapped `event-log-index` sidecars unless
+  the referenced block range is continuously covered by active `event-log`
+  segments. `gtron snapshot build-event-logs` exposes the standalone operator
   build path, while `gtron snapshot build-derived-indexes` now emits event-log
-  sidecars together with balance-trace and section-bloom segments. Production
-  snap-mode history passes can now publish the matching event-log sidecar in
-  the same manifest generation as the state-history segment before hot prune
-  runs. Runtime startup registers the manager on `ChainDB`, and
-  `TronBackend.GetLogs` uses the cold event-log stream when checker-verified
-  manifest coverage fully spans the query range, falling back to the hot scan
-  on coverage gaps and surfacing checker failures as archive data errors.
+  and event-log-index sidecars together with balance-trace and section-bloom
+  segments. Production snap-mode history passes can now publish the matching
+  event-log sidecar in the same manifest generation as the state-history segment
+  before hot prune runs. Runtime startup registers the manager on `ChainDB`, and
+  `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
+  checks so index-covered archive reads verify only candidate immutable segments
+  before streaming cold logs. Backend and JSON-RPC `eth_getLogs` regressions
+  delete hot `TransactionRet` rows and unrelated cold segment files to prove
+  filtered archive reads are served through the cold index path. The API falls
+  back to the hot scan on coverage gaps and surfaces checker failures as archive
+  data errors.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
@@ -794,9 +807,10 @@ Remaining:
   lifecycle pruning now covers chain lookups, section blooms, and balance
   traces, balance-trace snapshot builds now reject incomplete source ranges, and
   isolated replay backfill has replay-DB resume, collector-backed trace writes,
-  and signed-snapshot checkpoint starts. Production archive completeness still needs
-  larger-datadir soak, global/recsplit-style event-log address/topic accessors beyond segment-local postings,
-  and an archive/as-of state reader beyond the trace-specific checkpoint path.
+  and signed-snapshot checkpoint starts. Production archive completeness still
+  needs larger-datadir soak, recsplit-style event-log address/topic profiling
+  beyond the current sorted sidecar, and an archive/as-of state reader beyond
+  the trace-specific checkpoint path.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

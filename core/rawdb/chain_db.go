@@ -81,6 +81,13 @@ type EventLogReader interface {
 	IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error
 }
 
+// FilteredEventLogCoverageReader is an optional extension for cold event-log
+// readers with a global lookup sidecar. It allows filtered archive reads to
+// verify only the immutable event-log segments that can satisfy the filter.
+type FilteredEventLogCoverageReader interface {
+	EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error)
+}
+
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
 // `anc` may be `NoopAncient{}` when the freezer is disabled or in tests
 // that don't want a freezer on disk.
@@ -130,6 +137,16 @@ func (db *ChainDB) SetEventLogReader(reader EventLogReader) {
 func (db *ChainDB) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
 	if db == nil || db.eventLog == nil {
 		return false, nil
+	}
+	return db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
+}
+
+func (db *ChainDB) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	if db == nil || db.eventLog == nil {
+		return false, nil
+	}
+	if reader, ok := db.eventLog.(FilteredEventLogCoverageReader); ok {
+		return reader.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
 	}
 	return db.eventLog.EventLogRangeCovered(fromBlock, toBlock)
 }
