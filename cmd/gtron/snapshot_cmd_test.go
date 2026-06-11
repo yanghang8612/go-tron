@@ -784,9 +784,22 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 		t.Fatalf("openPebbleDB: %v", err)
 	}
 	owner := common.Address{0x41, 0xbb}
-	block12 := snapshotCmdBlock(12)
+	block12, txHash, _ := snapshotCmdBlockWithTx(t, 12)
+	logAddress := []byte{0x41, 0x12, 0x13, 0x14, 0x15}
+	logTopic := common.Hash{0xdd}
 	if err := rawdb.WriteBlock(db, block12); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 12, []*corepb.TransactionInfo{{
+		Id:          txHash[:],
+		BlockNumber: 12,
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: logAddress,
+			Topics:  [][]byte{logTopic[:]},
+			Data:    []byte{0x12},
+		}},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
 	}
 	if err := rawdb.WriteBlockBalanceTrace(db, 12, &contractpb.BlockBalanceTrace{
 		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
@@ -823,24 +836,26 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}
-	if report.ActiveSegments != 2 {
-		t.Fatalf("active segments = %d, want 2", report.ActiveSegments)
+	if report.ActiveSegments != 3 {
+		t.Fatalf("active segments = %d, want 3", report.ActiveSegments)
 	}
 	manifest, err := statesnapshots.LoadProductionManifest(snapshotDir)
 	if err != nil {
 		t.Fatalf("LoadProductionManifest: %v", err)
 	}
-	var haveBalanceTrace, haveSectionBloom bool
+	var haveBalanceTrace, haveSectionBloom, haveEventLog bool
 	for _, ref := range manifest.Segments {
 		switch ref.Kind {
 		case statesnapshots.SegmentBalanceTrace:
 			haveBalanceTrace = true
 		case statesnapshots.SegmentSectionBloom:
 			haveSectionBloom = true
+		case statesnapshots.SegmentEventLog:
+			haveEventLog = true
 		}
 	}
-	if !haveBalanceTrace || !haveSectionBloom {
-		t.Fatalf("manifest segments = %+v, want balance trace and section bloom segments", manifest.Segments)
+	if !haveBalanceTrace || !haveSectionBloom || !haveEventLog {
+		t.Fatalf("manifest segments = %+v, want balance trace, section bloom, and event log segments", manifest.Segments)
 	}
 	mgr, err := statesnapshots.OpenManager(snapshotDir)
 	if err != nil {
@@ -857,6 +872,101 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	raw, ok, err := mgr.SectionBloom(0, 42)
 	if err != nil || !ok || !bytes.Equal(raw, bloomRow) {
 		t.Fatalf("SectionBloom = %x/%v/%v, want bloom row", raw, ok, err)
+	}
+	covered, err := mgr.EventLogRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var eventRows []rawdb.EventLog
+	if err := mgr.IterateEventLogs(12, 12, rawdb.EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(logAddress)},
+		Topics:    [][]common.Hash{{logTopic}},
+	}, func(row rawdb.EventLog) (bool, error) {
+		eventRows = append(eventRows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(eventRows) != 1 || eventRows[0].BlockNum != 12 || !bytes.Equal(eventRows[0].Log.GetData(), []byte{0x12}) {
+		t.Fatalf("event rows = %+v, want one cold event log", eventRows)
+	}
+}
+
+func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+		"--snapshot.from-block", "7",
+		"--snapshot.to-block", "7",
+		"--dev",
+		"--witness.key", snapshotTestWitnessKey,
+	})
+	db, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("openPebbleDB: %v", err)
+	}
+	block7, txHash, _ := snapshotCmdBlockWithTx(t, 7)
+	logAddress := []byte{0x41, 0x77, 0x78, 0x79, 0x7a}
+	logTopic := common.Hash{0xee}
+	if err := rawdb.WriteBlock(db, block7); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{{
+		Id:          txHash[:],
+		BlockNumber: 7,
+		Log: []*corepb.TransactionInfo_Log{{
+			Address: logAddress,
+			Topics:  [][]byte{logTopic[:]},
+			Data:    []byte{0x07},
+		}},
+	}}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if err := snapshotBuildEventLogsCmd(ctx); err != nil {
+		t.Fatalf("snapshotBuildEventLogsCmd: %v", err)
+	}
+	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
+	if err != nil {
+		t.Fatalf("snapshotExpectedChainIdentityFromContext: %v", err)
+	}
+	report, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{
+		ExpectedChain:     &identity,
+		RequireRegistered: true,
+		RequireChecksums:  true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyManifestFiles: %v", err)
+	}
+	if report.ActiveSegments != 1 {
+		t.Fatalf("active segments = %d, want 1", report.ActiveSegments)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCovered(7, 7)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var rows []rawdb.EventLog
+	if err := mgr.IterateEventLogs(7, 7, rawdb.EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(logAddress)},
+		Topics:    [][]common.Hash{{logTopic}},
+	}, func(row rawdb.EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].TxHash != txHash || !bytes.Equal(rows[0].Log.GetData(), []byte{0x07}) {
+		t.Fatalf("event rows = %+v, want tx %x with data 07", rows, txHash)
 	}
 }
 

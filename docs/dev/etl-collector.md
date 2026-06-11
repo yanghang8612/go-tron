@@ -79,9 +79,11 @@ writes to collector-backed loads.
   or ancient per-block `TransactionRet` payloads. The current segment is a
   verified immutable log stream with segment-local address and positional-topic
   postings, plus manager-side range filtering across registered segments.
-  `TronBackend.GetLogs` uses it when manifest coverage fully spans the query
-  range; global/recsplit-style address/topic point indexes remain follow-up
-  work.
+  `gtron snapshot build-event-logs` exposes the builder, and
+  `gtron snapshot build-derived-indexes` includes event-log sidecars alongside
+  balance-trace and section-bloom segments. `TronBackend.GetLogs` uses it when
+  checker-verified manifest coverage fully spans the query range; broader
+  global/recsplit-style address/topic point indexes remain follow-up work.
 - `TronBackend.GetLogs` consumes those section-bloom rows as an optional
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing

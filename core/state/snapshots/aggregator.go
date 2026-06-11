@@ -33,6 +33,7 @@ type AggregatorBuildChainFreezerOptions struct {
 type AggregatorBuildDerivedOptions struct {
 	BalanceTraces bool
 	SectionBlooms bool
+	EventLogs     bool
 }
 
 type AggregatorBuildResult struct {
@@ -231,11 +232,19 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("snapshots: derived index block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
-	if !opts.BalanceTraces && !opts.SectionBlooms {
+	if !opts.BalanceTraces && !opts.SectionBlooms && !opts.EventLogs {
 		return nil, errors.New("snapshots: no derived index datasets selected")
 	}
+	var chain *rawdb.ChainDB
+	if opts.EventLogs {
+		var ok bool
+		chain, ok = db.(*rawdb.ChainDB)
+		if !ok {
+			return nil, errors.New("snapshots: event log derived index build requires rawdb.ChainDB")
+		}
+	}
 
-	refs := make([]SegmentRef, 0, 2)
+	refs := make([]SegmentRef, 0, 3)
 	if opts.BalanceTraces {
 		ref, err := BuildBalanceTraceSegmentFromDB(db, a.dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {
@@ -245,6 +254,13 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 	}
 	if opts.SectionBlooms {
 		ref, err := BuildSectionBloomSegmentFromDB(db, a.dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	if opts.EventLogs {
+		ref, err := BuildEventLogSegmentFromChain(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
 		if err != nil {
 			return nil, err
 		}

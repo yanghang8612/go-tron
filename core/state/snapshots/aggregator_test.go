@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestAggregatorBuildsManifestServesLatestAndHistory(t *testing.T) {
@@ -221,7 +222,18 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	db := rawdb.NewMemoryChainDB()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x88}, common.AccountIDLength)...))
 	bloomRow := sectionBloomTestEncodedBit(t, 9)
+	eventAddress := eventLogTestAddress(0x55)
+	eventTopic := common.Hash{0xee}
+	eventBlock, eventInfos := eventLogTestBlock(t, 12, []*corepb.TransactionInfo_Log{
+		{Address: eventAddress, Topics: [][]byte{eventTopic[:]}, Data: []byte{0x12}},
+	})
 
+	if err := rawdb.WriteBlock(db, eventBlock); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 12, eventInfos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
 	if err := rawdb.WriteBlockBalanceTrace(db, 12, balanceTraceTestBlockTrace(12, 1200)); err != nil {
 		t.Fatalf("WriteBlockBalanceTrace: %v", err)
 	}
@@ -235,18 +247,20 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	result, err := NewAggregator(dir).BuildDerivedIndexes(db, 12, 12, AggregatorBuildDerivedOptions{
 		BalanceTraces: true,
 		SectionBlooms: true,
+		EventLogs:     true,
 	})
 	if err != nil {
 		t.Fatalf("BuildDerivedIndexes: %v", err)
 	}
-	if len(result.Segments) != 2 {
-		t.Fatalf("segments = %d, want 2", len(result.Segments))
+	if len(result.Segments) != 3 {
+		t.Fatalf("segments = %d, want 3", len(result.Segments))
 	}
-	if result.Manifest == nil || len(result.Manifest.Segments) != 2 {
-		t.Fatalf("manifest = %+v, want two active segments", result.Manifest)
+	if result.Manifest == nil || len(result.Manifest.Segments) != 3 {
+		t.Fatalf("manifest = %+v, want three active segments", result.Manifest)
 	}
 	assertSegmentRef(t, result.Manifest, SegmentDatasetBalanceTrace, 0, SegmentBalanceTrace)
 	assertSegmentRef(t, result.Manifest, SegmentDatasetSectionBloom, 0, SegmentSectionBloom)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetEventLog, 0, SegmentEventLog)
 	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}
@@ -266,6 +280,23 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	raw, ok, err := mgr.SectionBloom(0, 42)
 	if err != nil || !ok || !bytes.Equal(raw, bloomRow) {
 		t.Fatalf("SectionBloom = %x/%v/%v, want bloom row", raw, ok, err)
+	}
+	covered, err := mgr.EventLogRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	var eventRows []EventLog
+	if err := mgr.IterateEventLogs(12, 12, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(eventAddress)},
+		Topics:    [][]common.Hash{{eventTopic}},
+	}, func(row EventLog) (bool, error) {
+		eventRows = append(eventRows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if len(eventRows) != 1 || eventRows[0].BlockNum != 12 || !bytes.Equal(eventRows[0].Log.GetData(), []byte{0x12}) {
+		t.Fatalf("event rows = %+v, want one cold event log", eventRows)
 	}
 }
 
