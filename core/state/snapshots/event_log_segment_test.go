@@ -169,6 +169,44 @@ func TestEventLogSegmentTopicLookupSkipsNonCandidatePayloads(t *testing.T) {
 	}
 }
 
+func TestEventLogRangeCoveredRequiresReadableSegments(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x44)
+	topic := common.Hash{0xcc}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x04}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	result, err := NewAggregator(dir).BuildEventLogs(db, 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogs: %v", err)
+	}
+	if len(result.Segments) != 1 {
+		t.Fatalf("BuildEventLogs segments = %d, want 1", len(result.Segments))
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered before removal = %v, %v; want true, nil", covered, err)
+	}
+	if err := os.Remove(filepath.Join(dir, result.Segments[0].Path)); err != nil {
+		t.Fatalf("Remove segment: %v", err)
+	}
+	covered, err = mgr.EventLogRangeCovered(1, 1)
+	if err == nil || covered {
+		t.Fatalf("EventLogRangeCovered after removal = %v, %v; want false, error", covered, err)
+	}
+}
+
 func TestEventLogSegmentBuildRejectsMissingBlock(t *testing.T) {
 	_, err := BuildEventLogSegmentFromChain(rawdb.NewMemoryChainDB(), t.TempDir(), "", 1, 1)
 	if err == nil {

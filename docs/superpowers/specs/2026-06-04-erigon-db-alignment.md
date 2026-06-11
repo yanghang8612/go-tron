@@ -705,8 +705,9 @@ Status:
   those immutable files, and v2 segments carry segment-local address plus
   positional-topic postings so filtered cold reads avoid scanning unrelated log
   payloads. Runtime startup registers the manager on `ChainDB`, and
-  `TronBackend.GetLogs` uses the cold event-log stream when manifest coverage
-  fully spans the query range, falling back to the hot scan otherwise.
+  `TronBackend.GetLogs` uses the cold event-log stream when checker-verified
+  manifest coverage fully spans the query range, falling back to the hot scan
+  on coverage gaps and surfacing checker failures as archive data errors.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.

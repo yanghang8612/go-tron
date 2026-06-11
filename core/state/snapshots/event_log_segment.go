@@ -386,6 +386,9 @@ func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) 
 		if ref.FromTxNum > next {
 			return false, nil
 		}
+		if err := CheckEventLogSegment(m.dir, ref); err != nil {
+			return false, err
+		}
 		if ref.ToTxNum >= toBlock {
 			return true, nil
 		}
