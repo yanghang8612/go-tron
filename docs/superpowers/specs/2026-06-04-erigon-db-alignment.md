@@ -691,6 +691,9 @@ Status:
   --snapshot.to-block` builds balance-trace and section-bloom sidecars together
   and integrates them into one manifest generation, while retaining the
   pre-freeze balance-trace coverage audit.
+- `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
+  the manifest's retired segment set after active segment preflight succeeds,
+  without rewriting the signed manifest/catalog view.
 - `gtron snapshot prune-section-blooms` verifies the signed catalog and cold
   segment format, compares every hot `sb-` row in the covered section range
   byte-for-byte against the cold segment, and deletes the hot rows only after

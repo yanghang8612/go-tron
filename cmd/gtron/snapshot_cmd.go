@@ -304,6 +304,15 @@ func snapshotCommand() *cli.Command {
 				},
 				Action: snapshotPruneSectionBloomsCmd,
 			},
+			{
+				Name:  "prune-retired",
+				Usage: "Delete retired snapshot segment files that are no longer active",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+				},
+				Action: snapshotPruneRetiredCmd,
+			},
 		},
 	}
 }
@@ -959,6 +968,23 @@ func pruneVerifiedHotSectionBlooms(db ethdb.KeyValueStore, dir string, identity 
 		return nil, err
 	}
 	return statesnapshots.PruneHotSectionBloomsWithProgress(db, dir, manifest)
+}
+
+func snapshotPruneRetiredCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	dir := snapshotDir(ctx, cfg.DataDir)
+	result, err := statesnapshots.PruneRetiredSegmentFiles(dir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Retired snapshot segments pruned: retired=%d deleted=%d missing=%d skippedActive=%d bytesDeleted=%d\n",
+		result.RetiredSegments,
+		result.FilesDeleted,
+		result.FilesMissing,
+		result.FilesSkippedActive,
+		result.BytesDeleted,
+	)
+	return nil
 }
 
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {

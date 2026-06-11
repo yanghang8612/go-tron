@@ -131,6 +131,10 @@ gtron snapshot publish-catalog \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
   --snapshot.signing-key <ed25519-seed-or-private-key-hex>
+
+gtron snapshot prune-retired \
+  --datadir /path/to/datadir \
+  --snapshot.dir /path/to/datadir/gtron/state-snapshots
 ```
 
 `snapshot build-balance-traces` repeats the coverage audit and refuses to build
@@ -164,6 +168,13 @@ sidecars together and integrates them into a single manifest generation. It
 uses the same balance-trace coverage audit as `snapshot build-balance-traces`;
 run the specific single-dataset commands when only one sidecar needs to be
 refreshed.
+
+`snapshot prune-retired` removes physical files listed in the manifest's
+`retired` section after verifying that all active segments are still present.
+It does not rewrite `manifest.json` or `snapshot-catalog.json`, so an already
+signed catalog continues to authenticate the active snapshot view. Run it after
+segment replacement or compaction when the retired files are no longer needed
+for local audit.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` and `section-bloom` segments. At runtime, `ChainDB` falls

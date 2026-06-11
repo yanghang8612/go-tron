@@ -860,6 +860,49 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	}
 }
 
+func TestSnapshotPruneRetiredCmdDeletesRetiredSegmentFiles(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "datadir")
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(source, 1, &contractpb.BlockBalanceTrace{Timestamp: 100}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace retired: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(source, 10, &contractpb.BlockBalanceTrace{Timestamp: 1000}); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace active: %v", err)
+	}
+	retiredRef, err := statesnapshots.BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB retired: %v", err)
+	}
+	activeRef, err := statesnapshots.BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 10, 10)
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDB active: %v", err)
+	}
+	manifest := statesnapshots.NewManifest(10, 10, []statesnapshots.SegmentRef{activeRef})
+	manifest.Retired = []statesnapshots.SegmentRef{retiredRef}
+	if err := statesnapshots.PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--datadir", dataDir,
+		"--snapshot.dir", snapshotDir,
+	})
+
+	if err := snapshotPruneRetiredCmd(ctx); err != nil {
+		t.Fatalf("snapshotPruneRetiredCmd: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, activeRef.Path)); err != nil {
+		t.Fatalf("active segment stat: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshotDir, retiredRef.Path)); !os.IsNotExist(err) {
+		t.Fatalf("retired segment stat err = %v, want not exist", err)
+	}
+	if _, err := statesnapshots.VerifyManifestFiles(snapshotDir, statesnapshots.VerifyManifestOptions{}); err != nil {
+		t.Fatalf("VerifyManifestFiles active-only: %v", err)
+	}
+}
+
 func TestSnapshotRestoreVerificationOptionsRebuildsCommitmentRoot(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
