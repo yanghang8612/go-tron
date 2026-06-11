@@ -78,6 +78,34 @@ func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int
 	return len(keys), nil
 }
 
+func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	var start [8]byte
+	binary.BigEndian.PutUint64(start[:], blockNum)
+	it := db.NewIterator(syncStagedBlockPrefix, start[:])
+	var keys [][]byte
+	for it.Next() {
+		key := append([]byte{}, it.Key()...)
+		if len(key) != len(syncStagedBlockPrefix)+8 {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if err := it.Error(); err != nil {
+		it.Release()
+		return 0, err
+	}
+	it.Release()
+	for _, key := range keys {
+		if err := db.Delete(key); err != nil {
+			return 0, err
+		}
+	}
+	return len(keys), nil
+}
+
 func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 	if db == nil {
 		return 0, nil

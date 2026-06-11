@@ -384,7 +384,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	head := ss.chain.CurrentBlock().Number()
 	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
 	ss.deleteImportedSyncBodiesThrough(head)
-	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch)
+	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
@@ -424,7 +424,7 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	return head
 }
 
-func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int) {
+func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) {
 	if ss == nil || ss.chain == nil || limit <= 0 {
 		return
 	}
@@ -432,6 +432,7 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int) {
 	if db == nil {
 		return
 	}
+	var lastRestored *types.Block
 	for n := start; limit > 0; n++ {
 		if buffered, ok := ss.blockBuffer[n]; ok {
 			if buffered.num > ss.targetHeadNum {
@@ -443,13 +444,22 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int) {
 		block, ok, err := rawdb.ReadSyncStagedBlock(db, n)
 		if err != nil {
 			syncLog.Warn("Read sync staged block failed", "number", n, "err", err)
+			if pruneStaleTail {
+				ss.deleteStaleSyncBodiesFrom(n, lastRestored)
+			}
 			return
 		}
 		if !ok {
+			if pruneStaleTail {
+				ss.deleteStaleSyncBodiesFrom(n+1, lastRestored)
+			}
 			return
 		}
 		bid := block.ID()
 		if !ss.reserveBlockPathLocked(bid) {
+			if pruneStaleTail {
+				ss.deleteStaleSyncBodiesFrom(n, lastRestored)
+			}
 			return
 		}
 		ss.blockBuffer[n] = bufferedSyncBlock{
@@ -461,6 +471,7 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int) {
 		if n > ss.targetHeadNum {
 			ss.targetHeadNum = n
 		}
+		lastRestored = block
 		limit--
 	}
 }
@@ -1189,7 +1200,7 @@ func (ss *SyncService) waitForDrain() {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
-	ss.restoreSyncStagedBodiesLocked(next, maxFetchBatch)
+	ss.restoreSyncStagedBodiesLocked(next, maxFetchBatch, false)
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
 		buffered, ok := ss.blockBuffer[next]
@@ -1333,6 +1344,45 @@ func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
 	}
 	if _, err := rawdb.DeleteSyncStagedBlocksThrough(db, head); err != nil {
 		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", err)
+	}
+}
+
+func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestored *types.Block) {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	deleted, err := rawdb.DeleteSyncStagedBlocksFrom(db, blockNum)
+	if err != nil {
+		syncLog.Warn("Delete stale sync staged blocks failed", "from", blockNum, "err", err)
+		return
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies)
+	if err != nil {
+		syncLog.Warn("Read sync bodies stage progress failed", "err", err)
+		return
+	}
+	if !ok || row.BlockNum < blockNum {
+		return
+	}
+	if lastRestored == nil {
+		if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodies); err != nil {
+			syncLog.Warn("Delete stale sync bodies stage progress failed", "err", err)
+		}
+		if deleted > 0 {
+			syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", deleted)
+		}
+		return
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, lastRestored.Number(), lastRestored.Hash()); err != nil {
+		syncLog.Warn("Rewind sync bodies stage progress failed", "block", lastRestored.Number(), "hash", lastRestored.Hash(), "err", err)
+		return
+	}
+	if deleted > 0 {
+		syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", deleted, "rewoundTo", lastRestored.Number())
 	}
 }
 

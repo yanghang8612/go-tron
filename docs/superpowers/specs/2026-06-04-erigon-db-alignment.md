@@ -276,11 +276,16 @@ Status:
   staging table before they enter the in-memory drain buffer. A restarted sync
   session reloads contiguous staged bodies from `head+1`; successful
   `InsertBlocks` deletes the matching staging rows, while active sync reset
-  clears unimported rows so peer failover does not inherit a stale path.
+  clears unimported rows so peer failover does not inherit a stale path. Session
+  restore now truncates gapped staged-body tails and rewinds the `SyncBodies`
+  watermark to the last continuous recovered block, keeping persisted downloader
+  state hash-bound and contiguous after restart without rejecting out-of-order
+  bodies in the still-running sync session.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
-  downloaded bodies are staged and restored across session startup, and imported
-  block number/hash progress is written after `InsertBlocks` succeeds.
+  downloaded bodies are staged and restored across session startup, gapped
+  staged-body tails are dropped on restart, and imported block number/hash
+  progress is written after `InsertBlocks` succeeds.
 
 Needed:
 

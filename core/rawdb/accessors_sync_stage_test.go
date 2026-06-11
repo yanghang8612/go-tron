@@ -58,6 +58,34 @@ func TestDeleteSyncStagedBlocksThrough(t *testing.T) {
 	}
 }
 
+func TestDeleteSyncStagedBlocksFrom(t *testing.T) {
+	db := NewMemoryDatabase()
+	for n := uint64(1); n <= 4; n++ {
+		if err := WriteSyncStagedBlock(db, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
+			t.Fatalf("write staged block %d: %v", n, err)
+		}
+	}
+	deleted, err := DeleteSyncStagedBlocksFrom(db, 3)
+	if err != nil {
+		t.Fatalf("delete staged blocks from: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted staged blocks = %d, want 2", deleted)
+	}
+	for n := uint64(1); n <= 4; n++ {
+		_, ok, err := ReadSyncStagedBlock(db, n)
+		if err != nil {
+			t.Fatalf("read staged block %d: %v", n, err)
+		}
+		if n < 3 && !ok {
+			t.Fatalf("staged block %d was deleted unexpectedly", n)
+		}
+		if n >= 3 && ok {
+			t.Fatalf("staged block %d survived cleanup", n)
+		}
+	}
+}
+
 func TestDeleteAllSyncStagedBlocks(t *testing.T) {
 	db := NewMemoryDatabase()
 	for n := uint64(1); n <= 3; n++ {
