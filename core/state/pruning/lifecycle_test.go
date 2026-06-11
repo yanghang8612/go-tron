@@ -64,6 +64,8 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	writeSnapPruningChange(t, db, 1, 10, 12)
 	chain := &fakePruneChain{db: db, solidified: 5}
 	sawHotPruneStage := false
+	chainLookupRan := false
+	sawChainLookupBeforeSectionBloom := false
 	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
 		Pruner: PrunerConfig{
 			Policy:    FullPolicy(2, 1),
@@ -76,11 +78,22 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 				return nil, err
 			}
 			sawHotPruneStage = ok && got == 5
+			chainLookupRan = true
 			return &snapshots.PruneHotChainLookupResult{
 				HasRange:          true,
 				FromBlock:         0,
 				ToBlock:           1,
 				ColdIndexSegments: 1,
+			}, nil
+		},
+		SectionBloomPrune: func() (*snapshots.PruneHotSectionBloomResult, error) {
+			sawChainLookupBeforeSectionBloom = chainLookupRan
+			return &snapshots.PruneHotSectionBloomResult{
+				HasRange:          true,
+				FromSection:       0,
+				ToSection:         1,
+				ColdBloomSegments: 1,
+				RowsDeleted:       2,
 			}, nil
 		},
 	})
@@ -94,5 +107,11 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	}
 	if result.ChainLookupPrune == nil || !result.ChainLookupPrune.HasRange || result.ChainLookupPrune.ToBlock != 1 {
 		t.Fatalf("chain lookup prune result = %+v, want hook result", result.ChainLookupPrune)
+	}
+	if !sawChainLookupBeforeSectionBloom {
+		t.Fatal("section bloom prune hook ran before chain lookup prune hook")
+	}
+	if result.SectionBloomPrune == nil || !result.SectionBloomPrune.HasRange || result.SectionBloomPrune.RowsDeleted != 2 {
+		t.Fatalf("section bloom prune result = %+v, want hook result", result.SectionBloomPrune)
 	}
 }

@@ -55,6 +55,10 @@ const (
 	// whose hash-keyed hot lookup rows have been pruned after verified cold
 	// chain-index coverage was published.
 	StageSnapshotChainLookupPrune StageID = "SnapshotChainLookupPrune"
+	// StageSnapshotSectionBloomPrune records the highest source block whose
+	// hot section-bloom rows have been pruned after verified cold
+	// section-bloom snapshot coverage was published.
+	StageSnapshotSectionBloomPrune StageID = "SnapshotSectionBloomPrune"
 	// StageSnapshotChainFreezerTailPrune records the highest local freezer
 	// block hidden by the virtual tail after verified cold chain-freezer
 	// coverage existed. In minimal mode this also means any fully-hidden data

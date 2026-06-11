@@ -15,12 +15,50 @@ type PruneHotSectionBloomResult struct {
 	ToSection         uint64
 	RowsDeleted       uint64
 	ColdBloomSegments uint64
+
+	hasProcessedToBlock bool
+	processedToBlock    uint64
+}
+
+type sectionBloomPruneBounds struct {
+	lastPrunedBlock    uint64
+	hasLastPrunedBlock bool
 }
 
 // PruneHotSectionBlooms deletes hot section-bloom rows only after a registered
 // cold section-bloom segment has been verified and every hot row in the
 // segment's section range has an exact cold match.
 func PruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifest) (*PruneHotSectionBloomResult, error) {
+	return pruneHotSectionBlooms(db, dir, manifest, sectionBloomPruneBounds{})
+}
+
+// PruneHotSectionBloomsWithProgress prunes covered hot section-bloom rows after
+// the persisted StageSnapshotSectionBloomPrune boundary and advances that
+// boundary when a verified cold segment is processed.
+func PruneHotSectionBloomsWithProgress(db ethdb.KeyValueStore, dir string, manifest *Manifest) (*PruneHotSectionBloomResult, error) {
+	if db == nil {
+		return nil, errors.New("snapshots: nil section bloom prune database")
+	}
+	lastPrunedBlock, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotSectionBloomPrune)
+	if err != nil {
+		return nil, err
+	}
+	result, err := pruneHotSectionBlooms(db, dir, manifest, sectionBloomPruneBounds{
+		lastPrunedBlock:    lastPrunedBlock,
+		hasLastPrunedBlock: ok,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.hasProcessedToBlock {
+		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotSectionBloomPrune, result.processedToBlock); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func pruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifest, bounds sectionBloomPruneBounds) (*PruneHotSectionBloomResult, error) {
 	if db == nil {
 		return nil, errors.New("snapshots: nil section bloom prune database")
 	}
@@ -32,6 +70,9 @@ func PruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifes
 	}
 	result := new(PruneHotSectionBloomResult)
 	for _, ref := range sectionBloomRefsAscending(manifest) {
+		if bounds.hasLastPrunedBlock && ref.ToTxNum <= bounds.lastPrunedBlock {
+			continue
+		}
 		if err := CheckSectionBloomSegment(dir, ref); err != nil {
 			return nil, err
 		}
@@ -39,31 +80,31 @@ func PruneHotSectionBlooms(db ethdb.KeyValueStore, dir string, manifest *Manifes
 		if err != nil {
 			return nil, err
 		}
-		verified, err := verifyHotSectionBloomRowsCovered(db, seg, ref)
+		verified, err := verifyHotSectionBloomRowsCovered(db, seg, ref, bounds)
 		if closeErr := seg.Close(); err == nil {
 			err = closeErr
 		}
 		if err != nil {
 			return nil, err
 		}
-		if !verified.hasRows {
-			continue
+		if verified.hasRows {
+			seg, err = OpenSectionBloomSegment(dir, ref)
+			if err != nil {
+				return nil, err
+			}
+			pruned, pruneErr := pruneHotSectionBloomRowsForSegment(db, seg, ref, result, bounds)
+			closeErr := seg.Close()
+			if pruneErr != nil {
+				return nil, pruneErr
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+			if pruned {
+				result.ColdBloomSegments++
+			}
 		}
-		seg, err = OpenSectionBloomSegment(dir, ref)
-		if err != nil {
-			return nil, err
-		}
-		pruned, pruneErr := pruneHotSectionBloomRowsForSegment(db, seg, ref, result)
-		closeErr := seg.Close()
-		if pruneErr != nil {
-			return nil, pruneErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		if pruned {
-			result.ColdBloomSegments++
-		}
+		markSectionBloomProcessedToBlock(result, ref.ToTxNum)
 	}
 	return result, nil
 }
@@ -72,10 +113,10 @@ type sectionBloomCoverageCheck struct {
 	hasRows bool
 }
 
-func verifyHotSectionBloomRowsCovered(db ethdb.Iteratee, seg *SectionBloomSegment, ref SegmentRef) (sectionBloomCoverageCheck, error) {
+func verifyHotSectionBloomRowsCovered(db ethdb.Iteratee, seg *SectionBloomSegment, ref SegmentRef, bounds sectionBloomPruneBounds) (sectionBloomCoverageCheck, error) {
 	var out sectionBloomCoverageCheck
 	if err := rawdb.IterateSectionBloomRows(db, func(section, bitIndex uint64, raw []byte) (bool, error) {
-		if !sectionBloomRefCoversSection(ref, section) {
+		if !sectionBloomRefCoversSection(ref, section) || bounds.skipSection(section) {
 			return true, nil
 		}
 		coldRaw, ok, err := seg.SectionBloom(section, bitIndex)
@@ -96,11 +137,14 @@ func verifyHotSectionBloomRowsCovered(db ethdb.Iteratee, seg *SectionBloomSegmen
 	return out, nil
 }
 
-func pruneHotSectionBloomRowsForSegment(db ethdb.KeyValueWriter, seg *SectionBloomSegment, ref SegmentRef, result *PruneHotSectionBloomResult) (bool, error) {
+func pruneHotSectionBloomRowsForSegment(db ethdb.KeyValueWriter, seg *SectionBloomSegment, ref SegmentRef, result *PruneHotSectionBloomResult, bounds sectionBloomPruneBounds) (bool, error) {
 	var pruned bool
 	if err := seg.IterateRows(func(section, bitIndex uint64, _ []byte) error {
 		if !sectionBloomRefCoversSection(ref, section) {
 			return fmt.Errorf("snapshots: section bloom segment %q section %d outside block range [%d,%d]", ref.Path, section, ref.FromTxNum, ref.ToTxNum)
+		}
+		if bounds.skipSection(section) {
+			return nil
 		}
 		if err := rawdb.DeleteSectionBloom(db, section, bitIndex); err != nil {
 			return err
@@ -113,6 +157,10 @@ func pruneHotSectionBloomRowsForSegment(db ethdb.KeyValueWriter, seg *SectionBlo
 		return false, err
 	}
 	return pruned, nil
+}
+
+func (b sectionBloomPruneBounds) skipSection(section uint64) bool {
+	return b.hasLastPrunedBlock && sectionBloomSectionEndBlock(section) <= b.lastPrunedBlock
 }
 
 func markSectionBloomPrunedRange(result *PruneHotSectionBloomResult, section uint64) {
@@ -133,10 +181,24 @@ func markSectionBloomPrunedRange(result *PruneHotSectionBloomResult, section uin
 	}
 }
 
+func markSectionBloomProcessedToBlock(result *PruneHotSectionBloomResult, blockNum uint64) {
+	if result == nil {
+		return
+	}
+	if !result.hasProcessedToBlock || blockNum > result.processedToBlock {
+		result.hasProcessedToBlock = true
+		result.processedToBlock = blockNum
+	}
+}
+
 func sectionBloomRefsAscending(manifest *Manifest) []SegmentRef {
 	refs := sectionBloomRefs(manifest)
 	for i, j := 0, len(refs)-1; i < j; i, j = i+1, j-1 {
 		refs[i], refs[j] = refs[j], refs[i]
 	}
 	return refs
+}
+
+func sectionBloomSectionEndBlock(section uint64) uint64 {
+	return (section+1)*rawdb.SectionBloomBlockPerSection - 1
 }

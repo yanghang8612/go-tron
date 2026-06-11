@@ -687,6 +687,10 @@ Status:
   segment format, compares every hot `sb-` row in the covered section range
   byte-for-byte against the cold segment, and deletes the hot rows only after
   that preflight succeeds.
+- Production snapshot/prune lifecycle now runs section-bloom hot-row pruning
+  with a persisted `SnapshotSectionBloomPrune` stage, so snap/full/block/minimal
+  modes can keep reclaiming covered `sb-` rows across restarts without rescanning
+  already processed segments.
 - `rawdb.AuditBlockBalanceTraceCoverage` and
   `gtron db audit-balance-traces` now give operators a pre-freeze coverage
   check for archive trace sidecars: every canonical block in the requested
@@ -742,10 +746,11 @@ Remaining:
   account/balance trace read APIs are wired, history-enabled execution now
   populates new trace rows, account traces can be repaired from retained
   block-balance traces, rawdb readers can fall through to registered cold trace
-  and section-bloom segments after verified hot pruning, balance-trace snapshot
-  builds now reject incomplete source ranges, and isolated replay backfill has
-  replay-DB resume, collector-backed trace writes, and signed-snapshot
-  checkpoint starts. Production archive completeness still needs
+  and section-bloom segments after verified hot pruning, progress-aware
+  lifecycle pruning now covers chain lookups and section blooms, balance-trace
+  snapshot builds now reject incomplete source ranges, and isolated replay
+  backfill has replay-DB resume, collector-backed trace writes, and
+  signed-snapshot checkpoint starts. Production archive completeness still needs
   larger-datadir soak, broader event/log cold accessors beyond the section
   bloom prefilter, and an archive/as-of state reader beyond the trace-specific
   checkpoint path.

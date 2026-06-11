@@ -650,6 +650,7 @@ func gtron(ctx *cli.Context) error {
 	stack.RegisterLifecycle(pbftDataSync)
 
 	chainLookupPruneLifecycleWired := false
+	sectionBloomPruneLifecycleWired := false
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
@@ -679,13 +680,25 @@ func gtron(ctx *cli.Context) error {
 				}
 				return statesnapshots.PruneHotChainLookupsWithProgress(db, stateSnapshotDir, manifest)
 			},
+			SectionBloomPrune: func() (*statesnapshots.PruneHotSectionBloomResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotSectionBloomsWithProgress(db, stateSnapshotDir, manifest)
+			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
 		chainLookupPruneLifecycleWired = true
+		sectionBloomPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 			"chainLookupPrune", true,
+			"sectionBloomPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,
 			"reorgWindow", prunePolicy.ReorgWindow,
@@ -698,6 +711,14 @@ func gtron(ctx *cli.Context) error {
 			Dir: stateSnapshotDir,
 		}))
 		log.Info("Chain lookup prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !sectionBloomPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewSectionBloomPruneLifecycle(db, statesnapshots.SectionBloomPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Section bloom prune lifecycle enabled",
 			"mode", chainConfig.EffectiveHistoryMode(),
 			"snapshotDir", stateSnapshotDir)
 	}
