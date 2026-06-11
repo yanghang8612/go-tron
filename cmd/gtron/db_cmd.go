@@ -3,11 +3,15 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"strings"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	"github.com/tronprotocol/go-tron/crypto"
+	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -31,6 +35,14 @@ var (
 	dbETLBatchMiBFlag = &cli.Uint64Flag{
 		Name:  "db.etl.batch",
 		Usage: "ETL output batch size in MiB (0 = default)",
+	}
+	dbReplayTempDirFlag = &cli.StringFlag{
+		Name:  "db.replay.tempdir",
+		Usage: "Parent directory for temporary isolated replay databases",
+	}
+	dbBalanceTraceOverwriteFlag = &cli.BoolFlag{
+		Name:  "db.balance-trace.overwrite",
+		Usage: "Overwrite existing balance trace rows when replay output differs",
 	}
 )
 
@@ -107,6 +119,29 @@ func dbCommand() *cli.Command {
 					dbToBlockFlag,
 				},
 				Action: dbAuditBalanceTracesCmd,
+			},
+			{
+				Name:  "backfill-balance-traces",
+				Usage: "Backfill BlockBalanceTrace/AccountTrace rows by replaying canonical blocks in an isolated database",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					testnetFlag,
+					genesisFileFlag,
+					devFlag,
+					devFullFeaturesFlag,
+					devMaintenanceIntervalFlag,
+					witnessKeyFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+					dbFromBlockFlag,
+					dbToBlockFlag,
+					dbReplayTempDirFlag,
+					dbBalanceTraceOverwriteFlag,
+				},
+				Action: dbBackfillBalanceTracesCmd,
 			},
 		},
 	}
@@ -282,6 +317,89 @@ func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
 		)
 	}
 	return nil
+}
+
+func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	genesis, err := dbReplayGenesis(ctx)
+	if err != nil {
+		return err
+	}
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	chainDB := rawdb.NewChainDB(db, ancientReader)
+	fromBlock := ctx.Uint64("db.from-block")
+	toBlock, err := dbRebuildToBlock(ctx, chainDB)
+	if err != nil {
+		return err
+	}
+	replayDir, err := os.MkdirTemp(strings.TrimSpace(ctx.String("db.replay.tempdir")), "gtron-balance-trace-replay-*")
+	if err != nil {
+		return fmt.Errorf("create replay tempdir: %w", err)
+	}
+	defer os.RemoveAll(replayDir)
+
+	replayDB, err := openPebbleDB(ctx, replayDir)
+	if err != nil {
+		return fmt.Errorf("open replay database: %w", err)
+	}
+	defer replayDB.Close()
+
+	lastProgress := uint64(0)
+	result, err := core.BackfillBalanceTracesByReplay(chainDB, db, replayDB, genesis, core.BalanceTraceReplayBackfillOptions{
+		FromBlock: fromBlock,
+		ToBlock:   toBlock,
+		Overwrite: ctx.Bool("db.balance-trace.overwrite"),
+		Progress: func(p core.BalanceTraceReplayBackfillProgress) {
+			if p.Phase != "replay" {
+				return
+			}
+			if p.Block == p.Target || p.Block-lastProgress >= 10000 {
+				lastProgress = p.Block
+				fmt.Printf("Balance trace replay: block=%d target=%d\n", p.Block, p.Target)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Balance traces backfilled: blocks=[%d,%d] replayed=%d backfilled=%d blockTraceRows=%d accountTraceRows=%d existingBlockTraces=%d existingAccountTraces=%d\n",
+		result.FromBlock,
+		result.ToBlock,
+		result.BlocksReplayed,
+		result.BlocksBackfilled,
+		result.BlockTraceRows,
+		result.AccountTraceRows,
+		result.ExistingBlockTraces,
+		result.ExistingAccountTraces,
+	)
+	return nil
+}
+
+func dbReplayGenesis(ctx *cli.Context) (*params.Genesis, error) {
+	genesis, err := makeGenesis(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ctx.Bool("dev") {
+		return genesis, nil
+	}
+	key, err := parseWitnessKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dev mode requires --witness.key: %w", err)
+	}
+	witnessAddr := crypto.PubkeyToAddress(&key.PublicKey)
+	return makeDevGenesis(witnessAddr, ctx.Bool("dev.full-features"), ctx.Int64("dev.maintenance-interval")), nil
 }
 
 func dbRebuildToBlock(ctx *cli.Context, chainDB *rawdb.ChainDB) (uint64, error) {

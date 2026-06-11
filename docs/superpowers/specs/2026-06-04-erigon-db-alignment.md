@@ -679,6 +679,14 @@ Status:
   check for archive trace sidecars: every canonical block in the requested
   range must exist and have a block-balance trace whose payload block
   identifier matches the canonical hash/number.
+- `core.BackfillBalanceTracesByReplay` and
+  `gtron db backfill-balance-traces` now provide a safe historical
+  `BlockBalanceTrace`/`AccountTrace` backfill path for old datadirs: the
+  command initializes a temporary replay database from the same genesis,
+  enables history capture there, replays canonical blocks from the source
+  chain, and copies only the generated trace rows back to the operator DB.
+  Existing differing trace rows are rejected unless the operator explicitly
+  passes `--db.balance-trace.overwrite`.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -704,18 +712,18 @@ Status:
 Remaining:
 
 - Migrate history backfill commands and the remaining derived RPC index build
-  paths, especially historical block-balance-trace re-execution rebuilds and
-  broader event/log cold accessors, onto the collector-backed helpers where
+  paths, especially the new isolated historical block-balance-trace replay
+  backfill and broader event/log cold accessors, onto the collector-backed
+  helpers where
   benchmarks show lower Pebble write amplification. The account/balance trace
   read APIs are wired, history-enabled execution now populates new trace rows,
   account traces can be repaired from retained block-balance traces, and
   rawdb readers can already fall through to registered cold trace segments after
-  verified hot trace pruning, and balance-trace snapshot builds now reject
-  incomplete source ranges, but historical block-balance-trace backfill is still
-  needed before the feature is archive-complete. A safe backfill cannot reuse
-  canonical `applyBlock` directly because the current flat latest read path is
-  head-oriented; it needs either an as-of state reader wired into replay or an
-  isolated replay database that exports trace rows.
+  verified hot trace pruning, balance-trace snapshot builds now reject
+  incomplete source ranges, and a safe isolated replay backfill exists. It is
+  still expensive because it replays from genesis into a temporary DB; production
+  archive completeness still needs resume/checkpoint support, larger-datadir
+  soak, and eventually an as-of state reader or checkpointed replay start point.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

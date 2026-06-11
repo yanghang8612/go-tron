@@ -2,17 +2,21 @@ package main
 
 import (
 	"flag"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	corepkg "github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	corestate "github.com/tronprotocol/go-tron/core/state"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"github.com/urfave/cli/v2"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestDBRebuildTxIndexesCmdRebuildsHotIndexes(t *testing.T) {
@@ -275,6 +279,41 @@ func TestDBAuditBalanceTracesCmdRejectsIncompleteCoverage(t *testing.T) {
 	}
 }
 
+func TestDBBackfillBalanceTracesCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	genesisPath, sender, receiver, block1 := seedDBBackfillBalanceTraceDatadir(t, dataDir)
+
+	ctx := makeDBTestContext(t, []string{
+		"--datadir", dataDir,
+		"--genesis", genesisPath,
+		"--db.from-block", "1",
+		"--db.to-block", "1",
+		"--db.replay.tempdir", t.TempDir(),
+	})
+	if err := dbBackfillBalanceTracesCmd(ctx); err != nil {
+		t.Fatalf("dbBackfillBalanceTracesCmd: %v", err)
+	}
+
+	reopened, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("reopen pebble: %v", err)
+	}
+	defer reopened.Close()
+	trace := rawdb.ReadBlockBalanceTrace(reopened, 1)
+	if trace == nil {
+		t.Fatal("BlockBalanceTrace missing after backfill")
+	}
+	if trace.GetBlockIdentifier().GetNumber() != 1 || string(trace.GetBlockIdentifier().GetHash()) != string(block1.Hash().Bytes()) {
+		t.Fatalf("trace id = %+v, want block 1 %x", trace.GetBlockIdentifier(), block1.Hash())
+	}
+	if _, ok := rawdb.ReadAccountTrace(reopened, sender.Bytes(), 1); !ok {
+		t.Fatal("sender AccountTrace missing after backfill")
+	}
+	if _, ok := rawdb.ReadAccountTrace(reopened, receiver.Bytes(), 1); !ok {
+		t.Fatal("receiver AccountTrace missing after backfill")
+	}
+}
+
 func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (ethdb.KeyValueStore, []*corepb.TransactionInfo) {
 	t.Helper()
 	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
@@ -306,6 +345,88 @@ func seedDBRebuildTxIndexDatadir(t *testing.T, dataDir string, writeHead bool) (
 		t.Fatalf("pre-rebuild tx info = %+v, want nil", got)
 	}
 	return db, append(infos1, infos2...)
+}
+
+func seedDBBackfillBalanceTraceDatadir(t *testing.T, dataDir string) (string, common.Address, common.Address, *coretypes.Block) {
+	t.Helper()
+	sender := dbRebuildTraceAddressT(0xd0)
+	receiver := dbRebuildTraceAddressT(0xe0)
+	genesisPath := filepath.Join(t.TempDir(), "genesis.json")
+	genesisJSON := `{
+  "chain_id": 1999,
+  "p2p_version": 1999,
+  "timestamp_ms": 0,
+  "parent_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "accounts": [
+    {"address": "` + sender.Hex() + `", "balance": "99000000000000000"},
+    {"address": "` + receiver.Hex() + `", "balance": "1"}
+  ],
+  "dynamic_properties": {
+    "maintenance_time_interval": 21600000,
+    "next_maintenance_time": 4611686018427387903
+  }
+}`
+	if err := os.WriteFile(genesisPath, []byte(genesisJSON), 0o644); err != nil {
+		t.Fatalf("write genesis file: %v", err)
+	}
+	genesis, err := loadGenesisFile(genesisPath)
+	if err != nil {
+		t.Fatalf("loadGenesisFile: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	defer db.Close()
+	_, genesisHash, err := corepkg.SetupGenesisBlock(db, genesis)
+	if err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := corepkg.NewBlockChain(db, corestate.NewDatabase(rawdb.WrapKeyValueStore(db)), genesis.Config)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	defer bc.Close()
+	block1 := dbBackfillTransferBlock(t, 1, 3000, genesisHash, sender, receiver, 5_000_000)
+	if err := bc.InsertBlock(block1); err != nil {
+		t.Fatalf("InsertBlock: %v", err)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("pre-backfill BlockBalanceTrace = %+v, want nil", got)
+	}
+	return genesisPath, sender, receiver, block1
+}
+
+func dbBackfillTransferBlock(t *testing.T, number int64, ts int64, parentHash common.Hash, sender, receiver common.Address, amount int64) *coretypes.Block {
+	t.Helper()
+	tc := &contractpb.TransferContract{
+		OwnerAddress: sender.Bytes(),
+		ToAddress:    receiver.Bytes(),
+		Amount:       amount,
+	}
+	param, err := anypb.New(tc)
+	if err != nil {
+		t.Fatalf("Any TransferContract: %v", err)
+	}
+	txPB := &corepb.Transaction{
+		RawData: &corepb.TransactionRaw{
+			Expiration: ts + 60_000,
+			Contract: []*corepb.Transaction_Contract{{
+				Type:      corepb.Transaction_Contract_TransferContract,
+				Parameter: param,
+			}},
+		},
+	}
+	return coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     number,
+				Timestamp:  ts,
+				ParentHash: parentHash.Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB},
+	})
 }
 
 func dbRebuildTxIndexBlock(t *testing.T, number uint64, txCount int) (*coretypes.Block, []*corepb.TransactionInfo) {
@@ -351,6 +472,10 @@ func dbRebuildTraceAddress(seed byte) []byte {
 	return out
 }
 
+func dbRebuildTraceAddressT(seed byte) common.Address {
+	return common.BytesToAddress(dbRebuildTraceAddress(seed))
+}
+
 func dbRebuildBalanceOp(id int64, addr []byte, amount int64) *contractpb.TransactionBalanceTrace_Operation {
 	return &contractpb.TransactionBalanceTrace_Operation{
 		OperationIdentifier: id,
@@ -381,6 +506,14 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbETLTempDirFlag,
 		dbETLBufferMiBFlag,
 		dbETLBatchMiBFlag,
+		dbReplayTempDirFlag,
+		dbBalanceTraceOverwriteFlag,
+		testnetFlag,
+		genesisFileFlag,
+		devFlag,
+		devFullFeaturesFlag,
+		devMaintenanceIntervalFlag,
+		witnessKeyFlag,
 	}
 	set := flag.NewFlagSet("db-command-test", flag.ContinueOnError)
 	for _, f := range app.Flags {

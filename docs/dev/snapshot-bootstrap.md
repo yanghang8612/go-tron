@@ -87,13 +87,19 @@ account/balance trace sidecars with the same signed catalog:
 ```bash
 gtron db audit-balance-traces \
   --datadir /path/to/datadir \
-  --db.from-block 0 \
+  --db.from-block 1 \
   --db.to-block 12345678
+
+gtron db backfill-balance-traces \
+  --datadir /path/to/datadir \
+  --db.from-block 1 \
+  --db.to-block 12345678 \
+  --db.replay.tempdir /path/to/fast/tmp
 
 gtron snapshot build-balance-traces \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
-  --snapshot.from-block 0 \
+  --snapshot.from-block 1 \
   --snapshot.to-block 12345678
 
 gtron snapshot publish-catalog \
@@ -105,8 +111,10 @@ gtron snapshot publish-catalog \
 `snapshot build-balance-traces` repeats the coverage audit and refuses to build
 if any canonical block in the requested range is missing a `BlockBalanceTrace`
 row or if the trace payload identifies a different block hash/number. Generate
-or repair the hot trace rows first; the cold sidecar is only safe when the
-source range is complete.
+or repair the hot trace rows first; `gtron db backfill-balance-traces` does
+this by replaying canonical blocks into an isolated temporary database and then
+copying only the generated trace rows back into the operator datadir. The cold
+sidecar is only safe when the source range is complete.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` segments. At runtime, `ChainDB` falls through to the snapshot
