@@ -621,6 +621,9 @@ func TestSnapshotBuildBalanceTracesCmdWritesColdSegment(t *testing.T) {
 	if balance, ok := rawdb.ReadAccountTrace(reopened, owner.Bytes(), 12); ok || balance != 0 {
 		t.Fatalf("hot AccountTrace after prune = %d/%v, want 0/false", balance, ok)
 	}
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotBalanceTracePrune); err != nil || !ok || got != 12 {
+		t.Fatalf("StageSnapshotBalanceTracePrune = %d ok=%v err=%v, want 12", got, ok, err)
+	}
 	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
 	chainDB.SetBalanceTraceReader(mgr)
 	if got := rawdb.ReadBlockBalanceTrace(chainDB, 12); got == nil || got.GetTimestamp() != 1200 {
@@ -752,6 +755,9 @@ func TestSnapshotBuildSectionBloomsCmdWritesColdSegment(t *testing.T) {
 	defer reopened.Close()
 	if got := rawdb.ReadSectionBloom(reopened, 1, 99); got != nil {
 		t.Fatalf("hot SectionBloom after prune = %x, want nil", got)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotSectionBloomPrune); err != nil || !ok || got != rawdb.SectionBloomBlockPerSection*2-1 {
+		t.Fatalf("StageSnapshotSectionBloomPrune = %d ok=%v err=%v, want %d", got, ok, err, rawdb.SectionBloomBlockPerSection*2-1)
 	}
 	chainDB := rawdb.NewChainDB(reopened, rawdb.NoopAncient{})
 	chainDB.SetSectionBloomReader(mgr)

@@ -175,7 +175,7 @@ against the cold segment before deleting anything. A missing or different cold
 row aborts the prune. Runtime snapshot/prune lifecycle also runs balance-trace
 and section-bloom pruning with persisted `SnapshotBalanceTracePrune` and
 `SnapshotSectionBloomPrune` stages, so already processed cold segments are
-skipped after restart.
+skipped after restart. The manual prune commands update the same stages.
 
 ## One-Step Bootstrap
 

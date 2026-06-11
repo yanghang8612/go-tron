@@ -797,7 +797,7 @@ func pruneVerifiedHotBalanceTraces(db ethdb.KeyValueStore, dir string, identity 
 	if err != nil {
 		return nil, err
 	}
-	return statesnapshots.PruneHotBalanceTraces(db, dir, manifest)
+	return statesnapshots.PruneHotBalanceTracesWithProgress(db, dir, manifest)
 }
 
 func snapshotPruneSectionBloomsCmd(ctx *cli.Context) error {
@@ -857,7 +857,7 @@ func pruneVerifiedHotSectionBlooms(db ethdb.KeyValueStore, dir string, identity 
 	if err != nil {
 		return nil, err
 	}
-	return statesnapshots.PruneHotSectionBlooms(db, dir, manifest)
+	return statesnapshots.PruneHotSectionBloomsWithProgress(db, dir, manifest)
 }
 
 func snapshotRestoreVerificationOptions(db ethdb.KeyValueStore) statesnapshots.RestoreVerifiedSnapshotOptions {
