@@ -651,6 +651,7 @@ func gtron(ctx *cli.Context) error {
 
 	chainLookupPruneLifecycleWired := false
 	sectionBloomPruneLifecycleWired := false
+	balanceTracePruneLifecycleWired := false
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
@@ -690,15 +691,27 @@ func gtron(ctx *cli.Context) error {
 				}
 				return statesnapshots.PruneHotSectionBloomsWithProgress(db, stateSnapshotDir, manifest)
 			},
+			BalanceTracePrune: func() (*statesnapshots.PruneHotBalanceTraceResult, error) {
+				manifest, err := statesnapshots.LoadProductionManifest(stateSnapshotDir)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
+			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
 		chainLookupPruneLifecycleWired = true
 		sectionBloomPruneLifecycleWired = true
+		balanceTracePruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 			"chainLookupPrune", true,
 			"sectionBloomPrune", true,
+			"balanceTracePrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,
 			"reorgWindow", prunePolicy.ReorgWindow,
@@ -719,6 +732,14 @@ func gtron(ctx *cli.Context) error {
 			Dir: stateSnapshotDir,
 		}))
 		log.Info("Section bloom prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !balanceTracePruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewBalanceTracePruneLifecycle(db, statesnapshots.BalanceTracePruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Balance trace prune lifecycle enabled",
 			"mode", chainConfig.EffectiveHistoryMode(),
 			"snapshotDir", stateSnapshotDir)
 	}

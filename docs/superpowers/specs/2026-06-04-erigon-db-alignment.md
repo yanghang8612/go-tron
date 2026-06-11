@@ -674,6 +674,10 @@ Status:
   range against the cold segment and aborts before deletion if any row is
   missing or differs, so archive reads can move to cold storage without silent
   trace loss.
+- Production snapshot/prune lifecycle now runs balance-trace hot-row pruning
+  with a persisted `SnapshotBalanceTracePrune` stage, so covered
+  `BlockBalanceTrace` and account-trace rows are reclaimed across restarts
+  without rescanning already processed segments.
 - `rawdb.ChainDB` now also has an optional cold section-bloom reader. Registered
   `section-bloom` snapshot segments freeze java-tron-compatible `sb-` rows by
   source block range, `snapshots.Manager` serves those rows after hot misses,
@@ -747,10 +751,10 @@ Remaining:
   populates new trace rows, account traces can be repaired from retained
   block-balance traces, rawdb readers can fall through to registered cold trace
   and section-bloom segments after verified hot pruning, progress-aware
-  lifecycle pruning now covers chain lookups and section blooms, balance-trace
-  snapshot builds now reject incomplete source ranges, and isolated replay
-  backfill has replay-DB resume, collector-backed trace writes, and
-  signed-snapshot checkpoint starts. Production archive completeness still needs
+  lifecycle pruning now covers chain lookups, section blooms, and balance
+  traces, balance-trace snapshot builds now reject incomplete source ranges, and
+  isolated replay backfill has replay-DB resume, collector-backed trace writes,
+  and signed-snapshot checkpoint starts. Production archive completeness still needs
   larger-datadir soak, broader event/log cold accessors beyond the section
   bloom prefilter, and an archive/as-of state reader beyond the trace-specific
   checkpoint path.
