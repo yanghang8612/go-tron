@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -310,6 +311,13 @@ func (r *Runner) onePass() (PassResult, error) {
 		return PassResult{}, nil
 	}
 	cutoffBlock := uint64(solidified) - r.cfg.HistoryWindow
+	finishStage, hasFinishStage, err := verifiedFinishStageBlock(db)
+	if err != nil {
+		return PassResult{}, err
+	}
+	if hasFinishStage && finishStage < cutoffBlock {
+		cutoffBlock = finishStage
+	}
 	result := PassResult{
 		SolidifiedBlock: uint64(solidified),
 		CutoffBlock:     cutoffBlock,
@@ -442,6 +450,27 @@ func (r *Runner) onePass() (PassResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
+	if db == nil {
+		return 0, false, nil
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageFinish)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	if !row.HasBlockHash {
+		return 0, true, fmt.Errorf("snapshots: finish stage %d is not hash-bound", row.BlockNum)
+	}
+	canonical := rawdb.ReadBlockHashByNumber(db, row.BlockNum)
+	if canonical == (common.Hash{}) {
+		return 0, true, fmt.Errorf("snapshots: finish stage %d has hash %x but canonical block is unavailable", row.BlockNum, row.BlockHash)
+	}
+	if canonical != row.BlockHash {
+		return 0, true, fmt.Errorf("snapshots: finish stage %d hash %x does not match canonical hash %x", row.BlockNum, row.BlockHash, canonical)
+	}
+	return row.BlockNum, true, nil
 }
 
 func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlock, toBlock uint64) ([]SegmentRef, error) {

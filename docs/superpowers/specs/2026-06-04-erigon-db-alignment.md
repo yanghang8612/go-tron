@@ -293,12 +293,17 @@ Status:
   progress a stable restart boundary for later prune/freezer/snapshot consumers,
   while `SyncInventory`, `SyncBodies`, and `SyncImport` remain non-canonical
   downloader diagnostics.
+- The cold history snapshot builder now caps its history cutoff at the verified
+  hash-bound `StageFinish` row and fails on finish-stage hash mismatches, so
+  immutable history/event/bloom/trace sidecars are not published past the same
+  canonical execution boundary used by the pruner and chain freezer.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped
   staged-body tails and stale downloader watermarks are dropped on restart,
-  corrupted startup canonical stages are repaired to the stored head, and
-  imported block number/hash progress is written after `InsertBlocks` succeeds.
+  corrupted startup canonical stages are repaired to the stored head, snapshot
+  builds are capped at verified finish stage, and imported block number/hash
+  progress is written after `InsertBlocks` succeeds.
 
 Needed:
 

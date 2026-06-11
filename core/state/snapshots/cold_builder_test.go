@@ -144,6 +144,73 @@ func TestColdBuilderOnePassBuildsStateDomainChangeHistoryAndManagerReads(t *test
 	}
 }
 
+func TestColdBuilderOnePassCapsCutoffAtVerifiedFinishStage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x72)
+
+	for n := uint64(1); n <= 5; n++ {
+		writeColdBuilderChange(t, db, owner, n, n, string([]byte{'a' + byte(n)}))
+		writeColdBuilderCanonicalBlock(t, db, n)
+	}
+	finishHash := writeColdBuilderCanonicalBlock(t, db, 3)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 3, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 6}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("one pass: %v", err)
+	}
+	if !result.Built || result.CutoffBlock != 3 || result.FromTxNum != 1 || result.ToTxNum != 3 {
+		t.Fatalf("result = %+v, want build through finish stage block/tx 3", result)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotBuild); err != nil || !ok || got != 3 {
+		t.Fatalf("StageSnapshotBuild = %d ok=%v err=%v, want 3", got, ok, err)
+	}
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.VisibleTxEnd != 3 {
+		t.Fatalf("manifest visible end = %d, want 3", manifest.VisibleTxEnd)
+	}
+}
+
+func TestColdBuilderOnePassRejectsFinishStageHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x73)
+
+	for n := uint64(1); n <= 3; n++ {
+		writeColdBuilderChange(t, db, owner, n, n, string([]byte{'a' + byte(n)}))
+		writeColdBuilderCanonicalBlock(t, db, n)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 3, common.Hash{0xee}); err != nil {
+		t.Fatalf("write mismatched finish stage: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 4}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+	})
+	result, err := runner.OnePass()
+	if err == nil || !strings.Contains(err.Error(), "finish stage 3 hash") {
+		t.Fatalf("one pass result=%+v err=%v, want finish stage hash mismatch", result, err)
+	}
+	if _, err := LoadManifest(dir); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("manifest after rejected pass err=%v, want not exist", err)
+	}
+}
+
 func TestColdBuilderSecondPassNoOpWhenManifestCoversCutoff(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -1007,6 +1074,22 @@ func writeColdBuilderChange(t *testing.T, db ethdb.KeyValueWriter, owner common.
 	}); err != nil {
 		t.Fatalf("write change block %d: %v", blockNum, err)
 	}
+}
+
+func writeColdBuilderCanonicalBlock(t *testing.T, db ethdb.KeyValueWriter, number uint64) common.Hash {
+	t.Helper()
+	block := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    int64(number),
+				Timestamp: int64(number) * 3000,
+			},
+		},
+	})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("write canonical block %d: %v", number, err)
+	}
+	return block.Hash()
 }
 
 func equalStrings(a, b []string) bool {
