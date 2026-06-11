@@ -508,6 +508,49 @@ func TestRunnerLatestPassIntervalGate(t *testing.T) {
 	}
 }
 
+func TestRunnerLatestPassCapsWatermarkAtVerifiedFinishStage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x87)
+
+	seedLatestRows(t, db, owner, 40, 40)
+	finishHash := writeColdBuilderCanonicalBlock(t, db, 40)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 40, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 50, common.Hash{50}, 50, 50); err != nil {
+		t.Fatalf("seed tx range block 50: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{db: db, solidified: 50}, Config{
+		Dir:               dir,
+		Enabled:           true,
+		Interval:          time.Hour,
+		HistoryWindow:     1,
+		LatestBuildBlocks: 10,
+	})
+	built, err := runner.latestPass()
+	if err != nil {
+		t.Fatalf("latestPass: %v", err)
+	}
+	if !built {
+		t.Fatal("latestPass expected built=true")
+	}
+	if got := runner.lastLatestBuildBlock.Load(); got != 40 {
+		t.Fatalf("lastLatestBuildBlock = %d, want verified finish stage 40", got)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotLatestBuild); err != nil || !ok || got != 40 {
+		t.Fatalf("StageSnapshotLatestBuild = %d ok=%v err=%v, want 40", got, ok, err)
+	}
+	manifest, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.Progress == nil || manifest.Progress.LatestBuildTxNum != 40 {
+		t.Fatalf("manifest progress = %+v, want LatestBuildTxNum 40", manifest.Progress)
+	}
+}
+
 // TestRunnerLatestBuildWatermarkSurvivesRestart proves that the latest-build
 // watermark is persisted to StageSnapshotLatestBuild and that a fresh Runner
 // over the same DB seeds from that persisted value rather than re-seeding to

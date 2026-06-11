@@ -602,11 +602,20 @@ func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, er
 	if solidified <= 0 {
 		return 0, 0, false, nil
 	}
-	tx, err := StateDomainHistoryTxNumAtBlockEnd(r.chain.DB(), uint64(solidified))
+	db := r.chain.DB()
+	block = uint64(solidified)
+	finishStage, hasFinishStage, err := verifiedFinishStageBlock(db)
 	if err != nil {
 		return 0, 0, false, err
 	}
-	return uint64(solidified), tx, tx > 0, nil
+	if hasFinishStage && finishStage < block {
+		block = finishStage
+	}
+	tx, err := StateDomainHistoryTxNumAtBlockEnd(db, block)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return block, tx, tx > 0, nil
 }
 
 func (r *Runner) latestPass() (bool, error) {

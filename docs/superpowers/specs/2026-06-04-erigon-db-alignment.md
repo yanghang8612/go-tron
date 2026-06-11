@@ -297,6 +297,9 @@ Status:
   hash-bound `StageFinish` row and fails on finish-stage hash mismatches, so
   immutable history/event/bloom/trace sidecars are not published past the same
   canonical execution boundary used by the pruner and chain freezer.
+  Latest-domain snapshot watermarks use the same cap, so full-keyspace latest
+  files are also labelled with the verified execution boundary rather than an
+  unverified solidified-height estimate.
 - Regression coverage checks both normal multi-peer sync and snapshot-freezer
   boundary handoff: inventory target progress survives the CHAIN_INVENTORY path,
   downloaded bodies are staged and restored across session startup, gapped
