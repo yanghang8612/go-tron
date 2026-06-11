@@ -653,6 +653,13 @@ Status:
   changes do not leak into the trace. Synchronous and async commit paths persist
   the trace rows in the block metadata batch, and the rawdb writer now surfaces
   marshal/Put errors instead of silently dropping archive data.
+- `rawdb.ChainDB` now has an optional cold account/balance trace reader. The
+  existing `ReadBlockBalanceTrace`, `HasBlockBalanceTrace`,
+  `ReadAccountTrace`, and `ReadAccountTraceAtOrBefore` accessors prefer hot
+  rawdb rows and fall through to that reader on misses, choosing the newest
+  account trace across hot and cold sources for java-tron `getPrevBalance`
+  semantics. This keeps Wallet/API trace callers stable when future snapshot
+  trace segments provide the cold data.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` and
   `gtron db rebuild-account-traces` now repair account-trace rows from retained
   java-tron-compatible `BlockBalanceTrace` operation diffs through sorted ETL.
@@ -682,9 +689,11 @@ Remaining:
   broader event/log cold accessors, onto the collector-backed helpers where
   benchmarks show lower Pebble write amplification. The account/balance trace
   read APIs are wired, history-enabled execution now populates new trace rows,
-  and account traces can be repaired from retained block-balance traces, but
-  historical block-balance-trace backfill and cold trace storage are still
-  needed before the feature is archive-complete.
+  account traces can be repaired from retained block-balance traces, and
+  rawdb readers can already fall through to a cold trace sidecar, but
+  historical block-balance-trace backfill plus actual trace snapshot
+  build/restore/attach plumbing are still needed before the feature is
+  archive-complete.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 

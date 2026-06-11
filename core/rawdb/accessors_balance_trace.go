@@ -27,7 +27,7 @@ func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *cont
 func ReadBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.BlockBalanceTrace {
 	data, err := db.Get(balanceTraceKey(blockNum))
 	if err != nil || len(data) == 0 {
-		return nil
+		return readColdBlockBalanceTrace(db, blockNum)
 	}
 	var trace contractpb.BlockBalanceTrace
 	if err := proto.Unmarshal(data, &trace); err != nil {
@@ -39,10 +39,25 @@ func ReadBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.
 // HasBlockBalanceTrace reports whether a trace is stored for blockNum.
 func HasBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) bool {
 	ok, _ := db.Has(balanceTraceKey(blockNum))
-	return ok
+	if ok {
+		return true
+	}
+	return readColdBlockBalanceTrace(db, blockNum) != nil
 }
 
 // DeleteBlockBalanceTrace removes the balance trace for blockNum.
 func DeleteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64) error {
 	return db.Delete(balanceTraceKey(blockNum))
+}
+
+func readColdBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.BlockBalanceTrace {
+	chain, ok := db.(*ChainDB)
+	if !ok || chain == nil || chain.balanceTrace == nil {
+		return nil
+	}
+	trace, ok, err := chain.balanceTrace.BlockBalanceTrace(blockNum)
+	if err != nil || !ok {
+		return nil
+	}
+	return trace
 }

@@ -28,7 +28,11 @@ func WriteAccountTrace(db ethdb.KeyValueWriter, owner []byte, blockNum int64, ba
 func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool) {
 	data, err := db.Get(accountTraceKey(owner, blockNum))
 	if err != nil || len(data) == 0 {
-		return 0, false
+		traceBlock, balance, ok, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+		if err != nil || !ok || traceBlock != blockNum {
+			return 0, false
+		}
+		return balance, true
 	}
 	var at contractpb.AccountTrace
 	if err := proto.Unmarshal(data, &at); err != nil {
@@ -53,21 +57,36 @@ func ReadAccountTraceAtOrBefore(db ethdb.Iteratee, owner []byte, blockNum int64)
 	start := accountTraceBlockSuffix(blockNum)
 	it := db.NewIterator(prefix, start)
 	defer it.Release()
-	if !it.Next() {
-		if err := it.Error(); err != nil {
-			return 0, 0, false, err
+	var hotBlock int64
+	var hotBalance int64
+	var hotOK bool
+	if it.Next() {
+		key := it.Key()
+		if len(key) != len(prefix)+8 {
+			return 0, 0, false, fmt.Errorf("account trace: malformed key length %d", len(key))
 		}
-		return 0, 0, false, nil
+		var at contractpb.AccountTrace
+		if err := proto.Unmarshal(it.Value(), &at); err != nil {
+			return 0, 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
+		}
+		hotBlock = accountTraceBlockFromSuffix(key[len(prefix):])
+		hotBalance = at.Balance
+		hotOK = true
+	} else if err := it.Error(); err != nil {
+		return 0, 0, false, err
 	}
-	key := it.Key()
-	if len(key) != len(prefix)+8 {
-		return 0, 0, false, fmt.Errorf("account trace: malformed key length %d", len(key))
+
+	coldBlock, coldBalance, coldOK, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+	if err != nil {
+		return 0, 0, false, err
 	}
-	var at contractpb.AccountTrace
-	if err := proto.Unmarshal(it.Value(), &at); err != nil {
-		return 0, 0, false, fmt.Errorf("account trace: unmarshal: %w", err)
+	if coldOK && (!hotOK || coldBlock > hotBlock) {
+		return coldBlock, coldBalance, true, nil
 	}
-	return accountTraceBlockFromSuffix(key[len(prefix):]), at.Balance, true, nil
+	if hotOK {
+		return hotBlock, hotBalance, true, nil
+	}
+	return 0, 0, false, nil
 }
 
 // DeleteAccountTrace removes the record.
@@ -91,4 +110,12 @@ func accountTraceBlockSuffix(blockNum int64) []byte {
 func accountTraceBlockFromSuffix(suffix []byte) int64 {
 	const longMax int64 = 0x7FFFFFFFFFFFFFFF
 	return int64(binary.BigEndian.Uint64(suffix)) ^ longMax
+}
+
+func readColdAccountTraceAtOrBefore(db interface{}, owner []byte, blockNum int64) (int64, int64, bool, error) {
+	chain, ok := db.(*ChainDB)
+	if !ok || chain == nil || chain.balanceTrace == nil {
+		return 0, 0, false, nil
+	}
+	return chain.balanceTrace.AccountTraceAtOrBefore(owner, blockNum)
 }

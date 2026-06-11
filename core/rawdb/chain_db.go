@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
 
 // ChainDB is the gtron chain database: a hot Pebble store plus an
@@ -24,7 +25,8 @@ import (
 type ChainDB struct {
 	ethdb.KeyValueStore
 	AncientReader
-	chainIndex ChainIndexReader
+	chainIndex   ChainIndexReader
+	balanceTrace BalanceTraceReader
 }
 
 // ChainIndexReader is an optional cold lookup sidecar. It is defined in rawdb
@@ -33,6 +35,14 @@ type ChainDB struct {
 type ChainIndexReader interface {
 	BlockNumberByHash(hash common.Hash) (uint64, bool, error)
 	TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error)
+}
+
+// BalanceTraceReader is an optional cold trace sidecar. It lets archive APIs
+// keep account/balance trace reads working after hot rawdb trace rows are
+// pruned, without tying rawdb accessors to the snapshot package.
+type BalanceTraceReader interface {
+	BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error)
+	AccountTraceAtOrBefore(owner []byte, blockNum int64) (traceBlock int64, balance int64, ok bool, err error)
 }
 
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
@@ -52,6 +62,15 @@ func (db *ChainDB) SetChainIndexReader(reader ChainIndexReader) {
 		return
 	}
 	db.chainIndex = reader
+}
+
+// SetBalanceTraceReader attaches a cold account/balance trace sidecar. Passing
+// nil disables the sidecar and leaves trace reads on hot rawdb rows only.
+func (db *ChainDB) SetBalanceTraceReader(reader BalanceTraceReader) {
+	if db == nil {
+		return
+	}
+	db.balanceTrace = reader
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's
