@@ -207,6 +207,103 @@ func TestApplyChainFreezerTailPruneFromDBRequiresColdCoverage(t *testing.T) {
 	}
 }
 
+func TestApplyChainFreezerTailPruneRejectsColdCoverageGap(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTestRows(t, f, 0, 9)
+
+	snapshotDir := root + "/snapshot"
+	refA, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 2)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 0..2: %v", err)
+	}
+	refB, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 4, 9)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 4..9: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{refA, refB})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if covered, err := mgr.ChainFreezerRangeCovered(0, 2); err != nil || !covered {
+		t.Fatalf("ChainFreezerRangeCovered 0..2 = %v/%v, want true/nil", covered, err)
+	}
+	if covered, err := mgr.ChainFreezerRangeCovered(0, 6); err != nil || covered {
+		t.Fatalf("ChainFreezerRangeCovered 0..6 = %v/%v, want false/nil due to gap", covered, err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	if err != nil {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
+	}
+	if result.Applied || result.Plan.Reason != chainFreezerTailPruneReasonMissingColdCoverage {
+		t.Fatalf("apply result = %+v, want no apply due to cold coverage gap", result)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 0 {
+		t.Fatalf("freezer tail = %d/%v, want 0/nil", tail, err)
+	}
+}
+
+func TestApplyChainFreezerTailPruneRejectsUnreadableColdCoverageSegment(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTestRows(t, f, 0, 9)
+
+	snapshotDir := root + "/snapshot"
+	refA, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 2)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 0..2: %v", err)
+	}
+	refB, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 3, 4)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 3..4: %v", err)
+	}
+	refC, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 5, 9)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 5..9: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{refA, refB, refC})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := os.Remove(filepath.Join(snapshotDir, refB.Path)); err != nil {
+		t.Fatalf("remove middle segment: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if covered, err := mgr.ChainFreezerRangeCovered(0, 6); err == nil || covered {
+		t.Fatalf("ChainFreezerRangeCovered 0..6 = %v/%v, want false/error due to missing middle file", covered, err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	if err != nil {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
+	}
+	if result.Applied || result.Plan.Reason != chainFreezerTailPruneReasonMissingColdCoverage {
+		t.Fatalf("apply result = %+v, want no apply due to unreadable cold coverage segment", result)
+	}
+}
+
 func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	root := t.TempDir()
 	ancientDir := filepath.Join(root, "ancient")

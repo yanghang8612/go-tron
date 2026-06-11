@@ -304,6 +304,49 @@ func (m *Manager) HasAncient(kind string, number uint64) (bool, error) {
 	return false, nil
 }
 
+func (m *Manager) ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return false, fmt.Errorf("snapshots: chain-freezer coverage range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return false, err
+	}
+	refs := chainFreezerRefs(manifest)
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].FromTxNum != refs[j].FromTxNum {
+			return refs[i].FromTxNum < refs[j].FromTxNum
+		}
+		if refs[i].ToTxNum != refs[j].ToTxNum {
+			return refs[i].ToTxNum < refs[j].ToTxNum
+		}
+		return refs[i].Path < refs[j].Path
+	})
+	next := fromBlock
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return false, nil
+		}
+		if err := CheckChainFreezerSegment(m.dir, ref); err != nil {
+			return false, err
+		}
+		if ref.ToTxNum >= toBlock {
+			return true, nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return false, nil
+		}
+		next = ref.ToTxNum + 1
+	}
+	return false, nil
+}
+
 func RestoreChainFreezerFromVerifiedManifest(store ChainFreezerAncientStore, dir string, expected ChainIdentity) (*RestoreVerifiedChainFreezerResult, error) {
 	return RestoreChainFreezerFromVerifiedManifestWithOptions(store, dir, expected, RestoreChainFreezerOptions{})
 }

@@ -375,10 +375,12 @@ Status:
   `SnapshotChainLookupPrune` stage progress, converts inclusive coverage block
   `N` into freezer tail `N+1`, and caps the target by the ancient append head
   plus the recent-block retention window. The apply path verifies cold
-  chain-freezer coverage before calling runtime `TruncateTail`; tests pin
-  missing-stage no-ops, lookup-stage caps, retention-window caps,
-  ancient-head caps, short-chain behavior, DB-backed stage reads, successful
-  tail truncation, and no-op behavior when cold coverage is missing.
+  chain-freezer coverage before calling runtime `TruncateTail`; snapshot
+  managers now prove continuous chain-freezer coverage for the whole tail range
+  instead of only probing endpoints. Tests pin missing-stage no-ops,
+  lookup-stage caps, retention-window caps, ancient-head caps, short-chain
+  behavior, DB-backed stage reads, successful tail truncation, no-op behavior
+  when cold coverage is missing, and rejection of gapped cold coverage.
 - The snapshot `Manager` now implements the rawdb `AncientReader` shape for
   chain-freezer segments, and `rawdb.NewFallbackAncientReader` composes local
   freezer rows with verified cold snapshot files. Runtime startup wraps the
@@ -511,8 +513,10 @@ Remaining:
   and dev harness coverage to production-complete status. The freezer and
   chain-freezer table set now have the tested virtual-tail primitive, physical
   shard reclamation primitive, planner, runtime apply path, and cold
-  chain-freezer segment fallback reads with block-number accessors, but
-  production still needs collected long-running soak/space samples and
+  chain-freezer segment fallback reads with block-number accessors. Minimal
+  tail pruning now also requires continuous cold snapshot coverage across the
+  entire pruned range, but production still needs collected long-running
+  soak/space samples and
   acceptance thresholds before old block file reclamation is considered
   production-complete under `minimal`.
 

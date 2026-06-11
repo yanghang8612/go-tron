@@ -87,6 +87,10 @@ type chainFreezerTailFilePruner interface {
 	PruneTailFiles() (uint64, error)
 }
 
+type chainFreezerRangeCoverer interface {
+	ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error)
+}
+
 // PlanChainFreezerTailPrune computes the highest freezer virtual tail that can
 // be requested without passing local ancient coverage, verified cold lookup
 // coverage, the append head, or the recent-block retention window. It performs
@@ -225,6 +229,16 @@ func verifyColdChainFreezerTailCoverage(cold rawdb.AncientReader, fromTail, toTa
 		return nil
 	}
 	last := toTail - 1
+	if coverer, ok := cold.(chainFreezerRangeCoverer); ok {
+		covered, err := coverer.ChainFreezerRangeCovered(fromTail, last)
+		if err != nil {
+			return err
+		}
+		if !covered {
+			return rawdb.ErrNotInAncient
+		}
+		return nil
+	}
 	for _, number := range coldCoverageProbeBlocks(fromTail, last) {
 		for _, table := range []string{rawdb.AncientBlocksTable, rawdb.AncientTxInfosTable, rawdb.AncientStateRootsTable} {
 			if _, err := cold.Ancient(table, number); err != nil {
