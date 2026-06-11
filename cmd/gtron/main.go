@@ -652,6 +652,7 @@ func gtron(ctx *cli.Context) error {
 	chainLookupPruneLifecycleWired := false
 	sectionBloomPruneLifecycleWired := false
 	balanceTracePruneLifecycleWired := false
+	retiredPruneLifecycleWired := false
 	if shouldEnableDomainStatePruner(chainConfig) {
 		prunePolicy := domainStatePrunePolicy(chainConfig, domainStateReorgWindow)
 		historyDataset := statesnapshots.SegmentDatasetStateDomainChange
@@ -701,17 +702,28 @@ func gtron(ctx *cli.Context) error {
 				}
 				return statesnapshots.PruneHotBalanceTracesWithProgress(db, stateSnapshotDir, manifest)
 			},
+			RetiredPrune: func() (*statesnapshots.PruneRetiredSegmentFilesResult, error) {
+				if _, err := statesnapshots.LoadProductionManifest(stateSnapshotDir); err != nil {
+					if os.IsNotExist(err) {
+						return nil, nil
+					}
+					return nil, err
+				}
+				return statesnapshots.PruneRetiredSegmentFiles(stateSnapshotDir)
+			},
 		})
 		stack.RegisterLifecycle(domainLifecycle)
 		chainLookupPruneLifecycleWired = true
 		sectionBloomPruneLifecycleWired = true
 		balanceTracePruneLifecycleWired = true
+		retiredPruneLifecycleWired = true
 		log.Info("Domain state snapshot/prune lifecycle enabled",
 			"mode", prunePolicy.Mode,
 			"snapshotEnabled", chainConfig.EffectiveHistoryMode() == params.HistoryModeSnap && chainConfig.HistoryEnabled,
 			"chainLookupPrune", true,
 			"sectionBloomPrune", true,
 			"balanceTracePrune", true,
+			"retiredPrune", true,
 			"dataset", historyDataset,
 			"historyWindow", prunePolicy.HistoryWindow,
 			"reorgWindow", prunePolicy.ReorgWindow,
@@ -740,6 +752,14 @@ func gtron(ctx *cli.Context) error {
 			Dir: stateSnapshotDir,
 		}))
 		log.Info("Balance trace prune lifecycle enabled",
+			"mode", chainConfig.EffectiveHistoryMode(),
+			"snapshotDir", stateSnapshotDir)
+	}
+	if !retiredPruneLifecycleWired && shouldEnableChainLookupPruner(chainConfig) {
+		stack.RegisterLifecycle(statesnapshots.NewRetiredPruneLifecycle(statesnapshots.RetiredPruneLifecycleConfig{
+			Dir: stateSnapshotDir,
+		}))
+		log.Info("Retired snapshot segment prune lifecycle enabled",
 			"mode", chainConfig.EffectiveHistoryMode(),
 			"snapshotDir", stateSnapshotDir)
 	}

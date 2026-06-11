@@ -81,3 +81,40 @@ func TestPruneRetiredSegmentFilesRequiresActivePreflight(t *testing.T) {
 		assertFileExists(t, filepath.Join(dir, ref.Path))
 	}
 }
+
+func TestRetiredPruneLifecycleOnePass(t *testing.T) {
+	dir := t.TempDir()
+	activeRefs := writeCompactionStateDomainChangeSegment(t, dir, 10, 10, binaryStateDomainChange(10, 10, 1, "active"))
+	retiredRefs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "retired"))
+	manifest := NewManifest(10, 10, activeRefs)
+	manifest.Retired = retiredRefs
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	lifecycle := NewRetiredPruneLifecycle(RetiredPruneLifecycleConfig{Dir: dir})
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if result == nil || result.FilesDeleted != len(retiredRefs) {
+		t.Fatalf("OnePass result = %+v, want deleted retired refs", result)
+	}
+	for _, ref := range activeRefs {
+		assertFileExists(t, filepath.Join(dir, ref.Path))
+	}
+	for _, ref := range retiredRefs {
+		assertFileMissing(t, filepath.Join(dir, ref.Path))
+	}
+}
+
+func TestRetiredPruneLifecycleNoManifestNoop(t *testing.T) {
+	lifecycle := NewRetiredPruneLifecycle(RetiredPruneLifecycleConfig{Dir: t.TempDir()})
+	result, err := lifecycle.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("OnePass result = %+v, want nil without manifest", result)
+	}
+}

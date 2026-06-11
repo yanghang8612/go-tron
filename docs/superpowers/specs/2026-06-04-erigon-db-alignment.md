@@ -694,6 +694,9 @@ Status:
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
+- Production snapshot/prune lifecycle now runs retired snapshot file cleanup
+  after hot-row prune hooks, so replaced immutable segment files do not
+  accumulate indefinitely while the active signed snapshot view stays intact.
 - `gtron snapshot prune-section-blooms` verifies the signed catalog and cold
   segment format, compares every hot `sb-` row in the covered section range
   byte-for-byte against the cold segment, and deletes the hot rows only after

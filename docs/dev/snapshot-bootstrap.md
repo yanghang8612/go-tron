@@ -174,7 +174,9 @@ refreshed.
 It does not rewrite `manifest.json` or `snapshot-catalog.json`, so an already
 signed catalog continues to authenticate the active snapshot view. Run it after
 segment replacement or compaction when the retired files are no longer needed
-for local audit.
+for local audit. The runtime snapshot/prune lifecycle also runs the same
+retired-file cleanup after cold/hot prune hooks in pruning modes that enable
+snapshot-backed cold storage reclamation.
 
 `snapshot fetch` and `snapshot verify` perform registered format checks for
 `balance-trace` and `section-bloom` segments. At runtime, `ChainDB` falls

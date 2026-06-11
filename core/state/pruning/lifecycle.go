@@ -19,12 +19,14 @@ type SnapshotLifecycleConfig struct {
 	ChainLookupPrune  ChainLookupPruneFunc
 	SectionBloomPrune SectionBloomPruneFunc
 	BalanceTracePrune BalanceTracePruneFunc
+	RetiredPrune      RetiredPruneFunc
 	Interval          time.Duration
 }
 
 type ChainLookupPruneFunc func() (*snapshots.PruneHotChainLookupResult, error)
 type SectionBloomPruneFunc func() (*snapshots.PruneHotSectionBloomResult, error)
 type BalanceTracePruneFunc func() (*snapshots.PruneHotBalanceTraceResult, error)
+type RetiredPruneFunc func() (*snapshots.PruneRetiredSegmentFilesResult, error)
 
 // SnapshotLifecyclePass is the result of one ordered lifecycle pass.
 type SnapshotLifecyclePass struct {
@@ -33,6 +35,7 @@ type SnapshotLifecyclePass struct {
 	ChainLookupPrune  *snapshots.PruneHotChainLookupResult
 	SectionBloomPrune *snapshots.PruneHotSectionBloomResult
 	BalanceTracePrune *snapshots.PruneHotBalanceTraceResult
+	RetiredPrune      *snapshots.PruneRetiredSegmentFilesResult
 }
 
 // SnapshotLifecycle owns the state snapshot builder/compactor and hot pruner
@@ -44,6 +47,7 @@ type SnapshotLifecycle struct {
 	chainLookupPrune  ChainLookupPruneFunc
 	sectionBloomPrune SectionBloomPruneFunc
 	balanceTracePrune BalanceTracePruneFunc
+	retiredPrune      RetiredPruneFunc
 
 	interval time.Duration
 	quit     chan struct{}
@@ -73,6 +77,7 @@ func NewSnapshotLifecycle(chain ChainSource, cfg SnapshotLifecycleConfig) *Snaps
 		chainLookupPrune:  cfg.ChainLookupPrune,
 		sectionBloomPrune: cfg.SectionBloomPrune,
 		balanceTracePrune: cfg.BalanceTracePrune,
+		retiredPrune:      cfg.RetiredPrune,
 		interval:          interval,
 		quit:              make(chan struct{}),
 		done:              make(chan struct{}),
@@ -97,6 +102,7 @@ func (l *SnapshotLifecycle) Start() error {
 		"chainLookupPrune", l.chainLookupPrune != nil,
 		"sectionBloomPrune", l.sectionBloomPrune != nil,
 		"balanceTracePrune", l.balanceTracePrune != nil,
+		"retiredPrune", l.retiredPrune != nil,
 		"mode", l.pruner.cfg.Policy.Mode,
 		"interval", l.interval,
 		"snapshotDir", l.pruner.cfg.SnapshotDir)
@@ -152,6 +158,13 @@ func (l *SnapshotLifecycle) OnePass() (SnapshotLifecyclePass, error) {
 			return out, err
 		}
 		out.BalanceTracePrune = result
+	}
+	if l.retiredPrune != nil {
+		result, err := l.retiredPrune()
+		if err != nil {
+			return out, err
+		}
+		out.RetiredPrune = result
 	}
 	return out, nil
 }

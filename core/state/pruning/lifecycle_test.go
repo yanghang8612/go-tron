@@ -68,6 +68,8 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	sawChainLookupBeforeSectionBloom := false
 	sectionBloomRan := false
 	sawSectionBloomBeforeBalanceTrace := false
+	balanceTraceRan := false
+	sawBalanceTraceBeforeRetiredPrune := false
 	lifecycle := NewSnapshotLifecycle(chain, SnapshotLifecycleConfig{
 		Pruner: PrunerConfig{
 			Policy:    FullPolicy(2, 1),
@@ -101,6 +103,7 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 		},
 		BalanceTracePrune: func() (*snapshots.PruneHotBalanceTraceResult, error) {
 			sawSectionBloomBeforeBalanceTrace = sectionBloomRan
+			balanceTraceRan = true
 			return &snapshots.PruneHotBalanceTraceResult{
 				HasRange:             true,
 				FromBlock:            10,
@@ -108,6 +111,14 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 				ColdTraceSegments:    1,
 				BlockTracesDeleted:   2,
 				AccountTracesDeleted: 2,
+			}, nil
+		},
+		RetiredPrune: func() (*snapshots.PruneRetiredSegmentFilesResult, error) {
+			sawBalanceTraceBeforeRetiredPrune = balanceTraceRan
+			return &snapshots.PruneRetiredSegmentFilesResult{
+				RetiredSegments: 3,
+				FilesDeleted:    2,
+				BytesDeleted:    100,
 			}, nil
 		},
 	})
@@ -133,5 +144,11 @@ func TestSnapshotLifecycleRunsChainLookupPruneAfterHotPrune(t *testing.T) {
 	}
 	if result.BalanceTracePrune == nil || !result.BalanceTracePrune.HasRange || result.BalanceTracePrune.ToBlock != 12 {
 		t.Fatalf("balance trace prune result = %+v, want hook result", result.BalanceTracePrune)
+	}
+	if !sawBalanceTraceBeforeRetiredPrune {
+		t.Fatal("retired segment prune hook ran before balance trace prune hook")
+	}
+	if result.RetiredPrune == nil || result.RetiredPrune.FilesDeleted != 2 || result.RetiredPrune.BytesDeleted != 100 {
+		t.Fatalf("retired segment prune result = %+v, want hook result", result.RetiredPrune)
 	}
 }
