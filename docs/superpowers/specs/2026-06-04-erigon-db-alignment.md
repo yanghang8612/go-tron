@@ -779,6 +779,10 @@ Status:
   java-compatible section bitsets from retained block `TransactionInfo.log`
   payloads through `DerivedIndexCollector`. Partial-range rebuilds preserve
   existing block bits in the same section by reading and ORing existing rows.
+  The rebuild now rejects tx-bearing blocks whose `TransactionRet` coverage is
+  missing, shorter than the block's transaction list, or contains nil entries,
+  preventing operators from publishing incomplete log prefilter rows as a
+  successful rebuild.
 - `gtron db rebuild-section-blooms` exposes that section-bloom rebuild to
   operators. It opens hot Pebble plus read-only ancient freezer rows, supports
   explicit or head-derived block ranges, and routes the rebuilt `sb-` rows

@@ -119,6 +119,14 @@ func TestWriteReadTransactionInfosByBlock(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionInfosByBlockRejectsNilEntry(t *testing.T) {
+	db := NewMemoryChainDB()
+	err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{nil})
+	if err == nil {
+		t.Fatal("WriteTransactionInfosByBlock accepted nil transaction info")
+	}
+}
+
 func TestReadTransactionInfosByBlock_NotFound(t *testing.T) {
 	db := NewMemoryChainDB()
 	got := ReadTransactionInfosByBlock(db, 999)

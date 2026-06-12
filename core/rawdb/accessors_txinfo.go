@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
@@ -81,6 +82,11 @@ func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLoo
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.
 func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
+	for txIndex, info := range infos {
+		if info == nil {
+			return fmt.Errorf("rawdb: nil transaction info at block %d index %d", blockNum, txIndex)
+		}
+	}
 	ret := &corepb.TransactionRet{
 		BlockNumber:     int64(blockNum),
 		Transactioninfo: infos,

@@ -397,6 +397,9 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 		}
 		result.BlocksScanned++
 		infos := ReadTransactionInfosByBlock(chain, blockNum)
+		if err := validateTransactionInfosCoverBlock(blockNum, len(block.Transactions()), infos, "section bloom rebuild"); err != nil {
+			return nil, err
+		}
 		if len(infos) != 0 {
 			result.BlocksWithTransactionInfos++
 		}
@@ -433,6 +436,18 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 	}
 	result.ETL = stats
 	return result, nil
+}
+
+func validateTransactionInfosCoverBlock(blockNum uint64, txCount int, infos []*corepb.TransactionInfo, context string) error {
+	if txCount > 0 && len(infos) < txCount {
+		return fmt.Errorf("rawdb: incomplete transaction info coverage for block %d during %s: have %d entries for %d transactions", blockNum, context, len(infos), txCount)
+	}
+	for txIndex, info := range infos {
+		if info == nil {
+			return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
+		}
+	}
+	return nil
 }
 
 func validateBlockBalanceTraceForRebuild(blockNum uint64, blockHash []byte, trace *contractpb.BlockBalanceTrace) error {

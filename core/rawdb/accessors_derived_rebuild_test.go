@@ -239,6 +239,17 @@ func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
 	if _, err := RebuildSectionBloomsFromTransactionInfos(db, db, db, 9, 9, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "missing block 9") {
 		t.Fatalf("missing block err = %v, want missing block 9", err)
 	}
+	missingInfoDB := NewMemoryChainDB()
+	block, _ := derivedRebuildTestBlock(t, 1, 1)
+	if err := WriteBlock(missingInfoDB, block); err != nil {
+		t.Fatalf("WriteBlock missingInfoDB: %v", err)
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(missingInfoDB, missingInfoDB, missingInfoDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "incomplete transaction info coverage") {
+		t.Fatalf("missing tx-info coverage err = %v, want incomplete transaction info coverage", err)
+	}
+	if err := validateTransactionInfosCoverBlock(1, 1, []*corepb.TransactionInfo{nil}, "section bloom rebuild"); err == nil || !strings.Contains(err.Error(), "nil transaction info") {
+		t.Fatalf("nil tx-info err = %v, want nil transaction info", err)
+	}
 }
 
 func TestRebuildAccountTracesFromBlockBalanceTraces(t *testing.T) {
