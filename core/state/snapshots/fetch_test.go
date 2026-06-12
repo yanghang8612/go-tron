@@ -9,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFetchRemoteSnapshot(t *testing.T) {
@@ -79,6 +82,92 @@ func TestFetchRemoteSnapshotRejectsManifestChecksumMismatch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "manifest checksum") {
 		t.Fatalf("error = %v, want manifest checksum mismatch", err)
+	}
+}
+
+func TestFetchRemoteSnapshotDownloadsSegmentsConcurrently(t *testing.T) {
+	source, identity, _ := writeVerifiableHistoryManifest(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := PublishSignedSnapshotCatalog(source, priv); err != nil {
+		t.Fatalf("PublishSignedSnapshotCatalog: %v", err)
+	}
+
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/")
+		if rel != SnapshotCatalogFile && rel != ManifestFile {
+			current := inFlight.Add(1)
+			for {
+				max := maxInFlight.Load()
+				if current <= max || maxInFlight.CompareAndSwap(max, current) {
+					break
+				}
+			}
+			if current >= 2 {
+				releaseOnce.Do(func() { close(release) })
+			}
+			select {
+			case <-release:
+			case <-time.After(500 * time.Millisecond):
+			}
+			defer inFlight.Add(-1)
+		}
+		http.FileServer(http.Dir(source)).ServeHTTP(w, r)
+	}))
+	defer server.Close()
+
+	result, err := FetchRemoteSnapshot(context.Background(), FetchRemoteSnapshotOptions{
+		BaseURL:                server.URL,
+		Dir:                    t.TempDir(),
+		Expected:               identity,
+		TrustedKeys:            []ed25519.PublicKey{pub},
+		MaxConcurrentDownloads: 2,
+	})
+	if err != nil {
+		t.Fatalf("FetchRemoteSnapshot: %v", err)
+	}
+	if result.FilesDownloaded != 5 {
+		t.Fatalf("files downloaded = %d, want catalog+manifest+3 segments", result.FilesDownloaded)
+	}
+	if maxInFlight.Load() < 2 {
+		t.Fatalf("max concurrent segment downloads = %d, want at least 2", maxInFlight.Load())
+	}
+}
+
+func TestNormaliseSnapshotFetchConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		want        int
+		wantErr     string
+	}{
+		{name: "default", concurrency: 0, want: snapshotFetchDefaultConcurrency},
+		{name: "explicit", concurrency: 2, want: 2},
+		{name: "negative", concurrency: -1, wantErr: "must be non-negative"},
+		{name: "too high", concurrency: snapshotFetchMaxConcurrencyLimit + 1, wantErr: "exceeds maximum"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normaliseSnapshotFetchConcurrency(tt.concurrency)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("normaliseSnapshotFetchConcurrency error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normaliseSnapshotFetchConcurrency: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("normaliseSnapshotFetchConcurrency = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

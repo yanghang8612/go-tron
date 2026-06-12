@@ -243,6 +243,7 @@ func TestSnapshotFetchCmdDownloadsSignedRemoteSnapshot(t *testing.T) {
 		"--datadir", dataDir,
 		"--snapshot.dir", destDir,
 		"--snapshot.url", server.URL,
+		"--snapshot.fetch.concurrency", "2",
 		"--snapshot.trusted-key", hex.EncodeToString(pub),
 	})
 	if err := snapshotFetchCmd(ctx); err != nil {
@@ -1868,6 +1869,7 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotDirFlag,
 		snapshotURLFlag,
 		snapshotResetFlag,
+		snapshotFetchConcurrencyFlag,
 		snapshotTrustedCatalogKeyFlag,
 		snapshotTrustedCatalogKeyFileFlag,
 		snapshotForkConfigHashFlag,

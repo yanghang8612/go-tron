@@ -16,6 +16,10 @@ file.
   `GTRON_SNAPSHOT_TRUSTED_KEY` / `GTRON_SNAPSHOT_TRUSTED_KEY_FILE`.
 - Chain identity: selected by `--testnet`, `--genesis`, and optional
   `--snapshot.fork-config-hash` or `GTRON_SNAPSHOT_FORK_CONFIG_HASH`.
+- Fetch concurrency: `snapshot fetch` and `snapshot bootstrap` download
+  catalog/manifest serially for trust establishment, then fetch segment files
+  concurrently. Use `--snapshot.fetch.concurrency N` to tune the segment worker
+  count; `0` keeps the built-in default.
 
 Official mainnet/testnet URLs and signer keys are release artifacts. Until they
 are published, operators should pass their deployment-specific URL and key set
@@ -72,7 +76,8 @@ For a fresh datadir where you want to inspect the downloaded files first:
 ```bash
 gtron snapshot fetch \
   --datadir /path/to/datadir \
-  --snapshot.reset
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
 
 gtron snapshot verify \
   --datadir /path/to/datadir
@@ -236,7 +241,8 @@ For the normal operator path:
 ```bash
 gtron snapshot bootstrap \
   --datadir /path/to/datadir \
-  --snapshot.reset
+  --snapshot.reset \
+  --snapshot.fetch.concurrency 8
 ```
 
 Pass `--snapshot.url`, `--snapshot.trusted-key-file`, or

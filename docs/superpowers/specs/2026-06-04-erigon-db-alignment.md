@@ -179,6 +179,11 @@ Status:
   `gtron snapshot fetch` CLI path against an HTTP snapshot source and verifies
   the downloaded catalog, manifest, and active segment bytes match the signed
   source before local signed-catalog verification succeeds.
+- Remote snapshot fetch now keeps catalog and manifest download/verification
+  serial, then downloads unique active or retired segment files through a
+  bounded worker pool (`--snapshot.fetch.concurrency`, default worker count 4).
+  `TestFetchRemoteSnapshotDownloadsSegmentsConcurrently` proves multiple
+  segment HTTP requests are in flight before final signed-catalog verification.
 - `VerifyRemoteManifestFiles` now performs the strict pre-install check for a
   snapshot directory: chain identity, registered segment family, checksum, size,
   and format-aware segment validation.

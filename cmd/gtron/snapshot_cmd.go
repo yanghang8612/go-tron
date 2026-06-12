@@ -38,6 +38,10 @@ var (
 		Name:  "snapshot.reset",
 		Usage: "Delete the local snapshot directory before fetching the remote snapshot",
 	}
+	snapshotFetchConcurrencyFlag = &cli.IntFlag{
+		Name:  "snapshot.fetch.concurrency",
+		Usage: "Maximum concurrent snapshot segment downloads (0 = default)",
+	}
 	snapshotTrustedCatalogKeyFlag = &cli.StringSliceFlag{
 		Name:    "snapshot.trusted-key",
 		Usage:   "Trusted Ed25519 snapshot catalog public key as hex; repeatable or comma-separated",
@@ -116,6 +120,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotURLFlag,
 					snapshotResetFlag,
+					snapshotFetchConcurrencyFlag,
 					snapshotTrustedCatalogKeyFlag,
 					snapshotTrustedCatalogKeyFileFlag,
 					snapshotForkConfigHashFlag,
@@ -151,6 +156,7 @@ func snapshotCommand() *cli.Command {
 					snapshotDirFlag,
 					snapshotURLFlag,
 					snapshotResetFlag,
+					snapshotFetchConcurrencyFlag,
 					snapshotTrustedCatalogKeyFlag,
 					snapshotTrustedCatalogKeyFileFlag,
 					snapshotForkConfigHashFlag,
@@ -406,10 +412,11 @@ func snapshotFetchCmd(ctx *cli.Context) error {
 		return err
 	}
 	result, err := statesnapshots.FetchRemoteSnapshot(contextOrBackground(ctx), statesnapshots.FetchRemoteSnapshotOptions{
-		BaseURL:     baseURL,
-		Dir:         dir,
-		Expected:    identity,
-		TrustedKeys: trustedKeys,
+		BaseURL:                baseURL,
+		Dir:                    dir,
+		Expected:               identity,
+		TrustedKeys:            trustedKeys,
+		MaxConcurrentDownloads: ctx.Int("snapshot.fetch.concurrency"),
 	})
 	if err != nil {
 		return err

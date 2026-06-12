@@ -15,17 +15,23 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-const snapshotFetchMetadataLimit = 16 << 20
+const (
+	snapshotFetchMetadataLimit       = 16 << 20
+	snapshotFetchDefaultConcurrency  = 4
+	snapshotFetchMaxConcurrencyLimit = 64
+)
 
 type FetchRemoteSnapshotOptions struct {
-	BaseURL      string
-	Dir          string
-	Expected     ChainIdentity
-	TrustedKeys  []ed25519.PublicKey
-	HTTPClient   *http.Client
-	CheckRetired bool
+	BaseURL                string
+	Dir                    string
+	Expected               ChainIdentity
+	TrustedKeys            []ed25519.PublicKey
+	HTTPClient             *http.Client
+	CheckRetired           bool
+	MaxConcurrentDownloads int
 }
 
 type FetchRemoteSnapshotResult struct {
@@ -99,21 +105,12 @@ func FetchRemoteSnapshot(ctx context.Context, opts FetchRemoteSnapshotOptions) (
 	if opts.CheckRetired {
 		refs = append(refs, manifest.Retired...)
 	}
-	seen := make(map[string]struct{}, len(refs))
-	for _, ref := range refs {
-		if _, ok := seen[ref.Path]; ok {
-			continue
-		}
-		seen[ref.Path] = struct{}{}
-		downloaded, bytes, err := fetchSnapshotSegment(ctx, client, baseURL, opts.Dir, ref)
-		if err != nil {
-			return nil, err
-		}
-		if downloaded {
-			result.FilesDownloaded++
-			result.BytesDownloaded += bytes
-		}
+	files, bytes, err := fetchSnapshotSegments(ctx, client, baseURL, opts.Dir, refs, opts.MaxConcurrentDownloads)
+	if err != nil {
+		return nil, err
 	}
+	result.FilesDownloaded += files
+	result.BytesDownloaded += bytes
 
 	_, report, err := VerifySignedSnapshotCatalog(opts.Dir, opts.Expected, opts.TrustedKeys)
 	if err != nil {
@@ -205,6 +202,105 @@ func fetchSnapshotMetadata(ctx context.Context, client *http.Client, fileURL str
 		return nil, fmt.Errorf("snapshots: metadata %s exceeds %d bytes", fileURL, snapshotFetchMetadataLimit)
 	}
 	return data, nil
+}
+
+type fetchSnapshotSegmentResult struct {
+	downloaded bool
+	bytes      uint64
+	err        error
+}
+
+func fetchSnapshotSegments(ctx context.Context, client *http.Client, baseURL, dir string, refs []SegmentRef, concurrency int) (int, uint64, error) {
+	workers, err := normaliseSnapshotFetchConcurrency(concurrency)
+	if err != nil {
+		return 0, 0, err
+	}
+	uniqueRefs := uniqueSnapshotSegmentRefs(refs)
+	if len(uniqueRefs) == 0 {
+		return 0, 0, nil
+	}
+	if workers > len(uniqueRefs) {
+		workers = len(uniqueRefs)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan SegmentRef)
+	results := make(chan fetchSnapshotSegmentResult, len(uniqueRefs))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ref := range jobs {
+				downloaded, bytes, err := fetchSnapshotSegment(ctx, client, baseURL, dir, ref)
+				results <- fetchSnapshotSegmentResult{downloaded: downloaded, bytes: bytes, err: err}
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, ref := range uniqueRefs {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- ref:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var files int
+	var bytes uint64
+	var firstErr error
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+			cancel()
+			continue
+		}
+		if result.err == nil && result.downloaded {
+			files++
+			bytes += result.bytes
+		}
+	}
+	if firstErr != nil {
+		return 0, 0, firstErr
+	}
+	return files, bytes, nil
+}
+
+func uniqueSnapshotSegmentRefs(refs []SegmentRef) []SegmentRef {
+	out := make([]SegmentRef, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if _, ok := seen[ref.Path]; ok {
+			continue
+		}
+		seen[ref.Path] = struct{}{}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func normaliseSnapshotFetchConcurrency(concurrency int) (int, error) {
+	if concurrency < 0 {
+		return 0, fmt.Errorf("snapshots: fetch concurrency %d must be non-negative", concurrency)
+	}
+	if concurrency == 0 {
+		return snapshotFetchDefaultConcurrency, nil
+	}
+	if concurrency > snapshotFetchMaxConcurrencyLimit {
+		return 0, fmt.Errorf("snapshots: fetch concurrency %d exceeds maximum %d", concurrency, snapshotFetchMaxConcurrencyLimit)
+	}
+	return concurrency, nil
 }
 
 func fetchSnapshotSegment(ctx context.Context, client *http.Client, baseURL, dir string, ref SegmentRef) (bool, uint64, error) {
