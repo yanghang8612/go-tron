@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -386,6 +387,40 @@ func TestArchiveQuery_PruneFloorRejectsUnavailableHistory(t *testing.T) {
 	}
 	if _, err := b.GetAccountAt(recipient, 2); !errors.Is(err, ErrArchiveHistoryPruned) {
 		t.Fatalf("GetAccountAt below prune floor with pruned root: err = %v, want ErrArchiveHistoryPruned", err)
+	}
+}
+
+func TestArchiveQuery_BlocksAndMinimalModesUsePruneWindowGate(t *testing.T) {
+	for _, mode := range []string{params.HistoryModeBlocks, params.HistoryModeMinimal} {
+		t.Run(mode, func(t *testing.T) {
+			b, witness, recipient := archiveBackend(t)
+			bc := b.chain
+			bc.config.HistoryMode = mode
+			bc.config.HistoryPruneWindow = 2
+
+			parent := bc.genesisBlock.Hash()
+			for n := int64(1); n <= 5; n++ {
+				blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+				if err := bc.InsertBlock(blk); err != nil {
+					t.Fatalf("insert block %d: %v", n, err)
+				}
+				parent = blk.Hash()
+			}
+			if head := bc.CurrentBlock().Number(); head != 5 {
+				t.Fatalf("head = %d, want 5", head)
+			}
+
+			if got, err := b.GetBalanceAt(recipient, 4); err != nil || got == 0 {
+				t.Fatalf("GetBalanceAt inside %s prune window = %d/%v, want non-zero balance", mode, got, err)
+			}
+			_, err := b.GetBalanceAt(recipient, 3)
+			if !errors.Is(err, ErrArchiveHistoryPruned) {
+				t.Fatalf("GetBalanceAt below %s prune window err = %v, want ErrArchiveHistoryPruned", mode, err)
+			}
+			if !strings.Contains(err.Error(), "first_available=4") {
+				t.Fatalf("GetBalanceAt below %s prune window err = %v, want first_available=4", mode, err)
+			}
+		})
 	}
 }
 

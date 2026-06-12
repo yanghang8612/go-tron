@@ -1521,7 +1521,7 @@ func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
 		return ErrArchiveHistoryDisabled
 	}
 
-	if cfg.EffectiveHistoryMode() == params.HistoryModeFull {
+	if archiveModeUsesLocalHistoryWindow(cfg.EffectiveHistoryMode()) {
 		window := cfg.EffectiveHistoryPruneWindow()
 		if window > 0 && headNum >= window {
 			firstAvailable := headNum - window + 1
@@ -1546,6 +1546,15 @@ func (b *TronBackend) requireArchive(blockNum, headNum uint64) error {
 		}
 	}
 	return nil
+}
+
+func archiveModeUsesLocalHistoryWindow(mode string) bool {
+	switch mode {
+	case params.HistoryModeFull, params.HistoryModeBlocks, params.HistoryModeMinimal:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *TronBackend) archiveStateTxRangeAvailable(blockNum uint64) (bool, error) {

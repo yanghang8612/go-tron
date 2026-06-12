@@ -515,6 +515,10 @@ Status:
   share `full`'s finite state-history retention window for hot
   `StateDomainChange`/`StateTxRange` pruning, and the Worker/Checker paths now
   enforce and audit that retention without collapsing their mode labels.
+  Archive/as-of state queries also apply the same local history-window gate for
+  `full`, `blocks`, and `minimal`, so requests below the retained floor fail
+  with `ErrArchiveHistoryPruned` instead of reconstructing from incomplete or
+  mode-inconsistent history.
 - `blocks` preserves complete local chain-freezer history while still allowing
   state/history and hot lookup pruning. `minimal` is the only mode that
   registers a chain-freezer tail-prune lifecycle. It applies virtual-tail
