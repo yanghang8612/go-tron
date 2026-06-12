@@ -198,7 +198,11 @@ manifest and verifies indexed cold coverage for event-log build and freezer-tail
 prune stages by comparing `event-log-index` postings with the active event-log
 segments, plus chain lookup, section-bloom, and balance-trace coverage, so
 operators can detect stale stage rows after sidecar files are moved or
-corrupted.
+corrupted. The same gate compares manifest-backed snapshot stage rows
+(`SnapshotLatest`, `SnapshotHistory`, `SnapshotAccessor`,
+`SnapshotCommitmentFlush`, and `SnapshotHotPrune`) with the active manifest
+`progress` section, so DB stage watermarks cannot move ahead of the snapshot
+artifacts that prove them.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.

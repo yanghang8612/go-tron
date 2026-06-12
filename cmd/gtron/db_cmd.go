@@ -369,6 +369,11 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 	needsCoverage := false
 	for _, stage := range []rawdb.StageID{
 		rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotLatest,
+		rawdb.StageSnapshotHistory,
+		rawdb.StageSnapshotAccessor,
+		rawdb.StageSnapshotCommitmentFlush,
+		rawdb.StageSnapshotHotPrune,
 		rawdb.StageSnapshotChainLookupPrune,
 		rawdb.StageSnapshotSectionBloomPrune,
 		rawdb.StageSnapshotBalanceTracePrune,
@@ -387,6 +392,24 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		return []string{fmt.Sprintf("snapshot coverage unreadable: %v", err)}
 	}
 	var issues []string
+	manifest := mgr.Manifest()
+	var progress *statesnapshots.Progress
+	if manifest != nil {
+		progress = manifest.Progress
+	}
+	checkProgress := func(stage rawdb.StageID, label string, covered uint64) {
+		row, ok := byStage[stage]
+		if !ok || row.progress.BlockNum == 0 {
+			return
+		}
+		if progress == nil || covered == 0 {
+			issues = append(issues, fmt.Sprintf("%s=%d missing snapshot manifest %s progress", stage, row.progress.BlockNum, label))
+			return
+		}
+		if row.progress.BlockNum > covered {
+			issues = append(issues, fmt.Sprintf("%s=%d ahead of snapshot manifest %s progress %d", stage, row.progress.BlockNum, label, covered))
+		}
+	}
 	check := func(stage rawdb.StageID, block uint64, label string, fromBlock uint64, covered func(uint64, uint64) (bool, error)) {
 		ok, err := covered(fromBlock, block)
 		if err != nil {
@@ -396,6 +419,19 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		if !ok {
 			issues = append(issues, fmt.Sprintf("%s=%d missing cold %s coverage [%d,%d]", stage, block, label, fromBlock, block))
 		}
+	}
+	if progress != nil {
+		checkProgress(rawdb.StageSnapshotLatest, "latest", progress.LatestBuildTxNum)
+		checkProgress(rawdb.StageSnapshotHistory, "history", progress.HistoryBuildTxNum)
+		checkProgress(rawdb.StageSnapshotAccessor, "accessor", progress.AccessorBuildTxNum)
+		checkProgress(rawdb.StageSnapshotCommitmentFlush, "commitment-flush", progress.CommitmentFlushTxNum)
+		checkProgress(rawdb.StageSnapshotHotPrune, "hot-prune", progress.HotPruneTxNum)
+	} else {
+		checkProgress(rawdb.StageSnapshotLatest, "latest", 0)
+		checkProgress(rawdb.StageSnapshotHistory, "history", 0)
+		checkProgress(rawdb.StageSnapshotAccessor, "accessor", 0)
+		checkProgress(rawdb.StageSnapshotCommitmentFlush, "commitment-flush", 0)
+		checkProgress(rawdb.StageSnapshotHotPrune, "hot-prune", 0)
 	}
 	if row, ok := byStage[rawdb.StageSnapshotEventLogBuild]; ok && row.progress.BlockNum > 0 {
 		check(row.stage, row.progress.BlockNum, "indexed event-log", 1, mgr.EventLogIndexedRangeCovered)

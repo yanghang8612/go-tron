@@ -368,7 +368,11 @@ Status:
   `SnapshotChainLookupPrune`, `SnapshotSectionBloomPrune`,
   `SnapshotBalanceTracePrune`, and `SnapshotChainFreezerTailPrune`, catching
   missing/gapped/corrupt sidecars even when the stage rows themselves look
-  ordered.
+  ordered. Manifest-backed progress rows (`SnapshotLatest`, `SnapshotHistory`,
+  `SnapshotAccessor`, `SnapshotCommitmentFlush`, and `SnapshotHotPrune`) are
+  checked against the active manifest `progress` section as well, so automation
+  cannot trust DB stage rows that are ahead of or missing from the snapshot
+  artifact set that would be used for restore/prune/archive decisions.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.

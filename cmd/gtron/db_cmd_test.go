@@ -901,6 +901,111 @@ func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusSnapshotCoverageIssuesChecksManifestProgress(t *testing.T) {
+	snapshotDir := t.TempDir()
+	manifest := statesnapshots.NewManifest(1, 12, nil)
+	manifest.Progress = &statesnapshots.Progress{
+		LatestBuildTxNum:     10,
+		HistoryBuildTxNum:    10,
+		AccessorBuildTxNum:   13,
+		CommitmentFlushTxNum: 0,
+		HotPruneTxNum:        5,
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotLatest,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotLatest,
+				BlockNum: 8,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotHistory,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotHistory,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotAccessor,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotAccessor,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotCommitmentFlush,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotCommitmentFlush,
+				BlockNum: 1,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotHotPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotHotPrune,
+				BlockNum: 6,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, snapshotDir)
+	for _, want := range []string{
+		"SnapshotHistory=12 ahead of snapshot manifest history progress 10",
+		"SnapshotCommitmentFlush=1 missing snapshot manifest commitment-flush progress",
+		"SnapshotHotPrune=6 ahead of snapshot manifest hot-prune progress 5",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+		}
+	}
+	if len(issues) != 3 {
+		t.Fatalf("snapshot coverage issues = %#v, want only manifest progress issues", issues)
+	}
+}
+
+func TestDBStageStatusSnapshotCoverageIssuesRequiresManifestProgress(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotLatest,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotLatest,
+				BlockNum: 7,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, filepath.Join(t.TempDir(), "missing-snapshots"))
+	want := "SnapshotLatest=7 missing snapshot manifest latest progress"
+	for _, issue := range issues {
+		if issue == want {
+			return
+		}
+	}
+	t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+}
+
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
 	t.Helper()
 	genesis, err := loadGenesisFile(genesisPath)
