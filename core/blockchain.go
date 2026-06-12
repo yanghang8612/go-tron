@@ -1214,6 +1214,18 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	if err := rawdb.WriteTaposRef(bc.buffer, block.Number(), block.Hash()); err != nil {
 		return fmt.Errorf("stage tapos ref: %w", err)
 	}
+	// Stage the block body alongside the TAPOS row so BLOCKHASH lookups from
+	// the NEXT blocks of an insert range resolve through the buffer. The
+	// durable b-<num> row is written by writeBlockMetadataBatch, but under
+	// async commit that batch runs on the commit worker, so block N+1's
+	// execution raced it and read blockhash(N) as 0 while java-tron always
+	// serves the parent hash — Nile 10,552,292 stalled exactly here (OneSwap
+	// derives limit-order ids from blockhash(block.number-1) ^ tx.origin, so
+	// the zero hash silently diverged the order book at placement). Layered
+	// staging keeps the row fork-rewindable, like the TAPOS ref above.
+	if err := rawdb.WriteBlock(bc.buffer, block); err != nil {
+		return fmt.Errorf("stage block body: %w", err)
+	}
 	if n := len(block.Transactions()); n > 0 {
 		count := rawdb.ReadTotalTransactionCount(bc.buffer)
 		rawdb.WriteTotalTransactionCount(bc.buffer, count+int64(n))
