@@ -91,76 +91,6 @@ type bufferedSyncBatch struct {
 	bufferWaits []time.Duration
 }
 
-type syncStageProgressRow struct {
-	blockNum uint64
-	hash     tcommon.Hash
-}
-
-type syncStageProgressCollector struct {
-	mu   sync.Mutex
-	rows map[rawdb.StageID][]syncStageProgressRow
-}
-
-func newSyncStageProgressCollector() *syncStageProgressCollector {
-	return &syncStageProgressCollector{rows: make(map[rawdb.StageID][]syncStageProgressRow)}
-}
-
-func (c *syncStageProgressCollector) observe(stage rawdb.StageID, blockNum uint64, hash tcommon.Hash) {
-	syncStage, ok := syncStageForCanonicalStage(stage)
-	if c == nil || !ok {
-		return
-	}
-	c.mu.Lock()
-	c.rows[syncStage] = append(c.rows[syncStage], syncStageProgressRow{blockNum: blockNum, hash: hash})
-	c.mu.Unlock()
-}
-
-func (c *syncStageProgressCollector) write(ss *SyncService, through uint64) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	rows := make(map[rawdb.StageID][]syncStageProgressRow, len(c.rows))
-	for stage, stageRows := range c.rows {
-		rows[stage] = append([]syncStageProgressRow(nil), stageRows...)
-	}
-	c.mu.Unlock()
-	for _, stage := range syncPipelineProgressStages() {
-		var (
-			latest syncStageProgressRow
-			have   bool
-		)
-		for _, row := range rows[stage] {
-			if row.blockNum > through {
-				continue
-			}
-			if !have || row.blockNum > latest.blockNum {
-				latest = row
-				have = true
-			}
-		}
-		if !have {
-			continue
-		}
-		ss.writeStageProgress(stage, latest.blockNum, latest.hash, true)
-	}
-}
-
-func syncStageForCanonicalStage(stage rawdb.StageID) (rawdb.StageID, bool) {
-	switch stage {
-	case rawdb.StageBodies:
-		return rawdb.StageSyncImport, true
-	case rawdb.StageExecution:
-		return rawdb.StageSyncExecution, true
-	case rawdb.StageCommitment:
-		return rawdb.StageSyncCommitment, true
-	case rawdb.StageFinish:
-		return rawdb.StageSyncFinish, true
-	default:
-		return "", false
-	}
-}
-
 type outboundSyncRequest struct {
 	peer   *p2p.Peer
 	blocks []types.BlockID
@@ -518,12 +448,7 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 }
 
 func syncPipelineProgressStages() []rawdb.StageID {
-	return []rawdb.StageID{
-		rawdb.StageSyncImport,
-		rawdb.StageSyncExecution,
-		rawdb.StageSyncCommitment,
-		rawdb.StageSyncFinish,
-	}
+	return syncdl.SyncPipelineProgressStages()
 }
 
 func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
@@ -1306,9 +1231,9 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.stats.AddBufferWait(wait)
 		}
 
-		stageProgress := newSyncStageProgressCollector()
+		stageProgress := syncdl.NewStageProgressCollector()
 		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlocksWithStageHook(batch.blocks, stageProgress.observe)
+		insertErr := ss.chain.InsertBlocksWithStageHook(batch.blocks, stageProgress.Observe)
 		insertElapsed := time.Since(insertStart)
 		applied := len(batch.blocks)
 		if insertErr != nil {
@@ -1450,7 +1375,7 @@ func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 	}
 }
 
-func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration, stageProgress *syncStageProgressCollector) {
+func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
 	if applied <= 0 {
 		return
 	}
@@ -1462,7 +1387,9 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	}
 	ss.deleteImportedSyncBodies(batch, applied)
 	if last := batch.buffered[applied-1]; last.num > 0 {
-		stageProgress.write(ss, last.num)
+		stageProgress.Write(last.num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+			ss.writeStageProgress(stage, blockNum, blockHash, true)
+		})
 	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks

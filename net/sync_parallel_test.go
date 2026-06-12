@@ -8,6 +8,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -163,13 +164,15 @@ func TestSyncStageProgressCollectorKeepsLatestAppliedStage(t *testing.T) {
 
 	block1 := stubBlock(1, bc.CurrentBlock().Hash())
 	block2 := stubBlock(2, block1.Hash())
-	collector := newSyncStageProgressCollector()
+	collector := syncdl.NewStageProgressCollector()
 	for _, stage := range rawdb.CanonicalExecutionStages() {
-		collector.observe(stage, block1.Number(), block1.Hash())
+		collector.Observe(stage, block1.Number(), block1.Hash())
 	}
-	collector.observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	collector.write(ss, block1.Number())
+	collector.Write(block1.Number(), func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+		ss.writeStageProgress(stage, blockNum, blockHash, true)
+	})
 
 	assertSyncPipelineProgress(t, bc.DB(), block1)
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
