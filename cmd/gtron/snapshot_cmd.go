@@ -65,6 +65,18 @@ var (
 		Name:  "snapshot.to-block",
 		Usage: "Last chain-freezer block number to snapshot, inclusive",
 	}
+	snapshotETLTempDirFlag = &cli.StringFlag{
+		Name:  "snapshot.etl.tempdir",
+		Usage: "Parent directory for temporary snapshot ETL run files",
+	}
+	snapshotETLBufferMiBFlag = &cli.Uint64Flag{
+		Name:  "snapshot.etl.buffer",
+		Usage: "Snapshot ETL memory buffer limit in MiB (0 = default)",
+	}
+	snapshotETLBatchMiBFlag = &cli.Uint64Flag{
+		Name:  "snapshot.etl.batch",
+		Usage: "Snapshot ETL output batch size in MiB (0 = default)",
+	}
 )
 
 func snapshotCommand() *cli.Command {
@@ -88,6 +100,9 @@ func snapshotCommand() *cli.Command {
 					snapshotTrustedCatalogKeyFlag,
 					snapshotTrustedCatalogKeyFileFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotRestoreCmd,
 			},
@@ -139,6 +154,9 @@ func snapshotCommand() *cli.Command {
 					snapshotTrustedCatalogKeyFlag,
 					snapshotTrustedCatalogKeyFileFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBootstrapCmd,
 			},
@@ -167,6 +185,9 @@ func snapshotCommand() *cli.Command {
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBuildFreezerCmd,
 			},
@@ -190,6 +211,9 @@ func snapshotCommand() *cli.Command {
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBuildBalanceTracesCmd,
 			},
@@ -213,6 +237,9 @@ func snapshotCommand() *cli.Command {
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBuildSectionBloomsCmd,
 			},
@@ -236,6 +263,9 @@ func snapshotCommand() *cli.Command {
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBuildEventLogsCmd,
 			},
@@ -259,6 +289,9 @@ func snapshotCommand() *cli.Command {
 					snapshotFromBlockFlag,
 					snapshotToBlockFlag,
 					snapshotForkConfigHashFlag,
+					snapshotETLTempDirFlag,
+					snapshotETLBufferMiBFlag,
+					snapshotETLBatchMiBFlag,
 				},
 				Action: snapshotBuildDerivedIndexesCmd,
 			},
@@ -466,7 +499,13 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 		return err
 	}
 	identity := snapshotExpectedChainIdentity(chainConfig, genesis, genesisHash, forkConfigHash)
-	result, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(db, dir, identity, trustedKeys, snapshotRestoreVerificationOptions(db))
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	restoreOpts := snapshotRestoreVerificationOptions(db)
+	restoreOpts.ETL = etlOpts
+	result, err := statesnapshots.RestoreSnapshotFromVerifiedCatalogWithOptions(db, dir, identity, trustedKeys, restoreOpts)
 	if err != nil {
 		return err
 	}
@@ -474,6 +513,7 @@ func snapshotRestoreCmd(ctx *cli.Context) error {
 		IndexWriter:       db,
 		ProgressWriter:    db,
 		PreferColdIndexes: true,
+		ETL:               etlOpts,
 	})
 	if err != nil {
 		return err
@@ -573,7 +613,13 @@ func snapshotBuildFreezerCmd(ctx *cli.Context) error {
 	defer fz.Close()
 
 	dir := snapshotDir(ctx, cfg.DataDir)
-	result, err := statesnapshots.NewAggregator(dir).BuildChainFreezer(rawdb.NewFreezerReader(fz), fromBlock, toBlock)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := statesnapshots.NewAggregator(dir).BuildChainFreezerWithOptions(rawdb.NewFreezerReader(fz), fromBlock, toBlock, statesnapshots.AggregatorBuildChainFreezerOptions{
+		ETL: etlOpts,
+	})
 	if err != nil {
 		return err
 	}
@@ -649,7 +695,11 @@ func snapshotBuildBalanceTracesCmd(ctx *cli.Context) error {
 	}
 
 	dir := snapshotDir(ctx, cfg.DataDir)
-	result, err := statesnapshots.NewAggregator(dir).BuildBalanceTraces(db, fromBlock, toBlock)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := statesnapshots.NewAggregator(dir).BuildBalanceTracesWithOptions(db, fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -701,7 +751,11 @@ func snapshotBuildSectionBloomsCmd(ctx *cli.Context) error {
 	defer db.Close()
 
 	dir := snapshotDir(ctx, cfg.DataDir)
-	result, err := statesnapshots.NewAggregator(dir).BuildSectionBlooms(db, fromBlock, toBlock)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := statesnapshots.NewAggregator(dir).BuildSectionBloomsWithOptions(db, fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -759,7 +813,11 @@ func snapshotBuildEventLogsCmd(ctx *cli.Context) error {
 	defer closeAncient()
 
 	dir := snapshotDir(ctx, cfg.DataDir)
-	result, err := statesnapshots.NewAggregator(dir).BuildEventLogs(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := statesnapshots.NewAggregator(dir).BuildEventLogsWithOptions(rawdb.NewChainDB(db, ancientReader), fromBlock, toBlock, etlOpts)
 	if err != nil {
 		return err
 	}
@@ -835,10 +893,15 @@ func snapshotBuildDerivedIndexesCmd(ctx *cli.Context) error {
 	}
 
 	dir := snapshotDir(ctx, cfg.DataDir)
+	etlOpts, err := snapshotETLOptions(ctx)
+	if err != nil {
+		return err
+	}
 	result, err := statesnapshots.NewAggregator(dir).BuildDerivedIndexes(chainDB, fromBlock, toBlock, statesnapshots.AggregatorBuildDerivedOptions{
 		BalanceTraces: true,
 		SectionBlooms: true,
 		EventLogs:     true,
+		ETL:           etlOpts,
 	})
 	if err != nil {
 		return err
@@ -876,6 +939,22 @@ func ensureSnapshotManifestChainIdentity(dir string, identity statesnapshots.Cha
 	}
 	manifest.Chain = &identity
 	return statesnapshots.PublishManifest(dir, manifest)
+}
+
+func snapshotETLOptions(ctx *cli.Context) (statesnapshots.RestoreETLOptions, error) {
+	buffer, err := mibToIntBytes(ctx.Uint64("snapshot.etl.buffer"), "snapshot.etl.buffer")
+	if err != nil {
+		return statesnapshots.RestoreETLOptions{}, err
+	}
+	batch, err := mibToIntBytes(ctx.Uint64("snapshot.etl.batch"), "snapshot.etl.batch")
+	if err != nil {
+		return statesnapshots.RestoreETLOptions{}, err
+	}
+	return statesnapshots.RestoreETLOptions{
+		TempDir:     strings.TrimSpace(ctx.String("snapshot.etl.tempdir")),
+		BufferLimit: buffer,
+		BatchSize:   batch,
+	}, nil
 }
 
 func snapshotPruneChainLookupsCmd(ctx *cli.Context) error {

@@ -899,11 +899,14 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "datadir")
 	snapshotDir := filepath.Join(root, "snapshot")
+	etlTemp := filepath.Join(root, "snapshot-etl")
 	ctx := makeSnapshotRestoreTestContext(t, []string{
 		"--datadir", dataDir,
 		"--snapshot.dir", snapshotDir,
 		"--snapshot.from-block", "12",
 		"--snapshot.to-block", "12",
+		"--snapshot.etl.tempdir", etlTemp,
+		"--snapshot.etl.buffer", "1",
 		"--dev",
 		"--witness.key", snapshotTestWitnessKey,
 	})
@@ -951,6 +954,9 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 
 	if err := snapshotBuildDerivedIndexesCmd(ctx); err != nil {
 		t.Fatalf("snapshotBuildDerivedIndexesCmd: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("snapshot ETL temp parent stat: %v", err)
 	}
 	identity, err := snapshotExpectedChainIdentityFromContext(ctx, "")
 	if err != nil {
@@ -1868,6 +1874,9 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		snapshotCatalogSigningKeyFlag,
 		snapshotFromBlockFlag,
 		snapshotToBlockFlag,
+		snapshotETLTempDirFlag,
+		snapshotETLBufferMiBFlag,
+		snapshotETLBatchMiBFlag,
 	}
 	set := flag.NewFlagSet("snapshot-restore-test", flag.ContinueOnError)
 	for _, f := range app.Flags {

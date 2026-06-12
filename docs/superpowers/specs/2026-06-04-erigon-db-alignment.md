@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, replayed balance-trace backfill, and cold event-log/section-bloom/balance-trace segment builds now use the collector; larger benchmark evidence is still needed. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, replayed balance-trace backfill, and cold event-log/section-bloom/balance-trace segment builds now use the collector. Snapshot restore/build CLIs now expose `--snapshot.etl.*` scratch controls; larger benchmark evidence is still needed. |
 
 ## Important Non-Alignments By Design
 

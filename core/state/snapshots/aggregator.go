@@ -196,7 +196,11 @@ func (a *Aggregator) BuildBalanceTracesWithOptions(db AggregatorDB, fromBlock, t
 }
 
 func (a *Aggregator) BuildSectionBlooms(db AggregatorDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
-	return a.BuildDerivedIndexes(db, fromBlock, toBlock, AggregatorBuildDerivedOptions{SectionBlooms: true})
+	return a.BuildSectionBloomsWithOptions(db, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func (a *Aggregator) BuildSectionBloomsWithOptions(db AggregatorDB, fromBlock, toBlock uint64, opts RestoreETLOptions) (*AggregatorBuildResult, error) {
+	return a.BuildDerivedIndexes(db, fromBlock, toBlock, AggregatorBuildDerivedOptions{SectionBlooms: true, ETL: opts})
 }
 
 func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {

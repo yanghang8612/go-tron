@@ -15,6 +15,8 @@ with an isolated replay DB and collector-backed trace writes. History-enabled
 canonical replay now populates `BlockBalanceTrace` and final `AccountTrace`
 rows during execution, so Wallet HTTP/gRPC account and block balance trace read
 paths have a live data source for newly imported history-enabled blocks.
+Snapshot restore and snapshot build commands expose `--snapshot.etl.*` flags so
+operators can place large sorted-run scratch files on fast temporary storage.
 
 ## Purpose
 
@@ -218,6 +220,27 @@ missing blocks and preserves existing block bits outside the requested range
 when a section row already exists. `eth_getLogs` and filter queries can then use
 the rebuilt rows to skip blocks that cannot match the requested address/topic
 bloom.
+
+Snapshot restore and snapshot sidecar builds use `--snapshot.etl.*` for the
+same scratch-space controls:
+
+```bash
+gtron snapshot restore \
+  --datadir /path/to/datadir \
+  --snapshot.etl.tempdir /path/to/fast-scratch \
+  --snapshot.etl.buffer 512
+
+gtron snapshot build-derived-indexes \
+  --datadir /path/to/datadir \
+  --snapshot.from-block 1 \
+  --snapshot.to-block 1000000 \
+  --snapshot.etl.tempdir /path/to/fast-scratch \
+  --snapshot.etl.buffer 512
+```
+
+The same flags are accepted by `snapshot bootstrap`, `snapshot build-freezer`,
+`snapshot build-balance-traces`, `snapshot build-section-blooms`, and
+`snapshot build-event-logs`.
 
 ## Migration Targets
 

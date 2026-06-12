@@ -78,7 +78,8 @@ gtron snapshot verify \
   --datadir /path/to/datadir
 
 gtron snapshot restore \
-  --datadir /path/to/datadir
+  --datadir /path/to/datadir \
+  --snapshot.etl.tempdir /path/to/fast/tmp
 ```
 
 `snapshot restore` refuses non-genesis datadirs. It restores state domains and
@@ -119,20 +120,23 @@ gtron snapshot build-balance-traces \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
   --snapshot.from-block 1 \
-  --snapshot.to-block 12345678
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
 
 gtron snapshot build-section-blooms \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
   --snapshot.from-block 1 \
-  --snapshot.to-block 12345678
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
 
 # Equivalent one-pass manifest integration for both derived sidecars.
 gtron snapshot build-derived-indexes \
   --datadir /path/to/datadir \
   --snapshot.dir /path/to/datadir/gtron/state-snapshots \
   --snapshot.from-block 1 \
-  --snapshot.to-block 12345678
+  --snapshot.to-block 12345678 \
+  --snapshot.etl.tempdir /path/to/fast/tmp
 
 gtron snapshot publish-catalog \
   --datadir /path/to/datadir \
