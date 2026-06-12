@@ -633,6 +633,17 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 		t.Fatalf("reopen with all tables: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
+	stats, err := reopened.Stats()
+	if err != nil {
+		t.Fatalf("Stats after repair: %v", err)
+	}
+	if !stats.Repair.Applied || stats.Repair.TargetHead != 0 || stats.Repair.TargetTail != 0 || len(stats.Repair.Tables) != 1 {
+		t.Fatalf("repair stats = %+v, want one table repaired to head/tail 0", stats.Repair)
+	}
+	repair := stats.Repair.Tables[0]
+	if repair.Name != "raw" || repair.HeadBefore != 5 || repair.HeadAfter != 0 || repair.HiddenTailBefore != 0 || repair.HiddenTailAfter != 0 {
+		t.Fatalf("repair table = %+v, want raw head 5->0 tail 0->0", repair)
+	}
 	for _, kind := range []string{"raw", "cmp"} {
 		got, err := reopened.AncientCount(kind)
 		if err != nil {

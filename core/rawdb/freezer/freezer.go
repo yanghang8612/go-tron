@@ -89,7 +89,8 @@ type Freezer struct {
 
 	readonly     bool
 	tables       map[string]*freezerTable // Data tables for storing everything
-	instanceLock *flock.Flock             // File-system lock to prevent double opens
+	repairStats  RepairStats
+	instanceLock *flock.Flock // File-system lock to prevent double opens
 	closeOnce    sync.Once
 }
 
@@ -103,6 +104,31 @@ type Stats struct {
 	Head     uint64
 	Tail     uint64
 	Tables   []TableStats
+	Repair   RepairStats
+}
+
+// RepairStats describes the most recent writable-open repair pass. Applied is
+// true when at least one table was truncated to the common freezer bounds.
+type RepairStats struct {
+	Applied    bool
+	TargetHead uint64
+	TargetTail uint64
+	Tables     []TableRepairStats
+}
+
+// TableRepairStats records one table bound change made by freezer repair.
+type TableRepairStats struct {
+	Name             string
+	HeadBefore       uint64
+	HeadAfter        uint64
+	HiddenTailBefore uint64
+	HiddenTailAfter  uint64
+}
+
+func (s RepairStats) clone() RepairStats {
+	out := s
+	out.Tables = append([]TableRepairStats(nil), s.Tables...)
+	return out
 }
 
 // TableStats describes one freezer table's storage bounds. PhysicalTail is the
@@ -317,6 +343,7 @@ func (f *Freezer) Stats() (Stats, error) {
 		Head:     f.head.Load(),
 		Tail:     f.tail.Load(),
 		Tables:   make([]TableStats, 0, len(f.tables)),
+		Repair:   f.repairStats.clone(),
 	}
 	names := make([]string, 0, len(f.tables))
 	for name := range f.tables {
@@ -524,8 +551,20 @@ func (f *Freezer) repair() error {
 		head = min(head, table.items.Load())
 		prunedTail = max(prunedTail, table.itemHidden.Load())
 	}
+	repair := RepairStats{
+		TargetHead: head,
+		TargetTail: prunedTail,
+	}
+	names := make([]string, 0, len(f.tables))
+	for name := range f.tables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	// apply the pruning
-	for kind, table := range f.tables {
+	for _, kind := range names {
+		table := f.tables[kind]
+		headBefore := table.items.Load()
+		hiddenTailBefore := table.itemHidden.Load()
 		// all tables need to have the same head
 		if err := table.truncateHead(head); err != nil {
 			return err
@@ -541,9 +580,30 @@ func (f *Freezer) repair() error {
 				return err
 			}
 		}
+		headAfter := table.items.Load()
+		hiddenTailAfter := table.itemHidden.Load()
+		if headBefore != headAfter || hiddenTailBefore != hiddenTailAfter {
+			repair.Applied = true
+			repair.Tables = append(repair.Tables, TableRepairStats{
+				Name:             kind,
+				HeadBefore:       headBefore,
+				HeadAfter:        headAfter,
+				HiddenTailBefore: hiddenTailBefore,
+				HiddenTailAfter:  hiddenTailAfter,
+			})
+		}
 	}
 
 	f.head.Store(head)
 	f.tail.Store(prunedTail)
+	f.repairStats = repair
+	if repair.Applied {
+		gtronlog.Warn("Repaired ancient database table bounds",
+			"database", f.datadir,
+			"targetHead", repair.TargetHead,
+			"targetTail", repair.TargetTail,
+			"tables", len(repair.Tables),
+		)
+	}
 	return nil
 }

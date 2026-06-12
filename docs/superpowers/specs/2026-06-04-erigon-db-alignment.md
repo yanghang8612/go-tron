@@ -481,6 +481,9 @@ Status:
 - Freezer startup repair is covered for table cardinality mismatch: writable
   opens truncate all freezer tables to the common low head, while readonly opens
   reject mismatched heads instead of silently serving a partial ancient view.
+  Writable repair passes now leave a structured `Repair` snapshot in freezer
+  stats and emit a warning when any table is truncated, and `gtron db
+  freezer-status` prints that repair summary for operator diagnostics.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,
@@ -604,9 +607,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Add higher-level operator alerts around freezer repair events. Catalog/freezer
-  sidecar mismatch is now caught by signed/local manifest verification as well
-  as tail-prune/stage-status coverage gates.
+- Add higher-level operator alerts around freezer repair events beyond the
+  current structured freezer stats/repair warning. Catalog/freezer sidecar
+  mismatch is now caught by signed/local manifest verification as well as
+  tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 
