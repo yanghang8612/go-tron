@@ -563,6 +563,117 @@ func TestTronBackend_GetLogsBlockHashUsesColdEventLogSegment(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsBlockHashUsesColdChainIndexAndEventLogSegment(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	defer fz.Close()
+
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		Timestamp:         0,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, rawdb.NewFreezerReader(fz))
+	if err != nil {
+		t.Fatalf("NewBlockChainWithAncient: %v", err)
+	}
+	defer bc.Close()
+
+	logAddress := bytes20(0x46)
+	topic := tcommon.Hash{0x46}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x46, 0x47},
+	})
+	if err := rawdb.WriteBlock(diskdb, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(diskdb, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	parent := rawdb.ReadBlock(bc.ChainDB(), 0)
+	if parent == nil {
+		t.Fatal("genesis block missing")
+	}
+	if err := appendBackendColdLookupAncients(t, fz, diskdb, parent, block1); err != nil {
+		t.Fatalf("append ancients: %v", err)
+	}
+
+	snapshotDir := t.TempDir()
+	eventRef, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), snapshotDir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	eventIndexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(snapshotDir, []statesnapshots.SegmentRef{eventRef}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(fz), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	chainIndexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{
+		eventRef,
+		eventIndexRef,
+		freezerRef,
+		chainIndexRef,
+	})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	if err := rawdb.DeleteFrozenBlockRange(diskdb, 1, 1); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	if err := rawdb.DeleteBlockNumber(diskdb, block1.Hash()); err != nil {
+		t.Fatalf("DeleteBlockNumber: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfosByBlock(diskdb, 1); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
+	if got := rawdb.ReadBlock(hotOnly, 1); got != nil {
+		t.Fatalf("hot block still present: %x", got.Hash())
+	}
+	if got := rawdb.ReadBlockNumber(hotOnly, block1.Hash()); got != nil {
+		t.Fatalf("hot block lookup still present: %v", got)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 1); len(infos) != 0 {
+		t.Fatalf("hot tx infos still present: %+v", infos)
+	}
+
+	bc.ChainDB().SetChainIndexReader(mgr)
+	bc.ChainDB().SetEventLogReader(mgr)
+	blockHash := block1.Hash()
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{BlockHash: &blockHash})
+	if err != nil {
+		t.Fatalf("GetLogs by blockHash: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs by blockHash from cold chain/event segments returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x4647" || logs[0].BlockHash != fmt.Sprintf("0x%x", blockHash) {
+		t.Fatalf("log = %+v, want blockHash %x data 0x4647", logs[0], blockHash)
+	}
+}
+
 func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()

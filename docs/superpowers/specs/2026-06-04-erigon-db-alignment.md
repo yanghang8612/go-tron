@@ -855,7 +855,11 @@ Status:
   query.
 - Event-log archive reads now include backend coverage for block-hash single
   block filters after hot transaction-info rows are removed, proving the cold
-  event-log segment path is not limited to from/to range filters.
+  event-log segment path is not limited to from/to range filters. A stronger
+  regression also removes the hot block body, block-hash lookup, and
+  transaction-info rows, then serves the same `blockHash` log query through
+  chain-freezer ancient rows plus the cold `chain-index` and `event-log`
+  segments.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
