@@ -10,12 +10,20 @@ import (
 type fakeBalanceTraceReader struct {
 	blockTraces   map[int64]*contractpb.BlockBalanceTrace
 	accountTraces map[string]map[int64]int64
+	accountLookup map[string]fakeAccountTraceLookup
+}
+
+type fakeAccountTraceLookup struct {
+	block   int64
+	balance int64
+	ok      bool
 }
 
 func newFakeBalanceTraceReader() *fakeBalanceTraceReader {
 	return &fakeBalanceTraceReader{
 		blockTraces:   make(map[int64]*contractpb.BlockBalanceTrace),
 		accountTraces: make(map[string]map[int64]int64),
+		accountLookup: make(map[string]fakeAccountTraceLookup),
 	}
 }
 
@@ -25,6 +33,9 @@ func (r *fakeBalanceTraceReader) BlockBalanceTrace(blockNum int64) (*contractpb.
 }
 
 func (r *fakeBalanceTraceReader) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	if row, ok := r.accountLookup[string(owner)]; ok {
+		return row.block, row.balance, row.ok, nil
+	}
 	rows := r.accountTraces[string(owner)]
 	var bestBlock int64
 	var bestBalance int64
@@ -52,6 +63,14 @@ func (r *fakeBalanceTraceReader) putAccountTrace(owner []byte, blockNum int64, b
 		r.accountTraces[key] = make(map[int64]int64)
 	}
 	r.accountTraces[key][blockNum] = balance
+}
+
+func (r *fakeBalanceTraceReader) setAccountTraceLookup(owner []byte, blockNum int64, balance int64, ok bool) {
+	r.accountLookup[string(owner)] = fakeAccountTraceLookup{
+		block:   blockNum,
+		balance: balance,
+		ok:      ok,
+	}
 }
 
 func TestBlockBalanceTrace_FallsThroughToColdReader(t *testing.T) {
@@ -149,5 +168,24 @@ func TestAccountTrace_AtOrBeforeChoosesNewestAcrossHotAndCold(t *testing.T) {
 	}
 	if !ok || block != 95 || balance != 950 {
 		t.Fatalf("hot newest = block %d balance %d ok %v, want 95/950/true", block, balance, ok)
+	}
+}
+
+func TestAccountTraceRejectsColdFutureLookup(t *testing.T) {
+	db := NewMemoryChainDB()
+	cold := newFakeBalanceTraceReader()
+	db.SetBalanceTraceReader(cold)
+	owner := mustAddr(0xe3)
+	cold.setAccountTraceLookup(owner, 11, 1100, true)
+
+	if got, ok := ReadAccountTrace(db, owner, 10); ok || got != 0 {
+		t.Fatalf("ReadAccountTrace cold future = %d/%v, want 0/false", got, ok)
+	}
+	block, balance, ok, err := ReadAccountTraceAtOrBefore(db, owner, 10)
+	if err != nil {
+		t.Fatalf("ReadAccountTraceAtOrBefore cold future: %v", err)
+	}
+	if ok || block != 0 || balance != 0 {
+		t.Fatalf("ReadAccountTraceAtOrBefore cold future = block %d balance %d ok %v, want zero/false", block, balance, ok)
 	}
 }

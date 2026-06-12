@@ -175,5 +175,12 @@ func readColdAccountTraceAtOrBefore(db interface{}, owner []byte, blockNum int64
 	if !ok || chain == nil || chain.balanceTrace == nil {
 		return 0, 0, false, nil
 	}
-	return chain.balanceTrace.AccountTraceAtOrBefore(owner, blockNum)
+	traceBlock, balance, ok, err := chain.balanceTrace.AccountTraceAtOrBefore(owner, blockNum)
+	if err != nil || !ok {
+		return 0, 0, false, err
+	}
+	if traceBlock > blockNum {
+		return 0, 0, false, nil
+	}
+	return traceBlock, balance, true, nil
 }
