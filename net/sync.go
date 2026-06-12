@@ -1045,24 +1045,22 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 	if len(ss.retryList) == 0 {
 		return
 	}
-	keep := ss.retryList[:0]
-	for _, bid := range ss.retryList {
+	assigned, keep := syncdl.AssignRetryCandidates(ss.retryList, func(bid types.BlockID) syncdl.RetryDecision {
 		if ss.hasBlockOrRequestLocked(bid) {
-			continue
+			return syncdl.RetryDrop
 		}
 		if !ps.canFetch(bid) {
-			keep = append(keep, bid)
-			continue
+			return syncdl.RetryKeep
 		}
 		if _, ok := ps.requestedHashes[bid.Hash]; ok {
-			keep = append(keep, bid)
-			continue
+			return syncdl.RetryKeep
 		}
 		if !ss.reserveBlockPathLocked(bid) {
-			continue
+			return syncdl.RetryDrop
 		}
-		ps.fetchList = append(ps.fetchList, bid)
-	}
+		return syncdl.RetryAssign
+	})
+	ps.fetchList = append(ps.fetchList, assigned...)
 	ss.retryList = keep
 }
 

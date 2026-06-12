@@ -66,6 +66,48 @@ func TestPopFetchBatchKeepsCandidatesWhenMaxInvalid(t *testing.T) {
 	}
 }
 
+func TestAssignRetryCandidatesPartitionsByDecision(t *testing.T) {
+	retries := []types.BlockID{
+		queueID(1),
+		queueID(2),
+		queueID(3),
+		queueID(4),
+		queueID(5),
+	}
+	var seen []uint64
+	assigned, keep := AssignRetryCandidates(retries, func(bid types.BlockID) RetryDecision {
+		seen = append(seen, bid.Num)
+		switch bid.Num {
+		case 1, 4:
+			return RetryAssign
+		case 2, 5:
+			return RetryKeep
+		default:
+			return RetryDrop
+		}
+	})
+
+	if want := []uint64{1, 2, 3, 4, 5}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("classifier saw nums %v, want %v", seen, want)
+	}
+	if got, want := blockNums(assigned), []uint64{1, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("assigned nums = %v, want %v", got, want)
+	}
+	if got, want := blockNums(keep), []uint64{2, 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("keep nums = %v, want %v", got, want)
+	}
+}
+
+func TestAssignRetryCandidatesDropsByDefault(t *testing.T) {
+	assigned, keep := AssignRetryCandidates([]types.BlockID{queueID(1)}, nil)
+	if assigned != nil {
+		t.Fatalf("assigned = %v, want nil", blockNums(assigned))
+	}
+	if keep != nil {
+		t.Fatalf("keep = %v, want nil", blockNums(keep))
+	}
+}
+
 func blockNums(ids []types.BlockID) []uint64 {
 	out := make([]uint64, len(ids))
 	for i, id := range ids {
