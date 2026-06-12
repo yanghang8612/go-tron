@@ -2,9 +2,12 @@ package sync
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tronprotocol/go-tron/core"
 )
 
 func TestPauseGate_DefaultNotPaused(t *testing.T) {
@@ -154,5 +157,28 @@ func TestPauseGate_Concurrent(t *testing.T) {
 	}
 	if at.IsZero() || err == nil {
 		t.Fatalf("incomplete state: at=%v err=%v", at, err)
+	}
+}
+
+func TestPauseHintDistinguishesExecutionFailure(t *testing.T) {
+	err := &core.InsertBlocksError{
+		Index:       0,
+		BlockNumber: 19716962,
+		Err:         errors.New("process block: tx 0: validate: insufficient balance"),
+	}
+	got := PauseHint(err)
+	for _, want := range []string{"block execution failed", "pre-divergence snapshot", "resync"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("PauseHint() = %q, want substring %q", got, want)
+		}
+	}
+	if got == "restart to resume" {
+		t.Fatalf("PauseHint() returned stale restart hint for InsertBlocksError")
+	}
+}
+
+func TestPauseHintKeepsRestartHintForNonExecutionFailure(t *testing.T) {
+	if got := PauseHint(errors.New("temporary sync peer disconnect")); got != "restart to resume" {
+		t.Fatalf("PauseHint() = %q, want restart hint", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -238,7 +239,7 @@ func TestSyncServiceKeepsCanonicalSyncImportProgressOnSessionStart(t *testing.T)
 	if block1 == nil {
 		t.Fatal("missing block1")
 	}
-	for _, stage := range syncPipelineProgressStages() {
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
 		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), block1.Hash()); err != nil {
 			t.Fatalf("write %s progress: %v", stage, err)
 		}
@@ -257,7 +258,7 @@ func TestSyncServiceDeletesStaleSyncPipelineProgressOnSessionStart(t *testing.T)
 	if block1 == nil {
 		t.Fatal("missing block1")
 	}
-	for _, stage := range syncPipelineProgressStages() {
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
 		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), tcommon.Hash{0xee}); err != nil {
 			t.Fatalf("write mismatched %s progress: %v", stage, err)
 		}
@@ -267,12 +268,12 @@ func TestSyncServiceDeletesStaleSyncPipelineProgressOnSessionStart(t *testing.T)
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	ss.mu.Unlock()
-	for _, stage := range syncPipelineProgressStages() {
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
 			t.Fatalf("stale %s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
 		}
 	}
-	for _, stage := range syncPipelineProgressStages() {
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
 		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, 5, tcommon.Hash{0x05}); err != nil {
 			t.Fatalf("write ahead %s progress: %v", stage, err)
 		}
@@ -281,7 +282,7 @@ func TestSyncServiceDeletesStaleSyncPipelineProgressOnSessionStart(t *testing.T)
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	ss.mu.Unlock()
-	for _, stage := range syncPipelineProgressStages() {
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
 			t.Fatalf("ahead %s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
 		}
