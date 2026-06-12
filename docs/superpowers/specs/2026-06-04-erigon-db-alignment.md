@@ -657,7 +657,10 @@ Status:
   `docs/dev/erigon-storage-benchmark-results-2026-06-10.md`. The harness can
   now also enable history capture and run `snapshot build-derived-indexes`
   after producer shutdown, recording the derived-index cold coverage boundary,
-  active segment count, and build time in the same JSONL row.
+  active segment count, and build time in the same JSONL row. When the signed
+  cold-prune drill runs with derived indexes enabled, it also signs the updated
+  manifest and runs the verified balance-trace and section-bloom hot-row prune
+  commands, recording reclaimed block trace, account trace, and bloom rows.
 
 Remaining:
 

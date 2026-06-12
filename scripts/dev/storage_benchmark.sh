@@ -36,6 +36,11 @@ RUN_COLD_FREEZER_TO_BLOCK=-1
 RUN_DERIVED_INDEX_TO_BLOCK=-1
 RUN_DERIVED_INDEX_SEGMENTS=0
 RUN_DERIVED_INDEX_BUILD_SECONDS=0
+RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
+RUN_BALANCE_TRACE_BLOCK_ROWS=0
+RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
+RUN_SECTION_BLOOM_PRUNE_TO_SECTION=-1
+RUN_SECTION_BLOOM_ROWS=0
 RUN_SIGNED_COLD_PRUNE=0
 RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
 RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
@@ -170,6 +175,11 @@ reset_run_metrics() {
   RUN_DERIVED_INDEX_TO_BLOCK=-1
   RUN_DERIVED_INDEX_SEGMENTS=0
   RUN_DERIVED_INDEX_BUILD_SECONDS=0
+  RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
+  RUN_BALANCE_TRACE_BLOCK_ROWS=0
+  RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
+  RUN_SECTION_BLOOM_PRUNE_TO_SECTION=-1
+  RUN_SECTION_BLOOM_ROWS=0
   RUN_SIGNED_COLD_PRUNE=0
   RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
   RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
@@ -445,6 +455,44 @@ run_signed_cold_prune_drill() {
   RUN_CHAIN_LOOKUP_BLOCK_INDEXES="${block_indexes:-0}"
   RUN_CHAIN_LOOKUP_TX_INDEXES="${tx_indexes:-0}"
 
+  if [ "$BUILD_DERIVED_INDEXES" -eq 1 ]; then
+    local balance_out="$WORKDIR/$mode-prune-balance-traces.out"
+    echo "pruning hot balance trace rows using signed catalog signer $signer" >>"$log_path"
+    if ! run_logged "$balance_out" "$GTRON" snapshot prune-balance-traces \
+      --dev \
+      --witness.key "$WITNESS_KEY" \
+      --datadir "$datadir" \
+      --snapshot.trusted-key "$signer" >>"$log_path"; then
+      die "snapshot prune-balance-traces failed; see $log_path"
+    fi
+    local balance_range_to balance_block_rows balance_account_rows
+    balance_range_to="$(sed -n 's/.*range=\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p' "$balance_out" | tail -1)"
+    balance_block_rows="$(sed -n 's/.*blockTraces=\([0-9][0-9]*\).*/\1/p' "$balance_out" | tail -1)"
+    balance_account_rows="$(sed -n 's/.*accountTraces=\([0-9][0-9]*\).*/\1/p' "$balance_out" | tail -1)"
+    if [ -n "$balance_range_to" ]; then
+      RUN_BALANCE_TRACE_PRUNE_TO_BLOCK="$balance_range_to"
+    fi
+    RUN_BALANCE_TRACE_BLOCK_ROWS="${balance_block_rows:-0}"
+    RUN_BALANCE_TRACE_ACCOUNT_ROWS="${balance_account_rows:-0}"
+
+    local bloom_out="$WORKDIR/$mode-prune-section-blooms.out"
+    echo "pruning hot section bloom rows using signed catalog signer $signer" >>"$log_path"
+    if ! run_logged "$bloom_out" "$GTRON" snapshot prune-section-blooms \
+      --dev \
+      --witness.key "$WITNESS_KEY" \
+      --datadir "$datadir" \
+      --snapshot.trusted-key "$signer" >>"$log_path"; then
+      die "snapshot prune-section-blooms failed; see $log_path"
+    fi
+    local bloom_range_to bloom_rows
+    bloom_range_to="$(sed -n 's/.*sections=\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p' "$bloom_out" | tail -1)"
+    bloom_rows="$(sed -n 's/.*rows=\([0-9][0-9]*\).*/\1/p' "$bloom_out" | tail -1)"
+    if [ -n "$bloom_range_to" ]; then
+      RUN_SECTION_BLOOM_PRUNE_TO_SECTION="$bloom_range_to"
+    fi
+    RUN_SECTION_BLOOM_ROWS="${bloom_rows:-0}"
+  fi
+
   if [ "$mode" = "minimal" ]; then
     local port_base=$((BASE_PORT + idx * 20))
     local restart_log="$WORKDIR/$mode-producer-post-prune-restart.log"
@@ -483,7 +531,10 @@ emit_result() {
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
-    "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
+    "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" \
+    "$RUN_BALANCE_TRACE_BLOCK_ROWS" "$RUN_BALANCE_TRACE_ACCOUNT_ROWS" \
+    "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" "$RUN_SECTION_BLOOM_ROWS" \
+    "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$datadir" "$log_path" <<'PY'
@@ -494,7 +545,10 @@ keys = [
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
-    "derivedIndexBuildSeconds", "signedColdPrune", "chainLookupPruneToBlock",
+    "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
+    "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
+    "sectionBloomPruneToSection", "sectionBloomRowsPruned",
+    "signedColdPrune", "chainLookupPruneToBlock",
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "datadir", "log",
@@ -504,7 +558,9 @@ ints = {
     "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
-    "derivedIndexSegments", "derivedIndexBuildSeconds", "signedColdPrune",
+    "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
+    "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
+    "sectionBloomPruneToSection", "sectionBloomRowsPruned", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
 }

@@ -37,6 +37,11 @@ The output path is printed at startup. Each JSON row contains:
 - `derivedIndexToBlock`
 - `derivedIndexSegments`
 - `derivedIndexBuildSeconds`
+- `balanceTracePruneToBlock`
+- `balanceTraceBlockRowsPruned`
+- `balanceTraceAccountRowsPruned`
+- `sectionBloomPruneToSection`
+- `sectionBloomRowsPruned`
 - `signedColdPrune`
 - `chainLookupPruneToBlock`
 - `chainLookupBlockIndexes`
@@ -82,6 +87,13 @@ key for each selected mode. `blocks` stops there and should report lookup-prune
 coverage with no freezer-tail prune. `minimal` then restarts once so the
 tail-prune lifecycle can run. Use a small `--history-window` for short dev
 samples; production and soak runs should use the intended retention window.
+
+When the same run also passes `--build-derived-indexes`, the signed drill also
+runs `gtron snapshot prune-balance-traces` and
+`gtron snapshot prune-section-blooms` after catalog publication. Those commands
+verify the signed catalog and compare hot rows against the cold sidecars before
+deleting anything, so the JSON row can report trace/bloom hot-row reclamation
+alongside chain lookup pruning.
 
 After the drill, `gtron db freezer-status --datadir <dir>` prints the local
 freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and
