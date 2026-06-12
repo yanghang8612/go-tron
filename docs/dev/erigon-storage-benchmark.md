@@ -126,6 +126,12 @@ append head. The JSONL row includes `freezerAlertStatus`,
 `freezerAlertIssues`, and `freezerAlertHiddenBytes`; warning rows capture hidden
 bytes that still await physical tail-file pruning.
 
+The harness also runs `gtron db stage-status --db.stage.verify --datadir <dir>`
+before writing the row. This fails the sample if canonical/sync/snapshot/prune
+stage rows are hash-mismatched, out of order, or claim cold coverage that the
+local manifest cannot prove. Successful rows include `stageVerifyStatus=ok` and
+`stageVerifyIssues=0`.
+
 ## Sync Profile
 
 Run one dev witness and one fresh follower per mode. The row measures follower

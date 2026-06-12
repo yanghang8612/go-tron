@@ -712,7 +712,11 @@ Status:
   sample now also runs `gtron db freezer-alerts` before the JSONL row is emitted
   and records `freezerAlertStatus`, `freezerAlertIssues`, and
   `freezerAlertHiddenBytes`, so critical persisted freezer states fail the
-  benchmark instead of becoming misleading storage samples.
+  benchmark instead of becoming misleading storage samples. The same harness now
+  runs `gtron db stage-status --db.stage.verify` and records
+  `stageVerifyStatus` / `stageVerifyIssues`, so canonical, sync, snapshot,
+  prune, and cold-coverage stage regressions also fail the sample before it is
+  used for Erigon-style storage comparisons.
 
 Remaining:
 

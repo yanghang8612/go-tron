@@ -50,6 +50,8 @@ RUN_TAIL_PRUNED_FILES=0
 RUN_FREEZER_ALERT_STATUS="not-run"
 RUN_FREEZER_ALERT_ISSUES=-1
 RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
+RUN_STAGE_VERIFY_STATUS="not-run"
+RUN_STAGE_VERIFY_ISSUES=-1
 
 usage() {
   cat <<'EOF'
@@ -192,6 +194,8 @@ reset_run_metrics() {
   RUN_FREEZER_ALERT_STATUS="not-run"
   RUN_FREEZER_ALERT_ISSUES=-1
   RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
+  RUN_STAGE_VERIFY_STATUS="not-run"
+  RUN_STAGE_VERIFY_ISSUES=-1
 }
 
 block_num() {
@@ -441,6 +445,23 @@ run_freezer_alert_gate() {
   fi
 }
 
+run_stage_verify_gate() {
+  local mode="$1"
+  local role="$2"
+  local datadir="$3"
+  local log_path="$4"
+  local stage_out="$WORKDIR/$mode-$role-stage-status-verify.out"
+  echo "verifying persisted stage progress and cold coverage" >>"$log_path"
+  if run_logged "$stage_out" "$GTRON" db stage-status --datadir "$datadir" --db.stage.verify >>"$log_path"; then
+    RUN_STAGE_VERIFY_STATUS="ok"
+    RUN_STAGE_VERIFY_ISSUES=0
+    return
+  fi
+  RUN_STAGE_VERIFY_STATUS="critical"
+  RUN_STAGE_VERIFY_ISSUES=1
+  die "stage-status verification failed for $mode/$role; see $log_path"
+}
+
 run_signed_cold_prune_drill() {
   local mode="$1"
   local idx="$2"
@@ -567,6 +588,7 @@ emit_result() {
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
+    "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" \
     "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -582,6 +604,7 @@ keys = [
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
+    "stageVerifyStatus", "stageVerifyIssues",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -595,6 +618,7 @@ ints = {
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
+    "stageVerifyIssues",
 }
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
@@ -626,6 +650,7 @@ run_producer_mode() {
   maybe_build_derived_indexes "$datadir" "$height" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
   run_freezer_alert_gate "$mode" "producer" "$datadir" "$log_path"
+  run_stage_verify_gate "$mode" "producer" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
 }
 
@@ -655,6 +680,7 @@ run_sync_mode() {
   stop_pid "$node_pid"
   stop_pid "$sr_pid"
   run_freezer_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"
+  run_stage_verify_gate "$mode" "sync-follower" "$node_dir" "$node_log"
   emit_result "$PROFILE" "$mode" "sync-follower" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$node_dir" "$node_log"
 }
 
