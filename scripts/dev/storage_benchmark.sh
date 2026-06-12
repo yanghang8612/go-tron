@@ -21,6 +21,7 @@ FREEZER_MARGIN=3
 FREEZER_INTERVAL="1s"
 FREEZER_BATCH=256
 BUILD_COLD_FREEZER=0
+BUILD_DERIVED_INDEXES=0
 SIGNED_COLD_PRUNE=0
 SNAPSHOT_SIGNING_SEED="1111111111111111111111111111111111111111111111111111111111111111"
 SYNC_MAX_DIFF=2
@@ -32,6 +33,9 @@ WITNESS_KEY="c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4"
 PIDS=()
 STARTED_PID=""
 RUN_COLD_FREEZER_TO_BLOCK=-1
+RUN_DERIVED_INDEX_TO_BLOCK=-1
+RUN_DERIVED_INDEX_SEGMENTS=0
+RUN_DERIVED_INDEX_BUILD_SECONDS=0
 RUN_SIGNED_COLD_PRUNE=0
 RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
 RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
@@ -63,6 +67,7 @@ Options:
   --freezer-interval DURATION    Freezer pass interval (default: 1s)
   --freezer-batch N              Max blocks frozen per pass (default: 256)
   --build-cold-freezer           After producer run, build chain-freezer snapshot
+  --build-derived-indexes        After producer run, build cold trace/bloom/log sidecars
   --signed-cold-prune            Build freezer snapshot, sign catalog, prune hot lookups
   --snapshot-signing-seed HEX    Ed25519 seed/private key for signed-cold-prune
   --sync-max-diff N              Sync profile success threshold (default: 2)
@@ -95,6 +100,7 @@ while [ "$#" -gt 0 ]; do
     --freezer-interval) FREEZER_INTERVAL="${2:?}"; shift 2 ;;
     --freezer-batch) FREEZER_BATCH="${2:?}"; shift 2 ;;
     --build-cold-freezer) BUILD_COLD_FREEZER=1; shift ;;
+    --build-derived-indexes) BUILD_DERIVED_INDEXES=1; shift ;;
     --signed-cold-prune) SIGNED_COLD_PRUNE=1; BUILD_COLD_FREEZER=1; shift ;;
     --snapshot-signing-seed) SNAPSHOT_SIGNING_SEED="${2:?}"; shift 2 ;;
     --sync-max-diff) SYNC_MAX_DIFF="${2:?}"; shift 2 ;;
@@ -110,6 +116,9 @@ case "$PROFILE" in
 esac
 if [ "$SIGNED_COLD_PRUNE" -eq 1 ] && [ "$PROFILE" != "producer" ]; then
   die "--signed-cold-prune is only supported with --profile producer"
+fi
+if [ "$BUILD_DERIVED_INDEXES" -eq 1 ] && [ "$PROFILE" != "producer" ]; then
+  die "--build-derived-indexes is only supported with --profile producer"
 fi
 
 if [ -z "$WORKDIR" ]; then
@@ -158,6 +167,9 @@ json_field() {
 
 reset_run_metrics() {
   RUN_COLD_FREEZER_TO_BLOCK=-1
+  RUN_DERIVED_INDEX_TO_BLOCK=-1
+  RUN_DERIVED_INDEX_SEGMENTS=0
+  RUN_DERIVED_INDEX_BUILD_SECONDS=0
   RUN_SIGNED_COLD_PRUNE=0
   RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
   RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
@@ -290,6 +302,9 @@ start_node() {
   if [ -n "$history_cfg" ]; then
     args+=(--config "$history_cfg")
   fi
+  if [ "$BUILD_DERIVED_INDEXES" -eq 1 ]; then
+    args+=(--history.enabled)
+  fi
   if [ "$witness" = "1" ]; then
     args+=(--witness)
   fi
@@ -342,6 +357,38 @@ maybe_build_cold_freezer() {
       fi
       echo "warning: snapshot build-freezer failed; see $log_path" >&2
     }
+}
+
+maybe_build_derived_indexes() {
+  local datadir="$1"
+  local height="$2"
+  local log_path="$3"
+  if [ "$BUILD_DERIVED_INDEXES" -ne 1 ]; then
+    return
+  fi
+  if [ "$height" -le "$FREEZER_MARGIN" ]; then
+    die "derived index snapshot build requires height > freezer margin"
+  fi
+  local to_block=$((height - FREEZER_MARGIN - 1))
+  if [ "$to_block" -lt 1 ]; then
+    die "derived index snapshot build requires at least one post-genesis block before the freezer margin"
+  fi
+  RUN_DERIVED_INDEX_TO_BLOCK="$to_block"
+  echo "building cold derived-index snapshots through block $to_block" >>"$log_path"
+  local build_start=$SECONDS
+  local derived_out="$WORKDIR/derived-indexes-$(basename "$datadir").out"
+  if ! run_logged "$derived_out" "$GTRON" snapshot build-derived-indexes \
+    --dev \
+    --witness.key "$WITNESS_KEY" \
+    --datadir "$datadir" \
+    --snapshot.from-block 1 \
+    --snapshot.to-block "$to_block" >>"$log_path"; then
+    die "snapshot build-derived-indexes failed; see $log_path"
+  fi
+  RUN_DERIVED_INDEX_BUILD_SECONDS=$((SECONDS - build_start))
+  local active_segments
+  active_segments="$(sed -n 's/.*activeSegments=\([0-9][0-9]*\).*/\1/p' "$derived_out" | tail -1)"
+  RUN_DERIVED_INDEX_SEGMENTS="${active_segments:-0}"
 }
 
 run_logged() {
@@ -435,7 +482,8 @@ emit_result() {
   snapshot_files="$(file_count "$datadir/gtron/state-snapshots")"
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
-    "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
+    "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
+    "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$datadir" "$log_path" <<'PY'
@@ -445,7 +493,8 @@ keys = [
     "profile", "mode", "role", "status", "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles",
-    "coldFreezerToBlock", "signedColdPrune", "chainLookupPruneToBlock",
+    "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
+    "derivedIndexBuildSeconds", "signedColdPrune", "chainLookupPruneToBlock",
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "datadir", "log",
@@ -454,7 +503,8 @@ values = sys.argv[2:]
 ints = {
     "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
-    "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "signedColdPrune",
+    "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
+    "derivedIndexSegments", "derivedIndexBuildSeconds", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
 }
@@ -485,6 +535,7 @@ run_producer_mode() {
   local elapsed=$((SECONDS - start))
   stop_pid "$pid"
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
+  maybe_build_derived_indexes "$datadir" "$height" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
 }

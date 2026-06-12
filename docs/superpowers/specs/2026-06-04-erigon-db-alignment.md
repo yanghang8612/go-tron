@@ -77,7 +77,7 @@ not complete.
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
 | Snapshot bootstrapping | Local snapshot build/restore plus signed remote fetch exist. | Moderate. Preverified HTTP(S) catalog/manifest/segment download, local reset/resync, and bootstrap restore are covered; production hosting/defaults remain. |
 | Derived history domains | Some blooms/traces/receipts are still rawdb or planned. | Weak to partial. Erigon has receipts/log/traces indexes as registered domains or indexes. |
-| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, and replayed balance-trace backfill now use the collector; larger benchmark evidence is still needed. |
+| ETL sorted ingestion | Streaming snapshot builders, batches, and `core/rawdb/etl` collector support exist. | Partial. Latest-domain, state-domain history, chain-freezer hot lookup snapshot restore, chain-index sidecar build, rawdb derived-index bulk loads, transaction lookup/info rebuild, section-bloom rebuild, account-trace rebuild, replayed balance-trace backfill, and cold event-log/section-bloom/balance-trace segment builds now use the collector; larger benchmark evidence is still needed. |
 
 ## Important Non-Alignments By Design
 
@@ -654,7 +654,10 @@ Status:
   `blocks`/`minimal`, and restarts only `minimal` so the tail-prune lifecycle
   can report the post-prune boundary. The matching runbook is
   `docs/dev/erigon-storage-benchmark.md`, with the first smoke sample recorded in
-  `docs/dev/erigon-storage-benchmark-results-2026-06-10.md`.
+  `docs/dev/erigon-storage-benchmark-results-2026-06-10.md`. The harness can
+  now also enable history capture and run `snapshot build-derived-indexes`
+  after producer shutdown, recording the derived-index cold coverage boundary,
+  active segment count, and build time in the same JSONL row.
 
 Remaining:
 
@@ -1007,6 +1010,12 @@ Status:
   aggregator passes its ETL options into section-bloom builds, so large bloom
   snapshot jobs no longer need to materialize every bloom row in a Go slice
   before writing.
+- Balance-trace segment builds now feed account trace rows through the shared
+  sorted ETL collector keyed by `(owner, reversedBlock)` before writing the
+  immutable account index. Block trace protobuf payloads still stream directly
+  by block number, so large payloads are not duplicated in scratch files while
+  the archive account-balance lookup index no longer depends on raw iterator
+  ordering.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or

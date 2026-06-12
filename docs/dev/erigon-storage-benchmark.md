@@ -19,6 +19,7 @@ scripts/dev/storage_benchmark.sh \
   --freezer-margin 3 \
   --freezer-interval 1s \
   --build-cold-freezer \
+  --build-derived-indexes \
   --keep
 ```
 
@@ -33,6 +34,9 @@ The output path is printed at startup. Each JSON row contains:
 - `ancientFiles`
 - `snapshotFiles`
 - `coldFreezerToBlock`
+- `derivedIndexToBlock`
+- `derivedIndexSegments`
+- `derivedIndexBuildSeconds`
 - `signedColdPrune`
 - `chainLookupPruneToBlock`
 - `chainLookupBlockIndexes`
@@ -47,6 +51,13 @@ The freezer build writes or preserves the manifest chain identity, so the output
 can be signed in a follow-up drill. It does not sign catalogs or mark
 lookup-prune progress by itself; it is a measurement step, not a production
 prune workflow.
+
+`--build-derived-indexes` starts the producer with `--history.enabled`, then
+runs `gtron snapshot build-derived-indexes` after stopping it. The build uses
+the same post-freezer-margin boundary as the cold freezer build and publishes
+balance-trace, section-bloom, event-log, and event-log-index sidecars into the
+snapshot manifest. Use this option to measure the ETL-backed derived-index
+builders and to generate indexed log coverage before minimal-mode prune drills.
 
 ## Signed Cold Prune Drill
 
