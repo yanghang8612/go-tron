@@ -262,16 +262,17 @@ block under the canonical chain path.
 
 Status:
 
-- `SyncService` now persists lightweight downloader/body/import watermarks:
+- `SyncService` now persists lightweight downloader/body/import pipeline watermarks:
   `SyncInventory` records the highest peer inventory target observed,
   hash-bound `SyncBodies` records the highest block body accepted into the
-  transient downloader staging table, and hash-bound `SyncImport` records the
-  latest block successfully imported by the live sync loop. New sync sessions
+  transient downloader staging table, and hash-bound `SyncImport`,
+  `SyncExecution`, `SyncCommitment`, and `SyncFinish` record the latest
+  sync-driven block that completed the live import pipeline. New sync sessions
   restore `SyncInventory` when it is ahead of the current head, preserving
   restart diagnostics/remaining-block estimates without advancing canonical
   chain state. These are intentionally outside `CanonicalExecutionStages()` so
-  peer-advertised or downloaded progress cannot masquerade as executed
-  canonical chain progress.
+  peer-advertised, downloaded, or sync-imported progress cannot masquerade as
+  executed canonical chain progress.
 - Received sync block bodies are now written to a `sync-staged-block-v1-`
   staging table before they enter the in-memory drain buffer. A restarted sync
   session reloads contiguous staged bodies from `head+1`; successful
@@ -285,16 +286,18 @@ Status:
   rejecting out-of-order bodies in the still-running sync session. A
   `SyncBodies` watermark whose first expected body is missing is dropped rather
   than left pointing at an unusable staged range.
-- `SyncImport` startup repair now keeps only hash-bound rows that still resolve
-  to the current canonical chain; rows that point past the head, lack a hash, or
-  name an old fork hash are deleted. This keeps downloader import diagnostics
-  from masquerading as a resumable canonical stage after restart or fork repair.
+- Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
+  `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
+  the current canonical chain; rows that point past the head, lack a hash, or
+  name an old fork hash are deleted. This keeps downloader/import diagnostics
+  from masquerading as resumable canonical stages after restart or fork repair.
 - `BlockChain` startup now verifies `Headers/Bodies/Execution/Commitment/Finish`
   stage rows against the persisted head block and repairs missing, legacy, or
   mismatched rows back to that hash-bound head. This makes canonical stage
   progress a stable restart boundary for later prune/freezer/snapshot consumers,
-  while `SyncInventory`, `SyncBodies`, and `SyncImport` remain non-canonical
-  downloader diagnostics.
+  while `SyncInventory`, `SyncBodies`, `SyncImport`, `SyncExecution`,
+  `SyncCommitment`, and `SyncFinish` remain non-canonical downloader/import
+  diagnostics.
 - The cold history snapshot builder now caps its history cutoff at the verified
   hash-bound `StageFinish` row and fails on finish-stage hash mismatches, so
   immutable history/event/bloom/trace sidecars are not published past the same
@@ -314,8 +317,8 @@ Status:
   downloaded bodies are staged and restored across session startup, gapped
   staged-body tails and stale downloader watermarks are dropped on restart,
   corrupted startup canonical stages are repaired to the stored head, snapshot
-  builds are capped at verified finish stage, and imported block number/hash
-  progress is written after `InsertBlocks` succeeds.
+  builds are capped at verified finish stage, and imported sync pipeline
+  number/hash progress is written after `InsertBlocks` succeeds.
 
 Needed:
 

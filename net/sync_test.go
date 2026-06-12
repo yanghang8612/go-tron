@@ -167,46 +167,53 @@ func TestSyncServiceKeepsCanonicalSyncImportProgressOnSessionStart(t *testing.T)
 	if block1 == nil {
 		t.Fatal("missing block1")
 	}
-	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, block1.Number(), block1.Hash()); err != nil {
-		t.Fatalf("write sync import progress: %v", err)
+	for _, stage := range syncPipelineProgressStages() {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), block1.Hash()); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
 	}
 
 	ss := NewSyncService(bc, nil)
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	ss.mu.Unlock()
-	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport)
-	if err != nil || !ok || row.BlockNum != block1.Number() || !row.HasBlockHash || row.BlockHash != block1.Hash() {
-		t.Fatalf("sync import progress after startup = %+v ok=%v err=%v, want block1", row, ok, err)
-	}
+	assertSyncPipelineProgress(t, bc.DB(), block1)
 }
 
-func TestSyncServiceDeletesStaleSyncImportProgressOnSessionStart(t *testing.T) {
+func TestSyncServiceDeletesStaleSyncPipelineProgressOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 2)
 	block1 := bc.GetBlockByNumber(1)
 	if block1 == nil {
 		t.Fatal("missing block1")
 	}
-	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, block1.Number(), tcommon.Hash{0xee}); err != nil {
-		t.Fatalf("write mismatched sync import progress: %v", err)
+	for _, stage := range syncPipelineProgressStages() {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), tcommon.Hash{0xee}); err != nil {
+			t.Fatalf("write mismatched %s progress: %v", stage, err)
+		}
 	}
 
 	ss := NewSyncService(bc, nil)
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	ss.mu.Unlock()
-	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || ok {
-		t.Fatalf("stale sync import progress after startup = %+v ok=%v err=%v, want deleted", row, ok, err)
+	for _, stage := range syncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("stale %s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
 	}
-	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, 5, tcommon.Hash{0x05}); err != nil {
-		t.Fatalf("write ahead sync import progress: %v", err)
+	for _, stage := range syncPipelineProgressStages() {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, 5, tcommon.Hash{0x05}); err != nil {
+			t.Fatalf("write ahead %s progress: %v", stage, err)
+		}
 	}
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
 	ss.mu.Unlock()
-	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || ok {
-		t.Fatalf("ahead sync import progress after startup = %+v ok=%v err=%v, want deleted", row, ok, err)
+	for _, stage := range syncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("ahead %s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
 	}
 }
 

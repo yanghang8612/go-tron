@@ -106,6 +106,7 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || !row.HasBlockHash || row.BlockHash != block2.Hash() {
 		t.Fatalf("sync import stage = %+v ok=%v err=%v, want block2", row, ok, err)
 	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
 	for _, block := range []*types.Block{block1, block2} {
 		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
 			t.Fatalf("imported sync staged body #%d ok=%v err=%v, want deleted", block.Number(), ok, err)
@@ -150,6 +151,7 @@ func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
 	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != 1 {
 		t.Fatalf("sync stats total blocks after partial range = %d, want 1", got)
 	}
+	assertSyncPipelineProgress(t, bc.DB(), block1)
 }
 
 func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {

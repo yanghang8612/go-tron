@@ -389,7 +389,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	if headBlock != nil {
 		head = headBlock.Number()
 	}
-	ss.repairSyncImportProgress(headBlock)
+	ss.repairSyncPipelineProgress(headBlock)
 	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
 	ss.deleteImportedSyncBodiesThrough(head)
 	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
@@ -432,7 +432,22 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	return head
 }
 
-func (ss *SyncService) repairSyncImportProgress(head *types.Block) {
+func syncPipelineProgressStages() []rawdb.StageID {
+	return []rawdb.StageID{
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+		rawdb.StageSyncFinish,
+	}
+}
+
+func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
+	for _, stage := range syncPipelineProgressStages() {
+		ss.repairSyncStageProgress(head, stage)
+	}
+}
+
+func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.StageID) {
 	if ss == nil || ss.chain == nil || head == nil {
 		return
 	}
@@ -440,9 +455,9 @@ func (ss *SyncService) repairSyncImportProgress(head *types.Block) {
 	if db == nil {
 		return
 	}
-	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncImport)
+	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
 	if err != nil {
-		syncLog.Warn("Read sync import stage progress failed", "err", err)
+		syncLog.Warn("Read sync stage progress failed", "stage", stage, "err", err)
 		return
 	}
 	if !ok {
@@ -453,11 +468,11 @@ func (ss *SyncService) repairSyncImportProgress(head *types.Block) {
 			return
 		}
 	}
-	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncImport); err != nil {
-		syncLog.Warn("Delete stale sync import stage progress failed", "block", row.BlockNum, "hash", row.BlockHash, "err", err)
+	if err := rawdb.DeleteStageProgress(db, stage); err != nil {
+		syncLog.Warn("Delete stale sync stage progress failed", "stage", stage, "block", row.BlockNum, "hash", row.BlockHash, "err", err)
 		return
 	}
-	syncLog.Debug("Deleted stale sync import stage progress", "block", row.BlockNum, "hash", row.BlockHash, "head", head.Number(), "headHash", head.Hash())
+	syncLog.Debug("Deleted stale sync stage progress", "stage", stage, "block", row.BlockNum, "hash", row.BlockHash, "head", head.Number(), "headHash", head.Hash())
 }
 
 func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) {
@@ -1328,7 +1343,7 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	}
 	ss.deleteImportedSyncBodies(batch, applied)
 	if last := batch.buffered[applied-1]; last.num > 0 {
-		ss.writeStageProgress(rawdb.StageSyncImport, last.num, last.hash, true)
+		ss.writeSyncPipelineProgress(last.num, last.hash)
 	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
@@ -1355,6 +1370,12 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	if emit {
 		last := batch.buffered[applied-1]
 		ss.reportSegment(snap, diag, last.num, remain, last.peer)
+	}
+}
+
+func (ss *SyncService) writeSyncPipelineProgress(blockNum uint64, blockHash tcommon.Hash) {
+	for _, stage := range syncPipelineProgressStages() {
+		ss.writeStageProgress(stage, blockNum, blockHash, true)
 	}
 }
 

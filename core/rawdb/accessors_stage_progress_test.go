@@ -98,7 +98,7 @@ func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 			t.Fatalf("%s progress after write = %+v ok=%v err=%v, want 12 hash", stage, row, ok, err)
 		}
 	}
-	for _, stage := range []StageID{StageChainFreezer, StageSyncInventory, StageSyncBodies, StageSyncImport, StageSnapshotChainFreezerTailPrune} {
+	for _, stage := range []StageID{StageChainFreezer, StageSyncInventory, StageSyncBodies, StageSyncImport, StageSyncExecution, StageSyncCommitment, StageSyncFinish, StageSnapshotChainFreezerTailPrune} {
 		if _, ok, err := ReadStageProgressRow(db, stage); err != nil || ok {
 			t.Fatalf("%s downloader progress should not be written by canonical helper: ok=%v err=%v", stage, ok, err)
 		}

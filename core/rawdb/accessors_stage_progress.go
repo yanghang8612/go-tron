@@ -37,6 +37,18 @@ const (
 	// SyncService. Canonical execution stages are advanced separately by chain
 	// insertion and snapshot restore paths.
 	StageSyncImport StageID = "SyncImport"
+	// StageSyncExecution records the latest sync-imported block that completed
+	// canonical execution. It is downloader/import diagnostics, not canonical
+	// StageExecution progress.
+	StageSyncExecution StageID = "SyncExecution"
+	// StageSyncCommitment records the latest sync-imported block that completed
+	// state commitment. It is downloader/import diagnostics, not canonical
+	// StageCommitment progress.
+	StageSyncCommitment StageID = "SyncCommitment"
+	// StageSyncFinish records the latest sync-imported block that completed the
+	// full canonical block pipeline. It is downloader/import diagnostics, not
+	// canonical StageFinish progress.
+	StageSyncFinish StageID = "SyncFinish"
 
 	// StageSnapshotLatestBuild records the solidified block at which the last
 	// production latest-snapshot build ran, so the LatestBuildBlocks cadence gate
