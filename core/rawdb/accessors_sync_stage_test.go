@@ -131,6 +131,69 @@ func TestDeleteSyncStagedBlocksFrom(t *testing.T) {
 	}
 }
 
+func TestPruneSyncStagedBlocksFromRewindsBodiesProgress(t *testing.T) {
+	db := NewMemoryDatabase()
+	block2 := testSyncStagedBlock(2, common.Hash{0x01})
+	block3 := testSyncStagedBlock(3, block2.Hash())
+	block4 := testSyncStagedBlock(4, block3.Hash())
+	for _, block := range []*types.Block{block2, block3, block4} {
+		if err := WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := WriteStageProgressWithHash(db, StageSyncBodies, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+
+	result, err := PruneSyncStagedBlocksFrom(db, 3, block2.Number(), block2.Hash(), true)
+	if err != nil {
+		t.Fatalf("prune sync staged blocks: %v", err)
+	}
+	if result.Deleted != 2 || !result.HadProgress || !result.RewoundProgress || result.RewindBlock != block2.Number() || result.RewindHash != block2.Hash() {
+		t.Fatalf("result = %+v, want deleted 2 and rewound to block2", result)
+	}
+	for _, n := range []uint64{3, 4} {
+		if _, ok, err := ReadSyncStagedBlock(db, n); err != nil || ok {
+			t.Fatalf("staged block %d after prune ok=%v err=%v, want deleted", n, ok, err)
+		}
+	}
+	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+}
+
+func TestPruneSyncStagedBlocksFromDeletesBodiesProgressWithoutRestoredBlock(t *testing.T) {
+	db := NewMemoryDatabase()
+	block4 := testSyncStagedBlock(4, common.Hash{0x03})
+	if err := WriteSyncStagedBlock(db, block4); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageSyncBodies, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := WriteStageProgressWithHash(db, StageSyncBodiesReady, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
+
+	result, err := PruneSyncStagedBlocksFrom(db, 2, 0, common.Hash{}, false)
+	if err != nil {
+		t.Fatalf("prune sync staged blocks: %v", err)
+	}
+	if result.Deleted != 1 || !result.HadProgress || !result.DeletedProgress || result.RewoundProgress {
+		t.Fatalf("result = %+v, want deleted block and bodies progress", result)
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, block4.Number()); err != nil || ok {
+		t.Fatalf("staged block after prune ok=%v err=%v, want deleted", ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncBodies); err != nil || ok {
+		t.Fatalf("sync bodies progress after prune = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncBodiesReady); err != nil || !ok || row.BlockNum != block4.Number() {
+		t.Fatalf("sync bodies ready progress = %+v ok=%v err=%v, want unchanged rawdb row", row, ok, err)
+	}
+}
+
 func TestDeleteAllSyncStagedBlocks(t *testing.T) {
 	db := NewMemoryDatabase()
 	for n := uint64(1); n <= 3; n++ {

@@ -17,6 +17,16 @@ type SyncStagedBlockRow struct {
 	Raw    []byte
 }
 
+type SyncStagedTailPruneResult struct {
+	Deleted          int
+	HadProgress      bool
+	PreviousProgress StageProgress
+	DeletedProgress  bool
+	RewoundProgress  bool
+	RewindBlock      uint64
+	RewindHash       common.Hash
+}
+
 func WriteSyncStagedBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	return WriteSyncStagedBlockRaw(db, block, nil)
 }
@@ -181,6 +191,43 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 		}
 	}
 	return len(keys), nil
+}
+
+// PruneSyncStagedBlocksFrom removes a stale downloader body tail and keeps the
+// SyncBodies watermark consistent with the newest contiguous staged body kept
+// by the caller. SyncBodiesReady is deliberately not recomputed here: it
+// depends on the current canonical head and target head, so the sync service
+// refreshes it after this storage-level prune.
+func PruneSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64, lastRestoredNum uint64, lastRestoredHash common.Hash, haveLastRestored bool) (SyncStagedTailPruneResult, error) {
+	var result SyncStagedTailPruneResult
+	deleted, err := DeleteSyncStagedBlocksFrom(db, blockNum)
+	if err != nil {
+		return result, err
+	}
+	result.Deleted = deleted
+	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil {
+		return result, err
+	}
+	if !ok || row.BlockNum < blockNum {
+		return result, nil
+	}
+	result.HadProgress = true
+	result.PreviousProgress = row
+	if !haveLastRestored {
+		if err := DeleteStageProgress(db, StageSyncBodies); err != nil {
+			return result, err
+		}
+		result.DeletedProgress = true
+		return result, nil
+	}
+	if err := WriteStageProgressWithHash(db, StageSyncBodies, lastRestoredNum, lastRestoredHash); err != nil {
+		return result, err
+	}
+	result.RewoundProgress = true
+	result.RewindBlock = lastRestoredNum
+	result.RewindHash = lastRestoredHash
+	return result, nil
 }
 
 func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
