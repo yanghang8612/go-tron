@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -29,6 +30,10 @@ const DefaultLatestBuildBlocks = defaultColdSnapshotBatchBlocks * 8 // 40_000
 type ChainSource interface {
 	DB() AggregatorDB
 	LatestSolidifiedBlockNum() int64
+}
+
+type canonicalHashSource interface {
+	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 }
 
 // Config controls the cold history snapshot builder lifecycle.
@@ -310,7 +315,7 @@ func (r *Runner) onePass() (PassResult, error) {
 		return PassResult{}, nil
 	}
 	cutoffBlock := uint64(solidified) - r.cfg.HistoryWindow
-	finishStage, hasFinishStage, err := verifiedFinishStageBlock(db)
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock(db)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -451,12 +456,27 @@ func (r *Runner) onePass() (PassResult, error) {
 	return result, nil
 }
 
-func verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
-	block, ok, err := rawdb.ReadVerifiedStageProgressBlock(db, rawdb.StageFinish)
+func (r *Runner) verifiedFinishStageBlock(db AggregatorDB) (uint64, bool, error) {
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashReader(db, rawdb.StageFinish, r.canonicalHashReader(db))
 	if err != nil {
 		return 0, ok, fmt.Errorf("snapshots: %w", err)
 	}
 	return block, ok, nil
+}
+
+func (r *Runner) canonicalHashReader(db AggregatorDB) func(uint64) common.Hash {
+	return func(blockNum uint64) common.Hash {
+		if r != nil && r.chain != nil {
+			if source, ok := r.chain.(canonicalHashSource); ok {
+				hash, ok := source.CanonicalBlockHash(blockNum)
+				if ok {
+					return hash
+				}
+				return common.Hash{}
+			}
+		}
+		return rawdb.ReadBlockHashByNumber(db, blockNum)
+	}
 }
 
 func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlock, toBlock uint64) ([]SegmentRef, error) {
@@ -590,7 +610,7 @@ func (r *Runner) latestBuildWatermark() (block uint64, txNum uint64, ok bool, er
 	}
 	db := r.chain.DB()
 	block = uint64(solidified)
-	finishStage, hasFinishStage, err := verifiedFinishStageBlock(db)
+	finishStage, hasFinishStage, err := r.verifiedFinishStageBlock(db)
 	if err != nil {
 		return 0, 0, false, err
 	}

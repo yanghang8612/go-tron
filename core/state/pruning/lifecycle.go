@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
@@ -222,6 +223,20 @@ func (s snapshotChainSource) LatestSolidifiedBlockNum() int64 {
 		return 0
 	}
 	return s.chain.LatestSolidifiedBlockNum()
+}
+
+func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	if s.chain == nil {
+		return common.Hash{}, false
+	}
+	if source, ok := s.chain.(canonicalHashSource); ok {
+		return source.CanonicalBlockHash(blockNum)
+	}
+	hash := rawdb.ReadBlockHashByNumber(s.chain.DB(), blockNum)
+	if hash == (common.Hash{}) {
+		return common.Hash{}, false
+	}
+	return hash, true
 }
 
 var _ snapshots.ChainSource = snapshotChainSource{}

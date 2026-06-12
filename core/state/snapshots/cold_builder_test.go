@@ -183,6 +183,45 @@ func TestColdBuilderOnePassCapsCutoffAtVerifiedFinishStage(t *testing.T) {
 	}
 }
 
+func TestColdBuilderOnePassVerifiesFinishStageThroughChainSourceHash(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	owner := coldBuilderOwner(0x74)
+
+	var finishHash common.Hash
+	for n := uint64(1); n <= 3; n++ {
+		writeColdBuilderChange(t, db, owner, n, n, string([]byte{'a' + byte(n)}))
+		hash := writeColdBuilderCanonicalBlock(t, db, n)
+		if n == 3 {
+			finishHash = hash
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, 3, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	if err := rawdb.DeleteFrozenBlockRange(db, 3, 3); err != nil {
+		t.Fatalf("delete hot block row: %v", err)
+	}
+
+	runner := NewRunner(&coldBuilderChain{
+		db:              db,
+		solidified:      4,
+		canonicalHashes: map[uint64]common.Hash{3: finishHash},
+	}, Config{
+		Dir:           dir,
+		Enabled:       true,
+		Interval:      time.Hour,
+		HistoryWindow: 1,
+	})
+	result, err := runner.OnePass()
+	if err != nil {
+		t.Fatalf("one pass: %v", err)
+	}
+	if !result.Built || result.CutoffBlock != 3 || result.ToTxNum != 3 {
+		t.Fatalf("result = %+v, want build through chain-source finish stage", result)
+	}
+}
+
 func TestColdBuilderOnePassRejectsFinishStageHashMismatch(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryDatabase()
@@ -1042,13 +1081,26 @@ func TestColdBuilderSkipsPartialSectionBloomSection(t *testing.T) {
 }
 
 type coldBuilderChain struct {
-	db         AggregatorDB
-	solidified int64
+	db              AggregatorDB
+	solidified      int64
+	canonicalHashes map[uint64]common.Hash
 }
 
 func (c *coldBuilderChain) DB() AggregatorDB { return c.db }
 
 func (c *coldBuilderChain) LatestSolidifiedBlockNum() int64 { return c.solidified }
+
+func (c *coldBuilderChain) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	if c.canonicalHashes != nil {
+		hash, ok := c.canonicalHashes[blockNum]
+		return hash, ok
+	}
+	hash := rawdb.ReadBlockHashByNumber(c.db, blockNum)
+	if hash == (common.Hash{}) {
+		return common.Hash{}, false
+	}
+	return hash, true
+}
 
 func coldBuilderEventLogBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
 	t.Helper()

@@ -308,9 +308,9 @@ Status:
 - The freezer and snapshot builder now share the rawdb
   `ReadVerifiedStageProgressBlock` helper for this hash-bound canonical-stage
   check, keeping StageFinish integrity rules centralized at the DB-accessor
-  layer. The freezer runner supplies its `ChainSource` hash reader to the same
-  verifier, so StageFinish checks still pass when old block bodies have already
-  moved out of hot Pebble.
+  layer. The freezer runner and cold snapshot builder supply their
+  `ChainSource` hash readers to the same verifier, so StageFinish checks still
+  pass when old block bodies have already moved out of hot Pebble.
 - `gtron db stage-status` now gives operators one Erigon-style stage view over
   canonical execution, sync downloader/import diagnostics, snapshot build,
   prune, and chain-freezer progress. Hash-bound rows are checked through the

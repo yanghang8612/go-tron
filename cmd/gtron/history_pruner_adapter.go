@@ -74,6 +74,17 @@ func (a *stateSnapshotChainSource) LatestSolidifiedBlockNum() int64 {
 	return a.chain.DynProps().LatestSolidifiedBlockNum()
 }
 
+func (a *stateSnapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
+	if a == nil || a.chain == nil {
+		return common.Hash{}, false
+	}
+	block := a.chain.GetBlockByNumber(blockNum)
+	if block == nil {
+		return common.Hash{}, false
+	}
+	return block.Hash(), true
+}
+
 func (a *domainPrunerChainSource) SyncRemainingBlocks() (uint64, bool) {
 	if a == nil || a.sync == nil {
 		return 0, false
