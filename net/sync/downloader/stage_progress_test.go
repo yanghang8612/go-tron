@@ -100,3 +100,52 @@ func TestSyncPipelineProgressStagesOrder(t *testing.T) {
 		t.Fatalf("SyncPipelineProgressStages = %v, want %v", got, want)
 	}
 }
+
+func TestRepairSyncStageProgress(t *testing.T) {
+	stage := rawdb.StageSyncImport
+	canonical := map[uint64]tcommon.Hash{
+		2: {0x02},
+		3: {0x03},
+	}
+	readCanonical := func(number uint64) (tcommon.Hash, bool) {
+		hash, ok := canonical[number]
+		return hash, ok
+	}
+	tests := []struct {
+		name   string
+		row    *rawdb.StageProgress
+		head   uint64
+		status SyncStageProgressRepairStatus
+		kept   bool
+	}{
+		{name: "missing", head: 3, status: SyncStageProgressMissing},
+		{name: "valid", row: &rawdb.StageProgress{Stage: stage, BlockNum: 2, BlockHash: canonical[2], HasBlockHash: true}, head: 3, status: SyncStageProgressKept, kept: true},
+		{name: "unbound", row: &rawdb.StageProgress{Stage: stage, BlockNum: 2}, head: 3, status: SyncStageProgressDeleted},
+		{name: "ahead", row: &rawdb.StageProgress{Stage: stage, BlockNum: 4, BlockHash: tcommon.Hash{0x04}, HasBlockHash: true}, head: 3, status: SyncStageProgressDeleted},
+		{name: "fork hash", row: &rawdb.StageProgress{Stage: stage, BlockNum: 2, BlockHash: tcommon.Hash{0xee}, HasBlockHash: true}, head: 3, status: SyncStageProgressDeleted},
+		{name: "missing canonical", row: &rawdb.StageProgress{Stage: stage, BlockNum: 1, BlockHash: tcommon.Hash{0x01}, HasBlockHash: true}, head: 3, status: SyncStageProgressDeleted},
+	}
+	for _, tt := range tests {
+		db := rawdb.NewMemoryDatabase()
+		if tt.row != nil {
+			if tt.row.HasBlockHash {
+				if err := rawdb.WriteStageProgressWithHash(db, stage, tt.row.BlockNum, tt.row.BlockHash); err != nil {
+					t.Fatalf("%s: write progress: %v", tt.name, err)
+				}
+			} else if err := rawdb.WriteStageProgress(db, stage, tt.row.BlockNum); err != nil {
+				t.Fatalf("%s: write progress: %v", tt.name, err)
+			}
+		}
+		got := RepairSyncStageProgress(db, stage, tt.head, readCanonical)
+		if got.Status != tt.status {
+			t.Fatalf("%s: status = %v result %+v, want %v", tt.name, got.Status, got, tt.status)
+		}
+		_, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil {
+			t.Fatalf("%s: read progress after repair: %v", tt.name, err)
+		}
+		if ok != tt.kept {
+			t.Fatalf("%s: kept row = %v, want %v", tt.name, ok, tt.kept)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package downloader
 import (
 	"sync"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -16,6 +17,32 @@ type StageProgressRow struct {
 
 // StageProgressWriter persists hash-bound sync pipeline progress.
 type StageProgressWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash)
+
+// CanonicalHashReader returns the canonical block hash for number.
+type CanonicalHashReader func(number uint64) (tcommon.Hash, bool)
+
+// SyncStageProgressRepairStatus describes startup repair for one sync
+// pipeline diagnostic stage row.
+type SyncStageProgressRepairStatus uint8
+
+const (
+	SyncStageProgressMissing SyncStageProgressRepairStatus = iota
+	SyncStageProgressKept
+	SyncStageProgressDeleted
+	SyncStageProgressReadError
+	SyncStageProgressDeleteError
+)
+
+// SyncStageProgressRepair is the result of validating and possibly deleting
+// one sync pipeline stage row at session startup.
+type SyncStageProgressRepair struct {
+	Stage         rawdb.StageID
+	Status        SyncStageProgressRepairStatus
+	Row           rawdb.StageProgress
+	CanonicalHash tcommon.Hash
+	ReadError     error
+	DeleteError   error
+}
 
 // StageProgressCollector observes canonical block insertion stages and records
 // the matching downloader/import diagnostic stages.
@@ -113,4 +140,39 @@ func StageForCanonicalStage(stage rawdb.StageID) (rawdb.StageID, bool) {
 	default:
 		return "", false
 	}
+}
+
+// RepairSyncStageProgress keeps a hash-bound sync diagnostic stage row only
+// when it still resolves to canonical chain state at or below the current head.
+// Rows without hashes, rows ahead of head, forked rows, and rows whose
+// canonical block is unavailable are deleted.
+func RepairSyncStageProgress(db ethdb.KeyValueStore, stage rawdb.StageID, head uint64, canonicalHash CanonicalHashReader) SyncStageProgressRepair {
+	result := SyncStageProgressRepair{Stage: stage}
+	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+	if err != nil {
+		result.Status = SyncStageProgressReadError
+		result.ReadError = err
+		return result
+	}
+	if !ok {
+		result.Status = SyncStageProgressMissing
+		return result
+	}
+	result.Row = row
+	if row.HasBlockHash && row.BlockNum <= head && canonicalHash != nil {
+		if hash, ok := canonicalHash(row.BlockNum); ok {
+			result.CanonicalHash = hash
+			if hash == row.BlockHash {
+				result.Status = SyncStageProgressKept
+				return result
+			}
+		}
+	}
+	if err := rawdb.DeleteStageProgress(db, stage); err != nil {
+		result.Status = SyncStageProgressDeleteError
+		result.DeleteError = err
+		return result
+	}
+	result.Status = SyncStageProgressDeleted
+	return result
 }

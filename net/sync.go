@@ -425,24 +425,24 @@ func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.St
 	if db == nil {
 		return
 	}
-	row, ok, err := rawdb.ReadStageProgressRow(db, stage)
-	if err != nil {
-		syncLog.Warn("Read sync stage progress failed", "stage", stage, "err", err)
-		return
-	}
-	if !ok {
-		return
-	}
-	if row.HasBlockHash && row.BlockNum <= head.Number() {
-		if block := ss.chain.GetBlockByNumber(row.BlockNum); block != nil && block.Hash() == row.BlockHash {
-			return
+	repair := syncdl.RepairSyncStageProgress(db, stage, head.Number(), func(number uint64) (tcommon.Hash, bool) {
+		block := ss.chain.GetBlockByNumber(number)
+		if block == nil {
+			return tcommon.Hash{}, false
 		}
-	}
-	if err := rawdb.DeleteStageProgress(db, stage); err != nil {
-		syncLog.Warn("Delete stale sync stage progress failed", "stage", stage, "block", row.BlockNum, "hash", row.BlockHash, "err", err)
+		return block.Hash(), true
+	})
+	switch repair.Status {
+	case syncdl.SyncStageProgressReadError:
+		syncLog.Warn("Read sync stage progress failed", "stage", stage, "err", repair.ReadError)
+		return
+	case syncdl.SyncStageProgressDeleteError:
+		syncLog.Warn("Delete stale sync stage progress failed", "stage", stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "err", repair.DeleteError)
+		return
+	case syncdl.SyncStageProgressDeleted:
+		syncLog.Debug("Deleted stale sync stage progress", "stage", stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "head", head.Number(), "headHash", head.Hash())
 		return
 	}
-	syncLog.Debug("Deleted stale sync stage progress", "stage", stage, "block", row.BlockNum, "hash", row.BlockHash, "head", head.Number(), "headHash", head.Hash())
 }
 
 func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) {

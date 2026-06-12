@@ -340,6 +340,8 @@ Status:
   the current canonical chain; rows that point past the head, lack a hash, or
   name an old fork hash are deleted. This keeps downloader/import diagnostics
   from masquerading as resumable canonical stages after restart or fork repair.
+  The row validation and delete decision now live in `net/sync/downloader`, with
+  `SyncService` supplying only the canonical hash reader and logs.
 - `BlockChain` startup now verifies `Headers/Bodies/Execution/Commitment/Finish`
   stage rows against the persisted head block and repairs missing, legacy, or
   mismatched rows back to that hash-bound head. This makes canonical stage
