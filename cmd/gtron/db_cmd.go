@@ -54,6 +54,10 @@ var (
 		Name:  "db.balance-trace.overwrite",
 		Usage: "Overwrite existing balance trace rows when replay output differs",
 	}
+	dbStageVerifyFlag = &cli.BoolFlag{
+		Name:  "db.stage.verify",
+		Usage: "Fail stage-status when present stage rows are unverifiable or canonical stages are not hash-bound",
+	}
 )
 
 func dbCommand() *cli.Command {
@@ -179,6 +183,7 @@ func dbCommand() *cli.Command {
 					dbMemtableFlag,
 					dbL0CompactionFlag,
 					dbL0StopFlag,
+					dbStageVerifyFlag,
 				},
 				Action: dbStageStatusCmd,
 			},
@@ -222,7 +227,9 @@ func dbStageStatusCmd(ctx *cli.Context) error {
 	}
 	defer closeAncient()
 
-	return dbPrintStageStatus(db, rawdb.NewChainDB(db, ancientReader), cfg.DataDir)
+	return dbPrintStageStatus(db, rawdb.NewChainDB(db, ancientReader), cfg.DataDir, dbStageStatusOptions{
+		Verify: ctx.Bool("db.stage.verify"),
+	})
 }
 
 type dbStageStatusRow struct {
@@ -234,7 +241,11 @@ type dbStageStatusRow struct {
 	canonicalHash common.Hash
 }
 
-func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string) error {
+type dbStageStatusOptions struct {
+	Verify bool
+}
+
+func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string, opts dbStageStatusOptions) error {
 	rows, err := dbStageStatusRows(db, canonical)
 	if err != nil {
 		return err
@@ -263,7 +274,31 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		}
 		fmt.Println()
 	}
+	if opts.Verify {
+		if issues := dbStageStatusVerificationIssues(rows); len(issues) > 0 {
+			return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
+		}
+	}
 	return nil
+}
+
+func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
+	var issues []string
+	for _, row := range rows {
+		if !row.present {
+			continue
+		}
+		if row.progress.HasBlockHash {
+			if row.verified != "canonical" {
+				issues = append(issues, fmt.Sprintf("%s verified=%s", row.stage, row.verified))
+			}
+			continue
+		}
+		if row.group == "canonical" {
+			issues = append(issues, fmt.Sprintf("%s verified=unbound", row.stage))
+		}
+	}
+	return issues
 }
 
 func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbStageStatusRow, error) {

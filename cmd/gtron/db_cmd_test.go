@@ -545,6 +545,17 @@ func TestDBStageStatusCmd(t *testing.T) {
 			t.Fatalf("stage status output missing %q:\n%s", want, output)
 		}
 	}
+
+	verifyCtx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	verifyOutput, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(verifyCtx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") || !strings.Contains(err.Error(), string(rawdb.StageSyncBodies)) || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies mismatch", err)
+	}
+	if !strings.Contains(verifyOutput, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
+		t.Fatalf("verify output missing SyncBodies line:\n%s", verifyOutput)
+	}
 }
 
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
@@ -782,6 +793,7 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		dbReplayTempDirFlag,
 		dbReplayDirFlag,
 		dbBalanceTraceOverwriteFlag,
+		dbStageVerifyFlag,
 		snapshotDirFlag,
 		snapshotTrustedCatalogKeyFlag,
 		snapshotTrustedCatalogKeyFileFlag,

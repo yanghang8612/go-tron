@@ -315,7 +315,9 @@ Status:
   canonical execution, sync downloader/import diagnostics, snapshot build,
   prune, and chain-freezer progress. Hash-bound rows are checked through the
   freezer-aware chain reader, so old canonical blocks that have left hot Pebble
-  do not produce false mismatch diagnostics.
+  do not produce false mismatch diagnostics. `--db.stage.verify` turns the
+  same view into an automation gate that fails on mismatched/missing canonical
+  hashes or legacy unbound canonical stage rows.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.
