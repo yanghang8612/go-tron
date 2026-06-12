@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
@@ -45,6 +46,54 @@ func TestReadTransactionInfo_NotFound(t *testing.T) {
 	got := ReadTransactionInfo(db, bytes.Repeat([]byte{0x00}, 32))
 	if got != nil {
 		t.Fatal("expected nil for missing key")
+	}
+}
+
+func TestReadTransactionInfoUsesColdTxPositionWhenInfoIDMissing(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x34}, common.HashLength)
+	infos := []*corepb.TransactionInfo{
+		{Fee: 100, BlockNumber: 7, BlockTimeStamp: 7000},
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7000},
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{hash: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			hash: {BlockNum: 7, TxIndex: 1},
+		},
+	})
+
+	got := ReadTransactionInfo(db, txID)
+	if got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfo via cold tx position = %+v, want fee 200", got)
+	}
+}
+
+func TestReadTransactionInfoRejectsMismatchedColdTxPosition(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x35}, common.HashLength)
+	otherID := bytes.Repeat([]byte{0x36}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Id: otherID, Fee: 999, BlockNumber: 7, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{hash: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			hash: {BlockNum: 7, TxIndex: 0},
+		},
+	})
+
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo mismatched cold position = %+v, want nil", got)
 	}
 }
 

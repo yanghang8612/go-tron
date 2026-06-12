@@ -21,8 +21,9 @@ type fakeAncient struct {
 }
 
 type fakeChainIndex struct {
-	blocks map[common.Hash]uint64
-	txs    map[common.Hash]uint64
+	blocks    map[common.Hash]uint64
+	txs       map[common.Hash]uint64
+	positions map[common.Hash]ChainIndexTxLookup
 }
 
 func newFakeAncient() *fakeAncient {
@@ -113,6 +114,14 @@ func (f *fakeChainIndex) TransactionBlockNumberByHash(hash common.Hash) (uint64,
 	}
 	num, ok := f.txs[hash]
 	return num, ok, nil
+}
+
+func (f *fakeChainIndex) TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, bool, error) {
+	if f == nil {
+		return ChainIndexTxLookup{}, false, nil
+	}
+	lookup, ok := f.positions[hash]
+	return lookup, ok, nil
 }
 
 // newBlockProto builds a minimal *corepb.Block at the given number whose

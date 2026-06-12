@@ -41,7 +41,16 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	if blockNum == nil {
 		return nil
 	}
-	for _, info := range ReadTransactionInfosByBlock(db, *blockNum) {
+	infos := ReadTransactionInfosByBlock(db, *blockNum)
+	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == *blockNum {
+		if int(lookup.TxIndex) < len(infos) {
+			info := infos[lookup.TxIndex]
+			if info != nil && (len(info.Id) == 0 || bytes.Equal(info.Id, txID)) {
+				return info
+			}
+		}
+	}
+	for _, info := range infos {
 		if info == nil {
 			continue
 		}
@@ -50,6 +59,24 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 		}
 	}
 	return nil
+}
+
+func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLookup, bool) {
+	var zero ChainIndexTxLookup
+	if db == nil || db.chainIndex == nil || len(txHash) != common.HashLength {
+		return zero, false
+	}
+	reader, ok := db.chainIndex.(ChainIndexTxPositionReader)
+	if !ok {
+		return zero, false
+	}
+	var hash common.Hash
+	copy(hash[:], txHash)
+	lookup, ok, err := reader.TransactionIndexByHash(hash)
+	if err != nil || !ok {
+		return zero, false
+	}
+	return lookup, true
 }
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.

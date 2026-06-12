@@ -40,6 +40,20 @@ type ChainIndexReader interface {
 	TransactionBlockNumberByHash(hash common.Hash) (uint64, bool, error)
 }
 
+// ChainIndexTxLookup is the block-local transaction position returned by cold
+// chain-index sidecars.
+type ChainIndexTxLookup struct {
+	BlockNum uint64
+	TxIndex  uint32
+}
+
+// ChainIndexTxPositionReader is an optional extension for cold chain-index
+// sidecars that can resolve a transaction hash to its block-local index, not
+// just the containing block number.
+type ChainIndexTxPositionReader interface {
+	TransactionIndexByHash(hash common.Hash) (ChainIndexTxLookup, bool, error)
+}
+
 // BalanceTraceReader is an optional cold trace sidecar. It lets archive APIs
 // keep account/balance trace reads working after hot rawdb trace rows are
 // pruned, without tying rawdb accessors to the snapshot package.

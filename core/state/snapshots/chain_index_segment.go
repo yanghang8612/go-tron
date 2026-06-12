@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/types"
 )
@@ -29,10 +30,7 @@ const (
 
 var chainIndexMagic = [8]byte{'g', 't', 'c', 'i', 'd', 'x', '1', '\n'}
 
-type ChainIndexTxLookup struct {
-	BlockNum uint64
-	TxIndex  uint32
-}
+type ChainIndexTxLookup = rawdb.ChainIndexTxLookup
 
 type ChainIndexSegment struct {
 	ref    SegmentRef

@@ -232,7 +232,10 @@ Status:
   cold index reader. `ReadBlockNumber`, `ReadTransactionIndex`,
   `ReadTransactionInfo`, and the freezer fall-through branch of
   `ReadBlockStateRoot` first prefer hot Pebble rows, then use the cold
-  `chain-index` sidecar for historical rows.
+  `chain-index` sidecar for historical rows. `ReadTransactionInfo` now also
+  consumes the sidecar's tx hash to block-local index mapping, so archive
+  receipt reads can recover from pruned per-tx rows even when old
+  `TransactionRet` payloads lack a populated `TransactionInfo.Id`.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the
