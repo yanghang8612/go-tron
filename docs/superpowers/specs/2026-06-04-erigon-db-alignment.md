@@ -500,8 +500,8 @@ Status:
   recorded freezer repair, missing/impossible `ChainFreezer` stage progress,
   freezer/table bound mismatches, virtual-tail invariants, hash-mismatched or
   out-of-order stage rows, and claimed cold coverage that the local manifest
-  cannot prove. It also reports hidden bytes that still await physical tail-file
-  pruning.
+  cannot prove. It also reports hidden freezer bytes and retired snapshot bytes
+  that still await physical pruning.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,
@@ -716,9 +716,10 @@ Status:
   bytes through `retiredPrune*` JSON fields. Each sample now also runs
   `gtron db storage-alerts` before the JSONL row is emitted and records
   `freezerAlertStatus`, `freezerAlertIssues`,
-  `freezerAlertHiddenBytes`, `stageVerifyStatus`, and `stageVerifyIssues`, so
-  critical freezer, stage, prune, and cold-coverage regressions fail the sample
-  before it is used for Erigon-style storage comparisons.
+  `freezerAlertHiddenBytes`, `stageVerifyStatus`, `stageVerifyIssues`,
+  `snapshotAlertStatus`, `snapshotAlertIssues`, and the `snapshotRetired*`
+  counters, so critical freezer, stage, prune, and cold-coverage regressions
+  fail the sample before it is used for Erigon-style storage comparisons.
 
 Remaining:
 

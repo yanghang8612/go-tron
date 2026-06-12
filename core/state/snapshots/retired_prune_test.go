@@ -41,6 +41,31 @@ func TestPruneRetiredSegmentFilesDeletesOnlyRetiredFiles(t *testing.T) {
 	}
 }
 
+func TestInspectRetiredSegmentFilesReportsPresentFiles(t *testing.T) {
+	dir := t.TempDir()
+	activeRefs := writeCompactionStateDomainChangeSegment(t, dir, 10, 10, binaryStateDomainChange(10, 10, 1, "active"))
+	retiredRefs := writeCompactionStateDomainChangeSegment(t, dir, 1, 1, binaryStateDomainChange(1, 1, 1, "retired"))
+	manifest := NewManifest(10, 10, activeRefs)
+	manifest.Retired = retiredRefs
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	result, err := InspectRetiredSegmentFiles(dir)
+	if err != nil {
+		t.Fatalf("InspectRetiredSegmentFiles: %v", err)
+	}
+	if result.RetiredSegments != len(retiredRefs) || result.FilesPresent != len(retiredRefs) || result.FilesMissing != 0 || result.FilesSkippedActive != 0 {
+		t.Fatalf("result = %+v, want present retired refs", result)
+	}
+	if result.BytesPresent == 0 || len(result.PresentFiles) != len(retiredRefs) {
+		t.Fatalf("result = %+v, want present bytes and paths", result)
+	}
+	for _, ref := range retiredRefs {
+		assertFileExists(t, filepath.Join(dir, ref.Path))
+	}
+}
+
 func TestPruneRetiredSegmentFilesSkipsActivePath(t *testing.T) {
 	dir := t.TempDir()
 	activeRefs := writeCompactionStateDomainChangeSegment(t, dir, 10, 10, binaryStateDomainChange(10, 10, 1, "active"))

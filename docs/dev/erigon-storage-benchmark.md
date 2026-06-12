@@ -54,6 +54,18 @@ The output path is printed at startup. Each JSON row contains:
 - `tailPrunedThroughBlock`
 - `tailPrunedFiles`
 - `historyWindow`
+- `freezerAlertStatus`
+- `freezerAlertIssues`
+- `freezerAlertHiddenBytes`
+- `stageVerifyStatus`
+- `stageVerifyIssues`
+- `snapshotAlertStatus`
+- `snapshotAlertIssues`
+- `snapshotRetiredSegments`
+- `snapshotRetiredFiles`
+- `snapshotRetiredMissing`
+- `snapshotRetiredSkippedActive`
+- `snapshotRetiredBytes`
 
 `--build-cold-freezer` runs `gtron snapshot build-freezer` after stopping each
 producer so cold chain-freezer snapshot bytes are included in the size split.
@@ -135,10 +147,13 @@ prune/archive assumptions, including a recorded repair, a missing or impossible
 `ChainFreezer` stage, inconsistent per-table bounds, or a virtual tail past the
 append head. It also fails the sample if canonical/sync/snapshot/prune stage
 rows are hash-mismatched, out of order, or claim cold coverage that the local
-manifest cannot prove. The JSONL row includes `freezerAlertStatus`,
-`freezerAlertIssues`, `freezerAlertHiddenBytes`, `stageVerifyStatus`, and
-`stageVerifyIssues`; warning rows capture hidden bytes that still await physical
-tail-file pruning.
+manifest cannot prove. It also warns when retired snapshot files still occupy
+disk after compaction or replacement. The JSONL row includes
+`freezerAlertStatus`, `freezerAlertIssues`, `freezerAlertHiddenBytes`,
+`stageVerifyStatus`, `stageVerifyIssues`, `snapshotAlertStatus`,
+`snapshotAlertIssues`, and the `snapshotRetired*` counters; warning rows capture
+hidden freezer bytes and retired snapshot bytes that still await physical
+pruning.
 
 ## Sync Profile
 

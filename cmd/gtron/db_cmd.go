@@ -254,6 +254,12 @@ type dbFreezerAlertIssue struct {
 	detail   string
 }
 
+type dbSnapshotAlertIssue struct {
+	severity string
+	kind     string
+	detail   string
+}
+
 func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
@@ -336,22 +342,32 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		stageStatus = "critical"
 	}
 
+	snapshotInspection, snapshotIssues := dbSnapshotRetiredAlertIssues(stateSnapshotsDir(cfg.DataDir))
+	snapshotStatus := dbSnapshotAlertStatus(snapshotIssues)
+
 	status := "ok"
-	if freezerStatus == "critical" || stageStatus == "critical" {
+	if freezerStatus == "critical" || stageStatus == "critical" || snapshotStatus == "critical" {
 		status = "critical"
-	} else if freezerStatus == "warning" {
+	} else if freezerStatus == "warning" || snapshotStatus == "warning" {
 		status = "warning"
 	}
-	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d hiddenSize=%d\n",
-		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues), dbFreezerHiddenSize(stats))
+	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d snapshotStatus=%s snapshotIssues=%d retiredSegments=%d retiredFiles=%d retiredMissing=%d retiredSkippedActive=%d retiredBytes=%d hiddenSize=%d\n",
+		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues),
+		snapshotStatus, len(snapshotIssues), snapshotInspection.RetiredSegments, snapshotInspection.FilesPresent,
+		snapshotInspection.FilesMissing, snapshotInspection.FilesSkippedActive, snapshotInspection.BytesPresent,
+		dbFreezerHiddenSize(stats))
 	for _, issue := range freezerIssues {
 		fmt.Printf("Storage freezer alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
 	}
 	for _, issue := range stageIssues {
 		fmt.Printf("Storage stage alert: severity=critical detail=%s\n", issue)
 	}
+	for _, issue := range snapshotIssues {
+		fmt.Printf("Storage snapshot alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
+	}
 	if status == "critical" {
-		return fmt.Errorf("storage alerts failed: freezer=%s stage=%s", dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues))
+		return fmt.Errorf("storage alerts failed: freezer=%s stage=%s snapshot=%s",
+			dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues), dbSnapshotAlertSummary(snapshotIssues))
 	}
 	return nil
 }
@@ -359,6 +375,48 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 func dbFreezerAlertStatus(issues []dbFreezerAlertIssue) string {
 	if dbFreezerAlertHasCritical(issues) {
 		return "critical"
+	}
+	if len(issues) > 0 {
+		return "warning"
+	}
+	return "ok"
+}
+
+func dbSnapshotRetiredAlertIssues(snapshotDir string) (*statesnapshots.RetiredSegmentFileInspection, []dbSnapshotAlertIssue) {
+	inspection, err := statesnapshots.InspectRetiredSegmentFiles(snapshotDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &statesnapshots.RetiredSegmentFileInspection{}, nil
+		}
+		return &statesnapshots.RetiredSegmentFileInspection{}, []dbSnapshotAlertIssue{{
+			severity: "critical",
+			kind:     "retired-inspect-failed",
+			detail:   err.Error(),
+		}}
+	}
+	var issues []dbSnapshotAlertIssue
+	if inspection.FilesPresent > 0 {
+		issues = append(issues, dbSnapshotAlertIssue{
+			severity: "warning",
+			kind:     "retired-prune-pending",
+			detail:   fmt.Sprintf("%d retired snapshot file(s) still occupy %d bytes", inspection.FilesPresent, inspection.BytesPresent),
+		})
+	}
+	if inspection.FilesSkippedActive > 0 {
+		issues = append(issues, dbSnapshotAlertIssue{
+			severity: "warning",
+			kind:     "retired-active-path",
+			detail:   fmt.Sprintf("%d retired snapshot ref(s) still point at active manifest files", inspection.FilesSkippedActive),
+		})
+	}
+	return inspection, issues
+}
+
+func dbSnapshotAlertStatus(issues []dbSnapshotAlertIssue) string {
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			return "critical"
+		}
 	}
 	if len(issues) > 0 {
 		return "warning"
@@ -447,6 +505,19 @@ func dbStageAlertSummary(issues []string) string {
 		return "ok"
 	}
 	return strings.Join(issues, "; ")
+}
+
+func dbSnapshotAlertSummary(issues []dbSnapshotAlertIssue) string {
+	var critical []string
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			critical = append(critical, issue.kind)
+		}
+	}
+	if len(critical) == 0 {
+		return "no critical issues"
+	}
+	return strings.Join(critical, ",")
 }
 
 func dbFreezerHiddenSize(stats rawdbfreezer.Stats) uint64 {

@@ -630,6 +630,83 @@ func TestDBStorageAlertsCmdOK(t *testing.T) {
 		"freezerIssues=0",
 		"stageStatus=ok",
 		"stageIssues=0",
+		"snapshotStatus=ok",
+		"snapshotIssues=0",
+		"retiredSegments=0",
+		"retiredFiles=0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("storage alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStorageAlertsCmdWarnsOnRetiredSnapshotFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerValidBlockRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block4, _ := dbRebuildTxIndexBlock(t, 4, 0)
+	if err := rawdb.WriteBlock(db, block4); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Finish: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	snapshotDir := stateSnapshotsDir(dataDir)
+	retiredPath := filepath.Join("event-log", "retired.seg")
+	retiredBytes := []byte("retired snapshot bytes")
+	if err := os.MkdirAll(filepath.Join(snapshotDir, filepath.Dir(retiredPath)), 0o755); err != nil {
+		t.Fatalf("mkdir retired dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, retiredPath), retiredBytes, 0o644); err != nil {
+		t.Fatalf("write retired file: %v", err)
+	}
+	manifest := statesnapshots.NewManifest(0, 0, nil)
+	manifest.Retired = []statesnapshots.SegmentRef{{
+		Dataset:   statesnapshots.SegmentDatasetEventLog,
+		Kind:      statesnapshots.SegmentEventLog,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      retiredPath,
+		Size:      uint64(len(retiredBytes)),
+	}}
+	if err := statesnapshots.PublishManifest(snapshotDir, manifest); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStorageAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStorageAlertsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"status=warning",
+		"freezerStatus=ok",
+		"stageStatus=ok",
+		"snapshotStatus=warning",
+		"snapshotIssues=1",
+		"retiredSegments=1",
+		"retiredFiles=1",
+		"retiredMissing=0",
+		"retiredSkippedActive=0",
+		fmt.Sprintf("retiredBytes=%d", len(retiredBytes)),
+		"Storage snapshot alert: severity=warning kind=retired-prune-pending",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("storage alerts output missing %q:\n%s", want, output)

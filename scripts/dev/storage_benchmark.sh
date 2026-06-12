@@ -57,6 +57,13 @@ RUN_FREEZER_ALERT_ISSUES=-1
 RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
 RUN_STAGE_VERIFY_STATUS="not-run"
 RUN_STAGE_VERIFY_ISSUES=-1
+RUN_SNAPSHOT_ALERT_STATUS="not-run"
+RUN_SNAPSHOT_ALERT_ISSUES=-1
+RUN_SNAPSHOT_RETIRED_SEGMENTS=-1
+RUN_SNAPSHOT_RETIRED_FILES=-1
+RUN_SNAPSHOT_RETIRED_MISSING=-1
+RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
+RUN_SNAPSHOT_RETIRED_BYTES=-1
 
 usage() {
   cat <<'EOF'
@@ -206,6 +213,13 @@ reset_run_metrics() {
   RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
   RUN_STAGE_VERIFY_STATUS="not-run"
   RUN_STAGE_VERIFY_ISSUES=-1
+  RUN_SNAPSHOT_ALERT_STATUS="not-run"
+  RUN_SNAPSHOT_ALERT_ISSUES=-1
+  RUN_SNAPSHOT_RETIRED_SEGMENTS=-1
+  RUN_SNAPSHOT_RETIRED_FILES=-1
+  RUN_SNAPSHOT_RETIRED_MISSING=-1
+  RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE=-1
+  RUN_SNAPSHOT_RETIRED_BYTES=-1
 }
 
 block_num() {
@@ -443,17 +457,31 @@ run_storage_alert_gate() {
   if ! run_logged "$alert_out" "$GTRON" db storage-alerts --datadir "$datadir" >>"$log_path"; then
     ok=0
   fi
-  local freezer_status freezer_issues hidden stage_status stage_issues
+  local freezer_status freezer_issues hidden stage_status stage_issues snapshot_status snapshot_issues retired_segments retired_files retired_missing retired_skipped retired_bytes
   freezer_status="$(sed -n 's/.* freezerStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
   freezer_issues="$(sed -n 's/.* freezerIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
   hidden="$(sed -n 's/.* hiddenSize=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
   stage_status="$(sed -n 's/.* stageStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
   stage_issues="$(sed -n 's/.* stageIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  snapshot_status="$(sed -n 's/.* snapshotStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
+  snapshot_issues="$(sed -n 's/.* snapshotIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  retired_segments="$(sed -n 's/.* retiredSegments=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  retired_files="$(sed -n 's/.* retiredFiles=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  retired_missing="$(sed -n 's/.* retiredMissing=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  retired_skipped="$(sed -n 's/.* retiredSkippedActive=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  retired_bytes="$(sed -n 's/.* retiredBytes=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
   RUN_FREEZER_ALERT_STATUS="${freezer_status:-unknown}"
   RUN_FREEZER_ALERT_ISSUES="${freezer_issues:--1}"
   RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"
   RUN_STAGE_VERIFY_STATUS="${stage_status:-unknown}"
   RUN_STAGE_VERIFY_ISSUES="${stage_issues:--1}"
+  RUN_SNAPSHOT_ALERT_STATUS="${snapshot_status:-unknown}"
+  RUN_SNAPSHOT_ALERT_ISSUES="${snapshot_issues:--1}"
+  RUN_SNAPSHOT_RETIRED_SEGMENTS="${retired_segments:--1}"
+  RUN_SNAPSHOT_RETIRED_FILES="${retired_files:--1}"
+  RUN_SNAPSHOT_RETIRED_MISSING="${retired_missing:--1}"
+  RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE="${retired_skipped:--1}"
+  RUN_SNAPSHOT_RETIRED_BYTES="${retired_bytes:--1}"
   if [ "$ok" -ne 1 ]; then
     die "storage-alerts reported critical storage state for $mode/$role; see $log_path"
   fi
@@ -606,6 +634,10 @@ emit_result() {
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" \
+    "$RUN_SNAPSHOT_ALERT_STATUS" "$RUN_SNAPSHOT_ALERT_ISSUES" \
+    "$RUN_SNAPSHOT_RETIRED_SEGMENTS" "$RUN_SNAPSHOT_RETIRED_FILES" \
+    "$RUN_SNAPSHOT_RETIRED_MISSING" "$RUN_SNAPSHOT_RETIRED_SKIPPED_ACTIVE" \
+    "$RUN_SNAPSHOT_RETIRED_BYTES" \
     "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -624,6 +656,9 @@ keys = [
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "stageVerifyStatus", "stageVerifyIssues",
+    "snapshotAlertStatus", "snapshotAlertIssues", "snapshotRetiredSegments",
+    "snapshotRetiredFiles", "snapshotRetiredMissing", "snapshotRetiredSkippedActive",
+    "snapshotRetiredBytes",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -640,6 +675,8 @@ ints = {
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
     "stageVerifyIssues",
+    "snapshotAlertIssues", "snapshotRetiredSegments", "snapshotRetiredFiles",
+    "snapshotRetiredMissing", "snapshotRetiredSkippedActive", "snapshotRetiredBytes",
 }
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
