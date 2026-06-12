@@ -241,6 +241,65 @@ func CheckEventLogIndexSegment(dir string, ref SegmentRef) error {
 	return nil
 }
 
+func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef, eventRefs []SegmentRef) error {
+	if err := CheckEventLogIndexSegment(dir, indexRef); err != nil {
+		return err
+	}
+	if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
+		return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
+			indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+	}
+	expectedAddress := make(map[string][]uint64)
+	expectedTopic := make(map[string][]uint64)
+	for _, ref := range eventRefs {
+		if ref.ToTxNum < indexRef.FromTxNum || ref.FromTxNum > indexRef.ToTxNum {
+			continue
+		}
+		if ref.FromTxNum < indexRef.FromTxNum || ref.ToTxNum > indexRef.ToTxNum {
+			return fmt.Errorf("snapshots: event-log segment %q range [%d,%d] crosses event-log-index %q range [%d,%d]",
+				ref.Path, ref.FromTxNum, ref.ToTxNum, indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+		seg, err := OpenEventLogSegment(dir, ref)
+		if err != nil {
+			return err
+		}
+		collectErr := collectEventLogIndexPostings(seg, expectedAddress, expectedTopic)
+		closeErr := seg.Close()
+		if collectErr != nil {
+			return collectErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	index, err := OpenEventLogIndexSegment(dir, indexRef)
+	if err != nil {
+		return err
+	}
+	actualAddress, err := readEventLogLookupIndexMap(index.file, index.header.addressIndexOffset, index.header.addressIndexLength, eventLogAddressLookupKeySize)
+	if closeErr := index.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := compareEventLogLookupIndexMaps(indexRef, "address", expectedAddress, actualAddress); err != nil {
+		return err
+	}
+	index, err = OpenEventLogIndexSegment(dir, indexRef)
+	if err != nil {
+		return err
+	}
+	actualTopic, err := readEventLogLookupIndexMap(index.file, index.header.topicIndexOffset, index.header.topicIndexLength, eventLogTopicLookupKeySize)
+	if closeErr := index.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return compareEventLogLookupIndexMaps(indexRef, "topic", expectedTopic, actualTopic)
+}
+
 func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 	if err := validateEventLogRef(ref); err != nil {
 		return nil, err
@@ -664,7 +723,7 @@ func (m *Manager) EventLogIndexedRangeCovered(fromBlock, toBlock uint64) (bool, 
 		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
 			continue
 		}
-		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
+		if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, eventLogRefs(manifest)); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1386,6 +1445,84 @@ func readEventLogLookupRows(file io.ReaderAt, offset, length uint64, key []byte)
 		return readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
 	}
 	return nil, nil
+}
+
+func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize int) (map[string][]uint64, error) {
+	out := make(map[string][]uint64)
+	if offset == 0 || length == 0 {
+		return out, nil
+	}
+	if length < eventLogLookupHeaderSize {
+		return nil, fmt.Errorf("snapshots: event log lookup length %d smaller than header", length)
+	}
+	indexEnd, overflow := checkedAdd(offset, length)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: event log lookup range [%d,+%d] overflows", offset, length)
+	}
+	count, err := readEventLogUint64At(file, offset)
+	if err != nil {
+		return nil, err
+	}
+	entrySize := uint64(keySize + 16)
+	dirBytes, overflow := checkedMul(count, entrySize)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: event log lookup directory overflows")
+	}
+	dirStart, overflow := checkedAdd(offset, eventLogLookupHeaderSize)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: event log lookup directory start overflows")
+	}
+	dirEnd, overflow := checkedAdd(dirStart, dirBytes)
+	if overflow || dirEnd > indexEnd {
+		return nil, fmt.Errorf("snapshots: event log lookup directory [%d,%d] outside [%d,%d]", dirStart, dirEnd, offset, indexEnd)
+	}
+	entryRaw := make([]byte, int(entrySize))
+	for i := uint64(0); i < count; i++ {
+		entryOffset := dirStart + i*entrySize
+		if _, err := file.ReadAt(entryRaw, int64(entryOffset)); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		key := string(append([]byte(nil), entryRaw[:keySize]...))
+		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
+		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
+		rows, err := readEventLogLookupPostings(file, offset, length, dirEnd, postingsOffset, postingsCount)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = rows
+	}
+	return out, nil
+}
+
+func compareEventLogLookupIndexMaps(ref SegmentRef, name string, expected, actual map[string][]uint64) error {
+	if len(expected) != len(actual) {
+		return fmt.Errorf("snapshots: event-log-index %q %s lookup keys %d, want %d", ref.Path, name, len(actual), len(expected))
+	}
+	for key, want := range expected {
+		got, ok := actual[key]
+		if !ok {
+			return fmt.Errorf("snapshots: event-log-index %q missing %s lookup key %x", ref.Path, name, []byte(key))
+		}
+		if !equalUint64Slices(got, want) {
+			return fmt.Errorf("snapshots: event-log-index %q %s lookup key %x postings %v, want %v", ref.Path, name, []byte(key), got, want)
+		}
+	}
+	return nil
+}
+
+func equalUint64Slices(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func readEventLogLookupPostings(file io.ReaderAt, indexOffset, indexLength, minPostingsOffset, postingsOffset, postingsCount uint64) ([]uint64, error) {

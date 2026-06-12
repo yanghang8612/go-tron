@@ -176,10 +176,11 @@ cold chain-freezer, chain-index, and indexed event-log coverage before hiding
 or reclaiming local freezer rows. Event-log coverage starts at block 1; genesis
 remains guarded by the cold chain-freezer plus chain-index coverage check.
 `gtron db stage-status --db.stage.verify` also reopens the local snapshot
-manifest and verifies readable indexed cold coverage for event-log build and
-freezer-tail prune stages, plus chain lookup, section-bloom, and balance-trace
-coverage, so operators can detect stale stage rows after sidecar files are
-moved or corrupted.
+manifest and verifies indexed cold coverage for event-log build and freezer-tail
+prune stages by comparing `event-log-index` postings with the active event-log
+segments, plus chain lookup, section-bloom, and balance-trace coverage, so
+operators can detect stale stage rows after sidecar files are moved or
+corrupted.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.

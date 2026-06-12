@@ -805,10 +805,14 @@ Status:
   skipping of unrelated segments. Manifest validation rejects orphaned,
   prefix-missing, suffix-missing, or gapped `event-log-index` sidecars unless
   the referenced block range is continuously covered by active `event-log`
-  segments. `gtron snapshot build-event-logs` exposes the standalone operator
-  build path, while `gtron snapshot build-derived-indexes` now emits event-log
-  and event-log-index sidecars together with balance-trace and section-bloom
-  segments. Production snap-mode history passes can now publish matching
+  segments. Indexed coverage now also replays the active event-log segments
+  and compares the rebuilt address/topic postings with the registered
+  `event-log-index` sidecar, so format-valid but stale or incomplete sidecars
+  cannot satisfy archive log coverage gates. `gtron snapshot build-event-logs`
+  exposes the standalone operator build path, while `gtron snapshot
+  build-derived-indexes` now emits event-log and event-log-index sidecars
+  together with balance-trace and section-bloom segments. Production snap-mode
+  history passes can now publish matching
   event-log and event-log-index sidecars in the same manifest generation as the
   state-history segment before hot prune runs, and both production and manual
   event-log builders now advance a block-valued `SnapshotEventLogBuild` stage

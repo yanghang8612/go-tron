@@ -85,8 +85,10 @@ writes to collector-backed loads.
   builder can also publish the matching event-log and event-log-index sidecars
   in the same manifest generation as the state-history segment before hot prune
   runs. Event-log builder paths now advance `SnapshotEventLogBuild` only after
-  writing matching event-log-index coverage, so stage-status automation can
-  compare indexed cold log coverage with the verified chain `Finish` boundary.
+  writing matching event-log-index coverage, and verification rebuilds
+  address/topic postings from the active event-log segments before trusting the
+  sidecar, so stage-status automation can compare indexed cold log coverage
+  with the verified chain `Finish` boundary.
   `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
   spans the query range; broader global/recsplit-style address/topic point
   indexes remain follow-up work.
