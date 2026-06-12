@@ -1077,24 +1077,18 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 	if len(ps.fetchList) == 0 {
 		return nil
 	}
-	batch := make([]types.BlockID, 0, maxFetchBatch)
-	remaining := ps.fetchList[:0]
-	for _, bid := range ps.fetchList {
+	batch, remaining := syncdl.PopFetchBatch(ps.fetchList, maxFetchBatch, func(bid types.BlockID) bool {
 		if ss.hasBlockOrRequestLocked(bid) {
-			continue
+			return false
 		}
 		if !ss.reserveBlockPathLocked(bid) {
-			continue
+			return false
 		}
 		if _, ok := ps.requestedHashes[bid.Hash]; ok {
-			continue
+			return false
 		}
-		if len(batch) < maxFetchBatch {
-			batch = append(batch, bid)
-			continue
-		}
-		remaining = append(remaining, bid)
-	}
+		return true
+	})
 	ps.fetchList = remaining
 	return batch
 }
