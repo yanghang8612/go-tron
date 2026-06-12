@@ -757,13 +757,17 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 		t.Fatalf("result = %+v, want history+event-log build over block 1", result)
 	}
 	haveEventLog := false
+	haveEventLogIndex := false
 	for _, ref := range result.Segments {
-		if ref.Kind == SegmentEventLog {
+		switch ref.Kind {
+		case SegmentEventLog:
 			haveEventLog = true
+		case SegmentEventLogIndex:
+			haveEventLogIndex = true
 		}
 	}
-	if !haveEventLog {
-		t.Fatalf("segments = %+v, want event-log segment with history", result.Segments)
+	if !haveEventLog || !haveEventLogIndex {
+		t.Fatalf("segments = %+v, want event-log and event-log-index segments with history", result.Segments)
 	}
 	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 1 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 1", got, ok, err)
@@ -775,6 +779,10 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	covered, err := mgr.EventLogRangeCovered(1, 1)
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
 	}
 	var rows []EventLog
 	if err := mgr.IterateEventLogs(1, 1, EventLogFilter{

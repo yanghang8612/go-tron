@@ -452,7 +452,35 @@ func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
 		}
 		next = ref.ToTxNum + 1
 	}
-	return block, ok
+	if !ok {
+		return 0, false
+	}
+	indexedBlock, indexed := eventLogIndexedCoverageBlockFromRefs(eventLogIndexRefs(manifest), refs[0].FromTxNum, block)
+	return indexedBlock, indexed
+}
+
+func eventLogIndexedCoverageBlockFromRefs(indexRefs []SegmentRef, fromBlock, maxBlock uint64) (uint64, bool) {
+	if maxBlock < fromBlock {
+		return 0, false
+	}
+	var block uint64
+	var ok bool
+	for _, ref := range indexRefs {
+		if ref.FromTxNum > fromBlock || ref.ToTxNum < fromBlock {
+			continue
+		}
+		if ref.ToTxNum > block {
+			block = ref.ToTxNum
+			ok = true
+		}
+	}
+	if !ok {
+		return 0, false
+	}
+	if block > maxBlock {
+		block = maxBlock
+	}
+	return block, true
 }
 
 func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {

@@ -176,6 +176,10 @@ func TestEventLogManagerIteratesContinuousSegmentsWithFilter(t *testing.T) {
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered(1,3) = %v/%v, want true/nil", covered, err)
 	}
+	covered, err = mgr.EventLogIndexedRangeCovered(1, 3)
+	if err != nil || covered {
+		t.Fatalf("EventLogIndexedRangeCovered without index = %v/%v, want false/nil", covered, err)
+	}
 	covered, err = mgr.EventLogRangeCovered(1, 4)
 	if err != nil || covered {
 		t.Fatalf("EventLogRangeCovered(1,4) = %v/%v, want false/nil", covered, err)
@@ -415,7 +419,31 @@ func TestEventLogRangeCoveredRequiresReadableSegments(t *testing.T) {
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered before removal = %v, %v; want true, nil", covered, err)
 	}
-	if err := os.Remove(filepath.Join(dir, result.Segments[0].Path)); err != nil {
+	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered before removal = %v, %v; want true, nil", covered, err)
+	}
+	var eventRef, indexRef SegmentRef
+	for _, ref := range result.Segments {
+		switch ref.Kind {
+		case SegmentEventLog:
+			eventRef = ref
+		case SegmentEventLogIndex:
+			indexRef = ref
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, indexRef.Path)); err != nil {
+		t.Fatalf("Remove event-log-index segment: %v", err)
+	}
+	covered, err = mgr.EventLogRangeCovered(1, 1)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCovered after index removal = %v, %v; want true, nil", covered, err)
+	}
+	covered, err = mgr.EventLogIndexedRangeCovered(1, 1)
+	if err == nil || covered {
+		t.Fatalf("EventLogIndexedRangeCovered after index removal = %v, %v; want false, error", covered, err)
+	}
+	if err := os.Remove(filepath.Join(dir, eventRef.Path)); err != nil {
 		t.Fatalf("Remove segment: %v", err)
 	}
 	covered, err = mgr.EventLogRangeCovered(1, 1)

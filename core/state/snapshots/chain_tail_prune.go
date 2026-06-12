@@ -17,7 +17,7 @@ const (
 	chainFreezerTailPruneReasonTailAboveAncientHead = "current tail above ancient head"
 	chainFreezerTailPruneReasonCurrentTailCovered   = "current tail already satisfies limits"
 	chainFreezerTailPruneReasonMissingColdCoverage  = "missing cold chain-freezer coverage"
-	chainFreezerTailPruneReasonMissingEventLogCold  = "missing cold event-log coverage"
+	chainFreezerTailPruneReasonMissingEventLogCold  = "missing cold indexed event-log coverage"
 )
 
 // ChainFreezerTailPrunePlanInput describes the inclusive stage progress and
@@ -67,7 +67,7 @@ type ChainFreezerTailPrunePlan struct {
 	AncientHead uint64
 
 	// CoverageTail is the largest tail allowed by local freezer coverage,
-	// verified lookup-prune progress, and cold event-log coverage.
+	// verified lookup-prune progress, and indexed cold event-log coverage.
 	CoverageTail uint64
 
 	// RetentionTail is the largest tail allowed by the recent-block window.
@@ -100,8 +100,8 @@ type chainFreezerRangeCoverer interface {
 	ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
-type eventLogRangeCoverer interface {
-	EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error)
+type eventLogIndexedRangeCoverer interface {
+	EventLogIndexedRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
 // PlanChainFreezerTailPrune computes the highest freezer virtual tail that can
@@ -258,11 +258,11 @@ func verifyColdEventLogTailCoverage(cold rawdb.AncientReader, fromTail, toTail u
 	if toTail <= fromBlock {
 		return nil
 	}
-	coverer, ok := cold.(eventLogRangeCoverer)
+	coverer, ok := cold.(eventLogIndexedRangeCoverer)
 	if !ok {
 		return rawdb.ErrNotInAncient
 	}
-	covered, err := coverer.EventLogRangeCovered(fromBlock, toTail-1)
+	covered, err := coverer.EventLogIndexedRangeCovered(fromBlock, toTail-1)
 	if err != nil {
 		return err
 	}

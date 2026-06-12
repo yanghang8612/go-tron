@@ -645,6 +645,33 @@ func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) 
 	return false, nil
 }
 
+func (m *Manager) EventLogIndexedRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return false, fmt.Errorf("snapshots: indexed event log coverage range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	eventsCovered, err := m.EventLogRangeCovered(fromBlock, toBlock)
+	if err != nil || !eventsCovered {
+		return eventsCovered, err
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return false, err
+	}
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
+			continue
+		}
+		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
 	if m == nil {
 		return false, nil

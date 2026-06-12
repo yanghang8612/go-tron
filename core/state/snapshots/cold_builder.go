@@ -391,6 +391,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	if len(refs) == 0 {
 		return result, nil
 	}
+	aggregator := NewAggregator(r.cfg.Dir)
 	var chainDB *rawdb.ChainDB
 	if r.cfg.BuildBalanceTraces || r.cfg.BuildEventLogs {
 		chainDB, err = r.derivedIndexChainDB()
@@ -416,6 +417,15 @@ func (r *Runner) onePass() (PassResult, error) {
 			return PassResult{}, err
 		}
 		refs = append(refs, ref)
+		eventRefs, err := aggregator.eventLogRefsAfterIntegrating([]SegmentRef{ref})
+		if err != nil {
+			return PassResult{}, err
+		}
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(r.cfg.Dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum))
+		if err != nil {
+			return PassResult{}, err
+		}
+		refs = append(refs, indexRef)
 		eventLogBuilt = true
 	}
 	sectionBloomBuilt := false
@@ -429,7 +439,7 @@ func (r *Runner) onePass() (PassResult, error) {
 			sectionBloomBuilt = true
 		}
 	}
-	manifest, err := NewAggregator(r.cfg.Dir).Integrate(fromTxNum, toTxNum, refs)
+	manifest, err := aggregator.Integrate(fromTxNum, toTxNum, refs)
 	if err != nil {
 		return PassResult{}, err
 	}
@@ -450,8 +460,10 @@ func (r *Runner) onePass() (PassResult, error) {
 			return PassResult{}, err
 		}
 		if eventLogBuilt {
-			if err := stageProgress.Write(rawdb.StageSnapshotEventLogBuild, cutoffBlock); err != nil {
-				return PassResult{}, err
+			if block, ok := eventLogBuildBlockFromManifest(manifest); ok {
+				if err := stageProgress.Write(rawdb.StageSnapshotEventLogBuild, block); err != nil {
+					return PassResult{}, err
+				}
 			}
 		}
 		if err := writeManifestProgressStages(stageProgress, manifest.Progress); err != nil {

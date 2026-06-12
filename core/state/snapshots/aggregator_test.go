@@ -286,6 +286,10 @@ func TestAggregatorBuildDerivedIndexes(t *testing.T) {
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
 	}
+	covered, err = mgr.EventLogIndexedRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
 	var eventRows []EventLog
 	if err := mgr.IterateEventLogs(12, 12, EventLogFilter{
 		Addresses: []common.Address{common.BytesToAddress(eventAddress)},

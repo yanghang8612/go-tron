@@ -881,12 +881,12 @@ func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
 	}
 	issues := dbStageStatusSnapshotCoverageIssues(rows, filepath.Join(t.TempDir(), "missing-snapshots"))
 	for _, want := range []string{
-		"SnapshotEventLogBuild=12 missing cold event-log coverage [1,12]",
+		"SnapshotEventLogBuild=12 missing cold indexed event-log coverage [1,12]",
 		"SnapshotChainLookupPrune=12 missing cold chain-index coverage [0,12]",
 		fmt.Sprintf("SnapshotSectionBloomPrune=%d missing cold section-bloom coverage [0,%d]", rawdb.SectionBloomBlockPerSection-1, rawdb.SectionBloomBlockPerSection-1),
 		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [0,12]",
 		"SnapshotChainFreezerTailPrune=12 missing cold chain-freezer coverage [0,12]",
-		"SnapshotChainFreezerTailPrune=12 missing cold event-log coverage [1,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold indexed event-log coverage [1,12]",
 	} {
 		found := false
 		for _, issue := range issues {

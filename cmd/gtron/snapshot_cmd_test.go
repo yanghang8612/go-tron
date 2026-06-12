@@ -879,6 +879,10 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
 	}
+	covered, err = mgr.EventLogIndexedRangeCovered(12, 12)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
+	}
 	var eventRows []rawdb.EventLog
 	if err := mgr.IterateEventLogs(12, 12, rawdb.EventLogFilter{
 		Addresses: []common.Address{common.BytesToAddress(logAddress)},
@@ -964,6 +968,10 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	covered, err := mgr.EventLogRangeCovered(7, 7)
 	if err != nil || !covered {
 		t.Fatalf("EventLogRangeCovered = %v/%v, want true/nil", covered, err)
+	}
+	covered, err = mgr.EventLogIndexedRangeCovered(7, 7)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered = %v/%v, want true/nil", covered, err)
 	}
 	var rows []rawdb.EventLog
 	if err := mgr.IterateEventLogs(7, 7, rawdb.EventLogFilter{

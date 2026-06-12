@@ -168,16 +168,18 @@ event-log sidecars together and integrates them into a single manifest
 generation. It uses the same balance-trace coverage audit as
 `snapshot build-balance-traces`; run the specific single-dataset commands when
 only one sidecar needs to be refreshed. Event-log builds advance the
-`SnapshotEventLogBuild` stage to the highest continuously covered source block.
-Snapshot restore/bootstrap derives the same stage from verified manifest
-`event-log` segments, and minimal-mode freezer tail pruning rechecks continuous
-cold event-log coverage from block 1 onward before hiding or reclaiming local
-freezer rows; genesis remains guarded by the cold chain-freezer coverage check.
+`SnapshotEventLogBuild` stage to the highest source block covered by continuous
+`event-log` segments and a matching `event-log-index` sidecar. Snapshot
+restore/bootstrap derives the same stage from verified manifest indexed
+event-log coverage, and minimal-mode freezer tail pruning rechecks continuous
+indexed cold event-log coverage from block 1 onward before hiding or reclaiming
+local freezer rows; genesis remains guarded by the cold chain-freezer coverage
+check.
 `gtron db stage-status --db.stage.verify` also reopens the local snapshot
-manifest and verifies readable cold coverage for event-log build, chain lookup
-prune, section-bloom prune, balance-trace prune, and freezer-tail prune stages,
-so operators can detect stale stage rows after sidecar files are moved or
-corrupted.
+manifest and verifies readable indexed cold coverage for event-log build and
+freezer-tail prune stages, plus chain lookup, section-bloom, and balance-trace
+coverage, so operators can detect stale stage rows after sidecar files are
+moved or corrupted.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.

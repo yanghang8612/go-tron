@@ -451,11 +451,12 @@ Status:
   event-log build boundary keeps minimal-mode physical tail pruning behind
   cold log/index coverage, so archive log queries do not lose their immutable
   sidecar path when local freezer files are hidden or reclaimed. The apply path
-  verifies cold chain-freezer and event-log coverage before calling runtime
-  `TruncateTail`; event-log coverage starts at block 1 because genesis has no
-  transaction logs, while genesis chain rows remain covered by the cold freezer
-  check. Snapshot managers now prove continuous chain-freezer and log coverage
-  for the whole tail range instead of only probing endpoints. Tests pin
+  verifies cold chain-freezer and indexed event-log coverage before calling
+  runtime `TruncateTail`; indexed event-log coverage starts at block 1 because
+  genesis has no transaction logs, while genesis chain rows remain covered by
+  the cold freezer check. Snapshot managers now prove continuous chain-freezer
+  and indexed log coverage for the whole tail range instead of only probing
+  endpoints. Tests pin
   missing-stage no-ops, lookup-stage caps, event-log-stage caps,
   retention-window caps, ancient-head caps, short-chain behavior, DB-backed
   stage reads, successful tail truncation, no-op behavior when cold coverage is
@@ -806,14 +807,15 @@ Status:
   segments. `gtron snapshot build-event-logs` exposes the standalone operator
   build path, while `gtron snapshot build-derived-indexes` now emits event-log
   and event-log-index sidecars together with balance-trace and section-bloom
-  segments. Production snap-mode history passes can now publish the matching
-  event-log sidecar in the same manifest generation as the state-history segment
-  before hot prune runs, and both production and manual event-log builders now
-  advance a block-valued `SnapshotEventLogBuild` stage so operators can audit
-  cold log coverage against the verified `Finish` boundary. Snapshot
-  restore/bootstrap also derives that stage from verified manifest `event-log`
-  segments, so restored nodes can continue minimal-mode tail pruning without
-  locally rebuilding log sidecars. Runtime startup registers the manager on
+  segments. Production snap-mode history passes can now publish matching
+  event-log and event-log-index sidecars in the same manifest generation as the
+  state-history segment before hot prune runs, and both production and manual
+  event-log builders now advance a block-valued `SnapshotEventLogBuild` stage
+  only when indexed cold log coverage exists, so operators can audit it against
+  the verified `Finish` boundary. Snapshot restore/bootstrap also derives that
+  stage from verified manifest `event-log` plus `event-log-index` coverage, so
+  restored nodes can continue minimal-mode tail pruning without locally
+  rebuilding log sidecars. Runtime startup registers the manager on
   `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments

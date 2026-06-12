@@ -82,10 +82,11 @@ writes to collector-backed loads.
   `gtron snapshot build-event-logs` exposes the builder, and
   `gtron snapshot build-derived-indexes` includes event-log sidecars alongside
   balance-trace and section-bloom segments. The production snap-mode history
-  builder can also publish the matching event-log sidecar in the same manifest
-  generation as the state-history segment before hot prune runs. Event-log
-  builder paths now advance `SnapshotEventLogBuild` so stage-status automation
-  can compare cold log coverage with the verified chain `Finish` boundary.
+  builder can also publish the matching event-log and event-log-index sidecars
+  in the same manifest generation as the state-history segment before hot prune
+  runs. Event-log builder paths now advance `SnapshotEventLogBuild` only after
+  writing matching event-log-index coverage, so stage-status automation can
+  compare indexed cold log coverage with the verified chain `Finish` boundary.
   `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
   spans the query range; broader global/recsplit-style address/topic point
   indexes remain follow-up work.

@@ -398,7 +398,7 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 		}
 	}
 	if row, ok := byStage[rawdb.StageSnapshotEventLogBuild]; ok && row.progress.BlockNum > 0 {
-		check(row.stage, row.progress.BlockNum, "event-log", 1, mgr.EventLogRangeCovered)
+		check(row.stage, row.progress.BlockNum, "indexed event-log", 1, mgr.EventLogIndexedRangeCovered)
 	}
 	if row, ok := byStage[rawdb.StageSnapshotChainLookupPrune]; ok {
 		check(row.stage, row.progress.BlockNum, "chain-index", 0, mgr.ChainIndexRangeCovered)
@@ -412,7 +412,7 @@ func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir st
 	if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
 		check(row.stage, row.progress.BlockNum, "chain-freezer", 0, mgr.ChainFreezerRangeCovered)
 		if row.progress.BlockNum > 0 {
-			check(row.stage, row.progress.BlockNum, "event-log", 1, mgr.EventLogRangeCovered)
+			check(row.stage, row.progress.BlockNum, "indexed event-log", 1, mgr.EventLogIndexedRangeCovered)
 		}
 	}
 	return issues
