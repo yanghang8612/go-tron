@@ -1496,6 +1496,7 @@ func (ss *SyncService) deleteImportedSyncBodies(batch bufferedSyncBatch, applied
 			syncLog.Warn("Delete sync staged block failed", "number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
 		}
 	}
+	ss.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
@@ -1509,6 +1510,7 @@ func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
 	if _, err := rawdb.DeleteSyncStagedBlocksThrough(db, head); err != nil {
 		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", err)
 	}
+	ss.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {

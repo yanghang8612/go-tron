@@ -100,6 +100,9 @@ func TestSyncServiceRestoresStagedBodiesOnSessionStart(t *testing.T) {
 			t.Fatalf("staged block %d after import ok=%v err=%v, want deleted", block.Number(), ok, err)
 		}
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after restored staged import = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
 }
 
 func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {

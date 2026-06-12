@@ -112,6 +112,9 @@ func TestMultiPeerSyncBuffersOutOfOrderBlocks(t *testing.T) {
 			t.Fatalf("imported sync staged body #%d ok=%v err=%v, want deleted", block.Number(), ok, err)
 		}
 	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("sync bodies ready after imported range = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
 	ss.mu.Lock()
 	buffered := len(ss.blockBuffer)
 	ss.mu.Unlock()

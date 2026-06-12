@@ -267,7 +267,8 @@ Status:
   hash-bound `SyncBodies` records the highest block body accepted into the
   transient downloader staging table without regressing on out-of-order
   arrivals, hash-bound `SyncBodiesReady` records the contiguous staged-body
-  frontier drainable from the current head, and hash-bound `SyncImport`,
+  frontier drainable from the current head and is refreshed after imported
+  staged rows are deleted, and hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` record the latest
   sync-driven block that completed the live import pipeline. New sync sessions
   restore `SyncInventory` when it is ahead of the current head, preserving
