@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -10,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/crypto"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -442,6 +444,64 @@ func TestAsyncCommit_RealFoldErrorUnwind(t *testing.T) {
 		t.Fatal("a fresh insert after a worker fold failure must still surface the error")
 	}
 	// Don't assert Close success — commitErr is intentionally sticky (fail-fast).
+}
+
+// TestAsyncCommit_HeaderVerifyUsesRangeTip is the regression for the production
+// stall "insert block range index 1 block N: invalid block number". Under async
+// commit the serial commit worker publishes bc.CurrentBlock() off the critical
+// path, so the published head lags the executor's range-local tip by up to one
+// block. Header verification must validate a block's number / parent-hash / slot
+// linkage against the range-local tip (plan.parent), NOT bc.CurrentBlock() —
+// otherwise the 2nd+ block of an InsertBlocks range is rejected with
+// ErrInvalidBlockNumber because the worker has not yet published the previous
+// block's head.
+//
+// The existing async tests never catch this: with trivial in-memory blocks the
+// worker wins the publish race, so currentBlock stays caught up. Here we force
+// the production timing by delaying the worker's fold, which makes the worker lag
+// on EVERY block — exactly the regime where the real fold (~55% of commit cost)
+// loses the race on mainnet/Nile and surfaced as the block-101 sync stall.
+func TestAsyncCommit_HeaderVerifyUsesRangeTip(t *testing.T) {
+	witnessKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessAddr := crypto.PubkeyToAddress(&witnessKey.PublicKey)
+	genesis := fixedVerifyGenesis(witnessAddr)
+
+	// Real DPoS-signed wire blocks, re-unmarshalled cold — exactly what a peer
+	// delivers during sync. header verification (the path that returns
+	// "invalid block number") only runs with an engine wired, so this MUST be a
+	// newVerifierChain, not the engine-less async-flush helper.
+	const N = 6
+	raw := produceSignedBlocks(t, genesis, witnessKey, N, func(uint64) []*types.Transaction { return nil })
+
+	asyncBC := newVerifierChain(t, genesis)
+	asyncBC.SetAsyncCommit(true)
+	defer asyncBC.Close()
+
+	// Delay every fold so the commit worker reliably lags the foreground: by the
+	// time the foreground verifies block K+1's header, the worker has not yet
+	// stored currentBlock=K. The 20ms sleep dwarfs the foreground's khaos push +
+	// state open + header verify (all in-memory, microseconds), making the lag
+	// deterministic rather than timing-dependent — the same regime the real
+	// ~55%-of-commit fold produces on mainnet/Nile.
+	SetCommitFoldHookForTest(func(uint64) error {
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	})
+	defer SetCommitFoldHookForTest(nil)
+
+	if err := asyncBC.InsertBlocks(unmarshalBatch(t, raw)); err != nil {
+		t.Fatalf("InsertBlocks under a lagging commit worker: %v", err)
+	}
+	asyncBC.WaitForCommitSettled()
+	if errPtr := asyncBC.commitErr.Load(); errPtr != nil {
+		t.Fatalf("async commit recorded error: %v", *errPtr)
+	}
+	if got := asyncBC.CurrentBlock().Number(); got != N {
+		t.Fatalf("async head = %d, want %d", got, N)
+	}
 }
 
 // TestAsyncCommit_OffByDefault asserts the kill switch defaults off: a freshly
