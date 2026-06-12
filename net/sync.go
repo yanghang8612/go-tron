@@ -1289,9 +1289,22 @@ func (ss *SyncService) waitForDrain() {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
-	ss.restoreSyncStagedBodiesLocked(next, maxFetchBatch, false)
+	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
+	restoreLimit := maxFetchBatch
+	if hasReadyLimit {
+		if readyLimit < next {
+			return bufferedSyncBatch{}
+		}
+		if span := readyLimit - next + 1; span < uint64(restoreLimit) {
+			restoreLimit = int(span)
+		}
+	}
+	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
+		if hasReadyLimit && next > readyLimit {
+			break
+		}
 		buffered, ok := ss.blockBuffer[next]
 		if !ok {
 			break
@@ -1310,6 +1323,46 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		next++
 	}
 	return batch
+}
+
+func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
+	if ss == nil || ss.chain == nil {
+		return 0, false
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return 0, false
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil {
+		syncLog.Warn("Read sync bodies ready stage progress failed", "err", err)
+		return 0, false
+	}
+	if !ok {
+		return 0, false
+	}
+	if !row.HasBlockHash {
+		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", row.BlockNum)
+		return 0, false
+	}
+	if row.BlockNum < next {
+		ss.writeSyncBodiesReadyProgress()
+		return 0, false
+	}
+	staged, ok, err := rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	if err != nil {
+		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", row.BlockNum, "hash", row.BlockHash, "err", err)
+		return 0, false
+	}
+	if !ok {
+		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", row.BlockNum, "hash", row.BlockHash)
+		return 0, false
+	}
+	if staged.Hash != row.BlockHash {
+		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", row.BlockNum, "hash", row.BlockHash, "stagedHash", staged.Hash)
+		return 0, false
+	}
+	return row.BlockNum, true
 }
 
 // decodeBatchBlocks decodes the popped raw blocks into batch.blocks. It runs
