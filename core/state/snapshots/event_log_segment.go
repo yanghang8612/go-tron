@@ -893,10 +893,13 @@ func collectEventLogRows(chain *rawdb.ChainDB, fromBlock, toBlock uint64) ([]eve
 		blockHash := block.Hash()
 		txs := block.Transactions()
 		infos := rawdb.ReadTransactionInfosByBlock(chain, blockNum)
+		if len(txs) > 0 && len(infos) < len(txs) {
+			return nil, fmt.Errorf("snapshots: incomplete transaction info coverage for block %d: have %d entries for %d transactions", blockNum, len(infos), len(txs))
+		}
 		logIndex := uint64(0)
 		for txIndex, info := range infos {
 			if info == nil {
-				continue
+				return nil, fmt.Errorf("snapshots: nil transaction info at block %d index %d during event log segment build", blockNum, txIndex)
 			}
 			txHash := common.Hash{}
 			if txIndex < len(txs) {

@@ -970,6 +970,11 @@ Status:
   transaction-info rows, then serves the same `blockHash` log query through
   chain-freezer ancient rows plus the cold `chain-index` and `event-log`
   segments.
+- Event-log cold segment builds now reject tx-bearing blocks whose
+  `TransactionRet` coverage is missing or shorter than the block's transaction
+  list, and reject nil transaction-info entries. This prevents incomplete hot
+  source data from being published as empty immutable log coverage and making
+  archive `eth_getLogs` return false negatives after pruning.
 - Snapshot restore API soak now also sends `eth_getTransactionByHash` through
   both the in-process JSON-RPC API and a real restarted JSON-RPC listener after
   hot block bodies, block-hash lookups, tx lookups, and per-tx info rows are

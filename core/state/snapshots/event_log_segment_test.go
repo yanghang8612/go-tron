@@ -614,6 +614,20 @@ func TestEventLogSegmentBuildRejectsMissingBlock(t *testing.T) {
 	}
 }
 
+func TestEventLogSegmentBuildRejectsMissingTransactionInfoCoverage(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	block, _ := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{{
+		Address: eventLogTestAddress(0x91),
+		Data:    []byte{0x01},
+	}})
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if _, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1); err == nil {
+		t.Fatal("BuildEventLogSegmentFromChain accepted a tx-bearing block without TransactionInfo coverage")
+	}
+}
+
 func eventLogTestBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txPB := &corepb.Transaction{
