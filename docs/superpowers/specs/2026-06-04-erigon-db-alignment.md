@@ -973,7 +973,9 @@ Status:
   delete hot `TransactionRet` rows and unrelated cold segment files to prove
   filtered archive reads are served through the cold index path. The API falls
   back to the hot scan on coverage gaps and surfaces checker failures as archive
-  data errors.
+  data errors. `gtron snapshot event-log-index-stats` now gives operators a
+  readonly profile of active event-log-index sidecars, including address/topic
+  key counts, postings, and worst-case candidate segment fanout.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
@@ -1065,7 +1067,10 @@ Status:
   before serializing lookup maps, deduplicating repeated segment hits by sorted
   key instead of depending on scan-order map appends. Aggregator event-log
   builds can pass the same ETL temp, buffer, and batch knobs used by other
-  snapshot restore/build paths.
+  snapshot restore/build paths. The storage benchmark records the same
+  event-log-index key/posting/fanout counters after derived-index builds, giving
+  larger soaks a concrete selectivity signal before revisiting recsplit-style
+  accessors.
 - Section-bloom segment builds now use the shared sorted ETL collector too:
   hot `sb-` rows are collected by `(section, bitIndex)` into scratch space and
   streamed into the immutable segment in lookup order. The derived-index

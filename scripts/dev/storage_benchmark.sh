@@ -36,6 +36,13 @@ RUN_COLD_FREEZER_TO_BLOCK=-1
 RUN_DERIVED_INDEX_TO_BLOCK=-1
 RUN_DERIVED_INDEX_SEGMENTS=0
 RUN_DERIVED_INDEX_BUILD_SECONDS=0
+RUN_EVENT_LOG_INDEX_SEGMENTS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_KEYS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS=0
+RUN_EVENT_LOG_INDEX_TOPIC_KEYS=0
+RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS=0
+RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS=0
 RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
 RUN_BALANCE_TRACE_BLOCK_ROWS=0
 RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
@@ -192,6 +199,13 @@ reset_run_metrics() {
   RUN_DERIVED_INDEX_TO_BLOCK=-1
   RUN_DERIVED_INDEX_SEGMENTS=0
   RUN_DERIVED_INDEX_BUILD_SECONDS=0
+  RUN_EVENT_LOG_INDEX_SEGMENTS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_KEYS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_KEYS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS=0
   RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
   RUN_BALANCE_TRACE_BLOCK_ROWS=0
   RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
@@ -435,6 +449,34 @@ maybe_build_derived_indexes() {
   RUN_DERIVED_INDEX_SEGMENTS="${active_segments:-0}"
 }
 
+collect_event_log_index_stats() {
+  local datadir="$1"
+  local log_path="$2"
+  if [ "$BUILD_DERIVED_INDEXES" -ne 1 ]; then
+    return
+  fi
+  local stats_out="$WORKDIR/event-log-index-stats-$(basename "$datadir").out"
+  echo "collecting event-log index stats" >>"$log_path"
+  if ! run_logged "$stats_out" "$GTRON" snapshot event-log-index-stats --datadir "$datadir" >>"$log_path"; then
+    die "snapshot event-log-index-stats failed; see $log_path"
+  fi
+  local segments address_keys address_postings address_max topic_keys topic_postings topic_max
+  segments="$(sed -n 's/^Event log index stats:.* segments=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_keys="$(sed -n 's/^Event log index stats:.* addressKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_postings="$(sed -n 's/^Event log index stats:.* addressPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_max="$(sed -n 's/^Event log index stats:.* addressMaxPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_keys="$(sed -n 's/^Event log index stats:.* topicKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_postings="$(sed -n 's/^Event log index stats:.* topicPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_max="$(sed -n 's/^Event log index stats:.* topicMaxPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  RUN_EVENT_LOG_INDEX_SEGMENTS="${segments:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_KEYS="${address_keys:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS="${address_postings:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS="${address_max:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_KEYS="${topic_keys:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS="${topic_postings:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS="${topic_max:-0}"
+}
+
 run_logged() {
   local out="$1"
   shift
@@ -623,7 +665,11 @@ emit_result() {
   python3 - "$OUTPUT" "$profile" "$mode" "$role" "$status" "$target" "$height" "$elapsed" \
     "$total" "$chain" "$ancient" "$snapshots" "$ancient_files" "$snapshot_files" \
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
-    "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" \
+    "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_EVENT_LOG_INDEX_SEGMENTS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS" \
+    "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" \
     "$RUN_BALANCE_TRACE_BLOCK_ROWS" "$RUN_BALANCE_TRACE_ACCOUNT_ROWS" \
     "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" "$RUN_SECTION_BLOOM_ROWS" \
     "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
@@ -646,7 +692,10 @@ keys = [
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
-    "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
+    "derivedIndexBuildSeconds", "eventLogIndexSegments", "eventLogIndexAddressKeys",
+    "eventLogIndexAddressPostings", "eventLogIndexAddressMaxPostings",
+    "eventLogIndexTopicKeys", "eventLogIndexTopicPostings",
+    "eventLogIndexTopicMaxPostings", "balanceTracePruneToBlock",
     "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
     "sectionBloomPruneToSection", "sectionBloomRowsPruned",
     "signedColdPrune", "chainLookupPruneToBlock",
@@ -667,6 +716,9 @@ ints = {
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
     "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
+    "eventLogIndexSegments", "eventLogIndexAddressKeys", "eventLogIndexAddressPostings",
+    "eventLogIndexAddressMaxPostings", "eventLogIndexTopicKeys",
+    "eventLogIndexTopicPostings", "eventLogIndexTopicMaxPostings",
     "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
     "sectionBloomPruneToSection", "sectionBloomRowsPruned", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
@@ -706,6 +758,7 @@ run_producer_mode() {
   stop_pid "$pid"
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
   maybe_build_derived_indexes "$datadir" "$height" "$log_path"
+  collect_event_log_index_stats "$datadir" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
   run_storage_alert_gate "$mode" "producer" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"

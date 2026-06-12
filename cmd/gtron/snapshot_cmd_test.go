@@ -1129,6 +1129,27 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 7 {
 		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 7", got, ok, err)
 	}
+
+	statsOutput, err := captureDBCmdStdout(t, func() error {
+		return snapshotEventLogIndexStatsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("snapshotEventLogIndexStatsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Event log index stats:",
+		"segments=1",
+		"addressKeys=1",
+		"addressPostings=1",
+		"topicKeys=1",
+		"topicPostings=1",
+		"Event log index segment:",
+		"range=[7,7]",
+	} {
+		if !strings.Contains(statsOutput, want) {
+			t.Fatalf("event-log-index stats output missing %q:\n%s", want, statsOutput)
+		}
+	}
 }
 
 func TestSnapshotPruneRetiredCmdDeletesRetiredSegmentFiles(t *testing.T) {

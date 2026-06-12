@@ -302,6 +302,15 @@ func snapshotCommand() *cli.Command {
 				Action: snapshotBuildDerivedIndexesCmd,
 			},
 			{
+				Name:  "event-log-index-stats",
+				Usage: "Print event-log address/topic index key and posting statistics",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					snapshotDirFlag,
+				},
+				Action: snapshotEventLogIndexStatsCmd,
+			},
+			{
 				Name:  "prune-chain-lookups",
 				Usage: "Delete hot block/transaction lookup indexes covered by verified chain-freezer sidecars",
 				Flags: []cli.Flag{
@@ -1162,6 +1171,40 @@ func snapshotPruneRetiredCmd(ctx *cli.Context) error {
 		result.FilesSkippedActive,
 		result.BytesDeleted,
 	)
+	return nil
+}
+
+func snapshotEventLogIndexStatsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	dir := snapshotDir(ctx, cfg.DataDir)
+	inspection, err := statesnapshots.InspectEventLogIndexes(dir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Event log index stats: dir=%s segments=%d addressKeys=%d addressPostings=%d addressMaxPostings=%d topicKeys=%d topicPostings=%d topicMaxPostings=%d\n",
+		dir,
+		len(inspection.Segments),
+		inspection.Address.Keys,
+		inspection.Address.Postings,
+		inspection.Address.MaxPostingsPerKey,
+		inspection.Topic.Keys,
+		inspection.Topic.Postings,
+		inspection.Topic.MaxPostingsPerKey,
+	)
+	for _, stats := range inspection.Segments {
+		fmt.Printf("Event log index segment: path=%s range=[%d,%d] size=%d addressKeys=%d addressPostings=%d addressMaxPostings=%d topicKeys=%d topicPostings=%d topicMaxPostings=%d\n",
+			stats.Path,
+			stats.FromBlock,
+			stats.ToBlock,
+			stats.Size,
+			stats.Address.Keys,
+			stats.Address.Postings,
+			stats.Address.MaxPostingsPerKey,
+			stats.Topic.Keys,
+			stats.Topic.Postings,
+			stats.Topic.MaxPostingsPerKey,
+		)
+	}
 	return nil
 }
 

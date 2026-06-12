@@ -37,6 +37,13 @@ The output path is printed at startup. Each JSON row contains:
 - `derivedIndexToBlock`
 - `derivedIndexSegments`
 - `derivedIndexBuildSeconds`
+- `eventLogIndexSegments`
+- `eventLogIndexAddressKeys`
+- `eventLogIndexAddressPostings`
+- `eventLogIndexAddressMaxPostings`
+- `eventLogIndexTopicKeys`
+- `eventLogIndexTopicPostings`
+- `eventLogIndexTopicMaxPostings`
 - `balanceTracePruneToBlock`
 - `balanceTraceBlockRowsPruned`
 - `balanceTraceAccountRowsPruned`
@@ -80,6 +87,11 @@ the same post-freezer-margin boundary as the cold freezer build and publishes
 balance-trace, section-bloom, event-log, and event-log-index sidecars into the
 snapshot manifest. Use this option to measure the ETL-backed derived-index
 builders and to generate indexed log coverage before minimal-mode prune drills.
+After the build, the harness runs `gtron snapshot event-log-index-stats` and
+records address/topic key counts, postings, and worst-case postings per key for
+the event-log-index sidecars. These counters are the first profiling signal for
+whether the sorted sidecar is selective enough or needs a recsplit-style
+accessor.
 
 ## Signed Cold Prune Drill
 

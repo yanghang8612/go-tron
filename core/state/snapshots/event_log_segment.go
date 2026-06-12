@@ -55,6 +55,27 @@ type EventLogIndexSegment struct {
 	header eventLogIndexHeader
 }
 
+type EventLogIndexLookupStats struct {
+	Keys              uint64
+	Postings          uint64
+	MaxPostingsPerKey uint64
+}
+
+type EventLogIndexSegmentStats struct {
+	Path      string
+	FromBlock uint64
+	ToBlock   uint64
+	Size      uint64
+	Address   EventLogIndexLookupStats
+	Topic     EventLogIndexLookupStats
+}
+
+type EventLogIndexInspection struct {
+	Segments []EventLogIndexSegmentStats
+	Address  EventLogIndexLookupStats
+	Topic    EventLogIndexLookupStats
+}
+
 type eventLogHeader struct {
 	version            uint32
 	headerSize         uint64
@@ -460,6 +481,77 @@ func (s *EventLogIndexSegment) Close() error {
 		return nil
 	}
 	return s.file.Close()
+}
+
+func (s *EventLogIndexSegment) Stats() (EventLogIndexSegmentStats, error) {
+	if s == nil || s.file == nil {
+		return EventLogIndexSegmentStats{}, errors.New("snapshots: nil event log index segment")
+	}
+	stat, err := s.file.Stat()
+	if err != nil {
+		return EventLogIndexSegmentStats{}, err
+	}
+	address, err := readEventLogLookupStats(s.file, s.header.addressIndexOffset, s.header.addressIndexLength, eventLogAddressLookupKeySize)
+	if err != nil {
+		return EventLogIndexSegmentStats{}, err
+	}
+	topic, err := readEventLogLookupStats(s.file, s.header.topicIndexOffset, s.header.topicIndexLength, eventLogTopicLookupKeySize)
+	if err != nil {
+		return EventLogIndexSegmentStats{}, err
+	}
+	return EventLogIndexSegmentStats{
+		Path:      s.ref.Path,
+		FromBlock: s.ref.FromTxNum,
+		ToBlock:   s.ref.ToTxNum,
+		Size:      uint64(stat.Size()),
+		Address:   address,
+		Topic:     topic,
+	}, nil
+}
+
+func InspectEventLogIndexes(dir string) (*EventLogIndexInspection, error) {
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := &EventLogIndexInspection{}
+	for _, ref := range eventLogIndexRefs(manifest) {
+		seg, err := OpenEventLogIndexSegment(dir, ref)
+		if err != nil {
+			return nil, err
+		}
+		stats, statsErr := seg.Stats()
+		closeErr := seg.Close()
+		if statsErr != nil {
+			return nil, statsErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		out.Segments = append(out.Segments, stats)
+		out.Address.add(stats.Address)
+		out.Topic.add(stats.Topic)
+	}
+	return out, nil
+}
+
+func (s *EventLogIndexLookupStats) add(other EventLogIndexLookupStats) {
+	if s == nil {
+		return
+	}
+	if keys, overflow := checkedAdd(s.Keys, other.Keys); !overflow {
+		s.Keys = keys
+	} else {
+		s.Keys = math.MaxUint64
+	}
+	if postings, overflow := checkedAdd(s.Postings, other.Postings); !overflow {
+		s.Postings = postings
+	} else {
+		s.Postings = math.MaxUint64
+	}
+	if other.MaxPostingsPerKey > s.MaxPostingsPerKey {
+		s.MaxPostingsPerKey = other.MaxPostingsPerKey
+	}
 }
 
 func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -1801,6 +1893,67 @@ func readEventLogLookupIndexMap(file io.ReaderAt, offset, length uint64, keySize
 		out[key] = rows
 	}
 	return out, nil
+}
+
+func readEventLogLookupStats(file io.ReaderAt, offset, length uint64, keySize int) (EventLogIndexLookupStats, error) {
+	var stats EventLogIndexLookupStats
+	if offset == 0 || length == 0 {
+		return stats, nil
+	}
+	if length < eventLogLookupHeaderSize {
+		return stats, fmt.Errorf("snapshots: event log lookup length %d smaller than header", length)
+	}
+	indexEnd, overflow := checkedAdd(offset, length)
+	if overflow {
+		return stats, fmt.Errorf("snapshots: event log lookup range [%d,+%d] overflows", offset, length)
+	}
+	count, err := readEventLogUint64At(file, offset)
+	if err != nil {
+		return stats, err
+	}
+	entrySize := uint64(keySize + 16)
+	dirBytes, overflow := checkedMul(count, entrySize)
+	if overflow {
+		return stats, fmt.Errorf("snapshots: event log lookup directory overflows")
+	}
+	dirStart, overflow := checkedAdd(offset, eventLogLookupHeaderSize)
+	if overflow {
+		return stats, fmt.Errorf("snapshots: event log lookup directory start overflows")
+	}
+	dirEnd, overflow := checkedAdd(dirStart, dirBytes)
+	if overflow || dirEnd > indexEnd {
+		return stats, fmt.Errorf("snapshots: event log lookup directory [%d,%d] outside [%d,%d]", dirStart, dirEnd, offset, indexEnd)
+	}
+	stats.Keys = count
+	entryRaw := make([]byte, int(entrySize))
+	for i := uint64(0); i < count; i++ {
+		entryOffset := dirStart + i*entrySize
+		if _, err := file.ReadAt(entryRaw, int64(entryOffset)); err != nil {
+			if errors.Is(err, io.EOF) {
+				return stats, io.ErrUnexpectedEOF
+			}
+			return stats, err
+		}
+		postingsOffset := binary.BigEndian.Uint64(entryRaw[keySize : keySize+8])
+		postingsCount := binary.BigEndian.Uint64(entryRaw[keySize+8 : keySize+16])
+		postingsBytes, overflow := checkedMul(postingsCount, 8)
+		if overflow {
+			return stats, fmt.Errorf("snapshots: event log lookup postings overflow")
+		}
+		postingsEnd, overflow := checkedAdd(postingsOffset, postingsBytes)
+		if overflow || postingsOffset < dirEnd || postingsEnd > indexEnd {
+			return stats, fmt.Errorf("snapshots: event log lookup postings [%d,%d] outside [%d,%d]", postingsOffset, postingsEnd, offset, indexEnd)
+		}
+		sum, overflow := checkedAdd(stats.Postings, postingsCount)
+		if overflow {
+			return stats, fmt.Errorf("snapshots: event log lookup postings count overflow")
+		}
+		stats.Postings = sum
+		if postingsCount > stats.MaxPostingsPerKey {
+			stats.MaxPostingsPerKey = postingsCount
+		}
+	}
+	return stats, nil
 }
 
 func compareEventLogLookupIndexMaps(ref SegmentRef, name string, expected, actual map[string][]uint64) error {

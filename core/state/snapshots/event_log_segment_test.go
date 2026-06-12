@@ -70,6 +70,15 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	if err := CheckEventLogIndexSegment(dir, indexRef); err != nil {
 		t.Fatalf("CheckEventLogIndexSegment: %v", err)
 	}
+	indexStats, err := InspectEventLogIndexes(dir)
+	if err != nil {
+		t.Fatalf("InspectEventLogIndexes: %v", err)
+	}
+	if len(indexStats.Segments) != 1 ||
+		indexStats.Address.Keys != 2 || indexStats.Address.Postings != 2 || indexStats.Address.MaxPostingsPerKey != 1 ||
+		indexStats.Topic.Keys != 2 || indexStats.Topic.Postings != 2 || indexStats.Topic.MaxPostingsPerKey != 1 {
+		t.Fatalf("event log index stats = %+v, want two address/topic keys with one posting each", indexStats)
+	}
 	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
 		t.Fatalf("VerifyManifestFiles: %v", err)
 	}
