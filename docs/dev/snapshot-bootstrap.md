@@ -168,10 +168,10 @@ event-log sidecars together and integrates them into a single manifest
 generation. It uses the same balance-trace coverage audit as
 `snapshot build-balance-traces`; run the specific single-dataset commands when
 only one sidecar needs to be refreshed. Event-log builds advance the
-`SnapshotEventLogBuild` stage to the highest covered source block. Snapshot
-restore/bootstrap derives the same stage from verified manifest `event-log`
-segments, and minimal-mode freezer tail pruning rechecks continuous cold
-event-log coverage before hiding or reclaiming local freezer rows.
+`SnapshotEventLogBuild` stage to the highest continuously covered source block.
+Snapshot restore/bootstrap derives the same stage from verified manifest
+`event-log` segments, and minimal-mode freezer tail pruning rechecks continuous
+cold event-log coverage before hiding or reclaiming local freezer rows.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.

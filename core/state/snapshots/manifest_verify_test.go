@@ -182,6 +182,21 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 	}
 }
 
+func TestWriteSnapshotInstallProgressCapsEventLogBuildAtContinuousCoverage(t *testing.T) {
+	dir := t.TempDir()
+	ref1 := writeVerifiableEventLogSegment(t, dir, 1, 2)
+	ref4 := writeVerifiableEventLogSegment(t, dir, 4, 4)
+	manifest := NewManifest(0, 0, []SegmentRef{ref1, ref4})
+	db := rawdb.NewMemoryDatabase()
+
+	if _, err := WriteSnapshotInstallProgress(db, manifest); err != nil {
+		t.Fatalf("WriteSnapshotInstallProgress: %v", err)
+	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 2 {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 2", got, ok, err)
+	}
+}
+
 func writeVerifiableEventLogSegment(t *testing.T, dir string, fromBlock, toBlock uint64) SegmentRef {
 	t.Helper()
 	db := rawdb.NewMemoryChainDB()

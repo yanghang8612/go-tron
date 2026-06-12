@@ -228,7 +228,7 @@ func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uin
 	if err != nil {
 		return nil, err
 	}
-	if err := writeEventLogBuildStage(chain, toBlock); err != nil {
+	if err := writeEventLogBuildStage(chain, manifest); err != nil {
 		return nil, err
 	}
 	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
@@ -301,16 +301,20 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 		return nil, err
 	}
 	if opts.EventLogs {
-		if err := writeEventLogBuildStage(db, toBlock); err != nil {
+		if err := writeEventLogBuildStage(db, manifest); err != nil {
 			return nil, err
 		}
 	}
 	return &AggregatorBuildResult{Manifest: manifest, Segments: append([]SegmentRef(nil), refs...)}, nil
 }
 
-func writeEventLogBuildStage(db any, toBlock uint64) error {
+func writeEventLogBuildStage(db any, manifest *Manifest) error {
 	if writer, ok := db.(ethdb.KeyValueWriter); ok {
-		return rawdb.WriteStageProgress(writer, rawdb.StageSnapshotEventLogBuild, toBlock)
+		block, ok := eventLogBuildBlockFromManifest(manifest)
+		if !ok {
+			return nil
+		}
+		return rawdb.WriteStageProgress(writer, rawdb.StageSnapshotEventLogBuild, block)
 	}
 	return nil
 }
@@ -427,13 +431,26 @@ func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (
 }
 
 func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
+	refs := eventLogRefs(manifest)
+	if len(refs) == 0 {
+		return 0, false
+	}
+	next := refs[0].FromTxNum
 	var block uint64
 	var ok bool
-	for _, ref := range eventLogRefs(manifest) {
-		if !ok || ref.ToTxNum > block {
-			block = ref.ToTxNum
-			ok = true
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
 		}
+		if ref.FromTxNum > next {
+			break
+		}
+		block = ref.ToTxNum
+		ok = true
+		if ref.ToTxNum == ^uint64(0) {
+			break
+		}
+		next = ref.ToTxNum + 1
 	}
 	return block, ok
 }
