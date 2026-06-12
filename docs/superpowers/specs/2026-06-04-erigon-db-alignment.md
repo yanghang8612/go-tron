@@ -778,6 +778,10 @@ Status:
   `BlockBalanceTrace` protobuf rows plus fixed-width account trace index rows,
   `snapshots.Manager` implements the cold reader, and runtime startup attaches
   it to `ChainDB` alongside the chain-index sidecar.
+- Exact cold `BlockBalanceTrace` lookups skip balance-trace segment files whose
+  block range cannot contain the requested block before opening them. This
+  keeps unrelated missing or retired newer trace sidecars from blocking older
+  archive reads, while in-range missing segments still surface as data errors.
 - `gtron snapshot build-balance-traces --snapshot.from-block --snapshot.to-block`
   now audits canonical block coverage before building, rejects missing or
   mismatched `BlockBalanceTrace` rows, builds those registered cold trace

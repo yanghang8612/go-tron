@@ -204,7 +204,14 @@ func (m *Manager) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTra
 	if err != nil || manifest == nil {
 		return nil, false, err
 	}
+	if blockNum < 0 {
+		return nil, false, nil
+	}
+	queryBlock := uint64(blockNum)
 	for _, ref := range balanceTraceRefs(manifest) {
+		if queryBlock < ref.FromTxNum || queryBlock > ref.ToTxNum {
+			continue
+		}
 		seg, err := OpenBalanceTraceSegment(m.dir, ref)
 		if err != nil {
 			return nil, false, err

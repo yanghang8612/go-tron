@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -137,6 +138,43 @@ func TestBalanceTraceManagerSearchesOlderSegments(t *testing.T) {
 	block, balance, ok, err := mgr.AccountTraceAtOrBefore(owner.Bytes(), 15)
 	if err != nil || !ok || block != 5 || balance != 500 {
 		t.Fatalf("AccountTraceAtOrBefore across segments = %d/%d/%v/%v, want 5/500/true/nil", block, balance, ok, err)
+	}
+}
+
+func TestBalanceTraceManagerSkipsOutOfRangeMissingSegmentForBlockLookup(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	if err := rawdb.WriteBlockBalanceTrace(source, 10, balanceTraceTestBlockTrace(10, 1000)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace old: %v", err)
+	}
+	if err := rawdb.WriteBlockBalanceTrace(source, 20, balanceTraceTestBlockTrace(20, 2000)); err != nil {
+		t.Fatalf("WriteBlockBalanceTrace new: %v", err)
+	}
+	oldRef, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 10, 10)
+	if err != nil {
+		t.Fatalf("Build old segment: %v", err)
+	}
+	newRef, err := BuildBalanceTraceSegmentFromDB(source, snapshotDir, "", 20, 20)
+	if err != nil {
+		t.Fatalf("Build new segment: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{newRef, oldRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if err := os.Remove(filepath.Join(snapshotDir, newRef.Path)); err != nil {
+		t.Fatalf("remove newer segment: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	trace, ok, err := mgr.BlockBalanceTrace(10)
+	if err != nil || !ok || trace.GetTimestamp() != 1000 {
+		t.Fatalf("BlockBalanceTrace old with missing newer segment = %+v/%v/%v, want timestamp 1000", trace, ok, err)
+	}
+	if trace, ok, err := mgr.BlockBalanceTrace(20); err == nil || ok || trace != nil {
+		t.Fatalf("BlockBalanceTrace missing in-range segment = %+v/%v/%v, want nil/false/error", trace, ok, err)
 	}
 }
 
