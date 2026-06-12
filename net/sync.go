@@ -1308,31 +1308,18 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 	if db == nil {
 		return
 	}
-	if err := rawdb.WriteSyncStagedBlockRaw(db, block, raw); err != nil {
-		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", err)
+	result := rawdb.WriteSyncStagedBlockRawAndProgress(db, block, raw)
+	if result.StageError != nil {
+		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", result.StageError)
 		return
 	}
-	ss.writeSyncBodiesAcceptedProgress(block.Number(), block.Hash())
+	if result.ProgressReadError != nil {
+		syncLog.Warn("Read sync bodies stage progress failed", "err", result.ProgressReadError)
+	}
+	if result.ProgressWriteError != nil {
+		syncLog.Warn("Persist sync stage progress failed", "stage", rawdb.StageSyncBodies, "block", result.Number, "err", result.ProgressWriteError)
+	}
 	ss.writeSyncBodiesReadyProgress()
-}
-
-func (ss *SyncService) writeSyncBodiesAcceptedProgress(blockNum uint64, blockHash tcommon.Hash) {
-	if ss == nil || ss.chain == nil {
-		return
-	}
-	db := ss.chain.DB()
-	if db == nil {
-		return
-	}
-	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies)
-	if err != nil {
-		syncLog.Warn("Read sync bodies stage progress failed", "err", err)
-		return
-	}
-	if ok && row.BlockNum > blockNum {
-		return
-	}
-	ss.writeStageProgress(rawdb.StageSyncBodies, blockNum, blockHash, true)
 }
 
 func (ss *SyncService) writeSyncBodiesReadyProgress() {

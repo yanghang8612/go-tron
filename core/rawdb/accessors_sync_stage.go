@@ -27,6 +27,19 @@ type SyncStagedTailPruneResult struct {
 	RewindHash       common.Hash
 }
 
+type SyncStagedBlockWriteResult struct {
+	Number              uint64
+	Hash                common.Hash
+	Staged              bool
+	HadPreviousProgress bool
+	PreviousProgress    StageProgress
+	ProgressWritten     bool
+	ProgressSkipped     bool
+	StageError          error
+	ProgressReadError   error
+	ProgressWriteError  error
+}
+
 func WriteSyncStagedBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	return WriteSyncStagedBlockRaw(db, block, nil)
 }
@@ -50,6 +63,42 @@ func WriteSyncStagedBlockRaw(db ethdb.KeyValueWriter, block *types.Block, raw []
 		}
 	}
 	return db.Put(syncStagedBlockKey(block.Number()), append([]byte(nil), data...))
+}
+
+// WriteSyncStagedBlockRawAndProgress persists a downloader body row and
+// advances the hash-bound SyncBodies watermark unless that watermark already
+// points to a higher block. It intentionally does not refresh SyncBodiesReady:
+// the ready frontier depends on the caller's current canonical head and target.
+func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Block, raw []byte) SyncStagedBlockWriteResult {
+	var result SyncStagedBlockWriteResult
+	if block != nil {
+		result.Number = block.Number()
+		result.Hash = block.Hash()
+	}
+	if err := WriteSyncStagedBlockRaw(db, block, raw); err != nil {
+		result.StageError = err
+		return result
+	}
+	result.Staged = true
+	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil {
+		result.ProgressReadError = err
+		return result
+	}
+	if ok {
+		result.HadPreviousProgress = true
+		result.PreviousProgress = row
+		if row.BlockNum > result.Number {
+			result.ProgressSkipped = true
+			return result
+		}
+	}
+	if err := WriteStageProgressWithHash(db, StageSyncBodies, result.Number, result.Hash); err != nil {
+		result.ProgressWriteError = err
+		return result
+	}
+	result.ProgressWritten = true
+	return result
 }
 
 func ReadSyncStagedBlock(db ethdb.KeyValueReader, number uint64) (*types.Block, bool, error) {

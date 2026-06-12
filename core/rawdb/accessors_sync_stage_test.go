@@ -75,6 +75,55 @@ func TestSyncStagedBlockRawIterate(t *testing.T) {
 	}
 }
 
+func TestWriteSyncStagedBlockRawAndProgressWritesBodyAndProgress(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, block, raw)
+	if result.StageError != nil || result.ProgressReadError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("write result has error: %+v", result)
+	}
+	if !result.Staged || !result.ProgressWritten || result.ProgressSkipped {
+		t.Fatalf("write result = %+v, want staged progress write", result)
+	}
+	row, ok, err := ReadSyncStagedBlockRaw(db, block.Number())
+	if err != nil || !ok || row.Hash != block.Hash() || !bytes.Equal(row.Raw, raw) {
+		t.Fatalf("staged row = %+v ok=%v err=%v, want block raw", row, ok, err)
+	}
+	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil || !ok || progress.BlockNum != block.Number() || progress.BlockHash != block.Hash() {
+		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want block3", progress, ok, err)
+	}
+}
+
+func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressProgress(t *testing.T) {
+	db := NewMemoryDatabase()
+	block3 := testSyncStagedBlock(3, common.Hash{0x02})
+	block5 := testSyncStagedBlock(5, common.Hash{0x04})
+	if err := WriteStageProgressWithHash(db, StageSyncBodies, block5.Number(), block5.Hash()); err != nil {
+		t.Fatalf("write existing progress: %v", err)
+	}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, block3, nil)
+	if result.StageError != nil || result.ProgressReadError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("write result has error: %+v", result)
+	}
+	if !result.Staged || !result.HadPreviousProgress || !result.ProgressSkipped || result.ProgressWritten {
+		t.Fatalf("write result = %+v, want staged and skipped progress", result)
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, block3.Number()); err != nil || !ok {
+		t.Fatalf("staged block3 ok=%v err=%v, want present", ok, err)
+	}
+	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
+	if err != nil || !ok || progress.BlockNum != block5.Number() || progress.BlockHash != block5.Hash() {
+		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want existing block5", progress, ok, err)
+	}
+}
+
 func TestDeleteSyncStagedBlocksThrough(t *testing.T) {
 	db := NewMemoryDatabase()
 	for n := uint64(1); n <= 4; n++ {
