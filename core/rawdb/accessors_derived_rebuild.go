@@ -118,6 +118,9 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 		}
 		infos := ReadTransactionInfosByBlock(chain, blockNum)
 		if len(infos) != 0 {
+			if err := ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "transaction derived index rebuild"); err != nil {
+				return nil, err
+			}
 			if err := collector.PutTransactionInfosByBlock(blockNum, infos); err != nil {
 				return nil, err
 			}

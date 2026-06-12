@@ -768,7 +768,11 @@ Status:
 - `rawdb.RebuildTransactionDerivedIndexesFromBlocks` now rebuilds transaction
   reverse lookup, per-block `TransactionRet`, and per-tx `TransactionInfo` rows
   from retained blocks plus hot or ancient per-block info rows through
-  `DerivedIndexCollector`.
+  `DerivedIndexCollector`. Blocks without retained `TransactionRet` can still
+  rebuild tx-hash reverse lookup rows from the canonical block body, but
+  present per-block info rows must match the canonical block transaction count,
+  block number, and tx hash order before the rebuild republishes per-block or
+  per-tx info rows.
 - `gtron db rebuild-tx-indexes` exposes that transaction lookup/info rebuild to
   operators. It opens hot Pebble plus read-only ancient freezer rows, supports
   explicit or head-derived block ranges, and routes the rebuild through sorted

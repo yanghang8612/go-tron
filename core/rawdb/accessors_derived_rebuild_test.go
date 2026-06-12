@@ -131,6 +131,34 @@ func TestRebuildTransactionDerivedIndexesRejectsBadInputs(t *testing.T) {
 	}
 }
 
+func TestRebuildTransactionDerivedIndexesRejectsMismatchedTransactionInfo(t *testing.T) {
+	mismatchedDB := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	infos[0].Id = bytes.Repeat([]byte{0xef}, common.HashLength)
+	if err := WriteBlock(mismatchedDB, block); err != nil {
+		t.Fatalf("WriteBlock mismatchedDB: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(mismatchedDB, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock mismatchedDB: %v", err)
+	}
+	if _, err := RebuildTransactionDerivedIndexesFromBlocks(mismatchedDB, mismatchedDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("mismatched tx-info id err = %v, want canonical tx mismatch", err)
+	}
+
+	wrongBlockDB := NewMemoryChainDB()
+	block, infos = derivedRebuildTestBlock(t, 1, 1)
+	infos[0].BlockNumber = 2
+	if err := WriteBlock(wrongBlockDB, block); err != nil {
+		t.Fatalf("WriteBlock wrongBlockDB: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(wrongBlockDB, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock wrongBlockDB: %v", err)
+	}
+	if _, err := RebuildTransactionDerivedIndexesFromBlocks(wrongBlockDB, wrongBlockDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "transaction info block number") {
+		t.Fatalf("wrong block tx-info err = %v, want block number mismatch", err)
+	}
+}
+
 func TestRebuildSectionBloomsFromTransactionInfos(t *testing.T) {
 	db := NewMemoryChainDB()
 	block, infos := derivedRebuildTestBlock(t, 1, 1)
