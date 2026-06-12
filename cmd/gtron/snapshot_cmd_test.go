@@ -1328,6 +1328,12 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	recreatedStorageKeyB := snapshotCmdStorageRowKey(recreatedAddr, recreatedSlotB)
 	recreatedAccount1 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance1, corepb.AccountType_Contract, archiveCodeHash1, 0)
 	recreatedAccount2 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance2, corepb.AccountType_Contract, archiveCodeHash2, 1)
+	delegationFrom := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x45}, common.AccountIDLength)...))
+	delegationTo := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x46}, common.AccountIDLength)...))
+	delegationBandwidth := int64(6_000)
+	delegationBandwidthExpire := int64(60_000)
+	delegationEnergy := int64(7_000)
+	delegationEnergyExpire := int64(70_000)
 
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
 	defer src.Close()
@@ -1369,6 +1375,27 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 1, kvdomains.ContractStorage, recreatedStorageKeyA.Bytes(), recreatedNewA.Bytes()); err != nil {
 		t.Fatalf("WriteStateKVLatest recreated new slotA: %v", err)
+	}
+	delegationUnlocked := mustSnapshotCmdDelegationResource(t, &rawdb.DelegatedResource{
+		From:                      delegationFrom,
+		To:                        delegationTo,
+		FrozenBalanceForBandwidth: delegationBandwidth,
+		ExpireTimeForBandwidth:    delegationBandwidthExpire,
+	})
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, common.SystemAccountAddress, 0, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(delegationFrom, delegationTo, false), delegationUnlocked); err != nil {
+		t.Fatalf("WriteStateKVLatest delegation unlocked: %v", err)
+	}
+	delegationLocked := mustSnapshotCmdDelegationResource(t, &rawdb.DelegatedResource{
+		From:                   delegationFrom,
+		To:                     delegationTo,
+		FrozenBalanceForEnergy: delegationEnergy,
+		ExpireTimeForEnergy:    delegationEnergyExpire,
+	})
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, common.SystemAccountAddress, 0, kvdomains.SystemDelegation, rawdb.DelegatedResourceV2StateKey(delegationFrom, delegationTo, true), delegationLocked); err != nil {
+		t.Fatalf("WriteStateKVLatest delegation locked: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, common.SystemAccountAddress, 0, kvdomains.SystemDelegation, rawdb.DelegationIndexStateKey(delegationFrom), delegationTo.Bytes()); err != nil {
+		t.Fatalf("WriteStateKVLatest delegation index: %v", err)
 	}
 	if err := rawdb.WriteStateTxRange(stateSnapshotDB, block1.Number(), block1.Hash(), 1, 1); err != nil {
 		t.Fatalf("WriteStateTxRange block1: %v", err)
@@ -1446,6 +1473,10 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(contract storage): %v", err)
 	}
+	delegationRef, delegationAccessorRef, delegationBTreeRef, err := statesnapshots.BuildLatestDomainSegmentFilesFromDB(stateSnapshotDB, snapshotDir, kvdomains.SystemDelegation, 1, 2, "latest/system-delegation-1-2.seg")
+	if err != nil {
+		t.Fatalf("BuildLatestDomainSegmentFilesFromDB(system delegation): %v", err)
+	}
 	historyRefs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(stateSnapshotDB, snapshotDir, 1, 2, "history/state-domain-change-1-2.seg")
 	if err != nil {
 		t.Fatalf("BuildStateDomainChangeHistorySegmentsFromDB: %v", err)
@@ -1459,6 +1490,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		accountRef, accountAccessorRef, accountBTreeRef,
 		codeRef, codeAccessorRef, codeBTreeRef,
 		storageRef, storageAccessorRef, storageBTreeRef,
+		delegationRef, delegationAccessorRef, delegationBTreeRef,
 	}
 	segments = append(segments, historyRefs...)
 	segments = append(segments, freezerRef, indexRef)
@@ -1621,6 +1653,26 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotB, block2.Number()); err != nil || recreatedStorage != (common.Hash{}) {
 		t.Fatalf("GetStorageAtBlock(recreated slotB block2) = %x/%v, want zero", recreatedStorage, err)
 	}
+	delegated, err := backend.GetDelegatedResourceV2(delegationFrom, delegationTo)
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceV2: %v", err)
+	}
+	if len(delegated) != 2 {
+		t.Fatalf("GetDelegatedResourceV2 len = %d, want 2: %+v", len(delegated), delegated)
+	}
+	if delegated[0].FrozenBalanceForBandwidth != delegationBandwidth || delegated[0].ExpireTimeForBandwidth != delegationBandwidthExpire {
+		t.Fatalf("GetDelegatedResourceV2 bandwidth = %+v, want amount=%d expire=%d", delegated[0], delegationBandwidth, delegationBandwidthExpire)
+	}
+	if delegated[1].FrozenBalanceForEnergy != delegationEnergy || delegated[1].ExpireTimeForEnergy != delegationEnergyExpire {
+		t.Fatalf("GetDelegatedResourceV2 energy = %+v, want amount=%d expire=%d", delegated[1], delegationEnergy, delegationEnergyExpire)
+	}
+	delegationIndex, err := backend.GetDelegatedResourceAccountIndexV2(delegationFrom)
+	if err != nil {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2: %v", err)
+	}
+	if delegationIndex == nil || len(delegationIndex.ToAddresses) != 1 || delegationIndex.ToAddresses[0] != hex.EncodeToString(delegationTo.Bytes()) {
+		t.Fatalf("GetDelegatedResourceAccountIndexV2 = %+v, want %x", delegationIndex, delegationTo.Bytes())
+	}
 
 	tronMux := http.NewServeMux()
 	tronapi.NewAPI(backend).RegisterRoutes(tronMux)
@@ -1644,6 +1696,24 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		}
 		if got := asFloat64(infoJSON["blockNumber"]); got != float64(block1.Number()) {
 			t.Fatalf("%s/gettransactioninfobyid blockNumber = %v, want %d: %v", prefix, infoJSON["blockNumber"], block1.Number(), infoJSON)
+		}
+		delegatedJSON := postSnapshotTestJSON(t, tronServer.URL+prefix+"/getdelegatedresourcev2", fmt.Sprintf(`{"fromAddress":"%s","toAddress":"%s"}`, hex.EncodeToString(delegationFrom.Bytes()), hex.EncodeToString(delegationTo.Bytes())))
+		delegatedList, ok := delegatedJSON["delegatedResource"].([]any)
+		if !ok || len(delegatedList) != 2 {
+			t.Fatalf("%s/getdelegatedresourcev2 list = %v, want 2 entries", prefix, delegatedJSON["delegatedResource"])
+		}
+		delegatedBandwidthJSON, _ := delegatedList[0].(map[string]any)
+		if got := asFloat64(delegatedBandwidthJSON["frozen_balance_for_bandwidth"]); got != float64(delegationBandwidth) {
+			t.Fatalf("%s/getdelegatedresourcev2 bandwidth = %v, want %d: %v", prefix, delegatedBandwidthJSON["frozen_balance_for_bandwidth"], delegationBandwidth, delegatedJSON)
+		}
+		delegatedEnergyJSON, _ := delegatedList[1].(map[string]any)
+		if got := asFloat64(delegatedEnergyJSON["frozen_balance_for_energy"]); got != float64(delegationEnergy) {
+			t.Fatalf("%s/getdelegatedresourcev2 energy = %v, want %d: %v", prefix, delegatedEnergyJSON["frozen_balance_for_energy"], delegationEnergy, delegatedJSON)
+		}
+		delegationIndexJSON := postSnapshotTestJSON(t, tronServer.URL+prefix+"/getdelegatedresourceaccountindexv2", fmt.Sprintf(`{"value":"%s"}`, hex.EncodeToString(delegationFrom.Bytes())))
+		toAddresses, ok := delegationIndexJSON["toAddresses"].([]any)
+		if !ok || len(toAddresses) != 1 || toAddresses[0] != hex.EncodeToString(delegationTo.Bytes()) {
+			t.Fatalf("%s/getdelegatedresourceaccountindexv2 = %v, want %x", prefix, delegationIndexJSON, delegationTo.Bytes())
 		}
 	}
 	for _, prefix := range []string{"/walletsolidity", "/walletpbft"} {
@@ -1945,6 +2015,15 @@ func snapshotCmdStorageRowKey(addr common.Address, key common.Hash) common.Hash 
 func snapshotTestSunToWeiHex(sun int64) string {
 	wei := new(big.Int).Mul(big.NewInt(sun), big.NewInt(1_000_000_000_000))
 	return fmt.Sprintf("0x%x", wei)
+}
+
+func mustSnapshotCmdDelegationResource(t *testing.T, dr *rawdb.DelegatedResource) []byte {
+	t.Helper()
+	raw, err := json.Marshal(dr)
+	if err != nil {
+		t.Fatalf("marshal delegated resource: %v", err)
+	}
+	return raw
 }
 
 func writeSnapshotCmdRemoteFetchSource(t *testing.T, sourceDir string) (statesnapshots.ChainIdentity, ed25519.PublicKey, *statesnapshots.SnapshotCatalog, []statesnapshots.SegmentRef) {

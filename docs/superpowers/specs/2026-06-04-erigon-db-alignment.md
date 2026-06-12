@@ -532,7 +532,10 @@ Status:
   the snapshot head: old-generation storage rows remain physically present in
   restored latest files, but backend and JSON-RPC archive reads prove block-1
   storage is recoverable while head/block-2 reads do not leak untouched old
-  slots into the recreated contract.
+  slots into the recreated contract. SystemDelegation latest-domain rows are
+  also restored in that matrix: V2 delegation buckets plus the delegation index
+  are read back through backend calls and the `/wallet*`
+  `getdelegatedresourcev2`/`getdelegatedresourceaccountindexv2` HTTP routes.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
@@ -551,9 +554,9 @@ Needed:
 - Add longer-running node/server bootstrap soak tests that start the full API
   servers after `gtron snapshot restore` and exercise a broader `/wallet*`,
   JSON-RPC, and archive-read matrix, especially multi-account contract,
-  delegation, and broader account delete/recreate fixtures beyond the current
-  balance/code/storage/account/resource/deleted-account/recreated-contract
-  checks.
+  broader delegation flows, and broader account delete/recreate fixtures beyond
+  the current balance/code/storage/account/resource/deleted-account/
+  recreated-contract/SystemDelegation-latest checks.
 - Keep auditing newly introduced direct hot-only `rawdb.Read*KV` call sites
   before enabling more aggressive chain-data prune defaults.
 - Evaluate compact/merged cold index formats for block hash by number, tx
