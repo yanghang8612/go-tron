@@ -104,6 +104,34 @@ func TestReadVerifiedStageProgressBlockWithHashReader(t *testing.T) {
 	}
 }
 
+func TestRestoreSyncInventoryTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		head     uint64
+		row      uint64
+		haveRow  bool
+		target   uint64
+		restored bool
+	}{
+		{name: "missing", head: 10, target: 10},
+		{name: "ahead", head: 10, row: 25, haveRow: true, target: 25, restored: true},
+		{name: "stale", head: 10, row: 7, haveRow: true, target: 10},
+		{name: "equal", head: 10, row: 10, haveRow: true, target: 10},
+	}
+	for _, tt := range tests {
+		db := NewMemoryDatabase()
+		if tt.haveRow {
+			if err := WriteStageProgress(db, StageSyncInventory, tt.row); err != nil {
+				t.Fatalf("%s: write sync inventory: %v", tt.name, err)
+			}
+		}
+		got := RestoreSyncInventoryTarget(db, tt.head)
+		if got.Target != tt.target || got.Restored != tt.restored || got.ReadError != nil || got.HaveRow != tt.haveRow {
+			t.Fatalf("%s: restore = %+v, want target %d restored %v haveRow %v", tt.name, got, tt.target, tt.restored, tt.haveRow)
+		}
+	}
+}
+
 func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	db := NewMemoryDatabase()
 	hash12 := common.Hash{0x12}

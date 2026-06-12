@@ -296,7 +296,9 @@ Status:
   canonical stage cannot overwrite the sync-stage handoff boundary. New sync
   sessions restore `SyncInventory` when it is ahead of the current head,
   preserving restart diagnostics/remaining-block estimates without advancing
-  canonical chain state. These are intentionally outside `CanonicalExecutionStages()` so
+  canonical chain state; that restore decision is shared through `core/rawdb`
+  so stale inventory rows cannot move the target backward. These are
+  intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
 - Received sync block bodies are now written to a `sync-staged-block-v1-`

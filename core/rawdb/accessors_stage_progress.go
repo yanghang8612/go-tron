@@ -105,6 +105,15 @@ type StageProgress struct {
 	HasBlockHash bool
 }
 
+type SyncInventoryTargetRestore struct {
+	Head      uint64
+	Target    uint64
+	Row       StageProgress
+	HaveRow   bool
+	Restored  bool
+	ReadError error
+}
+
 func CanonicalExecutionStages() []StageID {
 	return []StageID{
 		StageHeaders,
@@ -236,6 +245,29 @@ func ReadStageProgressRow(db ethdb.KeyValueReader, stage StageID) (StageProgress
 		return StageProgress{}, false, err
 	}
 	return row, true, nil
+}
+
+// RestoreSyncInventoryTarget reads the peer-advertised sync target and returns
+// it only when it is ahead of the current local head. SyncInventory is
+// diagnostic downloader progress, so stale rows never move the local target
+// backward.
+func RestoreSyncInventoryTarget(db ethdb.KeyValueReader, head uint64) SyncInventoryTargetRestore {
+	result := SyncInventoryTargetRestore{Head: head, Target: head}
+	row, ok, err := ReadStageProgressRow(db, StageSyncInventory)
+	if err != nil {
+		result.ReadError = err
+		return result
+	}
+	if !ok {
+		return result
+	}
+	result.Row = row
+	result.HaveRow = true
+	if row.BlockNum > head {
+		result.Target = row.BlockNum
+		result.Restored = true
+	}
+	return result
 }
 
 func ReadVerifiedStageProgressBlock(db ethdb.KeyValueReader, stage StageID) (uint64, bool, error) {

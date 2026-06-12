@@ -400,15 +400,11 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	if ss == nil || ss.chain == nil {
 		return head
 	}
-	row, ok, err := rawdb.ReadStageProgressRow(ss.chain.DB(), rawdb.StageSyncInventory)
-	if err != nil {
-		syncLog.Warn("Read sync inventory stage progress failed", "err", err)
-		return head
+	restore := rawdb.RestoreSyncInventoryTarget(ss.chain.DB(), head)
+	if restore.ReadError != nil {
+		syncLog.Warn("Read sync inventory stage progress failed", "err", restore.ReadError)
 	}
-	if ok && row.BlockNum > head {
-		return row.BlockNum
-	}
-	return head
+	return restore.Target
 }
 
 func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
