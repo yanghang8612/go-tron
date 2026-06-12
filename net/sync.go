@@ -28,6 +28,7 @@ import (
 const (
 	maxChainInventorySize   = tsync.MaxChainInventorySize
 	maxFetchBatch           = tsync.MaxFetchBatch
+	maxSyncImportBatch      = tsync.MaxImportBatch
 	maxParallelSyncPeers    = tsync.MaxParallelSyncPeers
 	minFetchRequestInterval = tsync.MinFetchRequestInterval
 	peerJoinAttemptInterval = 2 * time.Second
@@ -1361,7 +1362,7 @@ func (ss *SyncService) waitForDrain() {
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
 	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
-	restoreLimit := maxFetchBatch
+	restoreLimit := maxSyncImportBatch
 	if hasReadyLimit {
 		if readyLimit < next {
 			return bufferedSyncBatch{}
@@ -1372,7 +1373,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 	}
 	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
 	var batch bufferedSyncBatch
-	for len(batch.buffered) < maxFetchBatch {
+	for len(batch.buffered) < maxSyncImportBatch {
 		if hasReadyLimit && next > readyLimit {
 			break
 		}

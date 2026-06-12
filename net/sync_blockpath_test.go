@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // TestPopBufferedBatchPrunesBlockPath pins the fix for the blockPath leak:
@@ -99,4 +101,70 @@ func TestPopBufferedBatchHonorsSyncBodiesReadyFrontier(t *testing.T) {
 	if pathLen != 2 {
 		t.Fatalf("blockPath after capped pop = %d, want 2", pathLen)
 	}
+}
+
+func TestPopBufferedBatchUsesImportChunkLimit(t *testing.T) {
+	bc := makeTestChain(t) // head = genesis (#0); next = #1
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.ensureSessionMapsLocked()
+	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, maxSyncImportBatch+2)
+	batch := ss.popBufferedSyncBatchLocked(time.Now())
+	pathLen := len(ss.blockPath)
+	bufLen := len(ss.blockBuffer)
+	hashLen := len(ss.bufferedHash)
+	ss.mu.Unlock()
+
+	if last == nil {
+		t.Fatal("seeded range returned nil last block")
+	}
+	if len(batch.buffered) != maxSyncImportBatch {
+		t.Fatalf("popped entries = %d, want local import chunk %d", len(batch.buffered), maxSyncImportBatch)
+	}
+	if got := batch.buffered[len(batch.buffered)-1].num; got != uint64(maxSyncImportBatch) {
+		t.Fatalf("last popped block = %d, want %d", got, maxSyncImportBatch)
+	}
+	if bufLen != 2 || hashLen != 2 || pathLen != 2 {
+		t.Fatalf("remaining buffered/hash/path = %d/%d/%d, want 2/2/2", bufLen, hashLen, pathLen)
+	}
+}
+
+func TestDrainBufferedBlocksImportsMultipleChunks(t *testing.T) {
+	bc := makeTestChain(t) // head = genesis (#0); next = #1
+	ss := NewSyncService(bc, nil)
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	last := seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, maxSyncImportBatch+3)
+	ss.targetHeadNum = last.Number()
+	ss.mu.Unlock()
+
+	ss.drainBufferedBlocksOnce()
+
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != last.Hash() {
+		t.Fatalf("head after multi-chunk drain = %v, want block %d %x", got, last.Number(), last.Hash())
+	}
+	if got := ss.stats.CurrentSnapshot().TotalBlocks; got != maxSyncImportBatch+3 {
+		t.Fatalf("sync stats total blocks after multi-chunk drain = %d, want %d", got, maxSyncImportBatch+3)
+	}
+	assertSyncPipelineProgress(t, bc.DB(), last)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("sync bodies ready after multi-chunk drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
+func seedBufferedSyncRange(t *testing.T, ss *SyncService, parentHash tcommon.Hash, start, count int) *types.Block {
+	t.Helper()
+	prev := parentHash
+	var last *types.Block
+	for n := start; n < start+count; n++ {
+		blk := stubBlock(int64(n), prev)
+		ss.blockBuffer[uint64(n)] = bufferedSyncBlock{raw: rawOf(t, blk), num: uint64(n), hash: blk.Hash()}
+		ss.bufferedHash[blk.Hash()] = struct{}{}
+		ss.blockPath[uint64(n)] = blk.Hash()
+		prev = blk.Hash()
+		last = blk
+	}
+	return last
 }

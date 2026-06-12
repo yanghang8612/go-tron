@@ -16,6 +16,10 @@ const (
 	// MaxFetchBatch bounds the number of block hashes requested in a
 	// single FETCH_INV_DATA from one peer.
 	MaxFetchBatch = 100
+	// MaxImportBatch bounds one local staged import range. It is intentionally
+	// smaller than MaxFetchBatch so the wire-compatible 100-block fetch window
+	// can be drained through lower-memory execution/commit chunks.
+	MaxImportBatch = 32
 	// MaxParallelSyncPeers caps how many peers participate in a single
 	// sync session at once.
 	MaxParallelSyncPeers = 8

@@ -143,6 +143,48 @@ func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	}
 }
 
+func TestSyncServicePrunesGappedStagedTailBeyondImportChunkOnSessionStart(t *testing.T) {
+	bc := makeTestChain(t)
+	prev := bc.CurrentBlock().Hash()
+	var lastContiguous *types.Block
+	for n := 1; n <= maxSyncImportBatch; n++ {
+		block := stubBlock(int64(n), prev)
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write sync staged block %d: %v", n, err)
+		}
+		prev = block.Hash()
+		lastContiguous = block
+	}
+	gapped := stubBlock(int64(maxSyncImportBatch+2), prev)
+	if err := rawdb.WriteSyncStagedBlock(bc.DB(), gapped); err != nil {
+		t.Fatalf("write gapped sync staged block: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodies, gapped.Number(), gapped.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	ss.mu.Unlock()
+
+	if buffered != maxSyncImportBatch {
+		t.Fatalf("restored staged bodies buffered=%d, want import chunk %d", buffered, maxSyncImportBatch)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), gapped.Number()); err != nil || ok {
+		t.Fatalf("gapped staged tail after startup cleanup ok=%v err=%v, want deleted", ok, err)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies)
+	if err != nil || !ok {
+		t.Fatalf("sync bodies progress after distant gap cleanup ok=%v err=%v, want rewound", ok, err)
+	}
+	if row.BlockNum != lastContiguous.Number() || !row.HasBlockHash || row.BlockHash != lastContiguous.Hash() {
+		t.Fatalf("sync bodies progress after distant gap cleanup = num %d hash %x hasHash=%v, want block %d %x",
+			row.BlockNum, row.BlockHash, row.HasBlockHash, lastContiguous.Number(), lastContiguous.Hash())
+	}
+}
+
 func TestSyncServiceDropsMissingFirstStagedBodyProgressOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block2 := stubBlock(2, bc.CurrentBlock().Hash())

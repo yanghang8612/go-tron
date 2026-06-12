@@ -307,6 +307,15 @@ Status:
   rejecting out-of-order bodies in the still-running sync session. A
   `SyncBodies` watermark whose first expected body is missing is dropped rather
   than left pointing at an unusable staged range.
+- The downloader's wire batch and local import batch are now separate knobs:
+  `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
+  the staged-body drain restores/pops at most a smaller local import chunk per
+  `InsertBlocksWithStageHook` call. This keeps peer throughput high but bounds
+  the decoded block range, state execution, commitment folding, and stage-row
+  observation done in one local pass. Regression coverage proves a range larger
+  than one local import chunk drains through multiple chunks and still advances
+  hash-bound `SyncImport`, `SyncExecution`, `SyncCommitment`, and `SyncFinish`
+  to the final block.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
@@ -368,8 +377,9 @@ Needed:
 
 - Extend the downloader/body/import watermarks into a fuller staged loop for
   execution, commitment, finish, snapshot build, prune, and freezer.
-- Let sync drain fetched ranges by stage instead of coupling download and
-  execution to one service loop.
+- Promote the chunked sync drain into a fuller stage scheduler instead of
+  coupling download, execution, commitment, finish, and retry policy inside one
+  service loop.
 - Make range execution flush domain batches by stage-sized chunks while still
   emitting per-block roots and TRON maintenance side effects.
 - Preserve fork/reorg safety through hash-bound stage rows and KhaosDB.
