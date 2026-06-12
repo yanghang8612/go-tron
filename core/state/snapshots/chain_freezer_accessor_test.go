@@ -164,3 +164,53 @@ func TestCheckChainFreezerAccessorSegmentRejectsBadOffsetOrder(t *testing.T) {
 		t.Fatalf("CheckChainFreezerAccessorSegment error = %v, want offset order rejection", err)
 	}
 }
+
+func TestChainFreezerRangeCoveredRejectsStaleAccessorOffsets(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: canonicalBoundaryTestBlock(t, 0)},
+		{block: canonicalBoundaryTestBlock(t, 1)},
+		{block: canonicalBoundaryTestBlock(t, 2)},
+	})
+	snapshotDir := filepath.Join(root, "snapshot")
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 2)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	offsets, err := chainFreezerRowOffsets(snapshotDir, freezerRef)
+	if err != nil {
+		t.Fatalf("chainFreezerRowOffsets: %v", err)
+	}
+	if len(offsets) != 3 {
+		t.Fatalf("offsets = %v, want three rows", offsets)
+	}
+	staleOffsets := append([]uint64(nil), offsets...)
+	staleOffsets[1] = offsets[2]
+	staleOffsets[2] = offsets[2] + 1
+	accessorRef, err := writeChainFreezerAccessorSegment(snapshotDir, SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainFreezerAccessor,
+		FromTxNum: 0,
+		ToTxNum:   2,
+		Path:      "chain/freezer-accessor-stale-0-2.idx",
+	}, staleOffsets)
+	if err != nil {
+		t.Fatalf("writeChainFreezerAccessorSegment stale: %v", err)
+	}
+	if err := CheckChainFreezerAccessorSegment(snapshotDir, accessorRef); err != nil {
+		t.Fatalf("CheckChainFreezerAccessorSegment stale shape: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{freezerRef, accessorRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.ChainFreezerRangeCovered(0, 2)
+	if err == nil || covered {
+		t.Fatalf("ChainFreezerRangeCovered stale accessor = %v/%v, want false/error", covered, err)
+	}
+}

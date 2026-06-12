@@ -351,6 +351,11 @@ func (m *Manager) ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, err
 		if err := CheckChainFreezerSegment(m.dir, ref); err != nil {
 			return false, err
 		}
+		if accessorRef, ok := chainFreezerAccessorRefForFreezer(manifest, ref); ok {
+			if err := VerifyChainFreezerAccessorSegmentAgainstChainFreezer(m.dir, accessorRef, ref); err != nil {
+				return false, err
+			}
+		}
 		if ref.ToTxNum >= toBlock {
 			return true, nil
 		}

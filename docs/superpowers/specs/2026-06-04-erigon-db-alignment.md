@@ -482,7 +482,10 @@ Status:
   continuing linearly. Tests prove the accessor build/check/verify path, range
   reads across segment boundaries, `maxBytes` truncation, gap handling, and that
   Manager can serve a row even when full segment scanning would reject trailing
-  bytes.
+  bytes. Chain-freezer cold coverage gates now cross-check any registered
+  accessor sidecar against the freezer segment contents, so format-valid but
+  stale offset tables cannot satisfy minimal-mode tail-prune or stage-status
+  verification.
 - Minimal-mode runtime now registers a chain-freezer tail-prune lifecycle when
   the local freezer is open. It advances the freezer's virtual tail only after
   the planner allows it and cold segment coverage is readable. When the
@@ -572,8 +575,9 @@ Status:
   registers a chain-freezer tail-prune lifecycle. It applies virtual-tail
   hiding and physical freezer shard reclamation after verified freezer/index
   stage progress, event-log cold coverage, and cold chain-freezer segment
-  coverage are visible. Cold chain-freezer segment reads are available as a
-  safety fallback, with
+  coverage are visible; if accessor sidecars exist, that coverage includes
+  byte-for-byte offset validation against the freezer segment. Cold
+  chain-freezer segment reads are available as a safety fallback, with
   `chain-freezer-accessor` sidecars covering non-scan block-number point reads
   for newly built snapshots. Regression coverage now locks this mode gate and
   runs a restart drill: after physical freezer file deletion and local freezer
