@@ -309,6 +309,11 @@ Status:
   `ReadVerifiedStageProgressBlock` helper for this hash-bound canonical-stage
   check, keeping StageFinish integrity rules centralized at the DB-accessor
   layer.
+- `gtron db stage-status` now gives operators one Erigon-style stage view over
+  canonical execution, sync downloader/import diagnostics, snapshot build,
+  prune, and chain-freezer progress. Hash-bound rows are checked through the
+  freezer-aware chain reader, so old canonical blocks that have left hot Pebble
+  do not produce false mismatch diagnostics.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.

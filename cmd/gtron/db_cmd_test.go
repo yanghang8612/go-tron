@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -493,6 +494,55 @@ func TestDBFreezerStatusCmd(t *testing.T) {
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("freezer status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBStageStatusCmd(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageHeaders, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress Headers: %v", err)
+	}
+	mismatchHash := common.Hash{0xee}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), mismatchHash); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHistory, 11); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotHistory: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageID("FutureStage"), 77); err != nil {
+		t.Fatalf("WriteStageProgress FutureStage: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbStageStatusCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Stage status:",
+		"known=",
+		fmt.Sprintf("group=canonical name=%s value=1 hash=%x verified=canonical", rawdb.StageHeaders, block1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncBodies, mismatchHash, block1.Hash()),
+		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
+		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
+		"group=unknown name=FutureStage value=77 hash=none verified=unbound",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stage status output missing %q:\n%s", want, output)
 		}
 	}
 }

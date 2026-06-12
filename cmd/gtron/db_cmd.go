@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -168,6 +169,19 @@ func dbCommand() *cli.Command {
 				},
 				Action: dbFreezerStatusCmd,
 			},
+			{
+				Name:  "stage-status",
+				Usage: "Print staged sync/snapshot/prune/freezer progress",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+				},
+				Action: dbStageStatusCmd,
+			},
 		},
 	}
 }
@@ -192,6 +206,144 @@ func dbFreezerStatusCmd(ctx *cli.Context) error {
 			table.TailFile, table.HeadFile, table.HeadBytes, table.VisibleSize, table.HiddenSize)
 	}
 	return nil
+}
+
+func dbStageStatusCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer closeAncient()
+
+	return dbPrintStageStatus(db, rawdb.NewChainDB(db, ancientReader), cfg.DataDir)
+}
+
+type dbStageStatusRow struct {
+	stage         rawdb.StageID
+	group         string
+	present       bool
+	progress      rawdb.StageProgress
+	verified      string
+	canonicalHash common.Hash
+}
+
+func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, dataDir string) error {
+	rows, err := dbStageStatusRows(db, canonical)
+	if err != nil {
+		return err
+	}
+	present := 0
+	for _, row := range rows {
+		if row.present {
+			present++
+		}
+	}
+	fmt.Printf("Stage status: datadir=%s known=%d rows=%d\n", dataDir, len(rawdb.KnownStageProgressStages()), present)
+	for _, row := range rows {
+		if !row.present {
+			fmt.Printf("Stage progress: group=%s name=%s status=missing\n", row.group, row.stage)
+			continue
+		}
+		if !row.progress.HasBlockHash {
+			fmt.Printf("Stage progress: group=%s name=%s value=%d hash=none verified=%s\n",
+				row.group, row.stage, row.progress.BlockNum, row.verified)
+			continue
+		}
+		fmt.Printf("Stage progress: group=%s name=%s value=%d hash=%x verified=%s",
+			row.group, row.stage, row.progress.BlockNum, row.progress.BlockHash, row.verified)
+		if row.verified != "canonical" {
+			fmt.Printf(" canonicalHash=%x", row.canonicalHash)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbStageStatusRow, error) {
+	progress := make(map[rawdb.StageID]rawdb.StageProgress)
+	if err := rawdb.IterateStageProgress(db, func(row rawdb.StageProgress) (bool, error) {
+		progress[row.Stage] = row
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+
+	known := rawdb.KnownStageProgressStages()
+	seen := make(map[rawdb.StageID]struct{}, len(known))
+	rows := make([]dbStageStatusRow, 0, len(known)+len(progress))
+	for _, stage := range known {
+		seen[stage] = struct{}{}
+		row, ok := progress[stage]
+		rows = append(rows, dbStageStatusRowFor(stage, row, ok, canonical))
+	}
+
+	var unknown []rawdb.StageID
+	for stage := range progress {
+		if _, ok := seen[stage]; ok {
+			continue
+		}
+		unknown = append(unknown, stage)
+	}
+	sort.Slice(unknown, func(i, j int) bool { return string(unknown[i]) < string(unknown[j]) })
+	for _, stage := range unknown {
+		rows = append(rows, dbStageStatusRowFor(stage, progress[stage], true, canonical))
+	}
+	return rows, nil
+}
+
+func dbStageStatusRowFor(stage rawdb.StageID, progress rawdb.StageProgress, present bool, canonical ethdb.KeyValueReader) dbStageStatusRow {
+	row := dbStageStatusRow{
+		stage:   stage,
+		group:   dbStageStatusGroup(stage),
+		present: present,
+	}
+	if !present {
+		return row
+	}
+	row.progress = progress
+	row.verified, row.canonicalHash = dbStageStatusVerification(progress, canonical)
+	return row
+}
+
+func dbStageStatusVerification(progress rawdb.StageProgress, canonical ethdb.KeyValueReader) (string, common.Hash) {
+	if !progress.HasBlockHash {
+		return "unbound", common.Hash{}
+	}
+	if canonical == nil {
+		return "unchecked", common.Hash{}
+	}
+	canonicalHash := rawdb.ReadBlockHashByNumber(canonical, progress.BlockNum)
+	if canonicalHash == (common.Hash{}) {
+		return "missing-canonical", canonicalHash
+	}
+	if canonicalHash != progress.BlockHash {
+		return "mismatch", canonicalHash
+	}
+	return "canonical", canonicalHash
+}
+
+func dbStageStatusGroup(stage rawdb.StageID) string {
+	switch stage {
+	case rawdb.StageHeaders, rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish:
+		return "canonical"
+	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
+		return "sync"
+	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:
+		return "snapshot"
+	case rawdb.StageSnapshotHotPrune, rawdb.StageSnapshotPrune, rawdb.StageSnapshotChainLookupPrune, rawdb.StageSnapshotSectionBloomPrune, rawdb.StageSnapshotBalanceTracePrune, rawdb.StageSnapshotChainFreezerTailPrune:
+		return "prune"
+	case rawdb.StageChainFreezer:
+		return "freezer"
+	default:
+		return "unknown"
+	}
 }
 
 func dbRebuildTxIndexesCmd(ctx *cli.Context) error {

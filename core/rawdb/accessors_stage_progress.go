@@ -105,6 +105,38 @@ func CanonicalExecutionStages() []StageID {
 	}
 }
 
+// KnownStageProgressStages returns every stage id with a built-in meaning in
+// the order operators expect to inspect the pipeline.
+func KnownStageProgressStages() []StageID {
+	return []StageID{
+		StageHeaders,
+		StageBodies,
+		StageExecution,
+		StageCommitment,
+		StageFinish,
+		StageSyncInventory,
+		StageSyncBodies,
+		StageSyncImport,
+		StageSyncExecution,
+		StageSyncCommitment,
+		StageSyncFinish,
+		StageSnapshotInstall,
+		StageSnapshotBuild,
+		StageSnapshotLatestBuild,
+		StageSnapshotLatest,
+		StageSnapshotHistory,
+		StageSnapshotAccessor,
+		StageSnapshotCommitmentFlush,
+		StageSnapshotHotPrune,
+		StageSnapshotPrune,
+		StageChainFreezer,
+		StageSnapshotChainLookupPrune,
+		StageSnapshotSectionBloomPrune,
+		StageSnapshotBalanceTracePrune,
+		StageSnapshotChainFreezerTailPrune,
+	}
+}
+
 func WriteStageProgress(db ethdb.KeyValueWriter, stage StageID, blockNum uint64) error {
 	if db == nil {
 		return errors.New("rawdb: nil stage progress writer")
