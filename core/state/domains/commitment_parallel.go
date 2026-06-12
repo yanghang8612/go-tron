@@ -12,15 +12,26 @@ import (
 // produce byte-identical roots AND byte-identical branch rows — this is purely a
 // performance knob and an operational kill switch, never a consensus toggle.
 //
-// The default is chosen so that trivially small commits (a handful of touched
-// keys) stay sequential and never pay goroutine spawn / buffer-allocation
-// overhead, while realistic per-block commits (typically hundreds–thousands of
-// touched keys on an active TRON chain) fan out across cores. The commitment
-// fold is keccak-bound (~28% of sync CPU, single-threaded before this), so the
-// split recovers idle cores on the hot path.
+// The threshold is the op count above which the parallel split (goroutine spawn +
+// a private bufferedBranchStore per non-empty subtrie) pays for itself. It is
+// grounded in BenchmarkFoldCrossover against a deep pre-populated trie: at base
+// 500k, sequential is faster only up to ~8 ops, while parallel already wins by
+// ~1.16x at 16 ops and climbs to ~1.68x by 64. The live chain trie is far deeper
+// (every resolved key costs more keccak + branch reads), so its crossover sits
+// even lower; 16 is the conservative choice that captures the win on production
+// state while keeping trivially small commits sequential.
+//
+// The prior default of 64 was set on the assumption that per-block commits touch
+// "hundreds–thousands" of keys. Live Nile profiling disproved this: under a
+// concentrated-write surge (many txs hammering a few hot contracts) the coalesced
+// per-block op count routinely lands BELOW 64, so the expensive deep-trie folds
+// ran sequentially on one core while ~12 stayed idle. Each key's keccak path
+// (keyPath) spreads uniformly across the 16 first-nibble subtries regardless of
+// how concentrated the original keys are, so the split parallelizes well even for
+// a single hot contract.
 var ParallelFoldMinOps = defaultParallelFoldMinOps
 
-const defaultParallelFoldMinOps = 64
+const defaultParallelFoldMinOps = 16
 
 // maxFoldNibbles is the branching factor at every trie level: the root fans out
 // into at most 16 independent first-nibble subtries.
