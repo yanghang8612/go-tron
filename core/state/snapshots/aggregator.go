@@ -217,7 +217,7 @@ func (a *Aggregator) BuildEventLogsWithOptions(chain *rawdb.ChainDB, fromBlock, 
 	if err != nil {
 		return nil, err
 	}
-	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum))
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +286,7 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 		if err != nil {
 			return nil, err
 		}
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum))
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(a.dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), opts.ETL)
 		if err != nil {
 			return nil, err
 		}

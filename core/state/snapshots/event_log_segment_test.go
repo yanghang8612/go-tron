@@ -345,6 +345,74 @@ func TestEventLogManagerUsesGlobalIndexToSkipUnrelatedSegments(t *testing.T) {
 	}
 }
 
+func TestBuildEventLogIndexSegmentWithOptionsUsesETLScratch(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "snapshot")
+	db := rawdb.NewMemoryChainDB()
+	addrA := eventLogTestAddress(0x62)
+	addrB := eventLogTestAddress(0x63)
+	topicA := common.Hash{0x62}
+	topicB := common.Hash{0x63}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addrA, Topics: [][]byte{topicA[:]}, Data: []byte{0x01}},
+	})
+	block2, infos2 := eventLogTestBlock(t, 2, []*corepb.TransactionInfo_Log{
+		{Address: addrB, Topics: [][]byte{topicB[:]}, Data: []byte{0x02}},
+	})
+	for _, block := range []*coretypes.Block{block1, block2} {
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 2, infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 2: %v", err)
+	}
+	ref1, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 1: %v", err)
+	}
+	ref2, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-2-2.seg", 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 2: %v", err)
+	}
+
+	etlTemp := filepath.Join(root, "etl-index-scratch")
+	indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(dir, []SegmentRef{ref1, ref2}, "", RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
+	}
+	if err := CheckEventLogIndexSegment(dir, indexRef); err != nil {
+		t.Fatalf("CheckEventLogIndexSegment: %v", err)
+	}
+	if err := verifyEventLogIndexSegmentAgainstEventLogs(dir, indexRef, []SegmentRef{ref1, ref2}); err != nil {
+		t.Fatalf("verifyEventLogIndexSegmentAgainstEventLogs: %v", err)
+	}
+	index, err := OpenEventLogIndexSegment(dir, indexRef)
+	if err != nil {
+		t.Fatalf("OpenEventLogIndexSegment: %v", err)
+	}
+	defer index.Close()
+	starts, used, err := index.CandidateSegmentStarts(EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addrB)},
+		Topics:    [][]common.Hash{{topicB}},
+	})
+	if err != nil {
+		t.Fatalf("CandidateSegmentStarts: %v", err)
+	}
+	if !used || len(starts) != 1 || starts[0] != ref2.FromTxNum {
+		t.Fatalf("CandidateSegmentStarts = %v used=%v, want [%d]/true", starts, used, ref2.FromTxNum)
+	}
+}
+
 func TestEventLogIndexBuildRejectsGappedSegments(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

@@ -33,6 +33,8 @@ const (
 	eventLogTopicLookupKeySize   = 8 + common.HashLength
 	eventLogETLKeySize           = 8 + 8 + 8
 	eventLogETLValueHeaderSize   = common.HashLength + common.HashLength + common.AddressLength
+	eventLogIndexETLKindAddress  = byte(1)
+	eventLogIndexETLKindTopic    = byte(2)
 )
 
 var (
@@ -139,6 +141,10 @@ func BuildEventLogSegmentFromChainWithOptions(chain *rawdb.ChainDB, dir, relPath
 }
 
 func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []SegmentRef, relPath string) (SegmentRef, error) {
+	return BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(dir, eventRefs, relPath, RestoreETLOptions{})
+}
+
+func BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(dir string, eventRefs []SegmentRef, relPath string, opts RestoreETLOptions) (SegmentRef, error) {
 	if dir == "" {
 		return SegmentRef{}, errors.New("snapshots: event log index directory is empty")
 	}
@@ -170,14 +176,17 @@ func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []Segme
 	if err := validateSegmentRef(ref); err != nil {
 		return SegmentRef{}, err
 	}
-	addressPostings := make(map[string][]uint64)
-	topicPostings := make(map[string][]uint64)
+	collector, err := etl.NewCollector(opts.collectorOptions())
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	defer collector.Close()
 	for _, eventRef := range eventRefs {
 		seg, err := OpenEventLogSegment(dir, eventRef)
 		if err != nil {
 			return SegmentRef{}, err
 		}
-		err = collectEventLogIndexPostings(seg, addressPostings, topicPostings)
+		err = collectEventLogIndexPostingsToETL(seg, collector)
 		closeErr := seg.Close()
 		if err != nil {
 			return SegmentRef{}, err
@@ -186,6 +195,11 @@ func BuildEventLogIndexSegmentFromEventLogSegments(dir string, eventRefs []Segme
 			return SegmentRef{}, closeErr
 		}
 	}
+	postings := newEventLogIndexPostingWriter()
+	if _, err := collector.Load(postings); err != nil {
+		return SegmentRef{}, err
+	}
+	addressPostings, topicPostings := postings.postings()
 	return writeEventLogIndexSegment(dir, ref, addressPostings, topicPostings)
 }
 
@@ -1198,11 +1212,104 @@ func collectEventLogIndexPostings(seg *EventLogSegment, addressPostings, topicPo
 	return nil
 }
 
+func collectEventLogIndexPostingsToETL(seg *EventLogSegment, collector *etl.Collector) error {
+	if seg == nil || seg.file == nil {
+		return errors.New("snapshots: nil event log segment for index build")
+	}
+	segmentStart := seg.ref.FromTxNum
+	for i := uint64(0); i < seg.header.rowCount; i++ {
+		entry, err := readEventLogIndexEntryAt(seg.file, eventLogIndexEntryOffset(seg.header, i))
+		if err != nil {
+			return err
+		}
+		if err := collector.Put(eventLogIndexETLKey(eventLogIndexETLKindAddress, eventLogAddressLookupKey(entry.address), segmentStart), nil); err != nil {
+			return err
+		}
+		log, err := seg.readLog(entry)
+		if err != nil {
+			return err
+		}
+		for position, rawTopic := range log.GetTopics() {
+			var topic common.Hash
+			copy(topic[:], rawTopic)
+			if err := collector.Put(eventLogIndexETLKey(eventLogIndexETLKindTopic, eventLogTopicLookupKey(uint64(position), topic), segmentStart), nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func appendEventLogSegmentPosting(rows []uint64, segmentStart uint64) []uint64 {
 	if len(rows) == 0 || rows[len(rows)-1] != segmentStart {
 		return append(rows, segmentStart)
 	}
 	return rows
+}
+
+type eventLogIndexPostingWriter struct {
+	addressPostings map[string][]uint64
+	topicPostings   map[string][]uint64
+}
+
+func newEventLogIndexPostingWriter() *eventLogIndexPostingWriter {
+	return &eventLogIndexPostingWriter{
+		addressPostings: make(map[string][]uint64),
+		topicPostings:   make(map[string][]uint64),
+	}
+}
+
+func (w *eventLogIndexPostingWriter) Put(key, value []byte) error {
+	kind, lookupKey, segmentStart, err := parseEventLogIndexETLKey(key)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case eventLogIndexETLKindAddress:
+		if len(lookupKey) != eventLogAddressLookupKeySize {
+			return fmt.Errorf("snapshots: event-log-index ETL address key length %d, want %d", len(lookupKey), eventLogAddressLookupKeySize)
+		}
+		mapKey := string(lookupKey)
+		w.addressPostings[mapKey] = appendEventLogSegmentPosting(w.addressPostings[mapKey], segmentStart)
+	case eventLogIndexETLKindTopic:
+		if len(lookupKey) != eventLogTopicLookupKeySize {
+			return fmt.Errorf("snapshots: event-log-index ETL topic key length %d, want %d", len(lookupKey), eventLogTopicLookupKeySize)
+		}
+		mapKey := string(lookupKey)
+		w.topicPostings[mapKey] = appendEventLogSegmentPosting(w.topicPostings[mapKey], segmentStart)
+	default:
+		return fmt.Errorf("snapshots: unknown event-log-index ETL key kind %d", kind)
+	}
+	return nil
+}
+
+func (w *eventLogIndexPostingWriter) Delete(key []byte) error {
+	return errors.New("snapshots: event-log-index ETL writer does not support deletes")
+}
+
+func (w *eventLogIndexPostingWriter) postings() (map[string][]uint64, map[string][]uint64) {
+	if w == nil {
+		return nil, nil
+	}
+	return w.addressPostings, w.topicPostings
+}
+
+func eventLogIndexETLKey(kind byte, lookupKey []byte, segmentStart uint64) []byte {
+	key := make([]byte, 1+len(lookupKey)+8)
+	key[0] = kind
+	copy(key[1:], lookupKey)
+	binary.BigEndian.PutUint64(key[1+len(lookupKey):], segmentStart)
+	return key
+}
+
+func parseEventLogIndexETLKey(key []byte) (byte, []byte, uint64, error) {
+	if len(key) < 1+8 {
+		return 0, nil, 0, fmt.Errorf("snapshots: event-log-index ETL key length %d is too short", len(key))
+	}
+	lookupLen := len(key) - 1 - 8
+	lookupKey := append([]byte(nil), key[1:1+lookupLen]...)
+	segmentStart := binary.BigEndian.Uint64(key[1+lookupLen:])
+	return key[0], lookupKey, segmentStart, nil
 }
 
 func writeEventLogIndexSegment(dir string, ref SegmentRef, addressPostings, topicPostings map[string][]uint64) (SegmentRef, error) {

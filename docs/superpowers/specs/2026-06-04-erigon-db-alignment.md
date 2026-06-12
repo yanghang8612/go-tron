@@ -995,8 +995,12 @@ Status:
   block scans spill event-log rows to scratch space keyed by
   block/transaction/log position, and the final segment writer streams sorted
   payload/index rows into the immutable segment while retaining only lookup
-  postings in memory. Aggregator event-log builds can pass the same ETL temp,
-  buffer, and batch knobs used by other snapshot restore/build paths.
+  postings in memory. Global event-log-index sidecars now feed
+  `(address/topic key, segment start)` postings through the same ETL collector
+  before serializing lookup maps, deduplicating repeated segment hits by sorted
+  key instead of depending on scan-order map appends. Aggregator event-log
+  builds can pass the same ETL temp, buffer, and batch knobs used by other
+  snapshot restore/build paths.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or
