@@ -1749,51 +1749,44 @@ func syncPauseHint(err error) string {
 }
 
 func (ss *SyncService) estimatedRemainLocked() int64 {
-	head := ss.chain.CurrentBlock().Number()
-	if ss.targetHeadNum > head {
-		return int64(ss.targetHeadNum - head)
-	}
-	remain := len(ss.retryList) + len(ss.blockBuffer)
-	for _, ps := range ss.peers {
-		remain += len(ps.fetchList) + ps.inflight
-		if ps.remainNum > 0 {
-			remain += int(ps.remainNum)
-		}
-	}
-	return int64(remain)
+	return ss.sessionProgressLocked().EstimatedRemaining()
 }
 
 func (ss *SyncService) shouldFinishLocked() bool {
-	if !ss.syncing || ss.pause.Paused() {
-		return false
-	}
-	if len(ss.retryList) != 0 || len(ss.blockBuffer) != 0 {
-		return false
-	}
-	for _, ps := range ss.peers {
-		if ps.chainRequested || ps.inflight != 0 || len(ps.fetchList) != 0 {
-			return false
-		}
-		if !ps.done {
-			return false
-		}
-	}
-	return ss.targetHeadNum == 0 || ss.chain.CurrentBlock().Number() >= ss.targetHeadNum
+	return ss.sessionProgressLocked().ShouldFinish()
 }
 
 func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
-	if !ss.syncing || ss.pause.Paused() || len(ss.retryList) == 0 || len(ss.blockBuffer) != 0 {
-		return false
+	return ss.sessionProgressLocked().ShouldRestartForStalledRetries()
+}
+
+func (ss *SyncService) sessionProgressLocked() syncdl.SessionProgress {
+	progress := syncdl.SessionProgress{
+		Syncing:        ss.syncing,
+		Paused:         ss.pause.Paused(),
+		TargetHead:     ss.targetHeadNum,
+		RetryListLen:   len(ss.retryList),
+		BlockBufferLen: len(ss.blockBuffer),
+	}
+	if ss.chain != nil && ss.chain.CurrentBlock() != nil {
+		progress.CurrentHead = ss.chain.CurrentBlock().Number()
+	}
+	if len(ss.peers) > 0 {
+		progress.Peers = make([]syncdl.PeerProgress, 0, len(ss.peers))
 	}
 	for _, ps := range ss.peers {
 		if ps == nil {
 			continue
 		}
-		if ps.chainRequested || ps.inflight != 0 || len(ps.fetchList) != 0 {
-			return false
-		}
+		progress.Peers = append(progress.Peers, syncdl.PeerProgress{
+			FetchListLen:   len(ps.fetchList),
+			Inflight:       ps.inflight,
+			RemainNum:      ps.remainNum,
+			ChainRequested: ps.chainRequested,
+			Done:           ps.done,
+		})
 	}
-	return true
+	return progress
 }
 
 func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
