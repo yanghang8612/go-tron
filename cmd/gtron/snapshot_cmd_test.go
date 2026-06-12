@@ -1781,6 +1781,11 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if !ok || blockRPCResult["hash"] != "0x"+blockHashHex {
 		t.Fatalf("eth_getBlockByHash result = %v, want block1 hash", blockRPC["result"])
 	}
+	txRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getTransactionByHash", []any{"0x" + txHashHex})
+	txResult, ok := txRPC["result"].(map[string]any)
+	if !ok || txResult["hash"] != "0x"+txHashHex || txResult["blockHash"] != "0x"+blockHashHex || txResult["blockNumber"] != "0x1" {
+		t.Fatalf("eth_getTransactionByHash result = %v, want tx/block1 hashes", txRPC["result"])
+	}
 	receiptRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getTransactionReceipt", []any{"0x" + txHashHex})
 	receipt, ok := receiptRPC["result"].(map[string]any)
 	if !ok || receipt["transactionHash"] != "0x"+txHashHex || receipt["blockHash"] != "0x"+blockHashHex {
@@ -1823,6 +1828,16 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	lifecycleBalanceRPC := postSnapshotTestRPC(t, rpcLifecycleURL, "eth_getBalance", []any{"0x" + hex.EncodeToString(archiveAddr.Bytes()), "0x1"})
 	if got := lifecycleBalanceRPC["result"]; got != snapshotTestSunToWeiHex(archiveBalance1) {
 		t.Fatalf("lifecycle eth_getBalance archive result = %v, want %s", got, snapshotTestSunToWeiHex(archiveBalance1))
+	}
+	lifecycleTxRPC := postSnapshotTestRPC(t, rpcLifecycleURL, "eth_getTransactionByHash", []any{"0x" + txHashHex})
+	lifecycleTx, ok := lifecycleTxRPC["result"].(map[string]any)
+	if !ok || lifecycleTx["hash"] != "0x"+txHashHex || lifecycleTx["blockHash"] != "0x"+blockHashHex || lifecycleTx["blockNumber"] != "0x1" {
+		t.Fatalf("lifecycle eth_getTransactionByHash result = %v, want tx/block1 hashes", lifecycleTxRPC["result"])
+	}
+	lifecycleReceiptRPC := postSnapshotTestRPC(t, rpcLifecycleURL, "eth_getTransactionReceipt", []any{"0x" + txHashHex})
+	lifecycleReceipt, ok := lifecycleReceiptRPC["result"].(map[string]any)
+	if !ok || lifecycleReceipt["transactionHash"] != "0x"+txHashHex || lifecycleReceipt["blockHash"] != "0x"+blockHashHex {
+		t.Fatalf("lifecycle eth_getTransactionReceipt result = %v, want tx/block1 hashes", lifecycleReceiptRPC["result"])
 	}
 }
 

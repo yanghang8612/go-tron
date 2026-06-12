@@ -970,6 +970,11 @@ Status:
   transaction-info rows, then serves the same `blockHash` log query through
   chain-freezer ancient rows plus the cold `chain-index` and `event-log`
   segments.
+- Snapshot restore API soak now also sends `eth_getTransactionByHash` through
+  both the in-process JSON-RPC API and a real restarted JSON-RPC listener after
+  hot block bodies, block-hash lookups, tx lookups, and per-tx info rows are
+  absent. This pins the archive transaction lookup path to cold chain-freezer
+  rows plus the `chain-index` sidecar, matching the existing receipt coverage.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
