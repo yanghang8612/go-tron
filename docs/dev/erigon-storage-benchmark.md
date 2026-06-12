@@ -14,7 +14,7 @@ datadir size split by hot Pebble, ancient freezer, and state snapshots:
 ```bash
 scripts/dev/storage_benchmark.sh \
   --profile producer \
-  --modes full,minimal,archive \
+  --modes full,blocks,minimal,archive \
   --target-blocks 120 \
   --freezer-margin 3 \
   --freezer-interval 1s \
@@ -56,7 +56,7 @@ operator prune workflow in one sample:
 ```bash
 scripts/dev/storage_benchmark.sh \
   --profile producer \
-  --modes minimal \
+  --modes blocks,minimal \
   --target-blocks 120 \
   --freezer-margin 3 \
   --freezer-interval 1s \
@@ -65,11 +65,12 @@ scripts/dev/storage_benchmark.sh \
   --keep
 ```
 
-This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, runs
-`gtron snapshot prune-chain-lookups` with the catalog signer as a trusted key,
-and then restarts `minimal` once so the tail-prune lifecycle can run. Use a
-small `--history-window` for short dev samples; production and soak runs should
-use the intended retention window.
+This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, and
+runs `gtron snapshot prune-chain-lookups` with the catalog signer as a trusted
+key for each selected mode. `blocks` stops there and should report lookup-prune
+coverage with no freezer-tail prune. `minimal` then restarts once so the
+tail-prune lifecycle can run. Use a small `--history-window` for short dev
+samples; production and soak runs should use the intended retention window.
 
 After the drill, `gtron db freezer-status --datadir <dir>` prints the local
 freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and
@@ -84,7 +85,7 @@ catch-up time and follower datadir size:
 ```bash
 scripts/dev/storage_benchmark.sh \
   --profile sync \
-  --modes full,minimal \
+  --modes full,blocks,minimal \
   --target-blocks 120 \
   --sync-max-diff 2 \
   --keep

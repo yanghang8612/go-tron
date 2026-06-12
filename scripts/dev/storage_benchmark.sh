@@ -8,7 +8,7 @@ set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 GTRON="${GTRON:-$BASEDIR/build/bin/gtron}"
-MODES="full,minimal,archive"
+MODES="full,blocks,minimal,archive"
 PROFILE="producer"
 TARGET_BLOCKS=30
 TIMEOUT=180
@@ -49,7 +49,8 @@ Profiles:
 
 Options:
   --profile producer|sync        Benchmark profile (default: producer)
-  --modes full,minimal,archive   Comma-separated prune modes
+  --modes full,blocks,minimal,archive
+                                  Comma-separated prune modes
   --target-blocks N              Block height target (default: 30)
   --timeout SECONDS              Per-wait timeout (default: 180)
   --workdir DIR                  Working directory (default: mktemp)
@@ -68,8 +69,8 @@ Options:
   --history-window N             Inject [history] prune_window for short prune drills
 
 Examples:
-  scripts/dev/storage_benchmark.sh --modes full,minimal,archive --target-blocks 80
-  scripts/dev/storage_benchmark.sh --profile sync --modes full,minimal --target-blocks 100
+  scripts/dev/storage_benchmark.sh --modes full,blocks,minimal,archive --target-blocks 80
+  scripts/dev/storage_benchmark.sh --profile sync --modes full,blocks,minimal --target-blocks 100
 EOF
 }
 

@@ -71,7 +71,7 @@ not complete.
 | Commitment domain | Staged hex-patricia branch rows, checkpoints, cold branch restore, java root adapter. | Strong. Internal root is decoupled from java-tron header root. |
 | Code retention | Content-addressed CodeDomain latest snapshots selected by account-envelope history. | Strong, with a deliberate no-temporal-code policy. |
 | Cold/hot lifecycle | `SnapshotLifecycle` runs builder, compactor, and pruner in order. | Moderate to strong. Local lifecycle and operator remote fetch/restore exist; automated remote publish/handoff is still missing. |
-| Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Partial. The CLI vocabulary now matches Erigon; `minimal` now has freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage, while `blocks` still needs distinct block-retention behavior. |
+| Pruning modes | `archive`, `full`, `snap`, `blocks`, and `minimal` are accepted through `--prune.mode`; `--gcmode` remains a deprecated alias. | Moderate. The CLI vocabulary matches Erigon; `blocks` keeps complete local block freezer history while pruning hot state/lookup rows, and `minimal` adds freezer virtual-tail enforcement plus physical shard reclamation gated by cold coverage. Longer benchmark/soak evidence is still needed. |
 | Chain freezer | `core/freezer` plus `core/rawdb/freezer`, `ChainDB` fall-through, and cold `chain-index` sidecars. | Moderate. Old block bodies/tx infos/state roots can be served from freezer, and verified sidecars cover block/tx lookup rows after hot prune. |
 | Staged execution | Hash-bound `Headers/Bodies/Execution/Commitment/Finish`, `InsertBlocks`, `canonicalRangeExecutor`, reusable `CommitScope`. | Partial. Range-shaped and stage-tracked, but not a full Erigon staged-sync loop. |
 | Parallel execution | Async commitment can overlap fold with next block in bulk sync. | Partial. No Erigon-style parallel transaction executor. |
@@ -543,12 +543,13 @@ Status:
   keeps hot lookup rows.
 - `scripts/dev/storage_benchmark.sh` is now the repeatable measurement harness
   for producer-time, follower sync catch-up, and datadir size split by hot
-  Pebble, ancient freezer, and state snapshots across prune modes. Its
+  Pebble, ancient freezer, and state snapshots across prune modes. Its default
+  producer matrix covers `full`, `blocks`, `minimal`, and `archive`. Its
   `--signed-cold-prune` drill builds cold chain-freezer coverage, signs the
-  catalog, prunes hot chain lookup rows through the verified signer, and
-  restarts `minimal` once so the tail-prune lifecycle can report the post-prune
-  boundary. The matching runbook is `docs/dev/erigon-storage-benchmark.md`,
-  with the first smoke sample recorded in
+  catalog, prunes hot chain lookup rows through the verified signer for
+  `blocks`/`minimal`, and restarts only `minimal` so the tail-prune lifecycle
+  can report the post-prune boundary. The matching runbook is
+  `docs/dev/erigon-storage-benchmark.md`, with the first smoke sample recorded in
   `docs/dev/erigon-storage-benchmark-results-2026-06-10.md`.
 
 Remaining:
@@ -559,10 +560,11 @@ Remaining:
   shard reclamation primitive, planner, runtime apply path, and cold
   chain-freezer segment fallback reads with block-number accessors. Minimal
   tail pruning now also requires continuous cold snapshot coverage across the
-  entire pruned range, but production still needs collected long-running
-  soak/space samples and
-  acceptance thresholds before old block file reclamation is considered
-  production-complete under `minimal`.
+  entire pruned range, and the benchmark drill can compare `blocks` lookup
+  pruning without freezer-tail truncation against `minimal` tail pruning. The
+  remaining gap is collected long-running soak/space samples and acceptance
+  thresholds before old block file reclamation is considered production-complete
+  under `minimal`.
 
 ### P2: Derived Domains And RPC Indexes
 
