@@ -260,15 +260,15 @@ func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
 	}
 }
 
-func TestArchiveQuery_HistoryReaderHoldsChainMutex(t *testing.T) {
+func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	b, _, _ := archiveBackend(t)
 
-	reader, _, releaseHistory, err := b.historyReaderAt()
+	session, err := b.archiveStateAt(0)
 	if err != nil {
-		t.Fatalf("historyReaderAt: %v", err)
+		t.Fatalf("archiveStateAt: %v", err)
 	}
-	if reader == nil {
-		t.Fatal("historyReaderAt returned nil reader")
+	if session.reader == nil {
+		t.Fatal("archiveStateAt returned nil reader")
 	}
 
 	locked := make(chan struct{})
@@ -286,12 +286,33 @@ func TestArchiveQuery_HistoryReaderHoldsChainMutex(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	releaseHistory()
+	session.Close()
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("chainmu was not released")
+	}
+}
+
+func TestArchiveQuery_ArchiveStateSessionReleasesChainMutexOnGateError(t *testing.T) {
+	b, _, _ := archiveBackend(t)
+
+	if _, err := b.archiveStateAt(1); err == nil {
+		t.Fatal("archiveStateAt future block returned nil error")
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		b.chain.chainmu.Lock()
+		close(locked)
+		b.chain.chainmu.Unlock()
+	}()
+
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("archiveStateAt gate error leaked chainmu")
 	}
 }
 

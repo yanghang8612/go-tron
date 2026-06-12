@@ -839,6 +839,13 @@ Status:
 - Snapshot restore APIs now expose `RestoreETLOptions` so callers can control
   the collector temp directory, buffer limit, and batch size for large
   bootstrap installs.
+- `TronBackend` archive/as-of account, balance, code, storage, reward, and
+  account-resource reads now share one archive state session. The session opens
+  the head-aligned persistent history reader, holds the chain mutex until the
+  query is done, and applies the shared block-range/history/prune-window gate
+  before any API-specific reconstruction starts. Regression coverage proves the
+  lock is held for successful sessions and released when the gate rejects a
+  query.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
@@ -855,8 +862,8 @@ Remaining:
   isolated replay backfill has replay-DB resume, collector-backed trace writes,
   and signed-snapshot checkpoint starts. Production archive completeness still
   needs larger-datadir soak, recsplit-style event-log address/topic profiling
-  beyond the current sorted sidecar, and an archive/as-of state reader beyond
-  the trace-specific checkpoint path.
+  beyond the current sorted sidecar, and broader API coverage on top of the
+  shared backend archive/as-of state session.
 - Collect longer Pebble-backed benchmark samples for large snapshot restore and
   backfill workloads, then tune collector buffer/batch defaults.
 
