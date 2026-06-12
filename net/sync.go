@@ -126,8 +126,7 @@ type SyncService struct {
 	// and ticker; Start/Stop fan-out launches and joins it.
 	watchdog *tsync.Watchdog
 
-	bufferWaitStart time.Time
-	bufferWaitNum   uint64
+	bufferWait syncdl.BufferWaitTracker
 
 	lastPeerJoinAttempt time.Time
 }
@@ -375,8 +374,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
 	ss.writeSyncBodiesReadyProgress()
 	ss.stats.InitSession(now)
-	ss.bufferWaitStart = time.Time{}
-	ss.bufferWaitNum = 0
+	ss.bufferWait.Reset()
 	ss.lastPeerJoinAttempt = time.Time{}
 }
 
@@ -1164,7 +1162,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		batch := ss.popBufferedSyncBatchLocked(now)
 		if len(batch.Buffered) == 0 {
 			next := ss.chain.CurrentBlock().Number() + 1
-			ss.beginBufferWaitLocked(next, now)
+			ss.bufferWait.Begin(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			complete := ss.shouldFinishLocked()
 			joinPeers := !complete && ss.shouldJoinAvailablePeersLocked(now)
@@ -1260,7 +1258,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 		if !ok {
 			break
 		}
-		batch.BufferWaits = append(batch.BufferWaits, ss.endBufferWaitLocked(next, now))
+		batch.BufferWaits = append(batch.BufferWaits, ss.bufferWait.End(next, now))
 		delete(ss.blockBuffer, next)
 		// Drop the path reservation too. Without this blockPath grows by one
 		// entry per synced block for the whole session (never pruned until
@@ -1571,28 +1569,6 @@ func (ss *SyncService) deleteAllSyncBodies() {
 	}
 }
 
-func (ss *SyncService) beginBufferWaitLocked(next uint64, now time.Time) {
-	if ss.bufferWaitStart.IsZero() || ss.bufferWaitNum != next {
-		ss.bufferWaitStart = now
-		ss.bufferWaitNum = next
-	}
-}
-
-func (ss *SyncService) endBufferWaitLocked(next uint64, now time.Time) time.Duration {
-	if ss.bufferWaitStart.IsZero() || ss.bufferWaitNum != next {
-		ss.bufferWaitStart = time.Time{}
-		ss.bufferWaitNum = 0
-		return 0
-	}
-	elapsed := now.Sub(ss.bufferWaitStart)
-	ss.bufferWaitStart = time.Time{}
-	ss.bufferWaitNum = 0
-	if elapsed < 0 {
-		return 0
-	}
-	return elapsed
-}
-
 func (ss *SyncService) pauseSync(peer *p2p.Peer, num uint64, err error) {
 	peerID := "<nil>"
 	if peer != nil {
@@ -1883,8 +1859,7 @@ func (ss *SyncService) doReset() {
 	ss.bufferedHash = nil
 	ss.blockPath = nil
 	ss.targetHeadNum = 0
-	ss.bufferWaitStart = time.Time{}
-	ss.bufferWaitNum = 0
+	ss.bufferWait.Reset()
 	ss.deleteAllSyncBodies()
 }
 

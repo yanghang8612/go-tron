@@ -153,6 +153,30 @@ func TestPopBufferedBatchUsesConfiguredImportChunkLimit(t *testing.T) {
 	}
 }
 
+func TestPopBufferedBatchCarriesBufferWait(t *testing.T) {
+	bc := makeTestChain(t) // head = genesis (#0); next = #1
+	ss := NewSyncService(bc, nil)
+
+	start := time.Unix(1_700_000_000, 0)
+	block := stubBlock(1, bc.CurrentBlock().Hash())
+
+	ss.mu.Lock()
+	ss.ensureSessionMapsLocked()
+	ss.bufferWait.Begin(1, start)
+	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: rawOf(t, block), Num: 1, Hash: block.Hash()}
+	ss.bufferedHash[block.Hash()] = struct{}{}
+	ss.blockPath[1] = block.Hash()
+	batch := ss.popBufferedSyncBatchLocked(start.Add(250 * time.Millisecond))
+	ss.mu.Unlock()
+
+	if len(batch.BufferWaits) != 1 {
+		t.Fatalf("buffer wait entries = %d, want 1", len(batch.BufferWaits))
+	}
+	if got := batch.BufferWaits[0]; got != 250*time.Millisecond {
+		t.Fatalf("buffer wait = %v, want 250ms", got)
+	}
+}
+
 func TestSetImportBatchSizeRejectsInvalidLimits(t *testing.T) {
 	ss := NewSyncService(makeTestChain(t), nil)
 	for _, size := range []int{0, -1, maxFetchBatch + 1} {
