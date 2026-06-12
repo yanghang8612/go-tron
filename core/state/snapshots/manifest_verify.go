@@ -301,6 +301,9 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 		}
 		report.ActiveSegments++
 	}
+	if err := verifyManifestChainFreezerSidecars(dir, manifest); err != nil {
+		return nil, err
+	}
 	if opts.CheckRetired {
 		for _, ref := range manifest.Retired {
 			if err := verifyManifestSegmentRef(dir, ref, opts); err != nil {
@@ -310,6 +313,39 @@ func VerifyLoadedManifestFiles(dir string, manifest *Manifest, opts VerifyManife
 		}
 	}
 	return report, nil
+}
+
+func verifyManifestChainFreezerSidecars(dir string, manifest *Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	freezerByRange := make(map[chainBlockSegmentRange]SegmentRef)
+	for _, ref := range manifest.Segments {
+		if ref.Kind != SegmentChainFreezer || ref.normalizedDataset() != SegmentDatasetChainFreezer {
+			continue
+		}
+		freezerByRange[chainBlockSegmentRange{from: ref.FromTxNum, to: ref.ToTxNum}] = ref
+	}
+	for _, ref := range manifest.Segments {
+		if ref.normalizedDataset() != SegmentDatasetChainFreezer {
+			continue
+		}
+		freezerRef, ok := freezerByRange[chainBlockSegmentRange{from: ref.FromTxNum, to: ref.ToTxNum}]
+		if !ok {
+			continue
+		}
+		switch ref.Kind {
+		case SegmentChainIndex:
+			if err := VerifyChainIndexSegmentAgainstChainFreezer(dir, ref, freezerRef); err != nil {
+				return err
+			}
+		case SegmentChainFreezerAccessor:
+			if err := VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir, ref, freezerRef); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func verifyManifestSegmentRef(dir string, ref SegmentRef, opts VerifyManifestOptions) error {

@@ -525,7 +525,11 @@ Status:
   bytes. Chain-freezer cold coverage gates now cross-check any registered
   accessor sidecar against the freezer segment contents, so format-valid but
   stale offset tables cannot satisfy minimal-mode tail-prune or stage-status
-  verification.
+  verification. Signed/local manifest verification now runs the same
+  chain-freezer sidecar cross-checks for active `chain-index` and
+  `chain-freezer-accessor` refs, so `gtron snapshot verify`, fetch, bootstrap,
+  and restore fail before trusting a catalog whose sidecars are format-valid
+  but point at different freezer contents.
 - Minimal-mode runtime now registers a chain-freezer tail-prune lifecycle when
   the local freezer is open. It advances the freezer's virtual tail only after
   the planner allows it and cold segment coverage is readable. When the
@@ -600,8 +604,9 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Add higher-level operator alerts around freezer repair events and
-  catalog/freezer sidecar mismatch.
+- Add higher-level operator alerts around freezer repair events. Catalog/freezer
+  sidecar mismatch is now caught by signed/local manifest verification as well
+  as tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

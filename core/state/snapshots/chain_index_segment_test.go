@@ -10,6 +10,8 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestChainIndexSegmentBuildVerifyLookup(t *testing.T) {
@@ -81,6 +83,53 @@ func TestManifestRejectsChainIndexWithoutFreezer(t *testing.T) {
 	manifest := NewManifestForChain(0, 0, []SegmentRef{ref}, chainFreezerTestIdentity())
 	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "no matching chain-freezer") {
 		t.Fatalf("manifest.Validate error = %v, want missing chain-freezer companion", err)
+	}
+}
+
+func TestVerifyRemoteManifestFilesRejectsChainIndexFreezerMismatch(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{{block: canonicalBoundaryTestBlock(t, 0)}})
+	freezerRef, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "chain/freezer-0-0.seg", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient src: %v", err)
+	}
+
+	alt := openChainFreezerTestStore(t, filepath.Join(root, "alt"))
+	defer alt.Close()
+	altBlock := coretypes.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:    0,
+				Timestamp: 9_999,
+			},
+		},
+	})
+	if altBlock.Hash() == canonicalBoundaryTestBlock(t, 0).Hash() {
+		t.Fatalf("alternate block hash unexpectedly matched source block hash")
+	}
+	appendChainFreezerRawRows(t, alt, []chainFreezerRawTestRow{{block: altBlock}})
+	altFreezerRef, err := BuildChainFreezerSegmentFromAncient(alt, snapshotDir, "chain/freezer-alt-0-0.seg", 0, 0)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient alt: %v", err)
+	}
+	indexRef, err := BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, altFreezerRef, "chain/index-0-0.idx")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment alt: %v", err)
+	}
+	if err := CheckChainIndexSegment(snapshotDir, indexRef); err != nil {
+		t.Fatalf("CheckChainIndexSegment: %v", err)
+	}
+
+	identity := chainFreezerTestIdentity()
+	if err := PublishManifest(snapshotDir, NewManifestForChain(0, 0, []SegmentRef{freezerRef, indexRef}, identity)); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	if _, err := VerifyRemoteManifestFiles(snapshotDir, identity); err == nil || !strings.Contains(err.Error(), "missing block hash") {
+		t.Fatalf("VerifyRemoteManifestFiles error = %v, want chain-index/freezer mismatch", err)
 	}
 }
 

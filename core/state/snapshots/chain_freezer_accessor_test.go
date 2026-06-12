@@ -205,6 +205,9 @@ func TestChainFreezerRangeCoveredRejectsStaleAccessorOffsets(t *testing.T) {
 	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{freezerRef, accessorRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
+	if _, err := VerifyManifestFiles(snapshotDir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err == nil || !strings.Contains(err.Error(), "offset for block 1 points at different row") {
+		t.Fatalf("VerifyManifestFiles stale accessor = %v, want accessor/freezer mismatch", err)
+	}
 	mgr, err := OpenManager(snapshotDir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)
