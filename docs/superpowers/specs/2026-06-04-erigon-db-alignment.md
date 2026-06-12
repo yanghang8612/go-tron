@@ -485,7 +485,9 @@ Status:
   stats, persist the same last-repair record as freezer-local `repair.json`,
   and emit a warning when any table is truncated. `gtron db freezer-status`
   prints that repair summary, including `repairRecordedAt`, for operator
-  diagnostics even after a later readonly reopen.
+  diagnostics even after a later readonly reopen. The same signal is exported
+  through go-ethereum metrics gauges/counters under `ancient/repair/*` and is
+  available on the opt-in debug server via `/debug/metrics?prefix=ancient/repair/`.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,
@@ -609,10 +611,10 @@ Needed:
   dominate disk or lookup latency.
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
-- Add higher-level operator alert wiring around the persisted freezer
-  `repair.json` signal, e.g. metrics/exporter integration. Catalog/freezer
-  sidecar mismatch is now caught by signed/local manifest verification as well
-  as tail-prune/stage-status coverage gates.
+- Add higher-level operator alert rules around the persisted freezer
+  `repair.json` plus `ancient/repair/*` metrics signal. Catalog/freezer sidecar
+  mismatch is now caught by signed/local manifest verification as well as
+  tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 
@@ -1111,14 +1113,15 @@ Status:
   freezer-wide head/tail plus per-table physical tail, hidden tail, prunable
   flags, shard IDs, visible size, and hidden size. `gtron db freezer-status`
   opens the chain freezer read-only and prints that state for benchmark and
-  soak sampling after minimal-mode tail pruning.
+  soak sampling after minimal-mode tail pruning. Freezer repair events now also
+  update `ancient/repair/*` metrics and the opt-in debug metrics endpoint can
+  filter those rows for alert exporters.
 
 Adopt only where profiles justify it:
 
 - tx hash to block lookup
 - event/log topic and address indexes
 - history accessor point lookup if `.kv` binary search becomes a bottleneck
-- repair-event metrics for pruned freezer tails
 - existence filters for cold CodeDomain or commitment snapshots
 
 ## Recommended Implementation Order

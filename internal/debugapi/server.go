@@ -15,8 +15,8 @@
 // can be used to denial-of-service the process via repeated CPU profiles or
 // to leak heap contents; keeping them on a separate, default-localhost port
 // makes the exposure footprint a deliberate operator choice. (2) Future
-// surface: /debug/metrics (go-ethereum-style Timer/Meter dump) will land
-// here too; bundling them keeps the diagnostic surface in one place.
+// surface: /debug/metrics exposes the go-ethereum-style Timer/Meter dump here
+// too; bundling them keeps the diagnostic surface in one place.
 package debugapi
 
 import (
@@ -29,9 +29,12 @@ import (
 	"net/http/pprof"
 	"runtime"
 	runtimepprof "runtime/pprof"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -91,6 +94,7 @@ func NewServer(addr string) *Server {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		runtimepprof.Lookup("goroutine").WriteTo(w, 2)
 	})
+	mux.HandleFunc("/debug/metrics", metricsHandler)
 
 	// /debug/state-hotspots: per-(domain,key) write activity since process
 	// start. Supports query params:
@@ -140,6 +144,43 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// metricsHandler serves /debug/metrics as an operator-facing JSON snapshot of
+// the process-wide go-ethereum metrics registry. Use ?prefix=ancient/repair/
+// to narrow the dump for alert checks.
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	all := metrics.DefaultRegistry.GetAll()
+	names := make([]string, 0, len(all))
+	for name := range all {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	type row struct {
+		Name   string                 `json:"name"`
+		Values map[string]interface{} `json:"values"`
+	}
+	out := struct {
+		Prefix  string `json:"prefix,omitempty"`
+		Count   int    `json:"count"`
+		Metrics []row  `json:"metrics"`
+	}{
+		Prefix:  prefix,
+		Count:   len(names),
+		Metrics: make([]row, 0, len(names)),
+	}
+	for _, name := range names {
+		out.Metrics = append(out.Metrics, row{Name: name, Values: all[name]})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
 }
 
 // stateHotspotsHandler serves /debug/state-hotspots. Uses the process

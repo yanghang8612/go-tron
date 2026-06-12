@@ -91,11 +91,12 @@ type Freezer struct {
 	writeLock  sync.RWMutex
 	writeBatch *freezerBatch
 
-	readonly     bool
-	tables       map[string]*freezerTable // Data tables for storing everything
-	repairStats  RepairStats
-	instanceLock *flock.Flock // File-system lock to prevent double opens
-	closeOnce    sync.Once
+	readonly      bool
+	tables        map[string]*freezerTable // Data tables for storing everything
+	repairStats   RepairStats
+	repairMetrics freezerRepairMetrics
+	instanceLock  *flock.Flock // File-system lock to prevent double opens
+	closeOnce     sync.Once
 }
 
 // Stats is a stable, read-only snapshot of freezer-wide and per-table bounds.
@@ -134,6 +135,60 @@ func (s RepairStats) clone() RepairStats {
 	out := s
 	out.Tables = append([]TableRepairStats(nil), s.Tables...)
 	return out
+}
+
+type freezerRepairMetrics struct {
+	applied    *metrics.Gauge
+	tables     *metrics.Gauge
+	targetHead *metrics.Gauge
+	targetTail *metrics.Gauge
+	recordedAt *metrics.Gauge
+	events     *metrics.Counter
+}
+
+func newFreezerRepairMetrics(namespace string) freezerRepairMetrics {
+	prefix := namespace + "ancient/repair/"
+	return freezerRepairMetrics{
+		applied:    metrics.GetOrRegisterGauge(prefix+"applied", nil),
+		tables:     metrics.GetOrRegisterGauge(prefix+"tables", nil),
+		targetHead: metrics.GetOrRegisterGauge(prefix+"target/head", nil),
+		targetTail: metrics.GetOrRegisterGauge(prefix+"target/tail", nil),
+		recordedAt: metrics.GetOrRegisterGauge(prefix+"recorded", nil),
+		events:     metrics.GetOrRegisterCounter(prefix+"events", nil),
+	}
+}
+
+func (m freezerRepairMetrics) update(repair RepairStats, countEvent bool) {
+	applied := int64(0)
+	if repair.Applied {
+		applied = 1
+	}
+	m.applied.Update(applied)
+	m.tables.Update(int64(len(repair.Tables)))
+	m.targetHead.Update(uint64MetricValue(repair.TargetHead))
+	m.targetTail.Update(uint64MetricValue(repair.TargetTail))
+	m.recordedAt.Update(repairRecordedUnix(repair.RecordedAt))
+	if countEvent && repair.Applied {
+		m.events.Inc(1)
+	}
+}
+
+func repairRecordedUnix(recordedAt string) int64 {
+	if recordedAt == "" {
+		return 0
+	}
+	ts, err := time.Parse(time.RFC3339Nano, recordedAt)
+	if err != nil {
+		return 0
+	}
+	return ts.Unix()
+}
+
+func uint64MetricValue(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 // TableStats describes one freezer table's storage bounds. PhysicalTail is the
@@ -196,10 +251,11 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 	}
 	// Open all the supported data tables
 	freezer := &Freezer{
-		datadir:      datadir,
-		readonly:     readonly,
-		tables:       make(map[string]*freezerTable),
-		instanceLock: lock,
+		datadir:       datadir,
+		readonly:      readonly,
+		tables:        make(map[string]*freezerTable),
+		repairMetrics: newFreezerRepairMetrics(namespace),
+		instanceLock:  lock,
 	}
 
 	// Create the tables.
@@ -233,6 +289,7 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 	if !freezer.repairStats.Applied {
 		freezer.loadPersistedRepairStats()
 	}
+	freezer.repairMetrics.update(freezer.repairStats, false)
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -661,6 +718,7 @@ func (f *Freezer) repair() error {
 	if repair.Applied {
 		repair.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		f.repairStats = repair
+		f.repairMetrics.update(repair, true)
 		if err := f.persistRepairStats(repair); err != nil {
 			gtronlog.Warn("Could not persist ancient database repair diagnostics", "database", f.datadir, "err", err)
 		}

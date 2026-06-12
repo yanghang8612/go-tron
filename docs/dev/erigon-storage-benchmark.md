@@ -103,8 +103,10 @@ visible/hidden sizes. The header also includes `repairApplied`,
 because the freezer had to truncate table bounds on open before serving the
 status view. The same repair record is persisted in the freezer directory as
 `repair.json`, so a later readonly status sample can still surface the last
-automatic repair. Capture this alongside the JSONL row when validating
-minimal-mode physical shard reclamation.
+automatic repair. When the debug server is enabled, `/debug/metrics?prefix=ancient/repair/`
+also exposes `ancient/repair/applied`, `tables`, `target/head`, `target/tail`,
+`recorded`, and `events` for alert sampling. Capture this alongside the JSONL
+row when validating minimal-mode physical shard reclamation.
 
 ## Sync Profile
 

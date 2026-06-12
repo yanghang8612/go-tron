@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 var testTables = map[string]TableConfig{
@@ -599,10 +601,17 @@ func TestFreezerTruncateTailPreflightsAllTables(t *testing.T) {
 func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
+	namespace := "test/freezer/repair/" + strings.ReplaceAll(t.Name(), "/", "_") + "/"
+	metricPrefix := namespace + "ancient/repair/"
+	t.Cleanup(func() {
+		for _, suffix := range []string{"applied", "tables", "target/head", "target/tail", "recorded", "events"} {
+			metrics.DefaultRegistry.Unregister(metricPrefix + suffix)
+		}
+	})
 	rawOnly := map[string]TableConfig{"raw": {NoSnappy: true}}
 	allTables := map[string]TableConfig{"raw": {NoSnappy: true}, "cmp": {NoSnappy: true}}
 
-	empty, err := NewFreezer(dir, "", false, 2049, allTables)
+	empty, err := NewFreezer(dir, namespace, false, 2049, allTables)
 	if err != nil {
 		t.Fatalf("NewFreezer empty all-tables: %v", err)
 	}
@@ -610,7 +619,7 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 		t.Fatalf("close empty all-tables: %v", err)
 	}
 
-	f, err := NewFreezer(dir, "", false, 2049, rawOnly)
+	f, err := NewFreezer(dir, namespace, false, 2049, rawOnly)
 	if err != nil {
 		t.Fatalf("NewFreezer raw-only: %v", err)
 	}
@@ -628,7 +637,7 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 		t.Fatalf("close raw-only: %v", err)
 	}
 
-	reopened, err := NewFreezer(dir, "", false, 2049, allTables)
+	reopened, err := NewFreezer(dir, namespace, false, 2049, allTables)
 	if err != nil {
 		t.Fatalf("reopen with all tables: %v", err)
 	}
@@ -667,7 +676,7 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 		t.Fatalf("close repaired freezer: %v", err)
 	}
 
-	readonly, err := NewFreezer(dir, "", true, 2049, allTables)
+	readonly, err := NewFreezer(dir, namespace, true, 2049, allTables)
 	if err != nil {
 		t.Fatalf("readonly reopen after repair: %v", err)
 	}
@@ -678,6 +687,35 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 	}
 	if !readonlyStats.Repair.Applied || readonlyStats.Repair.RecordedAt != stats.Repair.RecordedAt || len(readonlyStats.Repair.Tables) != 1 {
 		t.Fatalf("readonly repair stats = %+v, want persisted repair stats %+v", readonlyStats.Repair, stats.Repair)
+	}
+
+	assertGauge := func(suffix string, want int64) {
+		t.Helper()
+		gauge, ok := metrics.DefaultRegistry.Get(metricPrefix + suffix).(*metrics.Gauge)
+		if !ok {
+			t.Fatalf("missing gauge %s", metricPrefix+suffix)
+		}
+		if got := gauge.Snapshot().Value(); got != want {
+			t.Fatalf("gauge %s = %d, want %d", suffix, got, want)
+		}
+	}
+	assertGauge("applied", 1)
+	assertGauge("tables", 1)
+	assertGauge("target/head", 0)
+	assertGauge("target/tail", 0)
+	recordedGauge, ok := metrics.DefaultRegistry.Get(metricPrefix + "recorded").(*metrics.Gauge)
+	if !ok {
+		t.Fatalf("missing gauge %s", metricPrefix+"recorded")
+	}
+	if got := recordedGauge.Snapshot().Value(); got <= 0 {
+		t.Fatalf("recorded gauge = %d, want unix timestamp", got)
+	}
+	events, ok := metrics.DefaultRegistry.Get(metricPrefix + "events").(*metrics.Counter)
+	if !ok {
+		t.Fatalf("missing counter %s", metricPrefix+"events")
+	}
+	if got := events.Snapshot().Count(); got != 1 {
+		t.Fatalf("repair events = %d, want 1", got)
 	}
 }
 
