@@ -536,6 +536,10 @@ Status:
   also restored in that matrix: V2 delegation buckets plus the delegation index
   are read back through backend calls and the `/wallet*`
   `getdelegatedresourcev2`/`getdelegatedresourceaccountindexv2` HTTP routes.
+  The same restored backend now also starts the real TRON HTTP and JSON-RPC
+  server lifecycles on port `0`, discovers their bound addresses, and sends
+  archive API requests through those listeners instead of only through
+  in-memory `httptest` handlers.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
@@ -551,12 +555,13 @@ Status:
 
 Needed:
 
-- Add longer-running node/server bootstrap soak tests that start the full API
-  servers after `gtron snapshot restore` and exercise a broader `/wallet*`,
+- Add longer-running node/server bootstrap soak tests that start the whole node
+  stack after `gtron snapshot restore` and exercise a broader `/wallet*`,
   JSON-RPC, and archive-read matrix, especially multi-account contract,
   broader delegation flows, and broader account delete/recreate fixtures beyond
-  the current balance/code/storage/account/resource/deleted-account/
-  recreated-contract/SystemDelegation-latest checks.
+  the current real HTTP/JSON-RPC lifecycle smoke plus
+  balance/code/storage/account/resource/deleted-account/recreated-contract/
+  SystemDelegation-latest checks.
 - Keep auditing newly introduced direct hot-only `rawdb.Read*KV` call sites
   before enabling more aggressive chain-data prune defaults.
 - Evaluate compact/merged cold index formats for block hash by number, tx

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1762,6 +1763,16 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if got := asFloat64(recreatedHeadAccountJSON["balance"]); got != float64(recreatedBalance2) {
 		t.Fatalf("/wallet/getaccount recreated head balance = %v, want %d: %v", recreatedHeadAccountJSON["balance"], recreatedBalance2, recreatedHeadAccountJSON)
 	}
+	tronLifecycleServer := tronapi.NewServer(backend, 0)
+	if err := tronLifecycleServer.Start(); err != nil {
+		t.Fatalf("start TRON API lifecycle server: %v", err)
+	}
+	defer tronLifecycleServer.Stop()
+	tronLifecycleURL := snapshotTestServerURL(t, tronLifecycleServer.ListenAddr())
+	lifecycleAccountJSON := postSnapshotTestJSON(t, tronLifecycleURL+"/walletsolidity/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+	if got := asFloat64(lifecycleAccountJSON["balance"]); got != float64(recreatedBalance1) {
+		t.Fatalf("lifecycle /walletsolidity/getaccount recreated balance = %v, want %d: %v", lifecycleAccountJSON["balance"], recreatedBalance1, lifecycleAccountJSON)
+	}
 
 	rpcServer := httptest.NewServer(jsonrpcapi.NewAPI(backend))
 	defer rpcServer.Close()
@@ -1802,6 +1813,16 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	recreatedLeakedSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotB.Bytes()), "0x2"})
 	if got := recreatedLeakedSlotRPC["result"]; got != "0x"+hex.EncodeToString(common.Hash{}.Bytes()) {
 		t.Fatalf("eth_getStorageAt recreated slotB block2 result = %v, want zero", got)
+	}
+	rpcLifecycleServer := jsonrpcapi.NewServer(backend, 0)
+	if err := rpcLifecycleServer.Start(); err != nil {
+		t.Fatalf("start JSON-RPC lifecycle server: %v", err)
+	}
+	defer rpcLifecycleServer.Stop()
+	rpcLifecycleURL := snapshotTestServerURL(t, rpcLifecycleServer.ListenAddr())
+	lifecycleBalanceRPC := postSnapshotTestRPC(t, rpcLifecycleURL, "eth_getBalance", []any{"0x" + hex.EncodeToString(archiveAddr.Bytes()), "0x1"})
+	if got := lifecycleBalanceRPC["result"]; got != snapshotTestSunToWeiHex(archiveBalance1) {
+		t.Fatalf("lifecycle eth_getBalance archive result = %v, want %s", got, snapshotTestSunToWeiHex(archiveBalance1))
 	}
 }
 
@@ -2015,6 +2036,18 @@ func snapshotCmdStorageRowKey(addr common.Address, key common.Hash) common.Hash 
 func snapshotTestSunToWeiHex(sun int64) string {
 	wei := new(big.Int).Mul(big.NewInt(sun), big.NewInt(1_000_000_000_000))
 	return fmt.Sprintf("0x%x", wei)
+}
+
+func snapshotTestServerURL(t *testing.T, listenAddr string) string {
+	t.Helper()
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		t.Fatalf("split listen addr %q: %v", listenAddr, err)
+	}
+	if host == "" || host == "::" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func mustSnapshotCmdDelegationResource(t *testing.T, dr *rawdb.DelegatedResource) []byte {
