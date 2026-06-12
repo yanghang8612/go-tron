@@ -137,8 +137,8 @@ func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.initSessionLocked(time.Now())
-	ss.blockBuffer[1] = bufferedSyncBlock{raw: rawOf(t, block1), num: 1, hash: block1.Hash(), peer: peer}
-	ss.blockBuffer[2] = bufferedSyncBlock{raw: rawOf(t, block2), num: 2, hash: block2.Hash(), peer: peer}
+	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: rawOf(t, block1), Num: 1, Hash: block1.Hash(), Peer: peer}
+	ss.blockBuffer[2] = syncdl.BufferedBlock{Raw: rawOf(t, block2), Num: 2, Hash: block2.Hash(), Peer: peer}
 	ss.bufferedHash[block1.Hash()] = struct{}{}
 	ss.bufferedHash[block2.Hash()] = struct{}{}
 	ss.mu.Unlock()

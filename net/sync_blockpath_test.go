@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 )
 
 // TestPopBufferedBatchPrunesBlockPath pins the fix for the blockPath leak:
@@ -27,7 +28,7 @@ func TestPopBufferedBatchPrunesBlockPath(t *testing.T) {
 	prev := parent
 	for n := int64(1); n <= 3; n++ {
 		blk := stubBlock(n, prev)
-		ss.blockBuffer[uint64(n)] = bufferedSyncBlock{raw: rawOf(t, blk), num: uint64(n), hash: blk.Hash()}
+		ss.blockBuffer[uint64(n)] = syncdl.BufferedBlock{Raw: rawOf(t, blk), Num: uint64(n), Hash: blk.Hash()}
 		ss.bufferedHash[blk.Hash()] = struct{}{}
 		ss.blockPath[uint64(n)] = blk.Hash()
 		prev = blk.Hash()
@@ -38,8 +39,8 @@ func TestPopBufferedBatchPrunesBlockPath(t *testing.T) {
 	hashLen := len(ss.bufferedHash)
 	ss.mu.Unlock()
 
-	if len(batch.buffered) != 3 {
-		t.Fatalf("expected 3 popped entries, got %d", len(batch.buffered))
+	if len(batch.Buffered) != 3 {
+		t.Fatalf("expected 3 popped entries, got %d", len(batch.Buffered))
 	}
 	if bufLen != 0 {
 		t.Fatalf("blockBuffer should be drained, still holds %d", bufLen)
@@ -66,7 +67,7 @@ func TestPopBufferedBatchHonorsSyncBodiesReadyFrontier(t *testing.T) {
 		if err := rawdb.WriteSyncStagedBlock(bc.DB(), blk); err != nil {
 			t.Fatalf("write staged block %d: %v", n, err)
 		}
-		ss.blockBuffer[uint64(n)] = bufferedSyncBlock{raw: rawOf(t, blk), num: uint64(n), hash: blk.Hash()}
+		ss.blockBuffer[uint64(n)] = syncdl.BufferedBlock{Raw: rawOf(t, blk), Num: uint64(n), Hash: blk.Hash()}
 		ss.bufferedHash[blk.Hash()] = struct{}{}
 		ss.blockPath[uint64(n)] = blk.Hash()
 		if n == 1 {
@@ -83,14 +84,14 @@ func TestPopBufferedBatchHonorsSyncBodiesReadyFrontier(t *testing.T) {
 	hashLen := len(ss.bufferedHash)
 	ss.mu.Unlock()
 
-	if len(batch.buffered) != 1 {
-		t.Fatalf("popped entries = %d, want 1 capped by SyncBodiesReady", len(batch.buffered))
+	if len(batch.Buffered) != 1 {
+		t.Fatalf("popped entries = %d, want 1 capped by SyncBodiesReady", len(batch.Buffered))
 	}
-	if batch.buffered[0].num != 1 {
-		t.Fatalf("popped block number = %d, want 1", batch.buffered[0].num)
+	if batch.Buffered[0].Num != 1 {
+		t.Fatalf("popped block number = %d, want 1", batch.Buffered[0].Num)
 	}
-	if batch.buffered[0].hash != readyHash {
-		t.Fatalf("popped hash = %x, want %x", batch.buffered[0].hash, readyHash)
+	if batch.Buffered[0].Hash != readyHash {
+		t.Fatalf("popped hash = %x, want %x", batch.Buffered[0].Hash, readyHash)
 	}
 	if bufLen != 2 {
 		t.Fatalf("blockBuffer after capped pop = %d, want 2", bufLen)
@@ -119,10 +120,10 @@ func TestPopBufferedBatchUsesImportChunkLimit(t *testing.T) {
 	if last == nil {
 		t.Fatal("seeded range returned nil last block")
 	}
-	if len(batch.buffered) != maxSyncImportBatch {
-		t.Fatalf("popped entries = %d, want local import chunk %d", len(batch.buffered), maxSyncImportBatch)
+	if len(batch.Buffered) != maxSyncImportBatch {
+		t.Fatalf("popped entries = %d, want local import chunk %d", len(batch.Buffered), maxSyncImportBatch)
 	}
-	if got := batch.buffered[len(batch.buffered)-1].num; got != uint64(maxSyncImportBatch) {
+	if got := batch.Buffered[len(batch.Buffered)-1].Num; got != uint64(maxSyncImportBatch) {
 		t.Fatalf("last popped block = %d, want %d", got, maxSyncImportBatch)
 	}
 	if bufLen != 2 || hashLen != 2 || pathLen != 2 {
@@ -144,8 +145,8 @@ func TestPopBufferedBatchUsesConfiguredImportChunkLimit(t *testing.T) {
 	remaining := len(ss.blockBuffer)
 	ss.mu.Unlock()
 
-	if len(batch.buffered) != 2 {
-		t.Fatalf("popped entries = %d, want configured chunk 2", len(batch.buffered))
+	if len(batch.Buffered) != 2 {
+		t.Fatalf("popped entries = %d, want configured chunk 2", len(batch.Buffered))
 	}
 	if remaining != 3 {
 		t.Fatalf("remaining buffered blocks = %d, want 3", remaining)
@@ -194,7 +195,7 @@ func seedBufferedSyncRange(t *testing.T, ss *SyncService, parentHash tcommon.Has
 	var last *types.Block
 	for n := start; n < start+count; n++ {
 		blk := stubBlock(int64(n), prev)
-		ss.blockBuffer[uint64(n)] = bufferedSyncBlock{raw: rawOf(t, blk), num: uint64(n), hash: blk.Hash()}
+		ss.blockBuffer[uint64(n)] = syncdl.BufferedBlock{Raw: rawOf(t, blk), Num: uint64(n), Hash: blk.Hash()}
 		ss.bufferedHash[blk.Hash()] = struct{}{}
 		ss.blockPath[uint64(n)] = blk.Hash()
 		prev = blk.Hash()

@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -57,20 +58,20 @@ func TestPopDecodesRawBufferedBlock(t *testing.T) {
 
 	ss.mu.Lock()
 	ss.ensureSessionMapsLocked()
-	ss.blockBuffer[1] = bufferedSyncBlock{raw: raw, num: 1, hash: blk.Hash()}
+	ss.blockBuffer[1] = syncdl.BufferedBlock{Raw: raw, Num: 1, Hash: blk.Hash()}
 	ss.bufferedHash[blk.Hash()] = struct{}{}
 	batch := ss.popBufferedSyncBatchLocked(time.Now())
 	ss.mu.Unlock()
 
 	// pop only moves raw entries (cheap, under lock); decode runs off-lock.
-	if len(batch.buffered) != 1 {
-		t.Fatalf("expected 1 popped raw entry, got %d", len(batch.buffered))
+	if len(batch.Buffered) != 1 {
+		t.Fatalf("expected 1 popped raw entry, got %d", len(batch.Buffered))
 	}
 	ss.decodeBatchBlocks(&batch)
-	if len(batch.blocks) != 1 {
-		t.Fatalf("expected 1 decoded block, got %d", len(batch.blocks))
+	if len(batch.Blocks) != 1 {
+		t.Fatalf("expected 1 decoded block, got %d", len(batch.Blocks))
 	}
-	got := batch.blocks[0]
+	got := batch.Blocks[0]
 	if got == nil {
 		t.Fatal("popped block is nil — raw bytes were not decoded")
 	}
@@ -118,11 +119,11 @@ func TestHandleBlockBuffersRawBytes(t *testing.T) {
 	if !ok {
 		t.Fatal("block #2 was not buffered")
 	}
-	if len(buf.raw) == 0 {
+	if len(buf.Raw) == 0 {
 		t.Fatal("buffered entry holds no raw bytes")
 	}
-	if buf.hash != blk.Hash() || buf.num != 2 {
-		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.hash, buf.num)
+	if buf.Hash != blk.Hash() || buf.Num != 2 {
+		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.Hash, buf.Num)
 	}
 	staged, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), 2)
 	if err != nil || !ok {
@@ -153,11 +154,11 @@ func TestRestoreStagedBodyBuffersRawBytes(t *testing.T) {
 	if !ok {
 		t.Fatal("raw staged block was not restored into sync buffer")
 	}
-	if !bytesEqual(buf.raw, raw) {
+	if !bytesEqual(buf.Raw, raw) {
 		t.Fatal("restored sync buffer did not preserve staged raw bytes")
 	}
-	if buf.hash != blk.Hash() || buf.num != 1 {
-		t.Fatalf("restored metadata wrong: hash=%s num=%d", buf.hash, buf.num)
+	if buf.Hash != blk.Hash() || buf.Num != 1 {
+		t.Fatalf("restored metadata wrong: hash=%s num=%d", buf.Hash, buf.Num)
 	}
 }
 

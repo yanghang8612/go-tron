@@ -57,40 +57,6 @@ type syncPeerState struct {
 	done            bool
 }
 
-// bufferedSyncBlock holds an out-of-order sync block awaiting contiguous
-// drain. It stores the raw wire bytes (one []byte, no inner pointers) plus
-// light metadata rather than the decoded *types.Block: a decoded block pins its
-// whole proto tree (~80k pointer-rich objects), so on a busy chain the buffered
-// backlog balloons the GC mark set (≈12 GB / 161 M live objects observed on
-// the Nile node, ~70% CPU in GC). The full block is decoded lazily at drain.
-type bufferedSyncBlock struct {
-	raw  []byte
-	hash tcommon.Hash
-	num  uint64
-	peer *p2p.Peer
-}
-
-// bufferRawBlockBytes returns a self-owned copy of the block's wire bytes for
-// the sync buffer. `raw` is the exact payload received off the wire; we copy it
-// so the buffer never aliases a frame the p2p codec may later reuse. Callers
-// without the original bytes (tests, or any non-wire path) pass nil and we
-// re-marshal from the decoded block.
-func bufferRawBlockBytes(block *types.Block, raw []byte) []byte {
-	if len(raw) == 0 {
-		b, _ := block.Marshal()
-		return b
-	}
-	out := make([]byte, len(raw))
-	copy(out, raw)
-	return out
-}
-
-type bufferedSyncBatch struct {
-	blocks      []*types.Block
-	buffered    []bufferedSyncBlock
-	bufferWaits []time.Duration
-}
-
 type outboundSyncRequest struct {
 	peer   *p2p.Peer
 	blocks []types.BlockID
@@ -128,7 +94,7 @@ type SyncService struct {
 	peers         map[string]*syncPeerState
 	requested     map[tcommon.Hash]string
 	retryList     []types.BlockID
-	blockBuffer   map[uint64]bufferedSyncBlock
+	blockBuffer   map[uint64]syncdl.BufferedBlock
 	bufferedHash  map[tcommon.Hash]struct{}
 	blockPath     syncdl.BlockPath
 	targetHeadNum uint64
@@ -392,7 +358,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.peers = make(map[string]*syncPeerState)
 	ss.requested = make(map[tcommon.Hash]string)
 	ss.retryList = nil
-	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
+	ss.blockBuffer = make(map[uint64]syncdl.BufferedBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = syncdl.NewBlockPath()
 	headBlock := ss.chain.CurrentBlock()
@@ -422,7 +388,7 @@ func (ss *SyncService) ensureSessionMapsLocked() {
 		ss.requested = make(map[tcommon.Hash]string)
 	}
 	if ss.blockBuffer == nil {
-		ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
+		ss.blockBuffer = make(map[uint64]syncdl.BufferedBlock)
 	}
 	if ss.bufferedHash == nil {
 		ss.bufferedHash = make(map[tcommon.Hash]struct{})
@@ -514,11 +480,11 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 			if !ok {
 				return true
 			}
-			if buffered.num > ss.targetHeadNum {
-				ss.targetHeadNum = buffered.num
+			if buffered.Num > ss.targetHeadNum {
+				ss.targetHeadNum = buffered.Num
 			}
-			lastRestoredNum = buffered.num
-			lastRestoredHash = buffered.hash
+			lastRestoredNum = buffered.Num
+			lastRestoredHash = buffered.Hash
 			haveLastRestored = true
 			expected++
 			restored++
@@ -546,10 +512,10 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 			pruneTail(row.Number)
 			return false, nil
 		}
-		ss.blockBuffer[row.Number] = bufferedSyncBlock{
-			raw:  row.Raw,
-			hash: row.Hash,
-			num:  row.Number,
+		ss.blockBuffer[row.Number] = syncdl.BufferedBlock{
+			Raw:  row.Raw,
+			Hash: row.Hash,
+			Num:  row.Number,
 		}
 		ss.bufferedHash[bid.Hash] = struct{}{}
 		if row.Number > ss.targetHeadNum {
@@ -1136,18 +1102,13 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	if blockNum > ss.chain.CurrentBlock().Number() {
 		bid := types.BlockID{Hash: blockHash, Num: blockNum}
 		if existing, ok := ss.blockBuffer[blockNum]; ok {
-			if existing.hash != blockHash {
+			if existing.Hash != blockHash {
 				syncLog.Debug("Dropping conflicting buffered sync block",
-					"number", blockNum, "hash", blockHash, "kept", existing.hash, "peer", peer.ID())
+					"number", blockNum, "hash", blockHash, "kept", existing.Hash, "peer", peer.ID())
 			}
 		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
 			ss.stageSyncBody(block, raw)
-			ss.blockBuffer[blockNum] = bufferedSyncBlock{
-				raw:  bufferRawBlockBytes(block, raw),
-				hash: blockHash,
-				num:  blockNum,
-				peer: peer,
-			}
+			ss.blockBuffer[blockNum] = syncdl.NewBufferedBlock(peer, block, raw)
 			ss.bufferedHash[blockHash] = struct{}{}
 		}
 	}
@@ -1201,7 +1162,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		batch := ss.popBufferedSyncBatchLocked(now)
-		if len(batch.buffered) == 0 {
+		if len(batch.Buffered) == 0 {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
@@ -1221,34 +1182,34 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		// Decode off-lock — see decodeBatchBlocks. Keeps the heavy proto work
 		// off the central sync mutex so receiving peers aren't stalled.
 		ss.decodeBatchBlocks(&batch)
-		if len(batch.blocks) == 0 {
+		if len(batch.Blocks) == 0 {
 			// Every popped block failed to decode (can't happen for validated
 			// wire bytes). The entries were already removed at pop, so loop to
 			// re-pop the next run or hit the gap.
 			continue
 		}
-		for _, wait := range batch.bufferWaits {
+		for _, wait := range batch.BufferWaits {
 			ss.stats.AddBufferWait(wait)
 		}
 
 		stageProgress := syncdl.NewStageProgressCollector()
 		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlocksWithStageHook(batch.blocks, stageProgress.Observe)
+		insertErr := ss.chain.InsertBlocksWithStageHook(batch.Blocks, stageProgress.Observe)
 		insertElapsed := time.Since(insertStart)
-		applied := len(batch.blocks)
+		applied := len(batch.Blocks)
 		if insertErr != nil {
 			failed := 0
 			var rangeErr *core.InsertBlocksError
-			if errors.As(insertErr, &rangeErr) && rangeErr.Index >= 0 && rangeErr.Index < len(batch.buffered) {
+			if errors.As(insertErr, &rangeErr) && rangeErr.Index >= 0 && rangeErr.Index < len(batch.Buffered) {
 				failed = rangeErr.Index
 			}
 			applied = failed
 			ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
-			failedNum := batch.buffered[failed].num
+			failedNum := batch.Buffered[failed].Num
 			if failedNum == 0 && rangeErr != nil {
 				failedNum = rangeErr.BlockNumber
 			}
-			ss.pauseSync(batch.buffered[failed].peer, failedNum, insertErr)
+			ss.pauseSync(batch.Buffered[failed].Peer, failedNum, insertErr)
 			break
 		}
 		ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
@@ -1277,21 +1238,21 @@ func (ss *SyncService) importBatchLimitLocked() int {
 	return ss.importBatchSize
 }
 
-func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
+func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
 	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
 	restoreLimit := ss.importBatchLimitLocked()
 	if hasReadyLimit {
 		if readyLimit < next {
-			return bufferedSyncBatch{}
+			return syncdl.BufferedBatch{}
 		}
 		if span := readyLimit - next + 1; span < uint64(restoreLimit) {
 			restoreLimit = int(span)
 		}
 	}
 	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
-	var batch bufferedSyncBatch
-	for len(batch.buffered) < restoreLimit {
+	var batch syncdl.BufferedBatch
+	for len(batch.Buffered) < restoreLimit {
 		if hasReadyLimit && next > readyLimit {
 			break
 		}
@@ -1299,7 +1260,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		if !ok {
 			break
 		}
-		batch.bufferWaits = append(batch.bufferWaits, ss.endBufferWaitLocked(next, now))
+		batch.BufferWaits = append(batch.BufferWaits, ss.endBufferWaitLocked(next, now))
 		delete(ss.blockBuffer, next)
 		// Drop the path reservation too. Without this blockPath grows by one
 		// entry per synced block for the whole session (never pruned until
@@ -1308,8 +1269,8 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		// failure) owns that number, so the fork-conflict guard no longer
 		// needs the reservation.
 		ss.blockPath.Release(next)
-		delete(ss.bufferedHash, buffered.hash)
-		batch.buffered = append(batch.buffered, buffered)
+		delete(ss.bufferedHash, buffered.Hash)
+		batch.Buffered = append(batch.Buffered, buffered)
 		next++
 	}
 	return batch
@@ -1355,39 +1316,34 @@ func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
 	return row.BlockNum, true
 }
 
-// decodeBatchBlocks decodes the popped raw blocks into batch.blocks. It runs
+// decodeBatchBlocks decodes the popped raw blocks into batch.Blocks. It runs
 // OFF ss.mu — a full proto decode per block (up to the configured local import
 // chunk, and largest in exactly the full-block era this raw buffer targets) is
 // far too heavy to hold the sync lock across, and InsertBlocks already runs
 // off-lock. A decode error (can't happen for bytes that already decoded at
 // receive) truncates the batch; the dropped suffix was removed from the buffer
 // at pop, so it is simply re-fetched.
-func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
-	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
-	for i := range batch.buffered {
-		blk, err := types.UnmarshalBlock(batch.buffered[i].raw)
-		if err != nil {
-			syncLog.Error("Dropping undecodable buffered sync block",
-				"number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
-			return
-		}
-		batch.blocks = append(batch.blocks, blk)
+func (ss *SyncService) decodeBatchBlocks(batch *syncdl.BufferedBatch) {
+	dropped, err := batch.DecodeBlocks()
+	if err != nil {
+		syncLog.Error("Dropping undecodable buffered sync block",
+			"number", dropped.Num, "hash", dropped.Hash, "err", err)
 	}
 }
 
-func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
+func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
 	if applied <= 0 {
 		return
 	}
 	var txs int
-	for i := 0; i < applied && i < len(batch.blocks); i++ {
-		if block := batch.blocks[i]; block != nil {
+	for i := 0; i < applied && i < len(batch.Blocks); i++ {
+		if block := batch.Blocks[i]; block != nil {
 			txs += len(block.Transactions())
 		}
 	}
 	ss.deleteImportedSyncBodies(batch, applied)
-	if last := batch.buffered[applied-1]; last.num > 0 {
-		stageProgress.Write(last.num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+	if last := batch.Buffered[applied-1]; last.Num > 0 {
+		stageProgress.Write(last.Num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 			ss.writeStageProgress(stage, blockNum, blockHash, true)
 		})
 	}
@@ -1414,8 +1370,8 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	ss.mu.Unlock()
 
 	if emit {
-		last := batch.buffered[applied-1]
-		ss.reportSegment(snap, diag, last.num, remain, last.peer)
+		last := batch.Buffered[applied-1]
+		ss.reportSegment(snap, diag, last.Num, remain, last.Peer)
 	}
 }
 
@@ -1522,7 +1478,7 @@ func (ss *SyncService) writeSyncBodiesReadyProgress() {
 	}
 }
 
-func (ss *SyncService) deleteImportedSyncBodies(batch bufferedSyncBatch, applied int) {
+func (ss *SyncService) deleteImportedSyncBodies(batch syncdl.BufferedBatch, applied int) {
 	if ss == nil || ss.chain == nil || applied <= 0 {
 		return
 	}
@@ -1530,9 +1486,9 @@ func (ss *SyncService) deleteImportedSyncBodies(batch bufferedSyncBatch, applied
 	if db == nil {
 		return
 	}
-	for i := 0; i < applied && i < len(batch.buffered); i++ {
-		if err := rawdb.DeleteSyncStagedBlock(db, batch.buffered[i].num); err != nil {
-			syncLog.Warn("Delete sync staged block failed", "number", batch.buffered[i].num, "hash", batch.buffered[i].hash, "err", err)
+	for i := 0; i < applied && i < len(batch.Buffered); i++ {
+		if err := rawdb.DeleteSyncStagedBlock(db, batch.Buffered[i].Num); err != nil {
+			syncLog.Warn("Delete sync staged block failed", "number", batch.Buffered[i].Num, "hash", batch.Buffered[i].Hash, "err", err)
 		}
 	}
 	ss.writeSyncBodiesReadyProgress()
