@@ -999,11 +999,12 @@ Status:
   rows plus the `chain-index` sidecar, matching the existing receipt coverage.
 - Transaction-info read paths now reject mismatched payloads before exposing
   them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
-  the lookup key, and backend block-number receipt queries validate any
-  retained `TransactionRet` list against the canonical block transaction count,
-  block number, and tx hash order. The hot `TransactionInfo` writer and sorted
-  `DerivedIndexCollector` now apply the same per-tx id/key check before new
-  `ti-` rows can be written.
+  the lookup key, cold tx-info fallbacks must either carry no embedded block
+  number or match the tx index's block, and backend block-number receipt queries
+  validate any retained `TransactionRet` list against the canonical block
+  transaction count, block number, and tx hash order. The hot `TransactionInfo`
+  writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
+  check before new `ti-` rows can be written.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:

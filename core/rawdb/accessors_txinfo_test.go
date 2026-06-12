@@ -126,6 +126,40 @@ func TestReadTransactionInfoRejectsMismatchedColdTxPosition(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x37}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 999, BlockNumber: 8, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{hash: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			hash: {BlockNum: 7, TxIndex: 0},
+		},
+	})
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo cold block mismatch by position = %+v, want nil", got)
+	}
+
+	txID2 := bytes.Repeat([]byte{0x38}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 9, []*corepb.TransactionInfo{
+		{Id: txID2, Fee: 111, BlockNumber: 10, BlockTimeStamp: 9000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock scan fixture: %v", err)
+	}
+	if err := WriteTransactionIndex(db, txID2, 9); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if got := ReadTransactionInfo(db, txID2); got != nil {
+		t.Fatalf("ReadTransactionInfo cold block mismatch by scan = %+v, want nil", got)
+	}
+}
+
 func TestWriteReadTransactionInfosByBlock(t *testing.T) {
 	db := NewMemoryChainDB()
 

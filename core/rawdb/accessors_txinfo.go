@@ -52,16 +52,13 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == *blockNum {
 		if int(lookup.TxIndex) < len(infos) {
 			info := infos[lookup.TxIndex]
-			if info != nil && (len(info.Id) == 0 || bytes.Equal(info.Id, txID)) {
+			if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) {
 				return info
 			}
 		}
 	}
 	for _, info := range infos {
-		if info == nil {
-			continue
-		}
-		if bytes.Equal(info.Id, txID) {
+		if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) && len(info.Id) != 0 {
 			return info
 		}
 	}
@@ -70,6 +67,13 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 
 func transactionInfoIDMatches(info *corepb.TransactionInfo, txID []byte) bool {
 	return validateTransactionInfoIDForKey(txID, info, "read transaction info") == nil
+}
+
+func transactionInfoMatchesIndexedLookup(info *corepb.TransactionInfo, txID []byte, blockNum uint64) bool {
+	if !transactionInfoIDMatches(info, txID) {
+		return false
+	}
+	return info.BlockNumber == 0 || uint64(info.BlockNumber) == blockNum
 }
 
 func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {
