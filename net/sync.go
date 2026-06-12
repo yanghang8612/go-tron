@@ -924,12 +924,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	if len(inv.Ids) > 0 {
 		last := inv.Ids[len(inv.Ids)-1]
 		if last.Number > 0 {
-			ps.lastInventoryNum = uint64(last.Number)
-			if ps.lastInventoryNum > 2*maxChainInventorySize {
-				ps.minFetchNum = ps.lastInventoryNum - 2*maxChainInventorySize
-			} else {
-				ps.minFetchNum = 0
-			}
+			window := syncdl.NewFetchWindow(uint64(last.Number), maxChainInventorySize)
+			ps.lastInventoryNum = window.Max
+			ps.minFetchNum = window.Min
 			target := uint64(last.Number)
 			if inv.RemainNum > 0 {
 				target += uint64(inv.RemainNum)
@@ -1045,11 +1042,12 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 	if len(ss.retryList) == 0 {
 		return
 	}
+	window := syncdl.FetchWindow{Min: ps.minFetchNum, Max: ps.lastInventoryNum}
 	assigned, keep := syncdl.AssignRetryCandidates(ss.retryList, func(bid types.BlockID) syncdl.RetryDecision {
 		if ss.hasBlockOrRequestLocked(bid) {
 			return syncdl.RetryDrop
 		}
-		if !ps.canFetch(bid) {
+		if !window.Contains(bid) {
 			return syncdl.RetryKeep
 		}
 		if _, ok := ps.requestedHashes[bid.Hash]; ok {
@@ -1062,13 +1060,6 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 	})
 	ps.fetchList = append(ps.fetchList, assigned...)
 	ss.retryList = keep
-}
-
-func (ps *syncPeerState) canFetch(bid types.BlockID) bool {
-	if ps.lastInventoryNum == 0 {
-		return false
-	}
-	return bid.Num >= ps.minFetchNum && bid.Num <= ps.lastInventoryNum
 }
 
 func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
