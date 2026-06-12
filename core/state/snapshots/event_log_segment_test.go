@@ -541,6 +541,72 @@ func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
 	}
 }
 
+func TestEventLogRangeCoveredForFilterRejectsMissingCandidateSegment(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x47)
+	topic := common.Hash{0xcf}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x07}},
+	})
+	block2, infos2 := eventLogTestBlock(t, 2, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x08}},
+	})
+	for _, block := range []*coretypes.Block{block1, block2} {
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 2, infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 2: %v", err)
+	}
+	ref1, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 1: %v", err)
+	}
+	ref2, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-2-2.seg", 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 2: %v", err)
+	}
+	badIndexRef, err := writeEventLogIndexSegment(dir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: 1,
+		ToTxNum:   2,
+		Path:      "log/event-log-index-missing-candidate-1-2.idx",
+	}, map[string][]uint64{
+		string(eventLogAddressLookupKey(common.BytesToAddress(addr))): {1},
+	}, map[string][]uint64{
+		string(eventLogTopicLookupKey(0, topic)): {1},
+	})
+	if err != nil {
+		t.Fatalf("writeEventLogIndexSegment partial: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref1, ref2, badIndexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}
+	covered, err := mgr.EventLogRangeCoveredForFilter(1, 2, filter)
+	if err == nil || covered {
+		t.Fatalf("EventLogRangeCoveredForFilter partial index = %v/%v, want false/error", covered, err)
+	}
+	if err := mgr.IterateEventLogs(1, 2, filter, func(EventLog) (bool, error) {
+		return true, nil
+	}); err == nil {
+		t.Fatal("IterateEventLogs accepted stale partial event-log-index")
+	}
+}
+
 func TestEventLogSegmentBuildRejectsMissingBlock(t *testing.T) {
 	_, err := BuildEventLogSegmentFromChain(rawdb.NewMemoryChainDB(), t.TempDir(), "", 1, 1)
 	if err == nil {

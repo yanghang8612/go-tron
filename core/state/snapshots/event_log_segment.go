@@ -300,6 +300,83 @@ func verifyEventLogIndexSegmentAgainstEventLogs(dir string, indexRef SegmentRef,
 	return compareEventLogLookupIndexMaps(indexRef, "topic", expectedTopic, actualTopic)
 }
 
+func verifyEventLogIndexCandidatesForFilter(dir string, indexRef SegmentRef, eventRefs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, candidateStarts []uint64) error {
+	if !eventLogRangeCoveredByRefs(eventRefs, indexRef.FromTxNum, indexRef.ToTxNum) {
+		return fmt.Errorf("snapshots: event-log-index segment %q has no continuous event-log coverage for block range [%d,%d]",
+			indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+	}
+	candidates := make(map[uint64]struct{}, len(candidateStarts))
+	for _, start := range candidateStarts {
+		candidates[start] = struct{}{}
+	}
+	refsByStart := make(map[uint64]SegmentRef, len(eventRefs))
+	for _, ref := range eventRefs {
+		refsByStart[ref.FromTxNum] = ref
+	}
+	for _, start := range candidateStarts {
+		ref, ok := refsByStart[start]
+		if ok {
+			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+				continue
+			}
+			if err := CheckEventLogSegment(dir, ref); err != nil {
+				return err
+			}
+			continue
+		}
+		if start >= fromBlock && start <= toBlock {
+			return fmt.Errorf("snapshots: event-log-index %q points to missing event-log segment starting at block %d", indexRef.Path, start)
+		}
+	}
+	for _, ref := range eventRefs {
+		if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+			continue
+		}
+		if ref.FromTxNum < indexRef.FromTxNum || ref.ToTxNum > indexRef.ToTxNum {
+			return fmt.Errorf("snapshots: event-log segment %q range [%d,%d] crosses event-log-index %q range [%d,%d]",
+				ref.Path, ref.FromTxNum, ref.ToTxNum, indexRef.Path, indexRef.FromTxNum, indexRef.ToTxNum)
+		}
+		if _, ok := candidates[ref.FromTxNum]; ok {
+			continue
+		}
+		hasMatch, err := eventLogSegmentHasFilterMatch(dir, ref, max(fromBlock, ref.FromTxNum), min(toBlock, ref.ToTxNum), filter)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		if hasMatch {
+			return fmt.Errorf("snapshots: event-log-index %q missing candidate event-log segment %q for filtered range [%d,%d]",
+				indexRef.Path, ref.Path, fromBlock, toBlock)
+		}
+	}
+	return nil
+}
+
+func eventLogSegmentHasFilterMatch(dir string, ref SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	if err := CheckEventLogSegment(dir, ref); err != nil {
+		return false, err
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		return false, err
+	}
+	hasMatch := false
+	err = seg.IterateLogs(fromBlock, toBlock, filter, func(EventLog) (bool, error) {
+		hasMatch = true
+		return false, nil
+	})
+	closeErr := seg.Close()
+	if err != nil {
+		return false, err
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	return hasMatch, nil
+}
+
 func OpenEventLogSegment(dir string, ref SegmentRef) (*EventLogSegment, error) {
 	if err := validateEventLogRef(ref); err != nil {
 		return nil, err
@@ -650,10 +727,10 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 		if !used {
 			continue
 		}
+		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, fromBlock, toBlock, filter, starts); err != nil {
+			return nil, err
+		}
 		if len(starts) == 0 {
-			if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, refs); err != nil {
-				return nil, err
-			}
 			return nil, nil
 		}
 		candidates := make(map[uint64]struct{}, len(starts))
@@ -770,10 +847,10 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 		if !used {
 			continue
 		}
+		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, eventLogRefs(manifest), fromBlock, toBlock, filter, starts); err != nil {
+			return false, err
+		}
 		if len(starts) == 0 {
-			if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, eventLogRefs(manifest)); err != nil {
-				return false, err
-			}
 			return true, nil
 		}
 		candidateStarts := make(map[uint64]struct{}, len(starts))

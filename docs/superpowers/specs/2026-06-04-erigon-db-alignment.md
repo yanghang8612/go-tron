@@ -832,8 +832,11 @@ Status:
   cannot satisfy archive log coverage gates. Filtered cold-log coverage now
   also refuses to trust an index that reports no candidate segments unless that
   index can be semantically verified against the active event-log segments,
-  preventing stale empty sidecars from making archive log queries return false
-  empty results. `gtron snapshot build-event-logs`
+  and verifies that any readable non-candidate segment in the queried range
+  really has no filter match. This prevents stale empty or partial sidecars from
+  making archive log queries return false empty or incomplete results while
+  still allowing the global index to skip unreadable unrelated segments.
+  `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
   together with balance-trace and section-bloom segments. Production snap-mode
