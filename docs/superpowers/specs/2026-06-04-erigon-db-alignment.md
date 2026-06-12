@@ -1044,6 +1044,12 @@ Status:
   transaction count, block number, and tx hash order. The hot `TransactionInfo`
   writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
   check before new `ti-` rows can be written.
+- Per-block `TransactionRet` reads now apply the same block-number guard at the
+  rawdb accessor boundary for hot `tib-<block>` rows and ancient `tx_infos`
+  rows: an embedded `TransactionRet.block_number` or
+  `TransactionInfo.block_number` is accepted only when it is missing/zero or
+  matches the requested block. This keeps fallback log/receipt scans from
+  consuming mismatched hot or cold transaction-info payloads.
 - Cold balance-trace reads now reject mismatched cold sidecar payloads before
   APIs or rebuild paths consume them: block trace reads reject a returned
   `BlockBalanceTrace.block_identifier.number` that disagrees with the requested

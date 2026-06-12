@@ -73,7 +73,7 @@ func transactionInfoMatchesIndexedLookup(info *corepb.TransactionInfo, txID []by
 	if !transactionInfoIDMatches(info, txID) {
 		return false
 	}
-	return info.BlockNumber == 0 || uint64(info.BlockNumber) == blockNum
+	return transactionInfoBlockNumberMatches(info.BlockNumber, blockNum)
 }
 
 func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {
@@ -135,22 +135,53 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 // number. Consults the freezer first when the requested block is below
 // the ancient cutoff; falls back to `tib-<num>` in Pebble otherwise.
 func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.TransactionInfo {
+	infos, ok, err := readTransactionInfosByBlockStrict(db, blockNum)
+	if err != nil || !ok {
+		return nil
+	}
+	return infos
+}
+
+func readTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
 	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
-		ret := &corepb.TransactionRet{}
-		if err := proto.Unmarshal(data, ret); err != nil {
-			return nil
-		}
-		return ret.Transactioninfo
+		infos, err := decodeTransactionRetForBlock(data, blockNum)
+		return infos, true, err
 	}
 	data, err := db.Get(txInfoBlockKey(blockNum))
 	if err != nil {
-		return nil
+		return nil, false, nil
 	}
+	infos, err := decodeTransactionRetForBlock(data, blockNum)
+	return infos, true, err
+}
+
+func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.TransactionInfo, error) {
 	ret := &corepb.TransactionRet{}
 	if err := proto.Unmarshal(data, ret); err != nil {
-		return nil
+		return nil, err
 	}
-	return ret.Transactioninfo
+	if !transactionInfoBlockNumberMatches(ret.BlockNumber, blockNum) {
+		return nil, fmt.Errorf("rawdb: transaction ret block number %d does not match key block %d", ret.BlockNumber, blockNum)
+	}
+	for txIndex, info := range ret.Transactioninfo {
+		if info == nil {
+			return nil, fmt.Errorf("rawdb: nil transaction info at block %d index %d", blockNum, txIndex)
+		}
+		if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+			return nil, fmt.Errorf("rawdb: transaction info block number %d at block %d index %d", info.BlockNumber, blockNum, txIndex)
+		}
+	}
+	return ret.Transactioninfo, nil
+}
+
+func transactionInfoBlockNumberMatches(got int64, want uint64) bool {
+	if got == 0 {
+		return true
+	}
+	if got < 0 {
+		return false
+	}
+	return uint64(got) == want
 }
 
 // WriteTransactionIndex stores a tx-hash to block-number mapping.

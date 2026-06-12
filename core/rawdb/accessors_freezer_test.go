@@ -305,6 +305,29 @@ func TestReadTransactionInfosByBlock_AncientFallthrough(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosByBlockRejectsMismatchedAncientRet(t *testing.T) {
+	t.Parallel()
+
+	ret := &corepb.TransactionRet{
+		BlockNumber: 6,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x03}, 32), Fee: 33, BlockNumber: 5, BlockTimeStamp: 1000},
+		},
+	}
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	anc := newFakeAncient()
+	anc.put(ancientTxInfos, 5, data)
+	cdb := NewChainDB(NewMemoryDatabase(), anc)
+
+	if got := ReadTransactionInfosByBlock(cdb, 5); got != nil {
+		t.Fatalf("mismatched ancient TransactionRet read = %+v, want nil", got)
+	}
+}
+
 func TestReadTransactionInfosRaw_AncientFallthrough(t *testing.T) {
 	t.Parallel()
 

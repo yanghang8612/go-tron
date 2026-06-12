@@ -182,6 +182,63 @@ func TestWriteReadTransactionInfosByBlock(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfosByBlockAcceptsLegacyZeroBlockNumber(t *testing.T) {
+	db := NewMemoryChainDB()
+	data, err := proto.Marshal(&corepb.TransactionRet{
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x03}, 32), Fee: 300},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy ret: %v", err)
+	}
+	if err := db.Put(txInfoBlockKey(5), data); err != nil {
+		t.Fatalf("put legacy ret: %v", err)
+	}
+	got := ReadTransactionInfosByBlock(db, 5)
+	if len(got) != 1 || got[0].Fee != 300 {
+		t.Fatalf("legacy zero block number read = %+v, want one fee 300", got)
+	}
+}
+
+func TestReadTransactionInfosByBlockRejectsMismatchedRetBlockNumber(t *testing.T) {
+	db := NewMemoryChainDB()
+	data, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 6,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x04}, 32), Fee: 400, BlockNumber: 5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mismatched ret: %v", err)
+	}
+	if err := db.Put(txInfoBlockKey(5), data); err != nil {
+		t.Fatalf("put mismatched ret: %v", err)
+	}
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("mismatched TransactionRet block number read = %+v, want nil", got)
+	}
+}
+
+func TestReadTransactionInfosByBlockRejectsMismatchedInfoBlockNumber(t *testing.T) {
+	db := NewMemoryChainDB()
+	data, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 5,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x05}, 32), Fee: 500, BlockNumber: 6},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mismatched info: %v", err)
+	}
+	if err := db.Put(txInfoBlockKey(5), data); err != nil {
+		t.Fatalf("put mismatched info: %v", err)
+	}
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("mismatched TransactionInfo block number read = %+v, want nil", got)
+	}
+}
+
 func TestWriteTransactionInfosByBlockRejectsNilEntry(t *testing.T) {
 	db := NewMemoryChainDB()
 	err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{nil})

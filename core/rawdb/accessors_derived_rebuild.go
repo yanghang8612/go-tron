@@ -116,8 +116,11 @@ func RebuildTransactionDerivedIndexesFromBlocks(chain *ChainDB, writer ethdb.Key
 			}
 			result.TransactionsIndexed++
 		}
-		infos := ReadTransactionInfosByBlock(chain, blockNum)
-		if len(infos) != 0 {
+		infos, hasInfos, err := readTransactionInfosByBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if hasInfos {
 			if err := ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "transaction derived index rebuild"); err != nil {
 				return nil, err
 			}
@@ -400,7 +403,10 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 			return nil, fmt.Errorf("rawdb: missing block %d during section bloom rebuild", blockNum)
 		}
 		result.BlocksScanned++
-		infos := ReadTransactionInfosByBlock(chain, blockNum)
+		infos, _, err := readTransactionInfosByBlockStrict(chain, blockNum)
+		if err != nil {
+			return nil, err
+		}
 		if err := ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "section bloom rebuild"); err != nil {
 			return nil, err
 		}
