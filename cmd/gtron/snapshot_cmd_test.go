@@ -102,6 +102,43 @@ ed25519:%s, %s # staged rotation overlap
 	}
 }
 
+func TestSnapshotRemoteURLUsesEnvironmentDefault(t *testing.T) {
+	t.Setenv("GTRON_SNAPSHOT_URL", " https://snapshots.example.invalid/go-tron/mainnet/latest ")
+	ctx := makeSnapshotRestoreTestContext(t, nil)
+
+	got, err := snapshotRemoteURL(ctx)
+	if err != nil {
+		t.Fatalf("snapshotRemoteURL: %v", err)
+	}
+	if want := "https://snapshots.example.invalid/go-tron/mainnet/latest"; got != want {
+		t.Fatalf("snapshotRemoteURL = %q, want %q", got, want)
+	}
+}
+
+func TestSnapshotRemoteURLFlagOverridesEnvironmentDefault(t *testing.T) {
+	t.Setenv("GTRON_SNAPSHOT_URL", "https://snapshots.example.invalid/go-tron/mainnet/latest")
+	ctx := makeSnapshotRestoreTestContext(t, []string{
+		"--snapshot.url", " https://snapshots.example.invalid/go-tron/nile/latest ",
+	})
+
+	got, err := snapshotRemoteURL(ctx)
+	if err != nil {
+		t.Fatalf("snapshotRemoteURL: %v", err)
+	}
+	if want := "https://snapshots.example.invalid/go-tron/nile/latest"; got != want {
+		t.Fatalf("snapshotRemoteURL = %q, want %q", got, want)
+	}
+}
+
+func TestSnapshotRemoteURLRequiresFlagOrEnvironment(t *testing.T) {
+	t.Setenv("GTRON_SNAPSHOT_URL", "")
+	ctx := makeSnapshotRestoreTestContext(t, nil)
+
+	if _, err := snapshotRemoteURL(ctx); err == nil || !strings.Contains(err.Error(), "GTRON_SNAPSHOT_URL") {
+		t.Fatalf("snapshotRemoteURL error = %v, want missing source hint", err)
+	}
+}
+
 func TestSnapshotFetchCmdDownloadsSignedRemoteSnapshot(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "remote")

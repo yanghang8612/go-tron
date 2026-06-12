@@ -140,14 +140,16 @@ Status:
 - `docs/dev/snapshot-bootstrap.md` records the operator runbook for signed
   remote bootstrap: trusted key file format, key rotation steps, preflight
   verify, fetch+restore, one-step bootstrap, and safety notes around
-  `--snapshot.reset` and fork config hashes.
+  `--snapshot.reset`, `GTRON_SNAPSHOT_URL`, and fork config hashes.
 - `gtron snapshot fetch` downloads a signed HTTP(S) snapshot catalog, verifies
   the catalog signature before trusting manifest paths, checks the catalog
   manifest checksum, downloads active segments, and then re-runs strict
   registered-segment/checksum verification on the local snapshot directory.
   `--snapshot.reset` deletes the target local snapshot directory first so an
   operator can discard stale local views and resync from the latest remote
-  catalog.
+  catalog. The remote URL can be supplied by `--snapshot.url` or the
+  `GTRON_SNAPSHOT_URL` environment variable, giving operators one default
+  source knob without hard-coding an unofficial production URL.
 - `gtron snapshot bootstrap` is the integrated operator entry point for remote
   snapshot bootstrap: it fetches the signed remote catalog/manifest/segments
   and then runs the same signed-catalog restore path into the local datadir.
@@ -245,15 +247,16 @@ Needed:
 
 - Mainnet/testnet publication policy: official trusted catalog keys, rotation,
   and release workflow.
-- Production HTTP catalog/segment hosting and operator defaults; BitTorrent or
-  WebSeed can come later.
+- Production HTTP catalog/segment hosting and official operator defaults;
+  BitTorrent or WebSeed can come later.
 - Restore pipeline handoff from snapshot/freezer boundary into downloader,
   `SyncService.HandleBlock`, and local two-node P2P tail sync is now covered by
   regression tests. Remaining production work is longer-running soak/metrics
   around real hosted snapshots and heterogeneous peers.
 - Operator publication still needs the official latest remote snapshot URL and
-  trusted key release artifacts. The local CLI and runbook now cover trusted key
-  files, key rotation, fetch, verify, bootstrap, restore, and reset primitives.
+  trusted key release artifacts. The local CLI and runbook now cover a
+  `GTRON_SNAPSHOT_URL` default source knob, trusted key files, key rotation,
+  fetch, verify, bootstrap, restore, and reset primitives.
 
 This is the largest sync-speed win because it avoids replaying all historical
 blocks from genesis.

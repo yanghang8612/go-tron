@@ -30,8 +30,9 @@ var (
 		Usage: "Local state snapshot directory containing snapshot-catalog.json and manifest.json",
 	}
 	snapshotURLFlag = &cli.StringFlag{
-		Name:  "snapshot.url",
-		Usage: "HTTP(S) base URL for a remote snapshot directory",
+		Name:    "snapshot.url",
+		Usage:   "HTTP(S) base URL for a remote snapshot directory",
+		EnvVars: []string{"GTRON_SNAPSHOT_URL"},
 	}
 	snapshotResetFlag = &cli.BoolFlag{
 		Name:  "snapshot.reset",
@@ -364,8 +365,12 @@ func snapshotFetchCmd(ctx *cli.Context) error {
 			return err
 		}
 	}
+	baseURL, err := snapshotRemoteURL(ctx)
+	if err != nil {
+		return err
+	}
 	result, err := statesnapshots.FetchRemoteSnapshot(contextOrBackground(ctx), statesnapshots.FetchRemoteSnapshotOptions{
-		BaseURL:     ctx.String("snapshot.url"),
+		BaseURL:     baseURL,
 		Dir:         dir,
 		Expected:    identity,
 		TrustedKeys: trustedKeys,
@@ -1098,6 +1103,14 @@ func snapshotDir(ctx *cli.Context, dataDir string) string {
 		return dir
 	}
 	return stateSnapshotsDir(dataDir)
+}
+
+func snapshotRemoteURL(ctx *cli.Context) (string, error) {
+	url := strings.TrimSpace(ctx.String("snapshot.url"))
+	if url == "" {
+		return "", errors.New("snapshot fetch requires --snapshot.url or GTRON_SNAPSHOT_URL")
+	}
+	return url, nil
 }
 
 func resetSnapshotFetchDir(dir string) error {

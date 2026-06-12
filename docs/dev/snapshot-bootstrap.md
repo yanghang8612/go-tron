@@ -8,7 +8,9 @@ file.
 ## Inputs
 
 - Snapshot URL: the HTTP(S) directory containing `snapshot-catalog.json`,
-  `manifest.json`, and all referenced segment files.
+  `manifest.json`, and all referenced segment files. Pass it with
+  `--snapshot.url` or set `GTRON_SNAPSHOT_URL` for repeated fetch/bootstrap
+  runs.
 - Trusted catalog keys: Ed25519 public keys for snapshot catalogs.
 - Chain identity: selected by `--testnet`, `--genesis`, and optional
   `--snapshot.fork-config-hash`.
@@ -16,6 +18,10 @@ file.
 Official mainnet/testnet URLs and signer keys are release artifacts. Until they
 are published, operators should pass their deployment-specific URL and key set
 explicitly.
+
+```bash
+export GTRON_SNAPSHOT_URL=https://snapshots.example.invalid/go-tron/mainnet/latest
+```
 
 ## Trusted Key File
 
@@ -61,7 +67,6 @@ For a fresh datadir where you want to inspect the downloaded files first:
 ```bash
 gtron snapshot fetch \
   --datadir /path/to/datadir \
-  --snapshot.url https://snapshots.example.invalid/go-tron/mainnet/latest \
   --snapshot.reset \
   --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
 
@@ -225,10 +230,12 @@ For the normal operator path:
 ```bash
 gtron snapshot bootstrap \
   --datadir /path/to/datadir \
-  --snapshot.url https://snapshots.example.invalid/go-tron/mainnet/latest \
   --snapshot.reset \
   --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
 ```
+
+Pass `--snapshot.url` on the command line when it should override
+`GTRON_SNAPSHOT_URL` for a one-off fetch/bootstrap run.
 
 After bootstrap completes, start `gtron` normally. Sync resumes from the
 verified snapshot/freezer boundary and imports the recent tail from peers.
