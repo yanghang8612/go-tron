@@ -209,7 +209,7 @@ type SyncService struct {
 	retryList     []types.BlockID
 	blockBuffer   map[uint64]bufferedSyncBlock
 	bufferedHash  map[tcommon.Hash]struct{}
-	blockPath     map[uint64]tcommon.Hash
+	blockPath     syncdl.BlockPath
 	targetHeadNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
@@ -473,7 +473,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.retryList = nil
 	ss.blockBuffer = make(map[uint64]bufferedSyncBlock)
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
-	ss.blockPath = make(map[uint64]tcommon.Hash)
+	ss.blockPath = syncdl.NewBlockPath()
 	headBlock := ss.chain.CurrentBlock()
 	if headBlock == nil {
 		headBlock = ss.chain.GetBlockByNumber(0)
@@ -507,7 +507,7 @@ func (ss *SyncService) ensureSessionMapsLocked() {
 		ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	}
 	if ss.blockPath == nil {
-		ss.blockPath = make(map[uint64]tcommon.Hash)
+		ss.blockPath = syncdl.NewBlockPath()
 	}
 }
 
@@ -1083,7 +1083,7 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
-	if ss.blockPathConflictsLocked(bid) {
+	if ss.blockPath.Conflicts(bid) {
 		return true
 	}
 	if _, ok := ss.requested[bid.Hash]; ok {
@@ -1101,23 +1101,10 @@ func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {
 	return ss.chain.HasBlockInKhaosDB(bid.Hash)
 }
 
-func (ss *SyncService) blockPathConflictsLocked(bid types.BlockID) bool {
-	if ss.blockPath == nil {
-		return false
-	}
-	hash, ok := ss.blockPath[bid.Num]
-	return ok && hash != bid.Hash
-}
-
 func (ss *SyncService) reserveBlockPathLocked(bid types.BlockID) bool {
-	if ss.blockPathConflictsLocked(bid) {
-		return false
-	}
-	if ss.blockPath == nil {
-		ss.blockPath = make(map[uint64]tcommon.Hash)
-	}
-	ss.blockPath[bid.Num] = bid.Hash
-	return true
+	var ok bool
+	ss.blockPath, ok = ss.blockPath.Reserve(bid)
+	return ok
 }
 
 func (ss *SyncService) sendOutboundRequests(out []outboundSyncRequest) {
@@ -1404,7 +1391,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		// popped for insertion the canonical chain (or the sticky pause on
 		// failure) owns that number, so the fork-conflict guard no longer
 		// needs the reservation.
-		delete(ss.blockPath, next)
+		ss.blockPath.Release(next)
 		delete(ss.bufferedHash, buffered.hash)
 		batch.buffered = append(batch.buffered, buffered)
 		next++
