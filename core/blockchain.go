@@ -750,6 +750,23 @@ func (bc *BlockChain) applyBlock(block *types.Block) (retErr error) {
 	return executor.Apply(block)
 }
 
+// headerParentChainReader pins CurrentBlock() to a specific parent block for
+// header verification. Under async commit the published bc.CurrentBlock() is
+// advanced off the critical path by the serial commit worker, so it lags the
+// executor's range-local tip by up to one block (see range_executor.go tip()).
+// Verifying a block's number / parent-hash / slot linkage against that lagging
+// head spuriously rejects the 2nd+ block of an InsertBlocks range with
+// ErrInvalidBlockNumber. The other ChainReader reads VerifyHeaderWithDynProps
+// performs — GenesisTimestamp (immutable) and ActiveWitnesses (changes only at a
+// maintenance boundary, advanced synchronously in the foreground) — are not
+// worker-lagged, so they delegate to the embedded BlockChain unchanged.
+type headerParentChainReader struct {
+	consensus.ChainReader
+	parent *types.Block
+}
+
+func (r headerParentChainReader) CurrentBlock() *types.Block { return r.parent }
+
 // applyBlockWithPlan executes, commits, and persists one linear-extension
 // block from a range-owned execution plan. If plan.state is non-nil, it must
 // already represent the current canonical head's post-state; on success the
@@ -881,16 +898,21 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// InsertBlock because:
 	//   - applyBlock is the single chokepoint for state application from both
 	//     linear extension and switchFork's re-apply loop;
-	//   - bc.CurrentBlock() == block's actual parent at this point (the
-	//     re-apply loop advances current sequentially), so VerifyHeader's
-	//     parent-linkage and "ts > parent.ts" checks line up correctly even
-	//     during a fork rewind;
+	//   - the parent-linkage and "ts > parent.ts" checks must run against the
+	//     block's true parent — the range-local executor tip captured in
+	//     `current` (= plan.parent), NOT bc.CurrentBlock(). Under async commit the
+	//     serial commit worker publishes bc.CurrentBlock() off the critical path,
+	//     so it lags `current` by up to one block; verifying the 2nd+ block of a
+	//     range against that stale head would reject it with ErrInvalidBlockNumber
+	//     (the block-101 sync stall). headerParentChainReader pins CurrentBlock()
+	//     to `current` — with async off the two are identical, so it is a no-op
+	//     there and during a fork rewind;
 	//   - bad blocks may briefly enter the KhaosDB mini-store but never reach
 	//     state — KhaosDB's size bound caps the DoS surface, and the orphan is
 	//     pruned by the caller on the returned error.
 	// Skipped when bc.engine is nil (test path; see SetEngine).
 	if bc.engine != nil {
-		if err := bc.engine.VerifyHeaderWithDynProps(bc, block, dynProps); err != nil {
+		if err := bc.engine.VerifyHeaderWithDynProps(headerParentChainReader{bc, current}, block, dynProps); err != nil {
 			return err
 		}
 	}
