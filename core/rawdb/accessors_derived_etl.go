@@ -52,6 +52,9 @@ func (c *DerivedIndexCollector) PutTransactionInfo(txID []byte, info *corepb.Tra
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")
 	}
+	if err := validateTransactionInfoIDForKey(txID, info, "collect transaction info"); err != nil {
+		return err
+	}
 	data, err := proto.Marshal(info)
 	if err != nil {
 		return err

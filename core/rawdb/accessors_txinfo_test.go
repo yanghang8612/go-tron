@@ -6,6 +6,7 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestWriteReadTransactionInfo(t *testing.T) {
@@ -53,11 +54,27 @@ func TestReadTransactionInfoRejectsMismatchedHotRow(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x11}, common.HashLength)
 	otherID := bytes.Repeat([]byte{0x12}, common.HashLength)
-	if err := WriteTransactionInfo(db, txID, &corepb.TransactionInfo{Id: otherID, Fee: 99}); err != nil {
-		t.Fatalf("WriteTransactionInfo: %v", err)
+	data, err := proto.Marshal(&corepb.TransactionInfo{Id: otherID, Fee: 99})
+	if err != nil {
+		t.Fatalf("marshal tx info: %v", err)
+	}
+	if err := db.Put(txInfoKey(txID), data); err != nil {
+		t.Fatalf("put mismatched tx info: %v", err)
 	}
 	if got := ReadTransactionInfo(db, txID); got != nil {
 		t.Fatalf("ReadTransactionInfo mismatched hot row = %+v, want nil", got)
+	}
+}
+
+func TestWriteTransactionInfoRejectsMismatchedID(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x21}, common.HashLength)
+	otherID := bytes.Repeat([]byte{0x22}, common.HashLength)
+	if err := WriteTransactionInfo(db, txID, &corepb.TransactionInfo{Id: otherID, Fee: 99}); err == nil {
+		t.Fatal("WriteTransactionInfo accepted mismatched transaction id")
+	}
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo after rejected write = %+v, want nil", got)
 	}
 }
 

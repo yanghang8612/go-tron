@@ -111,6 +111,11 @@ func TestDerivedIndexCollectorRejectsInvalidRowsAndLifecycle(t *testing.T) {
 	if err := collector.PutBlockBalanceTrace(1, nil); err == nil {
 		t.Fatal("PutBlockBalanceTrace accepted nil trace")
 	}
+	txID := bytes.Repeat([]byte{0x31}, 32)
+	otherID := bytes.Repeat([]byte{0x32}, 32)
+	if err := collector.PutTransactionInfo(txID, &corepb.TransactionInfo{Id: otherID}); err == nil {
+		t.Fatal("PutTransactionInfo accepted mismatched transaction id")
+	}
 	if err := collector.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

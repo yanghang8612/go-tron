@@ -18,6 +18,9 @@ const ancientTxInfos = AncientTxInfosTable
 
 // WriteTransactionInfo stores a single TransactionInfo indexed by txID.
 func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.TransactionInfo) error {
+	if err := validateTransactionInfoIDForKey(txID, info, "write transaction info"); err != nil {
+		return err
+	}
 	data, err := proto.Marshal(info)
 	if err != nil {
 		return err
@@ -66,13 +69,23 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 }
 
 func transactionInfoIDMatches(info *corepb.TransactionInfo, txID []byte) bool {
+	return validateTransactionInfoIDForKey(txID, info, "read transaction info") == nil
+}
+
+func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {
 	if info == nil {
-		return false
+		return fmt.Errorf("rawdb: nil transaction info during %s", context)
 	}
 	if len(info.Id) == 0 {
-		return true
+		return nil
 	}
-	return len(info.Id) == common.HashLength && bytes.Equal(info.Id, txID)
+	if len(info.Id) != common.HashLength {
+		return fmt.Errorf("rawdb: transaction info id length %d during %s", len(info.Id), context)
+	}
+	if !bytes.Equal(info.Id, txID) {
+		return fmt.Errorf("rawdb: transaction info id %x does not match key %x during %s", info.Id, txID, context)
+	}
+	return nil
 }
 
 func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLookup, bool) {
