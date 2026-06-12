@@ -613,12 +613,21 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 			},
 		},
 		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 33,
+			},
+		},
+		{
 			stage:   rawdb.StageSnapshotSectionBloomPrune,
 			group:   "prune",
 			present: true,
 			progress: rawdb.StageProgress{
 				Stage:    rawdb.StageSnapshotSectionBloomPrune,
-				BlockNum: 33,
+				BlockNum: 34,
 			},
 		},
 		{
@@ -627,7 +636,7 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 			present: true,
 			progress: rawdb.StageProgress{
 				Stage:    rawdb.StageSnapshotBalanceTracePrune,
-				BlockNum: 34,
+				BlockNum: 35,
 			},
 		},
 		{
@@ -700,8 +709,9 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		"Execution=6 ahead of Bodies=5",
 		"SnapshotBuild=31 ahead of Finish=30",
 		"SnapshotPrune=32 ahead of Finish=30",
-		"SnapshotSectionBloomPrune=33 ahead of Finish=30",
-		"SnapshotBalanceTracePrune=34 ahead of Finish=30",
+		"SnapshotEventLogBuild=33 ahead of Finish=30",
+		"SnapshotSectionBloomPrune=34 ahead of Finish=30",
+		"SnapshotBalanceTracePrune=35 ahead of Finish=30",
 		"SyncBodiesReady=8 ahead of SyncBodies=7",
 		"SyncExecution=4 ahead of SyncImport=3",
 		"SnapshotChainLookupPrune=21 ahead of ChainFreezer=20",
@@ -762,12 +772,22 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 				BlockNum: 9,
 			},
 		},
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 10,
+			},
+		},
 	}
 	issues = dbStageStatusPipelineOrderIssues(rows)
 	for _, want := range []string{
 		"SnapshotBuild requires Finish",
 		"SnapshotChainLookupPrune requires ChainFreezer",
 		"SnapshotSectionBloomPrune requires Finish",
+		"SnapshotEventLogBuild requires Finish",
 	} {
 		found := false
 		for _, issue := range issues {

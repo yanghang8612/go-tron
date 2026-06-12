@@ -323,6 +323,7 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		{rawdb.StageFinish, rawdb.StageCommitment},
 		{rawdb.StageSnapshotBuild, rawdb.StageFinish},
 		{rawdb.StageSnapshotLatestBuild, rawdb.StageFinish},
+		{rawdb.StageSnapshotEventLogBuild, rawdb.StageFinish},
 		{rawdb.StageSnapshotPrune, rawdb.StageFinish},
 		{rawdb.StageChainFreezer, rawdb.StageFinish},
 		{rawdb.StageSnapshotSectionBloomPrune, rawdb.StageFinish},
@@ -359,6 +360,7 @@ func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) b
 	switch downstream {
 	case rawdb.StageSnapshotBuild,
 		rawdb.StageSnapshotLatestBuild,
+		rawdb.StageSnapshotEventLogBuild,
 		rawdb.StageSnapshotPrune,
 		rawdb.StageChainFreezer,
 		rawdb.StageSnapshotSectionBloomPrune,
@@ -459,7 +461,7 @@ func dbStageStatusGroup(stage rawdb.StageID) string {
 		return "canonical"
 	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
 		return "sync"
-	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:
+	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotEventLogBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:
 		return "snapshot"
 	case rawdb.StageSnapshotHotPrune, rawdb.StageSnapshotPrune, rawdb.StageSnapshotChainLookupPrune, rawdb.StageSnapshotSectionBloomPrune, rawdb.StageSnapshotBalanceTracePrune, rawdb.StageSnapshotChainFreezerTailPrune:
 		return "prune"

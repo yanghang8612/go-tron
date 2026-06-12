@@ -795,7 +795,10 @@ Status:
   and event-log-index sidecars together with balance-trace and section-bloom
   segments. Production snap-mode history passes can now publish the matching
   event-log sidecar in the same manifest generation as the state-history segment
-  before hot prune runs. Runtime startup registers the manager on `ChainDB`, and
+  before hot prune runs, and both production and manual event-log builders now
+  advance a block-valued `SnapshotEventLogBuild` stage so operators can audit
+  cold log coverage against the verified `Finish` boundary. Runtime startup
+  registers the manager on `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments
   before streaming cold logs. Backend and JSON-RPC `eth_getLogs` regressions

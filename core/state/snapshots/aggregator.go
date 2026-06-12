@@ -228,6 +228,9 @@ func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uin
 	if err != nil {
 		return nil, err
 	}
+	if err := writeEventLogBuildStage(chain, toBlock); err != nil {
+		return nil, err
+	}
 	return &AggregatorBuildResult{Manifest: manifest, Segments: refs}, nil
 }
 
@@ -297,7 +300,19 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 	if err != nil {
 		return nil, err
 	}
+	if opts.EventLogs {
+		if err := writeEventLogBuildStage(db, toBlock); err != nil {
+			return nil, err
+		}
+	}
 	return &AggregatorBuildResult{Manifest: manifest, Segments: append([]SegmentRef(nil), refs...)}, nil
+}
+
+func writeEventLogBuildStage(db any, toBlock uint64) error {
+	if writer, ok := db.(ethdb.KeyValueWriter); ok {
+		return rawdb.WriteStageProgress(writer, rawdb.StageSnapshotEventLogBuild, toBlock)
+	}
+	return nil
 }
 
 func (a *Aggregator) eventLogRefsAfterIntegrating(newEventRefs []SegmentRef) ([]SegmentRef, error) {

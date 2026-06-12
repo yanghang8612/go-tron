@@ -892,6 +892,14 @@ func TestSnapshotBuildDerivedIndexesCmdWritesColdSegments(t *testing.T) {
 	if len(eventRows) != 1 || eventRows[0].BlockNum != 12 || !bytes.Equal(eventRows[0].Log.GetData(), []byte{0x12}) {
 		t.Fatalf("event rows = %+v, want one cold event log", eventRows)
 	}
+	reopened, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 12 {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 12", got, ok, err)
+	}
 }
 
 func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
@@ -969,6 +977,14 @@ func TestSnapshotBuildEventLogsCmdWritesColdSegment(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].TxHash != txHash || !bytes.Equal(rows[0].Log.GetData(), []byte{0x07}) {
 		t.Fatalf("event rows = %+v, want tx %x with data 07", rows, txHash)
+	}
+	reopened, err := openPebbleDB(ctx, chainDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	if got, ok, err := rawdb.ReadStageProgress(reopened, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 7 {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 7", got, ok, err)
 	}
 }
 

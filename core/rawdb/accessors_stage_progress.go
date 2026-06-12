@@ -63,6 +63,11 @@ const (
 	// LatestBuildBlocks a lot, the next build may be far out even when state is
 	// stale — that is expected (gate = block >= prev + interval), not a stuck stage.
 	StageSnapshotLatestBuild StageID = "SnapshotLatestBuild"
+	// StageSnapshotEventLogBuild records the highest source block whose
+	// transaction logs have been published into registered cold event-log
+	// segments and global event-log-index sidecars. It is block-valued, unlike
+	// the txNum-valued state-domain snapshot stages.
+	StageSnapshotEventLogBuild StageID = "SnapshotEventLogBuild"
 
 	StageSnapshotLatest          StageID = "SnapshotLatest"
 	StageSnapshotHistory         StageID = "SnapshotHistory"
@@ -129,6 +134,7 @@ func KnownStageProgressStages() []StageID {
 		StageSnapshotInstall,
 		StageSnapshotBuild,
 		StageSnapshotLatestBuild,
+		StageSnapshotEventLogBuild,
 		StageSnapshotLatest,
 		StageSnapshotHistory,
 		StageSnapshotAccessor,

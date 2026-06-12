@@ -765,6 +765,9 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if !haveEventLog {
 		t.Fatalf("segments = %+v, want event-log segment with history", result.Segments)
 	}
+	if got, ok, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild); err != nil || !ok || got != 1 {
+		t.Fatalf("StageSnapshotEventLogBuild = %d ok=%v err=%v, want 1", got, ok, err)
+	}
 	mgr, err := OpenManager(dir)
 	if err != nil {
 		t.Fatalf("OpenManager: %v", err)

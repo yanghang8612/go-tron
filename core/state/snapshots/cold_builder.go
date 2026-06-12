@@ -449,6 +449,11 @@ func (r *Runner) onePass() (PassResult, error) {
 		if err := stageProgress.Write(rawdb.StageSnapshotBuild, cutoffBlock); err != nil {
 			return PassResult{}, err
 		}
+		if eventLogBuilt {
+			if err := stageProgress.Write(rawdb.StageSnapshotEventLogBuild, cutoffBlock); err != nil {
+				return PassResult{}, err
+			}
+		}
 		if err := writeManifestProgressStages(stageProgress, manifest.Progress); err != nil {
 			return PassResult{}, err
 		}

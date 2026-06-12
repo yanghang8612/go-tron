@@ -163,11 +163,12 @@ rows for the source block range. It does not rebuild missing bloom rows; use
 `gtron db rebuild-section-blooms` first when the hot bloom index is absent or
 incomplete.
 
-`snapshot build-derived-indexes` builds the balance-trace and section-bloom
-sidecars together and integrates them into a single manifest generation. It
-uses the same balance-trace coverage audit as `snapshot build-balance-traces`;
-run the specific single-dataset commands when only one sidecar needs to be
-refreshed.
+`snapshot build-derived-indexes` builds the balance-trace, section-bloom, and
+event-log sidecars together and integrates them into a single manifest
+generation. It uses the same balance-trace coverage audit as
+`snapshot build-balance-traces`; run the specific single-dataset commands when
+only one sidecar needs to be refreshed. Event-log builds advance the
+`SnapshotEventLogBuild` stage to the highest covered source block.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.
