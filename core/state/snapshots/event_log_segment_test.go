@@ -628,6 +628,24 @@ func TestEventLogSegmentBuildRejectsMissingTransactionInfoCoverage(t *testing.T)
 	}
 }
 
+func TestEventLogSegmentBuildRejectsMismatchedTransactionInfo(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{{
+		Address: eventLogTestAddress(0x92),
+		Data:    []byte{0x02},
+	}})
+	infos[0].Id = bytes.Repeat([]byte{0xee}, common.HashLength)
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if _, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1); err == nil {
+		t.Fatal("BuildEventLogSegmentFromChain accepted mismatched TransactionInfo id")
+	}
+}
+
 func eventLogTestBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {
 	t.Helper()
 	txPB := &corepb.Transaction{

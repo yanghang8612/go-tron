@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 )
@@ -397,7 +398,7 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 		}
 		result.BlocksScanned++
 		infos := ReadTransactionInfosByBlock(chain, blockNum)
-		if err := validateTransactionInfosCoverBlock(blockNum, len(block.Transactions()), infos, "section bloom rebuild"); err != nil {
+		if err := ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "section bloom rebuild"); err != nil {
 			return nil, err
 		}
 		if len(infos) != 0 {
@@ -438,13 +439,32 @@ func RebuildSectionBloomsFromTransactionInfos(chain *ChainDB, sectionReader ethd
 	return result, nil
 }
 
-func validateTransactionInfosCoverBlock(blockNum uint64, txCount int, infos []*corepb.TransactionInfo, context string) error {
-	if txCount > 0 && len(infos) < txCount {
-		return fmt.Errorf("rawdb: incomplete transaction info coverage for block %d during %s: have %d entries for %d transactions", blockNum, context, len(infos), txCount)
+// ValidateTransactionInfosForBlock verifies that per-block TransactionInfo rows
+// describe the canonical transaction list before derived log indexes trust them.
+func ValidateTransactionInfosForBlock(blockNum uint64, txs []*types.Transaction, infos []*corepb.TransactionInfo, context string) error {
+	if len(infos) != len(txs) {
+		return fmt.Errorf("rawdb: incomplete transaction info coverage for block %d during %s: have %d entries for %d transactions", blockNum, context, len(infos), len(txs))
 	}
 	for txIndex, info := range infos {
 		if info == nil {
 			return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
+		}
+		if info.BlockNumber != 0 && info.BlockNumber != int64(blockNum) {
+			return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during %s", info.BlockNumber, blockNum, txIndex, context)
+		}
+		tx := txs[txIndex]
+		if tx == nil {
+			return fmt.Errorf("rawdb: nil canonical transaction at block %d index %d during %s", blockNum, txIndex, context)
+		}
+		if len(info.Id) == 0 {
+			continue
+		}
+		if len(info.Id) != common.HashLength {
+			return fmt.Errorf("rawdb: transaction info id length %d at block %d index %d during %s", len(info.Id), blockNum, txIndex, context)
+		}
+		txHash := tx.Hash()
+		if !bytes.Equal(info.Id, txHash[:]) {
+			return fmt.Errorf("rawdb: transaction info id %x does not match canonical tx %x at block %d index %d during %s", info.Id, txHash[:], blockNum, txIndex, context)
 		}
 	}
 	return nil

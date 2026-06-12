@@ -780,9 +780,11 @@ Status:
   payloads through `DerivedIndexCollector`. Partial-range rebuilds preserve
   existing block bits in the same section by reading and ORing existing rows.
   The rebuild now rejects tx-bearing blocks whose `TransactionRet` coverage is
-  missing, shorter than the block's transaction list, or contains nil entries,
-  preventing operators from publishing incomplete log prefilter rows as a
-  successful rebuild.
+  missing, differs from the block's transaction list length, contains nil
+  entries, points at a different block number, or carries a tx id that does not
+  match the canonical block transaction at the same index, preventing operators
+  from publishing incomplete or mismatched log prefilter rows as a successful
+  rebuild.
 - `gtron db rebuild-section-blooms` exposes that section-bloom rebuild to
   operators. It opens hot Pebble plus read-only ancient freezer rows, supports
   explicit or head-derived block ranges, and routes the rebuilt `sb-` rows
@@ -975,10 +977,12 @@ Status:
   chain-freezer ancient rows plus the cold `chain-index` and `event-log`
   segments.
 - Event-log cold segment builds now reject tx-bearing blocks whose
-  `TransactionRet` coverage is missing or shorter than the block's transaction
-  list, and reject nil transaction-info entries. This prevents incomplete hot
-  source data from being published as empty immutable log coverage and making
-  archive `eth_getLogs` return false negatives after pruning.
+  `TransactionRet` coverage is missing, has a different transaction count,
+  contains nil transaction-info entries, points at a different block number, or
+  carries tx ids that do not match the canonical block transaction order. This
+  prevents incomplete or mismatched hot source data from being published as
+  immutable log coverage and making archive `eth_getLogs` return false
+  negatives or wrong tx hashes after pruning.
 - Snapshot restore API soak now also sends `eth_getTransactionByHash` through
   both the in-process JSON-RPC API and a real restarted JSON-RPC listener after
   hot block bodies, block-hash lookups, tx lookups, and per-tx info rows are

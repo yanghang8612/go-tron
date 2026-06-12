@@ -247,8 +247,32 @@ func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
 	if _, err := RebuildSectionBloomsFromTransactionInfos(missingInfoDB, missingInfoDB, missingInfoDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "incomplete transaction info coverage") {
 		t.Fatalf("missing tx-info coverage err = %v, want incomplete transaction info coverage", err)
 	}
-	if err := validateTransactionInfosCoverBlock(1, 1, []*corepb.TransactionInfo{nil}, "section bloom rebuild"); err == nil || !strings.Contains(err.Error(), "nil transaction info") {
+	if err := ValidateTransactionInfosForBlock(1, block.Transactions(), []*corepb.TransactionInfo{nil}, "section bloom rebuild"); err == nil || !strings.Contains(err.Error(), "nil transaction info") {
 		t.Fatalf("nil tx-info err = %v, want nil transaction info", err)
+	}
+	mismatchedDB := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	infos[0].Id = bytes.Repeat([]byte{0xfe}, common.HashLength)
+	if err := WriteBlock(mismatchedDB, block); err != nil {
+		t.Fatalf("WriteBlock mismatchedDB: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(mismatchedDB, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock mismatchedDB: %v", err)
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(mismatchedDB, mismatchedDB, mismatchedDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("mismatched tx-info id err = %v, want canonical tx mismatch", err)
+	}
+	wrongBlockDB := NewMemoryChainDB()
+	block, infos = derivedRebuildTestBlock(t, 1, 1)
+	infos[0].BlockNumber = 2
+	if err := WriteBlock(wrongBlockDB, block); err != nil {
+		t.Fatalf("WriteBlock wrongBlockDB: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(wrongBlockDB, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock wrongBlockDB: %v", err)
+	}
+	if _, err := RebuildSectionBloomsFromTransactionInfos(wrongBlockDB, wrongBlockDB, wrongBlockDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "transaction info block number") {
+		t.Fatalf("wrong block tx-info err = %v, want block number mismatch", err)
 	}
 }
 
