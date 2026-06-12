@@ -335,7 +335,13 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 	} {
 		down, downOK := byStage[pair.downstream]
 		up, upOK := byStage[pair.upstream]
-		if !downOK || !upOK {
+		if !downOK {
+			continue
+		}
+		if !upOK {
+			if dbStageStatusRequiresUpstreamPresence(pair.downstream, pair.upstream) {
+				issues = append(issues, fmt.Sprintf("%s requires %s", pair.downstream, pair.upstream))
+			}
 			continue
 		}
 		if down.progress.BlockNum <= up.progress.BlockNum {
@@ -345,6 +351,22 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 			pair.downstream, down.progress.BlockNum, pair.upstream, up.progress.BlockNum))
 	}
 	return issues
+}
+
+func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) bool {
+	switch downstream {
+	case rawdb.StageSnapshotBuild,
+		rawdb.StageSnapshotLatestBuild,
+		rawdb.StageSnapshotPrune,
+		rawdb.StageChainFreezer:
+		return upstream == rawdb.StageFinish
+	case rawdb.StageSnapshotChainLookupPrune:
+		return upstream == rawdb.StageChainFreezer
+	case rawdb.StageSnapshotChainFreezerTailPrune:
+		return upstream == rawdb.StageSnapshotChainLookupPrune
+	default:
+		return false
+	}
 }
 
 func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {

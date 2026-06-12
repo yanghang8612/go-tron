@@ -713,6 +713,43 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
 		t.Fatalf("pipeline order issues with missing upstream = %#v, want none", issues)
 	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 8,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		"SnapshotBuild requires Finish",
+		"SnapshotChainLookupPrune requires ChainFreezer",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
 }
 
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {

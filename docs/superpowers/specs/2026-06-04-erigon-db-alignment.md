@@ -332,7 +332,7 @@ Status:
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
   of `SyncBodies`, cold build/prune/freezer coverage ahead of verified
   `Finish`, and cold-prune coverage violations such as
-  `SnapshotChainLookupPrune` ahead of `ChainFreezer`.
+  `SnapshotChainLookupPrune` ahead of or present without `ChainFreezer`.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.
