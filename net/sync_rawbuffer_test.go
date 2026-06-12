@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -123,4 +124,51 @@ func TestHandleBlockBuffersRawBytes(t *testing.T) {
 	if buf.hash != blk.Hash() || buf.num != 2 {
 		t.Fatalf("buffered metadata wrong: hash=%s num=%d", buf.hash, buf.num)
 	}
+	staged, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), 2)
+	if err != nil || !ok {
+		t.Fatalf("persistent staged block ok=%v err=%v", ok, err)
+	}
+	if !bytesEqual(staged.Raw, raw) {
+		t.Fatal("persistent staged block did not preserve received raw bytes")
+	}
+}
+
+func TestRestoreStagedBodyBuffersRawBytes(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	blk := blockWithTxs(1, bc.CurrentBlock().Hash(), 2)
+	raw, err := proto.Marshal(blk.Proto())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteSyncStagedBlockRaw(bc.DB(), blk, raw); err != nil {
+		t.Fatalf("write raw staged block: %v", err)
+	}
+
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buf, ok := ss.blockBuffer[1]
+	ss.mu.Unlock()
+	if !ok {
+		t.Fatal("raw staged block was not restored into sync buffer")
+	}
+	if !bytesEqual(buf.raw, raw) {
+		t.Fatal("restored sync buffer did not preserve staged raw bytes")
+	}
+	if buf.hash != blk.Hash() || buf.num != 1 {
+		t.Fatalf("restored metadata wrong: hash=%s num=%d", buf.hash, buf.num)
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

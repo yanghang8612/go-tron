@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -27,6 +28,50 @@ func TestSyncStagedBlockReadWriteDelete(t *testing.T) {
 	}
 	if _, ok, err := ReadSyncStagedBlock(db, 3); err != nil || ok {
 		t.Fatalf("deleted staged block ok=%v err=%v", ok, err)
+	}
+}
+
+func TestSyncStagedBlockRawIterate(t *testing.T) {
+	db := NewMemoryDatabase()
+	for _, n := range []uint64{4, 2, 3} {
+		block := testSyncStagedBlock(n, common.Hash{byte(n - 1)})
+		raw, err := block.Marshal()
+		if err != nil {
+			t.Fatalf("marshal block %d: %v", n, err)
+		}
+		if err := WriteSyncStagedBlockRaw(db, block, raw); err != nil {
+			t.Fatalf("write raw staged block %d: %v", n, err)
+		}
+	}
+	row, ok, err := ReadSyncStagedBlockRaw(db, 2)
+	if err != nil || !ok || row.Number != 2 || row.Hash != testSyncStagedBlock(2, common.Hash{0x01}).Hash() {
+		t.Fatalf("ReadSyncStagedBlockRaw = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+	if len(row.Raw) == 0 {
+		t.Fatal("ReadSyncStagedBlockRaw returned empty raw bytes")
+	}
+	row.Raw[0] ^= 0xff
+	row2, ok, err := ReadSyncStagedBlockRaw(db, 2)
+	if err != nil || !ok {
+		t.Fatalf("second ReadSyncStagedBlockRaw ok=%v err=%v", ok, err)
+	}
+	if bytes.Equal(row.Raw, row2.Raw) {
+		t.Fatal("ReadSyncStagedBlockRaw returned aliased bytes")
+	}
+
+	var got []uint64
+	err = IterateSyncStagedBlocksFrom(db, 3, func(row SyncStagedBlockRow) (bool, error) {
+		got = append(got, row.Number)
+		if row.Hash == (common.Hash{}) || len(row.Raw) == 0 {
+			t.Fatalf("iter row missing hash/raw: %+v", row)
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("IterateSyncStagedBlocksFrom: %v", err)
+	}
+	if want := []uint64{3, 4}; !equalUint64s(got, want) {
+		t.Fatalf("iterated staged blocks = %v, want %v", got, want)
 	}
 }
 
@@ -118,4 +163,16 @@ func testSyncStagedBlock(number uint64, parent common.Hash) *types.Block {
 			WitnessSignature: make([]byte, 65),
 		},
 	})
+}
+
+func equalUint64s(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
