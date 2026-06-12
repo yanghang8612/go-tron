@@ -272,10 +272,11 @@ Status:
   `SyncBodiesReady` row as the upper bound for the next body batch, and
   hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` record the latest
-  sync-driven block that completed the live import pipeline. New sync sessions
-  restore `SyncInventory` when it is ahead of the current head, preserving
-  restart diagnostics/remaining-block estimates without advancing canonical
-  chain state. These are intentionally outside `CanonicalExecutionStages()` so
+  sync-driven block observed at the matching canonical `Bodies`, `Execution`,
+  `Commitment`, and `Finish` stage boundaries for the applied range. New sync
+  sessions restore `SyncInventory` when it is ahead of the current head,
+  preserving restart diagnostics/remaining-block estimates without advancing
+  canonical chain state. These are intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
 - Received sync block bodies are now written to a `sync-staged-block-v1-`
@@ -333,7 +334,8 @@ Status:
   staged-body tails and stale downloader watermarks are dropped on restart,
   corrupted startup canonical stages are repaired to the stored head, snapshot
   builds are capped at verified finish stage, and imported sync pipeline
-  number/hash progress is written after `InsertBlocks` succeeds.
+  number/hash progress is derived from the canonical stage observer after
+  `InsertBlocks` applies the range.
 
 Needed:
 

@@ -189,6 +189,65 @@ func TestBlockChain_InsertBlocks_AdvancesCanonicalStages(t *testing.T) {
 	}
 }
 
+func TestBlockChain_InsertBlocksWithStageHookObservesCanonicalStages(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := NewBlockChain(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocks := make([]*types.Block, 0, 2)
+	parentHash := bc.CurrentBlock().Hash()
+	for i := uint64(1); i <= 2; i++ {
+		block := types.NewBlockFromPB(&corepb.Block{
+			BlockHeader: &corepb.BlockHeader{
+				RawData: &corepb.BlockHeaderRaw{
+					Number:     int64(i),
+					Timestamp:  int64(i) * 3000,
+					ParentHash: parentHash.Bytes(),
+				},
+			},
+		})
+		blocks = append(blocks, block)
+		parentHash = block.Hash()
+	}
+
+	type observedStage struct {
+		stage rawdb.StageID
+		num   uint64
+		hash  tcommon.Hash
+	}
+	var observed []observedStage
+	if err := bc.InsertBlocksWithStageHook(blocks, func(stage rawdb.StageID, blockNum uint64, hash tcommon.Hash) {
+		observed = append(observed, observedStage{stage: stage, num: blockNum, hash: hash})
+	}); err != nil {
+		t.Fatalf("InsertBlocksWithStageHook: %v", err)
+	}
+
+	wantStages := rawdb.CanonicalExecutionStages()
+	if len(observed) != len(blocks)*len(wantStages) {
+		t.Fatalf("observed %d stage advances, want %d: %+v", len(observed), len(blocks)*len(wantStages), observed)
+	}
+	var idx int
+	for _, block := range blocks {
+		for _, stage := range wantStages {
+			got := observed[idx]
+			if got.stage != stage || got.num != block.Number() || got.hash != block.Hash() {
+				t.Fatalf("observed[%d] = %s/%d/%x, want %s/%d/%x",
+					idx, got.stage, got.num, got.hash, stage, block.Number(), block.Hash())
+			}
+			idx++
+		}
+	}
+}
+
 func TestNewBlockChainRepairsMissingCanonicalStagesToGenesis(t *testing.T) {
 	diskdb := ethrawdb.NewMemoryDatabase()
 	genesis := &params.Genesis{

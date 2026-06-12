@@ -619,6 +619,14 @@ func (bc *BlockChain) InsertBlock(block *types.Block) error {
 // surface sync can move onto while execution is collapsed toward shared domain
 // transactions.
 func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
+	return bc.InsertBlocksWithStageHook(blocks, nil)
+}
+
+// InsertBlocksWithStageHook applies a fetched canonical range and calls hook
+// after each canonical stage row is advanced. The hook is intended for staged
+// sync/import diagnostics that need to mirror the real canonical stage
+// boundary without registering a global BlockChain callback.
+func (bc *BlockChain) InsertBlocksWithStageHook(blocks []*types.Block, hook StageProgressHook) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -628,12 +636,12 @@ func (bc *BlockChain) InsertBlocks(blocks []*types.Block) error {
 		return ErrBlockChainClosed
 	}
 
-	return bc.insertBlocksLocked(blocks)
+	return bc.insertBlocksLocked(blocks, hook)
 }
 
 // insertBlocksLocked applies a contiguous range through insertBlockLocked.
 // Callers must hold bc.chainmu.
-func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
+func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block, hook StageProgressHook) (err error) {
 	// Parallel signature pre-verification: warm every tx's sender recovery and
 	// every block's witness-signature recovery ahead of serial execution, off
 	// the critical path. Pure cache-warming — the serial path (envelope
@@ -641,7 +649,7 @@ func (bc *BlockChain) insertBlocksLocked(blocks []*types.Block) (err error) {
 	// and reads an identical recovered value, computing inline on any miss.
 	prewarmBlockSignatures(blocks, bc.headerSigPrewarmer())
 
-	executor := newCanonicalRangeExecutor(bc, true)
+	executor := newCanonicalRangeExecutorWithStageHook(bc, true, hook)
 	if bc.asyncCommit {
 		// Async commit: settle the range at its boundary in one ordered defer so
 		// the persistent state matches the synchronous path exactly. The

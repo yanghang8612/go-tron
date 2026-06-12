@@ -99,6 +99,64 @@ type bufferedSyncBatch struct {
 	bufferWaits []time.Duration
 }
 
+type syncStageProgressRow struct {
+	blockNum uint64
+	hash     tcommon.Hash
+}
+
+type syncStageProgressCollector struct {
+	mu   sync.Mutex
+	rows map[rawdb.StageID]syncStageProgressRow
+}
+
+func newSyncStageProgressCollector() *syncStageProgressCollector {
+	return &syncStageProgressCollector{rows: make(map[rawdb.StageID]syncStageProgressRow)}
+}
+
+func (c *syncStageProgressCollector) observe(stage rawdb.StageID, blockNum uint64, hash tcommon.Hash) {
+	syncStage, ok := syncStageForCanonicalStage(stage)
+	if c == nil || !ok {
+		return
+	}
+	c.mu.Lock()
+	c.rows[syncStage] = syncStageProgressRow{blockNum: blockNum, hash: hash}
+	c.mu.Unlock()
+}
+
+func (c *syncStageProgressCollector) write(ss *SyncService, through uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	rows := make(map[rawdb.StageID]syncStageProgressRow, len(c.rows))
+	for stage, row := range c.rows {
+		rows[stage] = row
+	}
+	c.mu.Unlock()
+	for _, stage := range syncPipelineProgressStages() {
+		row, ok := rows[stage]
+		if !ok || row.blockNum > through {
+			continue
+		}
+		ss.writeStageProgress(stage, row.blockNum, row.hash, true)
+	}
+}
+
+func syncStageForCanonicalStage(stage rawdb.StageID) (rawdb.StageID, bool) {
+	switch stage {
+	case rawdb.StageBodies:
+		return rawdb.StageSyncImport, true
+	case rawdb.StageExecution:
+		return rawdb.StageSyncExecution, true
+	case rawdb.StageCommitment:
+		return rawdb.StageSyncCommitment, true
+	case rawdb.StageFinish:
+		return rawdb.StageSyncFinish, true
+	default:
+		return "", false
+	}
+}
+
 type outboundSyncRequest struct {
 	peer   *p2p.Peer
 	blocks []types.BlockID
@@ -1252,8 +1310,9 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.stats.AddBufferWait(wait)
 		}
 
+		stageProgress := newSyncStageProgressCollector()
 		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlocks(batch.blocks)
+		insertErr := ss.chain.InsertBlocksWithStageHook(batch.blocks, stageProgress.observe)
 		insertElapsed := time.Since(insertStart)
 		applied := len(batch.blocks)
 		if insertErr != nil {
@@ -1263,7 +1322,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 				failed = rangeErr.Index
 			}
 			applied = failed
-			ss.recordImportedBatch(batch, applied, insertElapsed)
+			ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
 			failedNum := batch.buffered[failed].num
 			if failedNum == 0 && rangeErr != nil {
 				failedNum = rangeErr.BlockNumber
@@ -1271,7 +1330,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.pauseSync(batch.buffered[failed].peer, failedNum, insertErr)
 			break
 		}
-		ss.recordImportedBatch(batch, applied, insertElapsed)
+		ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
 	}
 	ss.sendOutboundRequests(out)
 }
@@ -1385,7 +1444,7 @@ func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 	}
 }
 
-func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration) {
+func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int, totalElapsed time.Duration, stageProgress *syncStageProgressCollector) {
 	if applied <= 0 {
 		return
 	}
@@ -1397,7 +1456,7 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	}
 	ss.deleteImportedSyncBodies(batch, applied)
 	if last := batch.buffered[applied-1]; last.num > 0 {
-		ss.writeSyncPipelineProgress(last.num, last.hash)
+		stageProgress.write(ss, last.num)
 	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
@@ -1424,12 +1483,6 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	if emit {
 		last := batch.buffered[applied-1]
 		ss.reportSegment(snap, diag, last.num, remain, last.peer)
-	}
-}
-
-func (ss *SyncService) writeSyncPipelineProgress(blockNum uint64, blockHash tcommon.Hash) {
-	for _, stage := range syncPipelineProgressStages() {
-		ss.writeStageProgress(stage, blockNum, blockHash, true)
 	}
 }
 

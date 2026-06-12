@@ -173,6 +173,7 @@ func (p *canonicalBlockExecution) FlushLatestUpTo(cutoff int64) error {
 type canonicalRangeExecutor struct {
 	bc                *BlockChain
 	allowSharedCommit bool
+	stageHook         StageProgressHook
 	state             *state.StateDB
 	commit            *state.CommitScope
 	txRanges          *stateTxRangeAllocator
@@ -190,7 +191,11 @@ type canonicalRangeExecutor struct {
 }
 
 func newCanonicalRangeExecutor(bc *BlockChain, allowSharedCommit bool) *canonicalRangeExecutor {
-	return &canonicalRangeExecutor{bc: bc, allowSharedCommit: allowSharedCommit}
+	return newCanonicalRangeExecutorWithStageHook(bc, allowSharedCommit, nil)
+}
+
+func newCanonicalRangeExecutorWithStageHook(bc *BlockChain, allowSharedCommit bool, hook StageProgressHook) *canonicalRangeExecutor {
+	return &canonicalRangeExecutor{bc: bc, allowSharedCommit: allowSharedCommit, stageHook: hook}
 }
 
 // tip returns the range-local tip — the block subsequent applies build on.
@@ -241,7 +246,7 @@ func (e *canonicalRangeExecutor) Apply(block *types.Block) error {
 		state:    e.state,
 		commit:   e.commit,
 		txRange:  plannedTxRange,
-		pipeline: newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash()),
+		pipeline: newCanonicalStagePipeline(bc.buffer, block.Number(), block.Hash(), e.stageHook),
 		parent:   current,
 	}
 	// Under async commit, thread the previous block's finalized dynamic

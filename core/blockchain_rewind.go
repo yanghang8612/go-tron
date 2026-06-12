@@ -156,7 +156,7 @@ func (bc *BlockChain) RestartSyncFromHeight(height uint64, genesis *params.Genes
 			}
 			blocks = append(blocks, block)
 		}
-		if err := bc.insertBlocksLocked(blocks); err != nil {
+		if err := bc.insertBlocksLocked(blocks, nil); err != nil {
 			var rangeErr *InsertBlocksError
 			if errors.As(err, &rangeErr) {
 				for i := 0; i < rangeErr.Index && i < len(blocks); i++ {

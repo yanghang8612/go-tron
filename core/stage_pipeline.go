@@ -16,14 +16,25 @@ type canonicalStagePipeline struct {
 	blockNum uint64
 	hash     tcommon.Hash
 	last     int
+	hook     StageProgressHook
 }
 
-func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, hash tcommon.Hash) *canonicalStagePipeline {
+// StageProgressHook observes successful canonical stage advances for one block.
+// It must return quickly; callers run it on the block import path and may hold
+// the chain lock.
+type StageProgressHook func(stage rawdb.StageID, blockNum uint64, hash tcommon.Hash)
+
+func newCanonicalStagePipeline(writer ethdb.KeyValueWriter, blockNum uint64, hash tcommon.Hash, hooks ...StageProgressHook) *canonicalStagePipeline {
+	var hook StageProgressHook
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
 	return &canonicalStagePipeline{
 		progress: newRawDBStageProgressWriter(writer),
 		blockNum: blockNum,
 		hash:     hash,
 		last:     -1,
+		hook:     hook,
 	}
 }
 
@@ -60,6 +71,9 @@ func (p *canonicalStagePipeline) Advance(stages ...rawdb.StageID) error {
 			return fmt.Errorf("write %s stage progress: %w", stage, err)
 		}
 		p.last = ord
+		if p.hook != nil {
+			p.hook(stage, p.blockNum, p.hash)
+		}
 	}
 	return nil
 }
