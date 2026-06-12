@@ -609,7 +609,11 @@ Status:
   gates now resolve chain identity through `Context.EffectiveGenesisHash`, and
   the same audit suite prevents actuator code from reintroducing scattered
   direct `rawdb.ReadBlockHashByNumber(ctx.DB, ...)` calls that would depend on
-  hot genesis block rows after freezer/prune.
+  hot genesis block rows after freezer/prune. The audit suite also pins all
+  remaining production `ReadBlockHashByNumber` calls to explicit freezer/cold
+  index boundaries (`blockbuffer`, TVM `BLOCKHASH`, pruner stage verification,
+  snapshot builder canonical-hash readers, freezer adapter, and db diagnostics),
+  so new block-number hash lookups cannot silently bypass cold chain coverage.
 
 Needed:
 

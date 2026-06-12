@@ -35,6 +35,14 @@ KV (`bsr-<hash>`); on miss it falls through to ancient via a two-step
 lookup `bh-<hash>` → num → `state_roots[num]`. Both halves of that
 two-step are zero-allocation on the KV-hit path.
 
+The production `rawdb.ReadBlockHashByNumber` call sites are now locked by
+`TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries`. New direct calls
+must either move behind a freezer/cold-index-aware interface or update the
+explicit audit whitelist with the reason. The current whitelist covers only the
+known boundary adapters: `blockbuffer`/TVM `BLOCKHASH`, pruning and snapshot
+canonical-hash verification, the chain-freezer adapter, actuator genesis
+identity, and `gtron db` diagnostics.
+
 ### Why not split `header` and `body` tables?
 
 The geth spec uses two tables because Ethereum stores headers and bodies

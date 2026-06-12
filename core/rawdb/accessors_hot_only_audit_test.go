@@ -55,6 +55,38 @@ func TestNoActuatorDirectHotBlockHashReads(t *testing.T) {
 	}
 }
 
+func TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBCalls(t, root, map[string]struct{}{
+		"ReadBlockHashByNumber": {},
+	}, map[string]map[string]struct{}{
+		"actuator/actuator.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"cmd/gtron/db_cmd.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"cmd/gtron/freezer_adapter.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"core/blockbuffer/buffer.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"core/state/pruning/pruner.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"core/state/snapshots/cold_builder.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"vm/instructions.go": {
+			"ReadBlockHashByNumber": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production block-hash-by-number reads must stay behind audited freezer/cold-index boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
