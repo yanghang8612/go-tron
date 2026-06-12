@@ -328,8 +328,9 @@ Status:
   same view into an automation gate for canonical and sync-import stages; it
   fails on mismatched/missing canonical hashes or legacy unbound canonical
   stage rows while leaving downloader body stages as diagnostics. It also
-  rejects sync-stage order violations, e.g. `SyncExecution` ahead of
-  `SyncImport` or `SyncBodiesReady` ahead of `SyncBodies`.
+  rejects canonical and sync-stage order violations, e.g. `Execution` ahead of
+  `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
+  of `SyncBodies`.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.

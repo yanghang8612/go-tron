@@ -317,6 +317,10 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		downstream rawdb.StageID
 		upstream   rawdb.StageID
 	}{
+		{rawdb.StageBodies, rawdb.StageHeaders},
+		{rawdb.StageExecution, rawdb.StageBodies},
+		{rawdb.StageCommitment, rawdb.StageExecution},
+		{rawdb.StageFinish, rawdb.StageCommitment},
 		{rawdb.StageSyncBodiesReady, rawdb.StageSyncBodies},
 		{rawdb.StageSyncImport, rawdb.StageSyncBodiesReady},
 		{rawdb.StageSyncExecution, rawdb.StageSyncImport},

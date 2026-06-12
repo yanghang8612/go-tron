@@ -568,6 +568,24 @@ func TestDBStageStatusCmd(t *testing.T) {
 func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	rows := []dbStageStatusRow{
 		{
+			stage:   rawdb.StageBodies,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageBodies,
+				BlockNum: 5,
+			},
+		},
+		{
+			stage:   rawdb.StageExecution,
+			group:   "canonical",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageExecution,
+				BlockNum: 6,
+			},
+		},
+		{
 			stage:   rawdb.StageSyncBodies,
 			group:   "sync",
 			present: true,
@@ -607,6 +625,7 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 
 	issues := dbStageStatusPipelineOrderIssues(rows)
 	for _, want := range []string{
+		"Execution=6 ahead of Bodies=5",
 		"SyncBodiesReady=8 ahead of SyncBodies=7",
 		"SyncExecution=4 ahead of SyncImport=3",
 	} {
