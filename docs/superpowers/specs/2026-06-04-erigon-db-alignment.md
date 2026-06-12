@@ -273,7 +273,10 @@ Status:
   hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` record the latest
   sync-driven block observed at the matching canonical `Bodies`, `Execution`,
-  `Commitment`, and `Finish` stage boundaries for the applied range. New sync
+  `Commitment`, and `Finish` stage boundaries for the applied range. Partial
+  range failures write only the newest observed stage rows at or below the last
+  successfully applied block, so a failed block that advanced an early
+  canonical stage cannot overwrite the sync-stage handoff boundary. New sync
   sessions restore `SyncInventory` when it is ahead of the current head,
   preserving restart diagnostics/remaining-block estimates without advancing
   canonical chain state. These are intentionally outside `CanonicalExecutionStages()` so

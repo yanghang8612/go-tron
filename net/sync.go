@@ -106,11 +106,11 @@ type syncStageProgressRow struct {
 
 type syncStageProgressCollector struct {
 	mu   sync.Mutex
-	rows map[rawdb.StageID]syncStageProgressRow
+	rows map[rawdb.StageID][]syncStageProgressRow
 }
 
 func newSyncStageProgressCollector() *syncStageProgressCollector {
-	return &syncStageProgressCollector{rows: make(map[rawdb.StageID]syncStageProgressRow)}
+	return &syncStageProgressCollector{rows: make(map[rawdb.StageID][]syncStageProgressRow)}
 }
 
 func (c *syncStageProgressCollector) observe(stage rawdb.StageID, blockNum uint64, hash tcommon.Hash) {
@@ -119,7 +119,7 @@ func (c *syncStageProgressCollector) observe(stage rawdb.StageID, blockNum uint6
 		return
 	}
 	c.mu.Lock()
-	c.rows[syncStage] = syncStageProgressRow{blockNum: blockNum, hash: hash}
+	c.rows[syncStage] = append(c.rows[syncStage], syncStageProgressRow{blockNum: blockNum, hash: hash})
 	c.mu.Unlock()
 }
 
@@ -128,17 +128,29 @@ func (c *syncStageProgressCollector) write(ss *SyncService, through uint64) {
 		return
 	}
 	c.mu.Lock()
-	rows := make(map[rawdb.StageID]syncStageProgressRow, len(c.rows))
-	for stage, row := range c.rows {
-		rows[stage] = row
+	rows := make(map[rawdb.StageID][]syncStageProgressRow, len(c.rows))
+	for stage, stageRows := range c.rows {
+		rows[stage] = append([]syncStageProgressRow(nil), stageRows...)
 	}
 	c.mu.Unlock()
 	for _, stage := range syncPipelineProgressStages() {
-		row, ok := rows[stage]
-		if !ok || row.blockNum > through {
+		var (
+			latest syncStageProgressRow
+			have   bool
+		)
+		for _, row := range rows[stage] {
+			if row.blockNum > through {
+				continue
+			}
+			if !have || row.blockNum > latest.blockNum {
+				latest = row
+				have = true
+			}
+		}
+		if !have {
 			continue
 		}
-		ss.writeStageProgress(stage, row.blockNum, row.hash, true)
+		ss.writeStageProgress(stage, latest.blockNum, latest.hash, true)
 	}
 }
 

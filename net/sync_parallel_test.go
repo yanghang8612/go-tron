@@ -157,6 +157,26 @@ func TestMultiPeerSyncPausesAtFailedBlockInBufferedRange(t *testing.T) {
 	assertSyncPipelineProgress(t, bc.DB(), block1)
 }
 
+func TestSyncStageProgressCollectorKeepsLatestAppliedStage(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	collector := newSyncStageProgressCollector()
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		collector.observe(stage, block1.Number(), block1.Hash())
+	}
+	collector.observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+
+	collector.write(ss, block1.Number())
+
+	assertSyncPipelineProgress(t, bc.DB(), block1)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync import after capped collector write = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+}
+
 func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
