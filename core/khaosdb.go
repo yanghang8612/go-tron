@@ -14,12 +14,16 @@ var (
 	ErrBadBlockNumber = errors.New("block number not parent+1")
 )
 
-// KhaosBlock is a node in the in-memory fork tree.
+// KhaosBlock is a node in the in-memory fork tree. It deliberately holds NO
+// pointer to its parent block: parents are resolved on demand through the
+// store's by-hash index (see resolveParent), so a block that slides out of the
+// eviction window becomes unreachable and collectable. java-tron achieves the
+// same with a WeakReference parent (KhaosDatabase.KhaosBlock); a strong parent
+// pointer here would chain head→…→genesis and leak every block ever seen.
 type KhaosBlock struct {
-	block  *types.Block
-	parent *KhaosBlock
-	id     tcommon.Hash
-	num    uint64
+	block *types.Block
+	id    tcommon.Hash
+	num   uint64
 }
 
 func (kb *KhaosBlock) Block() *types.Block    { return kb.block }
@@ -173,7 +177,6 @@ func (k *KhaosDB) Push(block *types.Block) (*types.Block, error) {
 		if block.Number() != parent.num+1 {
 			return nil, ErrBadBlockNumber
 		}
-		kb.parent = parent
 	}
 
 	k.miniStore.insert(kb, k.head.num)
@@ -215,7 +218,6 @@ func (k *KhaosDB) promoteUnlinked(parent *KhaosBlock) {
 	k.miniUnlinkedStore.mu.Unlock()
 
 	for _, kb := range promote {
-		kb.parent = parent
 		k.miniStore.insert(kb, k.head.num)
 		if kb.num > k.head.num {
 			k.head = kb
@@ -225,10 +227,21 @@ func (k *KhaosDB) promoteUnlinked(parent *KhaosBlock) {
 	}
 }
 
+// resolveParent returns the in-window parent of kb, or nil if that parent has
+// been evicted from the window or was never linked (genesis / an unlinked
+// block). It mirrors java-tron's KhaosBlock.getParent() returning null once the
+// weak parent reference is cleared: the parent is found by hash through the
+// store's index rather than followed through a strong pointer, so an evicted
+// ancestor is reported absent (and stays collectable). Callers hold k.mu.
+func (k *KhaosDB) resolveParent(kb *KhaosBlock) *KhaosBlock {
+	return k.miniStore.getByHash(kb.ParentHash())
+}
+
 // GetBranch returns the list of KhaosBlocks on each side of the two tips,
 // back to (but not including) their lowest common ancestor.
 // branch1 goes from hash1 toward LCA; branch2 from hash2 toward LCA.
-// LCA = branch1[last].parent = branch2[last].parent (or hash2 if branch1 is empty).
+// The LCA is the (in-window) parent of branch1[last] and of branch2[last].
+// Returns ErrNonCommonBlock if either walk leaves the window before meeting.
 func (k *KhaosDB) GetBranch(hash1, hash2 tcommon.Hash) (branch1, branch2 []*KhaosBlock, err error) {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
@@ -245,15 +258,15 @@ func (k *KhaosDB) GetBranch(hash1, hash2 tcommon.Hash) (branch1, branch2 []*Khao
 	// Phase 1: equalize heights.
 	for kb1.num > kb2.num {
 		branch1 = append(branch1, kb1)
-		kb1 = kb1.parent
-		if kb1 == nil || k.miniStore.getByHash(kb1.id) == nil {
+		kb1 = k.resolveParent(kb1)
+		if kb1 == nil {
 			return nil, nil, ErrNonCommonBlock
 		}
 	}
 	for kb2.num > kb1.num {
 		branch2 = append(branch2, kb2)
-		kb2 = kb2.parent
-		if kb2 == nil || k.miniStore.getByHash(kb2.id) == nil {
+		kb2 = k.resolveParent(kb2)
+		if kb2 == nil {
 			return nil, nil, ErrNonCommonBlock
 		}
 	}
@@ -262,12 +275,12 @@ func (k *KhaosDB) GetBranch(hash1, hash2 tcommon.Hash) (branch1, branch2 []*Khao
 	for kb1.id != kb2.id {
 		branch1 = append(branch1, kb1)
 		branch2 = append(branch2, kb2)
-		kb1 = kb1.parent
-		if kb1 == nil || k.miniStore.getByHash(kb1.id) == nil {
+		kb1 = k.resolveParent(kb1)
+		if kb1 == nil {
 			return nil, nil, ErrNonCommonBlock
 		}
-		kb2 = kb2.parent
-		if kb2 == nil || k.miniStore.getByHash(kb2.id) == nil {
+		kb2 = k.resolveParent(kb2)
+		if kb2 == nil {
 			return nil, nil, ErrNonCommonBlock
 		}
 	}
@@ -298,14 +311,18 @@ func (k *KhaosDB) RemoveBlk(hash tcommon.Hash) {
 }
 
 // Pop rewinds the in-memory head pointer by one (does not touch committed state).
-// Returns false if there is no parent to rewind to.
+// Returns false if there is no in-window parent to rewind to.
 func (k *KhaosDB) Pop() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.head == nil || k.head.parent == nil {
+	if k.head == nil {
 		return false
 	}
-	k.head = k.head.parent
+	parent := k.resolveParent(k.head)
+	if parent == nil {
+		return false
+	}
+	k.head = parent
 	return true
 }
 
