@@ -640,9 +640,19 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 	if !stats.Repair.Applied || stats.Repair.TargetHead != 0 || stats.Repair.TargetTail != 0 || len(stats.Repair.Tables) != 1 {
 		t.Fatalf("repair stats = %+v, want one table repaired to head/tail 0", stats.Repair)
 	}
+	if stats.Repair.RecordedAt == "" {
+		t.Fatalf("repair stats missing RecordedAt: %+v", stats.Repair)
+	}
 	repair := stats.Repair.Tables[0]
 	if repair.Name != "raw" || repair.HeadBefore != 5 || repair.HeadAfter != 0 || repair.HiddenTailBefore != 0 || repair.HiddenTailAfter != 0 {
 		t.Fatalf("repair table = %+v, want raw head 5->0 tail 0->0", repair)
+	}
+	repairFile, err := os.ReadFile(filepath.Join(dir, repairStatsFilename))
+	if err != nil {
+		t.Fatalf("read persisted repair stats: %v", err)
+	}
+	if body := string(repairFile); !strings.Contains(body, `"applied": true`) || !strings.Contains(body, `"recordedAt":`) {
+		t.Fatalf("persisted repair stats missing applied/recordedAt:\n%s", body)
 	}
 	for _, kind := range []string{"raw", "cmp"} {
 		got, err := reopened.AncientCount(kind)
@@ -652,6 +662,22 @@ func TestFreezerOpenRepairsTableCardinalityMismatch(t *testing.T) {
 		if got != 0 {
 			t.Fatalf("%s count after repair = %d, want 0", kind, got)
 		}
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close repaired freezer: %v", err)
+	}
+
+	readonly, err := NewFreezer(dir, "", true, 2049, allTables)
+	if err != nil {
+		t.Fatalf("readonly reopen after repair: %v", err)
+	}
+	t.Cleanup(func() { _ = readonly.Close() })
+	readonlyStats, err := readonly.Stats()
+	if err != nil {
+		t.Fatalf("readonly Stats after repair: %v", err)
+	}
+	if !readonlyStats.Repair.Applied || readonlyStats.Repair.RecordedAt != stats.Repair.RecordedAt || len(readonlyStats.Repair.Tables) != 1 {
+		t.Fatalf("readonly repair stats = %+v, want persisted repair stats %+v", readonlyStats.Repair, stats.Repair)
 	}
 }
 

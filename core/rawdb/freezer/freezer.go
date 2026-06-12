@@ -20,6 +20,7 @@
 package freezer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -28,6 +29,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/gofrs/flock"
@@ -41,6 +43,8 @@ import (
 // go-ethereum uses 2 * 1000 * 1000 * 1000 (2 GB); we intentionally pick the
 // binary-power value because the spec spells it out as 2 GiB.
 const FreezerTableSize uint32 = 2 * 1024 * 1024 * 1024
+
+const repairStatsFilename = "repair.json"
 
 var (
 	// errReadOnly is returned if the freezer is opened in read only mode. All the
@@ -110,19 +114,20 @@ type Stats struct {
 // RepairStats describes the most recent writable-open repair pass. Applied is
 // true when at least one table was truncated to the common freezer bounds.
 type RepairStats struct {
-	Applied    bool
-	TargetHead uint64
-	TargetTail uint64
-	Tables     []TableRepairStats
+	Applied    bool               `json:"applied"`
+	TargetHead uint64             `json:"targetHead"`
+	TargetTail uint64             `json:"targetTail"`
+	RecordedAt string             `json:"recordedAt,omitempty"`
+	Tables     []TableRepairStats `json:"tables,omitempty"`
 }
 
 // TableRepairStats records one table bound change made by freezer repair.
 type TableRepairStats struct {
-	Name             string
-	HeadBefore       uint64
-	HeadAfter        uint64
-	HiddenTailBefore uint64
-	HiddenTailAfter  uint64
+	Name             string `json:"name"`
+	HeadBefore       uint64 `json:"headBefore"`
+	HeadAfter        uint64 `json:"headAfter"`
+	HiddenTailBefore uint64 `json:"hiddenTailBefore"`
+	HiddenTailAfter  uint64 `json:"hiddenTailAfter"`
 }
 
 func (s RepairStats) clone() RepairStats {
@@ -224,6 +229,9 @@ func NewFreezer(datadir string, namespace string, readonly bool, maxTableSize ui
 		}
 		lock.Unlock()
 		return nil, err
+	}
+	if !freezer.repairStats.Applied {
+		freezer.loadPersistedRepairStats()
 	}
 
 	// Create the write batch.
@@ -360,6 +368,60 @@ func (f *Freezer) Stats() (Stats, error) {
 		stats.Tables = append(stats.Tables, tableStats)
 	}
 	return stats, nil
+}
+
+func (f *Freezer) repairStatsPath() string {
+	return filepath.Join(f.datadir, repairStatsFilename)
+}
+
+func (f *Freezer) loadPersistedRepairStats() {
+	data, err := os.ReadFile(f.repairStatsPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		gtronlog.Warn("Could not read ancient database repair diagnostics", "database", f.datadir, "err", err)
+		return
+	}
+	var repair RepairStats
+	if err := json.Unmarshal(data, &repair); err != nil {
+		gtronlog.Warn("Could not decode ancient database repair diagnostics", "database", f.datadir, "err", err)
+		return
+	}
+	if repair.Applied {
+		f.repairStats = repair.clone()
+	}
+}
+
+func (f *Freezer) persistRepairStats(repair RepairStats) error {
+	if !repair.Applied {
+		return nil
+	}
+	data, err := json.MarshalIndent(repair, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(f.datadir, "."+repairStatsFilename+".tmp-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, f.repairStatsPath())
 }
 
 // ModifyAncients runs the given write operation.
@@ -596,12 +658,17 @@ func (f *Freezer) repair() error {
 
 	f.head.Store(head)
 	f.tail.Store(prunedTail)
-	f.repairStats = repair
 	if repair.Applied {
+		repair.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		f.repairStats = repair
+		if err := f.persistRepairStats(repair); err != nil {
+			gtronlog.Warn("Could not persist ancient database repair diagnostics", "database", f.datadir, "err", err)
+		}
 		gtronlog.Warn("Repaired ancient database table bounds",
 			"database", f.datadir,
 			"targetHead", repair.TargetHead,
 			"targetTail", repair.TargetTail,
+			"recordedAt", repair.RecordedAt,
 			"tables", len(repair.Tables),
 		)
 	}

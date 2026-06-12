@@ -488,6 +488,7 @@ func TestDBFreezerStatusCmd(t *testing.T) {
 		"head=5",
 		"tail=3",
 		"repairApplied=false",
+		"repairRecordedAt=-",
 		"name=" + rawdb.AncientBlocksTable,
 		"name=" + rawdb.AncientTxInfosTable,
 		"name=" + rawdb.AncientStateRootsTable,

@@ -98,10 +98,13 @@ alongside chain lookup pruning.
 After the drill, `gtron db freezer-status --datadir <dir>` prints the local
 freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and
 visible/hidden sizes. The header also includes `repairApplied`,
-`repairTargetHead`, and `repairTargetTail`; if any `Freezer repair table` rows
-appear, preserve them with the benchmark artifacts because the freezer had to
-truncate table bounds on open before serving the status view. Capture this
-alongside the JSONL row when validating minimal-mode physical shard reclamation.
+`repairTargetHead`, `repairTargetTail`, and `repairRecordedAt`; if any
+`Freezer repair table` rows appear, preserve them with the benchmark artifacts
+because the freezer had to truncate table bounds on open before serving the
+status view. The same repair record is persisted in the freezer directory as
+`repair.json`, so a later readonly status sample can still surface the last
+automatic repair. Capture this alongside the JSONL row when validating
+minimal-mode physical shard reclamation.
 
 ## Sync Profile
 

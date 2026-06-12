@@ -203,9 +203,13 @@ func dbFreezerStatusCmd(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read freezer status: %w", err)
 	}
-	fmt.Printf("Freezer status: datadir=%s readonly=%t head=%d tail=%d tables=%d repairApplied=%t repairTables=%d repairTargetHead=%d repairTargetTail=%d\n",
+	repairRecordedAt := stats.Repair.RecordedAt
+	if repairRecordedAt == "" {
+		repairRecordedAt = "-"
+	}
+	fmt.Printf("Freezer status: datadir=%s readonly=%t head=%d tail=%d tables=%d repairApplied=%t repairTables=%d repairTargetHead=%d repairTargetTail=%d repairRecordedAt=%s\n",
 		stats.Datadir, stats.ReadOnly, stats.Head, stats.Tail, len(stats.Tables),
-		stats.Repair.Applied, len(stats.Repair.Tables), stats.Repair.TargetHead, stats.Repair.TargetTail)
+		stats.Repair.Applied, len(stats.Repair.Tables), stats.Repair.TargetHead, stats.Repair.TargetTail, repairRecordedAt)
 	for _, table := range stats.Repair.Tables {
 		fmt.Printf("Freezer repair table: name=%s headBefore=%d headAfter=%d hiddenTailBefore=%d hiddenTailAfter=%d\n",
 			table.Name, table.HeadBefore, table.HeadAfter, table.HiddenTailBefore, table.HiddenTailAfter)
