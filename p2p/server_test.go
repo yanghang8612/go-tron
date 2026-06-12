@@ -54,6 +54,17 @@ func TestServerStartStop(t *testing.T) {
 	srv.Stop()
 }
 
+func TestServerStopBeforeStart(t *testing.T) {
+	srv := NewServer(ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   5,
+	}, &testHandler{})
+
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop before Start: %v", err)
+	}
+}
+
 func TestServerAcceptsPeer(t *testing.T) {
 	h1 := &testHandler{}
 	h2 := &testHandler{}

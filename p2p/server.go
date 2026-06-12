@@ -174,7 +174,9 @@ func (s *Server) Start() error {
 // Stop shuts down the server and disconnects all peers. Safe to call multiple times.
 func (s *Server) Stop() error {
 	s.stopOnce.Do(func() { close(s.quit) })
-	s.listener.Close()
+	if s.listener != nil {
+		s.listener.Close()
+	}
 
 	// Stop discovery service if running
 	if s.config.Discovery != nil {
