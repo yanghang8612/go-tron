@@ -134,13 +134,16 @@ Status:
   advances canonical chain stages after chain-freezer data proves the boundary
   block hash.
 - Snapshot catalog trust can now be supplied by `--snapshot.trusted-key-file`
-  across fetch, verify, bootstrap, restore, and chain-lookup prune commands.
-  The file supports comments, comma-separated entries, and overlap windows for
+  or `GTRON_SNAPSHOT_TRUSTED_KEY_FILE` across fetch, verify, bootstrap,
+  restore, and chain-lookup prune commands. Inline trusted keys can also be
+  supplied by `--snapshot.trusted-key` or `GTRON_SNAPSHOT_TRUSTED_KEY`. The
+  file supports comments, comma-separated entries, and overlap windows for
   Ed25519 key rotation.
 - `docs/dev/snapshot-bootstrap.md` records the operator runbook for signed
   remote bootstrap: trusted key file format, key rotation steps, preflight
   verify, fetch+restore, one-step bootstrap, and safety notes around
-  `--snapshot.reset`, `GTRON_SNAPSHOT_URL`, and fork config hashes.
+  `--snapshot.reset`, `GTRON_SNAPSHOT_URL`, `GTRON_SNAPSHOT_TRUSTED_KEY_FILE`,
+  `GTRON_SNAPSHOT_TRUSTED_KEY`, and fork config hashes.
 - `gtron snapshot fetch` downloads a signed HTTP(S) snapshot catalog, verifies
   the catalog signature before trusting manifest paths, checks the catalog
   manifest checksum, downloads active segments, and then re-runs strict
@@ -148,8 +151,10 @@ Status:
   `--snapshot.reset` deletes the target local snapshot directory first so an
   operator can discard stale local views and resync from the latest remote
   catalog. The remote URL can be supplied by `--snapshot.url` or the
-  `GTRON_SNAPSHOT_URL` environment variable, giving operators one default
-  source knob without hard-coding an unofficial production URL.
+  `GTRON_SNAPSHOT_URL` environment variable. Trusted catalog keys and optional
+  fork config hashes have matching `GTRON_SNAPSHOT_*` environment defaults,
+  giving operators one default bootstrap surface without hard-coding unofficial
+  production URL or key material.
 - `gtron snapshot bootstrap` is the integrated operator entry point for remote
   snapshot bootstrap: it fetches the signed remote catalog/manifest/segments
   and then runs the same signed-catalog restore path into the local datadir.
@@ -255,8 +260,9 @@ Needed:
   around real hosted snapshots and heterogeneous peers.
 - Operator publication still needs the official latest remote snapshot URL and
   trusted key release artifacts. The local CLI and runbook now cover a
-  `GTRON_SNAPSHOT_URL` default source knob, trusted key files, key rotation,
-  fetch, verify, bootstrap, restore, and reset primitives.
+  `GTRON_SNAPSHOT_URL` default source knob, trusted key environment defaults,
+  trusted key files, key rotation, fetch, verify, bootstrap, restore, and reset
+  primitives.
 
 This is the largest sync-speed win because it avoids replaying all historical
 blocks from genesis.

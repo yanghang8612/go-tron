@@ -39,16 +39,19 @@ var (
 		Usage: "Delete the local snapshot directory before fetching the remote snapshot",
 	}
 	snapshotTrustedCatalogKeyFlag = &cli.StringSliceFlag{
-		Name:  "snapshot.trusted-key",
-		Usage: "Trusted Ed25519 snapshot catalog public key as hex; repeatable or comma-separated",
+		Name:    "snapshot.trusted-key",
+		Usage:   "Trusted Ed25519 snapshot catalog public key as hex; repeatable or comma-separated",
+		EnvVars: []string{"GTRON_SNAPSHOT_TRUSTED_KEY"},
 	}
 	snapshotTrustedCatalogKeyFileFlag = &cli.StringFlag{
-		Name:  "snapshot.trusted-key-file",
-		Usage: "File containing trusted Ed25519 snapshot catalog public keys, one per line; # comments and comma-separated entries are allowed",
+		Name:    "snapshot.trusted-key-file",
+		Usage:   "File containing trusted Ed25519 snapshot catalog public keys, one per line; # comments and comma-separated entries are allowed",
+		EnvVars: []string{"GTRON_SNAPSHOT_TRUSTED_KEY_FILE"},
 	}
 	snapshotForkConfigHashFlag = &cli.StringFlag{
-		Name:  "snapshot.fork-config-hash",
-		Usage: "Expected fork config hash as sha256:<hex>; required when the catalog carries forkConfigHash",
+		Name:    "snapshot.fork-config-hash",
+		Usage:   "Expected fork config hash as sha256:<hex>; required when the catalog carries forkConfigHash",
+		EnvVars: []string{"GTRON_SNAPSHOT_FORK_CONFIG_HASH"},
 	}
 	snapshotCatalogSigningKeyFlag = &cli.StringFlag{
 		Name:  "snapshot.signing-key",
@@ -1169,7 +1172,7 @@ func parseSnapshotTrustedCatalogKeys(values []string) ([]ed25519.PublicKey, erro
 		}
 	}
 	if len(out) == 0 {
-		return nil, errors.New("snapshot catalog verification requires at least one --snapshot.trusted-key")
+		return nil, errors.New("snapshot catalog verification requires at least one --snapshot.trusted-key, --snapshot.trusted-key-file, GTRON_SNAPSHOT_TRUSTED_KEY, or GTRON_SNAPSHOT_TRUSTED_KEY_FILE")
 	}
 	return out, nil
 }

@@ -11,9 +11,11 @@ file.
   `manifest.json`, and all referenced segment files. Pass it with
   `--snapshot.url` or set `GTRON_SNAPSHOT_URL` for repeated fetch/bootstrap
   runs.
-- Trusted catalog keys: Ed25519 public keys for snapshot catalogs.
+- Trusted catalog keys: Ed25519 public keys for snapshot catalogs. Pass them
+  with `--snapshot.trusted-key` / `--snapshot.trusted-key-file` or set
+  `GTRON_SNAPSHOT_TRUSTED_KEY` / `GTRON_SNAPSHOT_TRUSTED_KEY_FILE`.
 - Chain identity: selected by `--testnet`, `--genesis`, and optional
-  `--snapshot.fork-config-hash`.
+  `--snapshot.fork-config-hash` or `GTRON_SNAPSHOT_FORK_CONFIG_HASH`.
 
 Official mainnet/testnet URLs and signer keys are release artifacts. Until they
 are published, operators should pass their deployment-specific URL and key set
@@ -21,6 +23,9 @@ explicitly.
 
 ```bash
 export GTRON_SNAPSHOT_URL=https://snapshots.example.invalid/go-tron/mainnet/latest
+export GTRON_SNAPSHOT_TRUSTED_KEY_FILE=/path/to/snapshot-trusted-keys.txt
+# Only needed when the catalog carries forkConfigHash:
+export GTRON_SNAPSHOT_FORK_CONFIG_HASH=sha256:<hex>
 ```
 
 ## Trusted Key File
@@ -67,16 +72,13 @@ For a fresh datadir where you want to inspect the downloaded files first:
 ```bash
 gtron snapshot fetch \
   --datadir /path/to/datadir \
-  --snapshot.reset \
-  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+  --snapshot.reset
 
 gtron snapshot verify \
-  --datadir /path/to/datadir \
-  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+  --datadir /path/to/datadir
 
 gtron snapshot restore \
-  --datadir /path/to/datadir \
-  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+  --datadir /path/to/datadir
 ```
 
 `snapshot restore` refuses non-genesis datadirs. It restores state domains and
@@ -230,12 +232,12 @@ For the normal operator path:
 ```bash
 gtron snapshot bootstrap \
   --datadir /path/to/datadir \
-  --snapshot.reset \
-  --snapshot.trusted-key-file /path/to/snapshot-trusted-keys.txt
+  --snapshot.reset
 ```
 
-Pass `--snapshot.url` on the command line when it should override
-`GTRON_SNAPSHOT_URL` for a one-off fetch/bootstrap run.
+Pass `--snapshot.url`, `--snapshot.trusted-key-file`, or
+`--snapshot.fork-config-hash` on the command line when a one-off run should
+override the corresponding `GTRON_SNAPSHOT_*` environment default.
 
 After bootstrap completes, start `gtron` normally. Sync resumes from the
 verified snapshot/freezer boundary and imports the recent tail from peers.

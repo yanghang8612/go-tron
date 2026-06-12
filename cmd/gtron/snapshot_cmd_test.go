@@ -102,9 +102,97 @@ ed25519:%s, %s # staged rotation overlap
 	}
 }
 
+func TestSnapshotTrustedCatalogKeysFromEnvironment(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_TRUSTED_KEY": snapshotTestEnvValue("ed25519:" + hex.EncodeToString(pub)),
+	})
+
+	keys, err := snapshotTrustedCatalogKeys(ctx)
+	if err != nil {
+		t.Fatalf("snapshotTrustedCatalogKeys: %v", err)
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], pub) {
+		t.Fatalf("keys = %x, want %x", keys, pub)
+	}
+}
+
+func TestSnapshotTrustedCatalogKeyFileFromEnvironment(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	keyFile := filepath.Join(t.TempDir(), "trusted-keys.txt")
+	if err := os.WriteFile(keyFile, []byte(hex.EncodeToString(pub)+"\n"), 0o644); err != nil {
+		t.Fatalf("write trusted key file: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_TRUSTED_KEY_FILE": snapshotTestEnvValue(keyFile),
+	})
+
+	keys, err := snapshotTrustedCatalogKeys(ctx)
+	if err != nil {
+		t.Fatalf("snapshotTrustedCatalogKeys: %v", err)
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], pub) {
+		t.Fatalf("keys = %x, want %x", keys, pub)
+	}
+}
+
+func TestSnapshotTrustedCatalogKeyFileFlagOverridesEnvironment(t *testing.T) {
+	envPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey env: %v", err)
+	}
+	flagPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey flag: %v", err)
+	}
+	envFile := filepath.Join(t.TempDir(), "env-keys.txt")
+	if err := os.WriteFile(envFile, []byte(hex.EncodeToString(envPub)+"\n"), 0o644); err != nil {
+		t.Fatalf("write env key file: %v", err)
+	}
+	flagFile := filepath.Join(t.TempDir(), "flag-keys.txt")
+	if err := os.WriteFile(flagFile, []byte(hex.EncodeToString(flagPub)+"\n"), 0o644); err != nil {
+		t.Fatalf("write flag key file: %v", err)
+	}
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, []string{
+		"--snapshot.trusted-key-file", flagFile,
+	}, map[string]*string{
+		"GTRON_SNAPSHOT_TRUSTED_KEY_FILE": snapshotTestEnvValue(envFile),
+	})
+
+	keys, err := snapshotTrustedCatalogKeys(ctx)
+	if err != nil {
+		t.Fatalf("snapshotTrustedCatalogKeys: %v", err)
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], flagPub) {
+		t.Fatalf("keys = %x, want flag key %x", keys, flagPub)
+	}
+}
+
+func TestSnapshotForkConfigHashFromEnvironment(t *testing.T) {
+	want := "sha256:" + strings.Repeat("ab", 32)
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_FORK_CONFIG_HASH": snapshotTestEnvValue(want),
+	})
+
+	got, err := normaliseSnapshotForkConfigHash(ctx.String("snapshot.fork-config-hash"))
+	if err != nil {
+		t.Fatalf("normaliseSnapshotForkConfigHash: %v", err)
+	}
+	if got != want {
+		t.Fatalf("fork config hash = %q, want %q", got, want)
+	}
+}
+
 func TestSnapshotRemoteURLUsesEnvironmentDefault(t *testing.T) {
-	t.Setenv("GTRON_SNAPSHOT_URL", " https://snapshots.example.invalid/go-tron/mainnet/latest ")
-	ctx := makeSnapshotRestoreTestContext(t, nil)
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_URL": snapshotTestEnvValue(" https://snapshots.example.invalid/go-tron/mainnet/latest "),
+	})
 
 	got, err := snapshotRemoteURL(ctx)
 	if err != nil {
@@ -116,9 +204,10 @@ func TestSnapshotRemoteURLUsesEnvironmentDefault(t *testing.T) {
 }
 
 func TestSnapshotRemoteURLFlagOverridesEnvironmentDefault(t *testing.T) {
-	t.Setenv("GTRON_SNAPSHOT_URL", "https://snapshots.example.invalid/go-tron/mainnet/latest")
-	ctx := makeSnapshotRestoreTestContext(t, []string{
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, []string{
 		"--snapshot.url", " https://snapshots.example.invalid/go-tron/nile/latest ",
+	}, map[string]*string{
+		"GTRON_SNAPSHOT_URL": snapshotTestEnvValue("https://snapshots.example.invalid/go-tron/mainnet/latest"),
 	})
 
 	got, err := snapshotRemoteURL(ctx)
@@ -131,8 +220,9 @@ func TestSnapshotRemoteURLFlagOverridesEnvironmentDefault(t *testing.T) {
 }
 
 func TestSnapshotRemoteURLRequiresFlagOrEnvironment(t *testing.T) {
-	t.Setenv("GTRON_SNAPSHOT_URL", "")
-	ctx := makeSnapshotRestoreTestContext(t, nil)
+	ctx := makeSnapshotRestoreTestContextWithEnv(t, nil, map[string]*string{
+		"GTRON_SNAPSHOT_URL": nil,
+	})
 
 	if _, err := snapshotRemoteURL(ctx); err == nil || !strings.Contains(err.Error(), "GTRON_SNAPSHOT_URL") {
 		t.Fatalf("snapshotRemoteURL error = %v, want missing source hint", err)
@@ -1529,6 +1619,8 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 
 func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 	t.Helper()
+	restoreFlags := restoreSnapshotTestCLIFlagState()
+	defer restoreFlags()
 	app := cli.NewApp()
 	app.Flags = []cli.Flag{
 		dataDirFlag,
@@ -1563,6 +1655,64 @@ func makeSnapshotRestoreTestContext(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse flags: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func restoreSnapshotTestCLIFlagState() func() {
+	snapshotURLValue, snapshotURLHasBeenSet := snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet
+	snapshotTrustedCatalogKeyHasBeenSet := snapshotTrustedCatalogKeyFlag.HasBeenSet
+	snapshotTrustedCatalogKeyFileValue, snapshotTrustedCatalogKeyFileHasBeenSet := snapshotTrustedCatalogKeyFileFlag.Value, snapshotTrustedCatalogKeyFileFlag.HasBeenSet
+	snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet := snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet
+	return func() {
+		snapshotURLFlag.Value, snapshotURLFlag.HasBeenSet = snapshotURLValue, snapshotURLHasBeenSet
+		snapshotTrustedCatalogKeyFlag.HasBeenSet = snapshotTrustedCatalogKeyHasBeenSet
+		snapshotTrustedCatalogKeyFileFlag.Value, snapshotTrustedCatalogKeyFileFlag.HasBeenSet = snapshotTrustedCatalogKeyFileValue, snapshotTrustedCatalogKeyFileHasBeenSet
+		snapshotForkConfigHashFlag.Value, snapshotForkConfigHashFlag.HasBeenSet = snapshotForkConfigHashValue, snapshotForkConfigHashHasBeenSet
+	}
+}
+
+func makeSnapshotRestoreTestContextWithEnv(t *testing.T, argv []string, env map[string]*string) *cli.Context {
+	t.Helper()
+	restore := setSnapshotTestEnv(t, env)
+	defer restore()
+	return makeSnapshotRestoreTestContext(t, argv)
+}
+
+func snapshotTestEnvValue(value string) *string {
+	return &value
+}
+
+func setSnapshotTestEnv(t *testing.T, env map[string]*string) func() {
+	t.Helper()
+	saved := make(map[string]*string, len(env))
+	for key, value := range env {
+		if old, ok := os.LookupEnv(key); ok {
+			saved[key] = snapshotTestEnvValue(old)
+		} else {
+			saved[key] = nil
+		}
+		if value == nil {
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatalf("unset env %s: %v", key, err)
+			}
+			continue
+		}
+		if err := os.Setenv(key, *value); err != nil {
+			t.Fatalf("set env %s: %v", key, err)
+		}
+	}
+	return func() {
+		for key, value := range saved {
+			var err error
+			if value == nil {
+				err = os.Unsetenv(key)
+			} else {
+				err = os.Setenv(key, *value)
+			}
+			if err != nil {
+				t.Fatalf("restore env %s: %v", key, err)
+			}
+		}
+	}
 }
 
 func postSnapshotTestJSON(t *testing.T, url, body string) map[string]any {
