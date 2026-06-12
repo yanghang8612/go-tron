@@ -301,6 +301,39 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 			issues = append(issues, fmt.Sprintf("%s verified=unbound", row.stage))
 		}
 	}
+	issues = append(issues, dbStageStatusPipelineOrderIssues(rows)...)
+	return issues
+}
+
+func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
+	byStage := make(map[rawdb.StageID]dbStageStatusRow, len(rows))
+	for _, row := range rows {
+		if row.present {
+			byStage[row.stage] = row
+		}
+	}
+	var issues []string
+	for _, pair := range []struct {
+		downstream rawdb.StageID
+		upstream   rawdb.StageID
+	}{
+		{rawdb.StageSyncBodiesReady, rawdb.StageSyncBodies},
+		{rawdb.StageSyncImport, rawdb.StageSyncBodiesReady},
+		{rawdb.StageSyncExecution, rawdb.StageSyncImport},
+		{rawdb.StageSyncCommitment, rawdb.StageSyncExecution},
+		{rawdb.StageSyncFinish, rawdb.StageSyncCommitment},
+	} {
+		down, downOK := byStage[pair.downstream]
+		up, upOK := byStage[pair.upstream]
+		if !downOK || !upOK {
+			continue
+		}
+		if down.progress.BlockNum <= up.progress.BlockNum {
+			continue
+		}
+		issues = append(issues, fmt.Sprintf("%s=%d ahead of %s=%d",
+			pair.downstream, down.progress.BlockNum, pair.upstream, up.progress.BlockNum))
+	}
 	return issues
 }
 

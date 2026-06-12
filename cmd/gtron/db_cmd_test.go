@@ -565,6 +565,79 @@ func TestDBStageStatusCmd(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSyncBodies,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncBodies,
+				BlockNum: 7,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncBodiesReady,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncBodiesReady,
+				BlockNum: 8,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncImport,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncImport,
+				BlockNum: 3,
+			},
+		},
+		{
+			stage:   rawdb.StageSyncExecution,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncExecution,
+				BlockNum: 4,
+			},
+		},
+	}
+
+	issues := dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		"SyncBodiesReady=8 ahead of SyncBodies=7",
+		"SyncExecution=4 ahead of SyncImport=3",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSyncExecution,
+			group:   "sync",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSyncExecution,
+				BlockNum: 4,
+			},
+		},
+	}
+	if issues := dbStageStatusPipelineOrderIssues(rows); len(issues) != 0 {
+		t.Fatalf("pipeline order issues with missing upstream = %#v, want none", issues)
+	}
+}
+
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
 	t.Helper()
 	genesis, err := loadGenesisFile(genesisPath)
