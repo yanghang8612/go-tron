@@ -829,7 +829,11 @@ Status:
   segments. Indexed coverage now also replays the active event-log segments
   and compares the rebuilt address/topic postings with the registered
   `event-log-index` sidecar, so format-valid but stale or incomplete sidecars
-  cannot satisfy archive log coverage gates. `gtron snapshot build-event-logs`
+  cannot satisfy archive log coverage gates. Filtered cold-log coverage now
+  also refuses to trust an index that reports no candidate segments unless that
+  index can be semantically verified against the active event-log segments,
+  preventing stale empty sidecars from making archive log queries return false
+  empty results. `gtron snapshot build-event-logs`
   exposes the standalone operator build path, while `gtron snapshot
   build-derived-indexes` now emits event-log and event-log-index sidecars
   together with balance-trace and section-bloom segments. Production snap-mode

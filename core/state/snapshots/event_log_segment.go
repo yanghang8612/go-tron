@@ -651,6 +651,9 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 			continue
 		}
 		if len(starts) == 0 {
+			if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, refs); err != nil {
+				return nil, err
+			}
 			return nil, nil
 		}
 		candidates := make(map[uint64]struct{}, len(starts))
@@ -768,6 +771,9 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 			continue
 		}
 		if len(starts) == 0 {
+			if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, eventLogRefs(manifest)); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 		candidateStarts := make(map[uint64]struct{}, len(starts))

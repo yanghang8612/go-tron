@@ -497,6 +497,50 @@ func TestEventLogIndexedRangeCoveredRejectsStaleIndexPostings(t *testing.T) {
 	}
 }
 
+func TestEventLogRangeCoveredForFilterRejectsStaleEmptyIndex(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x46)
+	topic := common.Hash{0xce}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x06}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	eventRef, err := BuildEventLogSegmentFromChain(db, dir, "", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	badIndexRef, err := writeEventLogIndexSegment(dir, SegmentRef{
+		Dataset:   SegmentDatasetEventLog,
+		Kind:      SegmentEventLogIndex,
+		FromTxNum: 1,
+		ToTxNum:   1,
+		Path:      "log/event-log-index-empty-filter-1-1.idx",
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("writeEventLogIndexSegment empty: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{eventRef, badIndexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogRangeCoveredForFilter(1, 1, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	})
+	if err == nil || covered {
+		t.Fatalf("EventLogRangeCoveredForFilter stale empty index = %v/%v, want false/error", covered, err)
+	}
+}
+
 func TestEventLogSegmentBuildRejectsMissingBlock(t *testing.T) {
 	_, err := BuildEventLogSegmentFromChain(rawdb.NewMemoryChainDB(), t.TempDir(), "", 1, 1)
 	if err == nil {
