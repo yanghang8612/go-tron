@@ -857,6 +857,70 @@ func TestPrunerCapsHeadAtFinishStageProgressFromRawDBFallback(t *testing.T) {
 	}
 }
 
+func TestPrunerCapsHeadAtFinishStageProgressFromChainDBFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
+		if err := rawdb.WriteStateTxRange(db, blockNum, common.Hash{byte(blockNum)}, blockNum, blockNum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishBlock := pruningTestBlock(5)
+	finishRaw, err := finishBlock.Marshal()
+	if err != nil {
+		t.Fatalf("marshal finish block: %v", err)
+	}
+	ancient := newPruneFakeAncient()
+	ancient.put(rawdb.AncientBlocksTable, finishBlock.Number(), finishRaw)
+	if hotHash := rawdb.ReadBlockHashByNumber(db, finishBlock.Number()); hotHash != (common.Hash{}) {
+		t.Fatalf("hot fallback unexpectedly resolved finish block hash %x", hotHash)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageFinish, finishBlock.Number(), finishBlock.Hash()); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	chainDB := rawdb.NewChainDB(db, ancient)
+	pruner := NewPruner(&fallbackPruneChain{db: db, chainDB: chainDB, solidified: 10}, PrunerConfig{
+		Policy:    FullPolicy(2, 1),
+		Interval:  time.Hour,
+		BatchSize: 10,
+	})
+	stats, err := pruner.PrunePass()
+	if err != nil {
+		t.Fatalf("prune pass: %v", err)
+	}
+	if stats.DeletedTxRanges != 3 {
+		t.Fatalf("deleted tx ranges = %d, want 3", stats.DeletedTxRanges)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 3); err != nil || ok {
+		t.Fatalf("block 3 range after chain fallback prune ok=%v err=%v, want deleted", ok, err)
+	}
+	if _, ok, err := rawdb.ReadStateTxRange(db, 4); err != nil || !ok {
+		t.Fatalf("block 4 range after chain fallback prune ok=%v err=%v, want retained by finish-stage cap", ok, err)
+	}
+}
+
+func TestSnapshotChainSourceCanonicalHashUsesChainDBFallback(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block := pruningTestBlock(7)
+	blockRaw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+	ancient := newPruneFakeAncient()
+	ancient.put(rawdb.AncientBlocksTable, block.Number(), blockRaw)
+	source := snapshotChainSource{chain: &fallbackPruneChain{
+		db:         db,
+		chainDB:    rawdb.NewChainDB(db, ancient),
+		solidified: 10,
+	}}
+	if hotHash := rawdb.ReadBlockHashByNumber(db, block.Number()); hotHash != (common.Hash{}) {
+		t.Fatalf("hot fallback unexpectedly resolved block hash %x", hotHash)
+	}
+	hash, ok := source.CanonicalBlockHash(block.Number())
+	if !ok || hash != block.Hash() {
+		t.Fatalf("CanonicalBlockHash = %x/%v, want %x/true", hash, ok, block.Hash())
+	}
+}
+
 func TestPrunerRejectsUnboundFinishStageProgress(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	for blockNum := uint64(1); blockNum <= 10; blockNum++ {
@@ -926,12 +990,85 @@ func (f *fakePruneChain) SyncRemainingBlocks() (uint64, bool) {
 
 type fallbackPruneChain struct {
 	db         ethdb.KeyValueStore
+	chainDB    *rawdb.ChainDB
 	solidified int64
 }
 
 func (f *fallbackPruneChain) DB() ethdb.KeyValueStore { return f.db }
 
+func (f *fallbackPruneChain) ChainDB() *rawdb.ChainDB { return f.chainDB }
+
 func (f *fallbackPruneChain) LatestSolidifiedBlockNum() int64 { return f.solidified }
+
+type pruneFakeAncient struct {
+	rows map[string]map[uint64][]byte
+}
+
+func newPruneFakeAncient() *pruneFakeAncient {
+	return &pruneFakeAncient{rows: make(map[string]map[uint64][]byte)}
+}
+
+func (f *pruneFakeAncient) put(kind string, number uint64, data []byte) {
+	table := f.rows[kind]
+	if table == nil {
+		table = make(map[uint64][]byte)
+		f.rows[kind] = table
+	}
+	table[number] = data
+}
+
+func (f *pruneFakeAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	table := f.rows[kind]
+	if table == nil {
+		return nil, rawdb.ErrNotInAncient
+	}
+	data, ok := table[number]
+	if !ok {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return data, nil
+}
+
+func (f *pruneFakeAncient) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if _, err := f.Ancient(kind, start); err != nil {
+		return nil, err
+	}
+	table := f.rows[kind]
+	var out [][]byte
+	var total uint64
+	for i := uint64(0); i < count; i++ {
+		row, ok := table[start+i]
+		if !ok {
+			break
+		}
+		if maxBytes > 0 && len(out) > 0 && total+uint64(len(row)) > maxBytes {
+			break
+		}
+		out = append(out, row)
+		total += uint64(len(row))
+	}
+	return out, nil
+}
+
+func (f *pruneFakeAncient) AncientCount(kind string) (uint64, error) {
+	table := f.rows[kind]
+	var count uint64
+	for {
+		if _, ok := table[count]; !ok {
+			return count, nil
+		}
+		count++
+	}
+}
+
+func (f *pruneFakeAncient) HasAncient(kind string, number uint64) (bool, error) {
+	table := f.rows[kind]
+	if table == nil {
+		return false, nil
+	}
+	_, ok := table[number]
+	return ok, nil
+}
 
 func pruningTestBlock(number uint64) *coretypes.Block {
 	return coretypes.NewBlockFromPB(&corepb.Block{

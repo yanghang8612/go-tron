@@ -226,17 +226,7 @@ func (s snapshotChainSource) LatestSolidifiedBlockNum() int64 {
 }
 
 func (s snapshotChainSource) CanonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	if s.chain == nil {
-		return common.Hash{}, false
-	}
-	if source, ok := s.chain.(canonicalHashSource); ok {
-		return source.CanonicalBlockHash(blockNum)
-	}
-	hash := rawdb.ReadBlockHashByNumber(s.chain.DB(), blockNum)
-	if hash == (common.Hash{}) {
-		return common.Hash{}, false
-	}
-	return hash, true
+	return canonicalBlockHashFromChainSource(s.chain, blockNum)
 }
 
 var _ snapshots.ChainSource = snapshotChainSource{}

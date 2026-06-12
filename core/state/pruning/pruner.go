@@ -32,6 +32,10 @@ type canonicalHashSource interface {
 	CanonicalBlockHash(blockNum uint64) (common.Hash, bool)
 }
 
+type chainDBSource interface {
+	ChainDB() *rawdb.ChainDB
+}
+
 type PrunerConfig struct {
 	Policy Policy
 
@@ -227,10 +231,25 @@ func (p *Pruner) capPruneHeadAtVerifiedFinishStage(pruneHead uint64) (uint64, er
 }
 
 func (p *Pruner) canonicalBlockHash(blockNum uint64) (common.Hash, bool) {
-	if source, ok := p.chain.(canonicalHashSource); ok {
+	return canonicalBlockHashFromChainSource(p.chain, blockNum)
+}
+
+func canonicalBlockHashFromChainSource(chain ChainSource, blockNum uint64) (common.Hash, bool) {
+	if chain == nil {
+		return common.Hash{}, false
+	}
+	if source, ok := chain.(canonicalHashSource); ok {
 		return source.CanonicalBlockHash(blockNum)
 	}
-	hash := rawdb.ReadBlockHashByNumber(p.chain.DB(), blockNum)
+	if source, ok := chain.(chainDBSource); ok {
+		if db := source.ChainDB(); db != nil {
+			hash := rawdb.ReadBlockHashByNumber(db, blockNum)
+			if hash != (common.Hash{}) {
+				return hash, true
+			}
+		}
+	}
+	hash := rawdb.ReadBlockHashByNumber(chain.DB(), blockNum)
 	if hash == (common.Hash{}) {
 		return common.Hash{}, false
 	}
