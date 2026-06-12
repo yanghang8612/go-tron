@@ -187,6 +187,19 @@ func dbCommand() *cli.Command {
 				Action: dbFreezerAlertsCmd,
 			},
 			{
+				Name:  "storage-alerts",
+				Usage: "Check chain freezer, stage, and cold-coverage alert conditions for soak monitoring",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+				},
+				Action: dbStorageAlertsCmd,
+			},
+			{
 				Name:  "stage-status",
 				Usage: "Print staged sync/snapshot/prune/freezer progress",
 				Flags: []cli.Flag{
@@ -286,6 +299,73 @@ func dbFreezerAlertsCmd(ctx *cli.Context) error {
 	return nil
 }
 
+func dbStorageAlertsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(cfg.DataDir), "", true, freezerTableSize, chainfreezer.FreezerTableSet())
+	if err != nil {
+		return fmt.Errorf("open freezer: %w", err)
+	}
+	defer f.Close()
+	chainDB := rawdb.NewChainDB(db, rawdb.NewFreezerReader(f))
+
+	stats, err := f.Stats()
+	if err != nil {
+		return fmt.Errorf("read freezer status: %w", err)
+	}
+	stage, hasStage, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	if err != nil {
+		return fmt.Errorf("read chain freezer stage: %w", err)
+	}
+	freezerIssues := dbFreezerAlertIssues(stats, stage, hasStage)
+	freezerStatus := dbFreezerAlertStatus(freezerIssues)
+
+	stageRows, err := dbStageStatusRows(db, chainDB)
+	if err != nil {
+		return err
+	}
+	stageIssues := dbStageStatusVerificationIssues(stageRows)
+	stageIssues = append(stageIssues, dbStageStatusSnapshotCoverageIssues(stageRows, stateSnapshotsDir(cfg.DataDir))...)
+	stageStatus := "ok"
+	if len(stageIssues) > 0 {
+		stageStatus = "critical"
+	}
+
+	status := "ok"
+	if freezerStatus == "critical" || stageStatus == "critical" {
+		status = "critical"
+	} else if freezerStatus == "warning" {
+		status = "warning"
+	}
+	fmt.Printf("Storage alerts: datadir=%s status=%s freezerStatus=%s freezerIssues=%d stageStatus=%s stageIssues=%d hiddenSize=%d\n",
+		cfg.DataDir, status, freezerStatus, len(freezerIssues), stageStatus, len(stageIssues), dbFreezerHiddenSize(stats))
+	for _, issue := range freezerIssues {
+		fmt.Printf("Storage freezer alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
+	}
+	for _, issue := range stageIssues {
+		fmt.Printf("Storage stage alert: severity=critical detail=%s\n", issue)
+	}
+	if status == "critical" {
+		return fmt.Errorf("storage alerts failed: freezer=%s stage=%s", dbFreezerAlertSummary(freezerIssues), dbStageAlertSummary(stageIssues))
+	}
+	return nil
+}
+
+func dbFreezerAlertStatus(issues []dbFreezerAlertIssue) string {
+	if dbFreezerAlertHasCritical(issues) {
+		return "critical"
+	}
+	if len(issues) > 0 {
+		return "warning"
+	}
+	return "ok"
+}
+
 func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, hasChainFreezerStage bool) []dbFreezerAlertIssue {
 	var issues []dbFreezerAlertIssue
 	add := func(severity, kind, format string, args ...interface{}) {
@@ -360,6 +440,13 @@ func dbFreezerAlertSummary(issues []dbFreezerAlertIssue) string {
 		return "no critical issues"
 	}
 	return strings.Join(critical, ",")
+}
+
+func dbStageAlertSummary(issues []string) string {
+	if len(issues) == 0 {
+		return "ok"
+	}
+	return strings.Join(issues, "; ")
 }
 
 func dbFreezerHiddenSize(stats rawdbfreezer.Stats) uint64 {

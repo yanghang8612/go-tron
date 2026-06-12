@@ -422,44 +422,31 @@ run_logged() {
   return 1
 }
 
-run_freezer_alert_gate() {
+run_storage_alert_gate() {
   local mode="$1"
   local role="$2"
   local datadir="$3"
   local log_path="$4"
-  local alert_out="$WORKDIR/$mode-$role-freezer-alerts.out"
-  echo "checking persisted freezer alert conditions" >>"$log_path"
+  local alert_out="$WORKDIR/$mode-$role-storage-alerts.out"
+  echo "checking persisted storage alert conditions" >>"$log_path"
   local ok=1
-  if ! run_logged "$alert_out" "$GTRON" db freezer-alerts --datadir "$datadir" >>"$log_path"; then
+  if ! run_logged "$alert_out" "$GTRON" db storage-alerts --datadir "$datadir" >>"$log_path"; then
     ok=0
   fi
-  local status issues hidden
-  status="$(sed -n 's/.* status=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
-  issues="$(sed -n 's/.* issues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  local freezer_status freezer_issues hidden stage_status stage_issues
+  freezer_status="$(sed -n 's/.* freezerStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
+  freezer_issues="$(sed -n 's/.* freezerIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
   hidden="$(sed -n 's/.* hiddenSize=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
-  RUN_FREEZER_ALERT_STATUS="${status:-unknown}"
-  RUN_FREEZER_ALERT_ISSUES="${issues:--1}"
+  stage_status="$(sed -n 's/.* stageStatus=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
+  stage_issues="$(sed -n 's/.* stageIssues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  RUN_FREEZER_ALERT_STATUS="${freezer_status:-unknown}"
+  RUN_FREEZER_ALERT_ISSUES="${freezer_issues:--1}"
   RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"
+  RUN_STAGE_VERIFY_STATUS="${stage_status:-unknown}"
+  RUN_STAGE_VERIFY_ISSUES="${stage_issues:--1}"
   if [ "$ok" -ne 1 ]; then
-    die "freezer-alerts reported critical freezer state for $mode/$role; see $log_path"
+    die "storage-alerts reported critical storage state for $mode/$role; see $log_path"
   fi
-}
-
-run_stage_verify_gate() {
-  local mode="$1"
-  local role="$2"
-  local datadir="$3"
-  local log_path="$4"
-  local stage_out="$WORKDIR/$mode-$role-stage-status-verify.out"
-  echo "verifying persisted stage progress and cold coverage" >>"$log_path"
-  if run_logged "$stage_out" "$GTRON" db stage-status --datadir "$datadir" --db.stage.verify >>"$log_path"; then
-    RUN_STAGE_VERIFY_STATUS="ok"
-    RUN_STAGE_VERIFY_ISSUES=0
-    return
-  fi
-  RUN_STAGE_VERIFY_STATUS="critical"
-  RUN_STAGE_VERIFY_ISSUES=1
-  die "stage-status verification failed for $mode/$role; see $log_path"
 }
 
 run_signed_cold_prune_drill() {
@@ -649,8 +636,7 @@ run_producer_mode() {
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
   maybe_build_derived_indexes "$datadir" "$height" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
-  run_freezer_alert_gate "$mode" "producer" "$datadir" "$log_path"
-  run_stage_verify_gate "$mode" "producer" "$datadir" "$log_path"
+  run_storage_alert_gate "$mode" "producer" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
 }
 
@@ -679,8 +665,7 @@ run_sync_mode() {
   local elapsed=$((SECONDS - start))
   stop_pid "$node_pid"
   stop_pid "$sr_pid"
-  run_freezer_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"
-  run_stage_verify_gate "$mode" "sync-follower" "$node_dir" "$node_log"
+  run_storage_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"
   emit_result "$PROFILE" "$mode" "sync-follower" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$node_dir" "$node_log"
 }
 

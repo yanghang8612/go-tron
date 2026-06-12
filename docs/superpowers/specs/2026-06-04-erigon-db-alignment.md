@@ -494,12 +494,14 @@ Status:
   and sampled hot Pebble block-row footprint. The opt-in debug metrics endpoint
   can therefore expose `/debug/metrics?prefix=chain/freezer/` for sync/freezer
   soak dashboards without scraping logs.
-- `gtron db freezer-alerts` now turns persisted freezer state into a
-  script-friendly alert gate for long soaks. It fails on recorded freezer
-  repair, missing/impossible `ChainFreezer` stage progress, freezer/table bound
-  mismatches, and virtual-tail invariants that would make prune/archive
-  assumptions unsafe; it also reports hidden bytes that still await physical
-  tail-file pruning.
+- `gtron db storage-alerts` now provides a single script-friendly alert gate for
+  long soaks. It combines the persisted freezer checks from
+  `gtron db freezer-alerts` with `stage-status --db.stage.verify`, failing on
+  recorded freezer repair, missing/impossible `ChainFreezer` stage progress,
+  freezer/table bound mismatches, virtual-tail invariants, hash-mismatched or
+  out-of-order stage rows, and claimed cold coverage that the local manifest
+  cannot prove. It also reports hidden bytes that still await physical tail-file
+  pruning.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,
@@ -634,7 +636,7 @@ Needed:
   modes.
 - Add higher-level production alert packaging around the persisted freezer
   `repair.json`, `ancient/repair/*`, `chain/freezer/*`, and
-  `gtron db freezer-alerts` signals. Catalog/freezer sidecar mismatch is now
+  `gtron db storage-alerts` signals. Catalog/freezer sidecar mismatch is now
   caught by signed/local manifest verification as well as tail-prune/stage-status
   coverage gates.
 
@@ -709,14 +711,11 @@ Status:
   cold-prune drill runs with derived indexes enabled, it also signs the updated
   manifest and runs the verified balance-trace and section-bloom hot-row prune
   commands, recording reclaimed block trace, account trace, and bloom rows. Each
-  sample now also runs `gtron db freezer-alerts` before the JSONL row is emitted
-  and records `freezerAlertStatus`, `freezerAlertIssues`, and
-  `freezerAlertHiddenBytes`, so critical persisted freezer states fail the
-  benchmark instead of becoming misleading storage samples. The same harness now
-  runs `gtron db stage-status --db.stage.verify` and records
-  `stageVerifyStatus` / `stageVerifyIssues`, so canonical, sync, snapshot,
-  prune, and cold-coverage stage regressions also fail the sample before it is
-  used for Erigon-style storage comparisons.
+  sample now also runs `gtron db storage-alerts` before the JSONL row is emitted
+  and records `freezerAlertStatus`, `freezerAlertIssues`,
+  `freezerAlertHiddenBytes`, `stageVerifyStatus`, and `stageVerifyIssues`, so
+  critical freezer, stage, prune, and cold-coverage regressions fail the sample
+  before it is used for Erigon-style storage comparisons.
 
 Remaining:
 

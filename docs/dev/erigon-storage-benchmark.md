@@ -118,19 +118,16 @@ fresh follower is draining historical block rows into ancient files instead of
 leaking them in Pebble.
 
 `scripts/dev/storage_benchmark.sh` runs
-`gtron db freezer-alerts --datadir <dir>` before emitting each JSONL row. The
+`gtron db storage-alerts --datadir <dir>` before emitting each JSONL row. The
 command returns non-zero when persisted freezer state is unsafe for
 prune/archive assumptions, including a recorded repair, a missing or impossible
 `ChainFreezer` stage, inconsistent per-table bounds, or a virtual tail past the
-append head. The JSONL row includes `freezerAlertStatus`,
-`freezerAlertIssues`, and `freezerAlertHiddenBytes`; warning rows capture hidden
-bytes that still await physical tail-file pruning.
-
-The harness also runs `gtron db stage-status --db.stage.verify --datadir <dir>`
-before writing the row. This fails the sample if canonical/sync/snapshot/prune
-stage rows are hash-mismatched, out of order, or claim cold coverage that the
-local manifest cannot prove. Successful rows include `stageVerifyStatus=ok` and
-`stageVerifyIssues=0`.
+append head. It also fails the sample if canonical/sync/snapshot/prune stage
+rows are hash-mismatched, out of order, or claim cold coverage that the local
+manifest cannot prove. The JSONL row includes `freezerAlertStatus`,
+`freezerAlertIssues`, `freezerAlertHiddenBytes`, `stageVerifyStatus`, and
+`stageVerifyIssues`; warning rows capture hidden bytes that still await physical
+tail-file pruning.
 
 ## Sync Profile
 
