@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -81,6 +82,22 @@ func (ctx *Context) ResourceTime() int64 {
 		return 0
 	}
 	return ctx.PrevBlockTime
+}
+
+// EffectiveGenesisHash returns the chain identity used by narrow historical
+// compatibility exceptions. Normal block processing passes GenesisHash
+// explicitly; the DB fallback is retained for tests and legacy callers.
+func (ctx *Context) EffectiveGenesisHash() common.Hash {
+	if ctx == nil {
+		return common.Hash{}
+	}
+	if ctx.GenesisHash != (common.Hash{}) {
+		return ctx.GenesisHash
+	}
+	if ctx.DB == nil {
+		return common.Hash{}
+	}
+	return rawdb.ReadBlockHashByNumber(ctx.DB, 0)
 }
 
 // Result captures the outcome of an actuator's Execute() call. The energy

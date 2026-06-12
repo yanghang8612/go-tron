@@ -593,7 +593,11 @@ Status:
   pruning finish-stage guard uses freezer-aware canonical hash lookups. A rawdb
   source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
   separately pins the raw freezer copy helpers to the explicit
-  `cmd/gtron/freezer_adapter.go` boundary.
+  `cmd/gtron/freezer_adapter.go` boundary. Actuator historical compatibility
+  gates now resolve chain identity through `Context.EffectiveGenesisHash`, and
+  the same audit suite prevents actuator code from reintroducing scattered
+  direct `rawdb.ReadBlockHashByNumber(ctx.DB, ...)` calls that would depend on
+  hot genesis block rows after freezer/prune.
 
 Needed:
 
@@ -604,8 +608,9 @@ Needed:
   the current real HTTP/JSON-RPC lifecycle smoke plus
   balance/code/storage/account/resource/deleted-account/recreated-contract/
   SystemDelegation-latest checks.
-- Keep auditing newly introduced direct hot-only `rawdb.Read*KV` call sites
-  before enabling more aggressive chain-data prune defaults.
+- Keep auditing newly introduced direct hot-only `rawdb.Read*KV` and
+  raw block-hash fallback call sites before enabling more aggressive
+  chain-data prune defaults.
 - Evaluate compact/merged cold index formats for block hash by number, tx
   lookup, per-tx info, and state-root lookup if sidecar profiles show they
   dominate disk or lookup latency.

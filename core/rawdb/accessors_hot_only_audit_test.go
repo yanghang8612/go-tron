@@ -40,6 +40,21 @@ func TestNoUnexpectedProductionDirectRawFreezerReads(t *testing.T) {
 	}
 }
 
+func TestNoActuatorDirectHotBlockHashReads(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	actuatorRoot := filepath.Join(repoRoot, "actuator")
+	offenders := auditForbiddenRawDBCalls(t, actuatorRoot, map[string]struct{}{
+		"ReadBlockHashByNumber": {},
+	}, map[string]map[string]struct{}{
+		"actuator.go": {
+			"ReadBlockHashByNumber": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("actuator historical compatibility checks must use Context.EffectiveGenesisHash instead of direct hot block hash reads:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")

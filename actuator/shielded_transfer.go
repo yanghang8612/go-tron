@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/zksnark"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -287,11 +286,7 @@ func isHistoricalNileShieldedFeeOnlyReplay(ctx *Context) bool {
 	if !ok || ret != corepb.Transaction_Result_SUCCESS {
 		return false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == params.NileGenesisHash
+	return ctx.EffectiveGenesisHash() == params.NileGenesisHash
 }
 
 func usesHistoricalNileShieldedSingleFee(ctx *Context) bool {
@@ -316,10 +311,7 @@ func findHistoricalShieldedProofCompat(ctx *Context, txHash common.Hash) (histor
 	if ctx == nil {
 		return historicalShieldedProofCompat{}, false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
+	genesisHash := ctx.EffectiveGenesisHash()
 	for _, entry := range historicalShieldedProofCompatEntries {
 		if ctx.BlockNumber == entry.blockNumber && txHash == entry.txHash && genesisHash == entry.genesisHash {
 			return entry, true

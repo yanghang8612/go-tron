@@ -6,7 +6,6 @@ import (
 
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/forks"
-	"github.com/tronprotocol/go-tron/core/rawdb"
 )
 
 const (
@@ -252,22 +251,14 @@ func isHistoricalNileShieldedActivation(ctx *Context) bool {
 	if ctx == nil || ctx.BlockNumber != proposalNileShieldedActivationBlock {
 		return false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == proposalNileGenesisHash
+	return ctx.EffectiveGenesisHash() == proposalNileGenesisHash
 }
 
 func isHistoricalNileShieldedTrc20Activation(ctx *Context) bool {
 	if ctx == nil || ctx.BlockNumber != proposalNileShieldedTrc20Block {
 		return false
 	}
-	genesisHash := ctx.GenesisHash
-	if genesisHash == (common.Hash{}) && ctx.DB != nil {
-		genesisHash = rawdb.ReadBlockHashByNumber(ctx.DB, 0)
-	}
-	return genesisHash == proposalNileGenesisHash
+	return ctx.EffectiveGenesisHash() == proposalNileGenesisHash
 }
 
 var proposalRequiredVersion = map[int64]int32{
