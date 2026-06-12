@@ -527,7 +527,12 @@ Status:
   account deleted at the snapshot head: its latest-domain row is absent, hot
   history rows are removed, and backend, TRON HTTP, and JSON-RPC archive reads
   still reconstruct the block-1 account from cold StateDomainChange history
-  while head reads return the deleted/zero state.
+  while head reads return the deleted/zero state. The same restore soak now
+  includes a recreated contract account whose `AccountKVGeneration` changes at
+  the snapshot head: old-generation storage rows remain physically present in
+  restored latest files, but backend and JSON-RPC archive reads prove block-1
+  storage is recoverable while head/block-2 reads do not leak untouched old
+  slots into the recreated contract.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
@@ -546,8 +551,9 @@ Needed:
 - Add longer-running node/server bootstrap soak tests that start the full API
   servers after `gtron snapshot restore` and exercise a broader `/wallet*`,
   JSON-RPC, and archive-read matrix, especially multi-account contract,
-  delegation, and account delete/recreate fixtures beyond the current
-  balance/code/storage/account/resource/deleted-account checks.
+  delegation, and broader account delete/recreate fixtures beyond the current
+  balance/code/storage/account/resource/deleted-account/recreated-contract
+  checks.
 - Keep auditing newly introduced direct hot-only `rawdb.Read*KV` call sites
   before enabling more aggressive chain-data prune defaults.
 - Evaluate compact/merged cold index formats for block hash by number, tx

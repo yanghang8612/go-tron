@@ -1316,6 +1316,18 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	deletedAddr := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x43}, common.AccountIDLength)...))
 	deletedBalance1 := int64(3_000)
 	deletedAccount1 := snapshotCmdAccountEnvelope(t, deletedAddr, deletedBalance1, corepb.AccountType_Normal, common.Hash{})
+	recreatedAddr := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x44}, common.AccountIDLength)...))
+	recreatedBalance1 := int64(4_000)
+	recreatedBalance2 := int64(5_000)
+	recreatedSlotA := common.Hash{31: 0xa1}
+	recreatedSlotB := common.Hash{31: 0xb1}
+	recreatedOldA := common.HexToHash("0a")
+	recreatedOldB := common.HexToHash("0b")
+	recreatedNewA := common.HexToHash("1a")
+	recreatedStorageKeyA := snapshotCmdStorageRowKey(recreatedAddr, recreatedSlotA)
+	recreatedStorageKeyB := snapshotCmdStorageRowKey(recreatedAddr, recreatedSlotB)
+	recreatedAccount1 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance1, corepb.AccountType_Contract, archiveCodeHash1, 0)
+	recreatedAccount2 := snapshotCmdAccountEnvelopeWithGeneration(t, recreatedAddr, recreatedBalance2, corepb.AccountType_Contract, archiveCodeHash2, 1)
 
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
 	defer src.Close()
@@ -1337,6 +1349,9 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, archiveAddr, archiveAccount2); err != nil {
 		t.Fatalf("WriteStateAccountLatest: %v", err)
 	}
+	if err := rawdb.WriteStateAccountLatest(stateSnapshotDB, recreatedAddr, recreatedAccount2); err != nil {
+		t.Fatalf("WriteStateAccountLatest recreated: %v", err)
+	}
 	if err := rawdb.WriteStateCode(stateSnapshotDB, archiveCodeHash1, archiveCode1); err != nil {
 		t.Fatalf("WriteStateCode code1: %v", err)
 	}
@@ -1345,6 +1360,15 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	}
 	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, archiveAddr, 0, kvdomains.ContractStorage, archiveStorageKey.Bytes(), archiveStorage2.Bytes()); err != nil {
 		t.Fatalf("WriteStateKVLatest contract storage: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 0, kvdomains.ContractStorage, recreatedStorageKeyA.Bytes(), recreatedOldA.Bytes()); err != nil {
+		t.Fatalf("WriteStateKVLatest recreated old slotA: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 0, kvdomains.ContractStorage, recreatedStorageKeyB.Bytes(), recreatedOldB.Bytes()); err != nil {
+		t.Fatalf("WriteStateKVLatest recreated old slotB: %v", err)
+	}
+	if err := rawdb.WriteStateKVLatest(stateSnapshotDB, recreatedAddr, 1, kvdomains.ContractStorage, recreatedStorageKeyA.Bytes(), recreatedNewA.Bytes()); err != nil {
+		t.Fatalf("WriteStateKVLatest recreated new slotA: %v", err)
 	}
 	if err := rawdb.WriteStateTxRange(stateSnapshotDB, block1.Number(), block1.Hash(), 1, 1); err != nil {
 		t.Fatalf("WriteStateTxRange block1: %v", err)
@@ -1395,6 +1419,20 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		NextExists: false,
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange deleted account: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        4,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      recreatedAddr,
+		PrevExists: true,
+		Prev:       recreatedAccount1,
+		NextExists: true,
+		Next:       recreatedAccount2,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange recreated account: %v", err)
 	}
 	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/accounts-1-2.seg")
 	if err != nil {
@@ -1565,6 +1603,24 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if deletedAccount, err := backend.GetAccountAt(deletedAddr, block2.Number()); err == nil || deletedAccount != nil {
 		t.Fatalf("GetAccountAt(deleted block2) = %+v/%v, want nil/error", deletedAccount, err)
 	}
+	if recreatedCode, err := backend.GetCodeAt(recreatedAddr, block1.Number()); err != nil || !bytes.Equal(recreatedCode, archiveCode1) {
+		t.Fatalf("GetCodeAt(recreated block1) = %x/%v, want %x", recreatedCode, err, archiveCode1)
+	}
+	if recreatedCode, err := backend.GetCodeAt(recreatedAddr, block2.Number()); err != nil || !bytes.Equal(recreatedCode, archiveCode2) {
+		t.Fatalf("GetCodeAt(recreated block2) = %x/%v, want %x", recreatedCode, err, archiveCode2)
+	}
+	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotA, block1.Number()); err != nil || recreatedStorage != recreatedOldA {
+		t.Fatalf("GetStorageAtBlock(recreated slotA block1) = %x/%v, want %x", recreatedStorage, err, recreatedOldA)
+	}
+	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotB, block1.Number()); err != nil || recreatedStorage != recreatedOldB {
+		t.Fatalf("GetStorageAtBlock(recreated slotB block1) = %x/%v, want %x", recreatedStorage, err, recreatedOldB)
+	}
+	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotA, block2.Number()); err != nil || recreatedStorage != recreatedNewA {
+		t.Fatalf("GetStorageAtBlock(recreated slotA block2) = %x/%v, want %x", recreatedStorage, err, recreatedNewA)
+	}
+	if recreatedStorage, err := backend.GetStorageAtBlock(recreatedAddr, recreatedSlotB, block2.Number()); err != nil || recreatedStorage != (common.Hash{}) {
+		t.Fatalf("GetStorageAtBlock(recreated slotB block2) = %x/%v, want zero", recreatedStorage, err)
+	}
 
 	tronMux := http.NewServeMux()
 	tronapi.NewAPI(backend).RegisterRoutes(tronMux)
@@ -1623,10 +1679,18 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		if got := asFloat64(deletedAccountJSON["balance"]); got != float64(deletedBalance1) {
 			t.Fatalf("%s/getaccount deleted-account balance = %v, want %d: %v", prefix, deletedAccountJSON["balance"], deletedBalance1, deletedAccountJSON)
 		}
+		recreatedAccountJSON := postSnapshotTestJSON(t, tronServer.URL+prefix+"/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+		if got := asFloat64(recreatedAccountJSON["balance"]); got != float64(recreatedBalance1) {
+			t.Fatalf("%s/getaccount recreated-account balance = %v, want %d: %v", prefix, recreatedAccountJSON["balance"], recreatedBalance1, recreatedAccountJSON)
+		}
 	}
 	deletedHeadAccountJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(deletedAddr.Bytes())))
 	if len(deletedHeadAccountJSON) != 0 {
 		t.Fatalf("/wallet/getaccount deleted head account = %v, want empty object", deletedHeadAccountJSON)
+	}
+	recreatedHeadAccountJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(recreatedAddr.Bytes())))
+	if got := asFloat64(recreatedHeadAccountJSON["balance"]); got != float64(recreatedBalance2) {
+		t.Fatalf("/wallet/getaccount recreated head balance = %v, want %d: %v", recreatedHeadAccountJSON["balance"], recreatedBalance2, recreatedHeadAccountJSON)
 	}
 
 	rpcServer := httptest.NewServer(jsonrpcapi.NewAPI(backend))
@@ -1660,6 +1724,14 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	deletedHeadBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(deletedAddr.Bytes()), "0x2"})
 	if got := deletedHeadBalanceRPC["result"]; got != snapshotTestSunToWeiHex(0) {
 		t.Fatalf("eth_getBalance deleted-account block2 result = %v, want %s", got, snapshotTestSunToWeiHex(0))
+	}
+	recreatedOldSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotB.Bytes()), "0x1"})
+	if got := recreatedOldSlotRPC["result"]; got != "0x"+hex.EncodeToString(recreatedOldB.Bytes()) {
+		t.Fatalf("eth_getStorageAt recreated old slotB block1 result = %v, want 0x%s", got, hex.EncodeToString(recreatedOldB.Bytes()))
+	}
+	recreatedLeakedSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotB.Bytes()), "0x2"})
+	if got := recreatedLeakedSlotRPC["result"]; got != "0x"+hex.EncodeToString(common.Hash{}.Bytes()) {
+		t.Fatalf("eth_getStorageAt recreated slotB block2 result = %v, want zero", got)
 	}
 }
 
@@ -1831,6 +1903,11 @@ func asFloat64(v any) float64 {
 
 func snapshotCmdAccountEnvelope(t *testing.T, addr common.Address, balance int64, accountType corepb.AccountType, codeHash common.Hash, allowance ...int64) []byte {
 	t.Helper()
+	return snapshotCmdAccountEnvelopeWithGeneration(t, addr, balance, accountType, codeHash, 0, allowance...)
+}
+
+func snapshotCmdAccountEnvelopeWithGeneration(t *testing.T, addr common.Address, balance int64, accountType corepb.AccountType, codeHash common.Hash, generation uint64, allowance ...int64) []byte {
+	t.Helper()
 	if len(allowance) > 1 {
 		t.Fatalf("snapshotCmdAccountEnvelope: expected at most one allowance, got %d", len(allowance))
 	}
@@ -1844,10 +1921,11 @@ func snapshotCmdAccountEnvelope(t *testing.T, addr common.Address, balance int64
 		t.Fatalf("marshal account: %v", err)
 	}
 	envelope := &corestate.StateAccountV2{
-		Version:       corestate.StateAccountVersion,
-		AccountProto:  accountRaw,
-		AccountKVRoot: corestate.EmptyKVRoot,
-		CodeHash:      codeHash,
+		Version:             corestate.StateAccountVersion,
+		AccountProto:        accountRaw,
+		AccountKVRoot:       corestate.EmptyKVRoot,
+		AccountKVGeneration: generation,
+		CodeHash:            codeHash,
 	}
 	raw, err := envelope.Encode()
 	if err != nil {
