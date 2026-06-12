@@ -34,6 +34,7 @@ type AggregatorBuildDerivedOptions struct {
 	BalanceTraces bool
 	SectionBlooms bool
 	EventLogs     bool
+	ETL           RestoreETLOptions
 }
 
 type AggregatorBuildResult struct {
@@ -195,6 +196,10 @@ func (a *Aggregator) BuildSectionBlooms(db AggregatorDB, fromBlock, toBlock uint
 }
 
 func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
+	return a.BuildEventLogsWithOptions(chain, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func (a *Aggregator) BuildEventLogsWithOptions(chain *rawdb.ChainDB, fromBlock, toBlock uint64, opts RestoreETLOptions) (*AggregatorBuildResult, error) {
 	if a == nil || a.dir == "" {
 		return nil, errors.New("snapshots: nil aggregator or empty directory")
 	}
@@ -204,7 +209,7 @@ func (a *Aggregator) BuildEventLogs(chain *rawdb.ChainDB, fromBlock, toBlock uin
 	if toBlock < fromBlock {
 		return nil, fmt.Errorf("snapshots: event log block range [%d,%d] is inverted", fromBlock, toBlock)
 	}
-	ref, err := BuildEventLogSegmentFromChain(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	ref, err := BuildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +277,7 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 		refs = append(refs, ref)
 	}
 	if opts.EventLogs {
-		ref, err := BuildEventLogSegmentFromChain(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		ref, err := BuildEventLogSegmentFromChainWithOptions(chain, a.dir, EventLogSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts.ETL)
 		if err != nil {
 			return nil, err
 		}

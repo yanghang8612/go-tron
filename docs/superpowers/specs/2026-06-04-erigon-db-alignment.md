@@ -991,6 +991,12 @@ Status:
   same TRON-address normalization, so 21-byte TVM log addresses filter
   consistently whether the data comes from hot `TransactionRet` rows or cold
   event-log segments.
+- Event-log segment builds now use the shared sorted ETL collector. Source
+  block scans spill event-log rows to scratch space keyed by
+  block/transaction/log position, and the final segment writer streams sorted
+  payload/index rows into the immutable segment while retaining only lookup
+  postings in memory. Aggregator event-log builds can pass the same ETL temp,
+  buffer, and batch knobs used by other snapshot restore/build paths.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or

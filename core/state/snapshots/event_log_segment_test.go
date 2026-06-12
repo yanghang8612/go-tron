@@ -122,6 +122,57 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestBuildEventLogSegmentWithOptionsUsesETLScratch(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "snapshot")
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x18)
+	topic := common.Hash{0x18}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x18}},
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x19}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	etlTemp := filepath.Join(root, "etl-scratch")
+	ref, err := BuildEventLogSegmentFromChainWithOptions(db, dir, "log/event-log-1-1.seg", 1, 1, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChainWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
+	}
+	if err := CheckEventLogSegment(dir, ref); err != nil {
+		t.Fatalf("CheckEventLogSegment: %v", err)
+	}
+	seg, err := OpenEventLogSegment(dir, ref)
+	if err != nil {
+		t.Fatalf("OpenEventLogSegment: %v", err)
+	}
+	defer seg.Close()
+	var rows []EventLog
+	if err := seg.IterateLogs(1, 1, EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addr)},
+		Topics:    [][]common.Hash{{topic}},
+	}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateLogs: %v", err)
+	}
+	if len(rows) != 2 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x18}) || !bytes.Equal(rows[1].Log.GetData(), []byte{0x19}) {
+		t.Fatalf("ETL event-log rows = %+v, want two ordered rows", rows)
+	}
+}
+
 func TestEventLogManagerIteratesContinuousSegmentsWithFilter(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()
