@@ -392,24 +392,29 @@ func chainFreezerRowOffsets(dir string, ref SegmentRef) ([]uint64, error) {
 }
 
 func readChainFreezerSegmentRowAt(file io.ReaderAt, offset, blockNum uint64) (chainFreezerRow, error) {
+	row, _, err := readChainFreezerSegmentRowAtWithNext(file, offset, blockNum)
+	return row, err
+}
+
+func readChainFreezerSegmentRowAtWithNext(file io.ReaderAt, offset, blockNum uint64) (chainFreezerRow, uint64, error) {
 	blockRaw, next, err := readChainFreezerBytesAt(file, offset)
 	if err != nil {
-		return chainFreezerRow{}, fmt.Errorf("snapshots: read chain-freezer block %d body at offset %d: %w", blockNum, offset, err)
+		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d body at offset %d: %w", blockNum, offset, err)
 	}
 	txInfosRaw, next, err := readChainFreezerBytesAt(file, next)
 	if err != nil {
-		return chainFreezerRow{}, fmt.Errorf("snapshots: read chain-freezer block %d tx infos at offset %d: %w", blockNum, next, err)
+		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d tx infos at offset %d: %w", blockNum, next, err)
 	}
-	stateRootRaw, _, err := readChainFreezerBytesAt(file, next)
+	stateRootRaw, next, err := readChainFreezerBytesAt(file, next)
 	if err != nil {
-		return chainFreezerRow{}, fmt.Errorf("snapshots: read chain-freezer block %d state root at offset %d: %w", blockNum, next, err)
+		return chainFreezerRow{}, 0, fmt.Errorf("snapshots: read chain-freezer block %d state root at offset %d: %w", blockNum, next, err)
 	}
 	return chainFreezerRow{
 		blockNum:     blockNum,
 		blockRaw:     blockRaw,
 		txInfosRaw:   txInfosRaw,
 		stateRootRaw: stateRootRaw,
-	}, nil
+	}, next, nil
 }
 
 func readChainFreezerBytesAt(file io.ReaderAt, offset uint64) ([]byte, uint64, error) {

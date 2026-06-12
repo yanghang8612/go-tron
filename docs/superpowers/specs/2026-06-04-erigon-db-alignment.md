@@ -476,8 +476,13 @@ Status:
   a block-number to row-offset table for the variable-length freezer segment.
   `Manager.Ancient` prefers that accessor for O(1) block-number point reads
   and falls back to the old scan path only for legacy manifests without the
-  sidecar. Tests prove the accessor build/check/verify path and that Manager
-  can serve a row even when full segment scanning would reject trailing bytes.
+  sidecar. Snapshot-backed `AncientRange` now also reads through a single
+  manifest view and streams sequential rows across active chain-freezer
+  segments, using the accessor to jump to the first requested block before
+  continuing linearly. Tests prove the accessor build/check/verify path, range
+  reads across segment boundaries, `maxBytes` truncation, gap handling, and that
+  Manager can serve a row even when full segment scanning would reject trailing
+  bytes.
 - Minimal-mode runtime now registers a chain-freezer tail-prune lifecycle when
   the local freezer is open. It advances the freezer's virtual tail only after
   the planner allows it and cold segment coverage is readable. When the

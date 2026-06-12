@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -397,6 +398,101 @@ func TestManagerAncientReadsChainFreezerSegmentAfterLocalTailHidden(t *testing.T
 	}
 }
 
+func TestManagerAncientRangeStreamsAcrossChainFreezerSegments(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerTestRows(t, src, 0, 3)
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	refA, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 0..1: %v", err)
+	}
+	accessorA, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, refA, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment 0..1: %v", err)
+	}
+	refB, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 2, 3)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 2..3: %v", err)
+	}
+	accessorB, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, refB, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment 2..3: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{refA, accessorA, refB, accessorB})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	rows, err := mgr.AncientRange(rawdb.AncientTxInfosTable, 1, 3, 0)
+	if err != nil {
+		t.Fatalf("AncientRange txinfos 1..3: %v", err)
+	}
+	if got, want := stringifyAncientRows(rows), []string{"txinfos-1", "txinfos-2", "txinfos-3"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("AncientRange txinfos = %q, want %q", got, want)
+	}
+
+	rows, err = mgr.AncientRange(rawdb.AncientBlocksTable, 0, 4, uint64(len("block-0")+1))
+	if err != nil {
+		t.Fatalf("AncientRange maxBytes: %v", err)
+	}
+	if got, want := stringifyAncientRows(rows), []string{"block-0"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("AncientRange maxBytes rows = %q, want %q", got, want)
+	}
+
+	if _, err := mgr.AncientRange(rawdb.AncientBlocksTable, 4, 1, 0); !errors.Is(err, rawdb.ErrNotInAncient) {
+		t.Fatalf("AncientRange missing first row error = %v, want ErrNotInAncient", err)
+	}
+}
+
+func TestManagerAncientRangeStopsAtChainFreezerSegmentGap(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	appendChainFreezerTestRows(t, src, 0, 3)
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	refA, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 0..1: %v", err)
+	}
+	accessorA, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, refA, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment 0..1: %v", err)
+	}
+	refC, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 3, 3)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient 3..3: %v", err)
+	}
+	accessorC, err := BuildChainFreezerAccessorSegmentFromChainFreezerSegment(snapshotDir, refC, "")
+	if err != nil {
+		t.Fatalf("BuildChainFreezerAccessorSegmentFromChainFreezerSegment 3..3: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{refA, accessorA, refC, accessorC})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	rows, err := mgr.AncientRange(rawdb.AncientBlocksTable, 0, 4, 0)
+	if err != nil {
+		t.Fatalf("AncientRange with later gap: %v", err)
+	}
+	if got, want := stringifyAncientRows(rows), []string{"block-0", "block-1"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("AncientRange with later gap rows = %q, want %q", got, want)
+	}
+	if _, err := mgr.AncientRange(rawdb.AncientBlocksTable, 2, 1, 0); !errors.Is(err, rawdb.ErrNotInAncient) {
+		t.Fatalf("AncientRange gap first row error = %v, want ErrNotInAncient", err)
+	}
+}
+
 func TestCheckChainFreezerSegmentRejectsTrailingBytes(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
@@ -559,6 +655,26 @@ func assertChainFreezerRowsEqual(t *testing.T, wantStore, gotStore *rawdbfreezer
 			}
 		}
 	}
+}
+
+func stringifyAncientRows(rows [][]byte) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = string(row)
+	}
+	return out
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type chainFreezerIndexOrderWriter struct {

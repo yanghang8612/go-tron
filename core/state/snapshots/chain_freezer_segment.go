@@ -240,32 +240,47 @@ func (m *Manager) AncientRange(kind string, start, count, maxBytes uint64) ([][]
 	if count == 0 {
 		return nil, nil
 	}
-	var (
-		out        [][]byte
-		totalBytes uint64
-	)
-	for i := uint64(0); i < count; i++ {
-		number := start + i
-		if number < start {
-			break
-		}
-		data, err := m.Ancient(kind, number)
-		if err != nil {
-			if len(out) > 0 && errors.Is(err, rawdb.ErrNotInAncient) {
-				break
-			}
-			return nil, err
-		}
-		if maxBytes > 0 && len(out) > 0 && totalBytes+uint64(len(data)) > maxBytes {
-			break
-		}
-		out = append(out, data)
-		totalBytes += uint64(len(data))
-	}
-	if len(out) == 0 {
+	if !isChainFreezerAncientKind(kind) {
 		return nil, rawdb.ErrNotInAncient
 	}
-	return out, nil
+	manifest, err := m.currentManifest()
+	if err != nil {
+		return nil, err
+	}
+	if manifest == nil {
+		return nil, rawdb.ErrNotInAncient
+	}
+	refs := chainFreezerRefs(manifest)
+	sortSegmentRefsAscending(refs)
+	var out [][]byte
+	var totalBytes uint64
+	next := start
+	remaining := count
+	for remaining > 0 {
+		ref, ok := chainFreezerRefContaining(refs, next)
+		if !ok {
+			break
+		}
+		rows, read, bytesRead, hitLimit, err := m.ancientRangeFromChainFreezerSegment(manifest, ref, kind, next, remaining, maxBytes, totalBytes, len(out) > 0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		totalBytes += bytesRead
+		if hitLimit || read == 0 {
+			break
+		}
+		remaining -= read
+		prev := next
+		next += read
+		if next < prev {
+			break
+		}
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
+	return nil, rawdb.ErrNotInAncient
 }
 
 // AncientCount returns the highest chain-freezer snapshot block plus one for
@@ -709,6 +724,90 @@ func readChainFreezerSegmentRow(dir string, ref SegmentRef, blockNum uint64) (ch
 		return nil
 	})
 	return out, found, err
+}
+
+func (m *Manager) ancientRangeFromChainFreezerSegment(manifest *Manifest, ref SegmentRef, kind string, start, count, maxBytes, totalBytes uint64, haveRows bool) ([][]byte, uint64, uint64, bool, error) {
+	if count == 0 || start < ref.FromTxNum || start > ref.ToTxNum {
+		return nil, 0, 0, false, nil
+	}
+	offset, ok, err := m.chainFreezerSegmentRowOffset(manifest, ref, start)
+	if err != nil || !ok {
+		return nil, 0, 0, false, err
+	}
+	file, err := os.Open(filepath.Join(m.dir, ref.Path))
+	if err != nil {
+		return nil, 0, 0, false, err
+	}
+	defer file.Close()
+	limit := ref.ToTxNum - start + 1
+	if count < limit {
+		limit = count
+	}
+	rows := make([][]byte, 0, limit)
+	var bytesRead uint64
+	blockNum := start
+	for i := uint64(0); i < limit; i++ {
+		row, nextOffset, err := readChainFreezerSegmentRowAtWithNext(file, offset, blockNum)
+		if err != nil {
+			return nil, 0, 0, false, err
+		}
+		payload := chainFreezerAncientPayload(row, kind)
+		payloadLen := uint64(len(payload))
+		if maxBytes > 0 && (haveRows || len(rows) > 0) && totalBytes+bytesRead+payloadLen > maxBytes {
+			return rows, i, bytesRead, true, nil
+		}
+		rows = append(rows, payload)
+		bytesRead += payloadLen
+		offset = nextOffset
+		blockNum++
+		if blockNum == 0 {
+			return rows, i + 1, bytesRead, false, nil
+		}
+	}
+	return rows, limit, bytesRead, false, nil
+}
+
+func (m *Manager) chainFreezerSegmentRowOffset(manifest *Manifest, ref SegmentRef, blockNum uint64) (uint64, bool, error) {
+	if blockNum < ref.FromTxNum || blockNum > ref.ToTxNum {
+		return 0, false, nil
+	}
+	if accessorRef, ok := chainFreezerAccessorRefForFreezer(manifest, ref); ok {
+		accessor, err := OpenChainFreezerAccessorSegment(m.dir, accessorRef)
+		if err != nil {
+			return 0, false, err
+		}
+		offset, found, lookupErr := accessor.RowOffset(blockNum)
+		closeErr := accessor.Close()
+		if lookupErr != nil {
+			return 0, false, lookupErr
+		}
+		if closeErr != nil {
+			return 0, false, closeErr
+		}
+		return offset, found, nil
+	}
+	offsets, err := chainFreezerRowOffsets(m.dir, ref)
+	if err != nil {
+		return 0, false, err
+	}
+	ordinal := blockNum - ref.FromTxNum
+	if ordinal >= uint64(len(offsets)) {
+		return 0, false, nil
+	}
+	return offsets[ordinal], true, nil
+}
+
+func chainFreezerRefContaining(refs []SegmentRef, blockNum uint64) (SegmentRef, bool) {
+	for _, ref := range refs {
+		if ref.ToTxNum < blockNum {
+			continue
+		}
+		if ref.FromTxNum > blockNum {
+			return SegmentRef{}, false
+		}
+		return ref, true
+	}
+	return SegmentRef{}, false
 }
 
 func chainFreezerAncientPayload(row chainFreezerRow, kind string) []byte {
