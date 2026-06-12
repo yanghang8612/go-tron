@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 )
@@ -17,6 +18,16 @@ type StagedBodyReadyFrontier struct {
 	ErrorAt     uint64
 	Error       error
 	NextMissing uint64
+}
+
+// StagedBodyReadyProgressRefresh records how SyncBodiesReady was refreshed
+// from the current contiguous staged-body frontier.
+type StagedBodyReadyProgressRefresh struct {
+	Frontier    StagedBodyReadyFrontier
+	Updated     bool
+	Deleted     bool
+	WriteError  error
+	DeleteError error
 }
 
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
@@ -84,6 +95,28 @@ func FindStagedBodyReadyFrontier(start, targetHead uint64, read StagedBodyReader
 			return frontier
 		}
 	}
+}
+
+// RefreshStagedBodyReadyProgress recomputes SyncBodiesReady from the persisted
+// sync-staged body table and writes or deletes the ready stage row.
+func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead uint64) StagedBodyReadyProgressRefresh {
+	var result StagedBodyReadyProgressRefresh
+	if db == nil {
+		result.Frontier.NextMissing = start
+		return result
+	}
+	frontier := FindStagedBodyReadyFrontier(start, targetHead, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
+		return rawdb.ReadSyncStagedBlockRaw(db, number)
+	})
+	result.Frontier = frontier
+	if !frontier.Have {
+		result.Deleted = true
+		result.DeleteError = rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady)
+		return result
+	}
+	result.Updated = true
+	result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash)
+	return result
 }
 
 // ValidateStagedBodyReadyDrainLimit checks that a persisted SyncBodiesReady

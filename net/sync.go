@@ -1347,20 +1347,15 @@ func (ss *SyncService) writeSyncBodiesReadyProgress() {
 	if head == nil {
 		return
 	}
-	frontier := syncdl.FindStagedBodyReadyFrontier(head.Number()+1, ss.targetHeadNum, func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
-		return rawdb.ReadSyncStagedBlockRaw(db, number)
-	})
-	if frontier.Error != nil {
-		syncLog.Warn("Read sync staged block for ready progress failed", "number", frontier.ErrorAt, "err", frontier.Error)
+	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum)
+	if refresh.Frontier.Error != nil {
+		syncLog.Warn("Read sync staged block for ready progress failed", "number", refresh.Frontier.ErrorAt, "err", refresh.Frontier.Error)
 	}
-	if !frontier.Have {
-		if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady); err != nil {
-			syncLog.Warn("Delete sync bodies ready stage progress failed", "err", err)
-		}
-		return
+	if refresh.DeleteError != nil {
+		syncLog.Warn("Delete sync bodies ready stage progress failed", "err", refresh.DeleteError)
 	}
-	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash); err != nil {
-		syncLog.Warn("Persist sync bodies ready stage progress failed", "block", frontier.Number, "hash", frontier.Hash, "err", err)
+	if refresh.WriteError != nil {
+		syncLog.Warn("Persist sync bodies ready stage progress failed", "block", refresh.Frontier.Number, "hash", refresh.Frontier.Hash, "err", refresh.WriteError)
 	}
 }
 

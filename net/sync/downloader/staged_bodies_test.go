@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 func TestFindStagedBodyReadyFrontierContiguous(t *testing.T) {
@@ -63,6 +64,91 @@ func TestFindStagedBodyReadyFrontierWithoutReader(t *testing.T) {
 	got := FindStagedBodyReadyFrontier(7, 0, nil)
 	if got.Have || got.NextMissing != 7 || got.Error != nil {
 		t.Fatalf("frontier = %+v, want empty next7", got)
+	}
+}
+
+func TestRefreshStagedBodyReadyProgressWritesContiguousFrontier(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	for _, block := range []*types.Block{block2, block3, block4} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+
+	got := RefreshStagedBodyReadyProgress(db, 2, 3)
+	if !got.Updated || got.Deleted || got.WriteError != nil || got.DeleteError != nil {
+		t.Fatalf("refresh result = %+v, want update only", got)
+	}
+	if !got.Frontier.Have || got.Frontier.Number != 3 || got.Frontier.Hash != block3.Hash() {
+		t.Fatalf("frontier = %+v, want block3 capped by target", got.Frontier)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || row.BlockNum != block3.Number() || row.BlockHash != block3.Hash() {
+		t.Fatalf("ready progress = %+v ok=%v err=%v, want block3", row, ok, err)
+	}
+}
+
+func TestRefreshStagedBodyReadyProgressDeletesWhenNoFrontier(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 9, tcommon.Hash{0x09}); err != nil {
+		t.Fatalf("write stale ready progress: %v", err)
+	}
+
+	got := RefreshStagedBodyReadyProgress(db, 2, 0)
+	if !got.Deleted || got.Updated || got.DeleteError != nil || got.Frontier.Have {
+		t.Fatalf("refresh result = %+v, want delete without frontier", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("ready progress after delete = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+}
+
+func TestRefreshStagedBodyReadyProgressKeepsPrefixOnReadError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	if err := rawdb.WriteSyncStagedBlock(db, block2); err != nil {
+		t.Fatalf("write staged block2: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlockRaw(db, block3, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("write corrupt staged block3: %v", err)
+	}
+
+	got := RefreshStagedBodyReadyProgress(db, 2, 0)
+	if got.Frontier.Error == nil || got.Frontier.ErrorAt != 3 {
+		t.Fatalf("frontier error = %+v, want read error at 3", got.Frontier)
+	}
+	if !got.Updated || got.WriteError != nil || !got.Frontier.Have || got.Frontier.Number != 2 || got.Frontier.Hash != block2.Hash() {
+		t.Fatalf("refresh result = %+v, want prefix update to block2", got)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+		t.Fatalf("ready progress = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+}
+
+func TestRefreshStagedBodyReadyProgressDeletesOnFirstReadError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 9, tcommon.Hash{0x09}); err != nil {
+		t.Fatalf("write stale ready progress: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlockRaw(db, block2, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("write corrupt staged block2: %v", err)
+	}
+
+	got := RefreshStagedBodyReadyProgress(db, 2, 0)
+	if got.Frontier.Error == nil || got.Frontier.ErrorAt != 2 {
+		t.Fatalf("frontier error = %+v, want read error at 2", got.Frontier)
+	}
+	if !got.Deleted || got.Updated || got.DeleteError != nil || got.Frontier.Have {
+		t.Fatalf("refresh result = %+v, want delete on first read error", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("ready progress after first-error delete = %+v ok=%v err=%v, want absent", row, ok, err)
 	}
 }
 
