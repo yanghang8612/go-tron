@@ -117,12 +117,14 @@ range (`frozen/min`, `frozen/max`, `frozen/has`), cumulative progress
 fresh follower is draining historical block rows into ancient files instead of
 leaking them in Pebble.
 
-Run `gtron db freezer-alerts --datadir <dir>` after each long soak sample. It
-returns non-zero when persisted freezer state is unsafe for prune/archive
-assumptions, including a recorded repair, a missing or impossible
+`scripts/dev/storage_benchmark.sh` runs
+`gtron db freezer-alerts --datadir <dir>` before emitting each JSONL row. The
+command returns non-zero when persisted freezer state is unsafe for
+prune/archive assumptions, including a recorded repair, a missing or impossible
 `ChainFreezer` stage, inconsistent per-table bounds, or a virtual tail past the
-append head. It also prints warning rows for hidden bytes that still await
-physical tail-file pruning.
+append head. The JSONL row includes `freezerAlertStatus`,
+`freezerAlertIssues`, and `freezerAlertHiddenBytes`; warning rows capture hidden
+bytes that still await physical tail-file pruning.
 
 ## Sync Profile
 

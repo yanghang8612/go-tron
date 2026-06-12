@@ -47,6 +47,9 @@ RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
 RUN_CHAIN_LOOKUP_TX_INDEXES=0
 RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
 RUN_TAIL_PRUNED_FILES=0
+RUN_FREEZER_ALERT_STATUS="not-run"
+RUN_FREEZER_ALERT_ISSUES=-1
+RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
 
 usage() {
   cat <<'EOF'
@@ -186,6 +189,9 @@ reset_run_metrics() {
   RUN_CHAIN_LOOKUP_TX_INDEXES=0
   RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
   RUN_TAIL_PRUNED_FILES=0
+  RUN_FREEZER_ALERT_STATUS="not-run"
+  RUN_FREEZER_ALERT_ISSUES=-1
+  RUN_FREEZER_ALERT_HIDDEN_BYTES=-1
 }
 
 block_num() {
@@ -412,6 +418,29 @@ run_logged() {
   return 1
 }
 
+run_freezer_alert_gate() {
+  local mode="$1"
+  local role="$2"
+  local datadir="$3"
+  local log_path="$4"
+  local alert_out="$WORKDIR/$mode-$role-freezer-alerts.out"
+  echo "checking persisted freezer alert conditions" >>"$log_path"
+  local ok=1
+  if ! run_logged "$alert_out" "$GTRON" db freezer-alerts --datadir "$datadir" >>"$log_path"; then
+    ok=0
+  fi
+  local status issues hidden
+  status="$(sed -n 's/.* status=\([^ ]*\).*/\1/p' "$alert_out" | tail -1)"
+  issues="$(sed -n 's/.* issues=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  hidden="$(sed -n 's/.* hiddenSize=\([0-9][0-9]*\).*/\1/p' "$alert_out" | tail -1)"
+  RUN_FREEZER_ALERT_STATUS="${status:-unknown}"
+  RUN_FREEZER_ALERT_ISSUES="${issues:--1}"
+  RUN_FREEZER_ALERT_HIDDEN_BYTES="${hidden:--1}"
+  if [ "$ok" -ne 1 ]; then
+    die "freezer-alerts reported critical freezer state for $mode/$role; see $log_path"
+  fi
+}
+
 run_signed_cold_prune_drill() {
   local mode="$1"
   local idx="$2"
@@ -537,6 +566,7 @@ emit_result() {
     "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
+    "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$datadir" "$log_path" <<'PY'
 import json, sys, time
 out = sys.argv[1]
@@ -551,6 +581,7 @@ keys = [
     "signedColdPrune", "chainLookupPruneToBlock",
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
+    "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "datadir", "log",
 ]
 values = sys.argv[2:]
@@ -563,6 +594,7 @@ ints = {
     "sectionBloomPruneToSection", "sectionBloomRowsPruned", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
+    "freezerAlertIssues", "freezerAlertHiddenBytes",
 }
 row = {"unix": int(time.time())}
 for key, value in zip(keys, values):
@@ -593,6 +625,7 @@ run_producer_mode() {
   maybe_build_cold_freezer "$datadir" "$height" "$log_path"
   maybe_build_derived_indexes "$datadir" "$height" "$log_path"
   run_signed_cold_prune_drill "$mode" "$idx" "$datadir" "$log_path"
+  run_freezer_alert_gate "$mode" "producer" "$datadir" "$log_path"
   emit_result "$PROFILE" "$mode" "producer" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$datadir" "$log_path"
 }
 
@@ -621,6 +654,7 @@ run_sync_mode() {
   local elapsed=$((SECONDS - start))
   stop_pid "$node_pid"
   stop_pid "$sr_pid"
+  run_freezer_alert_gate "$mode" "sync-follower" "$node_dir" "$node_log"
   emit_result "$PROFILE" "$mode" "sync-follower" "ok" "$TARGET_BLOCKS" "$height" "$elapsed" "$node_dir" "$node_log"
 }
 
