@@ -1049,7 +1049,10 @@ Status:
   rows: an embedded `TransactionRet.block_number` or
   `TransactionInfo.block_number` is accepted only when it is missing/zero or
   matches the requested block. This keeps fallback log/receipt scans from
-  consuming mismatched hot or cold transaction-info payloads.
+  consuming mismatched hot or cold transaction-info payloads. Snapshot and
+  rebuild publishers use the strict variant so malformed source rows fail the
+  cold coverage build with a concrete corruption error instead of being treated
+  as an ordinary coverage miss.
 - Cold balance-trace reads now reject mismatched cold sidecar payloads before
   APIs or rebuild paths consume them: block trace reads reject a returned
   `BlockBalanceTrace.block_identifier.number` that disagrees with the requested

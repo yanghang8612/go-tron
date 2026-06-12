@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -236,6 +237,37 @@ func TestReadTransactionInfosByBlockRejectsMismatchedInfoBlockNumber(t *testing.
 	}
 	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
 		t.Fatalf("mismatched TransactionInfo block number read = %+v, want nil", got)
+	}
+}
+
+func TestReadTransactionInfosByBlockStrictReportsMismatchedPayload(t *testing.T) {
+	db := NewMemoryChainDB()
+	data, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber: 5,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: bytes.Repeat([]byte{0x06}, 32), Fee: 600, BlockNumber: 6},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mismatched strict ret: %v", err)
+	}
+	if err := db.Put(txInfoBlockKey(5), data); err != nil {
+		t.Fatalf("put mismatched strict ret: %v", err)
+	}
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
+	if err == nil || !strings.Contains(err.Error(), "transaction info block number 6") {
+		t.Fatalf("strict tx-info read = %+v/%v/%v, want block number mismatch error", infos, ok, err)
+	}
+	if !ok {
+		t.Fatal("strict tx-info read reported missing source row for mismatched payload")
+	}
+}
+
+func TestReadTransactionInfosByBlockStrictReportsMissingSource(t *testing.T) {
+	db := NewMemoryChainDB()
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
+	if err != nil || ok || infos != nil {
+		t.Fatalf("strict missing tx-info read = %+v/%v/%v, want nil/false/nil", infos, ok, err)
 	}
 }
 

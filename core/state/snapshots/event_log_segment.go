@@ -913,7 +913,10 @@ func collectEventLogRowsToETL(chain *rawdb.ChainDB, fromBlock, toBlock uint64, c
 		}
 		blockHash := block.Hash()
 		txs := block.Transactions()
-		infos := rawdb.ReadTransactionInfosByBlock(chain, blockNum)
+		infos, _, err := rawdb.ReadTransactionInfosByBlockStrict(chain, blockNum)
+		if err != nil {
+			return 0, err
+		}
 		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, txs, infos, "event log segment build"); err != nil {
 			return 0, err
 		}

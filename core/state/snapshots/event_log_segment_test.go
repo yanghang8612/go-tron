@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -762,6 +763,24 @@ func TestEventLogSegmentBuildRejectsMismatchedTransactionInfo(t *testing.T) {
 	}
 	if _, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1); err == nil {
 		t.Fatal("BuildEventLogSegmentFromChain accepted mismatched TransactionInfo id")
+	}
+}
+
+func TestEventLogSegmentBuildRejectsMismatchedTransactionInfoBlockNumber(t *testing.T) {
+	db := rawdb.NewMemoryChainDB()
+	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{{
+		Address: eventLogTestAddress(0x93),
+		Data:    []byte{0x03},
+	}})
+	infos[0].BlockNumber = 2
+	if err := rawdb.WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if _, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1); err == nil || !strings.Contains(err.Error(), "transaction info block number 2") {
+		t.Fatalf("BuildEventLogSegmentFromChain error = %v, want block number mismatch", err)
 	}
 }
 

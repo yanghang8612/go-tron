@@ -135,14 +135,19 @@ func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, info
 // number. Consults the freezer first when the requested block is below
 // the ancient cutoff; falls back to `tib-<num>` in Pebble otherwise.
 func ReadTransactionInfosByBlock(db *ChainDB, blockNum uint64) []*corepb.TransactionInfo {
-	infos, ok, err := readTransactionInfosByBlockStrict(db, blockNum)
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, blockNum)
 	if err != nil || !ok {
 		return nil
 	}
 	return infos
 }
 
-func readTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
+// ReadTransactionInfosByBlockStrict retrieves the per-block TransactionRet row
+// and reports whether a source row existed. Unlike ReadTransactionInfosByBlock,
+// malformed or block-number-mismatched payloads are returned as errors so
+// rebuild/snapshot publishers can fail loudly instead of treating corrupt
+// coverage as an ordinary miss.
+func ReadTransactionInfosByBlockStrict(db *ChainDB, blockNum uint64) ([]*corepb.TransactionInfo, bool, error) {
 	if data, ok := readAncient(db, ancientTxInfos, blockNum); ok {
 		infos, err := decodeTransactionRetForBlock(data, blockNum)
 		return infos, true, err
