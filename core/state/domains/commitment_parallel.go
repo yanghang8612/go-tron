@@ -60,31 +60,26 @@ const maxFoldNibbles = 16
 //     is concurrent-safe, and go-ethereum memorydb guards reads with an RWMutex.
 type bufferedBranchStore struct {
 	base branchStore
-	puts map[string]cbSpan   // prefix (one byte per nibble) -> encoded span in arena
+	// puts holds the latest buffered branch per prefix (one byte per nibble). A
+	// re-PUT of a prefix OVERWRITES, so the map is bounded by the number of
+	// DISTINCT prefixes the subtrie touches — not by how many times each is
+	// rebuilt. (An earlier design appended every PUT's encoding to a grow-only
+	// arena; a branch near a busy subtrie root is rebuilt once per op passing
+	// through it, so a large fold appended thousands of stale encodings — a >10x
+	// allocation blowup that made the parallel path lose to sequential at high op
+	// counts. Overwriting by value removes it.)
+	//
+	// Storing the decoded BranchData by value rather than its encoding is safe
+	// even though the caller returns the source *child to branchPool right after
+	// PutBranch: a branch's only reference-typed field is leafKey, which is
+	// write-once — SetLeafChild always allocates a fresh slice and nothing mutates
+	// leafKey in place — so the shared backing arrays outlive the pool reuse.
+	puts map[string]BranchData
 	dels map[string]struct{} // prefix -> tombstone
-	// arenaP holds every buffered branch's encoded bytes back-to-back in one
-	// pooled buffer; puts stores [off,end) spans into *arenaP. This replaces a
-	// fresh []byte per PutBranch (the single largest fold allocation), since the
-	// buffered bytes are retained only until flush.
-	arenaP *[]byte
 }
 
-type cbSpan struct{ off, end int }
-
-// cbArenaPool reuses the per-subtrie encode arena across folds. Borrowed in
-// newBufferedBranchStore, returned at flush; sync.Pool is goroutine-safe and the
-// borrow/return both happen on the main goroutine (around the parallel phase).
-var cbArenaPool = sync.Pool{New: func() any { b := make([]byte, 0, 8192); return &b }}
-
-// cbArenaMaxCap bounds what the pool retains: an arena grown past this by a large
-// fold is dropped (GC'd) instead of pooled, so the pool can't hold a few huge
-// buffers that cut GC headroom under a binding GOMEMLIMIT (the live-node regime).
-const cbArenaMaxCap = 1 << 16
-
 func newBufferedBranchStore(base branchStore) *bufferedBranchStore {
-	ap := cbArenaPool.Get().(*[]byte)
-	*ap = (*ap)[:0]
-	return &bufferedBranchStore{base: base, arenaP: ap}
+	return &bufferedBranchStore{base: base}
 }
 
 func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error) {
@@ -92,11 +87,7 @@ func (s *bufferedBranchStore) GetBranch(prefix []byte) (BranchData, bool, error)
 	if _, tomb := s.dels[k]; tomb {
 		return BranchData{}, false, nil
 	}
-	if sp, ok := s.puts[k]; ok {
-		b, err := DecodeBranchData((*s.arenaP)[sp.off:sp.end])
-		if err != nil {
-			return BranchData{}, false, err
-		}
+	if b, ok := s.puts[k]; ok {
 		return b, true, nil
 	}
 	return s.base.GetBranch(prefix)
@@ -108,10 +99,8 @@ func (s *bufferedBranchStore) GetBranchInto(prefix []byte, dst *BranchData) (boo
 		*dst = BranchData{}
 		return false, nil
 	}
-	if sp, ok := s.puts[k]; ok {
-		if err := DecodeBranchDataInto((*s.arenaP)[sp.off:sp.end], dst); err != nil {
-			return false, err
-		}
+	if b, ok := s.puts[k]; ok {
+		*dst = b
 		return true, nil
 	}
 	return s.base.GetBranchInto(prefix, dst)
@@ -121,15 +110,14 @@ func (s *bufferedBranchStore) PutBranch(prefix []byte, b BranchData) error {
 	k := string(prefix)
 	delete(s.dels, k)
 	if s.puts == nil {
-		s.puts = make(map[string]cbSpan)
+		s.puts = make(map[string]BranchData)
 	}
-	// Encode eagerly into the arena: the caller (linkChild) returns *child to
-	// branchPool right after PutBranch, so the value must not be retained by
-	// reference. EncodeTo appends; if it grows the arena the spans stay valid
-	// because they index the current *arenaP, read only via that field.
-	off := len(*s.arenaP)
-	*s.arenaP = b.EncodeTo(*s.arenaP)
-	s.puts[k] = cbSpan{off: off, end: len(*s.arenaP)}
+	// Value copy, overwriting any prior buffered state for this prefix. Safe to
+	// retain even though the caller returns the source *child to branchPool right
+	// after: leafKey (the only slice field) is write-once, so the shared backing
+	// arrays stay valid. The encode is deferred to flush, once per surviving
+	// prefix, instead of on every re-PUT.
+	s.puts[k] = b
 	return nil
 }
 
@@ -143,20 +131,12 @@ func (s *bufferedBranchStore) DelBranch(prefix []byte) error {
 	return nil
 }
 
-// flush applies the buffered mutations to base, then returns the arena to the
-// pool. dels and puts hold disjoint prefixes, and across all sibling buffers
-// every prefix is written at most once, so the resulting base state is
-// independent of flush order; the sorted iteration only makes the emitted write
-// stream deterministic.
-func (s *bufferedBranchStore) flush(base branchStore) (err error) {
-	defer func() {
-		if s.arenaP != nil {
-			if cap(*s.arenaP) <= cbArenaMaxCap {
-				cbArenaPool.Put(s.arenaP)
-			}
-			s.arenaP = nil
-		}
-	}()
+// flush applies the buffered mutations to base. dels and puts hold disjoint
+// prefixes, and across all sibling buffers every prefix is written at most once,
+// so the resulting base state is independent of flush order; the sorted
+// iteration only makes the emitted write stream deterministic. Each surviving
+// branch is encoded here exactly once (inside base.PutBranch).
+func (s *bufferedBranchStore) flush(base branchStore) error {
 	if len(s.dels) > 0 {
 		keys := make([]string, 0, len(s.dels))
 		for k := range s.dels {
@@ -175,38 +155,13 @@ func (s *bufferedBranchStore) flush(base branchStore) (err error) {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		// Fast path: write the buffered encoded bytes straight through, so the
-		// expensive BranchData encode already happened inside the (parallel)
-		// subtrie goroutine and the serial flush is just a KV write.
-		if ep, ok := base.(encodedBranchPutter); ok {
-			for _, k := range keys {
-				sp := s.puts[k]
-				if err := ep.putBranchEncoded([]byte(k), (*s.arenaP)[sp.off:sp.end]); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
 		for _, k := range keys {
-			sp := s.puts[k]
-			b, err := DecodeBranchData((*s.arenaP)[sp.off:sp.end])
-			if err != nil {
-				return err
-			}
-			if err := base.PutBranch([]byte(k), b); err != nil {
+			if err := base.PutBranch([]byte(k), s.puts[k]); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
-}
-
-// encodedBranchPutter is an optional branchStore capability: writing an
-// already-encoded BranchData row without a Decode/Encode round trip. The
-// production rawdbBranchStore implements it; the parallel flush uses it when
-// available and otherwise falls back to PutBranch.
-type encodedBranchPutter interface {
-	putBranchEncoded(prefix, encoded []byte) error
 }
 
 // applyRootParallel is the parallel counterpart of apply at the root (prefix nil,
