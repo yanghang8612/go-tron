@@ -227,6 +227,40 @@ func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
 	}
 }
 
+func TestRestoreChainFreezerIndexesRejectsMismatchedTransactionInfo(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block1, _, txInfoRaw := chainFreezerBlockWithTx(t, 1)
+	var ret corepb.TransactionRet
+	if err := proto.Unmarshal(txInfoRaw, &ret); err != nil {
+		t.Fatalf("unmarshal tx info: %v", err)
+	}
+	ret.Transactioninfo[0].Id = bytes.Repeat([]byte{0xed}, common.HashLength)
+	badTxInfoRaw, err := proto.Marshal(&ret)
+	if err != nil {
+		t.Fatalf("marshal bad tx info: %v", err)
+	}
+	appendChainFreezerRawRows(t, src, []chainFreezerRawTestRow{
+		{block: block0},
+		{block: block1, txInfosRaw: badTxInfoRaw},
+	})
+
+	snapshotDir := filepath.Join(root, "snapshot")
+	ref, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	writer := newChainFreezerIndexOrderWriter()
+	if _, err := RestoreChainFreezerIndexes(writer, snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("RestoreChainFreezerIndexes error = %v, want canonical tx mismatch", err)
+	}
+	if len(writer.putKeys) != 0 {
+		t.Fatalf("RestoreChainFreezerIndexes loaded %d keys before rejecting bad tx info", len(writer.putKeys))
+	}
+}
+
 func TestRestoreChainFreezerManifestPrefersColdLookupIndexes(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))

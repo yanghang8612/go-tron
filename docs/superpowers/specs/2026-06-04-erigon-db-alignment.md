@@ -410,6 +410,11 @@ Status:
   rebuilt from verified freezer segment rows and can be safely retried: if the
   ancient rows already match the segment, restore skips append and rebuilds only
   the indexes.
+- Chain-freezer hot index restore now validates any embedded
+  `TransactionRet` payload against the canonical block transaction count, block
+  number, and tx hash order before writing per-tx `TransactionInfo` rows. This
+  keeps older snapshots that restore hot lookup/info rows from publishing
+  archive transaction metadata that does not match the frozen block body.
 - The snapshot build CLI can now add chain-freezer segments plus matching
   chain-index lookup sidecars from local ancient rows to the production
   manifest.

@@ -625,6 +625,9 @@ func restoreChainFreezerIndexesForRow(db ethdb.KeyValueWriter, row chainFreezerR
 	if ret.BlockNumber != 0 && uint64(ret.BlockNumber) != row.blockNum {
 		return result, fmt.Errorf("snapshots: chain-freezer tx infos row %d contains block number %d", row.blockNum, ret.BlockNumber)
 	}
+	if err := rawdb.ValidateTransactionInfosForBlock(row.blockNum, block.Transactions(), ret.Transactioninfo, "chain-freezer index restore"); err != nil {
+		return result, err
+	}
 	for _, info := range ret.Transactioninfo {
 		if info == nil || len(info.Id) == 0 {
 			continue
