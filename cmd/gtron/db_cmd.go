@@ -174,6 +174,19 @@ func dbCommand() *cli.Command {
 				Action: dbFreezerStatusCmd,
 			},
 			{
+				Name:  "freezer-alerts",
+				Usage: "Check chain freezer persisted alert conditions for soak monitoring",
+				Flags: []cli.Flag{
+					dataDirFlag,
+					dbCacheFlag,
+					dbHandlesFlag,
+					dbMemtableFlag,
+					dbL0CompactionFlag,
+					dbL0StopFlag,
+				},
+				Action: dbFreezerAlertsCmd,
+			},
+			{
 				Name:  "stage-status",
 				Usage: "Print staged sync/snapshot/prune/freezer progress",
 				Flags: []cli.Flag{
@@ -220,6 +233,141 @@ func dbFreezerStatusCmd(ctx *cli.Context) error {
 			table.TailFile, table.HeadFile, table.HeadBytes, table.VisibleSize, table.HiddenSize)
 	}
 	return nil
+}
+
+type dbFreezerAlertIssue struct {
+	severity string
+	kind     string
+	detail   string
+}
+
+func dbFreezerAlertsCmd(ctx *cli.Context) error {
+	cfg := makeConfig(ctx)
+	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(cfg.DataDir), "", true, freezerTableSize, chainfreezer.FreezerTableSet())
+	if err != nil {
+		return fmt.Errorf("open freezer: %w", err)
+	}
+	defer f.Close()
+
+	stats, err := f.Stats()
+	if err != nil {
+		return fmt.Errorf("read freezer status: %w", err)
+	}
+	stage, hasStage, err := rawdb.ReadStageProgress(db, rawdb.StageChainFreezer)
+	if err != nil {
+		return fmt.Errorf("read chain freezer stage: %w", err)
+	}
+
+	issues := dbFreezerAlertIssues(stats, stage, hasStage)
+	status := "ok"
+	if dbFreezerAlertHasCritical(issues) {
+		status = "critical"
+	} else if len(issues) > 0 {
+		status = "warning"
+	}
+	stageLabel := "-"
+	if hasStage {
+		stageLabel = fmt.Sprintf("%d", stage)
+	}
+	fmt.Printf("Freezer alerts: datadir=%s status=%s issues=%d head=%d tail=%d chainFreezerStage=%s repairApplied=%t hiddenSize=%d\n",
+		cfg.DataDir, status, len(issues), stats.Head, stats.Tail, stageLabel, stats.Repair.Applied, dbFreezerHiddenSize(stats))
+	for _, issue := range issues {
+		fmt.Printf("Freezer alert: severity=%s kind=%s detail=%s\n", issue.severity, issue.kind, issue.detail)
+	}
+	if status == "critical" {
+		return fmt.Errorf("freezer alerts failed: %s", dbFreezerAlertSummary(issues))
+	}
+	return nil
+}
+
+func dbFreezerAlertIssues(stats rawdbfreezer.Stats, chainFreezerStage uint64, hasChainFreezerStage bool) []dbFreezerAlertIssue {
+	var issues []dbFreezerAlertIssue
+	add := func(severity, kind, format string, args ...interface{}) {
+		issues = append(issues, dbFreezerAlertIssue{
+			severity: severity,
+			kind:     kind,
+			detail:   fmt.Sprintf(format, args...),
+		})
+	}
+
+	if stats.Tail > stats.Head {
+		add("critical", "tail-ahead-of-head", "freezer tail %d exceeds head %d", stats.Tail, stats.Head)
+	}
+	if stats.Repair.Applied {
+		add("critical", "repair-applied", "last writable open repaired %d table(s) to head=%d tail=%d recordedAt=%s",
+			len(stats.Repair.Tables), stats.Repair.TargetHead, stats.Repair.TargetTail, stats.Repair.RecordedAt)
+	}
+	if stats.Head > 0 && !hasChainFreezerStage {
+		add("critical", "chain-freezer-stage-missing", "freezer head=%d but %s stage is missing", stats.Head, rawdb.StageChainFreezer)
+	}
+	if hasChainFreezerStage {
+		switch {
+		case stats.Head == 0:
+			add("critical", "chain-freezer-stage-with-empty-freezer", "%s=%d but freezer head is 0", rawdb.StageChainFreezer, chainFreezerStage)
+		case chainFreezerStage >= stats.Head:
+			add("critical", "chain-freezer-stage-ahead", "%s=%d exceeds freezer max block %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Head-1)
+		case chainFreezerStage < stats.Tail:
+			add("critical", "chain-freezer-stage-behind-tail", "%s=%d is below freezer visible tail %d", rawdb.StageChainFreezer, chainFreezerStage, stats.Tail)
+		}
+	}
+	for _, table := range stats.Tables {
+		if table.Head != stats.Head {
+			add("critical", "table-head-mismatch", "table %s head=%d freezerHead=%d", table.Name, table.Head, stats.Head)
+		}
+		if table.HiddenTail > table.Head {
+			add("critical", "table-hidden-tail-ahead", "table %s hiddenTail=%d head=%d", table.Name, table.HiddenTail, table.Head)
+		}
+		if table.PhysicalTail > table.HiddenTail {
+			add("critical", "table-physical-tail-ahead", "table %s physicalTail=%d hiddenTail=%d", table.Name, table.PhysicalTail, table.HiddenTail)
+		}
+		if table.Prunable {
+			if table.HiddenTail != stats.Tail {
+				add("critical", "table-tail-mismatch", "table %s hiddenTail=%d freezerTail=%d", table.Name, table.HiddenTail, stats.Tail)
+			}
+		} else if table.HiddenTail != 0 {
+			add("critical", "non-prunable-hidden-tail", "table %s hiddenTail=%d", table.Name, table.HiddenTail)
+		}
+	}
+	if hidden := dbFreezerHiddenSize(stats); hidden > 0 {
+		add("warning", "physical-prune-pending", "freezer has %d hidden bytes waiting for physical tail-file pruning", hidden)
+	}
+	return issues
+}
+
+func dbFreezerAlertHasCritical(issues []dbFreezerAlertIssue) bool {
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			return true
+		}
+	}
+	return false
+}
+
+func dbFreezerAlertSummary(issues []dbFreezerAlertIssue) string {
+	var critical []string
+	for _, issue := range issues {
+		if issue.severity == "critical" {
+			critical = append(critical, issue.kind)
+		}
+	}
+	if len(critical) == 0 {
+		return "no critical issues"
+	}
+	return strings.Join(critical, ",")
+}
+
+func dbFreezerHiddenSize(stats rawdbfreezer.Stats) uint64 {
+	var hidden uint64
+	for _, table := range stats.Tables {
+		hidden += table.HiddenSize
+	}
+	return hidden
 }
 
 func dbStageStatusCmd(ctx *cli.Context) error {

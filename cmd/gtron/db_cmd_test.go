@@ -447,27 +447,8 @@ func TestDBBackfillBalanceTracesCmdSeedsReplayFromSnapshot(t *testing.T) {
 
 func TestDBFreezerStatusCmd(t *testing.T) {
 	dataDir := t.TempDir()
-	f, err := rawdbfreezer.NewFreezer(ancientDataDir(dataDir), "", false, 50, chainfreezer.FreezerTableSet())
-	if err != nil {
-		t.Fatalf("NewFreezer: %v", err)
-	}
-	_, err = f.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
-		for i := uint64(0); i < 5; i++ {
-			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, []byte{byte(i), byte(i + 1)}); err != nil {
-				return err
-			}
-			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, []byte{byte(i + 2)}); err != nil {
-				return err
-			}
-			if err := op.AppendRaw(rawdb.AncientStateRootsTable, i, []byte{byte(i + 3)}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("ModifyAncients: %v", err)
-	}
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
 	if _, err := f.TruncateTail(3); err != nil {
 		t.Fatalf("TruncateTail: %v", err)
 	}
@@ -497,6 +478,116 @@ func TestDBFreezerStatusCmd(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("freezer status output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDBFreezerAlertsCmdOK(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 5)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err != nil {
+		t.Fatalf("dbFreezerAlertsCmd: %v", err)
+	}
+	for _, want := range []string{
+		"Freezer alerts:",
+		"status=ok",
+		"issues=0",
+		"head=5",
+		"tail=0",
+		"chainFreezerStage=4",
+		"repairApplied=false",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertsCmdRejectsStageAheadOfHead(t *testing.T) {
+	dataDir := t.TempDir()
+	f := openDBCmdFreezer(t, dataDir)
+	appendDBCmdFreezerRows(t, f, 2)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close freezer: %v", err)
+	}
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 4); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbFreezerAlertsCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "chain-freezer-stage-ahead") {
+		t.Fatalf("dbFreezerAlertsCmd err = %v, want stage-ahead alert", err)
+	}
+	for _, want := range []string{
+		"status=critical",
+		"severity=critical kind=chain-freezer-stage-ahead",
+		"chainFreezerStage=4",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("freezer alerts output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDBFreezerAlertIssuesDetectRepairAndTailInvariants(t *testing.T) {
+	stats := rawdbfreezer.Stats{
+		Head: 5,
+		Tail: 2,
+		Repair: rawdbfreezer.RepairStats{
+			Applied:    true,
+			TargetHead: 4,
+			TargetTail: 1,
+			RecordedAt: "2026-06-12T00:00:00Z",
+			Tables: []rawdbfreezer.TableRepairStats{
+				{Name: rawdb.AncientBlocksTable, HeadBefore: 6, HeadAfter: 4},
+			},
+		},
+		Tables: []rawdbfreezer.TableStats{
+			{Name: rawdb.AncientBlocksTable, Head: 5, PhysicalTail: 3, HiddenTail: 2, Prunable: true},
+			{Name: "legacy", Head: 5, PhysicalTail: 0, HiddenTail: 1, Prunable: false},
+		},
+	}
+	issues := dbFreezerAlertIssues(stats, 0, true)
+	for _, want := range []string{
+		"repair-applied",
+		"chain-freezer-stage-behind-tail",
+		"table-physical-tail-ahead",
+		"non-prunable-hidden-tail",
+	} {
+		if !dbFreezerAlertIssueKindsContain(issues, want) {
+			t.Fatalf("issues missing %q: %+v", want, issues)
+		}
+	}
+	if !dbFreezerAlertHasCritical(issues) {
+		t.Fatalf("issues have no critical severity: %+v", issues)
 	}
 }
 
@@ -1265,6 +1356,45 @@ func makeDBTestContext(t *testing.T, argv []string) *cli.Context {
 		t.Fatalf("parse flags: %v", err)
 	}
 	return cli.NewContext(app, set, nil)
+}
+
+func openDBCmdFreezer(t *testing.T, dataDir string) *rawdbfreezer.Freezer {
+	t.Helper()
+	f, err := rawdbfreezer.NewFreezer(ancientDataDir(dataDir), "", false, 50, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	return f
+}
+
+func appendDBCmdFreezerRows(t *testing.T, f *rawdbfreezer.Freezer, rows uint64) {
+	t.Helper()
+	_, err := f.ModifyAncients(func(op rawdbfreezer.AncientWriteOp) error {
+		for i := uint64(0); i < rows; i++ {
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, i, []byte{byte(i), byte(i + 1)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, i, []byte{byte(i + 2)}); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, i, []byte{byte(i + 3)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ModifyAncients: %v", err)
+	}
+}
+
+func dbFreezerAlertIssueKindsContain(issues []dbFreezerAlertIssue, kind string) bool {
+	for _, issue := range issues {
+		if issue.kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func captureDBCmdStdout(t *testing.T, fn func() error) (string, error) {
