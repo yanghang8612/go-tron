@@ -418,7 +418,24 @@ func WriteSnapshotInstallProgress(db ethdb.KeyValueWriter, manifest *Manifest) (
 	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotInstall, manifest.VisibleTxEnd); err != nil {
 		return nil, err
 	}
+	if block, ok := eventLogBuildBlockFromManifest(manifest); ok {
+		if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, block); err != nil {
+			return nil, err
+		}
+	}
 	return progress, nil
+}
+
+func eventLogBuildBlockFromManifest(manifest *Manifest) (uint64, bool) {
+	var block uint64
+	var ok bool
+	for _, ref := range eventLogRefs(manifest) {
+		if !ok || ref.ToTxNum > block {
+			block = ref.ToTxNum
+			ok = true
+		}
+	}
+	return block, ok
 }
 
 func writeManifestProgressStages(store stageProgressStore, progress *Progress) error {

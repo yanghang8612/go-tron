@@ -17,6 +17,7 @@ const (
 	chainFreezerTailPruneReasonTailAboveAncientHead = "current tail above ancient head"
 	chainFreezerTailPruneReasonCurrentTailCovered   = "current tail already satisfies limits"
 	chainFreezerTailPruneReasonMissingColdCoverage  = "missing cold chain-freezer coverage"
+	chainFreezerTailPruneReasonMissingEventLogCold  = "missing cold event-log coverage"
 )
 
 // ChainFreezerTailPrunePlanInput describes the inclusive stage progress and
@@ -97,6 +98,10 @@ type chainFreezerTailFilePruner interface {
 
 type chainFreezerRangeCoverer interface {
 	ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error)
+}
+
+type eventLogRangeCoverer interface {
+	EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
 // PlanChainFreezerTailPrune computes the highest freezer virtual tail that can
@@ -214,6 +219,10 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingColdCoverage)
 		return result, nil
 	}
+	if err := verifyColdEventLogTailCoverage(cold, currentTail, plan.TargetTail); err != nil {
+		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogCold)
+		return result, nil
+	}
 	oldTail, err := freezer.TruncateTail(plan.TargetTail)
 	if err != nil {
 		return nil, err
@@ -236,6 +245,24 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 		}
 	}
 	return result, nil
+}
+
+func verifyColdEventLogTailCoverage(cold rawdb.AncientReader, fromTail, toTail uint64) error {
+	if toTail <= fromTail {
+		return nil
+	}
+	coverer, ok := cold.(eventLogRangeCoverer)
+	if !ok {
+		return rawdb.ErrNotInAncient
+	}
+	covered, err := coverer.EventLogRangeCovered(fromTail, toTail-1)
+	if err != nil {
+		return err
+	}
+	if !covered {
+		return rawdb.ErrNotInAncient
+	}
+	return nil
 }
 
 func verifyColdChainFreezerTailCoverage(cold rawdb.AncientReader, fromTail, toTail uint64) error {

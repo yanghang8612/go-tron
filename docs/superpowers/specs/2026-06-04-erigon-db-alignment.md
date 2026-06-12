@@ -445,13 +445,13 @@ Status:
   event-log build boundary keeps minimal-mode physical tail pruning behind
   cold log/index coverage, so archive log queries do not lose their immutable
   sidecar path when local freezer files are hidden or reclaimed. The apply path
-  verifies cold chain-freezer coverage before calling runtime `TruncateTail`;
-  snapshot managers now prove continuous chain-freezer coverage for the whole
-  tail range instead of only probing endpoints. Tests pin missing-stage no-ops,
-  lookup-stage caps, event-log-stage caps, retention-window caps,
-  ancient-head caps, short-chain behavior, DB-backed stage reads, successful
-  tail truncation, no-op behavior when cold coverage is missing, and rejection
-  of gapped cold coverage.
+  verifies cold chain-freezer and event-log coverage before calling runtime
+  `TruncateTail`; snapshot managers now prove continuous chain-freezer and log
+  coverage for the whole tail range instead of only probing endpoints. Tests
+  pin missing-stage no-ops, lookup-stage caps, event-log-stage caps,
+  retention-window caps, ancient-head caps, short-chain behavior, DB-backed
+  stage reads, successful tail truncation, no-op behavior when cold coverage is
+  missing, and rejection of gapped cold coverage.
 - The snapshot `Manager` now implements the rawdb `AncientReader` shape for
   chain-freezer segments, and `rawdb.NewFallbackAncientReader` composes local
   freezer rows with verified cold snapshot files. Runtime startup wraps the
@@ -802,8 +802,11 @@ Status:
   event-log sidecar in the same manifest generation as the state-history segment
   before hot prune runs, and both production and manual event-log builders now
   advance a block-valued `SnapshotEventLogBuild` stage so operators can audit
-  cold log coverage against the verified `Finish` boundary. Runtime startup
-  registers the manager on `ChainDB`, and
+  cold log coverage against the verified `Finish` boundary. Snapshot
+  restore/bootstrap also derives that stage from verified manifest `event-log`
+  segments, so restored nodes can continue minimal-mode tail pruning without
+  locally rebuilding log sidecars. Runtime startup registers the manager on
+  `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments
   before streaming cold logs. Backend and JSON-RPC `eth_getLogs` regressions

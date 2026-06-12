@@ -202,7 +202,8 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	if err != nil {
 		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
-	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 0, 9)
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, eventRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
 	mgr, err := OpenManager(snapshotDir)
@@ -238,6 +239,47 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	}
 	if ok, err := f.HasAncient(rawdb.AncientBlocksTable, 7); err != nil || !ok {
 		t.Fatalf("HasAncient(7) = %v/%v, want true/nil", ok, err)
+	}
+}
+
+func TestApplyChainFreezerTailPruneRequiresEventLogColdCoverage(t *testing.T) {
+	root := t.TempDir()
+	f := openChainFreezerTestStore(t, root+"/ancient")
+	defer f.Close()
+	appendChainFreezerTestRows(t, f, 0, 9)
+
+	snapshotDir := root + "/snapshot"
+	ref, err := BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(f), snapshotDir, "", 0, 9)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageChainFreezer, 8); err != nil {
+		t.Fatalf("WriteStageProgress ChainFreezer: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotChainLookupPrune, 8); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotChainLookupPrune: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotEventLogBuild, 8); err != nil {
+		t.Fatalf("WriteStageProgress SnapshotEventLogBuild: %v", err)
+	}
+	result, err := ApplyChainFreezerTailPruneFromDB(db, f, mgr, 9, 3)
+	if err != nil {
+		t.Fatalf("ApplyChainFreezerTailPruneFromDB: %v", err)
+	}
+	if result.Applied || result.Plan.Reason != chainFreezerTailPruneReasonMissingEventLogCold {
+		t.Fatalf("apply result = %+v, want no apply due to missing event-log coverage", result)
+	}
+	if tail, err := f.Tail(); err != nil || tail != 0 {
+		t.Fatalf("freezer tail = %d/%v, want 0/nil", tail, err)
 	}
 }
 
@@ -386,7 +428,8 @@ func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
-	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 0, 11)
+	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, eventRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
 	mgr, err := OpenManager(snapshotDir)
@@ -447,6 +490,25 @@ func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	if _, err := fallback.Ancient(rawdb.AncientBlocksTable, 8); err != nil {
 		t.Fatalf("fallback read retained block 8: %v", err)
 	}
+}
+
+func buildChainTailPruneEventLogSegment(t *testing.T, snapshotDir string, fromBlock, toBlock uint64) SegmentRef {
+	t.Helper()
+	db := rawdb.NewMemoryChainDB()
+	for blockNum := fromBlock; blockNum <= toBlock; blockNum++ {
+		block, infos := eventLogTestBlock(t, blockNum, nil)
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+	ref, err := BuildEventLogSegmentFromChain(db, snapshotDir, "", fromBlock, toBlock)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain %d..%d: %v", fromBlock, toBlock, err)
+	}
+	return ref
 }
 
 func openChainFreezerSizedTestStore(t *testing.T, dir string, maxTableSize uint32) *rawdbfreezer.Freezer {

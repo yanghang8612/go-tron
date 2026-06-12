@@ -142,6 +142,15 @@ func TestRestoreHistoryFromVerifiedManifestRestoresHotRowsAndIndexes(t *testing.
 
 func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) {
 	dir, identity, _ := writeVerifiableHistoryManifest(t)
+	eventRef := writeVerifiableEventLogSegment(t, dir, 1, 2)
+	manifest, err := LoadProductionManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadProductionManifest: %v", err)
+	}
+	manifest.Segments = append(manifest.Segments, eventRef)
+	if err := PublishManifest(dir, manifest); err != nil {
+		t.Fatalf("PublishManifest with event log: %v", err)
+	}
 	restored := rawdb.NewMemoryDatabase()
 
 	result, err := RestoreSnapshotFromVerifiedManifestWithOptions(restored, dir, identity, strictBoundaryOptions(t, restored))
@@ -161,6 +170,7 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 		{stage: rawdb.StageSnapshotInstall, want: 12},
 		{stage: rawdb.StageSnapshotHistory, want: 12},
 		{stage: rawdb.StageSnapshotAccessor, want: 12},
+		{stage: rawdb.StageSnapshotEventLogBuild, want: 2},
 	} {
 		got, ok, err := rawdb.ReadStageProgress(restored, tc.stage)
 		if err != nil || !ok || got != tc.want {
@@ -170,6 +180,25 @@ func TestRestoreSnapshotFromVerifiedManifestWritesInstallProgress(t *testing.T) 
 	if _, ok, err := rawdb.ReadStageProgress(restored, rawdb.StageHeaders); err != nil || ok {
 		t.Fatalf("canonical Headers stage should not be advanced by snapshot install: ok=%v err=%v", ok, err)
 	}
+}
+
+func writeVerifiableEventLogSegment(t *testing.T, dir string, fromBlock, toBlock uint64) SegmentRef {
+	t.Helper()
+	db := rawdb.NewMemoryChainDB()
+	for blockNum := fromBlock; blockNum <= toBlock; blockNum++ {
+		block, infos := eventLogTestBlock(t, blockNum, nil)
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", blockNum, err)
+		}
+		if err := rawdb.WriteTransactionInfosByBlock(db, blockNum, infos); err != nil {
+			t.Fatalf("WriteTransactionInfosByBlock %d: %v", blockNum, err)
+		}
+	}
+	ref, err := BuildEventLogSegmentFromChain(db, dir, "", fromBlock, toBlock)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain %d..%d: %v", fromBlock, toBlock, err)
+	}
+	return ref
 }
 
 func TestRestoreSnapshotFromVerifiedManifestVerifiesCommitmentBoundary(t *testing.T) {
