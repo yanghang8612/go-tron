@@ -488,6 +488,12 @@ Status:
   diagnostics even after a later readonly reopen. The same signal is exported
   through go-ethereum metrics gauges/counters under `ancient/repair/*` and is
   available on the opt-in debug server via `/debug/metrics?prefix=ancient/repair/`.
+- The live freezer runner now mirrors its `Runner.Snapshot` values into
+  go-ethereum metrics gauges under `chain/freezer/*`, including the visible
+  frozen range, cumulative frozen blocks/passes, latest pass timestamp/duration,
+  and sampled hot Pebble block-row footprint. The opt-in debug metrics endpoint
+  can therefore expose `/debug/metrics?prefix=chain/freezer/` for sync/freezer
+  soak dashboards without scraping logs.
 - The raw freezer now has a prunable-table virtual tail API: `TruncateTail`
   persists a hidden ancient tail and makes old rows unreadable without changing
   the append head. The production chain-freezer table set marks `bodies`,
@@ -617,9 +623,9 @@ Needed:
 - Keep only recent chain data and wallet-hot indexes in Pebble under full/snap
   modes.
 - Add higher-level operator alert rules around the persisted freezer
-  `repair.json` plus `ancient/repair/*` metrics signal. Catalog/freezer sidecar
-  mismatch is now caught by signed/local manifest verification as well as
-  tail-prune/stage-status coverage gates.
+  `repair.json`, `ancient/repair/*`, and `chain/freezer/*` metrics signals.
+  Catalog/freezer sidecar mismatch is now caught by signed/local manifest
+  verification as well as tail-prune/stage-status coverage gates.
 
 ### P1: Operator Mode Semantics
 

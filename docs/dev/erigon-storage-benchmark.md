@@ -108,6 +108,15 @@ also exposes `ancient/repair/applied`, `tables`, `target/head`, `target/tail`,
 `recorded`, and `events` for alert sampling. Capture this alongside the JSONL
 row when validating minimal-mode physical shard reclamation.
 
+For long-running sync/freezer drills, also scrape
+`/debug/metrics?prefix=chain/freezer/`. The runner exports the visible frozen
+range (`frozen/min`, `frozen/max`, `frozen/has`), cumulative progress
+(`blocks`, `passes`), latest pass wall-clock fields (`lastpass/time`,
+`lastpass/duration` in nanoseconds), and the sampled hot block-row footprint
+(`pebble/size`). These are the primary live signals for confirming that a
+fresh follower is draining historical block rows into ancient files instead of
+leaking them in Pebble.
+
 ## Sync Profile
 
 Run one dev witness and one fresh follower per mode. The row measures follower

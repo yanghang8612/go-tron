@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/metrics"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -845,6 +846,77 @@ func TestRunner_Snapshot(t *testing.T) {
 	}
 	if s1.LastPassDuration == 0 {
 		t.Fatalf("LastPassDuration is zero after pass")
+	}
+}
+
+func TestRunner_MetricsUpdatedAfterPass(t *testing.T) {
+	t.Parallel()
+	namespace := normalizeMetricNamespace("test/chain/freezer/" + strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() { unregisterRunnerMetricNamespace(namespace) })
+
+	fc := newFakeChain()
+	for n := uint64(0); n < 30; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(20)
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{
+		Enabled:          true,
+		MarginBlocks:     5,
+		BatchBlocks:      100,
+		MetricsNamespace: namespace,
+	})
+
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if frozen != 16 {
+		t.Fatalf("frozen=%d, want 16", frozen)
+	}
+
+	assertGauge := func(suffix string, want int64) {
+		t.Helper()
+		if got := runnerGaugeValue(t, namespace+suffix); got != want {
+			t.Fatalf("gauge %s = %d, want %d", suffix, got, want)
+		}
+	}
+	assertGauge("frozen/min", 0)
+	assertGauge("frozen/max", 15)
+	assertGauge("frozen/has", 1)
+	assertGauge("blocks", 16)
+	assertGauge("passes", 1)
+	if got := runnerGaugeValue(t, namespace+"lastpass/time"); got <= 0 {
+		t.Fatalf("lastpass/time = %d, want unix timestamp", got)
+	}
+	if got := runnerGaugeValue(t, namespace+"lastpass/duration"); got <= 0 {
+		t.Fatalf("lastpass/duration = %d, want positive duration", got)
+	}
+	if got := runnerGaugeValue(t, namespace+"pebble/size"); got <= 0 {
+		t.Fatalf("pebble/size = %d, want remaining hot block bytes", got)
+	}
+}
+
+func runnerGaugeValue(t *testing.T, name string) int64 {
+	t.Helper()
+	gauge, ok := metrics.DefaultRegistry.Get(name).(*metrics.Gauge)
+	if !ok {
+		t.Fatalf("missing gauge %s", name)
+	}
+	return gauge.Snapshot().Value()
+}
+
+func unregisterRunnerMetricNamespace(namespace string) {
+	for _, suffix := range []string{
+		"frozen/min",
+		"frozen/max",
+		"frozen/has",
+		"blocks",
+		"passes",
+		"lastpass/time",
+		"lastpass/duration",
+		"pebble/size",
+	} {
+		metrics.DefaultRegistry.Unregister(namespace + suffix)
 	}
 }
 

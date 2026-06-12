@@ -36,11 +36,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -56,9 +58,10 @@ var log = gtronlog.NewModule("core/freezer")
 // fresh-install backlog in under an hour, small enough that one pass
 // can't dominate Pebble's compaction queue).
 const (
-	defaultInterval     = 30 * time.Second
-	defaultMarginBlocks = uint64(128)
-	defaultBatchBlocks  = uint64(30_000)
+	defaultInterval         = 30 * time.Second
+	defaultMarginBlocks     = uint64(128)
+	defaultBatchBlocks      = uint64(30_000)
+	defaultMetricsNamespace = "chain/freezer/"
 )
 
 // Config governs the freezing pass cadence and batch sizing.
@@ -96,16 +99,22 @@ type Config struct {
 	// burst of Pebble DeleteRange tombstones; the default is calibrated
 	// so one pass fits comfortably under the Interval ceiling.
 	BatchBlocks uint64
+
+	// MetricsNamespace is the go-ethereum metrics prefix used for runner
+	// gauges. Default "chain/freezer/". Tests may override it to avoid
+	// sharing process-global metric names across parallel runners.
+	MetricsNamespace string
 }
 
 // Default returns the production defaults. Used by cmd/gtron when no
 // operator overrides have been supplied.
 func Default() Config {
 	return Config{
-		Enabled:      true,
-		Interval:     defaultInterval,
-		MarginBlocks: defaultMarginBlocks,
-		BatchBlocks:  defaultBatchBlocks,
+		Enabled:          true,
+		Interval:         defaultInterval,
+		MarginBlocks:     defaultMarginBlocks,
+		BatchBlocks:      defaultBatchBlocks,
+		MetricsNamespace: defaultMetricsNamespace,
 	}
 }
 
@@ -132,6 +141,9 @@ func (c Config) applyDefaults() Config {
 	}
 	if c.BatchBlocks == 0 {
 		c.BatchBlocks = defaultBatchBlocks
+	}
+	if c.MetricsNamespace == "" {
+		c.MetricsNamespace = defaultMetricsNamespace
 	}
 	return c
 }
@@ -200,10 +212,8 @@ type FreezerStore interface {
 	rawdb.AncientWriter
 }
 
-// Stats is a thread-safe snapshot of runner progress. Operators consume
-// it via Runner.Snapshot; a future metrics layer (Prometheus / OTel) can
-// translate it into gauges without the runner having a dep on a metrics
-// package.
+// Stats is a thread-safe snapshot of runner progress. Operators consume it via
+// Runner.Snapshot, and the runner mirrors the same values into metrics gauges.
 type Stats struct {
 	// FrozenMin is the lowest block number currently in ancient. Slice 1
 	// of the freezer spec never truncates the tail, so this is always 0
@@ -237,6 +247,74 @@ type Stats struct {
 	PebbleSizeAfter uint64
 }
 
+type runnerMetrics struct {
+	frozenMin        *metrics.Gauge
+	frozenMax        *metrics.Gauge
+	frozenHas        *metrics.Gauge
+	blocksFrozen     *metrics.Gauge
+	passesCompleted  *metrics.Gauge
+	lastPassAt       *metrics.Gauge
+	lastPassDuration *metrics.Gauge
+	pebbleSizeAfter  *metrics.Gauge
+}
+
+func newRunnerMetrics(namespace string) runnerMetrics {
+	namespace = normalizeMetricNamespace(namespace)
+	return runnerMetrics{
+		frozenMin:       metrics.GetOrRegisterGauge(namespace+"frozen/min", nil),
+		frozenMax:       metrics.GetOrRegisterGauge(namespace+"frozen/max", nil),
+		frozenHas:       metrics.GetOrRegisterGauge(namespace+"frozen/has", nil),
+		blocksFrozen:    metrics.GetOrRegisterGauge(namespace+"blocks", nil),
+		passesCompleted: metrics.GetOrRegisterGauge(namespace+"passes", nil),
+		lastPassAt:      metrics.GetOrRegisterGauge(namespace+"lastpass/time", nil),
+		lastPassDuration: metrics.GetOrRegisterGauge(
+			namespace+"lastpass/duration",
+			nil,
+		),
+		pebbleSizeAfter: metrics.GetOrRegisterGauge(namespace+"pebble/size", nil),
+	}
+}
+
+func normalizeMetricNamespace(namespace string) string {
+	if namespace == "" {
+		namespace = defaultMetricsNamespace
+	}
+	if !strings.HasSuffix(namespace, "/") {
+		namespace += "/"
+	}
+	return namespace
+}
+
+func (m runnerMetrics) update(stats Stats) {
+	m.frozenMin.Update(uint64GaugeValue(stats.FrozenMin))
+	m.frozenMax.Update(uint64GaugeValue(stats.FrozenMax))
+	m.frozenHas.Update(boolGaugeValue(stats.HasFrozen))
+	m.blocksFrozen.Update(uint64GaugeValue(stats.BlocksFrozen))
+	m.passesCompleted.Update(uint64GaugeValue(stats.PassesCompleted))
+	if stats.LastPassAt.IsZero() {
+		m.lastPassAt.Update(0)
+	} else {
+		m.lastPassAt.Update(stats.LastPassAt.Unix())
+	}
+	m.lastPassDuration.Update(int64(stats.LastPassDuration))
+	m.pebbleSizeAfter.Update(uint64GaugeValue(stats.PebbleSizeAfter))
+}
+
+func boolGaugeValue(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func uint64GaugeValue(v uint64) int64 {
+	const maxInt64GaugeValue = uint64(1<<63 - 1)
+	if v > maxInt64GaugeValue {
+		return int64(maxInt64GaugeValue)
+	}
+	return int64(v)
+}
+
 // Runner is the freezer's Lifecycle service. Construct with New, register
 // the returned value with the node, and the loop fires on its own timer
 // until Stop returns.
@@ -244,6 +322,7 @@ type Runner struct {
 	chain   ChainSource
 	freezer FreezerStore
 	cfg     Config
+	metrics runnerMetrics
 
 	quit chan struct{}
 	done chan struct{}
@@ -280,15 +359,19 @@ func New(chain ChainSource, fz FreezerStore, cfg Config) *Runner {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Runner{
+	cfg = cfg.applyDefaults()
+	r := &Runner{
 		chain:       chain,
 		freezer:     fz,
-		cfg:         cfg.applyDefaults(),
+		cfg:         cfg,
+		metrics:     newRunnerMetrics(cfg.MetricsNamespace),
 		quit:        make(chan struct{}),
 		done:        make(chan struct{}),
 		pauseCtx:    ctx,
 		pauseCancel: cancel,
 	}
+	r.updateMetrics()
+	return r
 }
 
 // Start implements node.Lifecycle. Launches the freezing goroutine. If
@@ -329,6 +412,10 @@ func (r *Runner) Stop() error {
 // Snapshot returns a thread-safe copy of the runner's current counters.
 // Safe to call from any goroutine — every field is read from an atomic.
 func (r *Runner) Snapshot() Stats {
+	return r.snapshot()
+}
+
+func (r *Runner) snapshot() Stats {
 	stats := Stats{
 		BlocksFrozen:     r.blocksFrozen.Load(),
 		PassesCompleted:  r.passesCompleted.Load(),
@@ -351,6 +438,10 @@ func (r *Runner) Snapshot() Stats {
 	return stats
 }
 
+func (r *Runner) updateMetrics() {
+	r.metrics.update(r.snapshot())
+}
+
 // OnePass runs a single freezing pass synchronously and returns the
 // number of blocks moved into ancient. Exported so tests can drive the
 // pass deterministically without spinning up the loop.
@@ -365,6 +456,7 @@ func (r *Runner) OnePass() (uint64, error) {
 		r.lastPassUnixNano.Store(start.UnixNano())
 		r.lastPassDuration.Store(int64(time.Since(start)))
 		r.passesCompleted.Add(1)
+		r.updateMetrics()
 	}()
 
 	if !r.cfg.Enabled {
