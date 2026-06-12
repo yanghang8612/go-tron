@@ -40,6 +40,17 @@ func TestNoUnexpectedProductionDirectRawFreezerReads(t *testing.T) {
 	}
 }
 
+func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
+	offenders := auditForbiddenRawDBCalls(t, snapshotRoot, map[string]struct{}{
+		"ReadTransactionInfosByBlock": {},
+	}, nil)
+	if len(offenders) > 0 {
+		t.Fatalf("snapshot builders must use ReadTransactionInfosByBlockStrict so corrupt TransactionRet rows fail cold coverage publishing:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()

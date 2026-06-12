@@ -1052,7 +1052,8 @@ Status:
   consuming mismatched hot or cold transaction-info payloads. Snapshot and
   rebuild publishers use the strict variant so malformed source rows fail the
   cold coverage build with a concrete corruption error instead of being treated
-  as an ordinary coverage miss.
+  as an ordinary coverage miss. A rawdb source audit now prevents production
+  snapshot builders from regressing to the non-strict per-block tx-info reader.
 - Cold balance-trace reads now reject mismatched cold sidecar payloads before
   APIs or rebuild paths consume them: block trace reads reject a returned
   `BlockBalanceTrace.block_identifier.number` that disagrees with the requested
