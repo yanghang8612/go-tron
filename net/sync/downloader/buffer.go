@@ -49,6 +49,50 @@ type BufferedBatch struct {
 	BufferWaits []time.Duration
 }
 
+// StagedBodyDrainLimit clamps one local staged-body drain chunk to the
+// hash-verified SyncBodiesReady frontier. The returned bool is false when the
+// ready frontier is behind the next needed block, so callers should not drain
+// from the local buffer.
+func StagedBodyDrainLimit(next uint64, max int, readyLimit uint64, hasReadyLimit bool) (int, bool) {
+	if max <= 0 {
+		return 0, false
+	}
+	if !hasReadyLimit {
+		return max, true
+	}
+	if readyLimit < next {
+		return 0, false
+	}
+	if span := readyLimit - next + 1; span < uint64(max) {
+		return int(span), true
+	}
+	return max, true
+}
+
+// PopBufferedBatch removes the contiguous run starting at next from the local
+// raw block buffer. Popping also releases the session path reservation and hash
+// de-dup entry because canonical import, or a sticky pause on failure, owns the
+// block number after this point.
+func PopBufferedBatch(buffer map[uint64]BufferedBlock, bufferedHashes map[tcommon.Hash]struct{}, path BlockPath, wait *BufferWaitTracker, next uint64, limit int, now time.Time) BufferedBatch {
+	var batch BufferedBatch
+	if limit <= 0 {
+		return batch
+	}
+	for len(batch.Buffered) < limit {
+		buffered, ok := buffer[next]
+		if !ok {
+			break
+		}
+		batch.BufferWaits = append(batch.BufferWaits, wait.End(next, now))
+		delete(buffer, next)
+		path.Release(next)
+		delete(bufferedHashes, buffered.Hash)
+		batch.Buffered = append(batch.Buffered, buffered)
+		next++
+	}
+	return batch
+}
+
 // DecodeBlocks decodes raw buffered entries into Blocks. It preserves the
 // successfully decoded prefix and reports the first undecodable entry; callers
 // can import the prefix and refetch the dropped suffix.

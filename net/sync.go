@@ -1235,39 +1235,12 @@ func (ss *SyncService) importBatchLimitLocked() int {
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
 	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
-	restoreLimit := ss.importBatchLimitLocked()
-	if hasReadyLimit {
-		if readyLimit < next {
-			return syncdl.BufferedBatch{}
-		}
-		if span := readyLimit - next + 1; span < uint64(restoreLimit) {
-			restoreLimit = int(span)
-		}
+	restoreLimit, ok := syncdl.StagedBodyDrainLimit(next, ss.importBatchLimitLocked(), readyLimit, hasReadyLimit)
+	if !ok {
+		return syncdl.BufferedBatch{}
 	}
 	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
-	var batch syncdl.BufferedBatch
-	for len(batch.Buffered) < restoreLimit {
-		if hasReadyLimit && next > readyLimit {
-			break
-		}
-		buffered, ok := ss.blockBuffer[next]
-		if !ok {
-			break
-		}
-		batch.BufferWaits = append(batch.BufferWaits, ss.bufferWait.End(next, now))
-		delete(ss.blockBuffer, next)
-		// Drop the path reservation too. Without this blockPath grows by one
-		// entry per synced block for the whole session (never pruned until
-		// Stop) — a ~1 GB leak on a from-genesis re-sync. Once a block is
-		// popped for insertion the canonical chain (or the sticky pause on
-		// failure) owns that number, so the fork-conflict guard no longer
-		// needs the reservation.
-		ss.blockPath.Release(next)
-		delete(ss.bufferedHash, buffered.Hash)
-		batch.Buffered = append(batch.Buffered, buffered)
-		next++
-	}
-	return batch
+	return syncdl.PopBufferedBatch(ss.blockBuffer, ss.bufferedHash, ss.blockPath, &ss.bufferWait, next, restoreLimit, now)
 }
 
 func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
