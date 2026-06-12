@@ -853,6 +853,9 @@ Status:
   before any API-specific reconstruction starts. Regression coverage proves the
   lock is held for successful sessions and released when the gate rejects a
   query.
+- Event-log archive reads now include backend coverage for block-hash single
+  block filters after hot transaction-info rows are removed, proving the cold
+  event-log segment path is not limited to from/to range filters.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
