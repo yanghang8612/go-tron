@@ -831,6 +831,76 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusSnapshotCoverageIssues(t *testing.T) {
+	rows := []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotEventLogBuild,
+			group:   "snapshot",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotEventLogBuild,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotSectionBloomPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotSectionBloomPrune,
+				BlockNum: rawdb.SectionBloomBlockPerSection - 1,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotBalanceTracePrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotBalanceTracePrune,
+				BlockNum: 12,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 12,
+			},
+		},
+	}
+	issues := dbStageStatusSnapshotCoverageIssues(rows, filepath.Join(t.TempDir(), "missing-snapshots"))
+	for _, want := range []string{
+		"SnapshotEventLogBuild=12 missing cold event-log coverage [1,12]",
+		"SnapshotChainLookupPrune=12 missing cold chain-index coverage [0,12]",
+		fmt.Sprintf("SnapshotSectionBloomPrune=%d missing cold section-bloom coverage [0,%d]", rawdb.SectionBloomBlockPerSection-1, rawdb.SectionBloomBlockPerSection-1),
+		"SnapshotBalanceTracePrune=12 missing cold balance-trace coverage [0,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold chain-freezer coverage [0,12]",
+		"SnapshotChainFreezerTailPrune=12 missing cold event-log coverage [1,12]",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("snapshot coverage issues missing %q in %#v", want, issues)
+		}
+	}
+}
+
 func writeDBBackfillReplaySeedSnapshot(t *testing.T, sourceDB ethdb.KeyValueStore, genesisPath string, snapshotDir string, boundary *coretypes.Block) string {
 	t.Helper()
 	genesis, err := loadGenesisFile(genesisPath)

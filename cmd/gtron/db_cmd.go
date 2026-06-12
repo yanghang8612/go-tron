@@ -275,7 +275,9 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		fmt.Println()
 	}
 	if opts.Verify {
-		if issues := dbStageStatusVerificationIssues(rows); len(issues) > 0 {
+		issues := dbStageStatusVerificationIssues(rows)
+		issues = append(issues, dbStageStatusSnapshotCoverageIssues(rows, stateSnapshotsDir(dataDir))...)
+		if len(issues) > 0 {
 			return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
 		}
 	}
@@ -353,6 +355,65 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		}
 		issues = append(issues, fmt.Sprintf("%s=%d ahead of %s=%d",
 			pair.downstream, down.progress.BlockNum, pair.upstream, up.progress.BlockNum))
+	}
+	return issues
+}
+
+func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir string) []string {
+	byStage := make(map[rawdb.StageID]dbStageStatusRow, len(rows))
+	for _, row := range rows {
+		if row.present {
+			byStage[row.stage] = row
+		}
+	}
+	needsCoverage := false
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageSnapshotEventLogBuild,
+		rawdb.StageSnapshotChainLookupPrune,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune,
+		rawdb.StageSnapshotChainFreezerTailPrune,
+	} {
+		if _, ok := byStage[stage]; ok {
+			needsCoverage = true
+			break
+		}
+	}
+	if !needsCoverage {
+		return nil
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		return []string{fmt.Sprintf("snapshot coverage unreadable: %v", err)}
+	}
+	var issues []string
+	check := func(stage rawdb.StageID, block uint64, label string, fromBlock uint64, covered func(uint64, uint64) (bool, error)) {
+		ok, err := covered(fromBlock, block)
+		if err != nil {
+			issues = append(issues, fmt.Sprintf("%s=%d cold %s coverage error: %v", stage, block, label, err))
+			return
+		}
+		if !ok {
+			issues = append(issues, fmt.Sprintf("%s=%d missing cold %s coverage [%d,%d]", stage, block, label, fromBlock, block))
+		}
+	}
+	if row, ok := byStage[rawdb.StageSnapshotEventLogBuild]; ok && row.progress.BlockNum > 0 {
+		check(row.stage, row.progress.BlockNum, "event-log", 1, mgr.EventLogRangeCovered)
+	}
+	if row, ok := byStage[rawdb.StageSnapshotChainLookupPrune]; ok {
+		check(row.stage, row.progress.BlockNum, "chain-index", 0, mgr.ChainIndexRangeCovered)
+	}
+	if row, ok := byStage[rawdb.StageSnapshotSectionBloomPrune]; ok {
+		check(row.stage, row.progress.BlockNum, "section-bloom", 0, mgr.SectionBloomRangeCovered)
+	}
+	if row, ok := byStage[rawdb.StageSnapshotBalanceTracePrune]; ok {
+		check(row.stage, row.progress.BlockNum, "balance-trace", 0, mgr.BalanceTraceRangeCovered)
+	}
+	if row, ok := byStage[rawdb.StageSnapshotChainFreezerTailPrune]; ok {
+		check(row.stage, row.progress.BlockNum, "chain-freezer", 0, mgr.ChainFreezerRangeCovered)
+		if row.progress.BlockNum > 0 {
+			check(row.stage, row.progress.BlockNum, "event-log", 1, mgr.EventLogRangeCovered)
+		}
 	}
 	return issues
 }

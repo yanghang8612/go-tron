@@ -334,6 +334,12 @@ Status:
   `Finish` (including balance-trace and section-bloom hot-row prune stages),
   and cold-prune coverage violations such as
   `SnapshotChainLookupPrune` ahead of or present without `ChainFreezer`.
+  The verification gate now also opens the local snapshot manifest and checks
+  actual readable cold coverage for `SnapshotEventLogBuild`,
+  `SnapshotChainLookupPrune`, `SnapshotSectionBloomPrune`,
+  `SnapshotBalanceTracePrune`, and `SnapshotChainFreezerTailPrune`, catching
+  missing/gapped/corrupt sidecars even when the stage rows themselves look
+  ordered.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.
