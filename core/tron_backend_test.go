@@ -365,6 +365,25 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetTransactionInfoByBlockNumRejectsMismatchedInfo(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	block, info := testBackendLogBlock(1, nil)
+	info.Id = bytes.Repeat([]byte{0xee}, tcommon.HashLength)
+	if err := rawdb.WriteBlock(bc.db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, block.Number(), []*corepb.TransactionInfo{info}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	bc.currentBlock.Store(block)
+
+	backend := &TronBackend{chain: bc}
+	if got, err := backend.GetTransactionInfoByBlockNum(block.Number()); err == nil || got != nil {
+		t.Fatalf("GetTransactionInfoByBlockNum mismatched info = %+v/%v, want nil/error", got, err)
+	}
+}
+
 func appendBackendColdLookupAncients(t *testing.T, fz *rawdbfreezer.Freezer, db ethdb.KeyValueReader, blocks ...*types.Block) error {
 	t.Helper()
 	if _, err := fz.ModifyAncients(func(op rawdb.AncientWriteOp) error {

@@ -279,7 +279,16 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 	if head := b.chain.CurrentBlock(); head != nil && blockNum > head.Number() {
 		return nil, nil
 	}
+	block := b.chain.GetBlockByNumber(blockNum)
+	if block == nil {
+		return nil, nil
+	}
 	infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, blockNum)
+	if len(infos) != 0 {
+		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "transaction info block query"); err != nil {
+			return nil, err
+		}
+	}
 	return infos, nil
 }
 

@@ -49,6 +49,18 @@ func TestReadTransactionInfo_NotFound(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoRejectsMismatchedHotRow(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x11}, common.HashLength)
+	otherID := bytes.Repeat([]byte{0x12}, common.HashLength)
+	if err := WriteTransactionInfo(db, txID, &corepb.TransactionInfo{Id: otherID, Fee: 99}); err != nil {
+		t.Fatalf("WriteTransactionInfo: %v", err)
+	}
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo mismatched hot row = %+v, want nil", got)
+	}
+}
+
 func TestReadTransactionInfoUsesColdTxPositionWhenInfoIDMissing(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x34}, common.HashLength)

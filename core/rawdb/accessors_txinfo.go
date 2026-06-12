@@ -36,6 +36,9 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 		if err := proto.Unmarshal(data, info); err != nil {
 			return nil
 		}
+		if !transactionInfoIDMatches(info, txID) {
+			return nil
+		}
 		return info
 	}
 	blockNum := ReadTransactionIndex(db, txID)
@@ -60,6 +63,16 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 		}
 	}
 	return nil
+}
+
+func transactionInfoIDMatches(info *corepb.TransactionInfo, txID []byte) bool {
+	if info == nil {
+		return false
+	}
+	if len(info.Id) == 0 {
+		return true
+	}
+	return len(info.Id) == common.HashLength && bytes.Equal(info.Id, txID)
 }
 
 func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLookup, bool) {

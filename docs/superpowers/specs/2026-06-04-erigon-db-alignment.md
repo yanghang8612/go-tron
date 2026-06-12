@@ -997,6 +997,11 @@ Status:
   hot block bodies, block-hash lookups, tx lookups, and per-tx info rows are
   absent. This pins the archive transaction lookup path to cold chain-freezer
   rows plus the `chain-index` sidecar, matching the existing receipt coverage.
+- Transaction-info read paths now reject mismatched payloads before exposing
+  them to APIs: hot `ti-<txid>` rows must either carry no embedded id or match
+  the lookup key, and backend block-number receipt queries validate any
+  retained `TransactionRet` list against the canonical block transaction count,
+  block number, and tx hash order.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
