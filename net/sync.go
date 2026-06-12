@@ -1286,28 +1286,36 @@ func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if !row.HasBlockHash {
+	var (
+		staged   rawdb.SyncStagedBlockRow
+		stagedOK bool
+		readErr  error
+	)
+	if row.HasBlockHash && row.BlockNum >= next {
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	}
+	limit := syncdl.ValidateStagedBodyReadyDrainLimit(next, row, true, staged, stagedOK, readErr)
+	switch limit.Status {
+	case syncdl.StagedBodyReadyLimitValid:
+		return limit.Limit, true
+	case syncdl.StagedBodyReadyLimitUnbound:
 		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", row.BlockNum)
 		return 0, false
-	}
-	if row.BlockNum < next {
+	case syncdl.StagedBodyReadyLimitStale:
 		ss.writeSyncBodiesReadyProgress()
 		return 0, false
-	}
-	staged, ok, err := rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
-	if err != nil {
-		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", row.BlockNum, "hash", row.BlockHash, "err", err)
+	case syncdl.StagedBodyReadyLimitReadError:
+		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", row.BlockNum, "hash", row.BlockHash, "err", limit.ReadError)
 		return 0, false
-	}
-	if !ok {
+	case syncdl.StagedBodyReadyLimitStagedMissing:
 		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", row.BlockNum, "hash", row.BlockHash)
 		return 0, false
-	}
-	if staged.Hash != row.BlockHash {
-		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", row.BlockNum, "hash", row.BlockHash, "stagedHash", staged.Hash)
+	case syncdl.StagedBodyReadyLimitHashMismatch:
+		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", row.BlockNum, "hash", row.BlockHash, "stagedHash", limit.StagedHash)
+		return 0, false
+	default:
 		return 0, false
 	}
-	return row.BlockNum, true
 }
 
 // decodeBatchBlocks decodes the popped raw blocks into batch.Blocks. It runs

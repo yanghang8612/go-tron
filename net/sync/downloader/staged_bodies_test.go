@@ -66,6 +66,46 @@ func TestFindStagedBodyReadyFrontierWithoutReader(t *testing.T) {
 	}
 }
 
+func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
+	readErr := errors.New("read staged")
+	row := rawdb.StageProgress{
+		Stage:        rawdb.StageSyncBodiesReady,
+		BlockNum:     7,
+		BlockHash:    tcommon.Hash{0x07},
+		HasBlockHash: true,
+	}
+	staged := rawdb.SyncStagedBlockRow{Number: 7, Hash: row.BlockHash}
+	tests := []struct {
+		name       string
+		next       uint64
+		row        rawdb.StageProgress
+		haveRow    bool
+		staged     rawdb.SyncStagedBlockRow
+		haveStaged bool
+		readErr    error
+		status     StagedBodyReadyLimitStatus
+		valid      bool
+		limit      uint64
+	}{
+		{name: "missing", next: 7, status: StagedBodyReadyLimitMissing},
+		{name: "unbound", next: 7, row: rawdb.StageProgress{BlockNum: 7}, haveRow: true, status: StagedBodyReadyLimitUnbound},
+		{name: "stale", next: 8, row: row, haveRow: true, status: StagedBodyReadyLimitStale},
+		{name: "read error", next: 7, row: row, haveRow: true, readErr: readErr, status: StagedBodyReadyLimitReadError},
+		{name: "staged missing", next: 7, row: row, haveRow: true, status: StagedBodyReadyLimitStagedMissing},
+		{name: "hash mismatch", next: 7, row: row, haveRow: true, staged: rawdb.SyncStagedBlockRow{Number: 7, Hash: tcommon.Hash{0xff}}, haveStaged: true, status: StagedBodyReadyLimitHashMismatch},
+		{name: "valid", next: 7, row: row, haveRow: true, staged: staged, haveStaged: true, status: StagedBodyReadyLimitValid, valid: true, limit: 7},
+	}
+	for _, tt := range tests {
+		got := ValidateStagedBodyReadyDrainLimit(tt.next, tt.row, tt.haveRow, tt.staged, tt.haveStaged, tt.readErr)
+		if got.Status != tt.status || got.Valid() != tt.valid || got.Limit != tt.limit {
+			t.Fatalf("%s: result = %+v, want status %v valid %v limit %d", tt.name, got, tt.status, tt.valid, tt.limit)
+		}
+		if tt.readErr != nil && !errors.Is(got.ReadError, tt.readErr) {
+			t.Fatalf("%s: ReadError = %v, want %v", tt.name, got.ReadError, tt.readErr)
+		}
+	}
+}
+
 func stagedBodyMapReader(rows map[uint64]rawdb.SyncStagedBlockRow) StagedBodyReader {
 	return func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
 		row, ok := rows[number]
