@@ -109,6 +109,60 @@ func TestBalanceTraceSegmentBuildVerifyLookup(t *testing.T) {
 	}
 }
 
+func TestBuildBalanceTraceSegmentWithOptionsUsesETLScratch(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	ownerA := balanceTraceTestAddress(0xa2)
+	ownerB := balanceTraceTestAddress(0xb3)
+
+	if err := rawdb.WriteAccountTrace(source, ownerB.Bytes(), 3, 300); err != nil {
+		t.Fatalf("WriteAccountTrace ownerB 3: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(source, ownerA.Bytes(), 8, 800); err != nil {
+		t.Fatalf("WriteAccountTrace ownerA 8: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(source, ownerA.Bytes(), 5, 500); err != nil {
+		t.Fatalf("WriteAccountTrace ownerA 5: %v", err)
+	}
+	if err := rawdb.WriteAccountTrace(source, ownerB.Bytes(), 7, 700); err != nil {
+		t.Fatalf("WriteAccountTrace ownerB 7: %v", err)
+	}
+
+	etlTemp := filepath.Join(root, "etl-scratch")
+	ref, err := BuildBalanceTraceSegmentFromDBWithOptions(source, snapshotDir, "trace/balance-trace-1-10.seg", 1, 10, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildBalanceTraceSegmentFromDBWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
+	}
+	if err := CheckBalanceTraceSegment(snapshotDir, ref); err != nil {
+		t.Fatalf("CheckBalanceTraceSegment: %v", err)
+	}
+
+	seg, err := OpenBalanceTraceSegment(snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("OpenBalanceTraceSegment: %v", err)
+	}
+	defer seg.Close()
+	block, balance, ok, err := seg.AccountTraceAtOrBefore(ownerA.Bytes(), 6)
+	if err != nil || !ok || block != 5 || balance != 500 {
+		t.Fatalf("AccountTraceAtOrBefore ownerA 6 = %d/%d/%v/%v, want 5/500/true/nil", block, balance, ok, err)
+	}
+	block, balance, ok, err = seg.AccountTraceAtOrBefore(ownerA.Bytes(), 9)
+	if err != nil || !ok || block != 8 || balance != 800 {
+		t.Fatalf("AccountTraceAtOrBefore ownerA 9 = %d/%d/%v/%v, want 8/800/true/nil", block, balance, ok, err)
+	}
+	block, balance, ok, err = seg.AccountTraceAtOrBefore(ownerB.Bytes(), 6)
+	if err != nil || !ok || block != 3 || balance != 300 {
+		t.Fatalf("AccountTraceAtOrBefore ownerB 6 = %d/%d/%v/%v, want 3/300/true/nil", block, balance, ok, err)
+	}
+}
+
 func TestBalanceTraceManagerSearchesOlderSegments(t *testing.T) {
 	root := t.TempDir()
 	snapshotDir := filepath.Join(root, "snapshot")

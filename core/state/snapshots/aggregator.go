@@ -188,7 +188,11 @@ func (a *Aggregator) BuildChainFreezerWithOptions(reader rawdb.AncientReader, fr
 }
 
 func (a *Aggregator) BuildBalanceTraces(db AggregatorDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
-	return a.BuildDerivedIndexes(db, fromBlock, toBlock, AggregatorBuildDerivedOptions{BalanceTraces: true})
+	return a.BuildBalanceTracesWithOptions(db, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func (a *Aggregator) BuildBalanceTracesWithOptions(db AggregatorDB, fromBlock, toBlock uint64, opts RestoreETLOptions) (*AggregatorBuildResult, error) {
+	return a.BuildDerivedIndexes(db, fromBlock, toBlock, AggregatorBuildDerivedOptions{BalanceTraces: true, ETL: opts})
 }
 
 func (a *Aggregator) BuildSectionBlooms(db AggregatorDB, fromBlock, toBlock uint64) (*AggregatorBuildResult, error) {
@@ -263,7 +267,7 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 
 	refs := make([]SegmentRef, 0, 3)
 	if opts.BalanceTraces {
-		ref, err := BuildBalanceTraceSegmentFromDB(db, a.dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		ref, err := BuildBalanceTraceSegmentFromDBWithOptions(db, a.dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts.ETL)
 		if err != nil {
 			return nil, err
 		}
