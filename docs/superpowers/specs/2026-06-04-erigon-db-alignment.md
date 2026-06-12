@@ -1001,6 +1001,12 @@ Status:
   key instead of depending on scan-order map appends. Aggregator event-log
   builds can pass the same ETL temp, buffer, and batch knobs used by other
   snapshot restore/build paths.
+- Section-bloom segment builds now use the shared sorted ETL collector too:
+  hot `sb-` rows are collected by `(section, bitIndex)` into scratch space and
+  streamed into the immutable segment in lookup order. The derived-index
+  aggregator passes its ETL options into section-bloom builds, so large bloom
+  snapshot jobs no longer need to materialize every bloom row in a Go slice
+  before writing.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or

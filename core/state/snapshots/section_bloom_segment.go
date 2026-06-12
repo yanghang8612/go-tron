@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	sectionBloomHeaderSize          = 8 + 8 + 8 + 8 + 8 + 8
 	sectionBloomIndexEntrySize      = 8 + 8 + 8 + 8
 	sectionBloomMaxDecodedBytesSize = rawdb.SectionBloomByteSize
+	sectionBloomETLKeySize          = 8 + 8
 )
 
 var sectionBloomMagic = [8]byte{'g', 't', 's', 'b', 'l', 'm', '1', '\n'}
@@ -44,17 +46,15 @@ type sectionBloomIndexEntry struct {
 	length   uint64
 }
 
-type sectionBloomRow struct {
-	section  uint64
-	bitIndex uint64
-	value    []byte
-}
-
 func SectionBloomSegmentPath(fromBlock, toBlock uint64) string {
 	return fmt.Sprintf("log/section-bloom-%d-%d.seg", fromBlock, toBlock)
 }
 
 func BuildSectionBloomSegmentFromDB(db ethdb.Iteratee, dir, relPath string, fromBlock, toBlock uint64) (SegmentRef, error) {
+	return BuildSectionBloomSegmentFromDBWithOptions(db, dir, relPath, fromBlock, toBlock, RestoreETLOptions{})
+}
+
+func BuildSectionBloomSegmentFromDBWithOptions(db ethdb.Iteratee, dir, relPath string, fromBlock, toBlock uint64, opts RestoreETLOptions) (SegmentRef, error) {
 	if db == nil {
 		return SegmentRef{}, errors.New("snapshots: nil database")
 	}
@@ -77,11 +77,16 @@ func BuildSectionBloomSegmentFromDB(db ethdb.Iteratee, dir, relPath string, from
 	if err := validateSegmentRef(ref); err != nil {
 		return SegmentRef{}, err
 	}
-	rows, err := collectSectionBloomRows(db, fromBlock, toBlock)
+	collector, err := etl.NewCollector(opts.collectorOptions())
 	if err != nil {
 		return SegmentRef{}, err
 	}
-	return writeSectionBloomSegmentRows(dir, ref, rows)
+	defer collector.Close()
+	rowCount, err := collectSectionBloomRowsToETL(db, fromBlock, toBlock, collector)
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	return writeSectionBloomSegmentFromETL(dir, ref, collector, rowCount)
 }
 
 func CheckSectionBloomSegment(dir string, ref SegmentRef) error {
@@ -251,60 +256,87 @@ func sectionBloomRefs(manifest *Manifest) []SegmentRef {
 	return refs
 }
 
-func collectSectionBloomRows(db ethdb.Iteratee, fromBlock, toBlock uint64) ([]sectionBloomRow, error) {
+func collectSectionBloomRowsToETL(db ethdb.Iteratee, fromBlock, toBlock uint64, collector *etl.Collector) (uint64, error) {
 	fromSection := fromBlock / rawdb.SectionBloomBlockPerSection
 	toSection := toBlock / rawdb.SectionBloomBlockPerSection
-	var rows []sectionBloomRow
+	var rowCount uint64
 	if err := rawdb.IterateSectionBloomRows(db, func(section, bitIndex uint64, value []byte) (bool, error) {
 		if section < fromSection || section > toSection {
 			return true, nil
 		}
-		rows = append(rows, sectionBloomRow{
-			section:  section,
-			bitIndex: bitIndex,
-			value:    append([]byte(nil), value...),
-		})
+		if err := collector.Put(sectionBloomETLKey(section, bitIndex), value); err != nil {
+			return false, err
+		}
+		rowCount++
 		return true, nil
 	}); err != nil {
-		return nil, err
+		return 0, err
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].section != rows[j].section {
-			return rows[i].section < rows[j].section
-		}
-		return rows[i].bitIndex < rows[j].bitIndex
-	})
-	for i := 1; i < len(rows); i++ {
-		if rows[i-1].section == rows[i].section && rows[i-1].bitIndex == rows[i].bitIndex {
-			return nil, fmt.Errorf("snapshots: duplicate section bloom row %d/%d", rows[i].section, rows[i].bitIndex)
-		}
-	}
-	return rows, nil
+	return rowCount, nil
 }
 
-func writeSectionBloomSegmentRows(dir string, ref SegmentRef, rows []sectionBloomRow) (SegmentRef, error) {
-	rowCount := uint64(len(rows))
-	indexBytes, overflow := checkedMul(rowCount, sectionBloomIndexEntrySize)
-	if overflow {
-		return SegmentRef{}, fmt.Errorf("snapshots: section bloom index entries %d overflow size", rowCount)
-	}
-	payloadOffset, overflow := checkedAdd(sectionBloomHeaderSize, indexBytes)
-	if overflow {
-		return SegmentRef{}, fmt.Errorf("snapshots: section bloom payload offset overflow")
-	}
-	if payloadOffset > math.MaxInt64 {
-		return SegmentRef{}, fmt.Errorf("snapshots: section bloom payload offset %d overflows int64", payloadOffset)
-	}
-	abs := filepath.Join(dir, ref.Path)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return SegmentRef{}, err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+func writeSectionBloomSegmentFromETL(dir string, ref SegmentRef, collector *etl.Collector, rowCount uint64) (SegmentRef, error) {
+	writer, err := newSectionBloomSegmentETLWriter(dir, ref, rowCount)
 	if err != nil {
 		return SegmentRef{}, err
 	}
+	finalized := false
+	defer func() {
+		if !finalized {
+			writer.abort()
+		}
+	}()
+	if _, err := collector.Load(writer); err != nil {
+		return SegmentRef{}, err
+	}
+	out, err := writer.finalize()
+	if err != nil {
+		return SegmentRef{}, err
+	}
+	finalized = true
+	return out, nil
+}
+
+type sectionBloomSegmentETLWriter struct {
+	dir           string
+	ref           SegmentRef
+	tmp           *os.File
+	tmpName       string
+	header        sectionBloomHeader
+	rowCount      uint64
+	rowIndex      uint64
+	payloadOffset uint64
+	offset        uint64
+}
+
+func newSectionBloomSegmentETLWriter(dir string, ref SegmentRef, rowCount uint64) (*sectionBloomSegmentETLWriter, error) {
+	indexBytes, overflow := checkedMul(rowCount, sectionBloomIndexEntrySize)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: section bloom index entries %d overflow size", rowCount)
+	}
+	payloadOffset, overflow := checkedAdd(sectionBloomHeaderSize, indexBytes)
+	if overflow {
+		return nil, fmt.Errorf("snapshots: section bloom payload offset overflow")
+	}
+	if payloadOffset > math.MaxInt64 {
+		return nil, fmt.Errorf("snapshots: section bloom payload offset %d overflows int64", payloadOffset)
+	}
+	abs := filepath.Join(dir, ref.Path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+	if err != nil {
+		return nil, err
+	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
 
 	header := sectionBloomHeader{
 		fromBlock:     ref.FromTxNum,
@@ -314,56 +346,115 @@ func writeSectionBloomSegmentRows(dir string, ref SegmentRef, rows []sectionBloo
 		payloadOffset: payloadOffset,
 	}
 	if err := writeSectionBloomHeader(tmp, header); err != nil {
-		_ = tmp.Close()
-		return SegmentRef{}, err
+		return nil, err
 	}
 	if _, err := tmp.Seek(int64(payloadOffset), io.SeekStart); err != nil {
-		_ = tmp.Close()
+		return nil, err
+	}
+	ok = true
+	return &sectionBloomSegmentETLWriter{
+		dir:           dir,
+		ref:           ref,
+		tmp:           tmp,
+		tmpName:       tmpName,
+		header:        header,
+		rowCount:      rowCount,
+		payloadOffset: payloadOffset,
+		offset:        payloadOffset,
+	}, nil
+}
+
+func (w *sectionBloomSegmentETLWriter) Put(key, value []byte) error {
+	if w == nil || w.tmp == nil {
+		return errors.New("snapshots: nil section bloom segment ETL writer")
+	}
+	if w.rowIndex >= w.rowCount {
+		return fmt.Errorf("snapshots: section bloom ETL row %d exceeds expected row count %d", w.rowIndex, w.rowCount)
+	}
+	section, bitIndex, err := parseSectionBloomETLKey(key)
+	if err != nil {
+		return err
+	}
+	if _, err := w.tmp.Write(value); err != nil {
+		return err
+	}
+	entry := sectionBloomIndexEntry{
+		section:  section,
+		bitIndex: bitIndex,
+		offset:   w.offset,
+		length:   uint64(len(value)),
+	}
+	if err := writeSectionBloomIndexEntryAt(w.tmp, w.header.indexOffset+w.rowIndex*sectionBloomIndexEntrySize, entry); err != nil {
+		return err
+	}
+	w.offset += uint64(len(value))
+	w.rowIndex++
+	return nil
+}
+
+func (w *sectionBloomSegmentETLWriter) Delete(key []byte) error {
+	return errors.New("snapshots: section bloom segment ETL writer does not support deletes")
+}
+
+func (w *sectionBloomSegmentETLWriter) finalize() (SegmentRef, error) {
+	if w == nil || w.tmp == nil {
+		return SegmentRef{}, errors.New("snapshots: nil section bloom segment ETL writer")
+	}
+	if w.rowIndex != w.rowCount {
+		return SegmentRef{}, fmt.Errorf("snapshots: section bloom ETL wrote %d rows, want %d", w.rowIndex, w.rowCount)
+	}
+	if err := w.tmp.Sync(); err != nil {
 		return SegmentRef{}, err
 	}
-	for i, row := range rows {
-		offset, err := tmp.Seek(0, io.SeekCurrent)
-		if err != nil {
-			_ = tmp.Close()
-			return SegmentRef{}, err
-		}
-		if _, err := tmp.Write(row.value); err != nil {
-			_ = tmp.Close()
-			return SegmentRef{}, err
-		}
-		entry := sectionBloomIndexEntry{
-			section:  row.section,
-			bitIndex: row.bitIndex,
-			offset:   uint64(offset),
-			length:   uint64(len(row.value)),
-		}
-		if err := writeSectionBloomIndexEntryAt(tmp, header.indexOffset+uint64(i)*sectionBloomIndexEntrySize, entry); err != nil {
-			_ = tmp.Close()
-			return SegmentRef{}, err
-		}
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
+	if err := w.tmp.Close(); err != nil {
 		return SegmentRef{}, err
 	}
-	if err := tmp.Close(); err != nil {
-		return SegmentRef{}, err
-	}
-	size, checksum, err := stateDomainChangeBinaryFileMetadata(tmpName)
+	w.tmp = nil
+	size, checksum, err := stateDomainChangeBinaryFileMetadata(w.tmpName)
 	if err != nil {
 		return SegmentRef{}, err
 	}
+	ref := w.ref
 	ref.Size = size
 	ref.Checksum = checksum
 	ref.Path = contentAddressedSnapshotPath(ref.Path, ref.Checksum)
-	finalAbs := filepath.Join(dir, ref.Path)
+	finalAbs := filepath.Join(w.dir, ref.Path)
 	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
 		return SegmentRef{}, err
 	}
-	if err := os.Rename(tmpName, finalAbs); err != nil {
+	if err := os.Rename(w.tmpName, finalAbs); err != nil {
 		return SegmentRef{}, err
 	}
+	w.tmpName = ""
 	return ref, nil
+}
+
+func (w *sectionBloomSegmentETLWriter) abort() {
+	if w == nil {
+		return
+	}
+	if w.tmp != nil {
+		_ = w.tmp.Close()
+		w.tmp = nil
+	}
+	if w.tmpName != "" {
+		_ = os.Remove(w.tmpName)
+		w.tmpName = ""
+	}
+}
+
+func sectionBloomETLKey(section, bitIndex uint64) []byte {
+	key := make([]byte, sectionBloomETLKeySize)
+	binary.BigEndian.PutUint64(key[0:8], section)
+	binary.BigEndian.PutUint64(key[8:16], bitIndex)
+	return key
+}
+
+func parseSectionBloomETLKey(key []byte) (uint64, uint64, error) {
+	if len(key) != sectionBloomETLKeySize {
+		return 0, 0, fmt.Errorf("snapshots: section bloom ETL key length %d, want %d", len(key), sectionBloomETLKeySize)
+	}
+	return binary.BigEndian.Uint64(key[0:8]), binary.BigEndian.Uint64(key[8:16]), nil
 }
 
 func validateSectionBloomRef(ref SegmentRef) error {

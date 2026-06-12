@@ -270,7 +270,7 @@ func (a *Aggregator) BuildDerivedIndexes(db AggregatorDB, fromBlock, toBlock uin
 		refs = append(refs, ref)
 	}
 	if opts.SectionBlooms {
-		ref, err := BuildSectionBloomSegmentFromDB(db, a.dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		ref, err := BuildSectionBloomSegmentFromDBWithOptions(db, a.dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock, opts.ETL)
 		if err != nil {
 			return nil, err
 		}

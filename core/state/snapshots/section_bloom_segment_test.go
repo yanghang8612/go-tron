@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -73,6 +74,44 @@ func TestSectionBloomSegmentBuildVerifyLookup(t *testing.T) {
 	bitset, ok, err := rawdb.ReadSectionBloomBitSet(coldOnly, 1, 99)
 	if err != nil || !ok || !rawdb.SectionBloomBitSetHas(bitset, 3) {
 		t.Fatalf("rawdb cold ReadSectionBloomBitSet = %x/%v/%v, want bit 3", bitset, ok, err)
+	}
+}
+
+func TestBuildSectionBloomSegmentWithOptionsUsesETLScratch(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	rowA := sectionBloomTestEncodedBit(t, 7)
+	rowB := sectionBloomTestEncodedBit(t, 8)
+	if err := rawdb.WriteSectionBloom(source, 0, 41, rowA); err != nil {
+		t.Fatalf("WriteSectionBloom 0/41: %v", err)
+	}
+	if err := rawdb.WriteSectionBloom(source, 0, 42, rowB); err != nil {
+		t.Fatalf("WriteSectionBloom 0/42: %v", err)
+	}
+
+	etlTemp := filepath.Join(root, "etl-scratch")
+	ref, err := BuildSectionBloomSegmentFromDBWithOptions(source, snapshotDir, "log/section-bloom-0-0.seg", 0, rawdb.SectionBloomBlockPerSection-1, RestoreETLOptions{
+		TempDir:     etlTemp,
+		BufferLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildSectionBloomSegmentFromDBWithOptions: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
+	}
+	if err := CheckSectionBloomSegment(snapshotDir, ref); err != nil {
+		t.Fatalf("CheckSectionBloomSegment: %v", err)
+	}
+	seg, err := OpenSectionBloomSegment(snapshotDir, ref)
+	if err != nil {
+		t.Fatalf("OpenSectionBloomSegment: %v", err)
+	}
+	defer seg.Close()
+	raw, ok, err := seg.SectionBloom(0, 42)
+	if err != nil || !ok || !bytes.Equal(raw, rowB) {
+		t.Fatalf("SectionBloom 0/42 = %x/%v/%v, want rowB", raw, ok, err)
 	}
 }
 
