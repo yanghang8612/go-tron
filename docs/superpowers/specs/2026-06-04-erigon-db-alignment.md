@@ -311,7 +311,9 @@ Status:
   persisted downloader state hash-bound and contiguous after restart without
   rejecting out-of-order bodies in the still-running sync session. A
   `SyncBodies` watermark whose first expected body is missing is dropped rather
-  than left pointing at an unusable staged range.
+  than left pointing at an unusable staged range. The restart-time contiguous
+  restore scanner now lives in `net/sync/downloader` and returns an explicit
+  prune-tail decision for `SyncService` to apply to the persistent stage rows.
 - The downloader's wire batch and local import batch are now separate knobs:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per

@@ -453,84 +453,15 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 	if db == nil {
 		return
 	}
-	expected := start
-	restored := 0
-	var (
-		lastRestoredNum  uint64
-		lastRestoredHash tcommon.Hash
-		haveLastRestored bool
-		prunedTail       bool
-	)
-	pruneTail := func(from uint64) {
-		if !pruneStaleTail || prunedTail {
-			return
-		}
-		ss.deleteStaleSyncBodiesFrom(from, lastRestoredNum, lastRestoredHash, haveLastRestored)
-		prunedTail = true
-	}
-	consumeBuffered := func() bool {
-		for restored < limit {
-			buffered, ok := ss.blockBuffer[expected]
-			if !ok {
-				return true
-			}
-			if buffered.Num > ss.targetHeadNum {
-				ss.targetHeadNum = buffered.Num
-			}
-			lastRestoredNum = buffered.Num
-			lastRestoredHash = buffered.Hash
-			haveLastRestored = true
-			expected++
-			restored++
-		}
-		return false
-	}
-	if !consumeBuffered() {
-		return
-	}
-	err := rawdb.IterateSyncStagedBlocksFrom(db, start, func(row rawdb.SyncStagedBlockRow) (bool, error) {
-		for row.Number > expected {
-			if !consumeBuffered() {
-				return false, nil
-			}
-			if row.Number > expected {
-				pruneTail(expected)
-				return false, nil
-			}
-		}
-		if row.Number < expected {
-			return true, nil
-		}
-		bid := types.BlockID{Hash: row.Hash, Num: row.Number}
-		if !ss.reserveBlockPathLocked(bid) {
-			pruneTail(row.Number)
-			return false, nil
-		}
-		ss.blockBuffer[row.Number] = syncdl.BufferedBlock{
-			Raw:  row.Raw,
-			Hash: row.Hash,
-			Num:  row.Number,
-		}
-		ss.bufferedHash[bid.Hash] = struct{}{}
-		if row.Number > ss.targetHeadNum {
-			ss.targetHeadNum = row.Number
-		}
-		lastRestoredNum = row.Number
-		lastRestoredHash = row.Hash
-		haveLastRestored = true
-		expected++
-		restored++
-		return restored < limit, nil
+	result := syncdl.RestoreStagedBodies(start, limit, ss.targetHeadNum, ss.blockBuffer, ss.bufferedHash, &ss.blockPath, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
+		return rawdb.IterateSyncStagedBlocksFrom(db, start, fn)
 	})
-	if err != nil {
-		syncLog.Warn("Read sync staged block range failed", "from", expected, "err", err)
-		pruneTail(expected)
-		return
+	ss.targetHeadNum = result.TargetHead
+	if result.ReadError != nil {
+		syncLog.Warn("Read sync staged block range failed", "from", result.NextExpected, "err", result.ReadError)
 	}
-	if restored < limit {
-		if consumeBuffered() {
-			pruneTail(expected)
-		}
+	if pruneStaleTail && result.NeedPruneTail {
+		ss.deleteStaleSyncBodiesFrom(result.PruneFrom, result.LastRestoredNum, result.LastRestoredHash, result.HaveLastRestored)
 	}
 }
 
