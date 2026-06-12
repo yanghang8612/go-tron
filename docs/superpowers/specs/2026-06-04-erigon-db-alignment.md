@@ -330,7 +330,8 @@ Status:
   stage rows while leaving downloader body stages as diagnostics. It also
   rejects canonical and sync-stage order violations, e.g. `Execution` ahead of
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
-  of `SyncBodies`.
+  of `SyncBodies`, and cold-prune coverage violations such as
+  `SnapshotChainLookupPrune` ahead of `ChainFreezer`.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.

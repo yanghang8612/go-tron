@@ -326,6 +326,8 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		{rawdb.StageSyncExecution, rawdb.StageSyncImport},
 		{rawdb.StageSyncCommitment, rawdb.StageSyncExecution},
 		{rawdb.StageSyncFinish, rawdb.StageSyncCommitment},
+		{rawdb.StageSnapshotChainLookupPrune, rawdb.StageChainFreezer},
+		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotChainLookupPrune},
 	} {
 		down, downOK := byStage[pair.downstream]
 		up, upOK := byStage[pair.upstream]

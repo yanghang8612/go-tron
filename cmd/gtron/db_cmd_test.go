@@ -621,6 +621,33 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 				BlockNum: 4,
 			},
 		},
+		{
+			stage:   rawdb.StageChainFreezer,
+			group:   "freezer",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageChainFreezer,
+				BlockNum: 20,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainLookupPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainLookupPrune,
+				BlockNum: 21,
+			},
+		},
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 22,
+			},
+		},
 	}
 
 	issues := dbStageStatusPipelineOrderIssues(rows)
@@ -628,6 +655,8 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		"Execution=6 ahead of Bodies=5",
 		"SyncBodiesReady=8 ahead of SyncBodies=7",
 		"SyncExecution=4 ahead of SyncImport=3",
+		"SnapshotChainLookupPrune=21 ahead of ChainFreezer=20",
+		"SnapshotChainFreezerTailPrune=22 ahead of SnapshotChainLookupPrune=21",
 	} {
 		found := false
 		for _, issue := range issues {
