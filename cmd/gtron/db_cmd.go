@@ -335,6 +335,7 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		{rawdb.StageSyncFinish, rawdb.StageSyncCommitment},
 		{rawdb.StageSnapshotChainLookupPrune, rawdb.StageChainFreezer},
 		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotChainLookupPrune},
+		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotEventLogBuild},
 	} {
 		down, downOK := byStage[pair.downstream]
 		up, upOK := byStage[pair.upstream]
@@ -369,7 +370,7 @@ func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) b
 	case rawdb.StageSnapshotChainLookupPrune:
 		return upstream == rawdb.StageChainFreezer
 	case rawdb.StageSnapshotChainFreezerTailPrune:
-		return upstream == rawdb.StageSnapshotChainLookupPrune
+		return upstream == rawdb.StageSnapshotChainLookupPrune || upstream == rawdb.StageSnapshotEventLogBuild
 	default:
 		return false
 	}

@@ -100,9 +100,9 @@ under test, which isolates mode impact on sync/import and local storage.
   chain data.
 - `blocks`: should preserve complete local chain-freezer history while allowing
   state/history and hot lookup pruning once cold coverage exists.
-- `minimal`: should be evaluated with `--signed-cold-prune` after verified cold
-  coverage exists; the drill reports lookup-prune coverage and the restart-time
-  tail-prune boundary.
+- `minimal`: should be evaluated with `--signed-cold-prune` after verified
+  cold chain-freezer, chain-index, and event-log coverage exists; the drill
+  reports lookup-prune coverage and the restart-time tail-prune boundary.
 - `archive`: should retain all temporal state rows and is expected to consume
   more hot storage.
 

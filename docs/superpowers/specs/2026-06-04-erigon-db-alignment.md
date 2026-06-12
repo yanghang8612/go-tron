@@ -438,16 +438,20 @@ Status:
   `tx_infos`, and `state_roots` as prunable and has regression coverage proving
   the table set can advance and persist a hidden tail.
 - `PlanChainFreezerTailPrune` now provides the boundary calculator for
-  minimal-mode block retention. It combines `ChainFreezer` and
-  `SnapshotChainLookupPrune` stage progress, converts inclusive coverage block
-  `N` into freezer tail `N+1`, and caps the target by the ancient append head
-  plus the recent-block retention window. The apply path verifies cold
-  chain-freezer coverage before calling runtime `TruncateTail`; snapshot
-  managers now prove continuous chain-freezer coverage for the whole tail range
-  instead of only probing endpoints. Tests pin missing-stage no-ops,
-  lookup-stage caps, retention-window caps, ancient-head caps, short-chain
-  behavior, DB-backed stage reads, successful tail truncation, no-op behavior
-  when cold coverage is missing, and rejection of gapped cold coverage.
+  minimal-mode block retention. It combines `ChainFreezer`,
+  `SnapshotChainLookupPrune`, and `SnapshotEventLogBuild` stage progress,
+  converts inclusive coverage block `N` into freezer tail `N+1`, and caps the
+  target by the ancient append head plus the recent-block retention window. The
+  event-log build boundary keeps minimal-mode physical tail pruning behind
+  cold log/index coverage, so archive log queries do not lose their immutable
+  sidecar path when local freezer files are hidden or reclaimed. The apply path
+  verifies cold chain-freezer coverage before calling runtime `TruncateTail`;
+  snapshot managers now prove continuous chain-freezer coverage for the whole
+  tail range instead of only probing endpoints. Tests pin missing-stage no-ops,
+  lookup-stage caps, event-log-stage caps, retention-window caps,
+  ancient-head caps, short-chain behavior, DB-backed stage reads, successful
+  tail truncation, no-op behavior when cold coverage is missing, and rejection
+  of gapped cold coverage.
 - The snapshot `Manager` now implements the rawdb `AncientReader` shape for
   chain-freezer segments, and `rawdb.NewFallbackAncientReader` composes local
   freezer rows with verified cold snapshot files. Runtime startup wraps the
@@ -549,8 +553,9 @@ Status:
   state/history and hot lookup pruning. `minimal` is the only mode that
   registers a chain-freezer tail-prune lifecycle. It applies virtual-tail
   hiding and physical freezer shard reclamation after verified freezer/index
-  stage progress and cold chain-freezer segment coverage are visible. Cold
-  chain-freezer segment reads are available as a safety fallback, with
+  stage progress, event-log cold coverage, and cold chain-freezer segment
+  coverage are visible. Cold chain-freezer segment reads are available as a
+  safety fallback, with
   `chain-freezer-accessor` sidecars covering non-scan block-number point reads
   for newly built snapshots. Regression coverage now locks this mode gate and
   runs a restart drill: after physical freezer file deletion and local freezer

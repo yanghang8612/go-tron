@@ -11,6 +11,7 @@ const (
 	chainFreezerTailPruneReasonReady                = "ready"
 	chainFreezerTailPruneReasonMissingFreezerStage  = "missing chain freezer stage"
 	chainFreezerTailPruneReasonMissingLookupStage   = "missing chain lookup prune stage"
+	chainFreezerTailPruneReasonMissingEventLogStage = "missing event-log build stage"
 	chainFreezerTailPruneReasonZeroRetainBlocks     = "zero retain blocks"
 	chainFreezerTailPruneReasonEmptyAncientStore    = "empty ancient store"
 	chainFreezerTailPruneReasonTailAboveAncientHead = "current tail above ancient head"
@@ -46,6 +47,13 @@ type ChainFreezerTailPrunePlanInput struct {
 	// have been pruned only after verified cold chain-index coverage existed.
 	ChainLookupPruneBlock    uint64
 	HasChainLookupPruneBlock bool
+
+	// EventLogBuildBlock is the highest block whose logs have been published
+	// into cold event-log segments plus event-log-index sidecars. Minimal-mode
+	// tail pruning must not hide local freezer rows beyond this boundary, or
+	// archive log queries would be forced back to block/TransactionRet scans.
+	EventLogBuildBlock    uint64
+	HasEventLogBuildBlock bool
 }
 
 // ChainFreezerTailPrunePlan is a dry-run result for a possible TruncateTail call.
@@ -57,8 +65,8 @@ type ChainFreezerTailPrunePlan struct {
 	TargetTail  uint64
 	AncientHead uint64
 
-	// CoverageTail is the largest tail allowed by local freezer coverage and
-	// verified lookup-prune progress.
+	// CoverageTail is the largest tail allowed by local freezer coverage,
+	// verified lookup-prune progress, and cold event-log coverage.
 	CoverageTail uint64
 
 	// RetentionTail is the largest tail allowed by the recent-block window.
@@ -109,6 +117,9 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 	if !input.HasChainLookupPruneBlock {
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingLookupStage)
 	}
+	if !input.HasEventLogBuildBlock {
+		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogStage)
+	}
 	if input.RetainBlocks == 0 {
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonZeroRetainBlocks)
 	}
@@ -119,7 +130,7 @@ func PlanChainFreezerTailPrune(input ChainFreezerTailPrunePlanInput) ChainFreeze
 		return noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonTailAboveAncientHead)
 	}
 
-	coverageBlock := minUint64(input.ChainFreezerBlock, input.ChainLookupPruneBlock)
+	coverageBlock := minUint64(minUint64(input.ChainFreezerBlock, input.ChainLookupPruneBlock), input.EventLogBuildBlock)
 	coverageTail := tailAfterInclusiveBlock(coverageBlock)
 	retentionTail := retainedHistoryTail(input.HeadBlock, input.RetainBlocks)
 	targetTail := minUint64(coverageTail, retentionTail)
@@ -143,8 +154,8 @@ func noChainFreezerTailPrune(plan ChainFreezerTailPrunePlan, reason string) Chai
 	return plan
 }
 
-// PlanChainFreezerTailPruneFromDB reads the chain freezer and lookup-prune
-// stages from db, then delegates to PlanChainFreezerTailPrune.
+// PlanChainFreezerTailPruneFromDB reads the chain freezer, lookup-prune, and
+// event-log build stages from db, then delegates to PlanChainFreezerTailPrune.
 func PlanChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, currentTail, ancientHead, headBlock, retainBlocks uint64) (ChainFreezerTailPrunePlan, error) {
 	if db == nil {
 		return ChainFreezerTailPrunePlan{}, errors.New("snapshots: nil chain freezer tail prune database")
@@ -157,6 +168,10 @@ func PlanChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, currentTail, ancie
 	if err != nil {
 		return ChainFreezerTailPrunePlan{}, err
 	}
+	eventLogBlock, hasEventLogBlock, err := rawdb.ReadStageProgress(db, rawdb.StageSnapshotEventLogBuild)
+	if err != nil {
+		return ChainFreezerTailPrunePlan{}, err
+	}
 	return PlanChainFreezerTailPrune(ChainFreezerTailPrunePlanInput{
 		CurrentTail:              currentTail,
 		AncientHead:              ancientHead,
@@ -166,6 +181,8 @@ func PlanChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, currentTail, ancie
 		HasChainFreezerBlock:     hasFreezerBlock,
 		ChainLookupPruneBlock:    lookupBlock,
 		HasChainLookupPruneBlock: hasLookupBlock,
+		EventLogBuildBlock:       eventLogBlock,
+		HasEventLogBuildBlock:    hasEventLogBlock,
 	}), nil
 }
 

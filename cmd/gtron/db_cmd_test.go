@@ -699,7 +699,7 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 			present: true,
 			progress: rawdb.StageProgress{
 				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
-				BlockNum: 22,
+				BlockNum: 34,
 			},
 		},
 	}
@@ -715,7 +715,8 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		"SyncBodiesReady=8 ahead of SyncBodies=7",
 		"SyncExecution=4 ahead of SyncImport=3",
 		"SnapshotChainLookupPrune=21 ahead of ChainFreezer=20",
-		"SnapshotChainFreezerTailPrune=22 ahead of SnapshotChainLookupPrune=21",
+		"SnapshotChainFreezerTailPrune=34 ahead of SnapshotChainLookupPrune=21",
+		"SnapshotChainFreezerTailPrune=34 ahead of SnapshotEventLogBuild=33",
 	} {
 		found := false
 		for _, issue := range issues {
@@ -788,6 +789,34 @@ func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 		"SnapshotChainLookupPrune requires ChainFreezer",
 		"SnapshotSectionBloomPrune requires Finish",
 		"SnapshotEventLogBuild requires Finish",
+	} {
+		found := false
+		for _, issue := range issues {
+			if issue == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline order issues missing %q in %#v", want, issues)
+		}
+	}
+
+	rows = []dbStageStatusRow{
+		{
+			stage:   rawdb.StageSnapshotChainFreezerTailPrune,
+			group:   "prune",
+			present: true,
+			progress: rawdb.StageProgress{
+				Stage:    rawdb.StageSnapshotChainFreezerTailPrune,
+				BlockNum: 20,
+			},
+		},
+	}
+	issues = dbStageStatusPipelineOrderIssues(rows)
+	for _, want := range []string{
+		"SnapshotChainFreezerTailPrune requires SnapshotChainLookupPrune",
+		"SnapshotChainFreezerTailPrune requires SnapshotEventLogBuild",
 	} {
 		found := false
 		for _, issue := range issues {
