@@ -727,17 +727,11 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	if len(inv.Ids) > 0 {
 		last := inv.Ids[len(inv.Ids)-1]
 		if last.Number > 0 {
-			window := syncdl.NewFetchWindow(uint64(last.Number), maxChainInventorySize)
-			ps.lastInventoryNum = window.Max
-			ps.minFetchNum = window.Min
-			target := uint64(last.Number)
-			if inv.RemainNum > 0 {
-				target += uint64(inv.RemainNum)
-			}
-			if target > ss.targetHeadNum {
-				ss.targetHeadNum = target
-			}
-			stageInventoryTarget = ss.targetHeadNum
+			target := syncdl.ObserveInventoryTarget(ss.targetHeadNum, uint64(last.Number), inv.RemainNum, maxChainInventorySize)
+			ps.lastInventoryNum = target.Window.Max
+			ps.minFetchNum = target.Window.Min
+			ss.targetHeadNum = target.Target
+			stageInventoryTarget = target.StageTarget
 		}
 	}
 

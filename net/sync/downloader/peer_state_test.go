@@ -40,3 +40,31 @@ func TestFetchWindowTrimsToDoubleInventorySpan(t *testing.T) {
 		}
 	}
 }
+
+func TestObserveInventoryTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		current     uint64
+		tip         uint64
+		remain      int64
+		limit       int
+		target      uint64
+		stageTarget uint64
+		observed    uint64
+		advanced    bool
+		windowMin   uint64
+		windowMax   uint64
+	}{
+		{name: "empty tip", current: 10, target: 10},
+		{name: "tip advances target", current: 10, tip: 25, limit: 5, target: 25, stageTarget: 25, observed: 25, advanced: true, windowMin: 15, windowMax: 25},
+		{name: "remain extends target", current: 10, tip: 25, remain: 7, limit: 5, target: 32, stageTarget: 32, observed: 32, advanced: true, windowMin: 15, windowMax: 25},
+		{name: "negative remain ignored", current: 10, tip: 25, remain: -7, limit: 5, target: 25, stageTarget: 25, observed: 25, advanced: true, windowMin: 15, windowMax: 25},
+		{name: "stale observed keeps current", current: 50, tip: 25, remain: 7, limit: 5, target: 50, stageTarget: 50, observed: 32, windowMin: 15, windowMax: 25},
+	}
+	for _, tt := range tests {
+		got := ObserveInventoryTarget(tt.current, tt.tip, tt.remain, tt.limit)
+		if got.Target != tt.target || got.StageTarget != tt.stageTarget || got.Observed != tt.observed || got.Advanced != tt.advanced || got.Window.Min != tt.windowMin || got.Window.Max != tt.windowMax {
+			t.Fatalf("%s: update = %+v, want target %d stage %d observed %d advanced %v window %d-%d", tt.name, got, tt.target, tt.stageTarget, tt.observed, tt.advanced, tt.windowMin, tt.windowMax)
+		}
+	}
+}

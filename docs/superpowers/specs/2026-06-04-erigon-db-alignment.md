@@ -297,7 +297,9 @@ Status:
   sessions restore `SyncInventory` when it is ahead of the current head,
   preserving restart diagnostics/remaining-block estimates without advancing
   canonical chain state; that restore decision is shared through `core/rawdb`
-  so stale inventory rows cannot move the target backward. These are
+  so stale inventory rows cannot move the target backward. CHAIN_INVENTORY
+  target/window derivation now lives in `net/sync/downloader`, keeping
+  `remainNum` handling and fetch-window bounds out of `SyncService`. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
