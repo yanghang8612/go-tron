@@ -27,6 +27,7 @@ import (
 	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
 	tnet "github.com/tronprotocol/go-tron/net"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/node"
 	"github.com/tronprotocol/go-tron/p2p"
 	"github.com/tronprotocol/go-tron/p2p/discover"
@@ -233,6 +234,11 @@ var (
 		Name:  "sync.restart-from",
 		Usage: "Before starting P2P sync, rebuild local state to this canonical historical block height and continue syncing from height+1",
 	}
+	syncImportBatchFlag = &cli.IntFlag{
+		Name:  "sync.import-batch",
+		Usage: "Maximum staged block bodies imported per local sync pass (1-100; wire fetch batch stays 100)",
+		Value: tsync.MaxImportBatch,
+	}
 )
 
 var app = &cli.App{
@@ -283,6 +289,7 @@ var app = &cli.App{
 		freezerMarginFlag,
 		freezerBatchFlag,
 		syncRestartFromFlag,
+		syncImportBatchFlag,
 	},
 	Before: func(ctx *cli.Context) error {
 		return log.SetupWithModules(ctx.Int("verbosity"), ctx.String("log.format"), ctx.String("log.file"), ctx.StringSlice("log.module"))
@@ -540,6 +547,10 @@ func gtron(ctx *cli.Context) error {
 	broadcaster := tnet.NewBroadcastService(nil)
 	handler := tnet.NewTronHandler(bc, pool, broadcaster)
 	syncService := tnet.NewSyncService(bc, handler)
+	if err := syncService.SetImportBatchSize(cfg.SyncImportBatch); err != nil {
+		closeStores()
+		return err
+	}
 	handler.SetSyncService(syncService)
 
 	nodeID, err := node.LoadOrCreateNodeID(cfg.DataDir)
@@ -874,6 +885,7 @@ func gtron(ctx *cli.Context) error {
 		"jsonrpc", fmt.Sprintf(":%d", cfg.JSONRPCPort),
 		"grpc", cfg.GRPCPort,
 		"p2p", fmt.Sprintf(":%d", cfg.P2PPort),
+		"syncImportBatch", cfg.SyncImportBatch,
 		"datadir", cfg.DataDir)
 
 	// Wait for interrupt

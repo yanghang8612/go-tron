@@ -233,6 +233,8 @@ type SyncService struct {
 	// is safe.
 	stats *tsync.Stats
 
+	importBatchSize int
+
 	// watchdog runs the periodic isolation check. Owns its own goroutine
 	// and ticker; Start/Stop fan-out launches and joins it.
 	watchdog *tsync.Watchdog
@@ -254,11 +256,12 @@ func (a chainStatusAdapter) CurrentBlockNum() uint64   { return a.chain.CurrentB
 // NewSyncService creates a new sync service.
 func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	ss := &SyncService{
-		chain:        chain,
-		handler:      handler,
-		pause:        tsync.NewPauseGate(),
-		stats:        tsync.NewStats(),
-		fetchTimeout: tsync.SyncFetchTimeout,
+		chain:           chain,
+		handler:         handler,
+		pause:           tsync.NewPauseGate(),
+		stats:           tsync.NewStats(),
+		fetchTimeout:    tsync.SyncFetchTimeout,
+		importBatchSize: maxSyncImportBatch,
 	}
 	ss.drainCond = sync.NewCond(&ss.drainMu)
 	ss.watchdog = tsync.NewWatchdog(
@@ -273,6 +276,25 @@ func NewSyncService(chain *core.BlockChain, handler *TronHandler) *SyncService {
 	// persist/hooks alongside the existing execElapsed total.
 	chain.AddApplyStatsHook(ss.onApplyStats)
 	return ss
+}
+
+// SetImportBatchSize changes the local staged-body import chunk. It never
+// changes the java-tron-compatible FETCH_INV_DATA request size; it only bounds
+// how many already staged bodies are decoded/executed in one local range pass.
+func (ss *SyncService) SetImportBatchSize(size int) error {
+	if ss == nil {
+		return fmt.Errorf("nil sync service")
+	}
+	if size <= 0 {
+		return fmt.Errorf("sync import batch must be >= 1")
+	}
+	if size > maxFetchBatch {
+		return fmt.Errorf("sync import batch %d exceeds fetch batch %d", size, maxFetchBatch)
+	}
+	ss.mu.Lock()
+	ss.importBatchSize = size
+	ss.mu.Unlock()
+	return nil
 }
 
 // watchdogPeerSource adapts a possibly-nil *TronHandler to tsync.PeerSource;
@@ -1359,10 +1381,20 @@ func (ss *SyncService) waitForDrain() {
 	ss.drainMu.Unlock()
 }
 
+func (ss *SyncService) importBatchLimitLocked() int {
+	if ss == nil || ss.importBatchSize <= 0 {
+		return maxSyncImportBatch
+	}
+	if ss.importBatchSize > maxFetchBatch {
+		return maxFetchBatch
+	}
+	return ss.importBatchSize
+}
+
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
 	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
-	restoreLimit := maxSyncImportBatch
+	restoreLimit := ss.importBatchLimitLocked()
 	if hasReadyLimit {
 		if readyLimit < next {
 			return bufferedSyncBatch{}
@@ -1373,7 +1405,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 	}
 	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
 	var batch bufferedSyncBatch
-	for len(batch.buffered) < maxSyncImportBatch {
+	for len(batch.buffered) < restoreLimit {
 		if hasReadyLimit && next > readyLimit {
 			break
 		}
@@ -1438,12 +1470,12 @@ func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
 }
 
 // decodeBatchBlocks decodes the popped raw blocks into batch.blocks. It runs
-// OFF ss.mu — a full proto decode per block (up to maxFetchBatch, and largest
-// in exactly the full-block era this raw buffer targets) is far too heavy to
-// hold the sync lock across, and InsertBlocks already runs off-lock. A decode
-// error (can't happen for bytes that already decoded at receive) truncates the
-// batch; the dropped suffix was removed from the buffer at pop, so it is simply
-// re-fetched.
+// OFF ss.mu — a full proto decode per block (up to the configured local import
+// chunk, and largest in exactly the full-block era this raw buffer targets) is
+// far too heavy to hold the sync lock across, and InsertBlocks already runs
+// off-lock. A decode error (can't happen for bytes that already decoded at
+// receive) truncates the batch; the dropped suffix was removed from the buffer
+// at pop, so it is simply re-fetched.
 func (ss *SyncService) decodeBatchBlocks(batch *bufferedSyncBatch) {
 	batch.blocks = make([]*types.Block, 0, len(batch.buffered))
 	for i := range batch.buffered {

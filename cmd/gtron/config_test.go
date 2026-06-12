@@ -1,13 +1,59 @@
 package main
 
 import (
+	"flag"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/params"
+	"github.com/urfave/cli/v2"
 )
 
 var testWitnessAddr = tcommon.Address{0x01}
+
+func makeNodeConfigFlagSet(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	app := cli.NewApp()
+	app.Flags = []cli.Flag{
+		dataDirFlag,
+		p2pPortFlag,
+		discoverPortFlag,
+		externalIPFlag,
+		httpPortFlag,
+		jsonrpcPortFlag,
+		grpcPortFlag,
+		pprofPortFlag,
+		pprofAddrFlag,
+		seednodeFlag,
+		maxpeersFlag,
+		syncImportBatchFlag,
+	}
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, f := range app.Flags {
+		if err := f.Apply(set); err != nil {
+			t.Fatalf("apply flag: %v", err)
+		}
+	}
+	if err := set.Parse(argv); err != nil {
+		t.Fatalf("parse argv: %v", err)
+	}
+	return cli.NewContext(app, set, nil)
+}
+
+func TestMakeConfigSyncImportBatchDefault(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, nil))
+	if cfg.SyncImportBatch != tsync.MaxImportBatch {
+		t.Fatalf("SyncImportBatch default = %d, want %d", cfg.SyncImportBatch, tsync.MaxImportBatch)
+	}
+}
+
+func TestMakeConfigSyncImportBatchOverride(t *testing.T) {
+	cfg := makeConfig(makeNodeConfigFlagSet(t, []string{"--sync.import-batch", "12"}))
+	if cfg.SyncImportBatch != 12 {
+		t.Fatalf("SyncImportBatch override = %d, want 12", cfg.SyncImportBatch)
+	}
+}
 
 func TestResolveNetworkID_Mainnet(t *testing.T) {
 	got := resolveNetworkID(params.DefaultMainnetGenesis())

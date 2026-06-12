@@ -130,6 +130,40 @@ func TestPopBufferedBatchUsesImportChunkLimit(t *testing.T) {
 	}
 }
 
+func TestPopBufferedBatchUsesConfiguredImportChunkLimit(t *testing.T) {
+	bc := makeTestChain(t) // head = genesis (#0); next = #1
+	ss := NewSyncService(bc, nil)
+	if err := ss.SetImportBatchSize(2); err != nil {
+		t.Fatalf("SetImportBatchSize: %v", err)
+	}
+
+	ss.mu.Lock()
+	ss.ensureSessionMapsLocked()
+	seedBufferedSyncRange(t, ss, bc.CurrentBlock().Hash(), 1, 5)
+	batch := ss.popBufferedSyncBatchLocked(time.Now())
+	remaining := len(ss.blockBuffer)
+	ss.mu.Unlock()
+
+	if len(batch.buffered) != 2 {
+		t.Fatalf("popped entries = %d, want configured chunk 2", len(batch.buffered))
+	}
+	if remaining != 3 {
+		t.Fatalf("remaining buffered blocks = %d, want 3", remaining)
+	}
+}
+
+func TestSetImportBatchSizeRejectsInvalidLimits(t *testing.T) {
+	ss := NewSyncService(makeTestChain(t), nil)
+	for _, size := range []int{0, -1, maxFetchBatch + 1} {
+		if err := ss.SetImportBatchSize(size); err == nil {
+			t.Fatalf("SetImportBatchSize(%d) succeeded, want error", size)
+		}
+	}
+	if err := ss.SetImportBatchSize(maxFetchBatch); err != nil {
+		t.Fatalf("SetImportBatchSize(maxFetchBatch): %v", err)
+	}
+}
+
 func TestDrainBufferedBlocksImportsMultipleChunks(t *testing.T) {
 	bc := makeTestChain(t) // head = genesis (#0); next = #1
 	ss := NewSyncService(bc, nil)

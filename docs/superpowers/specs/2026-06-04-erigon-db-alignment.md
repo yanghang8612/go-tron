@@ -310,12 +310,15 @@ Status:
 - The downloader's wire batch and local import batch are now separate knobs:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per
-  `InsertBlocksWithStageHook` call. This keeps peer throughput high but bounds
-  the decoded block range, state execution, commitment folding, and stage-row
-  observation done in one local pass. Regression coverage proves a range larger
-  than one local import chunk drains through multiple chunks and still advances
-  hash-bound `SyncImport`, `SyncExecution`, `SyncCommitment`, and `SyncFinish`
-  to the final block.
+  `InsertBlocksWithStageHook` call. The local chunk defaults to 32 blocks and
+  is operator-tunable through `--sync.import-batch` within the wire-safe
+  1..100 range. This keeps peer throughput high but bounds the decoded block
+  range, state execution, commitment folding, and stage-row observation done in
+  one local pass. Regression coverage proves a range larger than one local
+  import chunk drains through multiple chunks, custom chunk limits are honored,
+  invalid limits are rejected, session startup still prunes gapped staged-body
+  tails beyond the import chunk, and hash-bound `SyncImport`, `SyncExecution`,
+  `SyncCommitment`, and `SyncFinish` still advance to the final block.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

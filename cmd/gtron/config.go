@@ -31,17 +31,18 @@ func resolveNetworkID(g *params.Genesis) int32 {
 
 func makeConfig(ctx *cli.Context) *node.Config {
 	return &node.Config{
-		DataDir:      ctx.String("datadir"),
-		P2PPort:      ctx.Int("p2p.port"),
-		DiscoverPort: ctx.Int("discover.port"),
-		ExternalIP:   ctx.String("external.ip"),
-		HTTPPort:     ctx.Int("http.port"),
-		JSONRPCPort:  ctx.Int("jsonrpc.port"),
-		GRPCPort:     ctx.Int("grpc.port"),
-		PProfPort:    ctx.Int("pprof.port"),
-		PProfAddr:    ctx.String("pprof.addr"),
-		SeedNodes:    ctx.StringSlice("seednode"),
-		MaxPeers:     ctx.Int("maxpeers"),
+		DataDir:         ctx.String("datadir"),
+		P2PPort:         ctx.Int("p2p.port"),
+		DiscoverPort:    ctx.Int("discover.port"),
+		ExternalIP:      ctx.String("external.ip"),
+		HTTPPort:        ctx.Int("http.port"),
+		JSONRPCPort:     ctx.Int("jsonrpc.port"),
+		GRPCPort:        ctx.Int("grpc.port"),
+		PProfPort:       ctx.Int("pprof.port"),
+		PProfAddr:       ctx.String("pprof.addr"),
+		SeedNodes:       ctx.StringSlice("seednode"),
+		MaxPeers:        ctx.Int("maxpeers"),
+		SyncImportBatch: ctx.Int("sync.import-batch"),
 	}
 }
 
