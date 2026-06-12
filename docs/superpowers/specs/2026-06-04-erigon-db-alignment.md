@@ -533,7 +533,9 @@ Status:
   eliminated outside rawdb itself. TVM `BLOCKHASH`/legacy `CHAINID` now resolve
   through freezer-aware `BlockHashByNumber`/`ReadBlockHashByNumber`, and the
   pruning finish-stage guard uses freezer-aware canonical hash lookups. A rawdb
-  source audit test now fails on new production `rawdb.ReadBlockKV` calls.
+  source audit test now fails on new production `rawdb.ReadBlockKV` calls, and
+  separately pins the raw freezer copy helpers to the explicit
+  `cmd/gtron/freezer_adapter.go` boundary.
 
 Needed:
 

@@ -16,9 +16,27 @@ func TestNoProductionDirectHotBlockKVReads(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditForbiddenRawDBCalls(t, root, map[string]struct{}{
 		"ReadBlockKV": {},
-	})
+	}, nil)
 	if len(offenders) > 0 {
 		t.Fatalf("production code must use freezer-aware chain accessors instead of hot-only rawdb calls:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestNoUnexpectedProductionDirectRawFreezerReads(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBCalls(t, root, map[string]struct{}{
+		"ReadBlockRaw":            {},
+		"ReadTransactionInfosRaw": {},
+		"ReadBlockStateRootRaw":   {},
+	}, map[string]map[string]struct{}{
+		"cmd/gtron/freezer_adapter.go": {
+			"ReadBlockRaw":            {},
+			"ReadTransactionInfosRaw": {},
+			"ReadBlockStateRootRaw":   {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production code must route raw freezer reads through the freezer adapter boundary:\n%s", strings.Join(offenders, "\n"))
 	}
 }
 
@@ -40,7 +58,7 @@ func findRepoRoot(t *testing.T) string {
 	}
 }
 
-func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]struct{}) []string {
+func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
 	t.Helper()
 	var offenders []string
 	fset := token.NewFileSet()
@@ -83,7 +101,7 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 				if _, imported := rawdbNames[ident.Name]; !imported {
 					return true
 				}
-				if _, banned := forbidden[fun.Sel.Name]; banned {
+				if _, banned := forbidden[fun.Sel.Name]; banned && !isAllowedRawDBCall(root, path, fun.Sel.Name, allowed) {
 					offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), ident.Name+"."+fun.Sel.Name))
 				}
 			case *ast.Ident:
@@ -91,6 +109,9 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 					return true
 				}
 				if _, banned := forbidden[fun.Name]; banned {
+					if isAllowedRawDBCall(root, path, fun.Name, allowed) {
+						return true
+					}
 					offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), fun.Name))
 				}
 			}
@@ -103,6 +124,23 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 	}
 	sort.Strings(offenders)
 	return offenders
+}
+
+func isAllowedRawDBCall(root, path, function string, allowed map[string]map[string]struct{}) bool {
+	if len(allowed) == 0 {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = path
+	}
+	rel = filepath.ToSlash(rel)
+	functions := allowed[rel]
+	if len(functions) == 0 {
+		return false
+	}
+	_, ok := functions[function]
+	return ok
 }
 
 func rawdbImportNames(file *ast.File) map[string]struct{} {
