@@ -87,6 +87,23 @@ func TestReadVerifiedStageProgressBlock(t *testing.T) {
 	}
 }
 
+func TestReadVerifiedStageProgressBlockWithHashReader(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.Hash{0x42}
+	if err := WriteStageProgressWithHash(db, StageFinish, 99, hash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	got, ok, err := ReadVerifiedStageProgressBlockWithHashReader(db, StageFinish, func(number uint64) common.Hash {
+		if number != 99 {
+			return common.Hash{}
+		}
+		return hash
+	})
+	if err != nil || !ok || got != 99 {
+		t.Fatalf("custom-hash verified finish stage = %d ok=%v err=%v, want block 99", got, ok, err)
+	}
+}
+
 func TestCanonicalStageProgressWriteAndRewind(t *testing.T) {
 	db := NewMemoryDatabase()
 	hash12 := common.Hash{0x12}

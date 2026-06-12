@@ -375,6 +375,35 @@ func TestOnePass_CapsFreezeToVerifiedFinishStage(t *testing.T) {
 	}
 }
 
+func TestOnePass_VerifiesFinishStageThroughChainSourceHash(t *testing.T) {
+	t.Parallel()
+	fc := newFakeChain()
+	for n := uint64(0); n < 20; n++ {
+		fc.plantBlock(t, n)
+	}
+	fc.setSolidified(15)
+	finishHash := fc.ReadBlockHashByNumber(10)
+	if err := rawdb.WriteStageProgressWithHash(fc.db, rawdb.StageFinish, 10, finishHash); err != nil {
+		t.Fatalf("write finish stage: %v", err)
+	}
+	if err := fc.db.Delete(blockKVKey(10)); err != nil {
+		t.Fatalf("delete hot block row: %v", err)
+	}
+
+	r := New(fc, wrapFreezer(newFreezer(t)), Config{
+		Enabled:      true,
+		MarginBlocks: 0,
+		BatchBlocks:  1000,
+	})
+	frozen, err := r.OnePass()
+	if err != nil {
+		t.Fatalf("OnePass: %v", err)
+	}
+	if frozen != 11 {
+		t.Fatalf("frozen=%d, want 11 blocks through finish stage 10", frozen)
+	}
+}
+
 func TestOnePassRejectsFinishStageHashMismatch(t *testing.T) {
 	t.Parallel()
 	fc := newFakeChain()

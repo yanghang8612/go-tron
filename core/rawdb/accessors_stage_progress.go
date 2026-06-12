@@ -227,6 +227,14 @@ func ReadStageProgressRow(db ethdb.KeyValueReader, stage StageID) (StageProgress
 }
 
 func ReadVerifiedStageProgressBlock(db ethdb.KeyValueReader, stage StageID) (uint64, bool, error) {
+	return ReadVerifiedStageProgressBlockWithHashReader(db, stage, func(number uint64) common.Hash {
+		return ReadBlockHashByNumber(db, number)
+	})
+}
+
+// ReadVerifiedStageProgressBlockWithHashReader reads a hash-bound stage row and
+// verifies it against the caller's canonical hash source.
+func ReadVerifiedStageProgressBlockWithHashReader(db ethdb.KeyValueReader, stage StageID, readCanonicalHash func(uint64) common.Hash) (uint64, bool, error) {
 	row, ok, err := ReadStageProgressRow(db, stage)
 	if err != nil || !ok {
 		return 0, ok, err
@@ -235,7 +243,10 @@ func ReadVerifiedStageProgressBlock(db ethdb.KeyValueReader, stage StageID) (uin
 	if !row.HasBlockHash {
 		return 0, true, fmt.Errorf("rawdb: %s stage %d is not hash-bound", stageName, row.BlockNum)
 	}
-	canonical := ReadBlockHashByNumber(db, row.BlockNum)
+	if readCanonicalHash == nil {
+		return 0, true, fmt.Errorf("rawdb: %s stage %d cannot be verified without a canonical hash reader", stageName, row.BlockNum)
+	}
+	canonical := readCanonicalHash(row.BlockNum)
 	if canonical == (common.Hash{}) {
 		return 0, true, fmt.Errorf("rawdb: %s stage %d has hash %x but canonical block is unavailable", stageName, row.BlockNum, row.BlockHash)
 	}

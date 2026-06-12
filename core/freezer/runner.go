@@ -532,7 +532,11 @@ func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
 	if r == nil || r.chain == nil || r.chain.DB() == nil {
 		return 0, false, nil
 	}
-	block, ok, err := rawdb.ReadVerifiedStageProgressBlock(r.chain.DB(), rawdb.StageFinish)
+	block, ok, err := rawdb.ReadVerifiedStageProgressBlockWithHashReader(
+		r.chain.DB(),
+		rawdb.StageFinish,
+		r.chain.ReadBlockHashByNumber,
+	)
 	if err != nil {
 		return 0, ok, fmt.Errorf("freezer: %w", err)
 	}
