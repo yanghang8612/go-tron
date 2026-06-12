@@ -1773,11 +1773,7 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 
 				// Address filter
 				if len(filter.Addresses) > 0 {
-					addrStart := 0
-					if len(l.Address) > 20 {
-						addrStart = len(l.Address) - 20
-					}
-					addr := tcommon.BytesToAddress(l.Address[addrStart:])
+					addr := logAddressFromRaw(l.Address)
 					match := false
 					for _, fa := range filter.Addresses {
 						if fa == addr {
@@ -1849,11 +1845,17 @@ func (b *TronBackend) getLogsFromColdEventLogs(fromBlock, toBlock uint64, filter
 	}
 	logs := make([]*jsonrpc.RPCLog, 0)
 	err = db.IterateEventLogs(fromBlock, toBlock, coldFilter, func(row rawdb.EventLog) (bool, error) {
+		if row.BlockNum < fromBlock || row.BlockNum > toBlock {
+			return true, nil
+		}
 		if filter.BlockHash != nil && row.BlockHash != *filter.BlockHash {
 			return true, nil
 		}
 		if row.Log == nil {
 			return false, fmt.Errorf("cold event log row block=%d tx=%d log=%d is nil", row.BlockNum, row.TxIndex, row.LogIndex)
+		}
+		if !coldEventLogPayloadMatchesFilter(row.Log, filter) {
+			return true, nil
 		}
 		logs = append(logs, rpcLogFromColdEventLog(row))
 		return true, nil
@@ -1862,6 +1864,23 @@ func (b *TronBackend) getLogsFromColdEventLogs(fromBlock, toBlock uint64, filter
 		return nil, true, err
 	}
 	return logs, true, nil
+}
+
+func coldEventLogPayloadMatchesFilter(log *corepb.TransactionInfo_Log, filter jsonrpc.LogFilter) bool {
+	if len(filter.Addresses) > 0 {
+		addr := logAddressFromRaw(log.GetAddress())
+		matched := false
+		for _, candidate := range filter.Addresses {
+			if candidate == addr {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return matchTopics(filter.Topics, log.GetTopics())
 }
 
 func rpcLogFromColdEventLog(row rawdb.EventLog) *jsonrpc.RPCLog {
@@ -1885,6 +1904,13 @@ func rpcLogAddress(raw []byte) string {
 		addrStart = len(raw) - 20
 	}
 	return fmt.Sprintf("0x%x", raw[addrStart:])
+}
+
+func logAddressFromRaw(raw []byte) tcommon.Address {
+	if len(raw) > tcommon.AddressLength {
+		raw = raw[len(raw)-tcommon.AddressLength:]
+	}
+	return tcommon.BytesToAddress(raw)
 }
 
 func rpcLogTopics(rawTopics [][]byte) []string {

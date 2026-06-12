@@ -466,6 +466,47 @@ func TestTronBackend_GetLogsFallsBackWhenSectionBloomMissing(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsHotPathMatchesTronAddress(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := append([]byte{tcommon.AddressPrefixMainnet}, bytes20(0x21)...)
+	topic := tcommon.Hash{0x21}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x21, 0x22},
+	})
+	block2, _ := testBackendLogBlock(2, nil)
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteBlock(bc.db, block2); err != nil {
+		t.Fatalf("WriteBlock block2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block2)
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs hot TRON address filter returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x2122" {
+		t.Fatalf("GetLogs hot TRON address log = %+v, want data 0x2122", logs[0])
+	}
+}
+
 func TestTronBackend_GetLogsUsesColdEventLogSegment(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
@@ -771,6 +812,94 @@ func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.
 	}
 }
 
+func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	goodAddress := bytes20(0x81)
+	otherAddress := bytes20(0x82)
+	topic := tcommon.Hash{0x81}
+	otherTopic := tcommon.Hash{0x82}
+	block1, _ := testBackendLogBlock(1, nil)
+	block3, _ := testBackendLogBlock(3, nil)
+	bc.currentBlock.Store(block3)
+	bc.ChainDB().SetEventLogReader(fakeColdEventLogReader{
+		covered: true,
+		rows: []rawdb.EventLog{
+			{
+				BlockNum:  1,
+				TxIndex:   0,
+				LogIndex:  0,
+				TxHash:    tcommon.Hash{0xa1},
+				BlockHash: block1.Hash(),
+				Address:   tcommon.BytesToAddress(goodAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: goodAddress,
+					Topics:  [][]byte{topic[:]},
+					Data:    []byte{0x01},
+				},
+			},
+			{
+				BlockNum:  1,
+				TxIndex:   0,
+				LogIndex:  1,
+				TxHash:    tcommon.Hash{0xa2},
+				BlockHash: block1.Hash(),
+				Address:   tcommon.BytesToAddress(otherAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: otherAddress,
+					Topics:  [][]byte{topic[:]},
+					Data:    []byte{0x02},
+				},
+			},
+			{
+				BlockNum:  1,
+				TxIndex:   0,
+				LogIndex:  2,
+				TxHash:    tcommon.Hash{0xa3},
+				BlockHash: block1.Hash(),
+				Address:   tcommon.BytesToAddress(goodAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: goodAddress,
+					Topics:  [][]byte{otherTopic[:]},
+					Data:    []byte{0x03},
+				},
+			},
+			{
+				BlockNum:  3,
+				TxIndex:   0,
+				LogIndex:  0,
+				TxHash:    tcommon.Hash{0xa4},
+				BlockHash: block3.Hash(),
+				Address:   tcommon.BytesToAddress(goodAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: goodAddress,
+					Topics:  [][]byte{topic[:]},
+					Data:    []byte{0x04},
+				},
+			},
+			{BlockNum: 99},
+		},
+	})
+
+	from, to := uint64(1), uint64(2)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(goodAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs from unchecked cold rows returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x01" || logs[0].Address != fmt.Sprintf("0x%x", goodAddress) || logs[0].BlockNumber != "0x1" {
+		t.Fatalf("cold filtered log = %+v, want only matching block1 log", logs[0])
+	}
+}
+
 func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
@@ -957,6 +1086,25 @@ func (r testSectionBloomColdReader) SectionBloom(section, bitIndex uint64) ([]by
 		return nil, false, nil
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+type fakeColdEventLogReader struct {
+	covered bool
+	rows    []rawdb.EventLog
+}
+
+func (r fakeColdEventLogReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	return r.covered, nil
+}
+
+func (r fakeColdEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, filter rawdb.EventLogFilter, fn func(rawdb.EventLog) (bool, error)) error {
+	for _, row := range r.rows {
+		cont, err := fn(row)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
 }
 
 func testBackendLogBlock(number uint64, logEntry *corepb.TransactionInfo_Log) (*types.Block, *corepb.TransactionInfo) {

@@ -985,6 +985,12 @@ Status:
   transaction-info rows, then serves the same `blockHash` log query through
   chain-freezer ancient rows plus the cold `chain-index` and `event-log`
   segments.
+- Event-log backend reads now re-check cold sidecar rows against the requested
+  block range, optional block hash, address filter, and topic filter before
+  rendering JSON-RPC logs. Hot and cold `GetLogs` address matching now share the
+  same TRON-address normalization, so 21-byte TVM log addresses filter
+  consistently whether the data comes from hot `TransactionRet` rows or cold
+  event-log segments.
 - Event-log cold segment builds now reject tx-bearing blocks whose
   `TransactionRet` coverage is missing, has a different transaction count,
   contains nil transaction-info entries, points at a different block number, or
