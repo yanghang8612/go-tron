@@ -325,6 +325,8 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		{rawdb.StageSnapshotLatestBuild, rawdb.StageFinish},
 		{rawdb.StageSnapshotPrune, rawdb.StageFinish},
 		{rawdb.StageChainFreezer, rawdb.StageFinish},
+		{rawdb.StageSnapshotSectionBloomPrune, rawdb.StageFinish},
+		{rawdb.StageSnapshotBalanceTracePrune, rawdb.StageFinish},
 		{rawdb.StageSyncBodiesReady, rawdb.StageSyncBodies},
 		{rawdb.StageSyncImport, rawdb.StageSyncBodiesReady},
 		{rawdb.StageSyncExecution, rawdb.StageSyncImport},
@@ -358,7 +360,9 @@ func dbStageStatusRequiresUpstreamPresence(downstream, upstream rawdb.StageID) b
 	case rawdb.StageSnapshotBuild,
 		rawdb.StageSnapshotLatestBuild,
 		rawdb.StageSnapshotPrune,
-		rawdb.StageChainFreezer:
+		rawdb.StageChainFreezer,
+		rawdb.StageSnapshotSectionBloomPrune,
+		rawdb.StageSnapshotBalanceTracePrune:
 		return upstream == rawdb.StageFinish
 	case rawdb.StageSnapshotChainLookupPrune:
 		return upstream == rawdb.StageChainFreezer
