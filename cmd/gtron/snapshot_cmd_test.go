@@ -1313,6 +1313,9 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	archiveStorageKey := snapshotCmdStorageRowKey(archiveAddr, archiveSlot)
 	archiveAccount1 := snapshotCmdAccountEnvelope(t, archiveAddr, archiveBalance1, corepb.AccountType_Contract, archiveCodeHash1, archiveReward1)
 	archiveAccount2 := snapshotCmdAccountEnvelope(t, archiveAddr, archiveBalance2, corepb.AccountType_Contract, archiveCodeHash2, archiveReward2)
+	deletedAddr := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x43}, common.AccountIDLength)...))
+	deletedBalance1 := int64(3_000)
+	deletedAccount1 := snapshotCmdAccountEnvelope(t, deletedAddr, deletedBalance1, corepb.AccountType_Normal, common.Hash{})
 
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
 	defer src.Close()
@@ -1379,6 +1382,19 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		Next:       archiveStorage2.Bytes(),
 	}); err != nil {
 		t.Fatalf("WriteStateDomainChange storage: %v", err)
+	}
+	if err := rawdb.WriteStateDomainChange(stateSnapshotDB, &rawdb.StateDomainChange{
+		BlockNum:   block2.Number(),
+		BlockHash:  block2.Hash(),
+		TxNum:      2,
+		Seq:        3,
+		FlatDomain: rawdb.StateFlatDomainAccountLatest,
+		Owner:      deletedAddr,
+		PrevExists: true,
+		Prev:       deletedAccount1,
+		NextExists: false,
+	}); err != nil {
+		t.Fatalf("WriteStateDomainChange deleted account: %v", err)
 	}
 	accountRef, accountAccessorRef, accountBTreeRef, err := statesnapshots.BuildAccountLatestSegmentFilesFromDB(stateSnapshotDB, snapshotDir, 1, 2, "latest/accounts-1-2.seg")
 	if err != nil {
@@ -1535,6 +1551,20 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if err != nil || gotReward.Reward != archiveReward1 {
 		t.Fatalf("GetRewardAt(block1) = %+v/%v, want %d", gotReward, err, archiveReward1)
 	}
+	deletedBalance, err := backend.GetBalanceAt(deletedAddr, block1.Number())
+	if err != nil || deletedBalance != deletedBalance1 {
+		t.Fatalf("GetBalanceAt(deleted block1) = %d/%v, want %d", deletedBalance, err, deletedBalance1)
+	}
+	deletedBalance, err = backend.GetBalanceAt(deletedAddr, block2.Number())
+	if err != nil || deletedBalance != 0 {
+		t.Fatalf("GetBalanceAt(deleted block2) = %d/%v, want 0", deletedBalance, err)
+	}
+	if deletedAccount, err := backend.GetAccountAt(deletedAddr, block1.Number()); err != nil || deletedAccount == nil || deletedAccount.Balance() != deletedBalance1 {
+		t.Fatalf("GetAccountAt(deleted block1) = %+v/%v, want balance %d", deletedAccount, err, deletedBalance1)
+	}
+	if deletedAccount, err := backend.GetAccountAt(deletedAddr, block2.Number()); err == nil || deletedAccount != nil {
+		t.Fatalf("GetAccountAt(deleted block2) = %+v/%v, want nil/error", deletedAccount, err)
+	}
 
 	tronMux := http.NewServeMux()
 	tronapi.NewAPI(backend).RegisterRoutes(tronMux)
@@ -1589,6 +1619,14 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 		if got := asFloat64(rewardJSON["reward"]); got != float64(archiveReward1) {
 			t.Fatalf("%s/getreward reward = %v, want %d: %v", prefix, rewardJSON["reward"], archiveReward1, rewardJSON)
 		}
+		deletedAccountJSON := postSnapshotTestJSON(t, tronServer.URL+prefix+"/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(deletedAddr.Bytes())))
+		if got := asFloat64(deletedAccountJSON["balance"]); got != float64(deletedBalance1) {
+			t.Fatalf("%s/getaccount deleted-account balance = %v, want %d: %v", prefix, deletedAccountJSON["balance"], deletedBalance1, deletedAccountJSON)
+		}
+	}
+	deletedHeadAccountJSON := postSnapshotTestJSON(t, tronServer.URL+"/wallet/getaccount", fmt.Sprintf(`{"address":"%s"}`, hex.EncodeToString(deletedAddr.Bytes())))
+	if len(deletedHeadAccountJSON) != 0 {
+		t.Fatalf("/wallet/getaccount deleted head account = %v, want empty object", deletedHeadAccountJSON)
 	}
 
 	rpcServer := httptest.NewServer(jsonrpcapi.NewAPI(backend))
@@ -1614,6 +1652,14 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	storageRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(archiveAddr.Bytes()), "0x" + hex.EncodeToString(archiveSlot.Bytes()), "0x1"})
 	if got := storageRPC["result"]; got != "0x"+hex.EncodeToString(archiveStorage1.Bytes()) {
 		t.Fatalf("eth_getStorageAt archive result = %v, want 0x%s", got, hex.EncodeToString(archiveStorage1.Bytes()))
+	}
+	deletedBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(deletedAddr.Bytes()), "0x1"})
+	if got := deletedBalanceRPC["result"]; got != snapshotTestSunToWeiHex(deletedBalance1) {
+		t.Fatalf("eth_getBalance deleted-account block1 result = %v, want %s", got, snapshotTestSunToWeiHex(deletedBalance1))
+	}
+	deletedHeadBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(deletedAddr.Bytes()), "0x2"})
+	if got := deletedHeadBalanceRPC["result"]; got != snapshotTestSunToWeiHex(0) {
+		t.Fatalf("eth_getBalance deleted-account block2 result = %v, want %s", got, snapshotTestSunToWeiHex(0))
 	}
 }
 

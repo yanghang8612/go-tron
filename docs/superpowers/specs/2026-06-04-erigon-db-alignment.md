@@ -523,7 +523,11 @@ Status:
   the test pins solid/PBFT bounds to the historical block, removes restored hot
   history rows, then verifies `/walletsolidity` and `/walletpbft`
   `getaccount`/`getaccountresource`/`getreward` succeed through cold
-  state-domain history.
+  state-domain history. The restored API matrix now also includes a second
+  account deleted at the snapshot head: its latest-domain row is absent, hot
+  history rows are removed, and backend, TRON HTTP, and JSON-RPC archive reads
+  still reconstruct the block-1 account from cold StateDomainChange history
+  while head reads return the deleted/zero state.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
@@ -543,7 +547,7 @@ Needed:
   servers after `gtron snapshot restore` and exercise a broader `/wallet*`,
   JSON-RPC, and archive-read matrix, especially multi-account contract,
   delegation, and account delete/recreate fixtures beyond the current
-  balance/code/storage/account/resource checks.
+  balance/code/storage/account/resource/deleted-account checks.
 - Keep auditing newly introduced direct hot-only `rawdb.Read*KV` call sites
   before enabling more aggressive chain-data prune defaults.
 - Evaluate compact/merged cold index formats for block hash by number, tx
