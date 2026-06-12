@@ -449,13 +449,14 @@ Status:
   converts inclusive coverage block `N` into freezer tail `N+1`, and caps the
   target by the ancient append head plus the recent-block retention window. The
   event-log build boundary keeps minimal-mode physical tail pruning behind
-  cold log/index coverage, so archive log queries do not lose their immutable
-  sidecar path when local freezer files are hidden or reclaimed. The apply path
-  verifies cold chain-freezer and indexed event-log coverage before calling
-  runtime `TruncateTail`; indexed event-log coverage starts at block 1 because
-  genesis has no transaction logs, while genesis chain rows remain covered by
-  the cold freezer check. Snapshot managers now prove continuous chain-freezer
-  and indexed log coverage for the whole tail range instead of only probing
+  cold lookup/log index coverage, so archive block/transaction/log queries do
+  not lose their immutable sidecar path when local freezer files are hidden or
+  reclaimed. The apply path verifies cold chain-freezer, chain-index, and
+  indexed event-log coverage before calling runtime `TruncateTail`; indexed
+  event-log coverage starts at block 1 because genesis has no transaction logs,
+  while genesis chain rows remain covered by the cold freezer plus chain-index
+  check. Snapshot managers now prove continuous chain-freezer, chain-index, and
+  indexed log coverage for the whole tail range instead of only probing
   endpoints. Tests pin
   missing-stage no-ops, lookup-stage caps, event-log-stage caps,
   retention-window caps, ancient-head caps, short-chain behavior, DB-backed

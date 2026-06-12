@@ -172,9 +172,9 @@ only one sidecar needs to be refreshed. Event-log builds advance the
 `event-log` segments and a matching `event-log-index` sidecar. Snapshot
 restore/bootstrap derives the same stage from verified manifest indexed
 event-log coverage, and minimal-mode freezer tail pruning rechecks continuous
-indexed cold event-log coverage from block 1 onward before hiding or reclaiming
-local freezer rows; genesis remains guarded by the cold chain-freezer coverage
-check.
+cold chain-freezer, chain-index, and indexed event-log coverage before hiding
+or reclaiming local freezer rows. Event-log coverage starts at block 1; genesis
+remains guarded by the cold chain-freezer plus chain-index coverage check.
 `gtron db stage-status --db.stage.verify` also reopens the local snapshot
 manifest and verifies readable indexed cold coverage for event-log build and
 freezer-tail prune stages, plus chain lookup, section-bloom, and balance-trace

@@ -17,6 +17,7 @@ const (
 	chainFreezerTailPruneReasonTailAboveAncientHead = "current tail above ancient head"
 	chainFreezerTailPruneReasonCurrentTailCovered   = "current tail already satisfies limits"
 	chainFreezerTailPruneReasonMissingColdCoverage  = "missing cold chain-freezer coverage"
+	chainFreezerTailPruneReasonMissingChainIndex    = "missing cold chain-index coverage"
 	chainFreezerTailPruneReasonMissingEventLogCold  = "missing cold indexed event-log coverage"
 )
 
@@ -98,6 +99,10 @@ type chainFreezerTailFilePruner interface {
 
 type chainFreezerRangeCoverer interface {
 	ChainFreezerRangeCovered(fromBlock, toBlock uint64) (bool, error)
+}
+
+type chainIndexRangeCoverer interface {
+	ChainIndexRangeCovered(fromBlock, toBlock uint64) (bool, error)
 }
 
 type eventLogIndexedRangeCoverer interface {
@@ -219,6 +224,10 @@ func ApplyChainFreezerTailPruneFromDB(db ethdb.KeyValueReader, freezer ChainFree
 		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingColdCoverage)
 		return result, nil
 	}
+	if err := verifyColdChainIndexTailCoverage(cold, currentTail, plan.TargetTail); err != nil {
+		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingChainIndex)
+		return result, nil
+	}
 	if err := verifyColdEventLogTailCoverage(cold, currentTail, plan.TargetTail); err != nil {
 		result.Plan = noChainFreezerTailPrune(plan, chainFreezerTailPruneReasonMissingEventLogCold)
 		return result, nil
@@ -263,6 +272,24 @@ func verifyColdEventLogTailCoverage(cold rawdb.AncientReader, fromTail, toTail u
 		return rawdb.ErrNotInAncient
 	}
 	covered, err := coverer.EventLogIndexedRangeCovered(fromBlock, toTail-1)
+	if err != nil {
+		return err
+	}
+	if !covered {
+		return rawdb.ErrNotInAncient
+	}
+	return nil
+}
+
+func verifyColdChainIndexTailCoverage(cold rawdb.AncientReader, fromTail, toTail uint64) error {
+	if toTail <= fromTail {
+		return nil
+	}
+	coverer, ok := cold.(chainIndexRangeCoverer)
+	if !ok {
+		return rawdb.ErrNotInAncient
+	}
+	covered, err := coverer.ChainIndexRangeCovered(fromTail, toTail-1)
 	if err != nil {
 		return err
 	}
