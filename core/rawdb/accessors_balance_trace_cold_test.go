@@ -80,6 +80,26 @@ func TestBlockBalanceTrace_FallsThroughToColdReader(t *testing.T) {
 	}
 }
 
+func TestBlockBalanceTraceRejectsColdBlockNumberMismatch(t *testing.T) {
+	db := NewMemoryChainDB()
+	cold := newFakeBalanceTraceReader()
+	db.SetBalanceTraceReader(cold)
+	cold.putBlockTrace(12, &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{
+			Hash:   bytes.Repeat([]byte{0x77}, 32),
+			Number: 13,
+		},
+		Timestamp: 1200,
+	})
+
+	if HasBlockBalanceTrace(db, 12) {
+		t.Fatal("HasBlockBalanceTrace accepted cold block-number mismatch")
+	}
+	if got := ReadBlockBalanceTrace(db, 12); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace cold block-number mismatch = %+v, want nil", got)
+	}
+}
+
 func TestAccountTrace_FallsThroughToColdReader(t *testing.T) {
 	db := NewMemoryChainDB()
 	cold := newFakeBalanceTraceReader()

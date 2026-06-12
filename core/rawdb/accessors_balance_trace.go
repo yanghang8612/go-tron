@@ -102,5 +102,8 @@ func readColdBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contrac
 	if err != nil || !ok {
 		return nil
 	}
+	if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != blockNum {
+		return nil
+	}
 	return trace
 }

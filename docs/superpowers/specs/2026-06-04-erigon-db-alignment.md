@@ -1005,6 +1005,11 @@ Status:
   transaction count, block number, and tx hash order. The hot `TransactionInfo`
   writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
   check before new `ti-` rows can be written.
+- Cold block-balance-trace reads now reject a returned
+  `BlockBalanceTrace.block_identifier.number` that disagrees with the requested
+  block before `GetBlockBalanceTrace` or account-trace repair paths can consume
+  the immutable trace row. Older trace payloads that omit the block identifier
+  remain readable.
 - The runbook is `docs/dev/etl-collector.md`.
 
 Remaining:
