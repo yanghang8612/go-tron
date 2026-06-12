@@ -1,6 +1,7 @@
 package domains
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -91,6 +92,61 @@ func assertFoldEquivalent(t *testing.T, label string, seqTrie, parTrie *commitme
 		t.Fatalf("%s: root mismatch\n  seq=%x\n  par=%x", label, seqRoot, parRoot)
 	}
 	assertRowSetsEqual(t, seqStore.rowSet(), parStore.rowSet())
+}
+
+// TestBufferedBranchStoreRePutOverwrites locks the two contracts the parallel
+// fold's per-subtrie buffer relies on. (1) Re-PUTting a prefix OVERWRITES, so a
+// branch rebuilt once per op passing through it costs one slot — not one stale
+// copy per rebuild, the append-only-arena blowup that made the parallel path
+// lose to sequential at high op counts. (2) The buffer keeps an independent
+// value, so mutating the source after PutBranch (its *child is pool-recycled)
+// cannot corrupt what was buffered.
+func TestBufferedBranchStoreRePutOverwrites(t *testing.T) {
+	base := newMapBranchStore()
+	buf := newBufferedBranchStore(base)
+	prefix := []byte{0x0a}
+
+	var a BranchData
+	a.SetHashChild(1, common.Hash{0xaa})
+	for i := 0; i < 100; i++ { // same prefix rebuilt many times
+		if err := buf.PutBranch(prefix, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var final BranchData
+	final.SetHashChild(1, common.Hash{0xbb})
+	final.SetLeafChild(2, []byte{0x05}, common.Hash{0xcc})
+	if err := buf.PutBranch(prefix, final); err != nil {
+		t.Fatal(err)
+	}
+	if len(buf.puts) != 1 {
+		t.Fatalf("re-PUT must overwrite: buffer holds %d entries, want 1", len(buf.puts))
+	}
+	got, ok, err := buf.GetBranch(prefix)
+	if err != nil || !ok {
+		t.Fatalf("GetBranch after re-PUT: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got.Encode(), final.Encode()) {
+		t.Fatal("GetBranch after re-PUT returned a stale value")
+	}
+
+	// Independence: mutate the source after PUT; the buffered value must not move.
+	src := final
+	if err := buf.PutBranch([]byte{0x0b}, src); err != nil {
+		t.Fatal(err)
+	}
+	src.SetLeafChild(2, []byte{0x09}, common.Hash{0xee})
+	got2, _, _ := buf.GetBranch([]byte{0x0b})
+	if !bytes.Equal(got2.Encode(), final.Encode()) {
+		t.Fatal("buffered value changed when the source was mutated after PUT")
+	}
+
+	if err := buf.flush(base); err != nil {
+		t.Fatal(err)
+	}
+	if rows := base.rowSet(); len(rows) != 2 {
+		t.Fatalf("flush emitted %d rows, want 2 (one per distinct prefix)", len(rows))
+	}
 }
 
 // TestParallelFoldMatchesSequential_Incremental drives many rounds of mixed
