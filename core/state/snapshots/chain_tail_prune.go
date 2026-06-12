@@ -251,11 +251,18 @@ func verifyColdEventLogTailCoverage(cold rawdb.AncientReader, fromTail, toTail u
 	if toTail <= fromTail {
 		return nil
 	}
+	fromBlock := fromTail
+	if fromBlock == 0 {
+		fromBlock = 1
+	}
+	if toTail <= fromBlock {
+		return nil
+	}
 	coverer, ok := cold.(eventLogRangeCoverer)
 	if !ok {
 		return rawdb.ErrNotInAncient
 	}
-	covered, err := coverer.EventLogRangeCovered(fromTail, toTail-1)
+	covered, err := coverer.EventLogRangeCovered(fromBlock, toTail-1)
 	if err != nil {
 		return err
 	}

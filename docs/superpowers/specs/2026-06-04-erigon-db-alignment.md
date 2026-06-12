@@ -446,9 +446,11 @@ Status:
   cold log/index coverage, so archive log queries do not lose their immutable
   sidecar path when local freezer files are hidden or reclaimed. The apply path
   verifies cold chain-freezer and event-log coverage before calling runtime
-  `TruncateTail`; snapshot managers now prove continuous chain-freezer and log
-  coverage for the whole tail range instead of only probing endpoints. Tests
-  pin missing-stage no-ops, lookup-stage caps, event-log-stage caps,
+  `TruncateTail`; event-log coverage starts at block 1 because genesis has no
+  transaction logs, while genesis chain rows remain covered by the cold freezer
+  check. Snapshot managers now prove continuous chain-freezer and log coverage
+  for the whole tail range instead of only probing endpoints. Tests pin
+  missing-stage no-ops, lookup-stage caps, event-log-stage caps,
   retention-window caps, ancient-head caps, short-chain behavior, DB-backed
   stage reads, successful tail truncation, no-op behavior when cold coverage is
   missing, and rejection of gapped cold coverage.

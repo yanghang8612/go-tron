@@ -171,7 +171,8 @@ only one sidecar needs to be refreshed. Event-log builds advance the
 `SnapshotEventLogBuild` stage to the highest continuously covered source block.
 Snapshot restore/bootstrap derives the same stage from verified manifest
 `event-log` segments, and minimal-mode freezer tail pruning rechecks continuous
-cold event-log coverage before hiding or reclaiming local freezer rows.
+cold event-log coverage from block 1 onward before hiding or reclaiming local
+freezer rows; genesis remains guarded by the cold chain-freezer coverage check.
 
 `snapshot prune-retired` removes physical files listed in the manifest's
 `retired` section after verifying that all active segments are still present.

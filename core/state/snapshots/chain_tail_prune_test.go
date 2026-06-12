@@ -202,7 +202,7 @@ func TestApplyChainFreezerTailPruneFromDBTruncatesTailWithColdCoverage(t *testin
 	if err != nil {
 		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
-	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 0, 9)
+	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 1, 9)
 	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, eventRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
@@ -280,6 +280,12 @@ func TestApplyChainFreezerTailPruneRequiresEventLogColdCoverage(t *testing.T) {
 	}
 	if tail, err := f.Tail(); err != nil || tail != 0 {
 		t.Fatalf("freezer tail = %d/%v, want 0/nil", tail, err)
+	}
+}
+
+func TestVerifyColdEventLogTailCoverageSkipsGenesis(t *testing.T) {
+	if err := verifyColdEventLogTailCoverage(rawdb.NoopAncient{}, 0, 1); err != nil {
+		t.Fatalf("verifyColdEventLogTailCoverage genesis-only = %v, want nil", err)
 	}
 }
 
@@ -428,7 +434,7 @@ func TestApplyChainFreezerTailPrunePhysicallyReclaimsAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
 	}
-	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 0, 11)
+	eventRef := buildChainTailPruneEventLogSegment(t, snapshotDir, 1, 11)
 	if err := PublishManifest(snapshotDir, NewManifest(0, 0, []SegmentRef{ref, eventRef})); err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
