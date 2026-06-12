@@ -3,8 +3,6 @@ package net
 import (
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,13 +31,6 @@ const (
 	minFetchRequestInterval = tsync.MinFetchRequestInterval
 	peerJoinAttemptInterval = 2 * time.Second
 )
-
-type syncDiagnostics struct {
-	blockBufferLen int
-	requestedLen   int
-	retryListLen   int
-	peerState      string
-}
 
 type syncPeerState struct {
 	peer *p2p.Peer
@@ -1487,7 +1478,7 @@ func (ss *SyncService) recordImportedBatch(batch bufferedSyncBatch, applied int,
 	)
 
 	ss.mu.Lock()
-	var diag syncDiagnostics
+	var diag syncdl.Diagnostics
 	if emit {
 		diag = ss.snapshotDiagnosticsLocked()
 	}
@@ -1789,36 +1780,28 @@ func (ss *SyncService) sessionProgressLocked() syncdl.SessionProgress {
 	return progress
 }
 
-func (ss *SyncService) snapshotDiagnosticsLocked() syncDiagnostics {
-	diag := syncDiagnostics{
-		blockBufferLen: len(ss.blockBuffer),
-		requestedLen:   len(ss.requested),
-		retryListLen:   len(ss.retryList),
-	}
-	if len(ss.peers) == 0 {
-		return diag
-	}
-	ids := make([]string, 0, len(ss.peers))
-	for id := range ss.peers {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	parts := make([]string, 0, len(ids))
-	for _, id := range ids {
-		ps := ss.peers[id]
+func (ss *SyncService) snapshotDiagnosticsLocked() syncdl.Diagnostics {
+	peers := make([]syncdl.PeerDiagnostics, 0, len(ss.peers))
+	for id, ps := range ss.peers {
 		if ps == nil {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s{inflight=%d fetchList=%d pending=%d remain=%d chainRequested=%t done=%t}",
-			id, ps.inflight, len(ps.fetchList), len(ps.pending), ps.remainNum, ps.chainRequested, ps.done))
+		peers = append(peers, syncdl.PeerDiagnostics{
+			ID:             id,
+			Inflight:       ps.inflight,
+			FetchListLen:   len(ps.fetchList),
+			PendingLen:     len(ps.pending),
+			RemainNum:      ps.remainNum,
+			ChainRequested: ps.chainRequested,
+			Done:           ps.done,
+		})
 	}
-	diag.peerState = strings.Join(parts, ";")
-	return diag
+	return syncdl.NewDiagnostics(len(ss.blockBuffer), len(ss.requested), len(ss.retryList), peers)
 }
 
 // reportSegment emits the throttled "Imported chain segment" summary. Called
 // without ss.mu held.
-func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, head uint64, remain int64, peer *p2p.Peer) {
+func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, head uint64, remain int64, peer *p2p.Peer) {
 	elapsed := time.Since(s.StartTime)
 	if elapsed <= 0 {
 		elapsed = 1
@@ -1910,12 +1893,12 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncDiagnostics, hea
 		"dpUpdate", ethcommon.PrettyDuration(s.ApplyStats.DPUpdate),
 		"persist", ethcommon.PrettyDuration(s.ApplyStats.Persist),
 		"hooks", ethcommon.PrettyDuration(s.ApplyStats.Hooks),
-		"blockBuffer", diag.blockBufferLen,
-		"requested", diag.requestedLen,
-		"retryList", diag.retryListLen,
+		"blockBuffer", diag.BlockBufferLen,
+		"requested", diag.RequestedLen,
+		"retryList", diag.RetryListLen,
 	}
-	if diag.peerState != "" {
-		detail = append(detail, "peerState", diag.peerState)
+	if diag.PeerState != "" {
+		detail = append(detail, "peerState", diag.PeerState)
 	}
 	syncLog.Debug("Imported chain segment details", detail...)
 }
