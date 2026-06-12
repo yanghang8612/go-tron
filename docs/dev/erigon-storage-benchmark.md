@@ -46,6 +46,11 @@ The output path is printed at startup. Each JSON row contains:
 - `chainLookupPruneToBlock`
 - `chainLookupBlockIndexes`
 - `chainLookupTxIndexes`
+- `retiredPruneSegments`
+- `retiredPruneDeleted`
+- `retiredPruneMissing`
+- `retiredPruneSkippedActive`
+- `retiredPruneBytesDeleted`
 - `tailPrunedThroughBlock`
 - `tailPrunedFiles`
 - `historyWindow`
@@ -81,12 +86,13 @@ scripts/dev/storage_benchmark.sh \
   --keep
 ```
 
-This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, and
-runs `gtron snapshot prune-chain-lookups` with the catalog signer as a trusted
-key for each selected mode. `blocks` stops there and should report lookup-prune
-coverage with no freezer-tail prune. `minimal` then restarts once so the
-tail-prune lifecycle can run. Use a small `--history-window` for short dev
-samples; production and soak runs should use the intended retention window.
+This builds the cold chain-freezer segment, signs `snapshot-catalog.json`, runs
+`gtron snapshot prune-chain-lookups` with the catalog signer as a trusted key,
+and then runs `gtron snapshot prune-retired` for each selected mode. `blocks`
+stops there and should report lookup-prune plus retired snapshot-file cleanup
+with no freezer-tail prune. `minimal` then restarts once so the tail-prune
+lifecycle can run. Use a small `--history-window` for short dev samples;
+production and soak runs should use the intended retention window.
 
 When the same run also passes `--build-derived-indexes`, the signed drill also
 runs `gtron snapshot prune-balance-traces` and
@@ -94,6 +100,11 @@ runs `gtron snapshot prune-balance-traces` and
 verify the signed catalog and compare hot rows against the cold sidecars before
 deleting anything, so the JSON row can report trace/bloom hot-row reclamation
 alongside chain lookup pruning.
+
+`prune-retired` verifies the active manifest before deleting retired snapshot
+segment files. The JSON row reports the retired segment count, deleted/missing
+file count, active-file skips, and reclaimed bytes through the `retiredPrune*`
+fields.
 
 After the drill, `gtron db freezer-status --datadir <dir>` prints the local
 freezer head/tail plus per-table physical tail, hidden tail, shard IDs, and

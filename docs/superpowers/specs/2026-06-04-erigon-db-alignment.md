@@ -710,9 +710,12 @@ Status:
   active segment count, and build time in the same JSONL row. When the signed
   cold-prune drill runs with derived indexes enabled, it also signs the updated
   manifest and runs the verified balance-trace and section-bloom hot-row prune
-  commands, recording reclaimed block trace, account trace, and bloom rows. Each
-  sample now also runs `gtron db storage-alerts` before the JSONL row is emitted
-  and records `freezerAlertStatus`, `freezerAlertIssues`,
+  commands, recording reclaimed block trace, account trace, and bloom rows. The
+  signed cold-prune drill also runs `gtron snapshot prune-retired` and records
+  retired snapshot segment count, deleted/missing/skipped files, and reclaimed
+  bytes through `retiredPrune*` JSON fields. Each sample now also runs
+  `gtron db storage-alerts` before the JSONL row is emitted and records
+  `freezerAlertStatus`, `freezerAlertIssues`,
   `freezerAlertHiddenBytes`, `stageVerifyStatus`, and `stageVerifyIssues`, so
   critical freezer, stage, prune, and cold-coverage regressions fail the sample
   before it is used for Erigon-style storage comparisons.

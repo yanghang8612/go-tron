@@ -45,6 +45,11 @@ RUN_SIGNED_COLD_PRUNE=0
 RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
 RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
 RUN_CHAIN_LOOKUP_TX_INDEXES=0
+RUN_RETIRED_PRUNE_SEGMENTS=0
+RUN_RETIRED_PRUNE_DELETED=0
+RUN_RETIRED_PRUNE_MISSING=0
+RUN_RETIRED_PRUNE_SKIPPED_ACTIVE=0
+RUN_RETIRED_PRUNE_BYTES_DELETED=0
 RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
 RUN_TAIL_PRUNED_FILES=0
 RUN_FREEZER_ALERT_STATUS="not-run"
@@ -189,6 +194,11 @@ reset_run_metrics() {
   RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK=-1
   RUN_CHAIN_LOOKUP_BLOCK_INDEXES=0
   RUN_CHAIN_LOOKUP_TX_INDEXES=0
+  RUN_RETIRED_PRUNE_SEGMENTS=0
+  RUN_RETIRED_PRUNE_DELETED=0
+  RUN_RETIRED_PRUNE_MISSING=0
+  RUN_RETIRED_PRUNE_SKIPPED_ACTIVE=0
+  RUN_RETIRED_PRUNE_BYTES_DELETED=0
   RUN_TAIL_PRUNED_THROUGH_BLOCK=-1
   RUN_TAIL_PRUNED_FILES=0
   RUN_FREEZER_ALERT_STATUS="not-run"
@@ -530,6 +540,23 @@ run_signed_cold_prune_drill() {
     RUN_SECTION_BLOOM_ROWS="${bloom_rows:-0}"
   fi
 
+  local retired_out="$WORKDIR/$mode-prune-retired.out"
+  echo "pruning retired snapshot segment files" >>"$log_path"
+  if ! run_logged "$retired_out" "$GTRON" snapshot prune-retired --datadir "$datadir" >>"$log_path"; then
+    die "snapshot prune-retired failed; see $log_path"
+  fi
+  local retired_segments retired_deleted retired_missing retired_skipped retired_bytes_deleted
+  retired_segments="$(sed -n 's/.*retired=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  retired_deleted="$(sed -n 's/.*deleted=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  retired_missing="$(sed -n 's/.*missing=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  retired_skipped="$(sed -n 's/.*skippedActive=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  retired_bytes_deleted="$(sed -n 's/.*bytesDeleted=\([0-9][0-9]*\).*/\1/p' "$retired_out" | tail -1)"
+  RUN_RETIRED_PRUNE_SEGMENTS="${retired_segments:-0}"
+  RUN_RETIRED_PRUNE_DELETED="${retired_deleted:-0}"
+  RUN_RETIRED_PRUNE_MISSING="${retired_missing:-0}"
+  RUN_RETIRED_PRUNE_SKIPPED_ACTIVE="${retired_skipped:-0}"
+  RUN_RETIRED_PRUNE_BYTES_DELETED="${retired_bytes_deleted:-0}"
+
   if [ "$mode" = "minimal" ]; then
     local port_base=$((BASE_PORT + idx * 20))
     local restart_log="$WORKDIR/$mode-producer-post-prune-restart.log"
@@ -573,6 +600,9 @@ emit_result() {
     "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" "$RUN_SECTION_BLOOM_ROWS" \
     "$RUN_SIGNED_COLD_PRUNE" "$RUN_CHAIN_LOOKUP_PRUNE_TO_BLOCK" \
     "$RUN_CHAIN_LOOKUP_BLOCK_INDEXES" "$RUN_CHAIN_LOOKUP_TX_INDEXES" \
+    "$RUN_RETIRED_PRUNE_SEGMENTS" "$RUN_RETIRED_PRUNE_DELETED" \
+    "$RUN_RETIRED_PRUNE_MISSING" "$RUN_RETIRED_PRUNE_SKIPPED_ACTIVE" \
+    "$RUN_RETIRED_PRUNE_BYTES_DELETED" \
     "$RUN_TAIL_PRUNED_THROUGH_BLOCK" "$RUN_TAIL_PRUNED_FILES" "$HISTORY_WINDOW" \
     "$RUN_FREEZER_ALERT_STATUS" "$RUN_FREEZER_ALERT_ISSUES" "$RUN_FREEZER_ALERT_HIDDEN_BYTES" \
     "$RUN_STAGE_VERIFY_STATUS" "$RUN_STAGE_VERIFY_ISSUES" \
@@ -589,6 +619,8 @@ keys = [
     "sectionBloomPruneToSection", "sectionBloomRowsPruned",
     "signedColdPrune", "chainLookupPruneToBlock",
     "chainLookupBlockIndexes", "chainLookupTxIndexes",
+    "retiredPruneSegments", "retiredPruneDeleted", "retiredPruneMissing",
+    "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertStatus", "freezerAlertIssues", "freezerAlertHiddenBytes",
     "stageVerifyStatus", "stageVerifyIssues",
@@ -603,6 +635,8 @@ ints = {
     "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
     "sectionBloomPruneToSection", "sectionBloomRowsPruned", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
+    "retiredPruneSegments", "retiredPruneDeleted", "retiredPruneMissing",
+    "retiredPruneSkippedActive", "retiredPruneBytesDeleted",
     "tailPrunedThroughBlock", "tailPrunedFiles", "historyWindow",
     "freezerAlertIssues", "freezerAlertHiddenBytes",
     "stageVerifyIssues",
