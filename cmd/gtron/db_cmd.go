@@ -288,6 +288,9 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 		if !row.present {
 			continue
 		}
+		if !dbStageStatusRequiresCanonicalVerification(row.stage) {
+			continue
+		}
 		if row.progress.HasBlockHash {
 			if row.verified != "canonical" {
 				issues = append(issues, fmt.Sprintf("%s verified=%s", row.stage, row.verified))
@@ -299,6 +302,23 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 		}
 	}
 	return issues
+}
+
+func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
+	switch stage {
+	case rawdb.StageHeaders,
+		rawdb.StageBodies,
+		rawdb.StageExecution,
+		rawdb.StageCommitment,
+		rawdb.StageFinish,
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+		rawdb.StageSyncFinish:
+		return true
+	default:
+		return false
+	}
 }
 
 func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbStageStatusRow, error) {
@@ -368,7 +388,7 @@ func dbStageStatusGroup(stage rawdb.StageID) string {
 	switch stage {
 	case rawdb.StageHeaders, rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish:
 		return "canonical"
-	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
+	case rawdb.StageSyncInventory, rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady, rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish:
 		return "sync"
 	case rawdb.StageSnapshotInstall, rawdb.StageSnapshotBuild, rawdb.StageSnapshotLatestBuild, rawdb.StageSnapshotLatest, rawdb.StageSnapshotHistory, rawdb.StageSnapshotAccessor, rawdb.StageSnapshotCommitmentFlush:
 		return "snapshot"

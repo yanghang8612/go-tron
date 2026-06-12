@@ -33,6 +33,11 @@ const (
 	// transient downloader staging table. It is not canonical Headers/Bodies
 	// progress and does not imply the staged bodies are contiguous.
 	StageSyncBodies StageID = "SyncBodies"
+	// StageSyncBodiesReady records the highest contiguous sync block body that
+	// can be drained from the current canonical head. Unlike StageSyncBodies,
+	// this is a contiguous frontier and is the downloader-stage boundary future
+	// execution/import stages can safely consume.
+	StageSyncBodiesReady StageID = "SyncBodiesReady"
 	// StageSyncImport records the latest block successfully imported by
 	// SyncService. Canonical execution stages are advanced separately by chain
 	// insertion and snapshot restore paths.
@@ -116,6 +121,7 @@ func KnownStageProgressStages() []StageID {
 		StageFinish,
 		StageSyncInventory,
 		StageSyncBodies,
+		StageSyncBodiesReady,
 		StageSyncImport,
 		StageSyncExecution,
 		StageSyncCommitment,

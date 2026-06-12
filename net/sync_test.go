@@ -161,6 +161,32 @@ func TestSyncServiceDropsMissingFirstStagedBodyProgressOnSessionStart(t *testing
 	}
 }
 
+func TestSyncServiceTracksContiguousStagedBodiesReady(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block2 := stubBlock(2, bc.CurrentBlock().Hash())
+	block3 := stubBlock(3, block2.Hash())
+	ss := NewSyncService(bc, nil)
+
+	ss.stageSyncBody(block3, nil)
+	row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies)
+	if err != nil || !ok || row.BlockNum != block3.Number() || !row.HasBlockHash || row.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodies after out-of-order block3 = %+v ok=%v err=%v, want block3", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after gapped block3 = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+
+	ss.stageSyncBody(block2, nil)
+	row, ok, err = rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies)
+	if err != nil || !ok || row.BlockNum != block3.Number() || row.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodies after later block2 = %+v ok=%v err=%v, want monotonic block3", row, ok, err)
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block3.Number() || !ready.HasBlockHash || ready.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodiesReady after block2 fills gap = %+v ok=%v err=%v, want contiguous block3", ready, ok, err)
+	}
+}
+
 func TestSyncServiceKeepsCanonicalSyncImportProgressOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 2)
 	block1 := bc.GetBlockByNumber(1)
@@ -223,6 +249,12 @@ func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
 		t.Fatalf("write sync staged block: %v", err)
 	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodies, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
 	ss := NewSyncService(bc, nil)
 
 	ss.mu.Lock()
@@ -232,6 +264,12 @@ func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 
 	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
 		t.Fatalf("staged block after reset ok=%v err=%v, want deleted", ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || ok {
+		t.Fatalf("sync bodies after reset = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("sync bodies ready after reset = %+v ok=%v err=%v, want deleted", row, ok, err)
 	}
 }
 

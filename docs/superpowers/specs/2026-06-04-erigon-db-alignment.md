@@ -265,7 +265,9 @@ Status:
 - `SyncService` now persists lightweight downloader/body/import pipeline watermarks:
   `SyncInventory` records the highest peer inventory target observed,
   hash-bound `SyncBodies` records the highest block body accepted into the
-  transient downloader staging table, and hash-bound `SyncImport`,
+  transient downloader staging table without regressing on out-of-order
+  arrivals, hash-bound `SyncBodiesReady` records the contiguous staged-body
+  frontier drainable from the current head, and hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` record the latest
   sync-driven block that completed the live import pipeline. New sync sessions
   restore `SyncInventory` when it is ahead of the current head, preserving
@@ -316,8 +318,9 @@ Status:
   prune, and chain-freezer progress. Hash-bound rows are checked through the
   freezer-aware chain reader, so old canonical blocks that have left hot Pebble
   do not produce false mismatch diagnostics. `--db.stage.verify` turns the
-  same view into an automation gate that fails on mismatched/missing canonical
-  hashes or legacy unbound canonical stage rows.
+  same view into an automation gate for canonical and sync-import stages; it
+  fails on mismatched/missing canonical hashes or legacy unbound canonical
+  stage rows while leaving downloader body stages as diagnostics.
 - The state pruner now rejects legacy/unbound `StageFinish` rows instead of
   pruning against an unverifiable height, and its fallback canonical-hash lookup
   uses the freezer-aware rawdb block-hash accessor.

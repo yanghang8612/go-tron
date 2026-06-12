@@ -393,6 +393,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
 	ss.deleteImportedSyncBodiesThrough(head)
 	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
+	ss.writeSyncBodiesReadyProgress()
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
@@ -1410,7 +1411,76 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", err)
 		return
 	}
-	ss.writeStageProgress(rawdb.StageSyncBodies, block.Number(), block.Hash(), true)
+	ss.writeSyncBodiesAcceptedProgress(block.Number(), block.Hash())
+	ss.writeSyncBodiesReadyProgress()
+}
+
+func (ss *SyncService) writeSyncBodiesAcceptedProgress(blockNum uint64, blockHash tcommon.Hash) {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies)
+	if err != nil {
+		syncLog.Warn("Read sync bodies stage progress failed", "err", err)
+		return
+	}
+	if ok && row.BlockNum > blockNum {
+		return
+	}
+	ss.writeStageProgress(rawdb.StageSyncBodies, blockNum, blockHash, true)
+}
+
+func (ss *SyncService) writeSyncBodiesReadyProgress() {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	head := ss.chain.CurrentBlock()
+	if head == nil {
+		return
+	}
+	expected := head.Number() + 1
+	var (
+		lastNum  uint64
+		lastHash tcommon.Hash
+		haveLast bool
+	)
+	for {
+		if ss.targetHeadNum != 0 && expected > ss.targetHeadNum {
+			break
+		}
+		row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, expected)
+		if err != nil {
+			syncLog.Warn("Read sync staged block for ready progress failed", "number", expected, "err", err)
+			break
+		}
+		if !ok {
+			break
+		}
+		lastNum = row.Number
+		lastHash = row.Hash
+		haveLast = true
+		expected++
+		if expected == 0 {
+			break
+		}
+	}
+	if !haveLast {
+		if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady); err != nil {
+			syncLog.Warn("Delete sync bodies ready stage progress failed", "err", err)
+		}
+		return
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, lastNum, lastHash); err != nil {
+		syncLog.Warn("Persist sync bodies ready stage progress failed", "block", lastNum, "hash", lastHash, "err", err)
+	}
 }
 
 func (ss *SyncService) deleteImportedSyncBodies(batch bufferedSyncBatch, applied int) {
@@ -1460,11 +1530,15 @@ func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNu
 		return
 	}
 	if !ok || row.BlockNum < blockNum {
+		ss.writeSyncBodiesReadyProgress()
 		return
 	}
 	if !haveLastRestored {
 		if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodies); err != nil {
 			syncLog.Warn("Delete stale sync bodies stage progress failed", "err", err)
+		}
+		if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady); err != nil {
+			syncLog.Warn("Delete sync bodies ready stage progress failed", "err", err)
 		}
 		if deleted > 0 {
 			syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", deleted)
@@ -1475,6 +1549,7 @@ func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNu
 		syncLog.Warn("Rewind sync bodies stage progress failed", "block", lastRestoredNum, "hash", lastRestoredHash, "err", err)
 		return
 	}
+	ss.writeSyncBodiesReadyProgress()
 	if deleted > 0 {
 		syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", deleted, "rewoundTo", lastRestoredNum)
 	}
@@ -1490,6 +1565,12 @@ func (ss *SyncService) deleteAllSyncBodies() {
 	}
 	if _, err := rawdb.DeleteAllSyncStagedBlocks(db); err != nil {
 		syncLog.Warn("Delete sync staged blocks failed", "err", err)
+	}
+	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodies); err != nil {
+		syncLog.Warn("Delete sync bodies stage progress failed", "err", err)
+	}
+	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady); err != nil {
+		syncLog.Warn("Delete sync bodies ready stage progress failed", "err", err)
 	}
 }
 

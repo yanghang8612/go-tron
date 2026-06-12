@@ -515,6 +515,9 @@ func TestDBStageStatusCmd(t *testing.T) {
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), mismatchHash); err != nil {
 		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
 	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, block1.Number(), mismatchHash); err != nil {
+		t.Fatalf("WriteStageProgress SyncImport: %v", err)
+	}
 	if err := rawdb.WriteStageProgress(db, rawdb.StageSnapshotHistory, 11); err != nil {
 		t.Fatalf("WriteStageProgress SnapshotHistory: %v", err)
 	}
@@ -537,6 +540,7 @@ func TestDBStageStatusCmd(t *testing.T) {
 		"known=",
 		fmt.Sprintf("group=canonical name=%s value=1 hash=%x verified=canonical", rawdb.StageHeaders, block1.Hash()),
 		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncBodies, mismatchHash, block1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncImport, mismatchHash, block1.Hash()),
 		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
 		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
 		"group=unknown name=FutureStage value=77 hash=none verified=unbound",
@@ -550,8 +554,11 @@ func TestDBStageStatusCmd(t *testing.T) {
 	verifyOutput, err := captureDBCmdStdout(t, func() error {
 		return dbStageStatusCmd(verifyCtx)
 	})
-	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") || !strings.Contains(err.Error(), string(rawdb.StageSyncBodies)) || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodies mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "stage status verification failed") || !strings.Contains(err.Error(), string(rawdb.StageSyncImport)) || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncImport mismatch", err)
+	}
+	if strings.Contains(err.Error(), string(rawdb.StageSyncBodies)) {
+		t.Fatalf("dbStageStatusCmd verify err = %v, downloader SyncBodies should not fail verification", err)
 	}
 	if !strings.Contains(verifyOutput, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
 		t.Fatalf("verify output missing SyncBodies line:\n%s", verifyOutput)
