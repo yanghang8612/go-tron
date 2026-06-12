@@ -40,6 +40,13 @@ type SyncStagedBlockWriteResult struct {
 	ProgressWriteError  error
 }
 
+type SyncStagedResetResult struct {
+	DeletedBodies            int
+	StagedDeleteError        error
+	BodiesProgressError      error
+	BodiesReadyProgressError error
+}
+
 func WriteSyncStagedBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	return WriteSyncStagedBlockRaw(db, block, nil)
 }
@@ -299,4 +306,17 @@ func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 		}
 	}
 	return len(keys), nil
+}
+
+// ResetSyncStagedBodies clears the downloader body staging table and its body
+// progress rows. It attempts every cleanup step and reports per-step errors so
+// callers can log without leaving later cleanup undone.
+func ResetSyncStagedBodies(db ethdb.KeyValueStore) SyncStagedResetResult {
+	var result SyncStagedResetResult
+	deleted, err := DeleteAllSyncStagedBlocks(db)
+	result.DeletedBodies = deleted
+	result.StagedDeleteError = err
+	result.BodiesProgressError = DeleteStageProgress(db, StageSyncBodies)
+	result.BodiesReadyProgressError = DeleteStageProgress(db, StageSyncBodiesReady)
+	return result
 }

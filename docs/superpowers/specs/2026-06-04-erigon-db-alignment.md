@@ -317,9 +317,11 @@ Status:
   the storage-level tail delete plus `SyncBodies` rewind/delete rule is shared
   through `core/rawdb`. Accepted body staging now uses the same storage layer
   to persist the raw body and advance `SyncBodies` only when the watermark
-  would not regress. `SyncBodiesReady` refresh is also a downloader helper now:
-  it recomputes the contiguous staged-body frontier and writes or deletes the
-  ready row while reporting read/write errors back to `SyncService`.
+  would not regress. Active reset now uses a shared `core/rawdb` cleanup helper
+  to clear staged bodies plus `SyncBodies`/`SyncBodiesReady` rows.
+  `SyncBodiesReady` refresh is also a downloader helper now: it recomputes the
+  contiguous staged-body frontier and writes or deletes the ready row while
+  reporting read/write errors back to `SyncService`.
 - The downloader's wire batch and local import batch are now separate knobs:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per

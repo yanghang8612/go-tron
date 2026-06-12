@@ -1407,14 +1407,15 @@ func (ss *SyncService) deleteAllSyncBodies() {
 	if db == nil {
 		return
 	}
-	if _, err := rawdb.DeleteAllSyncStagedBlocks(db); err != nil {
-		syncLog.Warn("Delete sync staged blocks failed", "err", err)
+	result := rawdb.ResetSyncStagedBodies(db)
+	if result.StagedDeleteError != nil {
+		syncLog.Warn("Delete sync staged blocks failed", "err", result.StagedDeleteError)
 	}
-	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodies); err != nil {
-		syncLog.Warn("Delete sync bodies stage progress failed", "err", err)
+	if result.BodiesProgressError != nil {
+		syncLog.Warn("Delete sync bodies stage progress failed", "err", result.BodiesProgressError)
 	}
-	if err := rawdb.DeleteStageProgress(db, rawdb.StageSyncBodiesReady); err != nil {
-		syncLog.Warn("Delete sync bodies ready stage progress failed", "err", err)
+	if result.BodiesReadyProgressError != nil {
+		syncLog.Warn("Delete sync bodies ready stage progress failed", "err", result.BodiesReadyProgressError)
 	}
 }
 

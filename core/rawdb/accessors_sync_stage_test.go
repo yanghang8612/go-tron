@@ -264,6 +264,43 @@ func TestDeleteAllSyncStagedBlocks(t *testing.T) {
 	}
 }
 
+func TestResetSyncStagedBodiesDeletesRowsAndProgress(t *testing.T) {
+	db := NewMemoryDatabase()
+	for n := uint64(1); n <= 3; n++ {
+		block := testSyncStagedBlock(n, common.Hash{byte(n - 1)})
+		if err := WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", n, err)
+		}
+		if n == 3 {
+			if err := WriteStageProgressWithHash(db, StageSyncBodies, block.Number(), block.Hash()); err != nil {
+				t.Fatalf("write sync bodies progress: %v", err)
+			}
+			if err := WriteStageProgressWithHash(db, StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+				t.Fatalf("write sync bodies ready progress: %v", err)
+			}
+		}
+	}
+
+	result := ResetSyncStagedBodies(db)
+	if result.StagedDeleteError != nil || result.BodiesProgressError != nil || result.BodiesReadyProgressError != nil {
+		t.Fatalf("reset result has error: %+v", result)
+	}
+	if result.DeletedBodies != 3 {
+		t.Fatalf("DeletedBodies = %d, want 3", result.DeletedBodies)
+	}
+	for n := uint64(1); n <= 3; n++ {
+		if _, ok, err := ReadSyncStagedBlock(db, n); err != nil || ok {
+			t.Fatalf("staged block %d after reset ok=%v err=%v, want deleted", n, ok, err)
+		}
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncBodies); err != nil || ok {
+		t.Fatalf("sync bodies progress after reset = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+	if row, ok, err := ReadStageProgressRow(db, StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("sync bodies ready progress after reset = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func testSyncStagedBlock(number uint64, parent common.Hash) *types.Block {
 	return types.NewBlockFromPB(&corepb.Block{
 		BlockHeader: &corepb.BlockHeader{
