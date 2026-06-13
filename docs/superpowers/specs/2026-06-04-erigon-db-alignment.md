@@ -349,7 +349,10 @@ Status:
   while imported-body cleanup uses `core/rawdb` to delete the applied raw body
   rows as one batch. Active reset now uses a shared
   `core/rawdb` cleanup helper to clear staged bodies plus
-  `SyncBodies`/`SyncBodiesReady` rows.
+  `SyncBodies`/`SyncBodiesReady` rows, and range cleanup for startup
+  imported-through deletes, stale-tail deletes, and full-reset staged body
+  deletes now flushes through rawdb batches where the backing store supports
+  them.
   `SyncBodiesReady` refresh and drain-limit reads are downloader helpers now:
   refresh recomputes the contiguous staged-body frontier and writes or deletes
   the ready row, while the drain-limit helper reads the hash-bound ready row

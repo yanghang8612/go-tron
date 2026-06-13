@@ -194,18 +194,22 @@ func TestWriteSyncStagedBlockRawAndProgressStagesBodyOnProgressReadError(t *test
 }
 
 func TestDeleteSyncStagedBlocksThrough(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	for n := uint64(1); n <= 4; n++ {
-		if err := WriteSyncStagedBlock(db, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
+		if err := WriteSyncStagedBlock(base, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
 			t.Fatalf("write staged block %d: %v", n, err)
 		}
 	}
+	db := &countingBatchStore{KeyValueStore: base}
 	deleted, err := DeleteSyncStagedBlocksThrough(db, 2)
 	if err != nil {
 		t.Fatalf("delete staged blocks through: %v", err)
 	}
 	if deleted != 2 {
 		t.Fatalf("deleted staged blocks = %d, want 2", deleted)
+	}
+	if db.batches != 1 || db.directDeletes != 0 {
+		t.Fatalf("delete through used batches=%d directDeletes=%d, want one batch", db.batches, db.directDeletes)
 	}
 	for n := uint64(1); n <= 4; n++ {
 		_, ok, err := ReadSyncStagedBlock(db, n)
@@ -222,18 +226,22 @@ func TestDeleteSyncStagedBlocksThrough(t *testing.T) {
 }
 
 func TestDeleteSyncStagedBlocksFrom(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	for n := uint64(1); n <= 4; n++ {
-		if err := WriteSyncStagedBlock(db, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
+		if err := WriteSyncStagedBlock(base, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
 			t.Fatalf("write staged block %d: %v", n, err)
 		}
 	}
+	db := &countingBatchStore{KeyValueStore: base}
 	deleted, err := DeleteSyncStagedBlocksFrom(db, 3)
 	if err != nil {
 		t.Fatalf("delete staged blocks from: %v", err)
 	}
 	if deleted != 2 {
 		t.Fatalf("deleted staged blocks = %d, want 2", deleted)
+	}
+	if db.batches != 1 || db.directDeletes != 0 {
+		t.Fatalf("delete from used batches=%d directDeletes=%d, want one batch", db.batches, db.directDeletes)
 	}
 	for n := uint64(1); n <= 4; n++ {
 		_, ok, err := ReadSyncStagedBlock(db, n)
@@ -313,18 +321,22 @@ func TestPruneSyncStagedBlocksFromDeletesBodiesProgressWithoutRestoredBlock(t *t
 }
 
 func TestDeleteAllSyncStagedBlocks(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	for n := uint64(1); n <= 3; n++ {
-		if err := WriteSyncStagedBlock(db, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
+		if err := WriteSyncStagedBlock(base, testSyncStagedBlock(n, common.Hash{byte(n - 1)})); err != nil {
 			t.Fatalf("write staged block %d: %v", n, err)
 		}
 	}
+	db := &countingBatchStore{KeyValueStore: base}
 	deleted, err := DeleteAllSyncStagedBlocks(db)
 	if err != nil {
 		t.Fatalf("delete all staged blocks: %v", err)
 	}
 	if deleted != 3 {
 		t.Fatalf("deleted staged blocks = %d, want 3", deleted)
+	}
+	if db.batches != 1 || db.directDeletes != 0 {
+		t.Fatalf("delete all used batches=%d directDeletes=%d, want one batch", db.batches, db.directDeletes)
 	}
 	for n := uint64(1); n <= 3; n++ {
 		if _, ok, err := ReadSyncStagedBlock(db, n); err != nil || ok {
@@ -398,13 +410,19 @@ func equalUint64s(a, b []uint64) bool {
 type countingBatchStore struct {
 	ethdb.KeyValueStore
 
-	directPuts int
-	batches    int
+	directPuts    int
+	directDeletes int
+	batches       int
 }
 
 func (db *countingBatchStore) Put(key []byte, value []byte) error {
 	db.directPuts++
 	return db.KeyValueStore.Put(key, value)
+}
+
+func (db *countingBatchStore) Delete(key []byte) error {
+	db.directDeletes++
+	return db.KeyValueStore.Delete(key)
 }
 
 func (db *countingBatchStore) NewBatch() ethdb.Batch {

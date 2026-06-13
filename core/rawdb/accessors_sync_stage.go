@@ -260,10 +260,8 @@ func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int
 		return 0, err
 	}
 	it.Release()
-	for _, key := range keys {
-		if err := db.Delete(key); err != nil {
-			return 0, err
-		}
+	if err := deleteKeyBatch(db, keys); err != nil {
+		return 0, err
 	}
 	return len(keys), nil
 }
@@ -310,10 +308,8 @@ func DeleteSyncStagedBlocksFrom(db ethdb.KeyValueStore, blockNum uint64) (int, e
 		return 0, err
 	}
 	it.Release()
-	for _, key := range keys {
-		if err := db.Delete(key); err != nil {
-			return 0, err
-		}
+	if err := deleteKeyBatch(db, keys); err != nil {
+		return 0, err
 	}
 	return len(keys), nil
 }
@@ -369,12 +365,33 @@ func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 		return 0, err
 	}
 	it.Release()
-	for _, key := range keys {
-		if err := db.Delete(key); err != nil {
-			return 0, err
-		}
+	if err := deleteKeyBatch(db, keys); err != nil {
+		return 0, err
 	}
 	return len(keys), nil
+}
+
+func deleteKeyBatch(db ethdb.KeyValueWriter, keys [][]byte) error {
+	if db == nil || len(keys) == 0 {
+		return nil
+	}
+	batcher, ok := db.(ethdb.Batcher)
+	if !ok {
+		for _, key := range keys {
+			if err := db.Delete(key); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	batch := batcher.NewBatchWithSize(len(keys) * 8)
+	defer batch.Reset()
+	for _, key := range keys {
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	return batch.Write()
 }
 
 // ResetSyncStagedBodies clears the downloader body staging table and its body
