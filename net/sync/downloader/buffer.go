@@ -6,6 +6,7 @@ import (
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 )
@@ -80,6 +81,25 @@ func SummarizeAppliedBatch(batch BufferedBatch, applied int) AppliedBatchSummary
 	}
 	summary.HasStage = summary.Last.Num > 0
 	return summary
+}
+
+// AppliedStagedBlockDeletes returns the staged body rows covered by an applied
+// prefix of a buffered batch.
+func AppliedStagedBlockDeletes(batch BufferedBatch, applied int) []rawdb.SyncStagedBlockDelete {
+	if applied <= 0 || len(batch.Buffered) == 0 {
+		return nil
+	}
+	if applied > len(batch.Buffered) {
+		applied = len(batch.Buffered)
+	}
+	deletes := make([]rawdb.SyncStagedBlockDelete, 0, applied)
+	for i := 0; i < applied; i++ {
+		deletes = append(deletes, rawdb.SyncStagedBlockDelete{
+			Number: batch.Buffered[i].Num,
+			Hash:   batch.Buffered[i].Hash,
+		})
+	}
+	return deletes
 }
 
 // ImportFailureResolution describes which prefix was applied before a staged

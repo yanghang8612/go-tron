@@ -118,6 +118,32 @@ func TestSummarizeAppliedBatchCountsOnlyDecodedBlocks(t *testing.T) {
 	}
 }
 
+func TestAppliedStagedBlockDeletes(t *testing.T) {
+	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
+	second := BufferedBlock{Hash: tcommon.Hash{0x02}, Num: 2}
+	third := BufferedBlock{Hash: tcommon.Hash{0x03}, Num: 3}
+
+	got := AppliedStagedBlockDeletes(BufferedBatch{Buffered: []BufferedBlock{first, second, third}}, 2)
+	if len(got) != 2 {
+		t.Fatalf("deletes = %d, want 2", len(got))
+	}
+	if got[0].Number != 1 || got[0].Hash != first.Hash || got[1].Number != 2 || got[1].Hash != second.Hash {
+		t.Fatalf("deletes = %+v, want first two buffered blocks", got)
+	}
+}
+
+func TestAppliedStagedBlockDeletesClampsInvalidApplied(t *testing.T) {
+	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
+
+	if got := AppliedStagedBlockDeletes(BufferedBatch{Buffered: []BufferedBlock{first}}, 0); got != nil {
+		t.Fatalf("zero applied deletes = %+v, want nil", got)
+	}
+	got := AppliedStagedBlockDeletes(BufferedBatch{Buffered: []BufferedBlock{first}}, 3)
+	if len(got) != 1 || got[0].Number != first.Num || got[0].Hash != first.Hash {
+		t.Fatalf("clamped deletes = %+v, want first buffered block", got)
+	}
+}
+
 func TestResolveImportFailureUsesRangeErrorIndex(t *testing.T) {
 	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
 	second := BufferedBlock{Hash: tcommon.Hash{0x02}, Num: 2}

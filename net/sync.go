@@ -1353,14 +1353,7 @@ func (ss *SyncService) deleteImportedSyncBodies(batch syncdl.BufferedBatch, appl
 	if db == nil {
 		return
 	}
-	deletes := make([]rawdb.SyncStagedBlockDelete, 0, applied)
-	for i := 0; i < applied && i < len(batch.Buffered); i++ {
-		deletes = append(deletes, rawdb.SyncStagedBlockDelete{
-			Number: batch.Buffered[i].Num,
-			Hash:   batch.Buffered[i].Hash,
-		})
-	}
-	result := rawdb.DeleteSyncStagedBlockBatch(db, deletes)
+	result := rawdb.DeleteSyncStagedBlockBatch(db, syncdl.AppliedStagedBlockDeletes(batch, applied))
 	for _, deleteErr := range result.Errors {
 		syncLog.Warn("Delete sync staged block failed", "number", deleteErr.Number, "hash", deleteErr.Hash, "err", deleteErr.Err)
 	}
