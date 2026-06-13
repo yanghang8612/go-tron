@@ -2,10 +2,12 @@ package downloader
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -113,6 +115,45 @@ func TestSummarizeAppliedBatchCountsOnlyDecodedBlocks(t *testing.T) {
 	}
 	if got.Last.Num != 2 || !got.HasStage {
 		t.Fatalf("last/stage = #%d %v, want block 2 stage", got.Last.Num, got.HasStage)
+	}
+}
+
+func TestResolveImportFailureUsesRangeErrorIndex(t *testing.T) {
+	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
+	second := BufferedBlock{Hash: tcommon.Hash{0x02}, Num: 2}
+	err := &core.InsertBlocksError{Index: 1, BlockNumber: 2, Err: errors.New("bad block")}
+
+	got := ResolveImportFailure(BufferedBatch{Buffered: []BufferedBlock{first, second}}, err)
+	if !got.OK || got.Applied != 1 || got.FailedIndex != 1 || got.Failed.Num != 2 || got.FailedNum != 2 {
+		t.Fatalf("resolution = %+v, want failed block2 with applied prefix 1", got)
+	}
+}
+
+func TestResolveImportFailureFallsBackToFirstBlock(t *testing.T) {
+	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
+	second := BufferedBlock{Hash: tcommon.Hash{0x02}, Num: 2}
+
+	got := ResolveImportFailure(BufferedBatch{Buffered: []BufferedBlock{first, second}}, errors.New("plain insert failure"))
+	if !got.OK || got.Applied != 0 || got.FailedIndex != 0 || got.Failed.Num != 1 || got.FailedNum != 1 {
+		t.Fatalf("resolution = %+v, want failed first block", got)
+	}
+}
+
+func TestResolveImportFailureFallsBackToRangeBlockNumber(t *testing.T) {
+	err := &core.InsertBlocksError{Index: 0, BlockNumber: 99, Err: errors.New("bad block")}
+
+	got := ResolveImportFailure(BufferedBatch{Buffered: []BufferedBlock{{Hash: tcommon.Hash{0x01}}}}, err)
+	if !got.OK || got.FailedNum != 99 {
+		t.Fatalf("resolution = %+v, want fallback block number 99", got)
+	}
+}
+
+func TestResolveImportFailureRejectsNilOrEmpty(t *testing.T) {
+	if got := ResolveImportFailure(BufferedBatch{}, errors.New("bad block")); got.OK {
+		t.Fatalf("empty batch resolution = %+v, want not ok", got)
+	}
+	if got := ResolveImportFailure(BufferedBatch{Buffered: []BufferedBlock{{Num: 1}}}, nil); got.OK {
+		t.Fatalf("nil error resolution = %+v, want not ok", got)
 	}
 }
 

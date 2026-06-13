@@ -1,9 +1,11 @@
 package downloader
 
 import (
+	"errors"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/p2p"
 )
@@ -78,6 +80,42 @@ func SummarizeAppliedBatch(batch BufferedBatch, applied int) AppliedBatchSummary
 	}
 	summary.HasStage = summary.Last.Num > 0
 	return summary
+}
+
+// ImportFailureResolution describes which prefix was applied before a staged
+// import failed and which buffered block should be used to pause sync.
+type ImportFailureResolution struct {
+	OK          bool
+	Applied     int
+	FailedIndex int
+	Failed      BufferedBlock
+	FailedNum   uint64
+}
+
+// ResolveImportFailure maps a canonical range-insert error back onto the
+// buffered downloader batch. InsertBlocksError.Index names the first failed
+// block; generic errors conservatively pause at the first buffered block.
+func ResolveImportFailure(batch BufferedBatch, insertErr error) ImportFailureResolution {
+	if insertErr == nil || len(batch.Buffered) == 0 {
+		return ImportFailureResolution{}
+	}
+	failed := 0
+	var rangeErr *core.InsertBlocksError
+	if errors.As(insertErr, &rangeErr) && rangeErr.Index >= 0 && rangeErr.Index < len(batch.Buffered) {
+		failed = rangeErr.Index
+	}
+	failedBlock := batch.Buffered[failed]
+	failedNum := failedBlock.Num
+	if failedNum == 0 && rangeErr != nil {
+		failedNum = rangeErr.BlockNumber
+	}
+	return ImportFailureResolution{
+		OK:          true,
+		Applied:     failed,
+		FailedIndex: failed,
+		Failed:      failedBlock,
+		FailedNum:   failedNum,
+	}
 }
 
 // StagedBodyDrainLimit clamps one local staged-body drain chunk to the

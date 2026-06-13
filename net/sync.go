@@ -1,7 +1,6 @@
 package net
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -1133,18 +1132,14 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		insertElapsed := time.Since(insertStart)
 		applied := len(batch.Blocks)
 		if insertErr != nil {
-			failed := 0
-			var rangeErr *core.InsertBlocksError
-			if errors.As(insertErr, &rangeErr) && rangeErr.Index >= 0 && rangeErr.Index < len(batch.Buffered) {
-				failed = rangeErr.Index
+			failure := syncdl.ResolveImportFailure(batch, insertErr)
+			if failure.OK {
+				applied = failure.Applied
+				ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
+				ss.pauseSync(failure.Failed.Peer, failure.FailedNum, insertErr)
+			} else {
+				ss.pauseSync(nil, 0, insertErr)
 			}
-			applied = failed
-			ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
-			failedNum := batch.Buffered[failed].Num
-			if failedNum == 0 && rangeErr != nil {
-				failedNum = rangeErr.BlockNumber
-			}
-			ss.pauseSync(batch.Buffered[failed].Peer, failedNum, insertErr)
 			break
 		}
 		ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
