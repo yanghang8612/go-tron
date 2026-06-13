@@ -47,6 +47,49 @@ type FetchReceiptResult struct {
 	BatchDone bool
 }
 
+// FetchReceiptSettlement is the downloader-owned state-machine decision after
+// acknowledging one received FETCH_INV_DATA block.
+type FetchReceiptSettlement struct {
+	Accepted            bool
+	Inflight            int
+	BatchDone           bool
+	DeleteRequestedHash bool
+	AdvanceFetchSeq     bool
+	StopFetchTimer      bool
+	RearmFetchTimer     bool
+	FillFetchSlots      bool
+	DrainBuffered       bool
+}
+
+// FetchedBlockBufferAction names the local buffer/stage decision for one
+// received block body after its fetch receipt was accepted.
+type FetchedBlockBufferAction uint8
+
+const (
+	FetchedBlockBufferIgnore FetchedBlockBufferAction = iota
+	FetchedBlockBufferStage
+	FetchedBlockBufferConflict
+)
+
+// FetchedBlockBufferFacts are the side-effect-free facts needed to decide
+// whether a received block body should be staged and inserted into the local
+// contiguous drain buffer.
+type FetchedBlockBufferFacts struct {
+	ID                   types.BlockID
+	CurrentHead          uint64
+	ExistingBuffered     bool
+	ExistingBufferedHash tcommon.Hash
+	HashBuffered         bool
+	ReservedPath         bool
+}
+
+// FetchedBlockBufferPlan is the downloader-owned local buffer/stage decision.
+type FetchedBlockBufferPlan struct {
+	Action FetchedBlockBufferAction
+	ID     types.BlockID
+	Kept   tcommon.Hash
+}
+
 // AcknowledgeFetchReceipt removes a matching received block from the in-flight
 // request state and decrements the outstanding count without underflowing.
 func AcknowledgeFetchReceipt(state FetchReceiptState, hash tcommon.Hash, num uint64) FetchReceiptResult {
@@ -65,4 +108,45 @@ func AcknowledgeFetchReceipt(state FetchReceiptState, hash tcommon.Hash, num uin
 		Inflight:  state.Inflight,
 		BatchDone: state.Inflight == 0,
 	}
+}
+
+// PlanFetchReceiptSettlement maps an accepted fetch receipt to the service
+// actions required to keep timers, global requested marks, and follow-up fetch
+// scheduling consistent.
+func PlanFetchReceiptSettlement(receipt FetchReceiptResult) FetchReceiptSettlement {
+	if !receipt.Accepted {
+		return FetchReceiptSettlement{}
+	}
+	return FetchReceiptSettlement{
+		Accepted:            true,
+		Inflight:            receipt.Inflight,
+		BatchDone:           receipt.BatchDone,
+		DeleteRequestedHash: true,
+		AdvanceFetchSeq:     true,
+		StopFetchTimer:      true,
+		RearmFetchTimer:     !receipt.BatchDone,
+		FillFetchSlots:      receipt.BatchDone,
+		DrainBuffered:       true,
+	}
+}
+
+// PlanFetchedBlockBuffer decides whether an accepted sync block body should be
+// persisted in the staged-body table and local drain buffer.
+func PlanFetchedBlockBuffer(f FetchedBlockBufferFacts) FetchedBlockBufferPlan {
+	plan := FetchedBlockBufferPlan{ID: f.ID}
+	if f.ID.Num <= f.CurrentHead {
+		return plan
+	}
+	if f.ExistingBuffered {
+		if f.ExistingBufferedHash != f.ID.Hash {
+			plan.Action = FetchedBlockBufferConflict
+			plan.Kept = f.ExistingBufferedHash
+		}
+		return plan
+	}
+	if f.HashBuffered || !f.ReservedPath {
+		return plan
+	}
+	plan.Action = FetchedBlockBufferStage
+	return plan
 }

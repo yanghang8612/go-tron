@@ -139,3 +139,75 @@ func TestAcknowledgeFetchReceiptDoesNotUnderflowInflight(t *testing.T) {
 		t.Fatalf("pending maps were not cleared: %d/%d", len(pending), len(pendingIDs))
 	}
 }
+
+func TestPlanFetchReceiptSettlement(t *testing.T) {
+	rejected := PlanFetchReceiptSettlement(FetchReceiptResult{Inflight: 2})
+	if rejected.Accepted || rejected.DeleteRequestedHash || rejected.DrainBuffered {
+		t.Fatalf("rejected settlement = %+v, want no side effects", rejected)
+	}
+
+	partial := PlanFetchReceiptSettlement(FetchReceiptResult{Accepted: true, Inflight: 1})
+	if !partial.Accepted || partial.Inflight != 1 || partial.BatchDone || !partial.DeleteRequestedHash || !partial.AdvanceFetchSeq || !partial.StopFetchTimer || !partial.RearmFetchTimer || partial.FillFetchSlots || !partial.DrainBuffered {
+		t.Fatalf("partial settlement = %+v, want rearm without fill", partial)
+	}
+
+	done := PlanFetchReceiptSettlement(FetchReceiptResult{Accepted: true, BatchDone: true})
+	if !done.Accepted || done.Inflight != 0 || !done.BatchDone || !done.DeleteRequestedHash || !done.AdvanceFetchSeq || !done.StopFetchTimer || done.RearmFetchTimer || !done.FillFetchSlots || !done.DrainBuffered {
+		t.Fatalf("done settlement = %+v, want fill without rearm", done)
+	}
+}
+
+func TestPlanFetchedBlockBuffer(t *testing.T) {
+	bid := queueID(10)
+	tests := []struct {
+		name  string
+		facts FetchedBlockBufferFacts
+		want  FetchedBlockBufferPlan
+	}{
+		{
+			name:  "at current head ignored",
+			facts: FetchedBlockBufferFacts{ID: bid, CurrentHead: bid.Num},
+			want:  FetchedBlockBufferPlan{ID: bid},
+		},
+		{
+			name: "existing same height fork conflicts",
+			facts: FetchedBlockBufferFacts{
+				ID:                   bid,
+				CurrentHead:          bid.Num - 1,
+				ExistingBuffered:     true,
+				ExistingBufferedHash: tcommon.Hash{0xee},
+			},
+			want: FetchedBlockBufferPlan{Action: FetchedBlockBufferConflict, ID: bid, Kept: tcommon.Hash{0xee}},
+		},
+		{
+			name: "existing same block ignored",
+			facts: FetchedBlockBufferFacts{
+				ID:                   bid,
+				CurrentHead:          bid.Num - 1,
+				ExistingBuffered:     true,
+				ExistingBufferedHash: bid.Hash,
+			},
+			want: FetchedBlockBufferPlan{ID: bid},
+		},
+		{
+			name:  "duplicate hash ignored",
+			facts: FetchedBlockBufferFacts{ID: bid, CurrentHead: bid.Num - 1, HashBuffered: true, ReservedPath: true},
+			want:  FetchedBlockBufferPlan{ID: bid},
+		},
+		{
+			name:  "path reservation failure ignored",
+			facts: FetchedBlockBufferFacts{ID: bid, CurrentHead: bid.Num - 1},
+			want:  FetchedBlockBufferPlan{ID: bid},
+		},
+		{
+			name:  "fresh future block staged",
+			facts: FetchedBlockBufferFacts{ID: bid, CurrentHead: bid.Num - 1, ReservedPath: true},
+			want:  FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: bid},
+		},
+	}
+	for _, tt := range tests {
+		if got := PlanFetchedBlockBuffer(tt.facts); got != tt.want {
+			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
+		}
+	}
+}

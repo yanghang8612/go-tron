@@ -1069,15 +1069,19 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return true
 	}
-	delete(ss.requested, blockHash)
+	settlement := syncdl.PlanFetchReceiptSettlement(ack)
+	if settlement.DeleteRequestedHash {
+		delete(ss.requested, blockHash)
+	}
 	// Bump seq so any in-flight timer callback short-circuits. We stop the
 	// armed timer below but the callback may already be running on another
 	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
 	// rejects it.
-	ps.fetchSeq++
-	ps.inflight = ack.Inflight
-	batchDone := ack.BatchDone
-	if ps.fetchTimer != nil {
+	if settlement.AdvanceFetchSeq {
+		ps.fetchSeq++
+	}
+	ps.inflight = settlement.Inflight
+	if settlement.StopFetchTimer && ps.fetchTimer != nil {
 		ps.fetchTimer.Stop()
 		ps.fetchTimer = nil
 	}
@@ -1087,30 +1091,45 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	// machine wedged forever: batchDone stays false → fetchNextBatch
 	// never runs → onFetchTimeout never fires → the watchdog's
 	// IsSyncing() short-circuit keeps it from intervening either.
-	if !batchDone {
+	if settlement.RearmFetchTimer {
 		ss.armPeerFetchTimerLocked(ps)
 	}
-	if blockNum > ss.chain.CurrentBlock().Number() {
-		bid := types.BlockID{Hash: blockHash, Num: blockNum}
+	bid := types.BlockID{Hash: blockHash, Num: blockNum}
+	bufferFacts := syncdl.FetchedBlockBufferFacts{
+		ID:          bid,
+		CurrentHead: ss.chain.CurrentBlock().Number(),
+	}
+	if blockNum > bufferFacts.CurrentHead {
 		if existing, ok := ss.blockBuffer[blockNum]; ok {
-			if existing.Hash != blockHash {
-				syncLog.Debug("Dropping conflicting buffered sync block",
-					"number", blockNum, "hash", blockHash, "kept", existing.Hash, "peer", peer.ID())
+			bufferFacts.ExistingBuffered = true
+			bufferFacts.ExistingBufferedHash = existing.Hash
+		} else {
+			_, bufferFacts.HashBuffered = ss.bufferedHash[blockHash]
+			if !bufferFacts.HashBuffered {
+				bufferFacts.ReservedPath = ss.reserveBlockPathLocked(bid)
 			}
-		} else if _, ok := ss.bufferedHash[blockHash]; !ok && ss.reserveBlockPathLocked(bid) {
+		}
+		bufferPlan := syncdl.PlanFetchedBlockBuffer(bufferFacts)
+		switch bufferPlan.Action {
+		case syncdl.FetchedBlockBufferConflict:
+			syncLog.Debug("Dropping conflicting buffered sync block",
+				"number", blockNum, "hash", blockHash, "kept", bufferPlan.Kept, "peer", peer.ID())
+		case syncdl.FetchedBlockBufferStage:
 			ss.stageSyncBody(block, raw)
 			ss.blockBuffer[blockNum] = syncdl.NewBufferedBlock(peer, block, raw)
 			ss.bufferedHash[blockHash] = struct{}{}
 		}
 	}
 	var out []outboundSyncRequest
-	if batchDone {
+	if settlement.FillFetchSlots {
 		out = ss.fillFetchSlotsLocked(time.Now())
 	}
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
 
-	ss.drainBufferedBlocks()
+	if settlement.DrainBuffered {
+		ss.drainBufferedBlocks()
+	}
 	if len(out) > 0 && ss.IsSyncing() && !ss.IsPaused() {
 		ss.sendOutboundRequests(out)
 	}
