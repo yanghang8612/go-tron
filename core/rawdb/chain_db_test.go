@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // TestChainDBNoopAncient composes a memdb with a NoopAncient and confirms
@@ -145,4 +147,117 @@ func TestChainDBFreezerReader(t *testing.T) {
 	if !ok {
 		t.Fatalf("HasAncient(headers,0)=false")
 	}
+}
+
+func TestChainDBEventLogCoverageUsesFilteredReaderWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress([]byte{0x41})},
+		Topics:    [][]common.Hash{{common.Hash{0x42}}},
+	}
+	reader := &recordingEventLogReader{filteredCovered: true}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.EventLogRangeCoveredForFilter(7, 9, filter)
+	if err != nil || !covered {
+		t.Fatalf("filtered coverage = %v/%v, want true/nil", covered, err)
+	}
+	if reader.filteredCalls != 1 || reader.coveredCalls != 0 {
+		t.Fatalf("reader calls filtered=%d covered=%d, want filtered only", reader.filteredCalls, reader.coveredCalls)
+	}
+	if reader.lastFrom != 7 || reader.lastTo != 9 || len(reader.lastFilter.Addresses) != 1 || reader.lastFilter.Addresses[0] != filter.Addresses[0] {
+		t.Fatalf("forwarded filter = from:%d to:%d filter:%+v, want original", reader.lastFrom, reader.lastTo, reader.lastFilter)
+	}
+}
+
+func TestChainDBEventLogCoverageFallsBackToUnfilteredReader(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingBasicEventLogReader{covered: true}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.EventLogRangeCoveredForFilter(3, 5, EventLogFilter{Topics: [][]common.Hash{{common.Hash{0x99}}}})
+	if err != nil || !covered {
+		t.Fatalf("fallback coverage = %v/%v, want true/nil", covered, err)
+	}
+	if reader.coveredCalls != 1 || reader.lastFrom != 3 || reader.lastTo != 5 {
+		t.Fatalf("basic reader calls=%d range=%d..%d, want one call 3..5", reader.coveredCalls, reader.lastFrom, reader.lastTo)
+	}
+}
+
+func TestChainDBIterateEventLogsForwardsColdRows(t *testing.T) {
+	t.Parallel()
+
+	wantLog := &corepb.TransactionInfo_Log{Address: []byte{0x01}}
+	want := EventLog{
+		BlockNum:  11,
+		TxIndex:   2,
+		LogIndex:  3,
+		TxHash:    common.Hash{0xaa},
+		BlockHash: common.Hash{0xbb},
+		Address:   common.BytesToAddress([]byte{0x41}),
+		Log:       wantLog,
+	}
+	reader := &recordingEventLogReader{recordingBasicEventLogReader: recordingBasicEventLogReader{rows: []EventLog{want}}}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var got []EventLog
+	err := cdb.IterateEventLogs(10, 12, EventLogFilter{Addresses: []common.Address{want.Address}}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("IterateEventLogs: %v", err)
+	}
+	if reader.iterCalls != 1 || len(got) != 1 || got[0].BlockNum != want.BlockNum || got[0].Log != wantLog {
+		t.Fatalf("iter calls=%d rows=%+v, want one forwarded row", reader.iterCalls, got)
+	}
+}
+
+type recordingBasicEventLogReader struct {
+	covered      bool
+	coveredCalls int
+	lastFrom     uint64
+	lastTo       uint64
+	rows         []EventLog
+	iterCalls    int
+}
+
+func (r *recordingBasicEventLogReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	r.coveredCalls++
+	r.lastFrom = fromBlock
+	r.lastTo = toBlock
+	return r.covered, nil
+}
+
+func (r *recordingBasicEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, _ EventLogFilter, fn func(EventLog) (bool, error)) error {
+	r.iterCalls++
+	r.lastFrom = fromBlock
+	r.lastTo = toBlock
+	for _, row := range r.rows {
+		cont, err := fn(row)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
+type recordingEventLogReader struct {
+	recordingBasicEventLogReader
+	filteredCovered bool
+	filteredCalls   int
+	lastFilter      EventLogFilter
+}
+
+func (r *recordingEventLogReader) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error) {
+	r.filteredCalls++
+	r.lastFrom = fromBlock
+	r.lastTo = toBlock
+	r.lastFilter = filter
+	return r.filteredCovered, nil
 }
