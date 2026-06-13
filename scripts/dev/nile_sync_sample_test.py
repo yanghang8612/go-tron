@@ -89,6 +89,18 @@ class NileSyncSampleTest(unittest.TestCase):
             )
             pid_file = tmpdir / "gtron.pid"
             pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
+            sync_log = tmpdir / "gtron.err.log"
+            sync_log.write_text(
+                "\n".join(
+                    [
+                        "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s blocks/s=10 txs/s=4 head=90 remain=20 syncStageComplete=true syncStageCompleted=4 syncStageScheduled=4 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanPostBodyStages=30 syncExecPlanFirst=81 syncExecPlanLast=90",
+                        "DEBUG [06-13|12:00:00.100] Imported chain segment details blocks=10 head=90 syncExecPlanBlocks=10",
+                        "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s blocks/s=20.5 txs/s=7.5 head=100 remain=5 syncStageComplete=false syncStageCompleted=2 syncStageScheduled=4 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanPostBodyStages=60 syncExecPlanFirst=81 syncExecPlanLast=100",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -113,6 +125,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     str(stage_status),
                     "--pid-file",
                     str(pid_file),
+                    "--sync-log-file",
+                    str(sync_log),
                     "--output",
                     str(output),
                 ],
@@ -236,6 +250,28 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreaterEqual(row["processCpuPercent"], 0)
             self.assertGreaterEqual(row["processUptimeSeconds"], 0)
             self.assertGreaterEqual(row["processOpenFiles"], -1)
+            self.assertEqual(row["syncLogFile"], str(sync_log))
+            self.assertEqual(row["syncLogStatus"], "ok")
+            self.assertEqual(row["syncLogImportedSegments"], 2)
+            self.assertEqual(row["syncLogSegmentBlocks"], 20)
+            self.assertEqual(row["syncLogSegmentTxs"], 7)
+            self.assertEqual(row["syncLogSegmentHead"], 100)
+            self.assertEqual(row["syncLogSegmentRemain"], 5)
+            self.assertEqual(row["syncLogBlocksPerSecond"], 20.5)
+            self.assertEqual(row["syncLogTxsPerSecond"], 7.5)
+            self.assertFalse(row["syncLogStageComplete"])
+            self.assertEqual(row["syncLogStageCompleted"], 2)
+            self.assertEqual(row["syncLogStageScheduled"], 4)
+            self.assertEqual(row["syncLogStageNext"], "commitment")
+            self.assertEqual(row["syncLogStageNextBlock"], 100)
+            self.assertEqual(row["syncLogStageNextCanonical"], "Commitment")
+            self.assertEqual(row["syncLogStageNextSync"], "SyncCommitment")
+            self.assertEqual(row["syncLogStageBlockedStatus"], "missing")
+            self.assertEqual(row["syncLogExecPlanBlocks"], 20)
+            self.assertEqual(row["syncLogExecPlanStages"], 80)
+            self.assertEqual(row["syncLogExecPlanPostBodyStages"], 60)
+            self.assertEqual(row["syncLogExecPlanFirst"], 81)
+            self.assertEqual(row["syncLogExecPlanLast"], 100)
             self.assertEqual(output.read_text(encoding="utf-8").strip(), proc.stdout.strip())
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
@@ -471,6 +507,74 @@ class NileSyncSampleTest(unittest.TestCase):
                     }
                 ],
             )
+
+    def test_sample_parses_json_sync_log_segment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            sync_log = tmpdir / "gtron.json.log"
+            sync_log.write_text(
+                json.dumps(
+                    {
+                        "lvl": "info",
+                        "msg": "Imported chain segment",
+                        "blocks": 12,
+                        "txs": 9,
+                        "head": 112,
+                        "remain": 3,
+                        "blocks/s": 6.25,
+                        "txs/s": 4.5,
+                        "syncStageComplete": True,
+                        "syncStageCompleted": 4,
+                        "syncStageScheduled": 4,
+                        "syncExecPlanBlocks": 12,
+                        "syncExecPlanStages": 48,
+                        "syncExecPlanPostBodyStages": 36,
+                        "syncExecPlanFirst": 101,
+                        "syncExecPlanLast": 112,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--sync-log-file",
+                    str(sync_log),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["syncLogStatus"], "ok")
+            self.assertEqual(row["syncLogImportedSegments"], 1)
+            self.assertEqual(row["syncLogSegmentBlocks"], 12)
+            self.assertEqual(row["syncLogSegmentTxs"], 9)
+            self.assertEqual(row["syncLogSegmentHead"], 112)
+            self.assertEqual(row["syncLogSegmentRemain"], 3)
+            self.assertEqual(row["syncLogBlocksPerSecond"], 6.25)
+            self.assertTrue(row["syncLogStageComplete"])
+            self.assertEqual(row["syncLogExecPlanBlocks"], 12)
+            self.assertEqual(row["syncLogExecPlanStages"], 48)
+            self.assertEqual(row["syncLogExecPlanPostBodyStages"], 36)
+            self.assertEqual(row["syncLogExecPlanFirst"], 101)
+            self.assertEqual(row["syncLogExecPlanLast"], 112)
 
 
 if __name__ == "__main__":

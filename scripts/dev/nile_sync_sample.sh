@@ -18,6 +18,7 @@ MODE="unknown"
 LABEL="nile-sync"
 START_UNIX=0
 STAGE_STATUS_FILE=""
+SYNC_LOG_FILE=""
 PID_FILE=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
@@ -36,6 +37,7 @@ Options:
   --label LABEL              Free-form sample label (default: nile-sync)
   --start-unix SECONDS       Sync start unix timestamp; emits elapsed/blocksPerSecond
   --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
+  --sync-log-file FILE       Parse latest `Imported chain segment` log fields
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --strict-offline-db-check  Fail when offline db check reports critical issues
@@ -68,6 +70,7 @@ while [ "$#" -gt 0 ]; do
     --label) LABEL="${2:?}"; shift 2 ;;
     --start-unix) START_UNIX="${2:?}"; shift 2 ;;
     --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
+    --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
@@ -85,6 +88,9 @@ if [ -n "$OUTPUT" ]; then
 fi
 if [ -n "$STAGE_STATUS_FILE" ] && [ ! -r "$STAGE_STATUS_FILE" ]; then
   die "--stage-status-file is not readable: $STAGE_STATUS_FILE"
+fi
+if [ -n "$SYNC_LOG_FILE" ] && [ ! -r "$SYNC_LOG_FILE" ]; then
+  die "--sync-log-file is not readable: $SYNC_LOG_FILE"
 fi
 
 size_bytes() {
@@ -176,7 +182,7 @@ snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
-  "$STAGE_STATUS_FILE" "$PID_FILE" \
+  "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
@@ -201,6 +207,7 @@ from pathlib import Path
     nodes_path,
     storage_alerts_path,
     stage_status_path,
+    sync_log_path,
     pid_file,
     nowblock_status,
     nodeinfo_status,
@@ -360,6 +367,122 @@ def parse_stage_status(path):
     row["stageSyncImportExecutionLagBlocks"] = lag(row["stageSyncImport"], row["stageSyncExecution"])
     row["stageSyncExecutionCommitmentLagBlocks"] = lag(row["stageSyncExecution"], row["stageSyncCommitment"])
     row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
+    return row
+
+def parse_log_value(value):
+    text = str(value).strip().strip('"')
+    if text == "":
+        return text
+    lower = text.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    try:
+        if re.fullmatch(r"-?[0-9]+", text):
+            return int(text)
+        if re.fullmatch(r"-?[0-9]+\.[0-9]+", text):
+            return float(text)
+    except Exception:
+        pass
+    return text
+
+def parse_logfmt_fields(line):
+    fields = {}
+    for match in re.finditer(r'([A-Za-z0-9_./-]+)=("([^"\\]|\\.)*"|[^ ]+)', line):
+        key = match.group(1)
+        raw = match.group(2)
+        fields[key] = parse_log_value(raw)
+    return fields
+
+def imported_segment_fields_from_line(line):
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            msg = obj.get("msg") or obj.get("message") or ""
+            if msg == "Imported chain segment":
+                return obj
+            return None
+    except Exception:
+        pass
+    if "Imported chain segment details" in text:
+        return None
+    if "Imported chain segment" not in text:
+        return None
+    fields = parse_logfmt_fields(text)
+    return fields if fields else {}
+
+def parse_sync_log(path):
+    row = {
+        "syncLogFile": path,
+        "syncLogStatus": "skipped" if not path else "missing",
+        "syncLogImportedSegments": 0,
+        "syncLogSegmentBlocks": -1,
+        "syncLogSegmentTxs": -1,
+        "syncLogSegmentHead": -1,
+        "syncLogSegmentRemain": -1,
+        "syncLogBlocksPerSecond": -1.0,
+        "syncLogTxsPerSecond": -1.0,
+        "syncLogStageComplete": False,
+        "syncLogStageCompleted": -1,
+        "syncLogStageScheduled": -1,
+        "syncLogStageNext": "",
+        "syncLogStageNextBlock": -1,
+        "syncLogStageNextCanonical": "",
+        "syncLogStageNextSync": "",
+        "syncLogStageBlockedStatus": "",
+        "syncLogExecPlanBlocks": -1,
+        "syncLogExecPlanStages": -1,
+        "syncLogExecPlanPostBodyStages": -1,
+        "syncLogExecPlanFirst": -1,
+        "syncLogExecPlanLast": -1,
+    }
+    if not path:
+        return row
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return row
+    latest = None
+    count = 0
+    for line in lines:
+        fields = imported_segment_fields_from_line(line)
+        if fields is None:
+            continue
+        count += 1
+        latest = fields
+    row["syncLogImportedSegments"] = count
+    if latest is None:
+        row["syncLogStatus"] = "no-segment"
+        return row
+    row["syncLogStatus"] = "ok"
+    mappings = {
+        "blocks": "syncLogSegmentBlocks",
+        "txs": "syncLogSegmentTxs",
+        "head": "syncLogSegmentHead",
+        "remain": "syncLogSegmentRemain",
+        "blocks/s": "syncLogBlocksPerSecond",
+        "txs/s": "syncLogTxsPerSecond",
+        "syncStageComplete": "syncLogStageComplete",
+        "syncStageCompleted": "syncLogStageCompleted",
+        "syncStageScheduled": "syncLogStageScheduled",
+        "syncStageNext": "syncLogStageNext",
+        "syncStageNextBlock": "syncLogStageNextBlock",
+        "syncStageNextCanonical": "syncLogStageNextCanonical",
+        "syncStageNextSync": "syncLogStageNextSync",
+        "syncStageBlockedStatus": "syncLogStageBlockedStatus",
+        "syncExecPlanBlocks": "syncLogExecPlanBlocks",
+        "syncExecPlanStages": "syncLogExecPlanStages",
+        "syncExecPlanPostBodyStages": "syncLogExecPlanPostBodyStages",
+        "syncExecPlanFirst": "syncLogExecPlanFirst",
+        "syncExecPlanLast": "syncLogExecPlanLast",
+    }
+    for source, dest in mappings.items():
+        if source in latest:
+            row[dest] = parse_log_value(latest[source])
     return row
 
 def parse_etime_seconds(value):
@@ -718,6 +841,7 @@ blocks_per_minute = blocks_per_second * 60.0
 alerts_text = Path(storage_alerts_path).read_text(encoding="utf-8", errors="replace")
 alerts = parse_alerts(alerts_text)
 stages = parse_stage_status(stage_status_path)
+sync_log = parse_sync_log(sync_log_path)
 process = read_process_stats(pid_file)
 height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
 sync_target_height = max(height, nodeinfo_current)
@@ -989,6 +1113,7 @@ row = {
 }
 row.update(alerts)
 row.update(stages)
+row.update(sync_log)
 row.update(process)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])

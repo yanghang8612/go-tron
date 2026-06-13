@@ -67,6 +67,7 @@ scripts/dev/nile_sync_sample.sh \
   --http http://127.0.0.1:8090 \
   --mode full \
   --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
+  --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
   --pid-file /Users/asuka/gtron-soak/gtron.pid \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
@@ -104,6 +105,20 @@ the shell PID is retained by the gtron process after `exec`.
 `getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
 first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP
 endpoint error.
+
+When `--sync-log-file` points at the gtron runtime log, the sampler parses the
+latest `Imported chain segment` summary and emits `syncLog*` fields. These
+include the segment throughput (`syncLogSegmentBlocks`, `syncLogSegmentTxs`,
+`syncLogBlocksPerSecond`, `syncLogTxsPerSecond`, `syncLogSegmentHead`,
+`syncLogSegmentRemain`), the observed stage planner result
+(`syncLogStageComplete`, `syncLogStageCompleted`, `syncLogStageScheduled`,
+`syncLogStageNext*`, `syncLogStageBlockedStatus`), and the explicit planned
+execution schedule (`syncLogExecPlanBlocks`, `syncLogExecPlanStages`,
+`syncLogExecPlanPostBodyStages`, `syncLogExecPlanFirst`,
+`syncLogExecPlanLast`). These fields are log-derived and complement the
+`stage*` fields from `gtron db stage-status`: log fields explain what the last
+import batch planned and observed, while DB fields show the persisted recovery
+boundary.
 
 To include staged-sync progress without making the sampler open a live Pebble
 datadir, pass a captured `gtron db stage-status` output file:
