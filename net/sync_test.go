@@ -165,6 +165,43 @@ func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRepairsUnboundBodiesReadyOnSessionStart(t *testing.T) {
+	bc := makeTestChain(t)
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write sync staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncBodiesReady, block2.Number()); err != nil {
+		t.Fatalf("write unbound SyncBodiesReady: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	ss.mu.Unlock()
+
+	if buffered != 2 || target != block2.Number() {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 2/%d", buffered, target, block2.Number())
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady after unbound repair = %+v ok=%v err=%v, want hash-bound block2", ready, ok, err)
+	}
+
+	ss.drainBufferedBlocks()
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after repaired ready drain = %v, want block2 %x", got, block2.Hash())
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after repaired drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block2 := stubBlock(2, bc.CurrentBlock().Hash())

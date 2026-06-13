@@ -145,8 +145,9 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 		t.Fatalf("schedule = %+v, want block2 schedule %+v", got.Schedule, wantStages)
 	}
 	wantExecution := ImportExecutionStageTasks(block2.Number(), block2.Hash())
-	if !reflect.DeepEqual(got.Schedule.Execution, wantExecution) {
-		t.Fatalf("execution schedule = %+v, want %+v", got.Schedule.Execution, wantExecution)
+	if got.Schedule.Execution != wantExecution[0] || got.Schedule.Commitment != wantExecution[1] || got.Schedule.Finish != wantExecution[2] || !reflect.DeepEqual(got.Schedule.PostBody, wantExecution) {
+		t.Fatalf("post-body schedule = %+v/%+v/%+v post=%+v, want %+v",
+			got.Schedule.Execution, got.Schedule.Commitment, got.Schedule.Finish, got.Schedule.PostBody, wantExecution)
 	}
 	if !got.RefreshReady || got.StatsBlocks != 2 || got.StatsTransactions != 3 || got.ReportHead != block2.Number() {
 		t.Fatalf("record metadata = refresh=%v blocks=%d txs=%d head=%d, want refresh/2/3/block2",
@@ -468,6 +469,15 @@ func TestImportExecutionStageTasks(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ImportExecutionStageTasks = %+v, want %+v", got, want)
 	}
+	if ImportExecutionStageTask(7, hash) != want[0] {
+		t.Fatalf("ImportExecutionStageTask = %+v, want %+v", ImportExecutionStageTask(7, hash), want[0])
+	}
+	if ImportCommitmentStageTask(7, hash) != want[1] {
+		t.Fatalf("ImportCommitmentStageTask = %+v, want %+v", ImportCommitmentStageTask(7, hash), want[1])
+	}
+	if ImportFinishStageTask(7, hash) != want[2] {
+		t.Fatalf("ImportFinishStageTask = %+v, want %+v", ImportFinishStageTask(7, hash), want[2])
+	}
 }
 
 func TestNewImportStageSchedule(t *testing.T) {
@@ -475,9 +485,12 @@ func TestNewImportStageSchedule(t *testing.T) {
 	got := NewImportStageSchedule(7, hash)
 	wantTasks := ImportPipelineStageTasks(7, hash)
 	wantBody := ImportBodyStageTask(7, hash)
-	wantExecution := ImportExecutionStageTasks(7, hash)
-	if got.BlockNum != 7 || got.BlockHash != hash || !reflect.DeepEqual(got.Tasks, wantTasks) || got.Body != wantBody || !reflect.DeepEqual(got.Execution, wantExecution) {
+	wantPostBody := ImportExecutionStageTasks(7, hash)
+	if got.BlockNum != 7 || got.BlockHash != hash || !reflect.DeepEqual(got.Tasks, wantTasks) || got.Body != wantBody || !reflect.DeepEqual(got.PostBody, wantPostBody) {
 		t.Fatalf("schedule = %+v, want block/hash/tasks %+v", got, wantTasks)
+	}
+	if got.Execution != wantPostBody[0] || got.Commitment != wantPostBody[1] || got.Finish != wantPostBody[2] {
+		t.Fatalf("named post-body tasks = %+v/%+v/%+v, want %+v", got.Execution, got.Commitment, got.Finish, wantPostBody)
 	}
 
 	progress, decisions := NewStageProgressCollector().Plan(ImportStageSchedule{})
