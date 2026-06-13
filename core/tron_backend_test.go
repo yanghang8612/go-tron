@@ -362,6 +362,10 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	if err != nil || info == nil || uint64(info.BlockNumber) != block.Number() {
 		t.Fatalf("GetTransactionInfoByID = %+v/%v, want block %d", info, err, block.Number())
 	}
+	rpcInfo, err := backend.GetTransactionInfo(txHash)
+	if err != nil || rpcInfo == nil || uint64(rpcInfo.BlockNumber) != block.Number() {
+		t.Fatalf("GetTransactionInfo = %+v/%v, want block %d", rpcInfo, err, block.Number())
+	}
 	infos, err := backend.GetTransactionInfoByBlockNum(block.Number())
 	if err != nil || len(infos) != 1 || !bytes.Equal(infos[0].Id, txHash[:]) || uint64(infos[0].BlockNumber) != block.Number() {
 		t.Fatalf("GetTransactionInfoByBlockNum = %+v/%v, want one cold receipt for tx %x block %d", infos, err, txHash, block.Number())
