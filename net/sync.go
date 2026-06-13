@@ -834,14 +834,13 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		default:
 			continue
 		}
-		ps.inflight = len(batch)
-		ps.pending = make(map[tcommon.Hash]uint64, len(batch))
-		ps.pendingIDs = make(map[tcommon.Hash]types.BlockID, len(batch))
-		for _, bid := range batch {
-			ps.pending[bid.Hash] = bid.Num
-			ps.pendingIDs[bid.Hash] = bid
-			ps.requestedHashes[bid.Hash] = struct{}{}
-			ss.requested[bid.Hash] = ps.peer.ID()
+		request := syncdl.NewFetchRequestState(batch)
+		ps.inflight = request.Inflight
+		ps.pending = request.Pending
+		ps.pendingIDs = request.PendingIDs
+		for _, hash := range request.RequestedHashes {
+			ps.requestedHashes[hash] = struct{}{}
+			ss.requested[hash] = ps.peer.ID()
 		}
 		ps.nextFetchAt = now.Add(minFetchRequestInterval)
 		ss.armPeerFetchTimerLocked(ps)
