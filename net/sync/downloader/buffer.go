@@ -216,12 +216,13 @@ type ImportBatchRunPlanApplier interface {
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
 // means canonical import failed and the caller should leave the drain loop.
 type ImportBatchRunResult struct {
-	Decode        BufferedBatchDecodeResult
-	Execution     ImportBatchExecutionPlan
-	Outcome       ImportOutcome
-	Progress      ImportedBatchProgressPlan
-	ContinueDrain bool
-	StopDrain     bool
+	Decode           BufferedBatchDecodeResult
+	Execution        ImportBatchExecutionPlan
+	Outcome          ImportOutcome
+	Progress         ImportedBatchProgressPlan
+	StageDiagnostics ImportStagePlanDiagnostics
+	ContinueDrain    bool
+	StopDrain        bool
 }
 
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
@@ -276,6 +277,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
 			if result.Outcome.RecordApplied {
 				result.Progress = PlanImportedBatchProgress(plan.Batch, result.Outcome.Applied, collector)
+				result.StageDiagnostics = result.Progress.StageDiagnostics
 				if result.Progress.OK {
 					applier.RecordImportedBatch(result.Progress, elapsed)
 				}

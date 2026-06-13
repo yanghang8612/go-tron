@@ -1344,7 +1344,7 @@ func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan
 	ss.mu.Lock()
 	var diag syncdl.Diagnostics
 	if emit {
-		diag = ss.snapshotDiagnosticsLocked().WithImportStagePlan(plan.StagePlan)
+		diag = ss.snapshotDiagnosticsLocked().WithImportStageDiagnostics(plan.StageDiagnostics)
 	}
 	remain := ss.estimatedRemainLocked()
 	ss.mirrorLegacyLocked()
@@ -1643,7 +1643,13 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 			"syncStageScheduled", diag.ImportStageScheduled,
 		)
 		if diag.ImportStageNext != "" {
-			ctx = append(ctx, "syncStageNext", diag.ImportStageNext, "syncStageBlockedStatus", diag.ImportStageBlockedStatus)
+			ctx = append(ctx,
+				"syncStageNext", diag.ImportStageNext,
+				"syncStageNextBlock", diag.ImportStageNextBlock,
+				"syncStageNextCanonical", diag.ImportStageNextCanonical,
+				"syncStageNextSync", diag.ImportStageNextSync,
+				"syncStageBlockedStatus", diag.ImportStageBlockedStatus,
+			)
 		}
 	}
 	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
@@ -1724,7 +1730,13 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 			"syncStageScheduled", diag.ImportStageScheduled,
 		)
 		if diag.ImportStageNext != "" {
-			detail = append(detail, "syncStageNext", diag.ImportStageNext, "syncStageBlockedStatus", diag.ImportStageBlockedStatus)
+			detail = append(detail,
+				"syncStageNext", diag.ImportStageNext,
+				"syncStageNextBlock", diag.ImportStageNextBlock,
+				"syncStageNextCanonical", diag.ImportStageNextCanonical,
+				"syncStageNextSync", diag.ImportStageNextSync,
+				"syncStageBlockedStatus", diag.ImportStageBlockedStatus,
+			)
 		}
 	}
 	if diag.PeerState != "" {

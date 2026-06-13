@@ -147,13 +147,16 @@ type ImportStagePlan struct {
 // ImportStagePlanDiagnostics is the compact, log-safe view of an import stage
 // plan. It lets SyncService report stage planner state without re-deriving it.
 type ImportStagePlanDiagnostics struct {
-	Scheduled     int
-	Completed     int
-	Complete      bool
-	NextPhase     ImportStagePhase
-	NextStage     rawdb.StageID
-	BlockedStatus ImportStageProgressStatus
-	HasBlocked    bool
+	Scheduled          int
+	Completed          int
+	Complete           bool
+	NextPhase          ImportStagePhase
+	NextCanonicalStage rawdb.StageID
+	NextStage          rawdb.StageID
+	NextBlockNum       uint64
+	NextBlockHash      tcommon.Hash
+	BlockedStatus      ImportStageProgressStatus
+	HasBlocked         bool
 }
 
 // ImportStagePlanner owns the schedule-to-observation mapping for one import
@@ -199,6 +202,7 @@ type ImportedBatchProgressPlan struct {
 	Deletes           []rawdb.SyncStagedBlockDelete
 	Progress          []rawdb.StageProgress
 	Decisions         []ImportStageProgressDecision
+	StageDiagnostics  ImportStagePlanDiagnostics
 	RefreshReady      bool
 	Steps             []ImportedBatchProgressStep
 	StatsBlocks       int
@@ -289,6 +293,7 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 	plan.StagePlan = collector.PlanSchedule(plan.Schedule)
 	plan.Progress = plan.StagePlan.Progress
 	plan.Decisions = plan.StagePlan.Decisions
+	plan.StageDiagnostics = plan.StagePlan.Diagnostics()
 	return plan.withSteps()
 }
 
@@ -407,7 +412,10 @@ func (p ImportStagePlan) Diagnostics() ImportStagePlanDiagnostics {
 	}
 	if p.HasBlocked {
 		diag.NextPhase = p.Next.Phase
+		diag.NextCanonicalStage = p.Next.CanonicalStage
 		diag.NextStage = p.Next.SyncStage
+		diag.NextBlockNum = p.Next.BlockNum
+		diag.NextBlockHash = p.Next.BlockHash
 		diag.BlockedStatus = p.Blocked.Status
 		diag.HasBlocked = true
 	}

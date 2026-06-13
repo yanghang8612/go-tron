@@ -85,4 +85,13 @@ func TestDiagnosticsWithImportStagePlan(t *testing.T) {
 	if diag.ImportStageNext != string(ImportStagePhaseCommitment) || diag.ImportStageBlockedStatus != ImportStageProgressMissing.String() {
 		t.Fatalf("blocked stage diagnostics = %+v, want commitment/missing", diag)
 	}
+	if diag.ImportStageNextBlock != 8 || diag.ImportStageNextCanonical != string(rawdb.StageCommitment) || diag.ImportStageNextSync != string(rawdb.StageSyncCommitment) {
+		t.Fatalf("blocked stage target = block %d canonical %q sync %q, want block8 commitment/sync-commitment",
+			diag.ImportStageNextBlock, diag.ImportStageNextCanonical, diag.ImportStageNextSync)
+	}
+
+	diag = NewDiagnostics(0, 0, 0, nil).WithImportStageDiagnostics(blocked.Diagnostics())
+	if diag.ImportStageNext != string(ImportStagePhaseCommitment) || diag.ImportStageNextBlock != 8 {
+		t.Fatalf("direct diagnostics = %+v, want commitment at block8", diag)
+	}
 }

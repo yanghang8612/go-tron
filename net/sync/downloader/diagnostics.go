@@ -28,6 +28,9 @@ type Diagnostics struct {
 	ImportStageCompleted     int
 	ImportStageComplete      bool
 	ImportStageNext          string
+	ImportStageNextBlock     uint64
+	ImportStageNextCanonical string
+	ImportStageNextSync      string
 	ImportStageBlockedStatus string
 }
 
@@ -61,7 +64,12 @@ func NewDiagnostics(blockBufferLen, requestedLen, retryListLen int, peers []Peer
 // WithImportStagePlan adds downloader-owned import stage planner diagnostics to
 // the existing sync-session snapshot.
 func (d Diagnostics) WithImportStagePlan(plan ImportStagePlan) Diagnostics {
-	stage := plan.Diagnostics()
+	return d.WithImportStageDiagnostics(plan.Diagnostics())
+}
+
+// WithImportStageDiagnostics adds downloader-owned import stage planner
+// diagnostics to the existing sync-session snapshot.
+func (d Diagnostics) WithImportStageDiagnostics(stage ImportStagePlanDiagnostics) Diagnostics {
 	d.ImportStageScheduled = stage.Scheduled
 	d.ImportStageCompleted = stage.Completed
 	d.ImportStageComplete = stage.Complete
@@ -71,6 +79,9 @@ func (d Diagnostics) WithImportStagePlan(plan ImportStagePlan) Diagnostics {
 		} else if stage.NextStage != "" {
 			d.ImportStageNext = string(stage.NextStage)
 		}
+		d.ImportStageNextBlock = stage.NextBlockNum
+		d.ImportStageNextCanonical = string(stage.NextCanonicalStage)
+		d.ImportStageNextSync = string(stage.NextStage)
 		d.ImportStageBlockedStatus = stage.BlockedStatus.String()
 	}
 	return d

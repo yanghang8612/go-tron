@@ -350,8 +350,14 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if !result.Progress.OK || result.Progress.Summary.Applied != 2 || !result.Progress.StagePlan.Complete {
 		t.Fatalf("result progress plan = %+v, want complete applied block2 plan", result.Progress)
 	}
+	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 4 || result.StageDiagnostics.Scheduled != 4 {
+		t.Fatalf("result stage diagnostics = %+v, want complete 4/4", result.StageDiagnostics)
+	}
 	if !applier.recordPlan.OK || applier.recordPlan.ReportHead != block2.Number() || applier.recordPlan.StatsBlocks != 2 {
 		t.Fatalf("applier progress plan = %+v, want block2 report with two stats blocks", applier.recordPlan)
+	}
+	if !applier.recordPlan.StageDiagnostics.Complete || applier.recordPlan.StageDiagnostics.Completed != 4 {
+		t.Fatalf("applier stage diagnostics = %+v, want complete", applier.recordPlan.StageDiagnostics)
 	}
 	wantProgress := importPipelineProgressRows(block2.Number(), block2.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
@@ -381,6 +387,9 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
 		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
+	}
+	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 4 {
+		t.Fatalf("partial result stage diagnostics = %+v, want complete applied-prefix plan", result.StageDiagnostics)
 	}
 	wantProgress := importPipelineProgressRows(block1.Number(), block1.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
