@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -192,9 +193,125 @@ func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 	}
 }
 
+func TestReadStagedBodyReadyDrainLimit(t *testing.T) {
+	block := testBufferedBlock(7)
+	tests := []struct {
+		name    string
+		setup   func(*testing.T, ethdb.KeyValueStore)
+		next    uint64
+		status  StagedBodyReadyLimitStatus
+		valid   bool
+		limit   uint64
+		readErr bool
+	}{
+		{
+			name:   "missing",
+			next:   7,
+			status: StagedBodyReadyLimitMissing,
+		},
+		{
+			name: "valid",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+					t.Fatalf("write staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			next:   block.Number(),
+			status: StagedBodyReadyLimitValid,
+			valid:  true,
+			limit:  block.Number(),
+		},
+		{
+			name: "unbound",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodiesReady, block.Number()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			next:   block.Number(),
+			status: StagedBodyReadyLimitUnbound,
+		},
+		{
+			name: "stale without staged read",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number()-1, tcommon.Hash{0x06}); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			next:   block.Number(),
+			status: StagedBodyReadyLimitStale,
+		},
+		{
+			name: "staged read error",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlockRaw(db, block, []byte{0x01, 0x02}); err != nil {
+					t.Fatalf("write corrupt staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			next:    block.Number(),
+			status:  StagedBodyReadyLimitReadError,
+			readErr: true,
+		},
+		{
+			name: "hash mismatch",
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+					t.Fatalf("write staged block: %v", err)
+				}
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number(), tcommon.Hash{0xff}); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			next:   block.Number(),
+			status: StagedBodyReadyLimitHashMismatch,
+		},
+	}
+	for _, tt := range tests {
+		db := rawdb.NewMemoryDatabase()
+		if tt.setup != nil {
+			tt.setup(t, db)
+		}
+		got := ReadStagedBodyReadyDrainLimit(db, tt.next)
+		if got.Status != tt.status || got.Valid() != tt.valid || got.Limit != tt.limit {
+			t.Fatalf("%s: result = %+v, want status %v valid %v limit %d", tt.name, got, tt.status, tt.valid, tt.limit)
+		}
+		if tt.readErr && got.ReadError == nil {
+			t.Fatalf("%s: ReadError is nil, want staged read error", tt.name)
+		}
+	}
+}
+
+func TestReadStagedBodyReadyDrainLimitProgressReadError(t *testing.T) {
+	got := ReadStagedBodyReadyDrainLimit(corruptStageProgressReader{}, 7)
+	if got.Status != StagedBodyReadyLimitProgressReadError || got.StageError == nil {
+		t.Fatalf("result = %+v, want progress read error", got)
+	}
+}
+
 func stagedBodyMapReader(rows map[uint64]rawdb.SyncStagedBlockRow) StagedBodyReader {
 	return func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
 		row, ok := rows[number]
 		return row, ok, nil
 	}
+}
+
+type corruptStageProgressReader struct{}
+
+func (corruptStageProgressReader) Has([]byte) (bool, error) {
+	return true, nil
+}
+
+func (corruptStageProgressReader) Get([]byte) ([]byte, error) {
+	return []byte{0x01}, nil
 }

@@ -1193,40 +1193,27 @@ func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
 	if db == nil {
 		return 0, false
 	}
-	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
-	if err != nil {
-		syncLog.Warn("Read sync bodies ready stage progress failed", "err", err)
-		return 0, false
-	}
-	if !ok {
-		return 0, false
-	}
-	var (
-		staged   rawdb.SyncStagedBlockRow
-		stagedOK bool
-		readErr  error
-	)
-	if row.HasBlockHash && row.BlockNum >= next {
-		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
-	}
-	limit := syncdl.ValidateStagedBodyReadyDrainLimit(next, row, true, staged, stagedOK, readErr)
+	limit := syncdl.ReadStagedBodyReadyDrainLimit(db, next)
 	switch limit.Status {
 	case syncdl.StagedBodyReadyLimitValid:
 		return limit.Limit, true
+	case syncdl.StagedBodyReadyLimitProgressReadError:
+		syncLog.Warn("Read sync bodies ready stage progress failed", "err", limit.StageError)
+		return 0, false
 	case syncdl.StagedBodyReadyLimitUnbound:
-		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", row.BlockNum)
+		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", limit.StageRow.BlockNum)
 		return 0, false
 	case syncdl.StagedBodyReadyLimitStale:
 		ss.writeSyncBodiesReadyProgress()
 		return 0, false
 	case syncdl.StagedBodyReadyLimitReadError:
-		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", row.BlockNum, "hash", row.BlockHash, "err", limit.ReadError)
+		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "err", limit.ReadError)
 		return 0, false
 	case syncdl.StagedBodyReadyLimitStagedMissing:
-		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", row.BlockNum, "hash", row.BlockHash)
+		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash)
 		return 0, false
 	case syncdl.StagedBodyReadyLimitHashMismatch:
-		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", row.BlockNum, "hash", row.BlockHash, "stagedHash", limit.StagedHash)
+		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "stagedHash", limit.StagedHash)
 		return 0, false
 	default:
 		return 0, false

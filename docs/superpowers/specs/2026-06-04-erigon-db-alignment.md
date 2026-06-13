@@ -348,9 +348,10 @@ Status:
   rows as one batch. Active reset now uses a shared
   `core/rawdb` cleanup helper to clear staged bodies plus
   `SyncBodies`/`SyncBodiesReady` rows.
-  `SyncBodiesReady` refresh is also a downloader helper now: it recomputes the
-  contiguous staged-body frontier and writes or deletes the ready row while
-  reporting read/write errors back to `SyncService`.
+  `SyncBodiesReady` refresh and drain-limit reads are downloader helpers now:
+  refresh recomputes the contiguous staged-body frontier and writes or deletes
+  the ready row, while the drain-limit helper reads the hash-bound ready row
+  plus matching staged body before `SyncService` logs or refreshes stale rows.
 - The downloader's wire batch and local import batch are now separate knobs:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per

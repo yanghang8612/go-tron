@@ -36,6 +36,7 @@ type StagedBodyReadyLimitStatus uint8
 
 const (
 	StagedBodyReadyLimitMissing StagedBodyReadyLimitStatus = iota
+	StagedBodyReadyLimitProgressReadError
 	StagedBodyReadyLimitUnbound
 	StagedBodyReadyLimitStale
 	StagedBodyReadyLimitReadError
@@ -51,6 +52,7 @@ type StagedBodyReadyLimit struct {
 	Limit      uint64
 	StageRow   rawdb.StageProgress
 	StagedRow  rawdb.SyncStagedBlockRow
+	StageError error
 	ReadError  error
 	StagedHash tcommon.Hash
 }
@@ -117,6 +119,30 @@ func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead ui
 	result.Updated = true
 	result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash)
 	return result
+}
+
+// ReadStagedBodyReadyDrainLimit reads and validates the persisted
+// SyncBodiesReady frontier that can cap one local staged-body import drain.
+func ReadStagedBodyReadyDrainLimit(db ethdb.KeyValueReader, next uint64) StagedBodyReadyLimit {
+	if db == nil {
+		return ValidateStagedBodyReadyDrainLimit(next, rawdb.StageProgress{}, false, rawdb.SyncStagedBlockRow{}, false, nil)
+	}
+	row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil {
+		return StagedBodyReadyLimit{
+			Status:     StagedBodyReadyLimitProgressReadError,
+			StageError: err,
+		}
+	}
+	var (
+		staged   rawdb.SyncStagedBlockRow
+		stagedOK bool
+		readErr  error
+	)
+	if ok && row.HasBlockHash && row.BlockNum >= next {
+		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
+	}
+	return ValidateStagedBodyReadyDrainLimit(next, row, ok, staged, stagedOK, readErr)
 }
 
 // ValidateStagedBodyReadyDrainLimit checks that a persisted SyncBodiesReady
