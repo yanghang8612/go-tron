@@ -522,6 +522,32 @@ def lag_sum(values):
         return -1
     return sum(valid)
 
+def stage_pipeline_violations(stages):
+    pairs = [
+        ("bodies-ready", "stageSyncBodies", "stageSyncBodiesReady"),
+        ("ready-import", "stageSyncBodiesReady", "stageSyncImport"),
+        ("import-execution", "stageSyncImport", "stageSyncExecution"),
+        ("execution-commitment", "stageSyncExecution", "stageSyncCommitment"),
+        ("commitment-finish", "stageSyncCommitment", "stageSyncFinish"),
+    ]
+    violations = []
+    for name, upstream_key, downstream_key in pairs:
+        upstream = number(stages, upstream_key, -1)
+        downstream = number(stages, downstream_key, -1)
+        if upstream < 0 or downstream < 0:
+            continue
+        if downstream <= upstream:
+            continue
+        violations.append({
+            "name": name,
+            "upstreamStage": upstream_key,
+            "upstreamValue": upstream,
+            "downstreamStage": downstream_key,
+            "downstreamValue": downstream,
+            "violationBlocks": downstream - upstream,
+        })
+    return violations
+
 def ratio(numerator, denominator):
     try:
         numerator = float(numerator)
@@ -769,6 +795,14 @@ stage_sync_pipeline_lag = lag_sum([
     stage_sync_finish_head_lag,
 ])
 stage_sync_bottleneck_lag_share = ratio(stage_sync_bottleneck_lag, stage_sync_pipeline_lag)
+stage_sync_pipeline_violations = stage_pipeline_violations(stages)
+stage_sync_pipeline_violation = ""
+stage_sync_pipeline_max_violation_blocks = 0
+if stage_sync_pipeline_violations:
+    stage_sync_pipeline_violation = stage_sync_pipeline_violations[0]["name"]
+    stage_sync_pipeline_max_violation_blocks = max(
+        violation["violationBlocks"] for violation in stage_sync_pipeline_violations
+    )
 interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
 interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)
 interval_stage_sync_import = interval_stage_delta(stages.get("stageSyncImport", -1), previous, "stageSyncImport", interval_seconds)
@@ -917,6 +951,11 @@ row = {
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
     "stageSyncPipelineLagBlocks": stage_sync_pipeline_lag,
     "stageSyncBottleneckLagShare": stage_sync_bottleneck_lag_share,
+    "stageSyncPipelineMonotonic": len(stage_sync_pipeline_violations) == 0,
+    "stageSyncPipelineViolation": stage_sync_pipeline_violation,
+    "stageSyncPipelineViolationCount": len(stage_sync_pipeline_violations),
+    "stageSyncPipelineMaxViolationBlocks": stage_sync_pipeline_max_violation_blocks,
+    "stageSyncPipelineViolations": stage_sync_pipeline_violations,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,

@@ -126,8 +126,12 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
 `stageSyncBottleneck`/`stageSyncBottleneckLagBlocks`,
 `stageSyncPipelineLagBlocks`, and `stageSyncBottleneckLagShare` for the largest
-current pipeline lag and its share of total staged-sync backlog. The row also
-reports `stageSyncFinishHeadEtaSeconds`,
+current pipeline lag and its share of total staged-sync backlog. It also reports
+`stageSyncPipelineMonotonic`, `stageSyncPipelineViolation`,
+`stageSyncPipelineViolationCount`, `stageSyncPipelineMaxViolationBlocks`, and
+`stageSyncPipelineViolations`, so a sample row can flag any downstream stage
+that advanced ahead of its upstream stage. The row also reports
+`stageSyncFinishHeadEtaSeconds`,
 `stageChainFreezerHeadLagBlocks`, `stageChainFreezerHeadEtaSeconds`,
 `stageSnapshotEventLogBuildHeadLagBlocks`, and
 `stageSnapshotEventLogBuildHeadEtaSeconds` when the previous sample is
@@ -162,7 +166,8 @@ For a production Nile run, capture these checks:
    `nile_sync_sample.sh`.
 2. Periodically write `gtron db stage-status --datadir <dir>` output to the
    `--stage-status-file` path used by the sampler.
-3. Confirm `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
+3. Confirm `stageSyncPipelineMonotonic=true`, or manually check
+   `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
    stageSyncExecution >= stageSyncCommitment >= stageSyncFinish`.
 4. Confirm `stageSyncBottleneck` moves as expected during catch-up; a persistent
    large `import-execution`, `execution-commitment`, `commitment-finish`, or
