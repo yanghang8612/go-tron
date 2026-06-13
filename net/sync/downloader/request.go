@@ -31,3 +31,38 @@ func NewFetchRequestState(batch []types.BlockID) FetchRequestState {
 	}
 	return state
 }
+
+// FetchReceiptState is the peer-local in-flight state updated when a requested
+// block body arrives.
+type FetchReceiptState struct {
+	Inflight   int
+	Pending    map[tcommon.Hash]uint64
+	PendingIDs map[tcommon.Hash]types.BlockID
+}
+
+// FetchReceiptResult describes the effect of acknowledging one received block.
+type FetchReceiptResult struct {
+	Accepted  bool
+	Inflight  int
+	BatchDone bool
+}
+
+// AcknowledgeFetchReceipt removes a matching received block from the in-flight
+// request state and decrements the outstanding count without underflowing.
+func AcknowledgeFetchReceipt(state FetchReceiptState, hash tcommon.Hash, num uint64) FetchReceiptResult {
+	result := FetchReceiptResult{Inflight: state.Inflight, BatchDone: state.Inflight == 0}
+	expectedNum, ok := state.Pending[hash]
+	if !ok || expectedNum != num {
+		return result
+	}
+	delete(state.Pending, hash)
+	delete(state.PendingIDs, hash)
+	if state.Inflight > 0 {
+		state.Inflight--
+	}
+	return FetchReceiptResult{
+		Accepted:  true,
+		Inflight:  state.Inflight,
+		BatchDone: state.Inflight == 0,
+	}
+}

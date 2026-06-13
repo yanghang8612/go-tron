@@ -994,23 +994,23 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	}
 	blockHash := block.Hash()
 	blockNum := block.Number()
-	expectedNum, ok := ps.pending[blockHash]
-	if !ok || expectedNum != blockNum {
+	ack := syncdl.AcknowledgeFetchReceipt(syncdl.FetchReceiptState{
+		Inflight:   ps.inflight,
+		Pending:    ps.pending,
+		PendingIDs: ps.pendingIDs,
+	}, blockHash, blockNum)
+	if !ack.Accepted {
 		ss.mu.Unlock()
 		return true
 	}
-	delete(ps.pending, blockHash)
-	delete(ps.pendingIDs, blockHash)
 	delete(ss.requested, blockHash)
 	// Bump seq so any in-flight timer callback short-circuits. We stop the
 	// armed timer below but the callback may already be running on another
 	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
 	// rejects it.
 	ps.fetchSeq++
-	if ps.inflight > 0 {
-		ps.inflight--
-	}
-	batchDone := ps.inflight == 0
+	ps.inflight = ack.Inflight
+	batchDone := ack.BatchDone
 	if ps.fetchTimer != nil {
 		ps.fetchTimer.Stop()
 		ps.fetchTimer = nil

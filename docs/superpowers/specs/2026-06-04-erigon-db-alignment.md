@@ -311,8 +311,10 @@ Status:
   now plans eligible-peer fetch actions (`wait local head`, re-poll inventory,
   delay for rate-limit, or send the wire batch), leaving `SyncService` to apply
   timers and network sends. Outbound fetch batches also build their in-flight
-  pending/requested-hash bookkeeping through downloader helpers before
-  `SyncService` installs the peer/global requested marks. These are
+  pending/requested-hash bookkeeping through downloader helpers, and received
+  block acks use the same helper boundary to validate pending hashes, delete
+  peer-local pending rows, and decrement in-flight counts before `SyncService`
+  updates the global requested marks. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
