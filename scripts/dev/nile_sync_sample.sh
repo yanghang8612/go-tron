@@ -260,8 +260,32 @@ now = int(time.time())
 start = int(start_unix)
 elapsed = now - start if start > 0 and now >= start else -1
 blocks_per_second = float(height) / elapsed if elapsed > 0 and height > 0 else 0.0
+blocks_per_minute = blocks_per_second * 60.0
 alerts_text = Path(storage_alerts_path).read_text(encoding="utf-8", errors="replace")
 alerts = parse_alerts(alerts_text)
+height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
+total = int(total_bytes)
+chaindata = int(chaindata_bytes)
+ancient = int(ancient_bytes)
+snapshot = int(snapshot_bytes)
+replay = int(replay_bytes)
+cold_archive = ancient + snapshot
+bytes_per_block = float(total) / height if height > 0 else 0.0
+chaindata_bytes_per_block = float(chaindata) / height if height > 0 else 0.0
+cold_archive_bytes_per_block = float(cold_archive) / height if height > 0 else 0.0
+cold_to_hot_ratio = float(cold_archive) / chaindata if chaindata > 0 else 0.0
+if nowblock_status != "ok":
+    sample_status = "http-nowblock-error"
+elif nodeinfo_status != "ok":
+    sample_status = "http-nodeinfo-error"
+elif nodes_status != "ok":
+    sample_status = "http-listnodes-error"
+elif peers == 0:
+    sample_status = "no-peers"
+elif abs(height_delta) > 1:
+    sample_status = "height-mismatch"
+else:
+    sample_status = "ok"
 
 row = {
     "unix": now,
@@ -276,17 +300,26 @@ row = {
     "httpListNodesStatus": nodes_status,
     "height": height,
     "nodeInfoCurrentBlock": nodeinfo_current,
+    "nodeInfoHeightDelta": height_delta,
     "blockId": block_id,
     "peers": peers,
+    "sampleStatus": sample_status,
     "elapsedSeconds": elapsed,
     "blocksPerSecond": blocks_per_second,
-    "datadirBytes": int(total_bytes),
-    "chaindataBytes": int(chaindata_bytes),
-    "ancientBytes": int(ancient_bytes),
-    "snapshotBytes": int(snapshot_bytes),
-    "replayBytes": int(replay_bytes),
+    "blocksPerMinute": blocks_per_minute,
+    "datadirBytes": total,
+    "chaindataBytes": chaindata,
+    "ancientBytes": ancient,
+    "snapshotBytes": snapshot,
+    "replayBytes": replay,
+    "coldArchiveBytes": cold_archive,
+    "bytesPerBlock": bytes_per_block,
+    "chaindataBytesPerBlock": chaindata_bytes_per_block,
+    "coldArchiveBytesPerBlock": cold_archive_bytes_per_block,
+    "coldToHotBytesRatio": cold_to_hot_ratio,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
+    "coldArchiveFiles": int(ancient_files) + int(snapshot_files),
     "offlineDbCheck": bool(int(offline_enabled)),
     "offlineDbCheckStatus": offline_status,
     "offlineDbCheckExit": int(offline_exit),

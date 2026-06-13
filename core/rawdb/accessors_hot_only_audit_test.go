@@ -98,6 +98,29 @@ func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.
 	}
 }
 
+func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadAccountTrace":           {},
+		"ReadAccountTraceAtOrBefore": {},
+		"ReadBlockBalanceTrace":      {},
+		"ReadSectionBloom":           {},
+		"ReadSectionBloomBitSet":     {},
+	}, map[string]map[string]struct{}{
+		"cmd/balance-trace/main.go": {
+			"ReadAccountTrace":      {},
+			"ReadBlockBalanceTrace": {},
+		},
+		"core/balance_trace_backfill.go": {
+			"ReadAccountTrace":      {},
+			"ReadBlockBalanceTrace": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production archive readers must use the freezer/cold-sidecar-aware ChainDB boundary:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
@@ -250,15 +273,71 @@ func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[stri
 	return offenders
 }
 
+func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]struct{}, allowed map[string]map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		if len(rawdbNames) == 0 {
+			return nil
+		}
+		rel := auditRelPath(root, path)
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			name, ok := rawDBCallName(call.Fun, rawdbNames)
+			if !ok {
+				return true
+			}
+			if _, watch := watched[name]; !watch {
+				return true
+			}
+			if isAllowedRawDBCall(root, path, name, allowed) {
+				return true
+			}
+			if isColdAwareArchiveReaderArg(rel, name, call.Args[0], rawdbNames) {
+				return true
+			}
+			offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), "rawdb."+name))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit cold archive reader calls: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
 func isAllowedRawDBCall(root, path, function string, allowed map[string]map[string]struct{}) bool {
 	if len(allowed) == 0 {
 		return false
 	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		rel = path
-	}
-	rel = filepath.ToSlash(rel)
+	rel := auditRelPath(root, path)
 	functions := allowed[rel]
 	if len(functions) == 0 {
 		return false
@@ -280,23 +359,77 @@ func isAllowedAuditPath(root, path string, allowed map[string]struct{}) bool {
 	return ok
 }
 
-func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) bool {
+func rawDBCallName(expr ast.Expr, rawdbNames map[string]struct{}) (string, bool) {
 	switch fun := expr.(type) {
 	case *ast.SelectorExpr:
 		ident, ok := fun.X.(*ast.Ident)
-		if !ok || fun.Sel.Name != name {
-			return false
+		if !ok {
+			return "", false
 		}
-		_, imported := rawdbNames[ident.Name]
-		return imported
+		if _, imported := rawdbNames[ident.Name]; !imported {
+			return "", false
+		}
+		return fun.Sel.Name, true
 	case *ast.Ident:
-		if fun.Name != name {
+		if _, dotImported := rawdbNames["."]; !dotImported {
+			return "", false
+		}
+		return fun.Name, true
+	default:
+		return "", false
+	}
+}
+
+func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) bool {
+	got, ok := rawDBCallName(expr, rawdbNames)
+	return ok && got == name
+}
+
+func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	if isRawDBCall(expr, rawdbNames, "NewChainDB") {
+		return true
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		switch ident.Name {
+		case "chainDB", "chaindb":
+			return true
+		default:
 			return false
 		}
-		_, dotImported := rawdbNames["."]
-		return dotImported
-	default:
+	}
+	path := selectorPath(expr)
+	if len(path) == 0 {
 		return false
+	}
+	last := path[len(path)-1]
+	if strings.EqualFold(last, "chaindb") {
+		return true
+	}
+	if rel == "core/tron_backend.go" && function == "ReadSectionBloomBitSet" && strings.Join(path, ".") == "m.db" {
+		return true
+	}
+	return false
+}
+
+func selectorPath(expr ast.Expr) []string {
+	switch v := expr.(type) {
+	case *ast.Ident:
+		return []string{v.Name}
+	case *ast.SelectorExpr:
+		base := selectorPath(v.X)
+		if len(base) == 0 {
+			return nil
+		}
+		return append(base, v.Sel.Name)
+	default:
+		return nil
 	}
 }
 
@@ -345,9 +478,14 @@ func rawdbImportNames(file *ast.File) map[string]struct{} {
 
 func formatAuditOffender(fset *token.FileSet, root, path string, pos token.Pos, call string) string {
 	position := fset.Position(pos)
+	rel := auditRelPath(root, path)
+	return rel + ":" + strconv.Itoa(position.Line) + ": " + call
+}
+
+func auditRelPath(root, path string) string {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		rel = path
 	}
-	return rel + ":" + strconv.Itoa(position.Line) + ": " + call
+	return filepath.ToSlash(rel)
 }

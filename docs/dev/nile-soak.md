@@ -71,10 +71,16 @@ scripts/dev/nile_sync_sample.sh \
 ```
 
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
-7d soak. Each row includes `height`, `blockId`, `peers`,
-`elapsedSeconds`, `blocksPerSecond`, `datadirBytes`, `chaindataBytes`,
-`ancientBytes`, `snapshotBytes`, `ancientFiles`, and `snapshotFiles`, plus the
-repo commit used to produce the sample.
+7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
+`nodeInfoHeightDelta`, `blockId`, `peers`, `sampleStatus`, `elapsedSeconds`,
+`blocksPerSecond`, `blocksPerMinute`, `datadirBytes`, `chaindataBytes`,
+`ancientBytes`, `snapshotBytes`, `coldArchiveBytes`, per-block byte rates,
+`coldToHotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
+`coldArchiveFiles`, plus the repo commit used to produce the sample.
+`sampleStatus` is `ok` when HTTP calls work, peers are present, and
+`getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
+first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP
+endpoint error.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
