@@ -60,6 +60,38 @@ func TestPlanIdleDrainAfterRefill(t *testing.T) {
 	}
 }
 
+func TestPlanFetchRefillDispatch(t *testing.T) {
+	tests := map[string]struct {
+		input FetchRefillDispatchInput
+		want  FetchRefillDispatchPlan
+	}{
+		"active outbound": {
+			input: FetchRefillDispatchInput{OutboundRequests: 1, Syncing: true},
+			want: FetchRefillDispatchPlan{
+				SendOutboundRequests: true,
+				Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+			},
+		},
+		"no outbound": {
+			input: FetchRefillDispatchInput{Syncing: true},
+			want:  FetchRefillDispatchPlan{},
+		},
+		"not syncing": {
+			input: FetchRefillDispatchInput{OutboundRequests: 1},
+			want:  FetchRefillDispatchPlan{},
+		},
+		"paused": {
+			input: FetchRefillDispatchInput{OutboundRequests: 1, Syncing: true, Paused: true},
+			want:  FetchRefillDispatchPlan{},
+		},
+	}
+	for name, test := range tests {
+		if got := PlanFetchRefillDispatch(test.input); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s plan = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	applier := new(recordingIdleDrainApplier)
 	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{
@@ -78,6 +110,24 @@ func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 		t.Fatalf("fallback idle drain calls = %+v, want finish", applier.calls)
 	}
 	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{{Action: IdleDrainFinish}}}, nil)
+}
+
+func TestApplyFetchRefillDispatchPlan(t *testing.T) {
+	applier := new(recordingFetchRefillDispatchApplier)
+	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
+		{Action: FetchRefillDispatchSendOutbound},
+		{Action: FetchRefillDispatchStepAction(255)},
+	}}, applier)
+	if applier.sent != 1 {
+		t.Fatalf("refill dispatch sends = %d, want 1", applier.sent)
+	}
+
+	applier.sent = 0
+	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, applier)
+	if applier.sent != 1 {
+		t.Fatalf("fallback refill dispatch sends = %d, want 1", applier.sent)
+	}
+	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, nil)
 }
 
 func TestPlanPostInventorySettlement(t *testing.T) {
@@ -230,6 +280,14 @@ func (a *recordingIdleDrainApplier) FinishSync() {
 
 func (a *recordingIdleDrainApplier) JoinAvailablePeers() {
 	a.calls = append(a.calls, IdleDrainJoinAvailablePeers)
+}
+
+type recordingFetchRefillDispatchApplier struct {
+	sent int
+}
+
+func (a *recordingFetchRefillDispatchApplier) SendOutboundRequests() {
+	a.sent++
 }
 
 type recordingPostInventorySettlementApplier struct {

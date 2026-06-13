@@ -822,9 +822,14 @@ func (ss *SyncService) fetchNextBatch() {
 		ss.ensurePeerStateLocked(ss.syncPeer)
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
+	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
+		OutboundRequests: len(out),
+		Syncing:          ss.syncing,
+		Paused:           ss.pause.Paused(),
+	})
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
-	ss.sendOutboundRequests(out)
+	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
@@ -975,9 +980,14 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 		ps.fetchDelayTimer = nil
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
+	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
+		OutboundRequests: len(out),
+		Syncing:          ss.syncing,
+		Paused:           ss.pause.Paused(),
+	})
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
-	ss.sendOutboundRequests(out)
+	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 // HandleBlock processes a received block during sync.
@@ -1386,6 +1396,15 @@ type syncFetchReceiptDispatchApplier struct {
 }
 
 func (a syncFetchReceiptDispatchApplier) SendOutboundRequests() {
+	a.service.sendOutboundRequests(a.out)
+}
+
+type syncFetchRefillDispatchApplier struct {
+	service *SyncService
+	out     []outboundSyncRequest
+}
+
+func (a syncFetchRefillDispatchApplier) SendOutboundRequests() {
 	a.service.sendOutboundRequests(a.out)
 }
 

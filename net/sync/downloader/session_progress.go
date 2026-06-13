@@ -29,6 +29,14 @@ type IdleDrainAfterRefillInput struct {
 	JoinAvailablePeersAllowed bool
 }
 
+// FetchRefillDispatchInput is the lock-free state needed after refilling peer
+// fetch slots outside a receipt-settlement path.
+type FetchRefillDispatchInput struct {
+	OutboundRequests int
+	Syncing          bool
+	Paused           bool
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -38,9 +46,23 @@ const (
 	IdleDrainJoinAvailablePeers
 )
 
+// FetchRefillDispatchStepAction names one network dispatch action after peer
+// fetch slots were refilled.
+type FetchRefillDispatchStepAction uint8
+
+const (
+	FetchRefillDispatchSendOutbound FetchRefillDispatchStepAction = iota
+)
+
 // IdleDrainStep is one downloader-owned empty-drain settlement action.
 type IdleDrainStep struct {
 	Action IdleDrainStepAction
+}
+
+// FetchRefillDispatchStep is one downloader-owned dispatch operation after a
+// fetch-slot refill.
+type FetchRefillDispatchStep struct {
+	Action FetchRefillDispatchStepAction
 }
 
 // IdleDrainPlan describes the session-level action after a local drain found no
@@ -51,11 +73,24 @@ type IdleDrainPlan struct {
 	Steps              []IdleDrainStep
 }
 
+// FetchRefillDispatchPlan describes whether refilled outbound requests should
+// be sent.
+type FetchRefillDispatchPlan struct {
+	SendOutboundRequests bool
+	Steps                []FetchRefillDispatchStep
+}
+
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
 // empty-drain plan.
 type IdleDrainPlanApplier interface {
 	FinishSync()
 	JoinAvailablePeers()
+}
+
+// FetchRefillDispatchPlanApplier performs network sends named by a refill
+// dispatch plan.
+type FetchRefillDispatchPlanApplier interface {
+	SendOutboundRequests()
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -116,12 +151,28 @@ func PlanIdleDrainAfterRefill(in IdleDrainAfterRefillInput) IdleDrainPlan {
 	return IdleDrainPlan{}
 }
 
+// PlanFetchRefillDispatch decides whether refilled outbound requests should be
+// sent after a timer/manual refill. Receipt settlement has its own dispatch
+// plan because it may run after an off-lock drain.
+func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPlan {
+	return FetchRefillDispatchPlan{
+		SendOutboundRequests: in.OutboundRequests > 0 && in.Syncing && !in.Paused,
+	}.withSteps()
+}
+
 func (p IdleDrainPlan) withSteps() IdleDrainPlan {
 	switch {
 	case p.Finish:
 		p.Steps = []IdleDrainStep{{Action: IdleDrainFinish}}
 	case p.JoinAvailablePeers:
 		p.Steps = []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}}
+	}
+	return p
+}
+
+func (p FetchRefillDispatchPlan) withSteps() FetchRefillDispatchPlan {
+	if p.SendOutboundRequests {
+		p.Steps = []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}}
 	}
 	return p
 }
@@ -141,6 +192,23 @@ func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanAppl
 			applier.FinishSync()
 		case IdleDrainJoinAvailablePeers:
 			applier.JoinAvailablePeers()
+		}
+	}
+}
+
+// ApplyFetchRefillDispatchPlan executes downloader-owned refill dispatch
+// operations.
+func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRefillDispatchPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case FetchRefillDispatchSendOutbound:
+			applier.SendOutboundRequests()
 		}
 	}
 }
