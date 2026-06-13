@@ -1114,17 +1114,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			if !progress.ShouldFinish() {
 				joinAllowed = ss.shouldJoinAvailablePeersLocked(now)
 			}
-			idle := syncdl.PlanIdleDrainAfterRefill(syncdl.IdleDrainAfterRefillInput{
+			refill := syncdl.PlanEmptyDrainRefill(syncdl.EmptyDrainRefillInput{
+				OutboundRequests:          len(out),
 				Progress:                  progress,
 				JoinAvailablePeersAllowed: joinAllowed,
 			})
-			dispatch = syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
-				OutboundRequests: len(out),
-				Progress:         progress,
-			})
+			dispatch = refill.Dispatch
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
-			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
+			syncdl.ApplyIdleDrainAfterRefillPlan(refill.Idle, syncIdleDrainApplier{service: ss})
 			break
 		}
 		ss.mu.Unlock()

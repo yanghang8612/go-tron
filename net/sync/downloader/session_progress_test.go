@@ -93,6 +93,50 @@ func TestPlanFetchRefillDispatch(t *testing.T) {
 	}
 }
 
+func TestPlanEmptyDrainRefill(t *testing.T) {
+	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
+	got := PlanEmptyDrainRefill(EmptyDrainRefillInput{
+		OutboundRequests:          2,
+		Progress:                  complete,
+		JoinAvailablePeersAllowed: true,
+	})
+	want := EmptyDrainRefillPlan{
+		Idle: IdleDrainPlan{
+			Finish: true,
+			Steps:  []IdleDrainStep{{Action: IdleDrainFinish}},
+		},
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("complete empty-drain refill plan = %+v, want %+v", got, want)
+	}
+
+	got = PlanEmptyDrainRefill(EmptyDrainRefillInput{
+		Progress:                  SessionProgress{Syncing: true, CurrentHead: 1, TargetHead: 2},
+		JoinAvailablePeersAllowed: true,
+	})
+	want = EmptyDrainRefillPlan{
+		Idle: IdleDrainPlan{
+			JoinAvailablePeers: true,
+			Steps:              []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("joinable empty-drain refill plan = %+v, want %+v", got, want)
+	}
+
+	got = PlanEmptyDrainRefill(EmptyDrainRefillInput{
+		OutboundRequests: 3,
+		Progress:         SessionProgress{Syncing: true, Paused: true},
+	})
+	if !reflect.DeepEqual(got, EmptyDrainRefillPlan{}) {
+		t.Fatalf("paused empty-drain refill plan = %+v, want no action", got)
+	}
+}
+
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	applier := new(recordingIdleDrainApplier)
 	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{

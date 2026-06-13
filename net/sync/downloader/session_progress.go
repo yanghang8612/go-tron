@@ -36,6 +36,14 @@ type FetchRefillDispatchInput struct {
 	Progress         SessionProgress
 }
 
+// EmptyDrainRefillInput is the lock-free state after a local drain found no
+// importable bodies and existing peers were refilled.
+type EmptyDrainRefillInput struct {
+	OutboundRequests          int
+	Progress                  SessionProgress
+	JoinAvailablePeersAllowed bool
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -77,6 +85,13 @@ type IdleDrainPlan struct {
 type FetchRefillDispatchPlan struct {
 	SendOutboundRequests bool
 	Steps                []FetchRefillDispatchStep
+}
+
+// EmptyDrainRefillPlan groups the two downloader-owned decisions after an
+// empty local drain: session settlement and network dispatch.
+type EmptyDrainRefillPlan struct {
+	Idle     IdleDrainPlan
+	Dispatch FetchRefillDispatchPlan
 }
 
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
@@ -156,6 +171,21 @@ func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPla
 	return FetchRefillDispatchPlan{
 		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
+}
+
+// PlanEmptyDrainRefill derives the full downloader decision after a local
+// staged-body drain found no importable batch and fetch slots were refilled.
+func PlanEmptyDrainRefill(in EmptyDrainRefillInput) EmptyDrainRefillPlan {
+	return EmptyDrainRefillPlan{
+		Idle: PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{
+			Progress:                  in.Progress,
+			JoinAvailablePeersAllowed: in.JoinAvailablePeersAllowed,
+		}),
+		Dispatch: PlanFetchRefillDispatch(FetchRefillDispatchInput{
+			OutboundRequests: in.OutboundRequests,
+			Progress:         in.Progress,
+		}),
+	}
 }
 
 func (p IdleDrainPlan) withSteps() IdleDrainPlan {
