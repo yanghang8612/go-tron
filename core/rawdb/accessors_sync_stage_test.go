@@ -33,24 +33,28 @@ func TestSyncStagedBlockReadWriteDelete(t *testing.T) {
 }
 
 func TestDeleteSyncStagedBlockBatch(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	blocks := []*types.Block{
 		testSyncStagedBlock(1, common.Hash{}),
 		testSyncStagedBlock(2, common.Hash{0x01}),
 		testSyncStagedBlock(3, common.Hash{0x02}),
 	}
 	for _, block := range blocks {
-		if err := WriteSyncStagedBlock(db, block); err != nil {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
 			t.Fatalf("write staged block %d: %v", block.Number(), err)
 		}
 	}
 
+	db := &countingBatchStore{KeyValueStore: base}
 	result := DeleteSyncStagedBlockBatch(db, []SyncStagedBlockDelete{
 		{Number: blocks[0].Number(), Hash: blocks[0].Hash()},
 		{Number: blocks[1].Number(), Hash: blocks[1].Hash()},
 	})
 	if result.Deleted != 2 || len(result.Errors) != 0 {
 		t.Fatalf("delete result = %+v, want deleted 2 without errors", result)
+	}
+	if db.batches != 1 || db.directDeletes != 0 {
+		t.Fatalf("delete batch used batches=%d directDeletes=%d, want one batch", db.batches, db.directDeletes)
 	}
 	for _, block := range blocks[:2] {
 		if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || ok {

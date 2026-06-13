@@ -347,7 +347,7 @@ Status:
   batching the raw body plus hash-bound watermark write in the normal forward
   path,
   while imported-body cleanup uses `core/rawdb` to delete the applied raw body
-  rows as one batch. Active reset now uses a shared
+  rows through one rawdb batch flush. Active reset now uses a shared
   `core/rawdb` cleanup helper to clear staged bodies plus
   `SyncBodies`/`SyncBodiesReady` rows, and range cleanup for startup
   imported-through deletes, stale-tail deletes, and full-reset staged body

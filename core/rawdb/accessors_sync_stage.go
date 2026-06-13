@@ -224,6 +224,37 @@ func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBloc
 	if db == nil || len(blocks) == 0 {
 		return result
 	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatchWithSize(len(blocks) * 8)
+		defer batch.Reset()
+		enqueued := make([]SyncStagedBlockDelete, 0, len(blocks))
+		for _, block := range blocks {
+			if err := batch.Delete(syncStagedBlockKey(block.Number)); err != nil {
+				result.Errors = append(result.Errors, SyncStagedBlockDeleteError{
+					Number: block.Number,
+					Hash:   block.Hash,
+					Err:    err,
+				})
+				continue
+			}
+			enqueued = append(enqueued, block)
+		}
+		if len(enqueued) == 0 {
+			return result
+		}
+		if err := batch.Write(); err != nil {
+			for _, block := range enqueued {
+				result.Errors = append(result.Errors, SyncStagedBlockDeleteError{
+					Number: block.Number,
+					Hash:   block.Hash,
+					Err:    err,
+				})
+			}
+			return result
+		}
+		result.Deleted = len(enqueued)
+		return result
+	}
 	for _, block := range blocks {
 		if err := db.Delete(syncStagedBlockKey(block.Number)); err != nil {
 			result.Errors = append(result.Errors, SyncStagedBlockDeleteError{
