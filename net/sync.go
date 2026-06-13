@@ -700,28 +700,31 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
 		hash := tcommon.BytesToHash(bid.Hash)
+		facts := syncdl.InventoryCandidateFacts{}
 		if num <= headNum {
 			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
-				continue
+				facts.KnownOrRequested = true
 			}
 		}
-		if ss.chain.HasBlockInKhaosDB(hash) {
-			continue
+		if !facts.KnownOrRequested && ss.chain.HasBlockInKhaosDB(hash) {
+			facts.KnownOrRequested = true
 		}
-		if _, ok := ss.bufferedHash[hash]; ok {
-			continue
+		if !facts.KnownOrRequested {
+			_, facts.KnownOrRequested = ss.bufferedHash[hash]
 		}
-		if _, ok := ss.requested[hash]; ok {
-			continue
+		if !facts.KnownOrRequested {
+			_, facts.KnownOrRequested = ss.requested[hash]
 		}
-		if _, ok := ps.requestedHashes[hash]; ok {
-			continue
+		if !facts.KnownOrRequested {
+			_, facts.PeerRequested = ps.requestedHashes[hash]
 		}
 		bid := types.BlockID{Hash: hash, Num: num}
-		if !ss.reserveBlockPathLocked(bid) {
-			continue
+		if !facts.KnownOrRequested && !facts.PeerRequested {
+			facts.ReservedPath = ss.reserveBlockPathLocked(bid)
 		}
-		ps.fetchList = append(ps.fetchList, bid)
+		if syncdl.AcceptInventoryCandidate(facts) {
+			ps.fetchList = append(ps.fetchList, bid)
+		}
 	}
 	ps.remainNum = inv.RemainNum
 	if len(inv.Ids) > 0 {

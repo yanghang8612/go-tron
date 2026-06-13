@@ -305,12 +305,13 @@ Status:
   helpers to requeue pending in-flight IDs in stable block/hash order before
   the peer's local fetch list
   while `SyncService` supplies only the canonical/requested/block-path
-  availability filter. Retry-list and peer-local fetch-list candidate decisions
-  are also helper-owned, so the service loop gathers chain/path facts while the
-  downloader package decides drop/keep/assign/accept behavior. The same package
-  now plans eligible-peer fetch actions (`wait local head`, re-poll inventory,
-  delay for rate-limit, or send the wire batch), leaving `SyncService` to apply
-  timers and network sends. Outbound fetch batches also build their in-flight
+  availability filter. CHAIN_INVENTORY, retry-list, and peer-local fetch-list
+  candidate decisions are also helper-owned, so the service loop gathers
+  chain/cache/path facts while the downloader package decides
+  drop/keep/assign/accept behavior. The same package now plans eligible-peer
+  fetch actions (`wait local head`, re-poll inventory, delay for rate-limit, or
+  send the wire batch), leaving `SyncService` to apply timers and network sends.
+  Outbound fetch batches also build their in-flight
   pending/requested-hash bookkeeping through downloader helpers, and received
   block acks use the same helper boundary to validate pending hashes, delete
   peer-local pending rows, and decrement in-flight counts before `SyncService`

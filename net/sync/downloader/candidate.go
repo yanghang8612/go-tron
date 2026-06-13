@@ -39,3 +39,18 @@ type FetchCandidateFacts struct {
 func AcceptFetchCandidate(f FetchCandidateFacts) bool {
 	return !f.KnownOrRequested && f.ReservedPath && !f.PeerRequested
 }
+
+// InventoryCandidateFacts are the side-effect-free facts needed to decide
+// whether a CHAIN_INVENTORY block ID should enter a peer-local fetch queue.
+type InventoryCandidateFacts struct {
+	KnownOrRequested bool
+	PeerRequested    bool
+	ReservedPath     bool
+}
+
+// AcceptInventoryCandidate reports whether an advertised block ID should be
+// queued for future fetch. Callers own the chain/cache lookups and path
+// reservation side effects.
+func AcceptInventoryCandidate(f InventoryCandidateFacts) bool {
+	return !f.KnownOrRequested && !f.PeerRequested && f.ReservedPath
+}

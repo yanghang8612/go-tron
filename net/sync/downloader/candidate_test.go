@@ -60,3 +60,22 @@ func TestAcceptFetchCandidate(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptInventoryCandidate(t *testing.T) {
+	tests := []struct {
+		name  string
+		facts InventoryCandidateFacts
+		want  bool
+	}{
+		{name: "known rejected", facts: InventoryCandidateFacts{KnownOrRequested: true, ReservedPath: true}, want: false},
+		{name: "same peer duplicate rejected", facts: InventoryCandidateFacts{PeerRequested: true, ReservedPath: true}, want: false},
+		{name: "path conflict rejected", facts: InventoryCandidateFacts{}, want: false},
+		{name: "eligible accepted", facts: InventoryCandidateFacts{ReservedPath: true}, want: true},
+	}
+
+	for _, tt := range tests {
+		if got := AcceptInventoryCandidate(tt.facts); got != tt.want {
+			t.Fatalf("%s: accept = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
