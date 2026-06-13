@@ -1344,9 +1344,7 @@ func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan
 	ss.mu.Lock()
 	var diag syncdl.Diagnostics
 	if emit {
-		diag = ss.snapshotDiagnosticsLocked().
-			WithImportBatchExecutionDiagnostics(plan.ExecutionDiagnostics).
-			WithImportStageDiagnostics(plan.StageDiagnostics)
+		diag = ss.snapshotDiagnosticsLocked().WithImportedBatchProgressPlan(plan)
 	}
 	remain := ss.estimatedRemainLocked()
 	ss.mirrorLegacyLocked()

@@ -77,6 +77,17 @@ func (d Diagnostics) WithImportBatchExecutionDiagnostics(execution ImportBatchEx
 	return d
 }
 
+// WithImportedBatchProgressPlan adds every downloader-owned import progress
+// diagnostic carried by a planned staged-body import settlement.
+func (d Diagnostics) WithImportedBatchProgressPlan(plan ImportedBatchProgressPlan) Diagnostics {
+	if !plan.OK {
+		return d
+	}
+	return d.
+		WithImportBatchExecutionDiagnostics(plan.ExecutionDiagnostics).
+		WithImportStageDiagnostics(plan.StageDiagnostics)
+}
+
 // WithImportStagePlan adds downloader-owned import stage planner diagnostics to
 // the existing sync-session snapshot.
 func (d Diagnostics) WithImportStagePlan(plan ImportStagePlan) Diagnostics {

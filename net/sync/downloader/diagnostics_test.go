@@ -119,3 +119,49 @@ func TestDiagnosticsWithImportBatchExecutionPlan(t *testing.T) {
 		t.Fatal("empty diagnostics reported import execution plan")
 	}
 }
+
+func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
+	hash1 := tcommon.Hash{0x01}
+	hash2 := tcommon.Hash{0x02}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+	plan := ImportedBatchProgressPlan{
+		OK:                   true,
+		ExecutionDiagnostics: NewImportBatchExecutionPlanDiagnostics(stagePlan.Schedules, stagePlan),
+		StageDiagnostics: ImportStagePlanDiagnostics{
+			Scheduled:          4,
+			Completed:          2,
+			NextPhase:          ImportStagePhaseCommitment,
+			NextCanonicalStage: rawdb.StageCommitment,
+			NextStage:          rawdb.StageSyncCommitment,
+			NextBlockNum:       2,
+			BlockedStatus:      ImportStageProgressMissing,
+			HasBlocked:         true,
+		},
+	}
+
+	diag := NewDiagnostics(7, 8, 9, nil).WithImportedBatchProgressPlan(plan)
+	if diag.BlockBufferLen != 7 || diag.RequestedLen != 8 || diag.RetryListLen != 9 {
+		t.Fatalf("base diagnostics = %+v, want preserved counts 7/8/9", diag)
+	}
+	if !diag.HasImportBatchExecutionPlan() || diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 || diag.ImportExecutionPostBodyStages != 6 {
+		t.Fatalf("execution diagnostics = %+v, want two-block import execution plan", diag)
+	}
+	if !diag.HasImportStagePlan() || diag.ImportStageCompleted != 2 || diag.ImportStageScheduled != 4 || diag.ImportStageComplete {
+		t.Fatalf("stage diagnostics = %+v, want incomplete 2/4 stage plan", diag)
+	}
+	if diag.ImportStageNext != string(ImportStagePhaseCommitment) ||
+		diag.ImportStageNextBlock != 2 ||
+		diag.ImportStageNextCanonical != string(rawdb.StageCommitment) ||
+		diag.ImportStageNextSync != string(rawdb.StageSyncCommitment) ||
+		diag.ImportStageBlockedStatus != ImportStageProgressMissing.String() {
+		t.Fatalf("blocked stage diagnostics = %+v, want commitment/missing at block2", diag)
+	}
+
+	empty := NewDiagnostics(1, 2, 3, nil).WithImportedBatchProgressPlan(ImportedBatchProgressPlan{})
+	if empty.HasImportBatchExecutionPlan() || empty.HasImportStagePlan() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
+		t.Fatalf("empty progress diagnostics = %+v, want unchanged base counts and no import plan", empty)
+	}
+}
