@@ -356,6 +356,15 @@ func (b *Buffer) SetMaxInflight(n int) {
 	b.maxInflight = n
 }
 
+// MaxInflight returns the effective in-flight layer cap (the zero value reads as
+// 1, the single-active default). Exported for the async-commit depth wiring and
+// its tests.
+func (b *Buffer) MaxInflight() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.effectiveMaxInflight()
+}
+
 func (b *Buffer) layerPendingLocked(target *layer) bool {
 	if b == nil || target == nil {
 		return false

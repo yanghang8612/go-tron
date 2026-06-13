@@ -212,6 +212,7 @@ type BlockChain struct {
 	// With asyncCommit false (the default) the guard in applyBlockWithPlan is not
 	// taken and the synchronous commit path runs unchanged — byte-identical.
 	asyncCommit    bool
+	commitDepth    int // resolved at NewBlockChain (GTRON_ASYNC_COMMIT_DEPTH), ≥2
 	commitQueue    chan *commitJob
 	commitPending  *flushBarrier
 	commitWorkerWg sync.WaitGroup
@@ -355,6 +356,12 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		ancient = rawdb.NoopAncient{}
 	}
 	chaindb := rawdb.NewChainDB(db, ancient)
+	// Resolve the async-commit pipeline depth ONCE here and size the commit queue
+	// to depth-2 (the backpressure bound). The commit worker, started below in
+	// this constructor, ranges this exact channel for its lifetime — sizing it
+	// here (not in the later SetAsyncCommit) keeps the worker from ever being
+	// orphaned on a re-made channel. depth-2 == 0 ⇒ the unbuffered rendezvous.
+	commitDepth := resolveCommitPipelineDepth()
 	bc := &BlockChain{
 		db:                db,
 		chaindb:           chaindb,
@@ -364,7 +371,8 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		buffer:            buffer,
 		flushQueue:        make(chan uint64, flushQueueCap),
 		flushPending:      newFlushBarrier(),
-		commitQueue:       make(chan *commitJob, commitQueueCap),
+		commitDepth:       commitDepth,
+		commitQueue:       make(chan *commitJob, commitDepth-2),
 		commitPending:     newFlushBarrier(),
 		rewardAcctCache:   make(map[tcommon.Address]*state.AccountSnapshot),
 		rewardAcctSeen:    make(map[tcommon.Address]struct{}),
@@ -716,6 +724,35 @@ func (bc *BlockChain) insertBlockLockedWithExecutor(block *types.Block, executor
 
 	// The global head advanced. If it doesn't extend the canonical tip → fork.
 	if newHead.ParentHash() != current.Hash() {
+		// Fully settle a deferred (session/deep) executor before the rewind so
+		// switchFork sees exactly the precondition the per-call path gives it: a
+		// quiesced worker and an empty range executor whose blocks are committed +
+		// flushed to the same on-disk image the synchronous reorg rewinds. A
+		// cross-batch InsertSession reuses ONE executor across forward batches and
+		// defers the drain/flush to Finish; if a reorg interrupts mid-session that
+		// executor still holds applied-but-unflushed latest-domain rows (open
+		// scope) and an advanced range tip, which would leak (non-deterministically
+		// with the worker's flush progress) into the re-applied branch. Replicate
+		// insertBlocksLocked's async settle here: drain → Close (flush scope into
+		// the committed layers) → postFlush(solidified) → Reset. No-op when the
+		// executor never applied a block in this range (commit == nil) — the common
+		// case where the competing branch was all nothing-to-apply until its
+		// heavier tip, so the per-call path is byte-identical.
+		if bc.asyncCommit && executor != nil && executor.commit != nil {
+			bc.WaitForCommitSettled()
+			if errPtr := bc.commitErr.Load(); errPtr != nil {
+				return fmt.Errorf("async commit failed before fork: %w", *errPtr)
+			}
+			if err := executor.Close(); err != nil {
+				return fmt.Errorf("settle executor scope before fork: %w", err)
+			}
+			if solidified := bc.cachedDynProps().LatestSolidifiedBlockNum(); solidified > 0 {
+				if err := bc.postFlush(solidified); err != nil {
+					return fmt.Errorf("flush before fork: %w", err)
+				}
+			}
+			executor.Reset()
+		}
 		if err := bc.switchFork(newHead); err != nil {
 			bc.khaosDB.RemoveBlk(block.Hash())
 			return fmt.Errorf("switchFork: %w", err)

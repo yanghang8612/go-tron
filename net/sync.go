@@ -1046,6 +1046,17 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
+	// Deep async-commit pipeline (depth > 2): span ONE InsertSession across all
+	// batches so the commit worker is drained only at the end of the drain (not
+	// at every ≤100-block batch boundary) — the cross-batch barrier amortization.
+	// sess == nil for the synchronous / depth-2 path, where the loop below is
+	// byte-identical to before (plain InsertBlocks per batch).
+	var sess *core.InsertSession
+	if ss.chain.PipelinedCommitDepth() > 2 {
+		sess = ss.chain.BeginInsertSession()
+	}
+	var lastPeer *p2p.Peer
+	paused := false
 	for {
 		now := time.Now()
 		ss.mu.Lock()
@@ -1055,6 +1066,19 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 		batch := ss.popBufferedSyncBatchLocked(now)
 		if len(batch.buffered) == 0 {
+			if sess != nil {
+				// Drain the commit worker before the completion check: under deep
+				// pipelining CurrentBlock lags the applied tip, and shouldFinish /
+				// fillFetchSlots must see every applied block as committed. Release
+				// ss.mu first — Finish takes chainmu, always acquired outside ss.mu.
+				ss.mu.Unlock()
+				if ferr := sess.Finish(); ferr != nil && !paused {
+					ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
+					paused = true
+				}
+				sess = nil
+				ss.mu.Lock()
+			}
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.beginBufferWaitLocked(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
@@ -1083,9 +1107,17 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		for _, wait := range batch.bufferWaits {
 			ss.stats.AddBufferWait(wait)
 		}
+		if n := len(batch.buffered); n > 0 {
+			lastPeer = batch.buffered[n-1].peer
+		}
 
 		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlocks(batch.blocks)
+		var insertErr error
+		if sess != nil {
+			insertErr = sess.Insert(batch.blocks)
+		} else {
+			insertErr = ss.chain.InsertBlocks(batch.blocks)
+		}
 		insertElapsed := time.Since(insertStart)
 		applied := len(batch.blocks)
 		if insertErr != nil {
@@ -1101,9 +1133,17 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 				failedNum = rangeErr.BlockNumber
 			}
 			ss.pauseSync(batch.buffered[failed].peer, failedNum, insertErr)
+			paused = true
 			break
 		}
 		ss.recordImportedBatch(batch, applied, insertElapsed)
+	}
+	// Settle the session on any loop-exit path (not-syncing / paused / error
+	// break). The empty-batch path already finished it above (sess == nil there).
+	if sess != nil {
+		if ferr := sess.Finish(); ferr != nil && !paused {
+			ss.pauseSync(lastPeer, ss.chain.CurrentBlock().Number()+1, ferr)
+		}
 	}
 	ss.sendOutboundRequests(out)
 }

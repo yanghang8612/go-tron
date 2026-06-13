@@ -438,7 +438,11 @@ func gtron(ctx *cli.Context) error {
 	// production node until that validation passes.
 	if os.Getenv("GTRON_ASYNC_COMMIT") == "1" {
 		bc.SetAsyncCommit(true)
-		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use")
+		// depth > 2 (GTRON_ASYNC_COMMIT_DEPTH) additionally buffers the commit
+		// queue and amortizes the per-range drain across sync batches; depth 2
+		// (default) is the current rendezvous behavior.
+		log.Warn("Async commit ENABLED (experimental, GTRON_ASYNC_COMMIT=1) — internal commit pipelined off the critical path; validate via re-sync before production use",
+			"depth", bc.PipelinedCommitDepth())
 	}
 	if ctx.IsSet("sync.restart-from") {
 		target := ctx.Uint64("sync.restart-from")
