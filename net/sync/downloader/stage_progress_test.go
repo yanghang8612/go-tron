@@ -56,6 +56,9 @@ func TestStageProgressCollectorWritesLatestRowsAtOrBelowBoundary(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("written progress = %+v, want %+v", got, want)
 	}
+	if rows := collector.Rows(2); !reflect.DeepEqual(rows, want) {
+		t.Fatalf("progress rows = %+v, want %+v", rows, want)
+	}
 }
 
 func TestStageProgressCollectorNilAndEmpty(t *testing.T) {

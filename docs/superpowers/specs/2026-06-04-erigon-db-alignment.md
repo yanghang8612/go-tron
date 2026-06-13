@@ -370,7 +370,10 @@ Status:
   blocks in the downloader package, and the same applied-prefix summary derives
   the staged body delete descriptors used for imported-body cleanup, leaving
   `SyncService` to orchestrate persistence, logging, pausing, and canonical
-  insertion.
+  insertion. The hash-bound sync import/execution/commitment/finish rows for an
+  applied range are now emitted by the downloader collector and persisted
+  through one `core/rawdb` stage-progress batch when the backing store supports
+  batched writes.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

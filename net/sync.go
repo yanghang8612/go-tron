@@ -1255,9 +1255,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	}
 	ss.deleteImportedSyncBodies(batch, summary.Applied)
 	if summary.HasStage {
-		stageProgress.Write(summary.Last.Num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
-			ss.writeStageProgress(stage, blockNum, blockHash, true)
-		})
+		ss.writeStageProgressRows(stageProgress.Rows(summary.Last.Num))
 	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
@@ -1302,6 +1300,19 @@ func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, 
 	}
 	if err != nil {
 		syncLog.Warn("Persist sync stage progress failed", "stage", stage, "block", blockNum, "err", err)
+	}
+}
+
+func (ss *SyncService) writeStageProgressRows(rows []rawdb.StageProgress) {
+	if len(rows) == 0 || ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	if err := rawdb.WriteStageProgressRows(db, rows); err != nil {
+		syncLog.Warn("Persist sync stage progress rows failed", "rows", len(rows), "err", err)
 	}
 }
 

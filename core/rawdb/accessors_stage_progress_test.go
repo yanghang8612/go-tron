@@ -47,6 +47,49 @@ func TestStageProgressReadWriteIterateDelete(t *testing.T) {
 	}
 }
 
+func TestWriteStageProgressRows(t *testing.T) {
+	db := NewMemoryDatabase()
+	rows := []StageProgress{
+		{Stage: StageSyncImport, BlockNum: 10, BlockHash: common.Hash{0x10}, HasBlockHash: true},
+		{Stage: StageSyncExecution, BlockNum: 9, BlockHash: common.Hash{0x09}, HasBlockHash: true},
+		{Stage: StageSnapshotBuild, BlockNum: 8},
+	}
+
+	if err := WriteStageProgressRows(db, rows); err != nil {
+		t.Fatalf("write stage progress rows: %v", err)
+	}
+	for _, want := range rows {
+		got, ok, err := ReadStageProgressRow(db, want.Stage)
+		if err != nil || !ok {
+			t.Fatalf("read %s progress ok=%v err=%v", want.Stage, ok, err)
+		}
+		if got.BlockNum != want.BlockNum || got.BlockHash != want.BlockHash || got.HasBlockHash != want.HasBlockHash {
+			t.Fatalf("%s progress = %+v, want %+v", want.Stage, got, want)
+		}
+	}
+}
+
+func TestWriteStageProgressRowsNilEmptyAndInvalid(t *testing.T) {
+	if err := WriteStageProgressRows(nil, nil); err != nil {
+		t.Fatalf("empty rows with nil db: %v", err)
+	}
+	if err := WriteStageProgressRows(nil, []StageProgress{{Stage: StageSyncImport, BlockNum: 1}}); err == nil {
+		t.Fatal("nil db with rows returned nil error")
+	}
+
+	db := NewMemoryDatabase()
+	rows := []StageProgress{
+		{Stage: StageSyncImport, BlockNum: 1, BlockHash: common.Hash{0x01}, HasBlockHash: true},
+		{BlockNum: 2, BlockHash: common.Hash{0x02}, HasBlockHash: true},
+	}
+	if err := WriteStageProgressRows(db, rows); err == nil || !strings.Contains(err.Error(), "empty stage id") {
+		t.Fatalf("invalid rows error = %v, want empty stage id", err)
+	}
+	if _, ok, err := ReadStageProgressRow(db, StageSyncImport); err != nil || ok {
+		t.Fatalf("invalid batch wrote first row: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestReadVerifiedStageProgressBlock(t *testing.T) {
 	db := NewMemoryDatabase()
 	block := testSyncStagedBlock(3, common.Hash{0x02})

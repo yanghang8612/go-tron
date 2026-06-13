@@ -178,6 +178,40 @@ func WriteStageProgressWithHash(db ethdb.KeyValueWriter, stage StageID, blockNum
 	return db.Put(stageProgressKey(stage), encodeStageProgress(blockNum, blockHash, true))
 }
 
+// WriteStageProgressRows persists a group of stage progress rows. When the
+// writer supports ethdb batches, the rows are flushed with one batch write.
+func WriteStageProgressRows(db ethdb.KeyValueWriter, rows []StageProgress) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if db == nil {
+		return errors.New("rawdb: nil stage progress writer")
+	}
+	for i, row := range rows {
+		if row.Stage == "" {
+			return fmt.Errorf("rawdb: empty stage id at row %d", i)
+		}
+	}
+	writer := db
+	var batch ethdb.Batch
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch = batcher.NewBatch()
+		defer batch.Reset()
+		writer = batch
+	}
+	for _, row := range rows {
+		if err := writer.Put(stageProgressKey(row.Stage), encodeStageProgress(row.BlockNum, row.BlockHash, row.HasBlockHash)); err != nil {
+			return fmt.Errorf("rawdb: write stage progress %s at %d: %w", row.Stage, row.BlockNum, err)
+		}
+	}
+	if batch != nil {
+		if err := batch.Write(); err != nil {
+			return fmt.Errorf("rawdb: write stage progress batch: %w", err)
+		}
+	}
+	return nil
+}
+
 func WriteCanonicalStageProgress(db ethdb.KeyValueWriter, blockNum uint64) error {
 	for _, stage := range CanonicalExecutionStages() {
 		if err := WriteStageProgress(db, stage, blockNum); err != nil {

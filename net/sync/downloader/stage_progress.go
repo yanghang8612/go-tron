@@ -77,14 +77,32 @@ func (c *StageProgressCollector) Write(through uint64, write StageProgressWriter
 	if c == nil || write == nil {
 		return
 	}
-	rows := c.snapshotRows()
+	for _, row := range c.Rows(through) {
+		write(row.Stage, row.BlockNum, row.BlockHash)
+	}
+}
+
+// Rows returns the newest observed hash-bound row at or below through for each
+// sync pipeline stage, in operator stage-status order.
+func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
+	if c == nil {
+		return nil
+	}
+	observed := c.snapshotRows()
+	rows := make([]rawdb.StageProgress, 0, len(SyncPipelineProgressStages()))
 	for _, stage := range SyncPipelineProgressStages() {
-		latest, ok := latestStageProgress(rows[stage], through)
+		latest, ok := latestStageProgress(observed[stage], through)
 		if !ok {
 			continue
 		}
-		write(stage, latest.BlockNum, latest.Hash)
+		rows = append(rows, rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     latest.BlockNum,
+			BlockHash:    latest.Hash,
+			HasBlockHash: true,
+		})
 	}
+	return rows
 }
 
 func (c *StageProgressCollector) snapshotRows() map[rawdb.StageID][]StageProgressRow {
