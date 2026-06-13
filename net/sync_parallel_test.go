@@ -215,6 +215,72 @@ func TestRecordImportedBatchKeepsAppliedStagePrefixAfterPartialExecution(t *test
 	}
 }
 
+func TestSyncServiceRestoresHalfExecutedSessionOnStart(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	batch := syncdl.BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []syncdl.BufferedBlock{
+			{Raw: rawOf(t, block1), Num: block1.Number(), Hash: block1.Hash()},
+			{Raw: rawOf(t, block2), Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := syncdl.NewStageProgressCollector()
+	if err := bc.InsertBlocksWithStageHook([]*types.Block{block1}, collector.Observe); err != nil {
+		t.Fatalf("insert partially executed block1: %v", err)
+	}
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+
+	ss.recordImportedBatch(batch, 1, time.Millisecond, collector)
+
+	assertSyncPipelineProgress(t, bc.DB(), block1)
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
+		t.Fatalf("staged block1 after half execution ok=%v err=%v, want deleted", ok, err)
+	}
+	if staged, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block2.Number()); err != nil || !ok || staged.Hash() != block2.Hash() {
+		t.Fatalf("staged block2 after half execution = %v ok=%v err=%v, want retained", staged, ok, err)
+	}
+
+	restarted := NewSyncService(bc, nil)
+	restarted.mu.Lock()
+	restarted.initSessionLocked(time.Now())
+	buffered := len(restarted.blockBuffer)
+	target := restarted.targetHeadNum
+	path2 := restarted.blockPath[block2.Number()]
+	restarted.mu.Unlock()
+
+	if buffered != 1 || target != block2.Number() {
+		t.Fatalf("restart restored buffered=%d target=%d, want 1/%d", buffered, target, block2.Number())
+	}
+	if path2 != block2.Hash() {
+		t.Fatalf("restart block path for block2 = %x, want %x", path2, block2.Hash())
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady after half-executed restart = %+v ok=%v err=%v, want block2", ready, ok, err)
+	}
+
+	restarted.drainBufferedBlocks()
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after half-executed restart drain = %v, want block2 %x", got, block2.Hash())
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block2.Number()); err != nil || ok {
+		t.Fatalf("staged block2 after restart drain ok=%v err=%v, want deleted", ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after half-executed restart drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
