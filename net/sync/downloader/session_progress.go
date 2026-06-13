@@ -29,11 +29,33 @@ type IdleDrainAfterRefillInput struct {
 	JoinAvailablePeersAllowed bool
 }
 
+// IdleDrainStepAction names one session-level action after a local drain found
+// no importable buffered bodies and existing peers were refilled.
+type IdleDrainStepAction uint8
+
+const (
+	IdleDrainFinish IdleDrainStepAction = iota
+	IdleDrainJoinAvailablePeers
+)
+
+// IdleDrainStep is one downloader-owned empty-drain settlement action.
+type IdleDrainStep struct {
+	Action IdleDrainStepAction
+}
+
 // IdleDrainPlan describes the session-level action after a local drain found no
 // buffered batch and fetch slots have been refilled.
 type IdleDrainPlan struct {
 	Finish             bool
 	JoinAvailablePeers bool
+	Steps              []IdleDrainStep
+}
+
+// IdleDrainPlanApplier performs the session-level runtime actions named by an
+// empty-drain plan.
+type IdleDrainPlanApplier interface {
+	FinishSync()
+	JoinAvailablePeers()
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -57,12 +79,41 @@ type PostInventorySettlementPlan struct {
 // local drain after existing peers were given a chance to fetch more bodies.
 func PlanIdleDrainAfterRefill(in IdleDrainAfterRefillInput) IdleDrainPlan {
 	if in.Complete {
-		return IdleDrainPlan{Finish: true}
+		return IdleDrainPlan{Finish: true}.withSteps()
 	}
 	if in.JoinAvailablePeersAllowed {
-		return IdleDrainPlan{JoinAvailablePeers: true}
+		return IdleDrainPlan{JoinAvailablePeers: true}.withSteps()
 	}
 	return IdleDrainPlan{}
+}
+
+func (p IdleDrainPlan) withSteps() IdleDrainPlan {
+	switch {
+	case p.Finish:
+		p.Steps = []IdleDrainStep{{Action: IdleDrainFinish}}
+	case p.JoinAvailablePeers:
+		p.Steps = []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}}
+	}
+	return p
+}
+
+// ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain
+// settlement schedule.
+func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case IdleDrainFinish:
+			applier.FinishSync()
+		case IdleDrainJoinAvailablePeers:
+			applier.JoinAvailablePeers()
+		}
+	}
 }
 
 // PlanPostInventorySettlement decides how the service should settle a sync

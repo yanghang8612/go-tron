@@ -1,6 +1,9 @@
 package downloader
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestSessionProgressEstimatedRemainingUsesTargetHeadWhenAhead(t *testing.T) {
 	progress := SessionProgress{
@@ -38,15 +41,43 @@ func TestSessionProgressEstimatedRemainingFallsBackToQueues(t *testing.T) {
 }
 
 func TestPlanIdleDrainAfterRefill(t *testing.T) {
-	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{Complete: true, JoinAvailablePeersAllowed: true}); got != (IdleDrainPlan{Finish: true}) {
-		t.Fatalf("complete idle plan = %+v, want finish", got)
+	finish := IdleDrainPlan{
+		Finish: true,
+		Steps:  []IdleDrainStep{{Action: IdleDrainFinish}},
 	}
-	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{JoinAvailablePeersAllowed: true}); got != (IdleDrainPlan{JoinAvailablePeers: true}) {
-		t.Fatalf("joinable idle plan = %+v, want peer join", got)
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{Complete: true, JoinAvailablePeersAllowed: true}); !reflect.DeepEqual(got, finish) {
+		t.Fatalf("complete idle plan = %+v, want %+v", got, finish)
 	}
-	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{}); got != (IdleDrainPlan{}) {
+	join := IdleDrainPlan{
+		JoinAvailablePeers: true,
+		Steps:              []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}},
+	}
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{JoinAvailablePeersAllowed: true}); !reflect.DeepEqual(got, join) {
+		t.Fatalf("joinable idle plan = %+v, want %+v", got, join)
+	}
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{}); !reflect.DeepEqual(got, IdleDrainPlan{}) {
 		t.Fatalf("incomplete idle plan = %+v, want no action", got)
 	}
+}
+
+func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
+	applier := new(recordingIdleDrainApplier)
+	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{
+		{Action: IdleDrainJoinAvailablePeers},
+		{Action: IdleDrainStepAction(255)},
+		{Action: IdleDrainFinish},
+	}}, applier)
+
+	want := []IdleDrainStepAction{IdleDrainJoinAvailablePeers, IdleDrainFinish}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("idle drain calls = %+v, want %+v", applier.calls, want)
+	}
+	applier.calls = nil
+	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Finish: true}, applier)
+	if !reflect.DeepEqual(applier.calls, []IdleDrainStepAction{IdleDrainFinish}) {
+		t.Fatalf("fallback idle drain calls = %+v, want finish", applier.calls)
+	}
+	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{{Action: IdleDrainFinish}}}, nil)
 }
 
 func TestPlanPostInventorySettlement(t *testing.T) {
@@ -133,4 +164,16 @@ func TestSessionProgressShouldRestartForStalledRetries(t *testing.T) {
 			t.Fatalf("%s progress unexpectedly restarted", name)
 		}
 	}
+}
+
+type recordingIdleDrainApplier struct {
+	calls []IdleDrainStepAction
+}
+
+func (a *recordingIdleDrainApplier) FinishSync() {
+	a.calls = append(a.calls, IdleDrainFinish)
+}
+
+func (a *recordingIdleDrainApplier) JoinAvailablePeers() {
+	a.calls = append(a.calls, IdleDrainJoinAvailablePeers)
 }

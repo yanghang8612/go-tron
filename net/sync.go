@@ -1196,12 +1196,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			})
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
-			if idle.JoinAvailablePeers {
-				ss.joinAvailablePeers()
-			}
-			if idle.Finish {
-				ss.finishSync()
-			}
+			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
 			break
 		}
 		ss.mu.Unlock()
@@ -1286,6 +1281,18 @@ func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, 
 
 func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syncdl.BufferedBatch {
 	return syncdl.PopBufferedBatch(a.service.blockBuffer, a.service.bufferedHash, a.service.blockPath, &a.service.bufferWait, next, limit, a.now)
+}
+
+type syncIdleDrainApplier struct {
+	service *SyncService
+}
+
+func (a syncIdleDrainApplier) FinishSync() {
+	a.service.finishSync()
+}
+
+func (a syncIdleDrainApplier) JoinAvailablePeers() {
+	a.service.joinAvailablePeers()
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode
