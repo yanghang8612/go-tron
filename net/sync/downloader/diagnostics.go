@@ -25,12 +25,20 @@ type Diagnostics struct {
 	RetryListLen                  int
 	ImportExecutionPlannedBlocks  int
 	ImportExecutionPlannedStages  int
+	ImportExecutionBodyStages     int
 	ImportExecutionPostBodyStages int
+	ImportExecutionExecStages     int
+	ImportExecutionCommitStages   int
+	ImportExecutionFinishStages   int
 	ImportExecutionFirstBlock     uint64
 	ImportExecutionLastBlock      uint64
 	ImportAppliedPlannedBlocks    int
 	ImportAppliedPlannedStages    int
+	ImportAppliedBodyStages       int
 	ImportAppliedPostBodyStages   int
+	ImportAppliedExecStages       int
+	ImportAppliedCommitStages     int
+	ImportAppliedFinishStages     int
 	ImportAppliedFirstBlock       uint64
 	ImportAppliedLastBlock        uint64
 	PeerState                     string
@@ -76,7 +84,11 @@ func NewDiagnostics(blockBufferLen, requestedLen, retryListLen int, peers []Peer
 func (d Diagnostics) WithImportBatchExecutionDiagnostics(execution ImportBatchExecutionPlanDiagnostics) Diagnostics {
 	d.ImportExecutionPlannedBlocks = execution.PlannedBlocks
 	d.ImportExecutionPlannedStages = execution.PlannedStages
+	d.ImportExecutionBodyStages = execution.PlannedBodyStages
 	d.ImportExecutionPostBodyStages = execution.PlannedPostBodyStages
+	d.ImportExecutionExecStages = execution.PlannedExecutionStages
+	d.ImportExecutionCommitStages = execution.PlannedCommitmentStages
+	d.ImportExecutionFinishStages = execution.PlannedFinishStages
 	d.ImportExecutionFirstBlock = execution.FirstBlockNum
 	d.ImportExecutionLastBlock = execution.LastBlockNum
 	return d
@@ -87,7 +99,11 @@ func (d Diagnostics) WithImportBatchExecutionDiagnostics(execution ImportBatchEx
 func (d Diagnostics) WithImportAppliedStageDiagnostics(applied ImportBatchExecutionPlanDiagnostics) Diagnostics {
 	d.ImportAppliedPlannedBlocks = applied.PlannedBlocks
 	d.ImportAppliedPlannedStages = applied.PlannedStages
+	d.ImportAppliedBodyStages = applied.PlannedBodyStages
 	d.ImportAppliedPostBodyStages = applied.PlannedPostBodyStages
+	d.ImportAppliedExecStages = applied.PlannedExecutionStages
+	d.ImportAppliedCommitStages = applied.PlannedCommitmentStages
+	d.ImportAppliedFinishStages = applied.PlannedFinishStages
 	d.ImportAppliedFirstBlock = applied.FirstBlockNum
 	d.ImportAppliedLastBlock = applied.LastBlockNum
 	return d
@@ -128,7 +144,11 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 		fields = append(fields,
 			"syncExecPlanBlocks", d.ImportExecutionPlannedBlocks,
 			"syncExecPlanStages", d.ImportExecutionPlannedStages,
+			"syncExecPlanBodyStages", d.ImportExecutionBodyStages,
 			"syncExecPlanPostBodyStages", d.ImportExecutionPostBodyStages,
+			"syncExecPlanExecutionStages", d.ImportExecutionExecStages,
+			"syncExecPlanCommitmentStages", d.ImportExecutionCommitStages,
+			"syncExecPlanFinishStages", d.ImportExecutionFinishStages,
 			"syncExecPlanFirst", d.ImportExecutionFirstBlock,
 			"syncExecPlanLast", d.ImportExecutionLastBlock,
 		)
@@ -137,7 +157,11 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 		fields = append(fields,
 			"syncAppliedPlanBlocks", d.ImportAppliedPlannedBlocks,
 			"syncAppliedPlanStages", d.ImportAppliedPlannedStages,
+			"syncAppliedPlanBodyStages", d.ImportAppliedBodyStages,
 			"syncAppliedPlanPostBodyStages", d.ImportAppliedPostBodyStages,
+			"syncAppliedPlanExecutionStages", d.ImportAppliedExecStages,
+			"syncAppliedPlanCommitmentStages", d.ImportAppliedCommitStages,
+			"syncAppliedPlanFinishStages", d.ImportAppliedFinishStages,
 			"syncAppliedPlanFirst", d.ImportAppliedFirstBlock,
 			"syncAppliedPlanLast", d.ImportAppliedLastBlock,
 		)

@@ -330,10 +330,12 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if len(got.StagePlan.PostBody) != 6 || len(got.StagePlan.Tasks) != 8 {
 		t.Fatalf("stage plan task counts = postBody:%d tasks:%d, want 6/8", len(got.StagePlan.PostBody), len(got.StagePlan.Tasks))
 	}
-	if got.Diagnostics.PlannedBlocks != 2 || got.Diagnostics.PlannedStages != 8 || got.Diagnostics.PlannedPostBodyStages != 6 ||
+	if got.Diagnostics.PlannedBlocks != 2 || got.Diagnostics.PlannedStages != 8 ||
+		got.Diagnostics.PlannedBodyStages != 2 || got.Diagnostics.PlannedPostBodyStages != 6 ||
+		got.Diagnostics.PlannedExecutionStages != 2 || got.Diagnostics.PlannedCommitmentStages != 2 || got.Diagnostics.PlannedFinishStages != 2 ||
 		got.Diagnostics.FirstBlockNum != block1.Number() || got.Diagnostics.FirstBlockHash != block1.Hash() ||
 		got.Diagnostics.LastBlockNum != block2.Number() || got.Diagnostics.LastBlockHash != block2.Hash() {
-		t.Fatalf("execution diagnostics = %+v, want planned block1..block2 with 8 stages/6 post-body", got.Diagnostics)
+		t.Fatalf("execution diagnostics = %+v, want planned block1..block2 with 8 stages and 2 per phase", got.Diagnostics)
 	}
 	if got.StagePlan.Bodies[0] != ImportBodyStageTask(block1.Number(), block1.Hash()) || got.StagePlan.Execution[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) || got.StagePlan.Finish[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
 		t.Fatalf("stage plan grouped tasks = bodies:%+v execution:%+v finish:%+v, want block1 body and block2 execution/finish",
@@ -489,7 +491,9 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if result.Execution.Schedule.BlockNum != block2.Number() || !result.Execution.HasStageSchedule {
 		t.Fatalf("result execution schedule = %+v has=%v, want block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
 	}
-	if result.ExecutionDiagnostics.PlannedBlocks != 2 || result.ExecutionDiagnostics.PlannedStages != 8 || result.ExecutionDiagnostics.PlannedPostBodyStages != 6 {
+	if result.ExecutionDiagnostics.PlannedBlocks != 2 || result.ExecutionDiagnostics.PlannedStages != 8 ||
+		result.ExecutionDiagnostics.PlannedBodyStages != 2 || result.ExecutionDiagnostics.PlannedPostBodyStages != 6 ||
+		result.ExecutionDiagnostics.PlannedExecutionStages != 2 || result.ExecutionDiagnostics.PlannedCommitmentStages != 2 || result.ExecutionDiagnostics.PlannedFinishStages != 2 {
 		t.Fatalf("result execution diagnostics = %+v, want planned two-block batch", result.ExecutionDiagnostics)
 	}
 	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
@@ -510,7 +514,10 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if applier.recordPlan.ExecutionDiagnostics.PlannedBlocks != 2 || applier.recordPlan.ExecutionDiagnostics.LastBlockNum != block2.Number() {
 		t.Fatalf("applier execution diagnostics = %+v, want two planned blocks through block2", applier.recordPlan.ExecutionDiagnostics)
 	}
-	if applier.recordPlan.AppliedDiagnostics.PlannedBlocks != 2 || applier.recordPlan.AppliedDiagnostics.PlannedStages != 8 || applier.recordPlan.AppliedDiagnostics.LastBlockNum != block2.Number() {
+	if applier.recordPlan.AppliedDiagnostics.PlannedBlocks != 2 || applier.recordPlan.AppliedDiagnostics.PlannedStages != 8 ||
+		applier.recordPlan.AppliedDiagnostics.PlannedBodyStages != 2 || applier.recordPlan.AppliedDiagnostics.PlannedExecutionStages != 2 ||
+		applier.recordPlan.AppliedDiagnostics.PlannedCommitmentStages != 2 || applier.recordPlan.AppliedDiagnostics.PlannedFinishStages != 2 ||
+		applier.recordPlan.AppliedDiagnostics.LastBlockNum != block2.Number() {
 		t.Fatalf("applier applied diagnostics = %+v, want two applied planned blocks through block2", applier.recordPlan.AppliedDiagnostics)
 	}
 	if len(applier.recordPlan.AppliedStagePlan.Tasks) != 8 || len(applier.recordPlan.AppliedStagePlan.Execution) != 2 {
@@ -561,7 +568,10 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	if result.Progress.ExecutionDiagnostics.PlannedBlocks != 2 || result.Progress.ExecutionDiagnostics.LastBlockNum != block2.Number() {
 		t.Fatalf("partial execution diagnostics = %+v, want attempted two-block plan", result.Progress.ExecutionDiagnostics)
 	}
-	if result.Progress.AppliedDiagnostics.PlannedBlocks != 1 || result.Progress.AppliedDiagnostics.PlannedStages != 4 || result.Progress.AppliedDiagnostics.LastBlockNum != block1.Number() {
+	if result.Progress.AppliedDiagnostics.PlannedBlocks != 1 || result.Progress.AppliedDiagnostics.PlannedStages != 4 ||
+		result.Progress.AppliedDiagnostics.PlannedBodyStages != 1 || result.Progress.AppliedDiagnostics.PlannedExecutionStages != 1 ||
+		result.Progress.AppliedDiagnostics.PlannedCommitmentStages != 1 || result.Progress.AppliedDiagnostics.PlannedFinishStages != 1 ||
+		result.Progress.AppliedDiagnostics.LastBlockNum != block1.Number() {
 		t.Fatalf("partial applied diagnostics = %+v, want one-block applied prefix", result.Progress.AppliedDiagnostics)
 	}
 	if len(result.Progress.AppliedStagePlan.Tasks) != 4 || result.Progress.AppliedStagePlan.Finish[0] != ImportFinishStageTask(block1.Number(), block1.Hash()) {

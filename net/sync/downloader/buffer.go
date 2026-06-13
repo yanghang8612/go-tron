@@ -175,13 +175,17 @@ type ImportBatchExecutionPlan struct {
 // ImportBatchExecutionPlanDiagnostics is the compact, log-safe view of the
 // downloader-owned execution/commitment/finish schedule for a decoded batch.
 type ImportBatchExecutionPlanDiagnostics struct {
-	PlannedBlocks         int
-	PlannedStages         int
-	PlannedPostBodyStages int
-	FirstBlockNum         uint64
-	FirstBlockHash        tcommon.Hash
-	LastBlockNum          uint64
-	LastBlockHash         tcommon.Hash
+	PlannedBlocks           int
+	PlannedStages           int
+	PlannedBodyStages       int
+	PlannedPostBodyStages   int
+	PlannedExecutionStages  int
+	PlannedCommitmentStages int
+	PlannedFinishStages     int
+	FirstBlockNum           uint64
+	FirstBlockHash          tcommon.Hash
+	LastBlockNum            uint64
+	LastBlockHash           tcommon.Hash
 }
 
 // AppliedSchedule returns the stage schedule for the last block in an applied
@@ -400,13 +404,25 @@ func NewImportBatchExecutionPlanDiagnostics(schedules []ImportStageSchedule, sta
 	}
 	diag.PlannedBlocks = len(schedules)
 	diag.PlannedStages = len(stagePlan.Tasks)
+	diag.PlannedBodyStages = importStagePhaseTaskCount(stagePlan, ImportStagePhaseBodies)
 	diag.PlannedPostBodyStages = len(stagePlan.PostBody)
+	diag.PlannedExecutionStages = importStagePhaseTaskCount(stagePlan, ImportStagePhaseExecution)
+	diag.PlannedCommitmentStages = importStagePhaseTaskCount(stagePlan, ImportStagePhaseCommitment)
+	diag.PlannedFinishStages = importStagePhaseTaskCount(stagePlan, ImportStagePhaseFinish)
 	diag.FirstBlockNum = schedules[0].BlockNum
 	diag.FirstBlockHash = schedules[0].BlockHash
 	last := schedules[len(schedules)-1]
 	diag.LastBlockNum = last.BlockNum
 	diag.LastBlockHash = last.BlockHash
 	return diag
+}
+
+func importStagePhaseTaskCount(stagePlan ImportBatchStagePlan, phase ImportStagePhase) int {
+	phasePlan, ok := stagePlan.PhasePlan(phase)
+	if !ok {
+		return 0
+	}
+	return len(phasePlan.Tasks)
 }
 
 // PlanImportOutcome maps a canonical insert result into service actions:

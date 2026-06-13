@@ -110,8 +110,10 @@ func TestDiagnosticsWithImportBatchExecutionPlan(t *testing.T) {
 	if !diag.HasImportBatchExecutionPlan() {
 		t.Fatal("diagnostics did not report import execution plan")
 	}
-	if diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 || diag.ImportExecutionPostBodyStages != 6 {
-		t.Fatalf("execution diagnostics counts = %+v, want 2 blocks/8 stages/6 post-body", diag)
+	if diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 ||
+		diag.ImportExecutionBodyStages != 2 || diag.ImportExecutionPostBodyStages != 6 ||
+		diag.ImportExecutionExecStages != 2 || diag.ImportExecutionCommitStages != 2 || diag.ImportExecutionFinishStages != 2 {
+		t.Fatalf("execution diagnostics counts = %+v, want 2 blocks/8 stages/2 per phase", diag)
 	}
 	if diag.ImportExecutionFirstBlock != 1 || diag.ImportExecutionLastBlock != 2 {
 		t.Fatalf("execution diagnostics range = %d..%d, want 1..2", diag.ImportExecutionFirstBlock, diag.ImportExecutionLastBlock)
@@ -151,10 +153,15 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 	if diag.BlockBufferLen != 7 || diag.RequestedLen != 8 || diag.RetryListLen != 9 {
 		t.Fatalf("base diagnostics = %+v, want preserved counts 7/8/9", diag)
 	}
-	if !diag.HasImportBatchExecutionPlan() || diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 || diag.ImportExecutionPostBodyStages != 6 {
+	if !diag.HasImportBatchExecutionPlan() || diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 ||
+		diag.ImportExecutionBodyStages != 2 || diag.ImportExecutionPostBodyStages != 6 ||
+		diag.ImportExecutionExecStages != 2 || diag.ImportExecutionCommitStages != 2 || diag.ImportExecutionFinishStages != 2 {
 		t.Fatalf("execution diagnostics = %+v, want two-block import execution plan", diag)
 	}
-	if !diag.HasImportAppliedStagePlan() || diag.ImportAppliedPlannedBlocks != 1 || diag.ImportAppliedPlannedStages != 4 || diag.ImportAppliedPostBodyStages != 3 || diag.ImportAppliedFirstBlock != 1 || diag.ImportAppliedLastBlock != 1 {
+	if !diag.HasImportAppliedStagePlan() || diag.ImportAppliedPlannedBlocks != 1 || diag.ImportAppliedPlannedStages != 4 ||
+		diag.ImportAppliedBodyStages != 1 || diag.ImportAppliedPostBodyStages != 3 ||
+		diag.ImportAppliedExecStages != 1 || diag.ImportAppliedCommitStages != 1 || diag.ImportAppliedFinishStages != 1 ||
+		diag.ImportAppliedFirstBlock != 1 || diag.ImportAppliedLastBlock != 1 {
 		t.Fatalf("applied diagnostics = %+v, want one-block applied stage plan", diag)
 	}
 	if !diag.HasImportStagePlan() || diag.ImportStageCompleted != 2 || diag.ImportStageScheduled != 4 || diag.ImportStageComplete {
@@ -178,12 +185,20 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 	diag := Diagnostics{
 		ImportExecutionPlannedBlocks:  2,
 		ImportExecutionPlannedStages:  8,
+		ImportExecutionBodyStages:     2,
 		ImportExecutionPostBodyStages: 6,
+		ImportExecutionExecStages:     2,
+		ImportExecutionCommitStages:   2,
+		ImportExecutionFinishStages:   2,
 		ImportExecutionFirstBlock:     1,
 		ImportExecutionLastBlock:      2,
 		ImportAppliedPlannedBlocks:    1,
 		ImportAppliedPlannedStages:    4,
+		ImportAppliedBodyStages:       1,
 		ImportAppliedPostBodyStages:   3,
+		ImportAppliedExecStages:       1,
+		ImportAppliedCommitStages:     1,
+		ImportAppliedFinishStages:     1,
 		ImportAppliedFirstBlock:       1,
 		ImportAppliedLastBlock:        1,
 		ImportStageScheduled:          4,
@@ -207,12 +222,20 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncStageBlockedStatus", ImportStageProgressMissing.String(),
 		"syncExecPlanBlocks", 2,
 		"syncExecPlanStages", 8,
+		"syncExecPlanBodyStages", 2,
 		"syncExecPlanPostBodyStages", 6,
+		"syncExecPlanExecutionStages", 2,
+		"syncExecPlanCommitmentStages", 2,
+		"syncExecPlanFinishStages", 2,
 		"syncExecPlanFirst", uint64(1),
 		"syncExecPlanLast", uint64(2),
 		"syncAppliedPlanBlocks", 1,
 		"syncAppliedPlanStages", 4,
+		"syncAppliedPlanBodyStages", 1,
 		"syncAppliedPlanPostBodyStages", 3,
+		"syncAppliedPlanExecutionStages", 1,
+		"syncAppliedPlanCommitmentStages", 1,
+		"syncAppliedPlanFinishStages", 1,
 		"syncAppliedPlanFirst", uint64(1),
 		"syncAppliedPlanLast", uint64(1),
 	}
