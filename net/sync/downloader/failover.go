@@ -11,11 +11,13 @@ type PeerFailoverInput struct {
 // PeerFailoverPlan describes how the service should settle a failed-peer
 // transition after any remaining peers had a chance to fill fetch slots.
 type PeerFailoverPlan struct {
-	Reset              bool
-	Mirror             bool
-	TryFindPeer        bool
-	LockedSteps        []PeerFailoverStep
-	AfterDispatchSteps []PeerFailoverStep
+	Reset                bool
+	Mirror               bool
+	SendOutboundRequests bool
+	TryFindPeer          bool
+	LockedSteps          []PeerFailoverStep
+	DispatchSteps        []PeerFailoverStep
+	AfterDispatchSteps   []PeerFailoverStep
 }
 
 // PeerFailoverStepAction names one operation for settling a failed-peer
@@ -25,6 +27,7 @@ type PeerFailoverStepAction uint8
 const (
 	PeerFailoverReset PeerFailoverStepAction = iota
 	PeerFailoverMirror
+	PeerFailoverSendOutbound
 	PeerFailoverTryFindPeer
 )
 
@@ -40,6 +43,7 @@ type PeerFailoverStep struct {
 type PeerFailoverPlanApplier interface {
 	ResetSyncUnderLock()
 	MirrorLegacyUnderLock()
+	SendOutboundRequests()
 	TryFindSyncPeer()
 }
 
@@ -53,7 +57,7 @@ func PlanPeerFailover(in PeerFailoverInput) PeerFailoverPlan {
 	if in.OutboundRequests == 0 && in.StalledRetries {
 		return PeerFailoverPlan{Reset: true, TryFindPeer: true}.withSteps()
 	}
-	return PeerFailoverPlan{Mirror: true}.withSteps()
+	return PeerFailoverPlan{Mirror: true, SendOutboundRequests: in.OutboundRequests > 0}.withSteps()
 }
 
 func (p PeerFailoverPlan) withSteps() PeerFailoverPlan {
@@ -61,6 +65,9 @@ func (p PeerFailoverPlan) withSteps() PeerFailoverPlan {
 		p.LockedSteps = []PeerFailoverStep{{Action: PeerFailoverReset}}
 	} else if p.Mirror {
 		p.LockedSteps = []PeerFailoverStep{{Action: PeerFailoverMirror}}
+	}
+	if p.SendOutboundRequests {
+		p.DispatchSteps = []PeerFailoverStep{{Action: PeerFailoverSendOutbound}}
 	}
 	if p.TryFindPeer {
 		p.AfterDispatchSteps = []PeerFailoverStep{{Action: PeerFailoverTryFindPeer}}
@@ -83,6 +90,23 @@ func ApplyPeerFailoverLockedPlan(plan PeerFailoverPlan, applier PeerFailoverPlan
 			applier.ResetSyncUnderLock()
 		case PeerFailoverMirror:
 			applier.MirrorLegacyUnderLock()
+		}
+	}
+}
+
+// ApplyPeerFailoverDispatchPlan executes post-log network dispatch steps for a
+// failed-peer transition.
+func ApplyPeerFailoverDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.DispatchSteps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.DispatchSteps {
+		switch step.Action {
+		case PeerFailoverSendOutbound:
+			applier.SendOutboundRequests()
 		}
 	}
 }

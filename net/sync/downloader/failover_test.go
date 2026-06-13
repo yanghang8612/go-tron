@@ -35,8 +35,10 @@ func TestPlanPeerFailover(t *testing.T) {
 			name: "outbound requests continue session",
 			in:   PeerFailoverInput{RemainingPeers: 2, OutboundRequests: 1, StalledRetries: true},
 			want: PeerFailoverPlan{
-				Mirror:      true,
-				LockedSteps: []PeerFailoverStep{{Action: PeerFailoverMirror}},
+				Mirror:               true,
+				SendOutboundRequests: true,
+				LockedSteps:          []PeerFailoverStep{{Action: PeerFailoverMirror}},
+				DispatchSteps:        []PeerFailoverStep{{Action: PeerFailoverSendOutbound}},
 			},
 		},
 		{
@@ -63,27 +65,34 @@ func TestApplyPeerFailoverPlan(t *testing.T) {
 			{Action: PeerFailoverStepAction(255)},
 			{Action: PeerFailoverMirror},
 		},
+		DispatchSteps: []PeerFailoverStep{
+			{Action: PeerFailoverSendOutbound},
+			{Action: PeerFailoverStepAction(255)},
+		},
 		AfterDispatchSteps: []PeerFailoverStep{
 			{Action: PeerFailoverTryFindPeer},
 			{Action: PeerFailoverStepAction(255)},
 		},
 	}
 	ApplyPeerFailoverLockedPlan(plan, applier)
+	ApplyPeerFailoverDispatchPlan(plan, applier)
 	ApplyPeerFailoverAfterDispatchPlan(plan, applier)
 
-	want := []PeerFailoverStepAction{PeerFailoverReset, PeerFailoverMirror, PeerFailoverTryFindPeer}
+	want := []PeerFailoverStepAction{PeerFailoverReset, PeerFailoverMirror, PeerFailoverSendOutbound, PeerFailoverTryFindPeer}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("failover calls = %+v, want %+v", applier.calls, want)
 	}
 
 	applier.calls = nil
 	ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Mirror: true}, applier)
+	ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, applier)
 	ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, applier)
-	want = []PeerFailoverStepAction{PeerFailoverMirror, PeerFailoverTryFindPeer}
+	want = []PeerFailoverStepAction{PeerFailoverMirror, PeerFailoverSendOutbound, PeerFailoverTryFindPeer}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("fallback failover calls = %+v, want %+v", applier.calls, want)
 	}
 	ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Reset: true}, nil)
+	ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, nil)
 	ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, nil)
 }
 
@@ -97,6 +106,10 @@ func (a *recordingPeerFailoverApplier) ResetSyncUnderLock() {
 
 func (a *recordingPeerFailoverApplier) MirrorLegacyUnderLock() {
 	a.calls = append(a.calls, PeerFailoverMirror)
+}
+
+func (a *recordingPeerFailoverApplier) SendOutboundRequests() {
+	a.calls = append(a.calls, PeerFailoverSendOutbound)
 }
 
 func (a *recordingPeerFailoverApplier) TryFindSyncPeer() {

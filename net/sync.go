@@ -1338,6 +1338,7 @@ func (a syncPostInventorySettlementApplier) FinishSync() {
 type syncPeerFailoverApplier struct {
 	service *SyncService
 	exclude *p2p.Peer
+	out     []outboundSyncRequest
 }
 
 func (a syncPeerFailoverApplier) ResetSyncUnderLock() {
@@ -1346,6 +1347,10 @@ func (a syncPeerFailoverApplier) ResetSyncUnderLock() {
 
 func (a syncPeerFailoverApplier) MirrorLegacyUnderLock() {
 	a.service.mirrorLegacyLocked()
+}
+
+func (a syncPeerFailoverApplier) SendOutboundRequests() {
+	a.service.sendOutboundRequests(a.out)
 }
 
 func (a syncPeerFailoverApplier) TryFindSyncPeer() {
@@ -2009,17 +2014,14 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		OutboundRequests: len(out),
 		StalledRetries:   stalledRetries,
 	})
-	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: stalePeer}
+	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: stalePeer, out: out}
 	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
 	ss.mu.Unlock()
 	syncLog.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
 		"timeout", ethcommon.PrettyDuration(ss.fetchTimeout),
 		"inflight", inflight)
-	if len(out) > 0 {
-		ss.sendOutboundRequests(out)
-		return
-	}
+	syncdl.ApplyPeerFailoverDispatchPlan(plan, failoverApplier)
 	syncdl.ApplyPeerFailoverAfterDispatchPlan(plan, failoverApplier)
 }
 
@@ -2057,13 +2059,11 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 		OutboundRequests: len(out),
 		StalledRetries:   stalledRetries,
 	})
-	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: peer}
+	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: peer, out: out}
 	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
 	ss.mu.Unlock()
 	syncLog.Info("Sync peer disconnected", "peer", peer.ID())
-	if len(out) > 0 {
-		ss.sendOutboundRequests(out)
-	}
+	syncdl.ApplyPeerFailoverDispatchPlan(plan, failoverApplier)
 	syncdl.ApplyPeerFailoverAfterDispatchPlan(plan, failoverApplier)
 }
 
