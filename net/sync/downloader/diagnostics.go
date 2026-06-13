@@ -28,6 +28,11 @@ type Diagnostics struct {
 	ImportExecutionPostBodyStages int
 	ImportExecutionFirstBlock     uint64
 	ImportExecutionLastBlock      uint64
+	ImportAppliedPlannedBlocks    int
+	ImportAppliedPlannedStages    int
+	ImportAppliedPostBodyStages   int
+	ImportAppliedFirstBlock       uint64
+	ImportAppliedLastBlock        uint64
 	PeerState                     string
 	ImportStageScheduled          int
 	ImportStageCompleted          int
@@ -77,6 +82,17 @@ func (d Diagnostics) WithImportBatchExecutionDiagnostics(execution ImportBatchEx
 	return d
 }
 
+// WithImportAppliedStageDiagnostics adds the execution/commitment/finish
+// schedule for the prefix that canonical import actually accepted.
+func (d Diagnostics) WithImportAppliedStageDiagnostics(applied ImportBatchExecutionPlanDiagnostics) Diagnostics {
+	d.ImportAppliedPlannedBlocks = applied.PlannedBlocks
+	d.ImportAppliedPlannedStages = applied.PlannedStages
+	d.ImportAppliedPostBodyStages = applied.PlannedPostBodyStages
+	d.ImportAppliedFirstBlock = applied.FirstBlockNum
+	d.ImportAppliedLastBlock = applied.LastBlockNum
+	return d
+}
+
 // WithImportedBatchProgressPlan adds every downloader-owned import progress
 // diagnostic carried by a planned staged-body import settlement.
 func (d Diagnostics) WithImportedBatchProgressPlan(plan ImportedBatchProgressPlan) Diagnostics {
@@ -85,6 +101,7 @@ func (d Diagnostics) WithImportedBatchProgressPlan(plan ImportedBatchProgressPla
 	}
 	return d.
 		WithImportBatchExecutionDiagnostics(plan.ExecutionDiagnostics).
+		WithImportAppliedStageDiagnostics(plan.AppliedDiagnostics).
 		WithImportStageDiagnostics(plan.StageDiagnostics)
 }
 
@@ -114,6 +131,15 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 			"syncExecPlanPostBodyStages", d.ImportExecutionPostBodyStages,
 			"syncExecPlanFirst", d.ImportExecutionFirstBlock,
 			"syncExecPlanLast", d.ImportExecutionLastBlock,
+		)
+	}
+	if d.HasImportAppliedStagePlan() {
+		fields = append(fields,
+			"syncAppliedPlanBlocks", d.ImportAppliedPlannedBlocks,
+			"syncAppliedPlanStages", d.ImportAppliedPlannedStages,
+			"syncAppliedPlanPostBodyStages", d.ImportAppliedPostBodyStages,
+			"syncAppliedPlanFirst", d.ImportAppliedFirstBlock,
+			"syncAppliedPlanLast", d.ImportAppliedLastBlock,
 		)
 	}
 	return fields
@@ -155,4 +181,10 @@ func (d Diagnostics) HasImportStagePlan() bool {
 // local execution/commitment/finish schedule for the current imported batch.
 func (d Diagnostics) HasImportBatchExecutionPlan() bool {
 	return d.ImportExecutionPlannedStages > 0
+}
+
+// HasImportAppliedStagePlan reports whether Diagnostics carries the stage plan
+// for the canonical prefix accepted from the current import batch.
+func (d Diagnostics) HasImportAppliedStagePlan() bool {
+	return d.ImportAppliedPlannedStages > 0
 }

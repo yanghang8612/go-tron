@@ -249,12 +249,14 @@ type ImportedBatchProgressPlan struct {
 	OK                   bool
 	Summary              AppliedBatchSummary
 	Schedule             ImportStageSchedule
+	AppliedStagePlan     ImportBatchStagePlan
 	StagePlan            ImportStagePlan
 	Stages               []ImportStageTask
 	Deletes              []rawdb.SyncStagedBlockDelete
 	Progress             []rawdb.StageProgress
 	Decisions            []ImportStageProgressDecision
 	ExecutionDiagnostics ImportBatchExecutionPlanDiagnostics
+	AppliedDiagnostics   ImportBatchExecutionPlanDiagnostics
 	StageDiagnostics     ImportStagePlanDiagnostics
 	RefreshReady         bool
 	Steps                []ImportedBatchProgressStep
@@ -361,6 +363,10 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 	plan := planImportedBatchProgress(batch, applied, schedule, hasSchedule, collector)
 	if plan.OK {
 		plan.ExecutionDiagnostics = execution.Diagnostics
+		if appliedStagePlan, ok := execution.AppliedStagePlan(applied); ok {
+			plan.AppliedStagePlan = appliedStagePlan
+			plan.AppliedDiagnostics = NewImportBatchExecutionPlanDiagnostics(appliedStagePlan.Schedules, appliedStagePlan)
+		}
 	}
 	return plan
 }

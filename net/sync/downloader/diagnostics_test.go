@@ -131,6 +131,10 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 	plan := ImportedBatchProgressPlan{
 		OK:                   true,
 		ExecutionDiagnostics: NewImportBatchExecutionPlanDiagnostics(stagePlan.Schedules, stagePlan),
+		AppliedDiagnostics: NewImportBatchExecutionPlanDiagnostics(
+			stagePlan.Schedules[:1],
+			NewImportBatchStagePlan(stagePlan.Schedules[:1]),
+		),
 		StageDiagnostics: ImportStagePlanDiagnostics{
 			Scheduled:          4,
 			Completed:          2,
@@ -150,6 +154,9 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 	if !diag.HasImportBatchExecutionPlan() || diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 || diag.ImportExecutionPostBodyStages != 6 {
 		t.Fatalf("execution diagnostics = %+v, want two-block import execution plan", diag)
 	}
+	if !diag.HasImportAppliedStagePlan() || diag.ImportAppliedPlannedBlocks != 1 || diag.ImportAppliedPlannedStages != 4 || diag.ImportAppliedPostBodyStages != 3 || diag.ImportAppliedFirstBlock != 1 || diag.ImportAppliedLastBlock != 1 {
+		t.Fatalf("applied diagnostics = %+v, want one-block applied stage plan", diag)
+	}
 	if !diag.HasImportStagePlan() || diag.ImportStageCompleted != 2 || diag.ImportStageScheduled != 4 || diag.ImportStageComplete {
 		t.Fatalf("stage diagnostics = %+v, want incomplete 2/4 stage plan", diag)
 	}
@@ -162,7 +169,7 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 	}
 
 	empty := NewDiagnostics(1, 2, 3, nil).WithImportedBatchProgressPlan(ImportedBatchProgressPlan{})
-	if empty.HasImportBatchExecutionPlan() || empty.HasImportStagePlan() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
+	if empty.HasImportBatchExecutionPlan() || empty.HasImportAppliedStagePlan() || empty.HasImportStagePlan() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
 		t.Fatalf("empty progress diagnostics = %+v, want unchanged base counts and no import plan", empty)
 	}
 }
@@ -174,6 +181,11 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		ImportExecutionPostBodyStages: 6,
 		ImportExecutionFirstBlock:     1,
 		ImportExecutionLastBlock:      2,
+		ImportAppliedPlannedBlocks:    1,
+		ImportAppliedPlannedStages:    4,
+		ImportAppliedPostBodyStages:   3,
+		ImportAppliedFirstBlock:       1,
+		ImportAppliedLastBlock:        1,
 		ImportStageScheduled:          4,
 		ImportStageCompleted:          2,
 		ImportStageNext:               string(ImportStagePhaseCommitment),
@@ -198,6 +210,11 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncExecPlanPostBodyStages", 6,
 		"syncExecPlanFirst", uint64(1),
 		"syncExecPlanLast", uint64(2),
+		"syncAppliedPlanBlocks", 1,
+		"syncAppliedPlanStages", 4,
+		"syncAppliedPlanPostBodyStages", 3,
+		"syncAppliedPlanFirst", uint64(1),
+		"syncAppliedPlanLast", uint64(1),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("log fields = %+v, want %+v", got, want)

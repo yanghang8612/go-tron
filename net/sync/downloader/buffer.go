@@ -175,6 +175,15 @@ func (p ImportBatchExecutionPlan) AppliedSchedule(applied int) (ImportStageSched
 	return p.Schedules[applied-1], true
 }
 
+// AppliedStagePlan returns the explicit bodies/execution/commitment/finish
+// batch plan for the canonical prefix that was actually accepted.
+func (p ImportBatchExecutionPlan) AppliedStagePlan(applied int) (ImportBatchStagePlan, bool) {
+	if applied <= 0 || applied > len(p.Schedules) {
+		return ImportBatchStagePlan{}, false
+	}
+	return NewImportBatchStagePlan(p.Schedules[:applied]), true
+}
+
 // ProgressPlan derives the DB-side progress/cleanup plan for an applied prefix
 // of this execution plan. This keeps the applied boundary tied to the explicit
 // bodies/execution/commitment/finish schedule created before canonical import.
