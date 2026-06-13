@@ -236,6 +236,61 @@ func query(db *rawdb.ChainDB) {
 	}
 }
 
+func TestColdArchiveAuditAllowsTypedChainDBParameter(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(source *rawdb.ChainDB, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want typed ChainDB parameter accepted", offenders)
+	}
+}
+
+func TestColdArchiveAuditRejectsTrustedNameOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(source any, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want trusted-name hot store rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditAllowsNewChainDBAliasBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(tx []byte) {
+	archive := rawdb.NewChainDB(nil, nil)
+	_ = rawdb.ReadTransactionInfo(archive, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want NewChainDB alias accepted", offenders)
+	}
+}
+
 func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
@@ -288,6 +343,30 @@ func query(db *rawdb.ChainDB) {
 	})
 	if len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want ChainDB alias event-log boundary accepted", offenders)
+	}
+}
+
+func TestEventLogAuditRejectsTrustedNameOnNonChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) EventLogRangeCovered(uint64, uint64) (bool, error) {
+	return true, nil
+}
+
+func query(chainDB coldManager) {
+	_, _ = chainDB.EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
+		t.Fatalf("offenders = %+v, want trusted-name non-ChainDB event-log call rejected", offenders)
 	}
 }
 
@@ -505,18 +584,15 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 			return nil
 		}
 		rel := auditRelPath(root, path)
-		aliases := map[string]struct{}{
-			"chain":   {},
-			"chainDB": {},
-			"chaindb": {},
-			"cdb":     {},
-			"source":  {},
-		}
+		aliases := make(map[string]struct{})
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
+			case *ast.FuncDecl:
+				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
 				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
 			case *ast.ValueSpec:
+				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
 				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
 			case *ast.CallExpr:
 				if len(n.Args) == 0 {
@@ -577,15 +653,15 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 			return err
 		}
 		rawdbNames := rawdbImportNames(file)
-		aliases := map[string]struct{}{
-			"chainDB": {},
-			"chaindb": {},
-		}
+		aliases := make(map[string]struct{})
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
+			case *ast.FuncDecl:
+				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
 				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
 			case *ast.ValueSpec:
+				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
 				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
 			case *ast.CallExpr:
 				sel, ok := n.Fun.(*ast.SelectorExpr)
@@ -622,6 +698,33 @@ func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, a
 		}
 		if isChainDBBoundaryExpr(rhs[i], rawdbNames, aliases) {
 			aliases[ident.Name] = struct{}{}
+		}
+	}
+}
+
+func recordChainDBFieldAliases(fields *ast.FieldList, rawdbNames map[string]struct{}, aliases map[string]struct{}) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		if !isRawDBChainDBType(field.Type, rawdbNames) {
+			continue
+		}
+		for _, name := range field.Names {
+			if name.Name != "_" {
+				aliases[name.Name] = struct{}{}
+			}
+		}
+	}
+}
+
+func recordChainDBTypedAliases(names []*ast.Ident, typ ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) {
+	if !isRawDBChainDBType(typ, rawdbNames) {
+		return
+	}
+	for _, name := range names {
+		if name.Name != "_" {
+			aliases[name.Name] = struct{}{}
 		}
 	}
 }
@@ -704,6 +807,31 @@ func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) boo
 	}
 	got, ok := rawDBCallName(expr, rawdbNames)
 	return ok && got == name
+}
+
+func isRawDBChainDBType(expr ast.Expr, rawdbNames map[string]struct{}) bool {
+	for {
+		switch typed := expr.(type) {
+		case *ast.ParenExpr:
+			expr = typed.X
+		case *ast.StarExpr:
+			expr = typed.X
+		default:
+			goto done
+		}
+	}
+done:
+	if sel, ok := expr.(*ast.SelectorExpr); ok && sel.Sel.Name == "ChainDB" {
+		if ident, ok := sel.X.(*ast.Ident); ok {
+			_, imported := rawdbNames[ident.Name]
+			return imported
+		}
+	}
+	if ident, ok := expr.(*ast.Ident); ok && ident.Name == "ChainDB" {
+		_, dotImported := rawdbNames["."]
+		return dotImported
+	}
+	return false
 }
 
 func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) bool {
