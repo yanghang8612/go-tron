@@ -314,7 +314,9 @@ Status:
   pending/requested-hash bookkeeping through downloader helpers, and received
   block acks use the same helper boundary to validate pending hashes, delete
   peer-local pending rows, and decrement in-flight counts before `SyncService`
-  updates the global requested marks. These are
+  updates the global requested marks. Timeout/disconnect failover now also uses
+  a downloader plan for reset vs mirror vs fresh-peer search after remaining
+  peers have had a chance to fill fetch slots. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.

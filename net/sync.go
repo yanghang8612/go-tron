@@ -1738,18 +1738,23 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	inflight := ps.inflight
 	ss.removePeerStateLocked(peerID, true)
 	var out []outboundSyncRequest
-	restart := false
-	if len(ss.peers) == 0 {
-		ss.doReset()
-		restart = true
-	} else {
+	remainingPeers := len(ss.peers)
+	if remainingPeers > 0 {
 		out = ss.fillFetchSlotsLocked(time.Now())
-		restart = len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
-		if restart {
-			ss.doReset()
-		} else {
-			ss.mirrorLegacyLocked()
-		}
+	}
+	stalledRetries := false
+	if remainingPeers > 0 && len(out) == 0 {
+		stalledRetries = ss.shouldRestartForStalledRetriesLocked()
+	}
+	plan := syncdl.PlanPeerFailover(syncdl.PeerFailoverInput{
+		RemainingPeers:   remainingPeers,
+		OutboundRequests: len(out),
+		StalledRetries:   stalledRetries,
+	})
+	if plan.Reset {
+		ss.doReset()
+	} else if plan.Mirror {
+		ss.mirrorLegacyLocked()
 	}
 	ss.mu.Unlock()
 	syncLog.Warn("Fetch timeout, failing over",
@@ -1760,7 +1765,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		ss.sendOutboundRequests(out)
 		return
 	}
-	if restart || !ss.IsSyncing() {
+	if plan.TryFindPeer {
 		ss.tryFindSyncPeer(stalePeer)
 	}
 }
@@ -1786,26 +1791,30 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 	}
 	ss.removePeerStateLocked(peer.ID(), true)
 	var out []outboundSyncRequest
-	restart := false
-	empty := len(ss.peers) == 0
-	if empty {
-		ss.doReset()
-		restart = true
-	} else {
+	remainingPeers := len(ss.peers)
+	if remainingPeers > 0 {
 		out = ss.fillFetchSlotsLocked(time.Now())
-		restart = len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
-		if restart {
-			ss.doReset()
-		} else {
-			ss.mirrorLegacyLocked()
-		}
+	}
+	stalledRetries := false
+	if remainingPeers > 0 && len(out) == 0 {
+		stalledRetries = ss.shouldRestartForStalledRetriesLocked()
+	}
+	plan := syncdl.PlanPeerFailover(syncdl.PeerFailoverInput{
+		RemainingPeers:   remainingPeers,
+		OutboundRequests: len(out),
+		StalledRetries:   stalledRetries,
+	})
+	if plan.Reset {
+		ss.doReset()
+	} else if plan.Mirror {
+		ss.mirrorLegacyLocked()
 	}
 	ss.mu.Unlock()
 	syncLog.Info("Sync peer disconnected", "peer", peer.ID())
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)
 	}
-	if restart || empty {
+	if plan.TryFindPeer {
 		ss.tryFindSyncPeer(peer)
 	}
 }
