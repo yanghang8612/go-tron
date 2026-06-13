@@ -883,31 +883,59 @@ func TestShouldRefreshStagedBodyReadyBeforeDrain(t *testing.T) {
 
 func TestApplyStagedBodyDrainPlan(t *testing.T) {
 	popBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 10, Hash: tcommon.Hash{0x0a}}}}
+	refresh := StagedBodyReadyProgressRefresh{
+		Frontier: StagedBodyReadyFrontier{Have: true, Number: 12, Hash: tcommon.Hash{0x0c}},
+		Updated:  true,
+	}
+	restore := StagedBodyRestoreResult{
+		Restored:         2,
+		NextExpected:     12,
+		LastRestoredNum:  11,
+		LastRestoredHash: tcommon.Hash{0x0b},
+		HaveLastRestored: true,
+	}
 	plan := StagedBodyDrainPlan{
 		Steps: []StagedBodyDrainStep{
 			{Action: StagedBodyDrainRefreshReady},
-			{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 3},
+			{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 3, PruneStaleTail: true},
 			{Action: StagedBodyDrainStepAction(255)},
 			{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 3},
 		},
 	}
-	applier := &recordingStagedBodyDrainApplier{popBatch: popBatch}
+	applier := &recordingStagedBodyDrainApplier{readyRefresh: refresh, restore: restore, popBatch: popBatch}
 
 	got := ApplyStagedBodyDrainPlan(plan, applier)
 	wantCalls := []recordedStagedBodyDrainCall{
 		{action: StagedBodyDrainRefreshReady},
-		{action: StagedBodyDrainRestoreBodies, from: 10, limit: 3},
+		{action: StagedBodyDrainRestoreBodies, from: 10, limit: 3, prune: true},
 		{action: StagedBodyDrainPopBuffer, next: 10, limit: 3},
 	}
 	if !reflect.DeepEqual(applier.calls, wantCalls) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
 	}
-	if !reflect.DeepEqual(got, popBatch) {
-		t.Fatalf("batch = %+v, want %+v", got, popBatch)
+	wantApplied := []StagedBodyDrainStepAction{
+		StagedBodyDrainRefreshReady,
+		StagedBodyDrainRestoreBodies,
+		StagedBodyDrainPopBuffer,
+	}
+	if !reflect.DeepEqual(got.AppliedSteps, wantApplied) {
+		t.Fatalf("applied steps = %+v, want %+v", got.AppliedSteps, wantApplied)
+	}
+	if !reflect.DeepEqual(got.UnknownSteps, []StagedBodyDrainStepAction{StagedBodyDrainStepAction(255)}) {
+		t.Fatalf("unknown steps = %+v, want [255]", got.UnknownSteps)
+	}
+	if !got.HasReadyRefresh || !reflect.DeepEqual(got.ReadyRefresh, refresh) {
+		t.Fatalf("ready refresh = %+v set=%v, want %+v set", got.ReadyRefresh, got.HasReadyRefresh, refresh)
+	}
+	if !got.HasStagedBodyRestore || !reflect.DeepEqual(got.StagedBodyRestore, restore) {
+		t.Fatalf("restore = %+v set=%v, want %+v set", got.StagedBodyRestore, got.HasStagedBodyRestore, restore)
+	}
+	if !reflect.DeepEqual(got.Batch, popBatch) {
+		t.Fatalf("batch = %+v, want %+v", got.Batch, popBatch)
 	}
 
-	if got := ApplyStagedBodyDrainPlan(plan, nil); len(got.Buffered) != 0 {
-		t.Fatalf("nil applier batch = %+v, want empty", got)
+	if got := ApplyStagedBodyDrainPlan(plan, nil); len(got.Batch.Buffered) != 0 || len(got.AppliedSteps) != 0 || len(got.UnknownSteps) != 0 {
+		t.Fatalf("nil applier result = %+v, want empty", got)
 	}
 }
 
@@ -920,21 +948,25 @@ type recordedStagedBodyDrainCall struct {
 }
 
 type recordingStagedBodyDrainApplier struct {
-	calls    []recordedStagedBodyDrainCall
-	popBatch BufferedBatch
+	calls        []recordedStagedBodyDrainCall
+	readyRefresh StagedBodyReadyProgressRefresh
+	restore      StagedBodyRestoreResult
+	popBatch     BufferedBatch
 }
 
-func (a *recordingStagedBodyDrainApplier) RefreshSyncBodiesReady() {
+func (a *recordingStagedBodyDrainApplier) RefreshSyncBodiesReady() StagedBodyReadyProgressRefresh {
 	a.calls = append(a.calls, recordedStagedBodyDrainCall{action: StagedBodyDrainRefreshReady})
+	return a.readyRefresh
 }
 
-func (a *recordingStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+func (a *recordingStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult {
 	a.calls = append(a.calls, recordedStagedBodyDrainCall{
 		action: StagedBodyDrainRestoreBodies,
 		from:   from,
 		limit:  limit,
 		prune:  pruneStaleTail,
 	})
+	return a.restore
 }
 
 func (a *recordingStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) BufferedBatch {

@@ -1164,7 +1164,8 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 	next := ss.chain.CurrentBlock().Number() + 1
 	drain := ss.readStagedBodyDrainPlan(next)
 	ss.logStagedBodyReadyDrainLimit(drain.Ready)
-	return syncdl.ApplyStagedBodyDrainPlan(drain.Plan, syncStagedBodyDrainApplier{service: ss, now: now})
+	result := syncdl.ApplyStagedBodyDrainPlan(drain.Plan, syncStagedBodyDrainApplier{service: ss, now: now})
+	return result.Batch
 }
 
 func (ss *SyncService) readStagedBodyDrainPlan(next uint64) syncdl.StagedBodyDrainReadPlan {
@@ -1199,12 +1200,12 @@ type syncStagedBodyDrainApplier struct {
 	now     time.Time
 }
 
-func (a syncStagedBodyDrainApplier) RefreshSyncBodiesReady() {
-	a.service.writeSyncBodiesReadyProgress()
+func (a syncStagedBodyDrainApplier) RefreshSyncBodiesReady() syncdl.StagedBodyReadyProgressRefresh {
+	return a.service.writeSyncBodiesReadyProgress()
 }
 
-func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
-	a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
+func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {
+	return a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
 }
 
 func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syncdl.BufferedBatch {
@@ -1590,20 +1591,21 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 	}
 }
 
-func (ss *SyncService) writeSyncBodiesReadyProgress() {
+func (ss *SyncService) writeSyncBodiesReadyProgress() syncdl.StagedBodyReadyProgressRefresh {
 	if ss == nil || ss.chain == nil {
-		return
+		return syncdl.StagedBodyReadyProgressRefresh{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return
+		return syncdl.StagedBodyReadyProgressRefresh{}
 	}
 	head := ss.chain.CurrentBlock()
 	if head == nil {
-		return
+		return syncdl.StagedBodyReadyProgressRefresh{}
 	}
 	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum)
 	ss.logSyncBodiesReadyRefresh(refresh)
+	return refresh
 }
 
 func (ss *SyncService) logSyncBodiesReadyRefresh(refresh syncdl.StagedBodyReadyProgressRefresh) {

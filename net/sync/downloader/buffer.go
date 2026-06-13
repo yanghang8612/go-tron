@@ -586,12 +586,24 @@ type StagedBodyDrainStep struct {
 	PruneStaleTail bool
 }
 
+// StagedBodyDrainApplyResult records the drain preparation steps that were
+// actually dispatched plus the restored batch popped for canonical import.
+type StagedBodyDrainApplyResult struct {
+	AppliedSteps         []StagedBodyDrainStepAction
+	UnknownSteps         []StagedBodyDrainStepAction
+	ReadyRefresh         StagedBodyReadyProgressRefresh
+	HasReadyRefresh      bool
+	StagedBodyRestore    StagedBodyRestoreResult
+	HasStagedBodyRestore bool
+	Batch                BufferedBatch
+}
+
 // StagedBodyDrainPlanApplier performs the persistence/runtime operations named
 // by a staged-body drain plan. SyncService owns DB handles and in-memory maps;
 // downloader owns the ordered local import preparation.
 type StagedBodyDrainPlanApplier interface {
-	RefreshSyncBodiesReady()
-	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool)
+	RefreshSyncBodiesReady() StagedBodyReadyProgressRefresh
+	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
 	PopBufferedBatch(next uint64, limit int) BufferedBatch
 }
 
@@ -638,22 +650,29 @@ func (p StagedBodyDrainPlan) withSteps(next uint64) StagedBodyDrainPlan {
 }
 
 // ApplyStagedBodyDrainPlan executes the downloader-owned local drain schedule.
-func ApplyStagedBodyDrainPlan(plan StagedBodyDrainPlan, applier StagedBodyDrainPlanApplier) BufferedBatch {
+func ApplyStagedBodyDrainPlan(plan StagedBodyDrainPlan, applier StagedBodyDrainPlanApplier) StagedBodyDrainApplyResult {
+	var result StagedBodyDrainApplyResult
 	if applier == nil {
-		return BufferedBatch{}
+		return result
 	}
-	var batch BufferedBatch
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case StagedBodyDrainRefreshReady:
-			applier.RefreshSyncBodiesReady()
+			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
+			result.HasReadyRefresh = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case StagedBodyDrainRestoreBodies:
-			applier.RestoreStagedBodies(step.From, step.Limit, step.PruneStaleTail)
+			result.StagedBodyRestore = applier.RestoreStagedBodies(step.From, step.Limit, step.PruneStaleTail)
+			result.HasStagedBodyRestore = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case StagedBodyDrainPopBuffer:
-			batch = applier.PopBufferedBatch(step.Next, step.Limit)
+			result.Batch = applier.PopBufferedBatch(step.Next, step.Limit)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
-	return batch
+	return result
 }
 
 // PopBufferedBatch removes the contiguous run starting at next from the local
