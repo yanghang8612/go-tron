@@ -106,6 +106,65 @@ func TestSyncServiceRestoresStagedBodiesOnSessionStart(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
+	bc := makeTestChain(t)
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block, rawOf(t, block))
+		if result.StageError != nil || result.ProgressWriteError != nil {
+			t.Fatalf("stage block %d result = %+v", block.Number(), result)
+		}
+	}
+	if err := rawdb.WriteStageProgress(bc.DB(), rawdb.StageSyncInventory, 5); err != nil {
+		t.Fatalf("write sync inventory target: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	remain := ss.estimatedRemainLocked()
+	path1 := ss.blockPath[block1.Number()]
+	path2 := ss.blockPath[block2.Number()]
+	ss.mu.Unlock()
+
+	if buffered != 2 || target != 5 || remain != 5 {
+		t.Fatalf("restored half download buffered=%d target=%d remain=%d, want 2/5/5", buffered, target, remain)
+	}
+	if path1 != block1.Hash() || path2 != block2.Hash() {
+		t.Fatalf("restored block path = %x/%x, want block1/block2 %x/%x", path1, path2, block1.Hash(), block2.Hash())
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady after half-download restore = %+v ok=%v err=%v, want block2", ready, ok, err)
+	}
+
+	ss.drainBufferedBlocks()
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after half-download drain = %v, want block2 %x", got, block2.Hash())
+	}
+	ss.mu.Lock()
+	target = ss.targetHeadNum
+	remain = ss.estimatedRemainLocked()
+	syncing := ss.syncing
+	buffered = len(ss.blockBuffer)
+	ss.mu.Unlock()
+	if !syncing || target != 5 || remain != 3 || buffered != 0 {
+		t.Fatalf("post-drain session syncing=%v target=%d remain=%d buffered=%d, want true/5/3/0", syncing, target, remain, buffered)
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after half-download drain ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after half-download drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block2 := stubBlock(2, bc.CurrentBlock().Hash())
