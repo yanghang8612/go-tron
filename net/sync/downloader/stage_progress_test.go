@@ -7,6 +7,7 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 func TestStageForCanonicalStage(t *testing.T) {
@@ -115,6 +116,7 @@ func TestStageProgressCollectorNilAndEmpty(t *testing.T) {
 func TestPlanImportedBatchProgress(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
+	block2.Proto().Transactions = append(block2.Proto().Transactions, &corepb.Transaction{Signature: [][]byte{{0x22}}})
 	block3 := testBufferedBlock(3)
 	batch := BufferedBatch{
 		Blocks: []*types.Block{block1, block2, block3},
@@ -138,6 +140,13 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	wantStages := ImportPipelineStageTasks(block2.Number(), block2.Hash())
 	if !reflect.DeepEqual(got.Stages, wantStages) {
 		t.Fatalf("stages = %+v, want %+v", got.Stages, wantStages)
+	}
+	if got.Schedule.BlockNum != block2.Number() || got.Schedule.BlockHash != block2.Hash() || !reflect.DeepEqual(got.Schedule.Tasks, wantStages) {
+		t.Fatalf("schedule = %+v, want block2 schedule %+v", got.Schedule, wantStages)
+	}
+	if !got.RefreshReady || got.StatsBlocks != 2 || got.StatsTransactions != 3 || got.ReportHead != block2.Number() {
+		t.Fatalf("record metadata = refresh=%v blocks=%d txs=%d head=%d, want refresh/2/3/block2",
+			got.RefreshReady, got.StatsBlocks, got.StatsTransactions, got.ReportHead)
 	}
 	if len(got.Deletes) != 2 || got.Deletes[0].Number != block1.Number() || got.Deletes[1].Number != block2.Number() {
 		t.Fatalf("deletes = %+v, want block1/block2 staged rows", got.Deletes)
@@ -250,6 +259,20 @@ func TestImportPipelineStageTasks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ImportPipelineStageTasks = %+v, want %+v", got, want)
+	}
+}
+
+func TestNewImportStageSchedule(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	got := NewImportStageSchedule(7, hash)
+	wantTasks := ImportPipelineStageTasks(7, hash)
+	if got.BlockNum != 7 || got.BlockHash != hash || !reflect.DeepEqual(got.Tasks, wantTasks) {
+		t.Fatalf("schedule = %+v, want block/hash/tasks %+v", got, wantTasks)
+	}
+
+	progress, decisions := NewStageProgressCollector().Plan(ImportStageSchedule{})
+	if progress != nil || decisions != nil {
+		t.Fatalf("empty schedule plan = %+v/%+v, want nil/nil", progress, decisions)
 	}
 }
 

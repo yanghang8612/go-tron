@@ -1246,15 +1246,17 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 		return
 	}
 	ss.writeImportedSyncProgress(plan.Deletes, plan.Progress)
-	ss.writeSyncBodiesReadyProgress()
+	if plan.RefreshReady {
+		ss.writeSyncBodiesReadyProgress()
+	}
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
 	// recording the range as one unit keeps block counts and phase totals
 	// aligned in the emitted sync summary.
 	snap, emit := ss.stats.RecordBlocks(
-		plan.Summary.Applied,
-		plan.Summary.TxCount,
+		plan.StatsBlocks,
+		plan.StatsTransactions,
 		totalElapsed,
 		time.Now(),
 		tsync.StatsReportInterval,
@@ -1270,7 +1272,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	ss.mu.Unlock()
 
 	if emit {
-		ss.reportSegment(snap, diag, plan.Summary.Last.Num, remain, plan.Summary.Last.Peer)
+		ss.reportSegment(snap, diag, plan.ReportHead, remain, plan.ReportPeer)
 	}
 }
 

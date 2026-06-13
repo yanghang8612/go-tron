@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/p2p"
 )
 
 // StageProgressRow is one observed hash-bound progress row for a sync pipeline
@@ -65,6 +66,15 @@ type ImportStageTask struct {
 	BlockHash      tcommon.Hash
 }
 
+// ImportStageSchedule is the explicit stage schedule for one sync import
+// boundary. The canonical insert hook only supplies observations; this
+// schedule owns the required bodies/execution/commitment/finish targets.
+type ImportStageSchedule struct {
+	BlockNum  uint64
+	BlockHash tcommon.Hash
+	Tasks     []ImportStageTask
+}
+
 // ImportStageProgressDecision is one stage planner decision for an applied
 // sync import prefix. Later stages are blocked after the first missing stage so
 // persisted sync progress remains a contiguous pipeline prefix.
@@ -78,12 +88,18 @@ type ImportStageProgressDecision struct {
 // ImportedBatchProgressPlan is the downloader-owned storage plan for the
 // successfully imported prefix of one local staged-body batch.
 type ImportedBatchProgressPlan struct {
-	OK        bool
-	Summary   AppliedBatchSummary
-	Stages    []ImportStageTask
-	Deletes   []rawdb.SyncStagedBlockDelete
-	Progress  []rawdb.StageProgress
-	Decisions []ImportStageProgressDecision
+	OK                bool
+	Summary           AppliedBatchSummary
+	Schedule          ImportStageSchedule
+	Stages            []ImportStageTask
+	Deletes           []rawdb.SyncStagedBlockDelete
+	Progress          []rawdb.StageProgress
+	Decisions         []ImportStageProgressDecision
+	RefreshReady      bool
+	StatsBlocks       int
+	StatsTransactions int
+	ReportHead        uint64
+	ReportPeer        *p2p.Peer
 }
 
 // StageProgressCollector observes canonical block insertion stages and records
@@ -137,7 +153,8 @@ func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 	if !ok {
 		return nil
 	}
-	rows, _ := planImportStageRows(observed, tasks)
+	schedule := NewImportStageSchedule(through, tasks[0].BlockHash)
+	rows, _ := planImportStageRows(observed, schedule.Tasks)
 	return rows
 }
 
@@ -151,16 +168,41 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 		return ImportedBatchProgressPlan{}
 	}
 	plan := ImportedBatchProgressPlan{
-		OK:      true,
-		Summary: summary,
-		Deletes: AppliedStagedBlockDeletes(batch, summary.Applied),
+		OK:                true,
+		Summary:           summary,
+		Deletes:           AppliedStagedBlockDeletes(batch, summary.Applied),
+		RefreshReady:      true,
+		StatsBlocks:       summary.Applied,
+		StatsTransactions: summary.TxCount,
+		ReportHead:        summary.Last.Num,
+		ReportPeer:        summary.Last.Peer,
 	}
 	if !summary.HasStage {
 		return plan
 	}
-	plan.Stages = ImportPipelineStageTasks(summary.Last.Num, summary.Last.Hash)
-	plan.Progress, plan.Decisions = collector.plannedRows(plan.Stages)
+	plan.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
+	plan.Stages = plan.Schedule.Tasks
+	plan.Progress, plan.Decisions = collector.Plan(plan.Schedule)
 	return plan
+}
+
+// NewImportStageSchedule returns the bodies/execution/commitment/finish targets
+// required before sync progress can be published at one import boundary.
+func NewImportStageSchedule(blockNum uint64, blockHash tcommon.Hash) ImportStageSchedule {
+	return ImportStageSchedule{
+		BlockNum:  blockNum,
+		BlockHash: blockHash,
+		Tasks:     ImportPipelineStageTasks(blockNum, blockHash),
+	}
+}
+
+// Plan maps observed canonical stage hooks onto a schedule-owned contiguous
+// sync progress prefix.
+func (c *StageProgressCollector) Plan(schedule ImportStageSchedule) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
+	if len(schedule.Tasks) == 0 {
+		return nil, nil
+	}
+	return c.plannedRows(schedule.Tasks)
 }
 
 func (c *StageProgressCollector) plannedRows(stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
