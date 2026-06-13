@@ -1270,6 +1270,23 @@ func (a syncPostInventorySettlementApplier) FinishSync() {
 	a.service.finishSync()
 }
 
+type syncPeerFailoverApplier struct {
+	service *SyncService
+	exclude *p2p.Peer
+}
+
+func (a syncPeerFailoverApplier) ResetSyncUnderLock() {
+	a.service.doReset()
+}
+
+func (a syncPeerFailoverApplier) MirrorLegacyUnderLock() {
+	a.service.mirrorLegacyLocked()
+}
+
+func (a syncPeerFailoverApplier) TryFindSyncPeer() {
+	a.service.tryFindSyncPeer(a.exclude)
+}
+
 type syncFetchReceiptSettlementApplier struct {
 	service   *SyncService
 	peerState *syncPeerState
@@ -1909,11 +1926,8 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		OutboundRequests: len(out),
 		StalledRetries:   stalledRetries,
 	})
-	if plan.Reset {
-		ss.doReset()
-	} else if plan.Mirror {
-		ss.mirrorLegacyLocked()
-	}
+	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: stalePeer}
+	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
 	ss.mu.Unlock()
 	syncLog.Warn("Fetch timeout, failing over",
 		"peer", stalePeer.ID(),
@@ -1923,9 +1937,7 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 		ss.sendOutboundRequests(out)
 		return
 	}
-	if plan.TryFindPeer {
-		ss.tryFindSyncPeer(stalePeer)
-	}
+	syncdl.ApplyPeerFailoverAfterDispatchPlan(plan, failoverApplier)
 }
 
 // PeerDisconnected is called by the handler when a peer goes away. If that
@@ -1962,19 +1974,14 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 		OutboundRequests: len(out),
 		StalledRetries:   stalledRetries,
 	})
-	if plan.Reset {
-		ss.doReset()
-	} else if plan.Mirror {
-		ss.mirrorLegacyLocked()
-	}
+	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: peer}
+	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
 	ss.mu.Unlock()
 	syncLog.Info("Sync peer disconnected", "peer", peer.ID())
 	if len(out) > 0 {
 		ss.sendOutboundRequests(out)
 	}
-	if plan.TryFindPeer {
-		ss.tryFindSyncPeer(peer)
-	}
+	syncdl.ApplyPeerFailoverAfterDispatchPlan(plan, failoverApplier)
 }
 
 func (ss *SyncService) removePeerStateLocked(peerID string, retry bool) {
