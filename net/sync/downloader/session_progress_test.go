@@ -38,11 +38,14 @@ func TestSessionProgressEstimatedRemainingFallsBackToQueues(t *testing.T) {
 }
 
 func TestPlanIdleDrainAfterRefill(t *testing.T) {
-	if got := PlanIdleDrainAfterRefill(true); got != (IdleDrainPlan{Finish: true}) {
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{Complete: true, JoinAvailablePeersAllowed: true}); got != (IdleDrainPlan{Finish: true}) {
 		t.Fatalf("complete idle plan = %+v, want finish", got)
 	}
-	if got := PlanIdleDrainAfterRefill(false); got != (IdleDrainPlan{CheckJoinPeers: true}) {
-		t.Fatalf("incomplete idle plan = %+v, want peer join check", got)
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{JoinAvailablePeersAllowed: true}); got != (IdleDrainPlan{JoinAvailablePeers: true}) {
+		t.Fatalf("joinable idle plan = %+v, want peer join", got)
+	}
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{}); got != (IdleDrainPlan{}) {
+		t.Fatalf("incomplete idle plan = %+v, want no action", got)
 	}
 }
 

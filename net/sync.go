@@ -1180,11 +1180,18 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.bufferWait.Begin(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
-			idle := syncdl.PlanIdleDrainAfterRefill(ss.shouldFinishLocked())
-			joinPeers := idle.CheckJoinPeers && ss.shouldJoinAvailablePeersLocked(now)
+			complete := ss.shouldFinishLocked()
+			joinAllowed := false
+			if !complete {
+				joinAllowed = ss.shouldJoinAvailablePeersLocked(now)
+			}
+			idle := syncdl.PlanIdleDrainAfterRefill(syncdl.IdleDrainAfterRefillInput{
+				Complete:                  complete,
+				JoinAvailablePeersAllowed: joinAllowed,
+			})
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
-			if joinPeers {
+			if idle.JoinAvailablePeers {
 				ss.joinAvailablePeers()
 			}
 			if idle.Finish {

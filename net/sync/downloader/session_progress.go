@@ -22,11 +22,18 @@ type SessionProgress struct {
 	Peers          []PeerProgress
 }
 
+// IdleDrainAfterRefillInput is the lock-free state needed after a local drain
+// found no buffered batch and fetch slots have been refilled.
+type IdleDrainAfterRefillInput struct {
+	Complete                  bool
+	JoinAvailablePeersAllowed bool
+}
+
 // IdleDrainPlan describes the session-level action after a local drain found no
 // buffered batch and fetch slots have been refilled.
 type IdleDrainPlan struct {
-	Finish         bool
-	CheckJoinPeers bool
+	Finish             bool
+	JoinAvailablePeers bool
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -48,11 +55,14 @@ type PostInventorySettlementPlan struct {
 
 // PlanIdleDrainAfterRefill decides how the sync loop should settle an empty
 // local drain after existing peers were given a chance to fetch more bodies.
-func PlanIdleDrainAfterRefill(complete bool) IdleDrainPlan {
-	if complete {
+func PlanIdleDrainAfterRefill(in IdleDrainAfterRefillInput) IdleDrainPlan {
+	if in.Complete {
 		return IdleDrainPlan{Finish: true}
 	}
-	return IdleDrainPlan{CheckJoinPeers: true}
+	if in.JoinAvailablePeersAllowed {
+		return IdleDrainPlan{JoinAvailablePeers: true}
+	}
+	return IdleDrainPlan{}
 }
 
 // PlanPostInventorySettlement decides how the service should settle a sync
