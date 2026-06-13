@@ -924,7 +924,7 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 		return
 	}
 	window := syncdl.FetchWindow{Min: ps.minFetchNum, Max: ps.lastInventoryNum}
-	assigned, keep := syncdl.AssignRetryCandidates(ss.retryList, func(bid types.BlockID) syncdl.RetryDecision {
+	plan := syncdl.PlanRetryAssignment(ss.retryList, func(bid types.BlockID) syncdl.RetryCandidateFacts {
 		facts := syncdl.RetryCandidateFacts{KnownOrRequested: ss.hasBlockOrRequestLocked(bid)}
 		if !facts.KnownOrRequested {
 			facts.InWindow = window.Contains(bid)
@@ -935,10 +935,10 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 		if facts.InWindow && !facts.PeerRequested {
 			facts.ReservedPath = ss.reserveBlockPathLocked(bid)
 		}
-		return syncdl.ClassifyRetryCandidate(facts)
+		return facts
 	})
-	ps.fetchList = append(ps.fetchList, assigned...)
-	ss.retryList = keep
+	ps.fetchList = append(ps.fetchList, plan.Assigned...)
+	ss.retryList = plan.Keep
 }
 
 func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {

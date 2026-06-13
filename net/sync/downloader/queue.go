@@ -28,6 +28,25 @@ const (
 // needed before assignment, such as reserving a block path.
 type RetryClassifier func(types.BlockID) RetryDecision
 
+// RetryCandidateClassifier gathers service-owned facts for one retry-list
+// candidate. It may reserve the session block path before returning facts.
+type RetryCandidateClassifier func(types.BlockID) RetryCandidateFacts
+
+// RetryCandidatePlan records the downloader decision for one retry-list entry.
+type RetryCandidatePlan struct {
+	ID       types.BlockID
+	Facts    RetryCandidateFacts
+	Decision RetryDecision
+}
+
+// RetryAssignmentPlan is the downloader-owned result for assigning retry-list
+// entries into one peer's fetch queue.
+type RetryAssignmentPlan struct {
+	Assigned  []types.BlockID
+	Keep      []types.BlockID
+	Decisions []RetryCandidatePlan
+}
+
 // FetchCandidateClassifier gathers service-owned facts for one fetch-list
 // candidate. It may reserve the session block path before returning facts.
 type FetchCandidateClassifier func(types.BlockID) FetchCandidateFacts
@@ -141,6 +160,43 @@ func AssignRetryCandidates(retries []types.BlockID, classify RetryClassifier) (a
 		keep = nil
 	}
 	return assigned, keep
+}
+
+// PlanRetryAssignment classifies one retry queue, assigns eligible entries to
+// the target peer's fetch queue, keeps entries that are still retryable for a
+// later peer/session, and drops stale/conflicting entries. Keep may reuse
+// retries' backing array.
+func PlanRetryAssignment(retries []types.BlockID, classify RetryCandidateClassifier) RetryAssignmentPlan {
+	plan := RetryAssignmentPlan{}
+	if len(retries) == 0 {
+		return plan
+	}
+	plan.Keep = retries[:0]
+	for _, bid := range retries {
+		var facts RetryCandidateFacts
+		decision := RetryDrop
+		if classify != nil {
+			facts = classify(bid)
+			decision = ClassifyRetryCandidate(facts)
+		}
+		plan.Decisions = append(plan.Decisions, RetryCandidatePlan{
+			ID:       bid,
+			Facts:    facts,
+			Decision: decision,
+		})
+		switch decision {
+		case RetryAssign:
+			plan.Assigned = append(plan.Assigned, bid)
+		case RetryKeep:
+			plan.Keep = append(plan.Keep, bid)
+		default:
+			// RetryDrop or unknown decisions remove the stale entry.
+		}
+	}
+	if len(plan.Keep) == 0 {
+		plan.Keep = nil
+	}
+	return plan
 }
 
 // AppendDisconnectedPeerRetries appends block IDs left behind by a disconnected

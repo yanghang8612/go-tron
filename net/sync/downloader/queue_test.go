@@ -167,6 +167,62 @@ func TestAssignRetryCandidatesDropsByDefault(t *testing.T) {
 	}
 }
 
+func TestPlanRetryAssignmentRecordsDecisions(t *testing.T) {
+	retries := []types.BlockID{
+		queueID(1),
+		queueID(2),
+		queueID(3),
+		queueID(4),
+		queueID(5),
+	}
+	got := PlanRetryAssignment(retries, func(bid types.BlockID) RetryCandidateFacts {
+		switch bid.Num {
+		case 1:
+			return RetryCandidateFacts{KnownOrRequested: true}
+		case 2:
+			return RetryCandidateFacts{InWindow: false}
+		case 3:
+			return RetryCandidateFacts{InWindow: true, PeerRequested: true}
+		case 4:
+			return RetryCandidateFacts{InWindow: true, ReservedPath: true}
+		default:
+			return RetryCandidateFacts{InWindow: true}
+		}
+	})
+
+	if want := []uint64{4}; !reflect.DeepEqual(blockNums(got.Assigned), want) {
+		t.Fatalf("assigned nums = %v, want %v", blockNums(got.Assigned), want)
+	}
+	if want := []uint64{2, 3}; !reflect.DeepEqual(blockNums(got.Keep), want) {
+		t.Fatalf("keep nums = %v, want %v", blockNums(got.Keep), want)
+	}
+	wantDecisions := []RetryDecision{
+		RetryDrop,
+		RetryKeep,
+		RetryKeep,
+		RetryAssign,
+		RetryDrop,
+	}
+	if len(got.Decisions) != len(wantDecisions) {
+		t.Fatalf("decisions = %+v, want %d", got.Decisions, len(wantDecisions))
+	}
+	for i, want := range wantDecisions {
+		if got.Decisions[i].ID.Num != uint64(i+1) || got.Decisions[i].Decision != want {
+			t.Fatalf("decision %d = %+v, want block %d decision %v", i, got.Decisions[i], i+1, want)
+		}
+	}
+}
+
+func TestPlanRetryAssignmentDropsByDefault(t *testing.T) {
+	got := PlanRetryAssignment([]types.BlockID{queueID(1)}, nil)
+	if got.Assigned != nil || got.Keep != nil {
+		t.Fatalf("plan = %+v, want no assigned or kept entries", got)
+	}
+	if len(got.Decisions) != 1 || got.Decisions[0].Decision != RetryDrop {
+		t.Fatalf("decisions = %+v, want one drop", got.Decisions)
+	}
+}
+
 func TestAppendDisconnectedPeerRetriesFiltersPendingBeforeFetchQueue(t *testing.T) {
 	existing := []types.BlockID{queueID(9)}
 	pending := map[tcommon.Hash]types.BlockID{
