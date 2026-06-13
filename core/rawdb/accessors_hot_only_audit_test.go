@@ -101,11 +101,17 @@ func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.
 func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
-		"ReadAccountTrace":           {},
-		"ReadAccountTraceAtOrBefore": {},
-		"ReadBlockBalanceTrace":      {},
-		"ReadSectionBloom":           {},
-		"ReadSectionBloomBitSet":     {},
+		"ReadAccountTrace":            {},
+		"ReadAccountTraceAtOrBefore":  {},
+		"ReadBlock":                   {},
+		"ReadBlockBalanceTrace":       {},
+		"ReadBlockNumber":             {},
+		"ReadBlockStateRoot":          {},
+		"ReadSectionBloom":            {},
+		"ReadSectionBloomBitSet":      {},
+		"ReadTransactionIndex":        {},
+		"ReadTransactionInfo":         {},
+		"ReadTransactionInfosByBlock": {},
 	}, map[string]map[string]struct{}{
 		"cmd/balance-trace/main.go": {
 			"ReadAccountTrace":      {},
@@ -315,25 +321,38 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 			return nil
 		}
 		rel := auditRelPath(root, path)
+		aliases := map[string]struct{}{
+			"chain":   {},
+			"chainDB": {},
+			"chaindb": {},
+			"cdb":     {},
+			"source":  {},
+		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok || len(call.Args) == 0 {
-				return true
+			switch n := node.(type) {
+			case *ast.AssignStmt:
+				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
+			case *ast.ValueSpec:
+				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
+			case *ast.CallExpr:
+				if len(n.Args) == 0 {
+					return true
+				}
+				name, ok := rawDBCallName(n.Fun, rawdbNames)
+				if !ok {
+					return true
+				}
+				if _, watch := watched[name]; !watch {
+					return true
+				}
+				if isAllowedRawDBCall(root, path, name, allowed) {
+					return true
+				}
+				if isColdAwareArchiveReaderArg(rel, name, n.Args[0], rawdbNames, aliases) {
+					return true
+				}
+				offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), "rawdb."+name))
 			}
-			name, ok := rawDBCallName(call.Fun, rawdbNames)
-			if !ok {
-				return true
-			}
-			if _, watch := watched[name]; !watch {
-				return true
-			}
-			if isAllowedRawDBCall(root, path, name, allowed) {
-				return true
-			}
-			if isColdAwareArchiveReaderArg(rel, name, call.Args[0], rawdbNames) {
-				return true
-			}
-			offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), "rawdb."+name))
 			return true
 		})
 		return nil
@@ -510,7 +529,7 @@ func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliase
 	return len(path) > 0 && strings.EqualFold(path[len(path)-1], "chaindb")
 }
 
-func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}) bool {
+func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) bool {
 	for {
 		paren, ok := expr.(*ast.ParenExpr)
 		if !ok {
@@ -518,24 +537,12 @@ func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames
 		}
 		expr = paren.X
 	}
-	if isRawDBCall(expr, rawdbNames, "NewChainDB") {
+	if isChainDBBoundaryExpr(expr, rawdbNames, aliases) {
 		return true
-	}
-	if ident, ok := expr.(*ast.Ident); ok {
-		switch ident.Name {
-		case "chainDB", "chaindb":
-			return true
-		default:
-			return false
-		}
 	}
 	path := selectorPath(expr)
 	if len(path) == 0 {
 		return false
-	}
-	last := path[len(path)-1]
-	if strings.EqualFold(last, "chaindb") {
-		return true
 	}
 	if rel == "core/tron_backend.go" && function == "ReadSectionBloomBitSet" && strings.Join(path, ".") == "m.db" {
 		return true
