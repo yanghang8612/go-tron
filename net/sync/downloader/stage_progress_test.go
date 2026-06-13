@@ -30,13 +30,13 @@ func TestStageForCanonicalStage(t *testing.T) {
 	}
 }
 
-func TestStageProgressCollectorWritesLatestRowsAtOrBelowBoundary(t *testing.T) {
+func TestStageProgressCollectorWritesPlannedBoundaryPrefix(t *testing.T) {
 	collector := NewStageProgressCollector()
 	collector.Observe(rawdb.StageBodies, 1, tcommon.Hash{0x01})
-	collector.Observe(rawdb.StageBodies, 3, tcommon.Hash{0x03})
+	collector.Observe(rawdb.StageBodies, 2, tcommon.Hash{0x02})
 	collector.Observe(rawdb.StageExecution, 2, tcommon.Hash{0x02})
-	collector.Observe(rawdb.StageCommitment, 4, tcommon.Hash{0x04})
-	collector.Observe(rawdb.StageFinish, 2, tcommon.Hash{0x22})
+	collector.Observe(rawdb.StageCommitment, 3, tcommon.Hash{0x03})
+	collector.Observe(rawdb.StageFinish, 2, tcommon.Hash{0x02})
 	collector.Observe(rawdb.StageHeaders, 2, tcommon.Hash{0xff})
 
 	var got []rawdb.StageProgress
@@ -50,15 +50,26 @@ func TestStageProgressCollectorWritesLatestRowsAtOrBelowBoundary(t *testing.T) {
 	})
 
 	want := []rawdb.StageProgress{
-		{Stage: rawdb.StageSyncImport, BlockNum: 1, BlockHash: tcommon.Hash{0x01}, HasBlockHash: true},
+		{Stage: rawdb.StageSyncImport, BlockNum: 2, BlockHash: tcommon.Hash{0x02}, HasBlockHash: true},
 		{Stage: rawdb.StageSyncExecution, BlockNum: 2, BlockHash: tcommon.Hash{0x02}, HasBlockHash: true},
-		{Stage: rawdb.StageSyncFinish, BlockNum: 2, BlockHash: tcommon.Hash{0x22}, HasBlockHash: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("written progress = %+v, want %+v", got, want)
 	}
 	if rows := collector.Rows(2); !reflect.DeepEqual(rows, want) {
 		t.Fatalf("progress rows = %+v, want %+v", rows, want)
+	}
+}
+
+func TestStageProgressCollectorDoesNotPublishWithoutImportBoundary(t *testing.T) {
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, 1, tcommon.Hash{0x01})
+	collector.Observe(rawdb.StageExecution, 2, tcommon.Hash{0x02})
+	collector.Observe(rawdb.StageCommitment, 2, tcommon.Hash{0x02})
+	collector.Observe(rawdb.StageFinish, 2, tcommon.Hash{0x02})
+
+	if rows := collector.Rows(2); len(rows) != 0 {
+		t.Fatalf("rows without import boundary = %+v, want none", rows)
 	}
 }
 
@@ -83,12 +94,21 @@ func TestStageProgressCollectorNilAndEmpty(t *testing.T) {
 	zero.Observe(rawdb.StageFinish, 7, tcommon.Hash{0x07})
 	zero.Write(7, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 		called = true
-		if stage != rawdb.StageSyncFinish || blockNum != 7 || blockHash != (tcommon.Hash{0x07}) {
-			t.Fatalf("zero-value collector wrote %s/%d/%x", stage, blockNum, blockHash)
+	})
+	if called {
+		t.Fatal("zero-value collector wrote downstream progress without import boundary")
+	}
+
+	zero.Observe(rawdb.StageBodies, 7, tcommon.Hash{0x07})
+	zero.Observe(rawdb.StageExecution, 7, tcommon.Hash{0x07})
+	zero.Write(7, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+		called = true
+		if stage != rawdb.StageSyncImport && stage != rawdb.StageSyncExecution {
+			t.Fatalf("zero-value collector wrote unexpected stage %s/%d/%x", stage, blockNum, blockHash)
 		}
 	})
 	if !called {
-		t.Fatal("zero-value collector did not write observed progress")
+		t.Fatal("zero-value collector did not write planned boundary progress")
 	}
 }
 

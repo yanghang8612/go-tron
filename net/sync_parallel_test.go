@@ -180,6 +180,82 @@ func TestSyncStageProgressCollectorKeepsLatestAppliedStage(t *testing.T) {
 	}
 }
 
+func TestRecordImportedBatchKeepsAppliedStagePrefixAfterPartialExecution(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	batch := syncdl.BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []syncdl.BufferedBlock{
+			{Raw: rawOf(t, block1), Num: block1.Number(), Hash: block1.Hash()},
+			{Raw: rawOf(t, block2), Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := syncdl.NewStageProgressCollector()
+	for _, stage := range rawdb.CanonicalExecutionStages() {
+		collector.Observe(stage, block1.Number(), block1.Hash())
+	}
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+
+	ss.recordImportedBatch(batch, 1, time.Millisecond, collector)
+
+	assertSyncPipelineProgress(t, bc.DB(), block1)
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
+		t.Fatalf("staged block1 after partial import ok=%v err=%v, want deleted", ok, err)
+	}
+	if staged, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block2.Number()); err != nil || !ok || staged.Hash() != block2.Hash() {
+		t.Fatalf("staged block2 after partial import = %v ok=%v err=%v, want retained", staged, ok, err)
+	}
+}
+
+func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	batch := syncdl.BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []syncdl.BufferedBlock{
+			{Raw: rawOf(t, block1), Num: block1.Number(), Hash: block1.Hash()},
+			{Raw: rawOf(t, block2), Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := syncdl.NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	ss.recordImportedBatch(batch, 2, time.Millisecond, collector)
+
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+		t.Fatalf("sync import progress = %+v ok=%v err=%v, want block2", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want blocked", stage, row, ok, err)
+		}
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after import ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+}
+
 func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)

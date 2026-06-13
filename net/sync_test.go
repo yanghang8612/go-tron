@@ -349,6 +349,39 @@ func TestSyncServiceDeletesMismatchedSyncPipelineOrderOnSessionStart(t *testing.
 	}
 }
 
+func TestSyncServiceDeletesDownstreamSyncPipelineAfterForkHashMismatchOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncImport, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write import progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncExecution, block1.Number(), tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("write forked execution progress: %v", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), block1.Hash()); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync import progress after startup = %+v ok=%v err=%v, want block1 kept", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
 func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	bc := makeTestChain(t)
 	block := stubBlock(1, bc.CurrentBlock().Hash())

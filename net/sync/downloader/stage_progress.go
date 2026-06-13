@@ -113,8 +113,8 @@ func (c *StageProgressCollector) Observe(stage rawdb.StageID, blockNum uint64, h
 	c.mu.Unlock()
 }
 
-// Write emits the newest observed row at or below through for each sync
-// pipeline stage, in operator stage-status order.
+// Write emits the planned sync pipeline prefix for through, in operator
+// stage-status order.
 func (c *StageProgressCollector) Write(through uint64, write StageProgressWriter) {
 	if c == nil || write == nil {
 		return
@@ -124,26 +124,20 @@ func (c *StageProgressCollector) Write(through uint64, write StageProgressWriter
 	}
 }
 
-// Rows returns the newest observed hash-bound row at or below through for each
-// sync pipeline stage, in operator stage-status order.
+// Rows returns the planned sync pipeline prefix for through, in operator
+// stage-status order. A boundary is publishable only when the import/bodies
+// stage was observed at exactly through; later stages must match the same
+// block/hash or they are skipped with the rest of the downstream pipeline.
 func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 	if c == nil {
 		return nil
 	}
 	observed := c.snapshotRows()
-	rows := make([]rawdb.StageProgress, 0, len(SyncPipelineProgressStages()))
-	for _, stage := range SyncPipelineProgressStages() {
-		latest, ok := latestStageProgress(observed[stage], through)
-		if !ok {
-			continue
-		}
-		rows = append(rows, rawdb.StageProgress{
-			Stage:        stage,
-			BlockNum:     latest.BlockNum,
-			BlockHash:    latest.Hash,
-			HasBlockHash: true,
-		})
+	tasks, ok := observedImportStageTasks(observed, through)
+	if !ok {
+		return nil
 	}
+	rows, _ := planImportStageRows(observed, tasks)
 	return rows
 }
 
@@ -171,6 +165,10 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 
 func (c *StageProgressCollector) plannedRows(stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
 	observed := c.snapshotRows()
+	return planImportStageRows(observed, stages)
+}
+
+func planImportStageRows(observed map[rawdb.StageID][]StageProgressRow, stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
 	progress := make([]rawdb.StageProgress, 0, len(stages))
 	decisions := make([]ImportStageProgressDecision, 0, len(stages))
 	blocked := false
@@ -203,6 +201,15 @@ func (c *StageProgressCollector) plannedRows(stages []ImportStageTask) ([]rawdb.
 		})
 	}
 	return progress, decisions
+}
+
+func observedImportStageTasks(observed map[rawdb.StageID][]StageProgressRow, through uint64) ([]ImportStageTask, bool) {
+	for _, row := range observed[rawdb.StageSyncImport] {
+		if row.BlockNum == through {
+			return ImportPipelineStageTasks(row.BlockNum, row.Hash), true
+		}
+	}
+	return nil, false
 }
 
 func matchImportStageTask(rows []StageProgressRow, task ImportStageTask) (rawdb.StageProgress, ImportStageProgressStatus) {
@@ -246,23 +253,6 @@ func (c *StageProgressCollector) snapshotRows() map[rawdb.StageID][]StageProgres
 		rows[stage] = append([]StageProgressRow(nil), stageRows...)
 	}
 	return rows
-}
-
-func latestStageProgress(rows []StageProgressRow, through uint64) (StageProgressRow, bool) {
-	var (
-		latest StageProgressRow
-		have   bool
-	)
-	for _, row := range rows {
-		if row.BlockNum > through {
-			continue
-		}
-		if !have || row.BlockNum > latest.BlockNum {
-			latest = row
-			have = true
-		}
-	}
-	return latest, have
 }
 
 // SyncPipelineProgressStages returns the hash-bound sync import stages in the
