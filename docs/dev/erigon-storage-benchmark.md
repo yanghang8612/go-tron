@@ -192,8 +192,10 @@ per-interval byte deltas without opening the live Pebble store. The Nile sampler
 also breaks out `derivedIndexBytes`/`derivedIndexFiles` for chain-index,
 balance-trace, section-bloom, and event-log/index sidecars, while keeping
 `snapshotBytes` as the full snapshot directory size. Run it with
-`--offline-db-check` only after the node is stopped to add `storage-alerts`
-stage/freezer/snapshot diagnostics.
+`--sync-log-file` to fold the latest `Imported chain segment` stage planner,
+execution-plan, slow-phase, state-mutation, and peer fields into the JSONL row.
+Run it with `--offline-db-check` only after the node is stopped to add
+`storage-alerts` stage/freezer/snapshot diagnostics.
 
 ## Interpreting Results
 

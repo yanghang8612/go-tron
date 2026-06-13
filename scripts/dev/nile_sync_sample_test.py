@@ -93,9 +93,9 @@ class NileSyncSampleTest(unittest.TestCase):
             sync_log.write_text(
                 "\n".join(
                     [
-                        "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s blocks/s=10 txs/s=4 head=90 remain=20 syncStageComplete=true syncStageCompleted=4 syncStageScheduled=4 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanPostBodyStages=30 syncExecPlanFirst=81 syncExecPlanLast=90",
+                        "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s execElapsed=800ms applyElapsed=900ms blocks/s=10 txs/s=4 head=90 remain=20 slowPhase=execute slowElapsed=500ms stateMutTop=storagePuts:2 stateMutKVTop=accountKV:1 peer=peer-old syncStageComplete=true syncStageCompleted=4 syncStageScheduled=4 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanPostBodyStages=30 syncExecPlanFirst=81 syncExecPlanLast=90",
                         "DEBUG [06-13|12:00:00.100] Imported chain segment details blocks=10 head=90 syncExecPlanBlocks=10",
-                        "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s blocks/s=20.5 txs/s=7.5 head=100 remain=5 syncStageComplete=false syncStageCompleted=2 syncStageScheduled=4 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanPostBodyStages=60 syncExecPlanFirst=81 syncExecPlanLast=100",
+                        "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s execElapsed=1500ms applyElapsed=1700ms blocks/s=20.5 txs/s=7.5 head=100 remain=5 slowPhase=stateCommit slowElapsed=900ms slowStateCommitPhase=flatWrite slowStateCommitElapsed=600ms stateMutTop=storagePuts:7 stateMutKVTop=accountKV:3 peer=peer-latest syncStageComplete=false syncStageCompleted=2 syncStageScheduled=4 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanPostBodyStages=60 syncExecPlanFirst=81 syncExecPlanLast=100",
                     ]
                 )
                 + "\n",
@@ -257,8 +257,18 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogSegmentTxs"], 7)
             self.assertEqual(row["syncLogSegmentHead"], 100)
             self.assertEqual(row["syncLogSegmentRemain"], 5)
+            self.assertEqual(row["syncLogSegmentElapsed"], "2s")
+            self.assertEqual(row["syncLogSegmentExecElapsed"], "1500ms")
+            self.assertEqual(row["syncLogSegmentApplyElapsed"], "1700ms")
             self.assertEqual(row["syncLogBlocksPerSecond"], 20.5)
             self.assertEqual(row["syncLogTxsPerSecond"], 7.5)
+            self.assertEqual(row["syncLogSlowPhase"], "stateCommit")
+            self.assertEqual(row["syncLogSlowElapsed"], "900ms")
+            self.assertEqual(row["syncLogSlowStateCommitPhase"], "flatWrite")
+            self.assertEqual(row["syncLogSlowStateCommitElapsed"], "600ms")
+            self.assertEqual(row["syncLogStateMutTop"], "storagePuts:7")
+            self.assertEqual(row["syncLogStateMutKVTop"], "accountKV:3")
+            self.assertEqual(row["syncLogPeer"], "peer-latest")
             self.assertFalse(row["syncLogStageComplete"])
             self.assertEqual(row["syncLogStageCompleted"], 2)
             self.assertEqual(row["syncLogStageScheduled"], 4)
@@ -523,8 +533,18 @@ class NileSyncSampleTest(unittest.TestCase):
                         "txs": 9,
                         "head": 112,
                         "remain": 3,
+                        "elapsed": "2s",
+                        "execElapsed": "1500ms",
+                        "applyElapsed": "1700ms",
                         "blocks/s": 6.25,
                         "txs/s": 4.5,
+                        "slowPhase": "stateCommit",
+                        "slowElapsed": "900ms",
+                        "slowStateCommitPhase": "flatWrite",
+                        "slowStateCommitElapsed": "600ms",
+                        "stateMutTop": "storagePuts:9",
+                        "stateMutKVTop": "accountKV:4",
+                        "peer": "peer-json",
                         "syncStageComplete": True,
                         "syncStageCompleted": 4,
                         "syncStageScheduled": 4,
@@ -568,7 +588,17 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogSegmentTxs"], 9)
             self.assertEqual(row["syncLogSegmentHead"], 112)
             self.assertEqual(row["syncLogSegmentRemain"], 3)
+            self.assertEqual(row["syncLogSegmentElapsed"], "2s")
+            self.assertEqual(row["syncLogSegmentExecElapsed"], "1500ms")
+            self.assertEqual(row["syncLogSegmentApplyElapsed"], "1700ms")
             self.assertEqual(row["syncLogBlocksPerSecond"], 6.25)
+            self.assertEqual(row["syncLogSlowPhase"], "stateCommit")
+            self.assertEqual(row["syncLogSlowElapsed"], "900ms")
+            self.assertEqual(row["syncLogSlowStateCommitPhase"], "flatWrite")
+            self.assertEqual(row["syncLogSlowStateCommitElapsed"], "600ms")
+            self.assertEqual(row["syncLogStateMutTop"], "storagePuts:9")
+            self.assertEqual(row["syncLogStateMutKVTop"], "accountKV:4")
+            self.assertEqual(row["syncLogPeer"], "peer-json")
             self.assertTrue(row["syncLogStageComplete"])
             self.assertEqual(row["syncLogExecPlanBlocks"], 12)
             self.assertEqual(row["syncLogExecPlanStages"], 48)
