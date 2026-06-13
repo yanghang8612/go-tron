@@ -499,6 +499,62 @@ func TestNewImportStageSchedule(t *testing.T) {
 	}
 }
 
+func TestNewImportBatchStagePlan(t *testing.T) {
+	hash1 := tcommon.Hash{0x41}
+	hash2 := tcommon.Hash{0x42}
+	schedules := []ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	}
+
+	got := NewImportBatchStagePlan(schedules)
+	if got.Empty() {
+		t.Fatal("batch stage plan is empty, want scheduled tasks")
+	}
+	if !reflect.DeepEqual(got.Schedules, schedules) {
+		t.Fatalf("schedules = %+v, want %+v", got.Schedules, schedules)
+	}
+	wantBodies := []ImportStageTask{
+		ImportBodyStageTask(1, hash1),
+		ImportBodyStageTask(2, hash2),
+	}
+	wantExecution := []ImportStageTask{
+		ImportExecutionStageTask(1, hash1),
+		ImportExecutionStageTask(2, hash2),
+	}
+	wantCommitment := []ImportStageTask{
+		ImportCommitmentStageTask(1, hash1),
+		ImportCommitmentStageTask(2, hash2),
+	}
+	wantFinish := []ImportStageTask{
+		ImportFinishStageTask(1, hash1),
+		ImportFinishStageTask(2, hash2),
+	}
+	if !reflect.DeepEqual(got.Bodies, wantBodies) || !reflect.DeepEqual(got.Execution, wantExecution) || !reflect.DeepEqual(got.Commitment, wantCommitment) || !reflect.DeepEqual(got.Finish, wantFinish) {
+		t.Fatalf("phase groups = bodies:%+v execution:%+v commitment:%+v finish:%+v, want grouped block1/block2 tasks",
+			got.Bodies, got.Execution, got.Commitment, got.Finish)
+	}
+	wantPostBody := append(ImportExecutionStageTasks(1, hash1), ImportExecutionStageTasks(2, hash2)...)
+	if !reflect.DeepEqual(got.PostBody, wantPostBody) {
+		t.Fatalf("post-body tasks = %+v, want %+v", got.PostBody, wantPostBody)
+	}
+	wantTasks := append(ImportPipelineStageTasks(1, hash1), ImportPipelineStageTasks(2, hash2)...)
+	if !reflect.DeepEqual(got.Tasks, wantTasks) {
+		t.Fatalf("tasks = %+v, want %+v", got.Tasks, wantTasks)
+	}
+	task, ok := got.MatchCanonicalObservation(rawdb.StageCommitment, 2, hash2)
+	if !ok || task != ImportCommitmentStageTask(2, hash2) {
+		t.Fatalf("matched task = %+v ok=%v, want block2 commitment", task, ok)
+	}
+	if task, ok := got.MatchCanonicalObservation(rawdb.StageCommitment, 2, hash1); ok {
+		t.Fatalf("fork hash matched task %+v, want rejected", task)
+	}
+	empty := NewImportBatchStagePlan(nil)
+	if !empty.Empty() {
+		t.Fatalf("empty plan = %+v, want empty", empty)
+	}
+}
+
 func TestImportStageScheduleMatchCanonicalObservation(t *testing.T) {
 	hash := tcommon.Hash{0x42}
 	schedule := NewImportStageSchedule(7, hash)

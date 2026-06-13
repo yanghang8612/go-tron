@@ -108,6 +108,58 @@ type ImportStageSchedule struct {
 	Tasks      []ImportStageTask
 }
 
+// ImportBatchStagePlan groups every canonical import task in a decoded batch
+// by phase. It is the batch-level schedule; canonical insert hooks only confirm
+// observations against these targets.
+type ImportBatchStagePlan struct {
+	Schedules  []ImportStageSchedule
+	Bodies     []ImportStageTask
+	Execution  []ImportStageTask
+	Commitment []ImportStageTask
+	Finish     []ImportStageTask
+	PostBody   []ImportStageTask
+	Tasks      []ImportStageTask
+}
+
+// NewImportBatchStagePlan returns the phase-indexed stage schedule for a batch
+// of decoded import boundaries.
+func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePlan {
+	if len(schedules) == 0 {
+		return ImportBatchStagePlan{}
+	}
+	plan := ImportBatchStagePlan{
+		Schedules: append([]ImportStageSchedule(nil), schedules...),
+	}
+	for _, schedule := range schedules {
+		if len(schedule.Tasks) == 0 {
+			continue
+		}
+		plan.Bodies = append(plan.Bodies, schedule.Body)
+		plan.Execution = append(plan.Execution, schedule.Execution)
+		plan.Commitment = append(plan.Commitment, schedule.Commitment)
+		plan.Finish = append(plan.Finish, schedule.Finish)
+		plan.PostBody = append(plan.PostBody, schedule.PostBody...)
+		plan.Tasks = append(plan.Tasks, schedule.Tasks...)
+	}
+	return plan
+}
+
+// Empty reports whether the batch has any scheduled canonical import tasks.
+func (p ImportBatchStagePlan) Empty() bool {
+	return len(p.Tasks) == 0
+}
+
+// MatchCanonicalObservation reports whether a canonical stage hook observation
+// belongs to one of this batch plan's explicit stage tasks.
+func (p ImportBatchStagePlan) MatchCanonicalObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageTask, bool) {
+	for _, task := range p.Tasks {
+		if task.CanonicalStage == stage && task.BlockNum == blockNum && task.BlockHash == blockHash {
+			return task, true
+		}
+	}
+	return ImportStageTask{}, false
+}
+
 // MatchCanonicalObservation reports whether a canonical stage hook observation
 // is one of this schedule's explicit bodies/execution/commitment/finish tasks.
 func (s ImportStageSchedule) MatchCanonicalObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageTask, bool) {

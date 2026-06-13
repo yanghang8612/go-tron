@@ -271,6 +271,17 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if len(got.Schedules) != 2 || got.Schedules[0].BlockNum != block1.Number() || got.Schedules[1].BlockNum != block2.Number() {
 		t.Fatalf("execution schedules = %+v, want block1/block2", got.Schedules)
 	}
+	if len(got.StagePlan.Schedules) != 2 || len(got.StagePlan.Bodies) != 2 || len(got.StagePlan.Execution) != 2 || len(got.StagePlan.Commitment) != 2 || len(got.StagePlan.Finish) != 2 {
+		t.Fatalf("stage plan phases = schedules:%d bodies:%d execution:%d commitment:%d finish:%d, want two per phase",
+			len(got.StagePlan.Schedules), len(got.StagePlan.Bodies), len(got.StagePlan.Execution), len(got.StagePlan.Commitment), len(got.StagePlan.Finish))
+	}
+	if len(got.StagePlan.PostBody) != 6 || len(got.StagePlan.Tasks) != 8 {
+		t.Fatalf("stage plan task counts = postBody:%d tasks:%d, want 6/8", len(got.StagePlan.PostBody), len(got.StagePlan.Tasks))
+	}
+	if got.StagePlan.Bodies[0] != ImportBodyStageTask(block1.Number(), block1.Hash()) || got.StagePlan.Execution[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) || got.StagePlan.Finish[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("stage plan grouped tasks = bodies:%+v execution:%+v finish:%+v, want block1 body and block2 execution/finish",
+			got.StagePlan.Bodies, got.StagePlan.Execution, got.StagePlan.Finish)
+	}
 	applied1, ok := got.AppliedSchedule(1)
 	if !ok || applied1.BlockNum != block1.Number() || applied1.BlockHash != block1.Hash() {
 		t.Fatalf("applied schedule 1 = %+v ok=%v, want block1", applied1, ok)
@@ -323,6 +334,9 @@ func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testi
 	}
 	if !execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), block2.Hash()) {
 		t.Fatal("finish block2 should be planned")
+	}
+	if task, ok := execution.StagePlan.MatchCanonicalObservation(rawdb.StageCommitment, block2.Number(), block2.Hash()); !ok || task != ImportCommitmentStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("batch stage plan commitment match = %+v ok=%v, want block2 commitment task", task, ok)
 	}
 	if execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), tcommon.Hash{0xee}) {
 		t.Fatal("fork-hash finish should not be planned")

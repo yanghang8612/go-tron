@@ -141,12 +141,13 @@ type ImportOutcome struct {
 }
 
 // ImportBatchExecutionPlan is the downloader-owned execution target for one
-// decoded staged-body chunk. SyncService executes Blocks, while Schedules name
-// the expected bodies/execution/commitment/finish boundary for every decoded
+// decoded staged-body chunk. SyncService executes Blocks, while StagePlan names
+// the expected bodies/execution/commitment/finish task graph for every decoded
 // block. Schedule is the final boundary retained for concise diagnostics.
 type ImportBatchExecutionPlan struct {
 	Blocks           []*types.Block
 	Schedules        []ImportStageSchedule
+	StagePlan        ImportBatchStagePlan
 	Schedule         ImportStageSchedule
 	HasStageSchedule bool
 }
@@ -163,6 +164,12 @@ func (p ImportBatchExecutionPlan) AppliedSchedule(applied int) (ImportStageSched
 // PlansStageObservation reports whether a canonical insertion hook observation
 // belongs to one of the execution plan's explicit stage schedules.
 func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) bool {
+	if _, ok := p.StagePlan.MatchCanonicalObservation(stage, blockNum, blockHash); ok {
+		return true
+	}
+	if !p.StagePlan.Empty() {
+		return false
+	}
 	for _, schedule := range p.Schedules {
 		if _, ok := schedule.MatchCanonicalObservation(stage, blockNum, blockHash); ok {
 			return true
@@ -177,7 +184,7 @@ func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) Sta
 	if observe == nil {
 		return nil
 	}
-	if len(p.Schedules) == 0 {
+	if p.StagePlan.Empty() && len(p.Schedules) == 0 {
 		return observe
 	}
 	return func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
@@ -314,6 +321,7 @@ func PlanImportBatchExecution(batch BufferedBatch) ImportBatchExecutionPlan {
 		execution.Schedules = append(execution.Schedules, NewImportStageSchedule(buffered.Num, buffered.Hash))
 	}
 	if len(execution.Schedules) > 0 {
+		execution.StagePlan = NewImportBatchStagePlan(execution.Schedules)
 		execution.Schedule = execution.Schedules[len(execution.Schedules)-1]
 		execution.HasStageSchedule = true
 	}
