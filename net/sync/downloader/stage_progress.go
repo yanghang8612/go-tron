@@ -271,6 +271,19 @@ func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 // contiguous stage prefix: if a stage is missing, later observed rows are not
 // published for this batch.
 func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *StageProgressCollector) ImportedBatchProgressPlan {
+	return planImportedBatchProgress(batch, applied, ImportStageSchedule{}, false, collector)
+}
+
+// PlanImportedBatchProgressForExecution derives the DB-side progress plan for
+// an applied import prefix using the schedule already owned by the execution
+// plan. This keeps execution/commitment/finish planning on one path while
+// preserving PlanImportedBatchProgress as the legacy batch-derived entry point.
+func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, execution ImportBatchExecutionPlan, collector *StageProgressCollector) ImportedBatchProgressPlan {
+	schedule, hasSchedule := execution.AppliedSchedule(applied)
+	return planImportedBatchProgress(batch, applied, schedule, hasSchedule, collector)
+}
+
+func planImportedBatchProgress(batch BufferedBatch, applied int, schedule ImportStageSchedule, hasSchedule bool, collector *StageProgressCollector) ImportedBatchProgressPlan {
 	summary := SummarizeAppliedBatch(batch, applied)
 	if !summary.OK {
 		return ImportedBatchProgressPlan{}
@@ -288,7 +301,10 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 	if !summary.HasStage {
 		return plan.withSteps()
 	}
-	plan.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
+	if !hasSchedule {
+		schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
+	}
+	plan.Schedule = schedule
 	plan.Stages = plan.Schedule.Tasks
 	plan.StagePlan = collector.PlanSchedule(plan.Schedule)
 	plan.Progress = plan.StagePlan.Progress

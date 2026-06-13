@@ -271,6 +271,19 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if len(got.Schedules) != 2 || got.Schedules[0].BlockNum != block1.Number() || got.Schedules[1].BlockNum != block2.Number() {
 		t.Fatalf("execution schedules = %+v, want block1/block2", got.Schedules)
 	}
+	applied1, ok := got.AppliedSchedule(1)
+	if !ok || applied1.BlockNum != block1.Number() || applied1.BlockHash != block1.Hash() {
+		t.Fatalf("applied schedule 1 = %+v ok=%v, want block1", applied1, ok)
+	}
+	applied2, ok := got.AppliedSchedule(2)
+	if !ok || applied2.BlockNum != block2.Number() || applied2.BlockHash != block2.Hash() {
+		t.Fatalf("applied schedule 2 = %+v ok=%v, want block2", applied2, ok)
+	}
+	for _, applied := range []int{0, 3} {
+		if schedule, ok := got.AppliedSchedule(applied); ok {
+			t.Fatalf("applied schedule %d = %+v ok=true, want false", applied, schedule)
+		}
+	}
 	if !reflect.DeepEqual(got.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("execution schedule tasks = %+v, want full import pipeline", got.Schedule.Tasks)
 	}
@@ -387,6 +400,16 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
 		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
+	}
+	appliedSchedule, ok := result.Execution.AppliedSchedule(1)
+	if !ok {
+		t.Fatal("execution applied schedule 1 missing")
+	}
+	if !reflect.DeepEqual(result.Progress.Schedule.Tasks, appliedSchedule.Tasks) {
+		t.Fatalf("progress schedule = %+v, want execution applied schedule %+v", result.Progress.Schedule.Tasks, appliedSchedule.Tasks)
+	}
+	if result.Progress.Schedule.BlockNum != block1.Number() || result.Progress.Schedule.BlockHash != block1.Hash() {
+		t.Fatalf("progress schedule = %+v, want block1 applied prefix", result.Progress.Schedule)
 	}
 	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 4 {
 		t.Fatalf("partial result stage diagnostics = %+v, want complete applied-prefix plan", result.StageDiagnostics)

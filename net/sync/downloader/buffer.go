@@ -151,6 +151,15 @@ type ImportBatchExecutionPlan struct {
 	HasStageSchedule bool
 }
 
+// AppliedSchedule returns the stage schedule for the last block in an applied
+// prefix of this execution plan.
+func (p ImportBatchExecutionPlan) AppliedSchedule(applied int) (ImportStageSchedule, bool) {
+	if applied <= 0 || applied > len(p.Schedules) {
+		return ImportStageSchedule{}, false
+	}
+	return p.Schedules[applied-1], true
+}
+
 // PlansStageObservation reports whether a canonical insertion hook observation
 // belongs to one of the execution plan's explicit stage schedules.
 func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) bool {
@@ -276,7 +285,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
 			if result.Outcome.RecordApplied {
-				result.Progress = PlanImportedBatchProgress(plan.Batch, result.Outcome.Applied, collector)
+				result.Progress = PlanImportedBatchProgressForExecution(plan.Batch, result.Outcome.Applied, result.Execution, collector)
 				result.StageDiagnostics = result.Progress.StageDiagnostics
 				if result.Progress.OK {
 					applier.RecordImportedBatch(result.Progress, elapsed)
