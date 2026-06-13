@@ -117,8 +117,12 @@ type ImportBatchStagePlan struct {
 	Execution  []ImportStageTask
 	Commitment []ImportStageTask
 	Finish     []ImportStageTask
-	PostBody   []ImportStageTask
-	Tasks      []ImportStageTask
+	// PostBody is phase-ordered: all execution tasks, then commitment tasks,
+	// then finish tasks. This is the batch-level stage planner order even
+	// though current canonical insertion still emits observations per block.
+	PostBody []ImportStageTask
+	// Tasks is phase-ordered: bodies first, then PostBody.
+	Tasks []ImportStageTask
 }
 
 // NewImportBatchStagePlan returns the phase-indexed stage schedule for a batch
@@ -138,15 +142,34 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 		plan.Execution = append(plan.Execution, schedule.Execution)
 		plan.Commitment = append(plan.Commitment, schedule.Commitment)
 		plan.Finish = append(plan.Finish, schedule.Finish)
-		plan.PostBody = append(plan.PostBody, schedule.PostBody...)
-		plan.Tasks = append(plan.Tasks, schedule.Tasks...)
 	}
+	plan.PostBody = append(plan.PostBody, plan.Execution...)
+	plan.PostBody = append(plan.PostBody, plan.Commitment...)
+	plan.PostBody = append(plan.PostBody, plan.Finish...)
+	plan.Tasks = append(plan.Tasks, plan.Bodies...)
+	plan.Tasks = append(plan.Tasks, plan.PostBody...)
 	return plan
 }
 
 // Empty reports whether the batch has any scheduled canonical import tasks.
 func (p ImportBatchStagePlan) Empty() bool {
 	return len(p.Tasks) == 0
+}
+
+// TasksForPhase returns the batch-level stage tasks for phase in planner order.
+func (p ImportBatchStagePlan) TasksForPhase(phase ImportStagePhase) []ImportStageTask {
+	switch phase {
+	case ImportStagePhaseBodies:
+		return append([]ImportStageTask(nil), p.Bodies...)
+	case ImportStagePhaseExecution:
+		return append([]ImportStageTask(nil), p.Execution...)
+	case ImportStagePhaseCommitment:
+		return append([]ImportStageTask(nil), p.Commitment...)
+	case ImportStagePhaseFinish:
+		return append([]ImportStageTask(nil), p.Finish...)
+	default:
+		return nil
+	}
 }
 
 // MatchCanonicalObservation reports whether a canonical stage hook observation
