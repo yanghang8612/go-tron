@@ -592,6 +592,18 @@ func TestNewImportBatchStagePlan(t *testing.T) {
 		t.Fatalf("phase groups = bodies:%+v execution:%+v commitment:%+v finish:%+v, want grouped block1/block2 tasks",
 			got.Bodies, got.Execution, got.Commitment, got.Finish)
 	}
+	wantPhases := []ImportStagePhasePlan{
+		{Phase: ImportStagePhaseBodies, CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, Tasks: wantBodies},
+		{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, Tasks: wantExecution},
+		{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, Tasks: wantCommitment},
+		{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, Tasks: wantFinish},
+	}
+	if !reflect.DeepEqual(got.Phases, wantPhases) {
+		t.Fatalf("phase plans = %+v, want %+v", got.Phases, wantPhases)
+	}
+	if !reflect.DeepEqual(got.PhasePlans(), wantPhases) {
+		t.Fatalf("PhasePlans = %+v, want %+v", got.PhasePlans(), wantPhases)
+	}
 	wantPostBody := append([]ImportStageTask{}, wantExecution...)
 	wantPostBody = append(wantPostBody, wantCommitment...)
 	wantPostBody = append(wantPostBody, wantFinish...)
@@ -612,12 +624,24 @@ func TestNewImportBatchStagePlan(t *testing.T) {
 		{ImportStagePhaseCommitment, wantCommitment},
 		{ImportStagePhaseFinish, wantFinish},
 	} {
+		phasePlan, ok := got.PhasePlan(tt.phase)
+		if !ok || !reflect.DeepEqual(phasePlan.Tasks, tt.want) {
+			t.Fatalf("PhasePlan(%s) = %+v ok=%v, want tasks %+v", tt.phase, phasePlan, ok, tt.want)
+		}
 		if phaseTasks := got.TasksForPhase(tt.phase); !reflect.DeepEqual(phaseTasks, tt.want) {
 			t.Fatalf("TasksForPhase(%s) = %+v, want %+v", tt.phase, phaseTasks, tt.want)
 		}
 	}
+	phaseCopy := got.PhasePlans()
+	phaseCopy[0].Tasks[0].BlockNum = 99
+	if got.Phases[0].Tasks[0].BlockNum == 99 {
+		t.Fatal("PhasePlans returned aliased task slice")
+	}
 	if phaseTasks := got.TasksForPhase(ImportStagePhase("unknown")); phaseTasks != nil {
 		t.Fatalf("unknown phase tasks = %+v, want nil", phaseTasks)
+	}
+	if phasePlan, ok := got.PhasePlan(ImportStagePhase("unknown")); ok || len(phasePlan.Tasks) != 0 {
+		t.Fatalf("unknown phase plan = %+v ok=%v, want empty/false", phasePlan, ok)
 	}
 	task, ok := got.MatchCanonicalObservation(rawdb.StageCommitment, 2, hash2)
 	if !ok || task != ImportCommitmentStageTask(2, hash2) {

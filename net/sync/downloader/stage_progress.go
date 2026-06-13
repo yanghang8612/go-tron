@@ -94,6 +94,16 @@ type ImportStageTask struct {
 	BlockHash      tcommon.Hash
 }
 
+// ImportStagePhasePlan is the batch-level unit the downloader stage planner
+// owns: one phase, its canonical/sync stage pair, and every block boundary that
+// phase must complete.
+type ImportStagePhasePlan struct {
+	Phase          ImportStagePhase
+	CanonicalStage rawdb.StageID
+	SyncStage      rawdb.StageID
+	Tasks          []ImportStageTask
+}
+
 // ImportStageSchedule is the explicit stage schedule for one sync import
 // boundary. The canonical insert hook only supplies observations; this
 // schedule owns the required bodies/execution/commitment/finish targets.
@@ -113,6 +123,7 @@ type ImportStageSchedule struct {
 // observations against these targets.
 type ImportBatchStagePlan struct {
 	Schedules  []ImportStageSchedule
+	Phases     []ImportStagePhasePlan
 	Bodies     []ImportStageTask
 	Execution  []ImportStageTask
 	Commitment []ImportStageTask
@@ -143,11 +154,13 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 		plan.Commitment = append(plan.Commitment, schedule.Commitment)
 		plan.Finish = append(plan.Finish, schedule.Finish)
 	}
-	plan.PostBody = append(plan.PostBody, plan.Execution...)
-	plan.PostBody = append(plan.PostBody, plan.Commitment...)
-	plan.PostBody = append(plan.PostBody, plan.Finish...)
-	plan.Tasks = append(plan.Tasks, plan.Bodies...)
-	plan.Tasks = append(plan.Tasks, plan.PostBody...)
+	plan.Phases = newImportStagePhasePlans(plan)
+	for _, phase := range plan.Phases {
+		if phase.Phase != ImportStagePhaseBodies {
+			plan.PostBody = append(plan.PostBody, phase.Tasks...)
+		}
+		plan.Tasks = append(plan.Tasks, phase.Tasks...)
+	}
 	return plan
 }
 
@@ -156,20 +169,90 @@ func (p ImportBatchStagePlan) Empty() bool {
 	return len(p.Tasks) == 0
 }
 
-// TasksForPhase returns the batch-level stage tasks for phase in planner order.
-func (p ImportBatchStagePlan) TasksForPhase(phase ImportStagePhase) []ImportStageTask {
-	switch phase {
-	case ImportStagePhaseBodies:
-		return append([]ImportStageTask(nil), p.Bodies...)
-	case ImportStagePhaseExecution:
-		return append([]ImportStageTask(nil), p.Execution...)
-	case ImportStagePhaseCommitment:
-		return append([]ImportStageTask(nil), p.Commitment...)
-	case ImportStagePhaseFinish:
-		return append([]ImportStageTask(nil), p.Finish...)
-	default:
+// PhasePlans returns a defensive copy of the batch-level stage phase plan.
+func (p ImportBatchStagePlan) PhasePlans() []ImportStagePhasePlan {
+	if len(p.Phases) == 0 {
 		return nil
 	}
+	out := make([]ImportStagePhasePlan, 0, len(p.Phases))
+	for _, phase := range p.Phases {
+		out = append(out, cloneImportStagePhasePlan(phase))
+	}
+	return out
+}
+
+// PhasePlan returns the explicit batch-level plan for phase.
+func (p ImportBatchStagePlan) PhasePlan(phase ImportStagePhase) (ImportStagePhasePlan, bool) {
+	for _, phasePlan := range p.Phases {
+		if phasePlan.Phase == phase {
+			return cloneImportStagePhasePlan(phasePlan), true
+		}
+	}
+	var (
+		tasks     []ImportStageTask
+		canonical rawdb.StageID
+		syncStage rawdb.StageID
+	)
+	switch phase {
+	case ImportStagePhaseBodies:
+		tasks, canonical, syncStage = p.Bodies, rawdb.StageBodies, rawdb.StageSyncImport
+	case ImportStagePhaseExecution:
+		tasks, canonical, syncStage = p.Execution, rawdb.StageExecution, rawdb.StageSyncExecution
+	case ImportStagePhaseCommitment:
+		tasks, canonical, syncStage = p.Commitment, rawdb.StageCommitment, rawdb.StageSyncCommitment
+	case ImportStagePhaseFinish:
+		tasks, canonical, syncStage = p.Finish, rawdb.StageFinish, rawdb.StageSyncFinish
+	default:
+		return ImportStagePhasePlan{}, false
+	}
+	return newImportStagePhasePlan(phase, canonical, syncStage, tasks)
+}
+
+// TasksForPhase returns the batch-level stage tasks for phase in planner order.
+func (p ImportBatchStagePlan) TasksForPhase(phase ImportStagePhase) []ImportStageTask {
+	phasePlan, ok := p.PhasePlan(phase)
+	if !ok {
+		return nil
+	}
+	return phasePlan.Tasks
+}
+
+func newImportStagePhasePlans(plan ImportBatchStagePlan) []ImportStagePhasePlan {
+	phases := make([]ImportStagePhasePlan, 0, 4)
+	for _, spec := range []struct {
+		phase     ImportStagePhase
+		canonical rawdb.StageID
+		sync      rawdb.StageID
+		tasks     []ImportStageTask
+	}{
+		{ImportStagePhaseBodies, rawdb.StageBodies, rawdb.StageSyncImport, plan.Bodies},
+		{ImportStagePhaseExecution, rawdb.StageExecution, rawdb.StageSyncExecution, plan.Execution},
+		{ImportStagePhaseCommitment, rawdb.StageCommitment, rawdb.StageSyncCommitment, plan.Commitment},
+		{ImportStagePhaseFinish, rawdb.StageFinish, rawdb.StageSyncFinish, plan.Finish},
+	} {
+		phasePlan, ok := newImportStagePhasePlan(spec.phase, spec.canonical, spec.sync, spec.tasks)
+		if ok {
+			phases = append(phases, phasePlan)
+		}
+	}
+	return phases
+}
+
+func newImportStagePhasePlan(phase ImportStagePhase, canonical rawdb.StageID, syncStage rawdb.StageID, tasks []ImportStageTask) (ImportStagePhasePlan, bool) {
+	if len(tasks) == 0 {
+		return ImportStagePhasePlan{}, false
+	}
+	return ImportStagePhasePlan{
+		Phase:          phase,
+		CanonicalStage: canonical,
+		SyncStage:      syncStage,
+		Tasks:          append([]ImportStageTask(nil), tasks...),
+	}, true
+}
+
+func cloneImportStagePhasePlan(plan ImportStagePhasePlan) ImportStagePhasePlan {
+	plan.Tasks = append([]ImportStageTask(nil), plan.Tasks...)
+	return plan
 }
 
 // MatchCanonicalObservation reports whether a canonical stage hook observation

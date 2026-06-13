@@ -324,6 +324,9 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 		t.Fatalf("stage plan phases = schedules:%d bodies:%d execution:%d commitment:%d finish:%d, want two per phase",
 			len(got.StagePlan.Schedules), len(got.StagePlan.Bodies), len(got.StagePlan.Execution), len(got.StagePlan.Commitment), len(got.StagePlan.Finish))
 	}
+	if phases := got.StagePlan.PhasePlans(); len(phases) != 4 || phases[0].Phase != ImportStagePhaseBodies || phases[1].Phase != ImportStagePhaseExecution || phases[2].Phase != ImportStagePhaseCommitment || phases[3].Phase != ImportStagePhaseFinish {
+		t.Fatalf("stage phase plans = %+v, want bodies/execution/commitment/finish", phases)
+	}
 	if len(got.StagePlan.PostBody) != 6 || len(got.StagePlan.Tasks) != 8 {
 		t.Fatalf("stage plan task counts = postBody:%d tasks:%d, want 6/8", len(got.StagePlan.PostBody), len(got.StagePlan.Tasks))
 	}
