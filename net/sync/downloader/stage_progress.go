@@ -85,6 +85,31 @@ type ImportStageProgressDecision struct {
 	Row    rawdb.StageProgress
 }
 
+// ImportedBatchProgressStepAction names one ordered side effect of committing an
+// imported staged-body prefix.
+type ImportedBatchProgressStepAction uint8
+
+const (
+	ImportedBatchWriteProgress ImportedBatchProgressStepAction = iota
+	ImportedBatchRefreshBodiesReady
+)
+
+// ImportedBatchProgressStep is one downloader-owned persistence/runtime step
+// after a local staged-body prefix was imported.
+type ImportedBatchProgressStep struct {
+	Action   ImportedBatchProgressStepAction
+	Deletes  []rawdb.SyncStagedBlockDelete
+	Progress []rawdb.StageProgress
+}
+
+// ImportedBatchProgressPlanApplier performs the persistence/runtime operations
+// named by an imported-batch progress plan. SyncService owns DB handles and
+// logging; downloader owns the ordered stage side effects.
+type ImportedBatchProgressPlanApplier interface {
+	WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress)
+	RefreshSyncBodiesReady()
+}
+
 // ImportedBatchProgressPlan is the downloader-owned storage plan for the
 // successfully imported prefix of one local staged-body batch.
 type ImportedBatchProgressPlan struct {
@@ -96,6 +121,7 @@ type ImportedBatchProgressPlan struct {
 	Progress          []rawdb.StageProgress
 	Decisions         []ImportStageProgressDecision
 	RefreshReady      bool
+	Steps             []ImportedBatchProgressStep
 	StatsBlocks       int
 	StatsTransactions int
 	ReportHead        uint64
@@ -178,12 +204,41 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 		ReportPeer:        summary.Last.Peer,
 	}
 	if !summary.HasStage {
-		return plan
+		return plan.withSteps()
 	}
 	plan.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
 	plan.Stages = plan.Schedule.Tasks
 	plan.Progress, plan.Decisions = collector.Plan(plan.Schedule)
-	return plan
+	return plan.withSteps()
+}
+
+func (p ImportedBatchProgressPlan) withSteps() ImportedBatchProgressPlan {
+	if !p.OK {
+		return p
+	}
+	p.Steps = []ImportedBatchProgressStep{
+		{Action: ImportedBatchWriteProgress, Deletes: p.Deletes, Progress: p.Progress},
+	}
+	if p.RefreshReady {
+		p.Steps = append(p.Steps, ImportedBatchProgressStep{Action: ImportedBatchRefreshBodiesReady})
+	}
+	return p
+}
+
+// ApplyImportedBatchProgressPlan executes the downloader-owned side-effect
+// schedule for an imported staged-body prefix.
+func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier ImportedBatchProgressPlanApplier) {
+	if !plan.OK || applier == nil {
+		return
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case ImportedBatchWriteProgress:
+			applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
+		case ImportedBatchRefreshBodiesReady:
+			applier.RefreshSyncBodiesReady()
+		}
+	}
 }
 
 // NewImportStageSchedule returns the bodies/execution/commitment/finish targets

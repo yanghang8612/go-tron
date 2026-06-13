@@ -160,6 +160,13 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	if !reflect.DeepEqual(got.Progress, wantRows) {
 		t.Fatalf("progress = %+v, want %+v", got.Progress, wantRows)
 	}
+	wantSteps := []ImportedBatchProgressStep{
+		{Action: ImportedBatchWriteProgress, Deletes: got.Deletes, Progress: wantRows},
+		{Action: ImportedBatchRefreshBodiesReady},
+	}
+	if !reflect.DeepEqual(got.Steps, wantSteps) {
+		t.Fatalf("steps = %+v, want %+v", got.Steps, wantSteps)
+	}
 	if len(got.Decisions) != len(wantRows) {
 		t.Fatalf("decisions = %+v, want one per sync stage", got.Decisions)
 	}
@@ -168,6 +175,62 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 			t.Fatalf("decision = %+v, want planned", decision)
 		}
 	}
+}
+
+func TestApplyImportedBatchProgressPlan(t *testing.T) {
+	deleteRow := rawdb.SyncStagedBlockDelete{Number: 2, Hash: tcommon.Hash{0x02}}
+	progressRow := rawdb.StageProgress{
+		Stage:        rawdb.StageSyncExecution,
+		BlockNum:     2,
+		BlockHash:    deleteRow.Hash,
+		HasBlockHash: true,
+	}
+	plan := ImportedBatchProgressPlan{
+		OK: true,
+		Steps: []ImportedBatchProgressStep{
+			{Action: ImportedBatchWriteProgress, Deletes: []rawdb.SyncStagedBlockDelete{deleteRow}, Progress: []rawdb.StageProgress{progressRow}},
+			{Action: ImportedBatchProgressStepAction(255)},
+			{Action: ImportedBatchRefreshBodiesReady},
+		},
+	}
+	var applier recordingImportedBatchProgressApplier
+
+	ApplyImportedBatchProgressPlan(plan, &applier)
+	want := []recordedImportedBatchProgressCall{
+		{action: ImportedBatchWriteProgress, deletes: []rawdb.SyncStagedBlockDelete{deleteRow}, progress: []rawdb.StageProgress{progressRow}},
+		{action: ImportedBatchRefreshBodiesReady},
+	}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, want)
+	}
+
+	ApplyImportedBatchProgressPlan(plan, nil)
+	ApplyImportedBatchProgressPlan(ImportedBatchProgressPlan{}, &applier)
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("calls after no-op plans = %+v, want unchanged %+v", applier.calls, want)
+	}
+}
+
+type recordedImportedBatchProgressCall struct {
+	action   ImportedBatchProgressStepAction
+	deletes  []rawdb.SyncStagedBlockDelete
+	progress []rawdb.StageProgress
+}
+
+type recordingImportedBatchProgressApplier struct {
+	calls []recordedImportedBatchProgressCall
+}
+
+func (a *recordingImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
+	a.calls = append(a.calls, recordedImportedBatchProgressCall{
+		action:   ImportedBatchWriteProgress,
+		deletes:  append([]rawdb.SyncStagedBlockDelete(nil), deletes...),
+		progress: append([]rawdb.StageProgress(nil), rows...),
+	})
+}
+
+func (a *recordingImportedBatchProgressApplier) RefreshSyncBodiesReady() {
+	a.calls = append(a.calls, recordedImportedBatchProgressCall{action: ImportedBatchRefreshBodiesReady})
 }
 
 func TestPlanImportedBatchProgressStopsAtStageMismatch(t *testing.T) {

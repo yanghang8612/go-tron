@@ -1270,10 +1270,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	if !plan.OK {
 		return
 	}
-	ss.writeImportedSyncProgress(plan.Deletes, plan.Progress)
-	if plan.RefreshReady {
-		ss.writeSyncBodiesReadyProgress()
-	}
+	syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: ss})
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -1299,6 +1296,18 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	if emit {
 		ss.reportSegment(snap, diag, plan.ReportHead, remain, plan.ReportPeer)
 	}
+}
+
+type syncImportedBatchProgressApplier struct {
+	service *SyncService
+}
+
+func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
+	a.service.writeImportedSyncProgress(deletes, rows)
+}
+
+func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() {
+	a.service.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash, hasHash bool) {
