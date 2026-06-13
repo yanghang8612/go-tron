@@ -88,6 +88,27 @@ whole snapshot directory size for backward comparisons.
 first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP
 endpoint error.
 
+To include staged-sync progress without making the sampler open a live Pebble
+datadir, pass a captured `gtron db stage-status` output file:
+
+```bash
+scripts/dev/nile_sync_sample.sh \
+  --datadir /Users/asuka/gtron-soak/datadir \
+  --http http://127.0.0.1:8090 \
+  --stage-status-file /Users/asuka/gtron-soak/logs/stage-status.txt \
+  --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
+```
+
+Rows then include the parsed stage map plus flat sync-stage fields:
+`stageSyncInventory`, `stageSyncBodies`, `stageSyncBodiesReady`,
+`stageSyncImport`, `stageSyncExecution`, `stageSyncCommitment`,
+`stageSyncFinish`, `stageCanonicalFinish`, `stageChainFreezer`, and
+`stageSnapshotEventLogBuild`. The sampler also derives
+`stageSyncBodiesReadyGapBlocks`, `stageSyncImportExecutionLagBlocks`,
+`stageSyncExecutionCommitmentLagBlocks`,
+`stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks` so
+long-running samples show where the staged pipeline is accumulating backlog.
+
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
 alert fields in the row. Do not enable that flag against a live Pebble datadir

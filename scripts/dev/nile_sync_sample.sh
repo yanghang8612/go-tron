@@ -17,6 +17,7 @@ NETWORK="nile"
 MODE="unknown"
 LABEL="nile-sync"
 START_UNIX=0
+STAGE_STATUS_FILE=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 
@@ -33,6 +34,7 @@ Options:
   --mode MODE                Prune/storage mode label when known
   --label LABEL              Free-form sample label (default: nile-sync)
   --start-unix SECONDS       Sync start unix timestamp; emits elapsed/blocksPerSecond
+  --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --strict-offline-db-check  Fail when offline db check reports critical issues
   -h, --help                 Show this help
@@ -63,6 +65,7 @@ while [ "$#" -gt 0 ]; do
     --mode) MODE="${2:?}"; shift 2 ;;
     --label) LABEL="${2:?}"; shift 2 ;;
     --start-unix) START_UNIX="${2:?}"; shift 2 ;;
+    --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -76,6 +79,9 @@ case "$START_UNIX" in
 esac
 if [ -n "$OUTPUT" ]; then
   mkdir -p "$(dirname "$OUTPUT")"
+fi
+if [ -n "$STAGE_STATUS_FILE" ] && [ ! -r "$STAGE_STATUS_FILE" ]; then
+  die "--stage-status-file is not readable: $STAGE_STATUS_FILE"
 fi
 
 size_bytes() {
@@ -167,6 +173,7 @@ snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
+  "$STAGE_STATUS_FILE" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
@@ -188,6 +195,7 @@ from pathlib import Path
     nodeinfo_path,
     nodes_path,
     storage_alerts_path,
+    stage_status_path,
     nowblock_status,
     nodeinfo_status,
     nodes_status,
@@ -248,6 +256,106 @@ def parse_alerts(text):
             row[key] = value
     return row
 
+def parse_stage_status(path):
+    row = {
+        "stageStatusFile": path,
+        "stageStatusFileStatus": "skipped" if not path else "missing",
+        "stageKnown": -1,
+        "stageRows": -1,
+        "stageProgress": {},
+        "stageMismatchRows": 0,
+        "stageUnboundRows": 0,
+        "stageMissingCanonicalRows": 0,
+        "stageSyncInventory": -1,
+        "stageSyncBodies": -1,
+        "stageSyncBodiesReady": -1,
+        "stageSyncImport": -1,
+        "stageSyncExecution": -1,
+        "stageSyncCommitment": -1,
+        "stageSyncFinish": -1,
+        "stageCanonicalFinish": -1,
+        "stageChainFreezer": -1,
+        "stageSnapshotEventLogBuild": -1,
+        "stageSyncBodiesReadyGapBlocks": -1,
+        "stageSyncImportExecutionLagBlocks": -1,
+        "stageSyncExecutionCommitmentLagBlocks": -1,
+        "stageSyncCommitmentFinishLagBlocks": -1,
+    }
+    if not path:
+        return row
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return row
+    row["stageStatusFileStatus"] = "ok"
+    for line in text.splitlines():
+        if line.startswith("Stage status:"):
+            known = re.findall(r"known=([0-9]+)", line)
+            rows = re.findall(r"rows=([0-9]+)", line)
+            if known:
+                row["stageKnown"] = int(known[-1])
+            if rows:
+                row["stageRows"] = int(rows[-1])
+            continue
+        if not line.startswith("Stage progress:"):
+            continue
+        fields = {}
+        for token in line.split()[2:]:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            fields[key] = value
+        name = fields.get("name")
+        if not name:
+            continue
+        present = fields.get("status") != "missing"
+        value = -1
+        if present:
+            try:
+                value = int(fields.get("value", "-1"))
+            except Exception:
+                value = -1
+        verified = fields.get("verified", "")
+        entry = {
+            "group": fields.get("group", ""),
+            "present": present,
+            "value": value,
+            "hash": fields.get("hash", ""),
+            "verified": verified,
+            "canonicalHash": fields.get("canonicalHash", ""),
+        }
+        if not present:
+            entry["status"] = fields.get("status", "missing")
+        row["stageProgress"][name] = entry
+        if verified == "mismatch":
+            row["stageMismatchRows"] += 1
+        elif verified == "unbound":
+            row["stageUnboundRows"] += 1
+        elif verified == "missing-canonical":
+            row["stageMissingCanonicalRows"] += 1
+
+    stage_fields = {
+        "SyncInventory": "stageSyncInventory",
+        "SyncBodies": "stageSyncBodies",
+        "SyncBodiesReady": "stageSyncBodiesReady",
+        "SyncImport": "stageSyncImport",
+        "SyncExecution": "stageSyncExecution",
+        "SyncCommitment": "stageSyncCommitment",
+        "SyncFinish": "stageSyncFinish",
+        "Finish": "stageCanonicalFinish",
+        "ChainFreezer": "stageChainFreezer",
+        "SnapshotEventLogBuild": "stageSnapshotEventLogBuild",
+    }
+    for stage, field in stage_fields.items():
+        entry = row["stageProgress"].get(stage)
+        if entry and entry.get("present"):
+            row[field] = int(entry.get("value", -1))
+    row["stageSyncBodiesReadyGapBlocks"] = lag(row["stageSyncBodies"], row["stageSyncBodiesReady"])
+    row["stageSyncImportExecutionLagBlocks"] = lag(row["stageSyncImport"], row["stageSyncExecution"])
+    row["stageSyncExecutionCommitmentLagBlocks"] = lag(row["stageSyncExecution"], row["stageSyncCommitment"])
+    row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
+    return row
+
 def load_previous_sample(output_path):
     if not output_path:
         return {}
@@ -272,6 +380,16 @@ def number(row, key, default=0):
         return int(value)
     except Exception:
         return default
+
+def lag(high, low):
+    try:
+        high = int(high)
+        low = int(low)
+    except Exception:
+        return -1
+    if high < 0 or low < 0 or high < low:
+        return -1
+    return high - low
 
 def allocated_bytes(path):
     try:
@@ -325,6 +443,7 @@ blocks_per_second = float(height) / elapsed if elapsed > 0 and height > 0 else 0
 blocks_per_minute = blocks_per_second * 60.0
 alerts_text = Path(storage_alerts_path).read_text(encoding="utf-8", errors="replace")
 alerts = parse_alerts(alerts_text)
+stages = parse_stage_status(stage_status_path)
 height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
 total = int(total_bytes)
 chaindata = int(chaindata_bytes)
@@ -356,6 +475,7 @@ datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if inte
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -417,6 +537,7 @@ row = {
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
+    "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),
@@ -428,6 +549,7 @@ row = {
     "datadir": datadir,
 }
 row.update(alerts)
+row.update(stages)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 

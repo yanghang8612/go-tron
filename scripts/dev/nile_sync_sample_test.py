@@ -55,6 +55,25 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "state-snapshots" / "chain" / "chain-index-1-2.idx").write_bytes(b"i" * 1024)
             (datadir / "gtron" / "state-snapshots" / "log" / "event-log-index-1-2.idx").write_bytes(b"e" * 1024)
             (datadir / "gtron" / "state-snapshots" / "trace" / "balance-trace-1-2.seg").write_bytes(b"t" * 1024)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=9",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=96 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=90 hash=dd verified=canonical",
+                        "Stage progress: group=sync name=SyncCommitment value=89 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=80 hash=ff verified=canonical",
+                        "Stage progress: group=canonical name=Finish value=82 hash=11 verified=canonical",
+                        "Stage progress: group=freezer name=ChainFreezer value=70 hash=none verified=unbound",
+                        "Stage progress: group=snapshot name=SnapshotEventLogBuild status=missing",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -75,6 +94,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     "full",
                     "--start-unix",
                     start_unix,
+                    "--stage-status-file",
+                    str(stage_status),
                     "--output",
                     str(output),
                 ],
@@ -108,6 +129,26 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalSeconds"], -1)
             self.assertEqual(row["intervalBlocks"], 0)
             self.assertEqual(row["datadirBytesDelta"], 0)
+            self.assertEqual(row["stageStatusFileStatus"], "ok")
+            self.assertEqual(row["stageKnown"], 32)
+            self.assertEqual(row["stageRows"], 9)
+            self.assertEqual(row["stageSyncBodies"], 100)
+            self.assertEqual(row["stageSyncBodiesReady"], 96)
+            self.assertEqual(row["stageSyncImport"], 95)
+            self.assertEqual(row["stageSyncExecution"], 90)
+            self.assertEqual(row["stageSyncCommitment"], 89)
+            self.assertEqual(row["stageSyncFinish"], 80)
+            self.assertEqual(row["stageCanonicalFinish"], 82)
+            self.assertEqual(row["stageChainFreezer"], 70)
+            self.assertEqual(row["stageSnapshotEventLogBuild"], -1)
+            self.assertEqual(row["stageSyncBodiesReadyGapBlocks"], 4)
+            self.assertEqual(row["stageSyncImportExecutionLagBlocks"], 5)
+            self.assertEqual(row["stageSyncExecutionCommitmentLagBlocks"], 1)
+            self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
+            self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 20)
+            self.assertEqual(row["stageUnboundRows"], 1)
+            self.assertEqual(row["stageProgress"]["SyncFinish"]["value"], 80)
+            self.assertFalse(row["stageProgress"]["SnapshotEventLogBuild"]["present"])
             self.assertEqual(output.read_text(encoding="utf-8").strip(), proc.stdout.strip())
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
