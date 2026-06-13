@@ -112,6 +112,26 @@ type FetchReceiptDispatchInput struct {
 // be sent after the local drain has had a chance to settle the session.
 type FetchReceiptDispatchPlan struct {
 	SendOutboundRequests bool
+	Steps                []FetchReceiptDispatchStep
+}
+
+// FetchReceiptDispatchStepAction names one post-drain dispatch operation after
+// a fetch receipt has settled.
+type FetchReceiptDispatchStepAction uint8
+
+const (
+	FetchReceiptDispatchSendOutbound FetchReceiptDispatchStepAction = iota
+)
+
+// FetchReceiptDispatchStep is one downloader-owned post-drain dispatch step.
+type FetchReceiptDispatchStep struct {
+	Action FetchReceiptDispatchStepAction
+}
+
+// FetchReceiptDispatchPlanApplier performs post-drain dispatch operations
+// named by a fetch receipt dispatch plan.
+type FetchReceiptDispatchPlanApplier interface {
+	SendOutboundRequests()
 }
 
 // FetchedBlockBufferAction names the local buffer/stage decision for one
@@ -287,6 +307,30 @@ func applyFetchReceiptSettlementSteps(steps []FetchReceiptSettlementStep, applie
 func PlanFetchReceiptDispatch(in FetchReceiptDispatchInput) FetchReceiptDispatchPlan {
 	return FetchReceiptDispatchPlan{
 		SendOutboundRequests: in.OutboundRequests > 0 && in.Syncing && !in.Paused,
+	}.withSteps()
+}
+
+func (p FetchReceiptDispatchPlan) withSteps() FetchReceiptDispatchPlan {
+	if p.SendOutboundRequests {
+		p.Steps = []FetchReceiptDispatchStep{{Action: FetchReceiptDispatchSendOutbound}}
+	}
+	return p
+}
+
+// ApplyFetchReceiptDispatchPlan executes downloader-owned post-drain dispatch
+// operations after a fetch receipt.
+func ApplyFetchReceiptDispatchPlan(plan FetchReceiptDispatchPlan, applier FetchReceiptDispatchPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case FetchReceiptDispatchSendOutbound:
+			applier.SendOutboundRequests()
+		}
 	}
 }
 

@@ -251,7 +251,10 @@ func TestPlanFetchReceiptDispatch(t *testing.T) {
 	}{
 		"active outbound": {
 			input: FetchReceiptDispatchInput{OutboundRequests: 1, Syncing: true},
-			want:  FetchReceiptDispatchPlan{SendOutboundRequests: true},
+			want: FetchReceiptDispatchPlan{
+				SendOutboundRequests: true,
+				Steps:                []FetchReceiptDispatchStep{{Action: FetchReceiptDispatchSendOutbound}},
+			},
 		},
 		"no outbound": {
 			input: FetchReceiptDispatchInput{Syncing: true},
@@ -267,10 +270,28 @@ func TestPlanFetchReceiptDispatch(t *testing.T) {
 		},
 	}
 	for name, test := range tests {
-		if got := PlanFetchReceiptDispatch(test.input); got != test.want {
+		if got := PlanFetchReceiptDispatch(test.input); !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("%s dispatch = %+v, want %+v", name, got, test.want)
 		}
 	}
+}
+
+func TestApplyFetchReceiptDispatchPlan(t *testing.T) {
+	applier := new(recordingFetchReceiptDispatchApplier)
+	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{Steps: []FetchReceiptDispatchStep{
+		{Action: FetchReceiptDispatchSendOutbound},
+		{Action: FetchReceiptDispatchStepAction(255)},
+	}}, applier)
+	if applier.sent != 1 {
+		t.Fatalf("dispatch sends = %d, want 1", applier.sent)
+	}
+
+	applier.sent = 0
+	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, applier)
+	if applier.sent != 1 {
+		t.Fatalf("fallback dispatch sends = %d, want 1", applier.sent)
+	}
+	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, nil)
 }
 
 func TestPlanFetchedBlockBuffer(t *testing.T) {
@@ -397,6 +418,14 @@ func (a *recordingFetchReceiptSettlementApplier) MirrorLegacyLocked() {
 
 func (a *recordingFetchReceiptSettlementApplier) DrainBuffered() {
 	a.calls = append(a.calls, FetchReceiptDrainBuffered)
+}
+
+type recordingFetchReceiptDispatchApplier struct {
+	sent int
+}
+
+func (a *recordingFetchReceiptDispatchApplier) SendOutboundRequests() {
+	a.sent++
 }
 
 type recordingFetchedBlockBufferApplier struct {

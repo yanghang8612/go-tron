@@ -1041,9 +1041,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		Syncing:          ss.IsSyncing(),
 		Paused:           ss.IsPaused(),
 	})
-	if dispatch.SendOutboundRequests {
-		ss.sendOutboundRequests(settlementApplier.out)
-	}
+	syncdl.ApplyFetchReceiptDispatchPlan(dispatch, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
 	return true
 }
 
@@ -1378,6 +1376,15 @@ func (a *syncFetchReceiptSettlementApplier) MirrorLegacyLocked() {
 
 func (a *syncFetchReceiptSettlementApplier) DrainBuffered() {
 	a.service.drainBufferedBlocks()
+}
+
+type syncFetchReceiptDispatchApplier struct {
+	service *SyncService
+	out     []outboundSyncRequest
+}
+
+func (a syncFetchReceiptDispatchApplier) SendOutboundRequests() {
+	a.service.sendOutboundRequests(a.out)
 }
 
 type syncFetchedBlockBufferApplier struct {
