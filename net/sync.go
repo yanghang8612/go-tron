@@ -1165,32 +1165,14 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.mu.Unlock()
-		// Decode off-lock — see DecodeBufferedBatch. Keeps the heavy proto
-		// work off the central sync mutex so receiving peers aren't stalled.
-		decoded := syncdl.DecodeBufferedBatch(&batch)
-		ss.logDecodeBatchResult(decoded)
-		if decoded.Action != syncdl.BufferedBatchDecodeImport {
+		result := syncdl.ApplyImportBatchRunPlan(syncdl.NewImportBatchRunPlan(batch), syncImportBatchRunApplier{service: ss})
+		if result.ContinueDrain {
 			// Every popped block failed to decode (can't happen for validated
 			// wire bytes). The entries were already removed at pop, so loop to
 			// re-pop the next run or hit the gap.
 			continue
 		}
-		for _, wait := range batch.BufferWaits {
-			ss.stats.AddBufferWait(wait)
-		}
-
-		stageProgress := syncdl.NewStageProgressCollector()
-		insertStart := time.Now()
-		insertErr := ss.chain.InsertBlocksWithStageHook(batch.Blocks, stageProgress.Observe)
-		insertElapsed := time.Since(insertStart)
-		outcome := syncdl.PlanImportOutcome(batch, insertErr)
-		if outcome.RecordApplied {
-			ss.recordImportedBatch(batch, outcome.Applied, insertElapsed, stageProgress)
-		}
-		if outcome.Pause {
-			ss.pauseSync(outcome.PausePeer, outcome.PauseNum, insertErr)
-		}
-		if outcome.StopDrain {
+		if result.StopDrain {
 			break
 		}
 	}
@@ -1273,6 +1255,32 @@ func (ss *SyncService) logDecodeBatchResult(result syncdl.BufferedBatchDecodeRes
 		syncLog.Error("Dropping undecodable buffered sync block",
 			"number", result.Dropped.Num, "hash", result.Dropped.Hash, "err", result.Err)
 	}
+}
+
+type syncImportBatchRunApplier struct {
+	service *SyncService
+}
+
+func (a syncImportBatchRunApplier) LogDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
+	a.service.logDecodeBatchResult(result)
+}
+
+func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
+	a.service.stats.AddBufferWait(wait)
+}
+
+func (a syncImportBatchRunApplier) ExecuteImportBatch(blocks []*types.Block, observe syncdl.StageProgressWriter) (time.Duration, error) {
+	start := time.Now()
+	err := a.service.chain.InsertBlocksWithStageHook(blocks, core.StageProgressHook(observe))
+	return time.Since(start), err
+}
+
+func (a syncImportBatchRunApplier) RecordImportedBatch(batch syncdl.BufferedBatch, applied int, elapsed time.Duration, progress *syncdl.StageProgressCollector) {
+	a.service.recordImportedBatch(batch, applied, elapsed, progress)
+}
+
+func (a syncImportBatchRunApplier) PauseImport(peer *p2p.Peer, blockNum uint64, err error) {
+	a.service.pauseSync(peer, blockNum, err)
 }
 
 func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {

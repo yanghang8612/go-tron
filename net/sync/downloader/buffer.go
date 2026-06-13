@@ -140,6 +140,111 @@ type ImportOutcome struct {
 	StopDrain     bool
 }
 
+// ImportBatchRunStepAction names one ordered local operation for executing a
+// decoded staged-body chunk through the canonical chain importer.
+type ImportBatchRunStepAction uint8
+
+const (
+	ImportBatchRunDecode ImportBatchRunStepAction = iota
+	ImportBatchRunRecordBufferWaits
+	ImportBatchRunExecute
+	ImportBatchRunSettle
+)
+
+// ImportBatchRunStep is one downloader-owned local import operation. The
+// service supplies side effects; downloader owns the ordering.
+type ImportBatchRunStep struct {
+	Action ImportBatchRunStepAction
+}
+
+// ImportBatchRunPlan is the explicit local execution schedule for one popped
+// staged-body batch.
+type ImportBatchRunPlan struct {
+	Batch BufferedBatch
+	Steps []ImportBatchRunStep
+}
+
+// ImportBatchRunPlanApplier performs side effects for an import-batch run.
+// SyncService owns logging, stats, canonical execution, and pause handling.
+type ImportBatchRunPlanApplier interface {
+	LogDecodeBatchResult(BufferedBatchDecodeResult)
+	RecordBufferWait(time.Duration)
+	ExecuteImportBatch(blocks []*types.Block, observe StageProgressWriter) (time.Duration, error)
+	RecordImportedBatch(batch BufferedBatch, applied int, elapsed time.Duration, progress *StageProgressCollector)
+	PauseImport(peer *p2p.Peer, blockNum uint64, err error)
+}
+
+// ImportBatchRunResult reports the outcome of applying an import-batch run
+// plan. ContinueDrain means decode produced no importable prefix; StopDrain
+// means canonical import failed and the caller should leave the drain loop.
+type ImportBatchRunResult struct {
+	Decode        BufferedBatchDecodeResult
+	Outcome       ImportOutcome
+	ContinueDrain bool
+	StopDrain     bool
+}
+
+// NewImportBatchRunPlan returns the local staged-body execution schedule for
+// one popped batch: decode raw bodies, account wait time, execute canonical
+// stages with an explicit observer, then settle progress/pause decisions.
+func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
+	return ImportBatchRunPlan{
+		Batch: batch,
+		Steps: []ImportBatchRunStep{
+			{Action: ImportBatchRunDecode},
+			{Action: ImportBatchRunRecordBufferWaits},
+			{Action: ImportBatchRunExecute},
+			{Action: ImportBatchRunSettle},
+		},
+	}
+}
+
+// ApplyImportBatchRunPlan executes the downloader-owned local import schedule.
+func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlanApplier) ImportBatchRunResult {
+	if applier == nil {
+		return ImportBatchRunResult{}
+	}
+	var (
+		result    ImportBatchRunResult
+		collector *StageProgressCollector
+		insertErr error
+		elapsed   time.Duration
+		executed  bool
+	)
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case ImportBatchRunDecode:
+			result.Decode = DecodeBufferedBatch(&plan.Batch)
+			applier.LogDecodeBatchResult(result.Decode)
+			if result.Decode.Action != BufferedBatchDecodeImport {
+				result.ContinueDrain = true
+				return result
+			}
+		case ImportBatchRunRecordBufferWaits:
+			for _, wait := range plan.Batch.BufferWaits {
+				applier.RecordBufferWait(wait)
+			}
+		case ImportBatchRunExecute:
+			collector = NewStageProgressCollector()
+			elapsed, insertErr = applier.ExecuteImportBatch(plan.Batch.Blocks, collector.Observe)
+			executed = true
+		case ImportBatchRunSettle:
+			if !executed {
+				continue
+			}
+			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
+			if result.Outcome.RecordApplied {
+				applier.RecordImportedBatch(plan.Batch, result.Outcome.Applied, elapsed, collector)
+			}
+			if result.Outcome.Pause {
+				applier.PauseImport(result.Outcome.PausePeer, result.Outcome.PauseNum, insertErr)
+			}
+			result.StopDrain = result.Outcome.StopDrain
+		}
+	}
+	return result
+}
+
 // PlanImportOutcome maps a canonical insert result into service actions:
 // record the applied prefix, pause on failure, and decide whether the local
 // drain loop should stop.
