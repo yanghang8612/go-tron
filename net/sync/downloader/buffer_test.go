@@ -346,14 +346,16 @@ func TestPlanStagedBodyDrain(t *testing.T) {
 			},
 		},
 		{
-			name:  "invalid ready still uses max",
+			name:  "invalid ready refreshes before using max",
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitHashMismatch, Limit: 12},
 			want: StagedBodyDrainPlan{
 				RestoreLimit: 32,
 				CanDrain:     true,
+				RefreshReady: true,
 				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRefreshReady},
 					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 32},
 					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 32},
 				},
@@ -370,6 +372,27 @@ func TestPlanStagedBodyDrain(t *testing.T) {
 	for _, tt := range tests {
 		if got := PlanStagedBodyDrain(tt.next, tt.max, tt.ready); !reflect.DeepEqual(got, tt.want) {
 			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestShouldRefreshStagedBodyReadyBeforeDrain(t *testing.T) {
+	tests := []struct {
+		status StagedBodyReadyLimitStatus
+		want   bool
+	}{
+		{StagedBodyReadyLimitMissing, false},
+		{StagedBodyReadyLimitProgressReadError, true},
+		{StagedBodyReadyLimitUnbound, true},
+		{StagedBodyReadyLimitStale, true},
+		{StagedBodyReadyLimitReadError, true},
+		{StagedBodyReadyLimitStagedMissing, true},
+		{StagedBodyReadyLimitHashMismatch, true},
+		{StagedBodyReadyLimitValid, false},
+	}
+	for _, tt := range tests {
+		if got := ShouldRefreshStagedBodyReadyBeforeDrain(tt.status); got != tt.want {
+			t.Fatalf("ShouldRefreshStagedBodyReadyBeforeDrain(%v) = %v, want %v", tt.status, got, tt.want)
 		}
 	}
 }
