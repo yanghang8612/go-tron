@@ -37,6 +37,15 @@ func TestSessionProgressEstimatedRemainingFallsBackToQueues(t *testing.T) {
 	}
 }
 
+func TestPlanIdleDrainAfterRefill(t *testing.T) {
+	if got := PlanIdleDrainAfterRefill(true); got != (IdleDrainPlan{Finish: true}) {
+		t.Fatalf("complete idle plan = %+v, want finish", got)
+	}
+	if got := PlanIdleDrainAfterRefill(false); got != (IdleDrainPlan{CheckJoinPeers: true}) {
+		t.Fatalf("incomplete idle plan = %+v, want peer join check", got)
+	}
+}
+
 func TestSessionProgressShouldFinish(t *testing.T) {
 	done := SessionProgress{
 		Syncing:     true,

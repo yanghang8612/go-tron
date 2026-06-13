@@ -377,10 +377,12 @@ Status:
   applied-prefix import summary now derives tx counts plus the stage-progress
   boundary there as well. Insert range failure resolution also maps
   `InsertBlocksError` indexes back to buffered blocks in the downloader
-  package, and the same applied-prefix summary derives the staged body delete
-  descriptors used for imported-body cleanup, leaving `SyncService` to
-  orchestrate persistence, logging, pausing, and canonical insertion. The
-  hash-bound sync import/execution/commitment/finish rows for an
+  package; empty local-drain settlement after fetch-slot refill now uses a
+  downloader session plan to choose finish vs peer-join probing; and the same
+  applied-prefix summary derives the staged body delete descriptors used for
+  imported-body cleanup, leaving `SyncService` to orchestrate persistence,
+  logging, pausing, and canonical insertion. The hash-bound sync
+  import/execution/commitment/finish rows for an
   applied range are now emitted by the downloader collector and persisted
   through one `core/rawdb` stage-progress batch when the backing store supports
   batched writes.

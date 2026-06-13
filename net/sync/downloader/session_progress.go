@@ -22,6 +22,22 @@ type SessionProgress struct {
 	Peers          []PeerProgress
 }
 
+// IdleDrainPlan describes the session-level action after a local drain found no
+// buffered batch and fetch slots have been refilled.
+type IdleDrainPlan struct {
+	Finish         bool
+	CheckJoinPeers bool
+}
+
+// PlanIdleDrainAfterRefill decides how the sync loop should settle an empty
+// local drain after existing peers were given a chance to fetch more bodies.
+func PlanIdleDrainAfterRefill(complete bool) IdleDrainPlan {
+	if complete {
+		return IdleDrainPlan{Finish: true}
+	}
+	return IdleDrainPlan{CheckJoinPeers: true}
+}
+
 // EstimatedRemaining reports the advisory remaining block count for status and
 // import-summary logs.
 func (s SessionProgress) EstimatedRemaining() int64 {
