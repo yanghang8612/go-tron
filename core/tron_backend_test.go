@@ -860,6 +860,16 @@ func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.
 	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
 		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
 	}
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 2); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block2: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(bc.db, rawdb.NoopAncient{})
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 1); len(infos) != 0 {
+		t.Fatalf("hot block1 tx infos still present: %+v", infos)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 2); len(infos) != 0 {
+		t.Fatalf("hot block2 tx infos still present: %+v", infos)
+	}
 	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
 		t.Fatalf("remove unrelated event-log segment: %v", err)
 	}
@@ -1072,6 +1082,16 @@ func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	bc.ChainDB().SetEventLogReader(mgr)
 	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 1); err != nil {
 		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, 2); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block2: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(bc.db, rawdb.NoopAncient{})
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 1); len(infos) != 0 {
+		t.Fatalf("hot block1 tx infos still present: %+v", infos)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, 2); len(infos) != 0 {
+		t.Fatalf("hot block2 tx infos still present: %+v", infos)
 	}
 	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
 		t.Fatalf("remove unrelated event-log segment: %v", err)
