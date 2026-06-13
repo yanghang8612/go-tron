@@ -1411,18 +1411,24 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 	if db == nil {
 		return
 	}
-	result := rawdb.WriteSyncStagedBlockRawAndProgress(db, block, raw)
-	if result.StageError != nil {
-		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", result.StageError)
+	head := ss.chain.CurrentBlock()
+	if head == nil {
 		return
 	}
-	if result.ProgressReadError != nil {
-		syncLog.Warn("Read sync bodies stage progress failed", "err", result.ProgressReadError)
+	result := syncdl.AcceptStagedBody(db, block, raw, head.Number()+1, ss.targetHeadNum)
+	if result.Write.StageError != nil {
+		syncLog.Warn("Persist sync staged block failed", "number", block.Number(), "hash", block.Hash(), "err", result.Write.StageError)
+		return
 	}
-	if result.ProgressWriteError != nil {
-		syncLog.Warn("Persist sync stage progress failed", "stage", rawdb.StageSyncBodies, "block", result.Number, "err", result.ProgressWriteError)
+	if result.Write.ProgressReadError != nil {
+		syncLog.Warn("Read sync bodies stage progress failed", "err", result.Write.ProgressReadError)
 	}
-	ss.refreshSyncBodiesReadyProgressAfterStage(result.Number)
+	if result.Write.ProgressWriteError != nil {
+		syncLog.Warn("Persist sync stage progress failed", "stage", rawdb.StageSyncBodies, "block", result.Write.Number, "err", result.Write.ProgressWriteError)
+	}
+	if result.Ready.Refreshed {
+		ss.logSyncBodiesReadyRefresh(result.Ready.Refresh)
+	}
 }
 
 func (ss *SyncService) writeSyncBodiesReadyProgress() {
@@ -1439,24 +1445,6 @@ func (ss *SyncService) writeSyncBodiesReadyProgress() {
 	}
 	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum)
 	ss.logSyncBodiesReadyRefresh(refresh)
-}
-
-func (ss *SyncService) refreshSyncBodiesReadyProgressAfterStage(stagedNum uint64) {
-	if ss == nil || ss.chain == nil {
-		return
-	}
-	db := ss.chain.DB()
-	if db == nil {
-		return
-	}
-	head := ss.chain.CurrentBlock()
-	if head == nil {
-		return
-	}
-	result := syncdl.RefreshStagedBodyReadyProgressAfterStage(db, head.Number()+1, ss.targetHeadNum, stagedNum)
-	if result.Refreshed {
-		ss.logSyncBodiesReadyRefresh(result.Refresh)
-	}
 }
 
 func (ss *SyncService) logSyncBodiesReadyRefresh(refresh syncdl.StagedBodyReadyProgressRefresh) {

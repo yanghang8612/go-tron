@@ -4,6 +4,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 // StagedBodyReader returns one persisted sync-staged body row by block number.
@@ -37,6 +38,13 @@ type StagedBodyReadyAfterStageRefresh struct {
 	Refresh    StagedBodyReadyProgressRefresh
 	Refreshed  bool
 	Skipped    bool
+}
+
+// StagedBodyAcceptance records the downloader-owned storage and ready-frontier
+// effects of accepting one fetched sync body.
+type StagedBodyAcceptance struct {
+	Write rawdb.SyncStagedBlockWriteResult
+	Ready StagedBodyReadyAfterStageRefresh
 }
 
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
@@ -156,6 +164,19 @@ func RefreshStagedBodyReadyProgressAfterStage(db ethdb.KeyValueStore, start, tar
 	}
 	result.Refreshed = true
 	result.Refresh = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// AcceptStagedBody persists a fetched body and then refreshes SyncBodiesReady
+// when that body can start or extend the contiguous staged-body frontier.
+func AcceptStagedBody(db ethdb.KeyValueStore, block *types.Block, raw []byte, start, targetHead uint64) StagedBodyAcceptance {
+	result := StagedBodyAcceptance{
+		Write: rawdb.WriteSyncStagedBlockRawAndProgress(db, block, raw),
+	}
+	if result.Write.StageError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgressAfterStage(db, start, targetHead, result.Write.Number)
 	return result
 }
 

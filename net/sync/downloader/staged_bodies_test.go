@@ -274,6 +274,57 @@ func TestRefreshStagedBodyReadyProgressAfterStage(t *testing.T) {
 	}
 }
 
+func TestAcceptStagedBodyStagesBodyAndRefreshesReadyFrontier(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+
+	first := AcceptStagedBody(db, block3, nil, 2, 0)
+	if first.Write.StageError != nil || !first.Write.Staged || !first.Write.ProgressWritten {
+		t.Fatalf("first accept = %+v, want staged block3 and SyncBodies progress", first)
+	}
+	if !first.Ready.Skipped || first.Ready.Refreshed {
+		t.Fatalf("first ready refresh = %+v, want skipped gapped body", first.Ready)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("ready after block3 = %+v ok=%v err=%v, want absent", row, ok, err)
+	}
+
+	second := AcceptStagedBody(db, block2, nil, 2, 0)
+	if second.Write.StageError != nil || !second.Write.Staged || !second.Write.ProgressSkipped {
+		t.Fatalf("second accept = %+v, want staged block2 without regressing SyncBodies", second)
+	}
+	if !second.Ready.Refreshed || second.Ready.Skipped || second.Ready.Refresh.WriteError != nil {
+		t.Fatalf("second ready refresh = %+v, want refreshed", second.Ready)
+	}
+	if !second.Ready.Refresh.Frontier.Have || second.Ready.Refresh.Frontier.Number != block3.Number() || second.Ready.Refresh.Frontier.Hash != block3.Hash() {
+		t.Fatalf("ready frontier = %+v, want block3", second.Ready.Refresh.Frontier)
+	}
+	bodies, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies)
+	if err != nil || !ok || bodies.BlockNum != block3.Number() || bodies.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodies = %+v ok=%v err=%v, want block3", bodies, ok, err)
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block3.Number() || ready.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodiesReady = %+v ok=%v err=%v, want block3", ready, ok, err)
+	}
+	for _, block := range []*types.Block{block2, block3} {
+		if row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number()); err != nil || !ok || row.Hash != block.Hash() {
+			t.Fatalf("staged block %d = %+v ok=%v err=%v, want persisted", block.Number(), row, ok, err)
+		}
+	}
+}
+
+func TestAcceptStagedBodyStopsBeforeReadyRefreshOnStageError(t *testing.T) {
+	got := AcceptStagedBody(nil, testBufferedBlock(2), nil, 2, 0)
+	if got.Write.StageError == nil {
+		t.Fatalf("accept with nil db = %+v, want stage error", got)
+	}
+	if got.Ready.Refreshed || got.Ready.Skipped || got.Ready.ReadyLimit.Status != StagedBodyReadyLimitMissing {
+		t.Fatalf("ready refresh after stage error = %+v, want untouched zero result", got.Ready)
+	}
+}
+
 func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 	readErr := errors.New("read staged")
 	row := rawdb.StageProgress{
