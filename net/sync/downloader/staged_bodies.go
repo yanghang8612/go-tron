@@ -47,6 +47,14 @@ type StagedBodyAcceptance struct {
 	Ready StagedBodyReadyAfterStageRefresh
 }
 
+// StagedBodyTailPrune records a stale staged-body tail prune plus the
+// resulting ready-frontier refresh.
+type StagedBodyTailPrune struct {
+	Prune      rawdb.SyncStagedTailPruneResult
+	PruneError error
+	Ready      StagedBodyReadyProgressRefresh
+}
+
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
 // is usable as the next local import drain limit.
 type StagedBodyReadyLimitStatus uint8
@@ -177,6 +185,19 @@ func AcceptStagedBody(db ethdb.KeyValueStore, block *types.Block, raw []byte, st
 		return result
 	}
 	result.Ready = RefreshStagedBodyReadyProgressAfterStage(db, start, targetHead, result.Write.Number)
+	return result
+}
+
+// PruneStaleStagedBodyTail removes a stale downloader body tail, rewinds the
+// SyncBodies watermark if needed, and then recomputes SyncBodiesReady for the
+// caller's current canonical head/target.
+func PruneStaleStagedBodyTail(db ethdb.KeyValueStore, from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool, start uint64, targetHead uint64) StagedBodyTailPrune {
+	var result StagedBodyTailPrune
+	result.Prune, result.PruneError = rawdb.PruneSyncStagedBlocksFrom(db, from, lastRestoredNum, lastRestoredHash, haveLastRestored)
+	if result.PruneError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgress(db, start, targetHead)
 	return result
 }
 

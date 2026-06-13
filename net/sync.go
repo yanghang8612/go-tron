@@ -1481,18 +1481,22 @@ func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNu
 	if db == nil {
 		return
 	}
-	result, err := rawdb.PruneSyncStagedBlocksFrom(db, blockNum, lastRestoredNum, lastRestoredHash, haveLastRestored)
-	if err != nil {
-		syncLog.Warn("Prune stale sync staged blocks failed", "from", blockNum, "err", err)
+	head := ss.chain.CurrentBlock()
+	if head == nil {
 		return
 	}
-	ss.writeSyncBodiesReadyProgress()
-	if result.Deleted > 0 {
-		if result.RewoundProgress {
-			syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", result.Deleted, "rewoundTo", result.RewindBlock)
+	result := syncdl.PruneStaleStagedBodyTail(db, blockNum, lastRestoredNum, lastRestoredHash, haveLastRestored, head.Number()+1, ss.targetHeadNum)
+	if result.PruneError != nil {
+		syncLog.Warn("Prune stale sync staged blocks failed", "from", blockNum, "err", result.PruneError)
+		return
+	}
+	ss.logSyncBodiesReadyRefresh(result.Ready)
+	if result.Prune.Deleted > 0 {
+		if result.Prune.RewoundProgress {
+			syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", result.Prune.Deleted, "rewoundTo", result.Prune.RewindBlock)
 			return
 		}
-		syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", result.Deleted)
+		syncLog.Debug("Deleted stale sync staged block tail", "from", blockNum, "count", result.Prune.Deleted)
 	}
 }
 
