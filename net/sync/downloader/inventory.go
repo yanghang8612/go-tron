@@ -32,6 +32,37 @@ type ChainInventoryPlan struct {
 	StageTarget    uint64
 	HasStageTarget bool
 	Done           bool
+	Steps          []ChainInventoryStep
+}
+
+// ChainInventoryStepAction names one peer/session state mutation after a
+// CHAIN_INVENTORY response has been classified.
+type ChainInventoryStepAction uint8
+
+const (
+	ChainInventoryAppendAccepted ChainInventoryStepAction = iota
+	ChainInventoryUpdateProgress
+	ChainInventoryMarkDone
+)
+
+// ChainInventoryStep is one downloader-owned inventory response state update.
+type ChainInventoryStep struct {
+	Action         ChainInventoryStepAction
+	Accepted       []types.BlockID
+	RemainNum      int64
+	Target         InventoryTargetUpdate
+	HasTarget      bool
+	StageTarget    uint64
+	HasStageTarget bool
+}
+
+// ChainInventoryPlanApplier performs state mutations named by a chain
+// inventory plan. SyncService owns peer/session fields and DB stage writes;
+// downloader owns the update ordering.
+type ChainInventoryPlanApplier interface {
+	AppendAcceptedInventory(ids []types.BlockID)
+	UpdateInventoryProgress(remainNum int64, target InventoryTargetUpdate, hasTarget bool, stageTarget uint64, hasStageTarget bool)
+	MarkInventoryDone()
 }
 
 // PlanChainInventory filters one CHAIN_INVENTORY response, advances target
@@ -60,5 +91,44 @@ func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
 		}
 	}
 	plan.Done = ShouldMarkInventoryDone(len(in.Candidates), plan.QueuedAfter, in.RemainNum)
-	return plan
+	return plan.withSteps()
+}
+
+func (p ChainInventoryPlan) withSteps() ChainInventoryPlan {
+	p.Steps = []ChainInventoryStep{
+		{Action: ChainInventoryAppendAccepted, Accepted: append([]types.BlockID(nil), p.Accepted...)},
+		{
+			Action:         ChainInventoryUpdateProgress,
+			RemainNum:      p.RemainNum,
+			Target:         p.Target,
+			HasTarget:      p.HasTarget,
+			StageTarget:    p.StageTarget,
+			HasStageTarget: p.HasStageTarget,
+		},
+	}
+	if p.Done {
+		p.Steps = append(p.Steps, ChainInventoryStep{Action: ChainInventoryMarkDone})
+	}
+	return p
+}
+
+// ApplyChainInventoryPlan executes downloader-owned state updates for one
+// CHAIN_INVENTORY response.
+func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case ChainInventoryAppendAccepted:
+			applier.AppendAcceptedInventory(step.Accepted)
+		case ChainInventoryUpdateProgress:
+			applier.UpdateInventoryProgress(step.RemainNum, step.Target, step.HasTarget, step.StageTarget, step.HasStageTarget)
+		case ChainInventoryMarkDone:
+			applier.MarkInventoryDone()
+		}
+	}
 }

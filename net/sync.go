@@ -790,26 +790,9 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		InventoryLimit: maxChainInventorySize,
 		Candidates:     candidates,
 	})
-	ps.fetchList = append(ps.fetchList, inventoryPlan.Accepted...)
-	ps.remainNum = inventoryPlan.RemainNum
-	if inventoryPlan.HasTarget {
-		ps.lastInventoryNum = inventoryPlan.Target.Window.Max
-		ps.minFetchNum = inventoryPlan.Target.Window.Min
-		ss.targetHeadNum = inventoryPlan.Target.Target
-	}
-	if inventoryPlan.HasStageTarget {
-		stageInventoryTarget = inventoryPlan.StageTarget
-	}
-
-	// java-tron sets `needSyncFromUs = false` on its peer record only when
-	// our summary's last block matches its head (lostBlockIds.size == 1).
-	// While needSyncFromUs is true, java-tron's InventoryMsgHandler drops
-	// every inbound INV — so our outbound TRX advertisements never reach
-	// the producer's mempool. Detect "we are at head" here (response is a
-	// single id we already have) and finish; otherwise continue fetching.
-	if inventoryPlan.Done {
-		ps.done = true
-	}
+	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
+	syncdl.ApplyChainInventoryPlan(inventoryPlan, inventoryApplier)
+	stageInventoryTarget = inventoryApplier.stageInventoryTarget
 
 	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
@@ -1257,6 +1240,37 @@ func (a *syncFetchSlotApplier) SendFetch(plan syncdl.FetchSlotPlan) {
 	a.peerState.nextFetchAt = plan.NextFetchAt
 	a.service.armPeerFetchTimerLocked(a.peerState)
 	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, blocks: plan.Batch})
+}
+
+type syncChainInventoryApplier struct {
+	service              *SyncService
+	peerState            *syncPeerState
+	stageInventoryTarget uint64
+}
+
+func (a *syncChainInventoryApplier) AppendAcceptedInventory(ids []types.BlockID) {
+	a.peerState.fetchList = append(a.peerState.fetchList, ids...)
+}
+
+func (a *syncChainInventoryApplier) UpdateInventoryProgress(remainNum int64, target syncdl.InventoryTargetUpdate, hasTarget bool, stageTarget uint64, hasStageTarget bool) {
+	a.peerState.remainNum = remainNum
+	if hasTarget {
+		a.peerState.lastInventoryNum = target.Window.Max
+		a.peerState.minFetchNum = target.Window.Min
+		a.service.targetHeadNum = target.Target
+	}
+	if hasStageTarget {
+		a.stageInventoryTarget = stageTarget
+	}
+}
+
+func (a *syncChainInventoryApplier) MarkInventoryDone() {
+	// java-tron sets `needSyncFromUs = false` on its peer record only when our
+	// summary's last block matches its head (lostBlockIds.size == 1). While
+	// needSyncFromUs is true, java-tron's InventoryMsgHandler drops every
+	// inbound INV, so outbound TRX advertisements never reach the producer's
+	// mempool. Mark done only for downloader's one-id completion signal.
+	a.peerState.done = true
 }
 
 type syncRetryAssignmentApplier struct {
