@@ -121,6 +121,18 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered":          {},
+		"EventLogRangeCoveredForFilter": {},
+		"IterateEventLogs":              {},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production event-log queries must go through the cold-sidecar-aware ChainDB boundary:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
@@ -333,6 +345,92 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 	return offenders
 }
 
+func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "state", "snapshots")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		aliases := map[string]struct{}{
+			"chainDB": {},
+			"chaindb": {},
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.AssignStmt:
+				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
+			case *ast.ValueSpec:
+				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
+			case *ast.CallExpr:
+				sel, ok := n.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if _, watch := watched[sel.Sel.Name]; !watch {
+					return true
+				}
+				if isChainDBBoundaryExpr(sel.X, rawdbNames, aliases) {
+					return true
+				}
+				offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), sel.Sel.Name))
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit event-log method calls: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
+func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) {
+	for i, left := range lhs {
+		if i >= len(rhs) {
+			return
+		}
+		ident, ok := left.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if isChainDBBoundaryExpr(rhs[i], rawdbNames, aliases) {
+			aliases[ident.Name] = struct{}{}
+		}
+	}
+}
+
+func exprsFromIdents(idents []*ast.Ident) []ast.Expr {
+	exprs := make([]ast.Expr, 0, len(idents))
+	for _, ident := range idents {
+		exprs = append(exprs, ident)
+	}
+	return exprs
+}
+
 func isAllowedRawDBCall(root, path, function string, allowed map[string]map[string]struct{}) bool {
 	if len(allowed) == 0 {
 		return false
@@ -381,8 +479,35 @@ func rawDBCallName(expr ast.Expr, rawdbNames map[string]struct{}) (string, bool)
 }
 
 func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) bool {
+	if call, ok := expr.(*ast.CallExpr); ok {
+		expr = call.Fun
+	}
 	got, ok := rawDBCallName(expr, rawdbNames)
 	return ok && got == name
+}
+
+func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		_, exists := aliases[ident.Name]
+		return exists
+	}
+	if isRawDBCall(expr, rawdbNames, "NewChainDB") {
+		return true
+	}
+	if call, ok := expr.(*ast.CallExpr); ok {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "ChainDB" {
+			return true
+		}
+	}
+	path := selectorPath(expr)
+	return len(path) > 0 && strings.EqualFold(path[len(path)-1], "chaindb")
 }
 
 func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}) bool {
