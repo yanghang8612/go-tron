@@ -31,6 +31,47 @@ func TestSyncStagedBlockReadWriteDelete(t *testing.T) {
 	}
 }
 
+func TestDeleteSyncStagedBlockBatch(t *testing.T) {
+	db := NewMemoryDatabase()
+	blocks := []*types.Block{
+		testSyncStagedBlock(1, common.Hash{}),
+		testSyncStagedBlock(2, common.Hash{0x01}),
+		testSyncStagedBlock(3, common.Hash{0x02}),
+	}
+	for _, block := range blocks {
+		if err := WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+
+	result := DeleteSyncStagedBlockBatch(db, []SyncStagedBlockDelete{
+		{Number: blocks[0].Number(), Hash: blocks[0].Hash()},
+		{Number: blocks[1].Number(), Hash: blocks[1].Hash()},
+	})
+	if result.Deleted != 2 || len(result.Errors) != 0 {
+		t.Fatalf("delete result = %+v, want deleted 2 without errors", result)
+	}
+	for _, block := range blocks[:2] {
+		if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || ok {
+			t.Fatalf("deleted staged block %d ok=%v err=%v, want missing", block.Number(), ok, err)
+		}
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, blocks[2].Number()); err != nil || !ok {
+		t.Fatalf("untouched staged block ok=%v err=%v, want present", ok, err)
+	}
+}
+
+func TestDeleteSyncStagedBlockBatchNilOrEmpty(t *testing.T) {
+	for name, result := range map[string]SyncStagedBlockDeleteResult{
+		"nil db":      DeleteSyncStagedBlockBatch(nil, []SyncStagedBlockDelete{{Number: 1}}),
+		"empty input": DeleteSyncStagedBlockBatch(NewMemoryDatabase(), nil),
+	} {
+		if result.Deleted != 0 || len(result.Errors) != 0 {
+			t.Fatalf("%s result = %+v, want empty", name, result)
+		}
+	}
+}
+
 func TestSyncStagedBlockRawIterate(t *testing.T) {
 	db := NewMemoryDatabase()
 	for _, n := range []uint64{4, 2, 3} {

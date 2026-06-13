@@ -47,6 +47,22 @@ type SyncStagedResetResult struct {
 	BodiesReadyProgressError error
 }
 
+type SyncStagedBlockDelete struct {
+	Number uint64
+	Hash   common.Hash
+}
+
+type SyncStagedBlockDeleteError struct {
+	Number uint64
+	Hash   common.Hash
+	Err    error
+}
+
+type SyncStagedBlockDeleteResult struct {
+	Deleted int
+	Errors  []SyncStagedBlockDeleteError
+}
+
 func WriteSyncStagedBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	return WriteSyncStagedBlockRaw(db, block, nil)
 }
@@ -167,6 +183,25 @@ func DeleteSyncStagedBlock(db ethdb.KeyValueWriter, number uint64) error {
 		return nil
 	}
 	return db.Delete(syncStagedBlockKey(number))
+}
+
+func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBlockDelete) SyncStagedBlockDeleteResult {
+	var result SyncStagedBlockDeleteResult
+	if db == nil || len(blocks) == 0 {
+		return result
+	}
+	for _, block := range blocks {
+		if err := db.Delete(syncStagedBlockKey(block.Number)); err != nil {
+			result.Errors = append(result.Errors, SyncStagedBlockDeleteError{
+				Number: block.Number,
+				Hash:   block.Hash,
+				Err:    err,
+			})
+			continue
+		}
+		result.Deleted++
+	}
+	return result
 }
 
 func DeleteSyncStagedBlocksThrough(db ethdb.KeyValueStore, blockNum uint64) (int, error) {
