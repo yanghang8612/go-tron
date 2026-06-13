@@ -22,6 +22,8 @@ type StagedBodyRestoreResult struct {
 	NeedPruneTail    bool
 	PruneFrom        uint64
 	ReadError        error
+	InvalidRow       rawdb.SyncStagedBlockRow
+	InvalidError     error
 }
 
 // RestoreStagedBodies restores a contiguous run of persisted downloader body
@@ -81,6 +83,19 @@ func RestoreStagedBodies(start uint64, limit int, targetHead uint64, buffer map[
 		}
 		if row.Number < expected {
 			return true, nil
+		}
+		block, err := types.UnmarshalBlock(row.Raw)
+		if err != nil {
+			result.InvalidRow = row
+			result.InvalidError = err
+			requestPrune(row.Number)
+			return false, nil
+		}
+		if err := ValidateBufferedBlockMetadata(BufferedBlock{Raw: row.Raw, Hash: row.Hash, Num: row.Number}, block); err != nil {
+			result.InvalidRow = row
+			result.InvalidError = err
+			requestPrune(row.Number)
+			return false, nil
 		}
 		bid := types.BlockID{Hash: row.Hash, Num: row.Number}
 		if path != nil {

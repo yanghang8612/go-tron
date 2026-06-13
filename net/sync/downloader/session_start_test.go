@@ -332,6 +332,70 @@ func TestApplySessionStartupPlanRestoresHalfDownloadedBodiesBeforeExecution(t *t
 	}
 }
 
+func TestApplySessionStartupPlanPrunesCorruptStagedBodyRaw(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	raw3, err := block3.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block3: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("write staged block1: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlockRaw(db, block2, raw3); err != nil {
+		t.Fatalf("write corrupt staged block2 raw: %v", err)
+	}
+	if err := rawdb.WriteSyncStagedBlock(db, block4); err != nil {
+		t.Fatalf("write staged block4: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncInventory, block4.Number()); err != nil {
+		t.Fatalf("write inventory target: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, 0, nil)
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         0,
+		RestoreLimit: 10,
+	}), applier)
+
+	if !result.HasStagedBodyRestore {
+		t.Fatal("startup result did not record staged body restore")
+	}
+	if restore := result.StagedBodyRestore; restore.Restored != 1 || restore.ReadError == nil ||
+		!restore.NeedPruneTail || restore.PruneFrom != block2.Number() ||
+		restore.NextExpected != block2.Number() || !restore.HaveLastRestored ||
+		restore.LastRestoredNum != block1.Number() || restore.LastRestoredHash != block1.Hash() {
+		t.Fatalf("restore result = %+v, want restored block1 then prune corrupt block2 tail", restore)
+	}
+	if buffered, ok := applier.buffer[block1.Number()]; !ok || buffered.Hash != block1.Hash() {
+		t.Fatalf("buffered block1 = %+v ok=%v, want restored", buffered, ok)
+	}
+	if _, ok := applier.buffer[block2.Number()]; ok {
+		t.Fatal("corrupt block2 was restored into buffer")
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block2.Number()); err != nil || ok {
+		t.Fatalf("staged corrupt block2 after startup ok=%v err=%v, want pruned", ok, err)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block4.Number()); err != nil || ok {
+		t.Fatalf("staged block4 after startup ok=%v err=%v, want pruned with corrupt tail", ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want rewound to block1", stage, row, ok, err)
+		}
+	}
+}
+
 type recordedSessionStartupCall struct {
 	action SessionStartupStepAction
 	first  uint64

@@ -2,22 +2,25 @@ package downloader
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 func TestRestoreStagedBodiesConsumesBufferedThenRows(t *testing.T) {
 	h2 := tcommon.Hash{0x02}
-	h3 := tcommon.Hash{0x03}
+	block3 := testBufferedBlock(3)
+	h3 := block3.Hash()
 	buffer := map[uint64]BufferedBlock{
 		2: {Num: 2, Hash: h2},
 	}
 	hashes := map[tcommon.Hash]struct{}{h2: {}}
 	path := NewBlockPath()
 	path[2] = h2
-	rows := []rawdb.SyncStagedBlockRow{{Number: 3, Hash: h3, Raw: []byte{0x03}}}
+	rows := []rawdb.SyncStagedBlockRow{stagedRestoreRow(t, block3)}
 
 	got := RestoreStagedBodies(2, 2, 1, buffer, hashes, &path, stagedRows(rows, nil))
 	if got.NeedPruneTail {
@@ -41,14 +44,15 @@ func TestRestoreStagedBodiesConsumesBufferedThenRows(t *testing.T) {
 }
 
 func TestRestoreStagedBodiesRequestsPruneAtGap(t *testing.T) {
-	h2 := tcommon.Hash{0x02}
-	h4 := tcommon.Hash{0x04}
+	block2 := testBufferedBlock(2)
+	block4 := testBufferedBlock(4)
+	h2 := block2.Hash()
 	buffer := map[uint64]BufferedBlock{}
 	hashes := map[tcommon.Hash]struct{}{}
 	path := NewBlockPath()
 	rows := []rawdb.SyncStagedBlockRow{
-		{Number: 2, Hash: h2, Raw: []byte{0x02}},
-		{Number: 4, Hash: h4, Raw: []byte{0x04}},
+		stagedRestoreRow(t, block2),
+		stagedRestoreRow(t, block4),
 	}
 
 	got := RestoreStagedBodies(2, 10, 1, buffer, hashes, &path, stagedRows(rows, nil))
@@ -67,7 +71,7 @@ func TestRestoreStagedBodiesRequestsPruneAtGap(t *testing.T) {
 }
 
 func TestRestoreStagedBodiesStopsAtPathConflict(t *testing.T) {
-	h2 := tcommon.Hash{0x02}
+	block2 := testBufferedBlock(2)
 	conflict := tcommon.Hash{0xff}
 	buffer := map[uint64]BufferedBlock{}
 	hashes := map[tcommon.Hash]struct{}{}
@@ -75,7 +79,7 @@ func TestRestoreStagedBodiesStopsAtPathConflict(t *testing.T) {
 	path[2] = conflict
 
 	got := RestoreStagedBodies(2, 10, 1, buffer, hashes, &path, stagedRows([]rawdb.SyncStagedBlockRow{
-		{Number: 2, Hash: h2, Raw: []byte{0x02}},
+		stagedRestoreRow(t, block2),
 	}, nil))
 	if !got.NeedPruneTail || got.PruneFrom != 2 {
 		t.Fatalf("prune = %v from %d, want true from 2", got.NeedPruneTail, got.PruneFrom)
@@ -93,13 +97,13 @@ func TestRestoreStagedBodiesStopsAtPathConflict(t *testing.T) {
 
 func TestRestoreStagedBodiesReadErrorRequestsPruneAtExpected(t *testing.T) {
 	readErr := errors.New("read rows")
-	h2 := tcommon.Hash{0x02}
+	block2 := testBufferedBlock(2)
 	buffer := map[uint64]BufferedBlock{}
 	hashes := map[tcommon.Hash]struct{}{}
 	path := NewBlockPath()
 
 	got := RestoreStagedBodies(2, 10, 1, buffer, hashes, &path, stagedRows([]rawdb.SyncStagedBlockRow{
-		{Number: 2, Hash: h2, Raw: []byte{0x02}},
+		stagedRestoreRow(t, block2),
 	}, readErr))
 	if !errors.Is(got.ReadError, readErr) {
 		t.Fatalf("ReadError = %v, want %v", got.ReadError, readErr)
@@ -109,6 +113,76 @@ func TestRestoreStagedBodiesReadErrorRequestsPruneAtExpected(t *testing.T) {
 	}
 	if got.Restored != 1 || got.LastRestoredNum != 2 {
 		t.Fatalf("result = %+v, want restored block2", got)
+	}
+}
+
+func TestRestoreStagedBodiesPrunesInvalidRawAtRow(t *testing.T) {
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	rows := []rawdb.SyncStagedBlockRow{
+		stagedRestoreRow(t, block2),
+		{Number: block3.Number(), Hash: block3.Hash(), Raw: []byte{0x03}},
+	}
+	buffer := map[uint64]BufferedBlock{}
+	hashes := map[tcommon.Hash]struct{}{}
+	path := NewBlockPath()
+
+	got := RestoreStagedBodies(2, 10, 1, buffer, hashes, &path, stagedRows(rows, nil))
+	if got.InvalidError == nil {
+		t.Fatalf("InvalidError = nil, want decode error: %+v", got)
+	}
+	if got.InvalidRow.Number != block3.Number() || got.InvalidRow.Hash != block3.Hash() {
+		t.Fatalf("InvalidRow = %+v, want block3 row", got.InvalidRow)
+	}
+	if !got.NeedPruneTail || got.PruneFrom != block3.Number() || got.NextExpected != block3.Number() {
+		t.Fatalf("restore result = %+v, want prune from invalid block3", got)
+	}
+	if got.Restored != 1 || got.LastRestoredNum != block2.Number() || got.LastRestoredHash != block2.Hash() {
+		t.Fatalf("restore result = %+v, want only block2 restored", got)
+	}
+	if _, ok := buffer[block2.Number()]; !ok {
+		t.Fatal("valid prefix block2 was not restored")
+	}
+	if _, ok := buffer[block3.Number()]; ok {
+		t.Fatal("invalid block3 was restored")
+	}
+}
+
+func TestRestoreStagedBodiesPrunesMetadataMismatchAtRow(t *testing.T) {
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	raw3, err := block3.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block3: %v", err)
+	}
+	wrongHash := tcommon.Hash{0xee}
+	rows := []rawdb.SyncStagedBlockRow{
+		stagedRestoreRow(t, block2),
+		{Number: block3.Number(), Hash: wrongHash, Raw: raw3},
+	}
+	buffer := map[uint64]BufferedBlock{}
+	hashes := map[tcommon.Hash]struct{}{}
+	path := NewBlockPath()
+
+	got := RestoreStagedBodies(2, 10, 1, buffer, hashes, &path, stagedRows(rows, nil))
+	var mismatch *BufferedBlockMetadataMismatchError
+	if !errors.As(got.InvalidError, &mismatch) {
+		t.Fatalf("InvalidError = %T %[1]v, want metadata mismatch", got.InvalidError)
+	}
+	if mismatch.ExpectedNum != block3.Number() || mismatch.ExpectedHash != wrongHash || mismatch.GotHash != block3.Hash() {
+		t.Fatalf("mismatch = %+v, want staged wrong hash and decoded block3", mismatch)
+	}
+	if !got.NeedPruneTail || got.PruneFrom != block3.Number() || got.Restored != 1 {
+		t.Fatalf("restore result = %+v, want restored prefix and prune from block3", got)
+	}
+	if got.InvalidRow.Number != block3.Number() || got.InvalidRow.Hash != wrongHash || !reflect.DeepEqual(got.InvalidRow.Raw, raw3) {
+		t.Fatalf("invalid row = %+v, want staged block3 mismatch", got.InvalidRow)
+	}
+	if _, ok := buffer[block3.Number()]; ok {
+		t.Fatal("metadata-mismatched block3 was restored")
+	}
+	if _, ok := hashes[wrongHash]; ok {
+		t.Fatal("metadata-mismatched hash was registered")
 	}
 }
 
@@ -128,4 +202,13 @@ func stagedRows(rows []rawdb.SyncStagedBlockRow, err error) StagedBodyIterator {
 		}
 		return err
 	}
+}
+
+func stagedRestoreRow(t *testing.T, block *types.Block) rawdb.SyncStagedBlockRow {
+	t.Helper()
+	raw, err := block.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block %d: %v", block.Number(), err)
+	}
+	return rawdb.SyncStagedBlockRow{Number: block.Number(), Hash: block.Hash(), Raw: raw}
 }
