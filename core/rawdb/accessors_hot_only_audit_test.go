@@ -105,6 +105,7 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"ReadAccountTraceAtOrBefore":  {},
 		"ReadBlock":                   {},
 		"ReadBlockBalanceTrace":       {},
+		"ReadBlockHashByNumber":       {},
 		"ReadBlockNumber":             {},
 		"ReadBlockStateRoot":          {},
 		"ReadSectionBloom":            {},
@@ -113,13 +114,31 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"ReadTransactionInfo":         {},
 		"ReadTransactionInfosByBlock": {},
 	}, map[string]map[string]struct{}{
+		"actuator/actuator.go": {
+			"ReadBlockHashByNumber": {},
+		},
 		"cmd/balance-trace/main.go": {
 			"ReadAccountTrace":      {},
 			"ReadBlockBalanceTrace": {},
 		},
+		"cmd/gtron/db_cmd.go": {
+			"ReadBlockHashByNumber": {},
+		},
 		"core/balance_trace_backfill.go": {
 			"ReadAccountTrace":      {},
 			"ReadBlockBalanceTrace": {},
+		},
+		"core/blockbuffer/buffer.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"core/state/pruning/pruner.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"core/state/snapshots/cold_builder.go": {
+			"ReadBlockHashByNumber": {},
+		},
+		"vm/instructions.go": {
+			"ReadBlockHashByNumber": {},
 		},
 	})
 	if len(offenders) > 0 {
