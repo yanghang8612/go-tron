@@ -338,3 +338,45 @@ func RepairSyncStageProgress(db ethdb.KeyValueStore, stage rawdb.StageID, head u
 	result.Status = SyncStageProgressDeleted
 	return result
 }
+
+// RepairSyncPipelineProgress validates sync import pipeline rows as one
+// ordered pipeline. Individual rows must be hash-bound canonical rows at or
+// below head, and downstream stages cannot be ahead of their upstream stage.
+// Rows after the first missing/invalid stage are deleted so restart diagnostics
+// remain a contiguous sync-stage prefix.
+func RepairSyncPipelineProgress(db ethdb.KeyValueStore, head uint64, canonicalHash CanonicalHashReader) []SyncStageProgressRepair {
+	stages := SyncPipelineProgressStages()
+	repairs := make([]SyncStageProgressRepair, 0, len(stages))
+	for _, stage := range stages {
+		repairs = append(repairs, RepairSyncStageProgress(db, stage, head, canonicalHash))
+	}
+	var (
+		upstream rawdb.StageProgress
+		haveUp   bool
+		blocked  bool
+	)
+	for i := range repairs {
+		repair := &repairs[i]
+		switch repair.Status {
+		case SyncStageProgressKept:
+			if blocked || (haveUp && repair.Row.BlockNum > upstream.BlockNum) {
+				if err := rawdb.DeleteStageProgress(db, repair.Stage); err != nil {
+					repair.Status = SyncStageProgressDeleteError
+					repair.DeleteError = err
+					blocked = true
+					continue
+				}
+				repair.Status = SyncStageProgressDeleted
+				blocked = true
+				continue
+			}
+			upstream = repair.Row
+			haveUp = true
+		case SyncStageProgressMissing, SyncStageProgressDeleted:
+			blocked = true
+		case SyncStageProgressReadError, SyncStageProgressDeleteError:
+			return repairs
+		}
+	}
+	return repairs
+}

@@ -398,10 +398,14 @@ Status:
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
-  name an old fork hash are deleted. This keeps downloader/import diagnostics
-  from masquerading as resumable canonical stages after restart or fork repair.
-  The row validation and delete decision now live in `net/sync/downloader`, with
-  `SyncService` supplying only the canonical hash reader and logs.
+  name an old fork hash are deleted. It now repairs the four rows as one
+  ordered pipeline too: downstream stages that are ahead of their upstream
+  stage, or present after a missing upstream stage, are deleted so restart
+  diagnostics remain a contiguous sync-stage prefix. This keeps
+  downloader/import diagnostics from masquerading as resumable canonical stages
+  after restart or fork repair. The row validation, order validation, and delete
+  decision now live in `net/sync/downloader`, with `SyncService` supplying only
+  the canonical hash reader and logs.
 - `BlockChain` startup now verifies `Headers/Bodies/Execution/Commitment/Finish`
   stage rows against the persisted head block and repairs missing, legacy, or
   mismatched rows back to that hash-bound head. This makes canonical stage
@@ -460,7 +464,9 @@ Status:
   corrupted startup canonical stages are repaired to the stored head, snapshot
   builds are capped at verified finish stage, and imported sync pipeline
   number/hash progress is derived from the canonical stage observer after
-  `InsertBlocks` applies the range.
+  `InsertBlocks` applies the range. Startup recovery now also deletes
+  sync-pipeline progress mismatches where execution/commitment/finish are ahead
+  of their upstream sync stage.
 - `scripts/dev/nile_sync_sample.sh` now emits one JSONL sample for long-running
   Nile sync/soak runs without opening the live Pebble store: HTTP height/block
   ID, peers, elapsed sync time, block rate, git commit, and datadir size split

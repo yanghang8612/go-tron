@@ -294,3 +294,78 @@ func TestRepairSyncStageProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairSyncPipelineProgressDeletesDownstreamAheadOfUpstream(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	canonical := map[uint64]tcommon.Hash{
+		1: {0x01},
+		2: {0x02},
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, canonical[1]); err != nil {
+		t.Fatalf("write import progress: %v", err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if err := rawdb.WriteStageProgressWithHash(db, stage, 2, canonical[2]); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgress(db, 2, func(number uint64) (tcommon.Hash, bool) {
+		hash, ok := canonical[number]
+		return hash, ok
+	})
+	wantStatuses := []SyncStageProgressRepairStatus{
+		SyncStageProgressKept,
+		SyncStageProgressDeleted,
+		SyncStageProgressDeleted,
+		SyncStageProgressDeleted,
+	}
+	if len(got) != len(wantStatuses) {
+		t.Fatalf("repairs = %+v, want %d", got, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got[i].Status != status {
+			t.Fatalf("repair %d = %+v, want status %v", i, got[i], status)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != 1 {
+		t.Fatalf("import progress = %+v ok=%v err=%v, want block1 kept", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressDeletesDownstreamWithoutUpstream(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x01}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, 1, hash); err != nil {
+		t.Fatalf("write execution progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgress(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return hash, true
+		}
+		return tcommon.Hash{}, false
+	})
+	wantStatuses := []SyncStageProgressRepairStatus{
+		SyncStageProgressMissing,
+		SyncStageProgressDeleted,
+		SyncStageProgressMissing,
+		SyncStageProgressMissing,
+	}
+	if len(got) != len(wantStatuses) {
+		t.Fatalf("repairs = %+v, want %d", got, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got[i].Status != status {
+			t.Fatalf("repair %d = %+v, want status %v", i, got[i], status)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncExecution); err != nil || ok {
+		t.Fatalf("execution progress = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}

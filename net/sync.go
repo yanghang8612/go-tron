@@ -413,8 +413,22 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 }
 
 func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
-	for _, stage := range syncdl.SyncPipelineProgressStages() {
-		ss.repairSyncStageProgress(head, stage)
+	if ss == nil || ss.chain == nil || head == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	repairs := syncdl.RepairSyncPipelineProgress(db, head.Number(), func(number uint64) (tcommon.Hash, bool) {
+		block := ss.chain.GetBlockByNumber(number)
+		if block == nil {
+			return tcommon.Hash{}, false
+		}
+		return block.Hash(), true
+	})
+	for _, repair := range repairs {
+		ss.logSyncStageProgressRepair(head, repair)
 	}
 }
 
@@ -433,15 +447,22 @@ func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.St
 		}
 		return block.Hash(), true
 	})
+	ss.logSyncStageProgressRepair(head, repair)
+}
+
+func (ss *SyncService) logSyncStageProgressRepair(head *types.Block, repair syncdl.SyncStageProgressRepair) {
+	if head == nil {
+		return
+	}
 	switch repair.Status {
 	case syncdl.SyncStageProgressReadError:
-		syncLog.Warn("Read sync stage progress failed", "stage", stage, "err", repair.ReadError)
+		syncLog.Warn("Read sync stage progress failed", "stage", repair.Stage, "err", repair.ReadError)
 		return
 	case syncdl.SyncStageProgressDeleteError:
-		syncLog.Warn("Delete stale sync stage progress failed", "stage", stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "err", repair.DeleteError)
+		syncLog.Warn("Delete stale sync stage progress failed", "stage", repair.Stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "err", repair.DeleteError)
 		return
 	case syncdl.SyncStageProgressDeleted:
-		syncLog.Debug("Deleted stale sync stage progress", "stage", stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "head", head.Number(), "headHash", head.Hash())
+		syncLog.Debug("Deleted stale sync stage progress", "stage", repair.Stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "head", head.Number(), "headHash", head.Hash())
 		return
 	}
 }
