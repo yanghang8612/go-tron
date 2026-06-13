@@ -509,6 +509,19 @@ def stage_bottleneck(candidates):
         return "none", 0
     return name, value
 
+def interval_stage_delta(current, previous_row, key, interval):
+    try:
+        current = int(current)
+        previous_value = int(previous_row.get(key, -1))
+    except Exception:
+        return 0
+    if interval <= 0 or current < 0 or previous_value < 0:
+        return 0
+    return current - previous_value
+
+def interval_rate(delta, interval):
+    return float(delta) / interval if interval > 0 else 0.0
+
 def allocated_bytes(path):
     try:
         stat = path.stat()
@@ -673,6 +686,14 @@ stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
     ("commitment-finish", stages.get("stageSyncCommitmentFinishLagBlocks", -1)),
     ("finish-head", stage_sync_finish_head_lag),
 ])
+interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
+interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)
+interval_stage_sync_import = interval_stage_delta(stages.get("stageSyncImport", -1), previous, "stageSyncImport", interval_seconds)
+interval_stage_sync_execution = interval_stage_delta(stages.get("stageSyncExecution", -1), previous, "stageSyncExecution", interval_seconds)
+interval_stage_sync_commitment = interval_stage_delta(stages.get("stageSyncCommitment", -1), previous, "stageSyncCommitment", interval_seconds)
+interval_stage_sync_finish = interval_stage_delta(stages.get("stageSyncFinish", -1), previous, "stageSyncFinish", interval_seconds)
+interval_stage_chain_freezer = interval_stage_delta(stages.get("stageChainFreezer", -1), previous, "stageChainFreezer", interval_seconds)
+interval_stage_snapshot_event_log_build = interval_stage_delta(stages.get("stageSnapshotEventLogBuild", -1), previous, "stageSnapshotEventLogBuild", interval_seconds)
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -777,6 +798,22 @@ row = {
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
     "stageSyncBottleneck": stage_sync_bottleneck,
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
+    "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
+    "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
+    "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,
+    "intervalStageSyncBodiesReadyBlocksPerSecond": interval_rate(interval_stage_sync_bodies_ready, interval_seconds),
+    "intervalStageSyncImportBlocks": interval_stage_sync_import,
+    "intervalStageSyncImportBlocksPerSecond": interval_rate(interval_stage_sync_import, interval_seconds),
+    "intervalStageSyncExecutionBlocks": interval_stage_sync_execution,
+    "intervalStageSyncExecutionBlocksPerSecond": interval_rate(interval_stage_sync_execution, interval_seconds),
+    "intervalStageSyncCommitmentBlocks": interval_stage_sync_commitment,
+    "intervalStageSyncCommitmentBlocksPerSecond": interval_rate(interval_stage_sync_commitment, interval_seconds),
+    "intervalStageSyncFinishBlocks": interval_stage_sync_finish,
+    "intervalStageSyncFinishBlocksPerSecond": interval_rate(interval_stage_sync_finish, interval_seconds),
+    "intervalStageChainFreezerBlocks": interval_stage_chain_freezer,
+    "intervalStageChainFreezerBlocksPerSecond": interval_rate(interval_stage_chain_freezer, interval_seconds),
+    "intervalStageSnapshotEventLogBuildBlocks": interval_stage_snapshot_event_log_build,
+    "intervalStageSnapshotEventLogBuildBlocksPerSecond": interval_rate(interval_stage_snapshot_event_log_build, interval_seconds),
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),

@@ -182,6 +182,11 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 20)
             self.assertEqual(row["stageSyncBottleneck"], "finish-head")
             self.assertEqual(row["stageSyncBottleneckLagBlocks"], 20)
+            self.assertEqual(row["intervalStageSyncBodiesBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncImportBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncExecutionBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncCommitmentBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncFinishBlocks"], 0)
             self.assertEqual(row["stageUnboundRows"], 1)
             self.assertEqual(row["stageProgress"]["SyncFinish"]["value"], 80)
             self.assertFalse(row["stageProgress"]["SnapshotEventLogBuild"]["present"])
@@ -205,6 +210,24 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "ancient" / "cold.bin").write_bytes(b"c" * 2048)
             (datadir / "gtron" / "state-snapshots" / "snap.bin").write_bytes(b"s" * 1024)
             (datadir / "gtron" / "state-snapshots" / "log" / "section-bloom-1-8192.seg").write_bytes(b"b" * 2048)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=8",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=98 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=92 hash=dd verified=canonical",
+                        "Stage progress: group=sync name=SyncCommitment value=91 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=90 hash=ff verified=canonical",
+                        "Stage progress: group=freezer name=ChainFreezer value=70 hash=none verified=unbound",
+                        "Stage progress: group=snapshot name=SnapshotEventLogBuild value=88 hash=none verified=unbound",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -229,6 +252,14 @@ class NileSyncSampleTest(unittest.TestCase):
                 "snapshotChainBytes": 32,
                 "snapshotLogBytes": 32,
                 "snapshotTraceBytes": 32,
+                "stageSyncBodies": 80,
+                "stageSyncBodiesReady": 79,
+                "stageSyncImport": 70,
+                "stageSyncExecution": 68,
+                "stageSyncCommitment": 67,
+                "stageSyncFinish": 60,
+                "stageChainFreezer": 50,
+                "stageSnapshotEventLogBuild": 40,
             }
             output = tmpdir / "samples.jsonl"
             output.write_text(json.dumps(previous) + "\n", encoding="utf-8")
@@ -240,6 +271,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     str(datadir),
                     "--http",
                     f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
                     "--output",
                     str(output),
                 ],
@@ -275,6 +308,16 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalSnapshotBytesPerBlock"], row["snapshotBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalColdArchiveBytesPerBlock"], row["coldArchiveBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalDerivedIndexBytesPerBlock"], row["derivedIndexBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalStageSyncBodiesBlocks"], 20)
+            self.assertEqual(row["intervalStageSyncBodiesReadyBlocks"], 19)
+            self.assertEqual(row["intervalStageSyncImportBlocks"], 25)
+            self.assertEqual(row["intervalStageSyncExecutionBlocks"], 24)
+            self.assertEqual(row["intervalStageSyncCommitmentBlocks"], 24)
+            self.assertEqual(row["intervalStageSyncFinishBlocks"], 30)
+            self.assertEqual(row["intervalStageChainFreezerBlocks"], 20)
+            self.assertEqual(row["intervalStageSnapshotEventLogBuildBlocks"], 48)
+            self.assertGreater(row["intervalStageSyncFinishBlocksPerSecond"], 0)
+            self.assertGreater(row["intervalStageSnapshotEventLogBuildBlocksPerSecond"], 0)
 
             lines = output.read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(lines[0]), previous)

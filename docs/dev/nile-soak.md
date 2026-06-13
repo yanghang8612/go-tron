@@ -120,8 +120,14 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSyncExecutionCommitmentLagBlocks`,
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
 `stageSyncBottleneck`/`stageSyncBottleneckLagBlocks` for the largest current
-pipeline lag, so long-running samples show where the staged pipeline is
-accumulating backlog.
+pipeline lag. When the output JSONL already has a previous sample, rows also
+include interval stage throughput fields such as
+`intervalStageSyncImportBlocks`,
+`intervalStageSyncExecutionBlocks`,
+`intervalStageSyncCommitmentBlocks`,
+`intervalStageSyncFinishBlocks`, and matching `*BlocksPerSecond` values, so
+long-running samples show both where backlog is accumulating and whether each
+stage is still advancing.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
