@@ -246,21 +246,22 @@ type ImportedBatchProgressPlanApplier interface {
 // ImportedBatchProgressPlan is the downloader-owned storage plan for the
 // successfully imported prefix of one local staged-body batch.
 type ImportedBatchProgressPlan struct {
-	OK                bool
-	Summary           AppliedBatchSummary
-	Schedule          ImportStageSchedule
-	StagePlan         ImportStagePlan
-	Stages            []ImportStageTask
-	Deletes           []rawdb.SyncStagedBlockDelete
-	Progress          []rawdb.StageProgress
-	Decisions         []ImportStageProgressDecision
-	StageDiagnostics  ImportStagePlanDiagnostics
-	RefreshReady      bool
-	Steps             []ImportedBatchProgressStep
-	StatsBlocks       int
-	StatsTransactions int
-	ReportHead        uint64
-	ReportPeer        *p2p.Peer
+	OK                   bool
+	Summary              AppliedBatchSummary
+	Schedule             ImportStageSchedule
+	StagePlan            ImportStagePlan
+	Stages               []ImportStageTask
+	Deletes              []rawdb.SyncStagedBlockDelete
+	Progress             []rawdb.StageProgress
+	Decisions            []ImportStageProgressDecision
+	ExecutionDiagnostics ImportBatchExecutionPlanDiagnostics
+	StageDiagnostics     ImportStagePlanDiagnostics
+	RefreshReady         bool
+	Steps                []ImportedBatchProgressStep
+	StatsBlocks          int
+	StatsTransactions    int
+	ReportHead           uint64
+	ReportPeer           *p2p.Peer
 }
 
 // StageProgressCollector observes canonical block insertion stages and records
@@ -332,7 +333,11 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 // preserving PlanImportedBatchProgress as the legacy batch-derived entry point.
 func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, execution ImportBatchExecutionPlan, collector *StageProgressCollector) ImportedBatchProgressPlan {
 	schedule, hasSchedule := execution.AppliedSchedule(applied)
-	return planImportedBatchProgress(batch, applied, schedule, hasSchedule, collector)
+	plan := planImportedBatchProgress(batch, applied, schedule, hasSchedule, collector)
+	if plan.OK {
+		plan.ExecutionDiagnostics = execution.Diagnostics
+	}
+	return plan
 }
 
 func planImportedBatchProgress(batch BufferedBatch, applied int, schedule ImportStageSchedule, hasSchedule bool, collector *StageProgressCollector) ImportedBatchProgressPlan {

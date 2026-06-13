@@ -1344,7 +1344,9 @@ func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan
 	ss.mu.Lock()
 	var diag syncdl.Diagnostics
 	if emit {
-		diag = ss.snapshotDiagnosticsLocked().WithImportStageDiagnostics(plan.StageDiagnostics)
+		diag = ss.snapshotDiagnosticsLocked().
+			WithImportBatchExecutionDiagnostics(plan.ExecutionDiagnostics).
+			WithImportStageDiagnostics(plan.StageDiagnostics)
 	}
 	remain := ss.estimatedRemainLocked()
 	ss.mirrorLegacyLocked()
@@ -1650,6 +1652,15 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 			)
 		}
 	}
+	if diag.HasImportBatchExecutionPlan() {
+		ctx = append(ctx,
+			"syncExecPlanBlocks", diag.ImportExecutionPlannedBlocks,
+			"syncExecPlanStages", diag.ImportExecutionPlannedStages,
+			"syncExecPlanPostBodyStages", diag.ImportExecutionPostBodyStages,
+			"syncExecPlanFirst", diag.ImportExecutionFirstBlock,
+			"syncExecPlanLast", diag.ImportExecutionLastBlock,
+		)
+	}
 	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
 	if topMutations == "" {
 		topMutations = "none"
@@ -1736,6 +1747,15 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 				"syncStageBlockedStatus", diag.ImportStageBlockedStatus,
 			)
 		}
+	}
+	if diag.HasImportBatchExecutionPlan() {
+		detail = append(detail,
+			"syncExecPlanBlocks", diag.ImportExecutionPlannedBlocks,
+			"syncExecPlanStages", diag.ImportExecutionPlannedStages,
+			"syncExecPlanPostBodyStages", diag.ImportExecutionPostBodyStages,
+			"syncExecPlanFirst", diag.ImportExecutionFirstBlock,
+			"syncExecPlanLast", diag.ImportExecutionLastBlock,
+		)
 	}
 	if diag.PeerState != "" {
 		detail = append(detail, "peerState", diag.PeerState)

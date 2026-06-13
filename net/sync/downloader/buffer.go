@@ -151,6 +151,19 @@ type ImportBatchExecutionPlan struct {
 	StagePlan        ImportBatchStagePlan
 	Schedule         ImportStageSchedule
 	HasStageSchedule bool
+	Diagnostics      ImportBatchExecutionPlanDiagnostics
+}
+
+// ImportBatchExecutionPlanDiagnostics is the compact, log-safe view of the
+// downloader-owned execution/commitment/finish schedule for a decoded batch.
+type ImportBatchExecutionPlanDiagnostics struct {
+	PlannedBlocks         int
+	PlannedStages         int
+	PlannedPostBodyStages int
+	FirstBlockNum         uint64
+	FirstBlockHash        tcommon.Hash
+	LastBlockNum          uint64
+	LastBlockHash         tcommon.Hash
 }
 
 // AppliedSchedule returns the stage schedule for the last block in an applied
@@ -234,14 +247,15 @@ type ImportBatchRunPlanApplier interface {
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
 // means canonical import failed and the caller should leave the drain loop.
 type ImportBatchRunResult struct {
-	Decode           BufferedBatchDecodeResult
-	Execution        ImportBatchExecutionPlan
-	Outcome          ImportOutcome
-	Progress         ImportedBatchProgressPlan
-	StageDiagnostics ImportStagePlanDiagnostics
-	Steps            []ImportBatchRunStepAction
-	ContinueDrain    bool
-	StopDrain        bool
+	Decode               BufferedBatchDecodeResult
+	Execution            ImportBatchExecutionPlan
+	Outcome              ImportOutcome
+	Progress             ImportedBatchProgressPlan
+	ExecutionDiagnostics ImportBatchExecutionPlanDiagnostics
+	StageDiagnostics     ImportStagePlanDiagnostics
+	Steps                []ImportBatchRunStepAction
+	ContinueDrain        bool
+	StopDrain            bool
 }
 
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
@@ -289,10 +303,12 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 		case ImportBatchRunPlanExecution:
 			result.Execution = PlanImportBatchExecution(plan.Batch)
+			result.ExecutionDiagnostics = result.Execution.Diagnostics
 			planned = true
 		case ImportBatchRunExecute:
 			if !planned {
 				result.Execution = PlanImportBatchExecution(plan.Batch)
+				result.ExecutionDiagnostics = result.Execution.Diagnostics
 				planned = true
 			}
 			collector = NewStageProgressCollector()
@@ -336,8 +352,27 @@ func PlanImportBatchExecution(batch BufferedBatch) ImportBatchExecutionPlan {
 		execution.StagePlan = NewImportBatchStagePlan(execution.Schedules)
 		execution.Schedule = execution.Schedules[len(execution.Schedules)-1]
 		execution.HasStageSchedule = true
+		execution.Diagnostics = NewImportBatchExecutionPlanDiagnostics(execution.Schedules, execution.StagePlan)
 	}
 	return execution
+}
+
+// NewImportBatchExecutionPlanDiagnostics summarizes an explicit batch stage
+// schedule without depending on canonical stage hook observations.
+func NewImportBatchExecutionPlanDiagnostics(schedules []ImportStageSchedule, stagePlan ImportBatchStagePlan) ImportBatchExecutionPlanDiagnostics {
+	var diag ImportBatchExecutionPlanDiagnostics
+	if len(schedules) == 0 {
+		return diag
+	}
+	diag.PlannedBlocks = len(schedules)
+	diag.PlannedStages = len(stagePlan.Tasks)
+	diag.PlannedPostBodyStages = len(stagePlan.PostBody)
+	diag.FirstBlockNum = schedules[0].BlockNum
+	diag.FirstBlockHash = schedules[0].BlockHash
+	last := schedules[len(schedules)-1]
+	diag.LastBlockNum = last.BlockNum
+	diag.LastBlockHash = last.BlockHash
+	return diag
 }
 
 // PlanImportOutcome maps a canonical insert result into service actions:

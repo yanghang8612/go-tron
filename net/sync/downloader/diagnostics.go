@@ -20,18 +20,23 @@ type PeerDiagnostics struct {
 // Diagnostics is the lock-free sync-session snapshot consumed by import
 // summary logging.
 type Diagnostics struct {
-	BlockBufferLen           int
-	RequestedLen             int
-	RetryListLen             int
-	PeerState                string
-	ImportStageScheduled     int
-	ImportStageCompleted     int
-	ImportStageComplete      bool
-	ImportStageNext          string
-	ImportStageNextBlock     uint64
-	ImportStageNextCanonical string
-	ImportStageNextSync      string
-	ImportStageBlockedStatus string
+	BlockBufferLen                int
+	RequestedLen                  int
+	RetryListLen                  int
+	ImportExecutionPlannedBlocks  int
+	ImportExecutionPlannedStages  int
+	ImportExecutionPostBodyStages int
+	ImportExecutionFirstBlock     uint64
+	ImportExecutionLastBlock      uint64
+	PeerState                     string
+	ImportStageScheduled          int
+	ImportStageCompleted          int
+	ImportStageComplete           bool
+	ImportStageNext               string
+	ImportStageNextBlock          uint64
+	ImportStageNextCanonical      string
+	ImportStageNextSync           string
+	ImportStageBlockedStatus      string
 }
 
 // NewDiagnostics builds a deterministic diagnostics snapshot. Peer state is
@@ -59,6 +64,17 @@ func NewDiagnostics(blockBufferLen, requestedLen, retryListLen int, peers []Peer
 	}
 	diag.PeerState = strings.Join(parts, ";")
 	return diag
+}
+
+// WithImportBatchExecutionDiagnostics adds downloader-owned planned execution
+// schedule diagnostics to the existing sync-session snapshot.
+func (d Diagnostics) WithImportBatchExecutionDiagnostics(execution ImportBatchExecutionPlanDiagnostics) Diagnostics {
+	d.ImportExecutionPlannedBlocks = execution.PlannedBlocks
+	d.ImportExecutionPlannedStages = execution.PlannedStages
+	d.ImportExecutionPostBodyStages = execution.PlannedPostBodyStages
+	d.ImportExecutionFirstBlock = execution.FirstBlockNum
+	d.ImportExecutionLastBlock = execution.LastBlockNum
+	return d
 }
 
 // WithImportStagePlan adds downloader-owned import stage planner diagnostics to
@@ -91,4 +107,10 @@ func (d Diagnostics) WithImportStageDiagnostics(stage ImportStagePlanDiagnostics
 // state for the current imported batch.
 func (d Diagnostics) HasImportStagePlan() bool {
 	return d.ImportStageScheduled > 0
+}
+
+// HasImportBatchExecutionPlan reports whether Diagnostics carries the planned
+// local execution/commitment/finish schedule for the current imported batch.
+func (d Diagnostics) HasImportBatchExecutionPlan() bool {
+	return d.ImportExecutionPlannedStages > 0
 }

@@ -95,3 +95,27 @@ func TestDiagnosticsWithImportStagePlan(t *testing.T) {
 		t.Fatalf("direct diagnostics = %+v, want commitment at block8", diag)
 	}
 }
+
+func TestDiagnosticsWithImportBatchExecutionPlan(t *testing.T) {
+	hash1 := tcommon.Hash{0x01}
+	hash2 := tcommon.Hash{0x02}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+	execution := NewImportBatchExecutionPlanDiagnostics(stagePlan.Schedules, stagePlan)
+
+	diag := NewDiagnostics(0, 0, 0, nil).WithImportBatchExecutionDiagnostics(execution)
+	if !diag.HasImportBatchExecutionPlan() {
+		t.Fatal("diagnostics did not report import execution plan")
+	}
+	if diag.ImportExecutionPlannedBlocks != 2 || diag.ImportExecutionPlannedStages != 8 || diag.ImportExecutionPostBodyStages != 6 {
+		t.Fatalf("execution diagnostics counts = %+v, want 2 blocks/8 stages/6 post-body", diag)
+	}
+	if diag.ImportExecutionFirstBlock != 1 || diag.ImportExecutionLastBlock != 2 {
+		t.Fatalf("execution diagnostics range = %d..%d, want 1..2", diag.ImportExecutionFirstBlock, diag.ImportExecutionLastBlock)
+	}
+	if NewDiagnostics(0, 0, 0, nil).HasImportBatchExecutionPlan() {
+		t.Fatal("empty diagnostics reported import execution plan")
+	}
+}
