@@ -445,6 +445,41 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 }
 
+func TestApplyImportBatchRunPlanPartialFailureIgnoresFailedBlockStageObservations(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
+	applier := &recordingImportBatchRunApplier{
+		insertErr:                 insertErr,
+		appliedForObservations:    1,
+		observeAllAttemptedStages: true,
+	}
+
+	result := ApplyImportBatchRunPlan(NewImportBatchRunPlan(testImportRunBatch(t, block1, block2)), applier)
+
+	if !result.StopDrain || !result.Outcome.Pause || result.Outcome.Applied != 1 {
+		t.Fatalf("result = %+v, want partial applied prefix and pause", result)
+	}
+	if result.Progress.Schedule.BlockNum != block1.Number() || result.Progress.Schedule.BlockHash != block1.Hash() {
+		t.Fatalf("progress schedule = %+v, want applied block1 despite failed block observations", result.Progress.Schedule)
+	}
+	wantProgress := importPipelineProgressRows(block1.Number(), block1.Hash())
+	if !reflect.DeepEqual(applier.progress, wantProgress) {
+		t.Fatalf("progress = %+v, want applied block1 rows %+v", applier.progress, wantProgress)
+	}
+	for _, row := range applier.progress {
+		if row.BlockNum == block2.Number() || row.BlockHash == block2.Hash() {
+			t.Fatalf("progress includes failed block row %+v, want only applied prefix", row)
+		}
+	}
+	if applier.recordApplied != 1 {
+		t.Fatalf("recorded applied = %d, want 1", applier.recordApplied)
+	}
+	if applier.pauseNum != block2.Number() || !errors.Is(applier.pauseErr, insertErr) {
+		t.Fatalf("pause = #%d err=%v, want failed block2", applier.pauseNum, applier.pauseErr)
+	}
+}
+
 func TestApplyImportBatchRunPlanFirstDecodeFailureContinuesDrain(t *testing.T) {
 	block2 := testBufferedBlock(2)
 	raw2, err := block2.Marshal()
@@ -779,18 +814,19 @@ func importPipelineProgressRows(blockNum uint64, blockHash tcommon.Hash) []rawdb
 }
 
 type recordingImportBatchRunApplier struct {
-	calls                  []ImportBatchRunStepAction
-	waits                  []time.Duration
-	elapsed                time.Duration
-	insertErr              error
-	appliedForObservations int
-	execution              ImportBatchExecutionPlan
-	recordPlan             ImportedBatchProgressPlan
-	recordApplied          int
-	recordElapsed          time.Duration
-	progress               []rawdb.StageProgress
-	pauseNum               uint64
-	pauseErr               error
+	calls                     []ImportBatchRunStepAction
+	waits                     []time.Duration
+	elapsed                   time.Duration
+	insertErr                 error
+	appliedForObservations    int
+	observeAllAttemptedStages bool
+	execution                 ImportBatchExecutionPlan
+	recordPlan                ImportedBatchProgressPlan
+	recordApplied             int
+	recordElapsed             time.Duration
+	progress                  []rawdb.StageProgress
+	pauseNum                  uint64
+	pauseErr                  error
 }
 
 func (a *recordingImportBatchRunApplier) LogDecodeBatchResult(BufferedBatchDecodeResult) {
@@ -813,6 +849,16 @@ func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatc
 		block := execution.Blocks[applied-1]
 		for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
 			observe(stage, block.Number(), block.Hash())
+		}
+	}
+	if a.observeAllAttemptedStages {
+		for _, block := range execution.Blocks {
+			if applied > 0 && block.Number() == execution.Blocks[applied-1].Number() && block.Hash() == execution.Blocks[applied-1].Hash() {
+				continue
+			}
+			for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+				observe(stage, block.Number(), block.Hash())
+			}
 		}
 	}
 	return a.elapsed, a.insertErr
