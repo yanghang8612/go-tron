@@ -115,6 +115,10 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	if !got.OK || got.Summary.Applied != 2 || got.Summary.Last.Num != block2.Number() {
 		t.Fatalf("plan summary = %+v, want applied through block2", got.Summary)
 	}
+	wantStages := ImportPipelineStageTasks(block2.Number(), block2.Hash())
+	if !reflect.DeepEqual(got.Stages, wantStages) {
+		t.Fatalf("stages = %+v, want %+v", got.Stages, wantStages)
+	}
 	if len(got.Deletes) != 2 || got.Deletes[0].Number != block1.Number() || got.Deletes[1].Number != block2.Number() {
 		t.Fatalf("deletes = %+v, want block1/block2 staged rows", got.Deletes)
 	}
@@ -134,6 +138,48 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 		if decision.Status != ImportStageProgressPlanned {
 			t.Fatalf("decision = %+v, want planned", decision)
 		}
+	}
+}
+
+func TestPlanImportedBatchProgressStopsAtStageMismatch(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []BufferedBlock{
+			{Num: block1.Number(), Hash: block1.Hash()},
+			{Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	got := PlanImportedBatchProgress(batch, 2, collector)
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(got.Progress, wantRows) {
+		t.Fatalf("progress = %+v, want only import row before execution mismatch", got.Progress)
+	}
+	wantStatuses := []ImportStageProgressStatus{
+		ImportStageProgressPlanned,
+		ImportStageProgressMismatch,
+		ImportStageProgressBlocked,
+		ImportStageProgressBlocked,
+	}
+	if len(got.Decisions) != len(wantStatuses) {
+		t.Fatalf("decisions = %+v, want %d statuses", got.Decisions, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got.Decisions[i].Status != status {
+			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
+		}
+	}
+	if got.Decisions[1].Row.BlockNum != block1.Number() || got.Decisions[1].Row.BlockHash != block1.Hash() {
+		t.Fatalf("mismatch row = %+v, want execution at block1", got.Decisions[1].Row)
 	}
 }
 
@@ -170,6 +216,20 @@ func TestPlanImportedBatchProgressStopsAtStageGap(t *testing.T) {
 		if got.Decisions[i].Status != status {
 			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
 		}
+	}
+}
+
+func TestImportPipelineStageTasks(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	got := ImportPipelineStageTasks(7, hash)
+	want := []ImportStageTask{
+		{CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: hash},
+		{CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash},
+		{CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash},
+		{CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ImportPipelineStageTasks = %+v, want %+v", got, want)
 	}
 }
 

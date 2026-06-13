@@ -51,13 +51,25 @@ type ImportStageProgressStatus uint8
 const (
 	ImportStageProgressPlanned ImportStageProgressStatus = iota
 	ImportStageProgressMissing
+	ImportStageProgressMismatch
 	ImportStageProgressBlocked
 )
+
+// ImportStageTask is one explicit canonical import stage target. The
+// downloader publishes the matching sync diagnostic stage only after the
+// canonical stage hook observes this exact block/hash boundary.
+type ImportStageTask struct {
+	CanonicalStage rawdb.StageID
+	SyncStage      rawdb.StageID
+	BlockNum       uint64
+	BlockHash      tcommon.Hash
+}
 
 // ImportStageProgressDecision is one stage planner decision for an applied
 // sync import prefix. Later stages are blocked after the first missing stage so
 // persisted sync progress remains a contiguous pipeline prefix.
 type ImportStageProgressDecision struct {
+	Task   ImportStageTask
 	Stage  rawdb.StageID
 	Status ImportStageProgressStatus
 	Row    rawdb.StageProgress
@@ -68,6 +80,7 @@ type ImportStageProgressDecision struct {
 type ImportedBatchProgressPlan struct {
 	OK        bool
 	Summary   AppliedBatchSummary
+	Stages    []ImportStageTask
 	Deletes   []rawdb.SyncStagedBlockDelete
 	Progress  []rawdb.StageProgress
 	Decisions []ImportStageProgressDecision
@@ -151,39 +164,40 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 	if !summary.HasStage {
 		return plan
 	}
-	plan.Progress, plan.Decisions = collector.contiguousRows(summary.Last.Num)
+	plan.Stages = ImportPipelineStageTasks(summary.Last.Num, summary.Last.Hash)
+	plan.Progress, plan.Decisions = collector.plannedRows(plan.Stages)
 	return plan
 }
 
-func (c *StageProgressCollector) contiguousRows(through uint64) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
-	observed := make(map[rawdb.StageID]rawdb.StageProgress)
-	for _, row := range c.Rows(through) {
-		observed[row.Stage] = row
-	}
-	stages := SyncPipelineProgressStages()
+func (c *StageProgressCollector) plannedRows(stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
+	observed := c.snapshotRows()
 	progress := make([]rawdb.StageProgress, 0, len(stages))
 	decisions := make([]ImportStageProgressDecision, 0, len(stages))
 	blocked := false
-	for _, stage := range stages {
+	for _, task := range stages {
 		if blocked {
 			decisions = append(decisions, ImportStageProgressDecision{
-				Stage:  stage,
+				Task:   task,
+				Stage:  task.SyncStage,
 				Status: ImportStageProgressBlocked,
 			})
 			continue
 		}
-		row, ok := observed[stage]
-		if !ok {
+		row, status := matchImportStageTask(observed[task.SyncStage], task)
+		if status != ImportStageProgressPlanned {
 			blocked = true
 			decisions = append(decisions, ImportStageProgressDecision{
-				Stage:  stage,
-				Status: ImportStageProgressMissing,
+				Task:   task,
+				Stage:  task.SyncStage,
+				Status: status,
+				Row:    row,
 			})
 			continue
 		}
 		progress = append(progress, row)
 		decisions = append(decisions, ImportStageProgressDecision{
-			Stage:  stage,
+			Task:   task,
+			Stage:  task.SyncStage,
 			Status: ImportStageProgressPlanned,
 			Row:    row,
 		})
@@ -191,7 +205,40 @@ func (c *StageProgressCollector) contiguousRows(through uint64) ([]rawdb.StagePr
 	return progress, decisions
 }
 
+func matchImportStageTask(rows []StageProgressRow, task ImportStageTask) (rawdb.StageProgress, ImportStageProgressStatus) {
+	var (
+		latest StageProgressRow
+		have   bool
+	)
+	for _, row := range rows {
+		if row.BlockNum == task.BlockNum && row.Hash == task.BlockHash {
+			return rawdb.StageProgress{
+				Stage:        task.SyncStage,
+				BlockNum:     row.BlockNum,
+				BlockHash:    row.Hash,
+				HasBlockHash: true,
+			}, ImportStageProgressPlanned
+		}
+		if !have || row.BlockNum > latest.BlockNum {
+			latest = row
+			have = true
+		}
+	}
+	if !have {
+		return rawdb.StageProgress{}, ImportStageProgressMissing
+	}
+	return rawdb.StageProgress{
+		Stage:        task.SyncStage,
+		BlockNum:     latest.BlockNum,
+		BlockHash:    latest.Hash,
+		HasBlockHash: true,
+	}, ImportStageProgressMismatch
+}
+
 func (c *StageProgressCollector) snapshotRows() map[rawdb.StageID][]StageProgressRow {
+	if c == nil {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rows := make(map[rawdb.StageID][]StageProgressRow, len(c.rows))
@@ -226,6 +273,17 @@ func SyncPipelineProgressStages() []rawdb.StageID {
 		rawdb.StageSyncExecution,
 		rawdb.StageSyncCommitment,
 		rawdb.StageSyncFinish,
+	}
+}
+
+// ImportPipelineStageTasks returns the canonical-to-sync stage schedule for
+// one applied import boundary.
+func ImportPipelineStageTasks(blockNum uint64, blockHash tcommon.Hash) []ImportStageTask {
+	return []ImportStageTask{
+		{CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, BlockNum: blockNum, BlockHash: blockHash},
+		{CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: blockNum, BlockHash: blockHash},
+		{CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: blockNum, BlockHash: blockHash},
+		{CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: blockNum, BlockHash: blockHash},
 	}
 }
 
