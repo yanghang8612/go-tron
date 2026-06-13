@@ -143,6 +143,14 @@ type FetchedBlockBufferPlan struct {
 	Kept   tcommon.Hash
 }
 
+// FetchedBlockBufferPlanApplier performs the side effects named by a fetched
+// block buffer plan. SyncService owns logs, staged-body writes, and in-memory
+// buffer maps; downloader owns the action dispatch.
+type FetchedBlockBufferPlanApplier interface {
+	DropConflictingFetchedBlock(plan FetchedBlockBufferPlan)
+	StageFetchedBlock(plan FetchedBlockBufferPlan)
+}
+
 // AcknowledgeFetchReceipt removes a matching received block from the in-flight
 // request state and decrements the outstanding count without underflowing.
 func AcknowledgeFetchReceipt(state FetchReceiptState, hash tcommon.Hash, num uint64) FetchReceiptResult {
@@ -301,4 +309,18 @@ func PlanFetchedBlockBuffer(f FetchedBlockBufferFacts) FetchedBlockBufferPlan {
 	}
 	plan.Action = FetchedBlockBufferStage
 	return plan
+}
+
+// ApplyFetchedBlockBufferPlan executes the downloader-owned local
+// buffer/stage action for one accepted fetched block body.
+func ApplyFetchedBlockBufferPlan(plan FetchedBlockBufferPlan, applier FetchedBlockBufferPlanApplier) {
+	if applier == nil {
+		return
+	}
+	switch plan.Action {
+	case FetchedBlockBufferConflict:
+		applier.DropConflictingFetchedBlock(plan)
+	case FetchedBlockBufferStage:
+		applier.StageFetchedBlock(plan)
+	}
 }

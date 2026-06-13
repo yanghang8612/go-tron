@@ -328,6 +328,31 @@ func TestPlanFetchedBlockBuffer(t *testing.T) {
 	}
 }
 
+func TestApplyFetchedBlockBufferPlan(t *testing.T) {
+	applier := new(recordingFetchedBlockBufferApplier)
+	conflict := FetchedBlockBufferPlan{
+		Action: FetchedBlockBufferConflict,
+		ID:     queueID(10),
+		Kept:   tcommon.Hash{0xee},
+	}
+	stage := FetchedBlockBufferPlan{
+		Action: FetchedBlockBufferStage,
+		ID:     queueID(11),
+	}
+
+	ApplyFetchedBlockBufferPlan(FetchedBlockBufferPlan{ID: queueID(9)}, applier)
+	ApplyFetchedBlockBufferPlan(conflict, applier)
+	ApplyFetchedBlockBufferPlan(stage, applier)
+
+	if !reflect.DeepEqual(applier.conflicts, []FetchedBlockBufferPlan{conflict}) {
+		t.Fatalf("conflicts = %+v, want %+v", applier.conflicts, []FetchedBlockBufferPlan{conflict})
+	}
+	if !reflect.DeepEqual(applier.staged, []FetchedBlockBufferPlan{stage}) {
+		t.Fatalf("staged = %+v, want %+v", applier.staged, []FetchedBlockBufferPlan{stage})
+	}
+	ApplyFetchedBlockBufferPlan(stage, nil)
+}
+
 func fetchReceiptStepActions(steps []FetchReceiptSettlementStep) []FetchReceiptSettlementStepAction {
 	actions := make([]FetchReceiptSettlementStepAction, 0, len(steps))
 	for _, step := range steps {
@@ -372,4 +397,17 @@ func (a *recordingFetchReceiptSettlementApplier) MirrorLegacyLocked() {
 
 func (a *recordingFetchReceiptSettlementApplier) DrainBuffered() {
 	a.calls = append(a.calls, FetchReceiptDrainBuffered)
+}
+
+type recordingFetchedBlockBufferApplier struct {
+	conflicts []FetchedBlockBufferPlan
+	staged    []FetchedBlockBufferPlan
+}
+
+func (a *recordingFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan FetchedBlockBufferPlan) {
+	a.conflicts = append(a.conflicts, plan)
+}
+
+func (a *recordingFetchedBlockBufferApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) {
+	a.staged = append(a.staged, plan)
 }

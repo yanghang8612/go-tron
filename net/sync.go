@@ -1083,15 +1083,7 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 			}
 		}
 		bufferPlan := syncdl.PlanFetchedBlockBuffer(bufferFacts)
-		switch bufferPlan.Action {
-		case syncdl.FetchedBlockBufferConflict:
-			syncLog.Debug("Dropping conflicting buffered sync block",
-				"number", blockNum, "hash", blockHash, "kept", bufferPlan.Kept, "peer", peer.ID())
-		case syncdl.FetchedBlockBufferStage:
-			ss.stageSyncBody(block, raw)
-			ss.blockBuffer[blockNum] = syncdl.NewBufferedBlock(peer, block, raw)
-			ss.bufferedHash[blockHash] = struct{}{}
-		}
+		syncdl.ApplyFetchedBlockBufferPlan(bufferPlan, syncFetchedBlockBufferApplier{service: ss, peer: peer, block: block, raw: raw})
 	}
 	syncdl.ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement, settlementApplier)
 	ss.mu.Unlock()
@@ -1325,6 +1317,24 @@ func (a *syncFetchReceiptSettlementApplier) MirrorLegacyLocked() {
 
 func (a *syncFetchReceiptSettlementApplier) DrainBuffered() {
 	a.service.drainBufferedBlocks()
+}
+
+type syncFetchedBlockBufferApplier struct {
+	service *SyncService
+	peer    *p2p.Peer
+	block   *types.Block
+	raw     []byte
+}
+
+func (a syncFetchedBlockBufferApplier) DropConflictingFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
+	syncLog.Debug("Dropping conflicting buffered sync block",
+		"number", plan.ID.Num, "hash", plan.ID.Hash, "kept", plan.Kept, "peer", a.peer.ID())
+}
+
+func (a syncFetchedBlockBufferApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
+	a.service.stageSyncBody(a.block, a.raw)
+	a.service.blockBuffer[plan.ID.Num] = syncdl.NewBufferedBlock(a.peer, a.block, a.raw)
+	a.service.bufferedHash[plan.ID.Hash] = struct{}{}
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode
