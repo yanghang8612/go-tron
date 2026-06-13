@@ -19,6 +19,16 @@ type InventoryTargetUpdate struct {
 	Advanced    bool
 }
 
+// DrainedPeerAction is the next action for a peer whose local fetch queue has
+// no eligible block IDs to request.
+type DrainedPeerAction uint8
+
+const (
+	DrainedPeerIdle DrainedPeerAction = iota
+	DrainedPeerWaitLocalHead
+	DrainedPeerRequestInventory
+)
+
 // NewFetchWindow derives the serviceable range from an inventory tip. A zero
 // tip means the peer has not yet advertised a usable inventory window.
 func NewFetchWindow(inventoryTip uint64, inventoryLimit int) FetchWindow {
@@ -59,6 +69,25 @@ func ObserveInventoryTarget(currentTarget, inventoryTip uint64, remainNum int64,
 		Observed:    observed,
 		Advanced:    advanced,
 	}
+}
+
+// ShouldMarkInventoryDone mirrors java-tron's "one id and no remain" completion
+// signal once no new block IDs were queued from the inventory response.
+func ShouldMarkInventoryDone(inventoryIDs, queued int, remainNum int64) bool {
+	return inventoryIDs == 0 || (queued == 0 && inventoryIDs == 1 && remainNum == 0)
+}
+
+// PlanDrainedPeerAction decides whether an idle peer should wait for local
+// import to reach its last advertised inventory tip or request a fresh
+// CHAIN_INVENTORY window.
+func PlanDrainedPeerAction(done bool, inventoryTip, currentHead uint64) DrainedPeerAction {
+	if done {
+		return DrainedPeerIdle
+	}
+	if inventoryTip > currentHead {
+		return DrainedPeerWaitLocalHead
+	}
+	return DrainedPeerRequestInventory
 }
 
 // Contains reports whether bid falls inside the peer's advertised fetch range.

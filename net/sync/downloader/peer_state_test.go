@@ -68,3 +68,45 @@ func TestObserveInventoryTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldMarkInventoryDone(t *testing.T) {
+	tests := []struct {
+		name         string
+		inventoryIDs int
+		queued       int
+		remain       int64
+		done         bool
+	}{
+		{name: "empty inventory", done: true},
+		{name: "single already known head", inventoryIDs: 1, queued: 0, remain: 0, done: true},
+		{name: "single with queued block", inventoryIDs: 1, queued: 1, remain: 0},
+		{name: "single with remain", inventoryIDs: 1, queued: 0, remain: 2},
+		{name: "multi without queued", inventoryIDs: 2, queued: 0, remain: 0},
+	}
+	for _, tt := range tests {
+		if got := ShouldMarkInventoryDone(tt.inventoryIDs, tt.queued, tt.remain); got != tt.done {
+			t.Fatalf("%s: done = %v, want %v", tt.name, got, tt.done)
+		}
+	}
+}
+
+func TestPlanDrainedPeerAction(t *testing.T) {
+	tests := []struct {
+		name         string
+		done         bool
+		inventoryTip uint64
+		head         uint64
+		action       DrainedPeerAction
+	}{
+		{name: "done", done: true, inventoryTip: 10, head: 10, action: DrainedPeerIdle},
+		{name: "wait local head", inventoryTip: 10, head: 9, action: DrainedPeerWaitLocalHead},
+		{name: "request at tip", inventoryTip: 10, head: 10, action: DrainedPeerRequestInventory},
+		{name: "request past tip", inventoryTip: 10, head: 11, action: DrainedPeerRequestInventory},
+		{name: "request without tip", action: DrainedPeerRequestInventory},
+	}
+	for _, tt := range tests {
+		if got := PlanDrainedPeerAction(tt.done, tt.inventoryTip, tt.head); got != tt.action {
+			t.Fatalf("%s: action = %v, want %v", tt.name, got, tt.action)
+		}
+	}
+}
