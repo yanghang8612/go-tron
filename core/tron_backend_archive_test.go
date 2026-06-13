@@ -14,6 +14,7 @@ import (
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/params"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // Archive-query RPC surface over flat temporal state history.
@@ -702,6 +703,166 @@ func TestArchiveQuery_CodeAndStorageUseColdStateDomainChangeSnapshots(t *testing
 
 	assertArchiveCodeStorage("cold", 2, code2, storage2)
 	assertArchiveCodeStorage("cold", 3, code3, storage3)
+}
+
+func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChangeSnapshots(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	bc.config.HistoryMode = params.HistoryModeSnap
+	bc.config.HistoryPruneWindow = 1
+
+	const numBlocks = 5
+	parent := bc.genesisBlock.Hash()
+	blocks := make([]*types.Block, numBlocks+1)
+	blocks[0] = bc.genesisBlock
+	for n := int64(1); n <= numBlocks; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		blocks[n] = blk
+	}
+
+	range2, ok, err := rawdb.ReadStateTxRange(bc.buffer, 2)
+	if err != nil || !ok {
+		t.Fatalf("read block 2 tx range: ok=%v err=%v", ok, err)
+	}
+	range3, ok, err := rawdb.ReadStateTxRange(bc.buffer, 3)
+	if err != nil || !ok {
+		t.Fatalf("read block 3 tx range: ok=%v err=%v", ok, err)
+	}
+	range4, ok, err := rawdb.ReadStateTxRange(bc.buffer, 4)
+	if err != nil || !ok {
+		t.Fatalf("read block 4 tx range: ok=%v err=%v", ok, err)
+	}
+
+	contract := testInsertAddr(43)
+	var slotA, slotB tcommon.Hash
+	slotA[31] = 0xAA
+	slotB[31] = 0xBB
+	codeA := []byte{0x60, 0x0A, 0x60, 0x01}
+	codeB := []byte{0x60, 0x0B, 0x60, 0x02}
+	codeHashA := tcommon.Keccak256(codeA)
+	codeHashB := tcommon.Keccak256(codeB)
+	storageA0 := tcommon.HexToHash("a0")
+	storageB0 := tcommon.HexToHash("b0")
+	storageA1 := tcommon.HexToHash("a1")
+
+	root := bc.HeadStateRoot()
+	bc.buffer.BeginBlock(tcommon.Hash{0xDD}, 0) // sentinel; archive test layer
+	statedb, err := state.New(root, bc.StateDB())
+	if err != nil {
+		t.Fatalf("open manual recreate state: %v", err)
+	}
+	if err := bc.prepareOpenState(statedb); err != nil {
+		t.Fatalf("prepare manual recreate state: %v", err)
+	}
+	applyDomainBlock := func(blockNum uint64, blockHash tcommon.Hash, txRange *rawdb.StateTxRange, mutate func(*state.StateDB)) {
+		t.Helper()
+		statedb.BeginDomainChangeJournalCapture(bc.buffer, blockNum, blockHash, txRange.BeginTxNum, txRange.EndTxNum)
+		mark := statedb.DomainChangeJournalMark()
+		mutate(statedb)
+		if err := statedb.FlushDomainChangesSince(mark, txRange.EndTxNum); err != nil {
+			t.Fatalf("flush domain changes block %d: %v", blockNum, err)
+		}
+		nextRoot, err := statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit manual domain state block %d: %v", blockNum, err)
+		}
+		root = nextRoot
+		statedb, err = state.New(root, bc.StateDB())
+		if err != nil {
+			t.Fatalf("reopen manual domain state block %d: %v", blockNum, err)
+		}
+		if err := bc.prepareOpenState(statedb); err != nil {
+			t.Fatalf("prepare reopened manual domain state block %d: %v", blockNum, err)
+		}
+	}
+	applyDomainBlock(2, blocks[2].Hash(), range2, func(s *state.StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, codeA)
+		s.SetState(contract, slotA, storageA0)
+		s.SetState(contract, slotB, storageB0)
+	})
+	applyDomainBlock(3, blocks[3].Hash(), range3, func(s *state.StateDB) {
+		s.SelfDestruct(contract)
+		s.FinalizeTransaction()
+	})
+	applyDomainBlock(4, blocks[4].Hash(), range4, func(s *state.StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetCode(contract, codeB)
+		s.SetState(contract, slotA, storageA1)
+	})
+	bc.buffer.CommitBlock()
+
+	assertArchiveCodeStorage := func(label string, blockNum uint64, wantCode []byte, wantA, wantB tcommon.Hash) {
+		t.Helper()
+		gotCode, err := b.GetCodeAt(contract, blockNum)
+		if err != nil {
+			t.Fatalf("%s GetCodeAt(contract, %d): %v", label, blockNum, err)
+		}
+		if !bytes.Equal(gotCode, wantCode) {
+			t.Fatalf("%s GetCodeAt(contract, %d) = %x, want %x", label, blockNum, gotCode, wantCode)
+		}
+		gotA, err := b.GetStorageAtBlock(contract, slotA, blockNum)
+		if err != nil {
+			t.Fatalf("%s GetStorageAtBlock(contract, slotA, %d): %v", label, blockNum, err)
+		}
+		if gotA != wantA {
+			t.Fatalf("%s slotA @%d = %x, want %x", label, blockNum, gotA, wantA)
+		}
+		gotB, err := b.GetStorageAtBlock(contract, slotB, blockNum)
+		if err != nil {
+			t.Fatalf("%s GetStorageAtBlock(contract, slotB, %d): %v", label, blockNum, err)
+		}
+		if gotB != wantB {
+			t.Fatalf("%s slotB @%d = %x, want %x", label, blockNum, gotB, wantB)
+		}
+	}
+	assertArchiveCodeStorage("hot pre-destroy", 2, codeA, storageA0, storageB0)
+	assertArchiveCodeStorage("hot destroyed", 3, nil, tcommon.Hash{}, tcommon.Hash{})
+	assertArchiveCodeStorage("hot recreated", 4, codeB, storageA1, tcommon.Hash{})
+
+	dir := t.TempDir()
+	historyRefs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(bc.buffer, dir, range2.BeginTxNum, range4.EndTxNum, "history/state-domain-change-recreate-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold state-domain-change segment: %v", err)
+	}
+	codeRef, codeAccessorRef, codeBTreeRef, err := statesnapshots.BuildCodeSegmentFilesFromDB(bc.buffer, dir, range2.BeginTxNum, range4.EndTxNum, "latest/code-recreate-2-4.seg")
+	if err != nil {
+		t.Fatalf("build cold code segment: %v", err)
+	}
+	refs := append(historyRefs, codeRef, codeAccessorRef, codeBTreeRef)
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range4.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	b.SetStateColdHistory(mgr)
+
+	bc.buffer.BeginBlock(tcommon.Hash{0xDE}, 0) // sentinel; archive prune layer
+	for n := uint64(2); n <= 4; n++ {
+		if err := rawdb.DeleteStateDomainChanges(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateDomainChanges(%d): %v", n, err)
+		}
+		if err := rawdb.DeleteStateTxRange(bc.buffer, n); err != nil {
+			t.Fatalf("DeleteStateTxRange(%d): %v", n, err)
+		}
+	}
+	if err := rawdb.DeleteStateCode(bc.buffer, codeHashA); err != nil {
+		t.Fatalf("delete hot codeA: %v", err)
+	}
+	if err := rawdb.DeleteStateCode(bc.buffer, codeHashB); err != nil {
+		t.Fatalf("delete hot codeB: %v", err)
+	}
+	bc.buffer.CommitBlock()
+
+	assertArchiveCodeStorage("cold pre-destroy", 2, codeA, storageA0, storageB0)
+	assertArchiveCodeStorage("cold destroyed", 3, nil, tcommon.Hash{}, tcommon.Hash{})
+	assertArchiveCodeStorage("cold recreated", 4, codeB, storageA1, tcommon.Hash{})
 }
 
 // TestArchiveQuery_GatedOnHistoryEnabled verifies the HistoryEnabled gate:
