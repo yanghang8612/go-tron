@@ -140,6 +140,15 @@ type ImportOutcome struct {
 	StopDrain     bool
 }
 
+// ImportBatchExecutionPlan is the downloader-owned execution target for one
+// decoded staged-body chunk. SyncService executes Blocks, while the schedule
+// names the expected bodies/execution/commitment/finish boundary.
+type ImportBatchExecutionPlan struct {
+	Blocks           []*types.Block
+	Schedule         ImportStageSchedule
+	HasStageSchedule bool
+}
+
 // ImportBatchRunStepAction names one ordered local operation for executing a
 // decoded staged-body chunk through the canonical chain importer.
 type ImportBatchRunStepAction uint8
@@ -169,7 +178,7 @@ type ImportBatchRunPlan struct {
 type ImportBatchRunPlanApplier interface {
 	LogDecodeBatchResult(BufferedBatchDecodeResult)
 	RecordBufferWait(time.Duration)
-	ExecuteImportBatch(blocks []*types.Block, observe StageProgressWriter) (time.Duration, error)
+	ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error)
 	RecordImportedBatch(batch BufferedBatch, applied int, elapsed time.Duration, progress *StageProgressCollector)
 	PauseImport(peer *p2p.Peer, blockNum uint64, err error)
 }
@@ -179,6 +188,7 @@ type ImportBatchRunPlanApplier interface {
 // means canonical import failed and the caller should leave the drain loop.
 type ImportBatchRunResult struct {
 	Decode        BufferedBatchDecodeResult
+	Execution     ImportBatchExecutionPlan
 	Outcome       ImportOutcome
 	ContinueDrain bool
 	StopDrain     bool
@@ -226,7 +236,8 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 		case ImportBatchRunExecute:
 			collector = NewStageProgressCollector()
-			elapsed, insertErr = applier.ExecuteImportBatch(plan.Batch.Blocks, collector.Observe)
+			result.Execution = PlanImportBatchExecution(plan.Batch)
+			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, collector.Observe)
 			executed = true
 		case ImportBatchRunSettle:
 			if !executed {
@@ -243,6 +254,20 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		}
 	}
 	return result
+}
+
+// PlanImportBatchExecution returns the explicit canonical import target for a
+// decoded staged-body chunk.
+func PlanImportBatchExecution(batch BufferedBatch) ImportBatchExecutionPlan {
+	execution := ImportBatchExecutionPlan{
+		Blocks: append([]*types.Block(nil), batch.Blocks...),
+	}
+	summary := SummarizeAppliedBatch(batch, len(batch.Blocks))
+	if summary.OK && summary.HasStage {
+		execution.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
+		execution.HasStageSchedule = true
+	}
+	return execution
 }
 
 // PlanImportOutcome maps a canonical insert result into service actions:

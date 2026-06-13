@@ -253,6 +253,26 @@ func TestPlanImportOutcome(t *testing.T) {
 	}
 }
 
+func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+
+	got := PlanImportBatchExecution(batch)
+	if len(got.Blocks) != 2 || got.Blocks[0].Number() != block1.Number() || got.Blocks[0].Hash() != block1.Hash() || got.Blocks[1].Number() != block2.Number() || got.Blocks[1].Hash() != block2.Hash() {
+		t.Fatalf("execution blocks = %+v, want decoded block1/block2", got.Blocks)
+	}
+	if !got.HasStageSchedule || got.Schedule.BlockNum != block2.Number() || got.Schedule.BlockHash != block2.Hash() {
+		t.Fatalf("execution schedule = %+v has=%v, want block2", got.Schedule, got.HasStageSchedule)
+	}
+	if !reflect.DeepEqual(got.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
+		t.Fatalf("execution schedule tasks = %+v, want full import pipeline", got.Schedule.Tasks)
+	}
+}
+
 func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
@@ -278,6 +298,12 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if !reflect.DeepEqual(applier.waits, batch.BufferWaits) {
 		t.Fatalf("waits = %v, want %v", applier.waits, batch.BufferWaits)
 	}
+	if result.Execution.Schedule.BlockNum != block2.Number() || !result.Execution.HasStageSchedule {
+		t.Fatalf("result execution schedule = %+v has=%v, want block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
+	}
+	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
+		t.Fatalf("applier execution tasks = %+v, want block2 pipeline", applier.execution.Schedule.Tasks)
+	}
 	wantProgress := importPipelineProgressRows(block2.Number(), block2.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
 		t.Fatalf("progress = %+v, want %+v", applier.progress, wantProgress)
@@ -300,6 +326,9 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if result.Outcome.Applied != 1 || !result.Outcome.RecordApplied || applier.recordApplied != 1 {
 		t.Fatalf("applied = result %d record %d, want prefix 1", result.Outcome.Applied, applier.recordApplied)
+	}
+	if !result.Execution.HasStageSchedule || result.Execution.Schedule.BlockNum != block2.Number() {
+		t.Fatalf("execution schedule = %+v has=%v, want attempted block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
 	}
 	wantProgress := importPipelineProgressRows(block1.Number(), block1.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
@@ -657,6 +686,7 @@ type recordingImportBatchRunApplier struct {
 	elapsed                time.Duration
 	insertErr              error
 	appliedForObservations int
+	execution              ImportBatchExecutionPlan
 	recordApplied          int
 	recordElapsed          time.Duration
 	progress               []rawdb.StageProgress
@@ -673,14 +703,15 @@ func (a *recordingImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 	a.waits = append(a.waits, wait)
 }
 
-func (a *recordingImportBatchRunApplier) ExecuteImportBatch(blocks []*types.Block, observe StageProgressWriter) (time.Duration, error) {
+func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error) {
 	a.calls = append(a.calls, ImportBatchRunExecute)
-	applied := len(blocks)
+	a.execution = execution
+	applied := len(execution.Blocks)
 	if a.appliedForObservations > 0 && a.appliedForObservations < applied {
 		applied = a.appliedForObservations
 	}
 	if applied > 0 {
-		block := blocks[applied-1]
+		block := execution.Blocks[applied-1]
 		for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
 			observe(stage, block.Number(), block.Hash())
 		}
