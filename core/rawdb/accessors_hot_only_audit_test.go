@@ -87,6 +87,17 @@ func TestProductionBlockHashByNumberReadsStayOnAuditedBoundaries(t *testing.T) {
 	}
 }
 
+func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditHotOnlyChainDBConstructors(t, root, map[string]struct{}{
+		"cmd/gtron/db_cmd.go":            {},
+		"core/balance_trace_backfill.go": {},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production code must not construct hot-only ChainDB wrappers outside audited replay/diagnostic boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
@@ -184,6 +195,61 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 	return offenders
 }
 
+func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		if len(rawdbNames) == 0 {
+			return nil
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			if !isRawDBCall(call.Fun, rawdbNames, "NewChainDB") {
+				return true
+			}
+			if !isNoopAncientComposite(call.Args[1], rawdbNames) {
+				return true
+			}
+			if isAllowedAuditPath(root, path, allowed) {
+				return true
+			}
+			offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), "rawdb.NewChainDB(..., rawdb.NoopAncient{})"))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit hot-only ChainDB constructors: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
 func isAllowedRawDBCall(root, path, function string, allowed map[string]map[string]struct{}) bool {
 	if len(allowed) == 0 {
 		return false
@@ -199,6 +265,63 @@ func isAllowedRawDBCall(root, path, function string, allowed map[string]map[stri
 	}
 	_, ok := functions[function]
 	return ok
+}
+
+func isAllowedAuditPath(root, path string, allowed map[string]struct{}) bool {
+	if len(allowed) == 0 {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = path
+	}
+	rel = filepath.ToSlash(rel)
+	_, ok := allowed[rel]
+	return ok
+}
+
+func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) bool {
+	switch fun := expr.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := fun.X.(*ast.Ident)
+		if !ok || fun.Sel.Name != name {
+			return false
+		}
+		_, imported := rawdbNames[ident.Name]
+		return imported
+	case *ast.Ident:
+		if fun.Name != name {
+			return false
+		}
+		_, dotImported := rawdbNames["."]
+		return dotImported
+	default:
+		return false
+	}
+}
+
+func isNoopAncientComposite(expr ast.Expr, rawdbNames map[string]struct{}) bool {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	switch typ := lit.Type.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := typ.X.(*ast.Ident)
+		if !ok || typ.Sel.Name != "NoopAncient" {
+			return false
+		}
+		_, imported := rawdbNames[ident.Name]
+		return imported
+	case *ast.Ident:
+		if typ.Name != "NoopAncient" {
+			return false
+		}
+		_, dotImported := rawdbNames["."]
+		return dotImported
+	default:
+		return false
+	}
 }
 
 func rawdbImportNames(file *ast.File) map[string]struct{} {

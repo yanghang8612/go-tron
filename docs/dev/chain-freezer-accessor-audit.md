@@ -43,6 +43,12 @@ known boundary adapters: `blockbuffer`/TVM `BLOCKHASH`, pruning and snapshot
 canonical-hash verification, the chain-freezer adapter, actuator genesis
 identity, and `gtron db` diagnostics.
 
+`TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries` also rejects
+new production `rawdb.NewChainDB(..., rawdb.NoopAncient{})` wrappers. Those
+wrappers bypass ancient/cold sidecars by construction, so the whitelist is kept
+to isolated replay and diagnostic boundaries that intentionally do not read the
+live chain freezer.
+
 ### Why not split `header` and `body` tables?
 
 The geth spec uses two tables because Ethereum stores headers and bodies
