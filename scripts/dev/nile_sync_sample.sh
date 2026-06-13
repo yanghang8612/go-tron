@@ -446,7 +446,11 @@ def parse_sync_log(path):
         "syncLogStageBlockedStatus": "",
         "syncLogExecPlanBlocks": -1,
         "syncLogExecPlanStages": -1,
+        "syncLogExecPlanBodyStages": -1,
         "syncLogExecPlanPostBodyStages": -1,
+        "syncLogExecPlanExecutionStages": -1,
+        "syncLogExecPlanCommitmentStages": -1,
+        "syncLogExecPlanFinishStages": -1,
         "syncLogExecPlanFirst": -1,
         "syncLogExecPlanLast": -1,
     }
@@ -496,7 +500,11 @@ def parse_sync_log(path):
         "syncStageBlockedStatus": "syncLogStageBlockedStatus",
         "syncExecPlanBlocks": "syncLogExecPlanBlocks",
         "syncExecPlanStages": "syncLogExecPlanStages",
+        "syncExecPlanBodyStages": "syncLogExecPlanBodyStages",
         "syncExecPlanPostBodyStages": "syncLogExecPlanPostBodyStages",
+        "syncExecPlanExecutionStages": "syncLogExecPlanExecutionStages",
+        "syncExecPlanCommitmentStages": "syncLogExecPlanCommitmentStages",
+        "syncExecPlanFinishStages": "syncLogExecPlanFinishStages",
         "syncExecPlanFirst": "syncLogExecPlanFirst",
         "syncExecPlanLast": "syncLogExecPlanLast",
     }
