@@ -395,6 +395,49 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *test
 	}
 }
 
+func TestRecordImportedBatchBlocksDownstreamStagesAfterCommitmentMismatch(t *testing.T) {
+	bc := makeTestChain(t)
+	ss := NewSyncService(bc, nil)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	batch := syncdl.BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []syncdl.BufferedBlock{
+			{Raw: rawOf(t, block1), Num: block1.Number(), Hash: block1.Hash()},
+			{Raw: rawOf(t, block2), Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := syncdl.NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	ss.recordImportedBatch(batch, 2, time.Millisecond, collector)
+
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want blocked", stage, row, ok, err)
+		}
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || ok {
+			t.Fatalf("staged block %d after import ok=%v err=%v, want deleted", block.Number(), ok, err)
+		}
+	}
+}
+
 func TestMultiPeerSyncRejectsConflictingSameHeightInventories(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)

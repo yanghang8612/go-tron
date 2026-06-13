@@ -279,6 +279,49 @@ func TestPlanImportedBatchProgressStopsAtStageMismatch(t *testing.T) {
 	}
 }
 
+func TestPlanImportedBatchProgressStopsAtCommitmentMismatch(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []BufferedBlock{
+			{Num: block1.Number(), Hash: block1.Hash()},
+			{Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	got := PlanImportedBatchProgress(batch, 2, collector)
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(got.Progress, wantRows) {
+		t.Fatalf("progress = %+v, want import+execution before commitment mismatch", got.Progress)
+	}
+	wantStatuses := []ImportStageProgressStatus{
+		ImportStageProgressPlanned,
+		ImportStageProgressPlanned,
+		ImportStageProgressMismatch,
+		ImportStageProgressBlocked,
+	}
+	if len(got.Decisions) != len(wantStatuses) {
+		t.Fatalf("decisions = %+v, want %d statuses", got.Decisions, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got.Decisions[i].Status != status {
+			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
+		}
+	}
+	if got.Decisions[2].Row.BlockNum != block1.Number() || got.Decisions[2].Row.BlockHash != block1.Hash() {
+		t.Fatalf("mismatch row = %+v, want commitment at block1", got.Decisions[2].Row)
+	}
+}
+
 func TestPlanImportedBatchProgressStopsAtStageGap(t *testing.T) {
 	block := testBufferedBlock(2)
 	batch := BufferedBatch{
@@ -304,6 +347,44 @@ func TestPlanImportedBatchProgressStopsAtStageGap(t *testing.T) {
 		ImportStageProgressMissing,
 		ImportStageProgressBlocked,
 		ImportStageProgressBlocked,
+	}
+	if len(got.Decisions) != len(wantStatuses) {
+		t.Fatalf("decisions = %+v, want %d statuses", got.Decisions, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got.Decisions[i].Status != status {
+			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
+		}
+	}
+}
+
+func TestPlanImportedBatchProgressStopsAtFinishGap(t *testing.T) {
+	block := testBufferedBlock(2)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block},
+		Buffered: []BufferedBlock{
+			{Num: block.Number(), Hash: block.Hash()},
+		},
+	}
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block.Number(), block.Hash())
+	collector.Observe(rawdb.StageExecution, block.Number(), block.Hash())
+	collector.Observe(rawdb.StageCommitment, block.Number(), block.Hash())
+
+	got := PlanImportedBatchProgress(batch, 1, collector)
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncCommitment, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(got.Progress, wantRows) {
+		t.Fatalf("progress = %+v, want import+execution+commitment before finish gap", got.Progress)
+	}
+	wantStatuses := []ImportStageProgressStatus{
+		ImportStageProgressPlanned,
+		ImportStageProgressPlanned,
+		ImportStageProgressPlanned,
+		ImportStageProgressMissing,
 	}
 	if len(got.Decisions) != len(wantStatuses) {
 		t.Fatalf("decisions = %+v, want %d statuses", got.Decisions, len(wantStatuses))
