@@ -305,7 +305,9 @@ Status:
   helpers to requeue pending in-flight IDs in stable block/hash order before
   the peer's local fetch list
   while `SyncService` supplies only the canonical/requested/block-path
-  availability filter. These are
+  availability filter. Retry-list and peer-local fetch-list candidate decisions
+  are also helper-owned, so the service loop gathers chain/path facts while the
+  downloader package decides drop/keep/assign/accept behavior. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
