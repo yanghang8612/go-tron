@@ -254,6 +254,84 @@ func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *tes
 	}
 }
 
+func TestApplySessionStartupPlanRestoresHalfDownloadedBodiesBeforeExecution(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	block4 := testBufferedBlock(4)
+	for _, block := range []*types.Block{block1, block2, block4} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncInventory, block4.Number()); err != nil {
+		t.Fatalf("write inventory target: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, 0, nil)
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         0,
+		RestoreLimit: 10,
+	}), applier)
+
+	if len(result.SyncPipelineRepairs) != len(SyncPipelineProgressStages()) {
+		t.Fatalf("repairs = %+v, want one per sync import stage", result.SyncPipelineRepairs)
+	}
+	for _, repair := range result.SyncPipelineRepairs {
+		if repair.Status != SyncStageProgressMissing {
+			t.Fatalf("repair = %+v, want missing stage row before execution", repair)
+		}
+	}
+	if !result.HasStagedBodyRestore {
+		t.Fatal("startup result did not record staged body restore")
+	}
+	if restore := result.StagedBodyRestore; restore.Restored != 2 || !restore.NeedPruneTail || restore.PruneFrom != 3 ||
+		restore.TargetHead != block4.Number() || restore.NextExpected != 3 || !restore.HaveLastRestored ||
+		restore.LastRestoredNum != block2.Number() || restore.LastRestoredHash != block2.Hash() {
+		t.Fatalf("restore result = %+v, want restored block1-2 and prune from gap block3", restore)
+	}
+
+	if applier.target != block4.Number() {
+		t.Fatalf("restored target = %d, want inventory target block4", applier.target)
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number()); err != nil || !ok || row.Hash != block.Hash() {
+			t.Fatalf("staged block%d = %+v ok=%v err=%v, want retained", block.Number(), row, ok, err)
+		}
+		if buffered, ok := applier.buffer[block.Number()]; !ok || buffered.Hash != block.Hash() {
+			t.Fatalf("buffered block%d = %+v ok=%v, want restored for local import", block.Number(), buffered, ok)
+		}
+		if _, ok := applier.hashes[block.Hash()]; !ok {
+			t.Fatalf("buffered hash for block%d missing", block.Number())
+		}
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block4.Number()); err != nil || ok {
+		t.Fatalf("staged block4 = ok:%v err:%v, want pruned after block3 gap", ok, err)
+	}
+	if _, ok := applier.buffer[block4.Number()]; ok {
+		t.Fatal("buffer restored gapped block4, want only contiguous prefix")
+	}
+	bodies, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies)
+	if err != nil || !ok || bodies.BlockNum != block2.Number() || bodies.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodies progress = %+v ok=%v err=%v, want rewound to block2", bodies, ok, err)
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady progress = %+v ok=%v err=%v, want block2 contiguous ready frontier", ready, ok, err)
+	}
+	for _, stage := range SyncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want absent before execution", stage, row, ok, err)
+		}
+	}
+}
+
 type recordedSessionStartupCall struct {
 	action SessionStartupStepAction
 	first  uint64
