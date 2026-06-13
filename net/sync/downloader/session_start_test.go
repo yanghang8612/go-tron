@@ -3,6 +3,11 @@ package downloader
 import (
 	"reflect"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/ethdb"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
 )
 
 func TestPlanSessionStartup(t *testing.T) {
@@ -80,6 +85,28 @@ func TestPlanSessionStartupSaturatesRestoreStart(t *testing.T) {
 }
 
 func TestApplySessionStartupPlan(t *testing.T) {
+	repairHash := tcommon.Hash{0x09}
+	repairRows := []SyncStageProgressRepair{
+		{
+			Stage:  rawdb.StageSyncImport,
+			Status: SyncStageProgressKept,
+			Row: rawdb.StageProgress{
+				Stage:        rawdb.StageSyncImport,
+				BlockNum:     9,
+				BlockHash:    repairHash,
+				HasBlockHash: true,
+			},
+			CanonicalHash: repairHash,
+		},
+	}
+	restoreResult := StagedBodyRestoreResult{
+		Restored:         2,
+		TargetHead:       11,
+		NextExpected:     12,
+		LastRestoredNum:  11,
+		LastRestoredHash: tcommon.Hash{0x0b},
+		HaveLastRestored: true,
+	}
 	plan := SessionStartupPlan{
 		Steps: []SessionStartupStep{
 			{Action: SessionStartupRepairSyncPipeline},
@@ -90,7 +117,10 @@ func TestApplySessionStartupPlan(t *testing.T) {
 			{Action: SessionStartupRefreshBodiesReady},
 		},
 	}
-	var applier recordingSessionStartupApplier
+	applier := recordingSessionStartupApplier{
+		repairs: repairRows,
+		restore: restoreResult,
+	}
 	result := ApplySessionStartupPlan(plan, &applier)
 	want := []recordedSessionStartupCall{
 		{action: SessionStartupRepairSyncPipeline},
@@ -115,9 +145,112 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	if !reflect.DeepEqual(result.UnknownSteps, []SessionStartupStepAction{SessionStartupStepAction(255)}) {
 		t.Fatalf("unknown steps = %+v, want [255]", result.UnknownSteps)
 	}
+	if !reflect.DeepEqual(result.SyncPipelineRepairs, repairRows) {
+		t.Fatalf("sync pipeline repairs = %+v, want %+v", result.SyncPipelineRepairs, repairRows)
+	}
+	if !result.HasStagedBodyRestore || !reflect.DeepEqual(result.StagedBodyRestore, restoreResult) {
+		t.Fatalf("staged body restore = %+v set=%v, want %+v set", result.StagedBodyRestore, result.HasStagedBodyRestore, restoreResult)
+	}
 
 	if nilResult := ApplySessionStartupPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
 		t.Fatalf("nil applier result = %+v, want empty", nilResult)
+	}
+}
+
+func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	block6 := testBufferedBlock(6)
+	for _, block := range []*types.Block{block2, block3, block4, block6} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncInventory, block6.Number()); err != nil {
+		t.Fatalf("write inventory target: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block6.Number(), block6.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block6.Number(), block6.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write sync import progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write sync execution progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncCommitment, block3.Number(), block3.Hash()); err != nil {
+		t.Fatalf("write inconsistent sync commitment progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncFinish, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write downstream sync finish progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, 2, map[uint64]tcommon.Hash{
+		block2.Number(): block2.Hash(),
+	})
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         block2.Number(),
+		RestoreLimit: 10,
+	}), applier)
+
+	wantRepairs := []SyncStageProgressRepairStatus{
+		SyncStageProgressKept,
+		SyncStageProgressKept,
+		SyncStageProgressDeleted,
+		SyncStageProgressDeleted,
+	}
+	if len(result.SyncPipelineRepairs) != len(wantRepairs) {
+		t.Fatalf("repairs = %+v, want %d entries", result.SyncPipelineRepairs, len(wantRepairs))
+	}
+	for i, status := range wantRepairs {
+		if result.SyncPipelineRepairs[i].Status != status {
+			t.Fatalf("repair %d = %+v, want status %v", i, result.SyncPipelineRepairs[i], status)
+		}
+	}
+	if !result.HasStagedBodyRestore {
+		t.Fatal("startup result did not record staged body restore")
+	}
+	if restore := result.StagedBodyRestore; restore.Restored != 2 || !restore.NeedPruneTail || restore.PruneFrom != 5 ||
+		restore.TargetHead != 6 || restore.NextExpected != 5 || !restore.HaveLastRestored ||
+		restore.LastRestoredNum != block4.Number() || restore.LastRestoredHash != block4.Hash() {
+		t.Fatalf("restore result = %+v, want restored 3-4 and prune from 5", restore)
+	}
+
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block2.Number()); err != nil || ok {
+		t.Fatalf("staged block2 = ok:%v err:%v, want deleted as already imported", ok, err)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block6.Number()); err != nil || ok {
+		t.Fatalf("staged block6 = ok:%v err:%v, want pruned after gap", ok, err)
+	}
+	for _, block := range []*types.Block{block3, block4} {
+		if row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number()); err != nil || !ok || row.Hash != block.Hash() {
+			t.Fatalf("staged block%d = %+v ok=%v err=%v, want kept", block.Number(), row, ok, err)
+		}
+		if buffered, ok := applier.buffer[block.Number()]; !ok || buffered.Hash != block.Hash() {
+			t.Fatalf("buffered block%d = %+v ok=%v, want restored", block.Number(), buffered, ok)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block4.Number() || row.BlockHash != block4.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block4", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2 kept", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
 	}
 }
 
@@ -129,11 +262,14 @@ type recordedSessionStartupCall struct {
 }
 
 type recordingSessionStartupApplier struct {
-	calls []recordedSessionStartupCall
+	calls   []recordedSessionStartupCall
+	repairs []SyncStageProgressRepair
+	restore StagedBodyRestoreResult
 }
 
-func (a *recordingSessionStartupApplier) RepairSyncPipeline() {
+func (a *recordingSessionStartupApplier) RepairSyncPipeline() []SyncStageProgressRepair {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRepairSyncPipeline})
+	return a.repairs
 }
 
 func (a *recordingSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
@@ -144,15 +280,68 @@ func (a *recordingSessionStartupApplier) DeleteImportedBodies(through uint64) {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupDeleteImportedBodies, first: through})
 }
 
-func (a *recordingSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+func (a *recordingSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult {
 	a.calls = append(a.calls, recordedSessionStartupCall{
 		action: SessionStartupRestoreStagedBodies,
 		first:  from,
 		limit:  limit,
 		prune:  pruneStaleTail,
 	})
+	return a.restore
 }
 
 func (a *recordingSessionStartupApplier) RefreshBodiesReady() {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRefreshBodiesReady})
+}
+
+type startupRecoveryTestApplier struct {
+	db        ethdb.KeyValueStore
+	head      uint64
+	target    uint64
+	canonical map[uint64]tcommon.Hash
+	buffer    map[uint64]BufferedBlock
+	hashes    map[tcommon.Hash]struct{}
+	path      BlockPath
+}
+
+func newStartupRecoveryTestApplier(db ethdb.KeyValueStore, head uint64, canonical map[uint64]tcommon.Hash) *startupRecoveryTestApplier {
+	return &startupRecoveryTestApplier{
+		db:        db,
+		head:      head,
+		target:    head,
+		canonical: canonical,
+		buffer:    make(map[uint64]BufferedBlock),
+		hashes:    make(map[tcommon.Hash]struct{}),
+		path:      NewBlockPath(),
+	}
+}
+
+func (a *startupRecoveryTestApplier) RepairSyncPipeline() []SyncStageProgressRepair {
+	return RepairSyncPipelineProgress(a.db, a.head, func(number uint64) (tcommon.Hash, bool) {
+		hash, ok := a.canonical[number]
+		return hash, ok
+	})
+}
+
+func (a *startupRecoveryTestApplier) RestoreInventoryTarget(inventoryFloor uint64) {
+	a.target = rawdb.RestoreSyncInventoryTarget(a.db, inventoryFloor).Target
+}
+
+func (a *startupRecoveryTestApplier) DeleteImportedBodies(through uint64) {
+	DeleteImportedStagedBodiesThrough(a.db, through, a.head+1, a.target)
+}
+
+func (a *startupRecoveryTestApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult {
+	result := RestoreStagedBodies(from, limit, a.target, a.buffer, a.hashes, &a.path, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
+		return rawdb.IterateSyncStagedBlocksFrom(a.db, start, fn)
+	})
+	a.target = result.TargetHead
+	if pruneStaleTail && result.NeedPruneTail {
+		PruneStaleStagedBodyTail(a.db, result.PruneFrom, result.LastRestoredNum, result.LastRestoredHash, result.HaveLastRestored, a.head+1, a.target)
+	}
+	return result
+}
+
+func (a *startupRecoveryTestApplier) RefreshBodiesReady() {
+	RefreshStagedBodyReadyProgress(a.db, a.head+1, a.target)
 }

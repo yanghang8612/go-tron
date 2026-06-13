@@ -34,10 +34,10 @@ type SessionStartupStep struct {
 // by a startup plan. The service owns DB handles; downloader owns the ordered
 // stage-recovery schedule.
 type SessionStartupPlanApplier interface {
-	RepairSyncPipeline()
+	RepairSyncPipeline() []SyncStageProgressRepair
 	RestoreInventoryTarget(inventoryFloor uint64)
 	DeleteImportedBodies(through uint64)
-	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool)
+	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
 	RefreshBodiesReady()
 }
 
@@ -57,8 +57,11 @@ type SessionStartupPlan struct {
 // actually dispatched. Unknown steps are surfaced so tests and diagnostics can
 // catch plan/apply drift without teaching SyncService about every action.
 type SessionStartupApplyResult struct {
-	AppliedSteps []SessionStartupStepAction
-	UnknownSteps []SessionStartupStepAction
+	AppliedSteps         []SessionStartupStepAction
+	UnknownSteps         []SessionStartupStepAction
+	SyncPipelineRepairs  []SyncStageProgressRepair
+	StagedBodyRestore    StagedBodyRestoreResult
+	HasStagedBodyRestore bool
 }
 
 // PlanSessionStartup derives restart boundaries from the current canonical
@@ -106,7 +109,7 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case SessionStartupRepairSyncPipeline:
-			applier.RepairSyncPipeline()
+			result.SyncPipelineRepairs = applier.RepairSyncPipeline()
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreInventoryTarget:
 			applier.RestoreInventoryTarget(step.InventoryFloor)
@@ -115,7 +118,8 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			applier.DeleteImportedBodies(step.DeleteImportedThrough)
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreStagedBodies:
-			applier.RestoreStagedBodies(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
+			result.StagedBodyRestore = applier.RestoreStagedBodies(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
+			result.HasStagedBodyRestore = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRefreshBodiesReady:
 			applier.RefreshBodiesReady()

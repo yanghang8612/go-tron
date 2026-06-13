@@ -388,8 +388,8 @@ type syncSessionStartupApplier struct {
 	headBlock *types.Block
 }
 
-func (a syncSessionStartupApplier) RepairSyncPipeline() {
-	a.service.repairSyncPipelineProgress(a.headBlock)
+func (a syncSessionStartupApplier) RepairSyncPipeline() []syncdl.SyncStageProgressRepair {
+	return a.service.repairSyncPipelineProgress(a.headBlock)
 }
 
 func (a syncSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
@@ -400,8 +400,8 @@ func (a syncSessionStartupApplier) DeleteImportedBodies(through uint64) {
 	a.service.deleteImportedSyncBodiesThrough(through)
 }
 
-func (a syncSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
-	a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
+func (a syncSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {
+	return a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
 }
 
 func (a syncSessionStartupApplier) RefreshBodiesReady() {
@@ -437,13 +437,13 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	return restore.Target
 }
 
-func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
+func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) []syncdl.SyncStageProgressRepair {
 	if ss == nil || ss.chain == nil || head == nil {
-		return
+		return nil
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return
+		return nil
 	}
 	repairs := syncdl.RepairSyncPipelineProgress(db, head.Number(), func(number uint64) (tcommon.Hash, bool) {
 		block := ss.chain.GetBlockByNumber(number)
@@ -455,6 +455,7 @@ func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) {
 	for _, repair := range repairs {
 		ss.logSyncStageProgressRepair(head, repair)
 	}
+	return repairs
 }
 
 func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.StageID) {
@@ -492,13 +493,13 @@ func (ss *SyncService) logSyncStageProgressRepair(head *types.Block, repair sync
 	}
 }
 
-func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) {
+func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {
 	if ss == nil || ss.chain == nil || limit <= 0 {
-		return
+		return syncdl.StagedBodyRestoreResult{NextExpected: start}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return
+		return syncdl.StagedBodyRestoreResult{NextExpected: start}
 	}
 	result := syncdl.RestoreStagedBodies(start, limit, ss.targetHeadNum, ss.blockBuffer, ss.bufferedHash, &ss.blockPath, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
 		return rawdb.IterateSyncStagedBlocksFrom(db, start, fn)
@@ -510,6 +511,7 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 	if pruneStaleTail && result.NeedPruneTail {
 		ss.deleteStaleSyncBodiesFrom(result.PruneFrom, result.LastRestoredNum, result.LastRestoredHash, result.HaveLastRestored)
 	}
+	return result
 }
 
 func (ss *SyncService) addPeerStateLocked(peer *p2p.Peer) (*syncPeerState, bool) {
