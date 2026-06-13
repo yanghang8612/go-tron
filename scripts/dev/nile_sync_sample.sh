@@ -18,6 +18,7 @@ MODE="unknown"
 LABEL="nile-sync"
 START_UNIX=0
 STAGE_STATUS_FILE=""
+PID_FILE=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 
@@ -35,6 +36,7 @@ Options:
   --label LABEL              Free-form sample label (default: nile-sync)
   --start-unix SECONDS       Sync start unix timestamp; emits elapsed/blocksPerSecond
   --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
+  --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --strict-offline-db-check  Fail when offline db check reports critical issues
   -h, --help                 Show this help
@@ -66,6 +68,7 @@ while [ "$#" -gt 0 ]; do
     --label) LABEL="${2:?}"; shift 2 ;;
     --start-unix) START_UNIX="${2:?}"; shift 2 ;;
     --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
+    --pid-file) PID_FILE="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -173,13 +176,15 @@ snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
-  "$STAGE_STATUS_FILE" \
+  "$STAGE_STATUS_FILE" "$PID_FILE" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
   "$replay_bytes" "$ancient_files" "$snapshot_files" "$git_commit" "$git_dirty" <<'PY'
 import json
+import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -196,6 +201,7 @@ from pathlib import Path
     nodes_path,
     storage_alerts_path,
     stage_status_path,
+    pid_file,
     nowblock_status,
     nodeinfo_status,
     nodes_status,
@@ -356,6 +362,109 @@ def parse_stage_status(path):
     row["stageSyncCommitmentFinishLagBlocks"] = lag(row["stageSyncCommitment"], row["stageSyncFinish"])
     return row
 
+def parse_etime_seconds(value):
+    try:
+        text = str(value).strip()
+        if not text:
+            return -1
+        days = 0
+        if "-" in text:
+            day_text, text = text.split("-", 1)
+            days = int(day_text)
+        parts = [int(part) for part in text.split(":")]
+        if len(parts) == 3:
+            hours, minutes, seconds = parts
+        elif len(parts) == 2:
+            hours = 0
+            minutes, seconds = parts
+        else:
+            return -1
+        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+    except Exception:
+        return -1
+
+def process_open_files(pid):
+    proc_fd = Path("/proc") / str(pid) / "fd"
+    try:
+        if proc_fd.exists():
+            return len(list(proc_fd.iterdir()))
+    except Exception:
+        return -1
+    try:
+        result = subprocess.run(
+            ["lsof", "-n", "-p", str(pid)],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            return max(0, len(lines) - 1)
+    except Exception:
+        pass
+    return -1
+
+def read_process_stats(path):
+    row = {
+        "processPidFile": path,
+        "processStatus": "skipped" if not path else "missing",
+        "processPid": 0,
+        "processRssBytes": -1,
+        "processCpuPercent": -1.0,
+        "processUptimeSeconds": -1,
+        "processOpenFiles": -1,
+    }
+    if not path:
+        return row
+    try:
+        pid_text = Path(path).read_text(encoding="utf-8").strip().split()[0]
+    except Exception:
+        return row
+    try:
+        pid = int(pid_text)
+        if pid <= 0:
+            raise ValueError("non-positive pid")
+    except Exception:
+        row["processStatus"] = "invalid"
+        return row
+    row["processPid"] = pid
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        row["processStatus"] = "not-running"
+        return row
+    except PermissionError:
+        pass
+    except Exception:
+        row["processStatus"] = "unknown"
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "rss=", "-o", "pcpu=", "-o", "etime="],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            row["processStatus"] = "ps-error"
+            return row
+        line = result.stdout.strip().splitlines()[-1].strip()
+        fields = line.split(None, 2)
+        if len(fields) >= 1:
+            row["processRssBytes"] = int(float(fields[0]) * 1024)
+        if len(fields) >= 2:
+            row["processCpuPercent"] = float(fields[1])
+        if len(fields) >= 3:
+            row["processUptimeSeconds"] = parse_etime_seconds(fields[2])
+        row["processOpenFiles"] = process_open_files(pid)
+        row["processStatus"] = "ok"
+    except Exception:
+        row["processStatus"] = "ps-error"
+    return row
+
 def load_previous_sample(output_path):
     if not output_path:
         return {}
@@ -453,6 +562,7 @@ blocks_per_minute = blocks_per_second * 60.0
 alerts_text = Path(storage_alerts_path).read_text(encoding="utf-8", errors="replace")
 alerts = parse_alerts(alerts_text)
 stages = parse_stage_status(stage_status_path)
+process = read_process_stats(pid_file)
 height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
 total = int(total_bytes)
 chaindata = int(chaindata_bytes)
@@ -580,6 +690,7 @@ row = {
 }
 row.update(alerts)
 row.update(stages)
+row.update(process)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 

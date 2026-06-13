@@ -67,6 +67,7 @@ scripts/dev/nile_sync_sample.sh \
   --http http://127.0.0.1:8090 \
   --mode full \
   --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
+  --pid-file /Users/asuka/gtron-soak/gtron.pid \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
 
@@ -83,10 +84,17 @@ per-interval bytes-per-new-block fields such as
 `intervalDerivedIndexBytesPerBlock`, `coldToHotBytesRatio`,
 `derivedIndexToHotBytesRatio`,
 `derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
-`coldArchiveFiles`, plus the repo commit used to produce the sample. Derived
-index bytes are the chain-index/accessor, balance-trace, section-bloom, and
-event-log/index sidecars inside `state-snapshots`; `snapshotBytes` remains the
-whole snapshot directory size for backward comparisons.
+`coldArchiveFiles`, plus the repo commit used to produce the sample. When
+`--pid-file` is provided, rows also include `processPid`, `processStatus`,
+`processRssBytes`, `processCpuPercent`, `processUptimeSeconds`, and
+`processOpenFiles` so catch-up throughput can be correlated with local resource
+pressure. Derived index bytes are the chain-index/accessor, balance-trace,
+section-bloom, and event-log/index sidecars inside `state-snapshots`;
+`snapshotBytes` remains the whole snapshot directory size for backward
+comparisons.
+If the launch wrapper does not already maintain a pid file, write
+`echo "$$" > /Users/asuka/gtron-soak/gtron.pid` immediately before `exec gtron`;
+the shell PID is retained by the gtron process after `exec`.
 `sampleStatus` is `ok` when HTTP calls work, peers are present, and
 `getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
 first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP

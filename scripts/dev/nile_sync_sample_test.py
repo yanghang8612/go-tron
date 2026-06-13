@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -74,6 +75,8 @@ class NileSyncSampleTest(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            pid_file = tmpdir / "gtron.pid"
+            pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -96,6 +99,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     start_unix,
                     "--stage-status-file",
                     str(stage_status),
+                    "--pid-file",
+                    str(pid_file),
                     "--output",
                     str(output),
                 ],
@@ -151,6 +156,13 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageUnboundRows"], 1)
             self.assertEqual(row["stageProgress"]["SyncFinish"]["value"], 80)
             self.assertFalse(row["stageProgress"]["SnapshotEventLogBuild"]["present"])
+            self.assertEqual(row["processPidFile"], str(pid_file))
+            self.assertEqual(row["processStatus"], "ok")
+            self.assertEqual(row["processPid"], os.getpid())
+            self.assertGreater(row["processRssBytes"], 0)
+            self.assertGreaterEqual(row["processCpuPercent"], 0)
+            self.assertGreaterEqual(row["processUptimeSeconds"], 0)
+            self.assertGreaterEqual(row["processOpenFiles"], -1)
             self.assertEqual(output.read_text(encoding="utf-8").strip(), proc.stdout.strip())
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
