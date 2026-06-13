@@ -199,6 +199,44 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBReferences(t, root, stateHistoryAsOfRawDBReferences(), map[string]map[string]struct{}{
+		"core/state/snapshots/domain_registry.go": {
+			"ReadStateAccountLatestAsOfTxNum":      {},
+			"ReadStateKVAsOfTxNum":                 {},
+			"ReadStateKVGenerationAsOfTxNum":       {},
+			"ReadStateAccountKVAsOfTxNum":          {},
+			"IterateStateAccountKVAsOfPrefixTxNum": {},
+		},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production state history as-of reads must go through state.HistoryReader or the snapshot registry boundary:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestStateHistoryAsOfAuditRejectsDirectRawDBReference(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readStateAt = rawdb.ReadStateKVAsOfTxNum
+
+func query(db any) {
+	_, _, _ = rawdb.ReadStateKVGenerationAsOfTxNum(db, nil, 1, 2)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, stateHistoryAsOfRawDBReferences(), nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want rawdb state-as-of function value and direct call rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	if !strings.Contains(joined, "rawdb.ReadStateKVAsOfTxNum") || !strings.Contains(joined, "rawdb.ReadStateKVGenerationAsOfTxNum") {
+		t.Fatalf("offenders = %+v, want both state-as-of references rejected", offenders)
+	}
+}
+
 func TestColdArchiveAuditRejectsStrictTransactionInfoReadOnHotStore(t *testing.T) {
 	root := writeAuditFixture(t, "app/offender.go", `package app
 
@@ -487,6 +525,23 @@ func writeAuditFixture(t *testing.T, rel, body string) string {
 	return root
 }
 
+func stateHistoryAsOfRawDBReferences() map[string]struct{} {
+	return map[string]struct{}{
+		"ReadStateKVAsOf":                      {},
+		"ReadStateAccountLatestAsOf":           {},
+		"ReadStateAccountLatestAsOfTxNum":      {},
+		"ReadStateKVAsOfTxNum":                 {},
+		"ReadStateKVGenerationAsOf":            {},
+		"ReadStateKVGenerationAsOfTxNum":       {},
+		"ReadStateAccountKVAsOf":               {},
+		"ReadStateAccountKVAsOfTxNum":          {},
+		"IterateStateKVAsOfPrefix":             {},
+		"IterateStateKVAsOfPrefixTxNum":        {},
+		"IterateStateAccountKVAsOfPrefix":      {},
+		"IterateStateAccountKVAsOfPrefixTxNum": {},
+	}
+}
+
 func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
 	t.Helper()
 	var offenders []string
@@ -550,6 +605,61 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 	})
 	if err != nil {
 		t.Fatalf("audit forbidden rawdb calls: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
+func auditForbiddenRawDBReferences(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		if len(rawdbNames) == 0 {
+			return nil
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			sel, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, imported := rawdbNames[ident.Name]; !imported {
+				return true
+			}
+			if _, banned := forbidden[sel.Sel.Name]; banned && !isAllowedRawDBCall(root, path, sel.Sel.Name, allowed) {
+				offenders = append(offenders, formatAuditOffender(fset, root, path, sel.Pos(), ident.Name+"."+sel.Sel.Name))
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit forbidden rawdb references: %v", err)
 	}
 	sort.Strings(offenders)
 	return offenders
