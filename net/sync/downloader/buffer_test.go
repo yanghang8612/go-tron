@@ -479,6 +479,7 @@ func TestNewImportBatchRunPlanSchedulesExecutionPlanningBeforeExecute(t *testing
 		ImportBatchRunDecode,
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
+		ImportBatchRunPlanStagePhases,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
@@ -513,6 +514,7 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		ImportBatchRunDecode,
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
+		ImportBatchRunPlanStagePhases,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
@@ -529,6 +531,15 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		result.ExecutionDiagnostics.PlannedBodyStages != 2 || result.ExecutionDiagnostics.PlannedPostBodyStages != 6 ||
 		result.ExecutionDiagnostics.PlannedExecutionStages != 2 || result.ExecutionDiagnostics.PlannedCommitmentStages != 2 || result.ExecutionDiagnostics.PlannedFinishStages != 2 {
 		t.Fatalf("result execution diagnostics = %+v, want planned two-block batch", result.ExecutionDiagnostics)
+	}
+	if len(result.ExecutionPhases) != 4 ||
+		result.ExecutionPhases[0].Phase != ImportStagePhaseBodies ||
+		result.ExecutionPhases[1].Phase != ImportStagePhaseExecution ||
+		result.ExecutionPhases[2].Phase != ImportStagePhaseCommitment ||
+		result.ExecutionPhases[3].Phase != ImportStagePhaseFinish ||
+		len(result.ExecutionPhases[1].Tasks) != 2 ||
+		result.ExecutionPhases[1].Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("result execution phases = %+v, want two-block bodies/execution/commitment/finish plan", result.ExecutionPhases)
 	}
 	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("applier execution tasks = %+v, want block2 pipeline", applier.execution.Schedule.Tasks)
@@ -583,6 +594,13 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	if !result.Execution.HasStageSchedule || result.Execution.Schedule.BlockNum != block2.Number() {
 		t.Fatalf("execution schedule = %+v has=%v, want attempted block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
 	}
+	if len(result.ExecutionPhases) != 4 ||
+		len(result.ExecutionPhases[0].Tasks) != 2 ||
+		result.ExecutionPhases[0].Tasks[1] != ImportBodyStageTask(block2.Number(), block2.Hash()) ||
+		len(result.ExecutionPhases[3].Tasks) != 2 ||
+		result.ExecutionPhases[3].Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("partial result execution phases = %+v, want attempted two-block phase plan", result.ExecutionPhases)
+	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
 		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
 	}
@@ -630,6 +648,7 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 		ImportBatchRunDecode,
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
+		ImportBatchRunPlanStagePhases,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
