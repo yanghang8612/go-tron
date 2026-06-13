@@ -1,6 +1,9 @@
 package downloader
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestFetchWindowZeroTipContainsNothing(t *testing.T) {
 	window := NewFetchWindow(0, 100)
@@ -107,6 +110,64 @@ func TestPlanDrainedPeerAction(t *testing.T) {
 	for _, tt := range tests {
 		if got := PlanDrainedPeerAction(tt.done, tt.inventoryTip, tt.head); got != tt.action {
 			t.Fatalf("%s: action = %v, want %v", tt.name, got, tt.action)
+		}
+	}
+}
+
+func TestPlanReadyPeerFetchDrained(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  ReadyPeerFetchInput
+		action PeerFetchAction
+	}{
+		{
+			name:   "done idles",
+			input:  ReadyPeerFetchInput{Done: true, InventoryTip: 10, CurrentHead: 10},
+			action: PeerFetchIdle,
+		},
+		{
+			name:   "wait local head before re-poll",
+			input:  ReadyPeerFetchInput{InventoryTip: 10, CurrentHead: 9},
+			action: PeerFetchWaitLocalHead,
+		},
+		{
+			name:   "request inventory at tip",
+			input:  ReadyPeerFetchInput{InventoryTip: 10, CurrentHead: 10},
+			action: PeerFetchRequestInventory,
+		},
+	}
+	for _, tt := range tests {
+		if got := PlanReadyPeerFetch(tt.input); got.Action != tt.action || got.Wait != 0 {
+			t.Fatalf("%s: plan = %+v, want action %v with no wait", tt.name, got, tt.action)
+		}
+	}
+}
+
+func TestPlanReadyPeerFetchBatch(t *testing.T) {
+	tests := []struct {
+		name string
+		in   ReadyPeerFetchInput
+		want PeerFetchPlan
+	}{
+		{
+			name: "delays before next fetch time",
+			in:   ReadyPeerFetchInput{BatchLen: 3, FetchWait: 2 * time.Second},
+			want: PeerFetchPlan{Action: PeerFetchDelay, Wait: 2 * time.Second},
+		},
+		{
+			name: "sends when fetch time is due",
+			in:   ReadyPeerFetchInput{BatchLen: 3},
+			want: PeerFetchPlan{Action: PeerFetchSend},
+		},
+		{
+			name: "batch bypasses inventory wait",
+			in:   ReadyPeerFetchInput{BatchLen: 3, FetchWait: -time.Second, InventoryTip: 10, CurrentHead: 9},
+			want: PeerFetchPlan{Action: PeerFetchSend},
+		},
+	}
+	for _, tt := range tests {
+		if got := PlanReadyPeerFetch(tt.in); got != tt.want {
+			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
 }

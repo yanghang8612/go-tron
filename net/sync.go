@@ -792,32 +792,46 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		}
 		ss.assignRetryLocked(ps)
 		batch := ss.nextFetchBatchLocked(ps)
+		currentHead := uint64(0)
 		if len(batch) == 0 {
-			currentHead := ss.chain.CurrentBlock().Number()
-			switch syncdl.PlanDrainedPeerAction(ps.done, ps.lastInventoryNum, currentHead) {
-			case syncdl.DrainedPeerWaitLocalHead:
-				// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
-				// summary tail is below the last inventory tip it sent us
-				// on this peer (lastSyncNum > lastNum). Wait until the
-				// canonical head catches up before asking this peer for
-				// the next 2000-block window.
-				syncLog.Trace("Sync peer waiting for local head",
-					"peer", ps.peer.ID(),
-					"head", currentHead,
-					"inventoryTip", ps.lastInventoryNum)
-				continue
-			case syncdl.DrainedPeerRequestInventory:
-				// Always re-poll once a peer's local queue drains. java-tron may
-				// have produced new blocks while we were applying the previous
-				// batch; the one-id inventory response is what marks sync done.
-				ps.chainRequested = true
-				out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
-			}
-			continue
+			currentHead = ss.chain.CurrentBlock().Number()
 		}
-		if wait := time.Until(ps.nextFetchAt); wait > 0 {
+		fetchWait := time.Duration(0)
+		if len(batch) > 0 {
+			fetchWait = time.Until(ps.nextFetchAt)
+		}
+		plan := syncdl.PlanReadyPeerFetch(syncdl.ReadyPeerFetchInput{
+			BatchLen:     len(batch),
+			FetchWait:    fetchWait,
+			Done:         ps.done,
+			InventoryTip: ps.lastInventoryNum,
+			CurrentHead:  currentHead,
+		})
+		switch plan.Action {
+		case syncdl.PeerFetchWaitLocalHead:
+			// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
+			// summary tail is below the last inventory tip it sent us
+			// on this peer (lastSyncNum > lastNum). Wait until the
+			// canonical head catches up before asking this peer for
+			// the next 2000-block window.
+			syncLog.Trace("Sync peer waiting for local head",
+				"peer", ps.peer.ID(),
+				"head", currentHead,
+				"inventoryTip", ps.lastInventoryNum)
+			continue
+		case syncdl.PeerFetchRequestInventory:
+			// Always re-poll once a peer's local queue drains. java-tron may
+			// have produced new blocks while we were applying the previous
+			// batch; the one-id inventory response is what marks sync done.
+			ps.chainRequested = true
+			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
+			continue
+		case syncdl.PeerFetchDelay:
 			ps.fetchList = append(batch, ps.fetchList...)
-			ss.armPeerDelayTimerLocked(ps, wait)
+			ss.armPeerDelayTimerLocked(ps, plan.Wait)
+			continue
+		case syncdl.PeerFetchSend:
+		default:
 			continue
 		}
 		ps.inflight = len(batch)

@@ -307,7 +307,10 @@ Status:
   while `SyncService` supplies only the canonical/requested/block-path
   availability filter. Retry-list and peer-local fetch-list candidate decisions
   are also helper-owned, so the service loop gathers chain/path facts while the
-  downloader package decides drop/keep/assign/accept behavior. These are
+  downloader package decides drop/keep/assign/accept behavior. The same package
+  now plans eligible-peer fetch actions (`wait local head`, re-poll inventory,
+  delay for rate-limit, or send the wire batch), leaving `SyncService` to apply
+  timers, pending maps, and network sends. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.
