@@ -9,6 +9,56 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+func TestPlanFetchSlotEligibility(t *testing.T) {
+	tests := []struct {
+		name string
+		in   FetchSlotEligibilityInput
+		want bool
+	}{
+		{
+			name: "missing peer",
+			in:   FetchSlotEligibilityInput{},
+			want: false,
+		},
+		{
+			name: "done",
+			in: FetchSlotEligibilityInput{
+				PeerPresent: true,
+				Done:        true,
+			},
+			want: false,
+		},
+		{
+			name: "chain requested",
+			in: FetchSlotEligibilityInput{
+				PeerPresent:    true,
+				ChainRequested: true,
+			},
+			want: false,
+		},
+		{
+			name: "inflight",
+			in: FetchSlotEligibilityInput{
+				PeerPresent: true,
+				Inflight:    1,
+			},
+			want: false,
+		},
+		{
+			name: "eligible",
+			in: FetchSlotEligibilityInput{
+				PeerPresent: true,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		if got := PlanFetchSlotEligibility(tt.in); got.Eligible != tt.want {
+			t.Fatalf("%s: eligible = %v, want %v", tt.name, got.Eligible, tt.want)
+		}
+	}
+}
+
 func TestPlanFetchSlotDrainedActions(t *testing.T) {
 	tests := []struct {
 		name      string

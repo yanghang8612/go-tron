@@ -838,7 +838,14 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 	ss.ensureSessionMapsLocked()
 	var out []outboundSyncRequest
 	for _, ps := range ss.peers {
-		if ps == nil || ps.peer == nil || ps.done || ps.chainRequested || ps.inflight > 0 {
+		eligibility := syncdl.FetchSlotEligibilityInput{}
+		if ps != nil {
+			eligibility.PeerPresent = ps.peer != nil
+			eligibility.Done = ps.done
+			eligibility.ChainRequested = ps.chainRequested
+			eligibility.Inflight = ps.inflight
+		}
+		if !syncdl.PlanFetchSlotEligibility(eligibility).Eligible {
 			continue
 		}
 		ss.assignRetryLocked(ps)

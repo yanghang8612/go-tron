@@ -6,6 +6,21 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+// FetchSlotEligibilityInput is the side-effect-free peer state needed to decide
+// whether a peer can receive more block fetch work.
+type FetchSlotEligibilityInput struct {
+	PeerPresent    bool
+	Done           bool
+	ChainRequested bool
+	Inflight       int
+}
+
+// FetchSlotEligibilityPlan is the downloader-owned refill eligibility decision
+// for one peer.
+type FetchSlotEligibilityPlan struct {
+	Eligible bool
+}
+
 // FetchSlotInput is the side-effect-free peer state needed to decide the next
 // fetch-slot operation for one eligible peer.
 type FetchSlotInput struct {
@@ -53,6 +68,14 @@ type FetchSlotPlanApplier interface {
 	RequestInventory(plan FetchSlotPlan)
 	DelayFetch(plan FetchSlotPlan)
 	SendFetch(plan FetchSlotPlan)
+}
+
+// PlanFetchSlotEligibility decides whether one peer can be considered for fetch
+// slot refill.
+func PlanFetchSlotEligibility(in FetchSlotEligibilityInput) FetchSlotEligibilityPlan {
+	return FetchSlotEligibilityPlan{
+		Eligible: in.PeerPresent && !in.Done && !in.ChainRequested && in.Inflight == 0,
+	}
 }
 
 // PlanFetchSlot combines the peer-local fetch action and outbound request
