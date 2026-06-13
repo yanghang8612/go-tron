@@ -108,6 +108,47 @@ func TestAssignRetryCandidatesDropsByDefault(t *testing.T) {
 	}
 }
 
+func TestAppendDisconnectedPeerRetriesFiltersPendingBeforeFetchQueue(t *testing.T) {
+	existing := []types.BlockID{queueID(9)}
+	pending := map[tcommon.Hash]types.BlockID{
+		queueID(1).Hash: queueID(1),
+		queueID(2).Hash: queueID(2),
+	}
+	queued := []types.BlockID{queueID(3), queueID(4), queueID(5)}
+
+	got := AppendDisconnectedPeerRetries(existing, pending, queued, func(bid types.BlockID) bool {
+		return bid.Num != 2 && bid.Num != 4
+	})
+
+	if len(got) != 4 {
+		t.Fatalf("retry nums = %v, want 4 entries", blockNums(got))
+	}
+	if got[0].Num != 9 {
+		t.Fatalf("first retry = %d, want existing entry 9", got[0].Num)
+	}
+	if got[1].Num != 1 {
+		t.Fatalf("pending retry = %d, want 1", got[1].Num)
+	}
+	if tail := blockNums(got[2:]); !reflect.DeepEqual(tail, []uint64{3, 5}) {
+		t.Fatalf("fetch queue retry tail = %v, want [3 5]", tail)
+	}
+}
+
+func TestAppendDisconnectedPeerRetriesAcceptsAllWithoutFilter(t *testing.T) {
+	pending := map[tcommon.Hash]types.BlockID{
+		queueID(1).Hash: queueID(1),
+	}
+	queued := []types.BlockID{queueID(2)}
+
+	got := AppendDisconnectedPeerRetries(nil, pending, queued, nil)
+	if len(got) != 2 {
+		t.Fatalf("retry nums = %v, want 2 entries", blockNums(got))
+	}
+	if got[0].Num != 1 || got[1].Num != 2 {
+		t.Fatalf("retry nums = %v, want pending before queued [1 2]", blockNums(got))
+	}
+}
+
 func blockNums(ids []types.BlockID) []uint64 {
 	out := make([]uint64, len(ids))
 	for i, id := range ids {

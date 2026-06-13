@@ -1815,17 +1815,12 @@ func (ss *SyncService) removePeerStateLocked(peerID string, retry bool) {
 		ps.fetchDelayTimer = nil
 	}
 	if retry {
-		for h, bid := range ps.pendingIDs {
+		for h := range ps.pendingIDs {
 			delete(ss.requested, h)
-			if !ss.hasBlockOrRequestLocked(bid) {
-				ss.retryList = append(ss.retryList, bid)
-			}
 		}
-		for _, bid := range ps.fetchList {
-			if !ss.hasBlockOrRequestLocked(bid) {
-				ss.retryList = append(ss.retryList, bid)
-			}
-		}
+		ss.retryList = syncdl.AppendDisconnectedPeerRetries(ss.retryList, ps.pendingIDs, ps.fetchList, func(bid types.BlockID) bool {
+			return !ss.hasBlockOrRequestLocked(bid)
+		})
 	}
 	delete(ss.peers, peerID)
 	if ss.syncPeer != nil && ss.syncPeer.ID() == peerID {

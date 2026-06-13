@@ -301,7 +301,10 @@ Status:
   target/window derivation now lives in `net/sync/downloader`, keeping
   `remainNum` handling and fetch-window bounds out of `SyncService`; peer
   completion and drained-queue re-poll/wait decisions are helper-owned there
-  too. These are
+  too. Disconnected-peer retry recovery now uses the same downloader queue
+  helpers to requeue pending in-flight IDs before the peer's local fetch list
+  while `SyncService` supplies only the canonical/requested/block-path
+  availability filter. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.

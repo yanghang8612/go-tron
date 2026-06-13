@@ -1,6 +1,9 @@
 package downloader
 
-import "github.com/tronprotocol/go-tron/core/types"
+import (
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
+)
 
 // BlockFilter reports whether a candidate block ID is still eligible for the
 // local fetch queue. The caller owns side effects such as path reservation.
@@ -79,4 +82,22 @@ func AssignRetryCandidates(retries []types.BlockID, classify RetryClassifier) (a
 		keep = nil
 	}
 	return assigned, keep
+}
+
+// AppendDisconnectedPeerRetries appends block IDs left behind by a disconnected
+// peer to the global retry list. Pending in-flight IDs are considered before
+// the peer's local fetch queue, matching java-tron's retry preference for
+// requests that were already sent.
+func AppendDisconnectedPeerRetries(retries []types.BlockID, pending map[tcommon.Hash]types.BlockID, queued []types.BlockID, shouldRetry BlockFilter) []types.BlockID {
+	for _, bid := range pending {
+		if shouldRetry == nil || shouldRetry(bid) {
+			retries = append(retries, bid)
+		}
+	}
+	for _, bid := range queued {
+		if shouldRetry == nil || shouldRetry(bid) {
+			retries = append(retries, bid)
+		}
+	}
+	return retries
 }
