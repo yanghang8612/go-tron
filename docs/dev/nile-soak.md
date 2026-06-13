@@ -124,8 +124,10 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSyncBodiesReadyGapBlocks`, `stageSyncImportExecutionLagBlocks`,
 `stageSyncExecutionCommitmentLagBlocks`,
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
-`stageSyncBottleneck`/`stageSyncBottleneckLagBlocks` for the largest current
-pipeline lag. The row also reports `stageSyncFinishHeadEtaSeconds`,
+`stageSyncBottleneck`/`stageSyncBottleneckLagBlocks`,
+`stageSyncPipelineLagBlocks`, and `stageSyncBottleneckLagShare` for the largest
+current pipeline lag and its share of total staged-sync backlog. The row also
+reports `stageSyncFinishHeadEtaSeconds`,
 `stageChainFreezerHeadLagBlocks`, `stageChainFreezerHeadEtaSeconds`,
 `stageSnapshotEventLogBuildHeadLagBlocks`, and
 `stageSnapshotEventLogBuildHeadEtaSeconds` when the previous sample is
@@ -134,9 +136,10 @@ a previous sample, rows also include interval stage throughput fields such as
 `intervalStageSyncImportBlocks`,
 `intervalStageSyncExecutionBlocks`,
 `intervalStageSyncCommitmentBlocks`,
-`intervalStageSyncFinishBlocks`, and matching `*BlocksPerSecond` values, so
-long-running samples show both where backlog is accumulating and whether each
-stage is still advancing.
+`intervalStageSyncFinishBlocks`, matching `*BlocksPerSecond` values, and
+adjacent-stage ratios such as `intervalStageSyncExecutionToImportRatio` and
+`intervalStageSyncFinishToCommitmentRatio`, so long-running samples show both
+where backlog is accumulating and whether each downstream stage is keeping up.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot

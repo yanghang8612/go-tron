@@ -509,6 +509,29 @@ def stage_bottleneck(candidates):
         return "none", 0
     return name, value
 
+def lag_sum(values):
+    valid = []
+    for value in values:
+        try:
+            value = int(value)
+        except Exception:
+            continue
+        if value >= 0:
+            valid.append(value)
+    if not valid:
+        return -1
+    return sum(valid)
+
+def ratio(numerator, denominator):
+    try:
+        numerator = float(numerator)
+        denominator = float(denominator)
+    except Exception:
+        return -1.0
+    if numerator < 0 or denominator <= 0:
+        return -1.0
+    return numerator / denominator
+
 def interval_stage_delta(current, previous_row, key, interval):
     try:
         current = int(current)
@@ -738,6 +761,14 @@ stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
     ("commitment-finish", stages.get("stageSyncCommitmentFinishLagBlocks", -1)),
     ("finish-head", stage_sync_finish_head_lag),
 ])
+stage_sync_pipeline_lag = lag_sum([
+    stages.get("stageSyncBodiesReadyGapBlocks", -1),
+    stages.get("stageSyncImportExecutionLagBlocks", -1),
+    stages.get("stageSyncExecutionCommitmentLagBlocks", -1),
+    stages.get("stageSyncCommitmentFinishLagBlocks", -1),
+    stage_sync_finish_head_lag,
+])
+stage_sync_bottleneck_lag_share = ratio(stage_sync_bottleneck_lag, stage_sync_pipeline_lag)
 interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
 interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)
 interval_stage_sync_import = interval_stage_delta(stages.get("stageSyncImport", -1), previous, "stageSyncImport", interval_seconds)
@@ -884,18 +915,25 @@ row = {
     "stageSnapshotEventLogBuildHeadEtaSeconds": stage_snapshot_event_log_build_head_eta_seconds,
     "stageSyncBottleneck": stage_sync_bottleneck,
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
+    "stageSyncPipelineLagBlocks": stage_sync_pipeline_lag,
+    "stageSyncBottleneckLagShare": stage_sync_bottleneck_lag_share,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,
     "intervalStageSyncBodiesReadyBlocksPerSecond": interval_rate(interval_stage_sync_bodies_ready, interval_seconds),
+    "intervalStageSyncBodiesReadyToBodiesRatio": ratio(interval_stage_sync_bodies_ready, interval_stage_sync_bodies),
     "intervalStageSyncImportBlocks": interval_stage_sync_import,
     "intervalStageSyncImportBlocksPerSecond": interval_rate(interval_stage_sync_import, interval_seconds),
+    "intervalStageSyncImportToBodiesReadyRatio": ratio(interval_stage_sync_import, interval_stage_sync_bodies_ready),
     "intervalStageSyncExecutionBlocks": interval_stage_sync_execution,
     "intervalStageSyncExecutionBlocksPerSecond": interval_rate(interval_stage_sync_execution, interval_seconds),
+    "intervalStageSyncExecutionToImportRatio": ratio(interval_stage_sync_execution, interval_stage_sync_import),
     "intervalStageSyncCommitmentBlocks": interval_stage_sync_commitment,
     "intervalStageSyncCommitmentBlocksPerSecond": interval_rate(interval_stage_sync_commitment, interval_seconds),
+    "intervalStageSyncCommitmentToExecutionRatio": ratio(interval_stage_sync_commitment, interval_stage_sync_execution),
     "intervalStageSyncFinishBlocks": interval_stage_sync_finish,
     "intervalStageSyncFinishBlocksPerSecond": interval_stage_sync_finish_rate,
+    "intervalStageSyncFinishToCommitmentRatio": ratio(interval_stage_sync_finish, interval_stage_sync_commitment),
     "intervalStageChainFreezerBlocks": interval_stage_chain_freezer,
     "intervalStageChainFreezerBlocksPerSecond": interval_stage_chain_freezer_rate,
     "intervalStageSnapshotEventLogBuildBlocks": interval_stage_snapshot_event_log_build,
