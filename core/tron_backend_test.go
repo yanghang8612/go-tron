@@ -397,6 +397,142 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	}
 }
 
+func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	defer fz.Close()
+
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		Timestamp:         0,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, rawdb.NewFreezerReader(fz))
+	if err != nil {
+		t.Fatalf("NewBlockChainWithAncient: %v", err)
+	}
+	defer bc.Close()
+
+	logAddress := bytes20(0x9a)
+	topic := tcommon.Hash{0x9b}
+	block, info := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x9c, 0x9d},
+	})
+	txHash := tcommon.BytesToHash(info.Id)
+	if err := rawdb.WriteBlock(diskdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(diskdb, block.Number(), []*corepb.TransactionInfo{info}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfo(diskdb, txHash[:], info); err != nil {
+		t.Fatalf("WriteTransactionInfo: %v", err)
+	}
+	if err := rawdb.WriteTransactionIndex(diskdb, txHash[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	bc.currentBlock.Store(block)
+
+	parent := rawdb.ReadBlock(bc.ChainDB(), 0)
+	if parent == nil {
+		t.Fatal("genesis block missing")
+	}
+	if err := appendBackendColdLookupAncients(t, fz, diskdb, parent, block); err != nil {
+		t.Fatalf("append ancients: %v", err)
+	}
+	snapshotDir := t.TempDir()
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(fz), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{freezerRef, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	if err := rawdb.DeleteFrozenBlockRange(diskdb, block.Number(), block.Number()); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	if err := rawdb.DeleteBlockNumber(diskdb, block.Hash()); err != nil {
+		t.Fatalf("DeleteBlockNumber: %v", err)
+	}
+	if err := rawdb.DeleteTransactionIndex(diskdb, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfo(diskdb, txHash[:]); err != nil {
+		t.Fatalf("DeleteTransactionInfo: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfosByBlock(diskdb, block.Number()); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
+	if got := rawdb.ReadBlock(hotOnly, block.Number()); got != nil {
+		t.Fatalf("hot block still present: %x", got.Hash())
+	}
+	if got := rawdb.ReadBlockNumber(hotOnly, block.Hash()); got != nil {
+		t.Fatalf("hot block lookup still present: %v", got)
+	}
+	if got := rawdb.ReadTransactionIndex(hotOnly, txHash[:]); got != nil {
+		t.Fatalf("hot tx lookup still present: %v", got)
+	}
+	if got := rawdb.ReadTransactionInfo(hotOnly, txHash[:]); got != nil {
+		t.Fatalf("hot tx info still present: %+v", got)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, block.Number()); len(infos) != 0 {
+		t.Fatalf("hot tx receipt rows still present: %+v", infos)
+	}
+
+	bc.ChainDB().SetChainIndexReader(mgr)
+	backend := &TronBackend{chain: bc}
+	if got, err := backend.GetTransactionInfoByID(txHash); err != nil || got == nil || len(got.Log) != 1 {
+		t.Fatalf("GetTransactionInfoByID cold logs = %+v/%v, want one log", got, err)
+	}
+
+	rpcServer := jsonrpc.NewServer(backend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	txHashHex := "0x" + txHash.Hex()
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getTransactionReceipt", []any{txHashHex})
+	receipt, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt result = %T %v, want object", resp["result"], resp["result"])
+	}
+	logs, ok := receipt["logs"].([]any)
+	if !ok || len(logs) != 1 {
+		t.Fatalf("cold eth_getTransactionReceipt logs = %T %v, want one log", receipt["logs"], receipt["logs"])
+	}
+	logObj, ok := logs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("cold receipt log = %T %v, want object", logs[0], logs[0])
+	}
+	if receipt["transactionHash"] != txHashHex ||
+		receipt["blockHash"] != "0x"+block.Hash().Hex() ||
+		logObj["address"] != "0x"+fmt.Sprintf("%x", logAddress) ||
+		logObj["data"] != "0x9c9d" ||
+		logObj["transactionHash"] != txHashHex ||
+		logObj["blockNumber"] != "0x1" ||
+		logObj["logIndex"] != "0x0" {
+		t.Fatalf("cold eth_getTransactionReceipt = receipt %+v log %+v, want cold log payload", receipt, logObj)
+	}
+}
+
 func TestTronBackend_GetTransactionInfoByBlockNumRejectsMismatchedInfo(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
