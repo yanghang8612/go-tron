@@ -8,6 +8,7 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
@@ -389,6 +390,18 @@ func ResolveImportFailure(batch BufferedBatch, insertErr error) ImportFailureRes
 		Failed:      failedBlock,
 		FailedNum:   failedNum,
 	}
+}
+
+// ImportBatchLimit resolves the local staged-body import chunk from the
+// operator setting and sync package-wide bounds.
+func ImportBatchLimit(configured int) int {
+	if configured <= 0 {
+		return tsync.MaxImportBatch
+	}
+	if configured > tsync.MaxFetchBatch {
+		return tsync.MaxFetchBatch
+	}
+	return configured
 }
 
 // StagedBodyDrainLimit clamps one local staged-body drain chunk to the

@@ -1231,13 +1231,10 @@ func (ss *SyncService) waitForDrain() {
 }
 
 func (ss *SyncService) importBatchLimitLocked() int {
-	if ss == nil || ss.importBatchSize <= 0 {
-		return maxSyncImportBatch
+	if ss == nil {
+		return syncdl.ImportBatchLimit(0)
 	}
-	if ss.importBatchSize > maxFetchBatch {
-		return maxFetchBatch
-	}
-	return ss.importBatchSize
+	return syncdl.ImportBatchLimit(ss.importBatchSize)
 }
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {

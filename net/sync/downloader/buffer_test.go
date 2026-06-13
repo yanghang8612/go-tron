@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
+	tsync "github.com/tronprotocol/go-tron/net/sync"
 	"github.com/tronprotocol/go-tron/p2p"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -565,6 +566,24 @@ func TestStagedBodyDrainLimit(t *testing.T) {
 		got, ok := StagedBodyDrainLimit(tt.next, tt.max, tt.readyLimit, tt.hasReadyLimit)
 		if got != tt.wantLimit || ok != tt.wantOK {
 			t.Fatalf("%s: limit=%d ok=%v, want %d %v", tt.name, got, ok, tt.wantLimit, tt.wantOK)
+		}
+	}
+}
+
+func TestImportBatchLimit(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{name: "zero uses default", want: tsync.MaxImportBatch},
+		{name: "negative uses default", configured: -1, want: tsync.MaxImportBatch},
+		{name: "custom limit", configured: 12, want: 12},
+		{name: "fetch cap", configured: tsync.MaxFetchBatch + 1, want: tsync.MaxFetchBatch},
+	}
+	for _, tt := range tests {
+		if got := ImportBatchLimit(tt.configured); got != tt.want {
+			t.Fatalf("%s: limit=%d, want %d", tt.name, got, tt.want)
 		}
 	}
 }
