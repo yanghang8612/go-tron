@@ -1119,10 +1119,11 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.mu.Unlock()
-		// Decode off-lock — see decodeBatchBlocks. Keeps the heavy proto work
-		// off the central sync mutex so receiving peers aren't stalled.
-		ss.decodeBatchBlocks(&batch)
-		if len(batch.Blocks) == 0 {
+		// Decode off-lock — see DecodeBufferedBatch. Keeps the heavy proto
+		// work off the central sync mutex so receiving peers aren't stalled.
+		decoded := syncdl.DecodeBufferedBatch(&batch)
+		ss.logDecodeBatchResult(decoded)
+		if decoded.Action != syncdl.BufferedBatchDecodeImport {
 			// Every popped block failed to decode (can't happen for validated
 			// wire bytes). The entries were already removed at pop, so loop to
 			// re-pop the next run or hit the gap.
@@ -1212,18 +1213,12 @@ func (ss *SyncService) readSyncBodiesReadyDrainLimit(next uint64) syncdl.StagedB
 	return limit
 }
 
-// decodeBatchBlocks decodes the popped raw blocks into batch.Blocks. It runs
-// OFF ss.mu — a full proto decode per block (up to the configured local import
-// chunk, and largest in exactly the full-block era this raw buffer targets) is
-// far too heavy to hold the sync lock across, and InsertBlocks already runs
-// off-lock. A decode error (can't happen for bytes that already decoded at
-// receive) truncates the batch; the dropped suffix was removed from the buffer
-// at pop, so it is simply re-fetched.
-func (ss *SyncService) decodeBatchBlocks(batch *syncdl.BufferedBatch) {
-	dropped, err := batch.DecodeBlocks()
-	if err != nil {
+// logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode
+// step. A non-empty decoded prefix is still imported by the caller.
+func (ss *SyncService) logDecodeBatchResult(result syncdl.BufferedBatchDecodeResult) {
+	if result.Err != nil {
 		syncLog.Error("Dropping undecodable buffered sync block",
-			"number", dropped.Num, "hash", dropped.Hash, "err", err)
+			"number", result.Dropped.Num, "hash", result.Dropped.Hash, "err", result.Err)
 	}
 }
 

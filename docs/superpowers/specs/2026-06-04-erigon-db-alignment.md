@@ -379,6 +379,8 @@ Status:
   `InsertBlocksError` indexes back to buffered blocks in the downloader
   package; empty local-drain settlement after fetch-slot refill now uses a
   downloader session plan to choose finish vs peer-join probing; and the same
+  package now owns raw-buffer decode actions so a decoded prefix can be imported
+  while a first-entry decode failure simply continues the drain loop. The same
   applied-prefix summary derives the staged body delete descriptors used for
   imported-body cleanup, leaving `SyncService` to orchestrate persistence,
   logging, pausing, and canonical insertion. The hash-bound sync

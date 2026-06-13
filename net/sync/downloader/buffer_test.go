@@ -69,6 +69,43 @@ func TestBufferedBatchDecodeBlocksKeepsPrefixOnError(t *testing.T) {
 	}
 }
 
+func TestDecodeBufferedBatchAction(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	raw1, err := block1.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block1: %v", err)
+	}
+	raw2, err := block2.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block2: %v", err)
+	}
+
+	full := BufferedBatch{Buffered: []BufferedBlock{
+		{Raw: raw1, Hash: block1.Hash(), Num: block1.Number()},
+		{Raw: raw2, Hash: block2.Hash(), Num: block2.Number()},
+	}}
+	if got := DecodeBufferedBatch(&full); got.Action != BufferedBatchDecodeImport || got.Err != nil || len(full.Blocks) != 2 {
+		t.Fatalf("full decode = %+v blocks=%d, want import without error", got, len(full.Blocks))
+	}
+
+	firstBad := BufferedBatch{Buffered: []BufferedBlock{
+		{Raw: []byte{0x01}, Hash: tcommon.Hash{0xee}, Num: 1},
+		{Raw: raw2, Hash: block2.Hash(), Num: block2.Number()},
+	}}
+	if got := DecodeBufferedBatch(&firstBad); got.Action != BufferedBatchDecodeContinue || got.Err == nil || len(firstBad.Blocks) != 0 || got.Dropped.Num != 1 {
+		t.Fatalf("first-bad decode = %+v blocks=%d, want continue with dropped #1", got, len(firstBad.Blocks))
+	}
+
+	prefix := BufferedBatch{Buffered: []BufferedBlock{
+		{Raw: raw1, Hash: block1.Hash(), Num: block1.Number()},
+		{Raw: []byte{0x02}, Hash: tcommon.Hash{0xdd}, Num: 2},
+	}}
+	if got := DecodeBufferedBatch(&prefix); got.Action != BufferedBatchDecodeImport || got.Err == nil || len(prefix.Blocks) != 1 || got.Dropped.Num != 2 {
+		t.Fatalf("prefix decode = %+v blocks=%d, want import prefix with dropped #2", got, len(prefix.Blocks))
+	}
+}
+
 func TestSummarizeAppliedBatch(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)

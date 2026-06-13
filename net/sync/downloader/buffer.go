@@ -52,6 +52,23 @@ type BufferedBatch struct {
 	BufferWaits []time.Duration
 }
 
+// BufferedBatchDecodeAction tells the local drain loop what to do after
+// decoding a raw buffered batch.
+type BufferedBatchDecodeAction uint8
+
+const (
+	BufferedBatchDecodeContinue BufferedBatchDecodeAction = iota
+	BufferedBatchDecodeImport
+)
+
+// BufferedBatchDecodeResult records the decoded-prefix decision for one local
+// import chunk.
+type BufferedBatchDecodeResult struct {
+	Action  BufferedBatchDecodeAction
+	Dropped BufferedBlock
+	Err     error
+}
+
 // AppliedBatchSummary is the service-neutral accounting for the prefix of a
 // buffered batch that canonical insertion accepted.
 type AppliedBatchSummary struct {
@@ -225,4 +242,19 @@ func (b *BufferedBatch) DecodeBlocks() (BufferedBlock, error) {
 		b.Blocks = append(b.Blocks, block)
 	}
 	return BufferedBlock{}, nil
+}
+
+// DecodeBufferedBatch decodes a local import chunk and returns the next drain
+// action. A decode error after a non-empty prefix still imports that prefix;
+// an error on the first entry asks the caller to continue the drain loop.
+func DecodeBufferedBatch(batch *BufferedBatch) BufferedBatchDecodeResult {
+	dropped, err := batch.DecodeBlocks()
+	result := BufferedBatchDecodeResult{
+		Dropped: dropped,
+		Err:     err,
+	}
+	if batch != nil && len(batch.Blocks) > 0 {
+		result.Action = BufferedBatchDecodeImport
+	}
+	return result
 }

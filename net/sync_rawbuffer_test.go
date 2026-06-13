@@ -67,7 +67,10 @@ func TestPopDecodesRawBufferedBlock(t *testing.T) {
 	if len(batch.Buffered) != 1 {
 		t.Fatalf("expected 1 popped raw entry, got %d", len(batch.Buffered))
 	}
-	ss.decodeBatchBlocks(&batch)
+	decoded := syncdl.DecodeBufferedBatch(&batch)
+	if decoded.Action != syncdl.BufferedBatchDecodeImport {
+		t.Fatalf("decode action = %v err=%v, want import", decoded.Action, decoded.Err)
+	}
 	if len(batch.Blocks) != 1 {
 		t.Fatalf("expected 1 decoded block, got %d", len(batch.Blocks))
 	}
