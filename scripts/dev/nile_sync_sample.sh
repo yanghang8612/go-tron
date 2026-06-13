@@ -273,6 +273,43 @@ def number(row, key, default=0):
     except Exception:
         return default
 
+def allocated_bytes(path):
+    try:
+        stat = path.stat()
+    except Exception:
+        return 0
+    blocks = getattr(stat, "st_blocks", 0)
+    if blocks:
+        return int(blocks) * 512
+    return int(stat.st_size)
+
+def snapshot_derived_index_stats(datadir_path):
+    root = Path(datadir_path) / "gtron" / "state-snapshots"
+    if not root.exists():
+        return 0, 0
+    markers = (
+        "chain-freezer-accessor",
+        "chain-index",
+        "balance-trace",
+        "section-bloom",
+        "event-log",
+    )
+    total_bytes = 0
+    files = 0
+    try:
+        paths = root.rglob("*")
+        for path in paths:
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if not any(marker in rel for marker in markers):
+                continue
+            total_bytes += allocated_bytes(path)
+            files += 1
+    except Exception:
+        return 0, 0
+    return total_bytes, files
+
 nowblock = load_json(nowblock_path)
 nodeinfo = load_json(nodeinfo_path)
 nodes = load_json(nodes_path)
@@ -294,11 +331,15 @@ chaindata = int(chaindata_bytes)
 ancient = int(ancient_bytes)
 snapshot = int(snapshot_bytes)
 replay = int(replay_bytes)
+derived_index, derived_index_files = snapshot_derived_index_stats(datadir)
 cold_archive = ancient + snapshot
 bytes_per_block = float(total) / height if height > 0 else 0.0
 chaindata_bytes_per_block = float(chaindata) / height if height > 0 else 0.0
 cold_archive_bytes_per_block = float(cold_archive) / height if height > 0 else 0.0
+derived_index_bytes_per_block = float(derived_index) / height if height > 0 else 0.0
 cold_to_hot_ratio = float(cold_archive) / chaindata if chaindata > 0 else 0.0
+derived_index_to_hot_ratio = float(derived_index) / chaindata if chaindata > 0 else 0.0
+derived_index_snapshot_ratio = float(derived_index) / snapshot if snapshot > 0 else 0.0
 previous = load_previous_sample(output)
 previous_unix = number(previous, "unix", 0)
 previous_height = number(previous, "height", 0)
@@ -310,9 +351,11 @@ chaindata_bytes_delta = chaindata - number(previous, "chaindataBytes", chaindata
 ancient_bytes_delta = ancient - number(previous, "ancientBytes", ancient) if interval_seconds > 0 else 0
 snapshot_bytes_delta = snapshot - number(previous, "snapshotBytes", snapshot) if interval_seconds > 0 else 0
 cold_archive_bytes_delta = cold_archive - number(previous, "coldArchiveBytes", cold_archive) if interval_seconds > 0 else 0
+derived_index_bytes_delta = derived_index - number(previous, "derivedIndexBytes", derived_index) if interval_seconds > 0 else 0
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -355,18 +398,25 @@ row = {
     "snapshotBytes": snapshot,
     "replayBytes": replay,
     "coldArchiveBytes": cold_archive,
+    "derivedIndexBytes": derived_index,
+    "derivedIndexFiles": derived_index_files,
     "bytesPerBlock": bytes_per_block,
     "chaindataBytesPerBlock": chaindata_bytes_per_block,
     "coldArchiveBytesPerBlock": cold_archive_bytes_per_block,
+    "derivedIndexBytesPerBlock": derived_index_bytes_per_block,
     "coldToHotBytesRatio": cold_to_hot_ratio,
+    "derivedIndexToHotBytesRatio": derived_index_to_hot_ratio,
+    "derivedIndexSnapshotBytesRatio": derived_index_snapshot_ratio,
     "datadirBytesDelta": datadir_bytes_delta,
     "chaindataBytesDelta": chaindata_bytes_delta,
     "ancientBytesDelta": ancient_bytes_delta,
     "snapshotBytesDelta": snapshot_bytes_delta,
     "coldArchiveBytesDelta": cold_archive_bytes_delta,
+    "derivedIndexBytesDelta": derived_index_bytes_delta,
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
+    "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),

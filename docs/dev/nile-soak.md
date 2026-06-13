@@ -75,9 +75,14 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `nodeInfoHeightDelta`, `blockId`, `peers`, `sampleStatus`, `elapsedSeconds`,
 `blocksPerSecond`, `blocksPerMinute`, `intervalSeconds`, `intervalBlocks`,
 `intervalBlocksPerSecond`, `datadirBytes`, `chaindataBytes`, `ancientBytes`,
-`snapshotBytes`, `coldArchiveBytes`, per-block byte rates, per-interval byte
-deltas/rates, `coldToHotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
-`coldArchiveFiles`, plus the repo commit used to produce the sample.
+`snapshotBytes`, `coldArchiveBytes`, `derivedIndexBytes`,
+`derivedIndexFiles`, per-block byte rates, per-interval byte deltas/rates,
+`coldToHotBytesRatio`, `derivedIndexToHotBytesRatio`,
+`derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
+`coldArchiveFiles`, plus the repo commit used to produce the sample. Derived
+index bytes are the chain-index/accessor, balance-trace, section-bloom, and
+event-log/index sidecars inside `state-snapshots`; `snapshotBytes` remains the
+whole snapshot directory size for backward comparisons.
 `sampleStatus` is `ok` when HTTP calls work, peers are present, and
 `getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
 first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP

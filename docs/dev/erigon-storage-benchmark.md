@@ -188,7 +188,10 @@ For a real Nile node that is already running, use
 `scripts/dev/nile_sync_sample.sh` instead of this dev-network launcher. It
 appends JSONL samples with HTTP height/block ID, peer count, elapsed sync time,
 total and per-interval block rates, and hot/cold/snapshot disk split plus
-per-interval byte deltas without opening the live Pebble store. Run it with
+per-interval byte deltas without opening the live Pebble store. The Nile sampler
+also breaks out `derivedIndexBytes`/`derivedIndexFiles` for chain-index,
+balance-trace, section-bloom, and event-log/index sidecars, while keeping
+`snapshotBytes` as the full snapshot directory size. Run it with
 `--offline-db-check` only after the node is stopped to add `storage-alerts`
 stage/freezer/snapshot diagnostics.
 
