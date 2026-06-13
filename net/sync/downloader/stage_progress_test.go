@@ -33,7 +33,7 @@ func TestStageForCanonicalStage(t *testing.T) {
 	}
 }
 
-func TestStageProgressCollectorWritesPlannedBoundaryPrefix(t *testing.T) {
+func TestStageProgressCollectorWritesExplicitSchedulePrefix(t *testing.T) {
 	collector := NewStageProgressCollector()
 	collector.Observe(rawdb.StageBodies, 1, tcommon.Hash{0x01})
 	collector.Observe(rawdb.StageBodies, 2, tcommon.Hash{0x02})
@@ -43,7 +43,8 @@ func TestStageProgressCollectorWritesPlannedBoundaryPrefix(t *testing.T) {
 	collector.Observe(rawdb.StageHeaders, 2, tcommon.Hash{0xff})
 
 	var got []rawdb.StageProgress
-	collector.Write(2, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+	schedule := NewImportStageSchedule(2, tcommon.Hash{0x02})
+	collector.WriteSchedule(schedule, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 		got = append(got, rawdb.StageProgress{
 			Stage:        stage,
 			BlockNum:     blockNum,
@@ -59,8 +60,22 @@ func TestStageProgressCollectorWritesPlannedBoundaryPrefix(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("written progress = %+v, want %+v", got, want)
 	}
-	if rows := collector.Rows(2); !reflect.DeepEqual(rows, want) {
+	if rows := collector.RowsForSchedule(schedule); !reflect.DeepEqual(rows, want) {
 		t.Fatalf("progress rows = %+v, want %+v", rows, want)
+	}
+}
+
+func TestStageProgressCollectorLegacyRowsDeriveBoundaryFromImportObservation(t *testing.T) {
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, 2, tcommon.Hash{0x02})
+	collector.Observe(rawdb.StageExecution, 2, tcommon.Hash{0x02})
+
+	want := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: 2, BlockHash: tcommon.Hash{0x02}, HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: 2, BlockHash: tcommon.Hash{0x02}, HasBlockHash: true},
+	}
+	if rows := collector.Rows(2); !reflect.DeepEqual(rows, want) {
+		t.Fatalf("legacy progress rows = %+v, want %+v", rows, want)
 	}
 }
 

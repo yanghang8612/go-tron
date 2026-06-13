@@ -170,7 +170,7 @@ func TestSyncStageProgressCollectorKeepsLatestAppliedStage(t *testing.T) {
 	}
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	collector.Write(block1.Number(), func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+	collector.WriteSchedule(syncdl.NewImportStageSchedule(block1.Number(), block1.Hash()), func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 		ss.writeStageProgress(stage, blockNum, blockHash, true)
 	})
 
@@ -204,7 +204,8 @@ func TestRecordImportedBatchKeepsAppliedStagePrefixAfterPartialExecution(t *test
 	}
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	plan := syncdl.PlanImportedBatchProgress(batch, 1, collector)
+	execution := syncdl.PlanImportBatchExecution(batch)
+	plan := execution.ProgressPlan(batch, 1, collector)
 	ss.recordImportedBatch(plan, time.Millisecond)
 
 	assertSyncPipelineProgress(t, bc.DB(), block1)
@@ -240,7 +241,8 @@ func TestSyncServiceRestoresHalfExecutedSessionOnStart(t *testing.T) {
 	}
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	plan := syncdl.PlanImportedBatchProgress(batch, 1, collector)
+	execution := syncdl.PlanImportBatchExecution(batch)
+	plan := execution.ProgressPlan(batch, 1, collector)
 	ss.recordImportedBatch(plan, time.Millisecond)
 
 	assertSyncPipelineProgress(t, bc.DB(), block1)
@@ -380,7 +382,8 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *test
 	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
 	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
 
-	plan := syncdl.PlanImportedBatchProgress(batch, 2, collector)
+	execution := syncdl.PlanImportBatchExecution(batch)
+	plan := execution.ProgressPlan(batch, 2, collector)
 	ss.recordImportedBatch(plan, time.Millisecond)
 
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
@@ -422,7 +425,8 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterCommitmentMismatch(t *tes
 	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
 
-	plan := syncdl.PlanImportedBatchProgress(batch, 2, collector)
+	execution := syncdl.PlanImportBatchExecution(batch)
+	plan := execution.ProgressPlan(batch, 2, collector)
 	ss.recordImportedBatch(plan, time.Millisecond)
 
 	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {

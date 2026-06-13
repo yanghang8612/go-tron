@@ -175,6 +175,13 @@ func (p ImportBatchExecutionPlan) AppliedSchedule(applied int) (ImportStageSched
 	return p.Schedules[applied-1], true
 }
 
+// ProgressPlan derives the DB-side progress/cleanup plan for an applied prefix
+// of this execution plan. This keeps the applied boundary tied to the explicit
+// bodies/execution/commitment/finish schedule created before canonical import.
+func (p ImportBatchExecutionPlan) ProgressPlan(batch BufferedBatch, applied int, collector *StageProgressCollector) ImportedBatchProgressPlan {
+	return PlanImportedBatchProgressForExecution(batch, applied, p, collector)
+}
+
 // PlansStageObservation reports whether a canonical insertion hook observation
 // belongs to one of the execution plan's explicit stage schedules.
 func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) bool {
@@ -320,7 +327,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
 			if result.Outcome.RecordApplied {
-				result.Progress = PlanImportedBatchProgressForExecution(plan.Batch, result.Outcome.Applied, result.Execution, collector)
+				result.Progress = result.Execution.ProgressPlan(plan.Batch, result.Outcome.Applied, collector)
 				result.StageDiagnostics = result.Progress.StageDiagnostics
 				if result.Progress.OK {
 					applier.RecordImportedBatch(result.Progress, elapsed)

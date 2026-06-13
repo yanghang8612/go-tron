@@ -291,8 +291,9 @@ func (c *StageProgressCollector) Observe(stage rawdb.StageID, blockNum uint64, h
 	c.mu.Unlock()
 }
 
-// Write emits the planned sync pipeline prefix for through, in operator
-// stage-status order.
+// Write emits the hook-derived sync pipeline prefix for through, in operator
+// stage-status order. Production import paths should prefer WriteSchedule so
+// the execution plan, not hook observations, owns the target boundary.
 func (c *StageProgressCollector) Write(through uint64, write StageProgressWriter) {
 	if c == nil || write == nil {
 		return
@@ -302,7 +303,18 @@ func (c *StageProgressCollector) Write(through uint64, write StageProgressWriter
 	}
 }
 
-// Rows returns the planned sync pipeline prefix for through, in operator
+// WriteSchedule emits the explicit schedule-owned sync pipeline prefix in
+// operator stage-status order.
+func (c *StageProgressCollector) WriteSchedule(schedule ImportStageSchedule, write StageProgressWriter) {
+	if c == nil || write == nil {
+		return
+	}
+	for _, row := range c.RowsForSchedule(schedule) {
+		write(row.Stage, row.BlockNum, row.BlockHash)
+	}
+}
+
+// Rows returns the hook-derived sync pipeline prefix for through, in operator
 // stage-status order. A boundary is publishable only when the import/bodies
 // stage was observed at exactly through; later stages must match the same
 // block/hash or they are skipped with the rest of the downstream pipeline.
@@ -317,6 +329,12 @@ func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 	}
 	schedule := NewImportStageSchedule(through, tasks[0].BlockHash)
 	return newImportStagePlannerFromObserved(observed).Plan(schedule).Progress
+}
+
+// RowsForSchedule returns the explicit schedule-owned sync pipeline prefix in
+// operator stage-status order.
+func (c *StageProgressCollector) RowsForSchedule(schedule ImportStageSchedule) []rawdb.StageProgress {
+	return c.PlanSchedule(schedule).Progress
 }
 
 // PlanImportedBatchProgress derives the DB-side progress plan for an applied
