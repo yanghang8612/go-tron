@@ -519,6 +519,61 @@ def allocated_bytes(path):
         return int(blocks) * 512
     return int(stat.st_size)
 
+def empty_bucket_stats(names):
+    stats = {}
+    for name in names:
+        stats[name] = {"bytes": 0, "files": 0}
+    return stats
+
+def ancient_table_stats(datadir_path):
+    root = Path(datadir_path) / "gtron" / "ancient"
+    names = ("bodies", "txInfos", "stateRoots", "other")
+    stats = empty_bucket_stats(names)
+    if not root.exists():
+        return stats
+    table_names = {
+        "bodies": "bodies",
+        "tx_infos": "txInfos",
+        "state_roots": "stateRoots",
+    }
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            bucket = "other"
+            filename = path.name
+            for table, name in table_names.items():
+                if filename == f"{table}.meta" or filename == f"{table}.cidx" or filename == f"{table}.ridx" or filename.startswith(f"{table}."):
+                    bucket = name
+                    break
+            stats[bucket]["bytes"] += allocated_bytes(path)
+            stats[bucket]["files"] += 1
+    except Exception:
+        return empty_bucket_stats(names)
+    return stats
+
+def snapshot_bucket_stats(datadir_path):
+    root = Path(datadir_path) / "gtron" / "state-snapshots"
+    names = ("root", "latest", "history", "chain", "log", "trace", "commitment", "retired", "other")
+    stats = empty_bucket_stats(names)
+    if not root.exists():
+        return stats
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root)
+            if len(rel.parts) == 1:
+                bucket = "root"
+            else:
+                first = rel.parts[0]
+                bucket = first if first in stats else "other"
+            stats[bucket]["bytes"] += allocated_bytes(path)
+            stats[bucket]["files"] += 1
+    except Exception:
+        return empty_bucket_stats(names)
+    return stats
+
 def snapshot_derived_index_stats(datadir_path):
     root = Path(datadir_path) / "gtron" / "state-snapshots"
     if not root.exists():
@@ -569,6 +624,8 @@ chaindata = int(chaindata_bytes)
 ancient = int(ancient_bytes)
 snapshot = int(snapshot_bytes)
 replay = int(replay_bytes)
+ancient_tables = ancient_table_stats(datadir)
+snapshot_buckets = snapshot_bucket_stats(datadir)
 derived_index, derived_index_files = snapshot_derived_index_stats(datadir)
 cold_archive = ancient + snapshot
 bytes_per_block = float(total) / height if height > 0 else 0.0
@@ -590,6 +647,14 @@ ancient_bytes_delta = ancient - number(previous, "ancientBytes", ancient) if int
 snapshot_bytes_delta = snapshot - number(previous, "snapshotBytes", snapshot) if interval_seconds > 0 else 0
 cold_archive_bytes_delta = cold_archive - number(previous, "coldArchiveBytes", cold_archive) if interval_seconds > 0 else 0
 derived_index_bytes_delta = derived_index - number(previous, "derivedIndexBytes", derived_index) if interval_seconds > 0 else 0
+ancient_bodies_bytes_delta = ancient_tables["bodies"]["bytes"] - number(previous, "ancientBodiesBytes", ancient_tables["bodies"]["bytes"]) if interval_seconds > 0 else 0
+ancient_tx_infos_bytes_delta = ancient_tables["txInfos"]["bytes"] - number(previous, "ancientTxInfosBytes", ancient_tables["txInfos"]["bytes"]) if interval_seconds > 0 else 0
+ancient_state_roots_bytes_delta = ancient_tables["stateRoots"]["bytes"] - number(previous, "ancientStateRootsBytes", ancient_tables["stateRoots"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_latest_bytes_delta = snapshot_buckets["latest"]["bytes"] - number(previous, "snapshotLatestBytes", snapshot_buckets["latest"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_history_bytes_delta = snapshot_buckets["history"]["bytes"] - number(previous, "snapshotHistoryBytes", snapshot_buckets["history"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_chain_bytes_delta = snapshot_buckets["chain"]["bytes"] - number(previous, "snapshotChainBytes", snapshot_buckets["chain"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_log_bytes_delta = snapshot_buckets["log"]["bytes"] - number(previous, "snapshotLogBytes", snapshot_buckets["log"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_trace_bytes_delta = snapshot_buckets["trace"]["bytes"] - number(previous, "snapshotTraceBytes", snapshot_buckets["trace"]["bytes"]) if interval_seconds > 0 else 0
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
@@ -647,7 +712,33 @@ row = {
     "datadirBytes": total,
     "chaindataBytes": chaindata,
     "ancientBytes": ancient,
+    "ancientBodiesBytes": ancient_tables["bodies"]["bytes"],
+    "ancientBodiesFiles": ancient_tables["bodies"]["files"],
+    "ancientTxInfosBytes": ancient_tables["txInfos"]["bytes"],
+    "ancientTxInfosFiles": ancient_tables["txInfos"]["files"],
+    "ancientStateRootsBytes": ancient_tables["stateRoots"]["bytes"],
+    "ancientStateRootsFiles": ancient_tables["stateRoots"]["files"],
+    "ancientOtherBytes": ancient_tables["other"]["bytes"],
+    "ancientOtherFiles": ancient_tables["other"]["files"],
     "snapshotBytes": snapshot,
+    "snapshotRootBytes": snapshot_buckets["root"]["bytes"],
+    "snapshotRootFiles": snapshot_buckets["root"]["files"],
+    "snapshotLatestBytes": snapshot_buckets["latest"]["bytes"],
+    "snapshotLatestFiles": snapshot_buckets["latest"]["files"],
+    "snapshotHistoryBytes": snapshot_buckets["history"]["bytes"],
+    "snapshotHistoryFiles": snapshot_buckets["history"]["files"],
+    "snapshotChainBytes": snapshot_buckets["chain"]["bytes"],
+    "snapshotChainFiles": snapshot_buckets["chain"]["files"],
+    "snapshotLogBytes": snapshot_buckets["log"]["bytes"],
+    "snapshotLogFiles": snapshot_buckets["log"]["files"],
+    "snapshotTraceBytes": snapshot_buckets["trace"]["bytes"],
+    "snapshotTraceFiles": snapshot_buckets["trace"]["files"],
+    "snapshotCommitmentBytes": snapshot_buckets["commitment"]["bytes"],
+    "snapshotCommitmentFiles": snapshot_buckets["commitment"]["files"],
+    "snapshotRetiredDirectoryBytes": snapshot_buckets["retired"]["bytes"],
+    "snapshotRetiredDirectoryFiles": snapshot_buckets["retired"]["files"],
+    "snapshotOtherBytes": snapshot_buckets["other"]["bytes"],
+    "snapshotOtherFiles": snapshot_buckets["other"]["files"],
     "replayBytes": replay,
     "coldArchiveBytes": cold_archive,
     "derivedIndexBytes": derived_index,
@@ -665,6 +756,14 @@ row = {
     "snapshotBytesDelta": snapshot_bytes_delta,
     "coldArchiveBytesDelta": cold_archive_bytes_delta,
     "derivedIndexBytesDelta": derived_index_bytes_delta,
+    "ancientBodiesBytesDelta": ancient_bodies_bytes_delta,
+    "ancientTxInfosBytesDelta": ancient_tx_infos_bytes_delta,
+    "ancientStateRootsBytesDelta": ancient_state_roots_bytes_delta,
+    "snapshotLatestBytesDelta": snapshot_latest_bytes_delta,
+    "snapshotHistoryBytesDelta": snapshot_history_bytes_delta,
+    "snapshotChainBytesDelta": snapshot_chain_bytes_delta,
+    "snapshotLogBytesDelta": snapshot_log_bytes_delta,
+    "snapshotTraceBytesDelta": snapshot_trace_bytes_delta,
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
