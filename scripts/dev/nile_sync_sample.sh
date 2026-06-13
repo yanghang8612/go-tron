@@ -248,6 +248,31 @@ def parse_alerts(text):
             row[key] = value
     return row
 
+def load_previous_sample(output_path):
+    if not output_path:
+        return {}
+    try:
+        path = Path(output_path)
+        if not path.exists():
+            return {}
+        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            return json.loads(line)
+    except Exception:
+        return {}
+    return {}
+
+def number(row, key, default=0):
+    try:
+        value = row.get(key, default)
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
 nowblock = load_json(nowblock_path)
 nodeinfo = load_json(nodeinfo_path)
 nodes = load_json(nodes_path)
@@ -274,6 +299,20 @@ bytes_per_block = float(total) / height if height > 0 else 0.0
 chaindata_bytes_per_block = float(chaindata) / height if height > 0 else 0.0
 cold_archive_bytes_per_block = float(cold_archive) / height if height > 0 else 0.0
 cold_to_hot_ratio = float(cold_archive) / chaindata if chaindata > 0 else 0.0
+previous = load_previous_sample(output)
+previous_unix = number(previous, "unix", 0)
+previous_height = number(previous, "height", 0)
+interval_seconds = now - previous_unix if previous_unix > 0 and now >= previous_unix else -1
+interval_blocks = height - previous_height if interval_seconds > 0 and height >= previous_height else 0
+interval_blocks_per_second = float(interval_blocks) / interval_seconds if interval_seconds > 0 else 0.0
+datadir_bytes_delta = total - number(previous, "datadirBytes", total) if interval_seconds > 0 else 0
+chaindata_bytes_delta = chaindata - number(previous, "chaindataBytes", chaindata) if interval_seconds > 0 else 0
+ancient_bytes_delta = ancient - number(previous, "ancientBytes", ancient) if interval_seconds > 0 else 0
+snapshot_bytes_delta = snapshot - number(previous, "snapshotBytes", snapshot) if interval_seconds > 0 else 0
+cold_archive_bytes_delta = cold_archive - number(previous, "coldArchiveBytes", cold_archive) if interval_seconds > 0 else 0
+datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -307,6 +346,9 @@ row = {
     "elapsedSeconds": elapsed,
     "blocksPerSecond": blocks_per_second,
     "blocksPerMinute": blocks_per_minute,
+    "intervalSeconds": interval_seconds,
+    "intervalBlocks": interval_blocks,
+    "intervalBlocksPerSecond": interval_blocks_per_second,
     "datadirBytes": total,
     "chaindataBytes": chaindata,
     "ancientBytes": ancient,
@@ -317,6 +359,14 @@ row = {
     "chaindataBytesPerBlock": chaindata_bytes_per_block,
     "coldArchiveBytesPerBlock": cold_archive_bytes_per_block,
     "coldToHotBytesRatio": cold_to_hot_ratio,
+    "datadirBytesDelta": datadir_bytes_delta,
+    "chaindataBytesDelta": chaindata_bytes_delta,
+    "ancientBytesDelta": ancient_bytes_delta,
+    "snapshotBytesDelta": snapshot_bytes_delta,
+    "coldArchiveBytesDelta": cold_archive_bytes_delta,
+    "datadirBytesPerSecond": datadir_bytes_per_second,
+    "chaindataBytesPerSecond": chaindata_bytes_per_second,
+    "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),

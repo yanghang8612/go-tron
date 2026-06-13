@@ -73,9 +73,10 @@ scripts/dev/nile_sync_sample.sh \
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
 `nodeInfoHeightDelta`, `blockId`, `peers`, `sampleStatus`, `elapsedSeconds`,
-`blocksPerSecond`, `blocksPerMinute`, `datadirBytes`, `chaindataBytes`,
-`ancientBytes`, `snapshotBytes`, `coldArchiveBytes`, per-block byte rates,
-`coldToHotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
+`blocksPerSecond`, `blocksPerMinute`, `intervalSeconds`, `intervalBlocks`,
+`intervalBlocksPerSecond`, `datadirBytes`, `chaindataBytes`, `ancientBytes`,
+`snapshotBytes`, `coldArchiveBytes`, per-block byte rates, per-interval byte
+deltas/rates, `coldToHotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
 `coldArchiveFiles`, plus the repo commit used to produce the sample.
 `sampleStatus` is `ok` when HTTP calls work, peers are present, and
 `getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
