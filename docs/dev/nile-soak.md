@@ -141,6 +141,43 @@ adjacent-stage ratios such as `intervalStageSyncExecutionToImportRatio` and
 `intervalStageSyncFinishToCommitmentRatio`, so long-running samples show both
 where backlog is accumulating and whether each downstream stage is keeping up.
 
+## Full Staged Sync Validation
+
+"Full staged sync" means a cold Nile node can make progress through explicit,
+restart-safe stages instead of treating sync as one opaque block-import loop.
+In go-tron today the observable staged pipeline is:
+
+1. `SyncInventory`: peer target height discovered from chain inventory.
+2. `SyncBodies`: block bodies downloaded and persisted as staged rows.
+3. `SyncBodiesReady`: contiguous staged bodies are ready to drain.
+4. `SyncImport`: staged bodies were handed to block import.
+5. `SyncExecution`: block execution completed.
+6. `SyncCommitment`: state commitment/update work completed.
+7. `SyncFinish`: the imported range is fully verified and safe for downstream
+   freezer/prune/snapshot consumers.
+
+For a production Nile run, capture these checks:
+
+1. Start from an empty datadir and sample every few minutes with
+   `nile_sync_sample.sh`.
+2. Periodically write `gtron db stage-status --datadir <dir>` output to the
+   `--stage-status-file` path used by the sampler.
+3. Confirm `stageSyncBodies >= stageSyncBodiesReady >= stageSyncImport >=
+   stageSyncExecution >= stageSyncCommitment >= stageSyncFinish`.
+4. Confirm `stageSyncBottleneck` moves as expected during catch-up; a persistent
+   large `import-execution`, `execution-commitment`, `commitment-finish`, or
+   `finish-head` lag is the signal to profile that stage.
+5. Stop gtron mid-catch-up, restart without deleting the datadir, and confirm
+   staged bodies are recovered or pruned to a contiguous prefix: the next sample
+   should not show `SyncBodiesReady` ahead of a missing or mismatched body row.
+6. After catch-up, run at least one stopped-node `--offline-db-check` sample and
+   keep the JSONL row together with `gtron.err.log` and `stage-status.txt`.
+
+If any stage row is missing, unbound, ahead of canonical head, or hash-mismatched,
+the restart path should repair it by keeping only a contiguous hash-bound prefix.
+Treat repeated repairs after a clean restart as a bug, not an expected steady
+state.
+
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
 alert fields in the row. Do not enable that flag against a live Pebble datadir
