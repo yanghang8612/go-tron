@@ -581,6 +581,54 @@ func TestSyncServiceKeepsUpstreamAfterCommitmentForkHashMismatchOnSessionStart(t
 	}
 }
 
+func TestSyncServiceRestartsHalfExecutedPipelineWithNextStagedBody(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), block1.Hash()); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+	block2 := stubBlock(2, block1.Hash())
+	result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block2, rawOf(t, block2))
+	if result.StageError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("stage block2 result = %+v", result)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.syncing = true
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	path2 := ss.blockPath[block2.Number()]
+	ss.mu.Unlock()
+
+	if buffered != 1 || target != block2.Number() {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 1/%d", buffered, target, block2.Number())
+	}
+	if path2 != block2.Hash() {
+		t.Fatalf("restored block path for block2 = %x, want %x", path2, block2.Hash())
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+			t.Fatalf("%s progress after startup = %+v ok=%v err=%v, want block1 kept", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress after startup = %+v ok=%v err=%v, want absent", stage, row, ok, err)
+		}
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady after half-execution restart = %+v ok=%v err=%v, want block2", ready, ok, err)
+	}
+}
+
 func TestSyncServiceResetDeletesStagedBodies(t *testing.T) {
 	bc := makeTestChain(t)
 	block := stubBlock(1, bc.CurrentBlock().Hash())
