@@ -73,6 +73,54 @@ func TestBufferedBatchDecodeBlocksKeepsPrefixOnError(t *testing.T) {
 	}
 }
 
+func TestBufferedBatchDecodeBlocksRejectsMetadataMismatch(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	raw1, err := block1.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block1: %v", err)
+	}
+	raw2, err := block2.Marshal()
+	if err != nil {
+		t.Fatalf("marshal block2: %v", err)
+	}
+	expectedHash := tcommon.Hash{0xee}
+	batch := BufferedBatch{Buffered: []BufferedBlock{
+		{Raw: raw1, Hash: block1.Hash(), Num: block1.Number()},
+		{Raw: raw2, Hash: expectedHash, Num: block2.Number()},
+	}}
+
+	dropped, err := batch.DecodeBlocks()
+	var mismatch *BufferedBlockMetadataMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("DecodeBlocks err = %T %[1]v, want metadata mismatch", err)
+	}
+	if dropped.Num != block2.Number() || dropped.Hash != expectedHash {
+		t.Fatalf("dropped = #%d %x, want block2 metadata hash %x", dropped.Num, dropped.Hash, expectedHash)
+	}
+	if mismatch.ExpectedNum != block2.Number() || mismatch.ExpectedHash != expectedHash || mismatch.GotNum != block2.Number() || mismatch.GotHash != block2.Hash() {
+		t.Fatalf("mismatch = %+v, want expected staged metadata and decoded block2", mismatch)
+	}
+	if len(batch.Blocks) != 1 || batch.Blocks[0].Hash() != block1.Hash() {
+		t.Fatalf("decoded prefix = %d blocks, want only block1", len(batch.Blocks))
+	}
+}
+
+func TestValidateBufferedBlockMetadataRejectsNumberMismatch(t *testing.T) {
+	block := testBufferedBlock(2)
+	err := ValidateBufferedBlockMetadata(BufferedBlock{Num: 3, Hash: block.Hash()}, block)
+	var mismatch *BufferedBlockMetadataMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("metadata validation err = %T %[1]v, want mismatch", err)
+	}
+	if mismatch.ExpectedNum != 3 || mismatch.GotNum != block.Number() || mismatch.ExpectedHash != block.Hash() || mismatch.GotHash != block.Hash() {
+		t.Fatalf("mismatch = %+v, want expected #3 with decoded block2", mismatch)
+	}
+	if err := ValidateBufferedBlockMetadata(BufferedBlock{Num: block.Number(), Hash: block.Hash()}, block); err != nil {
+		t.Fatalf("metadata validation with matching block failed: %v", err)
+	}
+}
+
 func TestDecodeBufferedBatchAction(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)

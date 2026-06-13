@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -68,6 +69,23 @@ type BufferedBatchDecodeResult struct {
 	Action  BufferedBatchDecodeAction
 	Dropped BufferedBlock
 	Err     error
+}
+
+// BufferedBlockMetadataMismatchError reports a decoded staged-body entry whose
+// raw payload does not match the number/hash stored in the sync buffer.
+type BufferedBlockMetadataMismatchError struct {
+	ExpectedNum  uint64
+	ExpectedHash tcommon.Hash
+	GotNum       uint64
+	GotHash      tcommon.Hash
+}
+
+func (e *BufferedBlockMetadataMismatchError) Error() string {
+	if e == nil {
+		return "sync buffered block metadata mismatch"
+	}
+	return fmt.Sprintf("sync buffered block metadata mismatch: expected #%d %x got #%d %x",
+		e.ExpectedNum, e.ExpectedHash, e.GotNum, e.GotHash)
 }
 
 // AppliedBatchSummary is the service-neutral accounting for the prefix of a
@@ -612,9 +630,34 @@ func (b *BufferedBatch) DecodeBlocks() (BufferedBlock, error) {
 		if err != nil {
 			return buffered, err
 		}
+		if err := ValidateBufferedBlockMetadata(buffered, block); err != nil {
+			return buffered, err
+		}
 		b.Blocks = append(b.Blocks, block)
 	}
 	return BufferedBlock{}, nil
+}
+
+// ValidateBufferedBlockMetadata verifies that a decoded staged-body payload
+// still matches the number/hash used to schedule and de-duplicate it.
+func ValidateBufferedBlockMetadata(buffered BufferedBlock, block *types.Block) error {
+	if block == nil {
+		return errors.New("sync buffered block decoded to nil")
+	}
+	gotNum := block.Number()
+	gotHash := block.Hash()
+	var zeroHash tcommon.Hash
+	numMismatch := buffered.Num != 0 && buffered.Num != gotNum
+	hashMismatch := buffered.Hash != zeroHash && buffered.Hash != gotHash
+	if !numMismatch && !hashMismatch {
+		return nil
+	}
+	return &BufferedBlockMetadataMismatchError{
+		ExpectedNum:  buffered.Num,
+		ExpectedHash: buffered.Hash,
+		GotNum:       gotNum,
+		GotHash:      gotHash,
+	}
 }
 
 // DecodeBufferedBatch decodes a local import chunk and returns the next drain
