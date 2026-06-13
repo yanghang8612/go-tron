@@ -403,6 +403,83 @@ func TestReadTransactionInfo_ColdIndexAndAncientBlockFallback(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfo_ColdReceiptAfterHotPrune(t *testing.T) {
+	t.Parallel()
+
+	txID := bytes.Repeat([]byte{0xBE}, 32)
+	otherID := bytes.Repeat([]byte{0xBF}, 32)
+	infos := []*corepb.TransactionInfo{
+		{Id: otherID, Fee: 1, BlockNumber: 99},
+		{
+			Id:          txID,
+			Fee:         1234,
+			BlockNumber: 99,
+			Receipt: &corepb.ResourceReceipt{
+				EnergyUsage:      45,
+				EnergyFee:        678,
+				EnergyUsageTotal: 90,
+				NetUsage:         12,
+			},
+		},
+	}
+	ret := &corepb.TransactionRet{
+		BlockNumber:     99,
+		Transactioninfo: infos,
+	}
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	kv := NewMemoryDatabase()
+	cdb := NewChainDB(kv, newFakeAncient())
+	if err := WriteTransactionInfo(cdb, txID, infos[1]); err != nil {
+		t.Fatalf("write hot tx info: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(cdb, 99, infos); err != nil {
+		t.Fatalf("write hot tx infos by block: %v", err)
+	}
+	if err := WriteTransactionIndex(cdb, txID, 99); err != nil {
+		t.Fatalf("write hot tx index: %v", err)
+	}
+	if err := DeleteTransactionInfo(cdb, txID); err != nil {
+		t.Fatalf("delete hot tx info: %v", err)
+	}
+	if err := DeleteTransactionInfosByBlock(cdb, 99); err != nil {
+		t.Fatalf("delete hot tx infos by block: %v", err)
+	}
+	if err := DeleteTransactionIndex(cdb, txID); err != nil {
+		t.Fatalf("delete hot tx index: %v", err)
+	}
+	if _, err := kv.Get(txInfoKey(txID)); err == nil {
+		t.Fatal("hot per-tx info row survived prune setup")
+	}
+	if _, err := kv.Get(txInfoBlockKey(99)); err == nil {
+		t.Fatal("hot per-block tx infos row survived prune setup")
+	}
+	if _, err := kv.Get(txKey(txID)); err == nil {
+		t.Fatal("hot tx index row survived prune setup")
+	}
+
+	anc := newFakeAncient()
+	anc.put(ancientTxInfos, 99, data)
+	cdb = NewChainDB(kv, anc)
+	cdb.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{common.BytesToHash(txID): 99},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			common.BytesToHash(txID): {BlockNum: 99, TxIndex: 1},
+		},
+	})
+
+	got := ReadTransactionInfo(cdb, txID)
+	if got == nil || got.Fee != 1234 || got.Receipt == nil {
+		t.Fatalf("cold receipt fallback = %+v, want fee 1234 with receipt", got)
+	}
+	if got.Receipt.EnergyUsage != 45 || got.Receipt.EnergyFee != 678 || got.Receipt.EnergyUsageTotal != 90 || got.Receipt.NetUsage != 12 {
+		t.Fatalf("cold receipt = %+v, want energy/net fields preserved", got.Receipt)
+	}
+}
+
 // TestReadTransactionIndex_KVPath mirrors TestReadTransactionInfo_KVPath
 // for the tx-hash -> block-number reverse index.
 func TestReadTransactionIndex_KVPath(t *testing.T) {
