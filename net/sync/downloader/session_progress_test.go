@@ -46,6 +46,36 @@ func TestPlanIdleDrainAfterRefill(t *testing.T) {
 	}
 }
 
+func TestPlanPostInventorySettlement(t *testing.T) {
+	tests := map[string]struct {
+		input PostInventorySettlementInput
+		want  PostInventorySettlementPlan
+	}{
+		"stalled retries with no outbound resets": {
+			input: PostInventorySettlementInput{StalledRetries: true},
+			want:  PostInventorySettlementPlan{Reset: true, TryFindPeer: true},
+		},
+		"outbound requests suppress stalled reset": {
+			input: PostInventorySettlementInput{OutboundRequests: 1, StalledRetries: true},
+			want:  PostInventorySettlementPlan{Mirror: true},
+		},
+		"complete session finishes": {
+			input: PostInventorySettlementInput{Complete: true},
+			want:  PostInventorySettlementPlan{Mirror: true, Finish: true},
+		},
+		"incomplete session mirrors legacy queues": {
+			input: PostInventorySettlementInput{},
+			want:  PostInventorySettlementPlan{Mirror: true},
+		},
+	}
+
+	for name, test := range tests {
+		if got := PlanPostInventorySettlement(test.input); got != test.want {
+			t.Fatalf("%s plan = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestSessionProgressShouldFinish(t *testing.T) {
 	done := SessionProgress{
 		Syncing:     true,

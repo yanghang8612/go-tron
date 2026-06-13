@@ -814,12 +814,14 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
-	restart := len(out) == 0 && ss.shouldRestartForStalledRetriesLocked()
-	complete := false
-	if restart {
+	settlement := syncdl.PlanPostInventorySettlement(syncdl.PostInventorySettlementInput{
+		OutboundRequests: len(out),
+		StalledRetries:   ss.shouldRestartForStalledRetriesLocked(),
+		Complete:         ss.shouldFinishLocked(),
+	})
+	if settlement.Reset {
 		ss.doReset()
-	} else {
-		complete = ss.shouldFinishLocked()
+	} else if settlement.Mirror {
 		ss.mirrorLegacyLocked()
 	}
 	ss.mu.Unlock()
@@ -829,11 +831,11 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}
 
 	ss.sendOutboundRequests(out)
-	if restart {
+	if settlement.TryFindPeer {
 		ss.tryFindSyncPeer(nil)
 		return
 	}
-	if complete {
+	if settlement.Finish {
 		ss.finishSync()
 	}
 }

@@ -29,6 +29,23 @@ type IdleDrainPlan struct {
 	CheckJoinPeers bool
 }
 
+// PostInventorySettlementInput is the lock-free state needed after an
+// inventory message refilled fetch slots.
+type PostInventorySettlementInput struct {
+	OutboundRequests int
+	StalledRetries   bool
+	Complete         bool
+}
+
+// PostInventorySettlementPlan describes the session-level action after an
+// inventory response has been queued and fetch slots have been refilled.
+type PostInventorySettlementPlan struct {
+	Reset       bool
+	Mirror      bool
+	Finish      bool
+	TryFindPeer bool
+}
+
 // PlanIdleDrainAfterRefill decides how the sync loop should settle an empty
 // local drain after existing peers were given a chance to fetch more bodies.
 func PlanIdleDrainAfterRefill(complete bool) IdleDrainPlan {
@@ -36,6 +53,18 @@ func PlanIdleDrainAfterRefill(complete bool) IdleDrainPlan {
 		return IdleDrainPlan{Finish: true}
 	}
 	return IdleDrainPlan{CheckJoinPeers: true}
+}
+
+// PlanPostInventorySettlement decides how the service should settle a sync
+// session after accepting an inventory response and refilling fetch slots.
+func PlanPostInventorySettlement(in PostInventorySettlementInput) PostInventorySettlementPlan {
+	if in.OutboundRequests == 0 && in.StalledRetries {
+		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}
+	}
+	if in.Complete {
+		return PostInventorySettlementPlan{Mirror: true, Finish: true}
+	}
+	return PostInventorySettlementPlan{Mirror: true}
 }
 
 // EstimatedRemaining reports the advisory remaining block count for status and
