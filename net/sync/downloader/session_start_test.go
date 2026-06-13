@@ -78,3 +78,66 @@ func TestPlanSessionStartupSaturatesRestoreStart(t *testing.T) {
 		t.Fatalf("delete imported through = %d, want %d", got.DeleteImportedThrough, maxUint64)
 	}
 }
+
+func TestApplySessionStartupPlan(t *testing.T) {
+	plan := SessionStartupPlan{
+		Steps: []SessionStartupStep{
+			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
+			{Action: SessionStartupStepAction(255)},
+			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
+			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
+			{Action: SessionStartupRefreshBodiesReady},
+		},
+	}
+	var applier recordingSessionStartupApplier
+	ApplySessionStartupPlan(plan, &applier)
+	want := []recordedSessionStartupCall{
+		{action: SessionStartupRepairSyncPipeline},
+		{action: SessionStartupRestoreInventoryTarget, first: 9},
+		{action: SessionStartupDeleteImportedBodies, first: 8},
+		{action: SessionStartupRestoreStagedBodies, first: 10, limit: 32, prune: true},
+		{action: SessionStartupRefreshBodiesReady},
+	}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, want)
+	}
+
+	ApplySessionStartupPlan(plan, nil)
+}
+
+type recordedSessionStartupCall struct {
+	action SessionStartupStepAction
+	first  uint64
+	limit  int
+	prune  bool
+}
+
+type recordingSessionStartupApplier struct {
+	calls []recordedSessionStartupCall
+}
+
+func (a *recordingSessionStartupApplier) RepairSyncPipeline() {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRepairSyncPipeline})
+}
+
+func (a *recordingSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRestoreInventoryTarget, first: inventoryFloor})
+}
+
+func (a *recordingSessionStartupApplier) DeleteImportedBodies(through uint64) {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupDeleteImportedBodies, first: through})
+}
+
+func (a *recordingSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+	a.calls = append(a.calls, recordedSessionStartupCall{
+		action: SessionStartupRestoreStagedBodies,
+		first:  from,
+		limit:  limit,
+		prune:  pruneStaleTail,
+	})
+}
+
+func (a *recordingSessionStartupApplier) RefreshBodiesReady() {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRefreshBodiesReady})
+}

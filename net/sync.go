@@ -380,20 +380,32 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 }
 
 func (ss *SyncService) applySessionStartupPlan(headBlock *types.Block, startup syncdl.SessionStartupPlan) {
-	for _, step := range startup.Steps {
-		switch step.Action {
-		case syncdl.SessionStartupRepairSyncPipeline:
-			ss.repairSyncPipelineProgress(headBlock)
-		case syncdl.SessionStartupRestoreInventoryTarget:
-			ss.targetHeadNum = ss.restoreSyncInventoryTarget(step.InventoryFloor)
-		case syncdl.SessionStartupDeleteImportedBodies:
-			ss.deleteImportedSyncBodiesThrough(step.DeleteImportedThrough)
-		case syncdl.SessionStartupRestoreStagedBodies:
-			ss.restoreSyncStagedBodiesLocked(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
-		case syncdl.SessionStartupRefreshBodiesReady:
-			ss.writeSyncBodiesReadyProgress()
-		}
-	}
+	syncdl.ApplySessionStartupPlan(startup, syncSessionStartupApplier{service: ss, headBlock: headBlock})
+}
+
+type syncSessionStartupApplier struct {
+	service   *SyncService
+	headBlock *types.Block
+}
+
+func (a syncSessionStartupApplier) RepairSyncPipeline() {
+	a.service.repairSyncPipelineProgress(a.headBlock)
+}
+
+func (a syncSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
+	a.service.targetHeadNum = a.service.restoreSyncInventoryTarget(inventoryFloor)
+}
+
+func (a syncSessionStartupApplier) DeleteImportedBodies(through uint64) {
+	a.service.deleteImportedSyncBodiesThrough(through)
+}
+
+func (a syncSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+	a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
+}
+
+func (a syncSessionStartupApplier) RefreshBodiesReady() {
+	a.service.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) ensureSessionMapsLocked() {

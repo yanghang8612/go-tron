@@ -30,6 +30,17 @@ type SessionStartupStep struct {
 	PruneStaleTail          bool
 }
 
+// SessionStartupPlanApplier performs the persistence/runtime operations named
+// by a startup plan. The service owns DB handles; downloader owns the ordered
+// stage-recovery schedule.
+type SessionStartupPlanApplier interface {
+	RepairSyncPipeline()
+	RestoreInventoryTarget(inventoryFloor uint64)
+	DeleteImportedBodies(through uint64)
+	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool)
+	RefreshBodiesReady()
+}
+
 // SessionStartupPlan describes the persistence and local-runtime boundaries a
 // sync session should apply before asking peers for more inventory.
 type SessionStartupPlan struct {
@@ -75,4 +86,26 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 		{Action: SessionStartupRefreshBodiesReady},
 	}
 	return plan
+}
+
+// ApplySessionStartupPlan executes a downloader-owned startup recovery
+// schedule against the caller's persistence/runtime adapter.
+func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlanApplier) {
+	if applier == nil {
+		return
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case SessionStartupRepairSyncPipeline:
+			applier.RepairSyncPipeline()
+		case SessionStartupRestoreInventoryTarget:
+			applier.RestoreInventoryTarget(step.InventoryFloor)
+		case SessionStartupDeleteImportedBodies:
+			applier.DeleteImportedBodies(step.DeleteImportedThrough)
+		case SessionStartupRestoreStagedBodies:
+			applier.RestoreStagedBodies(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
+		case SessionStartupRefreshBodiesReady:
+			applier.RefreshBodiesReady()
+		}
+	}
 }
