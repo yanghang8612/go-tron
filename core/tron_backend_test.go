@@ -426,6 +426,12 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 		Topics:  [][]byte{topic[:]},
 		Data:    []byte{0x9c, 0x9d},
 	})
+	info.Receipt = &corepb.ResourceReceipt{
+		EnergyUsage:      33,
+		EnergyFee:        4400,
+		EnergyUsageTotal: 12345,
+	}
+	info.Result = corepb.TransactionInfo_FAILED
 	txHash := tcommon.BytesToHash(info.Id)
 	if err := rawdb.WriteBlock(diskdb, block); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
@@ -499,8 +505,12 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 
 	bc.ChainDB().SetChainIndexReader(mgr)
 	backend := &TronBackend{chain: bc}
-	if got, err := backend.GetTransactionInfoByID(txHash); err != nil || got == nil || len(got.Log) != 1 {
-		t.Fatalf("GetTransactionInfoByID cold logs = %+v/%v, want one log", got, err)
+	if got, err := backend.GetTransactionInfoByID(txHash); err != nil ||
+		got == nil ||
+		len(got.Log) != 1 ||
+		got.GetReceipt().GetEnergyUsageTotal() != 12345 ||
+		got.Result != corepb.TransactionInfo_FAILED {
+		t.Fatalf("GetTransactionInfoByID cold receipt = %+v/%v, want failed receipt with one log and energy", got, err)
 	}
 
 	rpcServer := jsonrpc.NewServer(backend, 0)
@@ -524,7 +534,11 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 	}
 	if receipt["transactionHash"] != txHashHex ||
 		receipt["blockHash"] != "0x"+block.Hash().Hex() ||
+		receipt["status"] != "0x0" ||
+		receipt["gasUsed"] != "0x3039" ||
+		receipt["cumulativeGasUsed"] != "0x3039" ||
 		logObj["address"] != "0x"+fmt.Sprintf("%x", logAddress) ||
+		fmt.Sprint(logObj["topics"]) != fmt.Sprintf("[0x%064x]", topic[:]) ||
 		logObj["data"] != "0x9c9d" ||
 		logObj["transactionHash"] != txHashHex ||
 		logObj["blockNumber"] != "0x1" ||
