@@ -23,7 +23,11 @@ func TestPlanPeerFailover(t *testing.T) {
 		},
 		{
 			name: "stalled retries reset and finds peer",
-			in:   PeerFailoverInput{RemainingPeers: 2, StalledRetries: true},
+			in: PeerFailoverInput{Progress: SessionProgress{
+				Syncing:      true,
+				RetryListLen: 1,
+				Peers:        []PeerProgress{{Done: true}, {Done: false}},
+			}},
 			want: PeerFailoverPlan{
 				Reset:              true,
 				TryFindPeer:        true,
@@ -33,7 +37,14 @@ func TestPlanPeerFailover(t *testing.T) {
 		},
 		{
 			name: "outbound requests continue session",
-			in:   PeerFailoverInput{RemainingPeers: 2, OutboundRequests: 1, StalledRetries: true},
+			in: PeerFailoverInput{
+				OutboundRequests: 1,
+				Progress: SessionProgress{
+					Syncing:      true,
+					RetryListLen: 1,
+					Peers:        []PeerProgress{{Done: true}, {Done: false}},
+				},
+			},
 			want: PeerFailoverPlan{
 				Mirror:               true,
 				SendOutboundRequests: true,
@@ -43,7 +54,7 @@ func TestPlanPeerFailover(t *testing.T) {
 		},
 		{
 			name: "idle peers without stalled retries mirror state",
-			in:   PeerFailoverInput{RemainingPeers: 2},
+			in:   PeerFailoverInput{Progress: SessionProgress{Syncing: true, Peers: []PeerProgress{{Done: true}, {Done: false}}}},
 			want: PeerFailoverPlan{
 				Mirror:      true,
 				LockedSteps: []PeerFailoverStep{{Action: PeerFailoverMirror}},

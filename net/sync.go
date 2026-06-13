@@ -1705,14 +1705,6 @@ func (ss *SyncService) estimatedRemainLocked() int64 {
 	return ss.sessionProgressLocked().EstimatedRemaining()
 }
 
-func (ss *SyncService) shouldFinishLocked() bool {
-	return ss.sessionProgressLocked().ShouldFinish()
-}
-
-func (ss *SyncService) shouldRestartForStalledRetriesLocked() bool {
-	return ss.sessionProgressLocked().ShouldRestartForStalledRetries()
-}
-
 func (ss *SyncService) sessionProgressLocked() syncdl.SessionProgress {
 	progress := syncdl.SessionProgress{
 		Syncing:        ss.syncing,
@@ -2005,14 +1997,10 @@ func (ss *SyncService) onFetchTimeout(seq uint64, peerID string) {
 	if remainingPeers > 0 {
 		out = ss.fillFetchSlotsLocked(time.Now())
 	}
-	stalledRetries := false
-	if remainingPeers > 0 && len(out) == 0 {
-		stalledRetries = ss.shouldRestartForStalledRetriesLocked()
-	}
+	progress := ss.sessionProgressLocked()
 	plan := syncdl.PlanPeerFailover(syncdl.PeerFailoverInput{
-		RemainingPeers:   remainingPeers,
 		OutboundRequests: len(out),
-		StalledRetries:   stalledRetries,
+		Progress:         progress,
 	})
 	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: stalePeer, out: out}
 	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
@@ -2050,14 +2038,10 @@ func (ss *SyncService) PeerDisconnected(peer *p2p.Peer) {
 	if remainingPeers > 0 {
 		out = ss.fillFetchSlotsLocked(time.Now())
 	}
-	stalledRetries := false
-	if remainingPeers > 0 && len(out) == 0 {
-		stalledRetries = ss.shouldRestartForStalledRetriesLocked()
-	}
+	progress := ss.sessionProgressLocked()
 	plan := syncdl.PlanPeerFailover(syncdl.PeerFailoverInput{
-		RemainingPeers:   remainingPeers,
 		OutboundRequests: len(out),
-		StalledRetries:   stalledRetries,
+		Progress:         progress,
 	})
 	failoverApplier := syncPeerFailoverApplier{service: ss, exclude: peer, out: out}
 	syncdl.ApplyPeerFailoverLockedPlan(plan, failoverApplier)
