@@ -2,7 +2,9 @@ package core
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/state"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/core/types"
+	"github.com/tronprotocol/go-tron/internal/jsonrpc"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
@@ -863,6 +866,27 @@ func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChange
 	assertArchiveCodeStorage("cold pre-destroy", 2, codeA, storageA0, storageB0)
 	assertArchiveCodeStorage("cold destroyed", 3, nil, tcommon.Hash{}, tcommon.Hash{})
 	assertArchiveCodeStorage("cold recreated", 4, codeB, storageA1, tcommon.Hash{})
+
+	rpcServer := jsonrpc.NewServer(b, 0)
+	defer func() { _ = rpcServer.Stop() }()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	contractArg := "0x" + contract.Hex()
+	slotAArg := "0x" + slotA.Hex()
+	slotBArg := "0x" + slotB.Hex()
+	assertRPCResult := func(method string, params any, want string) {
+		t.Helper()
+		resp := postCoreJSONRPC(t, httpServer.URL, method, params)
+		if got := resp["result"]; got != want {
+			t.Fatalf("%s(%v) result = %v, want %s", method, params, got, want)
+		}
+	}
+	assertRPCResult("eth_getCode", []any{contractArg, "0x3"}, "0x")
+	assertRPCResult("eth_getStorageAt", []any{contractArg, slotAArg, "0x3"}, "0x"+(tcommon.Hash{}).Hex())
+	assertRPCResult("eth_getCode", []any{contractArg, "0x4"}, "0x"+hex.EncodeToString(codeB))
+	assertRPCResult("eth_getStorageAt", []any{contractArg, slotAArg, "0x4"}, "0x"+storageA1.Hex())
+	assertRPCResult("eth_getStorageAt", []any{contractArg, slotBArg, "0x4"}, "0x"+(tcommon.Hash{}).Hex())
 }
 
 // TestArchiveQuery_GatedOnHistoryEnabled verifies the HistoryEnabled gate:
