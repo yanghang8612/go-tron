@@ -325,6 +325,9 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	if err := rawdb.DeleteTransactionInfo(diskdb, txHash[:]); err != nil {
 		t.Fatalf("DeleteTransactionInfo: %v", err)
 	}
+	if err := rawdb.DeleteTransactionInfosByBlock(diskdb, block.Number()); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock: %v", err)
+	}
 	hotOnly := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
 	if got := rawdb.ReadBlock(hotOnly, 1); got != nil {
 		t.Fatalf("hot block still present: %x", got.Hash())
@@ -337,6 +340,9 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	}
 	if got := rawdb.ReadTransactionInfo(hotOnly, txHash[:]); got != nil {
 		t.Fatalf("hot tx info still present: %+v", got)
+	}
+	if got := rawdb.ReadTransactionInfosByBlock(hotOnly, block.Number()); len(got) != 0 {
+		t.Fatalf("hot tx receipt rows still present: %+v", got)
 	}
 	if got := rawdb.ReadBlockStateRoot(hotOnly, block.Hash()); got != (tcommon.Hash{}) {
 		t.Fatalf("hot state root still present: %x", got)
@@ -355,6 +361,10 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	info, err := backend.GetTransactionInfoByID(txHash)
 	if err != nil || info == nil || uint64(info.BlockNumber) != block.Number() {
 		t.Fatalf("GetTransactionInfoByID = %+v/%v, want block %d", info, err, block.Number())
+	}
+	infos, err := backend.GetTransactionInfoByBlockNum(block.Number())
+	if err != nil || len(infos) != 1 || !bytes.Equal(infos[0].Id, txHash[:]) || uint64(infos[0].BlockNumber) != block.Number() {
+		t.Fatalf("GetTransactionInfoByBlockNum = %+v/%v, want one cold receipt for tx %x block %d", infos, err, txHash, block.Number())
 	}
 	gotTx, gotBlock, idx, err := backend.GetTransactionByHash(txHash)
 	if err != nil || gotTx == nil || gotBlock == nil || idx != 0 {
@@ -857,6 +867,9 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	goodAddress := bytes20(0x81)
 	otherAddress := bytes20(0x82)
 	topic := tcommon.Hash{0x81}
+	altTopic := tcommon.Hash{0x83}
+	secondTopic := tcommon.Hash{0x84}
+	otherSecondTopic := tcommon.Hash{0x85}
 	otherTopic := tcommon.Hash{0x82}
 	block1, _ := testBackendLogBlock(1, nil)
 	block3, _ := testBackendLogBlock(3, nil)
@@ -904,6 +917,32 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 				},
 			},
 			{
+				BlockNum:  1,
+				TxIndex:   0,
+				LogIndex:  3,
+				TxHash:    tcommon.Hash{0xa5},
+				BlockHash: block1.Hash(),
+				Address:   tcommon.BytesToAddress(goodAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: goodAddress,
+					Topics:  [][]byte{altTopic[:], secondTopic[:]},
+					Data:    []byte{0x05},
+				},
+			},
+			{
+				BlockNum:  1,
+				TxIndex:   0,
+				LogIndex:  4,
+				TxHash:    tcommon.Hash{0xa6},
+				BlockHash: block1.Hash(),
+				Address:   tcommon.BytesToAddress(goodAddress),
+				Log: &corepb.TransactionInfo_Log{
+					Address: goodAddress,
+					Topics:  [][]byte{altTopic[:], otherSecondTopic[:]},
+					Data:    []byte{0x06},
+				},
+			},
+			{
 				BlockNum:  3,
 				TxIndex:   0,
 				LogIndex:  0,
@@ -936,6 +975,22 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	}
 	if logs[0].Data != "0x01" || logs[0].Address != fmt.Sprintf("0x%x", goodAddress) || logs[0].BlockNumber != "0x1" {
 		t.Fatalf("cold filtered log = %+v, want only matching block1 log", logs[0])
+	}
+
+	logs, err = backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(goodAddress)},
+		Topics:    [][]tcommon.Hash{{topic, altTopic}, {secondTopic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs OR/multi-topic: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("GetLogs OR/multi-topic from unchecked cold rows returned %d logs, want 1", len(logs))
+	}
+	if logs[0].Data != "0x05" || logs[0].LogIndex != "0x3" {
+		t.Fatalf("cold OR/multi-topic filtered log = %+v, want log index 0x3 data 0x05", logs[0])
 	}
 }
 
