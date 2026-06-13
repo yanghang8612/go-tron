@@ -538,6 +538,35 @@ def empty_bucket_stats(names):
         stats[name] = {"bytes": 0, "files": 0}
     return stats
 
+def chaindata_file_stats(datadir_path):
+    root = Path(datadir_path) / "gtron" / "chaindata"
+    names = ("sst", "wal", "log", "manifest", "options", "other")
+    stats = empty_bucket_stats(names)
+    if not root.exists():
+        return stats
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            filename = path.name
+            if filename.endswith(".sst"):
+                bucket = "sst"
+            elif re.match(r"^[0-9]+\.log$", filename):
+                bucket = "wal"
+            elif filename == "LOG" or filename.startswith("LOG.") or filename.startswith("LOG.old"):
+                bucket = "log"
+            elif filename.startswith("MANIFEST"):
+                bucket = "manifest"
+            elif filename.startswith("OPTIONS"):
+                bucket = "options"
+            else:
+                bucket = "other"
+            stats[bucket]["bytes"] += allocated_bytes(path)
+            stats[bucket]["files"] += 1
+    except Exception:
+        return empty_bucket_stats(names)
+    return stats
+
 def ancient_table_stats(datadir_path):
     root = Path(datadir_path) / "gtron" / "ancient"
     names = ("bodies", "txInfos", "stateRoots", "other")
@@ -637,6 +666,7 @@ chaindata = int(chaindata_bytes)
 ancient = int(ancient_bytes)
 snapshot = int(snapshot_bytes)
 replay = int(replay_bytes)
+chaindata_files = chaindata_file_stats(datadir)
 ancient_tables = ancient_table_stats(datadir)
 snapshot_buckets = snapshot_bucket_stats(datadir)
 derived_index, derived_index_files = snapshot_derived_index_stats(datadir)
@@ -668,6 +698,12 @@ snapshot_history_bytes_delta = snapshot_buckets["history"]["bytes"] - number(pre
 snapshot_chain_bytes_delta = snapshot_buckets["chain"]["bytes"] - number(previous, "snapshotChainBytes", snapshot_buckets["chain"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_log_bytes_delta = snapshot_buckets["log"]["bytes"] - number(previous, "snapshotLogBytes", snapshot_buckets["log"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_trace_bytes_delta = snapshot_buckets["trace"]["bytes"] - number(previous, "snapshotTraceBytes", snapshot_buckets["trace"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_sst_bytes_delta = chaindata_files["sst"]["bytes"] - number(previous, "chaindataSSTBytes", chaindata_files["sst"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_wal_bytes_delta = chaindata_files["wal"]["bytes"] - number(previous, "chaindataWALBytes", chaindata_files["wal"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_log_bytes_delta = chaindata_files["log"]["bytes"] - number(previous, "chaindataLogBytes", chaindata_files["log"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_manifest_bytes_delta = chaindata_files["manifest"]["bytes"] - number(previous, "chaindataManifestBytes", chaindata_files["manifest"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_options_bytes_delta = chaindata_files["options"]["bytes"] - number(previous, "chaindataOptionsBytes", chaindata_files["options"]["bytes"]) if interval_seconds > 0 else 0
+chaindata_other_bytes_delta = chaindata_files["other"]["bytes"] - number(previous, "chaindataOtherBytes", chaindata_files["other"]["bytes"]) if interval_seconds > 0 else 0
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
@@ -732,6 +768,19 @@ row = {
     "intervalBlocksPerSecond": interval_blocks_per_second,
     "datadirBytes": total,
     "chaindataBytes": chaindata,
+    "chaindataFiles": sum(bucket["files"] for bucket in chaindata_files.values()),
+    "chaindataSSTBytes": chaindata_files["sst"]["bytes"],
+    "chaindataSSTFiles": chaindata_files["sst"]["files"],
+    "chaindataWALBytes": chaindata_files["wal"]["bytes"],
+    "chaindataWALFiles": chaindata_files["wal"]["files"],
+    "chaindataLogBytes": chaindata_files["log"]["bytes"],
+    "chaindataLogFiles": chaindata_files["log"]["files"],
+    "chaindataManifestBytes": chaindata_files["manifest"]["bytes"],
+    "chaindataManifestFiles": chaindata_files["manifest"]["files"],
+    "chaindataOptionsBytes": chaindata_files["options"]["bytes"],
+    "chaindataOptionsFiles": chaindata_files["options"]["files"],
+    "chaindataOtherBytes": chaindata_files["other"]["bytes"],
+    "chaindataOtherFiles": chaindata_files["other"]["files"],
     "ancientBytes": ancient,
     "ancientBodiesBytes": ancient_tables["bodies"]["bytes"],
     "ancientBodiesFiles": ancient_tables["bodies"]["files"],
@@ -785,6 +834,12 @@ row = {
     "snapshotChainBytesDelta": snapshot_chain_bytes_delta,
     "snapshotLogBytesDelta": snapshot_log_bytes_delta,
     "snapshotTraceBytesDelta": snapshot_trace_bytes_delta,
+    "chaindataSSTBytesDelta": chaindata_sst_bytes_delta,
+    "chaindataWALBytesDelta": chaindata_wal_bytes_delta,
+    "chaindataLogBytesDelta": chaindata_log_bytes_delta,
+    "chaindataManifestBytesDelta": chaindata_manifest_bytes_delta,
+    "chaindataOptionsBytesDelta": chaindata_options_bytes_delta,
+    "chaindataOtherBytesDelta": chaindata_other_bytes_delta,
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,

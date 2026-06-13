@@ -77,7 +77,10 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `blocksPerSecond`, `blocksPerMinute`, `intervalSeconds`, `intervalBlocks`,
 `intervalBlocksPerSecond`, `datadirBytes`, `chaindataBytes`, `ancientBytes`,
 `snapshotBytes`, `coldArchiveBytes`, `derivedIndexBytes`,
-`derivedIndexFiles`, total per-block byte rates, per-interval byte deltas/rates,
+`derivedIndexFiles`, Pebble hot-store buckets such as `chaindataSSTBytes`,
+`chaindataWALBytes`, `chaindataLogBytes`, `chaindataManifestBytes`,
+`chaindataOptionsBytes`, and matching `*Files` / `*BytesDelta` fields, total
+per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
 `intervalDatadirBytesPerBlock`, `intervalChaindataBytesPerBlock`,
 `intervalColdArchiveBytesPerBlock`, and

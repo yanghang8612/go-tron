@@ -53,6 +53,11 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "state-snapshots" / "latest").mkdir(parents=True)
             (datadir / "gtron" / "state-snapshots" / "history").mkdir(parents=True)
             (datadir / "gtron" / "chaindata" / "hot.bin").write_bytes(b"h" * 2048)
+            (datadir / "gtron" / "chaindata" / "000001.sst").write_bytes(b"s" * 1024)
+            (datadir / "gtron" / "chaindata" / "000002.log").write_bytes(b"w" * 1024)
+            (datadir / "gtron" / "chaindata" / "LOG").write_bytes(b"l" * 1024)
+            (datadir / "gtron" / "chaindata" / "MANIFEST-000003").write_bytes(b"m" * 1024)
+            (datadir / "gtron" / "chaindata" / "OPTIONS-000004").write_bytes(b"o" * 1024)
             (datadir / "gtron" / "ancient" / "cold.bin").write_bytes(b"c" * 1024)
             (datadir / "gtron" / "ancient" / "bodies.0000.cdat").write_bytes(b"b" * 1024)
             (datadir / "gtron" / "ancient" / "tx_infos.cidx").write_bytes(b"x" * 1024)
@@ -127,6 +132,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreater(row["blocksPerMinute"], 0)
             self.assertGreater(row["datadirBytes"], 0)
             self.assertGreater(row["chaindataBytes"], 0)
+            self.assertGreater(row["chaindataSSTBytes"], 0)
+            self.assertGreater(row["chaindataWALBytes"], 0)
+            self.assertGreater(row["chaindataLogBytes"], 0)
+            self.assertGreater(row["chaindataManifestBytes"], 0)
+            self.assertGreater(row["chaindataOptionsBytes"], 0)
+            self.assertGreater(row["chaindataOtherBytes"], 0)
             self.assertGreater(row["coldArchiveBytes"], 0)
             self.assertGreater(row["derivedIndexBytes"], 0)
             self.assertGreater(row["ancientBodiesBytes"], 0)
@@ -145,6 +156,13 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreater(row["bytesPerBlock"], 0)
             self.assertGreater(row["coldToHotBytesRatio"], 0)
             self.assertEqual(row["ancientFiles"], 4)
+            self.assertEqual(row["chaindataFiles"], 6)
+            self.assertEqual(row["chaindataSSTFiles"], 1)
+            self.assertEqual(row["chaindataWALFiles"], 1)
+            self.assertEqual(row["chaindataLogFiles"], 1)
+            self.assertEqual(row["chaindataManifestFiles"], 1)
+            self.assertEqual(row["chaindataOptionsFiles"], 1)
+            self.assertEqual(row["chaindataOtherFiles"], 1)
             self.assertEqual(row["ancientBodiesFiles"], 1)
             self.assertEqual(row["ancientTxInfosFiles"], 1)
             self.assertEqual(row["ancientStateRootsFiles"], 1)
@@ -207,6 +225,11 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "ancient").mkdir(parents=True)
             (datadir / "gtron" / "state-snapshots" / "log").mkdir(parents=True)
             (datadir / "gtron" / "chaindata" / "hot.bin").write_bytes(b"h" * 4096)
+            (datadir / "gtron" / "chaindata" / "000001.sst").write_bytes(b"s" * 4096)
+            (datadir / "gtron" / "chaindata" / "000002.log").write_bytes(b"w" * 4096)
+            (datadir / "gtron" / "chaindata" / "LOG").write_bytes(b"l" * 4096)
+            (datadir / "gtron" / "chaindata" / "MANIFEST-000003").write_bytes(b"m" * 4096)
+            (datadir / "gtron" / "chaindata" / "OPTIONS-000004").write_bytes(b"o" * 4096)
             (datadir / "gtron" / "ancient" / "cold.bin").write_bytes(b"c" * 2048)
             (datadir / "gtron" / "state-snapshots" / "snap.bin").write_bytes(b"s" * 1024)
             (datadir / "gtron" / "state-snapshots" / "log" / "section-bloom-1-8192.seg").write_bytes(b"b" * 2048)
@@ -241,6 +264,12 @@ class NileSyncSampleTest(unittest.TestCase):
                 "height": 70,
                 "datadirBytes": 1024,
                 "chaindataBytes": 512,
+                "chaindataSSTBytes": 128,
+                "chaindataWALBytes": 128,
+                "chaindataLogBytes": 128,
+                "chaindataManifestBytes": 128,
+                "chaindataOptionsBytes": 128,
+                "chaindataOtherBytes": 128,
                 "ancientBytes": 256,
                 "snapshotBytes": 128,
                 "coldArchiveBytes": 384,
@@ -288,6 +317,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreater(row["intervalBlocksPerSecond"], 0)
             self.assertEqual(row["datadirBytesDelta"], row["datadirBytes"] - previous["datadirBytes"])
             self.assertEqual(row["chaindataBytesDelta"], row["chaindataBytes"] - previous["chaindataBytes"])
+            self.assertEqual(row["chaindataSSTBytesDelta"], row["chaindataSSTBytes"] - previous["chaindataSSTBytes"])
+            self.assertEqual(row["chaindataWALBytesDelta"], row["chaindataWALBytes"] - previous["chaindataWALBytes"])
+            self.assertEqual(row["chaindataLogBytesDelta"], row["chaindataLogBytes"] - previous["chaindataLogBytes"])
+            self.assertEqual(row["chaindataManifestBytesDelta"], row["chaindataManifestBytes"] - previous["chaindataManifestBytes"])
+            self.assertEqual(row["chaindataOptionsBytesDelta"], row["chaindataOptionsBytes"] - previous["chaindataOptionsBytes"])
+            self.assertEqual(row["chaindataOtherBytesDelta"], row["chaindataOtherBytes"] - previous["chaindataOtherBytes"])
             self.assertEqual(row["ancientBytesDelta"], row["ancientBytes"] - previous["ancientBytes"])
             self.assertEqual(row["snapshotBytesDelta"], row["snapshotBytes"] - previous["snapshotBytes"])
             self.assertEqual(row["coldArchiveBytesDelta"], row["coldArchiveBytes"] - previous["coldArchiveBytes"])
