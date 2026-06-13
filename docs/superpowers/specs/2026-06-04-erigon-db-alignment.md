@@ -461,6 +461,12 @@ Status:
   builds are capped at verified finish stage, and imported sync pipeline
   number/hash progress is derived from the canonical stage observer after
   `InsertBlocks` applies the range.
+- `scripts/dev/nile_sync_sample.sh` now emits one JSONL sample for long-running
+  Nile sync/soak runs without opening the live Pebble store: HTTP height/block
+  ID, peers, elapsed sync time, block rate, git commit, and datadir size split
+  across hot `chaindata`, ancient freezer, state snapshots, and replay scratch.
+  When the node is stopped, `--offline-db-check` appends the same
+  freezer/stage/snapshot alert fields used by the storage benchmark harness.
 
 Needed:
 

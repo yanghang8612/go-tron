@@ -184,6 +184,13 @@ scripts/dev/storage_benchmark.sh \
 The producer always uses `full` mode in this profile. The follower uses the mode
 under test, which isolates mode impact on sync/import and local storage.
 
+For a real Nile node that is already running, use
+`scripts/dev/nile_sync_sample.sh` instead of this dev-network launcher. It
+appends JSONL samples with HTTP height/block ID, peer count, elapsed sync time,
+block rate, and hot/cold/snapshot disk split without opening the live Pebble
+store. Run it with `--offline-db-check` only after the node is stopped to add
+`storage-alerts` stage/freezer/snapshot diagnostics.
+
 ## Interpreting Results
 
 - `full`: should keep recent hot state/history and use local freezer for old

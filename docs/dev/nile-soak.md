@@ -56,6 +56,31 @@ tail -F /Users/asuka/gtron-soak/logs/soak-monitor.log
 curl -s http://127.0.0.1:8090/wallet/getnowblock | jq -r '.block_header.raw_data.number'
 ```
 
+## Structured Sync Samples
+
+Use `scripts/dev/nile_sync_sample.sh` to append one JSONL row with the current
+HTTP height, peer count, sync elapsed time, and datadir size split:
+
+```bash
+scripts/dev/nile_sync_sample.sh \
+  --datadir /Users/asuka/gtron-soak/datadir \
+  --http http://127.0.0.1:8090 \
+  --mode full \
+  --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
+  --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
+```
+
+Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
+7d soak. Each row includes `height`, `blockId`, `peers`,
+`elapsedSeconds`, `blocksPerSecond`, `datadirBytes`, `chaindataBytes`,
+`ancientBytes`, `snapshotBytes`, `ancientFiles`, and `snapshotFiles`, plus the
+repo commit used to produce the sample.
+
+When the node is stopped, add `--offline-db-check` to also run
+`gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
+alert fields in the row. Do not enable that flag against a live Pebble datadir
+unless the DB can be opened by the diagnostic command.
+
 ## Shielded TRC20 Replay Recovery
 
 If a Nile node was already synced past the shielded TRC20 activation window
