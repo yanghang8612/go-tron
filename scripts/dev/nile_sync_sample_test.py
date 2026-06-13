@@ -126,10 +126,14 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["height"], 100)
             self.assertEqual(row["nodeInfoCurrentBlock"], 105)
             self.assertEqual(row["nodeInfoHeightDelta"], 5)
+            self.assertEqual(row["syncTargetHeight"], 105)
+            self.assertEqual(row["syncTargetLagBlocks"], 5)
             self.assertEqual(row["sampleStatus"], "height-mismatch")
             self.assertEqual(row["peers"], 2)
             self.assertGreater(row["blocksPerSecond"], 0)
             self.assertGreater(row["blocksPerMinute"], 0)
+            self.assertGreater(row["syncEtaSeconds"], 0)
+            self.assertEqual(row["intervalSyncEtaSeconds"], -1.0)
             self.assertGreater(row["datadirBytes"], 0)
             self.assertGreater(row["chaindataBytes"], 0)
             self.assertGreater(row["chaindataSSTBytes"], 0)
@@ -198,6 +202,11 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncExecutionCommitmentLagBlocks"], 1)
             self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 20)
+            self.assertEqual(row["stageSyncFinishHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageChainFreezerHeadLagBlocks"], 30)
+            self.assertEqual(row["stageChainFreezerHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageSnapshotEventLogBuildHeadLagBlocks"], -1)
+            self.assertEqual(row["stageSnapshotEventLogBuildHeadEtaSeconds"], -1.0)
             self.assertEqual(row["stageSyncBottleneck"], "finish-head")
             self.assertEqual(row["stageSyncBottleneckLagBlocks"], 20)
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 0)
@@ -315,6 +324,9 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreaterEqual(row["intervalSeconds"], 10)
             self.assertEqual(row["intervalBlocks"], 30)
             self.assertGreater(row["intervalBlocksPerSecond"], 0)
+            self.assertEqual(row["syncTargetHeight"], 105)
+            self.assertEqual(row["syncTargetLagBlocks"], 5)
+            self.assertAlmostEqual(row["intervalSyncEtaSeconds"], 5 / row["intervalBlocksPerSecond"])
             self.assertEqual(row["datadirBytesDelta"], row["datadirBytes"] - previous["datadirBytes"])
             self.assertEqual(row["chaindataBytesDelta"], row["chaindataBytes"] - previous["chaindataBytes"])
             self.assertEqual(row["chaindataSSTBytesDelta"], row["chaindataSSTBytes"] - previous["chaindataSSTBytes"])
@@ -353,6 +365,21 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalStageSnapshotEventLogBuildBlocks"], 48)
             self.assertGreater(row["intervalStageSyncFinishBlocksPerSecond"], 0)
             self.assertGreater(row["intervalStageSnapshotEventLogBuildBlocksPerSecond"], 0)
+            self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 10)
+            self.assertAlmostEqual(
+                row["stageSyncFinishHeadEtaSeconds"],
+                10 / row["intervalStageSyncFinishBlocksPerSecond"],
+            )
+            self.assertEqual(row["stageChainFreezerHeadLagBlocks"], 30)
+            self.assertAlmostEqual(
+                row["stageChainFreezerHeadEtaSeconds"],
+                30 / row["intervalStageChainFreezerBlocksPerSecond"],
+            )
+            self.assertEqual(row["stageSnapshotEventLogBuildHeadLagBlocks"], 12)
+            self.assertAlmostEqual(
+                row["stageSnapshotEventLogBuildHeadEtaSeconds"],
+                12 / row["intervalStageSnapshotEventLogBuildBlocksPerSecond"],
+            )
 
             lines = output.read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(lines[0]), previous)

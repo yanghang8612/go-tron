@@ -74,9 +74,11 @@ scripts/dev/nile_sync_sample.sh \
 Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 7d soak. Each row includes `height`, `nodeInfoCurrentBlock`,
 `nodeInfoHeightDelta`, `blockId`, `peers`, `sampleStatus`, `elapsedSeconds`,
-`blocksPerSecond`, `blocksPerMinute`, `intervalSeconds`, `intervalBlocks`,
-`intervalBlocksPerSecond`, `datadirBytes`, `chaindataBytes`, `ancientBytes`,
-`snapshotBytes`, `coldArchiveBytes`, `derivedIndexBytes`,
+`blocksPerSecond`, `blocksPerMinute`, `syncTargetHeight`,
+`syncTargetLagBlocks`, `syncEtaSeconds`, `intervalSeconds`, `intervalBlocks`,
+`intervalBlocksPerSecond`, `intervalSyncEtaSeconds`, `datadirBytes`,
+`chaindataBytes`, `ancientBytes`, `snapshotBytes`, `coldArchiveBytes`,
+`derivedIndexBytes`,
 `derivedIndexFiles`, Pebble hot-store buckets such as `chaindataSSTBytes`,
 `chaindataWALBytes`, `chaindataLogBytes`, `chaindataManifestBytes`,
 `chaindataOptionsBytes`, and matching `*Files` / `*BytesDelta` fields, total
@@ -123,8 +125,12 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSyncExecutionCommitmentLagBlocks`,
 `stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
 `stageSyncBottleneck`/`stageSyncBottleneckLagBlocks` for the largest current
-pipeline lag. When the output JSONL already has a previous sample, rows also
-include interval stage throughput fields such as
+pipeline lag. The row also reports `stageSyncFinishHeadEtaSeconds`,
+`stageChainFreezerHeadLagBlocks`, `stageChainFreezerHeadEtaSeconds`,
+`stageSnapshotEventLogBuildHeadLagBlocks`, and
+`stageSnapshotEventLogBuildHeadEtaSeconds` when the previous sample is
+available enough to derive a per-stage rate. When the output JSONL already has
+a previous sample, rows also include interval stage throughput fields such as
 `intervalStageSyncImportBlocks`,
 `intervalStageSyncExecutionBlocks`,
 `intervalStageSyncCommitmentBlocks`,

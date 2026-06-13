@@ -522,6 +522,16 @@ def interval_stage_delta(current, previous_row, key, interval):
 def interval_rate(delta, interval):
     return float(delta) / interval if interval > 0 else 0.0
 
+def eta_seconds(lag_blocks, rate):
+    try:
+        lag_blocks = int(lag_blocks)
+        rate = float(rate)
+    except Exception:
+        return -1.0
+    if lag_blocks < 0 or rate <= 0:
+        return -1.0
+    return float(lag_blocks) / rate
+
 def allocated_bytes(path):
     try:
         stat = path.stat()
@@ -661,6 +671,8 @@ alerts = parse_alerts(alerts_text)
 stages = parse_stage_status(stage_status_path)
 process = read_process_stats(pid_file)
 height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
+sync_target_height = max(height, nodeinfo_current)
+sync_target_lag_blocks = sync_target_height - height if sync_target_height > height else 0
 total = int(total_bytes)
 chaindata = int(chaindata_bytes)
 ancient = int(ancient_bytes)
@@ -684,6 +696,8 @@ previous_height = number(previous, "height", 0)
 interval_seconds = now - previous_unix if previous_unix > 0 and now >= previous_unix else -1
 interval_blocks = height - previous_height if interval_seconds > 0 and height >= previous_height else 0
 interval_blocks_per_second = float(interval_blocks) / interval_seconds if interval_seconds > 0 else 0.0
+sync_eta_seconds = eta_seconds(sync_target_lag_blocks, blocks_per_second)
+interval_sync_eta_seconds = eta_seconds(sync_target_lag_blocks, interval_blocks_per_second)
 datadir_bytes_delta = total - number(previous, "datadirBytes", total) if interval_seconds > 0 else 0
 chaindata_bytes_delta = chaindata - number(previous, "chaindataBytes", chaindata) if interval_seconds > 0 else 0
 ancient_bytes_delta = ancient - number(previous, "ancientBytes", ancient) if interval_seconds > 0 else 0
@@ -715,6 +729,8 @@ snapshot_bytes_per_interval_block = float(snapshot_bytes_delta) / interval_block
 cold_archive_bytes_per_interval_block = float(cold_archive_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 derived_index_bytes_per_interval_block = float(derived_index_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
+stage_chain_freezer_head_lag = lag(height, stages.get("stageChainFreezer", -1))
+stage_snapshot_event_log_build_head_lag = lag(height, stages.get("stageSnapshotEventLogBuild", -1))
 stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
     ("bodies-ready-gap", stages.get("stageSyncBodiesReadyGapBlocks", -1)),
     ("import-execution", stages.get("stageSyncImportExecutionLagBlocks", -1)),
@@ -730,6 +746,12 @@ interval_stage_sync_commitment = interval_stage_delta(stages.get("stageSyncCommi
 interval_stage_sync_finish = interval_stage_delta(stages.get("stageSyncFinish", -1), previous, "stageSyncFinish", interval_seconds)
 interval_stage_chain_freezer = interval_stage_delta(stages.get("stageChainFreezer", -1), previous, "stageChainFreezer", interval_seconds)
 interval_stage_snapshot_event_log_build = interval_stage_delta(stages.get("stageSnapshotEventLogBuild", -1), previous, "stageSnapshotEventLogBuild", interval_seconds)
+interval_stage_sync_finish_rate = interval_rate(interval_stage_sync_finish, interval_seconds)
+interval_stage_chain_freezer_rate = interval_rate(interval_stage_chain_freezer, interval_seconds)
+interval_stage_snapshot_event_log_build_rate = interval_rate(interval_stage_snapshot_event_log_build, interval_seconds)
+stage_sync_finish_head_eta_seconds = eta_seconds(stage_sync_finish_head_lag, interval_stage_sync_finish_rate)
+stage_chain_freezer_head_eta_seconds = eta_seconds(stage_chain_freezer_head_lag, interval_stage_chain_freezer_rate)
+stage_snapshot_event_log_build_head_eta_seconds = eta_seconds(stage_snapshot_event_log_build_head_lag, interval_stage_snapshot_event_log_build_rate)
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -757,12 +779,16 @@ row = {
     "height": height,
     "nodeInfoCurrentBlock": nodeinfo_current,
     "nodeInfoHeightDelta": height_delta,
+    "syncTargetHeight": sync_target_height,
+    "syncTargetLagBlocks": sync_target_lag_blocks,
     "blockId": block_id,
     "peers": peers,
     "sampleStatus": sample_status,
     "elapsedSeconds": elapsed,
     "blocksPerSecond": blocks_per_second,
     "blocksPerMinute": blocks_per_minute,
+    "syncEtaSeconds": sync_eta_seconds,
+    "intervalSyncEtaSeconds": interval_sync_eta_seconds,
     "intervalSeconds": interval_seconds,
     "intervalBlocks": interval_blocks,
     "intervalBlocksPerSecond": interval_blocks_per_second,
@@ -851,6 +877,11 @@ row = {
     "intervalColdArchiveBytesPerBlock": cold_archive_bytes_per_interval_block,
     "intervalDerivedIndexBytesPerBlock": derived_index_bytes_per_interval_block,
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
+    "stageSyncFinishHeadEtaSeconds": stage_sync_finish_head_eta_seconds,
+    "stageChainFreezerHeadLagBlocks": stage_chain_freezer_head_lag,
+    "stageChainFreezerHeadEtaSeconds": stage_chain_freezer_head_eta_seconds,
+    "stageSnapshotEventLogBuildHeadLagBlocks": stage_snapshot_event_log_build_head_lag,
+    "stageSnapshotEventLogBuildHeadEtaSeconds": stage_snapshot_event_log_build_head_eta_seconds,
     "stageSyncBottleneck": stage_sync_bottleneck,
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
@@ -864,11 +895,11 @@ row = {
     "intervalStageSyncCommitmentBlocks": interval_stage_sync_commitment,
     "intervalStageSyncCommitmentBlocksPerSecond": interval_rate(interval_stage_sync_commitment, interval_seconds),
     "intervalStageSyncFinishBlocks": interval_stage_sync_finish,
-    "intervalStageSyncFinishBlocksPerSecond": interval_rate(interval_stage_sync_finish, interval_seconds),
+    "intervalStageSyncFinishBlocksPerSecond": interval_stage_sync_finish_rate,
     "intervalStageChainFreezerBlocks": interval_stage_chain_freezer,
-    "intervalStageChainFreezerBlocksPerSecond": interval_rate(interval_stage_chain_freezer, interval_seconds),
+    "intervalStageChainFreezerBlocksPerSecond": interval_stage_chain_freezer_rate,
     "intervalStageSnapshotEventLogBuildBlocks": interval_stage_snapshot_event_log_build,
-    "intervalStageSnapshotEventLogBuildBlocksPerSecond": interval_rate(interval_stage_snapshot_event_log_build, interval_seconds),
+    "intervalStageSnapshotEventLogBuildBlocksPerSecond": interval_stage_snapshot_event_log_build_rate,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),
