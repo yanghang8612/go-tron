@@ -819,11 +819,8 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		StalledRetries:   ss.shouldRestartForStalledRetriesLocked(),
 		Complete:         ss.shouldFinishLocked(),
 	})
-	if settlement.Reset {
-		ss.doReset()
-	} else if settlement.Mirror {
-		ss.mirrorLegacyLocked()
-	}
+	settlementApplier := syncPostInventorySettlementApplier{service: ss}
+	syncdl.ApplyPostInventorySettlementLockedPlan(settlement, settlementApplier)
 	ss.mu.Unlock()
 
 	if stageInventoryTarget > 0 {
@@ -831,13 +828,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}
 
 	ss.sendOutboundRequests(out)
-	if settlement.TryFindPeer {
-		ss.tryFindSyncPeer(nil)
-		return
-	}
-	if settlement.Finish {
-		ss.finishSync()
-	}
+	syncdl.ApplyPostInventorySettlementAfterDispatchPlan(settlement, settlementApplier)
 }
 
 func (ss *SyncService) fetchNextBatch() {
@@ -1293,6 +1284,26 @@ func (a syncIdleDrainApplier) FinishSync() {
 
 func (a syncIdleDrainApplier) JoinAvailablePeers() {
 	a.service.joinAvailablePeers()
+}
+
+type syncPostInventorySettlementApplier struct {
+	service *SyncService
+}
+
+func (a syncPostInventorySettlementApplier) ResetSyncUnderLock() {
+	a.service.doReset()
+}
+
+func (a syncPostInventorySettlementApplier) MirrorLegacyUnderLock() {
+	a.service.mirrorLegacyLocked()
+}
+
+func (a syncPostInventorySettlementApplier) TryFindSyncPeer() {
+	a.service.tryFindSyncPeer(nil)
+}
+
+func (a syncPostInventorySettlementApplier) FinishSync() {
+	a.service.finishSync()
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode

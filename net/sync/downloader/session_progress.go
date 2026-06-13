@@ -66,13 +66,42 @@ type PostInventorySettlementInput struct {
 	Complete         bool
 }
 
+// PostInventorySettlementStepAction names one session action after accepting a
+// peer inventory response and refilling local fetch slots.
+type PostInventorySettlementStepAction uint8
+
+const (
+	PostInventoryReset PostInventorySettlementStepAction = iota
+	PostInventoryMirror
+	PostInventoryTryFindPeer
+	PostInventoryFinish
+)
+
+// PostInventorySettlementStep is one downloader-owned post-inventory
+// settlement action. Locked steps must run while SyncService still holds its
+// state lock; after-dispatch steps run after stage progress and network sends.
+type PostInventorySettlementStep struct {
+	Action PostInventorySettlementStepAction
+}
+
 // PostInventorySettlementPlan describes the session-level action after an
 // inventory response has been queued and fetch slots have been refilled.
 type PostInventorySettlementPlan struct {
-	Reset       bool
-	Mirror      bool
-	Finish      bool
-	TryFindPeer bool
+	Reset              bool
+	Mirror             bool
+	Finish             bool
+	TryFindPeer        bool
+	LockedSteps        []PostInventorySettlementStep
+	AfterDispatchSteps []PostInventorySettlementStep
+}
+
+// PostInventorySettlementPlanApplier performs the runtime actions named by a
+// post-inventory settlement plan.
+type PostInventorySettlementPlanApplier interface {
+	ResetSyncUnderLock()
+	MirrorLegacyUnderLock()
+	TryFindSyncPeer()
+	FinishSync()
 }
 
 // PlanIdleDrainAfterRefill decides how the sync loop should settle an empty
@@ -120,12 +149,64 @@ func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanAppl
 // session after accepting an inventory response and refilling fetch slots.
 func PlanPostInventorySettlement(in PostInventorySettlementInput) PostInventorySettlementPlan {
 	if in.OutboundRequests == 0 && in.StalledRetries {
-		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}
+		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}.withSteps()
 	}
 	if in.Complete {
-		return PostInventorySettlementPlan{Mirror: true, Finish: true}
+		return PostInventorySettlementPlan{Mirror: true, Finish: true}.withSteps()
 	}
-	return PostInventorySettlementPlan{Mirror: true}
+	return PostInventorySettlementPlan{Mirror: true}.withSteps()
+}
+
+func (p PostInventorySettlementPlan) withSteps() PostInventorySettlementPlan {
+	if p.Reset {
+		p.LockedSteps = []PostInventorySettlementStep{{Action: PostInventoryReset}}
+	} else if p.Mirror {
+		p.LockedSteps = []PostInventorySettlementStep{{Action: PostInventoryMirror}}
+	}
+	if p.TryFindPeer {
+		p.AfterDispatchSteps = []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}}
+	} else if p.Finish {
+		p.AfterDispatchSteps = []PostInventorySettlementStep{{Action: PostInventoryFinish}}
+	}
+	return p
+}
+
+// ApplyPostInventorySettlementLockedPlan executes the lock-held settlement
+// steps for a post-inventory plan.
+func ApplyPostInventorySettlementLockedPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.LockedSteps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.LockedSteps {
+		switch step.Action {
+		case PostInventoryReset:
+			applier.ResetSyncUnderLock()
+		case PostInventoryMirror:
+			applier.MirrorLegacyUnderLock()
+		}
+	}
+}
+
+// ApplyPostInventorySettlementAfterDispatchPlan executes the post-dispatch
+// settlement steps for a post-inventory plan.
+func ApplyPostInventorySettlementAfterDispatchPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.AfterDispatchSteps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.AfterDispatchSteps {
+		switch step.Action {
+		case PostInventoryTryFindPeer:
+			applier.TryFindSyncPeer()
+		case PostInventoryFinish:
+			applier.FinishSync()
+		}
+	}
 }
 
 // EstimatedRemaining reports the advisory remaining block count for status and

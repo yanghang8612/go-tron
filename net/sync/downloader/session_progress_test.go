@@ -87,27 +87,81 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 	}{
 		"stalled retries with no outbound resets": {
 			input: PostInventorySettlementInput{StalledRetries: true},
-			want:  PostInventorySettlementPlan{Reset: true, TryFindPeer: true},
+			want: PostInventorySettlementPlan{
+				Reset:              true,
+				TryFindPeer:        true,
+				LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+				AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+			},
 		},
 		"outbound requests suppress stalled reset": {
 			input: PostInventorySettlementInput{OutboundRequests: 1, StalledRetries: true},
-			want:  PostInventorySettlementPlan{Mirror: true},
+			want: PostInventorySettlementPlan{
+				Mirror:      true,
+				LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+			},
 		},
 		"complete session finishes": {
 			input: PostInventorySettlementInput{Complete: true},
-			want:  PostInventorySettlementPlan{Mirror: true, Finish: true},
+			want: PostInventorySettlementPlan{
+				Mirror:             true,
+				Finish:             true,
+				LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+				AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryFinish}},
+			},
 		},
 		"incomplete session mirrors legacy queues": {
 			input: PostInventorySettlementInput{},
-			want:  PostInventorySettlementPlan{Mirror: true},
+			want: PostInventorySettlementPlan{
+				Mirror:      true,
+				LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+			},
 		},
 	}
 
 	for name, test := range tests {
-		if got := PlanPostInventorySettlement(test.input); got != test.want {
+		if got := PlanPostInventorySettlement(test.input); !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("%s plan = %+v, want %+v", name, got, test.want)
 		}
 	}
+}
+
+func TestApplyPostInventorySettlementPlan(t *testing.T) {
+	applier := new(recordingPostInventorySettlementApplier)
+	plan := PostInventorySettlementPlan{
+		LockedSteps: []PostInventorySettlementStep{
+			{Action: PostInventoryReset},
+			{Action: PostInventorySettlementStepAction(255)},
+			{Action: PostInventoryMirror},
+		},
+		AfterDispatchSteps: []PostInventorySettlementStep{
+			{Action: PostInventoryTryFindPeer},
+			{Action: PostInventorySettlementStepAction(255)},
+			{Action: PostInventoryFinish},
+		},
+	}
+	ApplyPostInventorySettlementLockedPlan(plan, applier)
+	ApplyPostInventorySettlementAfterDispatchPlan(plan, applier)
+
+	want := []PostInventorySettlementStepAction{
+		PostInventoryReset,
+		PostInventoryMirror,
+		PostInventoryTryFindPeer,
+		PostInventoryFinish,
+	}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("post-inventory calls = %+v, want %+v", applier.calls, want)
+	}
+
+	applier.calls = nil
+	ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Mirror: true}, applier)
+	ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{Finish: true}, applier)
+	want = []PostInventorySettlementStepAction{PostInventoryMirror, PostInventoryFinish}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("fallback post-inventory calls = %+v, want %+v", applier.calls, want)
+	}
+	ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Reset: true}, nil)
+	ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{TryFindPeer: true}, nil)
 }
 
 func TestSessionProgressShouldFinish(t *testing.T) {
@@ -176,4 +230,24 @@ func (a *recordingIdleDrainApplier) FinishSync() {
 
 func (a *recordingIdleDrainApplier) JoinAvailablePeers() {
 	a.calls = append(a.calls, IdleDrainJoinAvailablePeers)
+}
+
+type recordingPostInventorySettlementApplier struct {
+	calls []PostInventorySettlementStepAction
+}
+
+func (a *recordingPostInventorySettlementApplier) ResetSyncUnderLock() {
+	a.calls = append(a.calls, PostInventoryReset)
+}
+
+func (a *recordingPostInventorySettlementApplier) MirrorLegacyUnderLock() {
+	a.calls = append(a.calls, PostInventoryMirror)
+}
+
+func (a *recordingPostInventorySettlementApplier) TryFindSyncPeer() {
+	a.calls = append(a.calls, PostInventoryTryFindPeer)
+}
+
+func (a *recordingPostInventorySettlementApplier) FinishSync() {
+	a.calls = append(a.calls, PostInventoryFinish)
 }
