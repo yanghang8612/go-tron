@@ -210,6 +210,49 @@ func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestEventLogAuditRejectsNonChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) IterateEventLogs(uint64, uint64, rawdb.EventLogFilter, func(rawdb.EventLog) (bool, error)) error {
+	return nil
+}
+
+func query(m coldManager) {
+	_ = m.IterateEventLogs(1, 2, rawdb.EventLogFilter{}, nil)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"IterateEventLogs": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateEventLogs") {
+		t.Fatalf("offenders = %+v, want non-ChainDB IterateEventLogs call", offenders)
+	}
+}
+
+func TestEventLogAuditAllowsChainDBAliasBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db *rawdb.ChainDB) {
+	chainDB := db
+	_, _ = chainDB.EventLogRangeCoveredForFilter(1, 2, rawdb.EventLogFilter{})
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCoveredForFilter": {},
+	})
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want ChainDB alias event-log boundary accepted", offenders)
+	}
+}
+
 func TestSnapshotPublishersUseStrictTransactionInfoReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	snapshotRoot := filepath.Join(repoRoot, "core", "state", "snapshots")
