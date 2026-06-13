@@ -369,14 +369,15 @@ Status:
   invalid limits are rejected, session startup still prunes gapped staged-body
   tails beyond the import chunk, and hash-bound `SyncImport`, `SyncExecution`,
   `SyncCommitment`, and `SyncFinish` still advance to the final block. The
-  local drain frontier clamp and contiguous buffer pop/release logic now live
-  in `net/sync/downloader`, and the applied-prefix import summary now derives
-  tx counts plus the stage-progress boundary there as well. Insert range
-  failure resolution also maps `InsertBlocksError` indexes back to buffered
-  blocks in the downloader package, and the same applied-prefix summary derives
-  the staged body delete descriptors used for imported-body cleanup, leaving
-  `SyncService` to orchestrate persistence, logging, pausing, and canonical
-  insertion. The hash-bound sync import/execution/commitment/finish rows for an
+  local drain frontier clamp, stale-ready refresh request, and contiguous
+  buffer pop/release logic now live in `net/sync/downloader`, and the
+  applied-prefix import summary now derives tx counts plus the stage-progress
+  boundary there as well. Insert range failure resolution also maps
+  `InsertBlocksError` indexes back to buffered blocks in the downloader
+  package, and the same applied-prefix summary derives the staged body delete
+  descriptors used for imported-body cleanup, leaving `SyncService` to
+  orchestrate persistence, logging, pausing, and canonical insertion. The
+  hash-bound sync import/execution/commitment/finish rows for an
   applied range are now emitted by the downloader collector and persisted
   through one `core/rawdb` stage-progress batch when the backing store supports
   batched writes.

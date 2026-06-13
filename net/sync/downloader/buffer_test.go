@@ -207,6 +207,64 @@ func TestStagedBodyDrainLimit(t *testing.T) {
 	}
 }
 
+func TestPlanStagedBodyDrain(t *testing.T) {
+	tests := []struct {
+		name  string
+		next  uint64
+		max   int
+		ready StagedBodyReadyLimit
+		want  StagedBodyDrainPlan
+	}{
+		{
+			name:  "missing ready uses max",
+			next:  10,
+			max:   32,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitMissing},
+			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true},
+		},
+		{
+			name:  "valid ready clamps chunk",
+			next:  10,
+			max:   32,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitValid, Limit: 12},
+			want:  StagedBodyDrainPlan{RestoreLimit: 3, CanDrain: true, ReadyLimit: 12, HasReadyLimit: true},
+		},
+		{
+			name:  "valid ready beyond max keeps max",
+			next:  10,
+			max:   32,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitValid, Limit: 99},
+			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true, ReadyLimit: 99, HasReadyLimit: true},
+		},
+		{
+			name:  "stale ready requests refresh and uses max",
+			next:  10,
+			max:   32,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitStale, Limit: 9},
+			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true, RefreshReady: true},
+		},
+		{
+			name:  "invalid ready still uses max",
+			next:  10,
+			max:   32,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitHashMismatch, Limit: 12},
+			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true},
+		},
+		{
+			name:  "nonpositive max stops drain",
+			next:  10,
+			max:   0,
+			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitValid, Limit: 12},
+			want:  StagedBodyDrainPlan{ReadyLimit: 12, HasReadyLimit: true},
+		},
+	}
+	for _, tt := range tests {
+		if got := PlanStagedBodyDrain(tt.next, tt.max, tt.ready); got != tt.want {
+			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestPopBufferedBatchReleasesReservationsAndKeepsGap(t *testing.T) {
 	now := time.Unix(100, 0)
 	waitStart := now.Add(-3 * time.Second)

@@ -1176,48 +1176,40 @@ func (ss *SyncService) importBatchLimitLocked() int {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
-	readyLimit, hasReadyLimit := ss.syncBodiesReadyDrainLimit(next)
-	restoreLimit, ok := syncdl.StagedBodyDrainLimit(next, ss.importBatchLimitLocked(), readyLimit, hasReadyLimit)
-	if !ok {
+	readyLimit := ss.readSyncBodiesReadyDrainLimit(next)
+	plan := syncdl.PlanStagedBodyDrain(next, ss.importBatchLimitLocked(), readyLimit)
+	if plan.RefreshReady {
+		ss.writeSyncBodiesReadyProgress()
+	}
+	if !plan.CanDrain {
 		return syncdl.BufferedBatch{}
 	}
-	ss.restoreSyncStagedBodiesLocked(next, restoreLimit, false)
-	return syncdl.PopBufferedBatch(ss.blockBuffer, ss.bufferedHash, ss.blockPath, &ss.bufferWait, next, restoreLimit, now)
+	ss.restoreSyncStagedBodiesLocked(next, plan.RestoreLimit, false)
+	return syncdl.PopBufferedBatch(ss.blockBuffer, ss.bufferedHash, ss.blockPath, &ss.bufferWait, next, plan.RestoreLimit, now)
 }
 
-func (ss *SyncService) syncBodiesReadyDrainLimit(next uint64) (uint64, bool) {
+func (ss *SyncService) readSyncBodiesReadyDrainLimit(next uint64) syncdl.StagedBodyReadyLimit {
 	if ss == nil || ss.chain == nil {
-		return 0, false
+		return syncdl.StagedBodyReadyLimit{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return 0, false
+		return syncdl.StagedBodyReadyLimit{}
 	}
 	limit := syncdl.ReadStagedBodyReadyDrainLimit(db, next)
 	switch limit.Status {
-	case syncdl.StagedBodyReadyLimitValid:
-		return limit.Limit, true
 	case syncdl.StagedBodyReadyLimitProgressReadError:
 		syncLog.Warn("Read sync bodies ready stage progress failed", "err", limit.StageError)
-		return 0, false
 	case syncdl.StagedBodyReadyLimitUnbound:
 		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", limit.StageRow.BlockNum)
-		return 0, false
-	case syncdl.StagedBodyReadyLimitStale:
-		ss.writeSyncBodiesReadyProgress()
-		return 0, false
 	case syncdl.StagedBodyReadyLimitReadError:
 		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "err", limit.ReadError)
-		return 0, false
 	case syncdl.StagedBodyReadyLimitStagedMissing:
 		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash)
-		return 0, false
 	case syncdl.StagedBodyReadyLimitHashMismatch:
 		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "stagedHash", limit.StagedHash)
-		return 0, false
-	default:
-		return 0, false
 	}
+	return limit
 }
 
 // decodeBatchBlocks decodes the popped raw blocks into batch.Blocks. It runs

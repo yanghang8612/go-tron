@@ -158,6 +158,33 @@ func StagedBodyDrainLimit(next uint64, max int, readyLimit uint64, hasReadyLimit
 	return max, true
 }
 
+// StagedBodyDrainPlan is the local import chunk decision derived from the
+// persisted ready frontier and the operator's import-batch limit.
+type StagedBodyDrainPlan struct {
+	RestoreLimit  int
+	CanDrain      bool
+	ReadyLimit    uint64
+	HasReadyLimit bool
+	RefreshReady  bool
+}
+
+// PlanStagedBodyDrain decides how many staged bodies the local importer may
+// restore and pop. Only a valid SyncBodiesReady row clamps the chunk; invalid
+// or missing rows are treated as uncapped while their diagnostics are handled by
+// the caller.
+func PlanStagedBodyDrain(next uint64, max int, ready StagedBodyReadyLimit) StagedBodyDrainPlan {
+	var plan StagedBodyDrainPlan
+	if ready.Valid() {
+		plan.ReadyLimit = ready.Limit
+		plan.HasReadyLimit = true
+	}
+	if ready.Status == StagedBodyReadyLimitStale {
+		plan.RefreshReady = true
+	}
+	plan.RestoreLimit, plan.CanDrain = StagedBodyDrainLimit(next, max, plan.ReadyLimit, plan.HasReadyLimit)
+	return plan
+}
+
 // PopBufferedBatch removes the contiguous run starting at next from the local
 // raw block buffer. Popping also releases the session path reservation and hash
 // de-dup entry because canonical import, or a sticky pause on failure, owns the
