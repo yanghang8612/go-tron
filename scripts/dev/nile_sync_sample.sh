@@ -484,6 +484,12 @@ datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if inte
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+datadir_bytes_per_interval_block = float(datadir_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+chaindata_bytes_per_interval_block = float(chaindata_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+ancient_bytes_per_interval_block = float(ancient_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+snapshot_bytes_per_interval_block = float(snapshot_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+cold_archive_bytes_per_interval_block = float(cold_archive_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+derived_index_bytes_per_interval_block = float(derived_index_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
 stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
     ("bodies-ready-gap", stages.get("stageSyncBodiesReadyGapBlocks", -1)),
@@ -553,6 +559,12 @@ row = {
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
+    "intervalDatadirBytesPerBlock": datadir_bytes_per_interval_block,
+    "intervalChaindataBytesPerBlock": chaindata_bytes_per_interval_block,
+    "intervalAncientBytesPerBlock": ancient_bytes_per_interval_block,
+    "intervalSnapshotBytesPerBlock": snapshot_bytes_per_interval_block,
+    "intervalColdArchiveBytesPerBlock": cold_archive_bytes_per_interval_block,
+    "intervalDerivedIndexBytesPerBlock": derived_index_bytes_per_interval_block,
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
     "stageSyncBottleneck": stage_sync_bottleneck,
     "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,

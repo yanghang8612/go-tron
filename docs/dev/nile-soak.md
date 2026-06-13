@@ -76,8 +76,12 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `blocksPerSecond`, `blocksPerMinute`, `intervalSeconds`, `intervalBlocks`,
 `intervalBlocksPerSecond`, `datadirBytes`, `chaindataBytes`, `ancientBytes`,
 `snapshotBytes`, `coldArchiveBytes`, `derivedIndexBytes`,
-`derivedIndexFiles`, per-block byte rates, per-interval byte deltas/rates,
-`coldToHotBytesRatio`, `derivedIndexToHotBytesRatio`,
+`derivedIndexFiles`, total per-block byte rates, per-interval byte deltas/rates,
+per-interval bytes-per-new-block fields such as
+`intervalDatadirBytesPerBlock`, `intervalChaindataBytesPerBlock`,
+`intervalColdArchiveBytesPerBlock`, and
+`intervalDerivedIndexBytesPerBlock`, `coldToHotBytesRatio`,
+`derivedIndexToHotBytesRatio`,
 `derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
 `coldArchiveFiles`, plus the repo commit used to produce the sample. Derived
 index bytes are the chain-index/accessor, balance-trace, section-bloom, and

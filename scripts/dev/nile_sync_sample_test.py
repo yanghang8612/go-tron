@@ -214,6 +214,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreater(row["datadirBytesPerSecond"], 0)
             self.assertGreater(row["chaindataBytesPerSecond"], 0)
             self.assertGreater(row["derivedIndexBytesPerSecond"], 0)
+            self.assertEqual(row["intervalDatadirBytesPerBlock"], row["datadirBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalChaindataBytesPerBlock"], row["chaindataBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalAncientBytesPerBlock"], row["ancientBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalSnapshotBytesPerBlock"], row["snapshotBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalColdArchiveBytesPerBlock"], row["coldArchiveBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalDerivedIndexBytesPerBlock"], row["derivedIndexBytesDelta"] / row["intervalBlocks"])
 
             lines = output.read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(lines[0]), previous)
