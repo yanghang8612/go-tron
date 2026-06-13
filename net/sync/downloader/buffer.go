@@ -141,12 +141,41 @@ type ImportOutcome struct {
 }
 
 // ImportBatchExecutionPlan is the downloader-owned execution target for one
-// decoded staged-body chunk. SyncService executes Blocks, while the schedule
-// names the expected bodies/execution/commitment/finish boundary.
+// decoded staged-body chunk. SyncService executes Blocks, while Schedules name
+// the expected bodies/execution/commitment/finish boundary for every decoded
+// block. Schedule is the final boundary retained for concise diagnostics.
 type ImportBatchExecutionPlan struct {
 	Blocks           []*types.Block
+	Schedules        []ImportStageSchedule
 	Schedule         ImportStageSchedule
 	HasStageSchedule bool
+}
+
+// PlansStageObservation reports whether a canonical insertion hook observation
+// belongs to one of the execution plan's explicit stage schedules.
+func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) bool {
+	for _, schedule := range p.Schedules {
+		if _, ok := schedule.MatchCanonicalObservation(stage, blockNum, blockHash); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// StageObserver filters canonical stage hook observations through the execution
+// plan before they reach the stage-progress collector.
+func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) StageProgressWriter {
+	if observe == nil {
+		return nil
+	}
+	if len(p.Schedules) == 0 {
+		return observe
+	}
+	return func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+		if p.PlansStageObservation(stage, blockNum, blockHash) {
+			observe(stage, blockNum, blockHash)
+		}
+	}
 }
 
 // ImportBatchRunStepAction names one ordered local operation for executing a
@@ -237,7 +266,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		case ImportBatchRunExecute:
 			collector = NewStageProgressCollector()
 			result.Execution = PlanImportBatchExecution(plan.Batch)
-			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, collector.Observe)
+			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageObserver(collector.Observe))
 			executed = true
 		case ImportBatchRunSettle:
 			if !executed {
@@ -262,9 +291,15 @@ func PlanImportBatchExecution(batch BufferedBatch) ImportBatchExecutionPlan {
 	execution := ImportBatchExecutionPlan{
 		Blocks: append([]*types.Block(nil), batch.Blocks...),
 	}
-	summary := SummarizeAppliedBatch(batch, len(batch.Blocks))
-	if summary.OK && summary.HasStage {
-		execution.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
+	for i := 0; i < len(batch.Blocks) && i < len(batch.Buffered); i++ {
+		buffered := batch.Buffered[i]
+		if buffered.Num == 0 {
+			continue
+		}
+		execution.Schedules = append(execution.Schedules, NewImportStageSchedule(buffered.Num, buffered.Hash))
+	}
+	if len(execution.Schedules) > 0 {
+		execution.Schedule = execution.Schedules[len(execution.Schedules)-1]
 		execution.HasStageSchedule = true
 	}
 	return execution

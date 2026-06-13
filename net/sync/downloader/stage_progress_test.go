@@ -486,6 +486,30 @@ func TestNewImportStageSchedule(t *testing.T) {
 	}
 }
 
+func TestImportStageScheduleMatchCanonicalObservation(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	schedule := NewImportStageSchedule(7, hash)
+
+	task, ok := schedule.MatchCanonicalObservation(rawdb.StageCommitment, 7, hash)
+	if !ok || task.Phase != ImportStagePhaseCommitment || task.SyncStage != rawdb.StageSyncCommitment {
+		t.Fatalf("matched task = %+v ok=%v, want commitment task", task, ok)
+	}
+
+	for name, test := range map[string]struct {
+		stage rawdb.StageID
+		num   uint64
+		hash  tcommon.Hash
+	}{
+		"unknown stage": {stage: rawdb.StageHeaders, num: 7, hash: hash},
+		"wrong number":  {stage: rawdb.StageCommitment, num: 8, hash: hash},
+		"wrong hash":    {stage: rawdb.StageCommitment, num: 7, hash: tcommon.Hash{0xee}},
+	} {
+		if task, ok := schedule.MatchCanonicalObservation(test.stage, test.num, test.hash); ok {
+			t.Fatalf("%s matched %+v, want rejected", name, task)
+		}
+	}
+}
+
 func TestSyncPipelineProgressStagesOrder(t *testing.T) {
 	got := SyncPipelineProgressStages()
 	want := []rawdb.StageID{

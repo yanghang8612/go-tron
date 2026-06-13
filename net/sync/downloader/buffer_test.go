@@ -268,8 +268,51 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if !got.HasStageSchedule || got.Schedule.BlockNum != block2.Number() || got.Schedule.BlockHash != block2.Hash() {
 		t.Fatalf("execution schedule = %+v has=%v, want block2", got.Schedule, got.HasStageSchedule)
 	}
+	if len(got.Schedules) != 2 || got.Schedules[0].BlockNum != block1.Number() || got.Schedules[1].BlockNum != block2.Number() {
+		t.Fatalf("execution schedules = %+v, want block1/block2", got.Schedules)
+	}
 	if !reflect.DeepEqual(got.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("execution schedule tasks = %+v, want full import pipeline", got.Schedule.Tasks)
+	}
+}
+
+func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+	execution := PlanImportBatchExecution(batch)
+
+	type observedStage struct {
+		stage rawdb.StageID
+		num   uint64
+		hash  tcommon.Hash
+	}
+	var observed []observedStage
+	observer := execution.StageObserver(func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+		observed = append(observed, observedStage{stage: stage, num: blockNum, hash: blockHash})
+	})
+
+	observer(rawdb.StageBodies, block1.Number(), block1.Hash())
+	observer(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	observer(rawdb.StageExecution, block2.Number(), tcommon.Hash{0xee})
+	observer(rawdb.StageFinish, block2.Number()+1, block2.Hash())
+	observer(rawdb.StageHeaders, block2.Number(), block2.Hash())
+
+	want := []observedStage{
+		{stage: rawdb.StageBodies, num: block1.Number(), hash: block1.Hash()},
+		{stage: rawdb.StageCommitment, num: block2.Number(), hash: block2.Hash()},
+	}
+	if !reflect.DeepEqual(observed, want) {
+		t.Fatalf("observed = %+v, want only planned observations %+v", observed, want)
+	}
+	if !execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), block2.Hash()) {
+		t.Fatal("finish block2 should be planned")
+	}
+	if execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), tcommon.Hash{0xee}) {
+		t.Fatal("fork-hash finish should not be planned")
 	}
 }
 

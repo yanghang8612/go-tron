@@ -105,6 +105,17 @@ type ImportStageSchedule struct {
 	Tasks     []ImportStageTask
 }
 
+// MatchCanonicalObservation reports whether a canonical stage hook observation
+// is one of this schedule's explicit bodies/execution/commitment/finish tasks.
+func (s ImportStageSchedule) MatchCanonicalObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageTask, bool) {
+	for _, task := range s.Tasks {
+		if task.CanonicalStage == stage && task.BlockNum == blockNum && task.BlockHash == blockHash {
+			return task, true
+		}
+	}
+	return ImportStageTask{}, false
+}
+
 // ImportStageProgressDecision is one stage planner decision for an applied
 // sync import prefix. Later stages are blocked after the first missing stage so
 // persisted sync progress remains a contiguous pipeline prefix.
