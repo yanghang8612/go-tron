@@ -100,6 +100,28 @@ type ImportStageProgressDecision struct {
 	Row    rawdb.StageProgress
 }
 
+// ImportStagePlan is the stage planner view for one local import boundary.
+// It names the completed contiguous prefix and the first stage that still
+// prevents the boundary from being fully published.
+type ImportStagePlan struct {
+	Schedule   ImportStageSchedule
+	Progress   []rawdb.StageProgress
+	Decisions  []ImportStageProgressDecision
+	Completed  []ImportStageTask
+	Next       ImportStageTask
+	HasNext    bool
+	Blocked    ImportStageProgressDecision
+	HasBlocked bool
+	Complete   bool
+}
+
+// ImportStagePlanner owns the schedule-to-observation mapping for one import
+// run. StageProgressCollector records canonical hooks; the planner turns those
+// observations into an explicit bodies/execution/commitment/finish stage plan.
+type ImportStagePlanner struct {
+	observed map[rawdb.StageID][]StageProgressRow
+}
+
 // ImportedBatchProgressStepAction names one ordered side effect of committing an
 // imported staged-body prefix.
 type ImportedBatchProgressStepAction uint8
@@ -131,6 +153,7 @@ type ImportedBatchProgressPlan struct {
 	OK                bool
 	Summary           AppliedBatchSummary
 	Schedule          ImportStageSchedule
+	StagePlan         ImportStagePlan
 	Stages            []ImportStageTask
 	Deletes           []rawdb.SyncStagedBlockDelete
 	Progress          []rawdb.StageProgress
@@ -195,8 +218,7 @@ func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 		return nil
 	}
 	schedule := NewImportStageSchedule(through, tasks[0].BlockHash)
-	rows, _ := planImportStageRows(observed, schedule.Tasks)
-	return rows
+	return newImportStagePlannerFromObserved(observed).Plan(schedule).Progress
 }
 
 // PlanImportedBatchProgress derives the DB-side progress plan for an applied
@@ -223,7 +245,9 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 	}
 	plan.Schedule = NewImportStageSchedule(summary.Last.Num, summary.Last.Hash)
 	plan.Stages = plan.Schedule.Tasks
-	plan.Progress, plan.Decisions = collector.Plan(plan.Schedule)
+	plan.StagePlan = collector.PlanSchedule(plan.Schedule)
+	plan.Progress = plan.StagePlan.Progress
+	plan.Decisions = plan.StagePlan.Decisions
 	return plan.withSteps()
 }
 
@@ -270,18 +294,61 @@ func NewImportStageSchedule(blockNum uint64, blockHash tcommon.Hash) ImportStage
 	}
 }
 
+// PlanSchedule returns the explicit stage planner result for schedule.
+func (c *StageProgressCollector) PlanSchedule(schedule ImportStageSchedule) ImportStagePlan {
+	return NewImportStagePlanner(c).Plan(schedule)
+}
+
 // Plan maps observed canonical stage hooks onto a schedule-owned contiguous
 // sync progress prefix.
 func (c *StageProgressCollector) Plan(schedule ImportStageSchedule) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
-	if len(schedule.Tasks) == 0 {
-		return nil, nil
-	}
-	return c.plannedRows(schedule.Tasks)
+	plan := c.PlanSchedule(schedule)
+	return plan.Progress, plan.Decisions
 }
 
-func (c *StageProgressCollector) plannedRows(stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
-	observed := c.snapshotRows()
-	return planImportStageRows(observed, stages)
+// NewImportStagePlanner snapshots collector observations for deterministic
+// import-stage planning.
+func NewImportStagePlanner(collector *StageProgressCollector) ImportStagePlanner {
+	if collector == nil {
+		return ImportStagePlanner{}
+	}
+	return newImportStagePlannerFromObserved(collector.snapshotRows())
+}
+
+func newImportStagePlannerFromObserved(observed map[rawdb.StageID][]StageProgressRow) ImportStagePlanner {
+	return ImportStagePlanner{observed: cloneStageProgressRows(observed)}
+}
+
+// Plan maps observed canonical stage hooks onto a schedule-owned contiguous
+// sync progress prefix and records the first incomplete stage.
+func (p ImportStagePlanner) Plan(schedule ImportStageSchedule) ImportStagePlan {
+	if len(schedule.Tasks) == 0 {
+		return ImportStagePlan{}
+	}
+	progress, decisions := planImportStageRows(p.observed, schedule.Tasks)
+	return newImportStagePlan(schedule, progress, decisions)
+}
+
+func newImportStagePlan(schedule ImportStageSchedule, progress []rawdb.StageProgress, decisions []ImportStageProgressDecision) ImportStagePlan {
+	plan := ImportStagePlan{
+		Schedule:  schedule,
+		Progress:  append([]rawdb.StageProgress(nil), progress...),
+		Decisions: append([]ImportStageProgressDecision(nil), decisions...),
+	}
+	for _, decision := range decisions {
+		if decision.Status == ImportStageProgressPlanned {
+			plan.Completed = append(plan.Completed, decision.Task)
+			continue
+		}
+		if !plan.HasNext {
+			plan.Next = decision.Task
+			plan.HasNext = true
+			plan.Blocked = decision
+			plan.HasBlocked = true
+		}
+	}
+	plan.Complete = len(decisions) > 0 && len(plan.Completed) == len(schedule.Tasks)
+	return plan
 }
 
 func planImportStageRows(observed map[rawdb.StageID][]StageProgressRow, stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
@@ -364,8 +431,15 @@ func (c *StageProgressCollector) snapshotRows() map[rawdb.StageID][]StageProgres
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rows := make(map[rawdb.StageID][]StageProgressRow, len(c.rows))
-	for stage, stageRows := range c.rows {
+	return cloneStageProgressRows(c.rows)
+}
+
+func cloneStageProgressRows(source map[rawdb.StageID][]StageProgressRow) map[rawdb.StageID][]StageProgressRow {
+	if len(source) == 0 {
+		return nil
+	}
+	rows := make(map[rawdb.StageID][]StageProgressRow, len(source))
+	for stage, stageRows := range source {
 		rows[stage] = append([]StageProgressRow(nil), stageRows...)
 	}
 	return rows

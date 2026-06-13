@@ -164,6 +164,9 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	if !reflect.DeepEqual(got.Progress, wantRows) {
 		t.Fatalf("progress = %+v, want %+v", got.Progress, wantRows)
 	}
+	if !got.StagePlan.Complete || got.StagePlan.HasNext || got.StagePlan.HasBlocked || len(got.StagePlan.Completed) != len(wantRows) {
+		t.Fatalf("stage plan = %+v, want complete with no blocked stage", got.StagePlan)
+	}
 	wantSteps := []ImportedBatchProgressStep{
 		{Action: ImportedBatchWriteProgress, Deletes: got.Deletes, Progress: wantRows},
 		{Action: ImportedBatchRefreshBodiesReady},
@@ -380,6 +383,15 @@ func TestPlanImportedBatchProgressStopsAtFinishGap(t *testing.T) {
 	if !reflect.DeepEqual(got.Progress, wantRows) {
 		t.Fatalf("progress = %+v, want import+execution+commitment before finish gap", got.Progress)
 	}
+	if got.StagePlan.Complete || !got.StagePlan.HasNext || !got.StagePlan.HasBlocked {
+		t.Fatalf("stage plan = %+v, want blocked finish stage", got.StagePlan)
+	}
+	if got.StagePlan.Next.Phase != ImportStagePhaseFinish || got.StagePlan.Blocked.Status != ImportStageProgressMissing {
+		t.Fatalf("blocked stage = %+v next=%+v, want missing finish", got.StagePlan.Blocked, got.StagePlan.Next)
+	}
+	if len(got.StagePlan.Completed) != 3 {
+		t.Fatalf("completed stages = %+v, want import/execution/commitment", got.StagePlan.Completed)
+	}
 	wantStatuses := []ImportStageProgressStatus{
 		ImportStageProgressPlanned,
 		ImportStageProgressPlanned,
@@ -393,6 +405,41 @@ func TestPlanImportedBatchProgressStopsAtFinishGap(t *testing.T) {
 		if got.Decisions[i].Status != status {
 			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
 		}
+	}
+}
+
+func TestImportStagePlannerReportsNextIncompleteStage(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	schedule := NewImportStageSchedule(7, hash)
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, 7, hash)
+	collector.Observe(rawdb.StageExecution, 7, hash)
+	collector.Observe(rawdb.StageFinish, 7, hash)
+
+	stagePlan := collector.PlanSchedule(schedule)
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(stagePlan.Progress, wantRows) {
+		t.Fatalf("progress = %+v, want %+v", stagePlan.Progress, wantRows)
+	}
+	if stagePlan.Complete || !stagePlan.HasNext || !stagePlan.HasBlocked {
+		t.Fatalf("stage plan = %+v, want blocked commitment stage", stagePlan)
+	}
+	if len(stagePlan.Completed) != 2 {
+		t.Fatalf("completed stages = %+v, want import/execution", stagePlan.Completed)
+	}
+	if stagePlan.Next.Phase != ImportStagePhaseCommitment || stagePlan.Next.SyncStage != rawdb.StageSyncCommitment {
+		t.Fatalf("next stage = %+v, want commitment", stagePlan.Next)
+	}
+	if stagePlan.Blocked.Status != ImportStageProgressMissing || stagePlan.Blocked.Task != stagePlan.Next {
+		t.Fatalf("blocked decision = %+v, want missing next stage", stagePlan.Blocked)
+	}
+
+	progress, decisions := collector.Plan(schedule)
+	if !reflect.DeepEqual(progress, stagePlan.Progress) || !reflect.DeepEqual(decisions, stagePlan.Decisions) {
+		t.Fatalf("compat plan = %+v/%+v, want planner output %+v/%+v", progress, decisions, stagePlan.Progress, stagePlan.Decisions)
 	}
 }
 
