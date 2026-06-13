@@ -129,6 +129,43 @@ type ImportFailureResolution struct {
 	FailedNum   uint64
 }
 
+// ImportOutcome describes how the local drain loop should settle a canonical
+// insert attempt for one decoded buffered batch.
+type ImportOutcome struct {
+	Applied       int
+	RecordApplied bool
+	Pause         bool
+	PausePeer     *p2p.Peer
+	PauseNum      uint64
+	StopDrain     bool
+}
+
+// PlanImportOutcome maps a canonical insert result into service actions:
+// record the applied prefix, pause on failure, and decide whether the local
+// drain loop should stop.
+func PlanImportOutcome(batch BufferedBatch, insertErr error) ImportOutcome {
+	if insertErr == nil {
+		applied := len(batch.Blocks)
+		return ImportOutcome{
+			Applied:       applied,
+			RecordApplied: applied > 0,
+		}
+	}
+	outcome := ImportOutcome{
+		Pause:     true,
+		StopDrain: true,
+	}
+	failure := ResolveImportFailure(batch, insertErr)
+	if !failure.OK {
+		return outcome
+	}
+	outcome.Applied = failure.Applied
+	outcome.RecordApplied = failure.Applied > 0
+	outcome.PausePeer = failure.Failed.Peer
+	outcome.PauseNum = failure.FailedNum
+	return outcome
+}
+
 // ResolveImportFailure maps a canonical range-insert error back onto the
 // buffered downloader batch. InsertBlocksError.Index names the first failed
 // block; generic errors conservatively pause at the first buffered block.

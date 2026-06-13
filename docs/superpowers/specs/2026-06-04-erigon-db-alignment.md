@@ -377,7 +377,9 @@ Status:
   applied-prefix import summary now derives tx counts plus the stage-progress
   boundary there as well. Insert range failure resolution also maps
   `InsertBlocksError` indexes back to buffered blocks in the downloader
-  package; empty local-drain settlement after fetch-slot refill now uses a
+  package; import outcome planning there decides applied-prefix recording,
+  failure pause target, and drain-loop stop behavior; empty local-drain
+  settlement after fetch-slot refill now uses a
   downloader session plan to choose finish vs peer-join probing; and the same
   package now owns raw-buffer decode actions so a decoded prefix can be imported
   while a first-entry decode failure simply continues the drain loop. The same

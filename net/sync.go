@@ -1137,19 +1137,16 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		insertStart := time.Now()
 		insertErr := ss.chain.InsertBlocksWithStageHook(batch.Blocks, stageProgress.Observe)
 		insertElapsed := time.Since(insertStart)
-		applied := len(batch.Blocks)
-		if insertErr != nil {
-			failure := syncdl.ResolveImportFailure(batch, insertErr)
-			if failure.OK {
-				applied = failure.Applied
-				ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
-				ss.pauseSync(failure.Failed.Peer, failure.FailedNum, insertErr)
-			} else {
-				ss.pauseSync(nil, 0, insertErr)
-			}
+		outcome := syncdl.PlanImportOutcome(batch, insertErr)
+		if outcome.RecordApplied {
+			ss.recordImportedBatch(batch, outcome.Applied, insertElapsed, stageProgress)
+		}
+		if outcome.Pause {
+			ss.pauseSync(outcome.PausePeer, outcome.PauseNum, insertErr)
+		}
+		if outcome.StopDrain {
 			break
 		}
-		ss.recordImportedBatch(batch, applied, insertElapsed, stageProgress)
 	}
 	ss.sendOutboundRequests(out)
 }

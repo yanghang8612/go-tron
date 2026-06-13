@@ -220,6 +220,36 @@ func TestResolveImportFailureRejectsNilOrEmpty(t *testing.T) {
 	}
 }
 
+func TestPlanImportOutcome(t *testing.T) {
+	first := BufferedBlock{Hash: tcommon.Hash{0x01}, Num: 1}
+	second := BufferedBlock{Hash: tcommon.Hash{0x02}, Num: 2}
+	batch := BufferedBatch{
+		Blocks:   []*types.Block{testBufferedBlock(1), testBufferedBlock(2)},
+		Buffered: []BufferedBlock{first, second},
+	}
+
+	ok := PlanImportOutcome(batch, nil)
+	if ok.Applied != 2 || !ok.RecordApplied || ok.Pause || ok.StopDrain {
+		t.Fatalf("success outcome = %+v, want record full batch without pause", ok)
+	}
+
+	rangeErr := &core.InsertBlocksError{Index: 1, BlockNumber: 2, Err: errors.New("bad block")}
+	partial := PlanImportOutcome(batch, rangeErr)
+	if partial.Applied != 1 || !partial.RecordApplied || !partial.Pause || !partial.StopDrain || partial.PauseNum != 2 {
+		t.Fatalf("partial outcome = %+v, want record prefix and pause at block2", partial)
+	}
+
+	firstErr := PlanImportOutcome(batch, errors.New("plain insert failure"))
+	if firstErr.Applied != 0 || firstErr.RecordApplied || !firstErr.Pause || !firstErr.StopDrain || firstErr.PauseNum != 1 {
+		t.Fatalf("first failure outcome = %+v, want pause at block1 without record", firstErr)
+	}
+
+	unmapped := PlanImportOutcome(BufferedBatch{}, errors.New("bad block"))
+	if unmapped.RecordApplied || !unmapped.Pause || !unmapped.StopDrain || unmapped.PauseNum != 0 {
+		t.Fatalf("unmapped outcome = %+v, want generic pause", unmapped)
+	}
+}
+
 func TestStagedBodyDrainLimit(t *testing.T) {
 	tests := []struct {
 		name          string
