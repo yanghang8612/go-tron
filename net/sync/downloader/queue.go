@@ -1,6 +1,9 @@
 package downloader
 
 import (
+	"bytes"
+	"sort"
+
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 )
@@ -89,7 +92,17 @@ func AssignRetryCandidates(retries []types.BlockID, classify RetryClassifier) (a
 // the peer's local fetch queue, matching java-tron's retry preference for
 // requests that were already sent.
 func AppendDisconnectedPeerRetries(retries []types.BlockID, pending map[tcommon.Hash]types.BlockID, queued []types.BlockID, shouldRetry BlockFilter) []types.BlockID {
+	pendingIDs := make([]types.BlockID, 0, len(pending))
 	for _, bid := range pending {
+		pendingIDs = append(pendingIDs, bid)
+	}
+	sort.Slice(pendingIDs, func(i, j int) bool {
+		if pendingIDs[i].Num != pendingIDs[j].Num {
+			return pendingIDs[i].Num < pendingIDs[j].Num
+		}
+		return bytes.Compare(pendingIDs[i].Hash[:], pendingIDs[j].Hash[:]) < 0
+	})
+	for _, bid := range pendingIDs {
 		if shouldRetry == nil || shouldRetry(bid) {
 			retries = append(retries, bid)
 		}
