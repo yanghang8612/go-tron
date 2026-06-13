@@ -420,6 +420,50 @@ func TestReadStagedBodyReadyDrainLimitProgressReadError(t *testing.T) {
 	}
 }
 
+func TestReadStagedBodyDrainPlan(t *testing.T) {
+	block := testBufferedBlock(9)
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+
+	got := ReadStagedBodyDrainPlan(db, 7, 10)
+	if got.Ready.Status != StagedBodyReadyLimitValid || got.Ready.Limit != block.Number() {
+		t.Fatalf("ready = %+v, want valid block9", got.Ready)
+	}
+	if !got.Plan.HasReadyLimit || got.Plan.ReadyLimit != block.Number() || !got.Plan.CanDrain || got.Plan.RestoreLimit != 3 || got.Plan.RefreshReady {
+		t.Fatalf("plan = %+v, want clamped drain 7..9 without refresh", got.Plan)
+	}
+	if len(got.Plan.Steps) != 2 || got.Plan.Steps[0].Action != StagedBodyDrainRestoreBodies || got.Plan.Steps[0].From != 7 || got.Plan.Steps[0].Limit != 3 || got.Plan.Steps[1].Action != StagedBodyDrainPopBuffer || got.Plan.Steps[1].Next != 7 || got.Plan.Steps[1].Limit != 3 {
+		t.Fatalf("steps = %+v, want restore/pop 7 limit 3", got.Plan.Steps)
+	}
+}
+
+func TestReadStagedBodyDrainPlanRefreshesInvalidReadyBeforeDrain(t *testing.T) {
+	block := testBufferedBlock(7)
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+		t.Fatalf("write staged block: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block.Number(), tcommon.Hash{0xff}); err != nil {
+		t.Fatalf("write mismatched ready progress: %v", err)
+	}
+
+	got := ReadStagedBodyDrainPlan(db, block.Number(), 5)
+	if got.Ready.Status != StagedBodyReadyLimitHashMismatch {
+		t.Fatalf("ready = %+v, want hash mismatch", got.Ready)
+	}
+	if got.Plan.HasReadyLimit || got.Plan.ReadyLimit != 0 || !got.Plan.RefreshReady || !got.Plan.CanDrain || got.Plan.RestoreLimit != 5 {
+		t.Fatalf("plan = %+v, want refresh plus uncapped local drain", got.Plan)
+	}
+	if len(got.Plan.Steps) != 3 || got.Plan.Steps[0].Action != StagedBodyDrainRefreshReady || got.Plan.Steps[1].Action != StagedBodyDrainRestoreBodies || got.Plan.Steps[2].Action != StagedBodyDrainPopBuffer {
+		t.Fatalf("steps = %+v, want refresh/restore/pop", got.Plan.Steps)
+	}
+}
+
 func stagedBodyMapReader(rows map[uint64]rawdb.SyncStagedBlockRow) StagedBodyReader {
 	return func(number uint64) (rawdb.SyncStagedBlockRow, bool, error) {
 		row, ok := rows[number]

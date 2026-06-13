@@ -66,6 +66,13 @@ type StagedBodyReadyLimit struct {
 	StagedHash tcommon.Hash
 }
 
+// StagedBodyDrainReadPlan is the downloader-owned local import drain plan plus
+// the SyncBodiesReady validation evidence that produced it.
+type StagedBodyDrainReadPlan struct {
+	Ready StagedBodyReadyLimit
+	Plan  StagedBodyDrainPlan
+}
+
 // Valid reports whether the row can cap a local import drain.
 func (l StagedBodyReadyLimit) Valid() bool {
 	return l.Status == StagedBodyReadyLimitValid
@@ -193,6 +200,16 @@ func ReadStagedBodyReadyDrainLimit(db ethdb.KeyValueReader, next uint64) StagedB
 		staged, stagedOK, readErr = rawdb.ReadSyncStagedBlockRaw(db, row.BlockNum)
 	}
 	return ValidateStagedBodyReadyDrainLimit(next, row, ok, staged, stagedOK, readErr)
+}
+
+// ReadStagedBodyDrainPlan reads SyncBodiesReady and derives the local
+// staged-body drain plan in one downloader-owned decision point.
+func ReadStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int) StagedBodyDrainReadPlan {
+	ready := ReadStagedBodyReadyDrainLimit(db, next)
+	return StagedBodyDrainReadPlan{
+		Ready: ready,
+		Plan:  PlanStagedBodyDrain(next, max, ready),
+	}
 }
 
 // ValidateStagedBodyReadyDrainLimit checks that a persisted SyncBodiesReady

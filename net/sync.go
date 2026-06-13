@@ -1242,33 +1242,36 @@ func (ss *SyncService) importBatchLimitLocked() int {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
-	readyLimit := ss.readSyncBodiesReadyDrainLimit(next)
-	plan := syncdl.PlanStagedBodyDrain(next, ss.importBatchLimitLocked(), readyLimit)
-	return syncdl.ApplyStagedBodyDrainPlan(plan, syncStagedBodyDrainApplier{service: ss, now: now})
+	drain := ss.readStagedBodyDrainPlan(next)
+	ss.logStagedBodyReadyDrainLimit(drain.Ready)
+	return syncdl.ApplyStagedBodyDrainPlan(drain.Plan, syncStagedBodyDrainApplier{service: ss, now: now})
 }
 
-func (ss *SyncService) readSyncBodiesReadyDrainLimit(next uint64) syncdl.StagedBodyReadyLimit {
+func (ss *SyncService) readStagedBodyDrainPlan(next uint64) syncdl.StagedBodyDrainReadPlan {
+	max := ss.importBatchLimitLocked()
 	if ss == nil || ss.chain == nil {
-		return syncdl.StagedBodyReadyLimit{}
+		return syncdl.ReadStagedBodyDrainPlan(nil, next, max)
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return syncdl.StagedBodyReadyLimit{}
+		return syncdl.ReadStagedBodyDrainPlan(nil, next, max)
 	}
-	limit := syncdl.ReadStagedBodyReadyDrainLimit(db, next)
-	switch limit.Status {
+	return syncdl.ReadStagedBodyDrainPlan(db, next, max)
+}
+
+func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReadyLimit) {
+	switch ready.Status {
 	case syncdl.StagedBodyReadyLimitProgressReadError:
-		syncLog.Warn("Read sync bodies ready stage progress failed", "err", limit.StageError)
+		syncLog.Warn("Read sync bodies ready stage progress failed", "err", ready.StageError)
 	case syncdl.StagedBodyReadyLimitUnbound:
-		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", limit.StageRow.BlockNum)
+		syncLog.Warn("Ignoring unbound sync bodies ready stage progress", "block", ready.StageRow.BlockNum)
 	case syncdl.StagedBodyReadyLimitReadError:
-		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "err", limit.ReadError)
+		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash, "err", ready.ReadError)
 	case syncdl.StagedBodyReadyLimitStagedMissing:
-		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash)
+		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash)
 	case syncdl.StagedBodyReadyLimitHashMismatch:
-		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "stagedHash", limit.StagedHash)
+		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash, "stagedHash", ready.StagedHash)
 	}
-	return limit
 }
 
 type syncStagedBodyDrainApplier struct {
