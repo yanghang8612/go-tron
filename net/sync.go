@@ -945,7 +945,7 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 	if len(ps.fetchList) == 0 {
 		return nil
 	}
-	batch, remaining := syncdl.PopFetchBatch(ps.fetchList, maxFetchBatch, func(bid types.BlockID) bool {
+	plan := syncdl.PlanNextFetchBatch(ps.fetchList, maxFetchBatch, func(bid types.BlockID) syncdl.FetchCandidateFacts {
 		facts := syncdl.FetchCandidateFacts{KnownOrRequested: ss.hasBlockOrRequestLocked(bid)}
 		if !facts.KnownOrRequested {
 			facts.ReservedPath = ss.reserveBlockPathLocked(bid)
@@ -953,10 +953,10 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 		if facts.ReservedPath {
 			_, facts.PeerRequested = ps.requestedHashes[bid.Hash]
 		}
-		return syncdl.AcceptFetchCandidate(facts)
+		return facts
 	})
-	ps.fetchList = remaining
-	return batch
+	ps.fetchList = plan.Remaining
+	return plan.Batch
 }
 
 func (ss *SyncService) hasBlockOrRequestLocked(bid types.BlockID) bool {

@@ -33,11 +33,38 @@ type FetchCandidateFacts struct {
 	PeerRequested    bool
 }
 
+// FetchCandidateDecision records why a peer-local fetch-list block ID was
+// accepted or discarded before the next wire batch.
+type FetchCandidateDecision uint8
+
+const (
+	FetchCandidateAccepted FetchCandidateDecision = iota
+	FetchCandidateKnownOrRequested
+	FetchCandidatePathConflict
+	FetchCandidatePeerDuplicate
+)
+
+// ClassifyFetchCandidate maps one fetch-list block ID to an explicit
+// downloader decision. The service owns fact gathering and path reservation;
+// the downloader owns the policy ordering.
+func ClassifyFetchCandidate(f FetchCandidateFacts) FetchCandidateDecision {
+	if f.KnownOrRequested {
+		return FetchCandidateKnownOrRequested
+	}
+	if !f.ReservedPath {
+		return FetchCandidatePathConflict
+	}
+	if f.PeerRequested {
+		return FetchCandidatePeerDuplicate
+	}
+	return FetchCandidateAccepted
+}
+
 // AcceptFetchCandidate reports whether a fetch-list block ID should be emitted
 // in the next FETCH_INV_DATA request. Ineligible entries are dropped from the
 // peer-local fetch queue by PopFetchBatch.
 func AcceptFetchCandidate(f FetchCandidateFacts) bool {
-	return !f.KnownOrRequested && f.ReservedPath && !f.PeerRequested
+	return ClassifyFetchCandidate(f) == FetchCandidateAccepted
 }
 
 // InventoryCandidateFacts are the side-effect-free facts needed to decide

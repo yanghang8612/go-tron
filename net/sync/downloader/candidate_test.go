@@ -44,19 +44,23 @@ func TestClassifyRetryCandidate(t *testing.T) {
 
 func TestAcceptFetchCandidate(t *testing.T) {
 	tests := []struct {
-		name  string
-		facts FetchCandidateFacts
-		want  bool
+		name         string
+		facts        FetchCandidateFacts
+		wantDecision FetchCandidateDecision
+		wantAccept   bool
 	}{
-		{name: "known rejected", facts: FetchCandidateFacts{KnownOrRequested: true, ReservedPath: true}, want: false},
-		{name: "path conflict rejected", facts: FetchCandidateFacts{}, want: false},
-		{name: "same peer duplicate rejected", facts: FetchCandidateFacts{ReservedPath: true, PeerRequested: true}, want: false},
-		{name: "eligible accepted", facts: FetchCandidateFacts{ReservedPath: true}, want: true},
+		{name: "known rejected", facts: FetchCandidateFacts{KnownOrRequested: true, ReservedPath: true}, wantDecision: FetchCandidateKnownOrRequested},
+		{name: "path conflict rejected", facts: FetchCandidateFacts{}, wantDecision: FetchCandidatePathConflict},
+		{name: "same peer duplicate rejected", facts: FetchCandidateFacts{ReservedPath: true, PeerRequested: true}, wantDecision: FetchCandidatePeerDuplicate},
+		{name: "eligible accepted", facts: FetchCandidateFacts{ReservedPath: true}, wantDecision: FetchCandidateAccepted, wantAccept: true},
 	}
 
 	for _, tt := range tests {
-		if got := AcceptFetchCandidate(tt.facts); got != tt.want {
-			t.Fatalf("%s: accept = %v, want %v", tt.name, got, tt.want)
+		if got := ClassifyFetchCandidate(tt.facts); got != tt.wantDecision {
+			t.Fatalf("%s: decision = %v, want %v", tt.name, got, tt.wantDecision)
+		}
+		if got := AcceptFetchCandidate(tt.facts); got != tt.wantAccept {
+			t.Fatalf("%s: accept = %v, want %v", tt.name, got, tt.wantAccept)
 		}
 	}
 }

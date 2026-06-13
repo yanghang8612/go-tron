@@ -28,6 +28,25 @@ const (
 // needed before assignment, such as reserving a block path.
 type RetryClassifier func(types.BlockID) RetryDecision
 
+// FetchCandidateClassifier gathers service-owned facts for one fetch-list
+// candidate. It may reserve the session block path before returning facts.
+type FetchCandidateClassifier func(types.BlockID) FetchCandidateFacts
+
+// FetchCandidatePlan records the downloader decision for one fetch-list entry.
+type FetchCandidatePlan struct {
+	ID       types.BlockID
+	Facts    FetchCandidateFacts
+	Decision FetchCandidateDecision
+}
+
+// NextFetchBatchPlan is the downloader-owned result for draining one peer's
+// fetch-list into the next FETCH_INV_DATA batch.
+type NextFetchBatchPlan struct {
+	Batch     []types.BlockID
+	Remaining []types.BlockID
+	Decisions []FetchCandidatePlan
+}
+
 // PopFetchBatch filters candidates in order, returns up to max eligible block
 // IDs for the next FETCH_INV_DATA request, and keeps later eligible IDs in
 // remaining. Ineligible IDs are dropped.
@@ -54,6 +73,43 @@ func PopFetchBatch(candidates []types.BlockID, max int, accept BlockFilter) (bat
 		remaining = nil
 	}
 	return batch, remaining
+}
+
+// PlanNextFetchBatch classifies one peer-local fetch queue, emits up to max
+// accepted block IDs, keeps accepted overflow in Remaining, and drops rejected
+// entries. Remaining may reuse fetchList's backing array.
+func PlanNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandidateClassifier) NextFetchBatchPlan {
+	plan := NextFetchBatchPlan{}
+	if len(fetchList) == 0 || max <= 0 {
+		plan.Remaining = fetchList
+		return plan
+	}
+	plan.Batch = make([]types.BlockID, 0, max)
+	plan.Remaining = fetchList[:0]
+	for _, bid := range fetchList {
+		var facts FetchCandidateFacts
+		if classify != nil {
+			facts = classify(bid)
+		}
+		decision := ClassifyFetchCandidate(facts)
+		plan.Decisions = append(plan.Decisions, FetchCandidatePlan{
+			ID:       bid,
+			Facts:    facts,
+			Decision: decision,
+		})
+		if decision != FetchCandidateAccepted {
+			continue
+		}
+		if len(plan.Batch) < max {
+			plan.Batch = append(plan.Batch, bid)
+			continue
+		}
+		plan.Remaining = append(plan.Remaining, bid)
+	}
+	if len(plan.Remaining) == 0 {
+		plan.Remaining = nil
+	}
+	return plan
 }
 
 // AssignRetryCandidates partitions a retry list into entries assigned to the

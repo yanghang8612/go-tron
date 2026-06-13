@@ -66,6 +66,65 @@ func TestPopFetchBatchKeepsCandidatesWhenMaxInvalid(t *testing.T) {
 	}
 }
 
+func TestPlanNextFetchBatchClassifiesDropsAndKeepsAcceptedOverflow(t *testing.T) {
+	candidates := []types.BlockID{
+		queueID(1),
+		queueID(2),
+		queueID(3),
+		queueID(4),
+		queueID(5),
+	}
+	got := PlanNextFetchBatch(candidates, 2, func(bid types.BlockID) FetchCandidateFacts {
+		switch bid.Num {
+		case 1, 3, 5:
+			return FetchCandidateFacts{ReservedPath: true}
+		case 2:
+			return FetchCandidateFacts{KnownOrRequested: true}
+		case 4:
+			return FetchCandidateFacts{ReservedPath: true, PeerRequested: true}
+		default:
+			return FetchCandidateFacts{}
+		}
+	})
+
+	if want := []uint64{1, 3}; !reflect.DeepEqual(blockNums(got.Batch), want) {
+		t.Fatalf("batch nums = %v, want %v", blockNums(got.Batch), want)
+	}
+	if want := []uint64{5}; !reflect.DeepEqual(blockNums(got.Remaining), want) {
+		t.Fatalf("remaining nums = %v, want %v", blockNums(got.Remaining), want)
+	}
+	wantDecisions := []FetchCandidateDecision{
+		FetchCandidateAccepted,
+		FetchCandidateKnownOrRequested,
+		FetchCandidateAccepted,
+		FetchCandidatePeerDuplicate,
+		FetchCandidateAccepted,
+	}
+	if len(got.Decisions) != len(wantDecisions) {
+		t.Fatalf("decisions = %+v, want %d", got.Decisions, len(wantDecisions))
+	}
+	for i, want := range wantDecisions {
+		if got.Decisions[i].ID.Num != uint64(i+1) || got.Decisions[i].Decision != want {
+			t.Fatalf("decision %d = %+v, want block %d decision %v", i, got.Decisions[i], i+1, want)
+		}
+	}
+}
+
+func TestPlanNextFetchBatchKeepsCandidatesWhenMaxInvalid(t *testing.T) {
+	candidates := []types.BlockID{queueID(1)}
+	got := PlanNextFetchBatch(candidates, 0, func(types.BlockID) FetchCandidateFacts {
+		t.Fatal("classifier should not be called when max <= 0")
+		return FetchCandidateFacts{ReservedPath: true}
+	})
+
+	if got.Batch != nil || got.Decisions != nil {
+		t.Fatalf("plan = %+v, want no batch or decisions", got)
+	}
+	if want := []uint64{1}; !reflect.DeepEqual(blockNums(got.Remaining), want) {
+		t.Fatalf("remaining nums = %v, want %v", blockNums(got.Remaining), want)
+	}
+}
+
 func TestAssignRetryCandidatesPartitionsByDecision(t *testing.T) {
 	retries := []types.BlockID{
 		queueID(1),
