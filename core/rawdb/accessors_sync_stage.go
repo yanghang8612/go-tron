@@ -386,6 +386,20 @@ func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
+	keys, err := collectAllSyncStagedBlockKeys(db)
+	if err != nil {
+		return 0, err
+	}
+	if err := deleteKeyBatch(db, keys); err != nil {
+		return 0, err
+	}
+	return len(keys), nil
+}
+
+func collectAllSyncStagedBlockKeys(db ethdb.Iteratee) ([][]byte, error) {
+	if db == nil {
+		return nil, nil
+	}
 	it := db.NewIterator(syncStagedBlockPrefix, nil)
 	var keys [][]byte
 	for it.Next() {
@@ -393,13 +407,10 @@ func DeleteAllSyncStagedBlocks(db ethdb.KeyValueStore) (int, error) {
 	}
 	if err := it.Error(); err != nil {
 		it.Release()
-		return 0, err
+		return nil, err
 	}
 	it.Release()
-	if err := deleteKeyBatch(db, keys); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	return keys, nil
 }
 
 func deleteKeyBatch(db ethdb.KeyValueWriter, keys [][]byte) error {
@@ -430,10 +441,43 @@ func deleteKeyBatch(db ethdb.KeyValueWriter, keys [][]byte) error {
 // callers can log without leaving later cleanup undone.
 func ResetSyncStagedBodies(db ethdb.KeyValueStore) SyncStagedResetResult {
 	var result SyncStagedResetResult
-	deleted, err := DeleteAllSyncStagedBlocks(db)
-	result.DeletedBodies = deleted
-	result.StagedDeleteError = err
-	result.BodiesProgressError = DeleteStageProgress(db, StageSyncBodies)
-	result.BodiesReadyProgressError = DeleteStageProgress(db, StageSyncBodiesReady)
+	if db == nil {
+		return result
+	}
+	keys, err := collectAllSyncStagedBlockKeys(db)
+	if err != nil {
+		result.StagedDeleteError = err
+		result.BodiesProgressError = DeleteStageProgress(db, StageSyncBodies)
+		result.BodiesReadyProgressError = DeleteStageProgress(db, StageSyncBodiesReady)
+		return result
+	}
+	batch := db.NewBatchWithSize(len(keys)*8 + 2*8)
+	defer batch.Reset()
+	for _, key := range keys {
+		if err := batch.Delete(key); err != nil && result.StagedDeleteError == nil {
+			result.StagedDeleteError = err
+		}
+	}
+	if err := batch.Delete(stageProgressKey(StageSyncBodies)); err != nil {
+		result.BodiesProgressError = err
+	}
+	if err := batch.Delete(stageProgressKey(StageSyncBodiesReady)); err != nil {
+		result.BodiesReadyProgressError = err
+	}
+	if err := batch.Write(); err != nil {
+		if len(keys) > 0 && result.StagedDeleteError == nil {
+			result.StagedDeleteError = err
+		}
+		if result.BodiesProgressError == nil {
+			result.BodiesProgressError = err
+		}
+		if result.BodiesReadyProgressError == nil {
+			result.BodiesReadyProgressError = err
+		}
+		return result
+	}
+	if result.StagedDeleteError == nil {
+		result.DeletedBodies = len(keys)
+	}
 	return result
 }

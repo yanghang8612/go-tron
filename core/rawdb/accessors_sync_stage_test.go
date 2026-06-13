@@ -350,28 +350,32 @@ func TestDeleteAllSyncStagedBlocks(t *testing.T) {
 }
 
 func TestResetSyncStagedBodiesDeletesRowsAndProgress(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	for n := uint64(1); n <= 3; n++ {
 		block := testSyncStagedBlock(n, common.Hash{byte(n - 1)})
-		if err := WriteSyncStagedBlock(db, block); err != nil {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
 			t.Fatalf("write staged block %d: %v", n, err)
 		}
 		if n == 3 {
-			if err := WriteStageProgressWithHash(db, StageSyncBodies, block.Number(), block.Hash()); err != nil {
+			if err := WriteStageProgressWithHash(base, StageSyncBodies, block.Number(), block.Hash()); err != nil {
 				t.Fatalf("write sync bodies progress: %v", err)
 			}
-			if err := WriteStageProgressWithHash(db, StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
+			if err := WriteStageProgressWithHash(base, StageSyncBodiesReady, block.Number(), block.Hash()); err != nil {
 				t.Fatalf("write sync bodies ready progress: %v", err)
 			}
 		}
 	}
 
+	db := &countingBatchStore{KeyValueStore: base}
 	result := ResetSyncStagedBodies(db)
 	if result.StagedDeleteError != nil || result.BodiesProgressError != nil || result.BodiesReadyProgressError != nil {
 		t.Fatalf("reset result has error: %+v", result)
 	}
 	if result.DeletedBodies != 3 {
 		t.Fatalf("DeletedBodies = %d, want 3", result.DeletedBodies)
+	}
+	if db.batches != 1 || db.directDeletes != 0 {
+		t.Fatalf("reset used batches=%d directDeletes=%d, want one batch", db.batches, db.directDeletes)
 	}
 	for n := uint64(1); n <= 3; n++ {
 		if _, ok, err := ReadSyncStagedBlock(db, n); err != nil || ok {
