@@ -208,7 +208,7 @@ type ImportBatchRunPlanApplier interface {
 	LogDecodeBatchResult(BufferedBatchDecodeResult)
 	RecordBufferWait(time.Duration)
 	ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error)
-	RecordImportedBatch(batch BufferedBatch, applied int, elapsed time.Duration, progress *StageProgressCollector)
+	RecordImportedBatch(progress ImportedBatchProgressPlan, elapsed time.Duration)
 	PauseImport(peer *p2p.Peer, blockNum uint64, err error)
 }
 
@@ -219,6 +219,7 @@ type ImportBatchRunResult struct {
 	Decode        BufferedBatchDecodeResult
 	Execution     ImportBatchExecutionPlan
 	Outcome       ImportOutcome
+	Progress      ImportedBatchProgressPlan
 	ContinueDrain bool
 	StopDrain     bool
 }
@@ -274,7 +275,10 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
 			if result.Outcome.RecordApplied {
-				applier.RecordImportedBatch(plan.Batch, result.Outcome.Applied, elapsed, collector)
+				result.Progress = PlanImportedBatchProgress(plan.Batch, result.Outcome.Applied, collector)
+				if result.Progress.OK {
+					applier.RecordImportedBatch(result.Progress, elapsed)
+				}
 			}
 			if result.Outcome.Pause {
 				applier.PauseImport(result.Outcome.PausePeer, result.Outcome.PauseNum, insertErr)

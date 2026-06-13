@@ -1303,16 +1303,15 @@ func (a syncImportBatchRunApplier) ExecuteImportBatch(execution syncdl.ImportBat
 	return time.Since(start), err
 }
 
-func (a syncImportBatchRunApplier) RecordImportedBatch(batch syncdl.BufferedBatch, applied int, elapsed time.Duration, progress *syncdl.StageProgressCollector) {
-	a.service.recordImportedBatch(batch, applied, elapsed, progress)
+func (a syncImportBatchRunApplier) RecordImportedBatch(plan syncdl.ImportedBatchProgressPlan, elapsed time.Duration) {
+	a.service.recordImportedBatch(plan, elapsed)
 }
 
 func (a syncImportBatchRunApplier) PauseImport(peer *p2p.Peer, blockNum uint64, err error) {
 	a.service.pauseSync(peer, blockNum, err)
 }
 
-func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
-	plan := syncdl.PlanImportedBatchProgress(batch, applied, stageProgress)
+func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan, totalElapsed time.Duration) {
 	if !plan.OK {
 		return
 	}

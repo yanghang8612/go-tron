@@ -347,6 +347,12 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("applier execution tasks = %+v, want block2 pipeline", applier.execution.Schedule.Tasks)
 	}
+	if !result.Progress.OK || result.Progress.Summary.Applied != 2 || !result.Progress.StagePlan.Complete {
+		t.Fatalf("result progress plan = %+v, want complete applied block2 plan", result.Progress)
+	}
+	if !applier.recordPlan.OK || applier.recordPlan.ReportHead != block2.Number() || applier.recordPlan.StatsBlocks != 2 {
+		t.Fatalf("applier progress plan = %+v, want block2 report with two stats blocks", applier.recordPlan)
+	}
 	wantProgress := importPipelineProgressRows(block2.Number(), block2.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
 		t.Fatalf("progress = %+v, want %+v", applier.progress, wantProgress)
@@ -372,6 +378,9 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if !result.Execution.HasStageSchedule || result.Execution.Schedule.BlockNum != block2.Number() {
 		t.Fatalf("execution schedule = %+v has=%v, want attempted block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
+	}
+	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
+		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
 	}
 	wantProgress := importPipelineProgressRows(block1.Number(), block1.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
@@ -730,6 +739,7 @@ type recordingImportBatchRunApplier struct {
 	insertErr              error
 	appliedForObservations int
 	execution              ImportBatchExecutionPlan
+	recordPlan             ImportedBatchProgressPlan
 	recordApplied          int
 	recordElapsed          time.Duration
 	progress               []rawdb.StageProgress
@@ -762,11 +772,11 @@ func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatc
 	return a.elapsed, a.insertErr
 }
 
-func (a *recordingImportBatchRunApplier) RecordImportedBatch(batch BufferedBatch, applied int, elapsed time.Duration, progress *StageProgressCollector) {
+func (a *recordingImportBatchRunApplier) RecordImportedBatch(plan ImportedBatchProgressPlan, elapsed time.Duration) {
 	a.calls = append(a.calls, ImportBatchRunSettle)
-	a.recordApplied = applied
+	a.recordPlan = plan
+	a.recordApplied = plan.Summary.Applied
 	a.recordElapsed = elapsed
-	plan := PlanImportedBatchProgress(batch, applied, progress)
 	a.progress = append([]rawdb.StageProgress(nil), plan.Progress...)
 }
 

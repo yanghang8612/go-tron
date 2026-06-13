@@ -204,7 +204,8 @@ func TestRecordImportedBatchKeepsAppliedStagePrefixAfterPartialExecution(t *test
 	}
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	ss.recordImportedBatch(batch, 1, time.Millisecond, collector)
+	plan := syncdl.PlanImportedBatchProgress(batch, 1, collector)
+	ss.recordImportedBatch(plan, time.Millisecond)
 
 	assertSyncPipelineProgress(t, bc.DB(), block1)
 	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
@@ -239,7 +240,8 @@ func TestSyncServiceRestoresHalfExecutedSessionOnStart(t *testing.T) {
 	}
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 
-	ss.recordImportedBatch(batch, 1, time.Millisecond, collector)
+	plan := syncdl.PlanImportedBatchProgress(batch, 1, collector)
+	ss.recordImportedBatch(plan, time.Millisecond)
 
 	assertSyncPipelineProgress(t, bc.DB(), block1)
 	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block1.Number()); err != nil || ok {
@@ -378,7 +380,8 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *test
 	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
 	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
 
-	ss.recordImportedBatch(batch, 2, time.Millisecond, collector)
+	plan := syncdl.PlanImportedBatchProgress(batch, 2, collector)
+	ss.recordImportedBatch(plan, time.Millisecond)
 
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
 		t.Fatalf("sync import progress = %+v ok=%v err=%v, want block2", row, ok, err)
@@ -419,7 +422,8 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterCommitmentMismatch(t *tes
 	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
 
-	ss.recordImportedBatch(batch, 2, time.Millisecond, collector)
+	plan := syncdl.PlanImportedBatchProgress(batch, 2, collector)
+	ss.recordImportedBatch(plan, time.Millisecond)
 
 	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
