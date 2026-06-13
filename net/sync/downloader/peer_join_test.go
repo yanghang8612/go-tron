@@ -27,12 +27,14 @@ func TestPlanPeerJoinAttempt(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	base := PeerJoinAttemptInput{
 		HandlerAvailable: true,
-		Syncing:          true,
-		CurrentPeers:     1,
-		MaxPeers:         4,
-		LastAttempt:      now.Add(-2 * time.Second),
-		Now:              now,
-		MinInterval:      time.Second,
+		Progress: SessionProgress{
+			Syncing: true,
+			Peers:   []PeerProgress{{Done: false}},
+		},
+		MaxPeers:    4,
+		LastAttempt: now.Add(-2 * time.Second),
+		Now:         now,
+		MinInterval: time.Second,
 	}
 
 	got := PlanPeerJoinAttempt(base)
@@ -42,9 +44,11 @@ func TestPlanPeerJoinAttempt(t *testing.T) {
 
 	for name, mutate := range map[string]func(*PeerJoinAttemptInput){
 		"no-handler":  func(in *PeerJoinAttemptInput) { in.HandlerAvailable = false },
-		"not-syncing": func(in *PeerJoinAttemptInput) { in.Syncing = false },
-		"paused":      func(in *PeerJoinAttemptInput) { in.Paused = true },
-		"at-capacity": func(in *PeerJoinAttemptInput) { in.CurrentPeers = in.MaxPeers },
+		"not-syncing": func(in *PeerJoinAttemptInput) { in.Progress.Syncing = false },
+		"paused":      func(in *PeerJoinAttemptInput) { in.Progress.Paused = true },
+		"at-capacity": func(in *PeerJoinAttemptInput) {
+			in.Progress.Peers = []PeerProgress{{}, {}, {}, {}}
+		},
 		"throttled": func(in *PeerJoinAttemptInput) {
 			in.LastAttempt = in.Now.Add(-in.MinInterval / 2)
 		},
@@ -60,7 +64,7 @@ func TestPlanPeerJoinAttempt(t *testing.T) {
 func TestPlanPeerJoinAttemptAllowsFirstAttempt(t *testing.T) {
 	got := PlanPeerJoinAttempt(PeerJoinAttemptInput{
 		HandlerAvailable: true,
-		Syncing:          true,
+		Progress:         SessionProgress{Syncing: true},
 		MaxPeers:         2,
 		Now:              time.Unix(1_700_000_000, 0),
 		MinInterval:      time.Second,

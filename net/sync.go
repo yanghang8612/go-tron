@@ -636,9 +636,7 @@ func (ss *SyncService) joinAvailablePeers() {
 func (ss *SyncService) shouldJoinAvailablePeersLocked(now time.Time) bool {
 	plan := syncdl.PlanPeerJoinAttempt(syncdl.PeerJoinAttemptInput{
 		HandlerAvailable: ss.handler != nil,
-		Syncing:          ss.syncing,
-		Paused:           ss.pause.Paused(),
-		CurrentPeers:     len(ss.peers),
+		Progress:         ss.sessionProgressLocked(),
 		MaxPeers:         maxParallelSyncPeers,
 		LastAttempt:      ss.lastPeerJoinAttempt,
 		Now:              now,

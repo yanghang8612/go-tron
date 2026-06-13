@@ -16,9 +16,7 @@ func PeerJoinCapacity(currentPeers, maxPeers int) int {
 // a sync session should ask the handler for more peers.
 type PeerJoinAttemptInput struct {
 	HandlerAvailable bool
-	Syncing          bool
-	Paused           bool
-	CurrentPeers     int
+	Progress         SessionProgress
 	MaxPeers         int
 	LastAttempt      time.Time
 	Now              time.Time
@@ -35,10 +33,10 @@ type PeerJoinAttemptPlan struct {
 // PlanPeerJoinAttempt applies the downloader join throttle and parallel-peer
 // budget without mutating service state.
 func PlanPeerJoinAttempt(in PeerJoinAttemptInput) PeerJoinAttemptPlan {
-	if !in.HandlerAvailable || !in.Syncing || in.Paused {
+	if !in.HandlerAvailable || !in.Progress.Syncing || in.Progress.Paused {
 		return PeerJoinAttemptPlan{}
 	}
-	need := PeerJoinCapacity(in.CurrentPeers, in.MaxPeers)
+	need := PeerJoinCapacity(len(in.Progress.Peers), in.MaxPeers)
 	if need == 0 {
 		return PeerJoinAttemptPlan{}
 	}
