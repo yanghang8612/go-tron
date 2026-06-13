@@ -195,6 +195,10 @@ Pebble hot-store SST/WAL ratios plus interval SST/WAL bytes per block while
 keeping `snapshotBytes` as the full snapshot directory size. Run it with
 `--sync-log-file` to fold the latest `Imported chain segment` stage planner,
 execution-plan, slow-phase, state-mutation, and peer fields into the JSONL row.
+Each row also includes `soakHealthStatus`, `soakHealthIssues`, and
+`soakPrimaryBottleneck*` fields so long Nile runs can be filtered directly for
+HTTP/peer failures, stage regressions, pipeline violations, storage alerts, and
+the current sync-stage bottleneck.
 Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics.
 

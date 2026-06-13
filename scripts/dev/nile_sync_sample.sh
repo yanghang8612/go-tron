@@ -745,6 +745,93 @@ def eta_seconds(lag_blocks, rate):
         return -1.0
     return float(lag_blocks) / rate
 
+def build_soak_health(
+    sample_status,
+    height_regression_blocks,
+    stage_progress_regressions,
+    stage_sync_pipeline_violations,
+    restart_recovery_status,
+    stages,
+    alerts,
+    offline_status,
+    offline_enabled,
+    stage_sync_bottleneck,
+    stage_sync_bottleneck_lag,
+    sync_log,
+):
+    critical = []
+    warning = []
+
+    def add(target, issue):
+        if issue not in target:
+            target.append(issue)
+
+    if height_regression_blocks > 0:
+        add(critical, "height-regression")
+    if stage_progress_regressions:
+        add(critical, "stage-progress-regression")
+    if stage_sync_pipeline_violations:
+        add(critical, "stage-pipeline-violation")
+    if sample_status in {"http-nowblock-error", "http-nodeinfo-error", "http-listnodes-error", "no-peers"}:
+        add(critical, f"sample-status:{sample_status}")
+    elif sample_status != "ok":
+        add(warning, f"sample-status:{sample_status}")
+    if number(stages, "stageMismatchRows", 0) > 0:
+        add(critical, "stage-hash-mismatch")
+    if number(stages, "stageMissingCanonicalRows", 0) > 0:
+        add(critical, "stage-missing-canonical")
+    if number(stages, "stageUnboundRows", 0) > 0:
+        add(warning, "stage-unbound-rows")
+    if restart_recovery_status == "stalled":
+        add(warning, "restart-stalled")
+
+    for field, issue in (
+        ("freezerAlertStatus", "freezer-alert"),
+        ("stageVerifyStatus", "stage-verify-alert"),
+        ("snapshotAlertStatus", "snapshot-alert"),
+    ):
+        status = alerts.get(field, "unknown")
+        if status == "critical":
+            add(critical, issue)
+        elif status == "warning":
+            add(warning, issue)
+    if bool(int(offline_enabled)) and offline_status != "ok":
+        add(critical, f"offline-db-check:{offline_status}")
+
+    if critical:
+        status = "critical"
+    elif warning:
+        status = "warning"
+    else:
+        status = "ok"
+
+    primary = "none"
+    primary_source = "none"
+    primary_lag = -1
+    if critical:
+        primary = critical[0]
+        primary_source = "health"
+    elif stage_sync_bottleneck not in {"", "none", "unknown"} and stage_sync_bottleneck_lag > 0:
+        primary = stage_sync_bottleneck
+        primary_source = "sync-stage"
+        primary_lag = int(stage_sync_bottleneck_lag)
+    elif sync_log.get("syncLogStageNext"):
+        primary = f"sync-log:{sync_log.get('syncLogStageNext')}"
+        primary_source = "sync-log-stage"
+    elif warning:
+        primary = warning[0]
+        primary_source = "health"
+
+    return {
+        "soakHealthStatus": status,
+        "soakHealthIssues": critical + warning,
+        "soakHealthCriticalIssues": len(critical),
+        "soakHealthWarningIssues": len(warning),
+        "soakPrimaryBottleneck": primary,
+        "soakPrimaryBottleneckSource": primary_source,
+        "soakPrimaryBottleneckLagBlocks": primary_lag,
+    }
+
 def allocated_bytes(path):
     try:
         stat = path.stat()
@@ -1041,6 +1128,20 @@ elif abs(height_delta) > 1:
     sample_status = "height-mismatch"
 else:
     sample_status = "ok"
+soak_health = build_soak_health(
+    sample_status,
+    height_regression_blocks,
+    stage_progress_regressions,
+    stage_sync_pipeline_violations,
+    restart_recovery_status,
+    stages,
+    alerts,
+    offline_status,
+    offline_enabled,
+    stage_sync_bottleneck,
+    stage_sync_bottleneck_lag,
+    sync_log,
+)
 
 row = {
     "unix": now,
@@ -1211,6 +1312,7 @@ row = {
     "gitDirty": git_dirty == "true",
     "datadir": datadir,
 }
+row.update(soak_health)
 row.update(alerts)
 row.update(stages)
 row.update(sync_log)
