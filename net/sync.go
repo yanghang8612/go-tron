@@ -1331,7 +1331,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	ss.mu.Lock()
 	var diag syncdl.Diagnostics
 	if emit {
-		diag = ss.snapshotDiagnosticsLocked()
+		diag = ss.snapshotDiagnosticsLocked().WithImportStagePlan(plan.StagePlan)
 	}
 	remain := ss.estimatedRemainLocked()
 	ss.mirrorLegacyLocked()
@@ -1623,6 +1623,16 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if phase, elapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
 		ctx = append(ctx, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(elapsed))
 	}
+	if diag.HasImportStagePlan() {
+		ctx = append(ctx,
+			"syncStageComplete", diag.ImportStageComplete,
+			"syncStageCompleted", diag.ImportStageCompleted,
+			"syncStageScheduled", diag.ImportStageScheduled,
+		)
+		if diag.ImportStageNext != "" {
+			ctx = append(ctx, "syncStageNext", diag.ImportStageNext, "syncStageBlockedStatus", diag.ImportStageBlockedStatus)
+		}
+	}
 	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
 	if topMutations == "" {
 		topMutations = "none"
@@ -1693,6 +1703,16 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"blockBuffer", diag.BlockBufferLen,
 		"requested", diag.RequestedLen,
 		"retryList", diag.RetryListLen,
+	}
+	if diag.HasImportStagePlan() {
+		detail = append(detail,
+			"syncStageComplete", diag.ImportStageComplete,
+			"syncStageCompleted", diag.ImportStageCompleted,
+			"syncStageScheduled", diag.ImportStageScheduled,
+		)
+		if diag.ImportStageNext != "" {
+			detail = append(detail, "syncStageNext", diag.ImportStageNext, "syncStageBlockedStatus", diag.ImportStageBlockedStatus)
+		}
 	}
 	if diag.PeerState != "" {
 		detail = append(detail, "peerState", diag.PeerState)

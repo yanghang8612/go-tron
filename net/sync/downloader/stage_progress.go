@@ -56,6 +56,21 @@ const (
 	ImportStageProgressBlocked
 )
 
+func (s ImportStageProgressStatus) String() string {
+	switch s {
+	case ImportStageProgressPlanned:
+		return "planned"
+	case ImportStageProgressMissing:
+		return "missing"
+	case ImportStageProgressMismatch:
+		return "mismatch"
+	case ImportStageProgressBlocked:
+		return "blocked"
+	default:
+		return "unknown"
+	}
+}
+
 // ImportStagePhase names the sync import subphase a task belongs to. The
 // schedule keeps execution/commitment/finish as explicit tasks rather than
 // treating canonical hooks as the source of ordering.
@@ -113,6 +128,18 @@ type ImportStagePlan struct {
 	Blocked    ImportStageProgressDecision
 	HasBlocked bool
 	Complete   bool
+}
+
+// ImportStagePlanDiagnostics is the compact, log-safe view of an import stage
+// plan. It lets SyncService report stage planner state without re-deriving it.
+type ImportStagePlanDiagnostics struct {
+	Scheduled     int
+	Completed     int
+	Complete      bool
+	NextPhase     ImportStagePhase
+	NextStage     rawdb.StageID
+	BlockedStatus ImportStageProgressStatus
+	HasBlocked    bool
 }
 
 // ImportStagePlanner owns the schedule-to-observation mapping for one import
@@ -349,6 +376,22 @@ func newImportStagePlan(schedule ImportStageSchedule, progress []rawdb.StageProg
 	}
 	plan.Complete = len(decisions) > 0 && len(plan.Completed) == len(schedule.Tasks)
 	return plan
+}
+
+// Diagnostics returns the stable diagnostic view of this import stage plan.
+func (p ImportStagePlan) Diagnostics() ImportStagePlanDiagnostics {
+	diag := ImportStagePlanDiagnostics{
+		Scheduled: len(p.Schedule.Tasks),
+		Completed: len(p.Completed),
+		Complete:  p.Complete,
+	}
+	if p.HasBlocked {
+		diag.NextPhase = p.Next.Phase
+		diag.NextStage = p.Next.SyncStage
+		diag.BlockedStatus = p.Blocked.Status
+		diag.HasBlocked = true
+	}
+	return diag
 }
 
 func planImportStageRows(observed map[rawdb.StageID][]StageProgressRow, stages []ImportStageTask) ([]rawdb.StageProgress, []ImportStageProgressDecision) {

@@ -20,10 +20,15 @@ type PeerDiagnostics struct {
 // Diagnostics is the lock-free sync-session snapshot consumed by import
 // summary logging.
 type Diagnostics struct {
-	BlockBufferLen int
-	RequestedLen   int
-	RetryListLen   int
-	PeerState      string
+	BlockBufferLen           int
+	RequestedLen             int
+	RetryListLen             int
+	PeerState                string
+	ImportStageScheduled     int
+	ImportStageCompleted     int
+	ImportStageComplete      bool
+	ImportStageNext          string
+	ImportStageBlockedStatus string
 }
 
 // NewDiagnostics builds a deterministic diagnostics snapshot. Peer state is
@@ -51,4 +56,28 @@ func NewDiagnostics(blockBufferLen, requestedLen, retryListLen int, peers []Peer
 	}
 	diag.PeerState = strings.Join(parts, ";")
 	return diag
+}
+
+// WithImportStagePlan adds downloader-owned import stage planner diagnostics to
+// the existing sync-session snapshot.
+func (d Diagnostics) WithImportStagePlan(plan ImportStagePlan) Diagnostics {
+	stage := plan.Diagnostics()
+	d.ImportStageScheduled = stage.Scheduled
+	d.ImportStageCompleted = stage.Completed
+	d.ImportStageComplete = stage.Complete
+	if stage.HasBlocked {
+		if stage.NextPhase != "" {
+			d.ImportStageNext = string(stage.NextPhase)
+		} else if stage.NextStage != "" {
+			d.ImportStageNext = string(stage.NextStage)
+		}
+		d.ImportStageBlockedStatus = stage.BlockedStatus.String()
+	}
+	return d
+}
+
+// HasImportStagePlan reports whether Diagnostics carries import stage planner
+// state for the current imported batch.
+func (d Diagnostics) HasImportStagePlan() bool {
+	return d.ImportStageScheduled > 0
 }

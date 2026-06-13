@@ -1,6 +1,11 @@
 package downloader
 
-import "testing"
+import (
+	"testing"
+
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
+)
 
 func TestNewDiagnosticsSortsPeerState(t *testing.T) {
 	diag := NewDiagnostics(3, 4, 5, []PeerDiagnostics{
@@ -48,5 +53,36 @@ func TestNewDiagnosticsWithoutPeersHasNoPeerState(t *testing.T) {
 	diag := NewDiagnostics(1, 2, 3, nil)
 	if diag.PeerState != "" {
 		t.Fatalf("PeerState = %q, want empty", diag.PeerState)
+	}
+}
+
+func TestDiagnosticsWithImportStagePlan(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	collector := NewStageProgressCollector()
+	for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+		collector.Observe(stage, 7, hash)
+	}
+	complete := collector.PlanSchedule(NewImportStageSchedule(7, hash))
+	diag := NewDiagnostics(1, 2, 3, nil).WithImportStagePlan(complete)
+	if !diag.ImportStageComplete || diag.ImportStageCompleted != 4 || diag.ImportStageScheduled != 4 {
+		t.Fatalf("complete diagnostics = %+v, want complete 4/4", diag)
+	}
+	if diag.ImportStageNext != "" || diag.ImportStageBlockedStatus != "" {
+		t.Fatalf("complete diagnostics has blocked stage: %+v", diag)
+	}
+	if !diag.HasImportStagePlan() {
+		t.Fatal("complete diagnostics did not report stage plan")
+	}
+
+	collector = NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, 8, hash)
+	collector.Observe(rawdb.StageExecution, 8, hash)
+	blocked := collector.PlanSchedule(NewImportStageSchedule(8, hash))
+	diag = NewDiagnostics(0, 0, 0, nil).WithImportStagePlan(blocked)
+	if diag.ImportStageComplete || diag.ImportStageCompleted != 2 || diag.ImportStageScheduled != 4 {
+		t.Fatalf("blocked diagnostics = %+v, want incomplete 2/4", diag)
+	}
+	if diag.ImportStageNext != string(ImportStagePhaseCommitment) || diag.ImportStageBlockedStatus != ImportStageProgressMissing.String() {
+		t.Fatalf("blocked stage diagnostics = %+v, want commitment/missing", diag)
 	}
 }
