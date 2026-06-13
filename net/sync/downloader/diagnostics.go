@@ -88,6 +88,37 @@ func (d Diagnostics) WithImportedBatchProgressPlan(plan ImportedBatchProgressPla
 		WithImportStageDiagnostics(plan.StageDiagnostics)
 }
 
+// AppendImportPlanLogFields appends the stable log fields for downloader-owned
+// import execution and stage-plan diagnostics.
+func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
+	if d.HasImportStagePlan() {
+		fields = append(fields,
+			"syncStageComplete", d.ImportStageComplete,
+			"syncStageCompleted", d.ImportStageCompleted,
+			"syncStageScheduled", d.ImportStageScheduled,
+		)
+		if d.ImportStageNext != "" {
+			fields = append(fields,
+				"syncStageNext", d.ImportStageNext,
+				"syncStageNextBlock", d.ImportStageNextBlock,
+				"syncStageNextCanonical", d.ImportStageNextCanonical,
+				"syncStageNextSync", d.ImportStageNextSync,
+				"syncStageBlockedStatus", d.ImportStageBlockedStatus,
+			)
+		}
+	}
+	if d.HasImportBatchExecutionPlan() {
+		fields = append(fields,
+			"syncExecPlanBlocks", d.ImportExecutionPlannedBlocks,
+			"syncExecPlanStages", d.ImportExecutionPlannedStages,
+			"syncExecPlanPostBodyStages", d.ImportExecutionPostBodyStages,
+			"syncExecPlanFirst", d.ImportExecutionFirstBlock,
+			"syncExecPlanLast", d.ImportExecutionLastBlock,
+		)
+	}
+	return fields
+}
+
 // WithImportStagePlan adds downloader-owned import stage planner diagnostics to
 // the existing sync-session snapshot.
 func (d Diagnostics) WithImportStagePlan(plan ImportStagePlan) Diagnostics {

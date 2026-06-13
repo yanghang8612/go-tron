@@ -1634,31 +1634,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 	if phase, elapsed := slowestStateCommitPhase(s.ApplyStats); phase != "" {
 		ctx = append(ctx, "slowStateCommitPhase", phase, "slowStateCommitElapsed", ethcommon.PrettyDuration(elapsed))
 	}
-	if diag.HasImportStagePlan() {
-		ctx = append(ctx,
-			"syncStageComplete", diag.ImportStageComplete,
-			"syncStageCompleted", diag.ImportStageCompleted,
-			"syncStageScheduled", diag.ImportStageScheduled,
-		)
-		if diag.ImportStageNext != "" {
-			ctx = append(ctx,
-				"syncStageNext", diag.ImportStageNext,
-				"syncStageNextBlock", diag.ImportStageNextBlock,
-				"syncStageNextCanonical", diag.ImportStageNextCanonical,
-				"syncStageNextSync", diag.ImportStageNextSync,
-				"syncStageBlockedStatus", diag.ImportStageBlockedStatus,
-			)
-		}
-	}
-	if diag.HasImportBatchExecutionPlan() {
-		ctx = append(ctx,
-			"syncExecPlanBlocks", diag.ImportExecutionPlannedBlocks,
-			"syncExecPlanStages", diag.ImportExecutionPlannedStages,
-			"syncExecPlanPostBodyStages", diag.ImportExecutionPostBodyStages,
-			"syncExecPlanFirst", diag.ImportExecutionFirstBlock,
-			"syncExecPlanLast", diag.ImportExecutionLastBlock,
-		)
-	}
+	ctx = diag.AppendImportPlanLogFields(ctx)
 	topMutations := s.ApplyStats.StateCommitDetail.Mutations.TopKindsString(3)
 	if topMutations == "" {
 		topMutations = "none"
@@ -1730,31 +1706,7 @@ func (ss *SyncService) reportSegment(s tsync.Snapshot, diag syncdl.Diagnostics, 
 		"requested", diag.RequestedLen,
 		"retryList", diag.RetryListLen,
 	}
-	if diag.HasImportStagePlan() {
-		detail = append(detail,
-			"syncStageComplete", diag.ImportStageComplete,
-			"syncStageCompleted", diag.ImportStageCompleted,
-			"syncStageScheduled", diag.ImportStageScheduled,
-		)
-		if diag.ImportStageNext != "" {
-			detail = append(detail,
-				"syncStageNext", diag.ImportStageNext,
-				"syncStageNextBlock", diag.ImportStageNextBlock,
-				"syncStageNextCanonical", diag.ImportStageNextCanonical,
-				"syncStageNextSync", diag.ImportStageNextSync,
-				"syncStageBlockedStatus", diag.ImportStageBlockedStatus,
-			)
-		}
-	}
-	if diag.HasImportBatchExecutionPlan() {
-		detail = append(detail,
-			"syncExecPlanBlocks", diag.ImportExecutionPlannedBlocks,
-			"syncExecPlanStages", diag.ImportExecutionPlannedStages,
-			"syncExecPlanPostBodyStages", diag.ImportExecutionPostBodyStages,
-			"syncExecPlanFirst", diag.ImportExecutionFirstBlock,
-			"syncExecPlanLast", diag.ImportExecutionLastBlock,
-		)
-	}
+	detail = diag.AppendImportPlanLogFields(detail)
 	if diag.PeerState != "" {
 		detail = append(detail, "peerState", diag.PeerState)
 	}

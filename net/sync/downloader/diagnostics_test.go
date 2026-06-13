@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"reflect"
 	"testing"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -163,5 +164,47 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 	empty := NewDiagnostics(1, 2, 3, nil).WithImportedBatchProgressPlan(ImportedBatchProgressPlan{})
 	if empty.HasImportBatchExecutionPlan() || empty.HasImportStagePlan() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
 		t.Fatalf("empty progress diagnostics = %+v, want unchanged base counts and no import plan", empty)
+	}
+}
+
+func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
+	diag := Diagnostics{
+		ImportExecutionPlannedBlocks:  2,
+		ImportExecutionPlannedStages:  8,
+		ImportExecutionPostBodyStages: 6,
+		ImportExecutionFirstBlock:     1,
+		ImportExecutionLastBlock:      2,
+		ImportStageScheduled:          4,
+		ImportStageCompleted:          2,
+		ImportStageNext:               string(ImportStagePhaseCommitment),
+		ImportStageNextBlock:          2,
+		ImportStageNextCanonical:      string(rawdb.StageCommitment),
+		ImportStageNextSync:           string(rawdb.StageSyncCommitment),
+		ImportStageBlockedStatus:      ImportStageProgressMissing.String(),
+	}
+	got := diag.AppendImportPlanLogFields([]any{"base", 1})
+	want := []any{
+		"base", 1,
+		"syncStageComplete", false,
+		"syncStageCompleted", 2,
+		"syncStageScheduled", 4,
+		"syncStageNext", string(ImportStagePhaseCommitment),
+		"syncStageNextBlock", uint64(2),
+		"syncStageNextCanonical", string(rawdb.StageCommitment),
+		"syncStageNextSync", string(rawdb.StageSyncCommitment),
+		"syncStageBlockedStatus", ImportStageProgressMissing.String(),
+		"syncExecPlanBlocks", 2,
+		"syncExecPlanStages", 8,
+		"syncExecPlanPostBodyStages", 6,
+		"syncExecPlanFirst", uint64(1),
+		"syncExecPlanLast", uint64(2),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("log fields = %+v, want %+v", got, want)
+	}
+
+	empty := Diagnostics{}.AppendImportPlanLogFields([]any{"base", 1})
+	if !reflect.DeepEqual(empty, []any{"base", 1}) {
+		t.Fatalf("empty log fields = %+v, want base fields only", empty)
 	}
 }
