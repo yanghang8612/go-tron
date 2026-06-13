@@ -53,6 +53,14 @@ type SessionStartupPlan struct {
 	ResetPeerJoinThrottle   bool
 }
 
+// SessionStartupApplyResult records the startup recovery steps that were
+// actually dispatched. Unknown steps are surfaced so tests and diagnostics can
+// catch plan/apply drift without teaching SyncService about every action.
+type SessionStartupApplyResult struct {
+	AppliedSteps []SessionStartupStepAction
+	UnknownSteps []SessionStartupStepAction
+}
+
 // PlanSessionStartup derives restart boundaries from the current canonical
 // head. SyncService owns DB writes and timers; the downloader package owns the
 // staging/import boundary decisions.
@@ -90,22 +98,31 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 
 // ApplySessionStartupPlan executes a downloader-owned startup recovery
 // schedule against the caller's persistence/runtime adapter.
-func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlanApplier) {
+func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlanApplier) SessionStartupApplyResult {
+	var result SessionStartupApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case SessionStartupRepairSyncPipeline:
 			applier.RepairSyncPipeline()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreInventoryTarget:
 			applier.RestoreInventoryTarget(step.InventoryFloor)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupDeleteImportedBodies:
 			applier.DeleteImportedBodies(step.DeleteImportedThrough)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreStagedBodies:
 			applier.RestoreStagedBodies(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRefreshBodiesReady:
 			applier.RefreshBodiesReady()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }

@@ -91,7 +91,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 		},
 	}
 	var applier recordingSessionStartupApplier
-	ApplySessionStartupPlan(plan, &applier)
+	result := ApplySessionStartupPlan(plan, &applier)
 	want := []recordedSessionStartupCall{
 		{action: SessionStartupRepairSyncPipeline},
 		{action: SessionStartupRestoreInventoryTarget, first: 9},
@@ -102,8 +102,23 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, want)
 	}
+	wantApplied := []SessionStartupStepAction{
+		SessionStartupRepairSyncPipeline,
+		SessionStartupRestoreInventoryTarget,
+		SessionStartupDeleteImportedBodies,
+		SessionStartupRestoreStagedBodies,
+		SessionStartupRefreshBodiesReady,
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, wantApplied) {
+		t.Fatalf("applied steps = %+v, want %+v", result.AppliedSteps, wantApplied)
+	}
+	if !reflect.DeepEqual(result.UnknownSteps, []SessionStartupStepAction{SessionStartupStepAction(255)}) {
+		t.Fatalf("unknown steps = %+v, want [255]", result.UnknownSteps)
+	}
 
-	ApplySessionStartupPlan(plan, nil)
+	if nilResult := ApplySessionStartupPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil applier result = %+v, want empty", nilResult)
+	}
 }
 
 type recordedSessionStartupCall struct {
