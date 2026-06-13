@@ -338,11 +338,14 @@ Status:
   than left pointing at an unusable staged range. The restart-time contiguous
   restore scanner now lives in `net/sync/downloader` and returns an explicit
   prune-tail decision for `SyncService` to apply to the persistent stage rows;
-  the storage-level tail delete plus `SyncBodies` rewind/delete rule is shared
-  through `core/rawdb`. Accepted body staging now uses the same storage layer
-  to persist raw body rows and advance `SyncBodies` only when the watermark
-  would not regress, while imported-body cleanup uses `core/rawdb` to delete
-  the applied raw body rows as one batch. Active reset now uses a shared
+  session startup also consumes a downloader plan for the inventory floor,
+  imported-body cleanup boundary, staged-body restore start/limit, stale-tail
+  pruning flag, and peer-join throttle reset. The storage-level tail delete
+  plus `SyncBodies` rewind/delete rule is shared through `core/rawdb`.
+  Accepted body staging now uses the same storage layer to persist raw body
+  rows and advance `SyncBodies` only when the watermark would not regress,
+  while imported-body cleanup uses `core/rawdb` to delete the applied raw body
+  rows as one batch. Active reset now uses a shared
   `core/rawdb` cleanup helper to clear staged bodies plus
   `SyncBodies`/`SyncBodiesReady` rows.
   `SyncBodiesReady` refresh is also a downloader helper now: it recomputes the

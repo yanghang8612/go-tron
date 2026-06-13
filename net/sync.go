@@ -367,14 +367,20 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	if headBlock != nil {
 		head = headBlock.Number()
 	}
+	startup := syncdl.PlanSessionStartup(syncdl.SessionStartupInput{
+		Head:         head,
+		RestoreLimit: maxFetchBatch,
+	})
 	ss.repairSyncPipelineProgress(headBlock)
-	ss.targetHeadNum = ss.restoreSyncInventoryTarget(head)
-	ss.deleteImportedSyncBodiesThrough(head)
-	ss.restoreSyncStagedBodiesLocked(head+1, maxFetchBatch, true)
+	ss.targetHeadNum = ss.restoreSyncInventoryTarget(startup.InventoryFloor)
+	ss.deleteImportedSyncBodiesThrough(startup.DeleteImportedThrough)
+	ss.restoreSyncStagedBodiesLocked(startup.RestoreStagedBodiesFrom, startup.RestoreLimit, startup.PruneStaleTail)
 	ss.writeSyncBodiesReadyProgress()
 	ss.stats.InitSession(now)
 	ss.bufferWait.Reset()
-	ss.lastPeerJoinAttempt = time.Time{}
+	if startup.ResetPeerJoinThrottle {
+		ss.lastPeerJoinAttempt = time.Time{}
+	}
 }
 
 func (ss *SyncService) ensureSessionMapsLocked() {
