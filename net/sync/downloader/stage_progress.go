@@ -702,27 +702,25 @@ func RepairSyncStageProgress(db ethdb.KeyValueStore, stage rawdb.StageID, head u
 func RepairSyncPipelineProgress(db ethdb.KeyValueStore, head uint64, canonicalHash CanonicalHashReader) []SyncStageProgressRepair {
 	stages := SyncPipelineProgressStages()
 	repairs := make([]SyncStageProgressRepair, 0, len(stages))
-	for _, stage := range stages {
-		repairs = append(repairs, RepairSyncStageProgress(db, stage, head, canonicalHash))
-	}
 	var (
 		upstream rawdb.StageProgress
 		haveUp   bool
 		blocked  bool
 	)
-	for i := range repairs {
-		repair := &repairs[i]
+	for _, stage := range stages {
+		repair := RepairSyncStageProgress(db, stage, head, canonicalHash)
 		switch repair.Status {
 		case SyncStageProgressKept:
 			if blocked || (haveUp && repair.Row.BlockNum > upstream.BlockNum) {
 				if err := rawdb.DeleteStageProgress(db, repair.Stage); err != nil {
 					repair.Status = SyncStageProgressDeleteError
 					repair.DeleteError = err
-					blocked = true
-					continue
+					repairs = append(repairs, repair)
+					return repairs
 				}
 				repair.Status = SyncStageProgressDeleted
 				blocked = true
+				repairs = append(repairs, repair)
 				continue
 			}
 			upstream = repair.Row
@@ -730,8 +728,10 @@ func RepairSyncPipelineProgress(db ethdb.KeyValueStore, head uint64, canonicalHa
 		case SyncStageProgressMissing, SyncStageProgressDeleted:
 			blocked = true
 		case SyncStageProgressReadError, SyncStageProgressDeleteError:
+			repairs = append(repairs, repair)
 			return repairs
 		}
+		repairs = append(repairs, repair)
 	}
 	return repairs
 }

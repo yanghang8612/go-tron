@@ -1,9 +1,11 @@
 package downloader
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -762,4 +764,50 @@ func TestRepairSyncPipelineProgressDeletesDownstreamWithoutUpstream(t *testing.T
 	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncExecution); err != nil || ok {
 		t.Fatalf("execution progress = %+v ok=%v err=%v, want deleted", row, ok, err)
 	}
+}
+
+func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, tcommon.Hash{0x01}); err != nil {
+		t.Fatalf("write import progress: %v", err)
+	}
+	if err := corruptOnlyStageProgressRow(db); err != nil {
+		t.Fatalf("corrupt import progress: %v", err)
+	}
+	forkHash := tcommon.Hash{0xee}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, 1, forkHash); err != nil {
+		t.Fatalf("write forked execution progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgress(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return tcommon.Hash{0x01}, true
+		}
+		return tcommon.Hash{}, false
+	})
+	if len(got) != 1 || got[0].Stage != rawdb.StageSyncImport || got[0].Status != SyncStageProgressReadError {
+		t.Fatalf("repairs = %+v, want only import read error", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncExecution); err != nil || !ok || row.BlockHash != forkHash {
+		t.Fatalf("execution progress after import read error = %+v ok=%v err=%v, want retained fork row", row, ok, err)
+	}
+}
+
+func corruptOnlyStageProgressRow(db ethdb.KeyValueStore) error {
+	it := db.NewIterator(nil, nil)
+	defer it.Release()
+	if !it.Next() {
+		if err := it.Error(); err != nil {
+			return err
+		}
+		return errors.New("stage progress row not found")
+	}
+	key := append([]byte(nil), it.Key()...)
+	if it.Next() {
+		return ethdb.ErrTooManyKeys
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return db.Put(key, []byte{0x01})
 }
