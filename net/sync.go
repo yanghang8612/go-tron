@@ -808,8 +808,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	syncdl.ApplyPostInventorySettlementLockedPlan(settlement, settlementApplier)
 	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 		OutboundRequests: len(out),
-		Syncing:          progress.Syncing,
-		Paused:           progress.Paused,
+		Progress:         progress,
 	})
 	ss.mu.Unlock()
 
@@ -827,10 +826,10 @@ func (ss *SyncService) fetchNextBatch() {
 		ss.ensurePeerStateLocked(ss.syncPeer)
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
+	progress := ss.sessionProgressLocked()
 	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 		OutboundRequests: len(out),
-		Syncing:          ss.syncing,
-		Paused:           ss.pause.Paused(),
+		Progress:         progress,
 	})
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
@@ -985,10 +984,10 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 		ps.fetchDelayTimer = nil
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
+	progress := ss.sessionProgressLocked()
 	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 		OutboundRequests: len(out),
-		Syncing:          ss.syncing,
-		Paused:           ss.pause.Paused(),
+		Progress:         progress,
 	})
 	ss.mirrorLegacyLocked()
 	ss.mu.Unlock()
@@ -1055,8 +1054,10 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	syncdl.ApplyFetchReceiptSettlementAfterUnlockPlan(settlement, settlementApplier)
 	dispatch := syncdl.PlanFetchReceiptDispatch(syncdl.FetchReceiptDispatchInput{
 		OutboundRequests: len(settlementApplier.out),
-		Syncing:          ss.IsSyncing(),
-		Paused:           ss.IsPaused(),
+		Progress: syncdl.SessionProgress{
+			Syncing: ss.IsSyncing(),
+			Paused:  ss.IsPaused(),
+		},
 	})
 	syncdl.ApplyFetchReceiptDispatchPlan(dispatch, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
 	return true
@@ -1114,8 +1115,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			})
 			dispatch = syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 				OutboundRequests: len(out),
-				Syncing:          progress.Syncing,
-				Paused:           progress.Paused,
+				Progress:         progress,
 			})
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()

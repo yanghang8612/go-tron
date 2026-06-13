@@ -104,8 +104,7 @@ type FetchReceiptSettlementPlanApplier interface {
 // follow-up outbound fetch requests after a received block body.
 type FetchReceiptDispatchInput struct {
 	OutboundRequests int
-	Syncing          bool
-	Paused           bool
+	Progress         SessionProgress
 }
 
 // FetchReceiptDispatchPlan describes whether follow-up fetch requests should
@@ -306,7 +305,7 @@ func applyFetchReceiptSettlementSteps(steps []FetchReceiptSettlementStep, applie
 // should be sent after receipt settlement and any local drain.
 func PlanFetchReceiptDispatch(in FetchReceiptDispatchInput) FetchReceiptDispatchPlan {
 	return FetchReceiptDispatchPlan{
-		SendOutboundRequests: in.OutboundRequests > 0 && in.Syncing && !in.Paused,
+		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
 }
 

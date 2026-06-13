@@ -67,14 +67,14 @@ func TestPlanFetchRefillDispatch(t *testing.T) {
 		want  FetchRefillDispatchPlan
 	}{
 		"active outbound": {
-			input: FetchRefillDispatchInput{OutboundRequests: 1, Syncing: true},
+			input: FetchRefillDispatchInput{OutboundRequests: 1, Progress: SessionProgress{Syncing: true}},
 			want: FetchRefillDispatchPlan{
 				SendOutboundRequests: true,
 				Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
 			},
 		},
 		"no outbound": {
-			input: FetchRefillDispatchInput{Syncing: true},
+			input: FetchRefillDispatchInput{Progress: SessionProgress{Syncing: true}},
 			want:  FetchRefillDispatchPlan{},
 		},
 		"not syncing": {
@@ -82,7 +82,7 @@ func TestPlanFetchRefillDispatch(t *testing.T) {
 			want:  FetchRefillDispatchPlan{},
 		},
 		"paused": {
-			input: FetchRefillDispatchInput{OutboundRequests: 1, Syncing: true, Paused: true},
+			input: FetchRefillDispatchInput{OutboundRequests: 1, Progress: SessionProgress{Syncing: true, Paused: true}},
 			want:  FetchRefillDispatchPlan{},
 		},
 	}

@@ -250,14 +250,14 @@ func TestPlanFetchReceiptDispatch(t *testing.T) {
 		want  FetchReceiptDispatchPlan
 	}{
 		"active outbound": {
-			input: FetchReceiptDispatchInput{OutboundRequests: 1, Syncing: true},
+			input: FetchReceiptDispatchInput{OutboundRequests: 1, Progress: SessionProgress{Syncing: true}},
 			want: FetchReceiptDispatchPlan{
 				SendOutboundRequests: true,
 				Steps:                []FetchReceiptDispatchStep{{Action: FetchReceiptDispatchSendOutbound}},
 			},
 		},
 		"no outbound": {
-			input: FetchReceiptDispatchInput{Syncing: true},
+			input: FetchReceiptDispatchInput{Progress: SessionProgress{Syncing: true}},
 			want:  FetchReceiptDispatchPlan{},
 		},
 		"not syncing": {
@@ -265,7 +265,7 @@ func TestPlanFetchReceiptDispatch(t *testing.T) {
 			want:  FetchReceiptDispatchPlan{},
 		},
 		"paused": {
-			input: FetchReceiptDispatchInput{OutboundRequests: 1, Syncing: true, Paused: true},
+			input: FetchReceiptDispatchInput{OutboundRequests: 1, Progress: SessionProgress{Syncing: true, Paused: true}},
 			want:  FetchReceiptDispatchPlan{},
 		},
 	}

@@ -33,8 +33,7 @@ type IdleDrainAfterRefillInput struct {
 // fetch slots outside a receipt-settlement path.
 type FetchRefillDispatchInput struct {
 	OutboundRequests int
-	Syncing          bool
-	Paused           bool
+	Progress         SessionProgress
 }
 
 // IdleDrainStepAction names one session-level action after a local drain found
@@ -155,7 +154,7 @@ func PlanIdleDrainAfterRefill(in IdleDrainAfterRefillInput) IdleDrainPlan {
 // plan because it may run after an off-lock drain.
 func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPlan {
 	return FetchRefillDispatchPlan{
-		SendOutboundRequests: in.OutboundRequests > 0 && in.Syncing && !in.Paused,
+		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
 }
 
