@@ -70,6 +70,46 @@ func TestRestoreStagedBodiesRequestsPruneAtGap(t *testing.T) {
 	}
 }
 
+func TestRestoreStagedBodiesBridgesPersistedGapWithBufferedBlock(t *testing.T) {
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	h3 := block3.Hash()
+	buffer := map[uint64]BufferedBlock{
+		block3.Number(): {Num: block3.Number(), Hash: h3},
+	}
+	hashes := map[tcommon.Hash]struct{}{h3: {}}
+	path := NewBlockPath()
+	path[block3.Number()] = h3
+	rows := []rawdb.SyncStagedBlockRow{
+		stagedRestoreRow(t, block2),
+		stagedRestoreRow(t, block4),
+	}
+
+	got := RestoreStagedBodies(block2.Number(), 10, 1, buffer, hashes, &path, stagedRows(rows, nil))
+	if !got.NeedPruneTail || got.PruneFrom != block4.Number()+1 {
+		t.Fatalf("prune = %v from %d, want tail prune from block5 after bridging buffered gap: %+v", got.NeedPruneTail, got.PruneFrom, got)
+	}
+	if got.Restored != 3 || got.TargetHead != block4.Number() || got.NextExpected != block4.Number()+1 {
+		t.Fatalf("result = %+v, want restored block2..4", got)
+	}
+	if !got.HaveLastRestored || got.LastRestoredNum != block4.Number() || got.LastRestoredHash != block4.Hash() {
+		t.Fatalf("last restored = %+v, want block4", got)
+	}
+	for _, block := range []*types.Block{block2, block3, block4} {
+		buffered, ok := buffer[block.Number()]
+		if !ok || buffered.Hash != block.Hash() {
+			t.Fatalf("buffer[%d] = %+v ok=%v, want restored hash %x", block.Number(), buffered, ok, block.Hash())
+		}
+		if _, ok := hashes[block.Hash()]; !ok {
+			t.Fatalf("hash %x for block %d was not registered", block.Hash(), block.Number())
+		}
+		if path[block.Number()] != block.Hash() {
+			t.Fatalf("path[%d] = %x, want %x", block.Number(), path[block.Number()], block.Hash())
+		}
+	}
+}
+
 func TestRestoreStagedBodiesStopsAtPathConflict(t *testing.T) {
 	block2 := testBufferedBlock(2)
 	conflict := tcommon.Hash{0xff}

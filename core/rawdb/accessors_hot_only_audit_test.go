@@ -373,6 +373,69 @@ func query(h holder, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsReaderFunctionValueOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTxInfo = rawdb.ReadTransactionInfo
+
+func query(source any, tx []byte) {
+	_ = readTxInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want rawdb reader function value on hot store rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditAllowsReaderFunctionValueOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTxInfo = rawdb.ReadTransactionInfo
+
+func query(chainDB *rawdb.ChainDB, tx []byte) {
+	_ = readTxInfo(chainDB, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want rawdb reader function value on ChainDB boundary accepted", offenders)
+	}
+}
+
+func TestColdArchiveAuditReaderFunctionValueDoesNotLeakAcrossFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func first(source any, tx []byte) {
+	readTxInfo := rawdb.ReadTransactionInfo
+	_ = readTxInfo(source, tx)
+}
+
+func second(source any, tx []byte, readTxInfo func(any, []byte) any) {
+	_ = readTxInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want only the local rawdb reader alias rejected", offenders)
+	}
+}
+
 func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
@@ -768,24 +831,29 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 		}
 		rel := auditRelPath(root, path)
 		aliases := make(map[string]struct{})
+		packageReaderAliases := packageColdArchiveReaderAliases(file, rawdbNames, watched)
+		readerAliases := cloneStringMap(packageReaderAliases)
 		varTypes := make(map[string]auditExprType)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
+				readerAliases = cloneStringMap(packageReaderAliases)
 				recordAuditFieldTypes(n.Recv, rawdbNames, varTypes)
 				recordAuditFieldTypes(n.Type.Params, rawdbNames, varTypes)
 				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
 				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases, varTypes, typeIndex)
+				recordColdArchiveReaderAliases(n.Lhs, n.Rhs, rawdbNames, watched, readerAliases)
 			case *ast.ValueSpec:
 				recordAuditTypedVars(n.Names, n.Type, rawdbNames, varTypes)
 				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
 				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases, varTypes, typeIndex)
+				recordColdArchiveReaderAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, watched, readerAliases)
 			case *ast.CallExpr:
 				if len(n.Args) == 0 {
 					return true
 				}
-				name, ok := rawDBCallName(n.Fun, rawdbNames)
+				name, ok := coldArchiveReaderCallName(n.Fun, rawdbNames, readerAliases)
 				if !ok {
 					return true
 				}
@@ -809,6 +877,24 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 	}
 	sort.Strings(offenders)
 	return offenders
+}
+
+func packageColdArchiveReaderAliases(file *ast.File, rawdbNames map[string]struct{}, watched map[string]struct{}) map[string]string {
+	aliases := make(map[string]string)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			recordColdArchiveReaderAliases(exprsFromIdents(value.Names), value.Values, rawdbNames, watched, aliases)
+		}
+	}
+	return aliases
 }
 
 func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]struct{}) []string {
@@ -936,6 +1022,33 @@ func recordNoopAncientAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{
 		}
 		delete(aliases, ident.Name)
 	}
+}
+
+func recordColdArchiveReaderAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, watched map[string]struct{}, aliases map[string]string) {
+	for i, left := range lhs {
+		if i >= len(rhs) {
+			return
+		}
+		ident, ok := left.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if name, ok := coldArchiveReaderAliasName(rhs[i], rawdbNames, aliases); ok {
+			if _, watch := watched[name]; watch {
+				aliases[ident.Name] = name
+				continue
+			}
+		}
+		delete(aliases, ident.Name)
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func exprsFromIdents(idents []*ast.Ident) []ast.Expr {
@@ -1119,6 +1232,32 @@ func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) boo
 	}
 	got, ok := rawDBCallName(expr, rawdbNames)
 	return ok && got == name
+}
+
+func coldArchiveReaderCallName(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]string) (string, bool) {
+	if name, ok := rawDBCallName(expr, rawdbNames); ok {
+		return name, true
+	}
+	return coldArchiveReaderAliasName(expr, rawdbNames, aliases)
+}
+
+func coldArchiveReaderAliasName(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]string) (string, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	if name, ok := rawDBCallName(expr, rawdbNames); ok {
+		return name, true
+	}
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	name, ok := aliases[ident.Name]
+	return name, ok
 }
 
 func isRawDBChainDBType(expr ast.Expr, rawdbNames map[string]struct{}) bool {
