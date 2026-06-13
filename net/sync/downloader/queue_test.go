@@ -93,6 +93,9 @@ func TestPlanNextFetchBatchClassifiesDropsAndKeepsAcceptedOverflow(t *testing.T)
 	if want := []uint64{5}; !reflect.DeepEqual(blockNums(got.Remaining), want) {
 		t.Fatalf("remaining nums = %v, want %v", blockNums(got.Remaining), want)
 	}
+	if len(got.Steps) != 1 || got.Steps[0].Action != NextFetchBatchReplaceFetchList || !reflect.DeepEqual(blockNums(got.Steps[0].IDs), []uint64{5}) {
+		t.Fatalf("steps = %+v, want replace fetch list with block 5", got.Steps)
+	}
 	wantDecisions := []FetchCandidateDecision{
 		FetchCandidateAccepted,
 		FetchCandidateKnownOrRequested,
@@ -196,6 +199,13 @@ func TestPlanRetryAssignmentRecordsDecisions(t *testing.T) {
 	if want := []uint64{2, 3}; !reflect.DeepEqual(blockNums(got.Keep), want) {
 		t.Fatalf("keep nums = %v, want %v", blockNums(got.Keep), want)
 	}
+	if len(got.Steps) != 2 ||
+		got.Steps[0].Action != RetryAssignmentAppendAssigned ||
+		!reflect.DeepEqual(blockNums(got.Steps[0].IDs), []uint64{4}) ||
+		got.Steps[1].Action != RetryAssignmentReplaceRetryList ||
+		!reflect.DeepEqual(blockNums(got.Steps[1].IDs), []uint64{2, 3}) {
+		t.Fatalf("steps = %+v, want append assigned 4 and keep 2/3", got.Steps)
+	}
 	wantDecisions := []RetryDecision{
 		RetryDrop,
 		RetryKeep,
@@ -221,6 +231,46 @@ func TestPlanRetryAssignmentDropsByDefault(t *testing.T) {
 	if len(got.Decisions) != 1 || got.Decisions[0].Decision != RetryDrop {
 		t.Fatalf("decisions = %+v, want one drop", got.Decisions)
 	}
+}
+
+func TestApplyQueuePlans(t *testing.T) {
+	retryApplier := new(recordingRetryAssignmentApplier)
+	retryPlan := RetryAssignmentPlan{Steps: []RetryAssignmentStep{
+		{Action: RetryAssignmentAppendAssigned, IDs: []types.BlockID{queueID(4)}},
+		{Action: RetryAssignmentStepAction(255), IDs: []types.BlockID{queueID(99)}},
+		{Action: RetryAssignmentReplaceRetryList, IDs: []types.BlockID{queueID(2), queueID(3)}},
+	}}
+	ApplyRetryAssignmentPlan(retryPlan, retryApplier)
+	if !reflect.DeepEqual(blockNums(retryApplier.assigned), []uint64{4}) || !reflect.DeepEqual(blockNums(retryApplier.keep), []uint64{2, 3}) {
+		t.Fatalf("retry apply assigned/keep = %v/%v, want [4]/[2 3]", blockNums(retryApplier.assigned), blockNums(retryApplier.keep))
+	}
+
+	retryApplier.assigned = nil
+	retryApplier.keep = nil
+	ApplyRetryAssignmentPlan(RetryAssignmentPlan{
+		Assigned: []types.BlockID{queueID(7)},
+		Keep:     []types.BlockID{queueID(8)},
+	}, retryApplier)
+	if !reflect.DeepEqual(blockNums(retryApplier.assigned), []uint64{7}) || !reflect.DeepEqual(blockNums(retryApplier.keep), []uint64{8}) {
+		t.Fatalf("retry fallback assigned/keep = %v/%v, want [7]/[8]", blockNums(retryApplier.assigned), blockNums(retryApplier.keep))
+	}
+	ApplyRetryAssignmentPlan(retryPlan, nil)
+
+	fetchApplier := new(recordingNextFetchBatchApplier)
+	fetchPlan := NextFetchBatchPlan{Steps: []NextFetchBatchStep{
+		{Action: NextFetchBatchStepAction(255), IDs: []types.BlockID{queueID(99)}},
+		{Action: NextFetchBatchReplaceFetchList, IDs: []types.BlockID{queueID(5)}},
+	}}
+	ApplyNextFetchBatchPlan(fetchPlan, fetchApplier)
+	if !reflect.DeepEqual(blockNums(fetchApplier.remaining), []uint64{5}) {
+		t.Fatalf("fetch apply remaining = %v, want [5]", blockNums(fetchApplier.remaining))
+	}
+
+	ApplyNextFetchBatchPlan(NextFetchBatchPlan{Remaining: []types.BlockID{queueID(6)}}, fetchApplier)
+	if !reflect.DeepEqual(blockNums(fetchApplier.remaining), []uint64{6}) {
+		t.Fatalf("fetch fallback remaining = %v, want [6]", blockNums(fetchApplier.remaining))
+	}
+	ApplyNextFetchBatchPlan(fetchPlan, nil)
 }
 
 func TestAppendDisconnectedPeerRetriesFiltersPendingBeforeFetchQueue(t *testing.T) {
@@ -272,4 +322,25 @@ func blockNums(ids []types.BlockID) []uint64 {
 		out[i] = id.Num
 	}
 	return out
+}
+
+type recordingRetryAssignmentApplier struct {
+	assigned []types.BlockID
+	keep     []types.BlockID
+}
+
+func (a *recordingRetryAssignmentApplier) AppendAssignedRetries(ids []types.BlockID) {
+	a.assigned = append(a.assigned, ids...)
+}
+
+func (a *recordingRetryAssignmentApplier) ReplaceRetryList(ids []types.BlockID) {
+	a.keep = append([]types.BlockID(nil), ids...)
+}
+
+type recordingNextFetchBatchApplier struct {
+	remaining []types.BlockID
+}
+
+func (a *recordingNextFetchBatchApplier) ReplaceFetchList(ids []types.BlockID) {
+	a.remaining = append([]types.BlockID(nil), ids...)
 }

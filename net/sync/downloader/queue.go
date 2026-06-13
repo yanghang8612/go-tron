@@ -45,6 +45,7 @@ type RetryAssignmentPlan struct {
 	Assigned  []types.BlockID
 	Keep      []types.BlockID
 	Decisions []RetryCandidatePlan
+	Steps     []RetryAssignmentStep
 }
 
 // FetchCandidateClassifier gathers service-owned facts for one fetch-list
@@ -64,6 +65,48 @@ type NextFetchBatchPlan struct {
 	Batch     []types.BlockID
 	Remaining []types.BlockID
 	Decisions []FetchCandidatePlan
+	Steps     []NextFetchBatchStep
+}
+
+// RetryAssignmentStepAction names one queue mutation after retry assignment.
+type RetryAssignmentStepAction uint8
+
+const (
+	RetryAssignmentAppendAssigned RetryAssignmentStepAction = iota
+	RetryAssignmentReplaceRetryList
+)
+
+// RetryAssignmentStep is one downloader-owned retry queue mutation.
+type RetryAssignmentStep struct {
+	Action RetryAssignmentStepAction
+	IDs    []types.BlockID
+}
+
+// RetryAssignmentPlanApplier performs queue mutations named by a retry
+// assignment plan.
+type RetryAssignmentPlanApplier interface {
+	AppendAssignedRetries(ids []types.BlockID)
+	ReplaceRetryList(ids []types.BlockID)
+}
+
+// NextFetchBatchStepAction names one queue mutation after draining a fetch
+// queue into the next request batch.
+type NextFetchBatchStepAction uint8
+
+const (
+	NextFetchBatchReplaceFetchList NextFetchBatchStepAction = iota
+)
+
+// NextFetchBatchStep is one downloader-owned fetch queue mutation.
+type NextFetchBatchStep struct {
+	Action NextFetchBatchStepAction
+	IDs    []types.BlockID
+}
+
+// NextFetchBatchPlanApplier performs queue mutations named by a next-fetch
+// batch plan.
+type NextFetchBatchPlanApplier interface {
+	ReplaceFetchList(ids []types.BlockID)
 }
 
 // PopFetchBatch filters candidates in order, returns up to max eligible block
@@ -128,7 +171,7 @@ func PlanNextFetchBatch(fetchList []types.BlockID, max int, classify FetchCandid
 	if len(plan.Remaining) == 0 {
 		plan.Remaining = nil
 	}
-	return plan
+	return plan.withSteps()
 }
 
 // AssignRetryCandidates partitions a retry list into entries assigned to the
@@ -196,7 +239,57 @@ func PlanRetryAssignment(retries []types.BlockID, classify RetryCandidateClassif
 	if len(plan.Keep) == 0 {
 		plan.Keep = nil
 	}
-	return plan
+	return plan.withSteps()
+}
+
+func (p RetryAssignmentPlan) withSteps() RetryAssignmentPlan {
+	p.Steps = []RetryAssignmentStep{
+		{Action: RetryAssignmentAppendAssigned, IDs: append([]types.BlockID(nil), p.Assigned...)},
+		{Action: RetryAssignmentReplaceRetryList, IDs: append([]types.BlockID(nil), p.Keep...)},
+	}
+	return p
+}
+
+func (p NextFetchBatchPlan) withSteps() NextFetchBatchPlan {
+	p.Steps = []NextFetchBatchStep{
+		{Action: NextFetchBatchReplaceFetchList, IDs: append([]types.BlockID(nil), p.Remaining...)},
+	}
+	return p
+}
+
+// ApplyRetryAssignmentPlan executes downloader-owned retry assignment queue
+// mutations.
+func ApplyRetryAssignmentPlan(plan RetryAssignmentPlan, applier RetryAssignmentPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case RetryAssignmentAppendAssigned:
+			applier.AppendAssignedRetries(step.IDs)
+		case RetryAssignmentReplaceRetryList:
+			applier.ReplaceRetryList(step.IDs)
+		}
+	}
+}
+
+// ApplyNextFetchBatchPlan executes downloader-owned fetch queue mutations.
+func ApplyNextFetchBatchPlan(plan NextFetchBatchPlan, applier NextFetchBatchPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case NextFetchBatchReplaceFetchList:
+			applier.ReplaceFetchList(step.IDs)
+		}
+	}
 }
 
 // AppendDisconnectedPeerRetries appends block IDs left behind by a disconnected

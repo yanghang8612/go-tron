@@ -893,8 +893,7 @@ func (ss *SyncService) assignRetryLocked(ps *syncPeerState) {
 		}
 		return facts
 	})
-	ps.fetchList = append(ps.fetchList, plan.Assigned...)
-	ss.retryList = plan.Keep
+	syncdl.ApplyRetryAssignmentPlan(plan, syncRetryAssignmentApplier{service: ss, peerState: ps})
 }
 
 func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
@@ -911,7 +910,7 @@ func (ss *SyncService) nextFetchBatchLocked(ps *syncPeerState) []types.BlockID {
 		}
 		return facts
 	})
-	ps.fetchList = plan.Remaining
+	syncdl.ApplyNextFetchBatchPlan(plan, syncNextFetchBatchApplier{peerState: ps})
 	return plan.Batch
 }
 
@@ -1258,6 +1257,27 @@ func (a *syncFetchSlotApplier) SendFetch(plan syncdl.FetchSlotPlan) {
 	a.peerState.nextFetchAt = plan.NextFetchAt
 	a.service.armPeerFetchTimerLocked(a.peerState)
 	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, blocks: plan.Batch})
+}
+
+type syncRetryAssignmentApplier struct {
+	service   *SyncService
+	peerState *syncPeerState
+}
+
+func (a syncRetryAssignmentApplier) AppendAssignedRetries(ids []types.BlockID) {
+	a.peerState.fetchList = append(a.peerState.fetchList, ids...)
+}
+
+func (a syncRetryAssignmentApplier) ReplaceRetryList(ids []types.BlockID) {
+	a.service.retryList = ids
+}
+
+type syncNextFetchBatchApplier struct {
+	peerState *syncPeerState
+}
+
+func (a syncNextFetchBatchApplier) ReplaceFetchList(ids []types.BlockID) {
+	a.peerState.fetchList = ids
 }
 
 type syncPostInventorySettlementApplier struct {
