@@ -186,7 +186,7 @@ func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) Sta
 		return nil
 	}
 	if p.StagePlan.Empty() && len(p.Schedules) == 0 {
-		return observe
+		return func(rawdb.StageID, uint64, tcommon.Hash) {}
 	}
 	return func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 		if p.PlansStageObservation(stage, blockNum, blockHash) {

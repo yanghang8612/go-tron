@@ -344,6 +344,26 @@ func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testi
 	}
 }
 
+func TestImportBatchExecutionPlanStageObserverDropsUnplannedObservations(t *testing.T) {
+	var observed []rawdb.StageID
+	observer := (ImportBatchExecutionPlan{}).StageObserver(func(stage rawdb.StageID, _ uint64, _ tcommon.Hash) {
+		observed = append(observed, stage)
+	})
+	if observer == nil {
+		t.Fatal("empty execution plan observer = nil, want no-op observer")
+	}
+	observer(rawdb.StageBodies, 1, tcommon.Hash{0x01})
+	observer(rawdb.StageExecution, 1, tcommon.Hash{0x01})
+	observer(rawdb.StageCommitment, 1, tcommon.Hash{0x01})
+	observer(rawdb.StageFinish, 1, tcommon.Hash{0x01})
+	if len(observed) != 0 {
+		t.Fatalf("observed unplanned stages = %+v, want none", observed)
+	}
+	if (ImportBatchExecutionPlan{}).PlansStageObservation(rawdb.StageFinish, 1, tcommon.Hash{0x01}) {
+		t.Fatal("empty execution plan reported a planned finish observation")
+	}
+}
+
 func TestNewImportBatchRunPlanSchedulesExecutionPlanningBeforeExecute(t *testing.T) {
 	block := testBufferedBlock(1)
 	plan := NewImportBatchRunPlan(testImportRunBatch(t, block))
