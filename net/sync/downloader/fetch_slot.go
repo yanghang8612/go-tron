@@ -26,6 +26,33 @@ type FetchSlotPlan struct {
 	Wait        time.Duration
 	Request     FetchRequestState
 	NextFetchAt time.Time
+	Steps       []FetchSlotStep
+}
+
+// FetchSlotStepAction names one peer-local fetch-slot operation.
+type FetchSlotStepAction uint8
+
+const (
+	FetchSlotWaitLocalHead FetchSlotStepAction = iota
+	FetchSlotRequestInventory
+	FetchSlotDelay
+	FetchSlotSend
+)
+
+// FetchSlotStep is one downloader-owned operation for an eligible peer fetch
+// slot.
+type FetchSlotStep struct {
+	Action FetchSlotStepAction
+}
+
+// FetchSlotPlanApplier performs the runtime operations named by a fetch-slot
+// plan. SyncService owns timers, peer state, requested marks, and network
+// dispatch accumulation; downloader owns the action ordering.
+type FetchSlotPlanApplier interface {
+	WaitLocalHead(plan FetchSlotPlan)
+	RequestInventory(plan FetchSlotPlan)
+	DelayFetch(plan FetchSlotPlan)
+	SendFetch(plan FetchSlotPlan)
 }
 
 // PlanFetchSlot combines the peer-local fetch action and outbound request
@@ -44,11 +71,47 @@ func PlanFetchSlot(in FetchSlotInput) FetchSlotPlan {
 		Wait:   action.Wait,
 	}
 	if action.Action != PeerFetchSend {
-		return plan
+		return plan.withSteps()
 	}
 	plan.Request = NewFetchRequestState(in.Batch)
 	if in.MinInterval > 0 {
 		plan.NextFetchAt = in.Now.Add(in.MinInterval)
 	}
-	return plan
+	return plan.withSteps()
+}
+
+func (p FetchSlotPlan) withSteps() FetchSlotPlan {
+	switch p.Action {
+	case PeerFetchWaitLocalHead:
+		p.Steps = []FetchSlotStep{{Action: FetchSlotWaitLocalHead}}
+	case PeerFetchRequestInventory:
+		p.Steps = []FetchSlotStep{{Action: FetchSlotRequestInventory}}
+	case PeerFetchDelay:
+		p.Steps = []FetchSlotStep{{Action: FetchSlotDelay}}
+	case PeerFetchSend:
+		p.Steps = []FetchSlotStep{{Action: FetchSlotSend}}
+	}
+	return p
+}
+
+// ApplyFetchSlotPlan executes the downloader-owned peer fetch-slot schedule.
+func ApplyFetchSlotPlan(plan FetchSlotPlan, applier FetchSlotPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case FetchSlotWaitLocalHead:
+			applier.WaitLocalHead(plan)
+		case FetchSlotRequestInventory:
+			applier.RequestInventory(plan)
+		case FetchSlotDelay:
+			applier.DelayFetch(plan)
+		case FetchSlotSend:
+			applier.SendFetch(plan)
+		}
+	}
 }

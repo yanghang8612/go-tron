@@ -868,44 +868,9 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			Now:          now,
 			MinInterval:  minFetchRequestInterval,
 		})
-		switch plan.Action {
-		case syncdl.PeerFetchWaitLocalHead:
-			// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the
-			// summary tail is below the last inventory tip it sent us
-			// on this peer (lastSyncNum > lastNum). Wait until the
-			// canonical head catches up before asking this peer for
-			// the next 2000-block window.
-			syncLog.Trace("Sync peer waiting for local head",
-				"peer", ps.peer.ID(),
-				"head", currentHead,
-				"inventoryTip", ps.lastInventoryNum)
-			continue
-		case syncdl.PeerFetchRequestInventory:
-			// Always re-poll once a peer's local queue drains. java-tron may
-			// have produced new blocks while we were applying the previous
-			// batch; the one-id inventory response is what marks sync done.
-			ps.chainRequested = true
-			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
-			continue
-		case syncdl.PeerFetchDelay:
-			ps.fetchList = append(plan.Batch, ps.fetchList...)
-			ss.armPeerDelayTimerLocked(ps, plan.Wait)
-			continue
-		case syncdl.PeerFetchSend:
-		default:
-			continue
-		}
-		request := plan.Request
-		ps.inflight = request.Inflight
-		ps.pending = request.Pending
-		ps.pendingIDs = request.PendingIDs
-		for _, hash := range request.RequestedHashes {
-			ps.requestedHashes[hash] = struct{}{}
-			ss.requested[hash] = ps.peer.ID()
-		}
-		ps.nextFetchAt = plan.NextFetchAt
-		ss.armPeerFetchTimerLocked(ps)
-		out = append(out, outboundSyncRequest{peer: ps.peer, blocks: plan.Batch})
+		applier := syncFetchSlotApplier{service: ss, peerState: ps, currentHead: currentHead}
+		syncdl.ApplyFetchSlotPlan(plan, &applier)
+		out = append(out, applier.out...)
 	}
 	return out
 }
@@ -1248,6 +1213,51 @@ func (a syncIdleDrainApplier) FinishSync() {
 
 func (a syncIdleDrainApplier) JoinAvailablePeers() {
 	a.service.joinAvailablePeers()
+}
+
+type syncFetchSlotApplier struct {
+	service     *SyncService
+	peerState   *syncPeerState
+	currentHead uint64
+	out         []outboundSyncRequest
+}
+
+func (a *syncFetchSlotApplier) WaitLocalHead(_ syncdl.FetchSlotPlan) {
+	// java-tron rejects a follow-up SYNC_BLOCK_CHAIN if the summary tail is
+	// below the last inventory tip it sent us on this peer (lastSyncNum >
+	// lastNum). Wait until the canonical head catches up before asking this
+	// peer for the next 2000-block window.
+	syncLog.Trace("Sync peer waiting for local head",
+		"peer", a.peerState.peer.ID(),
+		"head", a.currentHead,
+		"inventoryTip", a.peerState.lastInventoryNum)
+}
+
+func (a *syncFetchSlotApplier) RequestInventory(_ syncdl.FetchSlotPlan) {
+	// Always re-poll once a peer's local queue drains. java-tron may have
+	// produced new blocks while we were applying the previous batch; the
+	// one-id inventory response is what marks sync done.
+	a.peerState.chainRequested = true
+	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, chain: true})
+}
+
+func (a *syncFetchSlotApplier) DelayFetch(plan syncdl.FetchSlotPlan) {
+	a.peerState.fetchList = append(plan.Batch, a.peerState.fetchList...)
+	a.service.armPeerDelayTimerLocked(a.peerState, plan.Wait)
+}
+
+func (a *syncFetchSlotApplier) SendFetch(plan syncdl.FetchSlotPlan) {
+	request := plan.Request
+	a.peerState.inflight = request.Inflight
+	a.peerState.pending = request.Pending
+	a.peerState.pendingIDs = request.PendingIDs
+	for _, hash := range request.RequestedHashes {
+		a.peerState.requestedHashes[hash] = struct{}{}
+		a.service.requested[hash] = a.peerState.peer.ID()
+	}
+	a.peerState.nextFetchAt = plan.NextFetchAt
+	a.service.armPeerFetchTimerLocked(a.peerState)
+	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, blocks: plan.Batch})
 }
 
 type syncPostInventorySettlementApplier struct {
