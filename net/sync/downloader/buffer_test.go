@@ -343,6 +343,26 @@ func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testi
 	}
 }
 
+func TestNewImportBatchRunPlanSchedulesExecutionPlanningBeforeExecute(t *testing.T) {
+	block := testBufferedBlock(1)
+	plan := NewImportBatchRunPlan(testImportRunBatch(t, block))
+
+	var got []ImportBatchRunStepAction
+	for _, step := range plan.Steps {
+		got = append(got, step.Action)
+	}
+	want := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunRecordBufferWaits,
+		ImportBatchRunPlanExecution,
+		ImportBatchRunExecute,
+		ImportBatchRunSettle,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("run plan steps = %+v, want %+v", got, want)
+	}
+}
+
 func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
@@ -364,6 +384,16 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	}
 	if !reflect.DeepEqual(applier.calls, wantCalls) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
+	}
+	wantSteps := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunRecordBufferWaits,
+		ImportBatchRunPlanExecution,
+		ImportBatchRunExecute,
+		ImportBatchRunSettle,
+	}
+	if !reflect.DeepEqual(result.Steps, wantSteps) {
+		t.Fatalf("result steps = %+v, want %+v", result.Steps, wantSteps)
 	}
 	if !reflect.DeepEqual(applier.waits, batch.BufferWaits) {
 		t.Fatalf("waits = %v, want %v", applier.waits, batch.BufferWaits)
@@ -443,6 +473,16 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	if !reflect.DeepEqual(applier.calls, wantCalls) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
 	}
+	wantSteps := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunRecordBufferWaits,
+		ImportBatchRunPlanExecution,
+		ImportBatchRunExecute,
+		ImportBatchRunSettle,
+	}
+	if !reflect.DeepEqual(result.Steps, wantSteps) {
+		t.Fatalf("result steps = %+v, want %+v", result.Steps, wantSteps)
+	}
 }
 
 func TestApplyImportBatchRunPlanPartialFailureIgnoresFailedBlockStageObservations(t *testing.T) {
@@ -499,6 +539,9 @@ func TestApplyImportBatchRunPlanFirstDecodeFailureContinuesDrain(t *testing.T) {
 	}
 	if !reflect.DeepEqual(applier.calls, []ImportBatchRunStepAction{ImportBatchRunDecode}) {
 		t.Fatalf("calls = %+v, want only decode", applier.calls)
+	}
+	if !reflect.DeepEqual(result.Steps, []ImportBatchRunStepAction{ImportBatchRunDecode}) {
+		t.Fatalf("result steps = %+v, want only decode", result.Steps)
 	}
 }
 

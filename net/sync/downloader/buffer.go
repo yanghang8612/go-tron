@@ -201,6 +201,7 @@ type ImportBatchRunStepAction uint8
 const (
 	ImportBatchRunDecode ImportBatchRunStepAction = iota
 	ImportBatchRunRecordBufferWaits
+	ImportBatchRunPlanExecution
 	ImportBatchRunExecute
 	ImportBatchRunSettle
 )
@@ -237,6 +238,7 @@ type ImportBatchRunResult struct {
 	Outcome          ImportOutcome
 	Progress         ImportedBatchProgressPlan
 	StageDiagnostics ImportStagePlanDiagnostics
+	Steps            []ImportBatchRunStepAction
 	ContinueDrain    bool
 	StopDrain        bool
 }
@@ -250,6 +252,7 @@ func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
 		Steps: []ImportBatchRunStep{
 			{Action: ImportBatchRunDecode},
 			{Action: ImportBatchRunRecordBufferWaits},
+			{Action: ImportBatchRunPlanExecution},
 			{Action: ImportBatchRunExecute},
 			{Action: ImportBatchRunSettle},
 		},
@@ -266,9 +269,11 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		collector *StageProgressCollector
 		insertErr error
 		elapsed   time.Duration
+		planned   bool
 		executed  bool
 	)
 	for _, step := range plan.Steps {
+		result.Steps = append(result.Steps, step.Action)
 		switch step.Action {
 		case ImportBatchRunDecode:
 			result.Decode = DecodeBufferedBatch(&plan.Batch)
@@ -281,9 +286,15 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			for _, wait := range plan.Batch.BufferWaits {
 				applier.RecordBufferWait(wait)
 			}
-		case ImportBatchRunExecute:
-			collector = NewStageProgressCollector()
+		case ImportBatchRunPlanExecution:
 			result.Execution = PlanImportBatchExecution(plan.Batch)
+			planned = true
+		case ImportBatchRunExecute:
+			if !planned {
+				result.Execution = PlanImportBatchExecution(plan.Batch)
+				planned = true
+			}
+			collector = NewStageProgressCollector()
 			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageObserver(collector.Observe))
 			executed = true
 		case ImportBatchRunSettle:
