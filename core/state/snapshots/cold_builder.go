@@ -62,6 +62,9 @@ type Config struct {
 	// BuildEventLogs builds registered cold event-log sidecars for the same
 	// block range as each newly published state-history segment.
 	BuildEventLogs bool
+	// ETL configures sorted scratch ingestion for derived cold sidecar builds
+	// launched by this lifecycle pass. Zero values preserve collector defaults.
+	ETL RestoreETLOptions
 }
 
 // PassResult describes a single cold snapshot builder pass.
@@ -412,7 +415,7 @@ func (r *Runner) onePass() (PassResult, error) {
 	}
 	eventLogBuilt := false
 	if r.cfg.BuildEventLogs {
-		ref, err := BuildEventLogSegmentFromChain(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock)
+		ref, err := BuildEventLogSegmentFromChainWithOptions(chainDB, r.cfg.Dir, EventLogSegmentPath(startBlock, cutoffBlock), startBlock, cutoffBlock, r.cfg.ETL)
 		if err != nil {
 			return PassResult{}, err
 		}
@@ -421,7 +424,7 @@ func (r *Runner) onePass() (PassResult, error) {
 		if err != nil {
 			return PassResult{}, err
 		}
-		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegments(r.cfg.Dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum))
+		indexRef, err := BuildEventLogIndexSegmentFromEventLogSegmentsWithOptions(r.cfg.Dir, eventRefs, EventLogIndexSegmentPath(eventRefs[0].FromTxNum, eventRefs[len(eventRefs)-1].ToTxNum), r.cfg.ETL)
 		if err != nil {
 			return PassResult{}, err
 		}
@@ -520,7 +523,7 @@ func (r *Runner) balanceTracePass(chain *rawdb.ChainDB, db AggregatorDB, fromBlo
 	if coverage.MissingBlockBalanceTrace > 0 || coverage.MissingAccountTrace > 0 {
 		return nil, nil
 	}
-	ref, err := BuildBalanceTraceSegmentFromDB(db, r.cfg.Dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+	ref, err := BuildBalanceTraceSegmentFromDBWithOptions(db, r.cfg.Dir, BalanceTraceSegmentPath(fromBlock, toBlock), fromBlock, toBlock, r.cfg.ETL)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +554,7 @@ func (r *Runner) sectionBloomPass(db AggregatorDB, cutoffBlock uint64) ([]Segmen
 		if sectionBloomManifestCoversFullSection(manifest, section) {
 			continue
 		}
-		ref, err := BuildSectionBloomSegmentFromDB(db, r.cfg.Dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock)
+		ref, err := BuildSectionBloomSegmentFromDBWithOptions(db, r.cfg.Dir, SectionBloomSegmentPath(fromBlock, toBlock), fromBlock, toBlock, r.cfg.ETL)
 		if err != nil {
 			return nil, err
 		}

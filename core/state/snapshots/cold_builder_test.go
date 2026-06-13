@@ -3,6 +3,7 @@ package snapshots
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -742,16 +743,24 @@ func TestColdBuilderBuildsEventLogsWithHistorySegment(t *testing.T) {
 	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
 		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
 	}
+	etlTemp := filepath.Join(dir, "etl-scratch")
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
 		Dir:            dir,
 		Enabled:        true,
 		HistoryWindow:  1,
 		BuildEventLogs: true,
+		ETL: RestoreETLOptions{
+			TempDir:     etlTemp,
+			BufferLimit: 1,
+		},
 	})
 	result, err := runner.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
 	}
 	if !result.Built || !result.EventLogBuilt || result.FromBlock != 1 || result.ToBlock != 1 {
 		t.Fatalf("result = %+v, want history+event-log build over block 1", result)
@@ -823,16 +832,24 @@ func TestColdBuilderBuildsBalanceTracesWithHistorySegment(t *testing.T) {
 	if err := rawdb.WriteAccountTrace(db, traceOwner.Bytes(), 1, 777); err != nil {
 		t.Fatalf("WriteAccountTrace: %v", err)
 	}
+	etlTemp := filepath.Join(dir, "etl-scratch")
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: 2}, Config{
 		Dir:                dir,
 		Enabled:            true,
 		HistoryWindow:      1,
 		BuildBalanceTraces: true,
+		ETL: RestoreETLOptions{
+			TempDir:     etlTemp,
+			BufferLimit: 1,
+		},
 	})
 	result, err := runner.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
 	}
 	if !result.Built || !result.BalanceTraceBuilt || result.FromBlock != 1 || result.ToBlock != 1 {
 		t.Fatalf("result = %+v, want history+balance-trace build over block 1", result)
@@ -1012,16 +1029,24 @@ func TestColdBuilderBuildsSectionBloomsOnlyForCompleteSections(t *testing.T) {
 	if err := rawdb.WriteSectionBloom(db, 0, 42, row); err != nil {
 		t.Fatalf("WriteSectionBloom: %v", err)
 	}
+	etlTemp := filepath.Join(dir, "etl-scratch")
 
 	runner := NewRunner(&coldBuilderChain{db: db, solidified: int64(sectionEnd + 1)}, Config{
 		Dir:                dir,
 		Enabled:            true,
 		HistoryWindow:      1,
 		BuildSectionBlooms: true,
+		ETL: RestoreETLOptions{
+			TempDir:     etlTemp,
+			BufferLimit: 1,
+		},
 	})
 	result, err := runner.OnePass()
 	if err != nil {
 		t.Fatalf("OnePass: %v", err)
+	}
+	if _, err := os.Stat(etlTemp); err != nil {
+		t.Fatalf("ETL temp parent stat: %v", err)
 	}
 	if !result.Built || !result.SectionBloomBuilt {
 		t.Fatalf("result = %+v, want history+section-bloom build", result)

@@ -86,11 +86,13 @@ writes to collector-backed loads.
   balance-trace and section-bloom segments. The production snap-mode history
   builder can also publish the matching event-log and event-log-index sidecars
   in the same manifest generation as the state-history segment before hot prune
-  runs. Event-log builder paths now advance `SnapshotEventLogBuild` only after
-  writing matching event-log-index coverage, and verification rebuilds
-  address/topic postings from the active event-log segments before trusting the
-  sidecar, so stage-status automation can compare indexed cold log coverage
-  with the verified chain `Finish` boundary.
+  runs, using the same `RestoreETLOptions` scratch controls as manual snapshot
+  builds when the lifecycle config supplies them. Event-log builder paths now
+  advance `SnapshotEventLogBuild` only after writing matching event-log-index
+  coverage, and verification rebuilds address/topic postings from the active
+  event-log segments before trusting the sidecar, so stage-status automation
+  can compare indexed cold log coverage with the verified chain `Finish`
+  boundary.
   `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
   spans the query range; broader global/recsplit-style address/topic point
   indexes remain follow-up work.
@@ -100,17 +102,18 @@ writes to collector-backed loads.
   block-by-block scan, so older datadirs remain correct until the operator runs
   the rebuild. Snap-mode history passes can now publish full-section cold
   `section-bloom` sidecars once the state-history cutoff has crossed the full
-  bloom section; the hot prune hook still verifies the cold row byte-for-byte
-  before deleting hot `sb-` rows.
+  bloom section through the lifecycle ETL settings; the hot prune hook still
+  verifies the cold row byte-for-byte before deleting hot `sb-` rows.
 - `TronBackend.GetAccountBalanceTrace` and `GetBlockBalanceTrace` expose
   retained account/balance trace rows through Wallet HTTP/gRPC APIs.
   History-enabled canonical replay now populates those rows during block
   execution. Snap-mode history passes now also build matching cold
   `balance-trace` sidecars when every canonical block in the pass range has a
   hash-matching hot `BlockBalanceTrace` and every account touched by those
-  operations has an exact-height hot `AccountTrace`; incomplete legacy ranges
-  are skipped instead of publishing false cold coverage, while mismatched block
-  traces fail the pass.
+  operations has an exact-height hot `AccountTrace`; these lifecycle builds use
+  the configured ETL scratch path for the account index. Incomplete legacy
+  ranges are skipped instead of publishing false cold coverage, while
+  mismatched block traces fail the pass.
 - `rawdb.RebuildAccountTracesFromBlockBalanceTraces` rebuilds account-trace
   rows from retained `BlockBalanceTrace` operation diffs through
   `DerivedIndexCollector`.

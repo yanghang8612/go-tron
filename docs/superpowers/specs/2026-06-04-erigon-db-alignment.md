@@ -1133,7 +1133,9 @@ Status:
   before serializing lookup maps, deduplicating repeated segment hits by sorted
   key instead of depending on scan-order map appends. Aggregator event-log
   builds can pass the same ETL temp, buffer, and batch knobs used by other
-  snapshot restore/build paths. The storage benchmark records the same
+  snapshot restore/build paths, and production cold-builder passes now forward
+  `snapshots.Config.ETL` to event-log, event-log-index, section-bloom, and
+  balance-trace sidecar builders. The storage benchmark records the same
   event-log-index key/posting/fanout counters after derived-index builds, giving
   larger soaks a concrete selectivity signal before revisiting recsplit-style
   accessors.
