@@ -61,6 +61,20 @@ type FetchReceiptSettlement struct {
 	DrainBuffered       bool
 }
 
+// FetchReceiptDispatchInput is the post-drain state needed before sending
+// follow-up outbound fetch requests after a received block body.
+type FetchReceiptDispatchInput struct {
+	OutboundRequests int
+	Syncing          bool
+	Paused           bool
+}
+
+// FetchReceiptDispatchPlan describes whether follow-up fetch requests should
+// be sent after the local drain has had a chance to settle the session.
+type FetchReceiptDispatchPlan struct {
+	SendOutboundRequests bool
+}
+
 // FetchedBlockBufferAction names the local buffer/stage decision for one
 // received block body after its fetch receipt was accepted.
 type FetchedBlockBufferAction uint8
@@ -127,6 +141,14 @@ func PlanFetchReceiptSettlement(receipt FetchReceiptResult) FetchReceiptSettleme
 		RearmFetchTimer:     !receipt.BatchDone,
 		FillFetchSlots:      receipt.BatchDone,
 		DrainBuffered:       true,
+	}
+}
+
+// PlanFetchReceiptDispatch decides whether follow-up outbound fetch requests
+// should be sent after receipt settlement and any local drain.
+func PlanFetchReceiptDispatch(in FetchReceiptDispatchInput) FetchReceiptDispatchPlan {
+	return FetchReceiptDispatchPlan{
+		SendOutboundRequests: in.OutboundRequests > 0 && in.Syncing && !in.Paused,
 	}
 }
 

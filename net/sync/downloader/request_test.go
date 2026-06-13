@@ -157,6 +157,35 @@ func TestPlanFetchReceiptSettlement(t *testing.T) {
 	}
 }
 
+func TestPlanFetchReceiptDispatch(t *testing.T) {
+	tests := map[string]struct {
+		input FetchReceiptDispatchInput
+		want  FetchReceiptDispatchPlan
+	}{
+		"active outbound": {
+			input: FetchReceiptDispatchInput{OutboundRequests: 1, Syncing: true},
+			want:  FetchReceiptDispatchPlan{SendOutboundRequests: true},
+		},
+		"no outbound": {
+			input: FetchReceiptDispatchInput{Syncing: true},
+			want:  FetchReceiptDispatchPlan{},
+		},
+		"not syncing": {
+			input: FetchReceiptDispatchInput{OutboundRequests: 1},
+			want:  FetchReceiptDispatchPlan{},
+		},
+		"paused": {
+			input: FetchReceiptDispatchInput{OutboundRequests: 1, Syncing: true, Paused: true},
+			want:  FetchReceiptDispatchPlan{},
+		},
+	}
+	for name, test := range tests {
+		if got := PlanFetchReceiptDispatch(test.input); got != test.want {
+			t.Fatalf("%s dispatch = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanFetchedBlockBuffer(t *testing.T) {
 	bid := queueID(10)
 	tests := []struct {

@@ -1134,7 +1134,12 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	if settlement.DrainBuffered {
 		ss.drainBufferedBlocks()
 	}
-	if len(out) > 0 && ss.IsSyncing() && !ss.IsPaused() {
+	dispatch := syncdl.PlanFetchReceiptDispatch(syncdl.FetchReceiptDispatchInput{
+		OutboundRequests: len(out),
+		Syncing:          ss.IsSyncing(),
+		Paused:           ss.IsPaused(),
+	})
+	if dispatch.SendOutboundRequests {
 		ss.sendOutboundRequests(out)
 	}
 	return true
