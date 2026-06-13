@@ -74,18 +74,26 @@ func WriteSyncStagedBlockRaw(db ethdb.KeyValueWriter, block *types.Block, raw []
 	if db == nil {
 		return errors.New("rawdb: nil sync staged block writer")
 	}
+	data, err := encodeSyncStagedBlockRaw(block, raw)
+	if err != nil {
+		return err
+	}
+	return db.Put(syncStagedBlockKey(block.Number()), data)
+}
+
+func encodeSyncStagedBlockRaw(block *types.Block, raw []byte) ([]byte, error) {
 	if block == nil {
-		return errors.New("rawdb: nil sync staged block")
+		return nil, errors.New("rawdb: nil sync staged block")
 	}
 	data := raw
 	if len(data) == 0 {
 		var err error
 		data, err = block.Marshal()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return db.Put(syncStagedBlockKey(block.Number()), append([]byte(nil), data...))
+	return append([]byte(nil), data...), nil
 }
 
 // WriteSyncStagedBlockRawAndProgress persists a downloader body row and
@@ -98,13 +106,22 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.Number = block.Number()
 		result.Hash = block.Hash()
 	}
-	if err := WriteSyncStagedBlockRaw(db, block, raw); err != nil {
+	if db == nil {
+		result.StageError = errors.New("rawdb: nil sync staged block writer")
+		return result
+	}
+	data, err := encodeSyncStagedBlockRaw(block, raw)
+	if err != nil {
 		result.StageError = err
 		return result
 	}
-	result.Staged = true
 	row, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil {
+		if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
+			result.StageError = err
+			return result
+		}
+		result.Staged = true
 		result.ProgressReadError = err
 		return result
 	}
@@ -112,14 +129,31 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 		result.HadPreviousProgress = true
 		result.PreviousProgress = row
 		if row.BlockNum > result.Number {
+			if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
+				result.StageError = err
+				return result
+			}
+			result.Staged = true
 			result.ProgressSkipped = true
 			return result
 		}
 	}
-	if err := WriteStageProgressWithHash(db, StageSyncBodies, result.Number, result.Hash); err != nil {
+	batch := db.NewBatchWithSize(len(data) + 8 + common.HashLength)
+	defer batch.Reset()
+	if err := batch.Put(syncStagedBlockKey(result.Number), data); err != nil {
+		result.StageError = err
+		return result
+	}
+	if err := batch.Put(stageProgressKey(StageSyncBodies), encodeStageProgress(result.Number, result.Hash, true)); err != nil {
 		result.ProgressWriteError = err
 		return result
 	}
+	if err := batch.Write(); err != nil {
+		result.StageError = err
+		result.ProgressWriteError = err
+		return result
+	}
+	result.Staged = true
 	result.ProgressWritten = true
 	return result
 }

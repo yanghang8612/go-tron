@@ -344,6 +344,8 @@ Status:
   plus `SyncBodies` rewind/delete rule is shared through `core/rawdb`.
   Accepted body staging now uses the same storage layer to persist raw body
   rows and advance `SyncBodies` only when the watermark would not regress,
+  batching the raw body plus hash-bound watermark write in the normal forward
+  path,
   while imported-body cleanup uses `core/rawdb` to delete the applied raw body
   rows as one batch. Active reset now uses a shared
   `core/rawdb` cleanup helper to clear staged bodies plus

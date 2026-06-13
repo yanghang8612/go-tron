@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -117,7 +118,8 @@ func TestSyncStagedBlockRawIterate(t *testing.T) {
 }
 
 func TestWriteSyncStagedBlockRawAndProgressWritesBodyAndProgress(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
+	db := &countingBatchStore{KeyValueStore: base}
 	block := testSyncStagedBlock(3, common.Hash{0x02})
 	raw, err := block.Marshal()
 	if err != nil {
@@ -131,6 +133,9 @@ func TestWriteSyncStagedBlockRawAndProgressWritesBodyAndProgress(t *testing.T) {
 	if !result.Staged || !result.ProgressWritten || result.ProgressSkipped {
 		t.Fatalf("write result = %+v, want staged progress write", result)
 	}
+	if db.batches != 1 || db.directPuts != 0 {
+		t.Fatalf("writes used batches=%d directPuts=%d, want one batch and no direct puts", db.batches, db.directPuts)
+	}
 	row, ok, err := ReadSyncStagedBlockRaw(db, block.Number())
 	if err != nil || !ok || row.Hash != block.Hash() || !bytes.Equal(row.Raw, raw) {
 		t.Fatalf("staged row = %+v ok=%v err=%v, want block raw", row, ok, err)
@@ -142,12 +147,13 @@ func TestWriteSyncStagedBlockRawAndProgressWritesBodyAndProgress(t *testing.T) {
 }
 
 func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressProgress(t *testing.T) {
-	db := NewMemoryDatabase()
+	base := NewMemoryDatabase()
 	block3 := testSyncStagedBlock(3, common.Hash{0x02})
 	block5 := testSyncStagedBlock(5, common.Hash{0x04})
-	if err := WriteStageProgressWithHash(db, StageSyncBodies, block5.Number(), block5.Hash()); err != nil {
+	if err := WriteStageProgressWithHash(base, StageSyncBodies, block5.Number(), block5.Hash()); err != nil {
 		t.Fatalf("write existing progress: %v", err)
 	}
+	db := &countingBatchStore{KeyValueStore: base}
 
 	result := WriteSyncStagedBlockRawAndProgress(db, block3, nil)
 	if result.StageError != nil || result.ProgressReadError != nil || result.ProgressWriteError != nil {
@@ -156,12 +162,34 @@ func TestWriteSyncStagedBlockRawAndProgressDoesNotRegressProgress(t *testing.T) 
 	if !result.Staged || !result.HadPreviousProgress || !result.ProgressSkipped || result.ProgressWritten {
 		t.Fatalf("write result = %+v, want staged and skipped progress", result)
 	}
+	if db.batches != 0 || db.directPuts != 1 {
+		t.Fatalf("writes used batches=%d directPuts=%d, want one direct body put", db.batches, db.directPuts)
+	}
 	if _, ok, err := ReadSyncStagedBlock(db, block3.Number()); err != nil || !ok {
 		t.Fatalf("staged block3 ok=%v err=%v, want present", ok, err)
 	}
 	progress, ok, err := ReadStageProgressRow(db, StageSyncBodies)
 	if err != nil || !ok || progress.BlockNum != block5.Number() || progress.BlockHash != block5.Hash() {
 		t.Fatalf("sync bodies progress = %+v ok=%v err=%v, want existing block5", progress, ok, err)
+	}
+}
+
+func TestWriteSyncStagedBlockRawAndProgressStagesBodyOnProgressReadError(t *testing.T) {
+	db := NewMemoryDatabase()
+	block := testSyncStagedBlock(3, common.Hash{0x02})
+	if err := db.Put(stageProgressKey(StageSyncBodies), []byte{0x01}); err != nil {
+		t.Fatalf("write corrupt progress: %v", err)
+	}
+
+	result := WriteSyncStagedBlockRawAndProgress(db, block, nil)
+	if result.StageError != nil || result.ProgressReadError == nil || result.ProgressWriteError != nil {
+		t.Fatalf("write result = %+v, want progress read error only", result)
+	}
+	if !result.Staged || result.ProgressWritten || result.ProgressSkipped {
+		t.Fatalf("write result = %+v, want staged without progress update", result)
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || !ok {
+		t.Fatalf("staged block ok=%v err=%v, want present", ok, err)
 	}
 }
 
@@ -365,4 +393,26 @@ func equalUint64s(a, b []uint64) bool {
 		}
 	}
 	return true
+}
+
+type countingBatchStore struct {
+	ethdb.KeyValueStore
+
+	directPuts int
+	batches    int
+}
+
+func (db *countingBatchStore) Put(key []byte, value []byte) error {
+	db.directPuts++
+	return db.KeyValueStore.Put(key, value)
+}
+
+func (db *countingBatchStore) NewBatch() ethdb.Batch {
+	db.batches++
+	return db.KeyValueStore.NewBatch()
+}
+
+func (db *countingBatchStore) NewBatchWithSize(size int) ethdb.Batch {
+	db.batches++
+	return db.KeyValueStore.NewBatchWithSize(size)
 }
