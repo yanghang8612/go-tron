@@ -371,15 +371,28 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 		Head:         head,
 		RestoreLimit: maxFetchBatch,
 	})
-	ss.repairSyncPipelineProgress(headBlock)
-	ss.targetHeadNum = ss.restoreSyncInventoryTarget(startup.InventoryFloor)
-	ss.deleteImportedSyncBodiesThrough(startup.DeleteImportedThrough)
-	ss.restoreSyncStagedBodiesLocked(startup.RestoreStagedBodiesFrom, startup.RestoreLimit, startup.PruneStaleTail)
-	ss.writeSyncBodiesReadyProgress()
+	ss.applySessionStartupPlan(headBlock, startup)
 	ss.stats.InitSession(now)
 	ss.bufferWait.Reset()
 	if startup.ResetPeerJoinThrottle {
 		ss.lastPeerJoinAttempt = time.Time{}
+	}
+}
+
+func (ss *SyncService) applySessionStartupPlan(headBlock *types.Block, startup syncdl.SessionStartupPlan) {
+	for _, step := range startup.Steps {
+		switch step.Action {
+		case syncdl.SessionStartupRepairSyncPipeline:
+			ss.repairSyncPipelineProgress(headBlock)
+		case syncdl.SessionStartupRestoreInventoryTarget:
+			ss.targetHeadNum = ss.restoreSyncInventoryTarget(step.InventoryFloor)
+		case syncdl.SessionStartupDeleteImportedBodies:
+			ss.deleteImportedSyncBodiesThrough(step.DeleteImportedThrough)
+		case syncdl.SessionStartupRestoreStagedBodies:
+			ss.restoreSyncStagedBodiesLocked(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
+		case syncdl.SessionStartupRefreshBodiesReady:
+			ss.writeSyncBodiesReadyProgress()
+		}
 	}
 }
 

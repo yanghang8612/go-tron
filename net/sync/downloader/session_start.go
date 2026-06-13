@@ -7,6 +7,29 @@ type SessionStartupInput struct {
 	RestoreLimit int
 }
 
+// SessionStartupStepAction names one persistence/runtime repair step required
+// before a sync session asks peers for more inventory.
+type SessionStartupStepAction uint8
+
+const (
+	SessionStartupRepairSyncPipeline SessionStartupStepAction = iota
+	SessionStartupRestoreInventoryTarget
+	SessionStartupDeleteImportedBodies
+	SessionStartupRestoreStagedBodies
+	SessionStartupRefreshBodiesReady
+)
+
+// SessionStartupStep is one explicit startup recovery operation. Fields are
+// populated only when the action needs that boundary.
+type SessionStartupStep struct {
+	Action                  SessionStartupStepAction
+	InventoryFloor          uint64
+	DeleteImportedThrough   uint64
+	RestoreStagedBodiesFrom uint64
+	RestoreLimit            int
+	PruneStaleTail          bool
+}
+
 // SessionStartupPlan describes the persistence and local-runtime boundaries a
 // sync session should apply before asking peers for more inventory.
 type SessionStartupPlan struct {
@@ -15,6 +38,7 @@ type SessionStartupPlan struct {
 	RestoreStagedBodiesFrom uint64
 	RestoreLimit            int
 	PruneStaleTail          bool
+	Steps                   []SessionStartupStep
 	ResetPeerJoinThrottle   bool
 }
 
@@ -30,7 +54,7 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 	if restoreFrom != ^uint64(0) {
 		restoreFrom++
 	}
-	return SessionStartupPlan{
+	plan := SessionStartupPlan{
 		InventoryFloor:          in.Head,
 		DeleteImportedThrough:   in.Head,
 		RestoreStagedBodiesFrom: restoreFrom,
@@ -38,4 +62,17 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 		PruneStaleTail:          restoreLimit > 0,
 		ResetPeerJoinThrottle:   true,
 	}
+	plan.Steps = []SessionStartupStep{
+		{Action: SessionStartupRepairSyncPipeline},
+		{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: plan.InventoryFloor},
+		{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: plan.DeleteImportedThrough},
+		{
+			Action:                  SessionStartupRestoreStagedBodies,
+			RestoreStagedBodiesFrom: plan.RestoreStagedBodiesFrom,
+			RestoreLimit:            plan.RestoreLimit,
+			PruneStaleTail:          plan.PruneStaleTail,
+		},
+		{Action: SessionStartupRefreshBodiesReady},
+	}
+	return plan
 }

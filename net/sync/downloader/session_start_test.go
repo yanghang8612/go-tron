@@ -1,6 +1,9 @@
 package downloader
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPlanSessionStartup(t *testing.T) {
 	got := PlanSessionStartup(SessionStartupInput{
@@ -26,6 +29,16 @@ func TestPlanSessionStartup(t *testing.T) {
 	if !got.ResetPeerJoinThrottle {
 		t.Fatalf("reset peer join throttle = false, want true")
 	}
+	wantSteps := []SessionStartupStep{
+		{Action: SessionStartupRepairSyncPipeline},
+		{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 99},
+		{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 99},
+		{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 100, RestoreLimit: 32, PruneStaleTail: true},
+		{Action: SessionStartupRefreshBodiesReady},
+	}
+	if !reflect.DeepEqual(got.Steps, wantSteps) {
+		t.Fatalf("startup steps = %+v, want %+v", got.Steps, wantSteps)
+	}
 }
 
 func TestPlanSessionStartupClampsNegativeRestoreLimit(t *testing.T) {
@@ -42,6 +55,11 @@ func TestPlanSessionStartupClampsNegativeRestoreLimit(t *testing.T) {
 	}
 	if got.RestoreStagedBodiesFrom != 8 {
 		t.Fatalf("restore staged bodies from = %d, want 8", got.RestoreStagedBodiesFrom)
+	}
+	for _, step := range got.Steps {
+		if step.Action == SessionStartupRestoreStagedBodies && step.PruneStaleTail {
+			t.Fatalf("restore step prune stale tail = true, want false: %+v", step)
+		}
 	}
 }
 
