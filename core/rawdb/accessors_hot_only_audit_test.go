@@ -272,6 +272,28 @@ func query(source any, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsSelectorNamedChainDBOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type holder struct {
+	chaindb any
+}
+
+func query(h holder, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(h.chaindb, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want selector-named hot store rejected", offenders)
+	}
+}
+
 func TestColdArchiveAuditAllowsNewChainDBAliasBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "app/chain.go", `package app
 
@@ -288,6 +310,28 @@ func query(tx []byte) {
 	}, nil)
 	if len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want NewChainDB alias accepted", offenders)
+	}
+}
+
+func TestColdArchiveAuditAllowsTypedChainDBFieldSelector(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type holder struct {
+	chaindb *rawdb.ChainDB
+}
+
+func query(h holder, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(h.chaindb, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want typed ChainDB field selector accepted", offenders)
 	}
 }
 
@@ -367,6 +411,34 @@ func query(chainDB coldManager) {
 	})
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
 		t.Fatalf("offenders = %+v, want trusted-name non-ChainDB event-log call rejected", offenders)
+	}
+}
+
+func TestEventLogAuditRejectsSelectorNamedChainDBOnNonChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) EventLogRangeCovered(uint64, uint64) (bool, error) {
+	return true, nil
+}
+
+type holder struct {
+	chaindb coldManager
+}
+
+func query(h holder) {
+	_, _ = h.chaindb.EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
+		t.Fatalf("offenders = %+v, want selector-named non-ChainDB event-log boundary rejected", offenders)
 	}
 }
 
@@ -558,6 +630,7 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 	t.Helper()
 	var offenders []string
 	fset := token.NewFileSet()
+	typeIndex := buildAuditTypeIndex(t, root)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -585,15 +658,19 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 		}
 		rel := auditRelPath(root, path)
 		aliases := make(map[string]struct{})
+		varTypes := make(map[string]auditExprType)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
+				recordAuditFieldTypes(n.Recv, rawdbNames, varTypes)
+				recordAuditFieldTypes(n.Type.Params, rawdbNames, varTypes)
 				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
-				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
+				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases, varTypes, typeIndex)
 			case *ast.ValueSpec:
+				recordAuditTypedVars(n.Names, n.Type, rawdbNames, varTypes)
 				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
-				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
+				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases, varTypes, typeIndex)
 			case *ast.CallExpr:
 				if len(n.Args) == 0 {
 					return true
@@ -608,7 +685,7 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 				if isAllowedRawDBCall(root, path, name, allowed) {
 					return true
 				}
-				if isColdAwareArchiveReaderArg(rel, name, n.Args[0], rawdbNames, aliases) {
+				if isColdAwareArchiveReaderArg(rel, name, n.Args[0], rawdbNames, aliases, varTypes, typeIndex) {
 					return true
 				}
 				offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), "rawdb."+name))
@@ -628,6 +705,7 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 	t.Helper()
 	var offenders []string
 	fset := token.NewFileSet()
+	typeIndex := buildAuditTypeIndex(t, root)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -654,15 +732,19 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 		}
 		rawdbNames := rawdbImportNames(file)
 		aliases := make(map[string]struct{})
+		varTypes := make(map[string]auditExprType)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
+				recordAuditFieldTypes(n.Recv, rawdbNames, varTypes)
+				recordAuditFieldTypes(n.Type.Params, rawdbNames, varTypes)
 				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
-				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases)
+				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases, varTypes, typeIndex)
 			case *ast.ValueSpec:
+				recordAuditTypedVars(n.Names, n.Type, rawdbNames, varTypes)
 				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
-				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases)
+				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases, varTypes, typeIndex)
 			case *ast.CallExpr:
 				sel, ok := n.Fun.(*ast.SelectorExpr)
 				if !ok {
@@ -671,7 +753,7 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 				if _, watch := watched[sel.Sel.Name]; !watch {
 					return true
 				}
-				if isChainDBBoundaryExpr(sel.X, rawdbNames, aliases) {
+				if isChainDBBoundaryExpr(sel.X, rawdbNames, aliases, varTypes, typeIndex) {
 					return true
 				}
 				offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), sel.Sel.Name))
@@ -687,7 +769,7 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 	return offenders
 }
 
-func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) {
+func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex) {
 	for i, left := range lhs {
 		if i >= len(rhs) {
 			return
@@ -696,7 +778,7 @@ func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, a
 		if !ok || ident.Name == "_" {
 			continue
 		}
-		if isChainDBBoundaryExpr(rhs[i], rawdbNames, aliases) {
+		if isChainDBBoundaryExpr(rhs[i], rawdbNames, aliases, varTypes, typeIndex) {
 			aliases[ident.Name] = struct{}{}
 		}
 	}
@@ -752,6 +834,126 @@ func exprsFromIdents(idents []*ast.Ident) []ast.Expr {
 		exprs = append(exprs, ident)
 	}
 	return exprs
+}
+
+type auditExprType struct {
+	ChainDB bool
+	Named   string
+}
+
+type auditTypeIndex map[string]map[string]auditExprType
+
+func buildAuditTypeIndex(t *testing.T, root string) auditTypeIndex {
+	t.Helper()
+	index := make(auditTypeIndex)
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rawdbNames := rawdbImportNames(file)
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := typeSpec.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
+					continue
+				}
+				fields := make(map[string]auditExprType)
+				for _, field := range st.Fields.List {
+					typ := auditExprTypeFromExpr(field.Type, rawdbNames)
+					if typ == (auditExprType{}) {
+						continue
+					}
+					for _, name := range field.Names {
+						fields[name.Name] = typ
+					}
+				}
+				if len(fields) > 0 {
+					index[typeSpec.Name.Name] = fields
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("build audit type index: %v", err)
+	}
+	return index
+}
+
+func auditExprTypeFromExpr(expr ast.Expr, rawdbNames map[string]struct{}) auditExprType {
+	for {
+		switch typed := expr.(type) {
+		case *ast.ParenExpr:
+			expr = typed.X
+		case *ast.StarExpr:
+			expr = typed.X
+		default:
+			goto done
+		}
+	}
+done:
+	if isRawDBType(expr, rawdbNames, "ChainDB") {
+		return auditExprType{ChainDB: true}
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		return auditExprType{Named: ident.Name}
+	}
+	if sel, ok := expr.(*ast.SelectorExpr); ok {
+		return auditExprType{Named: sel.Sel.Name}
+	}
+	return auditExprType{}
+}
+
+func recordAuditFieldTypes(fields *ast.FieldList, rawdbNames map[string]struct{}, varTypes map[string]auditExprType) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		typ := auditExprTypeFromExpr(field.Type, rawdbNames)
+		if typ == (auditExprType{}) {
+			continue
+		}
+		for _, name := range field.Names {
+			if name.Name != "_" {
+				varTypes[name.Name] = typ
+			}
+		}
+	}
+}
+
+func recordAuditTypedVars(names []*ast.Ident, typ ast.Expr, rawdbNames map[string]struct{}, varTypes map[string]auditExprType) {
+	resolved := auditExprTypeFromExpr(typ, rawdbNames)
+	if resolved == (auditExprType{}) {
+		return
+	}
+	for _, name := range names {
+		if name.Name != "_" {
+			varTypes[name.Name] = resolved
+		}
+	}
 }
 
 func isAllowedRawDBCall(root, path, function string, allowed map[string]map[string]struct{}) bool {
@@ -834,7 +1036,7 @@ done:
 	return false
 }
 
-func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) bool {
+func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex) bool {
 	for {
 		paren, ok := expr.(*ast.ParenExpr)
 		if !ok {
@@ -843,8 +1045,13 @@ func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliase
 		expr = paren.X
 	}
 	if ident, ok := expr.(*ast.Ident); ok {
-		_, exists := aliases[ident.Name]
-		return exists
+		if _, exists := aliases[ident.Name]; exists {
+			return true
+		}
+		if typ, ok := varTypes[ident.Name]; ok && typ.ChainDB {
+			return true
+		}
+		return false
 	}
 	if isRawDBCall(expr, rawdbNames, "NewChainDB") {
 		return true
@@ -854,11 +1061,13 @@ func isChainDBBoundaryExpr(expr ast.Expr, rawdbNames map[string]struct{}, aliase
 			return true
 		}
 	}
-	path := selectorPath(expr)
-	return len(path) > 0 && strings.EqualFold(path[len(path)-1], "chaindb")
+	if typ, ok := resolveAuditSelectorType(expr, varTypes, typeIndex); ok && typ.ChainDB {
+		return true
+	}
+	return false
 }
 
-func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) bool {
+func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex) bool {
 	for {
 		paren, ok := expr.(*ast.ParenExpr)
 		if !ok {
@@ -866,7 +1075,7 @@ func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames
 		}
 		expr = paren.X
 	}
-	if isChainDBBoundaryExpr(expr, rawdbNames, aliases) {
+	if isChainDBBoundaryExpr(expr, rawdbNames, aliases, varTypes, typeIndex) {
 		return true
 	}
 	path := selectorPath(expr)
@@ -877,6 +1086,34 @@ func isColdAwareArchiveReaderArg(rel, function string, expr ast.Expr, rawdbNames
 		return true
 	}
 	return false
+}
+
+func resolveAuditSelectorType(expr ast.Expr, varTypes map[string]auditExprType, typeIndex auditTypeIndex) (auditExprType, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	switch v := expr.(type) {
+	case *ast.Ident:
+		typ, ok := varTypes[v.Name]
+		return typ, ok
+	case *ast.SelectorExpr:
+		base, ok := resolveAuditSelectorType(v.X, varTypes, typeIndex)
+		if !ok || base.Named == "" {
+			return auditExprType{}, false
+		}
+		fields := typeIndex[base.Named]
+		if len(fields) == 0 {
+			return auditExprType{}, false
+		}
+		typ, ok := fields[v.Sel.Name]
+		return typ, ok
+	default:
+		return auditExprType{}, false
+	}
 }
 
 func selectorPath(expr ast.Expr) []string {
