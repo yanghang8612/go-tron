@@ -94,6 +94,13 @@ type ImportStageTask struct {
 	BlockHash      tcommon.Hash
 }
 
+// ImportStageObservation is one canonical stage hook observation accepted by
+// the downloader-owned phase plan.
+type ImportStageObservation struct {
+	Phase ImportStagePhasePlan
+	Task  ImportStageTask
+}
+
 // ImportStagePhasePlan is the batch-level unit the downloader stage planner
 // owns: one phase, its canonical/sync stage pair, and every block boundary that
 // phase must complete.
@@ -255,13 +262,42 @@ func cloneImportStagePhasePlan(plan ImportStagePhasePlan) ImportStagePhasePlan {
 	return plan
 }
 
+// MatchCanonicalObservation reports whether this phase owns a canonical stage
+// hook observation.
+func (p ImportStagePhasePlan) MatchCanonicalObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageTask, bool) {
+	if p.CanonicalStage != stage {
+		return ImportStageTask{}, false
+	}
+	for _, task := range p.Tasks {
+		if task.BlockNum == blockNum && task.BlockHash == blockHash {
+			return task, true
+		}
+	}
+	return ImportStageTask{}, false
+}
+
+// MatchPhaseObservation returns the explicit phase and task that own a
+// canonical stage hook observation.
+func (p ImportBatchStagePlan) MatchPhaseObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageObservation, bool) {
+	for _, phase := range p.Phases {
+		task, ok := phase.MatchCanonicalObservation(stage, blockNum, blockHash)
+		if !ok {
+			continue
+		}
+		return ImportStageObservation{
+			Phase: cloneImportStagePhasePlan(phase),
+			Task:  task,
+		}, true
+	}
+	return ImportStageObservation{}, false
+}
+
 // MatchCanonicalObservation reports whether a canonical stage hook observation
 // belongs to one of this batch plan's explicit stage tasks.
 func (p ImportBatchStagePlan) MatchCanonicalObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageTask, bool) {
-	for _, task := range p.Tasks {
-		if task.CanonicalStage == stage && task.BlockNum == blockNum && task.BlockHash == blockHash {
-			return task, true
-		}
+	observation, ok := p.MatchPhaseObservation(stage, blockNum, blockHash)
+	if ok {
+		return observation.Task, true
 	}
 	return ImportStageTask{}, false
 }

@@ -405,11 +405,18 @@ func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testi
 	if !execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), block2.Hash()) {
 		t.Fatal("finish block2 should be planned")
 	}
+	observation, ok := execution.PlannedStageObservation(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	if !ok || observation.Task != ImportCommitmentStageTask(block2.Number(), block2.Hash()) || observation.Phase.Phase != ImportStagePhaseCommitment || observation.Phase.CanonicalStage != rawdb.StageCommitment || observation.Phase.SyncStage != rawdb.StageSyncCommitment || len(observation.Phase.Tasks) != 2 {
+		t.Fatalf("planned stage observation = %+v ok=%v, want block2 commitment in two-task commitment phase", observation, ok)
+	}
 	if task, ok := execution.StagePlan.MatchCanonicalObservation(rawdb.StageCommitment, block2.Number(), block2.Hash()); !ok || task != ImportCommitmentStageTask(block2.Number(), block2.Hash()) {
 		t.Fatalf("batch stage plan commitment match = %+v ok=%v, want block2 commitment task", task, ok)
 	}
 	if execution.PlansStageObservation(rawdb.StageFinish, block2.Number(), tcommon.Hash{0xee}) {
 		t.Fatal("fork-hash finish should not be planned")
+	}
+	if observation, ok := execution.PlannedStageObservation(rawdb.StageFinish, block2.Number(), tcommon.Hash{0xee}); ok {
+		t.Fatalf("fork-hash finish observation = %+v ok=true, want rejected", observation)
 	}
 }
 

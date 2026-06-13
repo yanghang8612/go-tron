@@ -647,8 +647,15 @@ func TestNewImportBatchStagePlan(t *testing.T) {
 	if !ok || task != ImportCommitmentStageTask(2, hash2) {
 		t.Fatalf("matched task = %+v ok=%v, want block2 commitment", task, ok)
 	}
+	observation, ok := got.MatchPhaseObservation(rawdb.StageCommitment, 2, hash2)
+	if !ok || observation.Task != ImportCommitmentStageTask(2, hash2) || observation.Phase.Phase != ImportStagePhaseCommitment || len(observation.Phase.Tasks) != 2 {
+		t.Fatalf("phase observation = %+v ok=%v, want block2 commitment in two-task commitment phase", observation, ok)
+	}
 	if task, ok := got.MatchCanonicalObservation(rawdb.StageCommitment, 2, hash1); ok {
 		t.Fatalf("fork hash matched task %+v, want rejected", task)
+	}
+	if observation, ok := got.MatchPhaseObservation(rawdb.StageCommitment, 2, hash1); ok {
+		t.Fatalf("fork hash matched phase observation %+v, want rejected", observation)
 	}
 	empty := NewImportBatchStagePlan(nil)
 	if !empty.Empty() {

@@ -216,18 +216,31 @@ func (p ImportBatchExecutionPlan) ProgressPlan(batch BufferedBatch, applied int,
 // PlansStageObservation reports whether a canonical insertion hook observation
 // belongs to one of the execution plan's explicit stage schedules.
 func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) bool {
-	if _, ok := p.StagePlan.MatchCanonicalObservation(stage, blockNum, blockHash); ok {
-		return true
+	_, ok := p.PlannedStageObservation(stage, blockNum, blockHash)
+	return ok
+}
+
+// PlannedStageObservation returns the phase-owned stage task matching a
+// canonical insertion hook observation.
+func (p ImportBatchExecutionPlan) PlannedStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageObservation, bool) {
+	if observation, ok := p.StagePlan.MatchPhaseObservation(stage, blockNum, blockHash); ok {
+		return observation, true
 	}
 	if !p.StagePlan.Empty() {
-		return false
+		return ImportStageObservation{}, false
 	}
 	for _, schedule := range p.Schedules {
-		if _, ok := schedule.MatchCanonicalObservation(stage, blockNum, blockHash); ok {
-			return true
+		task, ok := schedule.MatchCanonicalObservation(stage, blockNum, blockHash)
+		if !ok {
+			continue
 		}
+		phase, ok := newImportStagePhasePlan(task.Phase, task.CanonicalStage, task.SyncStage, []ImportStageTask{task})
+		if !ok {
+			return ImportStageObservation{}, false
+		}
+		return ImportStageObservation{Phase: phase, Task: task}, true
 	}
-	return false
+	return ImportStageObservation{}, false
 }
 
 // StageObserver filters canonical stage hook observations through the execution
@@ -240,7 +253,7 @@ func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) Sta
 		return func(rawdb.StageID, uint64, tcommon.Hash) {}
 	}
 	return func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
-		if p.PlansStageObservation(stage, blockNum, blockHash) {
+		if _, ok := p.PlannedStageObservation(stage, blockNum, blockHash); ok {
 			observe(stage, blockNum, blockHash)
 		}
 	}
