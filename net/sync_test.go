@@ -165,6 +165,52 @@ func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
 	}
 }
 
+func TestSyncServiceStartupCleanupRefreshesReadyAfterImportedBodyDelete(t *testing.T) {
+	bc := makeChainWithBlocks(t, 2)
+	imported := bc.GetBlockByNumber(2)
+	if imported == nil {
+		t.Fatal("missing imported block2")
+	}
+	block3 := stubBlock(3, imported.Hash())
+	block4 := stubBlock(4, block3.Hash())
+	for _, block := range []*types.Block{imported, block3, block4} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write sync staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, imported.Number(), imported.Hash()); err != nil {
+		t.Fatalf("write stale SyncBodiesReady: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	path3 := ss.blockPath[block3.Number()]
+	path4 := ss.blockPath[block4.Number()]
+	ss.mu.Unlock()
+
+	if buffered != 2 || target != block4.Number() {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 2/%d", buffered, target, block4.Number())
+	}
+	if path3 != block3.Hash() || path4 != block4.Hash() {
+		t.Fatalf("restored block path = %x/%x, want block3/block4 %x/%x", path3, path4, block3.Hash(), block4.Hash())
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), imported.Number()); err != nil || ok {
+		t.Fatalf("imported staged block2 after startup ok=%v err=%v, want deleted", ok, err)
+	}
+	for _, block := range []*types.Block{block3, block4} {
+		if row, ok, err := rawdb.ReadSyncStagedBlock(bc.DB(), block.Number()); err != nil || !ok || row.Hash() != block.Hash() {
+			t.Fatalf("restored staged block %d = %v ok=%v err=%v, want present", block.Number(), row, ok, err)
+		}
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block4.Number() || !ready.HasBlockHash || ready.BlockHash != block4.Hash() {
+		t.Fatalf("SyncBodiesReady after imported cleanup = %+v ok=%v err=%v, want block4", ready, ok, err)
+	}
+}
+
 func TestSyncServiceRepairsUnboundBodiesReadyOnSessionStart(t *testing.T) {
 	bc := makeTestChain(t)
 	block1 := stubBlock(1, bc.CurrentBlock().Hash())

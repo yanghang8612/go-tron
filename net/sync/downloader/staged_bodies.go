@@ -55,6 +55,14 @@ type StagedBodyTailPrune struct {
 	Ready      StagedBodyReadyProgressRefresh
 }
 
+// ImportedStagedBodyCleanup records deletion of already-imported staged body
+// rows plus the resulting ready-frontier refresh.
+type ImportedStagedBodyCleanup struct {
+	Deleted     int
+	DeleteError error
+	Ready       StagedBodyReadyProgressRefresh
+}
+
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
 // is usable as the next local import drain limit.
 type StagedBodyReadyLimitStatus uint8
@@ -195,6 +203,19 @@ func PruneStaleStagedBodyTail(db ethdb.KeyValueStore, from uint64, lastRestoredN
 	var result StagedBodyTailPrune
 	result.Prune, result.PruneError = rawdb.PruneSyncStagedBlocksFrom(db, from, lastRestoredNum, lastRestoredHash, haveLastRestored)
 	if result.PruneError != nil {
+		return result
+	}
+	result.Ready = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// DeleteImportedStagedBodiesThrough removes staged body rows that are already
+// covered by the canonical head and then recomputes SyncBodiesReady from the
+// next import boundary.
+func DeleteImportedStagedBodiesThrough(db ethdb.KeyValueStore, through uint64, start uint64, targetHead uint64) ImportedStagedBodyCleanup {
+	var result ImportedStagedBodyCleanup
+	result.Deleted, result.DeleteError = rawdb.DeleteSyncStagedBlocksThrough(db, through)
+	if result.DeleteError != nil {
 		return result
 	}
 	result.Ready = RefreshStagedBodyReadyProgress(db, start, targetHead)

@@ -362,6 +362,44 @@ func TestPruneStaleStagedBodyTailRefreshesReadyFrontier(t *testing.T) {
 	}
 }
 
+func TestDeleteImportedStagedBodiesThroughRefreshesReadyFrontier(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	for _, block := range []*types.Block{block2, block3, block4} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block2.Number(), block2.Hash()); err != nil {
+		t.Fatalf("write stale SyncBodiesReady: %v", err)
+	}
+
+	got := DeleteImportedStagedBodiesThrough(db, block2.Number(), block3.Number(), 0)
+	if got.DeleteError != nil || got.Deleted != 1 {
+		t.Fatalf("cleanup result = %+v, want one deleted body without error", got)
+	}
+	if !got.Ready.Updated || got.Ready.DeleteError != nil || got.Ready.WriteError != nil {
+		t.Fatalf("ready refresh = %+v, want updated", got.Ready)
+	}
+	if !got.Ready.Frontier.Have || got.Ready.Frontier.Number != block4.Number() || got.Ready.Frontier.Hash != block4.Hash() {
+		t.Fatalf("ready frontier = %+v, want block4", got.Ready.Frontier)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block2.Number()); err != nil || ok {
+		t.Fatalf("imported staged block2 ok=%v err=%v, want deleted", ok, err)
+	}
+	for _, block := range []*types.Block{block3, block4} {
+		if row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number()); err != nil || !ok || row.Hash != block.Hash() {
+			t.Fatalf("remaining staged block %d = %+v ok=%v err=%v, want present", block.Number(), row, ok, err)
+		}
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block4.Number() || ready.BlockHash != block4.Hash() {
+		t.Fatalf("SyncBodiesReady = %+v ok=%v err=%v, want block4", ready, ok, err)
+	}
+}
+
 func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 	readErr := errors.New("read staged")
 	row := rawdb.StageProgress{

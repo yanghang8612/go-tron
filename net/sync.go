@@ -1467,10 +1467,16 @@ func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
 	if db == nil {
 		return
 	}
-	if _, err := rawdb.DeleteSyncStagedBlocksThrough(db, head); err != nil {
-		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", err)
+	current := ss.chain.CurrentBlock()
+	if current == nil {
+		return
 	}
-	ss.writeSyncBodiesReadyProgress()
+	result := syncdl.DeleteImportedStagedBodiesThrough(db, head, current.Number()+1, ss.targetHeadNum)
+	if result.DeleteError != nil {
+		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", result.DeleteError)
+		return
+	}
+	ss.logSyncBodiesReadyRefresh(result.Ready)
 }
 
 func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {
