@@ -145,7 +145,16 @@ current pipeline lag and its share of total staged-sync backlog. It also reports
 `stageSyncPipelineMonotonic`, `stageSyncPipelineViolation`,
 `stageSyncPipelineViolationCount`, `stageSyncPipelineMaxViolationBlocks`, and
 `stageSyncPipelineViolations`, so a sample row can flag any downstream stage
-that advanced ahead of its upstream stage. The row also reports
+that advanced ahead of its upstream stage. Across consecutive JSONL rows it
+also reports `restartRecoveryStatus`, `heightRegressionBlocks`,
+`stageProgressRegressionCount`, `stageProgressMaxRegressionBlocks`, and
+`stageProgressRegressions`. These fields make restart/repair events visible
+without manually diffing samples: `height-regression` means the HTTP head moved
+backward, `stage-regression` means one or more persisted stage rows moved
+backward or disappeared after repair, `pipeline-violation` means downstream
+stage progress is ahead of its upstream stage, `stalled` means no height or
+stage movement was observed while still lagging the target, and `progressing`
+means the current interval advanced. The row also reports
 `stageSyncFinishHeadEtaSeconds`,
 `stageChainFreezerHeadLagBlocks`, `stageChainFreezerHeadEtaSeconds`,
 `stageSnapshotEventLogBuildHeadLagBlocks`, and

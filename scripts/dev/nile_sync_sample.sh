@@ -691,6 +691,27 @@ def stage_pipeline_violations(stages):
         })
     return violations
 
+def progress_regressions(current, previous_row, keys, missing_is_regression):
+    if not previous_row:
+        return []
+    regressions = []
+    for key in keys:
+        previous_value = number(previous_row, key, -1)
+        if previous_value < 0:
+            continue
+        current_value = number(current, key, -1)
+        if current_value < 0 and not missing_is_regression:
+            continue
+        if current_value >= previous_value:
+            continue
+        regressions.append({
+            "stage": key,
+            "previousValue": previous_value,
+            "currentValue": current_value,
+            "regressionBlocks": previous_value - current_value if current_value >= 0 else previous_value,
+        })
+    return regressions
+
 def ratio(numerator, denominator):
     try:
         numerator = float(numerator)
@@ -961,6 +982,46 @@ interval_stage_snapshot_event_log_build_rate = interval_rate(interval_stage_snap
 stage_sync_finish_head_eta_seconds = eta_seconds(stage_sync_finish_head_lag, interval_stage_sync_finish_rate)
 stage_chain_freezer_head_eta_seconds = eta_seconds(stage_chain_freezer_head_lag, interval_stage_chain_freezer_rate)
 stage_snapshot_event_log_build_head_eta_seconds = eta_seconds(stage_snapshot_event_log_build_head_lag, interval_stage_snapshot_event_log_build_rate)
+height_regression_blocks = previous_height - height if interval_seconds > 0 and previous_height > 0 and height > 0 and height < previous_height else 0
+stage_progress_regressions = progress_regressions(stages, previous, [
+    "stageSyncBodies",
+    "stageSyncBodiesReady",
+    "stageSyncImport",
+    "stageSyncExecution",
+    "stageSyncCommitment",
+    "stageSyncFinish",
+    "stageCanonicalFinish",
+    "stageChainFreezer",
+    "stageSnapshotEventLogBuild",
+], stages.get("stageStatusFileStatus") == "ok")
+stage_progress_max_regression_blocks = 0
+if stage_progress_regressions:
+    stage_progress_max_regression_blocks = max(
+        regression["regressionBlocks"] for regression in stage_progress_regressions
+    )
+max_stage_interval_blocks = max(
+    0,
+    interval_stage_sync_bodies,
+    interval_stage_sync_bodies_ready,
+    interval_stage_sync_import,
+    interval_stage_sync_execution,
+    interval_stage_sync_commitment,
+    interval_stage_sync_finish,
+)
+if height_regression_blocks > 0:
+    restart_recovery_status = "height-regression"
+elif stage_progress_regressions:
+    restart_recovery_status = "stage-regression"
+elif stage_sync_pipeline_violations:
+    restart_recovery_status = "pipeline-violation"
+elif interval_seconds <= 0:
+    restart_recovery_status = "no-previous"
+elif sync_target_lag_blocks > 0 and interval_blocks == 0 and max_stage_interval_blocks <= 0:
+    restart_recovery_status = "stalled"
+elif interval_blocks > 0 or max_stage_interval_blocks > 0:
+    restart_recovery_status = "progressing"
+else:
+    restart_recovery_status = "steady"
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -1100,6 +1161,11 @@ row = {
     "stageSyncPipelineViolationCount": len(stage_sync_pipeline_violations),
     "stageSyncPipelineMaxViolationBlocks": stage_sync_pipeline_max_violation_blocks,
     "stageSyncPipelineViolations": stage_sync_pipeline_violations,
+    "restartRecoveryStatus": restart_recovery_status,
+    "heightRegressionBlocks": height_regression_blocks,
+    "stageProgressRegressionCount": len(stage_progress_regressions),
+    "stageProgressMaxRegressionBlocks": stage_progress_max_regression_blocks,
+    "stageProgressRegressions": stage_progress_regressions,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,

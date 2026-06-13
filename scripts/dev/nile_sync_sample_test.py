@@ -230,6 +230,11 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncPipelineViolationCount"], 0)
             self.assertEqual(row["stageSyncPipelineMaxViolationBlocks"], 0)
             self.assertEqual(row["stageSyncPipelineViolations"], [])
+            self.assertEqual(row["restartRecoveryStatus"], "no-previous")
+            self.assertEqual(row["heightRegressionBlocks"], 0)
+            self.assertEqual(row["stageProgressRegressionCount"], 0)
+            self.assertEqual(row["stageProgressMaxRegressionBlocks"], 0)
+            self.assertEqual(row["stageProgressRegressions"], [])
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 0)
             self.assertEqual(row["intervalStageSyncImportBlocks"], 0)
             self.assertEqual(row["intervalStageSyncExecutionBlocks"], 0)
@@ -436,6 +441,11 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncPipelineViolationCount"], 0)
             self.assertEqual(row["stageSyncPipelineMaxViolationBlocks"], 0)
             self.assertEqual(row["stageSyncPipelineViolations"], [])
+            self.assertEqual(row["restartRecoveryStatus"], "progressing")
+            self.assertEqual(row["heightRegressionBlocks"], 0)
+            self.assertEqual(row["stageProgressRegressionCount"], 0)
+            self.assertEqual(row["stageProgressMaxRegressionBlocks"], 0)
+            self.assertEqual(row["stageProgressRegressions"], [])
             self.assertAlmostEqual(
                 row["stageSyncFinishHeadEtaSeconds"],
                 10 / row["intervalStageSyncFinishBlocksPerSecond"],
@@ -504,6 +514,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncPipelineViolation"], "bodies-ready")
             self.assertEqual(row["stageSyncPipelineViolationCount"], 1)
             self.assertEqual(row["stageSyncPipelineMaxViolationBlocks"], 1)
+            self.assertEqual(row["restartRecoveryStatus"], "pipeline-violation")
+            self.assertEqual(row["heightRegressionBlocks"], 0)
+            self.assertEqual(row["stageProgressRegressionCount"], 0)
+            self.assertEqual(row["stageProgressRegressions"], [])
             self.assertEqual(
                 row["stageSyncPipelineViolations"],
                 [
@@ -515,6 +529,112 @@ class NileSyncSampleTest(unittest.TestCase):
                         "downstreamValue": 101,
                         "violationBlocks": 1,
                     }
+                ],
+            )
+
+    def test_sample_flags_restart_height_and_stage_regressions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=8",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=96 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=95 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=90 hash=dd verified=canonical",
+                        "Stage progress: group=sync name=SyncCommitment value=89 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=80 hash=ff verified=canonical",
+                        "Stage progress: group=canonical name=Finish value=82 hash=11 verified=canonical",
+                        "Stage progress: group=snapshot name=SnapshotEventLogBuild status=missing",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            now = int(time.time())
+            previous = {
+                "unix": now - 10,
+                "height": 120,
+                "stageSyncBodies": 101,
+                "stageSyncBodiesReady": 96,
+                "stageSyncImport": 99,
+                "stageSyncExecution": 91,
+                "stageSyncCommitment": 89,
+                "stageSyncFinish": 85,
+                "stageCanonicalFinish": 82,
+                "stageSnapshotEventLogBuild": 88,
+            }
+            output = tmpdir / "samples.jsonl"
+            output.write_text(json.dumps(previous) + "\n", encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
+                    "--output",
+                    str(output),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["height"], 100)
+            self.assertEqual(row["restartRecoveryStatus"], "height-regression")
+            self.assertEqual(row["heightRegressionBlocks"], 20)
+            self.assertEqual(row["stageProgressRegressionCount"], 5)
+            self.assertEqual(row["stageProgressMaxRegressionBlocks"], 88)
+            self.assertEqual(
+                row["stageProgressRegressions"],
+                [
+                    {
+                        "stage": "stageSyncBodies",
+                        "previousValue": 101,
+                        "currentValue": 100,
+                        "regressionBlocks": 1,
+                    },
+                    {
+                        "stage": "stageSyncImport",
+                        "previousValue": 99,
+                        "currentValue": 95,
+                        "regressionBlocks": 4,
+                    },
+                    {
+                        "stage": "stageSyncExecution",
+                        "previousValue": 91,
+                        "currentValue": 90,
+                        "regressionBlocks": 1,
+                    },
+                    {
+                        "stage": "stageSyncFinish",
+                        "previousValue": 85,
+                        "currentValue": 80,
+                        "regressionBlocks": 5,
+                    },
+                    {
+                        "stage": "stageSnapshotEventLogBuild",
+                        "previousValue": 88,
+                        "currentValue": -1,
+                        "regressionBlocks": 88,
+                    },
                 ],
             )
 
