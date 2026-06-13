@@ -150,11 +150,98 @@ func TestPlanFetchReceiptSettlement(t *testing.T) {
 	if !partial.Accepted || partial.Inflight != 1 || partial.BatchDone || !partial.DeleteRequestedHash || !partial.AdvanceFetchSeq || !partial.StopFetchTimer || !partial.RearmFetchTimer || partial.FillFetchSlots || !partial.DrainBuffered {
 		t.Fatalf("partial settlement = %+v, want rearm without fill", partial)
 	}
+	if got, want := fetchReceiptStepActions(partial.LockedPreBuffer), []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptAdvanceFetchSeq,
+		FetchReceiptUpdateInflight,
+		FetchReceiptStopFetchTimer,
+		FetchReceiptRearmFetchTimer,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("partial pre-buffer steps = %+v, want %+v", got, want)
+	}
+	if got, want := fetchReceiptStepActions(partial.LockedPostBuffer), []FetchReceiptSettlementStepAction{FetchReceiptMirrorLegacy}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("partial post-buffer steps = %+v, want %+v", got, want)
+	}
+	if got, want := fetchReceiptStepActions(partial.AfterUnlock), []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("partial after-unlock steps = %+v, want %+v", got, want)
+	}
 
 	done := PlanFetchReceiptSettlement(FetchReceiptResult{Accepted: true, BatchDone: true})
 	if !done.Accepted || done.Inflight != 0 || !done.BatchDone || !done.DeleteRequestedHash || !done.AdvanceFetchSeq || !done.StopFetchTimer || done.RearmFetchTimer || !done.FillFetchSlots || !done.DrainBuffered {
 		t.Fatalf("done settlement = %+v, want fill without rearm", done)
 	}
+	if got, want := fetchReceiptStepActions(done.LockedPreBuffer), []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptAdvanceFetchSeq,
+		FetchReceiptUpdateInflight,
+		FetchReceiptStopFetchTimer,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("done pre-buffer steps = %+v, want %+v", got, want)
+	}
+	if got, want := fetchReceiptStepActions(done.LockedPostBuffer), []FetchReceiptSettlementStepAction{FetchReceiptFillFetchSlots, FetchReceiptMirrorLegacy}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("done post-buffer steps = %+v, want %+v", got, want)
+	}
+	if got, want := fetchReceiptStepActions(done.AfterUnlock), []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("done after-unlock steps = %+v, want %+v", got, want)
+	}
+	if len(done.LockedPreBuffer) < 3 || done.LockedPreBuffer[2].Inflight != 0 || len(partial.LockedPreBuffer) < 3 || partial.LockedPreBuffer[2].Inflight != 1 {
+		t.Fatalf("update-inflight steps = done %+v partial %+v, want 0/1", done.LockedPreBuffer, partial.LockedPreBuffer)
+	}
+}
+
+func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
+	applier := new(recordingFetchReceiptSettlementApplier)
+	plan := FetchReceiptSettlement{
+		LockedPreBuffer: []FetchReceiptSettlementStep{
+			{Action: FetchReceiptDeleteRequestedHash},
+			{Action: FetchReceiptUpdateInflight, Inflight: 3},
+			{Action: FetchReceiptSettlementStepAction(255)},
+		},
+		LockedPostBuffer: []FetchReceiptSettlementStep{
+			{Action: FetchReceiptFillFetchSlots},
+			{Action: FetchReceiptMirrorLegacy},
+		},
+		AfterUnlock: []FetchReceiptSettlementStep{
+			{Action: FetchReceiptDrainBuffered},
+		},
+	}
+	ApplyFetchReceiptSettlementLockedPreBufferPlan(plan, applier)
+	ApplyFetchReceiptSettlementLockedPostBufferPlan(plan, applier)
+	ApplyFetchReceiptSettlementAfterUnlockPlan(plan, applier)
+
+	want := []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptUpdateInflight,
+		FetchReceiptFillFetchSlots,
+		FetchReceiptMirrorLegacy,
+		FetchReceiptDrainBuffered,
+	}
+	if !reflect.DeepEqual(applier.calls, want) || applier.inflight != 3 {
+		t.Fatalf("settlement calls/inflight = %+v/%d, want %+v/3", applier.calls, applier.inflight, want)
+	}
+
+	applier.calls = nil
+	ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{
+		Accepted:            true,
+		Inflight:            4,
+		DeleteRequestedHash: true,
+		AdvanceFetchSeq:     true,
+		StopFetchTimer:      true,
+		RearmFetchTimer:     true,
+	}, applier)
+	want = []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptAdvanceFetchSeq,
+		FetchReceiptUpdateInflight,
+		FetchReceiptStopFetchTimer,
+		FetchReceiptRearmFetchTimer,
+	}
+	if !reflect.DeepEqual(applier.calls, want) || applier.inflight != 4 {
+		t.Fatalf("fallback pre-buffer calls/inflight = %+v/%d, want %+v/4", applier.calls, applier.inflight, want)
+	}
+	ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{Accepted: true}, nil)
+	ApplyFetchReceiptSettlementLockedPostBufferPlan(FetchReceiptSettlement{Accepted: true}, nil)
+	ApplyFetchReceiptSettlementAfterUnlockPlan(FetchReceiptSettlement{Accepted: true}, nil)
 }
 
 func TestPlanFetchReceiptDispatch(t *testing.T) {
@@ -239,4 +326,50 @@ func TestPlanFetchedBlockBuffer(t *testing.T) {
 			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
+}
+
+func fetchReceiptStepActions(steps []FetchReceiptSettlementStep) []FetchReceiptSettlementStepAction {
+	actions := make([]FetchReceiptSettlementStepAction, 0, len(steps))
+	for _, step := range steps {
+		actions = append(actions, step.Action)
+	}
+	return actions
+}
+
+type recordingFetchReceiptSettlementApplier struct {
+	calls    []FetchReceiptSettlementStepAction
+	inflight int
+}
+
+func (a *recordingFetchReceiptSettlementApplier) DeleteRequestedHash() {
+	a.calls = append(a.calls, FetchReceiptDeleteRequestedHash)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) AdvanceFetchSeq() {
+	a.calls = append(a.calls, FetchReceiptAdvanceFetchSeq)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) UpdateInflight(inflight int) {
+	a.calls = append(a.calls, FetchReceiptUpdateInflight)
+	a.inflight = inflight
+}
+
+func (a *recordingFetchReceiptSettlementApplier) StopFetchTimer() {
+	a.calls = append(a.calls, FetchReceiptStopFetchTimer)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) RearmFetchTimer() {
+	a.calls = append(a.calls, FetchReceiptRearmFetchTimer)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) FillFetchSlots() {
+	a.calls = append(a.calls, FetchReceiptFillFetchSlots)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) MirrorLegacyLocked() {
+	a.calls = append(a.calls, FetchReceiptMirrorLegacy)
+}
+
+func (a *recordingFetchReceiptSettlementApplier) DrainBuffered() {
+	a.calls = append(a.calls, FetchReceiptDrainBuffered)
 }

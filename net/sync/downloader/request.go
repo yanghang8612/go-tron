@@ -59,6 +59,45 @@ type FetchReceiptSettlement struct {
 	RearmFetchTimer     bool
 	FillFetchSlots      bool
 	DrainBuffered       bool
+	LockedPreBuffer     []FetchReceiptSettlementStep
+	LockedPostBuffer    []FetchReceiptSettlementStep
+	AfterUnlock         []FetchReceiptSettlementStep
+}
+
+// FetchReceiptSettlementStepAction names one ordered local action after a
+// requested block body has been acknowledged.
+type FetchReceiptSettlementStepAction uint8
+
+const (
+	FetchReceiptDeleteRequestedHash FetchReceiptSettlementStepAction = iota
+	FetchReceiptAdvanceFetchSeq
+	FetchReceiptUpdateInflight
+	FetchReceiptStopFetchTimer
+	FetchReceiptRearmFetchTimer
+	FetchReceiptFillFetchSlots
+	FetchReceiptMirrorLegacy
+	FetchReceiptDrainBuffered
+)
+
+// FetchReceiptSettlementStep is one downloader-owned fetch-receipt settlement
+// action. Inflight is populated for FetchReceiptUpdateInflight.
+type FetchReceiptSettlementStep struct {
+	Action   FetchReceiptSettlementStepAction
+	Inflight int
+}
+
+// FetchReceiptSettlementPlanApplier performs the runtime operations named by a
+// fetch-receipt settlement plan. SyncService owns peer timers, request maps,
+// fetch-slot output, and local drains; downloader owns the ordering.
+type FetchReceiptSettlementPlanApplier interface {
+	DeleteRequestedHash()
+	AdvanceFetchSeq()
+	UpdateInflight(inflight int)
+	StopFetchTimer()
+	RearmFetchTimer()
+	FillFetchSlots()
+	MirrorLegacyLocked()
+	DrainBuffered()
 }
 
 // FetchReceiptDispatchInput is the post-drain state needed before sending
@@ -141,6 +180,97 @@ func PlanFetchReceiptSettlement(receipt FetchReceiptResult) FetchReceiptSettleme
 		RearmFetchTimer:     !receipt.BatchDone,
 		FillFetchSlots:      receipt.BatchDone,
 		DrainBuffered:       true,
+	}.withSteps()
+}
+
+func (s FetchReceiptSettlement) withSteps() FetchReceiptSettlement {
+	if !s.Accepted {
+		return s
+	}
+	if s.DeleteRequestedHash {
+		s.LockedPreBuffer = append(s.LockedPreBuffer, FetchReceiptSettlementStep{Action: FetchReceiptDeleteRequestedHash})
+	}
+	if s.AdvanceFetchSeq {
+		s.LockedPreBuffer = append(s.LockedPreBuffer, FetchReceiptSettlementStep{Action: FetchReceiptAdvanceFetchSeq})
+	}
+	s.LockedPreBuffer = append(s.LockedPreBuffer, FetchReceiptSettlementStep{
+		Action:   FetchReceiptUpdateInflight,
+		Inflight: s.Inflight,
+	})
+	if s.StopFetchTimer {
+		s.LockedPreBuffer = append(s.LockedPreBuffer, FetchReceiptSettlementStep{Action: FetchReceiptStopFetchTimer})
+	}
+	if s.RearmFetchTimer {
+		s.LockedPreBuffer = append(s.LockedPreBuffer, FetchReceiptSettlementStep{Action: FetchReceiptRearmFetchTimer})
+	}
+	if s.FillFetchSlots {
+		s.LockedPostBuffer = append(s.LockedPostBuffer, FetchReceiptSettlementStep{Action: FetchReceiptFillFetchSlots})
+	}
+	s.LockedPostBuffer = append(s.LockedPostBuffer, FetchReceiptSettlementStep{Action: FetchReceiptMirrorLegacy})
+	if s.DrainBuffered {
+		s.AfterUnlock = []FetchReceiptSettlementStep{{Action: FetchReceiptDrainBuffered}}
+	}
+	return s
+}
+
+// ApplyFetchReceiptSettlementLockedPreBufferPlan executes the lock-held
+// peer/request/timer update steps that must run before staging the received
+// block body.
+func ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(settlement.LockedPreBuffer) == 0 {
+		settlement = settlement.withSteps()
+	}
+	applyFetchReceiptSettlementSteps(settlement.LockedPreBuffer, applier)
+}
+
+// ApplyFetchReceiptSettlementLockedPostBufferPlan executes the lock-held fetch
+// scheduling and mirror steps that run after the received block body has been
+// staged or ignored.
+func ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(settlement.LockedPostBuffer) == 0 {
+		settlement = settlement.withSteps()
+	}
+	applyFetchReceiptSettlementSteps(settlement.LockedPostBuffer, applier)
+}
+
+// ApplyFetchReceiptSettlementAfterUnlockPlan executes post-lock local drain
+// actions for an accepted fetch receipt.
+func ApplyFetchReceiptSettlementAfterUnlockPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(settlement.AfterUnlock) == 0 {
+		settlement = settlement.withSteps()
+	}
+	applyFetchReceiptSettlementSteps(settlement.AfterUnlock, applier)
+}
+
+func applyFetchReceiptSettlementSteps(steps []FetchReceiptSettlementStep, applier FetchReceiptSettlementPlanApplier) {
+	for _, step := range steps {
+		switch step.Action {
+		case FetchReceiptDeleteRequestedHash:
+			applier.DeleteRequestedHash()
+		case FetchReceiptAdvanceFetchSeq:
+			applier.AdvanceFetchSeq()
+		case FetchReceiptUpdateInflight:
+			applier.UpdateInflight(step.Inflight)
+		case FetchReceiptStopFetchTimer:
+			applier.StopFetchTimer()
+		case FetchReceiptRearmFetchTimer:
+			applier.RearmFetchTimer()
+		case FetchReceiptFillFetchSlots:
+			applier.FillFetchSlots()
+		case FetchReceiptMirrorLegacy:
+			applier.MirrorLegacyLocked()
+		case FetchReceiptDrainBuffered:
+			applier.DrainBuffered()
+		}
 	}
 }
 

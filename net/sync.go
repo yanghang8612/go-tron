@@ -1065,30 +1065,8 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		return true
 	}
 	settlement := syncdl.PlanFetchReceiptSettlement(ack)
-	if settlement.DeleteRequestedHash {
-		delete(ss.requested, blockHash)
-	}
-	// Bump seq so any in-flight timer callback short-circuits. We stop the
-	// armed timer below but the callback may already be running on another
-	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
-	// rejects it.
-	if settlement.AdvanceFetchSeq {
-		ps.fetchSeq++
-	}
-	ps.inflight = settlement.Inflight
-	if settlement.StopFetchTimer && ps.fetchTimer != nil {
-		ps.fetchTimer.Stop()
-		ps.fetchTimer = nil
-	}
-	// Re-arm the fetch timeout if blocks are still in flight. Without
-	// this a peer that delivers part of a batch and then stalls (network
-	// blip, JVM GC pause, deliberate misbehaviour) leaves the sync state
-	// machine wedged forever: batchDone stays false → fetchNextBatch
-	// never runs → onFetchTimeout never fires → the watchdog's
-	// IsSyncing() short-circuit keeps it from intervening either.
-	if settlement.RearmFetchTimer {
-		ss.armPeerFetchTimerLocked(ps)
-	}
+	settlementApplier := &syncFetchReceiptSettlementApplier{service: ss, peerState: ps, blockHash: blockHash}
+	syncdl.ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement, settlementApplier)
 	bid := types.BlockID{Hash: blockHash, Num: blockNum}
 	bufferFacts := syncdl.FetchedBlockBufferFacts{
 		ID:          bid,
@@ -1115,23 +1093,17 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 			ss.bufferedHash[blockHash] = struct{}{}
 		}
 	}
-	var out []outboundSyncRequest
-	if settlement.FillFetchSlots {
-		out = ss.fillFetchSlotsLocked(time.Now())
-	}
-	ss.mirrorLegacyLocked()
+	syncdl.ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement, settlementApplier)
 	ss.mu.Unlock()
 
-	if settlement.DrainBuffered {
-		ss.drainBufferedBlocks()
-	}
+	syncdl.ApplyFetchReceiptSettlementAfterUnlockPlan(settlement, settlementApplier)
 	dispatch := syncdl.PlanFetchReceiptDispatch(syncdl.FetchReceiptDispatchInput{
-		OutboundRequests: len(out),
+		OutboundRequests: len(settlementApplier.out),
 		Syncing:          ss.IsSyncing(),
 		Paused:           ss.IsPaused(),
 	})
 	if dispatch.SendOutboundRequests {
-		ss.sendOutboundRequests(out)
+		ss.sendOutboundRequests(settlementApplier.out)
 	}
 	return true
 }
@@ -1304,6 +1276,55 @@ func (a syncPostInventorySettlementApplier) TryFindSyncPeer() {
 
 func (a syncPostInventorySettlementApplier) FinishSync() {
 	a.service.finishSync()
+}
+
+type syncFetchReceiptSettlementApplier struct {
+	service   *SyncService
+	peerState *syncPeerState
+	blockHash tcommon.Hash
+	out       []outboundSyncRequest
+}
+
+func (a *syncFetchReceiptSettlementApplier) DeleteRequestedHash() {
+	delete(a.service.requested, a.blockHash)
+}
+
+func (a *syncFetchReceiptSettlementApplier) AdvanceFetchSeq() {
+	// Bump seq so any in-flight timer callback short-circuits. We stop the
+	// armed timer below but the callback may already be running on another
+	// goroutine and waiting on ss.mu; the seq check inside onFetchTimeout
+	// rejects it.
+	a.peerState.fetchSeq++
+}
+
+func (a *syncFetchReceiptSettlementApplier) UpdateInflight(inflight int) {
+	a.peerState.inflight = inflight
+}
+
+func (a *syncFetchReceiptSettlementApplier) StopFetchTimer() {
+	if a.peerState.fetchTimer != nil {
+		a.peerState.fetchTimer.Stop()
+		a.peerState.fetchTimer = nil
+	}
+}
+
+func (a *syncFetchReceiptSettlementApplier) RearmFetchTimer() {
+	// Re-arm the fetch timeout if blocks are still in flight. Without this a
+	// peer that delivers part of a batch and then stalls leaves the sync state
+	// machine wedged until external intervention.
+	a.service.armPeerFetchTimerLocked(a.peerState)
+}
+
+func (a *syncFetchReceiptSettlementApplier) FillFetchSlots() {
+	a.out = a.service.fillFetchSlotsLocked(time.Now())
+}
+
+func (a *syncFetchReceiptSettlementApplier) MirrorLegacyLocked() {
+	a.service.mirrorLegacyLocked()
+}
+
+func (a *syncFetchReceiptSettlementApplier) DrainBuffered() {
+	a.service.drainBufferedBlocks()
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode
