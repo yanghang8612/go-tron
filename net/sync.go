@@ -1248,18 +1248,13 @@ func (ss *SyncService) decodeBatchBlocks(batch *syncdl.BufferedBatch) {
 }
 
 func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
-	if applied <= 0 {
+	summary := syncdl.SummarizeAppliedBatch(batch, applied)
+	if !summary.OK {
 		return
 	}
-	var txs int
-	for i := 0; i < applied && i < len(batch.Blocks); i++ {
-		if block := batch.Blocks[i]; block != nil {
-			txs += len(block.Transactions())
-		}
-	}
-	ss.deleteImportedSyncBodies(batch, applied)
-	if last := batch.Buffered[applied-1]; last.Num > 0 {
-		stageProgress.Write(last.Num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
+	ss.deleteImportedSyncBodies(batch, summary.Applied)
+	if summary.HasStage {
+		stageProgress.Write(summary.Last.Num, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
 			ss.writeStageProgress(stage, blockNum, blockHash, true)
 		})
 	}
@@ -1269,8 +1264,8 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	// recording the range as one unit keeps block counts and phase totals
 	// aligned in the emitted sync summary.
 	snap, emit := ss.stats.RecordBlocks(
-		applied,
-		txs,
+		summary.Applied,
+		summary.TxCount,
 		totalElapsed,
 		time.Now(),
 		tsync.StatsReportInterval,
@@ -1286,8 +1281,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	ss.mu.Unlock()
 
 	if emit {
-		last := batch.Buffered[applied-1]
-		ss.reportSegment(snap, diag, last.Num, remain, last.Peer)
+		ss.reportSegment(snap, diag, summary.Last.Num, remain, summary.Last.Peer)
 	}
 }
 

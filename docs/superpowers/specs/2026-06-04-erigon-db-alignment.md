@@ -359,8 +359,9 @@ Status:
   tails beyond the import chunk, and hash-bound `SyncImport`, `SyncExecution`,
   `SyncCommitment`, and `SyncFinish` still advance to the final block. The
   local drain frontier clamp and contiguous buffer pop/release logic now live
-  in `net/sync/downloader`, leaving `SyncService` to orchestrate persistence,
-  logging, and canonical insertion.
+  in `net/sync/downloader`, and the applied-prefix import summary now derives
+  tx counts plus the stage-progress boundary there as well, leaving
+  `SyncService` to orchestrate persistence, logging, and canonical insertion.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

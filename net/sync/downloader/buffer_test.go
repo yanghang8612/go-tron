@@ -67,6 +67,55 @@ func TestBufferedBatchDecodeBlocksKeepsPrefixOnError(t *testing.T) {
 	}
 }
 
+func TestSummarizeAppliedBatch(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	block2.Proto().Transactions = append(block2.Proto().Transactions, &corepb.Transaction{Signature: [][]byte{{0x02, 0x02}}})
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []BufferedBlock{
+			{Hash: block1.Hash(), Num: block1.Number()},
+			{Hash: block2.Hash(), Num: block2.Number()},
+		},
+	}
+
+	got := SummarizeAppliedBatch(batch, 2)
+	if !got.OK || got.Applied != 2 || got.TxCount != 3 || !got.HasStage {
+		t.Fatalf("summary = %+v, want applied 2 txs 3 with stage", got)
+	}
+	if got.Last.Num != block2.Number() || got.Last.Hash != block2.Hash() {
+		t.Fatalf("last = #%d %x, want block2 #%d %x", got.Last.Num, got.Last.Hash, block2.Number(), block2.Hash())
+	}
+}
+
+func TestSummarizeAppliedBatchRejectsInvalidApplied(t *testing.T) {
+	batch := BufferedBatch{Buffered: []BufferedBlock{{Num: 1}}}
+	for _, applied := range []int{0, -1, 2} {
+		if got := SummarizeAppliedBatch(batch, applied); got.OK {
+			t.Fatalf("applied %d summary = %+v, want not ok", applied, got)
+		}
+	}
+}
+
+func TestSummarizeAppliedBatchCountsOnlyDecodedBlocks(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1},
+		Buffered: []BufferedBlock{
+			{Hash: block1.Hash(), Num: block1.Number()},
+			{Hash: tcommon.Hash{0x02}, Num: 2},
+		},
+	}
+
+	got := SummarizeAppliedBatch(batch, 2)
+	if !got.OK || got.Applied != 2 || got.TxCount != 1 {
+		t.Fatalf("summary = %+v, want applied 2 with tx count 1", got)
+	}
+	if got.Last.Num != 2 || !got.HasStage {
+		t.Fatalf("last/stage = #%d %v, want block 2 stage", got.Last.Num, got.HasStage)
+	}
+}
+
 func TestStagedBodyDrainLimit(t *testing.T) {
 	tests := []struct {
 		name          string

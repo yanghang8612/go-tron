@@ -49,6 +49,37 @@ type BufferedBatch struct {
 	BufferWaits []time.Duration
 }
 
+// AppliedBatchSummary is the service-neutral accounting for the prefix of a
+// buffered batch that canonical insertion accepted.
+type AppliedBatchSummary struct {
+	OK       bool
+	Applied  int
+	TxCount  int
+	Last     BufferedBlock
+	HasStage bool
+}
+
+// SummarizeAppliedBatch derives stats and the stage-progress boundary from an
+// applied prefix of a buffered batch. Callers still own DB deletes, stage
+// writes, logging, and sync stats emission.
+func SummarizeAppliedBatch(batch BufferedBatch, applied int) AppliedBatchSummary {
+	if applied <= 0 || applied > len(batch.Buffered) {
+		return AppliedBatchSummary{}
+	}
+	summary := AppliedBatchSummary{
+		OK:      true,
+		Applied: applied,
+		Last:    batch.Buffered[applied-1],
+	}
+	for i := 0; i < applied && i < len(batch.Blocks); i++ {
+		if block := batch.Blocks[i]; block != nil {
+			summary.TxCount += len(block.Transactions())
+		}
+	}
+	summary.HasStage = summary.Last.Num > 0
+	return summary
+}
+
 // StagedBodyDrainLimit clamps one local staged-body drain chunk to the
 // hash-verified SyncBodiesReady frontier. The returned bool is false when the
 // ready frontier is behind the next needed block, so callers should not drain
