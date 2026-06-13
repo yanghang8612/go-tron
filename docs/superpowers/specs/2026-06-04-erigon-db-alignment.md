@@ -354,6 +354,9 @@ Status:
   refresh recomputes the contiguous staged-body frontier and writes or deletes
   the ready row, while the drain-limit helper reads the hash-bound ready row
   plus matching staged body before `SyncService` logs or refreshes stale rows.
+  Accepted body handling also asks the downloader helper whether the new staged
+  body can start or extend that ready frontier, so distant out-of-order bodies
+  no longer force a full staged-table scan.
 - The downloader's wire batch and local import batch are now separate knobs:
   `FETCH_INV_DATA` still requests java-tron-compatible 100-block windows, while
   the staged-body drain restores/pops at most a smaller local import chunk per

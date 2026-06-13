@@ -153,6 +153,127 @@ func TestRefreshStagedBodyReadyProgressDeletesOnFirstReadError(t *testing.T) {
 	}
 }
 
+func TestRefreshStagedBodyReadyProgressAfterStage(t *testing.T) {
+	tests := []struct {
+		name      string
+		start     uint64
+		target    uint64
+		stagedNum uint64
+		setup     func(*testing.T, ethdb.KeyValueStore)
+		refreshed bool
+		skipped   bool
+		frontier  uint64
+		haveRow   bool
+	}{
+		{
+			name:      "missing ready starts frontier",
+			start:     2,
+			stagedNum: 2,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 2, 3)
+			},
+			refreshed: true,
+			frontier:  3,
+			haveRow:   true,
+		},
+		{
+			name:      "missing ready skips future body",
+			start:     2,
+			stagedNum: 4,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 4)
+			},
+			skipped: true,
+		},
+		{
+			name:      "valid ready extends on next body",
+			start:     2,
+			stagedNum: 4,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 2, 3, 4)
+				block3 := testBufferedBlock(3)
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 3, block3.Hash()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			refreshed: true,
+			frontier:  4,
+			haveRow:   true,
+		},
+		{
+			name:      "valid ready skips gap body",
+			start:     2,
+			stagedNum: 5,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 2, 3, 5)
+				block3 := testBufferedBlock(3)
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 3, block3.Hash()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			skipped:  true,
+			frontier: 3,
+			haveRow:  true,
+		},
+		{
+			name:      "target cap skips extension",
+			start:     2,
+			target:    3,
+			stagedNum: 4,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 2, 3, 4)
+				block3 := testBufferedBlock(3)
+				if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, 3, block3.Hash()); err != nil {
+					t.Fatalf("write ready progress: %v", err)
+				}
+			},
+			skipped:  true,
+			frontier: 3,
+			haveRow:  true,
+		},
+		{
+			name:      "invalid ready row forces repair",
+			start:     2,
+			stagedNum: 5,
+			setup: func(t *testing.T, db ethdb.KeyValueStore) {
+				t.Helper()
+				writeTestStagedBlocks(t, db, 2, 3)
+				if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodiesReady, 9); err != nil {
+					t.Fatalf("write unbound ready progress: %v", err)
+				}
+			},
+			refreshed: true,
+			frontier:  3,
+			haveRow:   true,
+		},
+	}
+	for _, tt := range tests {
+		db := rawdb.NewMemoryDatabase()
+		if tt.setup != nil {
+			tt.setup(t, db)
+		}
+		got := RefreshStagedBodyReadyProgressAfterStage(db, tt.start, tt.target, tt.stagedNum)
+		if got.Refreshed != tt.refreshed || got.Skipped != tt.skipped {
+			t.Fatalf("%s: result = %+v, want refreshed %v skipped %v", tt.name, got, tt.refreshed, tt.skipped)
+		}
+		row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady)
+		if err != nil {
+			t.Fatalf("%s: read ready progress: %v", tt.name, err)
+		}
+		if ok != tt.haveRow {
+			t.Fatalf("%s: ready row ok=%v, want %v", tt.name, ok, tt.haveRow)
+		}
+		if tt.haveRow && row.BlockNum != tt.frontier {
+			t.Fatalf("%s: ready row = %+v, want frontier %d", tt.name, row, tt.frontier)
+		}
+	}
+}
+
 func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 	readErr := errors.New("read staged")
 	row := rawdb.StageProgress{
@@ -314,4 +435,14 @@ func (corruptStageProgressReader) Has([]byte) (bool, error) {
 
 func (corruptStageProgressReader) Get([]byte) ([]byte, error) {
 	return []byte{0x01}, nil
+}
+
+func writeTestStagedBlocks(t *testing.T, db ethdb.KeyValueStore, nums ...uint64) {
+	t.Helper()
+	for _, num := range nums {
+		block := testBufferedBlock(int64(num))
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", num, err)
+		}
+	}
 }

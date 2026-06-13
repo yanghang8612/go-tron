@@ -30,6 +30,15 @@ type StagedBodyReadyProgressRefresh struct {
 	DeleteError error
 }
 
+// StagedBodyReadyAfterStageRefresh records the optional SyncBodiesReady refresh
+// after one staged body was accepted.
+type StagedBodyReadyAfterStageRefresh struct {
+	ReadyLimit StagedBodyReadyLimit
+	Refresh    StagedBodyReadyProgressRefresh
+	Refreshed  bool
+	Skipped    bool
+}
+
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
 // is usable as the next local import drain limit.
 type StagedBodyReadyLimitStatus uint8
@@ -119,6 +128,47 @@ func RefreshStagedBodyReadyProgress(db ethdb.KeyValueStore, start, targetHead ui
 	result.Updated = true
 	result.WriteError = rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, frontier.Number, frontier.Hash)
 	return result
+}
+
+// RefreshStagedBodyReadyProgressAfterStage refreshes SyncBodiesReady only when
+// the newly staged body can start or extend the persisted contiguous frontier.
+// Invalid existing ready rows still force a refresh so restart/drain state is
+// repaired promptly.
+func RefreshStagedBodyReadyProgressAfterStage(db ethdb.KeyValueStore, start, targetHead, stagedNum uint64) StagedBodyReadyAfterStageRefresh {
+	var result StagedBodyReadyAfterStageRefresh
+	if db == nil {
+		result.Skipped = true
+		result.ReadyLimit = StagedBodyReadyLimit{Status: StagedBodyReadyLimitMissing}
+		return result
+	}
+	ready := ReadStagedBodyReadyDrainLimit(db, start)
+	result.ReadyLimit = ready
+	if !ShouldRefreshStagedBodyReadyAfterStage(start, targetHead, stagedNum, ready) {
+		result.Skipped = true
+		return result
+	}
+	result.Refreshed = true
+	result.Refresh = RefreshStagedBodyReadyProgress(db, start, targetHead)
+	return result
+}
+
+// ShouldRefreshStagedBodyReadyAfterStage reports whether a newly accepted
+// staged body can change the persisted ready frontier.
+func ShouldRefreshStagedBodyReadyAfterStage(start, targetHead, stagedNum uint64, ready StagedBodyReadyLimit) bool {
+	switch ready.Status {
+	case StagedBodyReadyLimitMissing:
+		return stagedNum == start
+	case StagedBodyReadyLimitValid:
+		if targetHead != 0 && ready.Limit >= targetHead {
+			return false
+		}
+		if ready.Limit == ^uint64(0) {
+			return false
+		}
+		return stagedNum == ready.Limit+1
+	default:
+		return true
+	}
 }
 
 // ReadStagedBodyReadyDrainLimit reads and validates the persisted

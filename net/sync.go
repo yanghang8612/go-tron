@@ -1322,7 +1322,7 @@ func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
 	if result.ProgressWriteError != nil {
 		syncLog.Warn("Persist sync stage progress failed", "stage", rawdb.StageSyncBodies, "block", result.Number, "err", result.ProgressWriteError)
 	}
-	ss.writeSyncBodiesReadyProgress()
+	ss.refreshSyncBodiesReadyProgressAfterStage(result.Number)
 }
 
 func (ss *SyncService) writeSyncBodiesReadyProgress() {
@@ -1338,6 +1338,28 @@ func (ss *SyncService) writeSyncBodiesReadyProgress() {
 		return
 	}
 	refresh := syncdl.RefreshStagedBodyReadyProgress(db, head.Number()+1, ss.targetHeadNum)
+	ss.logSyncBodiesReadyRefresh(refresh)
+}
+
+func (ss *SyncService) refreshSyncBodiesReadyProgressAfterStage(stagedNum uint64) {
+	if ss == nil || ss.chain == nil {
+		return
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return
+	}
+	head := ss.chain.CurrentBlock()
+	if head == nil {
+		return
+	}
+	result := syncdl.RefreshStagedBodyReadyProgressAfterStage(db, head.Number()+1, ss.targetHeadNum, stagedNum)
+	if result.Refreshed {
+		ss.logSyncBodiesReadyRefresh(result.Refresh)
+	}
+}
+
+func (ss *SyncService) logSyncBodiesReadyRefresh(refresh syncdl.StagedBodyReadyProgressRefresh) {
 	if refresh.Frontier.Error != nil {
 		syncLog.Warn("Read sync staged block for ready progress failed", "number", refresh.Frontier.ErrorAt, "err", refresh.Frontier.Error)
 	}

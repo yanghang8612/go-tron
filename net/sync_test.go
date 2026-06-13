@@ -233,6 +233,35 @@ func TestSyncServiceTracksContiguousStagedBodiesReady(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRefreshesReadyWhenLaterGapFills(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block2 := stubBlock(2, bc.CurrentBlock().Hash())
+	block3 := stubBlock(3, block2.Hash())
+	block4 := stubBlock(4, block3.Hash())
+	block5 := stubBlock(5, block4.Hash())
+	for _, block := range []*types.Block{block2, block3} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block3.Number(), block3.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+	ss := NewSyncService(bc, nil)
+
+	ss.stageSyncBody(block5, nil)
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block3.Number() || ready.BlockHash != block3.Hash() {
+		t.Fatalf("SyncBodiesReady after gap block5 = %+v ok=%v err=%v, want block3", ready, ok, err)
+	}
+
+	ss.stageSyncBody(block4, nil)
+	ready, ok, err = rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block5.Number() || ready.BlockHash != block5.Hash() {
+		t.Fatalf("SyncBodiesReady after block4 fills gap = %+v ok=%v err=%v, want block5", ready, ok, err)
+	}
+}
+
 func TestSyncServiceKeepsCanonicalSyncImportProgressOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 2)
 	block1 := bc.GetBlockByNumber(1)
