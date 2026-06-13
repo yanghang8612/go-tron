@@ -504,14 +504,26 @@ func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pr
 	result := syncdl.RestoreStagedBodies(start, limit, ss.targetHeadNum, ss.blockBuffer, ss.bufferedHash, &ss.blockPath, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
 		return rawdb.IterateSyncStagedBlocksFrom(db, start, fn)
 	})
-	ss.targetHeadNum = result.TargetHead
+	syncdl.ApplyStagedBodyRestoreSettlementPlan(
+		syncdl.PlanStagedBodyRestoreSettlement(result, pruneStaleTail),
+		syncStagedBodyRestoreSettlementApplier{service: ss},
+	)
 	if result.ReadError != nil {
 		syncLog.Warn("Read sync staged block range failed", "from", result.NextExpected, "err", result.ReadError)
 	}
-	if pruneStaleTail && result.NeedPruneTail {
-		ss.deleteStaleSyncBodiesFrom(result.PruneFrom, result.LastRestoredNum, result.LastRestoredHash, result.HaveLastRestored)
-	}
 	return result
+}
+
+type syncStagedBodyRestoreSettlementApplier struct {
+	service *SyncService
+}
+
+func (a syncStagedBodyRestoreSettlementApplier) SetStagedBodyRestoreTargetHead(targetHead uint64) {
+	a.service.targetHeadNum = targetHead
+}
+
+func (a syncStagedBodyRestoreSettlementApplier) PruneStaleStagedBodyTail(from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {
+	a.service.deleteStaleSyncBodiesFrom(from, lastRestoredNum, lastRestoredHash, haveLastRestored)
 }
 
 func (ss *SyncService) addPeerStateLocked(peer *p2p.Peer) (*syncPeerState, bool) {

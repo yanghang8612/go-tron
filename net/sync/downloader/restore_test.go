@@ -226,6 +226,110 @@ func TestRestoreStagedBodiesPrunesMetadataMismatchAtRow(t *testing.T) {
 	}
 }
 
+func TestPlanStagedBodyRestoreSettlement(t *testing.T) {
+	hash := tcommon.Hash{0x04}
+	restore := StagedBodyRestoreResult{
+		TargetHead:       9,
+		NeedPruneTail:    true,
+		PruneFrom:        5,
+		LastRestoredNum:  4,
+		LastRestoredHash: hash,
+		HaveLastRestored: true,
+	}
+
+	got := PlanStagedBodyRestoreSettlement(restore, true)
+	wantSteps := []StagedBodyRestoreSettlementStep{
+		{Action: StagedBodyRestoreSetTargetHead, TargetHead: 9},
+		{
+			Action:           StagedBodyRestorePruneStaleTail,
+			PruneFrom:        5,
+			LastRestoredNum:  4,
+			LastRestoredHash: hash,
+			HaveLastRestored: true,
+		},
+	}
+	if !reflect.DeepEqual(got.Restore, restore) || !got.PruneStaleTail || !reflect.DeepEqual(got.Steps, wantSteps) {
+		t.Fatalf("settlement plan = %+v, want restore/prune steps %+v", got, wantSteps)
+	}
+
+	noPrune := PlanStagedBodyRestoreSettlement(restore, false)
+	if noPrune.PruneStaleTail || len(noPrune.Steps) != 1 || noPrune.Steps[0].Action != StagedBodyRestoreSetTargetHead {
+		t.Fatalf("no-prune settlement plan = %+v, want only target update", noPrune)
+	}
+
+	clean := restore
+	clean.NeedPruneTail = false
+	cleanPlan := PlanStagedBodyRestoreSettlement(clean, true)
+	if len(cleanPlan.Steps) != 1 || cleanPlan.Steps[0].Action != StagedBodyRestoreSetTargetHead {
+		t.Fatalf("clean settlement plan = %+v, want only target update", cleanPlan)
+	}
+}
+
+func TestApplyStagedBodyRestoreSettlementPlan(t *testing.T) {
+	hash := tcommon.Hash{0x04}
+	plan := StagedBodyRestoreSettlementPlan{
+		Steps: []StagedBodyRestoreSettlementStep{
+			{Action: StagedBodyRestoreSetTargetHead, TargetHead: 9},
+			{Action: StagedBodyRestoreSettlementStepAction(255)},
+			{Action: StagedBodyRestorePruneStaleTail, PruneFrom: 5, LastRestoredNum: 4, LastRestoredHash: hash, HaveLastRestored: true},
+		},
+	}
+	var applier recordingStagedBodyRestoreSettlementApplier
+
+	got := ApplyStagedBodyRestoreSettlementPlan(plan, &applier)
+	wantCalls := []recordedStagedBodyRestoreSettlementCall{
+		{action: StagedBodyRestoreSetTargetHead, target: 9},
+		{action: StagedBodyRestorePruneStaleTail, from: 5, last: 4, hash: hash, haveLast: true},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
+	}
+	wantApplied := []StagedBodyRestoreSettlementStepAction{
+		StagedBodyRestoreSetTargetHead,
+		StagedBodyRestorePruneStaleTail,
+	}
+	if !reflect.DeepEqual(got.AppliedSteps, wantApplied) {
+		t.Fatalf("applied steps = %+v, want %+v", got.AppliedSteps, wantApplied)
+	}
+	if !reflect.DeepEqual(got.UnknownSteps, []StagedBodyRestoreSettlementStepAction{StagedBodyRestoreSettlementStepAction(255)}) {
+		t.Fatalf("unknown steps = %+v, want [255]", got.UnknownSteps)
+	}
+
+	if nilResult := ApplyStagedBodyRestoreSettlementPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil applier result = %+v, want empty", nilResult)
+	}
+}
+
+type recordedStagedBodyRestoreSettlementCall struct {
+	action   StagedBodyRestoreSettlementStepAction
+	target   uint64
+	from     uint64
+	last     uint64
+	hash     tcommon.Hash
+	haveLast bool
+}
+
+type recordingStagedBodyRestoreSettlementApplier struct {
+	calls []recordedStagedBodyRestoreSettlementCall
+}
+
+func (a *recordingStagedBodyRestoreSettlementApplier) SetStagedBodyRestoreTargetHead(targetHead uint64) {
+	a.calls = append(a.calls, recordedStagedBodyRestoreSettlementCall{
+		action: StagedBodyRestoreSetTargetHead,
+		target: targetHead,
+	})
+}
+
+func (a *recordingStagedBodyRestoreSettlementApplier) PruneStaleStagedBodyTail(from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {
+	a.calls = append(a.calls, recordedStagedBodyRestoreSettlementCall{
+		action:   StagedBodyRestorePruneStaleTail,
+		from:     from,
+		last:     lastRestoredNum,
+		hash:     lastRestoredHash,
+		haveLast: haveLastRestored,
+	})
+}
+
 func stagedRows(rows []rawdb.SyncStagedBlockRow, err error) StagedBodyIterator {
 	return func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
 		for _, row := range rows {

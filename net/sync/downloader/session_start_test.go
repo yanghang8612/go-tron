@@ -477,13 +477,18 @@ func (a *startupRecoveryTestApplier) RestoreStagedBodies(from uint64, limit int,
 	result := RestoreStagedBodies(from, limit, a.target, a.buffer, a.hashes, &a.path, func(start uint64, fn func(rawdb.SyncStagedBlockRow) (bool, error)) error {
 		return rawdb.IterateSyncStagedBlocksFrom(a.db, start, fn)
 	})
-	a.target = result.TargetHead
-	if pruneStaleTail && result.NeedPruneTail {
-		PruneStaleStagedBodyTail(a.db, result.PruneFrom, result.LastRestoredNum, result.LastRestoredHash, result.HaveLastRestored, a.head+1, a.target)
-	}
+	ApplyStagedBodyRestoreSettlementPlan(PlanStagedBodyRestoreSettlement(result, pruneStaleTail), a)
 	return result
 }
 
 func (a *startupRecoveryTestApplier) RefreshBodiesReady() {
 	RefreshStagedBodyReadyProgress(a.db, a.head+1, a.target)
+}
+
+func (a *startupRecoveryTestApplier) SetStagedBodyRestoreTargetHead(targetHead uint64) {
+	a.target = targetHead
+}
+
+func (a *startupRecoveryTestApplier) PruneStaleStagedBodyTail(from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {
+	PruneStaleStagedBodyTail(a.db, from, lastRestoredNum, lastRestoredHash, haveLastRestored, a.head+1, a.target)
 }

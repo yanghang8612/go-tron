@@ -26,6 +26,50 @@ type StagedBodyRestoreResult struct {
 	InvalidError     error
 }
 
+// StagedBodyRestoreSettlementStepAction names one side effect after restoring
+// persisted staged bodies into the local drain buffer.
+type StagedBodyRestoreSettlementStepAction uint8
+
+const (
+	StagedBodyRestoreSetTargetHead StagedBodyRestoreSettlementStepAction = iota
+	StagedBodyRestorePruneStaleTail
+)
+
+// StagedBodyRestoreSettlementStep is one downloader-owned restore settlement
+// operation. Fields are populated only for actions that need them.
+type StagedBodyRestoreSettlementStep struct {
+	Action           StagedBodyRestoreSettlementStepAction
+	TargetHead       uint64
+	PruneFrom        uint64
+	LastRestoredNum  uint64
+	LastRestoredHash tcommon.Hash
+	HaveLastRestored bool
+}
+
+// StagedBodyRestoreSettlementPlan decides how a restored staged-body range
+// updates session target state and whether a stale persisted tail must be
+// pruned.
+type StagedBodyRestoreSettlementPlan struct {
+	Restore        StagedBodyRestoreResult
+	PruneStaleTail bool
+	Steps          []StagedBodyRestoreSettlementStep
+}
+
+// StagedBodyRestoreSettlementApplier performs the side effects named by a
+// restore settlement plan. SyncService owns DB handles and logging; downloader
+// owns the stage-recovery decision.
+type StagedBodyRestoreSettlementApplier interface {
+	SetStagedBodyRestoreTargetHead(targetHead uint64)
+	PruneStaleStagedBodyTail(from uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool)
+}
+
+// StagedBodyRestoreSettlementApplyResult reports which restore settlement
+// steps were dispatched.
+type StagedBodyRestoreSettlementApplyResult struct {
+	AppliedSteps []StagedBodyRestoreSettlementStepAction
+	UnknownSteps []StagedBodyRestoreSettlementStepAction
+}
+
 // RestoreStagedBodies restores a contiguous run of persisted downloader body
 // rows into buffer, honoring any already-buffered contiguous entries first. A
 // gap, path conflict, or read error asks the caller to prune the stale persisted
@@ -124,6 +168,50 @@ func RestoreStagedBodies(start uint64, limit int, targetHead uint64, buffer map[
 	}
 	if result.Restored < limit && consumeBuffered() {
 		requestPrune(expected)
+	}
+	return result
+}
+
+// PlanStagedBodyRestoreSettlement returns the restore-settlement side effects
+// for one staged-body restore result.
+func PlanStagedBodyRestoreSettlement(restore StagedBodyRestoreResult, pruneStaleTail bool) StagedBodyRestoreSettlementPlan {
+	plan := StagedBodyRestoreSettlementPlan{
+		Restore:        restore,
+		PruneStaleTail: pruneStaleTail,
+		Steps: []StagedBodyRestoreSettlementStep{
+			{Action: StagedBodyRestoreSetTargetHead, TargetHead: restore.TargetHead},
+		},
+	}
+	if pruneStaleTail && restore.NeedPruneTail {
+		plan.Steps = append(plan.Steps, StagedBodyRestoreSettlementStep{
+			Action:           StagedBodyRestorePruneStaleTail,
+			PruneFrom:        restore.PruneFrom,
+			LastRestoredNum:  restore.LastRestoredNum,
+			LastRestoredHash: restore.LastRestoredHash,
+			HaveLastRestored: restore.HaveLastRestored,
+		})
+	}
+	return plan
+}
+
+// ApplyStagedBodyRestoreSettlementPlan executes downloader-owned restore
+// settlement decisions against the caller's persistence/runtime adapter.
+func ApplyStagedBodyRestoreSettlementPlan(plan StagedBodyRestoreSettlementPlan, applier StagedBodyRestoreSettlementApplier) StagedBodyRestoreSettlementApplyResult {
+	var result StagedBodyRestoreSettlementApplyResult
+	if applier == nil {
+		return result
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case StagedBodyRestoreSetTargetHead:
+			applier.SetStagedBodyRestoreTargetHead(step.TargetHead)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case StagedBodyRestorePruneStaleTail:
+			applier.PruneStaleStagedBodyTail(step.PruneFrom, step.LastRestoredNum, step.LastRestoredHash, step.HaveLastRestored)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
 	}
 	return result
 }
