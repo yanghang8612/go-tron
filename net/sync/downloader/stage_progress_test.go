@@ -144,6 +144,10 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	if got.Schedule.BlockNum != block2.Number() || got.Schedule.BlockHash != block2.Hash() || !reflect.DeepEqual(got.Schedule.Tasks, wantStages) {
 		t.Fatalf("schedule = %+v, want block2 schedule %+v", got.Schedule, wantStages)
 	}
+	wantExecution := ImportExecutionStageTasks(block2.Number(), block2.Hash())
+	if !reflect.DeepEqual(got.Schedule.Execution, wantExecution) {
+		t.Fatalf("execution schedule = %+v, want %+v", got.Schedule.Execution, wantExecution)
+	}
 	if !got.RefreshReady || got.StatsBlocks != 2 || got.StatsTransactions != 3 || got.ReportHead != block2.Number() {
 		t.Fatalf("record metadata = refresh=%v blocks=%d txs=%d head=%d, want refresh/2/3/block2",
 			got.RefreshReady, got.StatsBlocks, got.StatsTransactions, got.ReportHead)
@@ -315,13 +319,26 @@ func TestImportPipelineStageTasks(t *testing.T) {
 	hash := tcommon.Hash{0x42}
 	got := ImportPipelineStageTasks(7, hash)
 	want := []ImportStageTask{
-		{CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: hash},
-		{CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash},
-		{CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash},
-		{CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseBodies, CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ImportPipelineStageTasks = %+v, want %+v", got, want)
+	}
+}
+
+func TestImportExecutionStageTasks(t *testing.T) {
+	hash := tcommon.Hash{0x42}
+	got := ImportExecutionStageTasks(7, hash)
+	want := []ImportStageTask{
+		{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash},
+		{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ImportExecutionStageTasks = %+v, want %+v", got, want)
 	}
 }
 
@@ -329,7 +346,9 @@ func TestNewImportStageSchedule(t *testing.T) {
 	hash := tcommon.Hash{0x42}
 	got := NewImportStageSchedule(7, hash)
 	wantTasks := ImportPipelineStageTasks(7, hash)
-	if got.BlockNum != 7 || got.BlockHash != hash || !reflect.DeepEqual(got.Tasks, wantTasks) {
+	wantBody := ImportBodyStageTask(7, hash)
+	wantExecution := ImportExecutionStageTasks(7, hash)
+	if got.BlockNum != 7 || got.BlockHash != hash || !reflect.DeepEqual(got.Tasks, wantTasks) || got.Body != wantBody || !reflect.DeepEqual(got.Execution, wantExecution) {
 		t.Fatalf("schedule = %+v, want block/hash/tasks %+v", got, wantTasks)
 	}
 

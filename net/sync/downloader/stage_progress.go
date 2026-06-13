@@ -56,10 +56,23 @@ const (
 	ImportStageProgressBlocked
 )
 
+// ImportStagePhase names the sync import subphase a task belongs to. The
+// schedule keeps execution/commitment/finish as explicit tasks rather than
+// treating canonical hooks as the source of ordering.
+type ImportStagePhase string
+
+const (
+	ImportStagePhaseBodies     ImportStagePhase = "bodies"
+	ImportStagePhaseExecution  ImportStagePhase = "execution"
+	ImportStagePhaseCommitment ImportStagePhase = "commitment"
+	ImportStagePhaseFinish     ImportStagePhase = "finish"
+)
+
 // ImportStageTask is one explicit canonical import stage target. The
 // downloader publishes the matching sync diagnostic stage only after the
 // canonical stage hook observes this exact block/hash boundary.
 type ImportStageTask struct {
+	Phase          ImportStagePhase
 	CanonicalStage rawdb.StageID
 	SyncStage      rawdb.StageID
 	BlockNum       uint64
@@ -72,6 +85,8 @@ type ImportStageTask struct {
 type ImportStageSchedule struct {
 	BlockNum  uint64
 	BlockHash tcommon.Hash
+	Body      ImportStageTask
+	Execution []ImportStageTask
 	Tasks     []ImportStageTask
 }
 
@@ -244,10 +259,14 @@ func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier Impo
 // NewImportStageSchedule returns the bodies/execution/commitment/finish targets
 // required before sync progress can be published at one import boundary.
 func NewImportStageSchedule(blockNum uint64, blockHash tcommon.Hash) ImportStageSchedule {
+	body := ImportBodyStageTask(blockNum, blockHash)
+	execution := ImportExecutionStageTasks(blockNum, blockHash)
 	return ImportStageSchedule{
 		BlockNum:  blockNum,
 		BlockHash: blockHash,
-		Tasks:     ImportPipelineStageTasks(blockNum, blockHash),
+		Body:      body,
+		Execution: execution,
+		Tasks:     append([]ImportStageTask{body}, execution...),
 	}
 }
 
@@ -366,11 +385,29 @@ func SyncPipelineProgressStages() []rawdb.StageID {
 // ImportPipelineStageTasks returns the canonical-to-sync stage schedule for
 // one applied import boundary.
 func ImportPipelineStageTasks(blockNum uint64, blockHash tcommon.Hash) []ImportStageTask {
+	schedule := NewImportStageSchedule(blockNum, blockHash)
+	return append([]ImportStageTask(nil), schedule.Tasks...)
+}
+
+// ImportBodyStageTask returns the local body-import task for one applied
+// boundary. It must precede execution tasks before progress can be published.
+func ImportBodyStageTask(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
+	return ImportStageTask{
+		Phase:          ImportStagePhaseBodies,
+		CanonicalStage: rawdb.StageBodies,
+		SyncStage:      rawdb.StageSyncImport,
+		BlockNum:       blockNum,
+		BlockHash:      blockHash,
+	}
+}
+
+// ImportExecutionStageTasks returns the explicit execution/commitment/finish
+// task chain for one applied import boundary.
+func ImportExecutionStageTasks(blockNum uint64, blockHash tcommon.Hash) []ImportStageTask {
 	return []ImportStageTask{
-		{CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport, BlockNum: blockNum, BlockHash: blockHash},
-		{CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: blockNum, BlockHash: blockHash},
-		{CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: blockNum, BlockHash: blockHash},
-		{CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: blockNum, BlockHash: blockHash},
+		{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: blockNum, BlockHash: blockHash},
+		{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: blockNum, BlockHash: blockHash},
+		{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: blockNum, BlockHash: blockHash},
 	}
 }
 
