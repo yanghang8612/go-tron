@@ -317,7 +317,9 @@ Status:
   peer-local pending rows, and decrement in-flight counts before `SyncService`
   updates the global requested marks. Timeout/disconnect failover now also uses
   a downloader plan for reset vs mirror vs fresh-peer search after remaining
-  peers have had a chance to fill fetch slots. These are
+  peers have had a chance to fill fetch slots. Parallel peer join capacity and
+  join-attempt throttling are likewise planned in `net/sync/downloader` before
+  `SyncService` queries handler candidates. These are
   intentionally outside `CanonicalExecutionStages()` so
   peer-advertised, downloaded, or sync-imported progress cannot masquerade as
   executed canonical chain progress.

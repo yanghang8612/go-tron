@@ -542,7 +542,7 @@ func (ss *SyncService) joinAvailablePeers() {
 	}
 	needFrom := ss.chain.CurrentBlock().Number() + 1
 	ss.mu.Lock()
-	need := maxParallelSyncPeers - len(ss.peers)
+	need := syncdl.PeerJoinCapacity(len(ss.peers), maxParallelSyncPeers)
 	exclude := make(map[string]struct{}, len(ss.peers))
 	for id := range ss.peers {
 		exclude[id] = struct{}{}
@@ -581,10 +581,17 @@ func (ss *SyncService) joinAvailablePeers() {
 }
 
 func (ss *SyncService) shouldJoinAvailablePeersLocked(now time.Time) bool {
-	if ss.handler == nil || !ss.syncing || ss.pause.Paused() || len(ss.peers) >= maxParallelSyncPeers {
-		return false
-	}
-	if !ss.lastPeerJoinAttempt.IsZero() && now.Sub(ss.lastPeerJoinAttempt) < peerJoinAttemptInterval {
+	plan := syncdl.PlanPeerJoinAttempt(syncdl.PeerJoinAttemptInput{
+		HandlerAvailable: ss.handler != nil,
+		Syncing:          ss.syncing,
+		Paused:           ss.pause.Paused(),
+		CurrentPeers:     len(ss.peers),
+		MaxPeers:         maxParallelSyncPeers,
+		LastAttempt:      ss.lastPeerJoinAttempt,
+		Now:              now,
+		MinInterval:      peerJoinAttemptInterval,
+	})
+	if !plan.Allowed {
 		return false
 	}
 	ss.lastPeerJoinAttempt = now
