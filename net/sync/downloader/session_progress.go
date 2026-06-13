@@ -25,7 +25,7 @@ type SessionProgress struct {
 // IdleDrainAfterRefillInput is the lock-free state needed after a local drain
 // found no buffered batch and fetch slots have been refilled.
 type IdleDrainAfterRefillInput struct {
-	Complete                  bool
+	Progress                  SessionProgress
 	JoinAvailablePeersAllowed bool
 }
 
@@ -97,8 +97,7 @@ type FetchRefillDispatchPlanApplier interface {
 // inventory message refilled fetch slots.
 type PostInventorySettlementInput struct {
 	OutboundRequests int
-	StalledRetries   bool
-	Complete         bool
+	Progress         SessionProgress
 }
 
 // PostInventorySettlementStepAction names one session action after accepting a
@@ -142,7 +141,7 @@ type PostInventorySettlementPlanApplier interface {
 // PlanIdleDrainAfterRefill decides how the sync loop should settle an empty
 // local drain after existing peers were given a chance to fetch more bodies.
 func PlanIdleDrainAfterRefill(in IdleDrainAfterRefillInput) IdleDrainPlan {
-	if in.Complete {
+	if in.Progress.ShouldFinish() {
 		return IdleDrainPlan{Finish: true}.withSteps()
 	}
 	if in.JoinAvailablePeersAllowed {
@@ -216,10 +215,10 @@ func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRef
 // PlanPostInventorySettlement decides how the service should settle a sync
 // session after accepting an inventory response and refilling fetch slots.
 func PlanPostInventorySettlement(in PostInventorySettlementInput) PostInventorySettlementPlan {
-	if in.OutboundRequests == 0 && in.StalledRetries {
+	if in.OutboundRequests == 0 && in.Progress.ShouldRestartForStalledRetries() {
 		return PostInventorySettlementPlan{Reset: true, TryFindPeer: true}.withSteps()
 	}
-	if in.Complete {
+	if in.Progress.ShouldFinish() {
 		return PostInventorySettlementPlan{Mirror: true, Finish: true}.withSteps()
 	}
 	return PostInventorySettlementPlan{Mirror: true}.withSteps()

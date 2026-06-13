@@ -41,11 +41,12 @@ func TestSessionProgressEstimatedRemainingFallsBackToQueues(t *testing.T) {
 }
 
 func TestPlanIdleDrainAfterRefill(t *testing.T) {
+	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	finish := IdleDrainPlan{
 		Finish: true,
 		Steps:  []IdleDrainStep{{Action: IdleDrainFinish}},
 	}
-	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{Complete: true, JoinAvailablePeersAllowed: true}); !reflect.DeepEqual(got, finish) {
+	if got := PlanIdleDrainAfterRefill(IdleDrainAfterRefillInput{Progress: complete, JoinAvailablePeersAllowed: true}); !reflect.DeepEqual(got, finish) {
 		t.Fatalf("complete idle plan = %+v, want %+v", got, finish)
 	}
 	join := IdleDrainPlan{
@@ -136,7 +137,11 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 		want  PostInventorySettlementPlan
 	}{
 		"stalled retries with no outbound resets": {
-			input: PostInventorySettlementInput{StalledRetries: true},
+			input: PostInventorySettlementInput{Progress: SessionProgress{
+				Syncing:      true,
+				RetryListLen: 1,
+				Peers:        []PeerProgress{{Done: true}},
+			}},
 			want: PostInventorySettlementPlan{
 				Reset:              true,
 				TryFindPeer:        true,
@@ -145,14 +150,26 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 			},
 		},
 		"outbound requests suppress stalled reset": {
-			input: PostInventorySettlementInput{OutboundRequests: 1, StalledRetries: true},
+			input: PostInventorySettlementInput{
+				OutboundRequests: 1,
+				Progress: SessionProgress{
+					Syncing:      true,
+					RetryListLen: 1,
+					Peers:        []PeerProgress{{Done: true}},
+				},
+			},
 			want: PostInventorySettlementPlan{
 				Mirror:      true,
 				LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
 			},
 		},
 		"complete session finishes": {
-			input: PostInventorySettlementInput{Complete: true},
+			input: PostInventorySettlementInput{Progress: SessionProgress{
+				Syncing:     true,
+				CurrentHead: 9,
+				TargetHead:  9,
+				Peers:       []PeerProgress{{Done: true}},
+			}},
 			want: PostInventorySettlementPlan{
 				Mirror:             true,
 				Finish:             true,

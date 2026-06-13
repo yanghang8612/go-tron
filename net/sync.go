@@ -799,17 +799,17 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
+	progress := ss.sessionProgressLocked()
 	settlement := syncdl.PlanPostInventorySettlement(syncdl.PostInventorySettlementInput{
 		OutboundRequests: len(out),
-		StalledRetries:   ss.shouldRestartForStalledRetriesLocked(),
-		Complete:         ss.shouldFinishLocked(),
+		Progress:         progress,
 	})
 	settlementApplier := syncPostInventorySettlementApplier{service: ss}
 	syncdl.ApplyPostInventorySettlementLockedPlan(settlement, settlementApplier)
 	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 		OutboundRequests: len(out),
-		Syncing:          ss.syncing,
-		Paused:           ss.pause.Paused(),
+		Syncing:          progress.Syncing,
+		Paused:           progress.Paused,
 	})
 	ss.mu.Unlock()
 
@@ -1103,19 +1103,19 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.bufferWait.Begin(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
-			complete := ss.shouldFinishLocked()
+			progress := ss.sessionProgressLocked()
 			joinAllowed := false
-			if !complete {
+			if !progress.ShouldFinish() {
 				joinAllowed = ss.shouldJoinAvailablePeersLocked(now)
 			}
 			idle := syncdl.PlanIdleDrainAfterRefill(syncdl.IdleDrainAfterRefillInput{
-				Complete:                  complete,
+				Progress:                  progress,
 				JoinAvailablePeersAllowed: joinAllowed,
 			})
 			dispatch = syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
 				OutboundRequests: len(out),
-				Syncing:          ss.syncing,
-				Paused:           ss.pause.Paused(),
+				Syncing:          progress.Syncing,
+				Paused:           progress.Paused,
 			})
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
