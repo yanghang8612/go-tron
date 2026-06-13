@@ -106,8 +106,10 @@ Rows then include the parsed stage map plus flat sync-stage fields:
 `stageSnapshotEventLogBuild`. The sampler also derives
 `stageSyncBodiesReadyGapBlocks`, `stageSyncImportExecutionLagBlocks`,
 `stageSyncExecutionCommitmentLagBlocks`,
-`stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks` so
-long-running samples show where the staged pipeline is accumulating backlog.
+`stageSyncCommitmentFinishLagBlocks`, and `stageSyncFinishHeadLagBlocks`, plus
+`stageSyncBottleneck`/`stageSyncBottleneckLagBlocks` for the largest current
+pipeline lag, so long-running samples show where the staged pipeline is
+accumulating backlog.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot

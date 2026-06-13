@@ -391,6 +391,15 @@ def lag(high, low):
         return -1
     return high - low
 
+def stage_bottleneck(candidates):
+    valid = [(name, value) for name, value in candidates if value >= 0]
+    if not valid:
+        return "unknown", -1
+    name, value = max(valid, key=lambda item: item[1])
+    if value == 0:
+        return "none", 0
+    return name, value
+
 def allocated_bytes(path):
     try:
         stat = path.stat()
@@ -476,6 +485,13 @@ chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if 
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
+stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
+    ("bodies-ready-gap", stages.get("stageSyncBodiesReadyGapBlocks", -1)),
+    ("import-execution", stages.get("stageSyncImportExecutionLagBlocks", -1)),
+    ("execution-commitment", stages.get("stageSyncExecutionCommitmentLagBlocks", -1)),
+    ("commitment-finish", stages.get("stageSyncCommitmentFinishLagBlocks", -1)),
+    ("finish-head", stage_sync_finish_head_lag),
+])
 if nowblock_status != "ok":
     sample_status = "http-nowblock-error"
 elif nodeinfo_status != "ok":
@@ -538,6 +554,8 @@ row = {
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
+    "stageSyncBottleneck": stage_sync_bottleneck,
+    "stageSyncBottleneckLagBlocks": stage_sync_bottleneck_lag,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),

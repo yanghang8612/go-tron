@@ -146,6 +146,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncExecutionCommitmentLagBlocks"], 1)
             self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 20)
+            self.assertEqual(row["stageSyncBottleneck"], "finish-head")
+            self.assertEqual(row["stageSyncBottleneckLagBlocks"], 20)
             self.assertEqual(row["stageUnboundRows"], 1)
             self.assertEqual(row["stageProgress"]["SyncFinish"]["value"], 80)
             self.assertFalse(row["stageProgress"]["SnapshotEventLogBuild"]["present"])
