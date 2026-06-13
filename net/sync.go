@@ -1222,14 +1222,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 	next := ss.chain.CurrentBlock().Number() + 1
 	readyLimit := ss.readSyncBodiesReadyDrainLimit(next)
 	plan := syncdl.PlanStagedBodyDrain(next, ss.importBatchLimitLocked(), readyLimit)
-	if plan.RefreshReady {
-		ss.writeSyncBodiesReadyProgress()
-	}
-	if !plan.CanDrain {
-		return syncdl.BufferedBatch{}
-	}
-	ss.restoreSyncStagedBodiesLocked(next, plan.RestoreLimit, false)
-	return syncdl.PopBufferedBatch(ss.blockBuffer, ss.bufferedHash, ss.blockPath, &ss.bufferWait, next, plan.RestoreLimit, now)
+	return syncdl.ApplyStagedBodyDrainPlan(plan, syncStagedBodyDrainApplier{service: ss, now: now})
 }
 
 func (ss *SyncService) readSyncBodiesReadyDrainLimit(next uint64) syncdl.StagedBodyReadyLimit {
@@ -1254,6 +1247,23 @@ func (ss *SyncService) readSyncBodiesReadyDrainLimit(next uint64) syncdl.StagedB
 		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", limit.StageRow.BlockNum, "hash", limit.StageRow.BlockHash, "stagedHash", limit.StagedHash)
 	}
 	return limit
+}
+
+type syncStagedBodyDrainApplier struct {
+	service *SyncService
+	now     time.Time
+}
+
+func (a syncStagedBodyDrainApplier) RefreshSyncBodiesReady() {
+	a.service.writeSyncBodiesReadyProgress()
+}
+
+func (a syncStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+	a.service.restoreSyncStagedBodiesLocked(from, limit, pruneStaleTail)
+}
+
+func (a syncStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) syncdl.BufferedBatch {
+	return syncdl.PopBufferedBatch(a.service.blockBuffer, a.service.bufferedHash, a.service.blockPath, &a.service.bufferWait, next, limit, a.now)
 }
 
 // logDecodeBatchResult logs decode failures from the off-lock raw-buffer decode

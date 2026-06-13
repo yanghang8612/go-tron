@@ -3,6 +3,7 @@ package downloader
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -287,35 +288,76 @@ func TestPlanStagedBodyDrain(t *testing.T) {
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitMissing},
-			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true},
+			want: StagedBodyDrainPlan{
+				RestoreLimit: 32,
+				CanDrain:     true,
+				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 32},
+					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 32},
+				},
+			},
 		},
 		{
 			name:  "valid ready clamps chunk",
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitValid, Limit: 12},
-			want:  StagedBodyDrainPlan{RestoreLimit: 3, CanDrain: true, ReadyLimit: 12, HasReadyLimit: true},
+			want: StagedBodyDrainPlan{
+				RestoreLimit:  3,
+				CanDrain:      true,
+				ReadyLimit:    12,
+				HasReadyLimit: true,
+				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 3},
+					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 3},
+				},
+			},
 		},
 		{
 			name:  "valid ready beyond max keeps max",
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitValid, Limit: 99},
-			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true, ReadyLimit: 99, HasReadyLimit: true},
+			want: StagedBodyDrainPlan{
+				RestoreLimit:  32,
+				CanDrain:      true,
+				ReadyLimit:    99,
+				HasReadyLimit: true,
+				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 32},
+					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 32},
+				},
+			},
 		},
 		{
 			name:  "stale ready requests refresh and uses max",
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitStale, Limit: 9},
-			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true, RefreshReady: true},
+			want: StagedBodyDrainPlan{
+				RestoreLimit: 32,
+				CanDrain:     true,
+				RefreshReady: true,
+				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRefreshReady},
+					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 32},
+					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 32},
+				},
+			},
 		},
 		{
 			name:  "invalid ready still uses max",
 			next:  10,
 			max:   32,
 			ready: StagedBodyReadyLimit{Status: StagedBodyReadyLimitHashMismatch, Limit: 12},
-			want:  StagedBodyDrainPlan{RestoreLimit: 32, CanDrain: true},
+			want: StagedBodyDrainPlan{
+				RestoreLimit: 32,
+				CanDrain:     true,
+				Steps: []StagedBodyDrainStep{
+					{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 32},
+					{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 32},
+				},
+			},
 		},
 		{
 			name:  "nonpositive max stops drain",
@@ -326,10 +368,75 @@ func TestPlanStagedBodyDrain(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		if got := PlanStagedBodyDrain(tt.next, tt.max, tt.ready); got != tt.want {
+		if got := PlanStagedBodyDrain(tt.next, tt.max, tt.ready); !reflect.DeepEqual(got, tt.want) {
 			t.Fatalf("%s: plan = %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
+}
+
+func TestApplyStagedBodyDrainPlan(t *testing.T) {
+	popBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 10, Hash: tcommon.Hash{0x0a}}}}
+	plan := StagedBodyDrainPlan{
+		Steps: []StagedBodyDrainStep{
+			{Action: StagedBodyDrainRefreshReady},
+			{Action: StagedBodyDrainRestoreBodies, From: 10, Limit: 3},
+			{Action: StagedBodyDrainStepAction(255)},
+			{Action: StagedBodyDrainPopBuffer, Next: 10, Limit: 3},
+		},
+	}
+	applier := &recordingStagedBodyDrainApplier{popBatch: popBatch}
+
+	got := ApplyStagedBodyDrainPlan(plan, applier)
+	wantCalls := []recordedStagedBodyDrainCall{
+		{action: StagedBodyDrainRefreshReady},
+		{action: StagedBodyDrainRestoreBodies, from: 10, limit: 3},
+		{action: StagedBodyDrainPopBuffer, next: 10, limit: 3},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
+	}
+	if !reflect.DeepEqual(got, popBatch) {
+		t.Fatalf("batch = %+v, want %+v", got, popBatch)
+	}
+
+	if got := ApplyStagedBodyDrainPlan(plan, nil); len(got.Buffered) != 0 {
+		t.Fatalf("nil applier batch = %+v, want empty", got)
+	}
+}
+
+type recordedStagedBodyDrainCall struct {
+	action StagedBodyDrainStepAction
+	from   uint64
+	next   uint64
+	limit  int
+	prune  bool
+}
+
+type recordingStagedBodyDrainApplier struct {
+	calls    []recordedStagedBodyDrainCall
+	popBatch BufferedBatch
+}
+
+func (a *recordingStagedBodyDrainApplier) RefreshSyncBodiesReady() {
+	a.calls = append(a.calls, recordedStagedBodyDrainCall{action: StagedBodyDrainRefreshReady})
+}
+
+func (a *recordingStagedBodyDrainApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) {
+	a.calls = append(a.calls, recordedStagedBodyDrainCall{
+		action: StagedBodyDrainRestoreBodies,
+		from:   from,
+		limit:  limit,
+		prune:  pruneStaleTail,
+	})
+}
+
+func (a *recordingStagedBodyDrainApplier) PopBufferedBatch(next uint64, limit int) BufferedBatch {
+	a.calls = append(a.calls, recordedStagedBodyDrainCall{
+		action: StagedBodyDrainPopBuffer,
+		next:   next,
+		limit:  limit,
+	})
+	return a.popBatch
 }
 
 func TestPopBufferedBatchReleasesReservationsAndKeepsGap(t *testing.T) {

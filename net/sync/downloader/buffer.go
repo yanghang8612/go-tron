@@ -220,6 +220,35 @@ type StagedBodyDrainPlan struct {
 	ReadyLimit    uint64
 	HasReadyLimit bool
 	RefreshReady  bool
+	Steps         []StagedBodyDrainStep
+}
+
+// StagedBodyDrainStepAction names one ordered local operation required to drain
+// a staged-body prefix into canonical import.
+type StagedBodyDrainStepAction uint8
+
+const (
+	StagedBodyDrainRefreshReady StagedBodyDrainStepAction = iota
+	StagedBodyDrainRestoreBodies
+	StagedBodyDrainPopBuffer
+)
+
+// StagedBodyDrainStep is one downloader-owned step in a local staged-body drain.
+type StagedBodyDrainStep struct {
+	Action         StagedBodyDrainStepAction
+	From           uint64
+	Next           uint64
+	Limit          int
+	PruneStaleTail bool
+}
+
+// StagedBodyDrainPlanApplier performs the persistence/runtime operations named
+// by a staged-body drain plan. SyncService owns DB handles and in-memory maps;
+// downloader owns the ordered local import preparation.
+type StagedBodyDrainPlanApplier interface {
+	RefreshSyncBodiesReady()
+	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool)
+	PopBufferedBatch(next uint64, limit int) BufferedBatch
 }
 
 // PlanStagedBodyDrain decides how many staged bodies the local importer may
@@ -236,7 +265,39 @@ func PlanStagedBodyDrain(next uint64, max int, ready StagedBodyReadyLimit) Stage
 		plan.RefreshReady = true
 	}
 	plan.RestoreLimit, plan.CanDrain = StagedBodyDrainLimit(next, max, plan.ReadyLimit, plan.HasReadyLimit)
-	return plan
+	return plan.withSteps(next)
+}
+
+func (p StagedBodyDrainPlan) withSteps(next uint64) StagedBodyDrainPlan {
+	if p.RefreshReady {
+		p.Steps = append(p.Steps, StagedBodyDrainStep{Action: StagedBodyDrainRefreshReady})
+	}
+	if p.CanDrain {
+		p.Steps = append(p.Steps,
+			StagedBodyDrainStep{Action: StagedBodyDrainRestoreBodies, From: next, Limit: p.RestoreLimit},
+			StagedBodyDrainStep{Action: StagedBodyDrainPopBuffer, Next: next, Limit: p.RestoreLimit},
+		)
+	}
+	return p
+}
+
+// ApplyStagedBodyDrainPlan executes the downloader-owned local drain schedule.
+func ApplyStagedBodyDrainPlan(plan StagedBodyDrainPlan, applier StagedBodyDrainPlanApplier) BufferedBatch {
+	if applier == nil {
+		return BufferedBatch{}
+	}
+	var batch BufferedBatch
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case StagedBodyDrainRefreshReady:
+			applier.RefreshSyncBodiesReady()
+		case StagedBodyDrainRestoreBodies:
+			applier.RestoreStagedBodies(step.From, step.Limit, step.PruneStaleTail)
+		case StagedBodyDrainPopBuffer:
+			batch = applier.PopBufferedBatch(step.Next, step.Limit)
+		}
+	}
+	return batch
 }
 
 // PopBufferedBatch removes the contiguous run starting at next from the local
