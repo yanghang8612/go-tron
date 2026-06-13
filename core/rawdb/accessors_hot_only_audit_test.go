@@ -92,9 +92,61 @@ func TestProductionHotOnlyChainDBConstructorsStayOnAuditedBoundaries(t *testing.
 	offenders := auditHotOnlyChainDBConstructors(t, root, map[string]struct{}{
 		"cmd/gtron/db_cmd.go":            {},
 		"core/balance_trace_backfill.go": {},
+		"core/blockchain.go":             {},
+		"core/genesis.go":                {},
 	})
 	if len(offenders) > 0 {
-		t.Fatalf("production code must not construct hot-only ChainDB wrappers outside audited replay/diagnostic boundaries:\n%s", strings.Join(offenders, "\n"))
+		t.Fatalf("production code must not construct hot-only ChainDB wrappers outside audited constructor/replay/diagnostic boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestHotOnlyChainDBAuditRecognizesConvertedNoopAncient(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func build() {
+	_ = rawdb.NewChainDB(nil, rawdb.AncientReader(rawdb.NoopAncient{}))
+}
+`)
+
+	offenders := auditHotOnlyChainDBConstructors(t, root, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.NewChainDB(..., rawdb.NoopAncient{})") {
+		t.Fatalf("offenders = %+v, want converted NoopAncient constructor", offenders)
+	}
+}
+
+func TestHotOnlyChainDBAuditRecognizesNoopAncientAlias(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func build() {
+	var ancient rawdb.AncientReader = rawdb.NoopAncient{}
+	_ = rawdb.NewChainDB(nil, ancient)
+}
+`)
+
+	offenders := auditHotOnlyChainDBConstructors(t, root, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.NewChainDB(..., rawdb.NoopAncient{})") {
+		t.Fatalf("offenders = %+v, want aliased NoopAncient constructor", offenders)
+	}
+}
+
+func TestHotOnlyChainDBAuditClearsNoopAncientAliasAfterRewrap(t *testing.T) {
+	root := writeAuditFixture(t, "app/rewrapped.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func build() {
+	var ancient rawdb.AncientReader = rawdb.NoopAncient{}
+	ancient = rawdb.NewFallbackAncientReader(ancient, nil)
+	_ = rawdb.NewChainDB(nil, ancient)
+}
+`)
+
+	if offenders := auditHotOnlyChainDBConstructors(t, root, nil); len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want rewrapped ancient reader accepted", offenders)
 	}
 }
 
@@ -185,6 +237,22 @@ func findRepoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+func writeAuditFixture(t *testing.T, rel, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module auditfixture\n"), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture source: %v", err)
+	}
+	return root
 }
 
 func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
@@ -285,21 +353,37 @@ func auditHotOnlyChainDBConstructors(t *testing.T, root string, allowed map[stri
 			return nil
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok || len(call.Args) < 2 {
+			fn, ok := node.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
 				return true
 			}
-			if !isRawDBCall(call.Fun, rawdbNames, "NewChainDB") {
+			noopAncientAliases := make(map[string]struct{})
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.AssignStmt:
+					recordNoopAncientAliases(n.Lhs, n.Rhs, rawdbNames, noopAncientAliases)
+					return true
+				case *ast.ValueSpec:
+					recordNoopAncientAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, noopAncientAliases)
+					return true
+				case *ast.CallExpr:
+					if len(n.Args) < 2 {
+						return true
+					}
+					if !isRawDBCall(n.Fun, rawdbNames, "NewChainDB") {
+						return true
+					}
+					if !isNoopAncientExpr(n.Args[1], rawdbNames) && !isNoopAncientAlias(n.Args[1], noopAncientAliases) {
+						return true
+					}
+					if isAllowedAuditPath(root, path, allowed) {
+						return true
+					}
+					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), "rawdb.NewChainDB(..., rawdb.NoopAncient{})"))
+				}
 				return true
-			}
-			if !isNoopAncientComposite(call.Args[1], rawdbNames) {
-				return true
-			}
-			if isAllowedAuditPath(root, path, allowed) {
-				return true
-			}
-			offenders = append(offenders, formatAuditOffender(fset, root, path, call.Pos(), "rawdb.NewChainDB(..., rawdb.NoopAncient{})"))
-			return true
+			})
+			return false
 		})
 		return nil
 	})
@@ -461,6 +545,23 @@ func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, a
 	}
 }
 
+func recordNoopAncientAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}) {
+	for i, left := range lhs {
+		if i >= len(rhs) {
+			return
+		}
+		ident, ok := left.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if isNoopAncientExpr(rhs[i], rawdbNames) {
+			aliases[ident.Name] = struct{}{}
+			continue
+		}
+		delete(aliases, ident.Name)
+	}
+}
+
 func exprsFromIdents(idents []*ast.Ident) []ast.Expr {
 	exprs := make([]ast.Expr, 0, len(idents))
 	for _, ident := range idents {
@@ -584,21 +685,51 @@ func selectorPath(expr ast.Expr) []string {
 	}
 }
 
-func isNoopAncientComposite(expr ast.Expr, rawdbNames map[string]struct{}) bool {
+func isNoopAncientAlias(expr ast.Expr, aliases map[string]struct{}) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, exists := aliases[ident.Name]
+	return exists
+}
+
+func isNoopAncientExpr(expr ast.Expr, rawdbNames map[string]struct{}) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 1 && isRawDBType(call.Fun, rawdbNames, "AncientReader") {
+		return isNoopAncientExpr(call.Args[0], rawdbNames)
+	}
 	lit, ok := expr.(*ast.CompositeLit)
 	if !ok {
 		return false
 	}
-	switch typ := lit.Type.(type) {
+	return isRawDBType(lit.Type, rawdbNames, "NoopAncient")
+}
+
+func isRawDBType(expr ast.Expr, rawdbNames map[string]struct{}, name string) bool {
+	switch typ := expr.(type) {
 	case *ast.SelectorExpr:
 		ident, ok := typ.X.(*ast.Ident)
-		if !ok || typ.Sel.Name != "NoopAncient" {
+		if !ok || typ.Sel.Name != name {
 			return false
 		}
 		_, imported := rawdbNames[ident.Name]
 		return imported
 	case *ast.Ident:
-		if typ.Name != "NoopAncient" {
+		if typ.Name != name {
 			return false
 		}
 		_, dotImported := rawdbNames["."]
