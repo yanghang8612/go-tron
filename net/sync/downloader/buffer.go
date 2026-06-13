@@ -243,9 +243,9 @@ func (p ImportBatchExecutionPlan) PlannedStageObservation(stage rawdb.StageID, b
 	return ImportStageObservation{}, false
 }
 
-// StageObserver filters canonical stage hook observations through the execution
-// plan before they reach the stage-progress collector.
-func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) StageProgressWriter {
+// StageObservationObserver filters canonical stage hook observations through
+// the execution plan and emits phase-owned observations.
+func (p ImportBatchExecutionPlan) StageObservationObserver(observe ImportStageObservationWriter) StageProgressWriter {
 	if observe == nil {
 		return nil
 	}
@@ -253,10 +253,31 @@ func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) Sta
 		return func(rawdb.StageID, uint64, tcommon.Hash) {}
 	}
 	return func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) {
-		if _, ok := p.PlannedStageObservation(stage, blockNum, blockHash); ok {
-			observe(stage, blockNum, blockHash)
+		if observation, ok := p.PlannedStageObservation(stage, blockNum, blockHash); ok {
+			observe(observation)
 		}
 	}
+}
+
+// StageProgressObserver filters canonical stage hook observations and records
+// phase-owned progress rows in collector.
+func (p ImportBatchExecutionPlan) StageProgressObserver(collector *StageProgressCollector) StageProgressWriter {
+	if collector == nil {
+		return nil
+	}
+	return p.StageObservationObserver(collector.ObservePlanned)
+}
+
+// StageObserver filters canonical stage hook observations through the execution
+// plan before they reach a legacy canonical-stage writer.
+func (p ImportBatchExecutionPlan) StageObserver(observe StageProgressWriter) StageProgressWriter {
+	if observe == nil {
+		return nil
+	}
+	return p.StageObservationObserver(func(observation ImportStageObservation) {
+		task := observation.Task
+		observe(task.CanonicalStage, task.BlockNum, task.BlockHash)
+	})
 }
 
 // ImportBatchRunStepAction names one ordered local operation for executing a
@@ -363,7 +384,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 				planned = true
 			}
 			collector = NewStageProgressCollector()
-			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageObserver(collector.Observe))
+			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageProgressObserver(collector))
 			executed = true
 		case ImportBatchRunSettle:
 			if !executed {

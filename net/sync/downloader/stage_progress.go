@@ -19,6 +19,10 @@ type StageProgressRow struct {
 // StageProgressWriter persists hash-bound sync pipeline progress.
 type StageProgressWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash)
 
+// ImportStageObservationWriter records one phase-owned import-stage
+// observation accepted by an execution plan.
+type ImportStageObservationWriter func(ImportStageObservation)
+
 // CanonicalHashReader returns the canonical block hash for number.
 type CanonicalHashReader func(number uint64) (tcommon.Hash, bool)
 
@@ -427,6 +431,19 @@ func (c *StageProgressCollector) Observe(stage rawdb.StageID, blockNum uint64, h
 	if c == nil || !ok {
 		return
 	}
+	c.observeSyncStage(syncStage, blockNum, hash)
+}
+
+// ObservePlanned records one observation already matched by the downloader's
+// phase plan.
+func (c *StageProgressCollector) ObservePlanned(observation ImportStageObservation) {
+	if c == nil || observation.Task.SyncStage == "" {
+		return
+	}
+	c.observeSyncStage(observation.Task.SyncStage, observation.Task.BlockNum, observation.Task.BlockHash)
+}
+
+func (c *StageProgressCollector) observeSyncStage(syncStage rawdb.StageID, blockNum uint64, hash tcommon.Hash) {
 	c.mu.Lock()
 	if c.rows == nil {
 		c.rows = make(map[rawdb.StageID][]StageProgressRow)

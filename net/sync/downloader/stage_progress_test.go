@@ -65,6 +65,37 @@ func TestStageProgressCollectorWritesExplicitSchedulePrefix(t *testing.T) {
 	}
 }
 
+func TestStageProgressCollectorRecordsPlannedObservation(t *testing.T) {
+	collector := NewStageProgressCollector()
+	hash := tcommon.Hash{0x02}
+	bodyTask := ImportBodyStageTask(2, hash)
+	task := ImportExecutionStageTask(2, hash)
+	phase := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseExecution,
+		CanonicalStage: rawdb.StageExecution,
+		SyncStage:      rawdb.StageSyncExecution,
+		Tasks:          []ImportStageTask{task},
+	}
+
+	collector.ObservePlanned(ImportStageObservation{Phase: ImportStagePhasePlan{
+		Phase:          ImportStagePhaseBodies,
+		CanonicalStage: rawdb.StageBodies,
+		SyncStage:      rawdb.StageSyncImport,
+		Tasks:          []ImportStageTask{bodyTask},
+	}, Task: bodyTask})
+	collector.ObservePlanned(ImportStageObservation{Phase: phase, Task: task})
+
+	want := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: 2, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: 2, BlockHash: hash, HasBlockHash: true},
+	}
+	if rows := collector.RowsForSchedule(NewImportStageSchedule(2, hash)); !reflect.DeepEqual(rows, want) {
+		t.Fatalf("planned observation rows = %+v, want %+v", rows, want)
+	}
+	var nilCollector *StageProgressCollector
+	nilCollector.ObservePlanned(ImportStageObservation{Phase: phase, Task: task})
+}
+
 func TestStageProgressCollectorLegacyRowsDeriveBoundaryFromImportObservation(t *testing.T) {
 	collector := NewStageProgressCollector()
 	collector.Observe(rawdb.StageBodies, 2, tcommon.Hash{0x02})

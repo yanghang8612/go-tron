@@ -420,6 +420,33 @@ func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testi
 	}
 }
 
+func TestImportBatchExecutionPlanStageProgressObserverRecordsPlannedObservations(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+	execution := PlanImportBatchExecution(batch)
+	collector := NewStageProgressCollector()
+	observer := execution.StageProgressObserver(collector)
+
+	observer(rawdb.StageBodies, block2.Number(), block2.Hash())
+	observer(rawdb.StageExecution, block2.Number(), block2.Hash())
+	observer(rawdb.StageCommitment, block2.Number(), tcommon.Hash{0xee})
+
+	want := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+	}
+	if rows := collector.RowsForSchedule(NewImportStageSchedule(block2.Number(), block2.Hash())); !reflect.DeepEqual(rows, want) {
+		t.Fatalf("planned progress observer rows = %+v, want %+v", rows, want)
+	}
+	if execution.StageProgressObserver(nil) != nil {
+		t.Fatal("nil collector produced progress observer")
+	}
+}
+
 func TestImportBatchExecutionPlanStageObserverDropsUnplannedObservations(t *testing.T) {
 	var observed []rawdb.StageID
 	observer := (ImportBatchExecutionPlan{}).StageObserver(func(stage rawdb.StageID, _ uint64, _ tcommon.Hash) {
