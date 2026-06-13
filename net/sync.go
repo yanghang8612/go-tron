@@ -866,12 +866,14 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 		if len(batch) > 0 {
 			fetchWait = time.Until(ps.nextFetchAt)
 		}
-		plan := syncdl.PlanReadyPeerFetch(syncdl.ReadyPeerFetchInput{
-			BatchLen:     len(batch),
+		plan := syncdl.PlanFetchSlot(syncdl.FetchSlotInput{
+			Batch:        batch,
 			FetchWait:    fetchWait,
 			Done:         ps.done,
 			InventoryTip: ps.lastInventoryNum,
 			CurrentHead:  currentHead,
+			Now:          now,
+			MinInterval:  minFetchRequestInterval,
 		})
 		switch plan.Action {
 		case syncdl.PeerFetchWaitLocalHead:
@@ -893,14 +895,14 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
 			continue
 		case syncdl.PeerFetchDelay:
-			ps.fetchList = append(batch, ps.fetchList...)
+			ps.fetchList = append(plan.Batch, ps.fetchList...)
 			ss.armPeerDelayTimerLocked(ps, plan.Wait)
 			continue
 		case syncdl.PeerFetchSend:
 		default:
 			continue
 		}
-		request := syncdl.NewFetchRequestState(batch)
+		request := plan.Request
 		ps.inflight = request.Inflight
 		ps.pending = request.Pending
 		ps.pendingIDs = request.PendingIDs
@@ -908,9 +910,9 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			ps.requestedHashes[hash] = struct{}{}
 			ss.requested[hash] = ps.peer.ID()
 		}
-		ps.nextFetchAt = now.Add(minFetchRequestInterval)
+		ps.nextFetchAt = plan.NextFetchAt
 		ss.armPeerFetchTimerLocked(ps)
-		out = append(out, outboundSyncRequest{peer: ps.peer, blocks: batch})
+		out = append(out, outboundSyncRequest{peer: ps.peer, blocks: plan.Batch})
 	}
 	return out
 }
