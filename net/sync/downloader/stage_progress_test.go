@@ -463,6 +463,54 @@ func TestRepairSyncPipelineProgressDeletesDownstreamAheadOfUpstream(t *testing.T
 	}
 }
 
+func TestRepairSyncPipelineProgressDeletesDownstreamAfterMiddleForkHashMismatch(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	canonical := tcommon.Hash{0x01}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, canonical); err != nil {
+		t.Fatalf("write import progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, 1, canonical); err != nil {
+		t.Fatalf("write execution progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncCommitment, 1, tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("write forked commitment progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncFinish, 1, canonical); err != nil {
+		t.Fatalf("write finish progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgress(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return canonical, true
+		}
+		return tcommon.Hash{}, false
+	})
+	wantStatuses := []SyncStageProgressRepairStatus{
+		SyncStageProgressKept,
+		SyncStageProgressKept,
+		SyncStageProgressDeleted,
+		SyncStageProgressDeleted,
+	}
+	if len(got) != len(wantStatuses) {
+		t.Fatalf("repairs = %+v, want %d", got, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got[i].Status != status {
+			t.Fatalf("repair %d = %+v, want status %v", i, got[i], status)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || !ok || row.BlockNum != 1 || row.BlockHash != canonical {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want kept canonical row", stage, row, ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
 func TestRepairSyncPipelineProgressDeletesDownstreamWithoutUpstream(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	hash := tcommon.Hash{0x01}
