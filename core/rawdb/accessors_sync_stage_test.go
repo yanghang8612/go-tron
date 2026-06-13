@@ -77,6 +77,49 @@ func TestDeleteSyncStagedBlockBatchNilOrEmpty(t *testing.T) {
 	}
 }
 
+func TestWriteSyncImportProgressBatch(t *testing.T) {
+	base := NewMemoryDatabase()
+	blocks := []*types.Block{
+		testSyncStagedBlock(1, common.Hash{}),
+		testSyncStagedBlock(2, common.Hash{0x01}),
+		testSyncStagedBlock(3, common.Hash{0x02}),
+	}
+	for _, block := range blocks {
+		if err := WriteSyncStagedBlock(base, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+
+	db := &countingBatchStore{KeyValueStore: base}
+	result := WriteSyncImportProgressBatch(db, []SyncStagedBlockDelete{
+		{Number: blocks[0].Number(), Hash: blocks[0].Hash()},
+		{Number: blocks[1].Number(), Hash: blocks[1].Hash()},
+	}, []StageProgress{
+		{Stage: StageSyncImport, BlockNum: blocks[1].Number(), BlockHash: blocks[1].Hash(), HasBlockHash: true},
+		{Stage: StageSyncExecution, BlockNum: blocks[1].Number(), BlockHash: blocks[1].Hash(), HasBlockHash: true},
+	})
+	if result.Deleted != 2 || len(result.DeleteErrors) != 0 || result.ProgressRows != 2 || result.ProgressError != nil {
+		t.Fatalf("result = %+v, want deleted 2 and two progress rows", result)
+	}
+	if db.batches != 1 || db.directDeletes != 0 || db.directPuts != 0 {
+		t.Fatalf("sync import progress used batches=%d directDeletes=%d directPuts=%d, want one batch", db.batches, db.directDeletes, db.directPuts)
+	}
+	for _, block := range blocks[:2] {
+		if _, ok, err := ReadSyncStagedBlock(db, block.Number()); err != nil || ok {
+			t.Fatalf("deleted staged block %d ok=%v err=%v, want missing", block.Number(), ok, err)
+		}
+	}
+	if _, ok, err := ReadSyncStagedBlock(db, blocks[2].Number()); err != nil || !ok {
+		t.Fatalf("untouched staged block ok=%v err=%v, want present", ok, err)
+	}
+	for _, stage := range []StageID{StageSyncImport, StageSyncExecution} {
+		row, ok, err := ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != blocks[1].Number() || row.BlockHash != blocks[1].Hash() || !row.HasBlockHash {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2 hash", stage, row, ok, err)
+		}
+	}
+}
+
 func TestSyncStagedBlockRawIterate(t *testing.T) {
 	db := NewMemoryDatabase()
 	for _, n := range []uint64{4, 2, 3} {

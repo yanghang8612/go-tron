@@ -1224,10 +1224,13 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	if !summary.OK {
 		return
 	}
-	ss.deleteImportedSyncBodies(batch, summary.Applied)
+	deletes := syncdl.AppliedStagedBlockDeletes(batch, summary.Applied)
+	var progressRows []rawdb.StageProgress
 	if summary.HasStage {
-		ss.writeStageProgressRows(stageProgress.Rows(summary.Last.Num))
+		progressRows = stageProgress.Rows(summary.Last.Num)
 	}
+	ss.writeImportedSyncProgress(deletes, progressRows)
+	ss.writeSyncBodiesReadyProgress()
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -1274,16 +1277,20 @@ func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, 
 	}
 }
 
-func (ss *SyncService) writeStageProgressRows(rows []rawdb.StageProgress) {
-	if len(rows) == 0 || ss == nil || ss.chain == nil {
+func (ss *SyncService) writeImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
+	if (len(deletes) == 0 && len(rows) == 0) || ss == nil || ss.chain == nil {
 		return
 	}
 	db := ss.chain.DB()
 	if db == nil {
 		return
 	}
-	if err := rawdb.WriteStageProgressRows(db, rows); err != nil {
-		syncLog.Warn("Persist sync stage progress rows failed", "rows", len(rows), "err", err)
+	result := rawdb.WriteSyncImportProgressBatch(db, deletes, rows)
+	for _, deleteErr := range result.DeleteErrors {
+		syncLog.Warn("Delete sync staged block failed", "number", deleteErr.Number, "hash", deleteErr.Hash, "err", deleteErr.Err)
+	}
+	if result.ProgressError != nil {
+		syncLog.Warn("Persist sync stage progress rows failed", "rows", len(rows), "err", result.ProgressError)
 	}
 }
 
@@ -1353,21 +1360,6 @@ func (ss *SyncService) logSyncBodiesReadyRefresh(refresh syncdl.StagedBodyReadyP
 	if refresh.WriteError != nil {
 		syncLog.Warn("Persist sync bodies ready stage progress failed", "block", refresh.Frontier.Number, "hash", refresh.Frontier.Hash, "err", refresh.WriteError)
 	}
-}
-
-func (ss *SyncService) deleteImportedSyncBodies(batch syncdl.BufferedBatch, applied int) {
-	if ss == nil || ss.chain == nil || applied <= 0 {
-		return
-	}
-	db := ss.chain.DB()
-	if db == nil {
-		return
-	}
-	result := rawdb.DeleteSyncStagedBlockBatch(db, syncdl.AppliedStagedBlockDeletes(batch, applied))
-	for _, deleteErr := range result.Errors {
-		syncLog.Warn("Delete sync staged block failed", "number", deleteErr.Number, "hash", deleteErr.Hash, "err", deleteErr.Err)
-	}
-	ss.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {

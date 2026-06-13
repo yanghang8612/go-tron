@@ -63,6 +63,13 @@ type SyncStagedBlockDeleteResult struct {
 	Errors  []SyncStagedBlockDeleteError
 }
 
+type SyncImportProgressWriteResult struct {
+	Deleted       int
+	DeleteErrors  []SyncStagedBlockDeleteError
+	ProgressRows  int
+	ProgressError error
+}
+
 func WriteSyncStagedBlock(db ethdb.KeyValueWriter, block *types.Block) error {
 	return WriteSyncStagedBlockRaw(db, block, nil)
 }
@@ -265,6 +272,71 @@ func DeleteSyncStagedBlockBatch(db ethdb.KeyValueWriter, blocks []SyncStagedBloc
 			continue
 		}
 		result.Deleted++
+	}
+	return result
+}
+
+// WriteSyncImportProgressBatch commits the storage side effects for an applied
+// sync import prefix: delete imported staged body rows and persist hash-bound
+// sync pipeline progress rows. Backends with batch support flush all writes in
+// one batch.
+func WriteSyncImportProgressBatch(db ethdb.KeyValueWriter, deletes []SyncStagedBlockDelete, progress []StageProgress) SyncImportProgressWriteResult {
+	var result SyncImportProgressWriteResult
+	if db == nil || (len(deletes) == 0 && len(progress) == 0) {
+		return result
+	}
+	if batcher, ok := db.(ethdb.Batcher); ok {
+		batch := batcher.NewBatchWithSize((len(deletes) + len(progress)) * 8)
+		defer batch.Reset()
+		enqueuedDeletes := make([]SyncStagedBlockDelete, 0, len(deletes))
+		for _, block := range deletes {
+			if err := batch.Delete(syncStagedBlockKey(block.Number)); err != nil {
+				result.DeleteErrors = append(result.DeleteErrors, SyncStagedBlockDeleteError{
+					Number: block.Number,
+					Hash:   block.Hash,
+					Err:    err,
+				})
+				continue
+			}
+			enqueuedDeletes = append(enqueuedDeletes, block)
+		}
+		for i, row := range progress {
+			if row.Stage == "" {
+				result.ProgressError = fmt.Errorf("rawdb: empty stage id at row %d", i)
+				return result
+			}
+			if err := batch.Put(stageProgressKey(row.Stage), encodeStageProgress(row.BlockNum, row.BlockHash, row.HasBlockHash)); err != nil {
+				result.ProgressError = fmt.Errorf("rawdb: write stage progress %s at %d: %w", row.Stage, row.BlockNum, err)
+				return result
+			}
+		}
+		if len(enqueuedDeletes) == 0 && len(progress) == 0 {
+			return result
+		}
+		if err := batch.Write(); err != nil {
+			for _, block := range enqueuedDeletes {
+				result.DeleteErrors = append(result.DeleteErrors, SyncStagedBlockDeleteError{
+					Number: block.Number,
+					Hash:   block.Hash,
+					Err:    err,
+				})
+			}
+			if len(progress) > 0 {
+				result.ProgressError = fmt.Errorf("rawdb: write sync import progress batch: %w", err)
+			}
+			return result
+		}
+		result.Deleted = len(enqueuedDeletes)
+		result.ProgressRows = len(progress)
+		return result
+	}
+	deleteResult := DeleteSyncStagedBlockBatch(db, deletes)
+	result.Deleted = deleteResult.Deleted
+	result.DeleteErrors = deleteResult.Errors
+	if err := WriteStageProgressRows(db, progress); err != nil {
+		result.ProgressError = err
+	} else {
+		result.ProgressRows = len(progress)
 	}
 	return result
 }

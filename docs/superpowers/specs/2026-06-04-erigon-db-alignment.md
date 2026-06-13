@@ -384,12 +384,10 @@ Status:
   package now owns raw-buffer decode actions so a decoded prefix can be imported
   while a first-entry decode failure simply continues the drain loop. The same
   applied-prefix summary derives the staged body delete descriptors used for
-  imported-body cleanup, leaving `SyncService` to orchestrate persistence,
-  logging, pausing, and canonical insertion. The hash-bound sync
-  import/execution/commitment/finish rows for an
-  applied range are now emitted by the downloader collector and persisted
-  through one `core/rawdb` stage-progress batch when the backing store supports
-  batched writes.
+  imported-body cleanup, and those deletes are committed with the hash-bound
+  sync import/execution/commitment/finish rows through one `core/rawdb` batch
+  when the backing store supports batched writes, leaving `SyncService` to
+  orchestrate logging, pausing, ready-frontier refresh, and canonical insertion.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
