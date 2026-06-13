@@ -136,9 +136,17 @@ func TestSyncServiceRestoresHalfDownloadedSessionOnStart(t *testing.T) {
 	if path1 != block1.Hash() || path2 != block2.Hash() {
 		t.Fatalf("restored block path = %x/%x, want block1/block2 %x/%x", path1, path2, block1.Hash(), block2.Hash())
 	}
+	if got := bc.CurrentBlock().Number(); got != 0 {
+		t.Fatalf("head after half-download restore = %d, want genesis before local import", got)
+	}
 	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
 	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
 		t.Fatalf("SyncBodiesReady after half-download restore = %+v ok=%v err=%v, want block2", ready, ok, err)
+	}
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress after half-download restore = %+v ok=%v err=%v, want absent before execution", stage, row, ok, err)
+		}
 	}
 
 	ss.drainBufferedBlocks()
