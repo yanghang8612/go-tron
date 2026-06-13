@@ -374,6 +374,24 @@ func TestTronBackend_ColdChainIndexLookupAfterRestore(t *testing.T) {
 	if err != nil || gotTx == nil || gotBlock == nil || idx != 0 {
 		t.Fatalf("GetTransactionByHash = tx:%v block:%v idx:%d err:%v, want tx/block/0", gotTx, gotBlock, idx, err)
 	}
+	rpcServer := jsonrpc.NewServer(backend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+	txHashHex := "0x" + txHash.Hex()
+	blockHashHex := "0x" + block.Hash().Hex()
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getTransactionReceipt", []any{txHashHex})
+	receipt, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if receipt["transactionHash"] != txHashHex ||
+		receipt["blockHash"] != blockHashHex ||
+		receipt["blockNumber"] != "0x1" ||
+		receipt["transactionIndex"] != "0x0" ||
+		receipt["status"] != "0x1" {
+		t.Fatalf("cold eth_getTransactionReceipt = %+v, want tx/block/index/status from cold chain data", receipt)
+	}
 	if got := bc.StateRootAtBlock(block.Number()); got != wantRoot {
 		t.Fatalf("StateRootAtBlock = %x, want %x", got, wantRoot)
 	}
