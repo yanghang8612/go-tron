@@ -44,6 +44,35 @@ type SyncStageProgressRepair struct {
 	DeleteError   error
 }
 
+// ImportStageProgressStatus records how one sync pipeline stage was handled
+// when planning imported-batch progress.
+type ImportStageProgressStatus uint8
+
+const (
+	ImportStageProgressPlanned ImportStageProgressStatus = iota
+	ImportStageProgressMissing
+	ImportStageProgressBlocked
+)
+
+// ImportStageProgressDecision is one stage planner decision for an applied
+// sync import prefix. Later stages are blocked after the first missing stage so
+// persisted sync progress remains a contiguous pipeline prefix.
+type ImportStageProgressDecision struct {
+	Stage  rawdb.StageID
+	Status ImportStageProgressStatus
+	Row    rawdb.StageProgress
+}
+
+// ImportedBatchProgressPlan is the downloader-owned storage plan for the
+// successfully imported prefix of one local staged-body batch.
+type ImportedBatchProgressPlan struct {
+	OK        bool
+	Summary   AppliedBatchSummary
+	Deletes   []rawdb.SyncStagedBlockDelete
+	Progress  []rawdb.StageProgress
+	Decisions []ImportStageProgressDecision
+}
+
 // StageProgressCollector observes canonical block insertion stages and records
 // the matching downloader/import diagnostic stages.
 type StageProgressCollector struct {
@@ -103,6 +132,63 @@ func (c *StageProgressCollector) Rows(through uint64) []rawdb.StageProgress {
 		})
 	}
 	return rows
+}
+
+// PlanImportedBatchProgress derives the DB-side progress plan for an applied
+// import prefix. It keeps sync import/execution/commitment/finish rows as a
+// contiguous stage prefix: if a stage is missing, later observed rows are not
+// published for this batch.
+func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *StageProgressCollector) ImportedBatchProgressPlan {
+	summary := SummarizeAppliedBatch(batch, applied)
+	if !summary.OK {
+		return ImportedBatchProgressPlan{}
+	}
+	plan := ImportedBatchProgressPlan{
+		OK:      true,
+		Summary: summary,
+		Deletes: AppliedStagedBlockDeletes(batch, summary.Applied),
+	}
+	if !summary.HasStage {
+		return plan
+	}
+	plan.Progress, plan.Decisions = collector.contiguousRows(summary.Last.Num)
+	return plan
+}
+
+func (c *StageProgressCollector) contiguousRows(through uint64) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
+	observed := make(map[rawdb.StageID]rawdb.StageProgress)
+	for _, row := range c.Rows(through) {
+		observed[row.Stage] = row
+	}
+	stages := SyncPipelineProgressStages()
+	progress := make([]rawdb.StageProgress, 0, len(stages))
+	decisions := make([]ImportStageProgressDecision, 0, len(stages))
+	blocked := false
+	for _, stage := range stages {
+		if blocked {
+			decisions = append(decisions, ImportStageProgressDecision{
+				Stage:  stage,
+				Status: ImportStageProgressBlocked,
+			})
+			continue
+		}
+		row, ok := observed[stage]
+		if !ok {
+			blocked = true
+			decisions = append(decisions, ImportStageProgressDecision{
+				Stage:  stage,
+				Status: ImportStageProgressMissing,
+			})
+			continue
+		}
+		progress = append(progress, row)
+		decisions = append(decisions, ImportStageProgressDecision{
+			Stage:  stage,
+			Status: ImportStageProgressPlanned,
+			Row:    row,
+		})
+	}
+	return progress, decisions
 }
 
 func (c *StageProgressCollector) snapshotRows() map[rawdb.StageID][]StageProgressRow {

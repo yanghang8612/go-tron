@@ -1220,16 +1220,11 @@ func (ss *SyncService) logDecodeBatchResult(result syncdl.BufferedBatchDecodeRes
 }
 
 func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied int, totalElapsed time.Duration, stageProgress *syncdl.StageProgressCollector) {
-	summary := syncdl.SummarizeAppliedBatch(batch, applied)
-	if !summary.OK {
+	plan := syncdl.PlanImportedBatchProgress(batch, applied, stageProgress)
+	if !plan.OK {
 		return
 	}
-	deletes := syncdl.AppliedStagedBlockDeletes(batch, summary.Applied)
-	var progressRows []rawdb.StageProgress
-	if summary.HasStage {
-		progressRows = stageProgress.Rows(summary.Last.Num)
-	}
-	ss.writeImportedSyncProgress(deletes, progressRows)
+	ss.writeImportedSyncProgress(plan.Deletes, plan.Progress)
 	ss.writeSyncBodiesReadyProgress()
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
@@ -1237,8 +1232,8 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	// recording the range as one unit keeps block counts and phase totals
 	// aligned in the emitted sync summary.
 	snap, emit := ss.stats.RecordBlocks(
-		summary.Applied,
-		summary.TxCount,
+		plan.Summary.Applied,
+		plan.Summary.TxCount,
 		totalElapsed,
 		time.Now(),
 		tsync.StatsReportInterval,
@@ -1254,7 +1249,7 @@ func (ss *SyncService) recordImportedBatch(batch syncdl.BufferedBatch, applied i
 	ss.mu.Unlock()
 
 	if emit {
-		ss.reportSegment(snap, diag, summary.Last.Num, remain, summary.Last.Peer)
+		ss.reportSegment(snap, diag, plan.Summary.Last.Num, remain, plan.Summary.Last.Peer)
 	}
 }
 

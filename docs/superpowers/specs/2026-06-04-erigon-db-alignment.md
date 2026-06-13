@@ -386,8 +386,12 @@ Status:
   applied-prefix summary derives the staged body delete descriptors used for
   imported-body cleanup, and those deletes are committed with the hash-bound
   sync import/execution/commitment/finish rows through one `core/rawdb` batch
-  when the backing store supports batched writes, leaving `SyncService` to
-  orchestrate logging, pausing, ready-frontier refresh, and canonical insertion.
+  when the backing store supports batched writes. The downloader package now
+  owns the complete imported-batch storage plan and publishes stage rows only as
+  a contiguous sync-stage prefix, so a missing execution observation prevents
+  later commitment/finish rows from making restart diagnostics look more
+  advanced than the applied pipeline. `SyncService` is left to orchestrate
+  logging, pausing, ready-frontier refresh, and canonical insertion.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
