@@ -806,13 +806,18 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	})
 	settlementApplier := syncPostInventorySettlementApplier{service: ss}
 	syncdl.ApplyPostInventorySettlementLockedPlan(settlement, settlementApplier)
+	dispatch := syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
+		OutboundRequests: len(out),
+		Syncing:          ss.syncing,
+		Paused:           ss.pause.Paused(),
+	})
 	ss.mu.Unlock()
 
 	if stageInventoryTarget > 0 {
 		ss.writeStageProgress(rawdb.StageSyncInventory, stageInventoryTarget, tcommon.Hash{}, false)
 	}
 
-	ss.sendOutboundRequests(out)
+	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 	syncdl.ApplyPostInventorySettlementAfterDispatchPlan(settlement, settlementApplier)
 }
 
@@ -1085,6 +1090,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
+	var dispatch syncdl.FetchRefillDispatchPlan
 	for {
 		now := time.Now()
 		ss.mu.Lock()
@@ -1106,6 +1112,11 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 				Complete:                  complete,
 				JoinAvailablePeersAllowed: joinAllowed,
 			})
+			dispatch = syncdl.PlanFetchRefillDispatch(syncdl.FetchRefillDispatchInput{
+				OutboundRequests: len(out),
+				Syncing:          ss.syncing,
+				Paused:           ss.pause.Paused(),
+			})
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
 			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
@@ -1123,7 +1134,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 	}
-	ss.sendOutboundRequests(out)
+	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 func (ss *SyncService) waitForDrain() {
