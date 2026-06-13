@@ -333,6 +333,13 @@ func PlanImportedBatchProgress(batch BufferedBatch, applied int, collector *Stag
 // preserving PlanImportedBatchProgress as the legacy batch-derived entry point.
 func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, execution ImportBatchExecutionPlan, collector *StageProgressCollector) ImportedBatchProgressPlan {
 	schedule, hasSchedule := execution.AppliedSchedule(applied)
+	if !hasSchedule {
+		plan := planImportedBatchProgress(batch, applied, ImportStageSchedule{}, true, collector)
+		if plan.OK {
+			plan.ExecutionDiagnostics = execution.Diagnostics
+		}
+		return plan
+	}
 	plan := planImportedBatchProgress(batch, applied, schedule, hasSchedule, collector)
 	if plan.OK {
 		plan.ExecutionDiagnostics = execution.Diagnostics

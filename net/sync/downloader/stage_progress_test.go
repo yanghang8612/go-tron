@@ -187,6 +187,47 @@ func TestPlanImportedBatchProgress(t *testing.T) {
 	}
 }
 
+func TestPlanImportedBatchProgressForExecutionRequiresAppliedSchedule(t *testing.T) {
+	block := testBufferedBlock(1)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block},
+		Buffered: []BufferedBlock{
+			{Num: block.Number(), Hash: block.Hash()},
+		},
+	}
+	collector := NewStageProgressCollector()
+	for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+		collector.Observe(stage, block.Number(), block.Hash())
+	}
+
+	legacy := PlanImportedBatchProgress(batch, 1, collector)
+	if len(legacy.Progress) != 4 || !legacy.StagePlan.Complete {
+		t.Fatalf("legacy progress = %+v stagePlan=%+v, want hook-derived compatibility progress", legacy.Progress, legacy.StagePlan)
+	}
+
+	got := PlanImportedBatchProgressForExecution(batch, 1, ImportBatchExecutionPlan{}, collector)
+	if !got.OK || got.Summary.Applied != 1 || !got.RefreshReady {
+		t.Fatalf("execution progress plan = %+v, want applied cleanup plan with ready refresh", got)
+	}
+	if len(got.Progress) != 0 || len(got.Decisions) != 0 || len(got.Stages) != 0 || len(got.Schedule.Tasks) != 0 {
+		t.Fatalf("execution progress = rows:%+v decisions:%+v stages:%+v schedule:%+v, want no stage progress without execution schedule",
+			got.Progress, got.Decisions, got.Stages, got.Schedule)
+	}
+	if got.StagePlan.Complete || got.StageDiagnostics.Scheduled != 0 || got.StageDiagnostics.Completed != 0 {
+		t.Fatalf("stage diagnostics = %+v plan=%+v, want no scheduled stage progress without execution schedule", got.StageDiagnostics, got.StagePlan)
+	}
+	if len(got.Deletes) != 1 || got.Deletes[0].Number != block.Number() || got.Deletes[0].Hash != block.Hash() {
+		t.Fatalf("deletes = %+v, want staged block cleanup for applied block", got.Deletes)
+	}
+	wantSteps := []ImportedBatchProgressStep{
+		{Action: ImportedBatchWriteProgress, Deletes: got.Deletes},
+		{Action: ImportedBatchRefreshBodiesReady},
+	}
+	if !reflect.DeepEqual(got.Steps, wantSteps) {
+		t.Fatalf("steps = %+v, want cleanup plus ready refresh", got.Steps)
+	}
+}
+
 func TestApplyImportedBatchProgressPlan(t *testing.T) {
 	deleteRow := rawdb.SyncStagedBlockDelete{Number: 2, Hash: tcommon.Hash{0x02}}
 	progressRow := rawdb.StageProgress{
