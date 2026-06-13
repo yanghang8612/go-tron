@@ -190,8 +190,9 @@ appends JSONL samples with HTTP height/block ID, peer count, elapsed sync time,
 total and per-interval block rates, and hot/cold/snapshot disk split plus
 per-interval byte deltas without opening the live Pebble store. The Nile sampler
 also breaks out `derivedIndexBytes`/`derivedIndexFiles` for chain-index,
-balance-trace, section-bloom, and event-log/index sidecars, while keeping
-`snapshotBytes` as the full snapshot directory size. Run it with
+balance-trace, section-bloom, and event-log/index sidecars, and reports
+Pebble hot-store SST/WAL ratios plus interval SST/WAL bytes per block while
+keeping `snapshotBytes` as the full snapshot directory size. Run it with
 `--sync-log-file` to fold the latest `Imported chain segment` stage planner,
 execution-plan, slow-phase, state-mutation, and peer fields into the JSONL row.
 Run it with `--offline-db-check` only after the node is stopped to add

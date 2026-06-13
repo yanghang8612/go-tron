@@ -904,6 +904,9 @@ derived_index_bytes_per_block = float(derived_index) / height if height > 0 else
 cold_to_hot_ratio = float(cold_archive) / chaindata if chaindata > 0 else 0.0
 derived_index_to_hot_ratio = float(derived_index) / chaindata if chaindata > 0 else 0.0
 derived_index_snapshot_ratio = float(derived_index) / snapshot if snapshot > 0 else 0.0
+chaindata_sst_to_hot_ratio = ratio(chaindata_files["sst"]["bytes"], chaindata)
+chaindata_wal_to_hot_ratio = ratio(chaindata_files["wal"]["bytes"], chaindata)
+chaindata_wal_to_sst_ratio = ratio(chaindata_files["wal"]["bytes"], chaindata_files["sst"]["bytes"])
 previous = load_previous_sample(output)
 previous_unix = number(previous, "unix", 0)
 previous_height = number(previous, "height", 0)
@@ -934,10 +937,14 @@ chaindata_options_bytes_delta = chaindata_files["options"]["bytes"] - number(pre
 chaindata_other_bytes_delta = chaindata_files["other"]["bytes"] - number(previous, "chaindataOtherBytes", chaindata_files["other"]["bytes"]) if interval_seconds > 0 else 0
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+chaindata_sst_bytes_per_second = float(chaindata_sst_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+chaindata_wal_bytes_per_second = float(chaindata_wal_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 datadir_bytes_per_interval_block = float(datadir_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 chaindata_bytes_per_interval_block = float(chaindata_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+chaindata_sst_bytes_per_interval_block = float(chaindata_sst_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+chaindata_wal_bytes_per_interval_block = float(chaindata_wal_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 ancient_bytes_per_interval_block = float(ancient_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 snapshot_bytes_per_interval_block = float(snapshot_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 cold_archive_bytes_per_interval_block = float(cold_archive_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
@@ -1116,6 +1123,9 @@ row = {
     "coldToHotBytesRatio": cold_to_hot_ratio,
     "derivedIndexToHotBytesRatio": derived_index_to_hot_ratio,
     "derivedIndexSnapshotBytesRatio": derived_index_snapshot_ratio,
+    "chaindataSSTToHotBytesRatio": chaindata_sst_to_hot_ratio,
+    "chaindataWALToHotBytesRatio": chaindata_wal_to_hot_ratio,
+    "chaindataWALToSSTBytesRatio": chaindata_wal_to_sst_ratio,
     "datadirBytesDelta": datadir_bytes_delta,
     "chaindataBytesDelta": chaindata_bytes_delta,
     "ancientBytesDelta": ancient_bytes_delta,
@@ -1138,10 +1148,14 @@ row = {
     "chaindataOtherBytesDelta": chaindata_other_bytes_delta,
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
+    "chaindataSSTBytesPerSecond": chaindata_sst_bytes_per_second,
+    "chaindataWALBytesPerSecond": chaindata_wal_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
     "intervalDatadirBytesPerBlock": datadir_bytes_per_interval_block,
     "intervalChaindataBytesPerBlock": chaindata_bytes_per_interval_block,
+    "intervalChaindataSSTBytesPerBlock": chaindata_sst_bytes_per_interval_block,
+    "intervalChaindataWALBytesPerBlock": chaindata_wal_bytes_per_interval_block,
     "intervalAncientBytesPerBlock": ancient_bytes_per_interval_block,
     "intervalSnapshotBytesPerBlock": snapshot_bytes_per_interval_block,
     "intervalColdArchiveBytesPerBlock": cold_archive_bytes_per_interval_block,

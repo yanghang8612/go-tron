@@ -86,9 +86,11 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
 `intervalDatadirBytesPerBlock`, `intervalChaindataBytesPerBlock`,
+`intervalChaindataSSTBytesPerBlock`, `intervalChaindataWALBytesPerBlock`,
 `intervalColdArchiveBytesPerBlock`, and
 `intervalDerivedIndexBytesPerBlock`, `coldToHotBytesRatio`,
-`derivedIndexToHotBytesRatio`,
+`derivedIndexToHotBytesRatio`, `chaindataSSTToHotBytesRatio`,
+`chaindataWALToHotBytesRatio`, `chaindataWALToSSTBytesRatio`,
 `derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
 `coldArchiveFiles`, plus the repo commit used to produce the sample. When
 `--pid-file` is provided, rows also include `processPid`, `processStatus`,
