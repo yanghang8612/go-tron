@@ -755,6 +755,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}
 	ps.chainRequested = false
 	headNum := ss.chain.CurrentBlock().Number()
+	candidates := make([]syncdl.InventoryCandidate, 0, len(inv.Ids))
 	for _, bid := range inv.Ids {
 		num := uint64(bid.Number)
 		hash := tcommon.BytesToHash(bid.Hash)
@@ -780,20 +781,24 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		if !facts.KnownOrRequested && !facts.PeerRequested {
 			facts.ReservedPath = ss.reserveBlockPathLocked(bid)
 		}
-		if syncdl.AcceptInventoryCandidate(facts) {
-			ps.fetchList = append(ps.fetchList, bid)
-		}
+		candidates = append(candidates, syncdl.InventoryCandidate{ID: bid, Facts: facts})
 	}
-	ps.remainNum = inv.RemainNum
-	if len(inv.Ids) > 0 {
-		last := inv.Ids[len(inv.Ids)-1]
-		if last.Number > 0 {
-			target := syncdl.ObserveInventoryTarget(ss.targetHeadNum, uint64(last.Number), inv.RemainNum, maxChainInventorySize)
-			ps.lastInventoryNum = target.Window.Max
-			ps.minFetchNum = target.Window.Min
-			ss.targetHeadNum = target.Target
-			stageInventoryTarget = target.StageTarget
-		}
+	inventoryPlan := syncdl.PlanChainInventory(syncdl.ChainInventoryInput{
+		CurrentTarget:  ss.targetHeadNum,
+		ExistingQueued: len(ps.fetchList),
+		RemainNum:      inv.RemainNum,
+		InventoryLimit: maxChainInventorySize,
+		Candidates:     candidates,
+	})
+	ps.fetchList = append(ps.fetchList, inventoryPlan.Accepted...)
+	ps.remainNum = inventoryPlan.RemainNum
+	if inventoryPlan.HasTarget {
+		ps.lastInventoryNum = inventoryPlan.Target.Window.Max
+		ps.minFetchNum = inventoryPlan.Target.Window.Min
+		ss.targetHeadNum = inventoryPlan.Target.Target
+	}
+	if inventoryPlan.HasStageTarget {
+		stageInventoryTarget = inventoryPlan.StageTarget
 	}
 
 	// java-tron sets `needSyncFromUs = false` on its peer record only when
@@ -802,7 +807,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	// every inbound INV — so our outbound TRX advertisements never reach
 	// the producer's mempool. Detect "we are at head" here (response is a
 	// single id we already have) and finish; otherwise continue fetching.
-	if syncdl.ShouldMarkInventoryDone(len(inv.Ids), len(ps.fetchList), inv.RemainNum) {
+	if inventoryPlan.Done {
 		ps.done = true
 	}
 
