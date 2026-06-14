@@ -97,7 +97,7 @@ class NileSyncSampleTest(unittest.TestCase):
                         "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s execElapsed=800ms applyElapsed=900ms blocks/s=10 txs/s=4 head=90 remain=20 slowPhase=execute slowElapsed=500ms stateMutTop=storagePuts:2 stateMutKVTop=accountKV:1 peer=peer-old syncStageComplete=true syncStageCompleted=40 syncStageScheduled=40 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanBodyStages=10 syncExecPlanPostBodyStages=30 syncExecPlanExecutionStages=10 syncExecPlanCommitmentStages=10 syncExecPlanFinishStages=10 syncExecPlanFirst=81 syncExecPlanLast=90",
                         "DEBUG [06-13|12:00:00.100] Imported chain segment details blocks=10 head=90 syncExecPlanBlocks=10",
                         "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s execElapsed=1500ms applyElapsed=1700ms blocks/s=20.5 txs/s=7.5 head=100 remain=5 slowPhase=stateCommit slowElapsed=900ms slowStateCommitPhase=flatWrite slowStateCommitElapsed=600ms stateMutTop=storagePuts:7 stateMutKVTop=accountKV:3 peer=peer-latest syncStageComplete=false syncStageCompleted=59 syncStageScheduled=80 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanBodyStages=20 syncExecPlanPostBodyStages=60 syncExecPlanExecutionStages=20 syncExecPlanCommitmentStages=20 syncExecPlanFinishStages=20 syncExecPlanFirst=81 syncExecPlanLast=100",
-                        'INFO [06-13|12:01:10.000] Sync startup repair summary syncStartupRepairComplete=false syncStartupRepairKept=2 syncStartupRepairMissing=1 syncStartupRepairDeleted=1 syncStartupRepairHasBlocked=true syncStartupRepairFirstBlocked=SyncCommitment syncStartupRepairInterrupted=false syncStartupRepairErrorStage= syncStartupRepairRows=4 syncStartupPipelineOrderChecked=true syncStartupPipelineOrderIssues=1 syncStartupPipelineOrderFirstIssue="SyncCommitment=3 ahead of SyncExecution=2" syncStartupPipelineOrderReadErrors=1 syncStartupPipelineOrderFirstReadErrorStage=SyncBodies syncStartupStagedRestored=3 syncStartupStagedTargetHead=110 syncStartupStagedNextExpected=104 syncStartupStagedNeedPruneTail=true syncStartupStagedPruneFrom=105 syncStartupStagedHaveLastRestored=true syncStartupStagedLastRestored=103',
+                        'INFO [06-13|12:01:10.000] Sync startup repair summary syncStartupRepairComplete=false syncStartupRepairKept=2 syncStartupRepairMissing=1 syncStartupRepairDeleted=1 syncStartupRepairHasBlocked=true syncStartupRepairFirstBlocked=SyncCommitment syncStartupRepairInterrupted=false syncStartupRepairErrorStage= syncStartupRepairRows=4 syncStartupPipelineOrderChecked=true syncStartupPipelineOrderIssues=1 syncStartupPipelineOrderFirstIssue="SyncCommitment=3 ahead of SyncExecution=2" syncStartupPipelineOrderReadErrors=1 syncStartupPipelineOrderFirstReadErrorStage=SyncBodies syncStartupPipelineOrderRepairChecked=true syncStartupPipelineOrderRepairComplete=false syncStartupPipelineOrderRepairDeleted=2 syncStartupPipelineOrderRepairUpdated=1 syncStartupPipelineOrderRepairInterrupted=true syncStartupPipelineOrderRepairErrorStage=SyncCommitment syncStartupPipelineOrderRepairRows=3 syncStartupPipelineCursorChecked=true syncStartupPipelineCursorComplete=false syncStartupPipelineCursorRows=4 syncStartupPipelineCursorHasLast=true syncStartupPipelineCursorLastStage=SyncExecution syncStartupPipelineCursorLastBlock=102 syncStartupPipelineCursorLastHasHash=true syncStartupPipelineCursorHasNext=true syncStartupPipelineCursorNextStage=SyncCommitment syncStartupPipelineCursorBlocked=true syncStartupPipelineCursorInterrupted=false syncStartupPipelineCursorErrorStage= syncStartupStagedRestored=3 syncStartupStagedTargetHead=110 syncStartupStagedNextExpected=104 syncStartupStagedNeedPruneTail=true syncStartupStagedPruneFrom=105 syncStartupStagedHaveLastRestored=true syncStartupStagedLastRestored=103',
                     ]
                 )
                 + "\n",
@@ -390,6 +390,25 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncStartupPipelineOrderFirstIssue"], "SyncCommitment=3 ahead of SyncExecution=2")
             self.assertEqual(row["syncStartupPipelineOrderReadErrors"], 1)
             self.assertEqual(row["syncStartupPipelineOrderFirstReadErrorStage"], "SyncBodies")
+            self.assertTrue(row["syncStartupPipelineOrderRepairChecked"])
+            self.assertFalse(row["syncStartupPipelineOrderRepairComplete"])
+            self.assertEqual(row["syncStartupPipelineOrderRepairDeleted"], 2)
+            self.assertEqual(row["syncStartupPipelineOrderRepairUpdated"], 1)
+            self.assertTrue(row["syncStartupPipelineOrderRepairInterrupted"])
+            self.assertEqual(row["syncStartupPipelineOrderRepairErrorStage"], "SyncCommitment")
+            self.assertEqual(row["syncStartupPipelineOrderRepairRows"], 3)
+            self.assertTrue(row["syncStartupPipelineCursorChecked"])
+            self.assertFalse(row["syncStartupPipelineCursorComplete"])
+            self.assertEqual(row["syncStartupPipelineCursorRows"], 4)
+            self.assertTrue(row["syncStartupPipelineCursorHasLast"])
+            self.assertEqual(row["syncStartupPipelineCursorLastStage"], "SyncExecution")
+            self.assertEqual(row["syncStartupPipelineCursorLastBlock"], 102)
+            self.assertTrue(row["syncStartupPipelineCursorLastHasHash"])
+            self.assertTrue(row["syncStartupPipelineCursorHasNext"])
+            self.assertEqual(row["syncStartupPipelineCursorNextStage"], "SyncCommitment")
+            self.assertTrue(row["syncStartupPipelineCursorBlocked"])
+            self.assertFalse(row["syncStartupPipelineCursorInterrupted"])
+            self.assertEqual(row["syncStartupPipelineCursorErrorStage"], "")
             self.assertEqual(row["syncStartupStagedRestored"], 3)
             self.assertEqual(row["syncStartupStagedTargetHead"], 110)
             self.assertEqual(row["syncStartupStagedNextExpected"], 104)
