@@ -1263,7 +1263,10 @@ drainLoop:
 	for {
 		now := time.Now()
 		ss.mu.Lock()
-		if !ss.syncing || ss.pause.Paused() {
+		entry := syncdl.PlanLocalDrainEntry(syncdl.LocalDrainEntryInput{
+			Progress: ss.sessionProgressLocked(),
+		})
+		if entry.StopLoop {
 			ss.mu.Unlock()
 			break
 		}

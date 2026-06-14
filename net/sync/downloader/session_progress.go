@@ -70,6 +70,12 @@ type EmptyDrainPreparationInput struct {
 	Progress SessionProgress
 }
 
+// LocalDrainEntryInput is the lock-held session state at the top of one local
+// drain iteration, before the caller reads staged-body rows.
+type LocalDrainEntryInput struct {
+	Progress SessionProgress
+}
+
 // LocalDrainIterationInput is the lock-held state for one local staged-body
 // drain iteration after the caller has restored/popped a possible batch.
 type LocalDrainIterationInput struct {
@@ -103,6 +109,15 @@ const (
 	LocalDrainIterationImport
 )
 
+// LocalDrainEntryStepAction names the entry operation for one local drain
+// iteration before staged-body rows are read.
+type LocalDrainEntryStepAction uint8
+
+const (
+	LocalDrainEntryStop LocalDrainEntryStepAction = iota
+	LocalDrainEntryReadStagedBodies
+)
+
 // FetchRefillDispatchStepAction names one network dispatch action after peer
 // fetch slots were refilled.
 type FetchRefillDispatchStepAction uint8
@@ -134,6 +149,11 @@ type IdleDrainApplyResult struct {
 // LocalDrainIterationStep is one downloader-owned local drain loop operation.
 type LocalDrainIterationStep struct {
 	Action LocalDrainIterationStepAction
+}
+
+// LocalDrainEntryStep is one downloader-owned local drain entry operation.
+type LocalDrainEntryStep struct {
+	Action LocalDrainEntryStepAction
 }
 
 // FetchRefillDispatchStep is one downloader-owned dispatch operation after a
@@ -177,6 +197,14 @@ type LocalDrainIterationPlan struct {
 	EmptyDrain  bool
 	ImportBatch bool
 	Steps       []LocalDrainIterationStep
+}
+
+// LocalDrainEntryPlan decides whether a local drain iteration should read
+// staged-body rows or stop before touching the staged-body table.
+type LocalDrainEntryPlan struct {
+	StopLoop         bool
+	ReadStagedBodies bool
+	Steps            []LocalDrainEntryStep
 }
 
 // LocalDrainRunPlan groups the staged-body drain result with the downloader
@@ -452,6 +480,15 @@ func PlanLocalDrainIteration(in LocalDrainIterationInput) LocalDrainIterationPla
 	return LocalDrainIterationPlan{ImportBatch: true}.withSteps()
 }
 
+// PlanLocalDrainEntry derives the local drain-loop entry branch before the
+// caller reads staged-body rows.
+func PlanLocalDrainEntry(in LocalDrainEntryInput) LocalDrainEntryPlan {
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return LocalDrainEntryPlan{StopLoop: true}.withSteps()
+	}
+	return LocalDrainEntryPlan{ReadStagedBodies: true}.withSteps()
+}
+
 // PlanLocalDrainRun derives the local drain branch from the full staged-body
 // drain result. This keeps the "empty vs importable" decision next to the
 // staged-body drain planner instead of re-deriving it in SyncService.
@@ -549,6 +586,15 @@ func (p LocalDrainIterationPlan) withSteps() LocalDrainIterationPlan {
 		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}}
 	case p.ImportBatch:
 		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationImport}}
+	}
+	return p
+}
+
+func (p LocalDrainEntryPlan) withSteps() LocalDrainEntryPlan {
+	if p.StopLoop {
+		p.Steps = []LocalDrainEntryStep{{Action: LocalDrainEntryStop}}
+	} else if p.ReadStagedBodies {
+		p.Steps = []LocalDrainEntryStep{{Action: LocalDrainEntryReadStagedBodies}}
 	}
 	return p
 }

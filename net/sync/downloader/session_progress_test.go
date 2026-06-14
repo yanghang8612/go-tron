@@ -126,6 +126,38 @@ func TestPlanFetchRefillRun(t *testing.T) {
 
 func TestPlanLocalDrainIteration(t *testing.T) {
 	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	entryTests := map[string]struct {
+		input LocalDrainEntryInput
+		want  LocalDrainEntryPlan
+	}{
+		"not syncing": {
+			input: LocalDrainEntryInput{},
+			want: LocalDrainEntryPlan{
+				StopLoop: true,
+				Steps:    []LocalDrainEntryStep{{Action: LocalDrainEntryStop}},
+			},
+		},
+		"paused": {
+			input: LocalDrainEntryInput{Progress: SessionProgress{Syncing: true, Paused: true}},
+			want: LocalDrainEntryPlan{
+				StopLoop: true,
+				Steps:    []LocalDrainEntryStep{{Action: LocalDrainEntryStop}},
+			},
+		},
+		"active": {
+			input: LocalDrainEntryInput{Progress: active},
+			want: LocalDrainEntryPlan{
+				ReadStagedBodies: true,
+				Steps:            []LocalDrainEntryStep{{Action: LocalDrainEntryReadStagedBodies}},
+			},
+		},
+	}
+	for name, test := range entryTests {
+		if got := PlanLocalDrainEntry(test.input); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s local drain entry = %+v, want %+v", name, got, test.want)
+		}
+	}
+
 	tests := map[string]struct {
 		input LocalDrainIterationInput
 		want  LocalDrainIterationPlan
