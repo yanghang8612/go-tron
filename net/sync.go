@@ -271,6 +271,31 @@ func (ss *SyncService) IsSyncing() bool {
 	return ss.syncing
 }
 
+// RecoverStalledFetch re-kicks the fetch scheduler of an active sync session
+// whose head has not advanced for a full watchdog StallThreshold. The trigger
+// is the async-commit depth>2 lost wakeup: the last fillFetchSlots ran against
+// a commit-worker-lagged CurrentBlock and parked every peer on "waiting for
+// local head", leaving no in-flight fetch or armed timer to re-evaluate once
+// the committed head caught up. Re-running the drain finishes any deep-pipeline
+// session (advancing the committed head to the applied tip) and re-fills the
+// fetch slots against that now-accurate head, re-requesting the next inventory
+// window. Called only by the watchdog goroutine — never the commit worker — so
+// re-entering the drain here cannot wedge the commit queue. No-op when not
+// syncing or paused.
+func (ss *SyncService) RecoverStalledFetch() {
+	if ss.stopping.Load() {
+		return
+	}
+	ss.mu.Lock()
+	syncing := ss.syncing
+	ss.mu.Unlock()
+	if !syncing || ss.pause.Paused() {
+		return
+	}
+	syncLog.Warn("Re-kicking stalled sync fetch", "head", ss.chain.CurrentBlock().Number())
+	ss.drainBufferedBlocks()
+}
+
 // SyncRemainingBlocks reports the current sync backlog when a sync session is
 // active. The value is advisory and intended for background workers that should
 // avoid competing with deep catch-up imports.
