@@ -1303,6 +1303,52 @@ func TestRepairSyncPipelineProgressOrderFromDBDeletesCommitmentTailAfterExecutio
 	}
 }
 
+func TestRepairSyncPipelineProgressOrderFromDBDeletesFinishTailAfterCommitmentLag(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x0d}
+	writes := []struct {
+		stage rawdb.StageID
+		block uint64
+	}{
+		{stage: rawdb.StageSyncBodies, block: 12},
+		{stage: rawdb.StageSyncBodiesReady, block: 12},
+		{stage: rawdb.StageSyncImport, block: 12},
+		{stage: rawdb.StageSyncExecution, block: 12},
+		{stage: rawdb.StageSyncCommitment, block: 8},
+		{stage: rawdb.StageSyncFinish, block: 10},
+	}
+	for _, write := range writes {
+		if err := rawdb.WriteStageProgressWithHash(db, write.stage, write.block, hash); err != nil {
+			t.Fatalf("write %s progress: %v", write.stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Deleted != 1 || len(got.Repairs) != 1 {
+		t.Fatalf("repair result = %+v, want finish tail deleted", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncFinish {
+		t.Fatalf("before issues = %+v, want finish ahead of commitment", got.Before.Issues)
+	}
+	if len(got.After.Issues) != 0 || len(got.After.ReadErrors) != 0 {
+		t.Fatalf("after check = %+v, want clean order after deleting finish tail", got.After)
+	}
+	for _, stage := range []rawdb.StageID{
+		rawdb.StageSyncBodies,
+		rawdb.StageSyncBodiesReady,
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+	} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || !ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want kept", stage, row, ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncFinish); err != nil || ok {
+		t.Fatalf("SyncFinish after repair = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestRepairSyncPipelineProgressOrderFromDBAllowsMissingUpstreamByDefault(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	hash := tcommon.Hash{0x0a}
