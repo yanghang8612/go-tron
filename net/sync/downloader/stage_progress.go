@@ -307,6 +307,27 @@ type ImportBatchStagePhaseSchedule struct {
 	PostBodyTasks []ImportStageTask
 }
 
+// ImportStagePhaseCursor is the phase-level restart cursor for an applied
+// import batch. It names the first incomplete phase/task in the explicit
+// bodies/execution/commitment/finish schedule.
+type ImportStagePhaseCursor struct {
+	ScheduledPhases       int
+	CompletedPhases       int
+	ScheduledTasks        int
+	CompletedTasks        int
+	Complete              bool
+	HasCurrent            bool
+	CurrentPhase          ImportStagePhase
+	CurrentCanonicalStage rawdb.StageID
+	CurrentSyncStage      rawdb.StageID
+	CurrentTasks          []ImportStageTask
+	CurrentTaskIndex      int
+	HasNextTask           bool
+	NextTask              ImportStageTask
+	HasBlocked            bool
+	BlockedStatus         ImportStageProgressStatus
+}
+
 // NewImportBatchStagePlan returns the phase-indexed stage schedule for a batch
 // of decoded import boundaries.
 func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePlan {
@@ -427,6 +448,58 @@ func (s ImportBatchStagePhaseSchedule) MatchPhaseObservation(stage rawdb.StageID
 		}, true
 	}
 	return ImportStageObservation{}, false
+}
+
+// PlanImportStagePhaseCursor maps a task-level stage plan back to the
+// explicit phase schedule. CompletedPhases counts only fully completed phases;
+// a partially observed execution/commitment/finish phase remains current.
+func PlanImportStagePhaseCursor(schedule ImportBatchStagePhaseSchedule, stagePlan ImportStagePlan) ImportStagePhaseCursor {
+	cursor := ImportStagePhaseCursor{
+		ScheduledPhases: len(schedule.Phases),
+		ScheduledTasks:  len(schedule.Tasks),
+		CompletedTasks:  len(stagePlan.Completed),
+		Complete:        stagePlan.Complete,
+	}
+	if cursor.ScheduledTasks == 0 {
+		cursor.ScheduledTasks = len(stagePlan.Tasks)
+	}
+	if len(schedule.Phases) == 0 {
+		return cursor
+	}
+	if stagePlan.Complete {
+		cursor.CompletedPhases = len(schedule.Phases)
+		return cursor
+	}
+	if !stagePlan.HasNext {
+		return cursor
+	}
+	cursor.HasNextTask = true
+	cursor.NextTask = stagePlan.Next
+	if stagePlan.HasBlocked {
+		cursor.HasBlocked = true
+		cursor.BlockedStatus = stagePlan.Blocked.Status
+	}
+	for phaseIndex, phase := range schedule.Phases {
+		if phase.Phase != stagePlan.Next.Phase ||
+			phase.CanonicalStage != stagePlan.Next.CanonicalStage ||
+			phase.SyncStage != stagePlan.Next.SyncStage {
+			continue
+		}
+		cursor.CompletedPhases = phaseIndex
+		cursor.HasCurrent = true
+		cursor.CurrentPhase = phase.Phase
+		cursor.CurrentCanonicalStage = phase.CanonicalStage
+		cursor.CurrentSyncStage = phase.SyncStage
+		cursor.CurrentTasks = append([]ImportStageTask(nil), phase.Tasks...)
+		for taskIndex, task := range phase.Tasks {
+			if task == stagePlan.Next {
+				cursor.CurrentTaskIndex = taskIndex
+				break
+			}
+		}
+		break
+	}
+	return cursor
 }
 
 // PhasePlans returns a defensive copy of the batch-level stage phase plan.
@@ -648,6 +721,7 @@ type ImportedBatchProgressPlan struct {
 	AppliedStagePlan     ImportBatchStagePlan
 	AppliedStagePhases   ImportBatchStagePhaseSchedule
 	AppliedPhases        []ImportStagePhasePlan
+	StagePhaseCursor     ImportStagePhaseCursor
 	StagePlan            ImportStagePlan
 	Stages               []ImportStageTask
 	Deletes              []rawdb.SyncStagedBlockDelete
@@ -799,6 +873,7 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 			plan.Progress = plan.StagePlan.Progress
 			plan.Decisions = plan.StagePlan.Decisions
 			plan.StageDiagnostics = plan.StagePlan.Diagnostics()
+			plan.StagePhaseCursor = PlanImportStagePhaseCursor(plan.AppliedStagePhases, plan.StagePlan)
 			plan = plan.withSteps()
 		}
 	}

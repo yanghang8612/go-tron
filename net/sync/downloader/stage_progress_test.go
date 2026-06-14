@@ -358,6 +358,22 @@ func TestPlanImportedBatchProgressForExecutionUsesBatchPhasePrefix(t *testing.T)
 	if got.StageDiagnostics.NextPhase != ImportStagePhaseExecution || got.StageDiagnostics.NextBlockNum != block2.Number() || got.StageDiagnostics.BlockedStatus != ImportStageProgressMismatch {
 		t.Fatalf("next stage diagnostics = %+v, want execution block2 mismatch", got.StageDiagnostics)
 	}
+	if cursor := got.StagePhaseCursor; cursor.ScheduledPhases != 4 ||
+		cursor.CompletedPhases != 1 ||
+		cursor.ScheduledTasks != 8 ||
+		cursor.CompletedTasks != 3 ||
+		cursor.Complete ||
+		!cursor.HasCurrent ||
+		cursor.CurrentPhase != ImportStagePhaseExecution ||
+		cursor.CurrentCanonicalStage != rawdb.StageExecution ||
+		cursor.CurrentSyncStage != rawdb.StageSyncExecution ||
+		cursor.CurrentTaskIndex != 1 ||
+		!cursor.HasNextTask ||
+		cursor.NextTask != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		!cursor.HasBlocked ||
+		cursor.BlockedStatus != ImportStageProgressMismatch {
+		t.Fatalf("stage phase cursor = %+v, want execution phase cursor at block2 mismatch", cursor)
+	}
 	if got.AppliedStagePhases.Empty() ||
 		len(got.AppliedPhases) != 4 ||
 		got.AppliedStagePhases.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
@@ -985,6 +1001,57 @@ func TestNewImportBatchStagePhaseSchedule(t *testing.T) {
 	empty := NewImportBatchStagePhaseSchedule(ImportBatchStagePlan{})
 	if !empty.Empty() || len(empty.PhasePlans()) != 0 {
 		t.Fatalf("empty phase schedule = %+v, want empty", empty)
+	}
+}
+
+func TestPlanImportStagePhaseCursor(t *testing.T) {
+	hash1 := tcommon.Hash{0x41}
+	hash2 := tcommon.Hash{0x42}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+	schedule := NewImportBatchStagePhaseSchedule(stagePlan)
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, 1, hash1)
+	collector.Observe(rawdb.StageBodies, 2, hash2)
+	collector.Observe(rawdb.StageExecution, 1, hash1)
+
+	cursor := PlanImportStagePhaseCursor(schedule, collector.PlanBatch(stagePlan))
+	if cursor.ScheduledPhases != 4 ||
+		cursor.CompletedPhases != 1 ||
+		cursor.ScheduledTasks != 8 ||
+		cursor.CompletedTasks != 3 ||
+		cursor.Complete ||
+		!cursor.HasCurrent ||
+		cursor.CurrentPhase != ImportStagePhaseExecution ||
+		cursor.CurrentCanonicalStage != rawdb.StageExecution ||
+		cursor.CurrentSyncStage != rawdb.StageSyncExecution ||
+		len(cursor.CurrentTasks) != 2 ||
+		cursor.CurrentTaskIndex != 1 ||
+		!cursor.HasNextTask ||
+		cursor.NextTask != ImportExecutionStageTask(2, hash2) ||
+		!cursor.HasBlocked ||
+		cursor.BlockedStatus != ImportStageProgressMismatch {
+		t.Fatalf("cursor = %+v, want current execution phase at block2", cursor)
+	}
+	cursor.CurrentTasks[1].BlockNum = 99
+	if schedule.Execution.Tasks[1].BlockNum == 99 {
+		t.Fatal("phase cursor returned aliased current task slice")
+	}
+
+	completeCollector := NewStageProgressCollector()
+	for _, task := range stagePlan.Tasks {
+		completeCollector.Observe(task.CanonicalStage, task.BlockNum, task.BlockHash)
+	}
+	complete := PlanImportStagePhaseCursor(schedule, completeCollector.PlanBatch(stagePlan))
+	if !complete.Complete ||
+		complete.CompletedPhases != 4 ||
+		complete.CompletedTasks != 8 ||
+		complete.HasCurrent ||
+		complete.HasNextTask ||
+		complete.HasBlocked {
+		t.Fatalf("complete cursor = %+v, want complete without current phase", complete)
 	}
 }
 
