@@ -433,6 +433,33 @@ func query(source any, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsColdIndexReaderFunctionValuesOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTxIndex = rawdb.ReadTransactionIndex
+var readBlockNumber = rawdb.ReadBlockNumber
+
+func query(source any, tx []byte, hash [32]byte) {
+	_ = readTxIndex(source, tx)
+	_ = readBlockNumber(source, hash)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadBlockNumber":      {},
+		"ReadTransactionIndex": {},
+	}, nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want both cold index reader function values rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	if !strings.Contains(joined, "rawdb.ReadTransactionIndex") || !strings.Contains(joined, "rawdb.ReadBlockNumber") {
+		t.Fatalf("offenders = %+v, want both cold index reader aliases reported", offenders)
+	}
+}
+
 func TestColdArchiveAuditAllowsReaderFunctionValueOnChainDBBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "app/chain.go", `package app
 
@@ -450,6 +477,54 @@ func query(chainDB *rawdb.ChainDB, tx []byte) {
 	}, nil)
 	if len(offenders) != 0 {
 		t.Fatalf("offenders = %+v, want rawdb reader function value on ChainDB boundary accepted", offenders)
+	}
+}
+
+func TestColdArchiveAuditRejectsSelectorReaderFunctionValueOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type readers struct {
+	readTxInfo func(any, []byte) any
+}
+
+func query(source any, tx []byte) {
+	var r readers
+	r.readTxInfo = rawdb.ReadTransactionInfo
+	_ = r.readTxInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want rawdb selector reader function value on hot store rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditAllowsSelectorReaderFunctionValueOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type readers struct {
+	readTxInfo func(any, []byte) any
+}
+
+func query(chainDB *rawdb.ChainDB, tx []byte) {
+	var r readers
+	r.readTxInfo = rawdb.ReadTransactionInfo
+	_ = r.readTxInfo(chainDB, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want selector reader function value on ChainDB boundary accepted", offenders)
 	}
 }
 
@@ -1264,17 +1339,17 @@ func recordColdArchiveReaderAliases(lhs, rhs []ast.Expr, rawdbNames map[string]s
 		if i >= len(rhs) {
 			return
 		}
-		ident, ok := left.(*ast.Ident)
-		if !ok || ident.Name == "_" {
+		key, ok := coldArchiveReaderAliasKey(left)
+		if !ok {
 			continue
 		}
 		if name, ok := coldArchiveReaderAliasName(rhs[i], rawdbNames, aliases); ok {
 			if _, watch := watched[name]; watch {
-				aliases[ident.Name] = name
+				aliases[key] = name
 				continue
 			}
 		}
-		delete(aliases, ident.Name)
+		delete(aliases, key)
 	}
 }
 
@@ -1553,12 +1628,37 @@ func coldArchiveReaderAliasName(expr ast.Expr, rawdbNames map[string]struct{}, a
 	if name, ok := rawDBCallName(expr, rawdbNames); ok {
 		return name, true
 	}
-	ident, ok := expr.(*ast.Ident)
+	key, ok := coldArchiveReaderAliasKey(expr)
 	if !ok {
 		return "", false
 	}
-	name, ok := aliases[ident.Name]
+	name, ok := aliases[key]
 	return name, ok
+}
+
+func coldArchiveReaderAliasKey(expr ast.Expr) (string, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	switch v := expr.(type) {
+	case *ast.Ident:
+		if v.Name == "_" {
+			return "", false
+		}
+		return v.Name, true
+	case *ast.SelectorExpr:
+		path := selectorPath(v)
+		if len(path) == 0 {
+			return "", false
+		}
+		return strings.Join(path, "."), true
+	default:
+		return "", false
+	}
 }
 
 func isRawDBChainDBType(expr ast.Expr, rawdbNames map[string]struct{}) bool {
