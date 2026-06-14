@@ -920,6 +920,25 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			interpreter.tvm.StateDB.TransferAllTRC10Balance(contract.Address, address)
 		}
 	}
+	if interpreter.tvmConfig.Freeze {
+		// java-tron Program.suicide (Program.java:497-504) / suicide2 (570-572):
+		// when allow_tvm_freeze is active, release the destroyed contract's V1
+		// frozen bandwidth/energy weight and credit the frozen balance to the
+		// inheritor. suicide2 returns before this when owner == obtainer, so the
+		// new-suicide path only runs for distinct addresses; old suicide routes a
+		// self-obtainer to the blackhole. The owner == obtainer test uses java's
+		// full-address isEqual (line 499), independent of the energy-adjustment
+		// compare used for the balance transfer above.
+		if oldSuicide {
+			inheritor := address
+			if address == contract.Address {
+				inheritor = interpreter.tvm.blackholeAddress()
+			}
+			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, inheritor)
+		} else if address != contract.Address {
+			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, address)
+		}
+	}
 	if oldSuicide {
 		interpreter.tvm.StateDB.SelfDestruct(contract.Address)
 	}

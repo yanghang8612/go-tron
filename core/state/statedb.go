@@ -1034,6 +1034,22 @@ func (s *StateDB) FreezeV1Energy(addr tcommon.Address, amount, expireTimeMs int6
 	obj.markDirty()
 }
 
+// ClearV1Freeze zeroes an account's V1 frozen bandwidth and energy slots in
+// place, mirroring java-tron's clearOwnerFreeze (AccountCapsule
+// setFrozenForBandwidth(0,0) / setFrozenForEnergy(0,0)) used by the SELFDESTRUCT
+// path under allow_tvm_selfdestruct_restriction. Both slots are left
+// present-but-zero to match java's proto encoding.
+func (s *StateDB) ClearV1Freeze(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetFrozenBandwidth(0, 0)
+	obj.account.SetFrozenEnergy(0, 0)
+	obj.markDirty()
+}
+
 func (s *StateDB) FreezeV1TronPower(addr tcommon.Address, amount, expireTimeMs int64) {
 	obj := s.getStateObject(addr)
 	if obj == nil {

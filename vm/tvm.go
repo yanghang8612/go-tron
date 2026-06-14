@@ -298,6 +298,51 @@ func (tvm *TVM) validatePrecompileEndowment(addr tcommon.Address, value int64) e
 	return nil
 }
 
+// transferDelegatedResourceToInheritor mirrors java-tron
+// Program.transferDelegatedResourceToInheritor (Program.java:588-618), invoked
+// from suicide()/suicide2() when allow_tvm_freeze is active. It releases the
+// destroyed contract's V1 frozen bandwidth (the first frozen slot only, per
+// java's getFrozenList().get(0) guarded by getFrozenCount() != 0) and its V1
+// frozen energy from the global total_net_weight/total_energy_weight, credits
+// their summed balance to the inheritor, and — only under
+// allow_tvm_selfdestruct_restriction — zeroes the owner's frozen slots in place
+// (clearOwnerFreeze). The caller decides the inheritor: the blackhole address
+// when owner == obtainer, otherwise the obtainer.
+//
+// Omitting this release is what drifted go-tron's total_energy_weight above
+// java-tron's and over-billed contract-origin energy at Nile block 19,716,962.
+func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Address) {
+	ownerAccount := tvm.StateDB.GetAccount(owner)
+	if ownerAccount == nil {
+		return
+	}
+
+	var frozenBalanceForBandwidth int64
+	if frozen := ownerAccount.FrozenBandwidthList(); len(frozen) != 0 {
+		frozenBalanceForBandwidth = frozen[0].FrozenBalance
+	}
+	frozenBalanceForEnergy := ownerAccount.FrozenEnergyAmount()
+
+	if tvm.DynProps != nil {
+		tvm.DynProps.AddTotalNetWeight(-frozenBalanceForBandwidth / tvmTRXPrecision)
+		tvm.DynProps.AddTotalEnergyWeight(-frozenBalanceForEnergy / tvmTRXPrecision)
+	}
+	// java unconditionally calls repo.addBalance(inheritor, sum), but in the
+	// suicide flow the inheritor always pre-exists (createAccountIfNotExist for
+	// the obtainer, genesis for the blackhole), so addBalance(inheritor, 0) is a
+	// no-op. Guard on a positive credit so a zero-frozen contract (the common
+	// case) does not spuriously materialise a bare inheritor account here —
+	// go-tron's AddBalance would GetOrCreate it — keeping this change scoped to
+	// the weight release.
+	if sum := frozenBalanceForBandwidth + frozenBalanceForEnergy; sum > 0 {
+		tvm.StateDB.AddBalance(inheritor, sum)
+	}
+
+	if tvm.cfg.SelfdestructRestrict {
+		tvm.StateDB.ClearV1Freeze(owner)
+	}
+}
+
 // Create deploys a new contract.
 func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value int64) ([]byte, tcommon.Address, uint64, error) {
 	if tvm.Depth > maxCallDepth {
