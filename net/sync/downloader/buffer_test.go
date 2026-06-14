@@ -692,6 +692,57 @@ func TestApplyImportBatchRunPlanPartialFailureIgnoresFailedBlockStageObservation
 	}
 }
 
+func TestApplyImportBatchRunPlanFirstBlockFailurePausesWithoutProgress(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	insertErr := &core.InsertBlocksError{Index: 0, BlockNumber: block1.Number(), Err: errors.New("bad first block")}
+	applier := &recordingImportBatchRunApplier{
+		insertErr:                 insertErr,
+		observeAllAttemptedStages: true,
+	}
+
+	result := ApplyImportBatchRunPlan(NewImportBatchRunPlan(testImportRunBatch(t, block1, block2)), applier)
+
+	if !result.StopDrain || !result.Outcome.Pause || result.Outcome.PauseNum != block1.Number() {
+		t.Fatalf("result = %+v, want pause at block1 and stop drain", result)
+	}
+	if result.Outcome.Applied != 0 || result.Outcome.RecordApplied {
+		t.Fatalf("outcome = %+v, want no applied prefix recorded", result.Outcome)
+	}
+	if result.Progress.OK || applier.recordPlan.OK || applier.recordApplied != 0 || len(applier.progress) != 0 {
+		t.Fatalf("progress result=%+v record=%+v applied=%d rows=%+v, want none", result.Progress, applier.recordPlan, applier.recordApplied, applier.progress)
+	}
+	if !result.Execution.HasStageSchedule || result.Execution.Schedule.BlockNum != block2.Number() {
+		t.Fatalf("execution schedule = %+v has=%v, want attempted block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
+	}
+	if len(result.ExecutionPhases) != 4 ||
+		len(result.ExecutionPhases[0].Tasks) != 2 ||
+		len(result.ExecutionPhases[3].Tasks) != 2 {
+		t.Fatalf("execution phases = %+v, want attempted two-block phase plan", result.ExecutionPhases)
+	}
+	if applier.pauseNum != block1.Number() || !errors.Is(applier.pauseErr, insertErr) {
+		t.Fatalf("pause = #%d err=%v, want failed block1", applier.pauseNum, applier.pauseErr)
+	}
+	wantCalls := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunExecute,
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
+	}
+	wantSteps := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunRecordBufferWaits,
+		ImportBatchRunPlanExecution,
+		ImportBatchRunPlanStagePhases,
+		ImportBatchRunExecute,
+		ImportBatchRunSettle,
+	}
+	if !reflect.DeepEqual(result.Steps, wantSteps) {
+		t.Fatalf("result steps = %+v, want %+v", result.Steps, wantSteps)
+	}
+}
+
 func TestApplyImportBatchRunPlanFirstDecodeFailureContinuesDrain(t *testing.T) {
 	block2 := testBufferedBlock(2)
 	raw2, err := block2.Marshal()
