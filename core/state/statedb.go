@@ -50,6 +50,26 @@ type StateDB struct {
 	// marks per change — the saved IO doesn't justify the complexity.
 	dirtyWitnesses map[tcommon.Address]struct{}
 
+	// txFinalizeDirty tracks addresses whose contract storage was written
+	// (SetState) or which were self-destructed since the last
+	// FinalizeTransaction. FinalizeTransaction iterates this set instead of the
+	// full stateObjects map to flip zero-valued storage rows non-existent and
+	// delete self-destructed accounts at the transaction boundary.
+	//
+	// Completeness: a zero-valued cached storage slot can only come from
+	// SetState — GetStateWithExist never caches a zero/absent disk row (it
+	// early-returns), so every object the old full scan would have marked is in
+	// this set. Self-destructs are the only other thing the scan acted on, and
+	// SelfDestruct populates the set too.
+	//
+	// Stale entries (left by a reverted write/self-destruct) are harmless:
+	// FinalizeTransaction re-resolves the live object by address via
+	// stateObjects, and the v==0 / (selfDestructed && !deleted) guards no-op on
+	// a reverted object. It is therefore deliberately NOT cleared by
+	// RevertToSnapshot, matching dirtyWitnesses. It IS cleared at the end of
+	// every FinalizeTransaction (per-transaction scope).
+	txFinalizeDirty map[tcommon.Address]struct{}
+
 	journal   *journal
 	snapshots []int // journal length at each snapshot
 	// domainChangeNoJournal mirrors block-final writes that intentionally
@@ -470,14 +490,15 @@ type AccountSnapshot struct {
 // New creates a flat-domain StateDB from the given CommitmentDomain root.
 func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 	return &StateDB{
-		db:             db,
-		stateObjects:   make(map[tcommon.Address]*stateObject),
-		witnesses:      make(map[tcommon.Address]*types.Witness),
-		dirtyWitnesses: make(map[tcommon.Address]struct{}),
-		journal:        newJournal(),
-		dynProps:       NewDynamicProperties(),
-		originRoot:     ethcommon.Hash(root),
-		codeStore:      newDefaultStateCodeStore(db),
+		db:              db,
+		stateObjects:    make(map[tcommon.Address]*stateObject),
+		witnesses:       make(map[tcommon.Address]*types.Witness),
+		dirtyWitnesses:  make(map[tcommon.Address]struct{}),
+		txFinalizeDirty: make(map[tcommon.Address]struct{}),
+		journal:         newJournal(),
+		dynProps:        NewDynamicProperties(),
+		originRoot:      ethcommon.Hash(root),
+		codeStore:       newDefaultStateCodeStore(db),
 	}, nil
 }
 
@@ -1435,7 +1456,14 @@ func (s *StateDB) RevertToSnapshot(id int) {
 // StateDB commits only once per block, so keep the zero value cached for the
 // eventual disk delete but make later SSTORE cost checks see the row as absent.
 func (s *StateDB) FinalizeTransaction() {
-	for _, obj := range s.stateObjects {
+	for addr := range s.txFinalizeDirty {
+		// Re-resolve the live object by address: a reverted create/recreate may
+		// have replaced or removed the object since it was recorded, so the
+		// stale-pointer it was recorded under must not be used.
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			continue
+		}
 		for k, v := range obj.storage {
 			if v == (tcommon.Hash{}) {
 				obj.storageExists[k] = false
@@ -1445,6 +1473,7 @@ func (s *StateDB) FinalizeTransaction() {
 			s.DeleteAccount(obj.address)
 		}
 	}
+	clear(s.txFinalizeDirty)
 }
 
 // AccountExists returns whether an account exists (non-nil and not deleted).
@@ -2169,6 +2198,10 @@ func (s *StateDB) SetState(addr tcommon.Address, key, value tcommon.Hash) {
 		prevDirty:  prevDirty,
 	})
 	obj.setStorage(key, value, true)
+	// A write to zero leaves a present-zero row that FinalizeTransaction must
+	// flip to non-existent; record the address so the boundary scan can skip
+	// untouched objects. (Non-zero writes here are harmless no-ops there.)
+	s.txFinalizeDirty[addr] = struct{}{}
 }
 
 func (s *StateDB) storageRowKey(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
@@ -2316,6 +2349,9 @@ func (s *StateDB) SelfDestruct(addr tcommon.Address) {
 		prev:    obj.selfDestructed,
 	})
 	obj.markSelfDestructed()
+	// FinalizeTransaction deletes self-destructed accounts at the boundary;
+	// record the address so the boundary scan can skip untouched objects.
+	s.txFinalizeDirty[addr] = struct{}{}
 }
 
 // DeleteAccount removes an account from flat account latest on commit.
@@ -2368,6 +2404,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		stateObjects:          make(map[tcommon.Address]*stateObject),
 		witnesses:             make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:        make(map[tcommon.Address]struct{}),
+		txFinalizeDirty:       make(map[tcommon.Address]struct{}),
 		journal:               newJournal(),
 		dynProps:              s.dynProps,
 		originRoot:            s.originRoot,
