@@ -83,7 +83,10 @@ Run it from cron/systemd/LaunchAgent every few minutes during catch-up and the
 `derivedIndexBytes`,
 `derivedIndexFiles`, Pebble hot-store buckets such as `chaindataSSTBytes`,
 `chaindataWALBytes`, `chaindataLogBytes`, `chaindataManifestBytes`,
-`chaindataOptionsBytes`, and matching `*Files` / `*BytesDelta` fields, total
+`chaindataOptionsBytes`, snapshot buckets such as `snapshotLatestBytes`,
+`snapshotHistoryBytes`, `snapshotCommitmentBytes`,
+`snapshotRetiredDirectoryBytes`, and `snapshotOtherBytes`, plus matching
+`*Files` / `*BytesDelta` fields, total
 per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
 `intervalDatadirBytesPerBlock`, `intervalChaindataBytesPerBlock`,
@@ -134,8 +137,9 @@ fall back to cumulative sync and current disk distribution. Rows also include
 `processOpenFiles` so catch-up throughput can be correlated with local resource
 pressure. Derived index bytes are the chain-index/accessor, balance-trace,
 section-bloom, and event-log/index sidecars inside `state-snapshots`;
-`snapshotBytes` remains the whole snapshot directory size for backward
-comparisons.
+`snapshotCommitmentBytes` tracks commitment root/checkpoint/branch snapshot
+files separately from `snapshotOtherBytes`, while `snapshotBytes` remains the
+whole snapshot directory size for backward comparisons.
 If the launch wrapper does not already maintain a pid file, write
 `echo "$$" > /Users/asuka/gtron-soak/gtron.pid` immediately before `exec gtron`;
 the shell PID is retained by the gtron process after `exec`.
