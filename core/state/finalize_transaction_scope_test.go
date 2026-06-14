@@ -122,3 +122,37 @@ func TestFinalizeTransactionScopedSelfDestructStillDeletes(t *testing.T) {
 		t.Fatal("self-destructed account should be absent after finalize")
 	}
 }
+
+// A row written to zero and committed must stay non-existent in a LATER block
+// that only touches a different slot of the same contract. This pins the
+// cross-commit persistence the inner-loop scoping relies on: storageExists is
+// not reset at commit, so a later FinalizeTransaction need not re-scan the
+// already-marked zero row — it must already read as absent.
+func TestFinalizeTransactionZeroRowStaysNonExistentAcrossCommit(t *testing.T) {
+	sdb := newTestStateDB(t)
+	addr := testAddr(5)
+	k := tcommon.Hash{0x01}
+	k2 := tcommon.Hash{0x02}
+
+	// Block N: write k non-zero then zero, finalize, commit.
+	sdb.SetState(addr, k, tcommon.Hash{0x42})
+	sdb.SetState(addr, k, tcommon.Hash{})
+	sdb.FinalizeTransaction()
+	if _, exists := sdb.GetStateWithExist(addr, k); exists {
+		t.Fatal("k should be non-existent after block N finalize")
+	}
+	if _, err := sdb.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Block N+1 on the same reused StateDB: write a DIFFERENT slot. k is not in
+	// this block's dirtyStorage, yet must remain non-existent.
+	sdb.SetState(addr, k2, tcommon.Hash{0x07})
+	sdb.FinalizeTransaction()
+	if _, exists := sdb.GetStateWithExist(addr, k); exists {
+		t.Fatal("k must remain non-existent in a later block (inner-loop scoping must not lose it)")
+	}
+	if v, exists := sdb.GetStateWithExist(addr, k2); !exists || v != (tcommon.Hash{0x07}) {
+		t.Fatalf("k2 = (%x,%v), want (07,true)", v, exists)
+	}
+}
