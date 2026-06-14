@@ -474,6 +474,16 @@ type ImportBatchDrainLoopPlan struct {
 	Steps        []ImportBatchDrainLoopStep
 }
 
+// ImportBatchDrainLoopApplyResult records the local drain-loop branch selected
+// from the downloader-owned step list.
+type ImportBatchDrainLoopApplyResult struct {
+	Action       ImportBatchDrainLoopStepAction
+	ContinueLoop bool
+	StopLoop     bool
+	AppliedSteps []ImportBatchDrainLoopStepAction
+	UnknownSteps []ImportBatchDrainLoopStepAction
+}
+
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
 // one popped batch: decode raw bodies, account wait time, plan canonical
 // stages, prepare a runnable attempt with its observer, execute it, then settle
@@ -622,6 +632,31 @@ func PlanImportBatchDrainLoop(settlement ImportBatchRunSettlementPlan) ImportBat
 		return ImportBatchDrainLoopPlan{StopLoop: true}.withSteps()
 	}
 	return ImportBatchDrainLoopPlan{ContinueLoop: true}.withSteps()
+}
+
+// ApplyImportBatchDrainLoopPlan resolves the downloader-owned drain-loop step
+// list into the caller's loop branch. The caller still owns the concrete loop
+// mechanics, but it no longer needs to interpret plan booleans directly.
+func ApplyImportBatchDrainLoopPlan(plan ImportBatchDrainLoopPlan) ImportBatchDrainLoopApplyResult {
+	var result ImportBatchDrainLoopApplyResult
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case ImportBatchDrainLoopContinue:
+			result.Action = step.Action
+			result.ContinueLoop = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case ImportBatchDrainLoopStop:
+			result.Action = step.Action
+			result.StopLoop = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
 }
 
 func (p ImportBatchDrainLoopPlan) withSteps() ImportBatchDrainLoopPlan {

@@ -377,6 +377,57 @@ func TestPlanImportBatchDrainLoop(t *testing.T) {
 	}
 }
 
+func TestApplyImportBatchDrainLoopPlan(t *testing.T) {
+	tests := map[string]struct {
+		plan ImportBatchDrainLoopPlan
+		want ImportBatchDrainLoopApplyResult
+	}{
+		"continue step": {
+			plan: ImportBatchDrainLoopPlan{Steps: []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopContinue}}},
+			want: ImportBatchDrainLoopApplyResult{
+				Action:       ImportBatchDrainLoopContinue,
+				ContinueLoop: true,
+				AppliedSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopContinue},
+			},
+		},
+		"stop step": {
+			plan: ImportBatchDrainLoopPlan{Steps: []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}}},
+			want: ImportBatchDrainLoopApplyResult{
+				Action:       ImportBatchDrainLoopStop,
+				StopLoop:     true,
+				AppliedSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopStop},
+			},
+		},
+		"legacy continue bool": {
+			plan: ImportBatchDrainLoopPlan{ContinueLoop: true},
+			want: ImportBatchDrainLoopApplyResult{
+				Action:       ImportBatchDrainLoopContinue,
+				ContinueLoop: true,
+				AppliedSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopContinue},
+			},
+		},
+		"legacy stop bool": {
+			plan: ImportBatchDrainLoopPlan{StopLoop: true},
+			want: ImportBatchDrainLoopApplyResult{
+				Action:       ImportBatchDrainLoopStop,
+				StopLoop:     true,
+				AppliedSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopStop},
+			},
+		},
+		"unknown step": {
+			plan: ImportBatchDrainLoopPlan{Steps: []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStepAction(255)}}},
+			want: ImportBatchDrainLoopApplyResult{
+				UnknownSteps: []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopStepAction(255)},
+			},
+		},
+	}
+	for name, test := range tests {
+		if got := ApplyImportBatchDrainLoopPlan(test.plan); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s apply drain loop = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
@@ -885,6 +936,9 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 		len(success.DrainLoop.Steps) != 1 || success.DrainLoop.Steps[0].Action != ImportBatchDrainLoopContinue {
 		t.Fatalf("success drain loop = %+v, want continue", success.DrainLoop)
 	}
+	if applied := ApplyImportBatchDrainLoopPlan(success.DrainLoop); !applied.ContinueLoop || applied.Action != ImportBatchDrainLoopContinue || len(applied.UnknownSteps) != 0 {
+		t.Fatalf("success applied drain loop = %+v, want continue", applied)
+	}
 
 	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
 	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
@@ -896,6 +950,9 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	if !failure.DrainLoop.StopLoop || failure.DrainLoop.ContinueLoop ||
 		len(failure.DrainLoop.Steps) != 1 || failure.DrainLoop.Steps[0].Action != ImportBatchDrainLoopStop {
 		t.Fatalf("failure drain loop = %+v, want stop", failure.DrainLoop)
+	}
+	if applied := ApplyImportBatchDrainLoopPlan(failure.DrainLoop); !applied.StopLoop || applied.Action != ImportBatchDrainLoopStop || len(applied.UnknownSteps) != 0 {
+		t.Fatalf("failure applied drain loop = %+v, want stop", applied)
 	}
 	if !failure.Run.HasRecord || failure.Run.RecordPlan.Progress.Summary.Applied != 1 {
 		t.Fatalf("failure record plan = %+v has=%v, want applied-prefix record before stop", failure.Run.RecordPlan, failure.Run.HasRecord)
