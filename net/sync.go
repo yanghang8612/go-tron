@@ -1282,12 +1282,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		if iteration.EmptyDrain {
-			next := ss.chain.CurrentBlock().Number() + 1
-			ss.bufferWait.Begin(next, now)
-			out = append(out, ss.fillFetchSlotsLocked(now)...)
+			prepare := syncdl.PlanEmptyDrainPreparation(syncdl.EmptyDrainPreparationInput{
+				Progress: ss.sessionProgressLocked(),
+			})
+			prepareApplier := &syncEmptyDrainPreparationApplier{service: ss, now: now}
+			prepareResult := syncdl.ApplyEmptyDrainPreparationPlan(prepare, prepareApplier)
+			out = append(out, prepareApplier.out...)
 			progress := ss.sessionProgressLocked()
 			emptyDrain := syncdl.PlanEmptyDrainRun(syncdl.EmptyDrainRunInput{
-				OutboundRequests: len(out),
+				OutboundRequests: prepareResult.OutboundRequests,
 				Progress:         progress,
 			}, syncEmptyDrainJoinGate{service: ss, now: now})
 			emptyDrainDispatch = emptyDrain
@@ -1308,6 +1311,21 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 	}
 	syncdl.ApplyEmptyDrainRunDispatchPlan(emptyDrainDispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
+}
+
+type syncEmptyDrainPreparationApplier struct {
+	service *SyncService
+	now     time.Time
+	out     []outboundSyncRequest
+}
+
+func (a *syncEmptyDrainPreparationApplier) BeginBufferWait(next uint64) {
+	a.service.bufferWait.Begin(next, a.now)
+}
+
+func (a *syncEmptyDrainPreparationApplier) RefillFetchSlots() int {
+	a.out = append(a.out, a.service.fillFetchSlotsLocked(a.now)...)
+	return len(a.out)
 }
 
 type syncEmptyDrainJoinGate struct {

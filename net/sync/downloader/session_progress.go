@@ -64,6 +64,12 @@ type EmptyDrainRunInput struct {
 	Progress         SessionProgress
 }
 
+// EmptyDrainPreparationInput is the lock-held state at the start of an empty
+// local drain branch, before fetch slots are refilled.
+type EmptyDrainPreparationInput struct {
+	Progress SessionProgress
+}
+
 // LocalDrainIterationInput is the lock-held state for one local staged-body
 // drain iteration after the caller has restored/popped a possible batch.
 type LocalDrainIterationInput struct {
@@ -224,9 +230,25 @@ const (
 	EmptyDrainMirrorLegacy EmptyDrainRunStepAction = iota
 )
 
+// EmptyDrainPreparationStepAction names one lock-held preparation operation
+// before an empty local drain can be settled.
+type EmptyDrainPreparationStepAction uint8
+
+const (
+	EmptyDrainPrepareBeginBufferWait EmptyDrainPreparationStepAction = iota
+	EmptyDrainPrepareRefillFetchSlots
+)
+
 // EmptyDrainRunStep is one lock-held operation for an empty local drain run.
 type EmptyDrainRunStep struct {
 	Action EmptyDrainRunStepAction
+}
+
+// EmptyDrainPreparationStep is one lock-held preparation operation for an
+// empty local drain.
+type EmptyDrainPreparationStep struct {
+	Action EmptyDrainPreparationStepAction
+	Next   uint64
 }
 
 // EmptyDrainRunLockedApplyResult records the lock-held empty-drain steps
@@ -234,6 +256,14 @@ type EmptyDrainRunStep struct {
 type EmptyDrainRunLockedApplyResult struct {
 	AppliedSteps []EmptyDrainRunStepAction
 	UnknownSteps []EmptyDrainRunStepAction
+}
+
+// EmptyDrainPreparationApplyResult records the preparation steps applied before
+// settling an empty local drain.
+type EmptyDrainPreparationApplyResult struct {
+	AppliedSteps     []EmptyDrainPreparationStepAction
+	UnknownSteps     []EmptyDrainPreparationStepAction
+	OutboundRequests int
 }
 
 // EmptyDrainRunApplyResult groups the lock-held, post-lock idle settlement,
@@ -252,6 +282,15 @@ type EmptyDrainRunPlan struct {
 	Refill                    EmptyDrainRefillPlan
 	MirrorLegacy              bool
 	LockedSteps               []EmptyDrainRunStep
+}
+
+// EmptyDrainPreparationPlan describes the lock-held work that should happen as
+// soon as a local drain discovers there is no importable buffered body.
+type EmptyDrainPreparationPlan struct {
+	BeginBufferWait  bool
+	BufferWaitNext   uint64
+	RefillFetchSlots bool
+	Steps            []EmptyDrainPreparationStep
 }
 
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
@@ -283,6 +322,13 @@ type EmptyDrainJoinGate interface {
 // empty-drain run plan.
 type EmptyDrainRunPlanApplier interface {
 	MirrorLegacyUnderLock()
+}
+
+// EmptyDrainPreparationPlanApplier performs lock-held empty-drain preparation
+// operations. RefillFetchSlots returns the number of outbound requests created.
+type EmptyDrainPreparationPlanApplier interface {
+	BeginBufferWait(next uint64)
+	RefillFetchSlots() int
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -471,6 +517,20 @@ func PlanEmptyDrainRun(in EmptyDrainRunInput, gate EmptyDrainJoinGate) EmptyDrai
 	}.withLockedSteps()
 }
 
+// PlanEmptyDrainPreparation derives the lock-held setup for an empty local
+// drain. The caller still owns the clock and peer maps; downloader owns the
+// ordering and the next block number used by the buffer-wait tracker.
+func PlanEmptyDrainPreparation(in EmptyDrainPreparationInput) EmptyDrainPreparationPlan {
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return EmptyDrainPreparationPlan{}
+	}
+	return EmptyDrainPreparationPlan{
+		BeginBufferWait:  true,
+		BufferWaitNext:   in.Progress.CurrentHead + 1,
+		RefillFetchSlots: true,
+	}.withSteps()
+}
+
 func (p IdleDrainPlan) withSteps() IdleDrainPlan {
 	switch {
 	case p.Finish:
@@ -514,6 +574,19 @@ func (p EmptyDrainRunPlan) withLockedSteps() EmptyDrainRunPlan {
 	return p
 }
 
+func (p EmptyDrainPreparationPlan) withSteps() EmptyDrainPreparationPlan {
+	if p.BeginBufferWait {
+		p.Steps = append(p.Steps, EmptyDrainPreparationStep{
+			Action: EmptyDrainPrepareBeginBufferWait,
+			Next:   p.BufferWaitNext,
+		})
+	}
+	if p.RefillFetchSlots {
+		p.Steps = append(p.Steps, EmptyDrainPreparationStep{Action: EmptyDrainPrepareRefillFetchSlots})
+	}
+	return p
+}
+
 // ApplyFetchRefillRunLockedPlan executes the lock-held portion of a full
 // timer/manual peer-ready fetch-refill run.
 func ApplyFetchRefillRunLockedPlan(plan FetchRefillRunPlan, applier FetchRefillRunPlanApplier) FetchRefillRunApplyResult {
@@ -531,6 +604,31 @@ func ApplyFetchRefillRunLockedPlan(plan FetchRefillRunPlan, applier FetchRefillR
 			result.Locked.AppliedSteps = append(result.Locked.AppliedSteps, step.Action)
 		default:
 			result.Locked.UnknownSteps = append(result.Locked.UnknownSteps, step.Action)
+		}
+	}
+	return result
+}
+
+// ApplyEmptyDrainPreparationPlan executes the lock-held preparation steps for
+// an empty local drain.
+func ApplyEmptyDrainPreparationPlan(plan EmptyDrainPreparationPlan, applier EmptyDrainPreparationPlanApplier) EmptyDrainPreparationApplyResult {
+	var result EmptyDrainPreparationApplyResult
+	if applier == nil {
+		return result
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case EmptyDrainPrepareBeginBufferWait:
+			applier.BeginBufferWait(step.Next)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case EmptyDrainPrepareRefillFetchSlots:
+			result.OutboundRequests += applier.RefillFetchSlots()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
 	return result

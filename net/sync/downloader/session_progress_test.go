@@ -344,6 +344,73 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 	}
 }
 
+func TestPlanEmptyDrainPreparation(t *testing.T) {
+	got := PlanEmptyDrainPreparation(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 8, TargetHead: 12},
+	})
+	want := EmptyDrainPreparationPlan{
+		BeginBufferWait:  true,
+		BufferWaitNext:   9,
+		RefillFetchSlots: true,
+		Steps: []EmptyDrainPreparationStep{
+			{Action: EmptyDrainPrepareBeginBufferWait, Next: 9},
+			{Action: EmptyDrainPrepareRefillFetchSlots},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active empty-drain preparation = %+v, want %+v", got, want)
+	}
+
+	for name, progress := range map[string]SessionProgress{
+		"not syncing": {},
+		"paused":      {Syncing: true, Paused: true, CurrentHead: 8},
+	} {
+		if got := PlanEmptyDrainPreparation(EmptyDrainPreparationInput{Progress: progress}); !reflect.DeepEqual(got, EmptyDrainPreparationPlan{}) {
+			t.Fatalf("%s empty-drain preparation = %+v, want no action", name, got)
+		}
+	}
+}
+
+func TestApplyEmptyDrainPreparationPlan(t *testing.T) {
+	applier := &recordingEmptyDrainPreparationApplier{outbound: 2}
+	result := ApplyEmptyDrainPreparationPlan(EmptyDrainPreparationPlan{Steps: []EmptyDrainPreparationStep{
+		{Action: EmptyDrainPrepareBeginBufferWait, Next: 10},
+		{Action: EmptyDrainPreparationStepAction(255)},
+		{Action: EmptyDrainPrepareRefillFetchSlots},
+	}}, applier)
+
+	if !reflect.DeepEqual(applier.begins, []uint64{10}) {
+		t.Fatalf("buffer wait begins = %+v, want [10]", applier.begins)
+	}
+	if applier.refills != 1 {
+		t.Fatalf("refills = %d, want 1", applier.refills)
+	}
+	if result.OutboundRequests != 2 ||
+		!reflect.DeepEqual(result.AppliedSteps, []EmptyDrainPreparationStepAction{EmptyDrainPrepareBeginBufferWait, EmptyDrainPrepareRefillFetchSlots}) ||
+		!reflect.DeepEqual(result.UnknownSteps, []EmptyDrainPreparationStepAction{EmptyDrainPreparationStepAction(255)}) {
+		t.Fatalf("empty-drain preparation result = %+v, want begin/refill applied with unknown [255]", result)
+	}
+
+	applier = &recordingEmptyDrainPreparationApplier{outbound: 3}
+	result = ApplyEmptyDrainPreparationPlan(EmptyDrainPreparationPlan{
+		BeginBufferWait:  true,
+		BufferWaitNext:   11,
+		RefillFetchSlots: true,
+	}, applier)
+	if !reflect.DeepEqual(applier.begins, []uint64{11}) ||
+		applier.refills != 1 ||
+		result.OutboundRequests != 3 ||
+		!reflect.DeepEqual(result.AppliedSteps, []EmptyDrainPreparationStepAction{EmptyDrainPrepareBeginBufferWait, EmptyDrainPrepareRefillFetchSlots}) ||
+		len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback empty-drain preparation result = %+v begins=%+v refills=%d, want begin/refill", result, applier.begins, applier.refills)
+	}
+
+	nilResult := ApplyEmptyDrainPreparationPlan(EmptyDrainPreparationPlan{RefillFetchSlots: true}, nil)
+	if nilResult.OutboundRequests != 0 || len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil empty-drain preparation result = %+v, want empty", nilResult)
+	}
+}
+
 func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	applier := new(recordingEmptyDrainRunApplier)
 	result := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
@@ -874,6 +941,21 @@ type recordingEmptyDrainRunApplier struct {
 
 func (a *recordingEmptyDrainRunApplier) MirrorLegacyUnderLock() {
 	a.mirrors++
+}
+
+type recordingEmptyDrainPreparationApplier struct {
+	begins   []uint64
+	outbound int
+	refills  int
+}
+
+func (a *recordingEmptyDrainPreparationApplier) BeginBufferWait(next uint64) {
+	a.begins = append(a.begins, next)
+}
+
+func (a *recordingEmptyDrainPreparationApplier) RefillFetchSlots() int {
+	a.refills++
+	return a.outbound
 }
 
 type recordingPostInventorySettlementApplier struct {
