@@ -12,19 +12,39 @@ import (
 	"testing"
 )
 
-func TestNoProductionDirectHotBlockKVReads(t *testing.T) {
+func TestNoProductionHotBlockKVReadReferences(t *testing.T) {
 	root := findRepoRoot(t)
-	offenders := auditForbiddenRawDBCalls(t, root, map[string]struct{}{
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
 		"ReadBlockKV": {},
 	}, nil)
 	if len(offenders) > 0 {
-		t.Fatalf("production code must use freezer-aware chain accessors instead of hot-only rawdb calls:\n%s", strings.Join(offenders, "\n"))
+		t.Fatalf("production code must use freezer-aware chain accessors instead of hot-only rawdb references:\n%s", strings.Join(offenders, "\n"))
 	}
 }
 
-func TestNoUnexpectedProductionDirectRawFreezerReads(t *testing.T) {
+func TestHotBlockKVAuditRejectsReaderFunctionValue(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readBlock = rawdb.ReadBlockKV
+
+func query(db any) {
+	_ = readBlock(db, 7)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
+		"ReadBlockKV": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadBlockKV") {
+		t.Fatalf("offenders = %+v, want hot-only block reader function value rejected", offenders)
+	}
+}
+
+func TestNoUnexpectedProductionRawFreezerReadReferences(t *testing.T) {
 	root := findRepoRoot(t)
-	offenders := auditForbiddenRawDBCalls(t, root, map[string]struct{}{
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
 		"ReadBlockRaw":            {},
 		"ReadTransactionInfosRaw": {},
 		"ReadBlockStateRootRaw":   {},
@@ -37,6 +57,26 @@ func TestNoUnexpectedProductionDirectRawFreezerReads(t *testing.T) {
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production code must route raw freezer reads through the freezer adapter boundary:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestRawFreezerReadAuditRejectsReaderFunctionValue(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readRawBlock = rawdb.ReadBlockRaw
+
+func query(db any) {
+	_ = readRawBlock(db, 7)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
+		"ReadBlockRaw": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadBlockRaw") {
+		t.Fatalf("offenders = %+v, want raw freezer reader function value rejected", offenders)
 	}
 }
 
