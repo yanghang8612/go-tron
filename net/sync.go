@@ -1243,11 +1243,12 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.mu.Unlock()
 			break
 		}
-		batch := ss.popBufferedSyncBatchLocked(now)
-		iteration := syncdl.PlanLocalDrainIteration(syncdl.LocalDrainIterationInput{
-			Progress:         ss.sessionProgressLocked(),
-			BufferedBatchLen: len(batch.Buffered),
+		drain := ss.runStagedBodyDrainLocked(now)
+		drainRun := syncdl.PlanLocalDrainRun(syncdl.LocalDrainRunInput{
+			Progress: ss.sessionProgressLocked(),
+			Drain:    drain,
 		})
+		iteration := drainRun.Iteration
 		if iteration.StopLoop {
 			ss.mu.Unlock()
 			break
@@ -1269,6 +1270,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		ss.mu.Unlock()
+		batch := drainRun.Batch
 		result := syncdl.ApplyImportBatchRunPlan(syncdl.NewImportBatchRunPlan(batch), syncImportBatchRunApplier{service: ss})
 		settlement := syncdl.PlanImportBatchRunSettlement(result)
 		if settlement.StopDrain {
@@ -1309,6 +1311,10 @@ func (ss *SyncService) importBatchLimitLocked() int {
 }
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
+	return ss.runStagedBodyDrainLocked(now).Batch
+}
+
+func (ss *SyncService) runStagedBodyDrainLocked(now time.Time) syncdl.StagedBodyDrainRunResult {
 	next := ss.chain.CurrentBlock().Number() + 1
 	max := ss.importBatchLimitLocked()
 	var result syncdl.StagedBodyDrainRunResult
@@ -1318,7 +1324,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 		result = syncdl.ReadAndApplyStagedBodyDrainPlan(nil, next, max, syncStagedBodyDrainApplier{service: ss, now: now})
 	}
 	ss.logStagedBodyReadyDrainLimit(result.Read.Ready)
-	return result.Batch
+	return result
 }
 
 func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReadyLimit) {

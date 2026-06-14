@@ -71,6 +71,13 @@ type LocalDrainIterationInput struct {
 	BufferedBatchLen int
 }
 
+// LocalDrainRunInput is the lock-held state after staged-body drain
+// preparation has either produced an importable batch or found an empty drain.
+type LocalDrainRunInput struct {
+	Progress SessionProgress
+	Drain    StagedBodyDrainRunResult
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -129,6 +136,14 @@ type LocalDrainIterationPlan struct {
 	EmptyDrain  bool
 	ImportBatch bool
 	Steps       []LocalDrainIterationStep
+}
+
+// LocalDrainRunPlan groups the staged-body drain result with the downloader
+// branch decision for the current local drain iteration.
+type LocalDrainRunPlan struct {
+	Drain     StagedBodyDrainRunResult
+	Batch     BufferedBatch
+	Iteration LocalDrainIterationPlan
 }
 
 // FetchRefillDispatchPlan describes whether refilled outbound requests should
@@ -287,6 +302,21 @@ func PlanLocalDrainIteration(in LocalDrainIterationInput) LocalDrainIterationPla
 		return LocalDrainIterationPlan{EmptyDrain: true}.withSteps()
 	}
 	return LocalDrainIterationPlan{ImportBatch: true}.withSteps()
+}
+
+// PlanLocalDrainRun derives the local drain branch from the full staged-body
+// drain result. This keeps the "empty vs importable" decision next to the
+// staged-body drain planner instead of re-deriving it in SyncService.
+func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
+	batch := in.Drain.Batch
+	return LocalDrainRunPlan{
+		Drain: in.Drain,
+		Batch: batch,
+		Iteration: PlanLocalDrainIteration(LocalDrainIterationInput{
+			Progress:         in.Progress,
+			BufferedBatchLen: len(batch.Buffered),
+		}),
+	}
 }
 
 // PlanEmptyDrainJoinProbe decides whether the caller should evaluate

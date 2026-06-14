@@ -160,6 +160,40 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 	}
 }
 
+func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
+
+	importRun := PlanLocalDrainRun(LocalDrainRunInput{
+		Progress: active,
+		Drain:    StagedBodyDrainRunResult{Batch: importBatch},
+	})
+	if !reflect.DeepEqual(importRun.Batch, importBatch) ||
+		!reflect.DeepEqual(importRun.Drain.Batch, importBatch) ||
+		!importRun.Iteration.ImportBatch ||
+		len(importRun.Iteration.Steps) != 1 ||
+		importRun.Iteration.Steps[0].Action != LocalDrainIterationImport {
+		t.Fatalf("import drain run = %+v, want import branch with original staged drain batch", importRun)
+	}
+
+	emptyRun := PlanLocalDrainRun(LocalDrainRunInput{Progress: active})
+	if !emptyRun.Iteration.EmptyDrain ||
+		len(emptyRun.Iteration.Steps) != 1 ||
+		emptyRun.Iteration.Steps[0].Action != LocalDrainIterationEmpty {
+		t.Fatalf("empty drain run = %+v, want empty branch", emptyRun)
+	}
+
+	stoppedRun := PlanLocalDrainRun(LocalDrainRunInput{
+		Progress: SessionProgress{Syncing: true, Paused: true},
+		Drain:    StagedBodyDrainRunResult{Batch: importBatch},
+	})
+	if !stoppedRun.Iteration.StopLoop ||
+		len(stoppedRun.Iteration.Steps) != 1 ||
+		stoppedRun.Iteration.Steps[0].Action != LocalDrainIterationStop {
+		t.Fatalf("stopped drain run = %+v, want stop branch even with buffered batch", stoppedRun)
+	}
+}
+
 func TestPlanEmptyDrainJoinProbe(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {
