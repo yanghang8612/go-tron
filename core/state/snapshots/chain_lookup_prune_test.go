@@ -51,9 +51,7 @@ func TestPruneHotChainLookupsKeepsColdReads(t *testing.T) {
 	if idx := rawdb.ReadTransactionIndex(chainDB, txHash[:]); idx == nil || *idx != 1 {
 		t.Fatalf("hot ReadTransactionIndex = %v, want 1", idx)
 	}
-	if info := rawdb.ReadTransactionInfo(chainDB, txHash[:]); info == nil || info.Fee != 777 {
-		t.Fatalf("hot ReadTransactionInfo = %+v, want fee 777", info)
-	}
+	assertChainFreezerTxInfo(t, "hot ReadTransactionInfo", rawdb.ReadTransactionInfo(chainDB, txHash[:]), 1)
 	if got := rawdb.ReadBlockStateRoot(chainDB, block1.Hash()); got != stateRoot {
 		t.Fatalf("hot ReadBlockStateRoot = %x, want %x", got, stateRoot)
 	}
@@ -86,9 +84,7 @@ func TestPruneHotChainLookupsKeepsColdReads(t *testing.T) {
 	if idx := rawdb.ReadTransactionIndex(chainDB, txHash[:]); idx == nil || *idx != 1 {
 		t.Fatalf("cold ReadTransactionIndex = %v, want 1", idx)
 	}
-	if info := rawdb.ReadTransactionInfo(chainDB, txHash[:]); info == nil || info.Fee != 777 {
-		t.Fatalf("cold ReadTransactionInfo = %+v, want fee 777", info)
-	}
+	assertChainFreezerTxInfo(t, "cold ReadTransactionInfo after hot lookup prune", rawdb.ReadTransactionInfo(chainDB, txHash[:]), 1)
 	if got := rawdb.ReadBlockStateRoot(chainDB, block1.Hash()); got != stateRoot {
 		t.Fatalf("cold ReadBlockStateRoot = %x, want %x", got, stateRoot)
 	}

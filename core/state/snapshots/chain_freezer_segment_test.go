@@ -147,9 +147,7 @@ func TestRestoreChainFreezerSegmentRebuildsHotLookupIndexes(t *testing.T) {
 	if idx := rawdb.ReadTransactionIndex(chainDB, txHash[:]); idx == nil || *idx != 1 {
 		t.Fatalf("ReadTransactionIndex = %v, want 1", idx)
 	}
-	if info := rawdb.ReadTransactionInfo(chainDB, txHash[:]); info == nil || info.Fee != 777 {
-		t.Fatalf("ReadTransactionInfo = %+v, want fee 777", info)
-	}
+	assertChainFreezerTxInfo(t, "ReadTransactionInfo", rawdb.ReadTransactionInfo(chainDB, txHash[:]), 1)
 	if infos := rawdb.ReadTransactionInfosByBlock(chainDB, 1); len(infos) != 1 || infos[0].Fee != 777 {
 		t.Fatalf("ReadTransactionInfosByBlock = %+v, want one fee 777", infos)
 	}
@@ -424,9 +422,7 @@ func TestManagerAncientReadsChainFreezerSegmentAfterLocalTailHidden(t *testing.T
 	if infos := rawdb.ReadTransactionInfosByBlock(chainDB, 1); len(infos) != 1 || infos[0].Fee != 777 {
 		t.Fatalf("ReadTransactionInfosByBlock after tail hidden = %+v, want fee 777", infos)
 	}
-	if info := rawdb.ReadTransactionInfo(chainDB, txHash[:]); info == nil || info.Fee != 777 {
-		t.Fatalf("ReadTransactionInfo after tail hidden = %+v, want fee 777", info)
-	}
+	assertChainFreezerTxInfo(t, "ReadTransactionInfo after tail hidden", rawdb.ReadTransactionInfo(chainDB, txHash[:]), 1)
 	if got := rawdb.ReadBlockStateRoot(chainDB, block1.Hash()); got != stateRoot {
 		t.Fatalf("ReadBlockStateRoot after tail hidden = %x, want %x", got, stateRoot)
 	}
@@ -653,12 +649,24 @@ func chainFreezerBlockWithTx(t *testing.T, number uint64) (*types.Block, [32]byt
 		Transactions: []*corepb.Transaction{txPB},
 	})
 	ret := &corepb.TransactionRet{
-		BlockNumber: int64(number),
+		BlockNumber:    int64(number),
+		BlockTimeStamp: int64(30_000 + number),
 		Transactioninfo: []*corepb.TransactionInfo{
 			{
-				Id:          txHash[:],
-				Fee:         777,
-				BlockNumber: int64(number),
+				Id:             txHash[:],
+				Fee:            777,
+				BlockNumber:    int64(number),
+				BlockTimeStamp: int64(30_000 + number),
+				Receipt: &corepb.ResourceReceipt{
+					EnergyUsage:        45,
+					EnergyFee:          678,
+					OriginEnergyUsage:  9,
+					EnergyUsageTotal:   90,
+					NetUsage:           12,
+					NetFee:             34,
+					Result:             corepb.Transaction_Result_SUCCESS,
+					EnergyPenaltyTotal: 56,
+				},
 			},
 		},
 	}
@@ -667,6 +675,30 @@ func chainFreezerBlockWithTx(t *testing.T, number uint64) (*types.Block, [32]byt
 		t.Fatalf("marshal tx info: %v", err)
 	}
 	return block, txHash, txInfoRaw
+}
+
+func assertChainFreezerTxInfo(t *testing.T, phase string, info *corepb.TransactionInfo, number uint64) {
+	t.Helper()
+	if info == nil {
+		t.Fatalf("%s transaction info = nil, want fee 777 with receipt", phase)
+	}
+	if info.Fee != 777 || info.BlockNumber != int64(number) || info.BlockTimeStamp != int64(30_000+number) {
+		t.Fatalf("%s transaction info = %+v, want fee 777 at block %d timestamp %d", phase, info, number, 30_000+number)
+	}
+	receipt := info.Receipt
+	if receipt == nil {
+		t.Fatalf("%s receipt = nil, want archived resource receipt", phase)
+	}
+	if receipt.EnergyUsage != 45 ||
+		receipt.EnergyFee != 678 ||
+		receipt.OriginEnergyUsage != 9 ||
+		receipt.EnergyUsageTotal != 90 ||
+		receipt.NetUsage != 12 ||
+		receipt.NetFee != 34 ||
+		receipt.Result != corepb.Transaction_Result_SUCCESS ||
+		receipt.EnergyPenaltyTotal != 56 {
+		t.Fatalf("%s receipt = %+v, want resource receipt fields preserved", phase, receipt)
+	}
 }
 
 func assertChainFreezerRowsEqual(t *testing.T, wantStore, gotStore *rawdbfreezer.Freezer, from, to uint64) {
