@@ -365,6 +365,27 @@ func (b *Buffer) MaxInflight() int {
 	return b.effectiveMaxInflight()
 }
 
+// NewestCommittedNumber returns the block number of the newest COMMITTED
+// (CommitInflight'd, not-yet-flushed) layer, or (0,false) if none. Committed
+// layers are ordered oldest→newest, so the newest is the tail. Used by the
+// async-commit deep path (depth>2) to cap the flush cutoff at a fully-committed
+// block: the commit worker publishes bc.CurrentBlock() BEFORE CommitInflight, so
+// the head block's layer can still be in-flight, and FlushLatestUpTo KEEPS ops
+// targeting an in-flight layer (writeFiltered only applies committed targets).
+// Capping at currentBlock therefore leaves the head block's latest-domain op
+// queued while a later postFlush drops its (by-then committed) layer →
+// "batch target layer is no longer pending". The newest committed number is the
+// highest block whose layer is guaranteed promoted, so any op ≤ it is flushed
+// (not kept) before its layer can be dropped.
+func (b *Buffer) NewestCommittedNumber() (uint64, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if len(b.layers) == 0 {
+		return 0, false
+	}
+	return b.layers[len(b.layers)-1].number, true
+}
+
 func (b *Buffer) layerPendingLocked(target *layer) bool {
 	if b == nil || target == nil {
 		return false

@@ -221,15 +221,24 @@ func (bc *BlockChain) commitAsync(
 	//    (Synchronous commit flushes at the true solidified because the layer is
 	//    committed in-line before this point; async must lag by one.)
 	cutoff := dynProps.LatestSolidifiedBlockNum()
-	// Cap the flush at the highest block whose buffer layer is already committed.
+	// Cap the flush at the highest block whose buffer layer is already COMMITTED.
 	// At depth 2 that is block.Number()-1: the rendezvous enqueue only returned
-	// after the worker committed N-1. At depth > 2 the worker's published head
-	// (bc.CurrentBlock()) may lag the foreground by up to D blocks; only committed
-	// layers are flushable, and flushing an in-flight block's latest-domain scope
-	// rows would orphan them, so the cutoff must track the committed head.
+	// after the worker fully committed N-1 (CommitInflight done). At depth > 2 the
+	// worker publishes bc.CurrentBlock() BEFORE CommitInflight, so the published
+	// head's layer can still be in-flight; FlushLatestUpTo KEEPS ops targeting an
+	// in-flight layer (writeFiltered only applies committed targets), so a cutoff
+	// of currentBlock would leave the head block's latest-domain op queued while a
+	// later postFlush drops its (by-then committed) layer → "batch target layer is
+	// no longer pending". Track the newest COMMITTED layer instead — any op ≤ it
+	// targets a promoted layer and is flushed (not kept) before its layer is
+	// dropped. No committed layer yet ⇒ nothing is flushable this round.
 	maxFlushable := int64(block.Number()) - 1
 	if bc.pipelinedCommit() {
-		maxFlushable = int64(bc.CurrentBlock().Number())
+		if n, ok := bc.buffer.NewestCommittedNumber(); ok {
+			maxFlushable = int64(n)
+		} else {
+			maxFlushable = 0
+		}
 	}
 	if cutoff > maxFlushable {
 		cutoff = maxFlushable
