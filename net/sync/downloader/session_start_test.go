@@ -396,6 +396,67 @@ func TestApplySessionStartupPlanPrunesCorruptStagedBodyRaw(t *testing.T) {
 	}
 }
 
+func TestApplySessionStartupPlanPrunesForkedStagedBodyPath(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block2 := testBufferedBlock(2)
+	block3 := testBufferedBlock(3)
+	block4 := testBufferedBlock(4)
+	for _, block := range []*types.Block{block3, block4} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncInventory, block4.Number()); err != nil {
+		t.Fatalf("write inventory target: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block4.Number(), block4.Hash()); err != nil {
+		t.Fatalf("write sync bodies ready progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, block2.Number(), map[uint64]tcommon.Hash{
+		block2.Number(): block2.Hash(),
+	})
+	forkHash := block3.Hash()
+	forkHash[0] ^= 0xff
+	applier.path[block3.Number()] = forkHash
+
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         block2.Number(),
+		RestoreLimit: 10,
+	}), applier)
+
+	if !result.HasStagedBodyRestore {
+		t.Fatal("startup result did not record staged body restore")
+	}
+	if restore := result.StagedBodyRestore; restore.Restored != 0 || !restore.NeedPruneTail ||
+		restore.PruneFrom != block3.Number() || restore.NextExpected != block3.Number() ||
+		restore.HaveLastRestored {
+		t.Fatalf("restore result = %+v, want prune from forked block3 without restored prefix", restore)
+	}
+	if _, ok := applier.buffer[block3.Number()]; ok {
+		t.Fatal("forked staged block3 was restored into buffer")
+	}
+	if _, ok := applier.hashes[block3.Hash()]; ok {
+		t.Fatal("forked staged block3 hash was registered")
+	}
+	if got := applier.path[block3.Number()]; got != forkHash {
+		t.Fatalf("reserved fork path changed to %x, want %x", got, forkHash)
+	}
+	for _, block := range []*types.Block{block3, block4} {
+		if _, ok, err := rawdb.ReadSyncStagedBlockRaw(db, block.Number()); err != nil || ok {
+			t.Fatalf("staged block%d = ok:%v err:%v, want pruned", block.Number(), ok, err)
+		}
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want deleted after forked tail prune", stage, row, ok, err)
+		}
+	}
+}
+
 type recordedSessionStartupCall struct {
 	action SessionStartupStepAction
 	first  uint64
