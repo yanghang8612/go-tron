@@ -110,6 +110,13 @@ type IdleDrainStep struct {
 	Action IdleDrainStepAction
 }
 
+// IdleDrainApplyResult records empty-drain settlement steps dispatched by the
+// downloader planner after refill.
+type IdleDrainApplyResult struct {
+	AppliedSteps []IdleDrainStepAction
+	UnknownSteps []IdleDrainStepAction
+}
+
 // LocalDrainIterationStep is one downloader-owned local drain loop operation.
 type LocalDrainIterationStep struct {
 	Action LocalDrainIterationStepAction
@@ -119,6 +126,13 @@ type LocalDrainIterationStep struct {
 // fetch-slot refill.
 type FetchRefillDispatchStep struct {
 	Action FetchRefillDispatchStepAction
+}
+
+// FetchRefillDispatchApplyResult records fetch-refill dispatch steps
+// dispatched by the downloader planner.
+type FetchRefillDispatchApplyResult struct {
+	AppliedSteps []FetchRefillDispatchStepAction
+	UnknownSteps []FetchRefillDispatchStepAction
 }
 
 // IdleDrainPlan describes the session-level action after a local drain found no
@@ -464,9 +478,10 @@ func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunP
 
 // ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain
 // settlement schedule.
-func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanApplier) {
+func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanApplier) IdleDrainApplyResult {
+	var result IdleDrainApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -475,17 +490,23 @@ func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanAppl
 		switch step.Action {
 		case IdleDrainFinish:
 			applier.FinishSync()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case IdleDrainJoinAvailablePeers:
 			applier.JoinAvailablePeers()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyFetchRefillDispatchPlan executes downloader-owned refill dispatch
 // operations.
-func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRefillDispatchPlanApplier) {
+func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRefillDispatchPlanApplier) FetchRefillDispatchApplyResult {
+	var result FetchRefillDispatchApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -494,8 +515,12 @@ func ApplyFetchRefillDispatchPlan(plan FetchRefillDispatchPlan, applier FetchRef
 		switch step.Action {
 		case FetchRefillDispatchSendOutbound:
 			applier.SendOutboundRequests()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // PlanPostInventorySettlement decides how the service should settle a sync

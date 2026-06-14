@@ -367,7 +367,7 @@ func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	applier := new(recordingIdleDrainApplier)
-	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{
+	result := ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{
 		{Action: IdleDrainJoinAvailablePeers},
 		{Action: IdleDrainStepAction(255)},
 		{Action: IdleDrainFinish},
@@ -377,30 +377,48 @@ func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("idle drain calls = %+v, want %+v", applier.calls, want)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, want) ||
+		!reflect.DeepEqual(result.UnknownSteps, []IdleDrainStepAction{IdleDrainStepAction(255)}) {
+		t.Fatalf("idle drain result = %+v, want join/finish applied and unknown [255]", result)
+	}
 	applier.calls = nil
-	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Finish: true}, applier)
+	result = ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Finish: true}, applier)
 	if !reflect.DeepEqual(applier.calls, []IdleDrainStepAction{IdleDrainFinish}) {
 		t.Fatalf("fallback idle drain calls = %+v, want finish", applier.calls)
 	}
-	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{{Action: IdleDrainFinish}}}, nil)
+	if !reflect.DeepEqual(result.AppliedSteps, []IdleDrainStepAction{IdleDrainFinish}) || len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback idle drain result = %+v, want finish applied", result)
+	}
+	if nilResult := ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{{Action: IdleDrainFinish}}}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil idle drain result = %+v, want empty", nilResult)
+	}
 }
 
 func TestApplyFetchRefillDispatchPlan(t *testing.T) {
 	applier := new(recordingFetchRefillDispatchApplier)
-	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
+	result := ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
 		{Action: FetchRefillDispatchSendOutbound},
 		{Action: FetchRefillDispatchStepAction(255)},
 	}}, applier)
 	if applier.sent != 1 {
 		t.Fatalf("refill dispatch sends = %d, want 1", applier.sent)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
+		!reflect.DeepEqual(result.UnknownSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchStepAction(255)}) {
+		t.Fatalf("refill dispatch result = %+v, want send applied and unknown [255]", result)
+	}
 
 	applier.sent = 0
-	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, applier)
+	result = ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, applier)
 	if applier.sent != 1 {
 		t.Fatalf("fallback refill dispatch sends = %d, want 1", applier.sent)
 	}
-	ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, nil)
+	if !reflect.DeepEqual(result.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) || len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback refill dispatch result = %+v, want send applied", result)
+	}
+	if nilResult := ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil refill dispatch result = %+v, want empty", nilResult)
+	}
 }
 
 func TestPlanPostInventorySettlement(t *testing.T) {
