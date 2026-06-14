@@ -188,6 +188,12 @@ type ImportBatchExecutionAttempt struct {
 // blocks with the attempt-owned stage observer.
 type ImportBatchExecutionAttemptExecutor func(blocks []*types.Block, observe StageProgressWriter) error
 
+// ImportBatchStageHookExecutor applies an execution attempt through the
+// canonical importer that accepts core stage hooks.
+type ImportBatchStageHookExecutor interface {
+	InsertBlocksWithStageHook(blocks []*types.Block, hook core.StageProgressHook) error
+}
+
 // ImportBatchExecutionAttemptResult records the runtime outcome of executing a
 // downloader-owned import attempt.
 type ImportBatchExecutionAttemptResult struct {
@@ -298,6 +304,19 @@ func RunImportBatchExecutionAttempt(attempt ImportBatchExecutionAttempt, execute
 		elapsed = 0
 	}
 	return ImportBatchExecutionAttemptResult{Elapsed: elapsed, Err: err}
+}
+
+// RunImportBatchExecutionAttemptWithStageHook executes a runnable attempt
+// through a canonical importer that accepts core stage hooks. This keeps the
+// planned stage observer bound to the downloader-owned attempt rather than
+// rebuilding the hook adapter in SyncService.
+func RunImportBatchExecutionAttemptWithStageHook(attempt ImportBatchExecutionAttempt, execute ImportBatchStageHookExecutor, now func() time.Time) ImportBatchExecutionAttemptResult {
+	return RunImportBatchExecutionAttempt(attempt, func(blocks []*types.Block, observe StageProgressWriter) error {
+		if execute == nil {
+			return nil
+		}
+		return execute.InsertBlocksWithStageHook(blocks, core.StageProgressHook(observe))
+	}, now)
 }
 
 // PlansStageObservation reports whether a canonical insertion hook observation

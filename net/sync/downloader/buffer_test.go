@@ -713,6 +713,70 @@ func TestRunImportBatchExecutionAttemptUsesPlannedObserverAndClock(t *testing.T)
 	}
 }
 
+func TestRunImportBatchExecutionAttemptWithStageHookBindsPlannedObserver(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+	execution := PlanImportBatchExecution(batch)
+	attempt := NewImportBatchExecutionAttempt(execution)
+	insertErr := errors.New("insert failed")
+	clock := []time.Time{
+		time.Unix(20, 0),
+		time.Unix(20, 0).Add(75 * time.Millisecond),
+	}
+	now := func() time.Time {
+		if len(clock) == 0 {
+			t.Fatal("clock exhausted")
+		}
+		next := clock[0]
+		clock = clock[1:]
+		return next
+	}
+	inserter := &recordingImportBatchStageHookExecutor{
+		err: insertErr,
+		observe: func(blocks []*types.Block, hook core.StageProgressHook) {
+			if hook == nil {
+				t.Fatal("stage hook is nil")
+			}
+			if !reflect.DeepEqual(blocks, execution.Blocks) {
+				t.Fatalf("blocks = %+v, want execution blocks %+v", blocks, execution.Blocks)
+			}
+			hook(rawdb.StageBodies, block1.Number(), block1.Hash())
+			hook(rawdb.StageExecution, block1.Number(), block1.Hash())
+			hook(rawdb.StageCommitment, block2.Number(), tcommon.Hash{0xee})
+		},
+	}
+
+	result := RunImportBatchExecutionAttemptWithStageHook(attempt, inserter, now)
+
+	if result.Elapsed != 75*time.Millisecond || !errors.Is(result.Err, insertErr) {
+		t.Fatalf("result = %+v, want 75ms insert error", result)
+	}
+	if !reflect.DeepEqual(inserter.blocks, execution.Blocks) {
+		t.Fatalf("recorded blocks = %+v, want execution blocks %+v", inserter.blocks, execution.Blocks)
+	}
+	progress := attempt.ProgressPlan(batch, 1)
+	want := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+	}
+	if !progress.OK || !reflect.DeepEqual(progress.Progress, want) {
+		t.Fatalf("attempt progress = %+v, want planned body/execution prefix %+v", progress, want)
+	}
+	if progress.StageDiagnostics.Complete ||
+		progress.StageDiagnostics.NextPhase != ImportStagePhaseCommitment ||
+		progress.StageDiagnostics.NextCanonicalStage != rawdb.StageCommitment ||
+		progress.StageDiagnostics.BlockedStatus != ImportStageProgressMissing {
+		t.Fatalf("attempt stage diagnostics = %+v, want blocked at commitment", progress.StageDiagnostics)
+	}
+	if len(clock) != 0 {
+		t.Fatalf("clock calls remaining = %d, want exhausted", len(clock))
+	}
+}
+
 func TestImportBatchExecutionPlanStageObserverDropsUnplannedObservations(t *testing.T) {
 	var observed []rawdb.StageID
 	observer := (ImportBatchExecutionPlan{}).StageObserver(func(stage rawdb.StageID, _ uint64, _ tcommon.Hash) {
@@ -1611,6 +1675,20 @@ type recordingImportBatchRunApplier struct {
 	progress                  []rawdb.StageProgress
 	pauseNum                  uint64
 	pauseErr                  error
+}
+
+type recordingImportBatchStageHookExecutor struct {
+	blocks  []*types.Block
+	err     error
+	observe func(blocks []*types.Block, hook core.StageProgressHook)
+}
+
+func (e *recordingImportBatchStageHookExecutor) InsertBlocksWithStageHook(blocks []*types.Block, hook core.StageProgressHook) error {
+	e.blocks = blocks
+	if e.observe != nil {
+		e.observe(blocks, hook)
+	}
+	return e.err
 }
 
 func (a *recordingImportBatchRunApplier) LogDecodeBatchResult(BufferedBatchDecodeResult) {
