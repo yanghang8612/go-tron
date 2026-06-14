@@ -539,6 +539,35 @@ func query(db *rawdb.ChainDB) {
 	}
 }
 
+func TestEventLogAuditMethodValueDoesNotLeakAcrossFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) IterateEventLogs(uint64, uint64, rawdb.EventLogFilter, func(rawdb.EventLog) (bool, error)) error {
+	return nil
+}
+
+func first(m coldManager) {
+	iter := m.IterateEventLogs
+	_ = iter(1, 2, rawdb.EventLogFilter{}, nil)
+}
+
+func second(iter func(uint64, uint64, rawdb.EventLogFilter, func(rawdb.EventLog) (bool, error)) error) {
+	_ = iter(1, 2, rawdb.EventLogFilter{}, nil)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"IterateEventLogs": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateEventLogs") {
+		t.Fatalf("offenders = %+v, want only the local non-ChainDB IterateEventLogs alias rejected", offenders)
+	}
+}
+
 func TestEventLogAuditAllowsChainDBAliasBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "app/chain.go", `package app
 
