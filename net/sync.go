@@ -1554,7 +1554,8 @@ func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan
 	if !plan.OK {
 		return
 	}
-	syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: ss})
+	applyResult := syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: ss})
+	ss.logImportedBatchProgressApplyResult(applyResult)
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
@@ -1586,12 +1587,12 @@ type syncImportedBatchProgressApplier struct {
 	service *SyncService
 }
 
-func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
-	a.service.writeImportedSyncProgress(deletes, rows)
+func (a syncImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult {
+	return a.service.writeImportedSyncProgress(deletes, rows)
 }
 
-func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() {
-	a.service.writeSyncBodiesReadyProgress()
+func (a syncImportedBatchProgressApplier) RefreshSyncBodiesReady() syncdl.StagedBodyReadyProgressRefresh {
+	return a.service.writeSyncBodiesReadyProgress()
 }
 
 func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash, hasHash bool) {
@@ -1613,20 +1614,29 @@ func (ss *SyncService) writeStageProgress(stage rawdb.StageID, blockNum uint64, 
 	}
 }
 
-func (ss *SyncService) writeImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
+func (ss *SyncService) writeImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult {
 	if (len(deletes) == 0 && len(rows) == 0) || ss == nil || ss.chain == nil {
-		return
+		return rawdb.SyncImportProgressWriteResult{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
+		return rawdb.SyncImportProgressWriteResult{}
+	}
+	return rawdb.WriteSyncImportProgressBatch(db, deletes, rows)
+}
+
+func (ss *SyncService) logImportedBatchProgressApplyResult(result syncdl.ImportedBatchProgressApplyResult) {
+	for _, unknown := range result.UnknownSteps {
+		syncLog.Warn("Unknown imported batch progress step", "step", unknown)
+	}
+	if !result.HasWriteResult {
 		return
 	}
-	result := rawdb.WriteSyncImportProgressBatch(db, deletes, rows)
-	for _, deleteErr := range result.DeleteErrors {
+	for _, deleteErr := range result.WriteResult.DeleteErrors {
 		syncLog.Warn("Delete sync staged block failed", "number", deleteErr.Number, "hash", deleteErr.Hash, "err", deleteErr.Err)
 	}
-	if result.ProgressError != nil {
-		syncLog.Warn("Persist sync stage progress rows failed", "rows", len(rows), "err", result.ProgressError)
+	if result.WriteResult.ProgressError != nil {
+		syncLog.Warn("Persist sync stage progress rows failed", "rows", result.WriteProgressRows, "err", result.WriteResult.ProgressError)
 	}
 }
 

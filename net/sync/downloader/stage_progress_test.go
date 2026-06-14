@@ -441,7 +441,7 @@ func TestApplyImportedBatchProgressPlan(t *testing.T) {
 	}
 	var applier recordingImportedBatchProgressApplier
 
-	ApplyImportedBatchProgressPlan(plan, &applier)
+	result := ApplyImportedBatchProgressPlan(plan, &applier)
 	want := []recordedImportedBatchProgressCall{
 		{action: ImportedBatchWriteProgress, deletes: []rawdb.SyncStagedBlockDelete{deleteRow}, progress: []rawdb.StageProgress{progressRow}},
 		{action: ImportedBatchRefreshBodiesReady},
@@ -449,9 +449,25 @@ func TestApplyImportedBatchProgressPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, want)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, []ImportedBatchProgressStepAction{ImportedBatchWriteProgress, ImportedBatchRefreshBodiesReady}) {
+		t.Fatalf("applied steps = %+v, want write/refresh", result.AppliedSteps)
+	}
+	if !reflect.DeepEqual(result.UnknownSteps, []ImportedBatchProgressStepAction{ImportedBatchProgressStepAction(255)}) {
+		t.Fatalf("unknown steps = %+v, want [255]", result.UnknownSteps)
+	}
+	if !result.HasWriteResult || result.WriteDeletes != 1 || result.WriteProgressRows != 1 || result.WriteResult.Deleted != 1 || result.WriteResult.ProgressRows != 1 {
+		t.Fatalf("write result = %+v deletes=%d rows=%d set=%v, want 1 delete and 1 progress row", result.WriteResult, result.WriteDeletes, result.WriteProgressRows, result.HasWriteResult)
+	}
+	if !result.HasReadyRefresh || !result.ReadyRefresh.Updated {
+		t.Fatalf("ready refresh = %+v set=%v, want updated", result.ReadyRefresh, result.HasReadyRefresh)
+	}
 
-	ApplyImportedBatchProgressPlan(plan, nil)
-	ApplyImportedBatchProgressPlan(ImportedBatchProgressPlan{}, &applier)
+	if empty := ApplyImportedBatchProgressPlan(plan, nil); len(empty.AppliedSteps) != 0 || len(empty.UnknownSteps) != 0 || empty.HasWriteResult || empty.HasReadyRefresh {
+		t.Fatalf("nil applier result = %+v, want empty", empty)
+	}
+	if empty := ApplyImportedBatchProgressPlan(ImportedBatchProgressPlan{}, &applier); len(empty.AppliedSteps) != 0 || len(empty.UnknownSteps) != 0 || empty.HasWriteResult || empty.HasReadyRefresh {
+		t.Fatalf("empty plan result = %+v, want empty", empty)
+	}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("calls after no-op plans = %+v, want unchanged %+v", applier.calls, want)
 	}
@@ -467,16 +483,21 @@ type recordingImportedBatchProgressApplier struct {
 	calls []recordedImportedBatchProgressCall
 }
 
-func (a *recordingImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) {
+func (a *recordingImportedBatchProgressApplier) WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult {
 	a.calls = append(a.calls, recordedImportedBatchProgressCall{
 		action:   ImportedBatchWriteProgress,
 		deletes:  append([]rawdb.SyncStagedBlockDelete(nil), deletes...),
 		progress: append([]rawdb.StageProgress(nil), rows...),
 	})
+	return rawdb.SyncImportProgressWriteResult{
+		Deleted:      len(deletes),
+		ProgressRows: len(rows),
+	}
 }
 
-func (a *recordingImportedBatchProgressApplier) RefreshSyncBodiesReady() {
+func (a *recordingImportedBatchProgressApplier) RefreshSyncBodiesReady() StagedBodyReadyProgressRefresh {
 	a.calls = append(a.calls, recordedImportedBatchProgressCall{action: ImportedBatchRefreshBodiesReady})
+	return StagedBodyReadyProgressRefresh{Updated: true}
 }
 
 func TestPlanImportedBatchProgressStopsAtStageMismatch(t *testing.T) {

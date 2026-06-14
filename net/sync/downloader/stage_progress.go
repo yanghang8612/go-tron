@@ -576,8 +576,8 @@ type ImportedBatchProgressStep struct {
 // named by an imported-batch progress plan. SyncService owns DB handles and
 // logging; downloader owns the ordered stage side effects.
 type ImportedBatchProgressPlanApplier interface {
-	WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress)
-	RefreshSyncBodiesReady()
+	WriteImportedSyncProgress(deletes []rawdb.SyncStagedBlockDelete, rows []rawdb.StageProgress) rawdb.SyncImportProgressWriteResult
+	RefreshSyncBodiesReady() StagedBodyReadyProgressRefresh
 }
 
 // ImportedBatchProgressPlan is the downloader-owned storage plan for the
@@ -601,6 +601,19 @@ type ImportedBatchProgressPlan struct {
 	StatsTransactions    int
 	ReportHead           uint64
 	ReportPeer           *p2p.Peer
+}
+
+// ImportedBatchProgressApplyResult records the storage/runtime side effects
+// dispatched for an imported staged-body prefix.
+type ImportedBatchProgressApplyResult struct {
+	AppliedSteps      []ImportedBatchProgressStepAction
+	UnknownSteps      []ImportedBatchProgressStepAction
+	WriteResult       rawdb.SyncImportProgressWriteResult
+	WriteDeletes      int
+	WriteProgressRows int
+	HasWriteResult    bool
+	ReadyRefresh      StagedBodyReadyProgressRefresh
+	HasReadyRefresh   bool
 }
 
 // StageProgressCollector observes canonical block insertion stages and records
@@ -772,18 +785,28 @@ func (p ImportedBatchProgressPlan) withSteps() ImportedBatchProgressPlan {
 
 // ApplyImportedBatchProgressPlan executes the downloader-owned side-effect
 // schedule for an imported staged-body prefix.
-func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier ImportedBatchProgressPlanApplier) {
+func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier ImportedBatchProgressPlanApplier) ImportedBatchProgressApplyResult {
+	var result ImportedBatchProgressApplyResult
 	if !plan.OK || applier == nil {
-		return
+		return result
 	}
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case ImportedBatchWriteProgress:
-			applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
+			result.WriteDeletes = len(step.Deletes)
+			result.WriteProgressRows = len(step.Progress)
+			result.WriteResult = applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
+			result.HasWriteResult = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case ImportedBatchRefreshBodiesReady:
-			applier.RefreshSyncBodiesReady()
+			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
+			result.HasReadyRefresh = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // NewImportStageSchedule returns the bodies/execution/commitment/finish targets
