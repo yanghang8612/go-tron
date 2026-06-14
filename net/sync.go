@@ -1068,7 +1068,8 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return true
 	}
-	settlement := syncdl.PlanFetchReceiptSettlement(ack)
+	receiptRun := syncdl.PlanFetchReceiptRun(syncdl.FetchReceiptRunInput{Receipt: ack})
+	settlement := receiptRun.Settlement
 	settlementApplier := &syncFetchReceiptSettlementApplier{service: ss, peerState: ps, blockHash: blockHash}
 	syncdl.ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement, settlementApplier)
 	bid := types.BlockID{Hash: blockHash, Num: blockNum}
@@ -1093,14 +1094,14 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	ss.mu.Unlock()
 
 	syncdl.ApplyFetchReceiptSettlementAfterUnlockPlan(settlement, settlementApplier)
-	dispatch := syncdl.PlanFetchReceiptDispatch(syncdl.FetchReceiptDispatchInput{
+	receiptRun = syncdl.PlanFetchReceiptRunAfterDrain(receiptRun, syncdl.FetchReceiptRunAfterDrainInput{
 		OutboundRequests: len(settlementApplier.out),
 		Progress: syncdl.SessionProgress{
 			Syncing: ss.IsSyncing(),
 			Paused:  ss.IsPaused(),
 		},
 	})
-	syncdl.ApplyFetchReceiptDispatchPlan(dispatch, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
+	syncdl.ApplyFetchReceiptDispatchPlan(receiptRun.Dispatch, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
 	return true
 }
 

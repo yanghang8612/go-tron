@@ -189,6 +189,54 @@ func TestPlanFetchReceiptSettlement(t *testing.T) {
 	}
 }
 
+func TestPlanFetchReceiptRun(t *testing.T) {
+	rejected := PlanFetchReceiptRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Inflight: 2},
+	})
+	if !reflect.DeepEqual(rejected, FetchReceiptRunPlan{}) {
+		t.Fatalf("rejected run = %+v, want no settlement or dispatch", rejected)
+	}
+	rejected = PlanFetchReceiptRunAfterDrain(rejected, FetchReceiptRunAfterDrainInput{
+		OutboundRequests: 2,
+		Progress:         SessionProgress{Syncing: true},
+	})
+	if !reflect.DeepEqual(rejected, FetchReceiptRunPlan{}) {
+		t.Fatalf("rejected after-drain run = %+v, want no dispatch", rejected)
+	}
+
+	active := PlanFetchReceiptRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	})
+	if !active.Settlement.Accepted || !active.Settlement.FillFetchSlots || active.Settlement.RearmFetchTimer || !active.Settlement.DrainBuffered {
+		t.Fatalf("active settlement = %+v, want batch-done settlement", active.Settlement)
+	}
+	active = PlanFetchReceiptRunAfterDrain(active, FetchReceiptRunAfterDrainInput{
+		OutboundRequests: 2,
+		Progress:         SessionProgress{Syncing: true},
+	})
+	wantDispatch := FetchReceiptDispatchPlan{
+		SendOutboundRequests: true,
+		Steps:                []FetchReceiptDispatchStep{{Action: FetchReceiptDispatchSendOutbound}},
+	}
+	if !reflect.DeepEqual(active.Dispatch, wantDispatch) {
+		t.Fatalf("active dispatch = %+v, want %+v", active.Dispatch, wantDispatch)
+	}
+
+	paused := PlanFetchReceiptRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, Inflight: 1},
+	})
+	if !paused.Settlement.RearmFetchTimer || paused.Settlement.FillFetchSlots {
+		t.Fatalf("paused settlement = %+v, want partial-batch settlement", paused.Settlement)
+	}
+	paused = PlanFetchReceiptRunAfterDrain(paused, FetchReceiptRunAfterDrainInput{
+		OutboundRequests: 2,
+		Progress:         SessionProgress{Syncing: true, Paused: true},
+	})
+	if !reflect.DeepEqual(paused.Dispatch, FetchReceiptDispatchPlan{}) {
+		t.Fatalf("paused dispatch = %+v, want no action", paused.Dispatch)
+	}
+}
+
 func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
 	applier := new(recordingFetchReceiptSettlementApplier)
 	plan := FetchReceiptSettlement{

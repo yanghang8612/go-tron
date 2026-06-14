@@ -47,6 +47,12 @@ type FetchReceiptResult struct {
 	BatchDone bool
 }
 
+// FetchReceiptRunInput is the side-effect-free state for settling one received
+// block body against the peer's in-flight fetch request.
+type FetchReceiptRunInput struct {
+	Receipt FetchReceiptResult
+}
+
 // FetchReceiptSettlement is the downloader-owned state-machine decision after
 // acknowledging one received FETCH_INV_DATA block.
 type FetchReceiptSettlement struct {
@@ -107,11 +113,25 @@ type FetchReceiptDispatchInput struct {
 	Progress         SessionProgress
 }
 
+// FetchReceiptRunAfterDrainInput is the state available after receipt
+// settlement has filled any fetch slots and local staged bodies have drained.
+type FetchReceiptRunAfterDrainInput struct {
+	OutboundRequests int
+	Progress         SessionProgress
+}
+
 // FetchReceiptDispatchPlan describes whether follow-up fetch requests should
 // be sent after the local drain has had a chance to settle the session.
 type FetchReceiptDispatchPlan struct {
 	SendOutboundRequests bool
 	Steps                []FetchReceiptDispatchStep
+}
+
+// FetchReceiptRunPlan groups the downloader-owned settlement and post-drain
+// dispatch decisions for one accepted fetched block body.
+type FetchReceiptRunPlan struct {
+	Settlement FetchReceiptSettlement
+	Dispatch   FetchReceiptDispatchPlan
 }
 
 // FetchReceiptDispatchStepAction names one post-drain dispatch operation after
@@ -187,6 +207,16 @@ func AcknowledgeFetchReceipt(state FetchReceiptState, hash tcommon.Hash, num uin
 		Accepted:  true,
 		Inflight:  state.Inflight,
 		BatchDone: state.Inflight == 0,
+	}
+}
+
+// PlanFetchReceiptRun derives the settlement half of a fetched-block receipt
+// run. The dispatch half is planned after the caller applies settlement and
+// drains local staged bodies, because only then are follow-up outbound requests
+// known.
+func PlanFetchReceiptRun(in FetchReceiptRunInput) FetchReceiptRunPlan {
+	return FetchReceiptRunPlan{
+		Settlement: PlanFetchReceiptSettlement(in.Receipt),
 	}
 }
 
@@ -307,6 +337,19 @@ func PlanFetchReceiptDispatch(in FetchReceiptDispatchInput) FetchReceiptDispatch
 	return FetchReceiptDispatchPlan{
 		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
+}
+
+// PlanFetchReceiptRunAfterDrain completes a fetched-block receipt run with the
+// post-drain dispatch decision.
+func PlanFetchReceiptRunAfterDrain(plan FetchReceiptRunPlan, in FetchReceiptRunAfterDrainInput) FetchReceiptRunPlan {
+	if !plan.Settlement.Accepted {
+		return plan
+	}
+	plan.Dispatch = PlanFetchReceiptDispatch(FetchReceiptDispatchInput{
+		OutboundRequests: in.OutboundRequests,
+		Progress:         in.Progress,
+	})
+	return plan
 }
 
 func (p FetchReceiptDispatchPlan) withSteps() FetchReceiptDispatchPlan {
