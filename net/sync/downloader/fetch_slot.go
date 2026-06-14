@@ -70,6 +70,15 @@ type FetchSlotPlanApplier interface {
 	SendFetch(plan FetchSlotPlan)
 }
 
+// FetchSlotApplyResult records the peer-local actions applied for one fetch
+// slot refill and the network dispatch intent produced by those actions.
+type FetchSlotApplyResult struct {
+	AppliedSteps     []FetchSlotStepAction
+	UnknownSteps     []FetchSlotStepAction
+	RequestInventory bool
+	SendFetch        bool
+}
+
 // PlanFetchSlotEligibility decides whether one peer can be considered for fetch
 // slot refill.
 func PlanFetchSlotEligibility(in FetchSlotEligibilityInput) FetchSlotEligibilityPlan {
@@ -118,9 +127,10 @@ func (p FetchSlotPlan) withSteps() FetchSlotPlan {
 }
 
 // ApplyFetchSlotPlan executes the downloader-owned peer fetch-slot schedule.
-func ApplyFetchSlotPlan(plan FetchSlotPlan, applier FetchSlotPlanApplier) {
+func ApplyFetchSlotPlan(plan FetchSlotPlan, applier FetchSlotPlanApplier) FetchSlotApplyResult {
+	var result FetchSlotApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -129,12 +139,21 @@ func ApplyFetchSlotPlan(plan FetchSlotPlan, applier FetchSlotPlanApplier) {
 		switch step.Action {
 		case FetchSlotWaitLocalHead:
 			applier.WaitLocalHead(plan)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchSlotRequestInventory:
 			applier.RequestInventory(plan)
+			result.RequestInventory = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchSlotDelay:
 			applier.DelayFetch(plan)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchSlotSend:
 			applier.SendFetch(plan)
+			result.SendFetch = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }

@@ -157,7 +157,7 @@ func TestApplyFetchSlotPlan(t *testing.T) {
 		{Action: FetchSlotDelay},
 		{Action: FetchSlotSend},
 	}}
-	ApplyFetchSlotPlan(plan, applier)
+	result := ApplyFetchSlotPlan(plan, applier)
 
 	want := []FetchSlotStepAction{
 		FetchSlotWaitLocalHead,
@@ -168,13 +168,23 @@ func TestApplyFetchSlotPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("fetch slot calls = %+v, want %+v", applier.calls, want)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, want) ||
+		!reflect.DeepEqual(result.UnknownSteps, []FetchSlotStepAction{FetchSlotStepAction(255)}) ||
+		!result.RequestInventory || !result.SendFetch {
+		t.Fatalf("fetch slot apply result = %+v, want applied calls, unknown step, inventory and fetch dispatch", result)
+	}
 
 	applier.calls = nil
-	ApplyFetchSlotPlan(FetchSlotPlan{Action: PeerFetchSend}, applier)
+	result = ApplyFetchSlotPlan(FetchSlotPlan{Action: PeerFetchSend}, applier)
 	if !reflect.DeepEqual(applier.calls, []FetchSlotStepAction{FetchSlotSend}) {
 		t.Fatalf("fallback fetch slot calls = %+v, want send", applier.calls)
 	}
-	ApplyFetchSlotPlan(FetchSlotPlan{Action: PeerFetchSend}, nil)
+	if !reflect.DeepEqual(result.AppliedSteps, []FetchSlotStepAction{FetchSlotSend}) || len(result.UnknownSteps) != 0 || result.RequestInventory || !result.SendFetch {
+		t.Fatalf("fallback fetch slot apply result = %+v, want send dispatch", result)
+	}
+	if nilResult := ApplyFetchSlotPlan(FetchSlotPlan{Action: PeerFetchSend}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.RequestInventory || nilResult.SendFetch {
+		t.Fatalf("nil fetch slot apply result = %+v, want empty", nilResult)
+	}
 }
 
 func fetchSlotStepActions(steps []FetchSlotStep) []FetchSlotStepAction {

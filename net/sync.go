@@ -1001,8 +1001,13 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			MinInterval:  minFetchRequestInterval,
 		})
 		applier := syncFetchSlotApplier{service: ss, peerState: ps, currentHead: currentHead}
-		syncdl.ApplyFetchSlotPlan(plan, &applier)
-		out = append(out, applier.out...)
+		applyResult := syncdl.ApplyFetchSlotPlan(plan, &applier)
+		if applyResult.RequestInventory {
+			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
+		}
+		if applyResult.SendFetch {
+			out = append(out, outboundSyncRequest{peer: ps.peer, blocks: plan.Batch})
+		}
 	}
 	return out
 }
@@ -1364,7 +1369,6 @@ type syncFetchSlotApplier struct {
 	service     *SyncService
 	peerState   *syncPeerState
 	currentHead uint64
-	out         []outboundSyncRequest
 }
 
 func (a *syncFetchSlotApplier) WaitLocalHead(_ syncdl.FetchSlotPlan) {
@@ -1383,7 +1387,6 @@ func (a *syncFetchSlotApplier) RequestInventory(_ syncdl.FetchSlotPlan) {
 	// produced new blocks while we were applying the previous batch; the
 	// one-id inventory response is what marks sync done.
 	a.peerState.chainRequested = true
-	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, chain: true})
 }
 
 func (a *syncFetchSlotApplier) DelayFetch(plan syncdl.FetchSlotPlan) {
@@ -1402,7 +1405,6 @@ func (a *syncFetchSlotApplier) SendFetch(plan syncdl.FetchSlotPlan) {
 	}
 	a.peerState.nextFetchAt = plan.NextFetchAt
 	a.service.armPeerFetchTimerLocked(a.peerState)
-	a.out = append(a.out, outboundSyncRequest{peer: a.peerState.peer, blocks: plan.Batch})
 }
 
 type syncChainInventoryApplier struct {
