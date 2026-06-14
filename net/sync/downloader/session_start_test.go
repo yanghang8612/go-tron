@@ -101,6 +101,7 @@ func TestPlanSessionStartup(t *testing.T) {
 		{Action: SessionStartupRefreshBodiesReady},
 		{Action: SessionStartupRepairSyncPipelineOrder},
 		{Action: SessionStartupCheckSyncPipelineOrder},
+		{Action: SessionStartupDeriveSyncPipelineCursor},
 	}
 	if !reflect.DeepEqual(got.Steps, wantSteps) {
 		t.Fatalf("startup steps = %+v, want %+v", got.Steps, wantSteps)
@@ -194,6 +195,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 			{Action: SessionStartupRefreshBodiesReady},
 			{Action: SessionStartupRepairSyncPipelineOrder},
 			{Action: SessionStartupCheckSyncPipelineOrder},
+			{Action: SessionStartupDeriveSyncPipelineCursor},
 		},
 	}
 	applier := recordingSessionStartupApplier{
@@ -223,6 +225,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 		SessionStartupRefreshBodiesReady,
 		SessionStartupRepairSyncPipelineOrder,
 		SessionStartupCheckSyncPipelineOrder,
+		SessionStartupDeriveSyncPipelineCursor,
 	}
 	if !reflect.DeepEqual(result.AppliedSteps, wantApplied) {
 		t.Fatalf("applied steps = %+v, want %+v", result.AppliedSteps, wantApplied)
@@ -426,6 +429,16 @@ func TestApplySessionStartupPlanDeletesPipelineAfterImportForkHashMismatch(t *te
 	}
 	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want checked with no issues after fork repair", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder)
+	}
+	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor ||
+		cursor.StageRows != 0 ||
+		cursor.HasLast ||
+		!cursor.HasNext ||
+		cursor.NextStage != rawdb.StageSyncBodies ||
+		cursor.Complete ||
+		cursor.HasBlocked ||
+		cursor.Interrupted {
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want reset to body stage after fork repair", cursor, result.HasSyncPipelineCursor)
 	}
 }
 

@@ -69,6 +69,7 @@ const (
 	SessionStartupRefreshBodiesReady
 	SessionStartupRepairSyncPipelineOrder
 	SessionStartupCheckSyncPipelineOrder
+	SessionStartupDeriveSyncPipelineCursor
 )
 
 // SessionStartupStep is one explicit startup recovery operation. Fields are
@@ -196,6 +197,7 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 		{Action: SessionStartupRefreshBodiesReady},
 		{Action: SessionStartupRepairSyncPipelineOrder},
 		{Action: SessionStartupCheckSyncPipelineOrder},
+		{Action: SessionStartupDeriveSyncPipelineCursor},
 	}
 	return plan
 }
@@ -236,6 +238,8 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.SyncPipelineOrderIssues = result.SyncPipelineOrderCheck.Issues
 			result.SyncPipelineOrderErrors = result.SyncPipelineOrderCheck.ReadErrors
 			result.HasSyncPipelineOrder = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionStartupDeriveSyncPipelineCursor:
 			result.SyncPipelineCursor = PlanSyncPipelineProgressCursor(result.SyncPipelineOrderCheck)
 			result.HasSyncPipelineCursor = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
