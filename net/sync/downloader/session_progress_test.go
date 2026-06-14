@@ -93,6 +93,31 @@ func TestPlanFetchRefillDispatch(t *testing.T) {
 	}
 }
 
+func TestPlanFetchRefillRun(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	got := PlanFetchRefillRun(FetchRefillRunInput{
+		OutboundRequests: 2,
+		Progress:         active,
+	})
+	want := FetchRefillRunPlan{
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active refill run = %+v, want %+v", got, want)
+	}
+
+	got = PlanFetchRefillRun(FetchRefillRunInput{
+		OutboundRequests: 2,
+		Progress:         SessionProgress{Syncing: true, Paused: true},
+	})
+	if !reflect.DeepEqual(got, FetchRefillRunPlan{}) {
+		t.Fatalf("paused refill run = %+v, want no action", got)
+	}
+}
+
 func TestPlanEmptyDrainJoinProbe(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {

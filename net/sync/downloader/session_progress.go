@@ -36,6 +36,13 @@ type FetchRefillDispatchInput struct {
 	Progress         SessionProgress
 }
 
+// FetchRefillRunInput is the lock-free state after a timer/manual peer-ready
+// pass has refilled peer fetch slots.
+type FetchRefillRunInput struct {
+	OutboundRequests int
+	Progress         SessionProgress
+}
+
 // EmptyDrainRefillInput is the lock-free state after a local drain found no
 // importable bodies and existing peers were refilled.
 type EmptyDrainRefillInput struct {
@@ -98,6 +105,13 @@ type IdleDrainPlan struct {
 type FetchRefillDispatchPlan struct {
 	SendOutboundRequests bool
 	Steps                []FetchRefillDispatchStep
+}
+
+// FetchRefillRunPlan groups the downloader-owned decisions after a timer or
+// peer-ready refill. It is intentionally narrow today; finish/retry settlement
+// can be added here without re-expanding SyncService call sites.
+type FetchRefillRunPlan struct {
+	Dispatch FetchRefillDispatchPlan
 }
 
 // EmptyDrainRefillPlan groups the two downloader-owned decisions after an
@@ -218,6 +232,17 @@ func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPla
 	return FetchRefillDispatchPlan{
 		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
+}
+
+// PlanFetchRefillRun derives the full downloader decision for a timer/manual
+// peer-ready fetch refill.
+func PlanFetchRefillRun(in FetchRefillRunInput) FetchRefillRunPlan {
+	return FetchRefillRunPlan{
+		Dispatch: PlanFetchRefillDispatch(FetchRefillDispatchInput{
+			OutboundRequests: in.OutboundRequests,
+			Progress:         in.Progress,
+		}),
+	}
 }
 
 // PlanEmptyDrainJoinProbe decides whether the caller should evaluate
