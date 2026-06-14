@@ -1352,6 +1352,18 @@ func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	if len(directLogs) != 1 {
 		t.Fatalf("direct GetLogs with cold event-log-index returned %d logs, want 1", len(directLogs))
 	}
+	directMissLogs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(tronLogAddress)},
+		Topics:    [][]tcommon.Hash{{otherTopic}},
+	})
+	if err != nil {
+		t.Fatalf("direct GetLogs wrong-topic cold event-log-index miss: %v", err)
+	}
+	if len(directMissLogs) != 0 {
+		t.Fatalf("direct GetLogs wrong-topic cold event-log-index miss returned %d logs, want none", len(directMissLogs))
+	}
 	recordingBackend := &recordingLogBackend{TronBackend: backend}
 	rpcServer := jsonrpc.NewServer(recordingBackend, 0)
 	defer rpcServer.Stop()
@@ -1386,6 +1398,16 @@ func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	}
 	if logObj["address"] != "0x"+fmt.Sprintf("%x", logAddress) {
 		t.Fatalf("eth_getLogs address = %v, want 0x%x", logObj["address"], logAddress)
+	}
+	missResp := postCoreJSONRPC(t, httpServer.URL, "eth_getLogs", []any{map[string]any{
+		"fromBlock": "0x1",
+		"toBlock":   "0x2",
+		"address":   "0x" + fmt.Sprintf("%x", tronLogAddress),
+		"topics":    []any{"0x" + hex.EncodeToString(otherTopic.Bytes())},
+	}})
+	missResult, ok := missResp["result"].([]any)
+	if !ok || len(missResult) != 0 {
+		t.Fatalf("eth_getLogs wrong-topic result = %v, want empty cold-index result", missResp["result"])
 	}
 }
 
