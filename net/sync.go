@@ -409,6 +409,10 @@ func (a syncSessionStartupApplier) RefreshBodiesReady() {
 	a.service.writeSyncBodiesReadyProgress()
 }
 
+func (a syncSessionStartupApplier) CheckSyncPipelineProgressOrder() []syncdl.SyncPipelineProgressOrderIssue {
+	return a.service.checkSyncPipelineProgressOrder()
+}
+
 func (ss *SyncService) ensureSessionMapsLocked() {
 	if ss.peers == nil {
 		ss.peers = make(map[string]*syncPeerState)
@@ -494,12 +498,39 @@ func (ss *SyncService) logSyncStageProgressRepair(head *types.Block, repair sync
 	}
 }
 
+func (ss *SyncService) checkSyncPipelineProgressOrder() []syncdl.SyncPipelineProgressOrderIssue {
+	if ss == nil || ss.chain == nil {
+		return nil
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return nil
+	}
+	rows := make(map[rawdb.StageID]rawdb.StageProgress)
+	for _, stage := range syncdl.FullSyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil {
+			syncLog.Warn("Read sync pipeline stage progress failed", "stage", stage, "err", err)
+			continue
+		}
+		if ok {
+			rows[stage] = row
+		}
+	}
+	return syncdl.CheckSyncPipelineProgressOrder(rows, syncdl.SyncPipelineProgressOrderOptions{})
+}
+
 func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
 	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore {
 		return
 	}
 	repair := result.SyncPipelineRepairResult
 	restore := result.StagedBodyRestore
+	orderIssueCount := len(result.SyncPipelineOrderIssues)
+	var firstOrderIssue string
+	if orderIssueCount > 0 {
+		firstOrderIssue = result.SyncPipelineOrderIssues[0].String()
+	}
 	syncLog.Info("Sync startup repair summary",
 		"syncStartupRepairComplete", repair.Complete,
 		"syncStartupRepairKept", repair.Kept,
@@ -510,6 +541,9 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupRepairInterrupted", repair.Interrupted,
 		"syncStartupRepairErrorStage", repair.ErrorStage,
 		"syncStartupRepairRows", len(repair.Repairs),
+		"syncStartupPipelineOrderChecked", result.HasSyncPipelineOrder,
+		"syncStartupPipelineOrderIssues", orderIssueCount,
+		"syncStartupPipelineOrderFirstIssue", firstOrderIssue,
 		"syncStartupStagedRestored", restore.Restored,
 		"syncStartupStagedTargetHead", restore.TargetHead,
 		"syncStartupStagedNextExpected", restore.NextExpected,

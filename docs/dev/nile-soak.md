@@ -150,7 +150,10 @@ shows how many bodies/execution/commitment/finish tasks completed before the
 next missing or mismatched task. These fields are log-derived and complement the
 `stage*` fields from `gtron db stage-status`: log fields explain what the last
 import batch planned and observed, while DB fields show the persisted recovery
-boundary.
+boundary. The same log parser also records startup recovery fields, including
+`syncStartupPipelineOrderChecked`, `syncStartupPipelineOrderIssues`, and
+`syncStartupPipelineOrderFirstIssue`, so restart samples show whether the node
+revalidated full sync-stage ordering after staged-body restore.
 
 To include staged-sync progress without making the sampler open a live Pebble
 datadir, pass a captured `gtron db stage-status` output file:

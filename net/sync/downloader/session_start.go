@@ -17,6 +17,7 @@ const (
 	SessionStartupDeleteImportedBodies
 	SessionStartupRestoreStagedBodies
 	SessionStartupRefreshBodiesReady
+	SessionStartupCheckSyncPipelineOrder
 )
 
 // SessionStartupStep is one explicit startup recovery operation. Fields are
@@ -39,6 +40,7 @@ type SessionStartupPlanApplier interface {
 	DeleteImportedBodies(through uint64)
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
 	RefreshBodiesReady()
+	CheckSyncPipelineProgressOrder() []SyncPipelineProgressOrderIssue
 }
 
 // SessionStartupPlan describes the persistence and local-runtime boundaries a
@@ -62,6 +64,8 @@ type SessionStartupApplyResult struct {
 	SyncPipelineRepairResult SyncPipelineProgressRepairResult
 	HasSyncPipelineRepair    bool
 	SyncPipelineRepairs      []SyncStageProgressRepair
+	SyncPipelineOrderIssues  []SyncPipelineProgressOrderIssue
+	HasSyncPipelineOrder     bool
 	StagedBodyRestore        StagedBodyRestoreResult
 	HasStagedBodyRestore     bool
 }
@@ -97,6 +101,7 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 			PruneStaleTail:          plan.PruneStaleTail,
 		},
 		{Action: SessionStartupRefreshBodiesReady},
+		{Action: SessionStartupCheckSyncPipelineOrder},
 	}
 	return plan
 }
@@ -127,6 +132,10 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRefreshBodiesReady:
 			applier.RefreshBodiesReady()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionStartupCheckSyncPipelineOrder:
+			result.SyncPipelineOrderIssues = applier.CheckSyncPipelineProgressOrder()
+			result.HasSyncPipelineOrder = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		default:
 			result.UnknownSteps = append(result.UnknownSteps, step.Action)
