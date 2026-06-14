@@ -87,8 +87,19 @@ per-block byte rates, per-interval byte deltas/rates,
 per-interval bytes-per-new-block fields such as
 `intervalDatadirBytesPerBlock`, `intervalChaindataBytesPerBlock`,
 `intervalChaindataSSTBytesPerBlock`, `intervalChaindataWALBytesPerBlock`,
-`intervalColdArchiveBytesPerBlock`, and
-`intervalDerivedIndexBytesPerBlock`, `coldToHotBytesRatio`,
+`intervalColdArchiveBytesPerBlock`, `intervalDerivedIndexBytesPerBlock`,
+`intervalReplayBytesPerBlock`, and `intervalDatadirOtherBytesPerBlock`,
+plus interval growth attribution fields:
+`intervalPositiveDiskGrowthBytes`, `intervalDiskGrowthPrimary`,
+`intervalDiskGrowthPrimaryBytes`, `intervalDiskGrowthPrimaryShare`,
+`intervalChaindataGrowthShare`, `intervalAncientGrowthShare`,
+`intervalSnapshotGrowthShare`, `intervalReplayGrowthShare`,
+`intervalDatadirOtherGrowthShare`, `intervalColdArchiveGrowthShare`, and
+`intervalDerivedIndexGrowthShare`. The primary growth bucket is computed from
+non-overlapping top-level buckets (`chaindata`, `ancient`, `snapshot`,
+`replay`, `other`); cold archive and derived index shares are overlapping
+diagnostic views for archive/index growth. Rows also include
+`coldToHotBytesRatio`,
 `derivedIndexToHotBytesRatio`, `chaindataSSTToHotBytesRatio`,
 `chaindataWALToHotBytesRatio`, `chaindataWALToSSTBytesRatio`,
 `derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and

@@ -730,6 +730,25 @@ def ratio(numerator, denominator):
         return -1.0
     return numerator / denominator
 
+def nonnegative(value):
+    try:
+        value = float(value)
+    except Exception:
+        return 0.0
+    return value if value > 0 else 0.0
+
+def growth_share(delta, total_positive_growth):
+    if total_positive_growth <= 0:
+        return 0.0
+    return ratio(nonnegative(delta), total_positive_growth)
+
+def disk_growth_primary(candidates, total_positive_growth):
+    positive = [(name, int(value)) for name, value in candidates if value > 0]
+    if not positive or total_positive_growth <= 0:
+        return "none", 0, 0.0
+    name, value = max(positive, key=lambda item: item[1])
+    return name, value, ratio(value, total_positive_growth)
+
 def interval_stage_delta(current, previous_row, key, interval):
     try:
         current = int(current)
@@ -1014,6 +1033,7 @@ datadir_bytes_delta = total - number(previous, "datadirBytes", total) if interva
 chaindata_bytes_delta = chaindata - number(previous, "chaindataBytes", chaindata) if interval_seconds > 0 else 0
 ancient_bytes_delta = ancient - number(previous, "ancientBytes", ancient) if interval_seconds > 0 else 0
 snapshot_bytes_delta = snapshot - number(previous, "snapshotBytes", snapshot) if interval_seconds > 0 else 0
+replay_bytes_delta = replay - number(previous, "replayBytes", replay) if interval_seconds > 0 else 0
 cold_archive_bytes_delta = cold_archive - number(previous, "coldArchiveBytes", cold_archive) if interval_seconds > 0 else 0
 derived_index_bytes_delta = derived_index - number(previous, "derivedIndexBytes", derived_index) if interval_seconds > 0 else 0
 ancient_bodies_bytes_delta = ancient_tables["bodies"]["bytes"] - number(previous, "ancientBodiesBytes", ancient_tables["bodies"]["bytes"]) if interval_seconds > 0 else 0
@@ -1030,12 +1050,27 @@ chaindata_log_bytes_delta = chaindata_files["log"]["bytes"] - number(previous, "
 chaindata_manifest_bytes_delta = chaindata_files["manifest"]["bytes"] - number(previous, "chaindataManifestBytes", chaindata_files["manifest"]["bytes"]) if interval_seconds > 0 else 0
 chaindata_options_bytes_delta = chaindata_files["options"]["bytes"] - number(previous, "chaindataOptionsBytes", chaindata_files["options"]["bytes"]) if interval_seconds > 0 else 0
 chaindata_other_bytes_delta = chaindata_files["other"]["bytes"] - number(previous, "chaindataOtherBytes", chaindata_files["other"]["bytes"]) if interval_seconds > 0 else 0
+datadir_other_bytes_delta = datadir_bytes_delta - chaindata_bytes_delta - ancient_bytes_delta - snapshot_bytes_delta - replay_bytes_delta if interval_seconds > 0 else 0
+top_level_growth_candidates = [
+    ("chaindata", chaindata_bytes_delta),
+    ("ancient", ancient_bytes_delta),
+    ("snapshot", snapshot_bytes_delta),
+    ("replay", replay_bytes_delta),
+    ("other", datadir_other_bytes_delta),
+]
+interval_positive_disk_growth_bytes = int(sum(nonnegative(value) for _, value in top_level_growth_candidates))
+interval_disk_growth_primary, interval_disk_growth_primary_bytes, interval_disk_growth_primary_share = disk_growth_primary(
+    top_level_growth_candidates,
+    interval_positive_disk_growth_bytes,
+)
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_sst_bytes_per_second = float(chaindata_sst_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_wal_bytes_per_second = float(chaindata_wal_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 cold_archive_bytes_per_second = float(cold_archive_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 derived_index_bytes_per_second = float(derived_index_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+replay_bytes_per_second = float(replay_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
+datadir_other_bytes_per_second = float(datadir_other_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 datadir_bytes_per_interval_block = float(datadir_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 chaindata_bytes_per_interval_block = float(chaindata_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 chaindata_sst_bytes_per_interval_block = float(chaindata_sst_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
@@ -1044,6 +1079,8 @@ ancient_bytes_per_interval_block = float(ancient_bytes_delta) / interval_blocks 
 snapshot_bytes_per_interval_block = float(snapshot_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 cold_archive_bytes_per_interval_block = float(cold_archive_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 derived_index_bytes_per_interval_block = float(derived_index_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+replay_bytes_per_interval_block = float(replay_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
+datadir_other_bytes_per_interval_block = float(datadir_other_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
 stage_chain_freezer_head_lag = lag(height, stages.get("stageChainFreezer", -1))
 stage_snapshot_event_log_build_head_lag = lag(height, stages.get("stageSnapshotEventLogBuild", -1))
@@ -1239,6 +1276,7 @@ row = {
     "chaindataBytesDelta": chaindata_bytes_delta,
     "ancientBytesDelta": ancient_bytes_delta,
     "snapshotBytesDelta": snapshot_bytes_delta,
+    "replayBytesDelta": replay_bytes_delta,
     "coldArchiveBytesDelta": cold_archive_bytes_delta,
     "derivedIndexBytesDelta": derived_index_bytes_delta,
     "ancientBodiesBytesDelta": ancient_bodies_bytes_delta,
@@ -1255,12 +1293,26 @@ row = {
     "chaindataManifestBytesDelta": chaindata_manifest_bytes_delta,
     "chaindataOptionsBytesDelta": chaindata_options_bytes_delta,
     "chaindataOtherBytesDelta": chaindata_other_bytes_delta,
+    "datadirOtherBytesDelta": datadir_other_bytes_delta,
+    "intervalPositiveDiskGrowthBytes": interval_positive_disk_growth_bytes,
+    "intervalDiskGrowthPrimary": interval_disk_growth_primary,
+    "intervalDiskGrowthPrimaryBytes": interval_disk_growth_primary_bytes,
+    "intervalDiskGrowthPrimaryShare": interval_disk_growth_primary_share,
+    "intervalChaindataGrowthShare": growth_share(chaindata_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalAncientGrowthShare": growth_share(ancient_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalSnapshotGrowthShare": growth_share(snapshot_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalReplayGrowthShare": growth_share(replay_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalDatadirOtherGrowthShare": growth_share(datadir_other_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalColdArchiveGrowthShare": growth_share(cold_archive_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalDerivedIndexGrowthShare": growth_share(derived_index_bytes_delta, interval_positive_disk_growth_bytes),
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "chaindataSSTBytesPerSecond": chaindata_sst_bytes_per_second,
     "chaindataWALBytesPerSecond": chaindata_wal_bytes_per_second,
     "coldArchiveBytesPerSecond": cold_archive_bytes_per_second,
     "derivedIndexBytesPerSecond": derived_index_bytes_per_second,
+    "replayBytesPerSecond": replay_bytes_per_second,
+    "datadirOtherBytesPerSecond": datadir_other_bytes_per_second,
     "intervalDatadirBytesPerBlock": datadir_bytes_per_interval_block,
     "intervalChaindataBytesPerBlock": chaindata_bytes_per_interval_block,
     "intervalChaindataSSTBytesPerBlock": chaindata_sst_bytes_per_interval_block,
@@ -1269,6 +1321,8 @@ row = {
     "intervalSnapshotBytesPerBlock": snapshot_bytes_per_interval_block,
     "intervalColdArchiveBytesPerBlock": cold_archive_bytes_per_interval_block,
     "intervalDerivedIndexBytesPerBlock": derived_index_bytes_per_interval_block,
+    "intervalReplayBytesPerBlock": replay_bytes_per_interval_block,
+    "intervalDatadirOtherBytesPerBlock": datadir_other_bytes_per_interval_block,
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
     "stageSyncFinishHeadEtaSeconds": stage_sync_finish_head_eta_seconds,
     "stageChainFreezerHeadLagBlocks": stage_chain_freezer_head_lag,

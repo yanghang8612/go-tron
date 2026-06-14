@@ -210,10 +210,27 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["datadirBytesDelta"], 0)
             self.assertEqual(row["ancientBodiesBytesDelta"], 0)
             self.assertEqual(row["snapshotHistoryBytesDelta"], 0)
+            self.assertEqual(row["replayBytesDelta"], 0)
+            self.assertEqual(row["datadirOtherBytesDelta"], 0)
+            self.assertEqual(row["intervalPositiveDiskGrowthBytes"], 0)
+            self.assertEqual(row["intervalDiskGrowthPrimary"], "none")
+            self.assertEqual(row["intervalDiskGrowthPrimaryBytes"], 0)
+            self.assertEqual(row["intervalDiskGrowthPrimaryShare"], 0.0)
+            self.assertEqual(row["intervalChaindataGrowthShare"], 0.0)
+            self.assertEqual(row["intervalAncientGrowthShare"], 0.0)
+            self.assertEqual(row["intervalSnapshotGrowthShare"], 0.0)
+            self.assertEqual(row["intervalReplayGrowthShare"], 0.0)
+            self.assertEqual(row["intervalDatadirOtherGrowthShare"], 0.0)
+            self.assertEqual(row["intervalColdArchiveGrowthShare"], 0.0)
+            self.assertEqual(row["intervalDerivedIndexGrowthShare"], 0.0)
             self.assertEqual(row["chaindataSSTBytesPerSecond"], 0.0)
             self.assertEqual(row["chaindataWALBytesPerSecond"], 0.0)
+            self.assertEqual(row["replayBytesPerSecond"], 0.0)
+            self.assertEqual(row["datadirOtherBytesPerSecond"], 0.0)
             self.assertEqual(row["intervalChaindataSSTBytesPerBlock"], 0.0)
             self.assertEqual(row["intervalChaindataWALBytesPerBlock"], 0.0)
+            self.assertEqual(row["intervalReplayBytesPerBlock"], 0.0)
+            self.assertEqual(row["intervalDatadirOtherBytesPerBlock"], 0.0)
             self.assertEqual(row["stageStatusFileStatus"], "ok")
             self.assertEqual(row["stageKnown"], 32)
             self.assertEqual(row["stageRows"], 9)
@@ -315,6 +332,7 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "chaindata").mkdir(parents=True)
             (datadir / "gtron" / "ancient").mkdir(parents=True)
             (datadir / "gtron" / "state-snapshots" / "log").mkdir(parents=True)
+            (datadir / "gtron" / "balance-trace-replay").mkdir(parents=True)
             (datadir / "gtron" / "chaindata" / "hot.bin").write_bytes(b"h" * 4096)
             (datadir / "gtron" / "chaindata" / "000001.sst").write_bytes(b"s" * 4096)
             (datadir / "gtron" / "chaindata" / "000002.log").write_bytes(b"w" * 4096)
@@ -324,6 +342,7 @@ class NileSyncSampleTest(unittest.TestCase):
             (datadir / "gtron" / "ancient" / "cold.bin").write_bytes(b"c" * 2048)
             (datadir / "gtron" / "state-snapshots" / "snap.bin").write_bytes(b"s" * 1024)
             (datadir / "gtron" / "state-snapshots" / "log" / "section-bloom-1-8192.seg").write_bytes(b"b" * 2048)
+            (datadir / "gtron" / "balance-trace-replay" / "replay.bin").write_bytes(b"r" * 1024)
             stage_status = tmpdir / "stage-status.txt"
             stage_status.write_text(
                 "\n".join(
@@ -363,6 +382,7 @@ class NileSyncSampleTest(unittest.TestCase):
                 "chaindataOtherBytes": 128,
                 "ancientBytes": 256,
                 "snapshotBytes": 128,
+                "replayBytes": 512,
                 "coldArchiveBytes": 384,
                 "derivedIndexBytes": 256,
                 "ancientBodiesBytes": 64,
@@ -427,6 +447,7 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["chaindataOtherBytesDelta"], row["chaindataOtherBytes"] - previous["chaindataOtherBytes"])
             self.assertEqual(row["ancientBytesDelta"], row["ancientBytes"] - previous["ancientBytes"])
             self.assertEqual(row["snapshotBytesDelta"], row["snapshotBytes"] - previous["snapshotBytes"])
+            self.assertEqual(row["replayBytesDelta"], row["replayBytes"] - previous["replayBytes"])
             self.assertEqual(row["coldArchiveBytesDelta"], row["coldArchiveBytes"] - previous["coldArchiveBytes"])
             self.assertEqual(row["derivedIndexBytesDelta"], row["derivedIndexBytes"] - previous["derivedIndexBytes"])
             self.assertEqual(row["ancientBodiesBytesDelta"], row["ancientBodiesBytes"] - previous["ancientBodiesBytes"])
@@ -436,11 +457,42 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["snapshotChainBytesDelta"], row["snapshotChainBytes"] - previous["snapshotChainBytes"])
             self.assertEqual(row["snapshotLogBytesDelta"], row["snapshotLogBytes"] - previous["snapshotLogBytes"])
             self.assertEqual(row["snapshotTraceBytesDelta"], row["snapshotTraceBytes"] - previous["snapshotTraceBytes"])
+            self.assertEqual(
+                row["datadirOtherBytesDelta"],
+                row["datadirBytesDelta"]
+                - row["chaindataBytesDelta"]
+                - row["ancientBytesDelta"]
+                - row["snapshotBytesDelta"]
+                - row["replayBytesDelta"],
+            )
+            growth_candidates = [
+                ("chaindata", row["chaindataBytesDelta"]),
+                ("ancient", row["ancientBytesDelta"]),
+                ("snapshot", row["snapshotBytesDelta"]),
+                ("replay", row["replayBytesDelta"]),
+                ("other", row["datadirOtherBytesDelta"]),
+            ]
+            positive_growth = sum(max(value, 0) for _, value in growth_candidates)
+            primary_name, primary_value = max(growth_candidates, key=lambda item: item[1])
+            self.assertGreater(positive_growth, 0)
+            self.assertEqual(row["intervalPositiveDiskGrowthBytes"], positive_growth)
+            self.assertEqual(row["intervalDiskGrowthPrimary"], primary_name)
+            self.assertEqual(row["intervalDiskGrowthPrimaryBytes"], primary_value)
+            self.assertAlmostEqual(row["intervalDiskGrowthPrimaryShare"], primary_value / positive_growth)
+            self.assertAlmostEqual(row["intervalChaindataGrowthShare"], max(row["chaindataBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalAncientGrowthShare"], max(row["ancientBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalSnapshotGrowthShare"], max(row["snapshotBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalReplayGrowthShare"], max(row["replayBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalDatadirOtherGrowthShare"], max(row["datadirOtherBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalColdArchiveGrowthShare"], max(row["coldArchiveBytesDelta"], 0) / positive_growth)
+            self.assertAlmostEqual(row["intervalDerivedIndexGrowthShare"], max(row["derivedIndexBytesDelta"], 0) / positive_growth)
             self.assertGreater(row["datadirBytesPerSecond"], 0)
             self.assertGreater(row["chaindataBytesPerSecond"], 0)
             self.assertGreater(row["chaindataSSTBytesPerSecond"], 0)
             self.assertGreater(row["chaindataWALBytesPerSecond"], 0)
             self.assertGreater(row["derivedIndexBytesPerSecond"], 0)
+            self.assertGreater(row["replayBytesPerSecond"], 0)
+            self.assertEqual(row["datadirOtherBytesPerSecond"], row["datadirOtherBytesDelta"] / row["intervalSeconds"])
             self.assertEqual(row["intervalDatadirBytesPerBlock"], row["datadirBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalChaindataBytesPerBlock"], row["chaindataBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalChaindataSSTBytesPerBlock"], row["chaindataSSTBytesDelta"] / row["intervalBlocks"])
@@ -449,6 +501,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalSnapshotBytesPerBlock"], row["snapshotBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalColdArchiveBytesPerBlock"], row["coldArchiveBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalDerivedIndexBytesPerBlock"], row["derivedIndexBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalReplayBytesPerBlock"], row["replayBytesDelta"] / row["intervalBlocks"])
+            self.assertEqual(row["intervalDatadirOtherBytesPerBlock"], row["datadirOtherBytesDelta"] / row["intervalBlocks"])
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 20)
             self.assertEqual(row["intervalStageSyncBodiesReadyBlocks"], 19)
             self.assertEqual(row["intervalStageSyncImportBlocks"], 25)
