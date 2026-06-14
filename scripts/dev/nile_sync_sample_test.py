@@ -229,6 +229,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalDatadirOtherGrowthShare"], 0.0)
             self.assertEqual(row["intervalColdArchiveGrowthShare"], 0.0)
             self.assertEqual(row["intervalDerivedIndexGrowthShare"], 0.0)
+            self.assertEqual(row["intervalColdToHotGrowthRatio"], -1.0)
+            self.assertEqual(row["intervalAncientToHotGrowthRatio"], -1.0)
+            self.assertEqual(row["intervalSnapshotToHotGrowthRatio"], -1.0)
+            self.assertEqual(row["intervalDerivedIndexToHotGrowthRatio"], -1.0)
             self.assertEqual(row["intervalChaindataSSTGrowthShare"], 0.0)
             self.assertEqual(row["intervalChaindataWALGrowthShare"], 0.0)
             self.assertEqual(row["intervalAncientBodiesGrowthShare"], 0.0)
@@ -532,6 +536,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertAlmostEqual(row["intervalDatadirOtherGrowthShare"], max(row["datadirOtherBytesDelta"], 0) / positive_growth)
             self.assertAlmostEqual(row["intervalColdArchiveGrowthShare"], max(row["coldArchiveBytesDelta"], 0) / positive_growth)
             self.assertAlmostEqual(row["intervalDerivedIndexGrowthShare"], max(row["derivedIndexBytesDelta"], 0) / positive_growth)
+            positive_hot_growth = max(row["chaindataBytesDelta"], 0)
+            self.assertGreater(positive_hot_growth, 0)
+            self.assertAlmostEqual(row["intervalColdToHotGrowthRatio"], max(row["coldArchiveBytesDelta"], 0) / positive_hot_growth)
+            self.assertAlmostEqual(row["intervalAncientToHotGrowthRatio"], max(row["ancientBytesDelta"], 0) / positive_hot_growth)
+            self.assertAlmostEqual(row["intervalSnapshotToHotGrowthRatio"], max(row["snapshotBytesDelta"], 0) / positive_hot_growth)
+            self.assertAlmostEqual(row["intervalDerivedIndexToHotGrowthRatio"], max(row["derivedIndexBytesDelta"], 0) / positive_hot_growth)
             detailed_growth_candidates = [
                 ("chaindata.sst", row["chaindataSSTBytesDelta"]),
                 ("chaindata.wal", row["chaindataWALBytesDelta"]),

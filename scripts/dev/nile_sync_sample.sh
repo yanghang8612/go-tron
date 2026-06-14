@@ -1122,6 +1122,15 @@ snapshot_bytes_delta = snapshot - number(previous, "snapshotBytes", snapshot) if
 replay_bytes_delta = replay - number(previous, "replayBytes", replay) if interval_seconds > 0 else 0
 cold_archive_bytes_delta = cold_archive - number(previous, "coldArchiveBytes", cold_archive) if interval_seconds > 0 else 0
 derived_index_bytes_delta = derived_index - number(previous, "derivedIndexBytes", derived_index) if interval_seconds > 0 else 0
+positive_hot_growth_bytes = nonnegative(chaindata_bytes_delta)
+positive_cold_archive_growth_bytes = nonnegative(cold_archive_bytes_delta)
+positive_ancient_growth_bytes = nonnegative(ancient_bytes_delta)
+positive_snapshot_growth_bytes = nonnegative(snapshot_bytes_delta)
+positive_derived_index_growth_bytes = nonnegative(derived_index_bytes_delta)
+interval_cold_to_hot_growth_ratio = ratio(positive_cold_archive_growth_bytes, positive_hot_growth_bytes)
+interval_ancient_to_hot_growth_ratio = ratio(positive_ancient_growth_bytes, positive_hot_growth_bytes)
+interval_snapshot_to_hot_growth_ratio = ratio(positive_snapshot_growth_bytes, positive_hot_growth_bytes)
+interval_derived_index_to_hot_growth_ratio = ratio(positive_derived_index_growth_bytes, positive_hot_growth_bytes)
 ancient_bodies_bytes_delta = ancient_tables["bodies"]["bytes"] - number(previous, "ancientBodiesBytes", ancient_tables["bodies"]["bytes"]) if interval_seconds > 0 else 0
 ancient_tx_infos_bytes_delta = ancient_tables["txInfos"]["bytes"] - number(previous, "ancientTxInfosBytes", ancient_tables["txInfos"]["bytes"]) if interval_seconds > 0 else 0
 ancient_state_roots_bytes_delta = ancient_tables["stateRoots"]["bytes"] - number(previous, "ancientStateRootsBytes", ancient_tables["stateRoots"]["bytes"]) if interval_seconds > 0 else 0
@@ -1433,6 +1442,10 @@ row = {
     "intervalDatadirOtherGrowthShare": growth_share(datadir_other_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalColdArchiveGrowthShare": growth_share(cold_archive_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalDerivedIndexGrowthShare": growth_share(derived_index_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalColdToHotGrowthRatio": interval_cold_to_hot_growth_ratio,
+    "intervalAncientToHotGrowthRatio": interval_ancient_to_hot_growth_ratio,
+    "intervalSnapshotToHotGrowthRatio": interval_snapshot_to_hot_growth_ratio,
+    "intervalDerivedIndexToHotGrowthRatio": interval_derived_index_to_hot_growth_ratio,
     "intervalChaindataSSTGrowthShare": growth_share(chaindata_sst_bytes_delta, interval_detailed_positive_disk_growth_bytes),
     "intervalChaindataWALGrowthShare": growth_share(chaindata_wal_bytes_delta, interval_detailed_positive_disk_growth_bytes),
     "intervalChaindataLogGrowthShare": growth_share(chaindata_log_bytes_delta, interval_detailed_positive_disk_growth_bytes),
