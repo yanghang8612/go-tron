@@ -193,6 +193,7 @@ type IdleDrainPlan struct {
 // LocalDrainIterationPlan decides whether one drain-loop iteration should stop,
 // settle an empty drain, or import a popped staged-body batch.
 type LocalDrainIterationPlan struct {
+	Action      LocalDrainIterationStepAction
 	StopLoop    bool
 	EmptyDrain  bool
 	ImportBatch bool
@@ -581,10 +582,13 @@ func (p IdleDrainPlan) withSteps() IdleDrainPlan {
 func (p LocalDrainIterationPlan) withSteps() LocalDrainIterationPlan {
 	switch {
 	case p.StopLoop:
+		p.Action = LocalDrainIterationStop
 		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationStop}}
 	case p.EmptyDrain:
+		p.Action = LocalDrainIterationEmpty
 		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}}
 	case p.ImportBatch:
+		p.Action = LocalDrainIterationImport
 		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationImport}}
 	}
 	return p

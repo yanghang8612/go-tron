@@ -165,6 +165,7 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 		"not syncing": {
 			input: LocalDrainIterationInput{},
 			want: LocalDrainIterationPlan{
+				Action:   LocalDrainIterationStop,
 				StopLoop: true,
 				Steps:    []LocalDrainIterationStep{{Action: LocalDrainIterationStop}},
 			},
@@ -172,6 +173,7 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 		"paused": {
 			input: LocalDrainIterationInput{Progress: SessionProgress{Syncing: true, Paused: true}},
 			want: LocalDrainIterationPlan{
+				Action:   LocalDrainIterationStop,
 				StopLoop: true,
 				Steps:    []LocalDrainIterationStep{{Action: LocalDrainIterationStop}},
 			},
@@ -179,6 +181,7 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 		"empty drain": {
 			input: LocalDrainIterationInput{Progress: active},
 			want: LocalDrainIterationPlan{
+				Action:     LocalDrainIterationEmpty,
 				EmptyDrain: true,
 				Steps:      []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}},
 			},
@@ -186,6 +189,7 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 		"import batch": {
 			input: LocalDrainIterationInput{Progress: active, BufferedBatchLen: 2},
 			want: LocalDrainIterationPlan{
+				Action:      LocalDrainIterationImport,
 				ImportBatch: true,
 				Steps:       []LocalDrainIterationStep{{Action: LocalDrainIterationImport}},
 			},
@@ -209,6 +213,7 @@ func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 	if !reflect.DeepEqual(importRun.Batch, importBatch) ||
 		!reflect.DeepEqual(importRun.Drain.Batch, importBatch) ||
 		!importRun.Iteration.ImportBatch ||
+		importRun.Iteration.Action != LocalDrainIterationImport ||
 		len(importRun.Iteration.Steps) != 1 ||
 		importRun.Iteration.Steps[0].Action != LocalDrainIterationImport {
 		t.Fatalf("import drain run = %+v, want import branch with original staged drain batch", importRun)
@@ -216,6 +221,7 @@ func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 
 	emptyRun := PlanLocalDrainRun(LocalDrainRunInput{Progress: active})
 	if !emptyRun.Iteration.EmptyDrain ||
+		emptyRun.Iteration.Action != LocalDrainIterationEmpty ||
 		len(emptyRun.Iteration.Steps) != 1 ||
 		emptyRun.Iteration.Steps[0].Action != LocalDrainIterationEmpty {
 		t.Fatalf("empty drain run = %+v, want empty branch", emptyRun)
@@ -226,6 +232,7 @@ func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 		Drain:    StagedBodyDrainRunResult{Batch: importBatch},
 	})
 	if !stoppedRun.Iteration.StopLoop ||
+		stoppedRun.Iteration.Action != LocalDrainIterationStop ||
 		len(stoppedRun.Iteration.Steps) != 1 ||
 		stoppedRun.Iteration.Steps[0].Action != LocalDrainIterationStop {
 		t.Fatalf("stopped drain run = %+v, want stop branch even with buffered batch", stoppedRun)

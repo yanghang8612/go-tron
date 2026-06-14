@@ -1276,11 +1276,11 @@ drainLoop:
 			Drain:    drain,
 		})
 		iteration := drainRun.Iteration
-		if iteration.StopLoop {
+		switch iteration.Action {
+		case syncdl.LocalDrainIterationStop:
 			ss.mu.Unlock()
-			break
-		}
-		if iteration.EmptyDrain {
+			break drainLoop
+		case syncdl.LocalDrainIterationEmpty:
 			prepare := syncdl.PlanEmptyDrainPreparation(syncdl.EmptyDrainPreparationInput{
 				Progress: ss.sessionProgressLocked(),
 			})
@@ -1296,7 +1296,11 @@ drainLoop:
 			syncdl.ApplyEmptyDrainRunLockedPlan(emptyDrain, syncEmptyDrainRunApplier{service: ss})
 			ss.mu.Unlock()
 			syncdl.ApplyEmptyDrainRunPostLockPlan(emptyDrain, syncIdleDrainApplier{service: ss})
-			break
+			break drainLoop
+		case syncdl.LocalDrainIterationImport:
+		default:
+			ss.mu.Unlock()
+			break drainLoop
 		}
 		ss.mu.Unlock()
 		batch := drainRun.Batch
