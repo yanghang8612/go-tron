@@ -13,6 +13,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
 )
 
 // historyFixture spins up an in-memory disk store and a StateDB that persists
@@ -457,6 +458,88 @@ func TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshot(t *testing.T) 
 	}
 	if got != (tcommon.Hash{0x03}) {
 		t.Fatalf("cold StorageAt block 3 = %x, want 0x03", got)
+	}
+}
+
+func TestPersistentHistoryReaderUsesColdStateDomainChangeSnapshotAcrossRecreate(t *testing.T) {
+	f := newHistoryFixture(t)
+	contract := testAddr(0x63)
+	other := testAddr(0x64)
+	slotA := tcommon.Hash{31: 0xA0}
+	slotB := tcommon.Hash{31: 0xB0}
+	oldA := tcommon.Hash{31: 0x0A}
+	oldB := tcommon.Hash{31: 0x0B}
+	newA := tcommon.Hash{31: 0x1A}
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetState(contract, slotA, oldA)
+		s.SetState(contract, slotB, oldB)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.SelfDestruct(contract)
+		s.FinalizeTransaction()
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.CreateAccount(contract, corepb.AccountType_Contract)
+		s.SetState(contract, slotA, newA)
+	})
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	range2, ok, err := rawdb.ReadStateTxRange(f.disk, 2)
+	if err != nil || !ok {
+		t.Fatalf("read block 2 tx range: ok=%v err=%v", ok, err)
+	}
+	range3, ok, err := rawdb.ReadStateTxRange(f.disk, 3)
+	if err != nil || !ok {
+		t.Fatalf("read block 3 tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(f.disk, dir, range2.BeginTxNum, range3.EndTxNum, "history/state-domain-change-2-3.seg")
+	if err != nil {
+		t.Fatalf("build cold state-domain-change segment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(range2.BeginTxNum, range3.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+	for _, blockNum := range []uint64{2, 3} {
+		if err := rawdb.DeleteStateDomainChanges(f.disk, blockNum); err != nil {
+			t.Fatalf("delete hot block %d changes: %v", blockNum, err)
+		}
+		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
+			t.Fatalf("delete hot block %d tx range: %v", blockNum, err)
+		}
+	}
+
+	r := NewPersistentHistoryReaderWithColdHistory(f.disk, f.state, f.head, mgr)
+	for _, tc := range []struct {
+		name  string
+		block uint64
+		slot  tcommon.Hash
+		want  tcommon.Hash
+	}{
+		{"old slot A before delete", 1, slotA, oldA},
+		{"old slot B before delete", 1, slotB, oldB},
+		{"slot A while deleted", 2, slotA, tcommon.Hash{}},
+		{"slot B while deleted", 2, slotB, tcommon.Hash{}},
+		{"new slot A after recreate", 3, slotA, newA},
+		{"old slot B after recreate", 3, slotB, tcommon.Hash{}},
+		{"new slot A at head", 4, slotA, newA},
+		{"old slot B at head", 4, slotB, tcommon.Hash{}},
+	} {
+		got, err := r.StorageAt(contract, tc.slot, tc.block)
+		if err != nil {
+			t.Fatalf("%s: StorageAt block %d: %v", tc.name, tc.block, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: StorageAt block %d = %x, want %x", tc.name, tc.block, got, tc.want)
+		}
 	}
 }
 
