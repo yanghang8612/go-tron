@@ -1052,6 +1052,44 @@ func TestRepairSyncPipelineProgressDeletesDownstreamWithoutUpstream(t *testing.T
 	}
 }
 
+func TestRepairSyncPipelineProgressWithResultSummarizesBoundaries(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x01}
+	for _, stage := range SyncPipelineProgressStages() {
+		if err := rawdb.WriteStageProgressWithHash(db, stage, 1, hash); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+
+	complete := RepairSyncPipelineProgressWithResult(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return hash, true
+		}
+		return tcommon.Hash{}, false
+	})
+	if !complete.Complete || complete.HasBlocked || complete.Interrupted ||
+		complete.Kept != len(SyncPipelineProgressStages()) ||
+		complete.Missing != 0 || complete.Deleted != 0 ||
+		len(complete.Repairs) != len(SyncPipelineProgressStages()) {
+		t.Fatalf("complete repair result = %+v, want full kept pipeline", complete)
+	}
+
+	db = rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncExecution, 1, hash); err != nil {
+		t.Fatalf("write orphan execution progress: %v", err)
+	}
+	blocked := RepairSyncPipelineProgressWithResult(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return hash, true
+		}
+		return tcommon.Hash{}, false
+	})
+	if blocked.Complete || !blocked.HasBlocked || blocked.FirstBlockedStage != rawdb.StageSyncImport ||
+		blocked.Interrupted || blocked.Kept != 0 || blocked.Missing != 3 || blocked.Deleted != 1 {
+		t.Fatalf("blocked repair result = %+v, want missing import with deleted downstream execution", blocked)
+	}
+}
+
 func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, tcommon.Hash{0x01}); err != nil {
@@ -1076,6 +1114,17 @@ func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T
 	}
 	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncExecution); err != nil || !ok || row.BlockHash != forkHash {
 		t.Fatalf("execution progress after import read error = %+v ok=%v err=%v, want retained fork row", row, ok, err)
+	}
+
+	result := RepairSyncPipelineProgressWithResult(db, 1, func(number uint64) (tcommon.Hash, bool) {
+		if number == 1 {
+			return tcommon.Hash{0x01}, true
+		}
+		return tcommon.Hash{}, false
+	})
+	if !result.Interrupted || result.ErrorStage != rawdb.StageSyncImport || result.Complete ||
+		len(result.Repairs) != 1 || result.Repairs[0].Status != SyncStageProgressReadError {
+		t.Fatalf("read-error result = %+v, want interrupted at import", result)
 	}
 }
 

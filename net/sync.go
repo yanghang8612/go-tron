@@ -445,17 +445,17 @@ func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) []syncdl.Sy
 	if db == nil {
 		return nil
 	}
-	repairs := syncdl.RepairSyncPipelineProgress(db, head.Number(), func(number uint64) (tcommon.Hash, bool) {
+	result := syncdl.RepairSyncPipelineProgressWithResult(db, head.Number(), func(number uint64) (tcommon.Hash, bool) {
 		block := ss.chain.GetBlockByNumber(number)
 		if block == nil {
 			return tcommon.Hash{}, false
 		}
 		return block.Hash(), true
 	})
-	for _, repair := range repairs {
+	for _, repair := range result.Repairs {
 		ss.logSyncStageProgressRepair(head, repair)
 	}
-	return repairs
+	return result.Repairs
 }
 
 func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.StageID) {
