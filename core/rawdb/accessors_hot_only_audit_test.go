@@ -658,6 +658,37 @@ func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	}
 }
 
+func TestProductionEventLogIndexedCoverageChecksStayOnAuditedBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditEventLogIndexedCoverageCalls(t, root, map[string]struct{}{
+		"cmd/gtron/db_cmd.go":                      {},
+		"core/state/snapshots/chain_tail_prune.go": {},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production indexed event-log coverage checks must stay on snapshot prune or db diagnostics boundaries:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
+func TestEventLogIndexedCoverageAuditRejectsAPIBoundaryBypass(t *testing.T) {
+	root := writeAuditFixture(t, "core/tron_backend.go", `package core
+
+type coldManager struct{}
+
+func (coldManager) EventLogIndexedRangeCovered(uint64, uint64) (bool, error) {
+	return true, nil
+}
+
+func query(m coldManager) {
+	_, _ = m.EventLogIndexedRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogIndexedCoverageCalls(t, root, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogIndexedRangeCovered") {
+		t.Fatalf("offenders = %+v, want indexed event-log coverage call rejected outside audited boundary", offenders)
+	}
+}
+
 func TestEventLogAuditRejectsNonChainDBBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "app/offender.go", `package app
 
@@ -1336,6 +1367,51 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 	})
 	if err != nil {
 		t.Fatalf("audit event-log method calls: %v", err)
+	}
+	sort.Strings(offenders)
+	return offenders
+}
+
+func auditEventLogIndexedCoverageCalls(t *testing.T, root string, allowed map[string]struct{}) []string {
+	t.Helper()
+	var offenders []string
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".claude", ".codex", "build", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if strings.HasPrefix(path, filepath.Join(root, "core", "rawdb")+string(os.PathSeparator)) {
+			return nil
+		}
+		if isAllowedAuditPath(root, path, allowed) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "EventLogIndexedRangeCovered" {
+				return true
+			}
+			offenders = append(offenders, formatAuditOffender(fset, root, path, selector.Pos(), selector.Sel.Name))
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("audit indexed event-log coverage calls: %v", err)
 	}
 	sort.Strings(offenders)
 	return offenders
