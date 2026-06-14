@@ -657,6 +657,19 @@ func (a *Account) ClearFrozenEnergy() {
 	}
 }
 
+// SetFrozenEnergy overwrites the V1 frozen-for-energy slot with the given
+// amount/expiry, mirroring java-tron AccountCapsule.setFrozenForEnergy. Unlike
+// ClearFrozenEnergy, this always leaves FrozenBalanceForEnergy present (a zero
+// amount serialises as a present-but-empty sub-message), matching java's proto
+// encoding for clearOwnerFreeze.
+func (a *Account) SetFrozenEnergy(amount, expireTimeMs int64) {
+	a.ensureAccountResource()
+	a.pb.AccountResource.FrozenBalanceForEnergy = &corepb.Account_Frozen{
+		FrozenBalance: amount,
+		ExpireTime:    expireTimeMs,
+	}
+}
+
 // V1 delegation: bandwidth
 func (a *Account) DelegatedFrozenBandwidth() int64 { return a.pb.DelegatedFrozenBalanceForBandwidth }
 func (a *Account) SetDelegatedFrozenBandwidth(v int64) {
