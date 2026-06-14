@@ -1495,8 +1495,15 @@ func (s *StateDB) FinalizeTransaction() {
 		if obj == nil {
 			continue
 		}
-		for k, v := range obj.storage {
-			if v == (tcommon.Hash{}) {
+		// Scope to slots written this block (dirtyStorage), not the whole cached
+		// storage map. A zero-valued cached slot can only come from SetState
+		// (reads never cache a zero row), which adds it to dirtyStorage, and
+		// storageExists is NOT reset at commit — so a zero row from an earlier
+		// block already reads as absent and need not be re-marked. This is the
+		// same authoritative write set the commit path uses, and keeps the scan
+		// O(writes-this-block) instead of O(accumulated storage cache).
+		for k := range obj.dirtyStorage {
+			if obj.storage[k] == (tcommon.Hash{}) {
 				obj.storageExists[k] = false
 			}
 		}
