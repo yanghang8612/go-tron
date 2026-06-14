@@ -770,8 +770,10 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 		plan.ExecutionDiagnostics = execution.Diagnostics
 		if appliedStagePlan, ok := execution.AppliedStagePlan(applied); ok {
 			plan.AppliedStagePlan = appliedStagePlan
-			plan.AppliedStagePhases = NewImportBatchStagePhaseSchedule(appliedStagePlan)
-			plan.AppliedPhases = plan.AppliedStagePhases.PhasePlans()
+			if appliedStagePhases, ok := execution.AppliedPhaseSchedule(applied); ok {
+				plan.AppliedStagePhases = appliedStagePhases
+				plan.AppliedPhases = plan.AppliedStagePhases.PhasePlans()
+			}
 			plan.AppliedDiagnostics = NewImportBatchExecutionPlanDiagnostics(appliedStagePlan.Schedules, appliedStagePlan)
 			plan.Stages = append([]ImportStageTask(nil), appliedStagePlan.Tasks...)
 			plan.StagePlan = collector.PlanBatch(appliedStagePlan)

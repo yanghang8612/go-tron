@@ -207,6 +207,16 @@ func (p ImportBatchExecutionPlan) AppliedStagePlan(applied int) (ImportBatchStag
 	return NewImportBatchStagePlan(p.Schedules[:applied]), true
 }
 
+// AppliedPhaseSchedule returns the explicit bodies/execution/commitment/finish
+// phase schedule for the canonical prefix that was actually accepted.
+func (p ImportBatchExecutionPlan) AppliedPhaseSchedule(applied int) (ImportBatchStagePhaseSchedule, bool) {
+	stagePlan, ok := p.AppliedStagePlan(applied)
+	if !ok {
+		return ImportBatchStagePhaseSchedule{}, false
+	}
+	return NewImportBatchStagePhaseSchedule(stagePlan), true
+}
+
 // PhaseSchedule returns the explicit phase schedule for this execution plan.
 func (p ImportBatchExecutionPlan) PhaseSchedule() ImportBatchStagePhaseSchedule {
 	if !p.StagePhases.Empty() {

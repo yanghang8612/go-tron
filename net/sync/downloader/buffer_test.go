@@ -394,9 +394,29 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if !ok || len(appliedPlan1.Schedules) != 1 || len(appliedPlan1.Tasks) != 4 || appliedPlan1.Schedules[0].BlockNum != block1.Number() {
 		t.Fatalf("applied stage plan 1 = %+v ok=%v, want one-block explicit stage plan", appliedPlan1, ok)
 	}
+	appliedPhases1, ok := got.AppliedPhaseSchedule(1)
+	if !ok ||
+		appliedPhases1.Empty() ||
+		len(appliedPhases1.Phases) != 4 ||
+		len(appliedPhases1.Execution.Tasks) != 1 ||
+		appliedPhases1.Execution.Tasks[0] != ImportExecutionStageTask(block1.Number(), block1.Hash()) ||
+		appliedPhases1.Commitment.Tasks[0] != ImportCommitmentStageTask(block1.Number(), block1.Hash()) ||
+		appliedPhases1.Finish.Tasks[0] != ImportFinishStageTask(block1.Number(), block1.Hash()) {
+		t.Fatalf("applied phase schedule 1 = %+v ok=%v, want one-block explicit phase schedule", appliedPhases1, ok)
+	}
 	appliedPlan2, ok := got.AppliedStagePlan(2)
 	if !ok || len(appliedPlan2.Schedules) != 2 || len(appliedPlan2.Tasks) != 8 || appliedPlan2.Schedules[1].BlockNum != block2.Number() {
 		t.Fatalf("applied stage plan 2 = %+v ok=%v, want two-block explicit stage plan", appliedPlan2, ok)
+	}
+	appliedPhases2, ok := got.AppliedPhaseSchedule(2)
+	if !ok ||
+		appliedPhases2.Empty() ||
+		len(appliedPhases2.Phases) != 4 ||
+		len(appliedPhases2.Execution.Tasks) != 2 ||
+		appliedPhases2.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		appliedPhases2.Commitment.Tasks[1] != ImportCommitmentStageTask(block2.Number(), block2.Hash()) ||
+		appliedPhases2.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("applied phase schedule 2 = %+v ok=%v, want two-block explicit phase schedule", appliedPhases2, ok)
 	}
 	for _, applied := range []int{0, 3} {
 		if schedule, ok := got.AppliedSchedule(applied); ok {
@@ -404,6 +424,9 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 		}
 		if stagePlan, ok := got.AppliedStagePlan(applied); ok {
 			t.Fatalf("applied stage plan %d = %+v ok=true, want false", applied, stagePlan)
+		}
+		if phaseSchedule, ok := got.AppliedPhaseSchedule(applied); ok {
+			t.Fatalf("applied phase schedule %d = %+v ok=true, want false", applied, phaseSchedule)
 		}
 	}
 	if !reflect.DeepEqual(got.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
