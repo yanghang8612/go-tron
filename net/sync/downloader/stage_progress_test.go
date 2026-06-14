@@ -311,6 +311,9 @@ func TestPlanImportedBatchProgressForExecutionRequiresAppliedSchedule(t *testing
 	if got.StagePlan.Complete || got.StageDiagnostics.Scheduled != 0 || got.StageDiagnostics.Completed != 0 {
 		t.Fatalf("stage diagnostics = %+v plan=%+v, want no scheduled stage progress without execution schedule", got.StageDiagnostics, got.StagePlan)
 	}
+	if !got.AppliedStagePhases.Empty() || len(got.AppliedPhases) != 0 {
+		t.Fatalf("applied phase schedule = %+v phases=%+v, want empty without execution schedule", got.AppliedStagePhases, got.AppliedPhases)
+	}
 	if len(got.Deletes) != 1 || got.Deletes[0].Number != block.Number() || got.Deletes[0].Hash != block.Hash() {
 		t.Fatalf("deletes = %+v, want staged block cleanup for applied block", got.Deletes)
 	}
@@ -354,6 +357,14 @@ func TestPlanImportedBatchProgressForExecutionUsesBatchPhasePrefix(t *testing.T)
 	}
 	if got.StageDiagnostics.NextPhase != ImportStagePhaseExecution || got.StageDiagnostics.NextBlockNum != block2.Number() || got.StageDiagnostics.BlockedStatus != ImportStageProgressMismatch {
 		t.Fatalf("next stage diagnostics = %+v, want execution block2 mismatch", got.StageDiagnostics)
+	}
+	if got.AppliedStagePhases.Empty() ||
+		len(got.AppliedPhases) != 4 ||
+		got.AppliedStagePhases.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		got.AppliedStagePhases.Commitment.Tasks[1] != ImportCommitmentStageTask(block2.Number(), block2.Hash()) ||
+		got.AppliedStagePhases.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("applied phase schedule = %+v phases=%+v, want two-block bodies/execution/commitment/finish prefix",
+			got.AppliedStagePhases, got.AppliedPhases)
 	}
 	wantStatuses := []ImportStageProgressStatus{
 		ImportStageProgressPlanned,

@@ -616,6 +616,20 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if len(applier.recordPlan.AppliedStagePlan.Tasks) != 8 || len(applier.recordPlan.AppliedStagePlan.Execution) != 2 {
 		t.Fatalf("applier applied stage plan = %+v, want two-block execution/commitment/finish prefix", applier.recordPlan.AppliedStagePlan)
 	}
+	if result.Progress.AppliedStagePhases.Empty() ||
+		len(result.Progress.AppliedPhases) != 4 ||
+		result.Progress.AppliedStagePhases.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		result.Progress.AppliedStagePhases.Commitment.Tasks[1] != ImportCommitmentStageTask(block2.Number(), block2.Hash()) ||
+		result.Progress.AppliedStagePhases.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("result applied phase schedule = %+v phases=%+v, want two-block phase prefix",
+			result.Progress.AppliedStagePhases, result.Progress.AppliedPhases)
+	}
+	if applier.recordPlan.AppliedStagePhases.Empty() ||
+		len(applier.recordPlan.AppliedPhases) != 4 ||
+		applier.recordPlan.AppliedStagePhases.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("applier applied phase schedule = %+v phases=%+v, want two-block phase prefix",
+			applier.recordPlan.AppliedStagePhases, applier.recordPlan.AppliedPhases)
+	}
 	wantProgress := importPipelineProgressRows(block2.Number(), block2.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
 		t.Fatalf("progress = %+v, want %+v", applier.progress, wantProgress)
@@ -726,6 +740,13 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if len(result.Progress.AppliedStagePlan.Tasks) != 4 || result.Progress.AppliedStagePlan.Finish[0] != ImportFinishStageTask(block1.Number(), block1.Hash()) {
 		t.Fatalf("partial applied stage plan = %+v, want block1 execution/commitment/finish prefix", result.Progress.AppliedStagePlan)
+	}
+	if result.Progress.AppliedStagePhases.Empty() ||
+		len(result.Progress.AppliedPhases) != 4 ||
+		len(result.Progress.AppliedStagePhases.Finish.Tasks) != 1 ||
+		result.Progress.AppliedStagePhases.Finish.Tasks[0] != ImportFinishStageTask(block1.Number(), block1.Hash()) {
+		t.Fatalf("partial applied phase schedule = %+v phases=%+v, want block1 bodies/execution/commitment/finish prefix",
+			result.Progress.AppliedStagePhases, result.Progress.AppliedPhases)
 	}
 	wantProgress := importPipelineProgressRows(block1.Number(), block1.Hash())
 	if !reflect.DeepEqual(applier.progress, wantProgress) {
