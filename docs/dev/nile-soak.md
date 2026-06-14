@@ -165,9 +165,12 @@ import batch planned and observed, while DB fields show the persisted recovery
 boundary. The same log parser also records startup recovery fields, including
 `syncStartupPipelineOrderChecked`, `syncStartupPipelineOrderIssues`,
 `syncStartupPipelineOrderFirstIssue`, `syncStartupPipelineOrderReadErrors`, and
-`syncStartupPipelineOrderFirstReadErrorStage`, so restart samples show whether
-the node revalidated full sync-stage ordering after staged-body restore and
-which persisted progress row failed to decode first.
+`syncStartupPipelineOrderFirstReadErrorStage`, plus
+`syncStartupPipelineOrderRepairChecked`,
+`syncStartupPipelineOrderRepairDeleted`, and
+`syncStartupPipelineOrderRepairUpdated`, so restart samples show whether the
+node repaired and revalidated full sync-stage ordering after staged-body
+restore and which persisted progress row failed to decode first.
 
 To include staged-sync progress without making the sampler open a live Pebble
 datadir, pass a captured `gtron db stage-status` output file:

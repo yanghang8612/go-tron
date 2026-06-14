@@ -409,6 +409,10 @@ func (a syncSessionStartupApplier) RefreshBodiesReady() {
 	a.service.writeSyncBodiesReadyProgress()
 }
 
+func (a syncSessionStartupApplier) RepairSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderRepairResult {
+	return a.service.repairSyncPipelineProgressOrder()
+}
+
 func (a syncSessionStartupApplier) CheckSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderCheckResult {
 	return a.service.checkSyncPipelineProgressOrder()
 }
@@ -513,12 +517,51 @@ func (ss *SyncService) checkSyncPipelineProgressOrder() syncdl.SyncPipelineProgr
 	return result
 }
 
+func (ss *SyncService) repairSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderRepairResult {
+	if ss == nil || ss.chain == nil {
+		return syncdl.SyncPipelineProgressOrderRepairResult{}
+	}
+	db := ss.chain.DB()
+	if db == nil {
+		return syncdl.SyncPipelineProgressOrderRepairResult{}
+	}
+	result := syncdl.RepairSyncPipelineProgressOrderFromDB(db, syncdl.SyncPipelineProgressOrderOptions{})
+	for _, readErr := range result.Before.ReadErrors {
+		syncLog.Warn("Read sync pipeline stage progress failed during order repair", "stage", readErr.Stage, "err", readErr.Err)
+	}
+	for _, repair := range result.Repairs {
+		if repair.WriteError != nil {
+			syncLog.Warn("Write sync pipeline order repair failed", "stage", repair.Stage, "block", repair.Row.BlockNum, "err", repair.WriteError)
+			continue
+		}
+		if repair.DeleteError != nil {
+			syncLog.Warn("Delete sync pipeline order violation failed", "stage", repair.Stage, "block", repair.Row.BlockNum, "err", repair.DeleteError)
+			continue
+		}
+		if repair.Updated {
+			syncLog.Debug("Updated sync pipeline order violation",
+				"stage", repair.Stage,
+				"block", repair.Row.BlockNum,
+				"hash", repair.Row.BlockHash,
+				"issue", repair.Issue.String())
+			continue
+		}
+		syncLog.Debug("Deleted sync pipeline order violation",
+			"stage", repair.Stage,
+			"block", repair.Row.BlockNum,
+			"hash", repair.Row.BlockHash,
+			"issue", repair.Issue.String())
+	}
+	return result
+}
+
 func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
-	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore {
+	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore && !result.HasSyncPipelineOrderRepair && !result.HasSyncPipelineOrder {
 		return
 	}
 	repair := result.SyncPipelineRepairResult
 	restore := result.StagedBodyRestore
+	orderRepair := result.SyncPipelineOrderRepair
 	orderIssueCount := len(result.SyncPipelineOrderIssues)
 	orderReadErrorCount := len(result.SyncPipelineOrderErrors)
 	var firstOrderIssue string
@@ -544,6 +587,13 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupPipelineOrderFirstIssue", firstOrderIssue,
 		"syncStartupPipelineOrderReadErrors", orderReadErrorCount,
 		"syncStartupPipelineOrderFirstReadErrorStage", firstOrderReadErrorStage,
+		"syncStartupPipelineOrderRepairChecked", result.HasSyncPipelineOrderRepair,
+		"syncStartupPipelineOrderRepairComplete", orderRepair.Complete,
+		"syncStartupPipelineOrderRepairDeleted", orderRepair.Deleted,
+		"syncStartupPipelineOrderRepairUpdated", orderRepair.Updated,
+		"syncStartupPipelineOrderRepairInterrupted", orderRepair.Interrupted,
+		"syncStartupPipelineOrderRepairErrorStage", orderRepair.ErrorStage,
+		"syncStartupPipelineOrderRepairRows", len(orderRepair.Repairs),
 		"syncStartupStagedRestored", restore.Restored,
 		"syncStartupStagedTargetHead", restore.TargetHead,
 		"syncStartupStagedNextExpected", restore.NextExpected,

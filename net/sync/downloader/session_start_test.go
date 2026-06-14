@@ -40,6 +40,7 @@ func TestPlanSessionStartup(t *testing.T) {
 		{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 99},
 		{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 100, RestoreLimit: 32, PruneStaleTail: true},
 		{Action: SessionStartupRefreshBodiesReady},
+		{Action: SessionStartupRepairSyncPipelineOrder},
 		{Action: SessionStartupCheckSyncPipelineOrder},
 	}
 	if !reflect.DeepEqual(got.Steps, wantSteps) {
@@ -120,6 +121,10 @@ func TestApplySessionStartupPlan(t *testing.T) {
 			UpstreamBlock:   9,
 		},
 	}
+	orderRepair := SyncPipelineProgressOrderRepairResult{
+		Deleted:  1,
+		Complete: true,
+	}
 	plan := SessionStartupPlan{
 		Steps: []SessionStartupStep{
 			{Action: SessionStartupRepairSyncPipeline},
@@ -128,12 +133,14 @@ func TestApplySessionStartupPlan(t *testing.T) {
 			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
 			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
 			{Action: SessionStartupRefreshBodiesReady},
+			{Action: SessionStartupRepairSyncPipelineOrder},
 			{Action: SessionStartupCheckSyncPipelineOrder},
 		},
 	}
 	applier := recordingSessionStartupApplier{
 		repair:      repairResult,
 		restore:     restoreResult,
+		orderRepair: orderRepair,
 		orderIssues: orderIssues,
 	}
 	result := ApplySessionStartupPlan(plan, &applier)
@@ -143,6 +150,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 		{action: SessionStartupDeleteImportedBodies, first: 8},
 		{action: SessionStartupRestoreStagedBodies, first: 10, limit: 32, prune: true},
 		{action: SessionStartupRefreshBodiesReady},
+		{action: SessionStartupRepairSyncPipelineOrder},
 		{action: SessionStartupCheckSyncPipelineOrder},
 	}
 	if !reflect.DeepEqual(applier.calls, want) {
@@ -154,6 +162,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 		SessionStartupDeleteImportedBodies,
 		SessionStartupRestoreStagedBodies,
 		SessionStartupRefreshBodiesReady,
+		SessionStartupRepairSyncPipelineOrder,
 		SessionStartupCheckSyncPipelineOrder,
 	}
 	if !reflect.DeepEqual(result.AppliedSteps, wantApplied) {
@@ -170,6 +179,9 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	}
 	if !result.HasStagedBodyRestore || !reflect.DeepEqual(result.StagedBodyRestore, restoreResult) {
 		t.Fatalf("staged body restore = %+v set=%v, want %+v set", result.StagedBodyRestore, result.HasStagedBodyRestore, restoreResult)
+	}
+	if !result.HasSyncPipelineOrderRepair || !reflect.DeepEqual(result.SyncPipelineOrderRepair, orderRepair) {
+		t.Fatalf("sync pipeline order repair = %+v set=%v, want %+v set", result.SyncPipelineOrderRepair, result.HasSyncPipelineOrderRepair, orderRepair)
 	}
 	if !result.HasSyncPipelineOrder || !reflect.DeepEqual(result.SyncPipelineOrderIssues, orderIssues) {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want %+v set", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder, orderIssues)
@@ -434,6 +446,54 @@ func TestApplySessionStartupPlanRestoresHalfDownloadedBodiesBeforeExecution(t *t
 	}
 }
 
+func TestApplySessionStartupPlanRepairsBodiesProgressBehindReadyFrontier(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncInventory, block2.Number()); err != nil {
+		t.Fatalf("write inventory target: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write stale sync bodies progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, 0, nil)
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         0,
+		RestoreLimit: 2,
+	}), applier)
+
+	if !result.HasStagedBodyRestore || result.StagedBodyRestore.Restored != 2 || result.StagedBodyRestore.NeedPruneTail {
+		t.Fatalf("staged body restore = %+v set=%v, want restored block1-2 without tail prune", result.StagedBodyRestore, result.HasStagedBodyRestore)
+	}
+	if !result.HasSyncPipelineOrderRepair || !result.SyncPipelineOrderRepair.Complete ||
+		result.SyncPipelineOrderRepair.Updated != 1 || result.SyncPipelineOrderRepair.Deleted != 0 ||
+		len(result.SyncPipelineOrderRepair.Repairs) != 1 ||
+		result.SyncPipelineOrderRepair.Repairs[0].Stage != rawdb.StageSyncBodies ||
+		!result.SyncPipelineOrderRepair.Repairs[0].Updated {
+		t.Fatalf("order repair = %+v, want one SyncBodies update from ready frontier", result.SyncPipelineOrderRepair)
+	}
+	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 || len(result.SyncPipelineOrderErrors) != 0 {
+		t.Fatalf("order check issues=%+v errors=%+v set=%v, want clean post-repair check", result.SyncPipelineOrderIssues, result.SyncPipelineOrderErrors, result.HasSyncPipelineOrder)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2", stage, row, ok, err)
+		}
+	}
+	for _, block := range []*types.Block{block1, block2} {
+		if buffered, ok := applier.buffer[block.Number()]; !ok || buffered.Hash != block.Hash() {
+			t.Fatalf("buffered block%d = %+v ok=%v, want restored", block.Number(), buffered, ok)
+		}
+	}
+}
+
 func TestApplySessionStartupPlanPrunesCorruptStagedBodyRaw(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	block1 := testBufferedBlock(1)
@@ -570,6 +630,7 @@ type recordingSessionStartupApplier struct {
 	calls       []recordedSessionStartupCall
 	repair      SyncPipelineProgressRepairResult
 	restore     StagedBodyRestoreResult
+	orderRepair SyncPipelineProgressOrderRepairResult
 	orderIssues []SyncPipelineProgressOrderIssue
 }
 
@@ -598,6 +659,11 @@ func (a *recordingSessionStartupApplier) RestoreStagedBodies(from uint64, limit 
 
 func (a *recordingSessionStartupApplier) RefreshBodiesReady() {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRefreshBodiesReady})
+}
+
+func (a *recordingSessionStartupApplier) RepairSyncPipelineProgressOrder() SyncPipelineProgressOrderRepairResult {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRepairSyncPipelineOrder})
+	return a.orderRepair
 }
 
 func (a *recordingSessionStartupApplier) CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult {
@@ -654,6 +720,10 @@ func (a *startupRecoveryTestApplier) RestoreStagedBodies(from uint64, limit int,
 
 func (a *startupRecoveryTestApplier) RefreshBodiesReady() {
 	RefreshStagedBodyReadyProgress(a.db, a.head+1, a.target)
+}
+
+func (a *startupRecoveryTestApplier) RepairSyncPipelineProgressOrder() SyncPipelineProgressOrderRepairResult {
+	return RepairSyncPipelineProgressOrderFromDB(a.db, SyncPipelineProgressOrderOptions{})
 }
 
 func (a *startupRecoveryTestApplier) CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult {

@@ -94,12 +94,36 @@ type SyncPipelineProgressOrderReadError struct {
 	Err   error
 }
 
+// SyncPipelineProgressOrderRepair records one stage row updated or deleted
+// while repairing full sync-stage ordering.
+type SyncPipelineProgressOrderRepair struct {
+	Stage       rawdb.StageID
+	Row         rawdb.StageProgress
+	Issue       SyncPipelineProgressOrderIssue
+	Updated     bool
+	DeleteError error
+	WriteError  error
+}
+
 // SyncPipelineProgressOrderCheckResult is the DB-backed full sync pipeline
 // order check result used by startup diagnostics.
 type SyncPipelineProgressOrderCheckResult struct {
 	Rows       []rawdb.StageProgress
 	Issues     []SyncPipelineProgressOrderIssue
 	ReadErrors []SyncPipelineProgressOrderReadError
+}
+
+// SyncPipelineProgressOrderRepairResult is the DB-backed startup repair result
+// for full sync-stage ordering.
+type SyncPipelineProgressOrderRepairResult struct {
+	Before      SyncPipelineProgressOrderCheckResult
+	After       SyncPipelineProgressOrderCheckResult
+	Repairs     []SyncPipelineProgressOrderRepair
+	Deleted     int
+	Updated     int
+	Interrupted bool
+	ErrorStage  rawdb.StageID
+	Complete    bool
 }
 
 func (i SyncPipelineProgressOrderIssue) String() string {
@@ -1171,6 +1195,113 @@ func CheckSyncPipelineProgressOrderFromDB(db ethdb.KeyValueReader, opts SyncPipe
 	}
 	result.Issues = CheckSyncPipelineProgressOrder(rows, opts)
 	return result
+}
+
+// RepairSyncPipelineProgressOrderFromDB repairs detected full-pipeline ordering
+// violations and then rechecks the stage rows.
+// Missing upstream rows are controlled by opts; the default non-strict mode is
+// intentionally tolerant of SyncBodiesReady being absent after imported staged
+// bodies were drained.
+func RepairSyncPipelineProgressOrderFromDB(db ethdb.KeyValueStore, opts SyncPipelineProgressOrderOptions) SyncPipelineProgressOrderRepairResult {
+	var result SyncPipelineProgressOrderRepairResult
+	if db == nil {
+		result.Complete = true
+		return result
+	}
+	result.Before = CheckSyncPipelineProgressOrderFromDB(db, opts)
+	if len(result.Before.ReadErrors) > 0 {
+		result.Interrupted = true
+		result.ErrorStage = result.Before.ReadErrors[0].Stage
+		return result
+	}
+	if len(result.Before.Issues) == 0 {
+		result.After = result.Before
+		result.Complete = true
+		return result
+	}
+	rows := make(map[rawdb.StageID]rawdb.StageProgress, len(result.Before.Rows))
+	for _, row := range result.Before.Rows {
+		rows[row.Stage] = row
+	}
+	deleted := make(map[rawdb.StageID]struct{})
+	for _, issue := range result.Before.Issues {
+		if issue.Downstream == rawdb.StageSyncBodiesReady && issue.Upstream == rawdb.StageSyncBodies {
+			if repair, ok := repairSyncBodiesProgressFromReady(db, rows[rawdb.StageSyncBodiesReady], issue); ok {
+				result.Repairs = append(result.Repairs, repair)
+				if repair.WriteError != nil {
+					result.Interrupted = true
+					result.ErrorStage = repair.Stage
+					return result
+				}
+				result.Updated++
+				rows[rawdb.StageSyncBodies] = repair.Row
+				continue
+			}
+		}
+		for _, stage := range fullSyncPipelineStagesFrom(issue.Downstream) {
+			if _, ok := deleted[stage]; ok {
+				continue
+			}
+			row, ok := rows[stage]
+			if !ok {
+				continue
+			}
+			repair := SyncPipelineProgressOrderRepair{
+				Stage: stage,
+				Row:   row,
+				Issue: issue,
+			}
+			if err := rawdb.DeleteStageProgress(db, stage); err != nil {
+				repair.DeleteError = err
+				result.Repairs = append(result.Repairs, repair)
+				result.Interrupted = true
+				result.ErrorStage = stage
+				return result
+			}
+			result.Repairs = append(result.Repairs, repair)
+			result.Deleted++
+			deleted[stage] = struct{}{}
+			delete(rows, stage)
+		}
+	}
+	result.After = CheckSyncPipelineProgressOrderFromDB(db, opts)
+	if len(result.After.ReadErrors) > 0 {
+		result.Interrupted = true
+		result.ErrorStage = result.After.ReadErrors[0].Stage
+		return result
+	}
+	result.Complete = len(result.After.Issues) == 0 && !result.Interrupted
+	return result
+}
+
+func repairSyncBodiesProgressFromReady(db ethdb.KeyValueStore, ready rawdb.StageProgress, issue SyncPipelineProgressOrderIssue) (SyncPipelineProgressOrderRepair, bool) {
+	if !ready.HasBlockHash {
+		return SyncPipelineProgressOrderRepair{}, false
+	}
+	row, ok, err := rawdb.ReadSyncStagedBlockRaw(db, ready.BlockNum)
+	if err != nil || !ok || row.Hash != ready.BlockHash {
+		return SyncPipelineProgressOrderRepair{}, false
+	}
+	repair := SyncPipelineProgressOrderRepair{
+		Stage:   rawdb.StageSyncBodies,
+		Row:     ready,
+		Issue:   issue,
+		Updated: true,
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, ready.BlockNum, ready.BlockHash); err != nil {
+		repair.WriteError = err
+	}
+	return repair, true
+}
+
+func fullSyncPipelineStagesFrom(stage rawdb.StageID) []rawdb.StageID {
+	stages := FullSyncPipelineProgressStages()
+	for i, candidate := range stages {
+		if candidate == stage {
+			return stages[i:]
+		}
+	}
+	return nil
 }
 
 // ImportPipelineStageTasks returns the canonical-to-sync stage schedule for

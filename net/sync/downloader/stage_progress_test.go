@@ -1085,6 +1085,158 @@ func TestCheckSyncPipelineProgressOrderFromDBReportsReadErrors(t *testing.T) {
 	}
 }
 
+func TestRepairSyncPipelineProgressOrderFromDBDeletesDownstreamTail(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x07}
+	writes := []struct {
+		stage rawdb.StageID
+		block uint64
+	}{
+		{stage: rawdb.StageSyncBodies, block: 7},
+		{stage: rawdb.StageSyncBodiesReady, block: 8},
+		{stage: rawdb.StageSyncImport, block: 8},
+		{stage: rawdb.StageSyncExecution, block: 8},
+	}
+	for _, write := range writes {
+		if err := rawdb.WriteStageProgressWithHash(db, write.stage, write.block, hash); err != nil {
+			t.Fatalf("write %s progress: %v", write.stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Interrupted || got.Deleted != 3 || len(got.Repairs) != 3 {
+		t.Fatalf("repair result = %+v, want complete deletion of ready/import/execution tail", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncBodiesReady {
+		t.Fatalf("before issues = %+v, want bodies-ready ahead of bodies", got.Before.Issues)
+	}
+	if len(got.After.Issues) != 0 || len(got.After.ReadErrors) != 0 {
+		t.Fatalf("after check = %+v, want no remaining order issues", got.After)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodies); err != nil || !ok || row.BlockNum != 7 {
+		t.Fatalf("SyncBodies after repair = %+v ok=%v err=%v, want kept block7", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodiesReady, rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressOrderFromDBAdvancesBodiesFromVerifiedReady(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block7 := testBufferedBlock(7)
+	block8 := testBufferedBlock(8)
+	for _, block := range []*types.Block{block7, block8} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block7.Number(), block7.Hash()); err != nil {
+		t.Fatalf("write bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block8.Number(), block8.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Interrupted || got.Deleted != 0 || got.Updated != 1 || len(got.Repairs) != 1 || !got.Repairs[0].Updated {
+		t.Fatalf("repair result = %+v, want one SyncBodies update from verified ready", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncBodiesReady {
+		t.Fatalf("before issues = %+v, want ready ahead of bodies", got.Before.Issues)
+	}
+	if len(got.After.Issues) != 0 || len(got.After.ReadErrors) != 0 {
+		t.Fatalf("after check = %+v, want repaired order", got.After)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block8.Number() || row.BlockHash != block8.Hash() {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want block8", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressOrderFromDBDeletesImportTailAfterReadyLag(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x0a}
+	writes := []struct {
+		stage rawdb.StageID
+		block uint64
+	}{
+		{stage: rawdb.StageSyncBodies, block: 12},
+		{stage: rawdb.StageSyncBodiesReady, block: 8},
+		{stage: rawdb.StageSyncImport, block: 10},
+		{stage: rawdb.StageSyncExecution, block: 10},
+		{stage: rawdb.StageSyncCommitment, block: 10},
+		{stage: rawdb.StageSyncFinish, block: 10},
+	}
+	for _, write := range writes {
+		if err := rawdb.WriteStageProgressWithHash(db, write.stage, write.block, hash); err != nil {
+			t.Fatalf("write %s progress: %v", write.stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Deleted != 4 || len(got.Repairs) != 4 {
+		t.Fatalf("repair result = %+v, want import/execution/commitment/finish tail deleted", got)
+	}
+	if len(got.Before.Issues) != 1 || got.Before.Issues[0].Downstream != rawdb.StageSyncImport {
+		t.Fatalf("before issues = %+v, want import ahead of ready", got.Before.Issues)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncBodies, rawdb.StageSyncBodiesReady} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || !ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want kept", stage, row, ok, err)
+		}
+	}
+	for _, stage := range SyncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
+			t.Fatalf("%s after repair = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressOrderFromDBAllowsMissingUpstreamByDefault(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	hash := tcommon.Hash{0x0a}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if err := rawdb.WriteStageProgressWithHash(db, stage, 10, hash); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Complete || got.Deleted != 0 || len(got.Repairs) != 0 || len(got.Before.Issues) != 0 {
+		t.Fatalf("repair result = %+v, want no-op for missing upstream in non-strict mode", got)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || !ok || row.BlockNum != 10 {
+			t.Fatalf("%s after no-op repair = %+v ok=%v err=%v, want kept block10", stage, row, ok, err)
+		}
+	}
+}
+
+func TestRepairSyncPipelineProgressOrderFromDBStopsOnReadError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodies, 7); err != nil {
+		t.Fatalf("write bodies progress: %v", err)
+	}
+	if err := corruptOnlyStageProgressRow(db); err != nil {
+		t.Fatalf("corrupt bodies progress: %v", err)
+	}
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodiesReady, 8); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+
+	got := RepairSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if !got.Interrupted || got.ErrorStage != rawdb.StageSyncBodies || got.Complete || got.Deleted != 0 || len(got.Repairs) != 0 {
+		t.Fatalf("repair result = %+v, want interrupted before deletion on read error", got)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncBodiesReady); err != nil || !ok || row.BlockNum != 8 {
+		t.Fatalf("ready progress after interrupted repair = %+v ok=%v err=%v, want retained", row, ok, err)
+	}
+}
+
 func TestRepairSyncStageProgress(t *testing.T) {
 	stage := rawdb.StageSyncImport
 	canonical := map[uint64]tcommon.Hash{

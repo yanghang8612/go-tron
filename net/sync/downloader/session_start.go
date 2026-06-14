@@ -17,6 +17,7 @@ const (
 	SessionStartupDeleteImportedBodies
 	SessionStartupRestoreStagedBodies
 	SessionStartupRefreshBodiesReady
+	SessionStartupRepairSyncPipelineOrder
 	SessionStartupCheckSyncPipelineOrder
 )
 
@@ -40,6 +41,7 @@ type SessionStartupPlanApplier interface {
 	DeleteImportedBodies(through uint64)
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
 	RefreshBodiesReady()
+	RepairSyncPipelineProgressOrder() SyncPipelineProgressOrderRepairResult
 	CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult
 }
 
@@ -59,17 +61,19 @@ type SessionStartupPlan struct {
 // actually dispatched. Unknown steps are surfaced so tests and diagnostics can
 // catch plan/apply drift without teaching SyncService about every action.
 type SessionStartupApplyResult struct {
-	AppliedSteps             []SessionStartupStepAction
-	UnknownSteps             []SessionStartupStepAction
-	SyncPipelineRepairResult SyncPipelineProgressRepairResult
-	HasSyncPipelineRepair    bool
-	SyncPipelineRepairs      []SyncStageProgressRepair
-	SyncPipelineOrderCheck   SyncPipelineProgressOrderCheckResult
-	SyncPipelineOrderIssues  []SyncPipelineProgressOrderIssue
-	SyncPipelineOrderErrors  []SyncPipelineProgressOrderReadError
-	HasSyncPipelineOrder     bool
-	StagedBodyRestore        StagedBodyRestoreResult
-	HasStagedBodyRestore     bool
+	AppliedSteps               []SessionStartupStepAction
+	UnknownSteps               []SessionStartupStepAction
+	SyncPipelineRepairResult   SyncPipelineProgressRepairResult
+	HasSyncPipelineRepair      bool
+	SyncPipelineRepairs        []SyncStageProgressRepair
+	SyncPipelineOrderCheck     SyncPipelineProgressOrderCheckResult
+	SyncPipelineOrderIssues    []SyncPipelineProgressOrderIssue
+	SyncPipelineOrderErrors    []SyncPipelineProgressOrderReadError
+	HasSyncPipelineOrder       bool
+	SyncPipelineOrderRepair    SyncPipelineProgressOrderRepairResult
+	HasSyncPipelineOrderRepair bool
+	StagedBodyRestore          StagedBodyRestoreResult
+	HasStagedBodyRestore       bool
 }
 
 // PlanSessionStartup derives restart boundaries from the current canonical
@@ -103,6 +107,7 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 			PruneStaleTail:          plan.PruneStaleTail,
 		},
 		{Action: SessionStartupRefreshBodiesReady},
+		{Action: SessionStartupRepairSyncPipelineOrder},
 		{Action: SessionStartupCheckSyncPipelineOrder},
 	}
 	return plan
@@ -134,6 +139,10 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRefreshBodiesReady:
 			applier.RefreshBodiesReady()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionStartupRepairSyncPipelineOrder:
+			result.SyncPipelineOrderRepair = applier.RepairSyncPipelineProgressOrder()
+			result.HasSyncPipelineOrderRepair = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupCheckSyncPipelineOrder:
 			result.SyncPipelineOrderCheck = applier.CheckSyncPipelineProgressOrder()
