@@ -547,6 +547,148 @@ func TestJSONRPCGetTransactionReceiptUsesColdLogsAfterHotReceiptPrune(t *testing
 	}
 }
 
+func TestJSONRPCGetTransactionReceiptUsesColdTxPositionAfterHotPrune(t *testing.T) {
+	diskdb := ethrawdb.NewMemoryDatabase()
+	fz, err := rawdbfreezer.NewFreezer(t.TempDir(), "", false, 2049, chainfreezer.FreezerTableSet())
+	if err != nil {
+		t.Fatalf("NewFreezer: %v", err)
+	}
+	defer fz.Close()
+
+	genesis := &params.Genesis{
+		Config:            params.MainnetChainConfig,
+		Timestamp:         0,
+		DynamicProperties: map[string]int64{},
+	}
+	if _, _, err := SetupGenesisBlock(diskdb, genesis); err != nil {
+		t.Fatalf("SetupGenesisBlock: %v", err)
+	}
+	bc, err := NewBlockChainWithAncient(diskdb, state.NewDatabase(diskdb), params.MainnetChainConfig, rawdb.NewFreezerReader(fz))
+	if err != nil {
+		t.Fatalf("NewBlockChainWithAncient: %v", err)
+	}
+	defer bc.Close()
+
+	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1001, Expiration: 2001, Data: []byte{0x01}}}
+	txPB2 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 1002, Expiration: 2002, Data: []byte{0x02}}}
+	txHash1 := types.NewTransactionFromPB(txPB1).Hash()
+	txHash2 := types.NewTransactionFromPB(txPB2).Hash()
+	parent := bc.CurrentBlock()
+	block := types.NewBlockFromPB(&corepb.Block{
+		BlockHeader: &corepb.BlockHeader{
+			RawData: &corepb.BlockHeaderRaw{
+				Number:     1,
+				Timestamp:  3000,
+				ParentHash: parent.Hash().Bytes(),
+			},
+		},
+		Transactions: []*corepb.Transaction{txPB1, txPB2},
+	})
+	info1 := &corepb.TransactionInfo{
+		Id:             txHash1.Bytes(),
+		BlockNumber:    int64(block.Number()),
+		BlockTimeStamp: block.Timestamp(),
+	}
+	info2 := &corepb.TransactionInfo{
+		BlockNumber:    int64(block.Number()),
+		BlockTimeStamp: block.Timestamp(),
+		Receipt:        &corepb.ResourceReceipt{EnergyUsageTotal: 77},
+	}
+	if err := rawdb.WriteBlock(diskdb, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(diskdb, block.Number(), []*corepb.TransactionInfo{info1, info2}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionIndex(diskdb, txHash1[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex tx1: %v", err)
+	}
+	if err := rawdb.WriteTransactionIndex(diskdb, txHash2[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex tx2: %v", err)
+	}
+	bc.currentBlock.Store(block)
+
+	if err := appendBackendColdLookupAncients(t, fz, diskdb, parent, block); err != nil {
+		t.Fatalf("append ancients: %v", err)
+	}
+	snapshotDir := t.TempDir()
+	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(fz), snapshotDir, "", 0, 1)
+	if err != nil {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildChainIndexSegmentFromChainFreezerSegment(snapshotDir, freezerRef, "")
+	if err != nil {
+		t.Fatalf("BuildChainIndexSegmentFromChainFreezerSegment: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(snapshotDir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{freezerRef, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(snapshotDir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	if err := rawdb.DeleteFrozenBlockRange(diskdb, block.Number(), block.Number()); err != nil {
+		t.Fatalf("DeleteFrozenBlockRange: %v", err)
+	}
+	if err := rawdb.DeleteBlockNumber(diskdb, block.Hash()); err != nil {
+		t.Fatalf("DeleteBlockNumber: %v", err)
+	}
+	if err := rawdb.DeleteTransactionIndex(diskdb, txHash1[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex tx1: %v", err)
+	}
+	if err := rawdb.DeleteTransactionIndex(diskdb, txHash2[:]); err != nil {
+		t.Fatalf("DeleteTransactionIndex tx2: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfo(diskdb, txHash1[:]); err != nil {
+		t.Fatalf("DeleteTransactionInfo tx1: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfo(diskdb, txHash2[:]); err != nil {
+		t.Fatalf("DeleteTransactionInfo tx2: %v", err)
+	}
+	if err := rawdb.DeleteTransactionInfosByBlock(diskdb, block.Number()); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(diskdb, rawdb.NoopAncient{})
+	if got := rawdb.ReadTransactionIndex(hotOnly, txHash2[:]); got != nil {
+		t.Fatalf("hot tx lookup still present: %v", got)
+	}
+	if got := rawdb.ReadTransactionInfo(hotOnly, txHash2[:]); got != nil {
+		t.Fatalf("hot tx info still present: %+v", got)
+	}
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, block.Number()); len(infos) != 0 {
+		t.Fatalf("hot tx receipt rows still present: %+v", infos)
+	}
+
+	bc.ChainDB().SetChainIndexReader(mgr)
+	backend := &TronBackend{chain: bc}
+	gotInfo, err := backend.GetTransactionInfo(txHash2)
+	if err != nil || gotInfo == nil || len(gotInfo.Id) != 0 || gotInfo.GetReceipt().GetEnergyUsageTotal() != 77 {
+		t.Fatalf("GetTransactionInfo cold tx-position receipt = %+v/%v, want empty-id receipt resolved by tx position", gotInfo, err)
+	}
+
+	rpcServer := jsonrpc.NewServer(backend, 0)
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer.Handler())
+	defer httpServer.Close()
+
+	txHashHex := "0x" + txHash2.Hex()
+	resp := postCoreJSONRPC(t, httpServer.URL, "eth_getTransactionReceipt", []any{txHashHex})
+	receipt, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("eth_getTransactionReceipt result = %T %v, want object", resp["result"], resp["result"])
+	}
+	if receipt["transactionHash"] != txHashHex ||
+		receipt["blockHash"] != "0x"+block.Hash().Hex() ||
+		receipt["blockNumber"] != "0x1" ||
+		receipt["transactionIndex"] != "0x1" ||
+		receipt["gasUsed"] != "0x4d" ||
+		receipt["cumulativeGasUsed"] != "0x4d" ||
+		receipt["status"] != "0x1" {
+		t.Fatalf("cold eth_getTransactionReceipt = %+v, want second tx receipt from cold tx-position lookup", receipt)
+	}
+}
+
 func TestTronBackend_GetTransactionInfoByBlockNumRejectsMismatchedInfo(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
