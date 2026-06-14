@@ -1610,21 +1610,18 @@ func (a syncImportBatchRunApplier) ExecuteImportBatch(execution syncdl.ImportBat
 	return time.Since(start), err
 }
 
-func (a syncImportBatchRunApplier) RecordImportedBatch(plan syncdl.ImportedBatchProgressPlan, elapsed time.Duration) {
-	a.service.recordImportedBatch(plan, elapsed)
+func (a syncImportBatchRunApplier) ApplyImportedBatchRecord(plan syncdl.ImportedBatchRecordPlan) syncdl.ImportedBatchRecordApplyResult {
+	return a.service.applyImportedBatchRecord(plan)
 }
 
 func (a syncImportBatchRunApplier) PauseImport(peer *p2p.Peer, blockNum uint64, err error) {
 	a.service.pauseSync(peer, blockNum, err)
 }
 
-func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan, totalElapsed time.Duration) {
-	if !plan.OK {
-		return
-	}
-	recordPlan := syncdl.PlanImportedBatchRecord(plan, totalElapsed)
-	recordResult := syncdl.ApplyImportedBatchRecordPlan(recordPlan, syncImportedBatchRecordApplier{service: ss})
+func (ss *SyncService) applyImportedBatchRecord(plan syncdl.ImportedBatchRecordPlan) syncdl.ImportedBatchRecordApplyResult {
+	recordResult := syncdl.ApplyImportedBatchRecordPlan(plan, syncImportedBatchRecordApplier{service: ss})
 	ss.logImportedBatchRecordApplyResult(recordResult)
+	return recordResult
 }
 
 type syncImportedBatchRecordApplier struct {

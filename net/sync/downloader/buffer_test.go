@@ -660,6 +660,13 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if applier.recordApplied != 2 || applier.recordElapsed != applier.elapsed {
 		t.Fatalf("record applied/elapsed = %d/%s, want 2/%s", applier.recordApplied, applier.recordElapsed, applier.elapsed)
 	}
+	if !result.HasRecord ||
+		result.RecordPlan.Elapsed != applier.elapsed ||
+		!reflect.DeepEqual(result.RecordPlan.Progress, result.Progress) ||
+		!reflect.DeepEqual(applier.recordRunPlan, result.RecordPlan) {
+		t.Fatalf("record plan result=%+v has=%v applier=%+v, want downloader-owned plan for imported progress",
+			result.RecordPlan, result.HasRecord, applier.recordRunPlan)
+	}
 }
 
 func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *testing.T) {
@@ -675,6 +682,9 @@ func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *test
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || !applier.recordPlan.OK {
 		t.Fatalf("progress result=%+v record=%+v, want recorded one-block progress", result.Progress, applier.recordPlan)
+	}
+	if !result.HasRecord || !reflect.DeepEqual(result.RecordPlan.Progress, result.Progress) {
+		t.Fatalf("record plan = %+v has=%v, want planned one-block progress record", result.RecordPlan, result.HasRecord)
 	}
 	wantProgress := []rawdb.StageProgress{
 		{Stage: rawdb.StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
@@ -738,6 +748,9 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
 		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
+	}
+	if !result.HasRecord || result.RecordPlan.Elapsed != applier.elapsed || !reflect.DeepEqual(result.RecordPlan.Progress, result.Progress) {
+		t.Fatalf("partial record plan = %+v has=%v, want downloader-owned applied-prefix record plan", result.RecordPlan, result.HasRecord)
 	}
 	appliedSchedule, ok := result.Execution.AppliedSchedule(1)
 	if !ok {
@@ -1285,6 +1298,8 @@ type recordingImportBatchRunApplier struct {
 	observeAllAttemptedStages bool
 	observedStages            []rawdb.StageID
 	execution                 ImportBatchExecutionPlan
+	recordRunPlan             ImportedBatchRecordPlan
+	recordApply               ImportedBatchRecordApplyResult
 	recordPlan                ImportedBatchProgressPlan
 	recordApplied             int
 	recordElapsed             time.Duration
@@ -1329,12 +1344,14 @@ func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatc
 	return a.elapsed, a.insertErr
 }
 
-func (a *recordingImportBatchRunApplier) RecordImportedBatch(plan ImportedBatchProgressPlan, elapsed time.Duration) {
+func (a *recordingImportBatchRunApplier) ApplyImportedBatchRecord(plan ImportedBatchRecordPlan) ImportedBatchRecordApplyResult {
 	a.calls = append(a.calls, ImportBatchRunSettle)
-	a.recordPlan = plan
-	a.recordApplied = plan.Summary.Applied
-	a.recordElapsed = elapsed
-	a.progress = append([]rawdb.StageProgress(nil), plan.Progress...)
+	a.recordRunPlan = plan
+	a.recordPlan = plan.Progress
+	a.recordApplied = plan.Progress.Summary.Applied
+	a.recordElapsed = plan.Elapsed
+	a.progress = append([]rawdb.StageProgress(nil), plan.Progress.Progress...)
+	return a.recordApply
 }
 
 func (a *recordingImportBatchRunApplier) PauseImport(_ *p2p.Peer, blockNum uint64, err error) {
