@@ -1125,11 +1125,16 @@ derived_index_bytes_delta = derived_index - number(previous, "derivedIndexBytes"
 ancient_bodies_bytes_delta = ancient_tables["bodies"]["bytes"] - number(previous, "ancientBodiesBytes", ancient_tables["bodies"]["bytes"]) if interval_seconds > 0 else 0
 ancient_tx_infos_bytes_delta = ancient_tables["txInfos"]["bytes"] - number(previous, "ancientTxInfosBytes", ancient_tables["txInfos"]["bytes"]) if interval_seconds > 0 else 0
 ancient_state_roots_bytes_delta = ancient_tables["stateRoots"]["bytes"] - number(previous, "ancientStateRootsBytes", ancient_tables["stateRoots"]["bytes"]) if interval_seconds > 0 else 0
+ancient_other_bytes_delta = ancient_tables["other"]["bytes"] - number(previous, "ancientOtherBytes", ancient_tables["other"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_root_bytes_delta = snapshot_buckets["root"]["bytes"] - number(previous, "snapshotRootBytes", snapshot_buckets["root"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_latest_bytes_delta = snapshot_buckets["latest"]["bytes"] - number(previous, "snapshotLatestBytes", snapshot_buckets["latest"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_history_bytes_delta = snapshot_buckets["history"]["bytes"] - number(previous, "snapshotHistoryBytes", snapshot_buckets["history"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_chain_bytes_delta = snapshot_buckets["chain"]["bytes"] - number(previous, "snapshotChainBytes", snapshot_buckets["chain"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_log_bytes_delta = snapshot_buckets["log"]["bytes"] - number(previous, "snapshotLogBytes", snapshot_buckets["log"]["bytes"]) if interval_seconds > 0 else 0
 snapshot_trace_bytes_delta = snapshot_buckets["trace"]["bytes"] - number(previous, "snapshotTraceBytes", snapshot_buckets["trace"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_commitment_bytes_delta = snapshot_buckets["commitment"]["bytes"] - number(previous, "snapshotCommitmentBytes", snapshot_buckets["commitment"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_retired_bytes_delta = snapshot_buckets["retired"]["bytes"] - number(previous, "snapshotRetiredDirectoryBytes", snapshot_buckets["retired"]["bytes"]) if interval_seconds > 0 else 0
+snapshot_other_bytes_delta = snapshot_buckets["other"]["bytes"] - number(previous, "snapshotOtherBytes", snapshot_buckets["other"]["bytes"]) if interval_seconds > 0 else 0
 chaindata_sst_bytes_delta = chaindata_files["sst"]["bytes"] - number(previous, "chaindataSSTBytes", chaindata_files["sst"]["bytes"]) if interval_seconds > 0 else 0
 chaindata_wal_bytes_delta = chaindata_files["wal"]["bytes"] - number(previous, "chaindataWALBytes", chaindata_files["wal"]["bytes"]) if interval_seconds > 0 else 0
 chaindata_log_bytes_delta = chaindata_files["log"]["bytes"] - number(previous, "chaindataLogBytes", chaindata_files["log"]["bytes"]) if interval_seconds > 0 else 0
@@ -1148,6 +1153,34 @@ interval_positive_disk_growth_bytes = int(sum(nonnegative(value) for _, value in
 interval_disk_growth_primary, interval_disk_growth_primary_bytes, interval_disk_growth_primary_share = disk_growth_primary(
     top_level_growth_candidates,
     interval_positive_disk_growth_bytes,
+)
+detailed_growth_candidates = [
+    ("chaindata.sst", chaindata_sst_bytes_delta),
+    ("chaindata.wal", chaindata_wal_bytes_delta),
+    ("chaindata.log", chaindata_log_bytes_delta),
+    ("chaindata.manifest", chaindata_manifest_bytes_delta),
+    ("chaindata.options", chaindata_options_bytes_delta),
+    ("chaindata.other", chaindata_other_bytes_delta),
+    ("ancient.bodies", ancient_bodies_bytes_delta),
+    ("ancient.txInfos", ancient_tx_infos_bytes_delta),
+    ("ancient.stateRoots", ancient_state_roots_bytes_delta),
+    ("ancient.other", ancient_other_bytes_delta),
+    ("snapshot.root", snapshot_root_bytes_delta),
+    ("snapshot.latest", snapshot_latest_bytes_delta),
+    ("snapshot.history", snapshot_history_bytes_delta),
+    ("snapshot.chain", snapshot_chain_bytes_delta),
+    ("snapshot.log", snapshot_log_bytes_delta),
+    ("snapshot.trace", snapshot_trace_bytes_delta),
+    ("snapshot.commitment", snapshot_commitment_bytes_delta),
+    ("snapshot.retired", snapshot_retired_bytes_delta),
+    ("snapshot.other", snapshot_other_bytes_delta),
+    ("replay", replay_bytes_delta),
+    ("datadir.other", datadir_other_bytes_delta),
+]
+interval_detailed_positive_disk_growth_bytes = int(sum(nonnegative(value) for _, value in detailed_growth_candidates))
+interval_disk_growth_primary_detailed, interval_disk_growth_primary_detailed_bytes, interval_disk_growth_primary_detailed_share = disk_growth_primary(
+    detailed_growth_candidates,
+    interval_detailed_positive_disk_growth_bytes,
 )
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
@@ -1368,11 +1401,16 @@ row = {
     "ancientBodiesBytesDelta": ancient_bodies_bytes_delta,
     "ancientTxInfosBytesDelta": ancient_tx_infos_bytes_delta,
     "ancientStateRootsBytesDelta": ancient_state_roots_bytes_delta,
+    "ancientOtherBytesDelta": ancient_other_bytes_delta,
+    "snapshotRootBytesDelta": snapshot_root_bytes_delta,
     "snapshotLatestBytesDelta": snapshot_latest_bytes_delta,
     "snapshotHistoryBytesDelta": snapshot_history_bytes_delta,
     "snapshotChainBytesDelta": snapshot_chain_bytes_delta,
     "snapshotLogBytesDelta": snapshot_log_bytes_delta,
     "snapshotTraceBytesDelta": snapshot_trace_bytes_delta,
+    "snapshotCommitmentBytesDelta": snapshot_commitment_bytes_delta,
+    "snapshotRetiredDirectoryBytesDelta": snapshot_retired_bytes_delta,
+    "snapshotOtherBytesDelta": snapshot_other_bytes_delta,
     "chaindataSSTBytesDelta": chaindata_sst_bytes_delta,
     "chaindataWALBytesDelta": chaindata_wal_bytes_delta,
     "chaindataLogBytesDelta": chaindata_log_bytes_delta,
@@ -1384,6 +1422,10 @@ row = {
     "intervalDiskGrowthPrimary": interval_disk_growth_primary,
     "intervalDiskGrowthPrimaryBytes": interval_disk_growth_primary_bytes,
     "intervalDiskGrowthPrimaryShare": interval_disk_growth_primary_share,
+    "intervalDetailedPositiveDiskGrowthBytes": interval_detailed_positive_disk_growth_bytes,
+    "intervalDiskGrowthPrimaryDetailed": interval_disk_growth_primary_detailed,
+    "intervalDiskGrowthPrimaryDetailedBytes": interval_disk_growth_primary_detailed_bytes,
+    "intervalDiskGrowthPrimaryDetailedShare": interval_disk_growth_primary_detailed_share,
     "intervalChaindataGrowthShare": growth_share(chaindata_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalAncientGrowthShare": growth_share(ancient_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalSnapshotGrowthShare": growth_share(snapshot_bytes_delta, interval_positive_disk_growth_bytes),
@@ -1391,6 +1433,27 @@ row = {
     "intervalDatadirOtherGrowthShare": growth_share(datadir_other_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalColdArchiveGrowthShare": growth_share(cold_archive_bytes_delta, interval_positive_disk_growth_bytes),
     "intervalDerivedIndexGrowthShare": growth_share(derived_index_bytes_delta, interval_positive_disk_growth_bytes),
+    "intervalChaindataSSTGrowthShare": growth_share(chaindata_sst_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalChaindataWALGrowthShare": growth_share(chaindata_wal_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalChaindataLogGrowthShare": growth_share(chaindata_log_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalChaindataManifestGrowthShare": growth_share(chaindata_manifest_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalChaindataOptionsGrowthShare": growth_share(chaindata_options_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalChaindataOtherGrowthShare": growth_share(chaindata_other_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalAncientBodiesGrowthShare": growth_share(ancient_bodies_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalAncientTxInfosGrowthShare": growth_share(ancient_tx_infos_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalAncientStateRootsGrowthShare": growth_share(ancient_state_roots_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalAncientOtherGrowthShare": growth_share(ancient_other_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotRootGrowthShare": growth_share(snapshot_root_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotLatestGrowthShare": growth_share(snapshot_latest_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotHistoryGrowthShare": growth_share(snapshot_history_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotChainGrowthShare": growth_share(snapshot_chain_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotLogGrowthShare": growth_share(snapshot_log_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotTraceGrowthShare": growth_share(snapshot_trace_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotCommitmentGrowthShare": growth_share(snapshot_commitment_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotRetiredDirectoryGrowthShare": growth_share(snapshot_retired_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalSnapshotOtherGrowthShare": growth_share(snapshot_other_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalReplayDetailedGrowthShare": growth_share(replay_bytes_delta, interval_detailed_positive_disk_growth_bytes),
+    "intervalDatadirOtherDetailedGrowthShare": growth_share(datadir_other_bytes_delta, interval_detailed_positive_disk_growth_bytes),
     "datadirBytesPerSecond": datadir_bytes_per_second,
     "chaindataBytesPerSecond": chaindata_bytes_per_second,
     "chaindataSSTBytesPerSecond": chaindata_sst_bytes_per_second,

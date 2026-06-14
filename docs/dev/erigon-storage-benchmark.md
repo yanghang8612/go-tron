@@ -191,8 +191,11 @@ total and per-interval block rates, and hot/cold/snapshot disk split plus
 per-interval byte deltas without opening the live Pebble store. The Nile sampler
 also breaks out `derivedIndexBytes`/`derivedIndexFiles` for chain-index,
 balance-trace, section-bloom, and event-log/index sidecars, and reports
-Pebble hot-store SST/WAL ratios plus interval SST/WAL bytes per block while
-keeping `snapshotBytes` as the full snapshot directory size. Run it with
+Pebble hot-store SST/WAL ratios plus interval SST/WAL bytes per block. It also
+reports `intervalDiskGrowthPrimaryDetailed*` across Pebble file buckets,
+ancient tables, snapshot subdirectories, replay, and datadir-other bytes so
+archive/full/minimal sync runs can be compared by the actual interval growth
+source while keeping `snapshotBytes` as the full snapshot directory size. Run it with
 `--sync-log-file` to fold the latest `Imported chain segment` stage planner,
 execution-plan, slow-phase, state-mutation, and peer fields into the JSONL row.
 Each row also includes `soakHealthStatus`, `soakHealthIssues`, and

@@ -92,13 +92,21 @@ per-interval bytes-per-new-block fields such as
 plus interval growth attribution fields:
 `intervalPositiveDiskGrowthBytes`, `intervalDiskGrowthPrimary`,
 `intervalDiskGrowthPrimaryBytes`, `intervalDiskGrowthPrimaryShare`,
+`intervalDetailedPositiveDiskGrowthBytes`,
+`intervalDiskGrowthPrimaryDetailed`,
+`intervalDiskGrowthPrimaryDetailedBytes`,
+`intervalDiskGrowthPrimaryDetailedShare`,
 `intervalChaindataGrowthShare`, `intervalAncientGrowthShare`,
 `intervalSnapshotGrowthShare`, `intervalReplayGrowthShare`,
 `intervalDatadirOtherGrowthShare`, `intervalColdArchiveGrowthShare`, and
-`intervalDerivedIndexGrowthShare`. The primary growth bucket is computed from
-non-overlapping top-level buckets (`chaindata`, `ancient`, `snapshot`,
-`replay`, `other`); cold archive and derived index shares are overlapping
-diagnostic views for archive/index growth. Rows also include
+`intervalDerivedIndexGrowthShare`. The top-level primary growth bucket is
+computed from non-overlapping top-level buckets (`chaindata`, `ancient`,
+`snapshot`, `replay`, `other`). The detailed primary bucket is computed from
+Pebble file buckets, ancient table buckets, snapshot subdirectories, replay,
+and datadir-other bytes; use it to spot whether interval growth is driven by
+SST/WAL, freezer tables, or derived snapshot indexes. Cold archive and derived
+index shares are overlapping diagnostic views for archive/index growth. Rows
+also include
 `coldToHotBytesRatio`,
 `derivedIndexToHotBytesRatio`, `chaindataSSTToHotBytesRatio`,
 `chaindataWALToHotBytesRatio`, `chaindataWALToSSTBytesRatio`,

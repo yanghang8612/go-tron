@@ -218,6 +218,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalDiskGrowthPrimary"], "none")
             self.assertEqual(row["intervalDiskGrowthPrimaryBytes"], 0)
             self.assertEqual(row["intervalDiskGrowthPrimaryShare"], 0.0)
+            self.assertEqual(row["intervalDetailedPositiveDiskGrowthBytes"], 0)
+            self.assertEqual(row["intervalDiskGrowthPrimaryDetailed"], "none")
+            self.assertEqual(row["intervalDiskGrowthPrimaryDetailedBytes"], 0)
+            self.assertEqual(row["intervalDiskGrowthPrimaryDetailedShare"], 0.0)
             self.assertEqual(row["intervalChaindataGrowthShare"], 0.0)
             self.assertEqual(row["intervalAncientGrowthShare"], 0.0)
             self.assertEqual(row["intervalSnapshotGrowthShare"], 0.0)
@@ -225,6 +229,10 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalDatadirOtherGrowthShare"], 0.0)
             self.assertEqual(row["intervalColdArchiveGrowthShare"], 0.0)
             self.assertEqual(row["intervalDerivedIndexGrowthShare"], 0.0)
+            self.assertEqual(row["intervalChaindataSSTGrowthShare"], 0.0)
+            self.assertEqual(row["intervalChaindataWALGrowthShare"], 0.0)
+            self.assertEqual(row["intervalAncientBodiesGrowthShare"], 0.0)
+            self.assertEqual(row["intervalSnapshotLogGrowthShare"], 0.0)
             self.assertEqual(row["chaindataSSTBytesPerSecond"], 0.0)
             self.assertEqual(row["chaindataWALBytesPerSecond"], 0.0)
             self.assertEqual(row["replayBytesPerSecond"], 0.0)
@@ -414,10 +422,16 @@ class NileSyncSampleTest(unittest.TestCase):
                 "ancientBodiesBytes": 64,
                 "ancientTxInfosBytes": 32,
                 "ancientStateRootsBytes": 16,
+                "ancientOtherBytes": 16,
+                "snapshotRootBytes": 64,
+                "snapshotLatestBytes": 16,
                 "snapshotHistoryBytes": 32,
                 "snapshotChainBytes": 32,
                 "snapshotLogBytes": 32,
                 "snapshotTraceBytes": 32,
+                "snapshotCommitmentBytes": 16,
+                "snapshotRetiredDirectoryBytes": 16,
+                "snapshotOtherBytes": 16,
                 "stageSyncBodies": 80,
                 "stageSyncBodiesReady": 79,
                 "stageSyncImport": 70,
@@ -479,10 +493,16 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["ancientBodiesBytesDelta"], row["ancientBodiesBytes"] - previous["ancientBodiesBytes"])
             self.assertEqual(row["ancientTxInfosBytesDelta"], row["ancientTxInfosBytes"] - previous["ancientTxInfosBytes"])
             self.assertEqual(row["ancientStateRootsBytesDelta"], row["ancientStateRootsBytes"] - previous["ancientStateRootsBytes"])
+            self.assertEqual(row["ancientOtherBytesDelta"], row["ancientOtherBytes"] - previous["ancientOtherBytes"])
+            self.assertEqual(row["snapshotRootBytesDelta"], row["snapshotRootBytes"] - previous["snapshotRootBytes"])
+            self.assertEqual(row["snapshotLatestBytesDelta"], row["snapshotLatestBytes"] - previous["snapshotLatestBytes"])
             self.assertEqual(row["snapshotHistoryBytesDelta"], row["snapshotHistoryBytes"] - previous["snapshotHistoryBytes"])
             self.assertEqual(row["snapshotChainBytesDelta"], row["snapshotChainBytes"] - previous["snapshotChainBytes"])
             self.assertEqual(row["snapshotLogBytesDelta"], row["snapshotLogBytes"] - previous["snapshotLogBytes"])
             self.assertEqual(row["snapshotTraceBytesDelta"], row["snapshotTraceBytes"] - previous["snapshotTraceBytes"])
+            self.assertEqual(row["snapshotCommitmentBytesDelta"], row["snapshotCommitmentBytes"] - previous["snapshotCommitmentBytes"])
+            self.assertEqual(row["snapshotRetiredDirectoryBytesDelta"], row["snapshotRetiredDirectoryBytes"] - previous["snapshotRetiredDirectoryBytes"])
+            self.assertEqual(row["snapshotOtherBytesDelta"], row["snapshotOtherBytes"] - previous["snapshotOtherBytes"])
             self.assertEqual(
                 row["datadirOtherBytesDelta"],
                 row["datadirBytesDelta"]
@@ -512,6 +532,64 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertAlmostEqual(row["intervalDatadirOtherGrowthShare"], max(row["datadirOtherBytesDelta"], 0) / positive_growth)
             self.assertAlmostEqual(row["intervalColdArchiveGrowthShare"], max(row["coldArchiveBytesDelta"], 0) / positive_growth)
             self.assertAlmostEqual(row["intervalDerivedIndexGrowthShare"], max(row["derivedIndexBytesDelta"], 0) / positive_growth)
+            detailed_growth_candidates = [
+                ("chaindata.sst", row["chaindataSSTBytesDelta"]),
+                ("chaindata.wal", row["chaindataWALBytesDelta"]),
+                ("chaindata.log", row["chaindataLogBytesDelta"]),
+                ("chaindata.manifest", row["chaindataManifestBytesDelta"]),
+                ("chaindata.options", row["chaindataOptionsBytesDelta"]),
+                ("chaindata.other", row["chaindataOtherBytesDelta"]),
+                ("ancient.bodies", row["ancientBodiesBytesDelta"]),
+                ("ancient.txInfos", row["ancientTxInfosBytesDelta"]),
+                ("ancient.stateRoots", row["ancientStateRootsBytesDelta"]),
+                ("ancient.other", row["ancientOtherBytesDelta"]),
+                ("snapshot.root", row["snapshotRootBytesDelta"]),
+                ("snapshot.latest", row["snapshotLatestBytesDelta"]),
+                ("snapshot.history", row["snapshotHistoryBytesDelta"]),
+                ("snapshot.chain", row["snapshotChainBytesDelta"]),
+                ("snapshot.log", row["snapshotLogBytesDelta"]),
+                ("snapshot.trace", row["snapshotTraceBytesDelta"]),
+                ("snapshot.commitment", row["snapshotCommitmentBytesDelta"]),
+                ("snapshot.retired", row["snapshotRetiredDirectoryBytesDelta"]),
+                ("snapshot.other", row["snapshotOtherBytesDelta"]),
+                ("replay", row["replayBytesDelta"]),
+                ("datadir.other", row["datadirOtherBytesDelta"]),
+            ]
+            detailed_positive_growth = sum(max(value, 0) for _, value in detailed_growth_candidates)
+            detailed_primary_name, detailed_primary_value = max(
+                [(name, value) for name, value in detailed_growth_candidates if value > 0],
+                key=lambda item: item[1],
+            )
+            self.assertGreater(detailed_positive_growth, 0)
+            self.assertEqual(row["intervalDetailedPositiveDiskGrowthBytes"], detailed_positive_growth)
+            self.assertEqual(row["intervalDiskGrowthPrimaryDetailed"], detailed_primary_name)
+            self.assertEqual(row["intervalDiskGrowthPrimaryDetailedBytes"], detailed_primary_value)
+            self.assertAlmostEqual(row["intervalDiskGrowthPrimaryDetailedShare"], detailed_primary_value / detailed_positive_growth)
+            detailed_shares = {
+                "intervalChaindataSSTGrowthShare": row["chaindataSSTBytesDelta"],
+                "intervalChaindataWALGrowthShare": row["chaindataWALBytesDelta"],
+                "intervalChaindataLogGrowthShare": row["chaindataLogBytesDelta"],
+                "intervalChaindataManifestGrowthShare": row["chaindataManifestBytesDelta"],
+                "intervalChaindataOptionsGrowthShare": row["chaindataOptionsBytesDelta"],
+                "intervalChaindataOtherGrowthShare": row["chaindataOtherBytesDelta"],
+                "intervalAncientBodiesGrowthShare": row["ancientBodiesBytesDelta"],
+                "intervalAncientTxInfosGrowthShare": row["ancientTxInfosBytesDelta"],
+                "intervalAncientStateRootsGrowthShare": row["ancientStateRootsBytesDelta"],
+                "intervalAncientOtherGrowthShare": row["ancientOtherBytesDelta"],
+                "intervalSnapshotRootGrowthShare": row["snapshotRootBytesDelta"],
+                "intervalSnapshotLatestGrowthShare": row["snapshotLatestBytesDelta"],
+                "intervalSnapshotHistoryGrowthShare": row["snapshotHistoryBytesDelta"],
+                "intervalSnapshotChainGrowthShare": row["snapshotChainBytesDelta"],
+                "intervalSnapshotLogGrowthShare": row["snapshotLogBytesDelta"],
+                "intervalSnapshotTraceGrowthShare": row["snapshotTraceBytesDelta"],
+                "intervalSnapshotCommitmentGrowthShare": row["snapshotCommitmentBytesDelta"],
+                "intervalSnapshotRetiredDirectoryGrowthShare": row["snapshotRetiredDirectoryBytesDelta"],
+                "intervalSnapshotOtherGrowthShare": row["snapshotOtherBytesDelta"],
+                "intervalReplayDetailedGrowthShare": row["replayBytesDelta"],
+                "intervalDatadirOtherDetailedGrowthShare": row["datadirOtherBytesDelta"],
+            }
+            for field, delta in detailed_shares.items():
+                self.assertAlmostEqual(row[field], max(delta, 0) / detailed_positive_growth)
             self.assertGreater(row["datadirBytesPerSecond"], 0)
             self.assertGreater(row["chaindataBytesPerSecond"], 0)
             self.assertGreater(row["chaindataSSTBytesPerSecond"], 0)
