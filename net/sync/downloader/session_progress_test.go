@@ -100,6 +100,8 @@ func TestPlanFetchRefillRun(t *testing.T) {
 		Progress:         active,
 	})
 	want := FetchRefillRunPlan{
+		MirrorLegacy: true,
+		LockedSteps:  []FetchRefillRunStep{{Action: FetchRefillRunMirrorLegacy}},
 		Dispatch: FetchRefillDispatchPlan{
 			SendOutboundRequests: true,
 			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
@@ -113,8 +115,12 @@ func TestPlanFetchRefillRun(t *testing.T) {
 		OutboundRequests: 2,
 		Progress:         SessionProgress{Syncing: true, Paused: true},
 	})
-	if !reflect.DeepEqual(got, FetchRefillRunPlan{}) {
-		t.Fatalf("paused refill run = %+v, want no action", got)
+	want = FetchRefillRunPlan{
+		MirrorLegacy: true,
+		LockedSteps:  []FetchRefillRunStep{{Action: FetchRefillRunMirrorLegacy}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paused refill run = %+v, want mirror only", got)
 	}
 }
 
@@ -418,6 +424,54 @@ func TestApplyFetchRefillDispatchPlan(t *testing.T) {
 	}
 	if nilResult := ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{SendOutboundRequests: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
 		t.Fatalf("nil refill dispatch result = %+v, want empty", nilResult)
+	}
+}
+
+func TestApplyFetchRefillRunPlan(t *testing.T) {
+	runApplier := new(recordingFetchRefillRunApplier)
+	dispatchApplier := new(recordingFetchRefillDispatchApplier)
+	plan := FetchRefillRunPlan{
+		LockedSteps: []FetchRefillRunStep{
+			{Action: FetchRefillRunMirrorLegacy},
+			{Action: FetchRefillRunStepAction(255)},
+		},
+		Dispatch: FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
+			{Action: FetchRefillDispatchSendOutbound},
+			{Action: FetchRefillDispatchStepAction(254)},
+		}},
+	}
+
+	locked := ApplyFetchRefillRunLockedPlan(plan, runApplier)
+	postLock := ApplyFetchRefillRunPostLockPlan(plan, dispatchApplier)
+	if runApplier.mirrors != 1 {
+		t.Fatalf("fetch refill run mirrors = %d, want 1", runApplier.mirrors)
+	}
+	if dispatchApplier.sent != 1 {
+		t.Fatalf("fetch refill run dispatch sends = %d, want 1", dispatchApplier.sent)
+	}
+	if !reflect.DeepEqual(locked.Locked.AppliedSteps, []FetchRefillRunStepAction{FetchRefillRunMirrorLegacy}) ||
+		!reflect.DeepEqual(locked.Locked.UnknownSteps, []FetchRefillRunStepAction{FetchRefillRunStepAction(255)}) ||
+		len(locked.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("locked fetch refill run result = %+v, want mirror applied and unknown [255]", locked)
+	}
+	if !reflect.DeepEqual(postLock.Dispatch.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
+		!reflect.DeepEqual(postLock.Dispatch.UnknownSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchStepAction(254)}) ||
+		len(postLock.Locked.AppliedSteps) != 0 {
+		t.Fatalf("post-lock fetch refill run result = %+v, want send applied and unknown [254]", postLock)
+	}
+
+	runApplier.mirrors = 0
+	locked = ApplyFetchRefillRunLockedPlan(FetchRefillRunPlan{MirrorLegacy: true}, runApplier)
+	if runApplier.mirrors != 1 ||
+		!reflect.DeepEqual(locked.Locked.AppliedSteps, []FetchRefillRunStepAction{FetchRefillRunMirrorLegacy}) ||
+		len(locked.Locked.UnknownSteps) != 0 {
+		t.Fatalf("fallback locked fetch refill run result = %+v mirrors=%d, want mirror applied", locked, runApplier.mirrors)
+	}
+	if nilLocked := ApplyFetchRefillRunLockedPlan(plan, nil); len(nilLocked.Locked.AppliedSteps) != 0 || len(nilLocked.Locked.UnknownSteps) != 0 {
+		t.Fatalf("nil locked fetch refill run result = %+v, want empty", nilLocked)
+	}
+	if nilPostLock := ApplyFetchRefillRunPostLockPlan(plan, nil); len(nilPostLock.Dispatch.AppliedSteps) != 0 || len(nilPostLock.Dispatch.UnknownSteps) != 0 {
+		t.Fatalf("nil post-lock fetch refill run result = %+v, want empty", nilPostLock)
 	}
 }
 
@@ -739,6 +793,14 @@ type recordingFetchRefillDispatchApplier struct {
 
 func (a *recordingFetchRefillDispatchApplier) SendOutboundRequests() {
 	a.sent++
+}
+
+type recordingFetchRefillRunApplier struct {
+	mirrors int
+}
+
+func (a *recordingFetchRefillRunApplier) MirrorLegacyUnderLock() {
+	a.mirrors++
 }
 
 type recordingEmptyDrainRunApplier struct {

@@ -960,9 +960,9 @@ func (ss *SyncService) fetchNextBatch() {
 		OutboundRequests: len(out),
 		Progress:         progress,
 	})
-	ss.mirrorLegacyLocked()
+	syncdl.ApplyFetchRefillRunLockedPlan(refill, syncFetchRefillRunApplier{service: ss})
 	ss.mu.Unlock()
-	syncdl.ApplyFetchRefillDispatchPlan(refill.Dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
+	syncdl.ApplyFetchRefillRunPostLockPlan(refill, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
@@ -1130,9 +1130,9 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 		OutboundRequests: len(out),
 		Progress:         progress,
 	})
-	ss.mirrorLegacyLocked()
+	syncdl.ApplyFetchRefillRunLockedPlan(refill, syncFetchRefillRunApplier{service: ss})
 	ss.mu.Unlock()
-	syncdl.ApplyFetchRefillDispatchPlan(refill.Dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
+	syncdl.ApplyFetchRefillRunPostLockPlan(refill, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 // HandleBlock processes a received block during sync.
@@ -1295,6 +1295,14 @@ type syncEmptyDrainRunApplier struct {
 }
 
 func (a syncEmptyDrainRunApplier) MirrorLegacyUnderLock() {
+	a.service.mirrorLegacyLocked()
+}
+
+type syncFetchRefillRunApplier struct {
+	service *SyncService
+}
+
+func (a syncFetchRefillRunApplier) MirrorLegacyUnderLock() {
 	a.service.mirrorLegacyLocked()
 }
 

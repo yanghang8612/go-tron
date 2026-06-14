@@ -105,6 +105,14 @@ const (
 	FetchRefillDispatchSendOutbound FetchRefillDispatchStepAction = iota
 )
 
+// FetchRefillRunStepAction names one lock-held operation for a timer/manual
+// peer-ready fetch-refill run.
+type FetchRefillRunStepAction uint8
+
+const (
+	FetchRefillRunMirrorLegacy FetchRefillRunStepAction = iota
+)
+
 // IdleDrainStep is one downloader-owned empty-drain settlement action.
 type IdleDrainStep struct {
 	Action IdleDrainStepAction
@@ -128,11 +136,24 @@ type FetchRefillDispatchStep struct {
 	Action FetchRefillDispatchStepAction
 }
 
+// FetchRefillRunStep is one lock-held operation for a timer/manual peer-ready
+// fetch-refill run.
+type FetchRefillRunStep struct {
+	Action FetchRefillRunStepAction
+}
+
 // FetchRefillDispatchApplyResult records fetch-refill dispatch steps
 // dispatched by the downloader planner.
 type FetchRefillDispatchApplyResult struct {
 	AppliedSteps []FetchRefillDispatchStepAction
 	UnknownSteps []FetchRefillDispatchStepAction
+}
+
+// FetchRefillRunLockedApplyResult records lock-held fetch-refill run steps
+// dispatched by the downloader planner.
+type FetchRefillRunLockedApplyResult struct {
+	AppliedSteps []FetchRefillRunStepAction
+	UnknownSteps []FetchRefillRunStepAction
 }
 
 // IdleDrainPlan describes the session-level action after a local drain found no
@@ -167,11 +188,19 @@ type FetchRefillDispatchPlan struct {
 	Steps                []FetchRefillDispatchStep
 }
 
-// FetchRefillRunPlan groups the downloader-owned decisions after a timer or
-// peer-ready refill. It is intentionally narrow today; finish/retry settlement
-// can be added here without re-expanding SyncService call sites.
+// FetchRefillRunPlan groups the downloader-owned lock-held mirror and
+// post-lock dispatch decisions after a timer or peer-ready refill.
 type FetchRefillRunPlan struct {
-	Dispatch FetchRefillDispatchPlan
+	MirrorLegacy bool
+	LockedSteps  []FetchRefillRunStep
+	Dispatch     FetchRefillDispatchPlan
+}
+
+// FetchRefillRunApplyResult groups the lock-held and post-lock phases for a
+// timer/manual peer-ready fetch-refill run.
+type FetchRefillRunApplyResult struct {
+	Locked   FetchRefillRunLockedApplyResult
+	Dispatch FetchRefillDispatchApplyResult
 }
 
 // EmptyDrainRefillPlan groups the two downloader-owned decisions after an
@@ -228,6 +257,12 @@ type IdleDrainPlanApplier interface {
 // dispatch plan.
 type FetchRefillDispatchPlanApplier interface {
 	SendOutboundRequests()
+}
+
+// FetchRefillRunPlanApplier performs lock-held runtime actions named by a
+// timer/manual peer-ready fetch-refill run plan.
+type FetchRefillRunPlanApplier interface {
+	MirrorLegacyUnderLock()
 }
 
 // EmptyDrainJoinGate performs the caller-owned peer join throttle and
@@ -342,11 +377,12 @@ func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPla
 // peer-ready fetch refill.
 func PlanFetchRefillRun(in FetchRefillRunInput) FetchRefillRunPlan {
 	return FetchRefillRunPlan{
+		MirrorLegacy: true,
 		Dispatch: PlanFetchRefillDispatch(FetchRefillDispatchInput{
 			OutboundRequests: in.OutboundRequests,
 			Progress:         in.Progress,
 		}),
-	}
+	}.withLockedSteps()
 }
 
 // PlanLocalDrainIteration derives the high-level local drain loop branch. The
@@ -456,11 +492,48 @@ func (p FetchRefillDispatchPlan) withSteps() FetchRefillDispatchPlan {
 	return p
 }
 
+func (p FetchRefillRunPlan) withLockedSteps() FetchRefillRunPlan {
+	if p.MirrorLegacy {
+		p.LockedSteps = []FetchRefillRunStep{{Action: FetchRefillRunMirrorLegacy}}
+	}
+	return p
+}
+
 func (p EmptyDrainRunPlan) withLockedSteps() EmptyDrainRunPlan {
 	if p.MirrorLegacy {
 		p.LockedSteps = []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}}
 	}
 	return p
+}
+
+// ApplyFetchRefillRunLockedPlan executes the lock-held portion of a full
+// timer/manual peer-ready fetch-refill run.
+func ApplyFetchRefillRunLockedPlan(plan FetchRefillRunPlan, applier FetchRefillRunPlanApplier) FetchRefillRunApplyResult {
+	var result FetchRefillRunApplyResult
+	if applier == nil {
+		return result
+	}
+	if len(plan.LockedSteps) == 0 {
+		plan = plan.withLockedSteps()
+	}
+	for _, step := range plan.LockedSteps {
+		switch step.Action {
+		case FetchRefillRunMirrorLegacy:
+			applier.MirrorLegacyUnderLock()
+			result.Locked.AppliedSteps = append(result.Locked.AppliedSteps, step.Action)
+		default:
+			result.Locked.UnknownSteps = append(result.Locked.UnknownSteps, step.Action)
+		}
+	}
+	return result
+}
+
+// ApplyFetchRefillRunPostLockPlan executes the post-lock dispatch portion of a
+// full timer/manual peer-ready fetch-refill run.
+func ApplyFetchRefillRunPostLockPlan(plan FetchRefillRunPlan, applier FetchRefillDispatchPlanApplier) FetchRefillRunApplyResult {
+	return FetchRefillRunApplyResult{
+		Dispatch: ApplyFetchRefillDispatchPlan(plan.Dispatch, applier),
+	}
 }
 
 // ApplyEmptyDrainRunLockedPlan executes the lock-held portion of an empty
