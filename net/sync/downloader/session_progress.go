@@ -331,6 +331,14 @@ type EmptyDrainPreparationRunApplyResult struct {
 	Run         EmptyDrainRunPlan
 }
 
+// EmptyDrainPreparationLockedRunApplyResult groups empty-drain preparation,
+// run planning, and lock-held run application into one downloader-owned unit.
+type EmptyDrainPreparationLockedRunApplyResult struct {
+	Preparation EmptyDrainPreparationApplyResult
+	Run         EmptyDrainRunPlan
+	Locked      EmptyDrainRunApplyResult
+}
+
 // EmptyDrainRunApplyResult groups the lock-held, post-lock idle settlement,
 // and final dispatch phases for one empty local drain run.
 type EmptyDrainRunApplyResult struct {
@@ -799,6 +807,18 @@ func ApplyEmptyDrainPreparationRunPlan(in EmptyDrainPreparationInput, applier Em
 		OutboundRequests: result.Preparation.OutboundRequests,
 		Progress:         applier.EmptyDrainRunProgress(),
 	}, gate)
+	return result
+}
+
+// ApplyEmptyDrainPreparationLockedRunPlan applies lock-held empty-drain
+// preparation and lock-held run actions while returning the run plan for
+// post-lock idle settlement and dispatch.
+func ApplyEmptyDrainPreparationLockedRunPlan(in EmptyDrainPreparationInput, prepApplier EmptyDrainPreparationRunPlanApplier, gate EmptyDrainJoinGate, runApplier EmptyDrainRunPlanApplier) EmptyDrainPreparationLockedRunApplyResult {
+	var result EmptyDrainPreparationLockedRunApplyResult
+	prepared := ApplyEmptyDrainPreparationRunPlan(in, prepApplier, gate)
+	result.Preparation = prepared.Preparation
+	result.Run = prepared.Run
+	result.Locked = ApplyEmptyDrainRunLockedPlan(prepared.Run, runApplier)
 	return result
 }
 

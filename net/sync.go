@@ -1282,13 +1282,12 @@ drainLoop:
 			break drainLoop
 		case iteration.EmptyDrain:
 			prepareApplier := &syncEmptyDrainPreparationApplier{service: ss, now: now}
-			prepareResult := syncdl.ApplyEmptyDrainPreparationRunPlan(syncdl.EmptyDrainPreparationInput{
+			prepareResult := syncdl.ApplyEmptyDrainPreparationLockedRunPlan(syncdl.EmptyDrainPreparationInput{
 				Progress: ss.sessionProgressLocked(),
-			}, prepareApplier, syncEmptyDrainJoinGate{service: ss, now: now})
+			}, prepareApplier, syncEmptyDrainJoinGate{service: ss, now: now}, syncEmptyDrainRunApplier{service: ss})
 			out = append(out, prepareApplier.out...)
 			emptyDrain := prepareResult.Run
 			emptyDrainDispatch = emptyDrain
-			syncdl.ApplyEmptyDrainRunLockedPlan(emptyDrain, syncEmptyDrainRunApplier{service: ss})
 			ss.mu.Unlock()
 			syncdl.ApplyEmptyDrainRunPostLockPlan(emptyDrain, syncIdleDrainApplier{service: ss})
 			break drainLoop

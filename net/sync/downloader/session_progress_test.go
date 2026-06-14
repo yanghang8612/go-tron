@@ -664,6 +664,64 @@ func TestApplyEmptyDrainPreparationRunPlanUsesRefreshedProgress(t *testing.T) {
 	}
 }
 
+func TestApplyEmptyDrainPreparationLockedRunPlan(t *testing.T) {
+	prepApplier := &recordingEmptyDrainPreparationApplier{
+		outbound: 1,
+		progress: SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 5, Peers: []PeerProgress{
+			{Done: true},
+		}},
+	}
+	runApplier := new(recordingEmptyDrainRunApplier)
+	result := ApplyEmptyDrainPreparationLockedRunPlan(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 4, TargetHead: 5},
+	}, prepApplier, &recordingEmptyDrainJoinGate{allowed: true}, runApplier)
+
+	if !reflect.DeepEqual(prepApplier.begins, []uint64{5}) || prepApplier.refills != 1 || prepApplier.progressReads != 1 {
+		t.Fatalf("preparation side effects begins=%+v refills=%d progressReads=%d, want begin 5, one refill, one progress read",
+			prepApplier.begins, prepApplier.refills, prepApplier.progressReads)
+	}
+	if result.Preparation.OutboundRequests != 1 ||
+		!reflect.DeepEqual(result.Preparation.AppliedSteps, []EmptyDrainPreparationStepAction{EmptyDrainPrepareBeginBufferWait, EmptyDrainPrepareRefillFetchSlots}) ||
+		len(result.Preparation.UnknownSteps) != 0 {
+		t.Fatalf("locked preparation result = %+v, want begin/refill with one outbound request", result.Preparation)
+	}
+	if !result.Run.MirrorLegacy ||
+		!reflect.DeepEqual(result.Run.LockedSteps, []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}}) ||
+		!result.Run.Refill.Idle.Finish ||
+		!result.Run.Refill.Dispatch.SendOutboundRequests {
+		t.Fatalf("locked preparation run plan = %+v, want mirror, finish, dispatch", result.Run)
+	}
+	if runApplier.mirrors != 1 ||
+		!reflect.DeepEqual(result.Locked.Locked.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) ||
+		len(result.Locked.Locked.UnknownSteps) != 0 ||
+		len(result.Locked.Idle.AppliedSteps) != 0 ||
+		len(result.Locked.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("locked run apply = %+v mirrors=%d, want mirror-only lock-held apply", result.Locked, runApplier.mirrors)
+	}
+
+	nilPrepResult := ApplyEmptyDrainPreparationLockedRunPlan(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 4, TargetHead: 5},
+	}, nil, nil, runApplier)
+	if !reflect.DeepEqual(nilPrepResult, EmptyDrainPreparationLockedRunApplyResult{}) {
+		t.Fatalf("nil preparation locked run result = %+v, want empty", nilPrepResult)
+	}
+
+	prepApplier = &recordingEmptyDrainPreparationApplier{
+		outbound: 1,
+		progress: SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 5, Peers: []PeerProgress{
+			{Done: true},
+		}},
+	}
+	nilRunResult := ApplyEmptyDrainPreparationLockedRunPlan(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 4, TargetHead: 5},
+	}, prepApplier, nil, nil)
+	if nilRunResult.Preparation.OutboundRequests != 1 ||
+		nilRunResult.Run.LockedSteps[0].Action != EmptyDrainMirrorLegacy ||
+		len(nilRunResult.Locked.Locked.AppliedSteps) != 0 {
+		t.Fatalf("nil run applier result = %+v, want preparation/run plan without locked side effects", nilRunResult)
+	}
+}
+
 func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	applier := new(recordingEmptyDrainRunApplier)
 	result := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
