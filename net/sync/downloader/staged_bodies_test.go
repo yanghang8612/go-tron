@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -587,6 +588,62 @@ func TestReadStagedBodyDrainPlanRefreshesInvalidReadyBeforeDrain(t *testing.T) {
 	}
 	if len(got.Plan.Steps) != 3 || got.Plan.Steps[0].Action != StagedBodyDrainRefreshReady || got.Plan.Steps[1].Action != StagedBodyDrainRestoreBodies || got.Plan.Steps[2].Action != StagedBodyDrainPopBuffer {
 		t.Fatalf("steps = %+v, want refresh/restore/pop", got.Plan.Steps)
+	}
+}
+
+func TestReadAndApplyStagedBodyDrainPlan(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block7 := testBufferedBlock(7)
+	block8 := testBufferedBlock(8)
+	for _, block := range []*types.Block{block7, block8} {
+		if err := rawdb.WriteSyncStagedBlock(db, block); err != nil {
+			t.Fatalf("write staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block8.Number(), block8.Hash()); err != nil {
+		t.Fatalf("write ready progress: %v", err)
+	}
+	popBatch := BufferedBatch{Buffered: []BufferedBlock{
+		{Num: block7.Number(), Hash: block7.Hash()},
+		{Num: block8.Number(), Hash: block8.Hash()},
+	}}
+	applier := &recordingStagedBodyDrainApplier{popBatch: popBatch}
+
+	got := ReadAndApplyStagedBodyDrainPlan(db, block7.Number(), 10, applier)
+
+	if got.Read.Ready.Status != StagedBodyReadyLimitValid || got.Read.Ready.Limit != block8.Number() {
+		t.Fatalf("ready = %+v, want valid block8 frontier", got.Read.Ready)
+	}
+	wantPlan := StagedBodyDrainPlan{
+		RestoreLimit:  2,
+		CanDrain:      true,
+		ReadyLimit:    block8.Number(),
+		HasReadyLimit: true,
+		Steps: []StagedBodyDrainStep{
+			{Action: StagedBodyDrainRestoreBodies, From: block7.Number(), Limit: 2},
+			{Action: StagedBodyDrainPopBuffer, Next: block7.Number(), Limit: 2},
+		},
+	}
+	if !reflect.DeepEqual(got.Read.Plan, wantPlan) {
+		t.Fatalf("plan = %+v, want %+v", got.Read.Plan, wantPlan)
+	}
+	wantCalls := []recordedStagedBodyDrainCall{
+		{action: StagedBodyDrainRestoreBodies, from: block7.Number(), limit: 2},
+		{action: StagedBodyDrainPopBuffer, next: block7.Number(), limit: 2},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
+	}
+	if !got.Apply.HasStagedBodyRestore {
+		t.Fatalf("apply = %+v, want restore result marker", got.Apply)
+	}
+	if !reflect.DeepEqual(got.Batch, popBatch) || !reflect.DeepEqual(got.Apply.Batch, popBatch) {
+		t.Fatalf("batch = %+v apply=%+v, want %+v", got.Batch, got.Apply.Batch, popBatch)
+	}
+
+	nilApplied := ReadAndApplyStagedBodyDrainPlan(db, block7.Number(), 10, nil)
+	if nilApplied.Read.Ready.Status != StagedBodyReadyLimitValid || len(nilApplied.Apply.AppliedSteps) != 0 || len(nilApplied.Batch.Buffered) != 0 {
+		t.Fatalf("nil applier result = %+v, want read plan without side effects", nilApplied)
 	}
 }
 

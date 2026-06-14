@@ -97,6 +97,14 @@ type StagedBodyDrainReadPlan struct {
 	Plan  StagedBodyDrainPlan
 }
 
+// StagedBodyDrainRunResult is the combined read/apply outcome for one local
+// staged-body drain attempt.
+type StagedBodyDrainRunResult struct {
+	Read  StagedBodyDrainReadPlan
+	Apply StagedBodyDrainApplyResult
+	Batch BufferedBatch
+}
+
 // Valid reports whether the row can cap a local import drain.
 func (l StagedBodyReadyLimit) Valid() bool {
 	return l.Status == StagedBodyReadyLimitValid
@@ -272,6 +280,19 @@ func ReadStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int) Stag
 	return StagedBodyDrainReadPlan{
 		Ready: ready,
 		Plan:  PlanStagedBodyDrain(next, max, ready),
+	}
+}
+
+// ReadAndApplyStagedBodyDrainPlan reads the persisted ready frontier, derives
+// the downloader-owned local drain schedule, and dispatches that schedule to
+// the caller's persistence/runtime adapter.
+func ReadAndApplyStagedBodyDrainPlan(db ethdb.KeyValueReader, next uint64, max int, applier StagedBodyDrainPlanApplier) StagedBodyDrainRunResult {
+	read := ReadStagedBodyDrainPlan(db, next, max)
+	apply := ApplyStagedBodyDrainPlan(read.Plan, applier)
+	return StagedBodyDrainRunResult{
+		Read:  read,
+		Apply: apply,
+		Batch: apply.Batch,
 	}
 }
 

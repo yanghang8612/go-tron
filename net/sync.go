@@ -1200,22 +1200,15 @@ func (ss *SyncService) importBatchLimitLocked() int {
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.BufferedBatch {
 	next := ss.chain.CurrentBlock().Number() + 1
-	drain := ss.readStagedBodyDrainPlan(next)
-	ss.logStagedBodyReadyDrainLimit(drain.Ready)
-	result := syncdl.ApplyStagedBodyDrainPlan(drain.Plan, syncStagedBodyDrainApplier{service: ss, now: now})
-	return result.Batch
-}
-
-func (ss *SyncService) readStagedBodyDrainPlan(next uint64) syncdl.StagedBodyDrainReadPlan {
 	max := ss.importBatchLimitLocked()
-	if ss == nil || ss.chain == nil {
-		return syncdl.ReadStagedBodyDrainPlan(nil, next, max)
+	var result syncdl.StagedBodyDrainRunResult
+	if db := ss.chain.DB(); db != nil {
+		result = syncdl.ReadAndApplyStagedBodyDrainPlan(db, next, max, syncStagedBodyDrainApplier{service: ss, now: now})
+	} else {
+		result = syncdl.ReadAndApplyStagedBodyDrainPlan(nil, next, max, syncStagedBodyDrainApplier{service: ss, now: now})
 	}
-	db := ss.chain.DB()
-	if db == nil {
-		return syncdl.ReadStagedBodyDrainPlan(nil, next, max)
-	}
-	return syncdl.ReadStagedBodyDrainPlan(db, next, max)
+	ss.logStagedBodyReadyDrainLimit(result.Read.Ready)
+	return result.Batch
 }
 
 func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReadyLimit) {
