@@ -1839,9 +1839,29 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	if got := deletedHeadBalanceRPC["result"]; got != snapshotTestSunToWeiHex(0) {
 		t.Fatalf("eth_getBalance deleted-account block2 result = %v, want %s", got, snapshotTestSunToWeiHex(0))
 	}
+	recreatedBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x1"})
+	if got := recreatedBalanceRPC["result"]; got != snapshotTestSunToWeiHex(recreatedBalance1) {
+		t.Fatalf("eth_getBalance recreated-account block1 result = %v, want %s", got, snapshotTestSunToWeiHex(recreatedBalance1))
+	}
+	recreatedHeadBalanceRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getBalance", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x2"})
+	if got := recreatedHeadBalanceRPC["result"]; got != snapshotTestSunToWeiHex(recreatedBalance2) {
+		t.Fatalf("eth_getBalance recreated-account block2 result = %v, want %s", got, snapshotTestSunToWeiHex(recreatedBalance2))
+	}
+	recreatedOldCodeRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getCode", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x1"})
+	if got := recreatedOldCodeRPC["result"]; got != "0x"+hex.EncodeToString(archiveCode1) {
+		t.Fatalf("eth_getCode recreated block1 result = %v, want 0x%s", got, hex.EncodeToString(archiveCode1))
+	}
+	recreatedNewCodeRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getCode", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x2"})
+	if got := recreatedNewCodeRPC["result"]; got != "0x"+hex.EncodeToString(archiveCode2) {
+		t.Fatalf("eth_getCode recreated block2 result = %v, want 0x%s", got, hex.EncodeToString(archiveCode2))
+	}
 	recreatedOldSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotB.Bytes()), "0x1"})
 	if got := recreatedOldSlotRPC["result"]; got != "0x"+hex.EncodeToString(recreatedOldB.Bytes()) {
 		t.Fatalf("eth_getStorageAt recreated old slotB block1 result = %v, want 0x%s", got, hex.EncodeToString(recreatedOldB.Bytes()))
+	}
+	recreatedNewSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotA.Bytes()), "0x2"})
+	if got := recreatedNewSlotRPC["result"]; got != "0x"+hex.EncodeToString(recreatedNewA.Bytes()) {
+		t.Fatalf("eth_getStorageAt recreated new slotA block2 result = %v, want 0x%s", got, hex.EncodeToString(recreatedNewA.Bytes()))
 	}
 	recreatedLeakedSlotRPC := postSnapshotTestRPC(t, rpcServer.URL, "eth_getStorageAt", []any{"0x" + hex.EncodeToString(recreatedAddr.Bytes()), "0x" + hex.EncodeToString(recreatedSlotB.Bytes()), "0x2"})
 	if got := recreatedLeakedSlotRPC["result"]; got != "0x"+hex.EncodeToString(common.Hash{}.Bytes()) {
