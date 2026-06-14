@@ -260,6 +260,13 @@ type PostInventorySettlementStep struct {
 	Action PostInventorySettlementStepAction
 }
 
+// PostInventorySettlementApplyResult records the settlement steps applied after
+// accepting a peer inventory response.
+type PostInventorySettlementApplyResult struct {
+	AppliedSteps []PostInventorySettlementStepAction
+	UnknownSteps []PostInventorySettlementStepAction
+}
+
 // PostInventorySettlementPlan describes the session-level action after an
 // inventory response has been queued and fetch slots have been refilled.
 type PostInventorySettlementPlan struct {
@@ -534,9 +541,10 @@ func (p PostInventorySettlementPlan) withSteps() PostInventorySettlementPlan {
 
 // ApplyPostInventorySettlementLockedPlan executes the lock-held settlement
 // steps for a post-inventory plan.
-func ApplyPostInventorySettlementLockedPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) {
+func ApplyPostInventorySettlementLockedPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) PostInventorySettlementApplyResult {
+	var result PostInventorySettlementApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.LockedSteps) == 0 {
 		plan = plan.withSteps()
@@ -545,17 +553,23 @@ func ApplyPostInventorySettlementLockedPlan(plan PostInventorySettlementPlan, ap
 		switch step.Action {
 		case PostInventoryReset:
 			applier.ResetSyncUnderLock()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case PostInventoryMirror:
 			applier.MirrorLegacyUnderLock()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyPostInventorySettlementAfterDispatchPlan executes the post-dispatch
 // settlement steps for a post-inventory plan.
-func ApplyPostInventorySettlementAfterDispatchPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) {
+func ApplyPostInventorySettlementAfterDispatchPlan(plan PostInventorySettlementPlan, applier PostInventorySettlementPlanApplier) PostInventorySettlementApplyResult {
+	var result PostInventorySettlementApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.AfterDispatchSteps) == 0 {
 		plan = plan.withSteps()
@@ -564,10 +578,15 @@ func ApplyPostInventorySettlementAfterDispatchPlan(plan PostInventorySettlementP
 		switch step.Action {
 		case PostInventoryTryFindPeer:
 			applier.TryFindSyncPeer()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case PostInventoryFinish:
 			applier.FinishSync()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // EstimatedRemaining reports the advisory remaining block count for status and

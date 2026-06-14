@@ -535,8 +535,8 @@ func TestApplyPostInventorySettlementPlan(t *testing.T) {
 			{Action: PostInventoryFinish},
 		},
 	}
-	ApplyPostInventorySettlementLockedPlan(plan, applier)
-	ApplyPostInventorySettlementAfterDispatchPlan(plan, applier)
+	lockedResult := ApplyPostInventorySettlementLockedPlan(plan, applier)
+	afterResult := ApplyPostInventorySettlementAfterDispatchPlan(plan, applier)
 
 	want := []PostInventorySettlementStepAction{
 		PostInventoryReset,
@@ -547,16 +547,36 @@ func TestApplyPostInventorySettlementPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("post-inventory calls = %+v, want %+v", applier.calls, want)
 	}
+	if !reflect.DeepEqual(lockedResult.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryReset, PostInventoryMirror}) ||
+		!reflect.DeepEqual(lockedResult.UnknownSteps, []PostInventorySettlementStepAction{PostInventorySettlementStepAction(255)}) {
+		t.Fatalf("locked post-inventory result = %+v, want reset/mirror applied and unknown [255]", lockedResult)
+	}
+	if !reflect.DeepEqual(afterResult.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryTryFindPeer, PostInventoryFinish}) ||
+		!reflect.DeepEqual(afterResult.UnknownSteps, []PostInventorySettlementStepAction{PostInventorySettlementStepAction(255)}) {
+		t.Fatalf("after-dispatch post-inventory result = %+v, want try-find/finish applied and unknown [255]", afterResult)
+	}
 
 	applier.calls = nil
-	ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Mirror: true}, applier)
-	ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{Finish: true}, applier)
+	lockedResult = ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Mirror: true}, applier)
+	afterResult = ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{Finish: true}, applier)
 	want = []PostInventorySettlementStepAction{PostInventoryMirror, PostInventoryFinish}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("fallback post-inventory calls = %+v, want %+v", applier.calls, want)
 	}
-	ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Reset: true}, nil)
-	ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{TryFindPeer: true}, nil)
+	if !reflect.DeepEqual(lockedResult.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryMirror}) ||
+		len(lockedResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback locked post-inventory result = %+v, want mirror applied", lockedResult)
+	}
+	if !reflect.DeepEqual(afterResult.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryFinish}) ||
+		len(afterResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback after-dispatch post-inventory result = %+v, want finish applied", afterResult)
+	}
+	if nilResult := ApplyPostInventorySettlementLockedPlan(PostInventorySettlementPlan{Reset: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil locked post-inventory result = %+v, want empty", nilResult)
+	}
+	if nilResult := ApplyPostInventorySettlementAfterDispatchPlan(PostInventorySettlementPlan{TryFindPeer: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil after-dispatch post-inventory result = %+v, want empty", nilResult)
+	}
 }
 
 func TestSessionProgressShouldFinish(t *testing.T) {
