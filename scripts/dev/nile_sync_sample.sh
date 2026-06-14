@@ -1107,6 +1107,7 @@ ancient_tables = ancient_table_stats(datadir)
 snapshot_buckets = snapshot_bucket_stats(datadir)
 derived_index, derived_index_files = snapshot_derived_index_stats(datadir)
 cold_archive = ancient + snapshot
+datadir_other = total - chaindata - ancient - snapshot - replay
 bytes_per_block = float(total) / height if height > 0 else 0.0
 chaindata_bytes_per_block = float(chaindata) / height if height > 0 else 0.0
 cold_archive_bytes_per_block = float(cold_archive) / height if height > 0 else 0.0
@@ -1200,6 +1201,34 @@ interval_detailed_positive_disk_growth_bytes = int(sum(nonnegative(value) for _,
 interval_disk_growth_primary_detailed, interval_disk_growth_primary_detailed_bytes, interval_disk_growth_primary_detailed_share = disk_growth_primary(
     detailed_growth_candidates,
     interval_detailed_positive_disk_growth_bytes,
+)
+current_detailed_disk_candidates = [
+    ("chaindata.sst", chaindata_files["sst"]["bytes"]),
+    ("chaindata.wal", chaindata_files["wal"]["bytes"]),
+    ("chaindata.log", chaindata_files["log"]["bytes"]),
+    ("chaindata.manifest", chaindata_files["manifest"]["bytes"]),
+    ("chaindata.options", chaindata_files["options"]["bytes"]),
+    ("chaindata.other", chaindata_files["other"]["bytes"]),
+    ("ancient.bodies", ancient_tables["bodies"]["bytes"]),
+    ("ancient.txInfos", ancient_tables["txInfos"]["bytes"]),
+    ("ancient.stateRoots", ancient_tables["stateRoots"]["bytes"]),
+    ("ancient.other", ancient_tables["other"]["bytes"]),
+    ("snapshot.root", snapshot_buckets["root"]["bytes"]),
+    ("snapshot.latest", snapshot_buckets["latest"]["bytes"]),
+    ("snapshot.history", snapshot_buckets["history"]["bytes"]),
+    ("snapshot.chain", snapshot_buckets["chain"]["bytes"]),
+    ("snapshot.log", snapshot_buckets["log"]["bytes"]),
+    ("snapshot.trace", snapshot_buckets["trace"]["bytes"]),
+    ("snapshot.commitment", snapshot_buckets["commitment"]["bytes"]),
+    ("snapshot.retired", snapshot_buckets["retired"]["bytes"]),
+    ("snapshot.other", snapshot_buckets["other"]["bytes"]),
+    ("replay", replay),
+    ("datadir.other", datadir_other),
+]
+current_detailed_positive_disk_bytes = int(sum(nonnegative(value) for _, value in current_detailed_disk_candidates))
+current_disk_primary_detailed, current_disk_primary_detailed_bytes, current_disk_primary_detailed_share = disk_growth_primary(
+    current_detailed_disk_candidates,
+    current_detailed_positive_disk_bytes,
 )
 datadir_bytes_per_second = float(datadir_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
 chaindata_bytes_per_second = float(chaindata_bytes_delta) / interval_seconds if interval_seconds > 0 else 0.0
@@ -1325,6 +1354,28 @@ soak_health = build_soak_health(
     stage_sync_bottleneck_lag,
     sync_log,
 )
+if interval_seconds > 0:
+    soak_efficiency_window = "interval"
+    soak_efficiency_blocks_per_second = interval_blocks_per_second
+    soak_efficiency_eta_seconds = interval_sync_eta_seconds
+    soak_efficiency_datadir_bytes_per_block = datadir_bytes_per_interval_block
+    soak_efficiency_hot_bytes_per_block = chaindata_bytes_per_interval_block
+    soak_efficiency_cold_archive_bytes_per_block = cold_archive_bytes_per_interval_block
+    soak_efficiency_derived_index_bytes_per_block = derived_index_bytes_per_interval_block
+    soak_efficiency_disk_primary = interval_disk_growth_primary_detailed
+    soak_efficiency_disk_primary_bytes = interval_disk_growth_primary_detailed_bytes
+    soak_efficiency_disk_primary_share = interval_disk_growth_primary_detailed_share
+else:
+    soak_efficiency_window = "cumulative"
+    soak_efficiency_blocks_per_second = blocks_per_second
+    soak_efficiency_eta_seconds = sync_eta_seconds
+    soak_efficiency_datadir_bytes_per_block = bytes_per_block
+    soak_efficiency_hot_bytes_per_block = chaindata_bytes_per_block
+    soak_efficiency_cold_archive_bytes_per_block = cold_archive_bytes_per_block
+    soak_efficiency_derived_index_bytes_per_block = derived_index_bytes_per_block
+    soak_efficiency_disk_primary = current_disk_primary_detailed
+    soak_efficiency_disk_primary_bytes = current_disk_primary_detailed_bytes
+    soak_efficiency_disk_primary_share = current_disk_primary_detailed_share
 
 row = {
     "unix": now,
@@ -1536,6 +1587,20 @@ row = {
     "intervalStageChainFreezerBlocksPerSecond": interval_stage_chain_freezer_rate,
     "intervalStageSnapshotEventLogBuildBlocks": interval_stage_snapshot_event_log_build,
     "intervalStageSnapshotEventLogBuildBlocksPerSecond": interval_stage_snapshot_event_log_build_rate,
+    "soakEfficiencyWindow": soak_efficiency_window,
+    "soakEfficiencyStatus": restart_recovery_status,
+    "soakEfficiencyBlocksPerSecond": soak_efficiency_blocks_per_second,
+    "soakEfficiencyEtaSeconds": soak_efficiency_eta_seconds,
+    "soakEfficiencyDatadirBytesPerBlock": soak_efficiency_datadir_bytes_per_block,
+    "soakEfficiencyHotBytesPerBlock": soak_efficiency_hot_bytes_per_block,
+    "soakEfficiencyColdArchiveBytesPerBlock": soak_efficiency_cold_archive_bytes_per_block,
+    "soakEfficiencyDerivedIndexBytesPerBlock": soak_efficiency_derived_index_bytes_per_block,
+    "soakEfficiencyDiskPrimary": soak_efficiency_disk_primary,
+    "soakEfficiencyDiskPrimaryBytes": soak_efficiency_disk_primary_bytes,
+    "soakEfficiencyDiskPrimaryShare": soak_efficiency_disk_primary_share,
+    "soakEfficiencyStageBottleneck": stage_sync_bottleneck,
+    "soakEfficiencyStageBottleneckLagBlocks": stage_sync_bottleneck_lag,
+    "soakEfficiencyStageBottleneckLagShare": stage_sync_bottleneck_lag_share,
     "ancientFiles": int(ancient_files),
     "snapshotFiles": int(snapshot_files),
     "coldArchiveFiles": int(ancient_files) + int(snapshot_files),

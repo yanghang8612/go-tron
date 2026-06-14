@@ -110,7 +110,18 @@ and datadir-other bytes; use it to spot whether interval growth is driven by
 SST/WAL, freezer tables, or derived snapshot indexes. Cold archive and derived
 index shares are overlapping diagnostic views for archive/index growth; the
 interval hot/cold ratios compare positive cold/index growth against positive
-Pebble hot growth. Rows also include
+Pebble hot growth. Rows also include a compact operator summary:
+`soakEfficiencyWindow`, `soakEfficiencyStatus`,
+`soakEfficiencyBlocksPerSecond`, `soakEfficiencyEtaSeconds`,
+`soakEfficiencyDatadirBytesPerBlock`, `soakEfficiencyHotBytesPerBlock`,
+`soakEfficiencyColdArchiveBytesPerBlock`,
+`soakEfficiencyDerivedIndexBytesPerBlock`, `soakEfficiencyDiskPrimary`,
+`soakEfficiencyDiskPrimaryBytes`, `soakEfficiencyDiskPrimaryShare`,
+`soakEfficiencyStageBottleneck`,
+`soakEfficiencyStageBottleneckLagBlocks`, and
+`soakEfficiencyStageBottleneckLagShare`. When a previous JSONL sample exists,
+these `soakEfficiency*` fields summarize the latest interval; otherwise they
+fall back to cumulative sync and current disk distribution. Rows also include
 `coldToHotBytesRatio`,
 `derivedIndexToHotBytesRatio`, `chaindataSSTToHotBytesRatio`,
 `chaindataWALToHotBytesRatio`, `chaindataWALToSSTBytesRatio`,
