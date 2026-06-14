@@ -1145,6 +1145,62 @@ func TestCheckSyncPipelineProgressOrderFromDBReportsReadErrors(t *testing.T) {
 	}
 }
 
+func TestPlanSyncPipelineProgressCursor(t *testing.T) {
+	hash := tcommon.Hash{0x0a}
+	check := SyncPipelineProgressOrderCheckResult{
+		Rows: []rawdb.StageProgress{
+			{Stage: rawdb.StageSyncBodies, BlockNum: 12, BlockHash: hash, HasBlockHash: true},
+			{Stage: rawdb.StageSyncImport, BlockNum: 10, BlockHash: hash, HasBlockHash: true},
+			{Stage: rawdb.StageSyncExecution, BlockNum: 10, BlockHash: hash, HasBlockHash: true},
+		},
+	}
+
+	got := PlanSyncPipelineProgressCursor(check)
+	if got.StageRows != 3 || !got.HasLast || got.LastStage != rawdb.StageSyncExecution ||
+		got.LastBlock != 10 || got.LastHash != hash || !got.LastHasHash ||
+		!got.HasNext || got.NextStage != rawdb.StageSyncCommitment ||
+		got.Complete || got.HasBlocked || got.Interrupted {
+		t.Fatalf("cursor = %+v, want execution cursor continuing at commitment", got)
+	}
+
+	check.Rows = append(check.Rows,
+		rawdb.StageProgress{Stage: rawdb.StageSyncCommitment, BlockNum: 10, BlockHash: hash, HasBlockHash: true},
+		rawdb.StageProgress{Stage: rawdb.StageSyncFinish, BlockNum: 10, BlockHash: hash, HasBlockHash: true},
+	)
+	got = PlanSyncPipelineProgressCursor(check)
+	if !got.Complete || got.HasNext || got.LastStage != rawdb.StageSyncFinish {
+		t.Fatalf("complete cursor = %+v, want finish complete", got)
+	}
+
+	check = SyncPipelineProgressOrderCheckResult{
+		Rows: []rawdb.StageProgress{
+			{Stage: rawdb.StageSyncBodies, BlockNum: 12},
+			{Stage: rawdb.StageSyncBodiesReady, BlockNum: 12},
+			{Stage: rawdb.StageSyncImport, BlockNum: 12},
+			{Stage: rawdb.StageSyncExecution, BlockNum: 8},
+			{Stage: rawdb.StageSyncCommitment, BlockNum: 10},
+		},
+		Issues: []SyncPipelineProgressOrderIssue{{
+			Downstream:      rawdb.StageSyncCommitment,
+			DownstreamBlock: 10,
+			Upstream:        rawdb.StageSyncExecution,
+			UpstreamBlock:   8,
+		}},
+	}
+	got = PlanSyncPipelineProgressCursor(check)
+	if !got.HasBlocked || !got.HasNext || got.NextStage != rawdb.StageSyncCommitment ||
+		!got.HasLast || got.LastStage != rawdb.StageSyncExecution || got.Complete {
+		t.Fatalf("blocked cursor = %+v, want blocked at commitment with execution as last stage", got)
+	}
+
+	got = PlanSyncPipelineProgressCursor(SyncPipelineProgressOrderCheckResult{
+		ReadErrors: []SyncPipelineProgressOrderReadError{{Stage: rawdb.StageSyncBodies}},
+	})
+	if !got.Interrupted || got.ErrorStage != rawdb.StageSyncBodies || got.HasNext || got.HasLast {
+		t.Fatalf("interrupted cursor = %+v, want read-error cursor", got)
+	}
+}
+
 func TestRepairSyncPipelineProgressOrderFromDBDeletesDownstreamTail(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	hash := tcommon.Hash{0x07}

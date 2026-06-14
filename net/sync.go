@@ -592,6 +592,7 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 	repair := result.SyncPipelineRepairResult
 	restore := result.StagedBodyRestore
 	orderRepair := result.SyncPipelineOrderRepair
+	cursor := result.SyncPipelineCursor
 	orderIssueCount := len(result.SyncPipelineOrderIssues)
 	orderReadErrorCount := len(result.SyncPipelineOrderErrors)
 	var firstOrderIssue string
@@ -624,6 +625,18 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupPipelineOrderRepairInterrupted", orderRepair.Interrupted,
 		"syncStartupPipelineOrderRepairErrorStage", orderRepair.ErrorStage,
 		"syncStartupPipelineOrderRepairRows", len(orderRepair.Repairs),
+		"syncStartupPipelineCursorChecked", result.HasSyncPipelineCursor,
+		"syncStartupPipelineCursorComplete", cursor.Complete,
+		"syncStartupPipelineCursorRows", cursor.StageRows,
+		"syncStartupPipelineCursorHasLast", cursor.HasLast,
+		"syncStartupPipelineCursorLastStage", cursor.LastStage,
+		"syncStartupPipelineCursorLastBlock", cursor.LastBlock,
+		"syncStartupPipelineCursorLastHasHash", cursor.LastHasHash,
+		"syncStartupPipelineCursorHasNext", cursor.HasNext,
+		"syncStartupPipelineCursorNextStage", cursor.NextStage,
+		"syncStartupPipelineCursorBlocked", cursor.HasBlocked,
+		"syncStartupPipelineCursorInterrupted", cursor.Interrupted,
+		"syncStartupPipelineCursorErrorStage", cursor.ErrorStage,
 		"syncStartupStagedRestored", restore.Restored,
 		"syncStartupStagedTargetHead", restore.TargetHead,
 		"syncStartupStagedNextExpected", restore.NextExpected,

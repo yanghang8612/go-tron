@@ -113,6 +113,25 @@ type SyncPipelineProgressOrderCheckResult struct {
 	ReadErrors []SyncPipelineProgressOrderReadError
 }
 
+// SyncPipelineProgressCursor is the restart cursor derived from the repaired
+// full sync pipeline rows. It names the downstream-most persisted stage and
+// the next stage the downloader should expect to advance.
+type SyncPipelineProgressCursor struct {
+	StageRows    int
+	HasLast      bool
+	LastStage    rawdb.StageID
+	LastBlock    uint64
+	LastHash     tcommon.Hash
+	LastHasHash  bool
+	HasNext      bool
+	NextStage    rawdb.StageID
+	Complete     bool
+	HasBlocked   bool
+	BlockedIssue SyncPipelineProgressOrderIssue
+	Interrupted  bool
+	ErrorStage   rawdb.StageID
+}
+
 // SyncPipelineProgressOrderRepairResult is the DB-backed startup repair result
 // for full sync-stage ordering.
 type SyncPipelineProgressOrderRepairResult struct {
@@ -1217,6 +1236,71 @@ func CheckSyncPipelineProgressOrderFromDB(db ethdb.KeyValueReader, opts SyncPipe
 	}
 	result.Issues = CheckSyncPipelineProgressOrder(rows, opts)
 	return result
+}
+
+// PlanSyncPipelineProgressCursor derives the startup continuation cursor from
+// already-checked full sync pipeline rows. Missing body-ready rows are tolerated
+// the same way the order check tolerates them: once a downstream stage exists,
+// it becomes the cursor even if an earlier optional diagnostic row is absent.
+func PlanSyncPipelineProgressCursor(check SyncPipelineProgressOrderCheckResult) SyncPipelineProgressCursor {
+	cursor := SyncPipelineProgressCursor{StageRows: len(check.Rows)}
+	if len(check.ReadErrors) > 0 {
+		cursor.Interrupted = true
+		cursor.ErrorStage = check.ReadErrors[0].Stage
+		return cursor
+	}
+	rows := make(map[rawdb.StageID]rawdb.StageProgress, len(check.Rows))
+	for _, row := range check.Rows {
+		rows[row.Stage] = row
+	}
+	stages := FullSyncPipelineProgressStages()
+	if len(check.Issues) > 0 {
+		cursor.HasBlocked = true
+		cursor.BlockedIssue = check.Issues[0]
+		cursor.HasNext = true
+		cursor.NextStage = check.Issues[0].Downstream
+		cursor.setLastBefore(stages, rows, check.Issues[0].Downstream)
+		return cursor
+	}
+	lastIndex := -1
+	for i, stage := range stages {
+		row, ok := rows[stage]
+		if !ok {
+			continue
+		}
+		lastIndex = i
+		cursor.setLast(row)
+	}
+	if lastIndex == len(stages)-1 && lastIndex >= 0 {
+		cursor.Complete = true
+		return cursor
+	}
+	cursor.HasNext = true
+	if lastIndex+1 >= 0 && lastIndex+1 < len(stages) {
+		cursor.NextStage = stages[lastIndex+1]
+	}
+	return cursor
+}
+
+func (c *SyncPipelineProgressCursor) setLastBefore(stages []rawdb.StageID, rows map[rawdb.StageID]rawdb.StageProgress, before rawdb.StageID) {
+	for _, stage := range stages {
+		if stage == before {
+			return
+		}
+		row, ok := rows[stage]
+		if !ok {
+			continue
+		}
+		c.setLast(row)
+	}
+}
+
+func (c *SyncPipelineProgressCursor) setLast(row rawdb.StageProgress) {
+	c.HasLast = true
+	c.LastStage = row.Stage
+	c.LastBlock = row.BlockNum
+	c.LastHash = row.BlockHash
+	c.LastHasHash = row.HasBlockHash
 }
 
 // RepairSyncPipelineProgressOrderFromDB repairs detected full-pipeline ordering

@@ -248,6 +248,10 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	if !reflect.DeepEqual(result.SyncPipelineOrderCheck.Issues, orderIssues) || len(result.SyncPipelineOrderErrors) != 0 {
 		t.Fatalf("sync pipeline order check = %+v errors=%+v, want issues without read errors", result.SyncPipelineOrderCheck, result.SyncPipelineOrderErrors)
 	}
+	if !result.HasSyncPipelineCursor || !result.SyncPipelineCursor.HasBlocked ||
+		result.SyncPipelineCursor.NextStage != rawdb.StageSyncExecution {
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want blocked cursor at execution", result.SyncPipelineCursor, result.HasSyncPipelineCursor)
+	}
 
 	if nilResult := ApplySessionStartupPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.HasSyncPipelineOrder {
 		t.Fatalf("nil applier result = %+v, want empty", nilResult)
@@ -321,6 +325,13 @@ func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *tes
 	}
 	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want checked with no issues", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder)
+	}
+	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor || cursor.StageRows != 4 ||
+		!cursor.HasLast || cursor.LastStage != rawdb.StageSyncExecution ||
+		cursor.LastBlock != block2.Number() || cursor.LastHash != block2.Hash() ||
+		!cursor.HasNext || cursor.NextStage != rawdb.StageSyncCommitment ||
+		cursor.Complete || cursor.HasBlocked || cursor.Interrupted {
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want execution cursor continuing at commitment", cursor, result.HasSyncPipelineCursor)
 	}
 	if restore := result.StagedBodyRestore; restore.Restored != 2 || !restore.NeedPruneTail || restore.PruneFrom != 5 ||
 		restore.TargetHead != 6 || restore.NextExpected != 5 || !restore.HaveLastRestored ||

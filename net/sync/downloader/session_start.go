@@ -120,6 +120,8 @@ type SessionStartupApplyResult struct {
 	SyncPipelineOrderIssues    []SyncPipelineProgressOrderIssue
 	SyncPipelineOrderErrors    []SyncPipelineProgressOrderReadError
 	HasSyncPipelineOrder       bool
+	SyncPipelineCursor         SyncPipelineProgressCursor
+	HasSyncPipelineCursor      bool
 	SyncPipelineOrderRepair    SyncPipelineProgressOrderRepairResult
 	HasSyncPipelineOrderRepair bool
 	StagedBodyRestore          StagedBodyRestoreResult
@@ -234,6 +236,8 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.SyncPipelineOrderIssues = result.SyncPipelineOrderCheck.Issues
 			result.SyncPipelineOrderErrors = result.SyncPipelineOrderCheck.ReadErrors
 			result.HasSyncPipelineOrder = true
+			result.SyncPipelineCursor = PlanSyncPipelineProgressCursor(result.SyncPipelineOrderCheck)
+			result.HasSyncPipelineCursor = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		default:
 			result.UnknownSteps = append(result.UnknownSteps, step.Action)
