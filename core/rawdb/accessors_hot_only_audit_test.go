@@ -404,6 +404,50 @@ func query(source *rawdb.ChainDB, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsBlockChainDBMethodHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type chain struct{}
+
+func (chain) DB() any { return nil }
+
+func query(chain chain, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(chain.DB(), tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want chain.DB() hot store rejected", offenders)
+	}
+}
+
+func TestColdArchiveAuditAllowsBlockChainChainDBMethodBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+type chain struct{}
+
+func (chain) ChainDB() *rawdb.ChainDB { return nil }
+
+func query(chain chain, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(chain.ChainDB(), tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want chain.ChainDB() boundary accepted", offenders)
+	}
+}
+
 func TestColdArchiveAuditRejectsTrustedNameOnHotStore(t *testing.T) {
 	root := writeAuditFixture(t, "app/offender.go", `package app
 
