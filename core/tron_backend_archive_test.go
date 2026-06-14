@@ -882,6 +882,9 @@ func TestArchiveQuery_ContractRecreateStorageGenerationUsesColdStateDomainChange
 			t.Fatalf("%s(%v) result = %v, want %s", method, params, got, want)
 		}
 	}
+	assertRPCResult("eth_getCode", []any{contractArg, "0x2"}, "0x"+hex.EncodeToString(codeA))
+	assertRPCResult("eth_getStorageAt", []any{contractArg, slotAArg, "0x2"}, "0x"+storageA0.Hex())
+	assertRPCResult("eth_getStorageAt", []any{contractArg, slotBArg, "0x2"}, "0x"+storageB0.Hex())
 	assertRPCResult("eth_getCode", []any{contractArg, "0x3"}, "0x")
 	assertRPCResult("eth_getStorageAt", []any{contractArg, slotAArg, "0x3"}, "0x"+(tcommon.Hash{}).Hex())
 	assertRPCResult("eth_getCode", []any{contractArg, "0x4"}, "0x"+hex.EncodeToString(codeB))
