@@ -340,20 +340,29 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 
 func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	applier := new(recordingEmptyDrainRunApplier)
-	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
+	result := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
 		{Action: EmptyDrainMirrorLegacy},
 		{Action: EmptyDrainRunStepAction(255)},
 	}}, applier)
 	if applier.mirrors != 1 {
 		t.Fatalf("mirror calls = %d, want 1", applier.mirrors)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) ||
+		!reflect.DeepEqual(result.UnknownSteps, []EmptyDrainRunStepAction{EmptyDrainRunStepAction(255)}) {
+		t.Fatalf("empty drain locked apply result = %+v, want mirror applied and unknown [255]", result)
+	}
 
 	applier.mirrors = 0
-	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, applier)
+	result = ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, applier)
 	if applier.mirrors != 1 {
 		t.Fatalf("fallback mirror calls = %d, want 1", applier.mirrors)
 	}
-	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, nil)
+	if !reflect.DeepEqual(result.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) || len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback empty drain locked apply result = %+v, want mirror applied", result)
+	}
+	if nilResult := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil empty drain locked apply result = %+v, want empty", nilResult)
+	}
 }
 
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {

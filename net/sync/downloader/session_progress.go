@@ -186,6 +186,13 @@ type EmptyDrainRunStep struct {
 	Action EmptyDrainRunStepAction
 }
 
+// EmptyDrainRunLockedApplyResult records the lock-held empty-drain steps
+// dispatched by the downloader planner.
+type EmptyDrainRunLockedApplyResult struct {
+	AppliedSteps []EmptyDrainRunStepAction
+	UnknownSteps []EmptyDrainRunStepAction
+}
+
 // EmptyDrainRunPlan groups the full downloader decision for one empty local
 // drain iteration.
 type EmptyDrainRunPlan struct {
@@ -428,9 +435,10 @@ func (p EmptyDrainRunPlan) withLockedSteps() EmptyDrainRunPlan {
 
 // ApplyEmptyDrainRunLockedPlan executes the lock-held portion of an empty
 // local drain run.
-func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunPlanApplier) {
+func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunPlanApplier) EmptyDrainRunLockedApplyResult {
+	var result EmptyDrainRunLockedApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.LockedSteps) == 0 {
 		plan = plan.withLockedSteps()
@@ -439,8 +447,12 @@ func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunP
 		switch step.Action {
 		case EmptyDrainMirrorLegacy:
 			applier.MirrorLegacyUnderLock()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain
