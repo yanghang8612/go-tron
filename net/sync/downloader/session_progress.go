@@ -173,12 +173,27 @@ type EmptyDrainJoinProbePlan struct {
 	CheckJoinAvailablePeers bool
 }
 
+// EmptyDrainRunStepAction names one lock-held operation after an empty local
+// drain has refilled peers and planned session settlement.
+type EmptyDrainRunStepAction uint8
+
+const (
+	EmptyDrainMirrorLegacy EmptyDrainRunStepAction = iota
+)
+
+// EmptyDrainRunStep is one lock-held operation for an empty local drain run.
+type EmptyDrainRunStep struct {
+	Action EmptyDrainRunStepAction
+}
+
 // EmptyDrainRunPlan groups the full downloader decision for one empty local
 // drain iteration.
 type EmptyDrainRunPlan struct {
 	JoinProbe                 EmptyDrainJoinProbePlan
 	JoinAvailablePeersAllowed bool
 	Refill                    EmptyDrainRefillPlan
+	MirrorLegacy              bool
+	LockedSteps               []EmptyDrainRunStep
 }
 
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
@@ -198,6 +213,12 @@ type FetchRefillDispatchPlanApplier interface {
 // availability check when the downloader decides a join probe is useful.
 type EmptyDrainJoinGate interface {
 	CheckJoinAvailablePeers(progress SessionProgress) bool
+}
+
+// EmptyDrainRunPlanApplier performs lock-held runtime actions named by an
+// empty-drain run plan.
+type EmptyDrainRunPlanApplier interface {
+	MirrorLegacyUnderLock()
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -350,6 +371,9 @@ func PlanEmptyDrainRefill(in EmptyDrainRefillInput) EmptyDrainRefillPlan {
 // unfinished sessions.
 func PlanEmptyDrainRun(in EmptyDrainRunInput, gate EmptyDrainJoinGate) EmptyDrainRunPlan {
 	joinProbe := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: in.Progress})
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return EmptyDrainRunPlan{}
+	}
 	joinAllowed := false
 	if joinProbe.CheckJoinAvailablePeers && gate != nil {
 		joinAllowed = gate.CheckJoinAvailablePeers(in.Progress)
@@ -357,12 +381,13 @@ func PlanEmptyDrainRun(in EmptyDrainRunInput, gate EmptyDrainJoinGate) EmptyDrai
 	return EmptyDrainRunPlan{
 		JoinProbe:                 joinProbe,
 		JoinAvailablePeersAllowed: joinAllowed,
+		MirrorLegacy:              true,
 		Refill: PlanEmptyDrainRefill(EmptyDrainRefillInput{
 			OutboundRequests:          in.OutboundRequests,
 			Progress:                  in.Progress,
 			JoinAvailablePeersAllowed: joinAllowed,
 		}),
-	}
+	}.withLockedSteps()
 }
 
 func (p IdleDrainPlan) withSteps() IdleDrainPlan {
@@ -392,6 +417,30 @@ func (p FetchRefillDispatchPlan) withSteps() FetchRefillDispatchPlan {
 		p.Steps = []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}}
 	}
 	return p
+}
+
+func (p EmptyDrainRunPlan) withLockedSteps() EmptyDrainRunPlan {
+	if p.MirrorLegacy {
+		p.LockedSteps = []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}}
+	}
+	return p
+}
+
+// ApplyEmptyDrainRunLockedPlan executes the lock-held portion of an empty
+// local drain run.
+func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunPlanApplier) {
+	if applier == nil {
+		return
+	}
+	if len(plan.LockedSteps) == 0 {
+		plan = plan.withLockedSteps()
+	}
+	for _, step := range plan.LockedSteps {
+		switch step.Action {
+		case EmptyDrainMirrorLegacy:
+			applier.MirrorLegacyUnderLock()
+		}
+	}
 }
 
 // ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain

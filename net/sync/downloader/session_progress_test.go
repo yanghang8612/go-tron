@@ -265,7 +265,9 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 		Progress:         complete,
 	}, gate)
 	want := EmptyDrainRunPlan{
-		JoinProbe: EmptyDrainJoinProbePlan{},
+		JoinProbe:    EmptyDrainJoinProbePlan{},
+		MirrorLegacy: true,
+		LockedSteps:  []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}},
 		Refill: EmptyDrainRefillPlan{
 			Idle: IdleDrainPlan{
 				Finish: true,
@@ -290,6 +292,8 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 	want = EmptyDrainRunPlan{
 		JoinProbe:                 EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: true},
 		JoinAvailablePeersAllowed: true,
+		MirrorLegacy:              true,
+		LockedSteps:               []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}},
 		Refill: EmptyDrainRefillPlan{
 			Idle: IdleDrainPlan{
 				JoinAvailablePeers: true,
@@ -310,7 +314,9 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 		Progress:         incomplete,
 	}, gate)
 	want = EmptyDrainRunPlan{
-		JoinProbe: EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: true},
+		JoinProbe:    EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: true},
+		MirrorLegacy: true,
+		LockedSteps:  []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}},
 		Refill: EmptyDrainRefillPlan{
 			Dispatch: FetchRefillDispatchPlan{
 				SendOutboundRequests: true,
@@ -330,6 +336,24 @@ func TestPlanEmptyDrainRun(t *testing.T) {
 	if gate.calls != 0 {
 		t.Fatalf("paused empty-drain called join gate %d times, want 0", gate.calls)
 	}
+}
+
+func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
+	applier := new(recordingEmptyDrainRunApplier)
+	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
+		{Action: EmptyDrainMirrorLegacy},
+		{Action: EmptyDrainRunStepAction(255)},
+	}}, applier)
+	if applier.mirrors != 1 {
+		t.Fatalf("mirror calls = %d, want 1", applier.mirrors)
+	}
+
+	applier.mirrors = 0
+	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, applier)
+	if applier.mirrors != 1 {
+		t.Fatalf("fallback mirror calls = %d, want 1", applier.mirrors)
+	}
+	ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, nil)
 }
 
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
@@ -612,6 +636,14 @@ type recordingFetchRefillDispatchApplier struct {
 
 func (a *recordingFetchRefillDispatchApplier) SendOutboundRequests() {
 	a.sent++
+}
+
+type recordingEmptyDrainRunApplier struct {
+	mirrors int
+}
+
+func (a *recordingEmptyDrainRunApplier) MirrorLegacyUnderLock() {
+	a.mirrors++
 }
 
 type recordingPostInventorySettlementApplier struct {

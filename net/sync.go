@@ -1264,7 +1264,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			}, syncEmptyDrainJoinGate{service: ss, now: now})
 			dispatch = emptyDrain.Refill.Dispatch
 			idle := emptyDrain.Refill.Idle
-			ss.mirrorLegacyLocked()
+			syncdl.ApplyEmptyDrainRunLockedPlan(emptyDrain, syncEmptyDrainRunApplier{service: ss})
 			ss.mu.Unlock()
 			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
 			break
@@ -1290,6 +1290,14 @@ type syncEmptyDrainJoinGate struct {
 
 func (g syncEmptyDrainJoinGate) CheckJoinAvailablePeers(progress syncdl.SessionProgress) bool {
 	return g.service.shouldJoinAvailablePeersLocked(g.now, progress)
+}
+
+type syncEmptyDrainRunApplier struct {
+	service *SyncService
+}
+
+func (a syncEmptyDrainRunApplier) MirrorLegacyUnderLock() {
+	a.service.mirrorLegacyLocked()
 }
 
 func (ss *SyncService) waitForDrain() {
