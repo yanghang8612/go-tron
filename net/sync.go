@@ -1622,33 +1622,49 @@ func (ss *SyncService) recordImportedBatch(plan syncdl.ImportedBatchProgressPlan
 	if !plan.OK {
 		return
 	}
-	applyResult := syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: ss})
-	ss.logImportedBatchProgressApplyResult(applyResult)
+	recordPlan := syncdl.PlanImportedBatchRecord(plan, totalElapsed)
+	recordResult := syncdl.ApplyImportedBatchRecordPlan(recordPlan, syncImportedBatchRecordApplier{service: ss})
+	ss.logImportedBatchRecordApplyResult(recordResult)
+}
+
+type syncImportedBatchRecordApplier struct {
+	service *SyncService
+}
+
+func (a syncImportedBatchRecordApplier) ApplyImportedBatchProgress(plan syncdl.ImportedBatchProgressPlan) syncdl.ImportedBatchProgressApplyResult {
+	return syncdl.ApplyImportedBatchProgressPlan(plan, syncImportedBatchProgressApplier{service: a.service})
+}
+
+func (a syncImportedBatchRecordApplier) RecordImportedBatchStats(blocks int, txs int, elapsed time.Duration) syncdl.ImportedBatchStatsRecordResult {
 	// RecordBlocks atomically (under stats.mu) appends the whole range's
 	// counters and decides whether the window has elapsed. applyBlock hooks
 	// have already contributed phase stats for the same applied range, so
 	// recording the range as one unit keeps block counts and phase totals
 	// aligned in the emitted sync summary.
-	snap, emit := ss.stats.RecordBlocks(
-		plan.StatsBlocks,
-		plan.StatsTransactions,
-		totalElapsed,
+	snap, emit := a.service.stats.RecordBlocks(
+		blocks,
+		txs,
+		elapsed,
 		time.Now(),
 		tsync.StatsReportInterval,
 	)
+	return syncdl.ImportedBatchStatsRecordResult{Snapshot: snap, Emit: emit}
+}
 
-	ss.mu.Lock()
+func (a syncImportedBatchRecordApplier) PrepareImportedBatchReport(plan syncdl.ImportedBatchProgressPlan, emit bool) syncdl.ImportedBatchReportPreparation {
+	a.service.mu.Lock()
 	var diag syncdl.Diagnostics
 	if emit {
-		diag = ss.snapshotDiagnosticsLocked().WithImportedBatchProgressPlan(plan)
+		diag = a.service.snapshotDiagnosticsLocked().WithImportedBatchProgressPlan(plan)
 	}
-	remain := ss.estimatedRemainLocked()
-	ss.mirrorLegacyLocked()
-	ss.mu.Unlock()
+	remain := a.service.estimatedRemainLocked()
+	a.service.mirrorLegacyLocked()
+	a.service.mu.Unlock()
+	return syncdl.ImportedBatchReportPreparation{Diagnostics: diag, Remaining: remain}
+}
 
-	if emit {
-		ss.reportSegment(snap, diag, plan.ReportHead, remain, plan.ReportPeer)
-	}
+func (a syncImportedBatchRecordApplier) ReportImportedBatchSegment(report syncdl.ImportedBatchRecordReport) {
+	a.service.reportSegment(report.Snapshot, report.Diagnostics, report.Head, report.Remaining, report.Peer)
 }
 
 type syncImportedBatchProgressApplier struct {
@@ -1706,6 +1722,13 @@ func (ss *SyncService) logImportedBatchProgressApplyResult(result syncdl.Importe
 	if result.WriteResult.ProgressError != nil {
 		syncLog.Warn("Persist sync stage progress rows failed", "rows", result.WriteProgressRows, "err", result.WriteResult.ProgressError)
 	}
+}
+
+func (ss *SyncService) logImportedBatchRecordApplyResult(result syncdl.ImportedBatchRecordApplyResult) {
+	for _, unknown := range result.UnknownSteps {
+		syncLog.Warn("Unknown imported batch record step", "step", unknown)
+	}
+	ss.logImportedBatchProgressApplyResult(result.ProgressApply)
 }
 
 func (ss *SyncService) stageSyncBody(block *types.Block, raw []byte) {
