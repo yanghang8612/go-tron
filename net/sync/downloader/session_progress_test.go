@@ -93,6 +93,25 @@ func TestPlanFetchRefillDispatch(t *testing.T) {
 	}
 }
 
+func TestPlanEmptyDrainJoinProbe(t *testing.T) {
+	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
+	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {
+		t.Fatalf("complete join probe = %+v, want no peer-join check", got)
+	}
+	incomplete := SessionProgress{Syncing: true, CurrentHead: 1, TargetHead: 2}
+	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: incomplete}); !got.CheckJoinAvailablePeers {
+		t.Fatalf("incomplete join probe = %+v, want peer-join check", got)
+	}
+	for name, progress := range map[string]SessionProgress{
+		"not syncing": {},
+		"paused":      {Syncing: true, Paused: true, CurrentHead: 1, TargetHead: 2},
+	} {
+		if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: progress}); got.CheckJoinAvailablePeers {
+			t.Fatalf("%s join probe = %+v, want no peer-join check", name, got)
+		}
+	}
+}
+
 func TestPlanEmptyDrainRefill(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	got := PlanEmptyDrainRefill(EmptyDrainRefillInput{

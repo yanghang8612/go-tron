@@ -44,6 +44,12 @@ type EmptyDrainRefillInput struct {
 	JoinAvailablePeersAllowed bool
 }
 
+// EmptyDrainJoinProbeInput is the lock-free state needed to decide whether an
+// empty local drain should spend time probing additional peers.
+type EmptyDrainJoinProbeInput struct {
+	Progress SessionProgress
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -92,6 +98,12 @@ type FetchRefillDispatchPlan struct {
 type EmptyDrainRefillPlan struct {
 	Idle     IdleDrainPlan
 	Dispatch FetchRefillDispatchPlan
+}
+
+// EmptyDrainJoinProbePlan tells SyncService whether it should evaluate the
+// peer-join throttle/availability gate before settling an empty local drain.
+type EmptyDrainJoinProbePlan struct {
+	CheckJoinAvailablePeers bool
 }
 
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
@@ -171,6 +183,17 @@ func PlanFetchRefillDispatch(in FetchRefillDispatchInput) FetchRefillDispatchPla
 	return FetchRefillDispatchPlan{
 		SendOutboundRequests: in.OutboundRequests > 0 && in.Progress.Syncing && !in.Progress.Paused,
 	}.withSteps()
+}
+
+// PlanEmptyDrainJoinProbe decides whether the caller should evaluate
+// peer-join availability before constructing the final empty-drain plan.
+// Paused/inactive sessions do nothing; finished sessions should go straight to
+// Finish without touching the join-throttle clock.
+func PlanEmptyDrainJoinProbe(in EmptyDrainJoinProbeInput) EmptyDrainJoinProbePlan {
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return EmptyDrainJoinProbePlan{}
+	}
+	return EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: !in.Progress.ShouldFinish()}
 }
 
 // PlanEmptyDrainRefill derives the full downloader decision after a local

@@ -645,10 +645,10 @@ func (ss *SyncService) joinAvailablePeers() {
 	}
 }
 
-func (ss *SyncService) shouldJoinAvailablePeersLocked(now time.Time) bool {
+func (ss *SyncService) shouldJoinAvailablePeersLocked(now time.Time, progress syncdl.SessionProgress) bool {
 	plan := syncdl.PlanPeerJoinAttempt(syncdl.PeerJoinAttemptInput{
 		HandlerAvailable: ss.handler != nil,
-		Progress:         ss.sessionProgressLocked(),
+		Progress:         progress,
 		MaxPeers:         maxParallelSyncPeers,
 		LastAttempt:      ss.lastPeerJoinAttempt,
 		Now:              now,
@@ -1123,8 +1123,9 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			progress := ss.sessionProgressLocked()
 			joinAllowed := false
-			if !progress.ShouldFinish() {
-				joinAllowed = ss.shouldJoinAvailablePeersLocked(now)
+			joinProbe := syncdl.PlanEmptyDrainJoinProbe(syncdl.EmptyDrainJoinProbeInput{Progress: progress})
+			if joinProbe.CheckJoinAvailablePeers {
+				joinAllowed = ss.shouldJoinAvailablePeersLocked(now, progress)
 			}
 			refill := syncdl.PlanEmptyDrainRefill(syncdl.EmptyDrainRefillInput{
 				OutboundRequests:          len(out),

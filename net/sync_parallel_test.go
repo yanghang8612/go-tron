@@ -653,13 +653,14 @@ func TestShouldJoinAvailablePeersThrottle(t *testing.T) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.syncing = true
-	if !ss.shouldJoinAvailablePeersLocked(now) {
+	progress := ss.sessionProgressLocked()
+	if !ss.shouldJoinAvailablePeersLocked(now, progress) {
 		t.Fatal("first join attempt should be allowed")
 	}
-	if ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval / 2)) {
+	if ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval/2), progress) {
 		t.Fatal("join attempt should be throttled")
 	}
-	if !ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval)) {
+	if !ss.shouldJoinAvailablePeersLocked(now.Add(peerJoinAttemptInterval), progress) {
 		t.Fatal("join attempt should be allowed after throttle interval")
 	}
 }
