@@ -236,6 +236,14 @@ type EmptyDrainRunLockedApplyResult struct {
 	UnknownSteps []EmptyDrainRunStepAction
 }
 
+// EmptyDrainRunApplyResult groups the lock-held, post-lock idle settlement,
+// and final dispatch phases for one empty local drain run.
+type EmptyDrainRunApplyResult struct {
+	Locked   EmptyDrainRunLockedApplyResult
+	Idle     IdleDrainApplyResult
+	Dispatch FetchRefillDispatchApplyResult
+}
+
 // EmptyDrainRunPlan groups the full downloader decision for one empty local
 // drain iteration.
 type EmptyDrainRunPlan struct {
@@ -538,8 +546,8 @@ func ApplyFetchRefillRunPostLockPlan(plan FetchRefillRunPlan, applier FetchRefil
 
 // ApplyEmptyDrainRunLockedPlan executes the lock-held portion of an empty
 // local drain run.
-func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunPlanApplier) EmptyDrainRunLockedApplyResult {
-	var result EmptyDrainRunLockedApplyResult
+func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunPlanApplier) EmptyDrainRunApplyResult {
+	var result EmptyDrainRunApplyResult
 	if applier == nil {
 		return result
 	}
@@ -550,12 +558,28 @@ func ApplyEmptyDrainRunLockedPlan(plan EmptyDrainRunPlan, applier EmptyDrainRunP
 		switch step.Action {
 		case EmptyDrainMirrorLegacy:
 			applier.MirrorLegacyUnderLock()
-			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			result.Locked.AppliedSteps = append(result.Locked.AppliedSteps, step.Action)
 		default:
-			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+			result.Locked.UnknownSteps = append(result.Locked.UnknownSteps, step.Action)
 		}
 	}
 	return result
+}
+
+// ApplyEmptyDrainRunPostLockPlan executes post-lock idle settlement for one
+// empty local drain run.
+func ApplyEmptyDrainRunPostLockPlan(plan EmptyDrainRunPlan, applier IdleDrainPlanApplier) EmptyDrainRunApplyResult {
+	return EmptyDrainRunApplyResult{
+		Idle: ApplyIdleDrainAfterRefillPlan(plan.Refill.Idle, applier),
+	}
+}
+
+// ApplyEmptyDrainRunDispatchPlan executes the final dispatch phase for one
+// empty local drain run.
+func ApplyEmptyDrainRunDispatchPlan(plan EmptyDrainRunPlan, applier FetchRefillDispatchPlanApplier) EmptyDrainRunApplyResult {
+	return EmptyDrainRunApplyResult{
+		Dispatch: ApplyFetchRefillDispatchPlan(plan.Refill.Dispatch, applier),
+	}
 }
 
 // ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain

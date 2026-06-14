@@ -353,8 +353,10 @@ func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	if applier.mirrors != 1 {
 		t.Fatalf("mirror calls = %d, want 1", applier.mirrors)
 	}
-	if !reflect.DeepEqual(result.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) ||
-		!reflect.DeepEqual(result.UnknownSteps, []EmptyDrainRunStepAction{EmptyDrainRunStepAction(255)}) {
+	if !reflect.DeepEqual(result.Locked.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) ||
+		!reflect.DeepEqual(result.Locked.UnknownSteps, []EmptyDrainRunStepAction{EmptyDrainRunStepAction(255)}) ||
+		len(result.Idle.AppliedSteps) != 0 ||
+		len(result.Dispatch.AppliedSteps) != 0 {
 		t.Fatalf("empty drain locked apply result = %+v, want mirror applied and unknown [255]", result)
 	}
 
@@ -363,11 +365,74 @@ func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	if applier.mirrors != 1 {
 		t.Fatalf("fallback mirror calls = %d, want 1", applier.mirrors)
 	}
-	if !reflect.DeepEqual(result.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) || len(result.UnknownSteps) != 0 {
+	if !reflect.DeepEqual(result.Locked.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) || len(result.Locked.UnknownSteps) != 0 {
 		t.Fatalf("fallback empty drain locked apply result = %+v, want mirror applied", result)
 	}
-	if nilResult := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+	if nilResult := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{MirrorLegacy: true}, nil); len(nilResult.Locked.AppliedSteps) != 0 || len(nilResult.Locked.UnknownSteps) != 0 {
 		t.Fatalf("nil empty drain locked apply result = %+v, want empty", nilResult)
+	}
+}
+
+func TestApplyEmptyDrainRunPlan(t *testing.T) {
+	runApplier := new(recordingEmptyDrainRunApplier)
+	idleApplier := new(recordingIdleDrainApplier)
+	dispatchApplier := new(recordingFetchRefillDispatchApplier)
+	plan := EmptyDrainRunPlan{
+		LockedSteps: []EmptyDrainRunStep{
+			{Action: EmptyDrainMirrorLegacy},
+			{Action: EmptyDrainRunStepAction(255)},
+		},
+		Refill: EmptyDrainRefillPlan{
+			Idle: IdleDrainPlan{Steps: []IdleDrainStep{
+				{Action: IdleDrainJoinAvailablePeers},
+				{Action: IdleDrainStepAction(254)},
+			}},
+			Dispatch: FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
+				{Action: FetchRefillDispatchSendOutbound},
+				{Action: FetchRefillDispatchStepAction(253)},
+			}},
+		},
+	}
+
+	locked := ApplyEmptyDrainRunLockedPlan(plan, runApplier)
+	postLock := ApplyEmptyDrainRunPostLockPlan(plan, idleApplier)
+	dispatch := ApplyEmptyDrainRunDispatchPlan(plan, dispatchApplier)
+	if runApplier.mirrors != 1 {
+		t.Fatalf("empty drain run mirrors = %d, want 1", runApplier.mirrors)
+	}
+	if !reflect.DeepEqual(idleApplier.calls, []IdleDrainStepAction{IdleDrainJoinAvailablePeers}) {
+		t.Fatalf("empty drain run idle calls = %+v, want join", idleApplier.calls)
+	}
+	if dispatchApplier.sent != 1 {
+		t.Fatalf("empty drain run dispatch sends = %d, want 1", dispatchApplier.sent)
+	}
+	if !reflect.DeepEqual(locked.Locked.AppliedSteps, []EmptyDrainRunStepAction{EmptyDrainMirrorLegacy}) ||
+		!reflect.DeepEqual(locked.Locked.UnknownSteps, []EmptyDrainRunStepAction{EmptyDrainRunStepAction(255)}) ||
+		len(locked.Idle.AppliedSteps) != 0 ||
+		len(locked.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("locked empty drain run result = %+v, want mirror applied and unknown [255]", locked)
+	}
+	if !reflect.DeepEqual(postLock.Idle.AppliedSteps, []IdleDrainStepAction{IdleDrainJoinAvailablePeers}) ||
+		!reflect.DeepEqual(postLock.Idle.UnknownSteps, []IdleDrainStepAction{IdleDrainStepAction(254)}) ||
+		len(postLock.Locked.AppliedSteps) != 0 ||
+		len(postLock.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("post-lock empty drain run result = %+v, want idle join and unknown [254]", postLock)
+	}
+	if !reflect.DeepEqual(dispatch.Dispatch.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
+		!reflect.DeepEqual(dispatch.Dispatch.UnknownSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchStepAction(253)}) ||
+		len(dispatch.Locked.AppliedSteps) != 0 ||
+		len(dispatch.Idle.AppliedSteps) != 0 {
+		t.Fatalf("dispatch empty drain run result = %+v, want send and unknown [253]", dispatch)
+	}
+
+	if nilLocked := ApplyEmptyDrainRunLockedPlan(plan, nil); len(nilLocked.Locked.AppliedSteps) != 0 || len(nilLocked.Locked.UnknownSteps) != 0 {
+		t.Fatalf("nil locked empty drain run result = %+v, want empty", nilLocked)
+	}
+	if nilPostLock := ApplyEmptyDrainRunPostLockPlan(plan, nil); len(nilPostLock.Idle.AppliedSteps) != 0 || len(nilPostLock.Idle.UnknownSteps) != 0 {
+		t.Fatalf("nil post-lock empty drain run result = %+v, want empty", nilPostLock)
+	}
+	if nilDispatch := ApplyEmptyDrainRunDispatchPlan(plan, nil); len(nilDispatch.Dispatch.AppliedSteps) != 0 || len(nilDispatch.Dispatch.UnknownSteps) != 0 {
+		t.Fatalf("nil dispatch empty drain run result = %+v, want empty", nilDispatch)
 	}
 }
 

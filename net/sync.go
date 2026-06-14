@@ -1233,7 +1233,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
-	var dispatch syncdl.FetchRefillDispatchPlan
+	var emptyDrainDispatch syncdl.EmptyDrainRunPlan
 	for {
 		now := time.Now()
 		ss.mu.Lock()
@@ -1260,11 +1260,10 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 				OutboundRequests: len(out),
 				Progress:         progress,
 			}, syncEmptyDrainJoinGate{service: ss, now: now})
-			dispatch = emptyDrain.Refill.Dispatch
-			idle := emptyDrain.Refill.Idle
+			emptyDrainDispatch = emptyDrain
 			syncdl.ApplyEmptyDrainRunLockedPlan(emptyDrain, syncEmptyDrainRunApplier{service: ss})
 			ss.mu.Unlock()
-			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
+			syncdl.ApplyEmptyDrainRunPostLockPlan(emptyDrain, syncIdleDrainApplier{service: ss})
 			break
 		}
 		ss.mu.Unlock()
@@ -1278,7 +1277,7 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			continue
 		}
 	}
-	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
+	syncdl.ApplyEmptyDrainRunDispatchPlan(emptyDrainDispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 type syncEmptyDrainJoinGate struct {
