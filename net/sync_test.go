@@ -521,6 +521,28 @@ func TestSyncServiceDeletesOrphanedDownstreamSyncPipelineOnSessionStart(t *testi
 	}
 }
 
+func TestSyncServiceDeletesExecutionWithoutImportOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncExecution, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("write orphaned execution progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+
+	for _, stage := range syncdl.SyncPipelineProgressStages() {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
+			t.Fatalf("%s progress after startup = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+		}
+	}
+}
+
 func TestSyncServiceDeletesDownstreamSyncPipelineAfterForkHashMismatchOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block1 := bc.GetBlockByNumber(1)
