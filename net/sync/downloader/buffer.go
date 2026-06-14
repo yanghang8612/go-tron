@@ -184,6 +184,17 @@ type ImportBatchExecutionAttempt struct {
 	Diagnostics        ImportBatchExecutionPlanDiagnostics
 }
 
+// ImportBatchExecutionAttemptExecutor applies an execution attempt's decoded
+// blocks with the attempt-owned stage observer.
+type ImportBatchExecutionAttemptExecutor func(blocks []*types.Block, observe StageProgressWriter) error
+
+// ImportBatchExecutionAttemptResult records the runtime outcome of executing a
+// downloader-owned import attempt.
+type ImportBatchExecutionAttemptResult struct {
+	Elapsed time.Duration
+	Err     error
+}
+
 // ImportBatchExecutionPlanDiagnostics is the compact, log-safe view of the
 // downloader-owned execution/commitment/finish schedule for a decoded batch.
 type ImportBatchExecutionPlanDiagnostics struct {
@@ -267,6 +278,26 @@ func (a ImportBatchExecutionAttempt) StageProgressObserver() StageProgressWriter
 // recorded by this execution attempt.
 func (a ImportBatchExecutionAttempt) ProgressPlan(batch BufferedBatch, applied int) ImportedBatchProgressPlan {
 	return a.Execution.ProgressPlan(batch, applied, a.Collector)
+}
+
+// RunImportBatchExecutionAttempt executes a runnable attempt through the
+// supplied canonical inserter. The helper keeps elapsed timing and the
+// attempt-owned stage observer in downloader instead of re-deriving them in
+// SyncService.
+func RunImportBatchExecutionAttempt(attempt ImportBatchExecutionAttempt, execute ImportBatchExecutionAttemptExecutor, now func() time.Time) ImportBatchExecutionAttemptResult {
+	if now == nil {
+		now = time.Now
+	}
+	start := now()
+	var err error
+	if execute != nil {
+		err = execute(attempt.Execution.Blocks, attempt.StageProgressObserver())
+	}
+	elapsed := now().Sub(start)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return ImportBatchExecutionAttemptResult{Elapsed: elapsed, Err: err}
 }
 
 // PlansStageObservation reports whether a canonical insertion hook observation
