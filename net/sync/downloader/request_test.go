@@ -253,9 +253,9 @@ func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
 			{Action: FetchReceiptDrainBuffered},
 		},
 	}
-	ApplyFetchReceiptSettlementLockedPreBufferPlan(plan, applier)
-	ApplyFetchReceiptSettlementLockedPostBufferPlan(plan, applier)
-	ApplyFetchReceiptSettlementAfterUnlockPlan(plan, applier)
+	preResult := ApplyFetchReceiptSettlementLockedPreBufferPlan(plan, applier)
+	postResult := ApplyFetchReceiptSettlementLockedPostBufferPlan(plan, applier)
+	afterResult := ApplyFetchReceiptSettlementAfterUnlockPlan(plan, applier)
 
 	want := []FetchReceiptSettlementStepAction{
 		FetchReceiptDeleteRequestedHash,
@@ -267,9 +267,20 @@ func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) || applier.inflight != 3 {
 		t.Fatalf("settlement calls/inflight = %+v/%d, want %+v/3", applier.calls, applier.inflight, want)
 	}
+	if !reflect.DeepEqual(preResult.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDeleteRequestedHash, FetchReceiptUpdateInflight}) ||
+		!reflect.DeepEqual(preResult.UnknownSteps, []FetchReceiptSettlementStepAction{FetchReceiptSettlementStepAction(255)}) {
+		t.Fatalf("pre-buffer apply result = %+v, want delete+inflight and unknown step", preResult)
+	}
+	if !reflect.DeepEqual(postResult.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptFillFetchSlots, FetchReceiptMirrorLegacy}) ||
+		postResult.OutboundRequests != 2 || !postResult.FilledFetchSlots || len(postResult.UnknownSteps) != 0 {
+		t.Fatalf("post-buffer apply result = %+v, want fill+mirror with two outbound requests", postResult)
+	}
+	if !reflect.DeepEqual(afterResult.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}) || len(afterResult.UnknownSteps) != 0 {
+		t.Fatalf("after-unlock apply result = %+v, want drain", afterResult)
+	}
 
 	applier.calls = nil
-	ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{
+	preResult = ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{
 		Accepted:            true,
 		Inflight:            4,
 		DeleteRequestedHash: true,
@@ -287,9 +298,18 @@ func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.calls, want) || applier.inflight != 4 {
 		t.Fatalf("fallback pre-buffer calls/inflight = %+v/%d, want %+v/4", applier.calls, applier.inflight, want)
 	}
-	ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{Accepted: true}, nil)
-	ApplyFetchReceiptSettlementLockedPostBufferPlan(FetchReceiptSettlement{Accepted: true}, nil)
-	ApplyFetchReceiptSettlementAfterUnlockPlan(FetchReceiptSettlement{Accepted: true}, nil)
+	if !reflect.DeepEqual(preResult.AppliedSteps, want) || len(preResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback pre-buffer result = %+v, want generated pre-buffer steps", preResult)
+	}
+	if nilResult := ApplyFetchReceiptSettlementLockedPreBufferPlan(FetchReceiptSettlement{Accepted: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.FilledFetchSlots {
+		t.Fatalf("nil pre-buffer result = %+v, want empty", nilResult)
+	}
+	if nilResult := ApplyFetchReceiptSettlementLockedPostBufferPlan(FetchReceiptSettlement{Accepted: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.FilledFetchSlots {
+		t.Fatalf("nil post-buffer result = %+v, want empty", nilResult)
+	}
+	if nilResult := ApplyFetchReceiptSettlementAfterUnlockPlan(FetchReceiptSettlement{Accepted: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.FilledFetchSlots {
+		t.Fatalf("nil after-unlock result = %+v, want empty", nilResult)
+	}
 }
 
 func TestPlanFetchReceiptDispatch(t *testing.T) {
@@ -456,8 +476,9 @@ func (a *recordingFetchReceiptSettlementApplier) RearmFetchTimer() {
 	a.calls = append(a.calls, FetchReceiptRearmFetchTimer)
 }
 
-func (a *recordingFetchReceiptSettlementApplier) FillFetchSlots() {
+func (a *recordingFetchReceiptSettlementApplier) FillFetchSlots() int {
 	a.calls = append(a.calls, FetchReceiptFillFetchSlots)
+	return 2
 }
 
 func (a *recordingFetchReceiptSettlementApplier) MirrorLegacyLocked() {

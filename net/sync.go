@@ -1187,12 +1187,12 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		bufferPlan := syncdl.PlanFetchedBlockBuffer(bufferFacts)
 		syncdl.ApplyFetchedBlockBufferPlan(bufferPlan, syncFetchedBlockBufferApplier{service: ss, peer: peer, block: block, raw: raw})
 	}
-	syncdl.ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement, settlementApplier)
+	postBufferResult := syncdl.ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement, settlementApplier)
 	ss.mu.Unlock()
 
 	syncdl.ApplyFetchReceiptSettlementAfterUnlockPlan(settlement, settlementApplier)
 	receiptRun = syncdl.PlanFetchReceiptRunAfterDrain(receiptRun, syncdl.FetchReceiptRunAfterDrainInput{
-		OutboundRequests: len(settlementApplier.out),
+		OutboundRequests: postBufferResult.OutboundRequests,
 		Progress: syncdl.SessionProgress{
 			Syncing: ss.IsSyncing(),
 			Paused:  ss.IsPaused(),
@@ -1532,8 +1532,9 @@ func (a *syncFetchReceiptSettlementApplier) RearmFetchTimer() {
 	a.service.armPeerFetchTimerLocked(a.peerState)
 }
 
-func (a *syncFetchReceiptSettlementApplier) FillFetchSlots() {
+func (a *syncFetchReceiptSettlementApplier) FillFetchSlots() int {
 	a.out = a.service.fillFetchSlotsLocked(time.Now())
+	return len(a.out)
 }
 
 func (a *syncFetchReceiptSettlementApplier) MirrorLegacyLocked() {

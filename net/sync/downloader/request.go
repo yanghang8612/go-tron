@@ -101,9 +101,18 @@ type FetchReceiptSettlementPlanApplier interface {
 	UpdateInflight(inflight int)
 	StopFetchTimer()
 	RearmFetchTimer()
-	FillFetchSlots()
+	FillFetchSlots() int
 	MirrorLegacyLocked()
 	DrainBuffered()
+}
+
+// FetchReceiptSettlementApplyResult records the receipt-settlement steps
+// applied in one lock phase and any follow-up fetch slots produced there.
+type FetchReceiptSettlementApplyResult struct {
+	AppliedSteps     []FetchReceiptSettlementStepAction
+	UnknownSteps     []FetchReceiptSettlementStepAction
+	OutboundRequests int
+	FilledFetchSlots bool
 }
 
 // FetchReceiptDispatchInput is the post-drain state needed before sending
@@ -273,62 +282,75 @@ func (s FetchReceiptSettlement) withSteps() FetchReceiptSettlement {
 // ApplyFetchReceiptSettlementLockedPreBufferPlan executes the lock-held
 // peer/request/timer update steps that must run before staging the received
 // block body.
-func ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+func ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) FetchReceiptSettlementApplyResult {
 	if applier == nil {
-		return
+		return FetchReceiptSettlementApplyResult{}
 	}
 	if len(settlement.LockedPreBuffer) == 0 {
 		settlement = settlement.withSteps()
 	}
-	applyFetchReceiptSettlementSteps(settlement.LockedPreBuffer, applier)
+	return applyFetchReceiptSettlementSteps(settlement.LockedPreBuffer, applier)
 }
 
 // ApplyFetchReceiptSettlementLockedPostBufferPlan executes the lock-held fetch
 // scheduling and mirror steps that run after the received block body has been
 // staged or ignored.
-func ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+func ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) FetchReceiptSettlementApplyResult {
 	if applier == nil {
-		return
+		return FetchReceiptSettlementApplyResult{}
 	}
 	if len(settlement.LockedPostBuffer) == 0 {
 		settlement = settlement.withSteps()
 	}
-	applyFetchReceiptSettlementSteps(settlement.LockedPostBuffer, applier)
+	return applyFetchReceiptSettlementSteps(settlement.LockedPostBuffer, applier)
 }
 
 // ApplyFetchReceiptSettlementAfterUnlockPlan executes post-lock local drain
 // actions for an accepted fetch receipt.
-func ApplyFetchReceiptSettlementAfterUnlockPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) {
+func ApplyFetchReceiptSettlementAfterUnlockPlan(settlement FetchReceiptSettlement, applier FetchReceiptSettlementPlanApplier) FetchReceiptSettlementApplyResult {
 	if applier == nil {
-		return
+		return FetchReceiptSettlementApplyResult{}
 	}
 	if len(settlement.AfterUnlock) == 0 {
 		settlement = settlement.withSteps()
 	}
-	applyFetchReceiptSettlementSteps(settlement.AfterUnlock, applier)
+	return applyFetchReceiptSettlementSteps(settlement.AfterUnlock, applier)
 }
 
-func applyFetchReceiptSettlementSteps(steps []FetchReceiptSettlementStep, applier FetchReceiptSettlementPlanApplier) {
+func applyFetchReceiptSettlementSteps(steps []FetchReceiptSettlementStep, applier FetchReceiptSettlementPlanApplier) FetchReceiptSettlementApplyResult {
+	var result FetchReceiptSettlementApplyResult
 	for _, step := range steps {
 		switch step.Action {
 		case FetchReceiptDeleteRequestedHash:
 			applier.DeleteRequestedHash()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptAdvanceFetchSeq:
 			applier.AdvanceFetchSeq()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptUpdateInflight:
 			applier.UpdateInflight(step.Inflight)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptStopFetchTimer:
 			applier.StopFetchTimer()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptRearmFetchTimer:
 			applier.RearmFetchTimer()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptFillFetchSlots:
-			applier.FillFetchSlots()
+			result.OutboundRequests = applier.FillFetchSlots()
+			result.FilledFetchSlots = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptMirrorLegacy:
 			applier.MirrorLegacyLocked()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case FetchReceiptDrainBuffered:
 			applier.DrainBuffered()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // PlanFetchReceiptDispatch decides whether follow-up outbound fetch requests
