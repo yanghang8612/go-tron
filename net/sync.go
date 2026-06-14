@@ -1299,7 +1299,7 @@ drainLoop:
 		ss.mu.Unlock()
 		batch := drainRun.Batch
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
-		loop := syncdl.ApplyImportBatchDrainLoopPlan(importRun.DrainLoop)
+		loop := importRun.DrainLoopApply
 		if loop.StopLoop {
 			break drainLoop
 		}

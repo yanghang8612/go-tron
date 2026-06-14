@@ -939,6 +939,12 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	if applied := ApplyImportBatchDrainLoopPlan(success.DrainLoop); !applied.ContinueLoop || applied.Action != ImportBatchDrainLoopContinue || len(applied.UnknownSteps) != 0 {
 		t.Fatalf("success applied drain loop = %+v, want continue", applied)
 	}
+	if !success.DrainLoopApply.ContinueLoop ||
+		success.DrainLoopApply.Action != ImportBatchDrainLoopContinue ||
+		!reflect.DeepEqual(success.DrainLoopApply.AppliedSteps, []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopContinue}) ||
+		len(success.DrainLoopApply.UnknownSteps) != 0 {
+		t.Fatalf("success run drain loop apply = %+v, want continue", success.DrainLoopApply)
+	}
 
 	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
 	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
@@ -953,6 +959,12 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	}
 	if applied := ApplyImportBatchDrainLoopPlan(failure.DrainLoop); !applied.StopLoop || applied.Action != ImportBatchDrainLoopStop || len(applied.UnknownSteps) != 0 {
 		t.Fatalf("failure applied drain loop = %+v, want stop", applied)
+	}
+	if !failure.DrainLoopApply.StopLoop ||
+		failure.DrainLoopApply.Action != ImportBatchDrainLoopStop ||
+		!reflect.DeepEqual(failure.DrainLoopApply.AppliedSteps, []ImportBatchDrainLoopStepAction{ImportBatchDrainLoopStop}) ||
+		len(failure.DrainLoopApply.UnknownSteps) != 0 {
+		t.Fatalf("failure run drain loop apply = %+v, want stop", failure.DrainLoopApply)
 	}
 	if !failure.Run.HasRecord || failure.Run.RecordPlan.Progress.Summary.Applied != 1 {
 		t.Fatalf("failure record plan = %+v has=%v, want applied-prefix record before stop", failure.Run.RecordPlan, failure.Run.HasRecord)
