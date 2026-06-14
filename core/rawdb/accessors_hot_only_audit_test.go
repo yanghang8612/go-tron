@@ -275,6 +275,16 @@ func TestProductionStateHistoryAsOfReadsStayBehindHistoryBoundaries(t *testing.T
 	}
 }
 
+func TestProductionStateLatestReadsStayBehindStateBoundaries(t *testing.T) {
+	root := findRepoRoot(t)
+	offenders := auditForbiddenRawDBReferencesSkipping(t, root, stateLatestRawDBReferences(), nil, map[string]struct{}{
+		"core/state": {},
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("production archive/API code must use state.Database or state.HistoryReader instead of raw state latest readers:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 func TestStateHistoryAsOfAuditRejectsDirectRawDBReference(t *testing.T) {
 	root := writeAuditFixture(t, "app/offender.go", `package app
 
@@ -294,6 +304,48 @@ func query(db any) {
 	joined := strings.Join(offenders, "\n")
 	if !strings.Contains(joined, "rawdb.ReadStateKVAsOfTxNum") || !strings.Contains(joined, "rawdb.ReadStateKVGenerationAsOfTxNum") {
 		t.Fatalf("offenders = %+v, want both state-as-of references rejected", offenders)
+	}
+}
+
+func TestStateLatestAuditRejectsArchiveAPIRawDBReference(t *testing.T) {
+	root := writeAuditFixture(t, "core/tron_backend.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readLatest = rawdb.ReadStateKVLatest
+
+func query(db any) {
+	_, _, _ = rawdb.ReadStateKVGeneration(db, [20]byte{})
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesSkipping(t, root, stateLatestRawDBReferences(), nil, map[string]struct{}{
+		"core/state": {},
+	})
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want raw state latest function value and generation read rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	if !strings.Contains(joined, "rawdb.ReadStateKVLatest") || !strings.Contains(joined, "rawdb.ReadStateKVGeneration") {
+		t.Fatalf("offenders = %+v, want both state latest references rejected", offenders)
+	}
+}
+
+func TestStateLatestAuditAllowsStatePackageBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "core/state/store.go", `package state
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db any) {
+	_, _, _ = rawdb.ReadStateAccountLatest(db, [20]byte{})
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesSkipping(t, root, stateLatestRawDBReferences(), nil, map[string]struct{}{
+		"core/state": {},
+	})
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want state package boundary accepted", offenders)
 	}
 }
 
@@ -865,6 +917,15 @@ func stateHistoryAsOfRawDBReferences() map[string]struct{} {
 	}
 }
 
+func stateLatestRawDBReferences() map[string]struct{} {
+	return map[string]struct{}{
+		"ReadStateAccountLatest": {},
+		"ReadStateCode":          {},
+		"ReadStateKVGeneration":  {},
+		"ReadStateKVLatest":      {},
+	}
+}
+
 func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
 	t.Helper()
 	var offenders []string
@@ -935,6 +996,11 @@ func auditForbiddenRawDBCalls(t *testing.T, root string, forbidden map[string]st
 
 func auditForbiddenRawDBReferences(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}) []string {
 	t.Helper()
+	return auditForbiddenRawDBReferencesSkipping(t, root, forbidden, allowed, nil)
+}
+
+func auditForbiddenRawDBReferencesSkipping(t *testing.T, root string, forbidden map[string]struct{}, allowed map[string]map[string]struct{}, skipRelDirs map[string]struct{}) []string {
+	t.Helper()
 	var offenders []string
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -942,6 +1008,10 @@ func auditForbiddenRawDBReferences(t *testing.T, root string, forbidden map[stri
 			return err
 		}
 		if entry.IsDir() {
+			rel := auditRelPath(root, path)
+			if _, skip := skipRelDirs[rel]; skip {
+				return filepath.SkipDir
+			}
 			switch entry.Name() {
 			case ".git", ".claude", ".codex", "build", "vendor":
 				return filepath.SkipDir
