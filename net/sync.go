@@ -670,39 +670,56 @@ func (ss *SyncService) joinAvailablePeers() {
 	ss.mu.Lock()
 	need := syncdl.PeerJoinCapacity(len(ss.peers), maxParallelSyncPeers)
 	exclude := make(map[string]struct{}, len(ss.peers))
+	existing := make([]string, 0, len(ss.peers))
 	for id := range ss.peers {
 		exclude[id] = struct{}{}
+		existing = append(existing, id)
 	}
 	ss.mu.Unlock()
 	if need <= 0 {
 		return
 	}
-	candidates := ss.handler.SyncCandidates(exclude, need)
-	for _, peer := range candidates {
-		if peer != nil {
-			exclude[peer.ID()] = struct{}{}
+	candidateByID := make(map[string]*p2p.Peer)
+	primaryPeers := ss.handler.SyncCandidates(exclude, need)
+	primary := make([]string, 0, len(primaryPeers))
+	for _, peer := range primaryPeers {
+		if peer == nil {
+			continue
 		}
+		id := peer.ID()
+		primary = append(primary, id)
+		candidateByID[id] = peer
 	}
-	if len(candidates) < need {
+	var fallback []syncdl.PeerJoinFallbackCandidate
+	if len(primary) < need {
 		for _, peer := range ss.handler.HandshakedPeers() {
 			if peer == nil {
 				continue
 			}
-			if _, skip := exclude[peer.ID()]; skip {
+			id := peer.ID()
+			if _, skip := exclude[id]; skip {
 				continue
 			}
-			if ok, _, _ := ss.handler.syncPeerCanServe(peer, needFrom); !ok {
-				continue
-			}
-			candidates = append(candidates, peer)
-			exclude[peer.ID()] = struct{}{}
-			if len(candidates) >= need {
-				break
+			ok, _, _ := ss.handler.syncPeerCanServe(peer, needFrom)
+			fallback = append(fallback, syncdl.PeerJoinFallbackCandidate{
+				ID:       id,
+				CanServe: ok,
+			})
+			if _, exists := candidateByID[id]; !exists {
+				candidateByID[id] = peer
 			}
 		}
 	}
-	for _, peer := range candidates {
-		ss.StartSync(peer)
+	selection := syncdl.PlanPeerJoinSelection(syncdl.PeerJoinSelectionInput{
+		Need:     need,
+		Existing: existing,
+		Primary:  primary,
+		Fallback: fallback,
+	})
+	for _, id := range selection.Selected {
+		if peer := candidateByID[id]; peer != nil {
+			ss.StartSync(peer)
+		}
 	}
 }
 
