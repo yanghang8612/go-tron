@@ -70,6 +70,32 @@ type StateDB struct {
 	// every FinalizeTransaction (per-transaction scope).
 	txFinalizeDirty map[tcommon.Address]struct{}
 
+	// dirtyObjects tracks the addresses of every stateObject marked dirty since
+	// the last commit. dirtyAccountCommitPlans iterates this set instead of
+	// scanning the whole stateObjects map (which, on the reused-StateDB sync
+	// path, accumulates the entire range's mostly read-only working set).
+	//
+	// Population: markDirty records s.address through the stateObject's dirtySet
+	// back-pointer (set when an object enters the cache via getStateObject), and
+	// GetOrCreateAccount records the born-dirty address it creates. Every forward
+	// mutator obtains its object via getStateObject / GetOrCreateAccount before
+	// calling markDirty, so the back-pointer is always set first; the set is thus
+	// a complete superset of {addr : stateObjects[addr].dirty}.
+	//
+	// Revert: an object re-dirtied during RevertToSnapshot (journal replay) is
+	// already in the set from the forward mutation that journaled it, and an
+	// address stays in the set until the next commit clears it, so the set is
+	// never cleared by RevertToSnapshot — matching dirtyWitnesses. Stale entries
+	// (a created-then-reverted address, or one re-dirtied to its original value)
+	// are harmless: dirtyAccountCommitPlans re-resolves the live object by
+	// address and the obj == nil / !obj.dirty guards skip it.
+	//
+	// Lifecycle is PER-BLOCK: cleared once after the finalizeAccountCommitPlan
+	// loop. dirtyAccountCommitPlans and the finalize loop both run on the
+	// committing goroutine (the deferred-fold worker only folds captured data and
+	// never touches stateObjects/dirtyObjects), so there is no exec/worker race.
+	dirtyObjects map[tcommon.Address]struct{}
+
 	journal   *journal
 	snapshots []int // journal length at each snapshot
 	// domainChangeNoJournal mirrors block-final writes that intentionally
@@ -495,6 +521,7 @@ func New(root tcommon.Hash, db *Database) (*StateDB, error) {
 		witnesses:       make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:  make(map[tcommon.Address]struct{}),
 		txFinalizeDirty: make(map[tcommon.Address]struct{}),
+		dirtyObjects:    make(map[tcommon.Address]struct{}),
 		journal:         newJournal(),
 		dynProps:        NewDynamicProperties(),
 		originRoot:      ethcommon.Hash(root),
@@ -768,6 +795,10 @@ func (s *StateDB) GetOrCreateAccount(addr tcommon.Address) *stateObject {
 	// new in-memory object until Commit removes the raw keys.
 	obj.codeDirty = true
 	obj.contractMetaDirty = true
+	// The new object is born dirty (created/accountDirty); record it directly
+	// since this path constructs the object instead of going through markDirty.
+	obj.dirtySet = s.dirtyObjects
+	s.dirtyObjects[addr] = struct{}{}
 	s.stateObjects[addr] = obj
 	return obj
 }
@@ -2405,6 +2436,7 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		witnesses:             make(map[tcommon.Address]*types.Witness),
 		dirtyWitnesses:        make(map[tcommon.Address]struct{}),
 		txFinalizeDirty:       make(map[tcommon.Address]struct{}),
+		dirtyObjects:          make(map[tcommon.Address]struct{}),
 		journal:               newJournal(),
 		dynProps:              s.dynProps,
 		originRoot:            s.originRoot,
@@ -2466,6 +2498,10 @@ func (s *StateDB) Copy() (*StateDB, error) {
 		for k := range obj.dirtyStorage {
 			newObj.dirtyStorage[k] = struct{}{}
 		}
+		newObj.dirtySet = cp.dirtyObjects
+		if newObj.dirty {
+			cp.dirtyObjects[addr] = struct{}{}
+		}
 		cp.stateObjects[addr] = newObj
 	}
 	return cp, nil
@@ -2489,9 +2525,18 @@ type accountCommitPlan struct {
 }
 
 func (s *StateDB) dirtyAccountCommitPlans() ([]*accountCommitPlan, error) {
-	addrs := make([]tcommon.Address, 0, len(s.stateObjects))
-	for addr, obj := range s.stateObjects {
-		if !obj.dirty {
+	// Iterate the incrementally-maintained dirty-address set instead of scanning
+	// the whole stateObjects map (which accumulates the range's read-only working
+	// set on the reused-StateDB sync path). The set is a complete superset of the
+	// dirty objects; the obj == nil / !obj.dirty guards filter stale entries (a
+	// created-then-reverted address, or one re-dirtied to its original value),
+	// reproducing the old `for addr, obj := range s.stateObjects` filter exactly.
+	// The sort keeps the commit order address-deterministic, byte-identical to
+	// the full scan.
+	addrs := make([]tcommon.Address, 0, len(s.dirtyObjects))
+	for addr := range s.dirtyObjects {
+		obj := s.stateObjects[addr]
+		if obj == nil || !obj.dirty {
 			continue
 		}
 		addrs = append(addrs, addr)
@@ -2905,6 +2950,12 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 	for _, plan := range plans {
 		s.finalizeAccountCommitPlan(plan)
 	}
+	// Every dirty object has now been finalized (obj.dirty cleared); drop the
+	// per-block dirty-address set in one shot, mirroring dirtyWitnesses /
+	// txFinalizeDirty. clear() (not reassignment) keeps every cached object's
+	// dirtySet back-pointer valid for the next block. No object is marked dirty
+	// between dirtyAccountCommitPlans and here, so nothing is lost.
+	clear(s.dirtyObjects)
 	mark(&stats.Finalize)
 
 	touchUpdates, err := commitmentState.latestUpdatesFromTouches()
@@ -3235,6 +3286,11 @@ func (s *StateDB) ClearUnfrozenV2(addr tcommon.Address) {
 // account latest domain.
 func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	if obj, ok := s.stateObjects[addr]; ok {
+		// Heal objects that entered the cache without a back-pointer (Load*
+		// hydration, journal-revert re-creation) so their next markDirty records.
+		if obj.dirtySet == nil {
+			obj.dirtySet = s.dirtyObjects
+		}
 		return obj
 	}
 	data, ok, err := s.readStateAccountLatest(addr)
@@ -3254,6 +3310,7 @@ func (s *StateDB) getStateObject(addr tcommon.Address) *stateObject {
 	obj.accountKVGeneration = envelope.AccountKVGeneration
 	obj.accountKVGenerationDirty = false
 	obj.codeHash = envelope.CodeHash
+	obj.dirtySet = s.dirtyObjects
 	s.stateObjects[addr] = obj
 	return obj
 }
