@@ -881,6 +881,10 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 		!success.Settlement.ContinueDrain || success.Settlement.StopDrain {
 		t.Fatalf("success run = %+v settlement=%+v, want recorded import and continue drain", success.Run, success.Settlement)
 	}
+	if !success.DrainLoop.ContinueLoop || success.DrainLoop.StopLoop ||
+		len(success.DrainLoop.Steps) != 1 || success.DrainLoop.Steps[0].Action != ImportBatchDrainLoopContinue {
+		t.Fatalf("success drain loop = %+v, want continue", success.DrainLoop)
+	}
 
 	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
 	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
@@ -888,6 +892,10 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 		failure.Settlement.Action != ImportBatchRunSettlementStopDrain ||
 		!failure.Settlement.StopDrain || failure.Settlement.ContinueDrain {
 		t.Fatalf("failure run = %+v settlement=%+v, want paused stop-drain settlement", failure.Run, failure.Settlement)
+	}
+	if !failure.DrainLoop.StopLoop || failure.DrainLoop.ContinueLoop ||
+		len(failure.DrainLoop.Steps) != 1 || failure.DrainLoop.Steps[0].Action != ImportBatchDrainLoopStop {
+		t.Fatalf("failure drain loop = %+v, want stop", failure.DrainLoop)
 	}
 	if !failure.Run.HasRecord || failure.Run.RecordPlan.Progress.Summary.Applied != 1 {
 		t.Fatalf("failure record plan = %+v has=%v, want applied-prefix record before stop", failure.Run.RecordPlan, failure.Run.HasRecord)

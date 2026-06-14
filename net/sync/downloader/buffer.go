@@ -430,6 +430,7 @@ type ImportBatchRunResult struct {
 type ImportBatchRunApplyResult struct {
 	Run        ImportBatchRunResult
 	Settlement ImportBatchRunSettlementPlan
+	DrainLoop  ImportBatchDrainLoopPlan
 }
 
 // ImportBatchRunSettlementAction names the local drain-loop branch selected
@@ -496,9 +497,11 @@ func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
 // run plan, then derives the drain-loop settlement from the run result.
 func ApplyImportBatchRun(batch BufferedBatch, applier ImportBatchRunPlanApplier) ImportBatchRunApplyResult {
 	run := ApplyImportBatchRunPlan(NewImportBatchRunPlan(batch), applier)
+	settlement := PlanImportBatchRunSettlement(run)
 	return ImportBatchRunApplyResult{
 		Run:        run,
-		Settlement: PlanImportBatchRunSettlement(run),
+		Settlement: settlement,
+		DrainLoop:  PlanImportBatchDrainLoop(settlement),
 	}
 }
 
