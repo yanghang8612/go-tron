@@ -948,7 +948,7 @@ def stage_pipeline_violations(stages):
         })
     return violations
 
-def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck_lag, pipeline_lag, finish_head_lag):
+def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck_lag, pipeline_lag, finish_head_lag, head):
     required = [
         ("SyncBodies", "stageSyncBodies"),
         ("SyncBodiesReady", "stageSyncBodiesReady"),
@@ -969,12 +969,17 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         "fullStagedSyncHashIssues": [],
         "fullStagedSyncUnverifiedStages": [],
         "fullStagedSyncCompleteBlock": -1,
+        "fullStagedSyncHeadBlock": head,
         "fullStagedSyncMinStage": "",
         "fullStagedSyncMinStageBlock": -1,
         "fullStagedSyncHeadLagBlocks": finish_head_lag,
+        "fullStagedSyncCompletionRatio": -1.0,
         "fullStagedSyncPipelineLagBlocks": pipeline_lag,
         "fullStagedSyncBottleneck": bottleneck,
         "fullStagedSyncBottleneckLagBlocks": bottleneck_lag,
+        "fullStagedSyncBottleneckLagShare": ratio(bottleneck_lag, pipeline_lag),
+        "fullStagedSyncStageCoverageRatio": 0.0,
+        "fullStagedSyncVerificationRatio": 0.0,
     }
     if stages.get("stageStatusFileStatus") != "ok":
         return row
@@ -1003,6 +1008,9 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         row["fullStagedSyncMinStage"] = min_stage
         row["fullStagedSyncMinStageBlock"] = min_value
     row["fullStagedSyncCompleteBlock"] = number(stages, "stageSyncFinish", -1)
+    row["fullStagedSyncCompletionRatio"] = ratio(row["fullStagedSyncCompleteBlock"], head)
+    row["fullStagedSyncStageCoverageRatio"] = ratio(row["fullStagedSyncPresentStageCount"], row["fullStagedSyncStageCount"])
+    row["fullStagedSyncVerificationRatio"] = ratio(row["fullStagedSyncVerifiedStageCount"], row["fullStagedSyncStageCount"])
 
     if row["fullStagedSyncMissingStages"]:
         row["fullStagedSyncStatus"] = "missing-stage"
@@ -1593,6 +1601,7 @@ full_staged_sync = full_staged_sync_summary(
     stage_sync_bottleneck_lag,
     stage_sync_pipeline_lag,
     stage_sync_finish_head_lag,
+    height,
 )
 interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
 interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)

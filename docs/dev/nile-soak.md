@@ -230,9 +230,12 @@ full staged sync summary: `fullStagedSyncStatus`,
 `fullStagedSyncReady`, `fullStagedSyncCompleteAtHead`,
 `fullStagedSyncPresentStageCount`, `fullStagedSyncVerifiedStageCount`,
 `fullStagedSyncMissingStages`, `fullStagedSyncHashIssues`,
-`fullStagedSyncCompleteBlock`, `fullStagedSyncHeadLagBlocks`,
+`fullStagedSyncCompleteBlock`, `fullStagedSyncHeadBlock`,
+`fullStagedSyncHeadLagBlocks`, `fullStagedSyncCompletionRatio`,
 `fullStagedSyncPipelineLagBlocks`, `fullStagedSyncBottleneck`, and
-`fullStagedSyncBottleneckLagBlocks`. `fullStagedSyncReady` means the six
+`fullStagedSyncBottleneckLagBlocks`,
+`fullStagedSyncBottleneckLagShare`, `fullStagedSyncStageCoverageRatio`, and
+`fullStagedSyncVerificationRatio`. `fullStagedSyncReady` means the six
 sync stages (`SyncBodies`, `SyncBodiesReady`, `SyncImport`, `SyncExecution`,
 `SyncCommitment`, `SyncFinish`) are present, hash/verification checks did not
 flag them, and the pipeline is monotonic; `fullStagedSyncCompleteAtHead` is the
