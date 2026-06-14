@@ -877,8 +877,6 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	//      their gap parent later arrives, KhaosDB.promoteUnlinked cascades
 	//      them into miniStore and InsertBlock's switchFork applies the
 	//      stretch in topological order, so refetching is never needed.
-	var stageInventoryTarget uint64
-
 	ss.mu.Lock()
 	if !ss.syncing {
 		ss.mu.Unlock()
@@ -930,8 +928,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		Candidates:     candidates,
 	})
 	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
-	syncdl.ApplyChainInventoryPlan(inventoryPlan, inventoryApplier)
-	stageInventoryTarget = inventoryApplier.stageInventoryTarget
+	inventoryApplyResult := syncdl.ApplyChainInventoryPlan(inventoryPlan, inventoryApplier)
 
 	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
@@ -946,8 +943,8 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	dispatch := postInventory.Dispatch
 	ss.mu.Unlock()
 
-	if stageInventoryTarget > 0 {
-		ss.writeStageProgress(rawdb.StageSyncInventory, stageInventoryTarget, tcommon.Hash{}, false)
+	if inventoryApplyResult.HasStageTarget {
+		ss.writeStageProgress(rawdb.StageSyncInventory, inventoryApplyResult.StageTarget, tcommon.Hash{}, false)
 	}
 
 	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
@@ -1409,9 +1406,8 @@ func (a *syncFetchSlotApplier) SendFetch(plan syncdl.FetchSlotPlan) {
 }
 
 type syncChainInventoryApplier struct {
-	service              *SyncService
-	peerState            *syncPeerState
-	stageInventoryTarget uint64
+	service   *SyncService
+	peerState *syncPeerState
 }
 
 func (a *syncChainInventoryApplier) AppendAcceptedInventory(ids []types.BlockID) {
@@ -1424,9 +1420,6 @@ func (a *syncChainInventoryApplier) UpdateInventoryProgress(remainNum int64, tar
 		a.peerState.lastInventoryNum = target.Window.Max
 		a.peerState.minFetchNum = target.Window.Min
 		a.service.targetHeadNum = target.Target
-	}
-	if hasStageTarget {
-		a.stageInventoryTarget = stageTarget
 	}
 }
 

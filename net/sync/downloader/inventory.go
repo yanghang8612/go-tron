@@ -86,6 +86,16 @@ type ChainInventoryPlanApplier interface {
 	MarkInventoryDone()
 }
 
+// ChainInventoryApplyResult records the downloader-owned state updates applied
+// for one CHAIN_INVENTORY response.
+type ChainInventoryApplyResult struct {
+	AppliedSteps   []ChainInventoryStepAction
+	UnknownSteps   []ChainInventoryStepAction
+	StageTarget    uint64
+	HasStageTarget bool
+	Done           bool
+}
+
 // PlanChainInventory filters one CHAIN_INVENTORY response, advances target
 // diagnostics, and recognizes java-tron's one-id completion signal.
 func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
@@ -173,9 +183,10 @@ func (p ChainInventoryPlan) withSteps() ChainInventoryPlan {
 
 // ApplyChainInventoryPlan executes downloader-owned state updates for one
 // CHAIN_INVENTORY response.
-func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlanApplier) {
+func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlanApplier) ChainInventoryApplyResult {
+	var result ChainInventoryApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -184,10 +195,21 @@ func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlan
 		switch step.Action {
 		case ChainInventoryAppendAccepted:
 			applier.AppendAcceptedInventory(step.Accepted)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case ChainInventoryUpdateProgress:
 			applier.UpdateInventoryProgress(step.RemainNum, step.Target, step.HasTarget, step.StageTarget, step.HasStageTarget)
+			if step.HasStageTarget {
+				result.StageTarget = step.StageTarget
+				result.HasStageTarget = true
+			}
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case ChainInventoryMarkDone:
 			applier.MarkInventoryDone()
+			result.Done = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }

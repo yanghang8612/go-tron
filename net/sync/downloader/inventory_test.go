@@ -209,12 +209,17 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 		},
 		{Action: ChainInventoryMarkDone},
 	}}
-	ApplyChainInventoryPlan(plan, applier)
+	result := ApplyChainInventoryPlan(plan, applier)
 
 	wantCalls := []ChainInventoryStepAction{
 		ChainInventoryAppendAccepted,
 		ChainInventoryUpdateProgress,
 		ChainInventoryMarkDone,
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, wantCalls) ||
+		!reflect.DeepEqual(result.UnknownSteps, []ChainInventoryStepAction{ChainInventoryStepAction(255)}) ||
+		result.StageTarget != 15 || !result.HasStageTarget || !result.Done {
+		t.Fatalf("apply result = %+v, want applied calls, unknown step, stage target 15, done", result)
 	}
 	if !reflect.DeepEqual(applier.calls, wantCalls) {
 		t.Fatalf("calls = %+v, want %+v", applier.calls, wantCalls)
@@ -225,7 +230,7 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 	}
 
 	applier = new(recordingChainInventoryApplier)
-	ApplyChainInventoryPlan(ChainInventoryPlan{
+	result = ApplyChainInventoryPlan(ChainInventoryPlan{
 		Accepted:       []types.BlockID{id11},
 		RemainNum:      4,
 		Target:         InventoryTargetUpdate{Target: 16},
@@ -234,11 +239,16 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 		HasStageTarget: true,
 		Done:           true,
 	}, applier)
+	if !reflect.DeepEqual(result.AppliedSteps, wantCalls) || len(result.UnknownSteps) != 0 || result.StageTarget != 16 || !result.HasStageTarget || !result.Done {
+		t.Fatalf("fallback apply result = %+v, want generated applied calls and stage target 16", result)
+	}
 	if !reflect.DeepEqual(applier.calls, wantCalls) || !reflect.DeepEqual(applier.accepted, []types.BlockID{id11}) || applier.remainNum != 4 || applier.target.Target != 16 || applier.stageTarget != 16 || !applier.done {
 		t.Fatalf("fallback applied state = calls:%+v accepted:%+v remain:%d target:%+v stage:%d done:%v, want generated steps",
 			applier.calls, applier.accepted, applier.remainNum, applier.target, applier.stageTarget, applier.done)
 	}
-	ApplyChainInventoryPlan(plan, nil)
+	if nilResult := ApplyChainInventoryPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.HasStageTarget || nilResult.Done {
+		t.Fatalf("nil apply result = %+v, want empty", nilResult)
+	}
 }
 
 type recordingChainInventoryApplier struct {
