@@ -147,6 +147,13 @@ type PostInventorySettlementInput struct {
 	Progress         SessionProgress
 }
 
+// PostInventoryRunInput is the lock-free state after an inventory response has
+// been accepted and peer fetch slots have been refilled.
+type PostInventoryRunInput struct {
+	OutboundRequests int
+	Progress         SessionProgress
+}
+
 // PostInventorySettlementStepAction names one session action after accepting a
 // peer inventory response and refilling local fetch slots.
 type PostInventorySettlementStepAction uint8
@@ -174,6 +181,13 @@ type PostInventorySettlementPlan struct {
 	TryFindPeer        bool
 	LockedSteps        []PostInventorySettlementStep
 	AfterDispatchSteps []PostInventorySettlementStep
+}
+
+// PostInventoryRunPlan groups the downloader-owned settlement and dispatch
+// decisions after accepting a peer inventory response.
+type PostInventoryRunPlan struct {
+	Settlement PostInventorySettlementPlan
+	Dispatch   FetchRefillDispatchPlan
 }
 
 // PostInventorySettlementPlanApplier performs the runtime actions named by a
@@ -315,6 +329,21 @@ func PlanPostInventorySettlement(in PostInventorySettlementInput) PostInventoryS
 		return PostInventorySettlementPlan{Mirror: true, Finish: true}.withSteps()
 	}
 	return PostInventorySettlementPlan{Mirror: true}.withSteps()
+}
+
+// PlanPostInventoryRun derives the full downloader decision after a peer
+// inventory response has refilled fetch slots.
+func PlanPostInventoryRun(in PostInventoryRunInput) PostInventoryRunPlan {
+	return PostInventoryRunPlan{
+		Settlement: PlanPostInventorySettlement(PostInventorySettlementInput{
+			OutboundRequests: in.OutboundRequests,
+			Progress:         in.Progress,
+		}),
+		Dispatch: PlanFetchRefillDispatch(FetchRefillDispatchInput{
+			OutboundRequests: in.OutboundRequests,
+			Progress:         in.Progress,
+		}),
+	}
 }
 
 func (p PostInventorySettlementPlan) withSteps() PostInventorySettlementPlan {

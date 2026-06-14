@@ -331,6 +331,62 @@ func TestPlanPostInventorySettlement(t *testing.T) {
 	}
 }
 
+func TestPlanPostInventoryRun(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	got := PlanPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: 2,
+		Progress:         active,
+	})
+	want := PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Mirror:      true,
+			LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+		},
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active outbound run = %+v, want %+v", got, want)
+	}
+
+	stalled := SessionProgress{Syncing: true, RetryListLen: 1, Peers: []PeerProgress{{Done: true}}}
+	got = PlanPostInventoryRun(PostInventoryRunInput{Progress: stalled})
+	want = PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Reset:              true,
+			TryFindPeer:        true,
+			LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryReset}},
+			AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryTryFindPeer}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("stalled retry run = %+v, want %+v", got, want)
+	}
+
+	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
+	got = PlanPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: 1,
+		Progress:         complete,
+	})
+	want = PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Mirror:             true,
+			Finish:             true,
+			LockedSteps:        []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+			AfterDispatchSteps: []PostInventorySettlementStep{{Action: PostInventoryFinish}},
+		},
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("complete outbound run = %+v, want %+v", got, want)
+	}
+}
+
 func TestApplyPostInventorySettlementPlan(t *testing.T) {
 	applier := new(recordingPostInventorySettlementApplier)
 	plan := PostInventorySettlementPlan{
