@@ -414,6 +414,102 @@ func TestAggregatorBuildLatestOnly(t *testing.T) {
 	}
 }
 
+func TestAggregatorBuildLatestPrunesDeletedContractGeneration(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryDatabase()
+	contract := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x99}, common.AccountIDLength)...))
+	root := common.BytesToHash(bytes.Repeat([]byte{0x45}, common.HashLength))
+
+	if err := rawdb.WriteStateKVGeneration(db, contract, 8); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		generation uint64
+		domain     kvdomains.KVDomain
+		key        []byte
+		value      []byte
+	}{
+		{generation: 7, domain: kvdomains.ContractMetadata, key: []byte("meta"), value: []byte("deleted-contract-meta")},
+		{generation: 7, domain: kvdomains.ContractStorage, key: []byte("slot/reused"), value: []byte("deleted-storage")},
+		{generation: 8, domain: kvdomains.ContractMetadata, key: []byte("meta"), value: []byte("recreated-contract-meta")},
+		{generation: 8, domain: kvdomains.ContractStorage, key: []byte("slot/reused"), value: []byte("recreated-storage")},
+	} {
+		if err := rawdb.WriteStateKVLatest(db, contract, row.generation, row.domain, row.key, row.value); err != nil {
+			t.Fatalf("write generation %d domain %s: %v", row.generation, kvdomains.Name(row.domain), err)
+		}
+	}
+	if err := rawdb.WriteLatestDomainCommitmentRoot(db, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateCommitmentCheckpoint(db, &rawdb.StateCommitmentCheckpoint{
+		BlockNum:  8,
+		BlockHash: common.Hash{0x08},
+		Root:      root,
+		Scheme:    rawdb.LatestDomainCommitmentScheme,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawdb.WriteStateTxRange(db, 8, common.Hash{0x08}, 80, 90); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewAggregator(dir).BuildLatest(db, AggregatorBuildOptions{FromTxNum: 80, ToTxNum: 90})
+	if err != nil {
+		t.Fatalf("BuildLatest: %v", err)
+	}
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVGeneration, 0, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractMetadata, SegmentLatest)
+	assertSegmentRef(t, result.Manifest, SegmentDatasetKVLatest, kvdomains.ContractStorage, SegmentLatest)
+
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	if generation, ok, err := mgr.GetKVGeneration(contract, 85); err != nil || !ok || generation != 8 {
+		t.Fatalf("cold generation = %d ok=%v err=%v, want 8", generation, ok, err)
+	}
+	for _, tc := range []struct {
+		domain kvdomains.KVDomain
+		key    []byte
+		want   string
+	}{
+		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
+		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
+	} {
+		if old, ok, err := mgr.GetKVLatest(tc.domain, contract, 7, tc.key, 85); err != nil || ok {
+			t.Fatalf("old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
+		}
+		got, ok, err := mgr.GetKVLatest(tc.domain, contract, 8, tc.key, 85)
+		if err != nil || !ok || string(got) != tc.want {
+			t.Fatalf("current generation %s value = %q ok=%v err=%v, want %q", kvdomains.Name(tc.domain), got, ok, err, tc.want)
+		}
+	}
+
+	restored := rawdb.NewMemoryDatabase()
+	if err := mgr.RestoreLatest(restored, 85); err != nil {
+		t.Fatalf("RestoreLatest: %v", err)
+	}
+	if generation, ok, err := rawdb.ReadStateKVGeneration(restored, contract); err != nil || !ok || generation != 8 {
+		t.Fatalf("restored generation = %d ok=%v err=%v, want 8", generation, ok, err)
+	}
+	for _, tc := range []struct {
+		domain kvdomains.KVDomain
+		key    []byte
+		want   string
+	}{
+		{domain: kvdomains.ContractMetadata, key: []byte("meta"), want: "recreated-contract-meta"},
+		{domain: kvdomains.ContractStorage, key: []byte("slot/reused"), want: "recreated-storage"},
+	} {
+		if old, ok, err := rawdb.ReadStateKVLatest(restored, contract, 7, tc.domain, tc.key); err != nil || ok {
+			t.Fatalf("restored old generation %s value = %q ok=%v err=%v, want absent", kvdomains.Name(tc.domain), old, ok, err)
+		}
+		got, ok, err := rawdb.ReadStateKVLatest(restored, contract, 8, tc.domain, tc.key)
+		if err != nil || !ok || string(got) != tc.want {
+			t.Fatalf("restored current generation %s value = %q ok=%v err=%v, want %q", kvdomains.Name(tc.domain), got, ok, err, tc.want)
+		}
+	}
+}
+
 func TestWriteManifestProgressStagesUsesStageProgressStore(t *testing.T) {
 	store := &recordingSnapshotStageProgressStore{}
 	progress := &Progress{
