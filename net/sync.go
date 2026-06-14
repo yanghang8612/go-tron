@@ -380,7 +380,8 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 }
 
 func (ss *SyncService) applySessionStartupPlan(headBlock *types.Block, startup syncdl.SessionStartupPlan) {
-	syncdl.ApplySessionStartupPlan(startup, syncSessionStartupApplier{service: ss, headBlock: headBlock})
+	result := syncdl.ApplySessionStartupPlan(startup, syncSessionStartupApplier{service: ss, headBlock: headBlock})
+	ss.logSyncStartupRepairSummary(result)
 }
 
 type syncSessionStartupApplier struct {
@@ -491,6 +492,32 @@ func (ss *SyncService) logSyncStageProgressRepair(head *types.Block, repair sync
 		syncLog.Debug("Deleted stale sync stage progress", "stage", repair.Stage, "block", repair.Row.BlockNum, "hash", repair.Row.BlockHash, "head", head.Number(), "headHash", head.Hash())
 		return
 	}
+}
+
+func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
+	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore {
+		return
+	}
+	repair := result.SyncPipelineRepairResult
+	restore := result.StagedBodyRestore
+	syncLog.Info("Sync startup repair summary",
+		"syncStartupRepairComplete", repair.Complete,
+		"syncStartupRepairKept", repair.Kept,
+		"syncStartupRepairMissing", repair.Missing,
+		"syncStartupRepairDeleted", repair.Deleted,
+		"syncStartupRepairHasBlocked", repair.HasBlocked,
+		"syncStartupRepairFirstBlocked", repair.FirstBlockedStage,
+		"syncStartupRepairInterrupted", repair.Interrupted,
+		"syncStartupRepairErrorStage", repair.ErrorStage,
+		"syncStartupRepairRows", len(repair.Repairs),
+		"syncStartupStagedRestored", restore.Restored,
+		"syncStartupStagedTargetHead", restore.TargetHead,
+		"syncStartupStagedNextExpected", restore.NextExpected,
+		"syncStartupStagedNeedPruneTail", restore.NeedPruneTail,
+		"syncStartupStagedPruneFrom", restore.PruneFrom,
+		"syncStartupStagedHaveLastRestored", restore.HaveLastRestored,
+		"syncStartupStagedLastRestored", restore.LastRestoredNum,
+	)
 }
 
 func (ss *SyncService) restoreSyncStagedBodiesLocked(start uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {

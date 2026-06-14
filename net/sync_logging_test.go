@@ -11,8 +11,10 @@ import (
 	tcommon "github.com/tronprotocol/go-tron/common"
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/p2p"
 )
 
@@ -156,6 +158,61 @@ func TestSync_BatchSummaryReportedOnInterval(t *testing.T) {
 	} {
 		if !strings.Contains(out, k) {
 			t.Errorf("missing key %q in summary line:\n%s", k, out)
+		}
+	}
+}
+
+func TestSync_StartupRepairSummaryLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := gtronlog.Root()
+	defer gtronlog.SetDefault(prev)
+	h := gtronlog.LogfmtHandlerWithLevel(&buf, gtronlog.LevelDebug)
+	gtronlog.SetDefault(gtronlog.NewLogger(h))
+
+	ss := &SyncService{}
+	ss.logSyncStartupRepairSummary(syncdl.SessionStartupApplyResult{
+		HasSyncPipelineRepair: true,
+		SyncPipelineRepairResult: syncdl.SyncPipelineProgressRepairResult{
+			Repairs:           []syncdl.SyncStageProgressRepair{{Stage: rawdb.StageSyncImport}, {Stage: rawdb.StageSyncExecution}, {Stage: rawdb.StageSyncCommitment}},
+			Kept:              2,
+			Deleted:           1,
+			HasBlocked:        true,
+			FirstBlockedStage: rawdb.StageSyncCommitment,
+		},
+		HasStagedBodyRestore: true,
+		StagedBodyRestore: syncdl.StagedBodyRestoreResult{
+			Restored:         3,
+			TargetHead:       9,
+			NextExpected:     7,
+			NeedPruneTail:    true,
+			PruneFrom:        8,
+			HaveLastRestored: true,
+			LastRestoredNum:  6,
+		},
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "Sync startup repair summary") {
+		t.Fatalf("expected startup repair summary line, got:\n%s", out)
+	}
+	for _, k := range []string{
+		"syncStartupRepairComplete=false",
+		"syncStartupRepairKept=2",
+		"syncStartupRepairMissing=0",
+		"syncStartupRepairDeleted=1",
+		"syncStartupRepairHasBlocked=true",
+		"syncStartupRepairFirstBlocked=SyncCommitment",
+		"syncStartupRepairRows=3",
+		"syncStartupStagedRestored=3",
+		"syncStartupStagedTargetHead=9",
+		"syncStartupStagedNextExpected=7",
+		"syncStartupStagedNeedPruneTail=true",
+		"syncStartupStagedPruneFrom=8",
+		"syncStartupStagedHaveLastRestored=true",
+		"syncStartupStagedLastRestored=6",
+	} {
+		if !strings.Contains(out, k) {
+			t.Errorf("missing key/value %q in startup summary line:\n%s", k, out)
 		}
 	}
 }

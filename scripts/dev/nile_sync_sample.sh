@@ -415,6 +415,24 @@ def imported_segment_fields_from_line(line):
     fields = parse_logfmt_fields(text)
     return fields if fields else {}
 
+def startup_repair_fields_from_line(line):
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            msg = obj.get("msg") or obj.get("message") or ""
+            if msg == "Sync startup repair summary":
+                return obj
+            return None
+    except Exception:
+        pass
+    if "Sync startup repair summary" not in text:
+        return None
+    fields = parse_logfmt_fields(text)
+    return fields if fields else {}
+
 def parse_sync_log(path):
     row = {
         "syncLogFile": path,
@@ -459,6 +477,24 @@ def parse_sync_log(path):
         "syncLogExecPlanLast": -1,
         "syncLogExecPlanStagesPerBlock": -1.0,
         "syncLogExecPlanPostBodyStagesPerBlock": -1.0,
+        "syncStartupRepairStatus": "skipped" if not path else "missing",
+        "syncStartupRepairSummaries": 0,
+        "syncStartupRepairComplete": False,
+        "syncStartupRepairKept": -1,
+        "syncStartupRepairMissing": -1,
+        "syncStartupRepairDeleted": -1,
+        "syncStartupRepairHasBlocked": False,
+        "syncStartupRepairFirstBlocked": "",
+        "syncStartupRepairInterrupted": False,
+        "syncStartupRepairErrorStage": "",
+        "syncStartupRepairRows": -1,
+        "syncStartupStagedRestored": -1,
+        "syncStartupStagedTargetHead": -1,
+        "syncStartupStagedNextExpected": -1,
+        "syncStartupStagedNeedPruneTail": False,
+        "syncStartupStagedPruneFrom": -1,
+        "syncStartupStagedHaveLastRestored": False,
+        "syncStartupStagedLastRestored": -1,
     }
     if not path:
         return row
@@ -468,13 +504,44 @@ def parse_sync_log(path):
         return row
     latest = None
     count = 0
+    latest_startup = None
+    startup_count = 0
     for line in lines:
         fields = imported_segment_fields_from_line(line)
-        if fields is None:
-            continue
-        count += 1
-        latest = fields
+        if fields is not None:
+            count += 1
+            latest = fields
+        startup_fields = startup_repair_fields_from_line(line)
+        if startup_fields is not None:
+            startup_count += 1
+            latest_startup = startup_fields
     row["syncLogImportedSegments"] = count
+    row["syncStartupRepairSummaries"] = startup_count
+    if latest_startup is not None:
+        row["syncStartupRepairStatus"] = "ok"
+        startup_mappings = {
+            "syncStartupRepairComplete": "syncStartupRepairComplete",
+            "syncStartupRepairKept": "syncStartupRepairKept",
+            "syncStartupRepairMissing": "syncStartupRepairMissing",
+            "syncStartupRepairDeleted": "syncStartupRepairDeleted",
+            "syncStartupRepairHasBlocked": "syncStartupRepairHasBlocked",
+            "syncStartupRepairFirstBlocked": "syncStartupRepairFirstBlocked",
+            "syncStartupRepairInterrupted": "syncStartupRepairInterrupted",
+            "syncStartupRepairErrorStage": "syncStartupRepairErrorStage",
+            "syncStartupRepairRows": "syncStartupRepairRows",
+            "syncStartupStagedRestored": "syncStartupStagedRestored",
+            "syncStartupStagedTargetHead": "syncStartupStagedTargetHead",
+            "syncStartupStagedNextExpected": "syncStartupStagedNextExpected",
+            "syncStartupStagedNeedPruneTail": "syncStartupStagedNeedPruneTail",
+            "syncStartupStagedPruneFrom": "syncStartupStagedPruneFrom",
+            "syncStartupStagedHaveLastRestored": "syncStartupStagedHaveLastRestored",
+            "syncStartupStagedLastRestored": "syncStartupStagedLastRestored",
+        }
+        for source, dest in startup_mappings.items():
+            if source in latest_startup:
+                row[dest] = parse_log_value(latest_startup[source])
+    elif row["syncStartupRepairStatus"] != "skipped":
+        row["syncStartupRepairStatus"] = "no-summary"
     if latest is None:
         row["syncLogStatus"] = "no-segment"
         return row
