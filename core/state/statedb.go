@@ -1001,6 +1001,28 @@ func (s *StateDB) AddFreezeV2(addr tcommon.Address, resourceType corepb.Resource
 	obj.markDirty()
 }
 
+// ClearV2Freeze zeroes an account's Stake-2.0 freeze state in place, mirroring
+// java-tron's clearOwnerFreezeV2 (clearFrozenV2 + setNetUsage(0) +
+// setNewWindowSize(BANDWIDTH,0) + setEnergyUsage(0) + setNewWindowSize(ENERGY,0)
+// + clearUnfrozenV2) used by the SELFDESTRUCT path under allow_tvm_freeze_v2.
+// Only the window *size* is zeroed (the optimized flag is left as the preceding
+// usage recovery set it, matching java setNewWindowSize); the latest-consume
+// times are likewise left untouched here.
+func (s *StateDB) ClearV2Freeze(addr tcommon.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.ClearFrozenV2()
+	obj.account.SetNetUsage(0)
+	obj.account.SetNewNetWindowSize(0)
+	obj.account.SetEnergyUsage(0)
+	obj.account.SetNewEnergyWindowSize(0)
+	obj.account.ClearUnfrozenV2()
+	obj.markDirty()
+}
+
 // --- V1 Stake (Stake 1.0) StateDB methods ---
 
 func (s *StateDB) FreezeV1Bandwidth(addr tcommon.Address, amount, expireTimeMs int64) {

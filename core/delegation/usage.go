@@ -114,6 +114,33 @@ func FoldUsageIntoOwner(statedb *state.StateDB, dp *state.DynamicProperties, own
 	writeResState(statedb, owner, resource, newOwnerUsage, finalRaw, finalOpt, now)
 }
 
+// MergeUsageToInheritor mirrors java-tron Program.transferFrozenV2BalanceToInheritor's
+// per-resource usage merge for a self-destructing contract: recover the owner's
+// usage to `now` (BandwidthProcessor.updateUsageForDelegated / EnergyProcessor
+// .updateUsage — pure recovery that also renormalizes + persists the window and
+// stamps the owner's consume time = now), then, when that recovered usage is
+// positive, fold ALL of it into the inheritor's window
+// (unDelegateIncrease(inheritor, owner, owner.usage, resource, now)). java guards
+// the fold on `owner.getUsage() > 0` after the recovery, so callers that later
+// clearOwnerFreezeV2 still see the owner's consume time advanced to now.
+func MergeUsageToInheritor(statedb *state.StateDB, dp *state.DynamicProperties, owner, inheritor tcommon.Address, resource corepb.ResourceCode, now int64) {
+	acct := statedb.GetAccount(owner)
+	if acct == nil {
+		return
+	}
+	harden := dp.AllowHardenResourceCalculation()
+	cancelAllV2 := dp.AllowCancelAllUnfreezeV2()
+
+	usage, lastTime, rawWindow, optimized := resState(statedb, acct, owner, resource)
+	recovered, newRaw, newOpt := computeResourceIncrease(rawWindow, optimized, usage, 0, lastTime, now, harden, cancelAllV2)
+	// java updateUsageForDelegated/updateUsage persists the recovered usage+window
+	// and the suicide body sets the owner's consume time to now.
+	writeResState(statedb, owner, resource, recovered, newRaw, newOpt, now)
+	if recovered > 0 {
+		FoldUsageIntoOwner(statedb, dp, inheritor, resource, recovered, newRaw, newOpt, now)
+	}
+}
+
 // AvailableFrozenV2ForDelegation returns the owner's self-frozen V2 balance
 // that can still be delegated after accounting for already-consumed resource
 // usage. This mirrors java-tron's DelegateResourceActuator.validate:

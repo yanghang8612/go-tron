@@ -886,7 +886,7 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			}
 		}
 	}
-	interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
+	suicideIT := interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
 	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
 	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
 	if oldSuicide && sameOldSuicideAddress {
@@ -937,6 +937,28 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, inheritor)
 		} else if address != contract.Address {
 			interpreter.tvm.transferDelegatedResourceToInheritor(contract.Address, address)
+		}
+	}
+	if interpreter.tvmConfig.StakingV2 {
+		// java-tron Program.suicide (Program.java:505-514) / suicide2 (574-581):
+		// when allow_tvm_freeze_v2 (Stake 2.0) is active, move the destroyed
+		// contract's FrozenV2 balances + usage to the inheritor and bump the
+		// suicide internal-tx value by any withdrawn expired-unfreeze balance. The
+		// inheritor selection matches the V1 block above (blackhole for a
+		// self-obtainer on old suicide; the obtainer otherwise). suicide2 returns
+		// before this when owner == obtainer, so the distinct-address guard holds.
+		var expireUnfrozenBalance int64
+		if oldSuicide {
+			inheritor := address
+			if address == contract.Address {
+				inheritor = interpreter.tvm.blackholeAddress()
+			}
+			expireUnfrozenBalance = interpreter.tvm.transferFrozenV2BalanceToInheritor(contract.Address, inheritor)
+		} else if address != contract.Address {
+			expireUnfrozenBalance = interpreter.tvm.transferFrozenV2BalanceToInheritor(contract.Address, address)
+		}
+		if expireUnfrozenBalance > 0 && suicideIT != nil && len(suicideIT.CallValueInfo) > 0 {
+			suicideIT.CallValueInfo[0].CallValue += expireUnfrozenBalance
 		}
 	}
 	if oldSuicide {

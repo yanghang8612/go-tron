@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -341,6 +342,67 @@ func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Ad
 	if tvm.cfg.SelfdestructRestrict {
 		tvm.StateDB.ClearV1Freeze(owner)
 	}
+}
+
+// transferFrozenV2BalanceToInheritor mirrors java-tron
+// Program.transferFrozenV2BalanceToInheritor (Program.java:620-681), invoked
+// from suicide()/suicide2() when allow_tvm_freeze_v2 (Stake 2.0) is active. It
+// moves the destroyed contract's self-frozen V2 balances (BANDWIDTH/ENERGY/
+// TRON_POWER) to the inheritor, folds the owner's recovered resource usage into
+// the inheritor's recovery window (unDelegateIncrease), withdraws any expired
+// pending V2 unfreeze to the inheritor's liquid balance, and clears the owner's
+// V2 freeze/usage/window/unfreeze state (clearOwnerFreezeV2). Unlike the V1
+// release the global total_net_weight/total_energy_weight is left untouched: the
+// frozen weight follows the balance to the inheritor. Returns the expired
+// unfreeze balance, which the caller adds to the suicide internal-tx value.
+func (tvm *TVM) transferFrozenV2BalanceToInheritor(owner, inheritor tcommon.Address) int64 {
+	ownerAccount := tvm.StateDB.GetAccount(owner)
+	if ownerAccount == nil {
+		return 0
+	}
+	// java reads inheritorCapsule = repo.getAccount(inheritor) after the obtainer
+	// was materialised by createAccountIfNotExist in the balance-transfer step
+	// (always active alongside allow_tvm_freeze_v2). Ensure it exists so the
+	// frozen-V2 move and the usage fold are not silently dropped: AddFreezeV2 and
+	// the fold no-op on a missing account, unlike AddBalance which GetOrCreates.
+	tvm.maybeCreateNormalAccountForValueTransfer(inheritor)
+
+	// 1. Move the owner's self-frozen V2 balances to the inheritor (java
+	//    getFrozenV2List().forEach addFrozenBalanceForXxxV2). The global weight is
+	//    conserved — owner loses, inheritor gains — so there is no addTotal*Weight.
+	for _, resource := range []corepb.ResourceCode{
+		corepb.ResourceCode_BANDWIDTH,
+		corepb.ResourceCode_ENERGY,
+		corepb.ResourceCode_TRON_POWER,
+	} {
+		if amount := ownerAccount.GetFrozenV2Amount(resource); amount > 0 {
+			tvm.StateDB.AddFreezeV2(inheritor, resource, amount)
+		}
+	}
+
+	// 2. Fold the owner's recovered usage windows into the inheritor
+	//    (updateUsageForDelegated/updateUsage + unDelegateIncrease).
+	now := tvm.ResourceTime()
+	delegation.MergeUsageToInheritor(tvm.StateDB, tvm.DynProps, owner, inheritor, corepb.ResourceCode_BANDWIDTH, now)
+	delegation.MergeUsageToInheritor(tvm.StateDB, tvm.DynProps, owner, inheritor, corepb.ResourceCode_ENERGY, now)
+
+	// 3. Withdraw the owner's expired pending V2 unfreezes to the inheritor.
+	var expireUnfrozenBalance int64
+	nowTimestamp := tvm.DynProps.LatestBlockHeaderTimestamp()
+	for _, u := range ownerAccount.UnfrozenV2() {
+		if u.UnfreezeAmount > 0 && u.UnfreezeExpireTime <= nowTimestamp {
+			expireUnfrozenBalance += u.UnfreezeAmount
+		}
+	}
+	if expireUnfrozenBalance > 0 {
+		tvm.StateDB.AddBalance(inheritor, expireUnfrozenBalance)
+		tvm.Nonce++
+		tvm.addInternalTransaction(owner, inheritor, expireUnfrozenBalance, nil, "withdrawExpireUnfreezeWhileSuiciding", 0, 0)
+	}
+
+	// 4. clearOwnerFreezeV2: zero the owner's V2 freeze/usage/window/unfreeze.
+	tvm.StateDB.ClearV2Freeze(owner)
+	return expireUnfrozenBalance
 }
 
 // Create deploys a new contract.
