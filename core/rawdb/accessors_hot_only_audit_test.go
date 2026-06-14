@@ -436,6 +436,29 @@ func second(source any, tx []byte, readTxInfo func(any, []byte) any) {
 	}
 }
 
+func TestColdArchiveAuditChainDBAliasDoesNotLeakAcrossFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+func first(db *rawdb.ChainDB) {
+	archive := db
+	_ = archive
+}
+
+func second(archive any, tx []byte) {
+	_ = rawdb.ReadTransactionInfo(archive, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "rawdb.ReadTransactionInfo") {
+		t.Fatalf("offenders = %+v, want ChainDB alias from first function not to bless second function hot-store read", offenders)
+	}
+}
+
 func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 	root := findRepoRoot(t)
 	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
@@ -469,6 +492,50 @@ func query(m coldManager) {
 	})
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateEventLogs") {
 		t.Fatalf("offenders = %+v, want non-ChainDB IterateEventLogs call", offenders)
+	}
+}
+
+func TestEventLogAuditRejectsMethodValueOnNonChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) IterateEventLogs(uint64, uint64, rawdb.EventLogFilter, func(rawdb.EventLog) (bool, error)) error {
+	return nil
+}
+
+func query(m coldManager) {
+	iter := m.IterateEventLogs
+	_ = iter(1, 2, rawdb.EventLogFilter{}, nil)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"IterateEventLogs": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateEventLogs") {
+		t.Fatalf("offenders = %+v, want non-ChainDB IterateEventLogs method value rejected", offenders)
+	}
+}
+
+func TestEventLogAuditAllowsMethodValueOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+func query(db *rawdb.ChainDB) {
+	iter := db.IterateEventLogs
+	_ = iter(1, 2, rawdb.EventLogFilter{}, nil)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"IterateEventLogs": {},
+	})
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want ChainDB IterateEventLogs method value accepted", offenders)
 	}
 }
 
@@ -540,6 +607,35 @@ func query(h holder) {
 	})
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
 		t.Fatalf("offenders = %+v, want selector-named non-ChainDB event-log boundary rejected", offenders)
+	}
+}
+
+func TestEventLogAuditChainDBAliasDoesNotLeakAcrossFunctions(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) EventLogRangeCovered(uint64, uint64) (bool, error) {
+	return true, nil
+}
+
+func first(db *rawdb.ChainDB) {
+	chainDB := db
+	_ = chainDB
+}
+
+func second(chainDB coldManager) {
+	_, _ = chainDB.EventLogRangeCovered(1, 2)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"EventLogRangeCovered": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "EventLogRangeCovered") {
+		t.Fatalf("offenders = %+v, want ChainDB alias from first function not to bless second function event-log call", offenders)
 	}
 }
 
@@ -830,14 +926,17 @@ func auditColdArchiveReaderCalls(t *testing.T, root string, watched map[string]s
 			return nil
 		}
 		rel := auditRelPath(root, path)
-		aliases := make(map[string]struct{})
+		packageAliases, packageVarTypes := packageChainDBBoundaries(file, rawdbNames, typeIndex)
+		aliases := cloneStringSet(packageAliases)
 		packageReaderAliases := packageColdArchiveReaderAliases(file, rawdbNames, watched)
 		readerAliases := cloneStringMap(packageReaderAliases)
-		varTypes := make(map[string]auditExprType)
+		varTypes := cloneAuditExprTypeMap(packageVarTypes)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
+				aliases = cloneStringSet(packageAliases)
 				readerAliases = cloneStringMap(packageReaderAliases)
+				varTypes = cloneAuditExprTypeMap(packageVarTypes)
 				recordAuditFieldTypes(n.Recv, rawdbNames, varTypes)
 				recordAuditFieldTypes(n.Type.Params, rawdbNames, varTypes)
 				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
@@ -897,6 +996,27 @@ func packageColdArchiveReaderAliases(file *ast.File, rawdbNames map[string]struc
 	return aliases
 }
 
+func packageChainDBBoundaries(file *ast.File, rawdbNames map[string]struct{}, typeIndex auditTypeIndex) (map[string]struct{}, map[string]auditExprType) {
+	aliases := make(map[string]struct{})
+	varTypes := make(map[string]auditExprType)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			recordAuditTypedVars(value.Names, value.Type, rawdbNames, varTypes)
+			recordChainDBTypedAliases(value.Names, value.Type, rawdbNames, aliases)
+			recordChainDBAliases(exprsFromIdents(value.Names), value.Values, rawdbNames, aliases, varTypes, typeIndex)
+		}
+	}
+	return aliases, varTypes
+}
+
 func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]struct{}) []string {
 	t.Helper()
 	var offenders []string
@@ -927,32 +1047,48 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 			return err
 		}
 		rawdbNames := rawdbImportNames(file)
-		aliases := make(map[string]struct{})
-		varTypes := make(map[string]auditExprType)
+		packageAliases, packageVarTypes := packageChainDBBoundaries(file, rawdbNames, typeIndex)
+		packageMethodAliases := packageEventLogMethodAliases(file, watched, rawdbNames, packageAliases, packageVarTypes, typeIndex)
+		aliases := cloneStringSet(packageAliases)
+		methodAliases := cloneEventLogMethodAliasMap(packageMethodAliases)
+		varTypes := cloneAuditExprTypeMap(packageVarTypes)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.FuncDecl:
+				aliases = cloneStringSet(packageAliases)
+				methodAliases = cloneEventLogMethodAliasMap(packageMethodAliases)
+				varTypes = cloneAuditExprTypeMap(packageVarTypes)
 				recordAuditFieldTypes(n.Recv, rawdbNames, varTypes)
 				recordAuditFieldTypes(n.Type.Params, rawdbNames, varTypes)
 				recordChainDBFieldAliases(n.Type.Params, rawdbNames, aliases)
 			case *ast.AssignStmt:
 				recordChainDBAliases(n.Lhs, n.Rhs, rawdbNames, aliases, varTypes, typeIndex)
+				recordEventLogMethodAliases(n.Lhs, n.Rhs, watched, rawdbNames, aliases, varTypes, typeIndex, methodAliases)
 			case *ast.ValueSpec:
 				recordAuditTypedVars(n.Names, n.Type, rawdbNames, varTypes)
 				recordChainDBTypedAliases(n.Names, n.Type, rawdbNames, aliases)
 				recordChainDBAliases(exprsFromIdents(n.Names), n.Values, rawdbNames, aliases, varTypes, typeIndex)
+				recordEventLogMethodAliases(exprsFromIdents(n.Names), n.Values, watched, rawdbNames, aliases, varTypes, typeIndex, methodAliases)
 			case *ast.CallExpr:
-				sel, ok := n.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
+				switch fun := n.Fun.(type) {
+				case *ast.SelectorExpr:
+					if _, watch := watched[fun.Sel.Name]; !watch {
+						return true
+					}
+					if isChainDBBoundaryExpr(fun.X, rawdbNames, aliases, varTypes, typeIndex) {
+						return true
+					}
+					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), fun.Sel.Name))
+				case *ast.Ident:
+					alias, ok := methodAliases[fun.Name]
+					if !ok {
+						return true
+					}
+					if alias.ChainDB {
+						return true
+					}
+					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), alias.Method))
 				}
-				if _, watch := watched[sel.Sel.Name]; !watch {
-					return true
-				}
-				if isChainDBBoundaryExpr(sel.X, rawdbNames, aliases, varTypes, typeIndex) {
-					return true
-				}
-				offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), sel.Sel.Name))
 			}
 			return true
 		})
@@ -963,6 +1099,34 @@ func auditEventLogMethodCalls(t *testing.T, root string, watched map[string]stru
 	}
 	sort.Strings(offenders)
 	return offenders
+}
+
+type auditEventLogMethodAlias struct {
+	Method  string
+	ChainDB bool
+}
+
+func packageEventLogMethodAliases(file *ast.File, watched map[string]struct{}, rawdbNames map[string]struct{}, chainAliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex) map[string]auditEventLogMethodAlias {
+	methodAliases := make(map[string]auditEventLogMethodAlias)
+	aliases := cloneStringSet(chainAliases)
+	types := cloneAuditExprTypeMap(varTypes)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			recordAuditTypedVars(value.Names, value.Type, rawdbNames, types)
+			recordChainDBTypedAliases(value.Names, value.Type, rawdbNames, aliases)
+			recordChainDBAliases(exprsFromIdents(value.Names), value.Values, rawdbNames, aliases, types, typeIndex)
+			recordEventLogMethodAliases(exprsFromIdents(value.Names), value.Values, watched, rawdbNames, aliases, types, typeIndex, methodAliases)
+		}
+	}
+	return methodAliases
 }
 
 func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, aliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex) {
@@ -976,7 +1140,9 @@ func recordChainDBAliases(lhs, rhs []ast.Expr, rawdbNames map[string]struct{}, a
 		}
 		if isChainDBBoundaryExpr(rhs[i], rawdbNames, aliases, varTypes, typeIndex) {
 			aliases[ident.Name] = struct{}{}
+			continue
 		}
+		delete(aliases, ident.Name)
 	}
 }
 
@@ -1043,8 +1209,74 @@ func recordColdArchiveReaderAliases(lhs, rhs []ast.Expr, rawdbNames map[string]s
 	}
 }
 
+func recordEventLogMethodAliases(lhs, rhs []ast.Expr, watched map[string]struct{}, rawdbNames map[string]struct{}, chainAliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex, methodAliases map[string]auditEventLogMethodAlias) {
+	for i, left := range lhs {
+		if i >= len(rhs) {
+			return
+		}
+		ident, ok := left.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		if alias, ok := eventLogMethodAlias(rhs[i], watched, rawdbNames, chainAliases, varTypes, typeIndex, methodAliases); ok {
+			methodAliases[ident.Name] = alias
+			continue
+		}
+		delete(methodAliases, ident.Name)
+	}
+}
+
+func eventLogMethodAlias(expr ast.Expr, watched map[string]struct{}, rawdbNames map[string]struct{}, chainAliases map[string]struct{}, varTypes map[string]auditExprType, typeIndex auditTypeIndex, methodAliases map[string]auditEventLogMethodAlias) (auditEventLogMethodAlias, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	switch v := expr.(type) {
+	case *ast.SelectorExpr:
+		if _, watch := watched[v.Sel.Name]; !watch {
+			return auditEventLogMethodAlias{}, false
+		}
+		return auditEventLogMethodAlias{
+			Method:  v.Sel.Name,
+			ChainDB: isChainDBBoundaryExpr(v.X, rawdbNames, chainAliases, varTypes, typeIndex),
+		}, true
+	case *ast.Ident:
+		alias, ok := methodAliases[v.Name]
+		return alias, ok
+	default:
+		return auditEventLogMethodAlias{}, false
+	}
+}
+
 func cloneStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneStringSet(in map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for k := range in {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func cloneAuditExprTypeMap(in map[string]auditExprType) map[string]auditExprType {
+	out := make(map[string]auditExprType, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneEventLogMethodAliasMap(in map[string]auditEventLogMethodAlias) map[string]auditEventLogMethodAlias {
+	out := make(map[string]auditEventLogMethodAlias, len(in))
 	for k, v := range in {
 		out[k] = v
 	}
