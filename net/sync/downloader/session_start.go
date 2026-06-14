@@ -7,6 +7,56 @@ type SessionStartupInput struct {
 	RestoreLimit int
 }
 
+// SyncStartSkipReason names why an inbound StartSync request should not attach
+// the peer to the current downloader session.
+type SyncStartSkipReason string
+
+const (
+	SyncStartSkipNone            SyncStartSkipReason = ""
+	SyncStartSkipNoPeer          SyncStartSkipReason = "no-peer"
+	SyncStartSkipStopping        SyncStartSkipReason = "stopping"
+	SyncStartSkipPaused          SyncStartSkipReason = "paused"
+	SyncStartSkipPeerUnavailable SyncStartSkipReason = "peer-unavailable"
+	SyncStartSkipAlreadyJoined   SyncStartSkipReason = "already-joined"
+)
+
+// SyncStartGateInput is the side-effect-free pre-lock state needed to decide
+// whether StartSync should proceed far enough to touch session state.
+type SyncStartGateInput struct {
+	PeerPresent         bool
+	Stopping            bool
+	Paused              bool
+	AvailabilityChecked bool
+	PeerCanServe        bool
+}
+
+// SyncStartGatePlan reports whether StartSync may continue past its pre-lock
+// gate and, if not, why it stopped.
+type SyncStartGatePlan struct {
+	Allowed    bool
+	SkipReason SyncStartSkipReason
+}
+
+// SyncPeerAttachInput is the locked session state needed to decide whether a
+// candidate peer should be attached to the downloader session.
+type SyncPeerAttachInput struct {
+	Syncing           bool
+	PeerAlreadyJoined bool
+}
+
+// SyncPeerAttachPlan is the session-local side-effect schedule for attaching a
+// peer. SyncService still owns the concrete maps, peer objects, and messages.
+type SyncPeerAttachPlan struct {
+	Attach             bool
+	InitSession        bool
+	MarkChainRequested bool
+	MirrorLegacy       bool
+	SendChainSummary   bool
+	JoinAvailablePeers bool
+	LogStarted         bool
+	SkipReason         SyncStartSkipReason
+}
+
 // SessionStartupStepAction names one persistence/runtime repair step required
 // before a sync session asks peers for more inventory.
 type SessionStartupStepAction uint8
@@ -74,6 +124,41 @@ type SessionStartupApplyResult struct {
 	HasSyncPipelineOrderRepair bool
 	StagedBodyRestore          StagedBodyRestoreResult
 	HasStagedBodyRestore       bool
+}
+
+// PlanSyncStartGate applies the StartSync pre-lock gate without observing or
+// mutating service-owned session state.
+func PlanSyncStartGate(in SyncStartGateInput) SyncStartGatePlan {
+	switch {
+	case !in.PeerPresent:
+		return SyncStartGatePlan{SkipReason: SyncStartSkipNoPeer}
+	case in.Stopping:
+		return SyncStartGatePlan{SkipReason: SyncStartSkipStopping}
+	case in.Paused:
+		return SyncStartGatePlan{SkipReason: SyncStartSkipPaused}
+	case in.AvailabilityChecked && !in.PeerCanServe:
+		return SyncStartGatePlan{SkipReason: SyncStartSkipPeerUnavailable}
+	default:
+		return SyncStartGatePlan{Allowed: true}
+	}
+}
+
+// PlanSyncPeerAttach derives the locked StartSync session actions. A stale
+// pre-existing peer map is ignored when Syncing=false because session startup
+// reinitializes the maps before attaching the peer.
+func PlanSyncPeerAttach(in SyncPeerAttachInput) SyncPeerAttachPlan {
+	if in.Syncing && in.PeerAlreadyJoined {
+		return SyncPeerAttachPlan{SkipReason: SyncStartSkipAlreadyJoined}
+	}
+	return SyncPeerAttachPlan{
+		Attach:             true,
+		InitSession:        !in.Syncing,
+		MarkChainRequested: true,
+		MirrorLegacy:       true,
+		SendChainSummary:   true,
+		JoinAvailablePeers: true,
+		LogStarted:         !in.Syncing,
+	}
 }
 
 // PlanSessionStartup derives restart boundaries from the current canonical

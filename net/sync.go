@@ -296,52 +296,82 @@ func (ss *SyncService) FindCommonBlock(peerSummary []types.BlockID) uint64 {
 
 // StartSync initiates sync with a peer that has a higher head block.
 func (ss *SyncService) StartSync(peer *p2p.Peer) {
-	if peer == nil {
-		return
-	}
-	if ss.stopping.Load() {
-		return
-	}
-	if ss.pause.Paused() {
+	preGate := syncdl.PlanSyncStartGate(syncdl.SyncStartGateInput{
+		PeerPresent: peer != nil,
+		Stopping:    ss.stopping.Load(),
+		Paused:      ss.pause.Paused(),
+	})
+	if !preGate.Allowed {
 		return
 	}
 	needFrom := ss.chain.CurrentBlock().Number() + 1
+	availabilityChecked := false
+	peerCanServe := true
+	var lowest, peerHead uint64
 	if ss.handler != nil {
-		ok, lowest, head := ss.handler.syncPeerCanServe(peer, needFrom)
-		if !ok {
+		availabilityChecked = true
+		ok, serviceLowest, serviceHead := ss.handler.syncPeerCanServe(peer, needFrom)
+		peerCanServe = ok
+		lowest = serviceLowest
+		peerHead = serviceHead
+	}
+	gate := syncdl.PlanSyncStartGate(syncdl.SyncStartGateInput{
+		PeerPresent:         peer != nil,
+		Stopping:            ss.stopping.Load(),
+		Paused:              ss.pause.Paused(),
+		AvailabilityChecked: availabilityChecked,
+		PeerCanServe:        peerCanServe,
+	})
+	if !gate.Allowed {
+		if gate.SkipReason == syncdl.SyncStartSkipPeerUnavailable {
 			syncLog.Info("Skipping sync peer outside available range",
 				"peer", peer.ID(),
 				"needFrom", needFrom,
 				"peerLowest", lowest,
-				"peerHead", head)
-			return
+				"peerHead", peerHead)
 		}
+		return
 	}
 	now := time.Now()
 	ss.mu.Lock()
-	started := false
-	if !ss.syncing {
+	ss.ensureSessionMapsLocked()
+	attach := syncdl.PlanSyncPeerAttach(syncdl.SyncPeerAttachInput{
+		Syncing:           ss.syncing,
+		PeerAlreadyJoined: ss.syncing && ss.peers[peer.ID()] != nil,
+	})
+	if !attach.Attach {
+		ss.mu.Unlock()
+		return
+	}
+	if attach.InitSession {
 		ss.initSessionLocked(now)
-		started = true
 	}
 	ps, added := ss.addPeerStateLocked(peer)
 	if !added {
 		ss.mu.Unlock()
 		return
 	}
-	ps.chainRequested = true
-	ss.mirrorLegacyLocked()
+	if attach.MarkChainRequested {
+		ps.chainRequested = true
+	}
+	if attach.MirrorLegacy {
+		ss.mirrorLegacyLocked()
+	}
 	ss.mu.Unlock()
 
-	if started {
+	if attach.LogStarted {
 		syncLog.Info("Sync started",
 			"peer", peer.ID(),
 			"localHead", ss.chain.CurrentBlock().Number())
 	} else {
 		syncLog.Debug("Sync peer joined", "peer", peer.ID())
 	}
-	ss.sendSyncBlockChain(peer)
-	ss.joinAvailablePeers()
+	if attach.SendChainSummary {
+		ss.sendSyncBlockChain(peer)
+	}
+	if attach.JoinAvailablePeers {
+		ss.joinAvailablePeers()
+	}
 }
 
 func (ss *SyncService) initSessionLocked(now time.Time) {

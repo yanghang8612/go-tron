@@ -10,6 +10,65 @@ import (
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
+func TestPlanSyncStartGate(t *testing.T) {
+	base := SyncStartGateInput{
+		PeerPresent:         true,
+		AvailabilityChecked: true,
+		PeerCanServe:        true,
+	}
+	if got := PlanSyncStartGate(base); !got.Allowed || got.SkipReason != SyncStartSkipNone {
+		t.Fatalf("allowed gate = %+v, want allowed", got)
+	}
+	if got := PlanSyncStartGate(SyncStartGateInput{PeerPresent: true}); !got.Allowed {
+		t.Fatalf("unchecked availability gate = %+v, want allowed", got)
+	}
+
+	tests := []struct {
+		name string
+		in   SyncStartGateInput
+		want SyncStartSkipReason
+	}{
+		{name: "no peer", in: SyncStartGateInput{}, want: SyncStartSkipNoPeer},
+		{name: "stopping", in: SyncStartGateInput{PeerPresent: true, Stopping: true}, want: SyncStartSkipStopping},
+		{name: "paused", in: SyncStartGateInput{PeerPresent: true, Paused: true}, want: SyncStartSkipPaused},
+		{name: "unavailable", in: SyncStartGateInput{PeerPresent: true, AvailabilityChecked: true}, want: SyncStartSkipPeerUnavailable},
+	}
+	for _, tt := range tests {
+		got := PlanSyncStartGate(tt.in)
+		if got.Allowed || got.SkipReason != tt.want {
+			t.Fatalf("%s: gate = %+v, want skip %s", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestPlanSyncPeerAttach(t *testing.T) {
+	fresh := PlanSyncPeerAttach(SyncPeerAttachInput{})
+	if !fresh.Attach || !fresh.InitSession || !fresh.LogStarted ||
+		!fresh.MarkChainRequested || !fresh.MirrorLegacy ||
+		!fresh.SendChainSummary || !fresh.JoinAvailablePeers ||
+		fresh.SkipReason != SyncStartSkipNone {
+		t.Fatalf("fresh attach = %+v, want full session start", fresh)
+	}
+
+	joined := PlanSyncPeerAttach(SyncPeerAttachInput{Syncing: true})
+	if !joined.Attach || joined.InitSession || joined.LogStarted ||
+		!joined.MarkChainRequested || !joined.MirrorLegacy ||
+		!joined.SendChainSummary || !joined.JoinAvailablePeers {
+		t.Fatalf("peer join attach = %+v, want attach without session init", joined)
+	}
+
+	duplicate := PlanSyncPeerAttach(SyncPeerAttachInput{Syncing: true, PeerAlreadyJoined: true})
+	if duplicate.Attach || duplicate.InitSession || duplicate.MarkChainRequested ||
+		duplicate.SkipReason != SyncStartSkipAlreadyJoined {
+		t.Fatalf("duplicate attach = %+v, want already-joined skip", duplicate)
+	}
+
+	staleMap := PlanSyncPeerAttach(SyncPeerAttachInput{Syncing: false, PeerAlreadyJoined: true})
+	if !staleMap.Attach || !staleMap.InitSession || !staleMap.LogStarted {
+		t.Fatalf("stale non-syncing attach = %+v, want fresh session to ignore stale peer map", staleMap)
+	}
+}
+
 func TestPlanSessionStartup(t *testing.T) {
 	got := PlanSessionStartup(SessionStartupInput{
 		Head:         99,
