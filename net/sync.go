@@ -1149,20 +1149,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			ss.bufferWait.Begin(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
 			progress := ss.sessionProgressLocked()
-			joinAllowed := false
-			joinProbe := syncdl.PlanEmptyDrainJoinProbe(syncdl.EmptyDrainJoinProbeInput{Progress: progress})
-			if joinProbe.CheckJoinAvailablePeers {
-				joinAllowed = ss.shouldJoinAvailablePeersLocked(now, progress)
-			}
-			refill := syncdl.PlanEmptyDrainRefill(syncdl.EmptyDrainRefillInput{
-				OutboundRequests:          len(out),
-				Progress:                  progress,
-				JoinAvailablePeersAllowed: joinAllowed,
-			})
-			dispatch = refill.Dispatch
+			emptyDrain := syncdl.PlanEmptyDrainRun(syncdl.EmptyDrainRunInput{
+				OutboundRequests: len(out),
+				Progress:         progress,
+			}, syncEmptyDrainJoinGate{service: ss, now: now})
+			dispatch = emptyDrain.Refill.Dispatch
+			idle := emptyDrain.Refill.Idle
 			ss.mirrorLegacyLocked()
 			ss.mu.Unlock()
-			syncdl.ApplyIdleDrainAfterRefillPlan(refill.Idle, syncIdleDrainApplier{service: ss})
+			syncdl.ApplyIdleDrainAfterRefillPlan(idle, syncIdleDrainApplier{service: ss})
 			break
 		}
 		ss.mu.Unlock()
@@ -1178,6 +1173,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 	}
 	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
+}
+
+type syncEmptyDrainJoinGate struct {
+	service *SyncService
+	now     time.Time
+}
+
+func (g syncEmptyDrainJoinGate) CheckJoinAvailablePeers(progress syncdl.SessionProgress) bool {
+	return g.service.shouldJoinAvailablePeersLocked(g.now, progress)
 }
 
 func (ss *SyncService) waitForDrain() {

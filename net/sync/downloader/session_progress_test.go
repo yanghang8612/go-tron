@@ -156,6 +156,81 @@ func TestPlanEmptyDrainRefill(t *testing.T) {
 	}
 }
 
+func TestPlanEmptyDrainRun(t *testing.T) {
+	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
+	gate := &recordingEmptyDrainJoinGate{allowed: true}
+	got := PlanEmptyDrainRun(EmptyDrainRunInput{
+		OutboundRequests: 2,
+		Progress:         complete,
+	}, gate)
+	want := EmptyDrainRunPlan{
+		JoinProbe: EmptyDrainJoinProbePlan{},
+		Refill: EmptyDrainRefillPlan{
+			Idle: IdleDrainPlan{
+				Finish: true,
+				Steps:  []IdleDrainStep{{Action: IdleDrainFinish}},
+			},
+			Dispatch: FetchRefillDispatchPlan{
+				SendOutboundRequests: true,
+				Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("complete empty-drain run = %+v, want %+v", got, want)
+	}
+	if gate.calls != 0 {
+		t.Fatalf("complete empty-drain called join gate %d times, want 0", gate.calls)
+	}
+
+	incomplete := SessionProgress{Syncing: true, CurrentHead: 1, TargetHead: 3}
+	gate = &recordingEmptyDrainJoinGate{allowed: true}
+	got = PlanEmptyDrainRun(EmptyDrainRunInput{Progress: incomplete}, gate)
+	want = EmptyDrainRunPlan{
+		JoinProbe:                 EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: true},
+		JoinAvailablePeersAllowed: true,
+		Refill: EmptyDrainRefillPlan{
+			Idle: IdleDrainPlan{
+				JoinAvailablePeers: true,
+				Steps:              []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("joinable empty-drain run = %+v, want %+v", got, want)
+	}
+	if gate.calls != 1 || !reflect.DeepEqual(gate.progress, incomplete) {
+		t.Fatalf("join gate calls/progress = %d/%+v, want one call with incomplete progress", gate.calls, gate.progress)
+	}
+
+	gate = &recordingEmptyDrainJoinGate{allowed: false}
+	got = PlanEmptyDrainRun(EmptyDrainRunInput{
+		OutboundRequests: 1,
+		Progress:         incomplete,
+	}, gate)
+	want = EmptyDrainRunPlan{
+		JoinProbe: EmptyDrainJoinProbePlan{CheckJoinAvailablePeers: true},
+		Refill: EmptyDrainRefillPlan{
+			Dispatch: FetchRefillDispatchPlan{
+				SendOutboundRequests: true,
+				Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("non-joinable empty-drain run = %+v, want %+v", got, want)
+	}
+
+	gate = &recordingEmptyDrainJoinGate{allowed: true}
+	got = PlanEmptyDrainRun(EmptyDrainRunInput{Progress: SessionProgress{Syncing: true, Paused: true}}, gate)
+	if !reflect.DeepEqual(got, EmptyDrainRunPlan{}) {
+		t.Fatalf("paused empty-drain run = %+v, want no action", got)
+	}
+	if gate.calls != 0 {
+		t.Fatalf("paused empty-drain called join gate %d times, want 0", gate.calls)
+	}
+}
+
 func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	applier := new(recordingIdleDrainApplier)
 	ApplyIdleDrainAfterRefillPlan(IdleDrainPlan{Steps: []IdleDrainStep{
@@ -352,6 +427,18 @@ func TestSessionProgressShouldRestartForStalledRetries(t *testing.T) {
 
 type recordingIdleDrainApplier struct {
 	calls []IdleDrainStepAction
+}
+
+type recordingEmptyDrainJoinGate struct {
+	allowed  bool
+	calls    int
+	progress SessionProgress
+}
+
+func (g *recordingEmptyDrainJoinGate) CheckJoinAvailablePeers(progress SessionProgress) bool {
+	g.calls++
+	g.progress = progress
+	return g.allowed
 }
 
 func (a *recordingIdleDrainApplier) FinishSync() {

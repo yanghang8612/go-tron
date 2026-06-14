@@ -50,6 +50,13 @@ type EmptyDrainJoinProbeInput struct {
 	Progress SessionProgress
 }
 
+// EmptyDrainRunInput is the lock-free state after a drain iteration found no
+// local batch and existing peer fetch slots were refilled.
+type EmptyDrainRunInput struct {
+	OutboundRequests int
+	Progress         SessionProgress
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -106,6 +113,14 @@ type EmptyDrainJoinProbePlan struct {
 	CheckJoinAvailablePeers bool
 }
 
+// EmptyDrainRunPlan groups the full downloader decision for one empty local
+// drain iteration.
+type EmptyDrainRunPlan struct {
+	JoinProbe                 EmptyDrainJoinProbePlan
+	JoinAvailablePeersAllowed bool
+	Refill                    EmptyDrainRefillPlan
+}
+
 // IdleDrainPlanApplier performs the session-level runtime actions named by an
 // empty-drain plan.
 type IdleDrainPlanApplier interface {
@@ -117,6 +132,12 @@ type IdleDrainPlanApplier interface {
 // dispatch plan.
 type FetchRefillDispatchPlanApplier interface {
 	SendOutboundRequests()
+}
+
+// EmptyDrainJoinGate performs the caller-owned peer join throttle and
+// availability check when the downloader decides a join probe is useful.
+type EmptyDrainJoinGate interface {
+	CheckJoinAvailablePeers(progress SessionProgress) bool
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -207,6 +228,26 @@ func PlanEmptyDrainRefill(in EmptyDrainRefillInput) EmptyDrainRefillPlan {
 		Dispatch: PlanFetchRefillDispatch(FetchRefillDispatchInput{
 			OutboundRequests: in.OutboundRequests,
 			Progress:         in.Progress,
+		}),
+	}
+}
+
+// PlanEmptyDrainRun derives the full empty-drain settlement plan, including the
+// optional caller-owned peer-join gate. The gate is consulted only for active,
+// unfinished sessions.
+func PlanEmptyDrainRun(in EmptyDrainRunInput, gate EmptyDrainJoinGate) EmptyDrainRunPlan {
+	joinProbe := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: in.Progress})
+	joinAllowed := false
+	if joinProbe.CheckJoinAvailablePeers && gate != nil {
+		joinAllowed = gate.CheckJoinAvailablePeers(in.Progress)
+	}
+	return EmptyDrainRunPlan{
+		JoinProbe:                 joinProbe,
+		JoinAvailablePeersAllowed: joinAllowed,
+		Refill: PlanEmptyDrainRefill(EmptyDrainRefillInput{
+			OutboundRequests:          in.OutboundRequests,
+			Progress:                  in.Progress,
+			JoinAvailablePeersAllowed: joinAllowed,
 		}),
 	}
 }
