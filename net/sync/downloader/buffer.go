@@ -362,9 +362,19 @@ type ImportBatchRunApplyResult struct {
 	Settlement ImportBatchRunSettlementPlan
 }
 
+// ImportBatchRunSettlementAction names the local drain-loop branch selected
+// after one import-batch run.
+type ImportBatchRunSettlementAction uint8
+
+const (
+	ImportBatchRunSettlementContinueDrain ImportBatchRunSettlementAction = iota + 1
+	ImportBatchRunSettlementStopDrain
+)
+
 // ImportBatchRunSettlementPlan maps a completed import-batch run back to the
 // caller's local drain loop.
 type ImportBatchRunSettlementPlan struct {
+	Action        ImportBatchRunSettlementAction
 	ContinueDrain bool
 	StopDrain     bool
 }
@@ -479,9 +489,15 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 // can be observed by the session.
 func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
 	if result.StopDrain {
-		return ImportBatchRunSettlementPlan{StopDrain: true}
+		return ImportBatchRunSettlementPlan{
+			Action:    ImportBatchRunSettlementStopDrain,
+			StopDrain: true,
+		}
 	}
-	return ImportBatchRunSettlementPlan{ContinueDrain: true}
+	return ImportBatchRunSettlementPlan{
+		Action:        ImportBatchRunSettlementContinueDrain,
+		ContinueDrain: true,
+	}
 }
 
 // PlanImportBatchExecution returns the explicit canonical import target for a

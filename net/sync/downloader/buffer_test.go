@@ -309,15 +309,24 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 	}{
 		"successful import continues": {
 			result: ImportBatchRunResult{Outcome: ImportOutcome{RecordApplied: true}},
-			want:   ImportBatchRunSettlementPlan{ContinueDrain: true},
+			want: ImportBatchRunSettlementPlan{
+				Action:        ImportBatchRunSettlementContinueDrain,
+				ContinueDrain: true,
+			},
 		},
 		"decode drop continues": {
 			result: ImportBatchRunResult{ContinueDrain: true},
-			want:   ImportBatchRunSettlementPlan{ContinueDrain: true},
+			want: ImportBatchRunSettlementPlan{
+				Action:        ImportBatchRunSettlementContinueDrain,
+				ContinueDrain: true,
+			},
 		},
 		"canonical failure stops": {
 			result: ImportBatchRunResult{StopDrain: true, Outcome: ImportOutcome{Pause: true, StopDrain: true}},
-			want:   ImportBatchRunSettlementPlan{StopDrain: true},
+			want: ImportBatchRunSettlementPlan{
+				Action:    ImportBatchRunSettlementStopDrain,
+				StopDrain: true,
+			},
 		},
 	}
 	for name, test := range tests {
@@ -675,13 +684,17 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	batch := testImportRunBatch(t, block1, block2)
 
 	success := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{})
-	if !success.Run.Outcome.RecordApplied || !success.Run.HasRecord || !success.Settlement.ContinueDrain || success.Settlement.StopDrain {
+	if !success.Run.Outcome.RecordApplied || !success.Run.HasRecord ||
+		success.Settlement.Action != ImportBatchRunSettlementContinueDrain ||
+		!success.Settlement.ContinueDrain || success.Settlement.StopDrain {
 		t.Fatalf("success run = %+v settlement=%+v, want recorded import and continue drain", success.Run, success.Settlement)
 	}
 
 	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
 	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
-	if !failure.Run.Outcome.Pause || !failure.Run.StopDrain || !failure.Settlement.StopDrain || failure.Settlement.ContinueDrain {
+	if !failure.Run.Outcome.Pause || !failure.Run.StopDrain ||
+		failure.Settlement.Action != ImportBatchRunSettlementStopDrain ||
+		!failure.Settlement.StopDrain || failure.Settlement.ContinueDrain {
 		t.Fatalf("failure run = %+v settlement=%+v, want paused stop-drain settlement", failure.Run, failure.Settlement)
 	}
 	if !failure.Run.HasRecord || failure.Run.RecordPlan.Progress.Summary.Applied != 1 {

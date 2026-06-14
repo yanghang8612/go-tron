@@ -1259,6 +1259,7 @@ func (ss *SyncService) drainBufferedBlocks() {
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
 	var emptyDrainDispatch syncdl.EmptyDrainRunPlan
+drainLoop:
 	for {
 		now := time.Now()
 		ss.mu.Lock()
@@ -1298,11 +1299,13 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		batch := drainRun.Batch
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
 		settlement := importRun.Settlement
-		if settlement.StopDrain {
-			break
-		}
-		if settlement.ContinueDrain {
-			continue
+		switch settlement.Action {
+		case syncdl.ImportBatchRunSettlementStopDrain:
+			break drainLoop
+		case syncdl.ImportBatchRunSettlementContinueDrain:
+			continue drainLoop
+		default:
+			continue drainLoop
 		}
 	}
 	syncdl.ApplyEmptyDrainRunDispatchPlan(emptyDrainDispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
