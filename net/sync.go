@@ -1301,15 +1301,14 @@ drainLoop:
 		ss.mu.Unlock()
 		batch := drainRun.Batch
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
-		settlement := importRun.Settlement
-		switch settlement.Action {
-		case syncdl.ImportBatchRunSettlementStopDrain:
+		loop := syncdl.PlanImportBatchDrainLoop(importRun.Settlement)
+		if loop.StopLoop {
 			break drainLoop
-		case syncdl.ImportBatchRunSettlementContinueDrain:
-			continue drainLoop
-		default:
+		}
+		if loop.ContinueLoop {
 			continue drainLoop
 		}
+		continue drainLoop
 	}
 	syncdl.ApplyEmptyDrainRunDispatchPlan(emptyDrainDispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }

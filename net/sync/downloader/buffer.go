@@ -379,6 +379,30 @@ type ImportBatchRunSettlementPlan struct {
 	StopDrain     bool
 }
 
+// ImportBatchDrainLoopStepAction names the caller's next drain-loop branch
+// after an import-batch settlement.
+type ImportBatchDrainLoopStepAction uint8
+
+const (
+	ImportBatchDrainLoopContinue ImportBatchDrainLoopStepAction = iota
+	ImportBatchDrainLoopStop
+)
+
+// ImportBatchDrainLoopStep is one downloader-owned drain-loop operation after
+// a local import batch settles.
+type ImportBatchDrainLoopStep struct {
+	Action ImportBatchDrainLoopStepAction
+}
+
+// ImportBatchDrainLoopPlan maps an import-batch settlement into the local
+// drain loop's next action. SyncService owns the loop mechanics; downloader
+// owns the settlement semantics.
+type ImportBatchDrainLoopPlan struct {
+	ContinueLoop bool
+	StopLoop     bool
+	Steps        []ImportBatchDrainLoopStep
+}
+
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
 // one popped batch: decode raw bodies, account wait time, execute canonical
 // stages with an explicit observer, then settle progress/pause decisions.
@@ -498,6 +522,24 @@ func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSet
 		Action:        ImportBatchRunSettlementContinueDrain,
 		ContinueDrain: true,
 	}
+}
+
+// PlanImportBatchDrainLoop derives the caller's next local drain-loop branch
+// from the downloader-owned import settlement.
+func PlanImportBatchDrainLoop(settlement ImportBatchRunSettlementPlan) ImportBatchDrainLoopPlan {
+	if settlement.Action == ImportBatchRunSettlementStopDrain || settlement.StopDrain {
+		return ImportBatchDrainLoopPlan{StopLoop: true}.withSteps()
+	}
+	return ImportBatchDrainLoopPlan{ContinueLoop: true}.withSteps()
+}
+
+func (p ImportBatchDrainLoopPlan) withSteps() ImportBatchDrainLoopPlan {
+	if p.StopLoop {
+		p.Steps = []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}}
+	} else if p.ContinueLoop {
+		p.Steps = []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopContinue}}
+	}
+	return p
 }
 
 // PlanImportBatchExecution returns the explicit canonical import target for a

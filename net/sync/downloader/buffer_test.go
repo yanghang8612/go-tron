@@ -336,6 +336,47 @@ func TestPlanImportBatchRunSettlement(t *testing.T) {
 	}
 }
 
+func TestPlanImportBatchDrainLoop(t *testing.T) {
+	tests := map[string]struct {
+		settlement ImportBatchRunSettlementPlan
+		want       ImportBatchDrainLoopPlan
+	}{
+		"continue action": {
+			settlement: ImportBatchRunSettlementPlan{Action: ImportBatchRunSettlementContinueDrain, ContinueDrain: true},
+			want: ImportBatchDrainLoopPlan{
+				ContinueLoop: true,
+				Steps:        []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopContinue}},
+			},
+		},
+		"stop action": {
+			settlement: ImportBatchRunSettlementPlan{Action: ImportBatchRunSettlementStopDrain, StopDrain: true},
+			want: ImportBatchDrainLoopPlan{
+				StopLoop: true,
+				Steps:    []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}},
+			},
+		},
+		"legacy stop bool": {
+			settlement: ImportBatchRunSettlementPlan{StopDrain: true},
+			want: ImportBatchDrainLoopPlan{
+				StopLoop: true,
+				Steps:    []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopStop}},
+			},
+		},
+		"default continues": {
+			settlement: ImportBatchRunSettlementPlan{},
+			want: ImportBatchDrainLoopPlan{
+				ContinueLoop: true,
+				Steps:        []ImportBatchDrainLoopStep{{Action: ImportBatchDrainLoopContinue}},
+			},
+		},
+	}
+	for name, test := range tests {
+		if got := PlanImportBatchDrainLoop(test.settlement); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s drain loop = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
