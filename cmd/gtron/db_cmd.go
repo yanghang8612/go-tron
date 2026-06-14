@@ -17,6 +17,7 @@ import (
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
 	statesnapshots "github.com/tronprotocol/go-tron/core/state/snapshots"
 	"github.com/tronprotocol/go-tron/crypto"
+	syncdl "github.com/tronprotocol/go-tron/net/sync/downloader"
 	"github.com/tronprotocol/go-tron/params"
 	"github.com/urfave/cli/v2"
 )
@@ -645,11 +646,6 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		{rawdb.StageChainFreezer, rawdb.StageFinish},
 		{rawdb.StageSnapshotSectionBloomPrune, rawdb.StageFinish},
 		{rawdb.StageSnapshotBalanceTracePrune, rawdb.StageFinish},
-		{rawdb.StageSyncBodiesReady, rawdb.StageSyncBodies},
-		{rawdb.StageSyncImport, rawdb.StageSyncBodiesReady},
-		{rawdb.StageSyncExecution, rawdb.StageSyncImport},
-		{rawdb.StageSyncCommitment, rawdb.StageSyncExecution},
-		{rawdb.StageSyncFinish, rawdb.StageSyncCommitment},
 		{rawdb.StageSnapshotChainLookupPrune, rawdb.StageChainFreezer},
 		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotChainLookupPrune},
 		{rawdb.StageSnapshotChainFreezerTailPrune, rawdb.StageSnapshotEventLogBuild},
@@ -671,7 +667,21 @@ func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {
 		issues = append(issues, fmt.Sprintf("%s=%d ahead of %s=%d",
 			pair.downstream, down.progress.BlockNum, pair.upstream, up.progress.BlockNum))
 	}
+	for _, issue := range syncdl.CheckSyncPipelineProgressOrder(dbStageStatusSyncProgressRows(byStage), syncdl.SyncPipelineProgressOrderOptions{}) {
+		issues = append(issues, issue.String())
+	}
 	return issues
+}
+
+func dbStageStatusSyncProgressRows(rows map[rawdb.StageID]dbStageStatusRow) map[rawdb.StageID]rawdb.StageProgress {
+	progress := make(map[rawdb.StageID]rawdb.StageProgress)
+	for _, stage := range syncdl.FullSyncPipelineProgressStages() {
+		row, ok := rows[stage]
+		if ok {
+			progress[stage] = row.progress
+		}
+	}
+	return progress
 }
 
 func dbStageStatusSnapshotCoverageIssues(rows []dbStageStatusRow, snapshotDir string) []string {

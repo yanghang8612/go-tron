@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -61,6 +62,36 @@ type SyncPipelineProgressRepairResult struct {
 	Interrupted       bool
 	ErrorStage        rawdb.StageID
 	Complete          bool
+}
+
+// SyncPipelineProgressOrderOptions controls how strictly sync-stage order is
+// validated. Startup repair is strict; operator diagnostics may allow missing
+// upstream rows while still rejecting downstream rows that are ahead.
+type SyncPipelineProgressOrderOptions struct {
+	RequireUpstream bool
+}
+
+// SyncPipelineProgressOrderPair is one downstream <= upstream invariant in the
+// full downloader sync pipeline.
+type SyncPipelineProgressOrderPair struct {
+	Downstream rawdb.StageID
+	Upstream   rawdb.StageID
+}
+
+// SyncPipelineProgressOrderIssue describes one sync-stage ordering violation.
+type SyncPipelineProgressOrderIssue struct {
+	Downstream      rawdb.StageID
+	DownstreamBlock uint64
+	Upstream        rawdb.StageID
+	UpstreamBlock   uint64
+	MissingUpstream bool
+}
+
+func (i SyncPipelineProgressOrderIssue) String() string {
+	if i.MissingUpstream {
+		return fmt.Sprintf("%s requires %s", i.Downstream, i.Upstream)
+	}
+	return fmt.Sprintf("%s=%d ahead of %s=%d", i.Downstream, i.DownstreamBlock, i.Upstream, i.UpstreamBlock)
 }
 
 func (r *SyncPipelineProgressRepairResult) add(repair SyncStageProgressRepair) {
@@ -1011,6 +1042,69 @@ func SyncPipelineProgressStages() []rawdb.StageID {
 		rawdb.StageSyncCommitment,
 		rawdb.StageSyncFinish,
 	}
+}
+
+// FullSyncPipelineProgressStages returns the ordered body-download and import
+// stage rows that must remain monotonic during full staged sync.
+func FullSyncPipelineProgressStages() []rawdb.StageID {
+	return []rawdb.StageID{
+		rawdb.StageSyncBodies,
+		rawdb.StageSyncBodiesReady,
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+		rawdb.StageSyncFinish,
+	}
+}
+
+// SyncPipelineProgressOrderPairs returns downstream/upstream stage pairs for
+// the full sync pipeline. A present downstream row cannot be ahead of its
+// upstream row.
+func SyncPipelineProgressOrderPairs() []SyncPipelineProgressOrderPair {
+	return []SyncPipelineProgressOrderPair{
+		{Downstream: rawdb.StageSyncBodiesReady, Upstream: rawdb.StageSyncBodies},
+		{Downstream: rawdb.StageSyncImport, Upstream: rawdb.StageSyncBodiesReady},
+		{Downstream: rawdb.StageSyncExecution, Upstream: rawdb.StageSyncImport},
+		{Downstream: rawdb.StageSyncCommitment, Upstream: rawdb.StageSyncExecution},
+		{Downstream: rawdb.StageSyncFinish, Upstream: rawdb.StageSyncCommitment},
+	}
+}
+
+// CheckSyncPipelineProgressOrder validates full-sync stage progress ordering
+// from already-read stage rows. The input map is read-only.
+func CheckSyncPipelineProgressOrder(rows map[rawdb.StageID]rawdb.StageProgress, opts SyncPipelineProgressOrderOptions) []SyncPipelineProgressOrderIssue {
+	if len(rows) == 0 {
+		return nil
+	}
+	var issues []SyncPipelineProgressOrderIssue
+	for _, pair := range SyncPipelineProgressOrderPairs() {
+		downstream, downstreamOK := rows[pair.Downstream]
+		if !downstreamOK {
+			continue
+		}
+		upstream, upstreamOK := rows[pair.Upstream]
+		if !upstreamOK {
+			if opts.RequireUpstream {
+				issues = append(issues, SyncPipelineProgressOrderIssue{
+					Downstream:      pair.Downstream,
+					DownstreamBlock: downstream.BlockNum,
+					Upstream:        pair.Upstream,
+					MissingUpstream: true,
+				})
+			}
+			continue
+		}
+		if downstream.BlockNum <= upstream.BlockNum {
+			continue
+		}
+		issues = append(issues, SyncPipelineProgressOrderIssue{
+			Downstream:      pair.Downstream,
+			DownstreamBlock: downstream.BlockNum,
+			Upstream:        pair.Upstream,
+			UpstreamBlock:   upstream.BlockNum,
+		})
+	}
+	return issues
 }
 
 // ImportPipelineStageTasks returns the canonical-to-sync stage schedule for

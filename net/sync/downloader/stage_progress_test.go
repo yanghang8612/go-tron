@@ -944,6 +944,60 @@ func TestSyncPipelineProgressStagesOrder(t *testing.T) {
 	}
 }
 
+func TestFullSyncPipelineProgressStagesOrder(t *testing.T) {
+	got := FullSyncPipelineProgressStages()
+	want := []rawdb.StageID{
+		rawdb.StageSyncBodies,
+		rawdb.StageSyncBodiesReady,
+		rawdb.StageSyncImport,
+		rawdb.StageSyncExecution,
+		rawdb.StageSyncCommitment,
+		rawdb.StageSyncFinish,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FullSyncPipelineProgressStages = %v, want %v", got, want)
+	}
+}
+
+func TestCheckSyncPipelineProgressOrder(t *testing.T) {
+	progress := map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageSyncBodies:      {Stage: rawdb.StageSyncBodies, BlockNum: 7},
+		rawdb.StageSyncBodiesReady: {Stage: rawdb.StageSyncBodiesReady, BlockNum: 8},
+		rawdb.StageSyncImport:      {Stage: rawdb.StageSyncImport, BlockNum: 3},
+		rawdb.StageSyncExecution:   {Stage: rawdb.StageSyncExecution, BlockNum: 4},
+		rawdb.StageSyncCommitment:  {Stage: rawdb.StageSyncCommitment, BlockNum: 4},
+		rawdb.StageSyncFinish:      {Stage: rawdb.StageSyncFinish, BlockNum: 4},
+	}
+
+	issues := CheckSyncPipelineProgressOrder(progress, SyncPipelineProgressOrderOptions{})
+	want := []string{
+		"SyncBodiesReady=8 ahead of SyncBodies=7",
+		"SyncExecution=4 ahead of SyncImport=3",
+	}
+	if len(issues) != len(want) {
+		t.Fatalf("issues = %+v, want %d entries", issues, len(want))
+	}
+	for i, issue := range issues {
+		if issue.String() != want[i] {
+			t.Fatalf("issue %d = %q, want %q", i, issue.String(), want[i])
+		}
+	}
+
+	issues = CheckSyncPipelineProgressOrder(map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 4},
+	}, SyncPipelineProgressOrderOptions{})
+	if len(issues) != 0 {
+		t.Fatalf("non-strict missing upstream issues = %+v, want none", issues)
+	}
+
+	issues = CheckSyncPipelineProgressOrder(map[rawdb.StageID]rawdb.StageProgress{
+		rawdb.StageSyncExecution: {Stage: rawdb.StageSyncExecution, BlockNum: 4},
+	}, SyncPipelineProgressOrderOptions{RequireUpstream: true})
+	if len(issues) != 1 || !issues[0].MissingUpstream || issues[0].String() != "SyncExecution requires SyncImport" {
+		t.Fatalf("strict missing upstream issues = %+v, want SyncExecution requires SyncImport", issues)
+	}
+}
+
 func TestRepairSyncStageProgress(t *testing.T) {
 	stage := rawdb.StageSyncImport
 	canonical := map[uint64]tcommon.Hash{
