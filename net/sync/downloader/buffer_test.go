@@ -669,6 +669,26 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	}
 }
 
+func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+
+	success := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{})
+	if !success.Run.Outcome.RecordApplied || !success.Run.HasRecord || !success.Settlement.ContinueDrain || success.Settlement.StopDrain {
+		t.Fatalf("success run = %+v settlement=%+v, want recorded import and continue drain", success.Run, success.Settlement)
+	}
+
+	insertErr := &core.InsertBlocksError{Index: 1, BlockNumber: block2.Number(), Err: errors.New("bad block")}
+	failure := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{insertErr: insertErr, appliedForObservations: 1})
+	if !failure.Run.Outcome.Pause || !failure.Run.StopDrain || !failure.Settlement.StopDrain || failure.Settlement.ContinueDrain {
+		t.Fatalf("failure run = %+v settlement=%+v, want paused stop-drain settlement", failure.Run, failure.Settlement)
+	}
+	if !failure.Run.HasRecord || failure.Run.RecordPlan.Progress.Summary.Applied != 1 {
+		t.Fatalf("failure record plan = %+v has=%v, want applied-prefix record before stop", failure.Run.RecordPlan, failure.Run.HasRecord)
+	}
+}
+
 func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *testing.T) {
 	block := testBufferedBlock(1)
 	applier := &recordingImportBatchRunApplier{

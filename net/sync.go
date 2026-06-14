@@ -1271,8 +1271,8 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 		ss.mu.Unlock()
 		batch := drainRun.Batch
-		result := syncdl.ApplyImportBatchRunPlan(syncdl.NewImportBatchRunPlan(batch), syncImportBatchRunApplier{service: ss})
-		settlement := syncdl.PlanImportBatchRunSettlement(result)
+		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
+		settlement := importRun.Settlement
 		if settlement.StopDrain {
 			break
 		}
