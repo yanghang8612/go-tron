@@ -346,20 +346,30 @@ func TestPlanFetchReceiptDispatch(t *testing.T) {
 
 func TestApplyFetchReceiptDispatchPlan(t *testing.T) {
 	applier := new(recordingFetchReceiptDispatchApplier)
-	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{Steps: []FetchReceiptDispatchStep{
+	result := ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{Steps: []FetchReceiptDispatchStep{
 		{Action: FetchReceiptDispatchSendOutbound},
 		{Action: FetchReceiptDispatchStepAction(255)},
 	}}, applier)
 	if applier.sent != 1 {
 		t.Fatalf("dispatch sends = %d, want 1", applier.sent)
 	}
+	if !reflect.DeepEqual(result.AppliedSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchSendOutbound}) ||
+		!reflect.DeepEqual(result.UnknownSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchStepAction(255)}) {
+		t.Fatalf("dispatch apply result = %+v, want send applied and unknown [255]", result)
+	}
 
 	applier.sent = 0
-	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, applier)
+	result = ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, applier)
 	if applier.sent != 1 {
 		t.Fatalf("fallback dispatch sends = %d, want 1", applier.sent)
 	}
-	ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, nil)
+	if !reflect.DeepEqual(result.AppliedSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchSendOutbound}) ||
+		len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback dispatch apply result = %+v, want send applied", result)
+	}
+	if nilResult := ApplyFetchReceiptDispatchPlan(FetchReceiptDispatchPlan{SendOutboundRequests: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil dispatch apply result = %+v, want empty", nilResult)
+	}
 }
 
 func TestPlanFetchedBlockBuffer(t *testing.T) {
@@ -428,10 +438,15 @@ func TestApplyFetchedBlockBufferPlan(t *testing.T) {
 		Action: FetchedBlockBufferStage,
 		ID:     queueID(11),
 	}
+	unknown := FetchedBlockBufferPlan{
+		Action: FetchedBlockBufferAction(255),
+		ID:     queueID(12),
+	}
 
-	ApplyFetchedBlockBufferPlan(FetchedBlockBufferPlan{ID: queueID(9)}, applier)
-	ApplyFetchedBlockBufferPlan(conflict, applier)
-	ApplyFetchedBlockBufferPlan(stage, applier)
+	ignoredResult := ApplyFetchedBlockBufferPlan(FetchedBlockBufferPlan{ID: queueID(9)}, applier)
+	conflictResult := ApplyFetchedBlockBufferPlan(conflict, applier)
+	stageResult := ApplyFetchedBlockBufferPlan(stage, applier)
+	unknownResult := ApplyFetchedBlockBufferPlan(unknown, applier)
 
 	if !reflect.DeepEqual(applier.conflicts, []FetchedBlockBufferPlan{conflict}) {
 		t.Fatalf("conflicts = %+v, want %+v", applier.conflicts, []FetchedBlockBufferPlan{conflict})
@@ -439,7 +454,24 @@ func TestApplyFetchedBlockBufferPlan(t *testing.T) {
 	if !reflect.DeepEqual(applier.staged, []FetchedBlockBufferPlan{stage}) {
 		t.Fatalf("staged = %+v, want %+v", applier.staged, []FetchedBlockBufferPlan{stage})
 	}
-	ApplyFetchedBlockBufferPlan(stage, nil)
+	if len(ignoredResult.AppliedActions) != 0 || len(ignoredResult.UnknownActions) != 0 {
+		t.Fatalf("ignored buffer result = %+v, want empty", ignoredResult)
+	}
+	if !reflect.DeepEqual(conflictResult.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferConflict}) ||
+		len(conflictResult.UnknownActions) != 0 {
+		t.Fatalf("conflict buffer result = %+v, want conflict applied", conflictResult)
+	}
+	if !reflect.DeepEqual(stageResult.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferStage}) ||
+		len(stageResult.UnknownActions) != 0 {
+		t.Fatalf("stage buffer result = %+v, want stage applied", stageResult)
+	}
+	if len(unknownResult.AppliedActions) != 0 ||
+		!reflect.DeepEqual(unknownResult.UnknownActions, []FetchedBlockBufferAction{FetchedBlockBufferAction(255)}) {
+		t.Fatalf("unknown buffer result = %+v, want unknown [255]", unknownResult)
+	}
+	if nilResult := ApplyFetchedBlockBufferPlan(stage, nil); len(nilResult.AppliedActions) != 0 || len(nilResult.UnknownActions) != 0 {
+		t.Fatalf("nil buffer result = %+v, want empty", nilResult)
+	}
 }
 
 func fetchReceiptStepActions(steps []FetchReceiptSettlementStep) []FetchReceiptSettlementStepAction {

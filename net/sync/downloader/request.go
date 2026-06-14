@@ -156,6 +156,13 @@ type FetchReceiptDispatchStep struct {
 	Action FetchReceiptDispatchStepAction
 }
 
+// FetchReceiptDispatchApplyResult records post-drain dispatch steps applied
+// after accepting a fetched block body.
+type FetchReceiptDispatchApplyResult struct {
+	AppliedSteps []FetchReceiptDispatchStepAction
+	UnknownSteps []FetchReceiptDispatchStepAction
+}
+
 // FetchReceiptDispatchPlanApplier performs post-drain dispatch operations
 // named by a fetch receipt dispatch plan.
 type FetchReceiptDispatchPlanApplier interface {
@@ -189,6 +196,13 @@ type FetchedBlockBufferPlan struct {
 	Action FetchedBlockBufferAction
 	ID     types.BlockID
 	Kept   tcommon.Hash
+}
+
+// FetchedBlockBufferApplyResult records local buffer/stage actions applied for
+// one accepted fetched block body.
+type FetchedBlockBufferApplyResult struct {
+	AppliedActions []FetchedBlockBufferAction
+	UnknownActions []FetchedBlockBufferAction
 }
 
 // FetchedBlockBufferPlanApplier performs the side effects named by a fetched
@@ -383,9 +397,10 @@ func (p FetchReceiptDispatchPlan) withSteps() FetchReceiptDispatchPlan {
 
 // ApplyFetchReceiptDispatchPlan executes downloader-owned post-drain dispatch
 // operations after a fetch receipt.
-func ApplyFetchReceiptDispatchPlan(plan FetchReceiptDispatchPlan, applier FetchReceiptDispatchPlanApplier) {
+func ApplyFetchReceiptDispatchPlan(plan FetchReceiptDispatchPlan, applier FetchReceiptDispatchPlanApplier) FetchReceiptDispatchApplyResult {
+	var result FetchReceiptDispatchApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -394,8 +409,12 @@ func ApplyFetchReceiptDispatchPlan(plan FetchReceiptDispatchPlan, applier FetchR
 		switch step.Action {
 		case FetchReceiptDispatchSendOutbound:
 			applier.SendOutboundRequests()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // PlanFetchedBlockBuffer decides whether an accepted sync block body should be
@@ -421,14 +440,21 @@ func PlanFetchedBlockBuffer(f FetchedBlockBufferFacts) FetchedBlockBufferPlan {
 
 // ApplyFetchedBlockBufferPlan executes the downloader-owned local
 // buffer/stage action for one accepted fetched block body.
-func ApplyFetchedBlockBufferPlan(plan FetchedBlockBufferPlan, applier FetchedBlockBufferPlanApplier) {
+func ApplyFetchedBlockBufferPlan(plan FetchedBlockBufferPlan, applier FetchedBlockBufferPlanApplier) FetchedBlockBufferApplyResult {
+	var result FetchedBlockBufferApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	switch plan.Action {
 	case FetchedBlockBufferConflict:
 		applier.DropConflictingFetchedBlock(plan)
+		result.AppliedActions = append(result.AppliedActions, plan.Action)
 	case FetchedBlockBufferStage:
 		applier.StageFetchedBlock(plan)
+		result.AppliedActions = append(result.AppliedActions, plan.Action)
+	case FetchedBlockBufferIgnore:
+	default:
+		result.UnknownActions = append(result.UnknownActions, plan.Action)
 	}
+	return result
 }
