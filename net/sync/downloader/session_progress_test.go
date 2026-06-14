@@ -613,6 +613,57 @@ func TestApplyEmptyDrainPreparationPlan(t *testing.T) {
 	}
 }
 
+func TestApplyEmptyDrainPreparationRunPlanUsesRefreshedProgress(t *testing.T) {
+	applier := &recordingEmptyDrainPreparationApplier{
+		outbound: 2,
+		progress: SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{
+			{Done: true},
+		}},
+	}
+	gate := &recordingEmptyDrainJoinGate{allowed: true}
+	result := ApplyEmptyDrainPreparationRunPlan(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 8, TargetHead: 9},
+	}, applier, gate)
+
+	if !reflect.DeepEqual(applier.begins, []uint64{9}) || applier.refills != 1 || applier.progressReads != 1 {
+		t.Fatalf("preparation side effects begins=%+v refills=%d progressReads=%d, want begin 9, one refill, one progress read",
+			applier.begins, applier.refills, applier.progressReads)
+	}
+	if result.Preparation.OutboundRequests != 2 ||
+		!reflect.DeepEqual(result.Preparation.AppliedSteps, []EmptyDrainPreparationStepAction{EmptyDrainPrepareBeginBufferWait, EmptyDrainPrepareRefillFetchSlots}) ||
+		len(result.Preparation.UnknownSteps) != 0 {
+		t.Fatalf("preparation result = %+v, want begin/refill with two outbound requests", result.Preparation)
+	}
+	wantRun := EmptyDrainRunPlan{
+		JoinProbe:    EmptyDrainJoinProbePlan{},
+		MirrorLegacy: true,
+		LockedSteps:  []EmptyDrainRunStep{{Action: EmptyDrainMirrorLegacy}},
+		Refill: EmptyDrainRefillPlan{
+			Idle: IdleDrainPlan{
+				Finish: true,
+				Steps:  []IdleDrainStep{{Action: IdleDrainFinish}},
+			},
+			Dispatch: FetchRefillDispatchPlan{
+				SendOutboundRequests: true,
+				Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+			},
+		},
+	}
+	if !reflect.DeepEqual(result.Run, wantRun) {
+		t.Fatalf("empty-drain run after preparation = %+v, want refreshed-progress finish run %+v", result.Run, wantRun)
+	}
+	if gate.calls != 0 {
+		t.Fatalf("join gate calls = %d, want 0 because refreshed progress is complete", gate.calls)
+	}
+
+	nilResult := ApplyEmptyDrainPreparationRunPlan(EmptyDrainPreparationInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 8, TargetHead: 9},
+	}, nil, gate)
+	if !reflect.DeepEqual(nilResult, EmptyDrainPreparationRunApplyResult{}) {
+		t.Fatalf("nil preparation/run result = %+v, want empty", nilResult)
+	}
+}
+
 func TestApplyEmptyDrainRunLockedPlan(t *testing.T) {
 	applier := new(recordingEmptyDrainRunApplier)
 	result := ApplyEmptyDrainRunLockedPlan(EmptyDrainRunPlan{LockedSteps: []EmptyDrainRunStep{
@@ -1146,9 +1197,11 @@ func (a *recordingEmptyDrainRunApplier) MirrorLegacyUnderLock() {
 }
 
 type recordingEmptyDrainPreparationApplier struct {
-	begins   []uint64
-	outbound int
-	refills  int
+	begins        []uint64
+	outbound      int
+	refills       int
+	progress      SessionProgress
+	progressReads int
 }
 
 func (a *recordingEmptyDrainPreparationApplier) BeginBufferWait(next uint64) {
@@ -1158,6 +1211,11 @@ func (a *recordingEmptyDrainPreparationApplier) BeginBufferWait(next uint64) {
 func (a *recordingEmptyDrainPreparationApplier) RefillFetchSlots() int {
 	a.refills++
 	return a.outbound
+}
+
+func (a *recordingEmptyDrainPreparationApplier) EmptyDrainRunProgress() SessionProgress {
+	a.progressReads++
+	return a.progress
 }
 
 type recordingPostInventorySettlementApplier struct {

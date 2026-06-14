@@ -324,6 +324,13 @@ type EmptyDrainPreparationApplyResult struct {
 	OutboundRequests int
 }
 
+// EmptyDrainPreparationRunApplyResult groups the lock-held preparation result
+// with the empty-drain run plan derived from the post-preparation progress.
+type EmptyDrainPreparationRunApplyResult struct {
+	Preparation EmptyDrainPreparationApplyResult
+	Run         EmptyDrainRunPlan
+}
+
 // EmptyDrainRunApplyResult groups the lock-held, post-lock idle settlement,
 // and final dispatch phases for one empty local drain run.
 type EmptyDrainRunApplyResult struct {
@@ -387,6 +394,14 @@ type EmptyDrainRunPlanApplier interface {
 type EmptyDrainPreparationPlanApplier interface {
 	BeginBufferWait(next uint64)
 	RefillFetchSlots() int
+}
+
+// EmptyDrainPreparationRunPlanApplier extends preparation with a fresh
+// progress read after lock-held side effects, preserving the ordering used by
+// SyncService before the downloader planner builds the final empty-drain run.
+type EmptyDrainPreparationRunPlanApplier interface {
+	EmptyDrainPreparationPlanApplier
+	EmptyDrainRunProgress() SessionProgress
 }
 
 // PostInventorySettlementInput is the lock-free state needed after an
@@ -769,6 +784,21 @@ func ApplyEmptyDrainPreparationPlan(plan EmptyDrainPreparationPlan, applier Empt
 			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
+}
+
+// ApplyEmptyDrainPreparationRunPlan applies lock-held empty-drain preparation,
+// then builds the final empty-drain run from the refreshed session progress.
+func ApplyEmptyDrainPreparationRunPlan(in EmptyDrainPreparationInput, applier EmptyDrainPreparationRunPlanApplier, gate EmptyDrainJoinGate) EmptyDrainPreparationRunApplyResult {
+	var result EmptyDrainPreparationRunApplyResult
+	if applier == nil {
+		return result
+	}
+	result.Preparation = ApplyEmptyDrainPreparationPlan(PlanEmptyDrainPreparation(in), applier)
+	result.Run = PlanEmptyDrainRun(EmptyDrainRunInput{
+		OutboundRequests: result.Preparation.OutboundRequests,
+		Progress:         applier.EmptyDrainRunProgress(),
+	}, gate)
 	return result
 }
 
