@@ -589,6 +589,36 @@ func TestSyncServiceKeepsUpstreamAfterCommitmentForkHashMismatchOnSessionStart(t
 	}
 }
 
+func TestSyncServiceKeepsUpstreamAfterFinishForkHashMismatchOnSessionStart(t *testing.T) {
+	bc := makeChainWithBlocks(t, 1)
+	block1 := bc.GetBlockByNumber(1)
+	if block1 == nil {
+		t.Fatal("missing block1")
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment} {
+		if err := rawdb.WriteStageProgressWithHash(bc.DB(), stage, block1.Number(), block1.Hash()); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncFinish, block1.Number(), tcommon.Hash{0xee}); err != nil {
+		t.Fatalf("write forked finish progress: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	ss.mu.Unlock()
+
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment} {
+		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+			t.Fatalf("%s progress after startup = %+v ok=%v err=%v, want block1 kept", stage, row, ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncFinish); err != nil || ok {
+		t.Fatalf("SyncFinish progress after startup = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServiceRestartsHalfExecutedPipelineWithNextStagedBody(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block1 := bc.GetBlockByNumber(1)

@@ -442,6 +442,77 @@ func TestApplySessionStartupPlanDeletesPipelineAfterImportForkHashMismatch(t *te
 	}
 }
 
+func TestApplySessionStartupPlanKeepsUpstreamAfterFinishForkHashMismatch(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1 := testBufferedBlock(1)
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment} {
+		if err := rawdb.WriteStageProgressWithHash(db, stage, block1.Number(), block1.Hash()); err != nil {
+			t.Fatalf("write %s progress: %v", stage, err)
+		}
+	}
+	forkHash := block1.Hash()
+	forkHash[0] ^= 0xff
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncFinish, block1.Number(), forkHash); err != nil {
+		t.Fatalf("write forked sync finish progress: %v", err)
+	}
+
+	applier := newStartupRecoveryTestApplier(db, block1.Number(), map[uint64]tcommon.Hash{
+		block1.Number(): block1.Hash(),
+	})
+	result := ApplySessionStartupPlan(PlanSessionStartup(SessionStartupInput{
+		Head:         block1.Number(),
+		RestoreLimit: 0,
+	}), applier)
+
+	wantStatuses := []SyncStageProgressRepairStatus{
+		SyncStageProgressKept,
+		SyncStageProgressKept,
+		SyncStageProgressKept,
+		SyncStageProgressDeleted,
+	}
+	if len(result.SyncPipelineRepairs) != len(wantStatuses) {
+		t.Fatalf("repairs = %+v, want %d entries", result.SyncPipelineRepairs, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if result.SyncPipelineRepairs[i].Status != status {
+			t.Fatalf("repair %d = %+v, want status %v", i, result.SyncPipelineRepairs[i], status)
+		}
+	}
+	if !result.HasSyncPipelineRepair ||
+		result.SyncPipelineRepairResult.Kept != 3 ||
+		result.SyncPipelineRepairResult.Deleted != 1 ||
+		!result.SyncPipelineRepairResult.HasBlocked ||
+		result.SyncPipelineRepairResult.FirstBlockedStage != rawdb.StageSyncFinish ||
+		result.SyncPipelineRepairResult.Complete {
+		t.Fatalf("sync pipeline repair result = %+v, want upstream kept and finish blocked", result.SyncPipelineRepairResult)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment} {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block1 kept", stage, row, ok, err)
+		}
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncFinish); err != nil || ok {
+		t.Fatalf("SyncFinish progress = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 {
+		t.Fatalf("sync pipeline order issues = %+v set=%v, want checked with no issues after finish repair", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder)
+	}
+	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor ||
+		cursor.StageRows != 3 ||
+		!cursor.HasLast ||
+		cursor.LastStage != rawdb.StageSyncCommitment ||
+		cursor.LastBlock != block1.Number() ||
+		cursor.LastHash != block1.Hash() ||
+		!cursor.HasNext ||
+		cursor.NextStage != rawdb.StageSyncFinish ||
+		cursor.Complete ||
+		cursor.HasBlocked ||
+		cursor.Interrupted {
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want commitment cursor continuing at finish", cursor, result.HasSyncPipelineCursor)
+	}
+}
+
 func TestApplySessionStartupPlanRestoresHalfDownloadedBodiesBeforeExecution(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	block1 := testBufferedBlock(1)
