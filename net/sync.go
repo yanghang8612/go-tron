@@ -1735,9 +1735,9 @@ func (a syncImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 	a.service.stats.AddBufferWait(wait)
 }
 
-func (a syncImportBatchRunApplier) ExecuteImportBatch(execution syncdl.ImportBatchExecutionPlan, observe syncdl.StageProgressWriter) (time.Duration, error) {
+func (a syncImportBatchRunApplier) ExecuteImportBatch(attempt syncdl.ImportBatchExecutionAttempt) (time.Duration, error) {
 	start := time.Now()
-	err := a.service.chain.InsertBlocksWithStageHook(execution.Blocks, core.StageProgressHook(observe))
+	err := a.service.chain.InsertBlocksWithStageHook(attempt.Execution.Blocks, core.StageProgressHook(attempt.StageProgressObserver()))
 	return time.Since(start), err
 }
 

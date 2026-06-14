@@ -173,6 +173,17 @@ type ImportBatchExecutionPlan struct {
 	Diagnostics      ImportBatchExecutionPlanDiagnostics
 }
 
+// ImportBatchExecutionAttempt is the runnable form of an execution plan. It
+// binds the explicit bodies/execution/commitment/finish phase schedule to the
+// collector that accepts only planner-owned canonical stage observations.
+type ImportBatchExecutionAttempt struct {
+	Execution          ImportBatchExecutionPlan
+	StagePhaseSchedule ImportBatchStagePhaseSchedule
+	ExecutionPhases    []ImportStagePhasePlan
+	Collector          *StageProgressCollector
+	Diagnostics        ImportBatchExecutionPlanDiagnostics
+}
+
 // ImportBatchExecutionPlanDiagnostics is the compact, log-safe view of the
 // downloader-owned execution/commitment/finish schedule for a decoded batch.
 type ImportBatchExecutionPlanDiagnostics struct {
@@ -230,6 +241,32 @@ func (p ImportBatchExecutionPlan) PhaseSchedule() ImportBatchStagePhaseSchedule 
 // bodies/execution/commitment/finish schedule created before canonical import.
 func (p ImportBatchExecutionPlan) ProgressPlan(batch BufferedBatch, applied int, collector *StageProgressCollector) ImportedBatchProgressPlan {
 	return PlanImportedBatchProgressForExecution(batch, applied, p, collector)
+}
+
+// NewImportBatchExecutionAttempt prepares the runnable execution attempt for a
+// decoded batch. SyncService executes this object; downloader owns the stage
+// phase schedule and the collector used to build restart progress.
+func NewImportBatchExecutionAttempt(execution ImportBatchExecutionPlan) ImportBatchExecutionAttempt {
+	phases := execution.PhaseSchedule()
+	return ImportBatchExecutionAttempt{
+		Execution:          execution,
+		StagePhaseSchedule: phases,
+		ExecutionPhases:    phases.PhasePlans(),
+		Collector:          NewStageProgressCollector(),
+		Diagnostics:        execution.Diagnostics,
+	}
+}
+
+// StageProgressObserver returns the hook passed to canonical insertion for
+// this attempt. Only observations owned by the execution plan are recorded.
+func (a ImportBatchExecutionAttempt) StageProgressObserver() StageProgressWriter {
+	return a.Execution.StageProgressObserver(a.Collector)
+}
+
+// ProgressPlan derives the DB-side progress/cleanup plan from the observations
+// recorded by this execution attempt.
+func (a ImportBatchExecutionAttempt) ProgressPlan(batch BufferedBatch, applied int) ImportedBatchProgressPlan {
+	return a.Execution.ProgressPlan(batch, applied, a.Collector)
 }
 
 // PlansStageObservation reports whether a canonical insertion hook observation
@@ -330,7 +367,7 @@ type ImportBatchRunPlan struct {
 type ImportBatchRunPlanApplier interface {
 	LogDecodeBatchResult(BufferedBatchDecodeResult)
 	RecordBufferWait(time.Duration)
-	ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error)
+	ExecuteImportBatch(attempt ImportBatchExecutionAttempt) (time.Duration, error)
 	ApplyImportedBatchRecord(plan ImportedBatchRecordPlan) ImportedBatchRecordApplyResult
 	PauseImport(peer *p2p.Peer, blockNum uint64, err error)
 }
@@ -341,6 +378,7 @@ type ImportBatchRunPlanApplier interface {
 type ImportBatchRunResult struct {
 	Decode               BufferedBatchDecodeResult
 	Execution            ImportBatchExecutionPlan
+	ExecutionAttempt     ImportBatchExecutionAttempt
 	StagePhaseSchedule   ImportBatchStagePhaseSchedule
 	ExecutionPhases      []ImportStagePhasePlan
 	Outcome              ImportOutcome
@@ -437,7 +475,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 	}
 	var (
 		result    ImportBatchRunResult
-		collector *StageProgressCollector
+		attempt   ImportBatchExecutionAttempt
 		insertErr error
 		elapsed   time.Duration
 		planned   bool
@@ -481,8 +519,15 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.ExecutionPhases == nil {
 				result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
 			}
-			collector = NewStageProgressCollector()
-			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageProgressObserver(collector))
+			attempt = NewImportBatchExecutionAttempt(result.Execution)
+			if result.StagePhaseSchedule.Empty() {
+				result.StagePhaseSchedule = attempt.StagePhaseSchedule
+			}
+			if result.ExecutionPhases == nil {
+				result.ExecutionPhases = append([]ImportStagePhasePlan(nil), attempt.ExecutionPhases...)
+			}
+			result.ExecutionAttempt = attempt
+			elapsed, insertErr = applier.ExecuteImportBatch(attempt)
 			executed = true
 		case ImportBatchRunSettle:
 			if !executed {
@@ -490,7 +535,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			}
 			result.Outcome = PlanImportOutcome(plan.Batch, insertErr)
 			if result.Outcome.RecordApplied {
-				result.Progress = result.Execution.ProgressPlan(plan.Batch, result.Outcome.Applied, collector)
+				result.Progress = attempt.ProgressPlan(plan.Batch, result.Outcome.Applied)
 				result.StageDiagnostics = result.Progress.StageDiagnostics
 				if result.Progress.OK {
 					result.RecordPlan = PlanImportedBatchRecord(result.Progress, elapsed)

@@ -561,6 +561,47 @@ func TestImportBatchExecutionPlanStageProgressObserverRecordsPlannedObservations
 	}
 }
 
+func TestImportBatchExecutionAttemptOwnsStageObserver(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+	execution := PlanImportBatchExecution(batch)
+	attempt := NewImportBatchExecutionAttempt(execution)
+	if attempt.Collector == nil {
+		t.Fatal("execution attempt collector is nil")
+	}
+	if attempt.StagePhaseSchedule.Empty() ||
+		len(attempt.ExecutionPhases) != 4 ||
+		attempt.ExecutionPhases[1].Phase != ImportStagePhaseExecution ||
+		attempt.ExecutionPhases[2].Phase != ImportStagePhaseCommitment ||
+		attempt.ExecutionPhases[3].Phase != ImportStagePhaseFinish {
+		t.Fatalf("attempt phases = %+v schedule=%+v, want explicit execution/commitment/finish phases",
+			attempt.ExecutionPhases, attempt.StagePhaseSchedule)
+	}
+	observer := attempt.StageProgressObserver()
+	observer(rawdb.StageBodies, block1.Number(), block1.Hash())
+	observer(rawdb.StageExecution, block1.Number(), block1.Hash())
+	observer(rawdb.StageCommitment, block2.Number(), tcommon.Hash{0xee})
+
+	progress := attempt.ProgressPlan(batch, 1)
+	want := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block1.Number(), BlockHash: block1.Hash(), HasBlockHash: true},
+	}
+	if !progress.OK || !reflect.DeepEqual(progress.Progress, want) {
+		t.Fatalf("attempt progress = %+v, want planned body/execution prefix %+v", progress, want)
+	}
+	if progress.StageDiagnostics.Complete ||
+		progress.StageDiagnostics.NextPhase != ImportStagePhaseCommitment ||
+		progress.StageDiagnostics.NextCanonicalStage != rawdb.StageCommitment ||
+		progress.StageDiagnostics.BlockedStatus != ImportStageProgressMissing {
+		t.Fatalf("attempt stage diagnostics = %+v, want blocked at commitment", progress.StageDiagnostics)
+	}
+}
+
 func TestImportBatchExecutionPlanStageObserverDropsUnplannedObservations(t *testing.T) {
 	var observed []rawdb.StageID
 	observer := (ImportBatchExecutionPlan{}).StageObserver(func(stage rawdb.StageID, _ uint64, _ tcommon.Hash) {
@@ -640,6 +681,13 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	}
 	if result.Execution.Schedule.BlockNum != block2.Number() || !result.Execution.HasStageSchedule {
 		t.Fatalf("result execution schedule = %+v has=%v, want block2", result.Execution.Schedule, result.Execution.HasStageSchedule)
+	}
+	if result.ExecutionAttempt.Execution.Schedule.BlockNum != block2.Number() ||
+		result.ExecutionAttempt.Collector == nil ||
+		result.ExecutionAttempt.StagePhaseSchedule.Empty() ||
+		len(result.ExecutionAttempt.ExecutionPhases) != 4 ||
+		result.ExecutionAttempt.Diagnostics.PlannedStages != 8 {
+		t.Fatalf("result execution attempt = %+v, want planned two-block runnable attempt", result.ExecutionAttempt)
 	}
 	if result.ExecutionDiagnostics.PlannedBlocks != 2 || result.ExecutionDiagnostics.PlannedStages != 8 ||
 		result.ExecutionDiagnostics.PlannedBodyStages != 2 || result.ExecutionDiagnostics.PlannedPostBodyStages != 6 ||
@@ -1372,6 +1420,7 @@ type recordingImportBatchRunApplier struct {
 	observeAllAttemptedStages bool
 	observedStages            []rawdb.StageID
 	execution                 ImportBatchExecutionPlan
+	executionAttempt          ImportBatchExecutionAttempt
 	recordRunPlan             ImportedBatchRecordPlan
 	recordApply               ImportedBatchRecordApplyResult
 	recordPlan                ImportedBatchProgressPlan
@@ -1391,9 +1440,12 @@ func (a *recordingImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 	a.waits = append(a.waits, wait)
 }
 
-func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error) {
+func (a *recordingImportBatchRunApplier) ExecuteImportBatch(attempt ImportBatchExecutionAttempt) (time.Duration, error) {
 	a.calls = append(a.calls, ImportBatchRunExecute)
+	execution := attempt.Execution
 	a.execution = execution
+	a.executionAttempt = attempt
+	observe := attempt.StageProgressObserver()
 	stages := a.observedStages
 	if stages == nil {
 		stages = []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish}
@@ -1405,13 +1457,17 @@ func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatc
 	for i := 0; i < applied; i++ {
 		block := execution.Blocks[i]
 		for _, stage := range stages {
-			observe(stage, block.Number(), block.Hash())
+			if observe != nil {
+				observe(stage, block.Number(), block.Hash())
+			}
 		}
 	}
 	if a.observeAllAttemptedStages {
 		for _, block := range execution.Blocks[applied:] {
 			for _, stage := range stages {
-				observe(stage, block.Number(), block.Hash())
+				if observe != nil {
+					observe(stage, block.Number(), block.Hash())
+				}
 			}
 		}
 	}
