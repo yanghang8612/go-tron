@@ -1006,35 +1006,17 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			eligibility.ChainRequested = ps.chainRequested
 			eligibility.Inflight = ps.inflight
 		}
-		if !syncdl.PlanFetchSlotEligibility(eligibility).Eligible {
+		refill := syncdl.PlanFetchSlotRefill(syncdl.FetchSlotRefillInput{Eligibility: eligibility})
+		if !refill.Eligible {
 			continue
 		}
-		ss.assignRetryLocked(ps)
-		batch := ss.nextFetchBatchLocked(ps)
-		currentHead := uint64(0)
-		if len(batch) == 0 {
-			currentHead = ss.chain.CurrentBlock().Number()
-		}
-		fetchWait := time.Duration(0)
-		if len(batch) > 0 {
-			fetchWait = time.Until(ps.nextFetchAt)
-		}
-		plan := syncdl.PlanFetchSlot(syncdl.FetchSlotInput{
-			Batch:        batch,
-			FetchWait:    fetchWait,
-			Done:         ps.done,
-			InventoryTip: ps.lastInventoryNum,
-			CurrentHead:  currentHead,
-			Now:          now,
-			MinInterval:  minFetchRequestInterval,
-		})
-		applier := syncFetchSlotApplier{service: ss, peerState: ps, currentHead: currentHead}
-		applyResult := syncdl.ApplyFetchSlotPlan(plan, &applier)
+		applier := &syncFetchSlotRefillApplier{service: ss, peerState: ps, now: now}
+		applyResult := syncdl.ApplyFetchSlotRefillPlan(refill, applier)
 		if applyResult.RequestInventory {
 			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
 		}
 		if applyResult.SendFetch {
-			out = append(out, outboundSyncRequest{peer: ps.peer, blocks: plan.Batch})
+			out = append(out, outboundSyncRequest{peer: ps.peer, blocks: applyResult.SlotPlan.Batch})
 		}
 	}
 	return out
@@ -1436,6 +1418,66 @@ type syncFetchSlotApplier struct {
 	service     *SyncService
 	peerState   *syncPeerState
 	currentHead uint64
+}
+
+type syncFetchSlotRefillApplier struct {
+	service     *SyncService
+	peerState   *syncPeerState
+	now         time.Time
+	currentHead uint64
+}
+
+func (a *syncFetchSlotRefillApplier) AssignRetry() {
+	a.service.assignRetryLocked(a.peerState)
+}
+
+func (a *syncFetchSlotRefillApplier) NextFetchBatch() []types.BlockID {
+	return a.service.nextFetchBatchLocked(a.peerState)
+}
+
+func (a *syncFetchSlotRefillApplier) FetchSlotInput(batch []types.BlockID) syncdl.FetchSlotInput {
+	currentHead := uint64(0)
+	if len(batch) == 0 {
+		currentHead = a.service.chain.CurrentBlock().Number()
+	}
+	a.currentHead = currentHead
+	fetchWait := time.Duration(0)
+	if len(batch) > 0 {
+		fetchWait = time.Until(a.peerState.nextFetchAt)
+	}
+	return syncdl.FetchSlotInput{
+		Batch:        batch,
+		FetchWait:    fetchWait,
+		Done:         a.peerState.done,
+		InventoryTip: a.peerState.lastInventoryNum,
+		CurrentHead:  currentHead,
+		Now:          a.now,
+		MinInterval:  minFetchRequestInterval,
+	}
+}
+
+func (a *syncFetchSlotRefillApplier) WaitLocalHead(plan syncdl.FetchSlotPlan) {
+	a.fetchSlotApplier().WaitLocalHead(plan)
+}
+
+func (a *syncFetchSlotRefillApplier) RequestInventory(plan syncdl.FetchSlotPlan) {
+	a.fetchSlotApplier().RequestInventory(plan)
+}
+
+func (a *syncFetchSlotRefillApplier) DelayFetch(plan syncdl.FetchSlotPlan) {
+	a.fetchSlotApplier().DelayFetch(plan)
+}
+
+func (a *syncFetchSlotRefillApplier) SendFetch(plan syncdl.FetchSlotPlan) {
+	a.fetchSlotApplier().SendFetch(plan)
+}
+
+func (a *syncFetchSlotRefillApplier) fetchSlotApplier() *syncFetchSlotApplier {
+	return &syncFetchSlotApplier{
+		service:     a.service,
+		peerState:   a.peerState,
+		currentHead: a.currentHead,
+	}
 }
 
 func (a *syncFetchSlotApplier) WaitLocalHead(_ syncdl.FetchSlotPlan) {

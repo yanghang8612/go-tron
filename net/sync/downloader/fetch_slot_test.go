@@ -59,6 +59,24 @@ func TestPlanFetchSlotEligibility(t *testing.T) {
 	}
 }
 
+func TestPlanFetchSlotRefill(t *testing.T) {
+	if got := PlanFetchSlotRefill(FetchSlotRefillInput{}); got.Eligible || len(got.Steps) != 0 {
+		t.Fatalf("ineligible refill plan = %+v, want no steps", got)
+	}
+
+	got := PlanFetchSlotRefill(FetchSlotRefillInput{
+		Eligibility: FetchSlotEligibilityInput{PeerPresent: true},
+	})
+	wantSteps := []FetchSlotRefillStepAction{
+		FetchSlotRefillAssignRetry,
+		FetchSlotRefillNextBatch,
+		FetchSlotRefillApplySlot,
+	}
+	if !got.Eligible || !reflect.DeepEqual(fetchSlotRefillStepActions(got.Steps), wantSteps) {
+		t.Fatalf("eligible refill plan = %+v, want steps %+v", got, wantSteps)
+	}
+}
+
 func TestPlanFetchSlotDrainedActions(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -148,6 +166,66 @@ func TestPlanFetchSlotBuildsRequestState(t *testing.T) {
 	}
 }
 
+func TestApplyFetchSlotRefillPlan(t *testing.T) {
+	now := time.Unix(100, 0)
+	batch := []types.BlockID{queueID(1), queueID(2)}
+	applier := &recordingFetchSlotRefillApplier{
+		batch: batch,
+		slotInput: FetchSlotInput{
+			Now:         now,
+			MinInterval: 3 * time.Second,
+		},
+	}
+	plan := FetchSlotRefillPlan{Steps: []FetchSlotRefillStep{
+		{Action: FetchSlotRefillAssignRetry},
+		{Action: FetchSlotRefillStepAction(255)},
+		{Action: FetchSlotRefillNextBatch},
+		{Action: FetchSlotRefillApplySlot},
+	}}
+	result := ApplyFetchSlotRefillPlan(plan, applier)
+
+	wantRefillCalls := []FetchSlotRefillStepAction{
+		FetchSlotRefillAssignRetry,
+		FetchSlotRefillNextBatch,
+		FetchSlotRefillApplySlot,
+	}
+	if !reflect.DeepEqual(applier.refillCalls, wantRefillCalls) {
+		t.Fatalf("refill calls = %+v, want %+v", applier.refillCalls, wantRefillCalls)
+	}
+	if !reflect.DeepEqual(applier.slotCalls, []FetchSlotStepAction{FetchSlotSend}) {
+		t.Fatalf("slot calls = %+v, want send", applier.slotCalls)
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, wantRefillCalls) ||
+		!reflect.DeepEqual(result.UnknownSteps, []FetchSlotRefillStepAction{FetchSlotRefillStepAction(255)}) ||
+		!reflect.DeepEqual(result.Batch, batch) ||
+		result.SlotPlan.Action != PeerFetchSend ||
+		!result.SendFetch || result.RequestInventory {
+		t.Fatalf("refill result = %+v, want applied refill with send slot", result)
+	}
+	if !reflect.DeepEqual(result.SlotPlan.Batch, batch) || result.SlotPlan.NextFetchAt != now.Add(3*time.Second) {
+		t.Fatalf("slot plan batch/next = %+v/%s, want batch and next fetch", result.SlotPlan.Batch, result.SlotPlan.NextFetchAt)
+	}
+
+	batch[0] = queueID(99)
+	if result.Batch[0].Num != 1 || result.SlotPlan.Batch[0].Num != 1 {
+		t.Fatalf("refill result aliases source batch: result=%+v slot=%+v", result.Batch, result.SlotPlan.Batch)
+	}
+
+	applier = &recordingFetchSlotRefillApplier{}
+	result = ApplyFetchSlotRefillPlan(FetchSlotRefillPlan{Eligible: true}, applier)
+	if !reflect.DeepEqual(applier.refillCalls, wantRefillCalls) {
+		t.Fatalf("fallback refill calls = %+v, want %+v", applier.refillCalls, wantRefillCalls)
+	}
+	if result.SlotPlan.Action != PeerFetchRequestInventory || !result.RequestInventory || result.SendFetch {
+		t.Fatalf("fallback refill result = %+v, want inventory request", result)
+	}
+
+	nilResult := ApplyFetchSlotRefillPlan(FetchSlotRefillPlan{Eligible: true}, nil)
+	if len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.SendFetch || nilResult.RequestInventory {
+		t.Fatalf("nil refill result = %+v, want empty", nilResult)
+	}
+}
+
 func TestApplyFetchSlotPlan(t *testing.T) {
 	applier := new(recordingFetchSlotApplier)
 	plan := FetchSlotPlan{Steps: []FetchSlotStep{
@@ -198,6 +276,17 @@ func fetchSlotStepActions(steps []FetchSlotStep) []FetchSlotStepAction {
 	return actions
 }
 
+func fetchSlotRefillStepActions(steps []FetchSlotRefillStep) []FetchSlotRefillStepAction {
+	if len(steps) == 0 {
+		return nil
+	}
+	actions := make([]FetchSlotRefillStepAction, 0, len(steps))
+	for _, step := range steps {
+		actions = append(actions, step.Action)
+	}
+	return actions
+}
+
 type recordingFetchSlotApplier struct {
 	calls []FetchSlotStepAction
 }
@@ -216,4 +305,43 @@ func (a *recordingFetchSlotApplier) DelayFetch(FetchSlotPlan) {
 
 func (a *recordingFetchSlotApplier) SendFetch(FetchSlotPlan) {
 	a.calls = append(a.calls, FetchSlotSend)
+}
+
+type recordingFetchSlotRefillApplier struct {
+	refillCalls []FetchSlotRefillStepAction
+	slotCalls   []FetchSlotStepAction
+	batch       []types.BlockID
+	slotInput   FetchSlotInput
+}
+
+func (a *recordingFetchSlotRefillApplier) AssignRetry() {
+	a.refillCalls = append(a.refillCalls, FetchSlotRefillAssignRetry)
+}
+
+func (a *recordingFetchSlotRefillApplier) NextFetchBatch() []types.BlockID {
+	a.refillCalls = append(a.refillCalls, FetchSlotRefillNextBatch)
+	return a.batch
+}
+
+func (a *recordingFetchSlotRefillApplier) FetchSlotInput(batch []types.BlockID) FetchSlotInput {
+	a.refillCalls = append(a.refillCalls, FetchSlotRefillApplySlot)
+	in := a.slotInput
+	in.Batch = batch
+	return in
+}
+
+func (a *recordingFetchSlotRefillApplier) WaitLocalHead(FetchSlotPlan) {
+	a.slotCalls = append(a.slotCalls, FetchSlotWaitLocalHead)
+}
+
+func (a *recordingFetchSlotRefillApplier) RequestInventory(FetchSlotPlan) {
+	a.slotCalls = append(a.slotCalls, FetchSlotRequestInventory)
+}
+
+func (a *recordingFetchSlotRefillApplier) DelayFetch(FetchSlotPlan) {
+	a.slotCalls = append(a.slotCalls, FetchSlotDelay)
+}
+
+func (a *recordingFetchSlotRefillApplier) SendFetch(FetchSlotPlan) {
+	a.slotCalls = append(a.slotCalls, FetchSlotSend)
 }

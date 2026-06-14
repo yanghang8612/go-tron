@@ -21,6 +21,12 @@ type FetchSlotEligibilityPlan struct {
 	Eligible bool
 }
 
+// FetchSlotRefillInput is the side-effect-free peer state needed to decide
+// whether the peer-local refill run should execute.
+type FetchSlotRefillInput struct {
+	Eligibility FetchSlotEligibilityInput
+}
+
 // FetchSlotInput is the side-effect-free peer state needed to decide the next
 // fetch-slot operation for one eligible peer.
 type FetchSlotInput struct {
@@ -44,6 +50,14 @@ type FetchSlotPlan struct {
 	Steps       []FetchSlotStep
 }
 
+// FetchSlotRefillPlan is the downloader-owned scheduler for one eligible peer's
+// refill pass. Runtime supplies retry assignment, candidate classification, and
+// peer timers; downloader owns the step ordering.
+type FetchSlotRefillPlan struct {
+	Eligible bool
+	Steps    []FetchSlotRefillStep
+}
+
 // FetchSlotStepAction names one peer-local fetch-slot operation.
 type FetchSlotStepAction uint8
 
@@ -54,10 +68,25 @@ const (
 	FetchSlotSend
 )
 
+// FetchSlotRefillStepAction names one peer-local operation in a refill pass.
+type FetchSlotRefillStepAction uint8
+
+const (
+	FetchSlotRefillAssignRetry FetchSlotRefillStepAction = iota
+	FetchSlotRefillNextBatch
+	FetchSlotRefillApplySlot
+)
+
 // FetchSlotStep is one downloader-owned operation for an eligible peer fetch
 // slot.
 type FetchSlotStep struct {
 	Action FetchSlotStepAction
+}
+
+// FetchSlotRefillStep is one downloader-owned operation for an eligible peer
+// refill pass.
+type FetchSlotRefillStep struct {
+	Action FetchSlotRefillStepAction
 }
 
 // FetchSlotPlanApplier performs the runtime operations named by a fetch-slot
@@ -70,11 +99,31 @@ type FetchSlotPlanApplier interface {
 	SendFetch(plan FetchSlotPlan)
 }
 
+// FetchSlotRefillPlanApplier performs the runtime operations needed by a
+// peer-local refill pass.
+type FetchSlotRefillPlanApplier interface {
+	FetchSlotPlanApplier
+	AssignRetry()
+	NextFetchBatch() []types.BlockID
+	FetchSlotInput(batch []types.BlockID) FetchSlotInput
+}
+
 // FetchSlotApplyResult records the peer-local actions applied for one fetch
 // slot refill and the network dispatch intent produced by those actions.
 type FetchSlotApplyResult struct {
 	AppliedSteps     []FetchSlotStepAction
 	UnknownSteps     []FetchSlotStepAction
+	RequestInventory bool
+	SendFetch        bool
+}
+
+// FetchSlotRefillApplyResult records one peer-local refill run.
+type FetchSlotRefillApplyResult struct {
+	AppliedSteps     []FetchSlotRefillStepAction
+	UnknownSteps     []FetchSlotRefillStepAction
+	Batch            []types.BlockID
+	SlotPlan         FetchSlotPlan
+	SlotApply        FetchSlotApplyResult
 	RequestInventory bool
 	SendFetch        bool
 }
@@ -85,6 +134,16 @@ func PlanFetchSlotEligibility(in FetchSlotEligibilityInput) FetchSlotEligibility
 	return FetchSlotEligibilityPlan{
 		Eligible: in.PeerPresent && !in.Done && !in.ChainRequested && in.Inflight == 0,
 	}
+}
+
+// PlanFetchSlotRefill derives the ordered peer-local refill schedule. Ineligible
+// peers intentionally produce no steps so callers can keep peer iteration simple.
+func PlanFetchSlotRefill(in FetchSlotRefillInput) FetchSlotRefillPlan {
+	eligibility := PlanFetchSlotEligibility(in.Eligibility)
+	if !eligibility.Eligible {
+		return FetchSlotRefillPlan{}
+	}
+	return FetchSlotRefillPlan{Eligible: true}.withSteps()
 }
 
 // PlanFetchSlot combines the peer-local fetch action and outbound request
@@ -112,6 +171,18 @@ func PlanFetchSlot(in FetchSlotInput) FetchSlotPlan {
 	return plan.withSteps()
 }
 
+func (p FetchSlotRefillPlan) withSteps() FetchSlotRefillPlan {
+	if !p.Eligible {
+		return p
+	}
+	p.Steps = []FetchSlotRefillStep{
+		{Action: FetchSlotRefillAssignRetry},
+		{Action: FetchSlotRefillNextBatch},
+		{Action: FetchSlotRefillApplySlot},
+	}
+	return p
+}
+
 func (p FetchSlotPlan) withSteps() FetchSlotPlan {
 	switch p.Action {
 	case PeerFetchWaitLocalHead:
@@ -124,6 +195,37 @@ func (p FetchSlotPlan) withSteps() FetchSlotPlan {
 		p.Steps = []FetchSlotStep{{Action: FetchSlotSend}}
 	}
 	return p
+}
+
+// ApplyFetchSlotRefillPlan executes the downloader-owned peer-local refill
+// schedule.
+func ApplyFetchSlotRefillPlan(plan FetchSlotRefillPlan, applier FetchSlotRefillPlanApplier) FetchSlotRefillApplyResult {
+	var result FetchSlotRefillApplyResult
+	if applier == nil {
+		return result
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case FetchSlotRefillAssignRetry:
+			applier.AssignRetry()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case FetchSlotRefillNextBatch:
+			result.Batch = append([]types.BlockID(nil), applier.NextFetchBatch()...)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case FetchSlotRefillApplySlot:
+			result.SlotPlan = PlanFetchSlot(applier.FetchSlotInput(result.Batch))
+			result.SlotApply = ApplyFetchSlotPlan(result.SlotPlan, applier)
+			result.RequestInventory = result.SlotApply.RequestInventory
+			result.SendFetch = result.SlotApply.SendFetch
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
 }
 
 // ApplyFetchSlotPlan executes the downloader-owned peer fetch-slot schedule.
