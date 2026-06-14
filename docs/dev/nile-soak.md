@@ -125,12 +125,17 @@ include the segment throughput (`syncLogSegmentBlocks`, `syncLogSegmentTxs`,
 `syncLogBlocksPerSecond`, `syncLogTxsPerSecond`, `syncLogSegmentHead`,
 `syncLogSegmentRemain`), the observed stage planner result
 (`syncLogStageComplete`, `syncLogStageCompleted`, `syncLogStageScheduled`,
+`syncLogStageIncomplete`, `syncLogStageCompletionRatio`,
+`syncLogStageTasksPerBlock`, `syncLogStageCompletedPerBlock`,
 `syncLogStageNext*`, `syncLogStageBlockedStatus`), and the explicit planned
 execution schedule (`syncLogExecPlanBlocks`, `syncLogExecPlanStages`,
 `syncLogExecPlanBodyStages`, `syncLogExecPlanPostBodyStages`,
 `syncLogExecPlanExecutionStages`, `syncLogExecPlanCommitmentStages`,
 `syncLogExecPlanFinishStages`, `syncLogExecPlanFirst`, `syncLogExecPlanLast`).
-These fields are log-derived and complement the
+For the batch-phase stage planner, a fully completed N-block import normally
+reports `syncLogStageScheduled = syncLogExecPlanStages = 4*N`; a blocked row
+shows how many bodies/execution/commitment/finish tasks completed before the
+next missing or mismatched task. These fields are log-derived and complement the
 `stage*` fields from `gtron db stage-status`: log fields explain what the last
 import batch planned and observed, while DB fields show the persisted recovery
 boundary.

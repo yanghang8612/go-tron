@@ -93,9 +93,9 @@ class NileSyncSampleTest(unittest.TestCase):
             sync_log.write_text(
                 "\n".join(
                     [
-                        "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s execElapsed=800ms applyElapsed=900ms blocks/s=10 txs/s=4 head=90 remain=20 slowPhase=execute slowElapsed=500ms stateMutTop=storagePuts:2 stateMutKVTop=accountKV:1 peer=peer-old syncStageComplete=true syncStageCompleted=4 syncStageScheduled=4 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanBodyStages=10 syncExecPlanPostBodyStages=30 syncExecPlanExecutionStages=10 syncExecPlanCommitmentStages=10 syncExecPlanFinishStages=10 syncExecPlanFirst=81 syncExecPlanLast=90",
+                        "INFO [06-13|12:00:00.000] Imported chain segment blocks=10 txs=4 elapsed=1s execElapsed=800ms applyElapsed=900ms blocks/s=10 txs/s=4 head=90 remain=20 slowPhase=execute slowElapsed=500ms stateMutTop=storagePuts:2 stateMutKVTop=accountKV:1 peer=peer-old syncStageComplete=true syncStageCompleted=40 syncStageScheduled=40 syncExecPlanBlocks=10 syncExecPlanStages=40 syncExecPlanBodyStages=10 syncExecPlanPostBodyStages=30 syncExecPlanExecutionStages=10 syncExecPlanCommitmentStages=10 syncExecPlanFinishStages=10 syncExecPlanFirst=81 syncExecPlanLast=90",
                         "DEBUG [06-13|12:00:00.100] Imported chain segment details blocks=10 head=90 syncExecPlanBlocks=10",
-                        "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s execElapsed=1500ms applyElapsed=1700ms blocks/s=20.5 txs/s=7.5 head=100 remain=5 slowPhase=stateCommit slowElapsed=900ms slowStateCommitPhase=flatWrite slowStateCommitElapsed=600ms stateMutTop=storagePuts:7 stateMutKVTop=accountKV:3 peer=peer-latest syncStageComplete=false syncStageCompleted=2 syncStageScheduled=4 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanBodyStages=20 syncExecPlanPostBodyStages=60 syncExecPlanExecutionStages=20 syncExecPlanCommitmentStages=20 syncExecPlanFinishStages=20 syncExecPlanFirst=81 syncExecPlanLast=100",
+                        "INFO [06-13|12:01:00.000] Imported chain segment blocks=20 txs=7 elapsed=2s execElapsed=1500ms applyElapsed=1700ms blocks/s=20.5 txs/s=7.5 head=100 remain=5 slowPhase=stateCommit slowElapsed=900ms slowStateCommitPhase=flatWrite slowStateCommitElapsed=600ms stateMutTop=storagePuts:7 stateMutKVTop=accountKV:3 peer=peer-latest syncStageComplete=false syncStageCompleted=59 syncStageScheduled=80 syncStageNext=commitment syncStageNextBlock=100 syncStageNextCanonical=Commitment syncStageNextSync=SyncCommitment syncStageBlockedStatus=missing syncExecPlanBlocks=20 syncExecPlanStages=80 syncExecPlanBodyStages=20 syncExecPlanPostBodyStages=60 syncExecPlanExecutionStages=20 syncExecPlanCommitmentStages=20 syncExecPlanFinishStages=20 syncExecPlanFirst=81 syncExecPlanLast=100",
                     ]
                 )
                 + "\n",
@@ -307,8 +307,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogStateMutKVTop"], "accountKV:3")
             self.assertEqual(row["syncLogPeer"], "peer-latest")
             self.assertFalse(row["syncLogStageComplete"])
-            self.assertEqual(row["syncLogStageCompleted"], 2)
-            self.assertEqual(row["syncLogStageScheduled"], 4)
+            self.assertEqual(row["syncLogStageCompleted"], 59)
+            self.assertEqual(row["syncLogStageScheduled"], 80)
+            self.assertEqual(row["syncLogStageIncomplete"], 21)
+            self.assertAlmostEqual(row["syncLogStageCompletionRatio"], 59 / 80)
+            self.assertEqual(row["syncLogStageTasksPerBlock"], 4.0)
+            self.assertAlmostEqual(row["syncLogStageCompletedPerBlock"], 59 / 20)
             self.assertEqual(row["syncLogStageNext"], "commitment")
             self.assertEqual(row["syncLogStageNextBlock"], 100)
             self.assertEqual(row["syncLogStageNextCanonical"], "Commitment")
@@ -323,6 +327,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogExecPlanFinishStages"], 20)
             self.assertEqual(row["syncLogExecPlanFirst"], 81)
             self.assertEqual(row["syncLogExecPlanLast"], 100)
+            self.assertEqual(row["syncLogExecPlanStagesPerBlock"], 4.0)
+            self.assertEqual(row["syncLogExecPlanPostBodyStagesPerBlock"], 3.0)
             self.assertEqual(output.read_text(encoding="utf-8").strip(), proc.stdout.strip())
 
     def test_sample_derives_interval_rates_from_previous_jsonl_row(self):
@@ -763,8 +769,8 @@ class NileSyncSampleTest(unittest.TestCase):
                         "stateMutKVTop": "accountKV:4",
                         "peer": "peer-json",
                         "syncStageComplete": True,
-                        "syncStageCompleted": 4,
-                        "syncStageScheduled": 4,
+                        "syncStageCompleted": 48,
+                        "syncStageScheduled": 48,
                         "syncExecPlanBlocks": 12,
                         "syncExecPlanStages": 48,
                         "syncExecPlanBodyStages": 12,
@@ -821,6 +827,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogStateMutKVTop"], "accountKV:4")
             self.assertEqual(row["syncLogPeer"], "peer-json")
             self.assertTrue(row["syncLogStageComplete"])
+            self.assertEqual(row["syncLogStageCompleted"], 48)
+            self.assertEqual(row["syncLogStageScheduled"], 48)
+            self.assertEqual(row["syncLogStageIncomplete"], 0)
+            self.assertEqual(row["syncLogStageCompletionRatio"], 1.0)
+            self.assertEqual(row["syncLogStageTasksPerBlock"], 4.0)
+            self.assertEqual(row["syncLogStageCompletedPerBlock"], 4.0)
             self.assertEqual(row["syncLogExecPlanBlocks"], 12)
             self.assertEqual(row["syncLogExecPlanStages"], 48)
             self.assertEqual(row["syncLogExecPlanBodyStages"], 12)
@@ -830,6 +842,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogExecPlanFinishStages"], 12)
             self.assertEqual(row["syncLogExecPlanFirst"], 101)
             self.assertEqual(row["syncLogExecPlanLast"], 112)
+            self.assertEqual(row["syncLogExecPlanStagesPerBlock"], 4.0)
+            self.assertEqual(row["syncLogExecPlanPostBodyStagesPerBlock"], 3.0)
 
 
 if __name__ == "__main__":

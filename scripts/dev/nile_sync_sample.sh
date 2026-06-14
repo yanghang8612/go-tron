@@ -439,6 +439,10 @@ def parse_sync_log(path):
         "syncLogStageComplete": False,
         "syncLogStageCompleted": -1,
         "syncLogStageScheduled": -1,
+        "syncLogStageIncomplete": -1,
+        "syncLogStageCompletionRatio": -1.0,
+        "syncLogStageTasksPerBlock": -1.0,
+        "syncLogStageCompletedPerBlock": -1.0,
         "syncLogStageNext": "",
         "syncLogStageNextBlock": -1,
         "syncLogStageNextCanonical": "",
@@ -453,6 +457,8 @@ def parse_sync_log(path):
         "syncLogExecPlanFinishStages": -1,
         "syncLogExecPlanFirst": -1,
         "syncLogExecPlanLast": -1,
+        "syncLogExecPlanStagesPerBlock": -1.0,
+        "syncLogExecPlanPostBodyStagesPerBlock": -1.0,
     }
     if not path:
         return row
@@ -511,6 +517,19 @@ def parse_sync_log(path):
     for source, dest in mappings.items():
         if source in latest:
             row[dest] = parse_log_value(latest[source])
+    scheduled = number(row, "syncLogStageScheduled", -1)
+    completed = number(row, "syncLogStageCompleted", -1)
+    segment_blocks = number(row, "syncLogSegmentBlocks", -1)
+    exec_blocks = number(row, "syncLogExecPlanBlocks", -1)
+    if scheduled >= 0 and completed >= 0:
+        row["syncLogStageIncomplete"] = max(scheduled - completed, 0)
+        row["syncLogStageCompletionRatio"] = ratio(completed, scheduled)
+    if segment_blocks > 0:
+        row["syncLogStageTasksPerBlock"] = ratio(scheduled, segment_blocks)
+        row["syncLogStageCompletedPerBlock"] = ratio(completed, segment_blocks)
+    if exec_blocks > 0:
+        row["syncLogExecPlanStagesPerBlock"] = ratio(row["syncLogExecPlanStages"], exec_blocks)
+        row["syncLogExecPlanPostBodyStagesPerBlock"] = ratio(row["syncLogExecPlanPostBodyStages"], exec_blocks)
     return row
 
 def parse_etime_seconds(value):
