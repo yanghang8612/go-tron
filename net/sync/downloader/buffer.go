@@ -376,6 +376,7 @@ const (
 	ImportBatchRunRecordBufferWaits
 	ImportBatchRunPlanExecution
 	ImportBatchRunPlanStagePhases
+	ImportBatchRunPrepareAttempt
 	ImportBatchRunExecute
 	ImportBatchRunSettle
 )
@@ -473,8 +474,9 @@ type ImportBatchDrainLoopPlan struct {
 }
 
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
-// one popped batch: decode raw bodies, account wait time, execute canonical
-// stages with an explicit observer, then settle progress/pause decisions.
+// one popped batch: decode raw bodies, account wait time, plan canonical
+// stages, prepare a runnable attempt with its observer, execute it, then settle
+// progress/pause decisions.
 func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
 	return ImportBatchRunPlan{
 		Batch: batch,
@@ -483,6 +485,7 @@ func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
 			{Action: ImportBatchRunRecordBufferWaits},
 			{Action: ImportBatchRunPlanExecution},
 			{Action: ImportBatchRunPlanStagePhases},
+			{Action: ImportBatchRunPrepareAttempt},
 			{Action: ImportBatchRunExecute},
 			{Action: ImportBatchRunSettle},
 		},
@@ -510,8 +513,41 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		insertErr error
 		elapsed   time.Duration
 		planned   bool
+		prepared  bool
 		executed  bool
 	)
+	ensureExecutionPlanned := func() {
+		if planned {
+			return
+		}
+		result.Execution = PlanImportBatchExecution(plan.Batch)
+		result.ExecutionDiagnostics = result.Execution.Diagnostics
+		planned = true
+	}
+	ensureStagePhasesPlanned := func() {
+		ensureExecutionPlanned()
+		if result.StagePhaseSchedule.Empty() {
+			result.StagePhaseSchedule = result.Execution.PhaseSchedule()
+		}
+		if result.ExecutionPhases == nil {
+			result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
+		}
+	}
+	prepareAttempt := func() {
+		if prepared {
+			return
+		}
+		ensureStagePhasesPlanned()
+		attempt = NewImportBatchExecutionAttempt(result.Execution)
+		if result.StagePhaseSchedule.Empty() {
+			result.StagePhaseSchedule = attempt.StagePhaseSchedule
+		}
+		if result.ExecutionPhases == nil {
+			result.ExecutionPhases = append([]ImportStagePhasePlan(nil), attempt.ExecutionPhases...)
+		}
+		result.ExecutionAttempt = attempt
+		prepared = true
+	}
 	for _, step := range plan.Steps {
 		result.Steps = append(result.Steps, step.Action)
 		switch step.Action {
@@ -527,37 +563,13 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 				applier.RecordBufferWait(wait)
 			}
 		case ImportBatchRunPlanExecution:
-			result.Execution = PlanImportBatchExecution(plan.Batch)
-			result.ExecutionDiagnostics = result.Execution.Diagnostics
-			planned = true
+			ensureExecutionPlanned()
 		case ImportBatchRunPlanStagePhases:
-			if !planned {
-				result.Execution = PlanImportBatchExecution(plan.Batch)
-				result.ExecutionDiagnostics = result.Execution.Diagnostics
-				planned = true
-			}
-			result.StagePhaseSchedule = result.Execution.PhaseSchedule()
-			result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
+			ensureStagePhasesPlanned()
+		case ImportBatchRunPrepareAttempt:
+			prepareAttempt()
 		case ImportBatchRunExecute:
-			if !planned {
-				result.Execution = PlanImportBatchExecution(plan.Batch)
-				result.ExecutionDiagnostics = result.Execution.Diagnostics
-				planned = true
-			}
-			if result.StagePhaseSchedule.Empty() {
-				result.StagePhaseSchedule = result.Execution.PhaseSchedule()
-			}
-			if result.ExecutionPhases == nil {
-				result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
-			}
-			attempt = NewImportBatchExecutionAttempt(result.Execution)
-			if result.StagePhaseSchedule.Empty() {
-				result.StagePhaseSchedule = attempt.StagePhaseSchedule
-			}
-			if result.ExecutionPhases == nil {
-				result.ExecutionPhases = append([]ImportStagePhasePlan(nil), attempt.ExecutionPhases...)
-			}
-			result.ExecutionAttempt = attempt
+			prepareAttempt()
 			elapsed, insertErr = applier.ExecuteImportBatch(attempt)
 			executed = true
 		case ImportBatchRunSettle:

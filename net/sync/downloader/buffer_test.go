@@ -695,6 +695,7 @@ func TestNewImportBatchRunPlanSchedulesExecutionPlanningBeforeExecute(t *testing
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
 		ImportBatchRunPlanStagePhases,
+		ImportBatchRunPrepareAttempt,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
@@ -730,6 +731,7 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
 		ImportBatchRunPlanStagePhases,
+		ImportBatchRunPrepareAttempt,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
@@ -824,6 +826,47 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		!reflect.DeepEqual(applier.recordRunPlan, result.RecordPlan) {
 		t.Fatalf("record plan result=%+v has=%v applier=%+v, want downloader-owned plan for imported progress",
 			result.RecordPlan, result.HasRecord, applier.recordRunPlan)
+	}
+}
+
+func TestApplyImportBatchRunPlanPreparesAttemptBeforeExecute(t *testing.T) {
+	block := testBufferedBlock(1)
+	batch := testImportRunBatch(t, block)
+	applier := &recordingImportBatchRunApplier{}
+	plan := ImportBatchRunPlan{
+		Batch: batch,
+		Steps: []ImportBatchRunStep{
+			{Action: ImportBatchRunDecode},
+			{Action: ImportBatchRunPlanExecution},
+			{Action: ImportBatchRunPlanStagePhases},
+			{Action: ImportBatchRunPrepareAttempt},
+			{Action: ImportBatchRunSettle},
+		},
+	}
+
+	result := ApplyImportBatchRunPlan(plan, applier)
+
+	if result.ExecutionAttempt.Collector == nil ||
+		result.ExecutionAttempt.Execution.Schedule.BlockNum != block.Number() ||
+		result.ExecutionAttempt.StagePhaseSchedule.Empty() ||
+		len(result.ExecutionAttempt.ExecutionPhases) != 4 {
+		t.Fatalf("execution attempt = %+v, want prepared one-block attempt before execute", result.ExecutionAttempt)
+	}
+	if result.Outcome.RecordApplied || result.Progress.OK || result.HasRecord || result.StopDrain || result.ContinueDrain {
+		t.Fatalf("result = %+v, want prepared-only run without execution settlement", result)
+	}
+	if !reflect.DeepEqual(applier.calls, []ImportBatchRunStepAction{ImportBatchRunDecode}) {
+		t.Fatalf("calls = %+v, want only decode side effect", applier.calls)
+	}
+	wantSteps := []ImportBatchRunStepAction{
+		ImportBatchRunDecode,
+		ImportBatchRunPlanExecution,
+		ImportBatchRunPlanStagePhases,
+		ImportBatchRunPrepareAttempt,
+		ImportBatchRunSettle,
+	}
+	if !reflect.DeepEqual(result.Steps, wantSteps) {
+		t.Fatalf("result steps = %+v, want %+v", result.Steps, wantSteps)
 	}
 }
 
@@ -986,6 +1029,7 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
 		ImportBatchRunPlanStagePhases,
+		ImportBatchRunPrepareAttempt,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
@@ -1077,6 +1121,7 @@ func TestApplyImportBatchRunPlanFirstBlockFailurePausesWithoutProgress(t *testin
 		ImportBatchRunRecordBufferWaits,
 		ImportBatchRunPlanExecution,
 		ImportBatchRunPlanStagePhases,
+		ImportBatchRunPrepareAttempt,
 		ImportBatchRunExecute,
 		ImportBatchRunSettle,
 	}
