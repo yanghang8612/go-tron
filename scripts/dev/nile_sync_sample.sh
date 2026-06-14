@@ -948,6 +948,77 @@ def stage_pipeline_violations(stages):
         })
     return violations
 
+def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck_lag, pipeline_lag, finish_head_lag):
+    required = [
+        ("SyncBodies", "stageSyncBodies"),
+        ("SyncBodiesReady", "stageSyncBodiesReady"),
+        ("SyncImport", "stageSyncImport"),
+        ("SyncExecution", "stageSyncExecution"),
+        ("SyncCommitment", "stageSyncCommitment"),
+        ("SyncFinish", "stageSyncFinish"),
+    ]
+    row = {
+        "fullStagedSyncStatus": "unknown",
+        "fullStagedSyncReady": False,
+        "fullStagedSyncCompleteAtHead": False,
+        "fullStagedSyncRequiredStages": [name for name, _ in required],
+        "fullStagedSyncStageCount": len(required),
+        "fullStagedSyncPresentStageCount": 0,
+        "fullStagedSyncVerifiedStageCount": 0,
+        "fullStagedSyncMissingStages": [],
+        "fullStagedSyncHashIssues": [],
+        "fullStagedSyncUnverifiedStages": [],
+        "fullStagedSyncCompleteBlock": -1,
+        "fullStagedSyncMinStage": "",
+        "fullStagedSyncMinStageBlock": -1,
+        "fullStagedSyncHeadLagBlocks": finish_head_lag,
+        "fullStagedSyncPipelineLagBlocks": pipeline_lag,
+        "fullStagedSyncBottleneck": bottleneck,
+        "fullStagedSyncBottleneckLagBlocks": bottleneck_lag,
+    }
+    if stages.get("stageStatusFileStatus") != "ok":
+        return row
+
+    present_values = []
+    progress = stages.get("stageProgress", {})
+    for name, field in required:
+        value = number(stages, field, -1)
+        entry = progress.get(name, {})
+        present = bool(entry.get("present")) and value >= 0
+        if not present:
+            row["fullStagedSyncMissingStages"].append(name)
+            continue
+        row["fullStagedSyncPresentStageCount"] += 1
+        present_values.append((name, value))
+        verified = str(entry.get("verified", ""))
+        if verified == "canonical":
+            row["fullStagedSyncVerifiedStageCount"] += 1
+        elif verified:
+            row["fullStagedSyncHashIssues"].append({"stage": name, "verified": verified})
+        else:
+            row["fullStagedSyncUnverifiedStages"].append(name)
+
+    if present_values:
+        min_stage, min_value = min(present_values, key=lambda item: item[1])
+        row["fullStagedSyncMinStage"] = min_stage
+        row["fullStagedSyncMinStageBlock"] = min_value
+    row["fullStagedSyncCompleteBlock"] = number(stages, "stageSyncFinish", -1)
+
+    if row["fullStagedSyncMissingStages"]:
+        row["fullStagedSyncStatus"] = "missing-stage"
+    elif row["fullStagedSyncHashIssues"]:
+        row["fullStagedSyncStatus"] = "hash-issue"
+    elif pipeline_violations:
+        row["fullStagedSyncStatus"] = "pipeline-violation"
+    elif finish_head_lag > 0:
+        row["fullStagedSyncStatus"] = "catching-up"
+    else:
+        row["fullStagedSyncStatus"] = "caught-up"
+
+    row["fullStagedSyncReady"] = row["fullStagedSyncStatus"] in {"catching-up", "caught-up"}
+    row["fullStagedSyncCompleteAtHead"] = row["fullStagedSyncReady"] and finish_head_lag == 0
+    return row
+
 def progress_regressions(current, previous_row, keys, missing_is_regression):
     if not previous_row:
         return []
@@ -1515,6 +1586,14 @@ if stage_sync_pipeline_violations:
     stage_sync_pipeline_max_violation_blocks = max(
         violation["violationBlocks"] for violation in stage_sync_pipeline_violations
     )
+full_staged_sync = full_staged_sync_summary(
+    stages,
+    stage_sync_pipeline_violations,
+    stage_sync_bottleneck,
+    stage_sync_bottleneck_lag,
+    stage_sync_pipeline_lag,
+    stage_sync_finish_head_lag,
+)
 interval_stage_sync_bodies = interval_stage_delta(stages.get("stageSyncBodies", -1), previous, "stageSyncBodies", interval_seconds)
 interval_stage_sync_bodies_ready = interval_stage_delta(stages.get("stageSyncBodiesReady", -1), previous, "stageSyncBodiesReady", interval_seconds)
 interval_stage_sync_import = interval_stage_delta(stages.get("stageSyncImport", -1), previous, "stageSyncImport", interval_seconds)
@@ -1897,6 +1976,7 @@ row = {
     "datadir": datadir,
 }
 row.update(soak_health)
+row.update(full_staged_sync)
 row.update(alerts)
 row.update(stages)
 row.update(sync_log)

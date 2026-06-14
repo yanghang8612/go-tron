@@ -225,7 +225,19 @@ current pipeline lag and its share of total staged-sync backlog. It also reports
 `stageSyncPipelineMonotonic`, `stageSyncPipelineViolation`,
 `stageSyncPipelineViolationCount`, `stageSyncPipelineMaxViolationBlocks`, and
 `stageSyncPipelineViolations`, so a sample row can flag any downstream stage
-that advanced ahead of its upstream stage. Across consecutive JSONL rows it
+that advanced ahead of its upstream stage. Rows also include an operator-facing
+full staged sync summary: `fullStagedSyncStatus`,
+`fullStagedSyncReady`, `fullStagedSyncCompleteAtHead`,
+`fullStagedSyncPresentStageCount`, `fullStagedSyncVerifiedStageCount`,
+`fullStagedSyncMissingStages`, `fullStagedSyncHashIssues`,
+`fullStagedSyncCompleteBlock`, `fullStagedSyncHeadLagBlocks`,
+`fullStagedSyncPipelineLagBlocks`, `fullStagedSyncBottleneck`, and
+`fullStagedSyncBottleneckLagBlocks`. `fullStagedSyncReady` means the six
+sync stages (`SyncBodies`, `SyncBodiesReady`, `SyncImport`, `SyncExecution`,
+`SyncCommitment`, `SyncFinish`) are present, hash/verification checks did not
+flag them, and the pipeline is monotonic; `fullStagedSyncCompleteAtHead` is the
+stricter condition where `SyncFinish` has caught up to the sampled HTTP head.
+Across consecutive JSONL rows it
 also reports `restartRecoveryStatus`, `heightRegressionBlocks`,
 `stageProgressRegressionCount`, `stageProgressMaxRegressionBlocks`, and
 `stageProgressRegressions`. These fields make restart/repair events visible
