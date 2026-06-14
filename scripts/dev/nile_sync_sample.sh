@@ -816,6 +816,83 @@ def progress_regressions(current, previous_row, keys, missing_is_regression):
         })
     return regressions
 
+def stage_last_progress_map(previous_row):
+    raw = previous_row.get("stageLastProgressUnix", {}) if previous_row else {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in raw.items():
+        try:
+            value = int(value)
+        except Exception:
+            continue
+        if value > 0:
+            out[key] = value
+    return out
+
+def stage_stagnation(current, previous_row, now, previous_unix, interval_seconds, height, target_height):
+    keys = [
+        "stageSyncBodies",
+        "stageSyncBodiesReady",
+        "stageSyncImport",
+        "stageSyncExecution",
+        "stageSyncCommitment",
+        "stageSyncFinish",
+        "stageChainFreezer",
+        "stageSnapshotEventLogBuild",
+    ]
+    previous_last = stage_last_progress_map(previous_row)
+    last_progress = {}
+    stalls = []
+    for key in keys:
+        value = number(current, key, -1)
+        if value < 0:
+            continue
+        previous_value = number(previous_row, key, -1)
+        if previous_value >= 0 and value == previous_value:
+            last = previous_last.get(key, previous_unix if previous_unix > 0 else now)
+        else:
+            last = now
+        last_progress[key] = last
+        lag_blocks = stage_stagnation_lag(current, key, height, target_height)
+        stalled_seconds = now - last if interval_seconds > 0 and previous_value >= 0 and value == previous_value and lag_blocks > 0 else 0
+        if stalled_seconds <= 0:
+            continue
+        stalls.append({
+            "stage": key,
+            "value": value,
+            "previousValue": previous_value,
+            "intervalBlocks": value - previous_value,
+            "lagBlocks": lag_blocks,
+            "stalledSeconds": stalled_seconds,
+            "lastProgressUnix": last,
+        })
+    return last_progress, stalls
+
+def stage_stagnation_lag(current, key, height, target_height):
+    if key == "stageSyncBodies":
+        return lag(target_height, current.get(key, -1))
+    if key == "stageSyncBodiesReady":
+        return lag(current.get("stageSyncBodies", -1), current.get(key, -1))
+    if key == "stageSyncImport":
+        return lag(current.get("stageSyncBodiesReady", -1), current.get(key, -1))
+    if key == "stageSyncExecution":
+        return lag(current.get("stageSyncImport", -1), current.get(key, -1))
+    if key == "stageSyncCommitment":
+        return lag(current.get("stageSyncExecution", -1), current.get(key, -1))
+    if key == "stageSyncFinish":
+        return lag(height, current.get(key, -1))
+    if key == "stageChainFreezer":
+        return lag(height, current.get(key, -1))
+    if key == "stageSnapshotEventLogBuild":
+        return lag(height, current.get(key, -1))
+    return -1
+
+def primary_stage_stall(stalls):
+    if not stalls:
+        return {}
+    return max(stalls, key=lambda row: (row.get("stalledSeconds", 0), row.get("lagBlocks", 0)))
+
 def ratio(numerator, denominator):
     try:
         numerator = float(numerator)
@@ -881,6 +958,7 @@ def build_soak_health(
     stage_sync_bottleneck,
     stage_sync_bottleneck_lag,
     sync_log,
+    stage_stalled,
 ):
     critical = []
     warning = []
@@ -907,6 +985,8 @@ def build_soak_health(
         add(warning, "stage-unbound-rows")
     if restart_recovery_status == "stalled":
         add(warning, "restart-stalled")
+    if stage_stalled:
+        add(warning, "stage-stalled")
 
     for field, issue in (
         ("freezerAlertStatus", "freezer-alert"),
@@ -1316,6 +1396,20 @@ max_stage_interval_blocks = max(
     interval_stage_sync_commitment,
     interval_stage_sync_finish,
 )
+stage_last_progress_unix, stage_stalls = stage_stagnation(
+    stages,
+    previous,
+    now,
+    previous_unix,
+    interval_seconds,
+    height,
+    sync_target_height,
+)
+stage_primary_stall = primary_stage_stall(stage_stalls)
+stage_stalled = bool(stage_primary_stall)
+stage_stalled_stage = stage_primary_stall.get("stage", "")
+stage_stalled_seconds = int(stage_primary_stall.get("stalledSeconds", 0)) if stage_primary_stall else 0
+stage_stalled_lag_blocks = int(stage_primary_stall.get("lagBlocks", -1)) if stage_primary_stall else -1
 if height_regression_blocks > 0:
     restart_recovery_status = "height-regression"
 elif stage_progress_regressions:
@@ -1355,6 +1449,7 @@ soak_health = build_soak_health(
     stage_sync_bottleneck,
     stage_sync_bottleneck_lag,
     sync_log,
+    stage_stalled,
 )
 if interval_seconds > 0:
     soak_efficiency_window = "interval"
@@ -1570,6 +1665,13 @@ row = {
     "stageProgressRegressionCount": len(stage_progress_regressions),
     "stageProgressMaxRegressionBlocks": stage_progress_max_regression_blocks,
     "stageProgressRegressions": stage_progress_regressions,
+    "stageLastProgressUnix": stage_last_progress_unix,
+    "stageStalled": stage_stalled,
+    "stageStalledCount": len(stage_stalls),
+    "stageStalledStage": stage_stalled_stage,
+    "stageStalledSeconds": stage_stalled_seconds,
+    "stageStalledLagBlocks": stage_stalled_lag_blocks,
+    "stageStalls": stage_stalls,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,

@@ -283,6 +283,12 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageProgressRegressionCount"], 0)
             self.assertEqual(row["stageProgressMaxRegressionBlocks"], 0)
             self.assertEqual(row["stageProgressRegressions"], [])
+            self.assertFalse(row["stageStalled"])
+            self.assertEqual(row["stageStalledCount"], 0)
+            self.assertEqual(row["stageStalledStage"], "")
+            self.assertEqual(row["stageStalledSeconds"], 0)
+            self.assertEqual(row["stageStalledLagBlocks"], -1)
+            self.assertEqual(row["stageStalls"], [])
             self.assertEqual(row["intervalStageSyncBodiesBlocks"], 0)
             self.assertEqual(row["intervalStageSyncImportBlocks"], 0)
             self.assertEqual(row["intervalStageSyncExecutionBlocks"], 0)
@@ -681,6 +687,8 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageProgressRegressionCount"], 0)
             self.assertEqual(row["stageProgressMaxRegressionBlocks"], 0)
             self.assertEqual(row["stageProgressRegressions"], [])
+            self.assertFalse(row["stageStalled"])
+            self.assertEqual(row["stageStalledCount"], 0)
             self.assertAlmostEqual(
                 row["stageSyncFinishHeadEtaSeconds"],
                 10 / row["intervalStageSyncFinishBlocksPerSecond"],
@@ -699,6 +707,90 @@ class NileSyncSampleTest(unittest.TestCase):
             lines = output.read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(lines[0]), previous)
             self.assertEqual(json.loads(lines[-1]), row)
+
+    def test_sample_flags_stage_stall_while_height_progresses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            stage_status = tmpdir / "stage-status.txt"
+            stage_status.write_text(
+                "\n".join(
+                    [
+                        "Stage status: datadir=/tmp/nile known=32 rows=6",
+                        "Stage progress: group=sync name=SyncBodies value=100 hash=aa verified=canonical",
+                        "Stage progress: group=sync name=SyncBodiesReady value=100 hash=bb verified=canonical",
+                        "Stage progress: group=sync name=SyncImport value=100 hash=cc verified=canonical",
+                        "Stage progress: group=sync name=SyncExecution value=90 hash=dd verified=canonical",
+                        "Stage progress: group=sync name=SyncCommitment value=89 hash=ee verified=canonical",
+                        "Stage progress: group=sync name=SyncFinish value=88 hash=ff verified=canonical",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            now = int(time.time())
+            previous = {
+                "unix": now - 20,
+                "height": 80,
+                "stageSyncBodies": 90,
+                "stageSyncBodiesReady": 90,
+                "stageSyncImport": 90,
+                "stageSyncExecution": 90,
+                "stageSyncCommitment": 89,
+                "stageSyncFinish": 88,
+                "stageLastProgressUnix": {
+                    "stageSyncExecution": now - 120,
+                    "stageSyncCommitment": now - 60,
+                    "stageSyncFinish": now - 40,
+                },
+            }
+            output = tmpdir / "samples.jsonl"
+            output.write_text(json.dumps(previous) + "\n", encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--stage-status-file",
+                    str(stage_status),
+                    "--output",
+                    str(output),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(row["height"], 100)
+            self.assertEqual(row["restartRecoveryStatus"], "progressing")
+            self.assertTrue(row["stageStalled"])
+            self.assertGreaterEqual(row["stageStalledCount"], 1)
+            self.assertEqual(row["stageStalledStage"], "stageSyncExecution")
+            self.assertGreaterEqual(row["stageStalledSeconds"], 120)
+            self.assertEqual(row["stageStalledLagBlocks"], 10)
+            self.assertIn("stage-stalled", row["soakHealthIssues"])
+            self.assertEqual(row["soakHealthStatus"], "warning")
+            self.assertEqual(row["soakPrimaryBottleneck"], "finish-head")
+            self.assertEqual(row["stageLastProgressUnix"]["stageSyncExecution"], previous["stageLastProgressUnix"]["stageSyncExecution"])
+            stalled = {entry["stage"]: entry for entry in row["stageStalls"]}
+            self.assertEqual(stalled["stageSyncExecution"]["value"], 90)
+            self.assertEqual(stalled["stageSyncExecution"]["previousValue"], 90)
+            self.assertEqual(stalled["stageSyncExecution"]["intervalBlocks"], 0)
+            self.assertEqual(stalled["stageSyncExecution"]["lagBlocks"], 10)
+            self.assertGreaterEqual(stalled["stageSyncExecution"]["stalledSeconds"], 120)
 
     def test_sample_reports_non_monotonic_stage_pipeline(self):
         with tempfile.TemporaryDirectory() as tmp:

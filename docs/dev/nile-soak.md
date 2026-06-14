@@ -220,6 +220,14 @@ a previous sample, rows also include interval stage throughput fields such as
 adjacent-stage ratios such as `intervalStageSyncExecutionToImportRatio` and
 `intervalStageSyncFinishToCommitmentRatio`, so long-running samples show both
 where backlog is accumulating and whether each downstream stage is keeping up.
+Rows also carry stage-stall fields derived from the previous JSONL sample:
+`stageLastProgressUnix`, `stageStalled`, `stageStalledCount`,
+`stageStalledStage`, `stageStalledSeconds`, `stageStalledLagBlocks`, and
+`stageStalls`. These flag an individual lagging stage even when the HTTP head
+or another stage is still advancing. For example, `stageStalledStage =
+stageSyncExecution` with positive `stageStalledLagBlocks` means `SyncImport`
+moved ahead while `SyncExecution` did not; treat sustained `stage-stalled`
+health warnings during catch-up as the next profiling target.
 
 ## Full Staged Sync Validation
 
