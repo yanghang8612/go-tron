@@ -184,6 +184,24 @@ type ImportBatchStagePlan struct {
 	Tasks []ImportStageTask
 }
 
+// ImportBatchStagePhaseSchedule is the phase-level execution schedule for a
+// decoded import batch. It makes the post-body execution/commitment/finish
+// phases explicit before canonical insertion emits any stage hooks.
+type ImportBatchStagePhaseSchedule struct {
+	Phases        []ImportStagePhasePlan
+	Body          ImportStagePhasePlan
+	HasBody       bool
+	Execution     ImportStagePhasePlan
+	HasExecution  bool
+	Commitment    ImportStagePhasePlan
+	HasCommitment bool
+	Finish        ImportStagePhasePlan
+	HasFinish     bool
+	PostBody      []ImportStagePhasePlan
+	Tasks         []ImportStageTask
+	PostBodyTasks []ImportStageTask
+}
+
 // NewImportBatchStagePlan returns the phase-indexed stage schedule for a batch
 // of decoded import boundaries.
 func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePlan {
@@ -212,9 +230,98 @@ func NewImportBatchStagePlan(schedules []ImportStageSchedule) ImportBatchStagePl
 	return plan
 }
 
+// NewImportBatchStagePhaseSchedule returns the phase-level plan for an import
+// batch. Bodies are scheduled first; execution, commitment, and finish are
+// retained as separate post-body phases in canonical planner order.
+func NewImportBatchStagePhaseSchedule(stagePlan ImportBatchStagePlan) ImportBatchStagePhaseSchedule {
+	var schedule ImportBatchStagePhaseSchedule
+	for _, phase := range stagePlan.PhasePlans() {
+		phase = cloneImportStagePhasePlan(phase)
+		schedule.Phases = append(schedule.Phases, phase)
+		schedule.Tasks = append(schedule.Tasks, phase.Tasks...)
+		switch phase.Phase {
+		case ImportStagePhaseBodies:
+			schedule.Body = phase
+			schedule.HasBody = true
+		case ImportStagePhaseExecution:
+			schedule.Execution = phase
+			schedule.HasExecution = true
+			schedule.PostBody = append(schedule.PostBody, phase)
+			schedule.PostBodyTasks = append(schedule.PostBodyTasks, phase.Tasks...)
+		case ImportStagePhaseCommitment:
+			schedule.Commitment = phase
+			schedule.HasCommitment = true
+			schedule.PostBody = append(schedule.PostBody, phase)
+			schedule.PostBodyTasks = append(schedule.PostBodyTasks, phase.Tasks...)
+		case ImportStagePhaseFinish:
+			schedule.Finish = phase
+			schedule.HasFinish = true
+			schedule.PostBody = append(schedule.PostBody, phase)
+			schedule.PostBodyTasks = append(schedule.PostBodyTasks, phase.Tasks...)
+		}
+	}
+	return schedule
+}
+
 // Empty reports whether the batch has any scheduled canonical import tasks.
 func (p ImportBatchStagePlan) Empty() bool {
 	return len(p.Tasks) == 0
+}
+
+// Empty reports whether the phase schedule has any planned stage phases.
+func (s ImportBatchStagePhaseSchedule) Empty() bool {
+	return len(s.Phases) == 0
+}
+
+// PhasePlans returns a defensive copy of the phase-level schedule.
+func (s ImportBatchStagePhaseSchedule) PhasePlans() []ImportStagePhasePlan {
+	if len(s.Phases) == 0 {
+		return nil
+	}
+	out := make([]ImportStagePhasePlan, 0, len(s.Phases))
+	for _, phase := range s.Phases {
+		out = append(out, cloneImportStagePhasePlan(phase))
+	}
+	return out
+}
+
+// PhasePlan returns the scheduled phase by name.
+func (s ImportBatchStagePhaseSchedule) PhasePlan(phase ImportStagePhase) (ImportStagePhasePlan, bool) {
+	switch phase {
+	case ImportStagePhaseBodies:
+		if s.HasBody {
+			return cloneImportStagePhasePlan(s.Body), true
+		}
+	case ImportStagePhaseExecution:
+		if s.HasExecution {
+			return cloneImportStagePhasePlan(s.Execution), true
+		}
+	case ImportStagePhaseCommitment:
+		if s.HasCommitment {
+			return cloneImportStagePhasePlan(s.Commitment), true
+		}
+	case ImportStagePhaseFinish:
+		if s.HasFinish {
+			return cloneImportStagePhasePlan(s.Finish), true
+		}
+	}
+	return ImportStagePhasePlan{}, false
+}
+
+// MatchPhaseObservation returns the phase-owned stage task matching a
+// canonical insertion hook observation.
+func (s ImportBatchStagePhaseSchedule) MatchPhaseObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageObservation, bool) {
+	for _, phase := range s.Phases {
+		task, ok := phase.MatchCanonicalObservation(stage, blockNum, blockHash)
+		if !ok {
+			continue
+		}
+		return ImportStageObservation{
+			Phase: cloneImportStagePhasePlan(phase),
+			Task:  task,
+		}, true
+	}
+	return ImportStageObservation{}, false
 }
 
 // PhasePlans returns a defensive copy of the batch-level stage phase plan.

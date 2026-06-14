@@ -843,6 +843,70 @@ func TestNewImportBatchStagePlan(t *testing.T) {
 	}
 }
 
+func TestNewImportBatchStagePhaseSchedule(t *testing.T) {
+	hash1 := tcommon.Hash{0x41}
+	hash2 := tcommon.Hash{0x42}
+	stagePlan := NewImportBatchStagePlan([]ImportStageSchedule{
+		NewImportStageSchedule(1, hash1),
+		NewImportStageSchedule(2, hash2),
+	})
+
+	got := NewImportBatchStagePhaseSchedule(stagePlan)
+	if got.Empty() {
+		t.Fatal("phase schedule is empty, want scheduled phases")
+	}
+	if !got.HasBody || !got.HasExecution || !got.HasCommitment || !got.HasFinish {
+		t.Fatalf("phase presence = body:%v execution:%v commitment:%v finish:%v, want all present",
+			got.HasBody, got.HasExecution, got.HasCommitment, got.HasFinish)
+	}
+	if len(got.Phases) != 4 || len(got.PostBody) != 3 || len(got.Tasks) != 8 || len(got.PostBodyTasks) != 6 {
+		t.Fatalf("phase counts = phases:%d postBody:%d tasks:%d postBodyTasks:%d, want 4/3/8/6",
+			len(got.Phases), len(got.PostBody), len(got.Tasks), len(got.PostBodyTasks))
+	}
+	if got.Body.Phase != ImportStagePhaseBodies ||
+		got.Execution.Phase != ImportStagePhaseExecution ||
+		got.Commitment.Phase != ImportStagePhaseCommitment ||
+		got.Finish.Phase != ImportStagePhaseFinish {
+		t.Fatalf("named phases = body:%s execution:%s commitment:%s finish:%s, want canonical order",
+			got.Body.Phase, got.Execution.Phase, got.Commitment.Phase, got.Finish.Phase)
+	}
+	if got.PostBody[0].Phase != ImportStagePhaseExecution ||
+		got.PostBody[1].Phase != ImportStagePhaseCommitment ||
+		got.PostBody[2].Phase != ImportStagePhaseFinish {
+		t.Fatalf("post-body phases = %+v, want execution/commitment/finish", got.PostBody)
+	}
+	if got.Execution.Tasks[1] != ImportExecutionStageTask(2, hash2) ||
+		got.Commitment.Tasks[1] != ImportCommitmentStageTask(2, hash2) ||
+		got.Finish.Tasks[1] != ImportFinishStageTask(2, hash2) {
+		t.Fatalf("post-body phase tasks = execution:%+v commitment:%+v finish:%+v, want block2 tasks",
+			got.Execution.Tasks, got.Commitment.Tasks, got.Finish.Tasks)
+	}
+	phasePlan, ok := got.PhasePlan(ImportStagePhaseCommitment)
+	if !ok || len(phasePlan.Tasks) != 2 || phasePlan.Tasks[1] != ImportCommitmentStageTask(2, hash2) {
+		t.Fatalf("PhasePlan(commitment) = %+v ok=%v, want block2 commitment task", phasePlan, ok)
+	}
+	phasePlan.Tasks[1].BlockNum = 99
+	if got.Commitment.Tasks[1].BlockNum == 99 {
+		t.Fatal("PhasePlan returned aliased task slice")
+	}
+	phaseCopy := got.PhasePlans()
+	phaseCopy[1].Tasks[1].BlockNum = 99
+	if got.Execution.Tasks[1].BlockNum == 99 {
+		t.Fatal("PhasePlans returned aliased task slice")
+	}
+	observation, ok := got.MatchPhaseObservation(rawdb.StageFinish, 2, hash2)
+	if !ok || observation.Task != ImportFinishStageTask(2, hash2) || observation.Phase.Phase != ImportStagePhaseFinish || len(observation.Phase.Tasks) != 2 {
+		t.Fatalf("finish observation = %+v ok=%v, want block2 finish in finish phase", observation, ok)
+	}
+	if observation, ok := got.MatchPhaseObservation(rawdb.StageFinish, 2, tcommon.Hash{0xee}); ok {
+		t.Fatalf("fork hash observation = %+v ok=true, want rejected", observation)
+	}
+	empty := NewImportBatchStagePhaseSchedule(ImportBatchStagePlan{})
+	if !empty.Empty() || len(empty.PhasePlans()) != 0 {
+		t.Fatalf("empty phase schedule = %+v, want empty", empty)
+	}
+}
+
 func TestImportStageScheduleMatchCanonicalObservation(t *testing.T) {
 	hash := tcommon.Hash{0x42}
 	schedule := NewImportStageSchedule(7, hash)

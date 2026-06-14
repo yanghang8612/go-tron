@@ -327,6 +327,22 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	if phases := got.StagePlan.PhasePlans(); len(phases) != 4 || phases[0].Phase != ImportStagePhaseBodies || phases[1].Phase != ImportStagePhaseExecution || phases[2].Phase != ImportStagePhaseCommitment || phases[3].Phase != ImportStagePhaseFinish {
 		t.Fatalf("stage phase plans = %+v, want bodies/execution/commitment/finish", phases)
 	}
+	if got.StagePhases.Empty() ||
+		!got.StagePhases.HasBody ||
+		!got.StagePhases.HasExecution ||
+		!got.StagePhases.HasCommitment ||
+		!got.StagePhases.HasFinish ||
+		len(got.StagePhases.PostBody) != 3 ||
+		len(got.StagePhases.PostBodyTasks) != 6 ||
+		got.StagePhases.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		got.StagePhases.Commitment.Tasks[1] != ImportCommitmentStageTask(block2.Number(), block2.Hash()) ||
+		got.StagePhases.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("stage phase schedule = %+v, want explicit bodies plus execution/commitment/finish phases", got.StagePhases)
+	}
+	phaseSchedule := got.PhaseSchedule()
+	if phaseSchedule.Empty() || len(phaseSchedule.Phases) != 4 || phaseSchedule.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("PhaseSchedule = %+v, want explicit four-phase schedule", phaseSchedule)
+	}
 	if len(got.StagePlan.PostBody) != 6 || len(got.StagePlan.Tasks) != 8 {
 		t.Fatalf("stage plan task counts = postBody:%d tasks:%d, want 6/8", len(got.StagePlan.PostBody), len(got.StagePlan.Tasks))
 	}
@@ -541,6 +557,13 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		result.ExecutionPhases[1].Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) {
 		t.Fatalf("result execution phases = %+v, want two-block bodies/execution/commitment/finish plan", result.ExecutionPhases)
 	}
+	if result.StagePhaseSchedule.Empty() ||
+		len(result.StagePhaseSchedule.PostBody) != 3 ||
+		result.StagePhaseSchedule.Execution.Tasks[1] != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		result.StagePhaseSchedule.Commitment.Tasks[1] != ImportCommitmentStageTask(block2.Number(), block2.Hash()) ||
+		result.StagePhaseSchedule.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("result stage phase schedule = %+v, want explicit two-block post-body phases", result.StagePhaseSchedule)
+	}
 	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("applier execution tasks = %+v, want block2 pipeline", applier.execution.Schedule.Tasks)
 	}
@@ -600,6 +623,11 @@ func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.
 		len(result.ExecutionPhases[3].Tasks) != 2 ||
 		result.ExecutionPhases[3].Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
 		t.Fatalf("partial result execution phases = %+v, want attempted two-block phase plan", result.ExecutionPhases)
+	}
+	if result.StagePhaseSchedule.Empty() ||
+		len(result.StagePhaseSchedule.PostBody) != 3 ||
+		result.StagePhaseSchedule.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("partial result stage phase schedule = %+v, want attempted two-block post-body plan", result.StagePhaseSchedule)
 	}
 	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || result.Progress.ReportHead != block1.Number() {
 		t.Fatalf("result progress plan = %+v, want applied block1 prefix", result.Progress)
@@ -719,6 +747,11 @@ func TestApplyImportBatchRunPlanFirstBlockFailurePausesWithoutProgress(t *testin
 		len(result.ExecutionPhases[0].Tasks) != 2 ||
 		len(result.ExecutionPhases[3].Tasks) != 2 {
 		t.Fatalf("execution phases = %+v, want attempted two-block phase plan", result.ExecutionPhases)
+	}
+	if result.StagePhaseSchedule.Empty() ||
+		len(result.StagePhaseSchedule.PostBody) != 3 ||
+		len(result.StagePhaseSchedule.Finish.Tasks) != 2 {
+		t.Fatalf("stage phase schedule = %+v, want attempted two-block post-body plan", result.StagePhaseSchedule)
 	}
 	if applier.pauseNum != block1.Number() || !errors.Is(applier.pauseErr, insertErr) {
 		t.Fatalf("pause = #%d err=%v, want failed block1", applier.pauseNum, applier.pauseErr)

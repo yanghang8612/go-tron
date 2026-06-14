@@ -167,6 +167,7 @@ type ImportBatchExecutionPlan struct {
 	Blocks           []*types.Block
 	Schedules        []ImportStageSchedule
 	StagePlan        ImportBatchStagePlan
+	StagePhases      ImportBatchStagePhaseSchedule
 	Schedule         ImportStageSchedule
 	HasStageSchedule bool
 	Diagnostics      ImportBatchExecutionPlanDiagnostics
@@ -206,6 +207,14 @@ func (p ImportBatchExecutionPlan) AppliedStagePlan(applied int) (ImportBatchStag
 	return NewImportBatchStagePlan(p.Schedules[:applied]), true
 }
 
+// PhaseSchedule returns the explicit phase schedule for this execution plan.
+func (p ImportBatchExecutionPlan) PhaseSchedule() ImportBatchStagePhaseSchedule {
+	if !p.StagePhases.Empty() {
+		return p.StagePhases
+	}
+	return NewImportBatchStagePhaseSchedule(p.StagePlan)
+}
+
 // ProgressPlan derives the DB-side progress/cleanup plan for an applied prefix
 // of this execution plan. This keeps the applied boundary tied to the explicit
 // bodies/execution/commitment/finish schedule created before canonical import.
@@ -223,7 +232,7 @@ func (p ImportBatchExecutionPlan) PlansStageObservation(stage rawdb.StageID, blo
 // PlannedStageObservation returns the phase-owned stage task matching a
 // canonical insertion hook observation.
 func (p ImportBatchExecutionPlan) PlannedStageObservation(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) (ImportStageObservation, bool) {
-	if observation, ok := p.StagePlan.MatchPhaseObservation(stage, blockNum, blockHash); ok {
+	if observation, ok := p.PhaseSchedule().MatchPhaseObservation(stage, blockNum, blockHash); ok {
 		return observation, true
 	}
 	if !p.StagePlan.Empty() {
@@ -322,6 +331,7 @@ type ImportBatchRunPlanApplier interface {
 type ImportBatchRunResult struct {
 	Decode               BufferedBatchDecodeResult
 	Execution            ImportBatchExecutionPlan
+	StagePhaseSchedule   ImportBatchStagePhaseSchedule
 	ExecutionPhases      []ImportStagePhasePlan
 	Outcome              ImportOutcome
 	Progress             ImportedBatchProgressPlan
@@ -386,15 +396,19 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 				result.ExecutionDiagnostics = result.Execution.Diagnostics
 				planned = true
 			}
-			result.ExecutionPhases = result.Execution.StagePlan.PhasePlans()
+			result.StagePhaseSchedule = result.Execution.PhaseSchedule()
+			result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
 		case ImportBatchRunExecute:
 			if !planned {
 				result.Execution = PlanImportBatchExecution(plan.Batch)
 				result.ExecutionDiagnostics = result.Execution.Diagnostics
 				planned = true
 			}
+			if result.StagePhaseSchedule.Empty() {
+				result.StagePhaseSchedule = result.Execution.PhaseSchedule()
+			}
 			if result.ExecutionPhases == nil {
-				result.ExecutionPhases = result.Execution.StagePlan.PhasePlans()
+				result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
 			}
 			collector = NewStageProgressCollector()
 			elapsed, insertErr = applier.ExecuteImportBatch(result.Execution, result.Execution.StageProgressObserver(collector))
@@ -435,6 +449,7 @@ func PlanImportBatchExecution(batch BufferedBatch) ImportBatchExecutionPlan {
 	}
 	if len(execution.Schedules) > 0 {
 		execution.StagePlan = NewImportBatchStagePlan(execution.Schedules)
+		execution.StagePhases = NewImportBatchStagePhaseSchedule(execution.StagePlan)
 		execution.Schedule = execution.Schedules[len(execution.Schedules)-1]
 		execution.HasStageSchedule = true
 		execution.Diagnostics = NewImportBatchExecutionPlanDiagnostics(execution.Schedules, execution.StagePlan)
