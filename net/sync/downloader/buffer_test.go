@@ -600,6 +600,51 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	}
 }
 
+func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *testing.T) {
+	block := testBufferedBlock(1)
+	applier := &recordingImportBatchRunApplier{
+		observedStages: []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution},
+	}
+
+	result := ApplyImportBatchRunPlan(NewImportBatchRunPlan(testImportRunBatch(t, block)), applier)
+
+	if result.ContinueDrain || result.StopDrain || result.Outcome.Applied != 1 || !result.Outcome.RecordApplied {
+		t.Fatalf("result = %+v, want successful one-block import", result)
+	}
+	if !result.Progress.OK || result.Progress.Summary.Applied != 1 || !applier.recordPlan.OK {
+		t.Fatalf("progress result=%+v record=%+v, want recorded one-block progress", result.Progress, applier.recordPlan)
+	}
+	wantProgress := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+		{Stage: rawdb.StageSyncExecution, BlockNum: block.Number(), BlockHash: block.Hash(), HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(result.Progress.Progress, wantProgress) || !reflect.DeepEqual(applier.progress, wantProgress) {
+		t.Fatalf("progress result=%+v recorded=%+v, want body/execution prefix %+v", result.Progress.Progress, applier.progress, wantProgress)
+	}
+	if result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 2 || result.StageDiagnostics.Scheduled != 4 ||
+		!result.StageDiagnostics.HasBlocked ||
+		result.StageDiagnostics.NextPhase != ImportStagePhaseCommitment ||
+		result.StageDiagnostics.NextCanonicalStage != rawdb.StageCommitment ||
+		result.StageDiagnostics.NextStage != rawdb.StageSyncCommitment ||
+		result.StageDiagnostics.BlockedStatus != ImportStageProgressMissing {
+		t.Fatalf("stage diagnostics = %+v, want blocked commitment after half execution", result.StageDiagnostics)
+	}
+	if !reflect.DeepEqual(applier.recordPlan.StageDiagnostics, result.StageDiagnostics) {
+		t.Fatalf("recorded stage diagnostics = %+v, want result diagnostics %+v", applier.recordPlan.StageDiagnostics, result.StageDiagnostics)
+	}
+	if result.Progress.AppliedDiagnostics.PlannedBlocks != 1 ||
+		result.Progress.AppliedDiagnostics.PlannedStages != 4 ||
+		result.Progress.AppliedDiagnostics.PlannedCommitmentStages != 1 ||
+		result.Progress.AppliedDiagnostics.PlannedFinishStages != 1 {
+		t.Fatalf("applied diagnostics = %+v, want full one-block planned stage graph", result.Progress.AppliedDiagnostics)
+	}
+	for _, row := range applier.progress {
+		if row.Stage == rawdb.StageSyncCommitment || row.Stage == rawdb.StageSyncFinish {
+			t.Fatalf("published downstream row %+v after missing commitment/finish observations", row)
+		}
+	}
+}
+
 func TestApplyImportBatchRunPlanPartialFailureRecordsPrefixAndPauses(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)
@@ -1169,6 +1214,7 @@ type recordingImportBatchRunApplier struct {
 	insertErr                 error
 	appliedForObservations    int
 	observeAllAttemptedStages bool
+	observedStages            []rawdb.StageID
 	execution                 ImportBatchExecutionPlan
 	recordPlan                ImportedBatchProgressPlan
 	recordApplied             int
@@ -1190,19 +1236,23 @@ func (a *recordingImportBatchRunApplier) RecordBufferWait(wait time.Duration) {
 func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatchExecutionPlan, observe StageProgressWriter) (time.Duration, error) {
 	a.calls = append(a.calls, ImportBatchRunExecute)
 	a.execution = execution
+	stages := a.observedStages
+	if stages == nil {
+		stages = []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish}
+	}
 	applied := len(execution.Blocks)
 	if a.appliedForObservations > 0 && a.appliedForObservations < applied {
 		applied = a.appliedForObservations
 	}
 	for i := 0; i < applied; i++ {
 		block := execution.Blocks[i]
-		for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+		for _, stage := range stages {
 			observe(stage, block.Number(), block.Hash())
 		}
 	}
 	if a.observeAllAttemptedStages {
 		for _, block := range execution.Blocks[applied:] {
-			for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+			for _, stage := range stages {
 				observe(stage, block.Number(), block.Hash())
 			}
 		}
