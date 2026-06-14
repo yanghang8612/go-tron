@@ -1115,6 +1115,8 @@ derived_index_bytes_per_block = float(derived_index) / height if height > 0 else
 cold_to_hot_ratio = float(cold_archive) / chaindata if chaindata > 0 else 0.0
 derived_index_to_hot_ratio = float(derived_index) / chaindata if chaindata > 0 else 0.0
 derived_index_snapshot_ratio = float(derived_index) / snapshot if snapshot > 0 else 0.0
+cold_archive_datadir_share = ratio(cold_archive, total)
+derived_index_cold_archive_ratio = ratio(derived_index, cold_archive)
 chaindata_sst_to_hot_ratio = ratio(chaindata_files["sst"]["bytes"], chaindata)
 chaindata_wal_to_hot_ratio = ratio(chaindata_files["wal"]["bytes"], chaindata)
 chaindata_wal_to_sst_ratio = ratio(chaindata_files["wal"]["bytes"], chaindata_files["sst"]["bytes"])
@@ -1458,6 +1460,8 @@ row = {
     "coldToHotBytesRatio": cold_to_hot_ratio,
     "derivedIndexToHotBytesRatio": derived_index_to_hot_ratio,
     "derivedIndexSnapshotBytesRatio": derived_index_snapshot_ratio,
+    "coldArchiveDatadirShare": cold_archive_datadir_share,
+    "derivedIndexColdArchiveRatio": derived_index_cold_archive_ratio,
     "chaindataSSTToHotBytesRatio": chaindata_sst_to_hot_ratio,
     "chaindataWALToHotBytesRatio": chaindata_wal_to_hot_ratio,
     "chaindataWALToSSTBytesRatio": chaindata_wal_to_sst_ratio,

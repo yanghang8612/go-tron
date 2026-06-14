@@ -125,7 +125,8 @@ fall back to cumulative sync and current disk distribution. Rows also include
 `coldToHotBytesRatio`,
 `derivedIndexToHotBytesRatio`, `chaindataSSTToHotBytesRatio`,
 `chaindataWALToHotBytesRatio`, `chaindataWALToSSTBytesRatio`,
-`derivedIndexSnapshotBytesRatio`, `ancientFiles`, `snapshotFiles`, and
+`derivedIndexSnapshotBytesRatio`, `coldArchiveDatadirShare`,
+`derivedIndexColdArchiveRatio`, `ancientFiles`, `snapshotFiles`, and
 `coldArchiveFiles`, plus the repo commit used to produce the sample. When
 `--pid-file` is provided, rows also include `processPid`, `processStatus`,
 `processRssBytes`, `processCpuPercent`, `processUptimeSeconds`, and
