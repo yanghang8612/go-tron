@@ -240,37 +240,57 @@ func TestApplyQueuePlans(t *testing.T) {
 		{Action: RetryAssignmentStepAction(255), IDs: []types.BlockID{queueID(99)}},
 		{Action: RetryAssignmentReplaceRetryList, IDs: []types.BlockID{queueID(2), queueID(3)}},
 	}}
-	ApplyRetryAssignmentPlan(retryPlan, retryApplier)
+	retryResult := ApplyRetryAssignmentPlan(retryPlan, retryApplier)
 	if !reflect.DeepEqual(blockNums(retryApplier.assigned), []uint64{4}) || !reflect.DeepEqual(blockNums(retryApplier.keep), []uint64{2, 3}) {
 		t.Fatalf("retry apply assigned/keep = %v/%v, want [4]/[2 3]", blockNums(retryApplier.assigned), blockNums(retryApplier.keep))
+	}
+	if !reflect.DeepEqual(retryResult.AppliedSteps, []RetryAssignmentStepAction{RetryAssignmentAppendAssigned, RetryAssignmentReplaceRetryList}) ||
+		!reflect.DeepEqual(retryResult.UnknownSteps, []RetryAssignmentStepAction{RetryAssignmentStepAction(255)}) {
+		t.Fatalf("retry apply result = %+v, want append/replace applied and unknown [255]", retryResult)
 	}
 
 	retryApplier.assigned = nil
 	retryApplier.keep = nil
-	ApplyRetryAssignmentPlan(RetryAssignmentPlan{
+	retryResult = ApplyRetryAssignmentPlan(RetryAssignmentPlan{
 		Assigned: []types.BlockID{queueID(7)},
 		Keep:     []types.BlockID{queueID(8)},
 	}, retryApplier)
 	if !reflect.DeepEqual(blockNums(retryApplier.assigned), []uint64{7}) || !reflect.DeepEqual(blockNums(retryApplier.keep), []uint64{8}) {
 		t.Fatalf("retry fallback assigned/keep = %v/%v, want [7]/[8]", blockNums(retryApplier.assigned), blockNums(retryApplier.keep))
 	}
-	ApplyRetryAssignmentPlan(retryPlan, nil)
+	if !reflect.DeepEqual(retryResult.AppliedSteps, []RetryAssignmentStepAction{RetryAssignmentAppendAssigned, RetryAssignmentReplaceRetryList}) ||
+		len(retryResult.UnknownSteps) != 0 {
+		t.Fatalf("retry fallback result = %+v, want append/replace applied", retryResult)
+	}
+	if nilResult := ApplyRetryAssignmentPlan(retryPlan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil retry result = %+v, want empty", nilResult)
+	}
 
 	fetchApplier := new(recordingNextFetchBatchApplier)
 	fetchPlan := NextFetchBatchPlan{Steps: []NextFetchBatchStep{
 		{Action: NextFetchBatchStepAction(255), IDs: []types.BlockID{queueID(99)}},
 		{Action: NextFetchBatchReplaceFetchList, IDs: []types.BlockID{queueID(5)}},
 	}}
-	ApplyNextFetchBatchPlan(fetchPlan, fetchApplier)
+	fetchResult := ApplyNextFetchBatchPlan(fetchPlan, fetchApplier)
 	if !reflect.DeepEqual(blockNums(fetchApplier.remaining), []uint64{5}) {
 		t.Fatalf("fetch apply remaining = %v, want [5]", blockNums(fetchApplier.remaining))
 	}
+	if !reflect.DeepEqual(fetchResult.AppliedSteps, []NextFetchBatchStepAction{NextFetchBatchReplaceFetchList}) ||
+		!reflect.DeepEqual(fetchResult.UnknownSteps, []NextFetchBatchStepAction{NextFetchBatchStepAction(255)}) {
+		t.Fatalf("fetch apply result = %+v, want replace applied and unknown [255]", fetchResult)
+	}
 
-	ApplyNextFetchBatchPlan(NextFetchBatchPlan{Remaining: []types.BlockID{queueID(6)}}, fetchApplier)
+	fetchResult = ApplyNextFetchBatchPlan(NextFetchBatchPlan{Remaining: []types.BlockID{queueID(6)}}, fetchApplier)
 	if !reflect.DeepEqual(blockNums(fetchApplier.remaining), []uint64{6}) {
 		t.Fatalf("fetch fallback remaining = %v, want [6]", blockNums(fetchApplier.remaining))
 	}
-	ApplyNextFetchBatchPlan(fetchPlan, nil)
+	if !reflect.DeepEqual(fetchResult.AppliedSteps, []NextFetchBatchStepAction{NextFetchBatchReplaceFetchList}) ||
+		len(fetchResult.UnknownSteps) != 0 {
+		t.Fatalf("fetch fallback result = %+v, want replace applied", fetchResult)
+	}
+	if nilResult := ApplyNextFetchBatchPlan(fetchPlan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil fetch result = %+v, want empty", nilResult)
+	}
 }
 
 func TestAppendDisconnectedPeerRetriesFiltersPendingBeforeFetchQueue(t *testing.T) {

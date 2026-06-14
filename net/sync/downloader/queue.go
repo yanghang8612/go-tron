@@ -82,6 +82,13 @@ type RetryAssignmentStep struct {
 	IDs    []types.BlockID
 }
 
+// RetryAssignmentApplyResult records retry queue mutations applied by the
+// downloader planner.
+type RetryAssignmentApplyResult struct {
+	AppliedSteps []RetryAssignmentStepAction
+	UnknownSteps []RetryAssignmentStepAction
+}
+
 // RetryAssignmentPlanApplier performs queue mutations named by a retry
 // assignment plan.
 type RetryAssignmentPlanApplier interface {
@@ -101,6 +108,13 @@ const (
 type NextFetchBatchStep struct {
 	Action NextFetchBatchStepAction
 	IDs    []types.BlockID
+}
+
+// NextFetchBatchApplyResult records fetch queue mutations applied by the
+// downloader planner.
+type NextFetchBatchApplyResult struct {
+	AppliedSteps []NextFetchBatchStepAction
+	UnknownSteps []NextFetchBatchStepAction
 }
 
 // NextFetchBatchPlanApplier performs queue mutations named by a next-fetch
@@ -259,9 +273,10 @@ func (p NextFetchBatchPlan) withSteps() NextFetchBatchPlan {
 
 // ApplyRetryAssignmentPlan executes downloader-owned retry assignment queue
 // mutations.
-func ApplyRetryAssignmentPlan(plan RetryAssignmentPlan, applier RetryAssignmentPlanApplier) {
+func ApplyRetryAssignmentPlan(plan RetryAssignmentPlan, applier RetryAssignmentPlanApplier) RetryAssignmentApplyResult {
+	var result RetryAssignmentApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -270,16 +285,22 @@ func ApplyRetryAssignmentPlan(plan RetryAssignmentPlan, applier RetryAssignmentP
 		switch step.Action {
 		case RetryAssignmentAppendAssigned:
 			applier.AppendAssignedRetries(step.IDs)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case RetryAssignmentReplaceRetryList:
 			applier.ReplaceRetryList(step.IDs)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyNextFetchBatchPlan executes downloader-owned fetch queue mutations.
-func ApplyNextFetchBatchPlan(plan NextFetchBatchPlan, applier NextFetchBatchPlanApplier) {
+func ApplyNextFetchBatchPlan(plan NextFetchBatchPlan, applier NextFetchBatchPlanApplier) NextFetchBatchApplyResult {
+	var result NextFetchBatchApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
@@ -288,8 +309,12 @@ func ApplyNextFetchBatchPlan(plan NextFetchBatchPlan, applier NextFetchBatchPlan
 		switch step.Action {
 		case NextFetchBatchReplaceFetchList:
 			applier.ReplaceFetchList(step.IDs)
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // AppendDisconnectedPeerRetries appends block IDs left behind by a disconnected
