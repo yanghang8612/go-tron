@@ -139,6 +139,14 @@ type SyncService struct {
 	bufferedHash  map[tcommon.Hash]struct{}
 	blockPath     map[uint64]tcommon.Hash
 	targetHeadNum uint64
+	// syncedTipNum is the drain cursor: the highest block this session has
+	// popped for import. Under async-commit depth>2 the committed CurrentBlock
+	// lags the applied tip by up to the pipeline depth, so popping from
+	// CurrentBlock+1 would re-target an already-imported (and deleted) buffer
+	// entry and break the drain after every batch. Tracking the cursor lets the
+	// drain pop the whole buffered run in one pass. Equals CurrentBlock when
+	// async commit is off (the production default), so that path is unchanged.
+	syncedTipNum uint64
 
 	// Sticky pause set on any InsertBlock failure during sync. Once set,
 	// StartSync / checkIsolation / tryFindSyncPeer all short-circuit; the
@@ -406,6 +414,7 @@ func (ss *SyncService) initSessionLocked(now time.Time) {
 	ss.bufferedHash = make(map[tcommon.Hash]struct{})
 	ss.blockPath = make(map[uint64]tcommon.Hash)
 	ss.targetHeadNum = ss.chain.CurrentBlock().Number()
+	ss.syncedTipNum = ss.targetHeadNum
 	ss.stats.InitSession(now)
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
@@ -1195,7 +1204,16 @@ func (ss *SyncService) waitForDrain() {
 }
 
 func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBatch {
-	next := ss.chain.CurrentBlock().Number() + 1
+	// Start from the drain cursor, not the committed head: under async-commit
+	// depth>2 CurrentBlock lags the applied tip, and CurrentBlock+1 may name a
+	// block we already imported and deleted from the buffer — which would break
+	// the drain after a single batch. syncedTipNum tracks what we've popped and
+	// equals CurrentBlock when async commit is off, keeping that path unchanged.
+	next := ss.chain.CurrentBlock().Number()
+	if ss.syncedTipNum > next {
+		next = ss.syncedTipNum
+	}
+	next++
 	var batch bufferedSyncBatch
 	for len(batch.buffered) < maxFetchBatch {
 		buffered, ok := ss.blockBuffer[next]
@@ -1214,6 +1232,9 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) bufferedSyncBat
 		delete(ss.bufferedHash, buffered.hash)
 		batch.buffered = append(batch.buffered, buffered)
 		next++
+	}
+	if popped := next - 1; popped > ss.syncedTipNum {
+		ss.syncedTipNum = popped
 	}
 	return batch
 }
@@ -1595,6 +1616,7 @@ func (ss *SyncService) doReset() {
 	ss.bufferedHash = nil
 	ss.blockPath = nil
 	ss.targetHeadNum = 0
+	ss.syncedTipNum = 0
 	ss.bufferWaitStart = time.Time{}
 	ss.bufferWaitNum = 0
 }
