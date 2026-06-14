@@ -364,6 +364,65 @@ func TestPlanImportedBatchProgressForExecutionDoesNotSkipMissingPhaseTask(t *tes
 	}
 }
 
+func TestPlanImportedBatchProgressForExecutionBlocksLaterPhasesAfterMissingExecution(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []BufferedBlock{
+			{Num: block1.Number(), Hash: block1.Hash()},
+			{Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	execution := PlanImportBatchExecution(batch)
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	got := PlanImportedBatchProgressForExecution(batch, 2, execution, collector)
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncImport, BlockNum: block2.Number(), BlockHash: block2.Hash(), HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(got.Progress, wantRows) {
+		t.Fatalf("progress = %+v, want only bodies phase progress %+v", got.Progress, wantRows)
+	}
+	wantStatuses := []ImportStageProgressStatus{
+		ImportStageProgressPlanned,
+		ImportStageProgressPlanned,
+		ImportStageProgressMissing,
+		ImportStageProgressBlocked,
+		ImportStageProgressBlocked,
+		ImportStageProgressBlocked,
+		ImportStageProgressBlocked,
+		ImportStageProgressBlocked,
+	}
+	if len(got.Decisions) != len(wantStatuses) {
+		t.Fatalf("decisions = %+v, want %d statuses", got.Decisions, len(wantStatuses))
+	}
+	for i, status := range wantStatuses {
+		if got.Decisions[i].Status != status {
+			t.Fatalf("decision %d = %+v, want status %v", i, got.Decisions[i], status)
+		}
+	}
+	if got.StageDiagnostics.Scheduled != 8 || got.StageDiagnostics.Completed != 2 || got.StageDiagnostics.Complete {
+		t.Fatalf("stage diagnostics = %+v, want 2/8 incomplete", got.StageDiagnostics)
+	}
+	if got.StageDiagnostics.NextPhase != ImportStagePhaseExecution ||
+		got.StageDiagnostics.NextBlockNum != block1.Number() ||
+		got.StageDiagnostics.NextCanonicalStage != rawdb.StageExecution ||
+		got.StageDiagnostics.NextStage != rawdb.StageSyncExecution ||
+		got.StageDiagnostics.BlockedStatus != ImportStageProgressMissing {
+		t.Fatalf("next stage diagnostics = %+v, want missing execution block1", got.StageDiagnostics)
+	}
+	for _, row := range got.Progress {
+		if row.Stage == rawdb.StageSyncCommitment || row.Stage == rawdb.StageSyncFinish {
+			t.Fatalf("progress published downstream phase row %+v after missing execution", row)
+		}
+	}
+}
+
 func TestApplyImportedBatchProgressPlan(t *testing.T) {
 	deleteRow := rawdb.SyncStagedBlockDelete{Number: 2, Hash: tcommon.Hash{0x02}}
 	progressRow := rawdb.StageProgress{
