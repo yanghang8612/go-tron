@@ -388,7 +388,7 @@ type syncSessionStartupApplier struct {
 	headBlock *types.Block
 }
 
-func (a syncSessionStartupApplier) RepairSyncPipeline() []syncdl.SyncStageProgressRepair {
+func (a syncSessionStartupApplier) RepairSyncPipeline() syncdl.SyncPipelineProgressRepairResult {
 	return a.service.repairSyncPipelineProgress(a.headBlock)
 }
 
@@ -437,13 +437,13 @@ func (ss *SyncService) restoreSyncInventoryTarget(head uint64) uint64 {
 	return restore.Target
 }
 
-func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) []syncdl.SyncStageProgressRepair {
+func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) syncdl.SyncPipelineProgressRepairResult {
 	if ss == nil || ss.chain == nil || head == nil {
-		return nil
+		return syncdl.SyncPipelineProgressRepairResult{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return nil
+		return syncdl.SyncPipelineProgressRepairResult{}
 	}
 	result := syncdl.RepairSyncPipelineProgressWithResult(db, head.Number(), func(number uint64) (tcommon.Hash, bool) {
 		block := ss.chain.GetBlockByNumber(number)
@@ -455,7 +455,7 @@ func (ss *SyncService) repairSyncPipelineProgress(head *types.Block) []syncdl.Sy
 	for _, repair := range result.Repairs {
 		ss.logSyncStageProgressRepair(head, repair)
 	}
-	return result.Repairs
+	return result
 }
 
 func (ss *SyncService) repairSyncStageProgress(head *types.Block, stage rawdb.StageID) {

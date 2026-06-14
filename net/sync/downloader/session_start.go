@@ -34,7 +34,7 @@ type SessionStartupStep struct {
 // by a startup plan. The service owns DB handles; downloader owns the ordered
 // stage-recovery schedule.
 type SessionStartupPlanApplier interface {
-	RepairSyncPipeline() []SyncStageProgressRepair
+	RepairSyncPipeline() SyncPipelineProgressRepairResult
 	RestoreInventoryTarget(inventoryFloor uint64)
 	DeleteImportedBodies(through uint64)
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
@@ -57,11 +57,13 @@ type SessionStartupPlan struct {
 // actually dispatched. Unknown steps are surfaced so tests and diagnostics can
 // catch plan/apply drift without teaching SyncService about every action.
 type SessionStartupApplyResult struct {
-	AppliedSteps         []SessionStartupStepAction
-	UnknownSteps         []SessionStartupStepAction
-	SyncPipelineRepairs  []SyncStageProgressRepair
-	StagedBodyRestore    StagedBodyRestoreResult
-	HasStagedBodyRestore bool
+	AppliedSteps             []SessionStartupStepAction
+	UnknownSteps             []SessionStartupStepAction
+	SyncPipelineRepairResult SyncPipelineProgressRepairResult
+	HasSyncPipelineRepair    bool
+	SyncPipelineRepairs      []SyncStageProgressRepair
+	StagedBodyRestore        StagedBodyRestoreResult
+	HasStagedBodyRestore     bool
 }
 
 // PlanSessionStartup derives restart boundaries from the current canonical
@@ -109,7 +111,9 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case SessionStartupRepairSyncPipeline:
-			result.SyncPipelineRepairs = applier.RepairSyncPipeline()
+			result.SyncPipelineRepairResult = applier.RepairSyncPipeline()
+			result.HasSyncPipelineRepair = true
+			result.SyncPipelineRepairs = result.SyncPipelineRepairResult.Repairs
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreInventoryTarget:
 			applier.RestoreInventoryTarget(step.InventoryFloor)

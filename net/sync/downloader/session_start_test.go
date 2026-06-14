@@ -99,6 +99,10 @@ func TestApplySessionStartupPlan(t *testing.T) {
 			CanonicalHash: repairHash,
 		},
 	}
+	repairResult := SyncPipelineProgressRepairResult{
+		Repairs: repairRows,
+		Kept:    1,
+	}
 	restoreResult := StagedBodyRestoreResult{
 		Restored:         2,
 		TargetHead:       11,
@@ -118,7 +122,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 		},
 	}
 	applier := recordingSessionStartupApplier{
-		repairs: repairRows,
+		repair:  repairResult,
 		restore: restoreResult,
 	}
 	result := ApplySessionStartupPlan(plan, &applier)
@@ -147,6 +151,9 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result.SyncPipelineRepairs, repairRows) {
 		t.Fatalf("sync pipeline repairs = %+v, want %+v", result.SyncPipelineRepairs, repairRows)
+	}
+	if !result.HasSyncPipelineRepair || !reflect.DeepEqual(result.SyncPipelineRepairResult, repairResult) {
+		t.Fatalf("sync pipeline repair result = %+v set=%v, want %+v set", result.SyncPipelineRepairResult, result.HasSyncPipelineRepair, repairResult)
 	}
 	if !result.HasStagedBodyRestore || !reflect.DeepEqual(result.StagedBodyRestore, restoreResult) {
 		t.Fatalf("staged body restore = %+v set=%v, want %+v set", result.StagedBodyRestore, result.HasStagedBodyRestore, restoreResult)
@@ -211,6 +218,13 @@ func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *tes
 		if result.SyncPipelineRepairs[i].Status != status {
 			t.Fatalf("repair %d = %+v, want status %v", i, result.SyncPipelineRepairs[i], status)
 		}
+	}
+	if !result.HasSyncPipelineRepair || result.SyncPipelineRepairResult.Kept != 2 ||
+		result.SyncPipelineRepairResult.Deleted != 2 ||
+		!result.SyncPipelineRepairResult.HasBlocked ||
+		result.SyncPipelineRepairResult.FirstBlockedStage != rawdb.StageSyncCommitment ||
+		result.SyncPipelineRepairResult.Complete {
+		t.Fatalf("sync pipeline repair result = %+v, want kept import/execution and blocked commitment", result.SyncPipelineRepairResult)
 	}
 	if !result.HasStagedBodyRestore {
 		t.Fatal("startup result did not record staged body restore")
@@ -287,6 +301,12 @@ func TestApplySessionStartupPlanRestoresHalfDownloadedBodiesBeforeExecution(t *t
 		if repair.Status != SyncStageProgressMissing {
 			t.Fatalf("repair = %+v, want missing stage row before execution", repair)
 		}
+	}
+	if !result.HasSyncPipelineRepair || result.SyncPipelineRepairResult.Missing != len(SyncPipelineProgressStages()) ||
+		!result.SyncPipelineRepairResult.HasBlocked ||
+		result.SyncPipelineRepairResult.FirstBlockedStage != rawdb.StageSyncImport ||
+		result.SyncPipelineRepairResult.Complete {
+		t.Fatalf("sync pipeline repair result = %+v, want missing import boundary before execution", result.SyncPipelineRepairResult)
 	}
 	if !result.HasStagedBodyRestore {
 		t.Fatal("startup result did not record staged body restore")
@@ -466,13 +486,13 @@ type recordedSessionStartupCall struct {
 
 type recordingSessionStartupApplier struct {
 	calls   []recordedSessionStartupCall
-	repairs []SyncStageProgressRepair
+	repair  SyncPipelineProgressRepairResult
 	restore StagedBodyRestoreResult
 }
 
-func (a *recordingSessionStartupApplier) RepairSyncPipeline() []SyncStageProgressRepair {
+func (a *recordingSessionStartupApplier) RepairSyncPipeline() SyncPipelineProgressRepairResult {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRepairSyncPipeline})
-	return a.repairs
+	return a.repair
 }
 
 func (a *recordingSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
@@ -519,8 +539,8 @@ func newStartupRecoveryTestApplier(db ethdb.KeyValueStore, head uint64, canonica
 	}
 }
 
-func (a *startupRecoveryTestApplier) RepairSyncPipeline() []SyncStageProgressRepair {
-	return RepairSyncPipelineProgress(a.db, a.head, func(number uint64) (tcommon.Hash, bool) {
+func (a *startupRecoveryTestApplier) RepairSyncPipeline() SyncPipelineProgressRepairResult {
+	return RepairSyncPipelineProgressWithResult(a.db, a.head, func(number uint64) (tcommon.Hash, bool) {
 		hash, ok := a.canonical[number]
 		return hash, ok
 	})
