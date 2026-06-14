@@ -85,26 +85,56 @@ func TestApplyPeerFailoverPlan(t *testing.T) {
 			{Action: PeerFailoverStepAction(255)},
 		},
 	}
-	ApplyPeerFailoverLockedPlan(plan, applier)
-	ApplyPeerFailoverDispatchPlan(plan, applier)
-	ApplyPeerFailoverAfterDispatchPlan(plan, applier)
+	lockedResult := ApplyPeerFailoverLockedPlan(plan, applier)
+	dispatchResult := ApplyPeerFailoverDispatchPlan(plan, applier)
+	afterResult := ApplyPeerFailoverAfterDispatchPlan(plan, applier)
 
 	want := []PeerFailoverStepAction{PeerFailoverReset, PeerFailoverMirror, PeerFailoverSendOutbound, PeerFailoverTryFindPeer}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("failover calls = %+v, want %+v", applier.calls, want)
 	}
+	if !reflect.DeepEqual(lockedResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverReset, PeerFailoverMirror}) ||
+		!reflect.DeepEqual(lockedResult.UnknownSteps, []PeerFailoverStepAction{PeerFailoverStepAction(255)}) {
+		t.Fatalf("locked failover result = %+v, want reset/mirror applied and unknown [255]", lockedResult)
+	}
+	if !reflect.DeepEqual(dispatchResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverSendOutbound}) ||
+		!reflect.DeepEqual(dispatchResult.UnknownSteps, []PeerFailoverStepAction{PeerFailoverStepAction(255)}) {
+		t.Fatalf("dispatch failover result = %+v, want send applied and unknown [255]", dispatchResult)
+	}
+	if !reflect.DeepEqual(afterResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverTryFindPeer}) ||
+		!reflect.DeepEqual(afterResult.UnknownSteps, []PeerFailoverStepAction{PeerFailoverStepAction(255)}) {
+		t.Fatalf("after-dispatch failover result = %+v, want try-find applied and unknown [255]", afterResult)
+	}
 
 	applier.calls = nil
-	ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Mirror: true}, applier)
-	ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, applier)
-	ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, applier)
+	lockedResult = ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Mirror: true}, applier)
+	dispatchResult = ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, applier)
+	afterResult = ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, applier)
 	want = []PeerFailoverStepAction{PeerFailoverMirror, PeerFailoverSendOutbound, PeerFailoverTryFindPeer}
 	if !reflect.DeepEqual(applier.calls, want) {
 		t.Fatalf("fallback failover calls = %+v, want %+v", applier.calls, want)
 	}
-	ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Reset: true}, nil)
-	ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, nil)
-	ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, nil)
+	if !reflect.DeepEqual(lockedResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverMirror}) ||
+		len(lockedResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback locked failover result = %+v, want mirror applied", lockedResult)
+	}
+	if !reflect.DeepEqual(dispatchResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverSendOutbound}) ||
+		len(dispatchResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback dispatch failover result = %+v, want send applied", dispatchResult)
+	}
+	if !reflect.DeepEqual(afterResult.AppliedSteps, []PeerFailoverStepAction{PeerFailoverTryFindPeer}) ||
+		len(afterResult.UnknownSteps) != 0 {
+		t.Fatalf("fallback after-dispatch failover result = %+v, want try-find applied", afterResult)
+	}
+	if nilResult := ApplyPeerFailoverLockedPlan(PeerFailoverPlan{Reset: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil locked failover result = %+v, want empty", nilResult)
+	}
+	if nilResult := ApplyPeerFailoverDispatchPlan(PeerFailoverPlan{SendOutboundRequests: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil dispatch failover result = %+v, want empty", nilResult)
+	}
+	if nilResult := ApplyPeerFailoverAfterDispatchPlan(PeerFailoverPlan{TryFindPeer: true}, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil after-dispatch failover result = %+v, want empty", nilResult)
+	}
 }
 
 type recordingPeerFailoverApplier struct {

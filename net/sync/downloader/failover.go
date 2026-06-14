@@ -37,6 +37,13 @@ type PeerFailoverStep struct {
 	Action PeerFailoverStepAction
 }
 
+// PeerFailoverApplyResult records the failed-peer settlement steps dispatched
+// by one failover apply phase.
+type PeerFailoverApplyResult struct {
+	AppliedSteps []PeerFailoverStepAction
+	UnknownSteps []PeerFailoverStepAction
+}
+
 // PeerFailoverPlanApplier performs the runtime operations named by a failed
 // peer settlement plan.
 type PeerFailoverPlanApplier interface {
@@ -76,9 +83,10 @@ func (p PeerFailoverPlan) withSteps() PeerFailoverPlan {
 
 // ApplyPeerFailoverLockedPlan executes the lock-held settlement steps for a
 // failed-peer transition.
-func ApplyPeerFailoverLockedPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) {
+func ApplyPeerFailoverLockedPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) PeerFailoverApplyResult {
+	var result PeerFailoverApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.LockedSteps) == 0 {
 		plan = plan.withSteps()
@@ -87,17 +95,23 @@ func ApplyPeerFailoverLockedPlan(plan PeerFailoverPlan, applier PeerFailoverPlan
 		switch step.Action {
 		case PeerFailoverReset:
 			applier.ResetSyncUnderLock()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case PeerFailoverMirror:
 			applier.MirrorLegacyUnderLock()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyPeerFailoverDispatchPlan executes post-log network dispatch steps for a
 // failed-peer transition.
-func ApplyPeerFailoverDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) {
+func ApplyPeerFailoverDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) PeerFailoverApplyResult {
+	var result PeerFailoverApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.DispatchSteps) == 0 {
 		plan = plan.withSteps()
@@ -106,15 +120,20 @@ func ApplyPeerFailoverDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPl
 		switch step.Action {
 		case PeerFailoverSendOutbound:
 			applier.SendOutboundRequests()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
 
 // ApplyPeerFailoverAfterDispatchPlan executes post-dispatch settlement steps
 // for a failed-peer transition.
-func ApplyPeerFailoverAfterDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) {
+func ApplyPeerFailoverAfterDispatchPlan(plan PeerFailoverPlan, applier PeerFailoverPlanApplier) PeerFailoverApplyResult {
+	var result PeerFailoverApplyResult
 	if applier == nil {
-		return
+		return result
 	}
 	if len(plan.AfterDispatchSteps) == 0 {
 		plan = plan.withSteps()
@@ -123,6 +142,10 @@ func ApplyPeerFailoverAfterDispatchPlan(plan PeerFailoverPlan, applier PeerFailo
 		switch step.Action {
 		case PeerFailoverTryFindPeer:
 			applier.TryFindSyncPeer()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}
 	}
+	return result
 }
