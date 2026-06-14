@@ -409,7 +409,7 @@ func (a syncSessionStartupApplier) RefreshBodiesReady() {
 	a.service.writeSyncBodiesReadyProgress()
 }
 
-func (a syncSessionStartupApplier) CheckSyncPipelineProgressOrder() []syncdl.SyncPipelineProgressOrderIssue {
+func (a syncSessionStartupApplier) CheckSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderCheckResult {
 	return a.service.checkSyncPipelineProgressOrder()
 }
 
@@ -498,26 +498,19 @@ func (ss *SyncService) logSyncStageProgressRepair(head *types.Block, repair sync
 	}
 }
 
-func (ss *SyncService) checkSyncPipelineProgressOrder() []syncdl.SyncPipelineProgressOrderIssue {
+func (ss *SyncService) checkSyncPipelineProgressOrder() syncdl.SyncPipelineProgressOrderCheckResult {
 	if ss == nil || ss.chain == nil {
-		return nil
+		return syncdl.SyncPipelineProgressOrderCheckResult{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return nil
+		return syncdl.SyncPipelineProgressOrderCheckResult{}
 	}
-	rows := make(map[rawdb.StageID]rawdb.StageProgress)
-	for _, stage := range syncdl.FullSyncPipelineProgressStages() {
-		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
-		if err != nil {
-			syncLog.Warn("Read sync pipeline stage progress failed", "stage", stage, "err", err)
-			continue
-		}
-		if ok {
-			rows[stage] = row
-		}
+	result := syncdl.CheckSyncPipelineProgressOrderFromDB(db, syncdl.SyncPipelineProgressOrderOptions{})
+	for _, readErr := range result.ReadErrors {
+		syncLog.Warn("Read sync pipeline stage progress failed", "stage", readErr.Stage, "err", readErr.Err)
 	}
-	return syncdl.CheckSyncPipelineProgressOrder(rows, syncdl.SyncPipelineProgressOrderOptions{})
+	return result
 }
 
 func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
@@ -527,9 +520,14 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 	repair := result.SyncPipelineRepairResult
 	restore := result.StagedBodyRestore
 	orderIssueCount := len(result.SyncPipelineOrderIssues)
+	orderReadErrorCount := len(result.SyncPipelineOrderErrors)
 	var firstOrderIssue string
 	if orderIssueCount > 0 {
 		firstOrderIssue = result.SyncPipelineOrderIssues[0].String()
+	}
+	var firstOrderReadErrorStage rawdb.StageID
+	if orderReadErrorCount > 0 {
+		firstOrderReadErrorStage = result.SyncPipelineOrderErrors[0].Stage
 	}
 	syncLog.Info("Sync startup repair summary",
 		"syncStartupRepairComplete", repair.Complete,
@@ -544,6 +542,8 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupPipelineOrderChecked", result.HasSyncPipelineOrder,
 		"syncStartupPipelineOrderIssues", orderIssueCount,
 		"syncStartupPipelineOrderFirstIssue", firstOrderIssue,
+		"syncStartupPipelineOrderReadErrors", orderReadErrorCount,
+		"syncStartupPipelineOrderFirstReadErrorStage", firstOrderReadErrorStage,
 		"syncStartupStagedRestored", restore.Restored,
 		"syncStartupStagedTargetHead", restore.TargetHead,
 		"syncStartupStagedNextExpected", restore.NextExpected,

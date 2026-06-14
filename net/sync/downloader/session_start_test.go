@@ -174,6 +174,9 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	if !result.HasSyncPipelineOrder || !reflect.DeepEqual(result.SyncPipelineOrderIssues, orderIssues) {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want %+v set", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder, orderIssues)
 	}
+	if !reflect.DeepEqual(result.SyncPipelineOrderCheck.Issues, orderIssues) || len(result.SyncPipelineOrderErrors) != 0 {
+		t.Fatalf("sync pipeline order check = %+v errors=%+v, want issues without read errors", result.SyncPipelineOrderCheck, result.SyncPipelineOrderErrors)
+	}
 
 	if nilResult := ApplySessionStartupPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.HasSyncPipelineOrder {
 		t.Fatalf("nil applier result = %+v, want empty", nilResult)
@@ -597,9 +600,11 @@ func (a *recordingSessionStartupApplier) RefreshBodiesReady() {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRefreshBodiesReady})
 }
 
-func (a *recordingSessionStartupApplier) CheckSyncPipelineProgressOrder() []SyncPipelineProgressOrderIssue {
+func (a *recordingSessionStartupApplier) CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupCheckSyncPipelineOrder})
-	return append([]SyncPipelineProgressOrderIssue(nil), a.orderIssues...)
+	return SyncPipelineProgressOrderCheckResult{
+		Issues: append([]SyncPipelineProgressOrderIssue(nil), a.orderIssues...),
+	}
 }
 
 type startupRecoveryTestApplier struct {
@@ -651,15 +656,8 @@ func (a *startupRecoveryTestApplier) RefreshBodiesReady() {
 	RefreshStagedBodyReadyProgress(a.db, a.head+1, a.target)
 }
 
-func (a *startupRecoveryTestApplier) CheckSyncPipelineProgressOrder() []SyncPipelineProgressOrderIssue {
-	rows := make(map[rawdb.StageID]rawdb.StageProgress)
-	for _, stage := range FullSyncPipelineProgressStages() {
-		row, ok, err := rawdb.ReadStageProgressRow(a.db, stage)
-		if err == nil && ok {
-			rows[stage] = row
-		}
-	}
-	return CheckSyncPipelineProgressOrder(rows, SyncPipelineProgressOrderOptions{})
+func (a *startupRecoveryTestApplier) CheckSyncPipelineProgressOrder() SyncPipelineProgressOrderCheckResult {
+	return CheckSyncPipelineProgressOrderFromDB(a.db, SyncPipelineProgressOrderOptions{})
 }
 
 func (a *startupRecoveryTestApplier) SetStagedBodyRestoreTargetHead(targetHead uint64) {

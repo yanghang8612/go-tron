@@ -87,6 +87,21 @@ type SyncPipelineProgressOrderIssue struct {
 	MissingUpstream bool
 }
 
+// SyncPipelineProgressOrderReadError records a stage row that could not be
+// read while checking full sync pipeline ordering.
+type SyncPipelineProgressOrderReadError struct {
+	Stage rawdb.StageID
+	Err   error
+}
+
+// SyncPipelineProgressOrderCheckResult is the DB-backed full sync pipeline
+// order check result used by startup diagnostics.
+type SyncPipelineProgressOrderCheckResult struct {
+	Rows       []rawdb.StageProgress
+	Issues     []SyncPipelineProgressOrderIssue
+	ReadErrors []SyncPipelineProgressOrderReadError
+}
+
 func (i SyncPipelineProgressOrderIssue) String() string {
 	if i.MissingUpstream {
 		return fmt.Sprintf("%s requires %s", i.Downstream, i.Upstream)
@@ -1105,6 +1120,34 @@ func CheckSyncPipelineProgressOrder(rows map[rawdb.StageID]rawdb.StageProgress, 
 		})
 	}
 	return issues
+}
+
+// CheckSyncPipelineProgressOrderFromDB reads full sync pipeline stage rows and
+// validates their ordering. The downloader owns the stage set and ordering
+// rules; callers own any logging for row read failures.
+func CheckSyncPipelineProgressOrderFromDB(db ethdb.KeyValueReader, opts SyncPipelineProgressOrderOptions) SyncPipelineProgressOrderCheckResult {
+	var result SyncPipelineProgressOrderCheckResult
+	if db == nil {
+		return result
+	}
+	rows := make(map[rawdb.StageID]rawdb.StageProgress)
+	for _, stage := range FullSyncPipelineProgressStages() {
+		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
+		if err != nil {
+			result.ReadErrors = append(result.ReadErrors, SyncPipelineProgressOrderReadError{
+				Stage: stage,
+				Err:   err,
+			})
+			continue
+		}
+		if !ok {
+			continue
+		}
+		rows[stage] = row
+		result.Rows = append(result.Rows, row)
+	}
+	result.Issues = CheckSyncPipelineProgressOrder(rows, opts)
+	return result
 }
 
 // ImportPipelineStageTasks returns the canonical-to-sync stage schedule for

@@ -998,6 +998,72 @@ func TestCheckSyncPipelineProgressOrder(t *testing.T) {
 	}
 }
 
+func TestCheckSyncPipelineProgressOrderFromDB(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	writes := []struct {
+		stage rawdb.StageID
+		block uint64
+	}{
+		{stage: rawdb.StageSyncExecution, block: 9},
+		{stage: rawdb.StageSyncBodiesReady, block: 8},
+		{stage: rawdb.StageSyncImport, block: 6},
+		{stage: rawdb.StageSyncBodies, block: 7},
+	}
+	for _, write := range writes {
+		if err := rawdb.WriteStageProgress(db, write.stage, write.block); err != nil {
+			t.Fatalf("write %s progress: %v", write.stage, err)
+		}
+	}
+
+	got := CheckSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if len(got.ReadErrors) != 0 {
+		t.Fatalf("read errors = %+v, want none", got.ReadErrors)
+	}
+	wantRows := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncBodies, BlockNum: 7},
+		{Stage: rawdb.StageSyncBodiesReady, BlockNum: 8},
+		{Stage: rawdb.StageSyncImport, BlockNum: 6},
+		{Stage: rawdb.StageSyncExecution, BlockNum: 9},
+	}
+	if !reflect.DeepEqual(got.Rows, wantRows) {
+		t.Fatalf("rows = %+v, want full pipeline order %+v", got.Rows, wantRows)
+	}
+	wantIssues := []string{
+		"SyncBodiesReady=8 ahead of SyncBodies=7",
+		"SyncExecution=9 ahead of SyncImport=6",
+	}
+	if len(got.Issues) != len(wantIssues) {
+		t.Fatalf("issues = %+v, want %d entries", got.Issues, len(wantIssues))
+	}
+	for i, issue := range got.Issues {
+		if issue.String() != wantIssues[i] {
+			t.Fatalf("issue %d = %q, want %q", i, issue.String(), wantIssues[i])
+		}
+	}
+
+	if empty := CheckSyncPipelineProgressOrderFromDB(nil, SyncPipelineProgressOrderOptions{}); len(empty.Rows) != 0 || len(empty.Issues) != 0 || len(empty.ReadErrors) != 0 {
+		t.Fatalf("nil db result = %+v, want empty", empty)
+	}
+}
+
+func TestCheckSyncPipelineProgressOrderFromDBReportsReadErrors(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	if err := rawdb.WriteStageProgress(db, rawdb.StageSyncBodies, 7); err != nil {
+		t.Fatalf("write bodies progress: %v", err)
+	}
+	if err := corruptOnlyStageProgressRow(db); err != nil {
+		t.Fatalf("corrupt bodies progress: %v", err)
+	}
+
+	got := CheckSyncPipelineProgressOrderFromDB(db, SyncPipelineProgressOrderOptions{})
+	if len(got.ReadErrors) != 1 || got.ReadErrors[0].Stage != rawdb.StageSyncBodies || got.ReadErrors[0].Err == nil {
+		t.Fatalf("read errors = %+v, want SyncBodies decode error", got.ReadErrors)
+	}
+	if len(got.Rows) != 0 || len(got.Issues) != 0 {
+		t.Fatalf("result = %+v, want no rows or order issues after read error", got)
+	}
+}
+
 func TestRepairSyncStageProgress(t *testing.T) {
 	stage := rawdb.StageSyncImport
 	canonical := map[uint64]tcommon.Hash{
