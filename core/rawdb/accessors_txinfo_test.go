@@ -127,6 +127,30 @@ func TestReadTransactionInfoRejectsMismatchedColdTxPosition(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoDoesNotScanAfterMismatchedColdTxPosition(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := bytes.Repeat([]byte{0x39}, common.HashLength)
+	otherID := bytes.Repeat([]byte{0x3a}, common.HashLength)
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Id: txID, Fee: 111, BlockNumber: 7, BlockTimeStamp: 7000},
+		{Id: otherID, Fee: 222, BlockNumber: 7, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	var hash common.Hash
+	copy(hash[:], txID)
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{hash: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			hash: {BlockNum: 7, TxIndex: 1},
+		},
+	})
+
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo scanned past mismatched cold position = %+v, want nil", got)
+	}
+}
+
 func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x37}, common.HashLength)

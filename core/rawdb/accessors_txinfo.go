@@ -56,6 +56,7 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 				return info
 			}
 		}
+		return nil
 	}
 	for _, info := range infos {
 		if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) && len(info.Id) != 0 {
