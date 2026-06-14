@@ -1043,6 +1043,97 @@ func TestTronBackend_GetLogsUsesColdEventLogIndexForFilteredCoverage(t *testing.
 	}
 }
 
+func TestTronBackend_GetLogsColdEventLogIndexMatchesTopicPositionOR(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x91)
+	otherAddress := bytes20(0x92)
+	topic0 := tcommon.Hash{0x91}
+	topic0Alt := tcommon.Hash{0x92}
+	topic1 := tcommon.Hash{0x93}
+	otherTopic1 := tcommon.Hash{0x94}
+	block1, info1 := testBackendLogBlock(1, nil)
+	info1.Log = []*corepb.TransactionInfo_Log{
+		{
+			Address: logAddress,
+			Topics:  [][]byte{topic0[:], topic1[:]},
+			Data:    []byte{0x91, 0x01},
+		},
+		{
+			Address: logAddress,
+			Topics:  [][]byte{topic0Alt[:], topic1[:]},
+			Data:    []byte{0x91, 0x02},
+		},
+		{
+			Address: logAddress,
+			Topics:  [][]byte{topic0[:], otherTopic1[:]},
+			Data:    []byte{0x91, 0x03},
+		},
+		{
+			Address: logAddress,
+			Topics:  [][]byte{topic1[:], topic0[:]},
+			Data:    []byte{0x91, 0x04},
+		},
+		{
+			Address: otherAddress,
+			Topics:  [][]byte{topic0Alt[:], topic1[:]},
+			Data:    []byte{0x91, 0x05},
+		},
+	}
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, block1.Number(), []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	dir := t.TempDir()
+	ref, err := statesnapshots.BuildEventLogSegmentFromChain(bc.ChainDB(), dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	indexRef, err := statesnapshots.BuildEventLogIndexSegmentFromEventLogSegments(dir, []statesnapshots.SegmentRef{ref}, "")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(0, 0, []statesnapshots.SegmentRef{ref, indexRef})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	bc.ChainDB().SetEventLogReader(mgr)
+	if err := rawdb.DeleteTransactionInfosByBlock(bc.db, block1.Number()); err != nil {
+		t.Fatalf("DeleteTransactionInfosByBlock block1: %v", err)
+	}
+	hotOnly := rawdb.NewChainDB(bc.db, rawdb.NoopAncient{})
+	if infos := rawdb.ReadTransactionInfosByBlock(hotOnly, block1.Number()); len(infos) != 0 {
+		t.Fatalf("hot block1 tx infos still present: %+v", infos)
+	}
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic0, topic0Alt}, {topic1}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("GetLogs with cold topic-position OR returned %d logs, want 2", len(logs))
+	}
+	for i, wantData := range []string{"0x9101", "0x9102"} {
+		if logs[i].Data != wantData || logs[i].LogIndex != fmt.Sprintf("0x%x", i) || logs[i].Address != fmt.Sprintf("0x%x", logAddress) {
+			t.Fatalf("cold topic-position OR log[%d] = %+v, want data %s at address %x", i, logs[i], wantData, logAddress)
+		}
+	}
+}
+
 func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
