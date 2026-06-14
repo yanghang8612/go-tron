@@ -212,6 +212,22 @@ type ImportStageObservation struct {
 	Task  ImportStageTask
 }
 
+// Valid reports whether the observation is owned by its phase plan. This keeps
+// planned hook observations tied to the downloader stage schedule instead of
+// accepting an arbitrary task-shaped record.
+func (o ImportStageObservation) Valid() bool {
+	if o.Task.Phase == "" || o.Task.CanonicalStage == "" || o.Task.SyncStage == "" {
+		return false
+	}
+	if o.Phase.Phase != o.Task.Phase ||
+		o.Phase.CanonicalStage != o.Task.CanonicalStage ||
+		o.Phase.SyncStage != o.Task.SyncStage {
+		return false
+	}
+	task, ok := o.Phase.MatchCanonicalObservation(o.Task.CanonicalStage, o.Task.BlockNum, o.Task.BlockHash)
+	return ok && task == o.Task
+}
+
 // ImportStagePhasePlan is the batch-level unit the downloader stage planner
 // owns: one phase, its canonical/sync stage pair, and every block boundary that
 // phase must complete.
@@ -665,7 +681,7 @@ func (c *StageProgressCollector) Observe(stage rawdb.StageID, blockNum uint64, h
 // ObservePlanned records one observation already matched by the downloader's
 // phase plan.
 func (c *StageProgressCollector) ObservePlanned(observation ImportStageObservation) {
-	if c == nil || observation.Task.SyncStage == "" {
+	if c == nil || !observation.Valid() {
 		return
 	}
 	c.observeSyncStage(observation.Task.SyncStage, observation.Task.BlockNum, observation.Task.BlockHash)

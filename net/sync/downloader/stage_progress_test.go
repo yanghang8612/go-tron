@@ -96,6 +96,55 @@ func TestStageProgressCollectorRecordsPlannedObservation(t *testing.T) {
 	nilCollector.ObservePlanned(ImportStageObservation{Phase: phase, Task: task})
 }
 
+func TestStageProgressCollectorRejectsUnownedPlannedObservation(t *testing.T) {
+	hash := tcommon.Hash{0x02}
+	task := ImportExecutionStageTask(2, hash)
+	phase := ImportStagePhasePlan{
+		Phase:          ImportStagePhaseExecution,
+		CanonicalStage: rawdb.StageExecution,
+		SyncStage:      rawdb.StageSyncExecution,
+		Tasks:          []ImportStageTask{task},
+	}
+	if observation := (ImportStageObservation{Phase: phase, Task: task}); !observation.Valid() {
+		t.Fatalf("valid planned observation reported invalid: %+v", observation)
+	}
+
+	for name, observation := range map[string]ImportStageObservation{
+		"empty": {},
+		"phase mismatch": {
+			Phase: ImportStagePhasePlan{
+				Phase:          ImportStagePhaseCommitment,
+				CanonicalStage: rawdb.StageCommitment,
+				SyncStage:      rawdb.StageSyncCommitment,
+				Tasks:          []ImportStageTask{task},
+			},
+			Task: task,
+		},
+		"task not owned": {
+			Phase: ImportStagePhasePlan{
+				Phase:          ImportStagePhaseExecution,
+				CanonicalStage: rawdb.StageExecution,
+				SyncStage:      rawdb.StageSyncExecution,
+				Tasks:          []ImportStageTask{ImportExecutionStageTask(3, tcommon.Hash{0x03})},
+			},
+			Task: task,
+		},
+		"task stage mismatch": {
+			Phase: phase,
+			Task:  ImportStageTask{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncExecution, BlockNum: task.BlockNum, BlockHash: task.BlockHash},
+		},
+	} {
+		if observation.Valid() {
+			t.Fatalf("%s observation reported valid: %+v", name, observation)
+		}
+		collector := NewStageProgressCollector()
+		collector.ObservePlanned(observation)
+		if rows := collector.RowsForSchedule(NewImportStageSchedule(task.BlockNum, task.BlockHash)); len(rows) != 0 {
+			t.Fatalf("%s observation produced rows %+v, want none", name, rows)
+		}
+	}
+}
+
 func TestStageProgressCollectorLegacyRowsDeriveBoundaryFromImportObservation(t *testing.T) {
 	collector := NewStageProgressCollector()
 	collector.Observe(rawdb.StageBodies, 2, tcommon.Hash{0x02})
