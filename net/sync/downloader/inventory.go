@@ -20,6 +20,16 @@ type ChainInventoryInput struct {
 	Candidates     []InventoryCandidate
 }
 
+// ChainInventoryResponseInput is the side-effect-free state needed to answer a
+// peer SYNC_BLOCK_CHAIN summary with the next sequential CHAIN_INVENTORY
+// window.
+type ChainInventoryResponseInput struct {
+	CommonBlock    uint64
+	HeadBlock      uint64
+	InventoryLimit int
+	ReadBlockID    func(number uint64) (types.BlockID, bool)
+}
+
 // ChainInventoryPlan is the downloader-owned result of one CHAIN_INVENTORY
 // response. The service applies Accepted IDs and target/window state to its
 // peer record while downloader owns the decision rules.
@@ -33,6 +43,17 @@ type ChainInventoryPlan struct {
 	HasStageTarget bool
 	Done           bool
 	Steps          []ChainInventoryStep
+}
+
+// ChainInventoryResponsePlan is the downloader-owned response window for one
+// SYNC_BLOCK_CHAIN request.
+type ChainInventoryResponsePlan struct {
+	IDs          []types.BlockID
+	RemainNum    int64
+	FromBlock    uint64
+	NextBlock    uint64
+	MissingBlock bool
+	MissingAt    uint64
 }
 
 // ChainInventoryStepAction names one peer/session state mutation after a
@@ -92,6 +113,44 @@ func PlanChainInventory(in ChainInventoryInput) ChainInventoryPlan {
 	}
 	plan.Done = ShouldMarkInventoryDone(len(in.Candidates), plan.QueuedAfter, in.RemainNum)
 	return plan.withSteps()
+}
+
+// PlanChainInventoryResponse builds the bounded sequential block-id window to
+// return for a peer SYNC_BLOCK_CHAIN request.
+func PlanChainInventoryResponse(in ChainInventoryResponseInput) ChainInventoryResponsePlan {
+	plan := ChainInventoryResponsePlan{}
+	if in.CommonBlock >= in.HeadBlock {
+		return plan
+	}
+	from := in.CommonBlock + 1
+	plan.FromBlock = from
+	plan.NextBlock = from
+	limit := in.InventoryLimit
+	if in.ReadBlockID == nil {
+		plan.MissingBlock = true
+		plan.MissingAt = from
+		plan.RemainNum = int64(in.HeadBlock - in.CommonBlock)
+		return plan
+	}
+	for num := from; limit > 0 && num <= in.HeadBlock; num++ {
+		bid, ok := in.ReadBlockID(num)
+		if !ok {
+			plan.MissingBlock = true
+			plan.MissingAt = num
+			plan.NextBlock = num
+			break
+		}
+		plan.IDs = append(plan.IDs, bid)
+		plan.NextBlock = num + 1
+		limit--
+		if num == ^uint64(0) {
+			break
+		}
+	}
+	if missing := in.HeadBlock - in.CommonBlock; uint64(len(plan.IDs)) < missing {
+		plan.RemainNum = int64(missing - uint64(len(plan.IDs)))
+	}
+	return plan
 }
 
 func (p ChainInventoryPlan) withSteps() ChainInventoryPlan {

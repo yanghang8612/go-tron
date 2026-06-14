@@ -760,30 +760,29 @@ func (ss *SyncService) HandleSyncBlockChain(peer *p2p.Peer, payload []byte) {
 	commonNum := ss.FindCommonBlock(peerSummary)
 	headNum := ss.chain.CurrentBlock().Number()
 
-	// Build chain inventory: sequential blocks after common
-	var responseIDs []*corepb.ChainInventory_BlockId
-	count := 0
-	for num := commonNum + 1; num <= headNum && count < maxChainInventorySize; num++ {
-		block := ss.chain.GetBlockByNumber(num)
-		if block == nil {
-			break
-		}
-		bid := block.ID()
+	responsePlan := syncdl.PlanChainInventoryResponse(syncdl.ChainInventoryResponseInput{
+		CommonBlock:    commonNum,
+		HeadBlock:      headNum,
+		InventoryLimit: maxChainInventorySize,
+		ReadBlockID: func(num uint64) (types.BlockID, bool) {
+			block := ss.chain.GetBlockByNumber(num)
+			if block == nil {
+				return types.BlockID{}, false
+			}
+			return block.ID(), true
+		},
+	})
+	responseIDs := make([]*corepb.ChainInventory_BlockId, 0, len(responsePlan.IDs))
+	for _, bid := range responsePlan.IDs {
 		responseIDs = append(responseIDs, &corepb.ChainInventory_BlockId{
 			Hash:   bid.Hash[:],
 			Number: int64(bid.Num),
 		})
-		count++
-	}
-
-	remainNum := int64(0)
-	if commonNum+uint64(count) < headNum {
-		remainNum = int64(headNum) - int64(commonNum) - int64(count)
 	}
 
 	resp := &corepb.ChainInventory{
 		Ids:       responseIDs,
-		RemainNum: remainNum,
+		RemainNum: responsePlan.RemainNum,
 	}
 	data, _ := proto.Marshal(resp)
 	peer.Send(p2p.MsgChainInventory, data)

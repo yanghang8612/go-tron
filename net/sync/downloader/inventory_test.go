@@ -101,6 +101,98 @@ func TestPlanChainInventoryKeepsStaleTarget(t *testing.T) {
 	}
 }
 
+func TestPlanChainInventoryResponseBuildsBoundedWindow(t *testing.T) {
+	got := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    3,
+		HeadBlock:      7,
+		InventoryLimit: 3,
+		ReadBlockID: chainInventoryResponseReader(map[uint64]types.BlockID{
+			4: queueID(4),
+			5: queueID(5),
+			6: queueID(6),
+			7: queueID(7),
+		}),
+	})
+
+	if !reflect.DeepEqual(got.IDs, []types.BlockID{queueID(4), queueID(5), queueID(6)}) {
+		t.Fatalf("ids = %+v, want 4,5,6", got.IDs)
+	}
+	if got.RemainNum != 1 || got.FromBlock != 4 || got.NextBlock != 7 || got.MissingBlock || got.MissingAt != 0 {
+		t.Fatalf("plan = %+v, want remain 1, from 4, next 7, no missing", got)
+	}
+}
+
+func TestPlanChainInventoryResponseStopsAtHead(t *testing.T) {
+	got := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    3,
+		HeadBlock:      5,
+		InventoryLimit: 10,
+		ReadBlockID: chainInventoryResponseReader(map[uint64]types.BlockID{
+			4: queueID(4),
+			5: queueID(5),
+		}),
+	})
+
+	if !reflect.DeepEqual(got.IDs, []types.BlockID{queueID(4), queueID(5)}) {
+		t.Fatalf("ids = %+v, want 4,5", got.IDs)
+	}
+	if got.RemainNum != 0 || got.FromBlock != 4 || got.NextBlock != 6 || got.MissingBlock {
+		t.Fatalf("plan = %+v, want exhausted head with no remain", got)
+	}
+}
+
+func TestPlanChainInventoryResponseStopsAtMissingBlock(t *testing.T) {
+	got := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    3,
+		HeadBlock:      7,
+		InventoryLimit: 10,
+		ReadBlockID: chainInventoryResponseReader(map[uint64]types.BlockID{
+			4: queueID(4),
+			6: queueID(6),
+		}),
+	})
+
+	if !reflect.DeepEqual(got.IDs, []types.BlockID{queueID(4)}) {
+		t.Fatalf("ids = %+v, want only block 4", got.IDs)
+	}
+	if got.RemainNum != 3 || !got.MissingBlock || got.MissingAt != 5 || got.NextBlock != 5 {
+		t.Fatalf("plan = %+v, want missing block 5 with remain 3", got)
+	}
+}
+
+func TestPlanChainInventoryResponseNoProgress(t *testing.T) {
+	atHead := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    7,
+		HeadBlock:      7,
+		InventoryLimit: 10,
+		ReadBlockID:    chainInventoryResponseReader(nil),
+	})
+	if len(atHead.IDs) != 0 || atHead.RemainNum != 0 || atHead.FromBlock != 0 || atHead.NextBlock != 0 || atHead.MissingBlock {
+		t.Fatalf("at-head plan = %+v, want empty plan", atHead)
+	}
+
+	limited := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    3,
+		HeadBlock:      7,
+		InventoryLimit: 0,
+		ReadBlockID: chainInventoryResponseReader(map[uint64]types.BlockID{
+			4: queueID(4),
+		}),
+	})
+	if len(limited.IDs) != 0 || limited.RemainNum != 4 || limited.FromBlock != 4 || limited.NextBlock != 4 || limited.MissingBlock {
+		t.Fatalf("limit-zero plan = %+v, want no ids and all blocks remaining", limited)
+	}
+
+	missingReader := PlanChainInventoryResponse(ChainInventoryResponseInput{
+		CommonBlock:    3,
+		HeadBlock:      7,
+		InventoryLimit: 10,
+	})
+	if len(missingReader.IDs) != 0 || missingReader.RemainNum != 4 || !missingReader.MissingBlock || missingReader.MissingAt != 4 || missingReader.NextBlock != 4 {
+		t.Fatalf("missing-reader plan = %+v, want missing block 4 with all blocks remaining", missingReader)
+	}
+}
+
 func TestApplyChainInventoryPlan(t *testing.T) {
 	id11 := queueID(11)
 	applier := new(recordingChainInventoryApplier)
@@ -177,4 +269,11 @@ func (a *recordingChainInventoryApplier) UpdateInventoryProgress(remainNum int64
 func (a *recordingChainInventoryApplier) MarkInventoryDone() {
 	a.calls = append(a.calls, ChainInventoryMarkDone)
 	a.done = true
+}
+
+func chainInventoryResponseReader(ids map[uint64]types.BlockID) func(uint64) (types.BlockID, bool) {
+	return func(number uint64) (types.BlockID, bool) {
+		id, ok := ids[number]
+		return id, ok
+	}
 }
