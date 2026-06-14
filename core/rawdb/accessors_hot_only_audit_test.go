@@ -80,6 +80,26 @@ func query(db any) {
 	}
 }
 
+func TestRawFreezerReadAuditRejectsDotImportedReaderFunctionValue(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import . "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readRawInfos = ReadTransactionInfosRaw
+
+func query(db any) {
+	_ = readRawInfos(db, 7)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferences(t, root, map[string]struct{}{
+		"ReadTransactionInfosRaw": {},
+	}, nil)
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "ReadTransactionInfosRaw") {
+		t.Fatalf("offenders = %+v, want dot-imported raw freezer reader function value rejected", offenders)
+	}
+}
+
 func TestNoActuatorDirectHotBlockHashReads(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	actuatorRoot := filepath.Join(repoRoot, "actuator")
@@ -943,19 +963,25 @@ func auditForbiddenRawDBReferences(t *testing.T, root string, forbidden map[stri
 			return nil
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			sel, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if _, imported := rawdbNames[ident.Name]; !imported {
-				return true
-			}
-			if _, banned := forbidden[sel.Sel.Name]; banned && !isAllowedRawDBCall(root, path, sel.Sel.Name, allowed) {
-				offenders = append(offenders, formatAuditOffender(fset, root, path, sel.Pos(), ident.Name+"."+sel.Sel.Name))
+			switch n := node.(type) {
+			case *ast.SelectorExpr:
+				ident, ok := n.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				if _, imported := rawdbNames[ident.Name]; !imported {
+					return true
+				}
+				if _, banned := forbidden[n.Sel.Name]; banned && !isAllowedRawDBCall(root, path, n.Sel.Name, allowed) {
+					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), ident.Name+"."+n.Sel.Name))
+				}
+			case *ast.Ident:
+				if _, dotImported := rawdbNames["."]; !dotImported {
+					return true
+				}
+				if _, banned := forbidden[n.Name]; banned && !isAllowedRawDBCall(root, path, n.Name, allowed) {
+					offenders = append(offenders, formatAuditOffender(fset, root, path, n.Pos(), n.Name))
+				}
 			}
 			return true
 		})
