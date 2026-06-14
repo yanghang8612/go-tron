@@ -332,6 +332,7 @@ type ImportStageProgressDecision struct {
 // prevents the boundary from being fully published.
 type ImportStagePlan struct {
 	Schedule   ImportStageSchedule
+	Tasks      []ImportStageTask
 	Progress   []rawdb.StageProgress
 	Decisions  []ImportStageProgressDecision
 	Completed  []ImportStageTask
@@ -525,6 +526,12 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 		if appliedStagePlan, ok := execution.AppliedStagePlan(applied); ok {
 			plan.AppliedStagePlan = appliedStagePlan
 			plan.AppliedDiagnostics = NewImportBatchExecutionPlanDiagnostics(appliedStagePlan.Schedules, appliedStagePlan)
+			plan.Stages = append([]ImportStageTask(nil), appliedStagePlan.Tasks...)
+			plan.StagePlan = collector.PlanBatch(appliedStagePlan)
+			plan.Progress = plan.StagePlan.Progress
+			plan.Decisions = plan.StagePlan.Decisions
+			plan.StageDiagnostics = plan.StagePlan.Diagnostics()
+			plan = plan.withSteps()
 		}
 	}
 	return plan
@@ -614,6 +621,12 @@ func (c *StageProgressCollector) PlanSchedule(schedule ImportStageSchedule) Impo
 	return NewImportStagePlanner(c).Plan(schedule)
 }
 
+// PlanBatch returns the explicit batch-phase planner result for all applied
+// bodies/execution/commitment/finish tasks.
+func (c *StageProgressCollector) PlanBatch(stagePlan ImportBatchStagePlan) ImportStagePlan {
+	return NewImportStagePlanner(c).PlanBatch(stagePlan)
+}
+
 // Plan maps observed canonical stage hooks onto a schedule-owned contiguous
 // sync progress prefix.
 func (c *StageProgressCollector) Plan(schedule ImportStageSchedule) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
@@ -644,9 +657,27 @@ func (p ImportStagePlanner) Plan(schedule ImportStageSchedule) ImportStagePlan {
 	return newImportStagePlan(schedule, progress, decisions)
 }
 
+// PlanBatch maps observed canonical stage hooks onto a batch phase plan. Unlike
+// Plan, which checks a single import boundary, this verifies each applied
+// bodies/execution/commitment/finish phase task before publishing that phase's
+// latest sync progress row.
+func (p ImportStagePlanner) PlanBatch(stagePlan ImportBatchStagePlan) ImportStagePlan {
+	if stagePlan.Empty() {
+		return ImportStagePlan{}
+	}
+	progress, decisions := planImportBatchStageRows(p.observed, stagePlan)
+	return newImportStagePlanFromTasks(stagePlan.Tasks, progress, decisions)
+}
+
 func newImportStagePlan(schedule ImportStageSchedule, progress []rawdb.StageProgress, decisions []ImportStageProgressDecision) ImportStagePlan {
+	plan := newImportStagePlanFromTasks(schedule.Tasks, progress, decisions)
+	plan.Schedule = schedule
+	return plan
+}
+
+func newImportStagePlanFromTasks(tasks []ImportStageTask, progress []rawdb.StageProgress, decisions []ImportStageProgressDecision) ImportStagePlan {
 	plan := ImportStagePlan{
-		Schedule:  schedule,
+		Tasks:     append([]ImportStageTask(nil), tasks...),
 		Progress:  append([]rawdb.StageProgress(nil), progress...),
 		Decisions: append([]ImportStageProgressDecision(nil), decisions...),
 	}
@@ -662,16 +693,19 @@ func newImportStagePlan(schedule ImportStageSchedule, progress []rawdb.StageProg
 			plan.HasBlocked = true
 		}
 	}
-	plan.Complete = len(decisions) > 0 && len(plan.Completed) == len(schedule.Tasks)
+	plan.Complete = len(tasks) > 0 && len(plan.Completed) == len(tasks)
 	return plan
 }
 
 // Diagnostics returns the stable diagnostic view of this import stage plan.
 func (p ImportStagePlan) Diagnostics() ImportStagePlanDiagnostics {
 	diag := ImportStagePlanDiagnostics{
-		Scheduled: len(p.Schedule.Tasks),
+		Scheduled: len(p.Tasks),
 		Completed: len(p.Completed),
 		Complete:  p.Complete,
+	}
+	if diag.Scheduled == 0 {
+		diag.Scheduled = len(p.Schedule.Tasks)
 	}
 	if p.HasBlocked {
 		diag.NextPhase = p.Next.Phase
@@ -716,6 +750,51 @@ func planImportStageRows(observed map[rawdb.StageID][]StageProgressRow, stages [
 			Status: ImportStageProgressPlanned,
 			Row:    row,
 		})
+	}
+	return progress, decisions
+}
+
+func planImportBatchStageRows(observed map[rawdb.StageID][]StageProgressRow, stagePlan ImportBatchStagePlan) ([]rawdb.StageProgress, []ImportStageProgressDecision) {
+	progress := make([]rawdb.StageProgress, 0, len(stagePlan.Phases))
+	decisions := make([]ImportStageProgressDecision, 0, len(stagePlan.Tasks))
+	blocked := false
+	for _, phase := range stagePlan.Phases {
+		var (
+			phaseRow     rawdb.StageProgress
+			havePhaseRow bool
+		)
+		for _, task := range phase.Tasks {
+			if blocked {
+				decisions = append(decisions, ImportStageProgressDecision{
+					Task:   task,
+					Stage:  task.SyncStage,
+					Status: ImportStageProgressBlocked,
+				})
+				continue
+			}
+			row, status := matchImportStageTask(observed[task.SyncStage], task)
+			if status != ImportStageProgressPlanned {
+				blocked = true
+				decisions = append(decisions, ImportStageProgressDecision{
+					Task:   task,
+					Stage:  task.SyncStage,
+					Status: status,
+					Row:    row,
+				})
+				continue
+			}
+			phaseRow = row
+			havePhaseRow = true
+			decisions = append(decisions, ImportStageProgressDecision{
+				Task:   task,
+				Stage:  task.SyncStage,
+				Status: ImportStageProgressPlanned,
+				Row:    row,
+			})
+		}
+		if havePhaseRow {
+			progress = append(progress, phaseRow)
+		}
 	}
 	return progress, decisions
 }

@@ -377,6 +377,7 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *test
 		},
 	}
 	collector := syncdl.NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
 	collector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
@@ -389,7 +390,10 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterExecutionMismatch(t *test
 	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncImport); err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
 		t.Fatalf("sync import progress = %+v ok=%v err=%v, want block2", row, ok, err)
 	}
-	for _, stage := range []rawdb.StageID{rawdb.StageSyncExecution, rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncExecution); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync execution progress = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
 			t.Fatalf("%s progress = %+v ok=%v err=%v, want blocked", stage, row, ok, err)
 		}
@@ -420,7 +424,9 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterCommitmentMismatch(t *tes
 		},
 	}
 	collector := syncdl.NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageExecution, block2.Number(), block2.Hash())
 	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
 	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
@@ -434,7 +440,10 @@ func TestRecordImportedBatchBlocksDownstreamStagesAfterCommitmentMismatch(t *tes
 			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2", stage, row, ok, err)
 		}
 	}
-	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncCommitment); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("sync commitment progress = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+	for _, stage := range []rawdb.StageID{rawdb.StageSyncFinish} {
 		if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), stage); err != nil || ok {
 			t.Fatalf("%s progress = %+v ok=%v err=%v, want blocked", stage, row, ok, err)
 		}

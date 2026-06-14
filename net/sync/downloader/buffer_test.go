@@ -547,14 +547,14 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	if !result.Progress.OK || result.Progress.Summary.Applied != 2 || !result.Progress.StagePlan.Complete {
 		t.Fatalf("result progress plan = %+v, want complete applied block2 plan", result.Progress)
 	}
-	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 4 || result.StageDiagnostics.Scheduled != 4 {
-		t.Fatalf("result stage diagnostics = %+v, want complete 4/4", result.StageDiagnostics)
+	if !result.StageDiagnostics.Complete || result.StageDiagnostics.Completed != 8 || result.StageDiagnostics.Scheduled != 8 {
+		t.Fatalf("result stage diagnostics = %+v, want complete 8/8", result.StageDiagnostics)
 	}
 	if !applier.recordPlan.OK || applier.recordPlan.ReportHead != block2.Number() || applier.recordPlan.StatsBlocks != 2 {
 		t.Fatalf("applier progress plan = %+v, want block2 report with two stats blocks", applier.recordPlan)
 	}
-	if !applier.recordPlan.StageDiagnostics.Complete || applier.recordPlan.StageDiagnostics.Completed != 4 {
-		t.Fatalf("applier stage diagnostics = %+v, want complete", applier.recordPlan.StageDiagnostics)
+	if !applier.recordPlan.StageDiagnostics.Complete || applier.recordPlan.StageDiagnostics.Completed != 8 || applier.recordPlan.StageDiagnostics.Scheduled != 8 {
+		t.Fatalf("applier stage diagnostics = %+v, want complete 8/8", applier.recordPlan.StageDiagnostics)
 	}
 	if applier.recordPlan.ExecutionDiagnostics.PlannedBlocks != 2 || applier.recordPlan.ExecutionDiagnostics.LastBlockNum != block2.Number() {
 		t.Fatalf("applier execution diagnostics = %+v, want two planned blocks through block2", applier.recordPlan.ExecutionDiagnostics)
@@ -1161,17 +1161,14 @@ func (a *recordingImportBatchRunApplier) ExecuteImportBatch(execution ImportBatc
 	if a.appliedForObservations > 0 && a.appliedForObservations < applied {
 		applied = a.appliedForObservations
 	}
-	if applied > 0 {
-		block := execution.Blocks[applied-1]
+	for i := 0; i < applied; i++ {
+		block := execution.Blocks[i]
 		for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
 			observe(stage, block.Number(), block.Hash())
 		}
 	}
 	if a.observeAllAttemptedStages {
-		for _, block := range execution.Blocks {
-			if applied > 0 && block.Number() == execution.Blocks[applied-1].Number() && block.Hash() == execution.Blocks[applied-1].Hash() {
-				continue
-			}
+		for _, block := range execution.Blocks[applied:] {
 			for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
 				observe(stage, block.Number(), block.Hash())
 			}
