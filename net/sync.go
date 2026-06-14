@@ -1258,7 +1258,6 @@ func (ss *SyncService) drainBufferedBlocks() {
 
 func (ss *SyncService) drainBufferedBlocksOnce() {
 	var out []outboundSyncRequest
-	var emptyDrainDispatch syncdl.EmptyDrainRunPlan
 drainLoop:
 	for {
 		now := time.Now()
@@ -1287,9 +1286,8 @@ drainLoop:
 			}, prepareApplier, syncEmptyDrainJoinGate{service: ss, now: now}, syncEmptyDrainRunApplier{service: ss})
 			out = append(out, prepareApplier.out...)
 			emptyDrain := prepareResult.Run
-			emptyDrainDispatch = emptyDrain
 			ss.mu.Unlock()
-			syncdl.ApplyEmptyDrainRunPostLockPlan(emptyDrain, syncIdleDrainApplier{service: ss})
+			syncdl.ApplyEmptyDrainRunAfterUnlockPlan(emptyDrain, syncIdleDrainApplier{service: ss}, syncFetchRefillDispatchApplier{service: ss, out: out})
 			break drainLoop
 		case iteration.ImportBatch:
 		default:
@@ -1308,7 +1306,6 @@ drainLoop:
 		}
 		continue drainLoop
 	}
-	syncdl.ApplyEmptyDrainRunDispatchPlan(emptyDrainDispatch, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 type syncEmptyDrainPreparationApplier struct {

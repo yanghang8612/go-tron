@@ -868,6 +868,15 @@ func ApplyEmptyDrainRunDispatchPlan(plan EmptyDrainRunPlan, applier FetchRefillD
 	}
 }
 
+// ApplyEmptyDrainRunAfterUnlockPlan executes the post-lock phases for one
+// empty local drain run: session idle settlement first, then network dispatch.
+func ApplyEmptyDrainRunAfterUnlockPlan(plan EmptyDrainRunPlan, idleApplier IdleDrainPlanApplier, dispatchApplier FetchRefillDispatchPlanApplier) EmptyDrainRunApplyResult {
+	return EmptyDrainRunApplyResult{
+		Idle:     ApplyIdleDrainAfterRefillPlan(plan.Refill.Idle, idleApplier),
+		Dispatch: ApplyFetchRefillDispatchPlan(plan.Refill.Dispatch, dispatchApplier),
+	}
+}
+
 // ApplyIdleDrainAfterRefillPlan executes the downloader-owned empty-drain
 // settlement schedule.
 func ApplyIdleDrainAfterRefillPlan(plan IdleDrainPlan, applier IdleDrainPlanApplier) IdleDrainApplyResult {
