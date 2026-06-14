@@ -1176,7 +1176,15 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 			break
 		}
 		batch := ss.popBufferedSyncBatchLocked(now)
-		if len(batch.Buffered) == 0 {
+		iteration := syncdl.PlanLocalDrainIteration(syncdl.LocalDrainIterationInput{
+			Progress:         ss.sessionProgressLocked(),
+			BufferedBatchLen: len(batch.Buffered),
+		})
+		if iteration.StopLoop {
+			ss.mu.Unlock()
+			break
+		}
+		if iteration.EmptyDrain {
 			next := ss.chain.CurrentBlock().Number() + 1
 			ss.bufferWait.Begin(next, now)
 			out = append(out, ss.fillFetchSlotsLocked(now)...)
@@ -1194,14 +1202,12 @@ func (ss *SyncService) drainBufferedBlocksOnce() {
 		}
 		ss.mu.Unlock()
 		result := syncdl.ApplyImportBatchRunPlan(syncdl.NewImportBatchRunPlan(batch), syncImportBatchRunApplier{service: ss})
-		if result.ContinueDrain {
-			// Every popped block failed to decode (can't happen for validated
-			// wire bytes). The entries were already removed at pop, so loop to
-			// re-pop the next run or hit the gap.
-			continue
-		}
-		if result.StopDrain {
+		settlement := syncdl.PlanImportBatchRunSettlement(result)
+		if settlement.StopDrain {
 			break
+		}
+		if settlement.ContinueDrain {
+			continue
 		}
 	}
 	syncdl.ApplyFetchRefillDispatchPlan(dispatch, syncFetchRefillDispatchApplier{service: ss, out: out})

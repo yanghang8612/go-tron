@@ -64,6 +64,13 @@ type EmptyDrainRunInput struct {
 	Progress         SessionProgress
 }
 
+// LocalDrainIterationInput is the lock-held state for one local staged-body
+// drain iteration after the caller has restored/popped a possible batch.
+type LocalDrainIterationInput struct {
+	Progress         SessionProgress
+	BufferedBatchLen int
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -71,6 +78,16 @@ type IdleDrainStepAction uint8
 const (
 	IdleDrainFinish IdleDrainStepAction = iota
 	IdleDrainJoinAvailablePeers
+)
+
+// LocalDrainIterationStepAction names the next high-level operation for one
+// local drain loop iteration.
+type LocalDrainIterationStepAction uint8
+
+const (
+	LocalDrainIterationStop LocalDrainIterationStepAction = iota
+	LocalDrainIterationEmpty
+	LocalDrainIterationImport
 )
 
 // FetchRefillDispatchStepAction names one network dispatch action after peer
@@ -86,6 +103,11 @@ type IdleDrainStep struct {
 	Action IdleDrainStepAction
 }
 
+// LocalDrainIterationStep is one downloader-owned local drain loop operation.
+type LocalDrainIterationStep struct {
+	Action LocalDrainIterationStepAction
+}
+
 // FetchRefillDispatchStep is one downloader-owned dispatch operation after a
 // fetch-slot refill.
 type FetchRefillDispatchStep struct {
@@ -98,6 +120,15 @@ type IdleDrainPlan struct {
 	Finish             bool
 	JoinAvailablePeers bool
 	Steps              []IdleDrainStep
+}
+
+// LocalDrainIterationPlan decides whether one drain-loop iteration should stop,
+// settle an empty drain, or import a popped staged-body batch.
+type LocalDrainIterationPlan struct {
+	StopLoop    bool
+	EmptyDrain  bool
+	ImportBatch bool
+	Steps       []LocalDrainIterationStep
 }
 
 // FetchRefillDispatchPlan describes whether refilled outbound requests should
@@ -245,6 +276,19 @@ func PlanFetchRefillRun(in FetchRefillRunInput) FetchRefillRunPlan {
 	}
 }
 
+// PlanLocalDrainIteration derives the high-level local drain loop branch. The
+// service still owns locking, DB handles, and network dispatch; downloader owns
+// the branch semantics so import and empty-drain behavior share one planner.
+func PlanLocalDrainIteration(in LocalDrainIterationInput) LocalDrainIterationPlan {
+	if !in.Progress.Syncing || in.Progress.Paused {
+		return LocalDrainIterationPlan{StopLoop: true}.withSteps()
+	}
+	if in.BufferedBatchLen == 0 {
+		return LocalDrainIterationPlan{EmptyDrain: true}.withSteps()
+	}
+	return LocalDrainIterationPlan{ImportBatch: true}.withSteps()
+}
+
 // PlanEmptyDrainJoinProbe decides whether the caller should evaluate
 // peer-join availability before constructing the final empty-drain plan.
 // Paused/inactive sessions do nothing; finished sessions should go straight to
@@ -297,6 +341,18 @@ func (p IdleDrainPlan) withSteps() IdleDrainPlan {
 		p.Steps = []IdleDrainStep{{Action: IdleDrainFinish}}
 	case p.JoinAvailablePeers:
 		p.Steps = []IdleDrainStep{{Action: IdleDrainJoinAvailablePeers}}
+	}
+	return p
+}
+
+func (p LocalDrainIterationPlan) withSteps() LocalDrainIterationPlan {
+	switch {
+	case p.StopLoop:
+		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationStop}}
+	case p.EmptyDrain:
+		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}}
+	case p.ImportBatch:
+		p.Steps = []LocalDrainIterationStep{{Action: LocalDrainIterationImport}}
 	}
 	return p
 }

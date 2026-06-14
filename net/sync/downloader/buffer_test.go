@@ -302,6 +302,31 @@ func TestPlanImportOutcome(t *testing.T) {
 	}
 }
 
+func TestPlanImportBatchRunSettlement(t *testing.T) {
+	tests := map[string]struct {
+		result ImportBatchRunResult
+		want   ImportBatchRunSettlementPlan
+	}{
+		"successful import continues": {
+			result: ImportBatchRunResult{Outcome: ImportOutcome{RecordApplied: true}},
+			want:   ImportBatchRunSettlementPlan{ContinueDrain: true},
+		},
+		"decode drop continues": {
+			result: ImportBatchRunResult{ContinueDrain: true},
+			want:   ImportBatchRunSettlementPlan{ContinueDrain: true},
+		},
+		"canonical failure stops": {
+			result: ImportBatchRunResult{StopDrain: true, Outcome: ImportOutcome{Pause: true, StopDrain: true}},
+			want:   ImportBatchRunSettlementPlan{StopDrain: true},
+		},
+	}
+	for name, test := range tests {
+		if got := PlanImportBatchRunSettlement(test.result); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s settlement = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)

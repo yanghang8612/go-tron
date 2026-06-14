@@ -342,6 +342,13 @@ type ImportBatchRunResult struct {
 	StopDrain            bool
 }
 
+// ImportBatchRunSettlementPlan maps a completed import-batch run back to the
+// caller's local drain loop.
+type ImportBatchRunSettlementPlan struct {
+	ContinueDrain bool
+	StopDrain     bool
+}
+
 // NewImportBatchRunPlan returns the local staged-body execution schedule for
 // one popped batch: decode raw bodies, account wait time, execute canonical
 // stages with an explicit observer, then settle progress/pause decisions.
@@ -432,6 +439,17 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		}
 	}
 	return result
+}
+
+// PlanImportBatchRunSettlement derives the drain-loop branch after applying an
+// import-batch run plan. Decode-only drops and successful imports both keep the
+// local drain loop moving; canonical import failures stop so the sticky pause
+// can be observed by the session.
+func PlanImportBatchRunSettlement(result ImportBatchRunResult) ImportBatchRunSettlementPlan {
+	if result.StopDrain {
+		return ImportBatchRunSettlementPlan{StopDrain: true}
+	}
+	return ImportBatchRunSettlementPlan{ContinueDrain: true}
 }
 
 // PlanImportBatchExecution returns the explicit canonical import target for a

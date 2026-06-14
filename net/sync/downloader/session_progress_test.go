@@ -118,6 +118,48 @@ func TestPlanFetchRefillRun(t *testing.T) {
 	}
 }
 
+func TestPlanLocalDrainIteration(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	tests := map[string]struct {
+		input LocalDrainIterationInput
+		want  LocalDrainIterationPlan
+	}{
+		"not syncing": {
+			input: LocalDrainIterationInput{},
+			want: LocalDrainIterationPlan{
+				StopLoop: true,
+				Steps:    []LocalDrainIterationStep{{Action: LocalDrainIterationStop}},
+			},
+		},
+		"paused": {
+			input: LocalDrainIterationInput{Progress: SessionProgress{Syncing: true, Paused: true}},
+			want: LocalDrainIterationPlan{
+				StopLoop: true,
+				Steps:    []LocalDrainIterationStep{{Action: LocalDrainIterationStop}},
+			},
+		},
+		"empty drain": {
+			input: LocalDrainIterationInput{Progress: active},
+			want: LocalDrainIterationPlan{
+				EmptyDrain: true,
+				Steps:      []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}},
+			},
+		},
+		"import batch": {
+			input: LocalDrainIterationInput{Progress: active, BufferedBatchLen: 2},
+			want: LocalDrainIterationPlan{
+				ImportBatch: true,
+				Steps:       []LocalDrainIterationStep{{Action: LocalDrainIterationImport}},
+			},
+		},
+	}
+	for name, test := range tests {
+		if got := PlanLocalDrainIteration(test.input); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s local drain iteration = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanEmptyDrainJoinProbe(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {
