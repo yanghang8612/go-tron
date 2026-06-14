@@ -202,6 +202,126 @@ func TestPlanLocalDrainIteration(t *testing.T) {
 	}
 }
 
+func TestApplyLocalDrainEntryPlan(t *testing.T) {
+	tests := map[string]struct {
+		plan LocalDrainEntryPlan
+		want LocalDrainEntryApplyResult
+	}{
+		"stop step": {
+			plan: LocalDrainEntryPlan{Steps: []LocalDrainEntryStep{{Action: LocalDrainEntryStop}}},
+			want: LocalDrainEntryApplyResult{
+				Action:       LocalDrainEntryStop,
+				StopLoop:     true,
+				AppliedSteps: []LocalDrainEntryStepAction{LocalDrainEntryStop},
+			},
+		},
+		"read staged bodies step": {
+			plan: LocalDrainEntryPlan{Steps: []LocalDrainEntryStep{{Action: LocalDrainEntryReadStagedBodies}}},
+			want: LocalDrainEntryApplyResult{
+				Action:           LocalDrainEntryReadStagedBodies,
+				ReadStagedBodies: true,
+				AppliedSteps:     []LocalDrainEntryStepAction{LocalDrainEntryReadStagedBodies},
+			},
+		},
+		"legacy stop bool": {
+			plan: LocalDrainEntryPlan{StopLoop: true},
+			want: LocalDrainEntryApplyResult{
+				Action:       LocalDrainEntryStop,
+				StopLoop:     true,
+				AppliedSteps: []LocalDrainEntryStepAction{LocalDrainEntryStop},
+			},
+		},
+		"legacy read bool": {
+			plan: LocalDrainEntryPlan{ReadStagedBodies: true},
+			want: LocalDrainEntryApplyResult{
+				Action:           LocalDrainEntryReadStagedBodies,
+				ReadStagedBodies: true,
+				AppliedSteps:     []LocalDrainEntryStepAction{LocalDrainEntryReadStagedBodies},
+			},
+		},
+		"unknown step": {
+			plan: LocalDrainEntryPlan{Steps: []LocalDrainEntryStep{{Action: LocalDrainEntryStepAction(255)}}},
+			want: LocalDrainEntryApplyResult{
+				Action:       LocalDrainEntryStepAction(255),
+				UnknownSteps: []LocalDrainEntryStepAction{LocalDrainEntryStepAction(255)},
+			},
+		},
+	}
+	for name, test := range tests {
+		if got := ApplyLocalDrainEntryPlan(test.plan); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s local drain entry apply = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
+func TestApplyLocalDrainIterationPlan(t *testing.T) {
+	tests := map[string]struct {
+		plan LocalDrainIterationPlan
+		want LocalDrainIterationApplyResult
+	}{
+		"stop step": {
+			plan: LocalDrainIterationPlan{Steps: []LocalDrainIterationStep{{Action: LocalDrainIterationStop}}},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationStop,
+				StopLoop:     true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationStop},
+			},
+		},
+		"empty step": {
+			plan: LocalDrainIterationPlan{Steps: []LocalDrainIterationStep{{Action: LocalDrainIterationEmpty}}},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationEmpty,
+				EmptyDrain:   true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationEmpty},
+			},
+		},
+		"import step": {
+			plan: LocalDrainIterationPlan{Steps: []LocalDrainIterationStep{{Action: LocalDrainIterationImport}}},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationImport,
+				ImportBatch:  true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationImport},
+			},
+		},
+		"legacy stop bool": {
+			plan: LocalDrainIterationPlan{StopLoop: true},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationStop,
+				StopLoop:     true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationStop},
+			},
+		},
+		"legacy empty bool": {
+			plan: LocalDrainIterationPlan{EmptyDrain: true},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationEmpty,
+				EmptyDrain:   true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationEmpty},
+			},
+		},
+		"legacy import bool": {
+			plan: LocalDrainIterationPlan{ImportBatch: true},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationImport,
+				ImportBatch:  true,
+				AppliedSteps: []LocalDrainIterationStepAction{LocalDrainIterationImport},
+			},
+		},
+		"unknown step": {
+			plan: LocalDrainIterationPlan{Steps: []LocalDrainIterationStep{{Action: LocalDrainIterationStepAction(255)}}},
+			want: LocalDrainIterationApplyResult{
+				Action:       LocalDrainIterationStepAction(255),
+				UnknownSteps: []LocalDrainIterationStepAction{LocalDrainIterationStepAction(255)},
+			},
+		},
+	}
+	for name, test := range tests {
+		if got := ApplyLocalDrainIterationPlan(test.plan); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%s local drain iteration apply = %+v, want %+v", name, got, test.want)
+		}
+	}
+}
+
 func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
 	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}

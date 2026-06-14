@@ -151,9 +151,30 @@ type LocalDrainIterationStep struct {
 	Action LocalDrainIterationStepAction
 }
 
+// LocalDrainIterationApplyResult records the drain-loop branch selected from
+// the downloader-owned local iteration step list.
+type LocalDrainIterationApplyResult struct {
+	Action       LocalDrainIterationStepAction
+	StopLoop     bool
+	EmptyDrain   bool
+	ImportBatch  bool
+	AppliedSteps []LocalDrainIterationStepAction
+	UnknownSteps []LocalDrainIterationStepAction
+}
+
 // LocalDrainEntryStep is one downloader-owned local drain entry operation.
 type LocalDrainEntryStep struct {
 	Action LocalDrainEntryStepAction
+}
+
+// LocalDrainEntryApplyResult records whether one drain iteration should stop
+// or read staged-body rows, as selected from the downloader-owned entry steps.
+type LocalDrainEntryApplyResult struct {
+	Action           LocalDrainEntryStepAction
+	StopLoop         bool
+	ReadStagedBodies bool
+	AppliedSteps     []LocalDrainEntryStepAction
+	UnknownSteps     []LocalDrainEntryStepAction
 }
 
 // FetchRefillDispatchStep is one downloader-owned dispatch operation after a
@@ -503,6 +524,55 @@ func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
 			BufferedBatchLen: len(batch.Buffered),
 		}),
 	}
+}
+
+// ApplyLocalDrainEntryPlan resolves the downloader-owned local drain entry
+// steps into the caller's lock-held branch.
+func ApplyLocalDrainEntryPlan(plan LocalDrainEntryPlan) LocalDrainEntryApplyResult {
+	var result LocalDrainEntryApplyResult
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		result.Action = step.Action
+		switch step.Action {
+		case LocalDrainEntryStop:
+			result.StopLoop = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case LocalDrainEntryReadStagedBodies:
+			result.ReadStagedBodies = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
+}
+
+// ApplyLocalDrainIterationPlan resolves the downloader-owned local drain
+// iteration steps into the caller's loop branch.
+func ApplyLocalDrainIterationPlan(plan LocalDrainIterationPlan) LocalDrainIterationApplyResult {
+	var result LocalDrainIterationApplyResult
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		result.Action = step.Action
+		switch step.Action {
+		case LocalDrainIterationStop:
+			result.StopLoop = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case LocalDrainIterationEmpty:
+			result.EmptyDrain = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case LocalDrainIterationImport:
+			result.ImportBatch = true
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
 }
 
 // PlanEmptyDrainJoinProbe decides whether the caller should evaluate
