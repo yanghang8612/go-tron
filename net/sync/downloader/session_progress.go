@@ -567,6 +567,12 @@ func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
 	}
 }
 
+// ApplyLocalDrainRun creates and applies the downloader-owned local drain run
+// plan from the current staged-body drain result.
+func ApplyLocalDrainRun(in LocalDrainRunInput) LocalDrainRunApplyResult {
+	return ApplyLocalDrainRunPlan(PlanLocalDrainRun(in))
+}
+
 // ApplyLocalDrainEntryPlan resolves the downloader-owned local drain entry
 // steps into the caller's lock-held branch.
 func ApplyLocalDrainEntryPlan(plan LocalDrainEntryPlan) LocalDrainEntryApplyResult {
@@ -588,6 +594,12 @@ func ApplyLocalDrainEntryPlan(plan LocalDrainEntryPlan) LocalDrainEntryApplyResu
 		}
 	}
 	return result
+}
+
+// ApplyLocalDrainEntry creates and applies the downloader-owned local drain
+// entry plan from the current session progress.
+func ApplyLocalDrainEntry(in LocalDrainEntryInput) LocalDrainEntryApplyResult {
+	return ApplyLocalDrainEntryPlan(PlanLocalDrainEntry(in))
 }
 
 // ApplyLocalDrainIterationPlan resolves the downloader-owned local drain

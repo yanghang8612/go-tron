@@ -254,6 +254,25 @@ func TestApplyLocalDrainEntryPlan(t *testing.T) {
 	}
 }
 
+func TestApplyLocalDrainEntryBuildsAndAppliesPlan(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	if got := ApplyLocalDrainEntry(LocalDrainEntryInput{Progress: active}); !got.ReadStagedBodies ||
+		got.StopLoop ||
+		got.Action != LocalDrainEntryReadStagedBodies ||
+		!reflect.DeepEqual(got.AppliedSteps, []LocalDrainEntryStepAction{LocalDrainEntryReadStagedBodies}) ||
+		len(got.UnknownSteps) != 0 {
+		t.Fatalf("active local drain entry = %+v, want read staged bodies", got)
+	}
+
+	if got := ApplyLocalDrainEntry(LocalDrainEntryInput{Progress: SessionProgress{Syncing: true, Paused: true}}); !got.StopLoop ||
+		got.ReadStagedBodies ||
+		got.Action != LocalDrainEntryStop ||
+		!reflect.DeepEqual(got.AppliedSteps, []LocalDrainEntryStepAction{LocalDrainEntryStop}) ||
+		len(got.UnknownSteps) != 0 {
+		t.Fatalf("paused local drain entry = %+v, want stop", got)
+	}
+}
+
 func TestApplyLocalDrainIterationPlan(t *testing.T) {
 	tests := map[string]struct {
 		plan LocalDrainIterationPlan
@@ -399,6 +418,47 @@ func TestApplyLocalDrainRunPlan(t *testing.T) {
 		unknownResult.Iteration.EmptyDrain ||
 		unknownResult.Iteration.ImportBatch {
 		t.Fatalf("unknown local drain run apply = %+v, want unknown iteration only", unknownResult)
+	}
+}
+
+func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
+	importDrain := StagedBodyDrainRunResult{Batch: importBatch}
+
+	importResult := ApplyLocalDrainRun(LocalDrainRunInput{Progress: active, Drain: importDrain})
+	if !reflect.DeepEqual(importResult.Batch, importBatch) ||
+		!reflect.DeepEqual(importResult.Drain.Batch, importBatch) ||
+		!importResult.Iteration.ImportBatch ||
+		importResult.Iteration.StopLoop ||
+		importResult.Iteration.EmptyDrain ||
+		importResult.Iteration.Action != LocalDrainIterationImport ||
+		!reflect.DeepEqual(importResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationImport}) ||
+		len(importResult.Iteration.UnknownSteps) != 0 {
+		t.Fatalf("import local drain run = %+v, want preserved batch and import branch", importResult)
+	}
+
+	emptyResult := ApplyLocalDrainRun(LocalDrainRunInput{Progress: active})
+	if !emptyResult.Iteration.EmptyDrain ||
+		emptyResult.Iteration.StopLoop ||
+		emptyResult.Iteration.ImportBatch ||
+		emptyResult.Iteration.Action != LocalDrainIterationEmpty ||
+		!reflect.DeepEqual(emptyResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationEmpty}) ||
+		len(emptyResult.Iteration.UnknownSteps) != 0 {
+		t.Fatalf("empty local drain run = %+v, want empty branch", emptyResult)
+	}
+
+	stoppedResult := ApplyLocalDrainRun(LocalDrainRunInput{
+		Progress: SessionProgress{Syncing: true, Paused: true},
+		Drain:    importDrain,
+	})
+	if !stoppedResult.Iteration.StopLoop ||
+		stoppedResult.Iteration.EmptyDrain ||
+		stoppedResult.Iteration.ImportBatch ||
+		stoppedResult.Iteration.Action != LocalDrainIterationStop ||
+		!reflect.DeepEqual(stoppedResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationStop}) ||
+		len(stoppedResult.Iteration.UnknownSteps) != 0 {
+		t.Fatalf("stopped local drain run = %+v, want stop branch", stoppedResult)
 	}
 }
 
