@@ -1331,6 +1331,11 @@ derived_index_bytes_per_interval_block = float(derived_index_bytes_delta) / inte
 replay_bytes_per_interval_block = float(replay_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 datadir_other_bytes_per_interval_block = float(datadir_other_bytes_delta) / interval_blocks if interval_blocks > 0 else 0.0
 stage_sync_finish_head_lag = lag(height, stages.get("stageSyncFinish", -1))
+stage_sync_bodies_head_lag = lag(height, stages.get("stageSyncBodies", -1))
+stage_sync_bodies_ready_head_lag = lag(height, stages.get("stageSyncBodiesReady", -1))
+stage_sync_import_head_lag = lag(height, stages.get("stageSyncImport", -1))
+stage_sync_execution_head_lag = lag(height, stages.get("stageSyncExecution", -1))
+stage_sync_commitment_head_lag = lag(height, stages.get("stageSyncCommitment", -1))
 stage_chain_freezer_head_lag = lag(height, stages.get("stageChainFreezer", -1))
 stage_snapshot_event_log_build_head_lag = lag(height, stages.get("stageSnapshotEventLogBuild", -1))
 stage_sync_bottleneck, stage_sync_bottleneck_lag = stage_bottleneck([
@@ -1364,9 +1369,19 @@ interval_stage_sync_commitment = interval_stage_delta(stages.get("stageSyncCommi
 interval_stage_sync_finish = interval_stage_delta(stages.get("stageSyncFinish", -1), previous, "stageSyncFinish", interval_seconds)
 interval_stage_chain_freezer = interval_stage_delta(stages.get("stageChainFreezer", -1), previous, "stageChainFreezer", interval_seconds)
 interval_stage_snapshot_event_log_build = interval_stage_delta(stages.get("stageSnapshotEventLogBuild", -1), previous, "stageSnapshotEventLogBuild", interval_seconds)
+interval_stage_sync_bodies_rate = interval_rate(interval_stage_sync_bodies, interval_seconds)
+interval_stage_sync_bodies_ready_rate = interval_rate(interval_stage_sync_bodies_ready, interval_seconds)
+interval_stage_sync_import_rate = interval_rate(interval_stage_sync_import, interval_seconds)
+interval_stage_sync_execution_rate = interval_rate(interval_stage_sync_execution, interval_seconds)
+interval_stage_sync_commitment_rate = interval_rate(interval_stage_sync_commitment, interval_seconds)
 interval_stage_sync_finish_rate = interval_rate(interval_stage_sync_finish, interval_seconds)
 interval_stage_chain_freezer_rate = interval_rate(interval_stage_chain_freezer, interval_seconds)
 interval_stage_snapshot_event_log_build_rate = interval_rate(interval_stage_snapshot_event_log_build, interval_seconds)
+stage_sync_bodies_head_eta_seconds = eta_seconds(stage_sync_bodies_head_lag, interval_stage_sync_bodies_rate)
+stage_sync_bodies_ready_head_eta_seconds = eta_seconds(stage_sync_bodies_ready_head_lag, interval_stage_sync_bodies_ready_rate)
+stage_sync_import_head_eta_seconds = eta_seconds(stage_sync_import_head_lag, interval_stage_sync_import_rate)
+stage_sync_execution_head_eta_seconds = eta_seconds(stage_sync_execution_head_lag, interval_stage_sync_execution_rate)
+stage_sync_commitment_head_eta_seconds = eta_seconds(stage_sync_commitment_head_lag, interval_stage_sync_commitment_rate)
 stage_sync_finish_head_eta_seconds = eta_seconds(stage_sync_finish_head_lag, interval_stage_sync_finish_rate)
 stage_chain_freezer_head_eta_seconds = eta_seconds(stage_chain_freezer_head_lag, interval_stage_chain_freezer_rate)
 stage_snapshot_event_log_build_head_eta_seconds = eta_seconds(stage_snapshot_event_log_build_head_lag, interval_stage_snapshot_event_log_build_rate)
@@ -1645,6 +1660,16 @@ row = {
     "intervalDerivedIndexBytesPerBlock": derived_index_bytes_per_interval_block,
     "intervalReplayBytesPerBlock": replay_bytes_per_interval_block,
     "intervalDatadirOtherBytesPerBlock": datadir_other_bytes_per_interval_block,
+    "stageSyncBodiesHeadLagBlocks": stage_sync_bodies_head_lag,
+    "stageSyncBodiesHeadEtaSeconds": stage_sync_bodies_head_eta_seconds,
+    "stageSyncBodiesReadyHeadLagBlocks": stage_sync_bodies_ready_head_lag,
+    "stageSyncBodiesReadyHeadEtaSeconds": stage_sync_bodies_ready_head_eta_seconds,
+    "stageSyncImportHeadLagBlocks": stage_sync_import_head_lag,
+    "stageSyncImportHeadEtaSeconds": stage_sync_import_head_eta_seconds,
+    "stageSyncExecutionHeadLagBlocks": stage_sync_execution_head_lag,
+    "stageSyncExecutionHeadEtaSeconds": stage_sync_execution_head_eta_seconds,
+    "stageSyncCommitmentHeadLagBlocks": stage_sync_commitment_head_lag,
+    "stageSyncCommitmentHeadEtaSeconds": stage_sync_commitment_head_eta_seconds,
     "stageSyncFinishHeadLagBlocks": stage_sync_finish_head_lag,
     "stageSyncFinishHeadEtaSeconds": stage_sync_finish_head_eta_seconds,
     "stageChainFreezerHeadLagBlocks": stage_chain_freezer_head_lag,
@@ -1673,18 +1698,18 @@ row = {
     "stageStalledLagBlocks": stage_stalled_lag_blocks,
     "stageStalls": stage_stalls,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
-    "intervalStageSyncBodiesBlocksPerSecond": interval_rate(interval_stage_sync_bodies, interval_seconds),
+    "intervalStageSyncBodiesBlocksPerSecond": interval_stage_sync_bodies_rate,
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,
-    "intervalStageSyncBodiesReadyBlocksPerSecond": interval_rate(interval_stage_sync_bodies_ready, interval_seconds),
+    "intervalStageSyncBodiesReadyBlocksPerSecond": interval_stage_sync_bodies_ready_rate,
     "intervalStageSyncBodiesReadyToBodiesRatio": ratio(interval_stage_sync_bodies_ready, interval_stage_sync_bodies),
     "intervalStageSyncImportBlocks": interval_stage_sync_import,
-    "intervalStageSyncImportBlocksPerSecond": interval_rate(interval_stage_sync_import, interval_seconds),
+    "intervalStageSyncImportBlocksPerSecond": interval_stage_sync_import_rate,
     "intervalStageSyncImportToBodiesReadyRatio": ratio(interval_stage_sync_import, interval_stage_sync_bodies_ready),
     "intervalStageSyncExecutionBlocks": interval_stage_sync_execution,
-    "intervalStageSyncExecutionBlocksPerSecond": interval_rate(interval_stage_sync_execution, interval_seconds),
+    "intervalStageSyncExecutionBlocksPerSecond": interval_stage_sync_execution_rate,
     "intervalStageSyncExecutionToImportRatio": ratio(interval_stage_sync_execution, interval_stage_sync_import),
     "intervalStageSyncCommitmentBlocks": interval_stage_sync_commitment,
-    "intervalStageSyncCommitmentBlocksPerSecond": interval_rate(interval_stage_sync_commitment, interval_seconds),
+    "intervalStageSyncCommitmentBlocksPerSecond": interval_stage_sync_commitment_rate,
     "intervalStageSyncCommitmentToExecutionRatio": ratio(interval_stage_sync_commitment, interval_stage_sync_execution),
     "intervalStageSyncFinishBlocks": interval_stage_sync_finish,
     "intervalStageSyncFinishBlocksPerSecond": interval_stage_sync_finish_rate,

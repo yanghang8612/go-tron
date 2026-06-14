@@ -263,6 +263,16 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncImportExecutionLagBlocks"], 5)
             self.assertEqual(row["stageSyncExecutionCommitmentLagBlocks"], 1)
             self.assertEqual(row["stageSyncCommitmentFinishLagBlocks"], 9)
+            self.assertEqual(row["stageSyncBodiesHeadLagBlocks"], 0)
+            self.assertEqual(row["stageSyncBodiesHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageSyncBodiesReadyHeadLagBlocks"], 4)
+            self.assertEqual(row["stageSyncBodiesReadyHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageSyncImportHeadLagBlocks"], 5)
+            self.assertEqual(row["stageSyncImportHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageSyncExecutionHeadLagBlocks"], 10)
+            self.assertEqual(row["stageSyncExecutionHeadEtaSeconds"], -1.0)
+            self.assertEqual(row["stageSyncCommitmentHeadLagBlocks"], 11)
+            self.assertEqual(row["stageSyncCommitmentHeadEtaSeconds"], -1.0)
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 20)
             self.assertEqual(row["stageSyncFinishHeadEtaSeconds"], -1.0)
             self.assertEqual(row["stageChainFreezerHeadLagBlocks"], 30)
@@ -677,6 +687,28 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["stageSyncFinishHeadLagBlocks"], 10)
             self.assertEqual(row["stageSyncPipelineLagBlocks"], 17)
             self.assertAlmostEqual(row["stageSyncBottleneckLagShare"], 10 / 17)
+            self.assertEqual(row["stageSyncBodiesHeadLagBlocks"], 0)
+            self.assertEqual(row["stageSyncBodiesHeadEtaSeconds"], 0.0)
+            self.assertEqual(row["stageSyncBodiesReadyHeadLagBlocks"], 2)
+            self.assertAlmostEqual(
+                row["stageSyncBodiesReadyHeadEtaSeconds"],
+                2 / row["intervalStageSyncBodiesReadyBlocksPerSecond"],
+            )
+            self.assertEqual(row["stageSyncImportHeadLagBlocks"], 5)
+            self.assertAlmostEqual(
+                row["stageSyncImportHeadEtaSeconds"],
+                5 / row["intervalStageSyncImportBlocksPerSecond"],
+            )
+            self.assertEqual(row["stageSyncExecutionHeadLagBlocks"], 8)
+            self.assertAlmostEqual(
+                row["stageSyncExecutionHeadEtaSeconds"],
+                8 / row["intervalStageSyncExecutionBlocksPerSecond"],
+            )
+            self.assertEqual(row["stageSyncCommitmentHeadLagBlocks"], 9)
+            self.assertAlmostEqual(
+                row["stageSyncCommitmentHeadEtaSeconds"],
+                9 / row["intervalStageSyncCommitmentBlocksPerSecond"],
+            )
             self.assertTrue(row["stageSyncPipelineMonotonic"])
             self.assertEqual(row["stageSyncPipelineViolation"], "")
             self.assertEqual(row["stageSyncPipelineViolationCount"], 0)
