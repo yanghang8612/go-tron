@@ -359,6 +359,49 @@ func TestPlanLocalDrainRunUsesStagedBodyDrainResult(t *testing.T) {
 	}
 }
 
+func TestApplyLocalDrainRunPlan(t *testing.T) {
+	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
+	importPlan := LocalDrainRunPlan{
+		Drain: StagedBodyDrainRunResult{Batch: importBatch},
+		Batch: importBatch,
+		Iteration: LocalDrainIterationPlan{
+			ImportBatch: true,
+			Steps:       []LocalDrainIterationStep{{Action: LocalDrainIterationImport}},
+		},
+	}
+	importResult := ApplyLocalDrainRunPlan(importPlan)
+	if !reflect.DeepEqual(importResult.Batch, importBatch) ||
+		!reflect.DeepEqual(importResult.Drain.Batch, importBatch) ||
+		!importResult.Iteration.ImportBatch ||
+		importResult.Iteration.Action != LocalDrainIterationImport ||
+		!reflect.DeepEqual(importResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationImport}) ||
+		len(importResult.Iteration.UnknownSteps) != 0 {
+		t.Fatalf("import local drain run apply = %+v, want preserved batch and import iteration", importResult)
+	}
+
+	emptyResult := ApplyLocalDrainRunPlan(LocalDrainRunPlan{
+		Iteration: LocalDrainIterationPlan{EmptyDrain: true},
+	})
+	if !emptyResult.Iteration.EmptyDrain ||
+		emptyResult.Iteration.Action != LocalDrainIterationEmpty ||
+		!reflect.DeepEqual(emptyResult.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationEmpty}) ||
+		len(emptyResult.Iteration.UnknownSteps) != 0 ||
+		len(emptyResult.Batch.Buffered) != 0 {
+		t.Fatalf("empty local drain run apply = %+v, want empty iteration", emptyResult)
+	}
+
+	unknownResult := ApplyLocalDrainRunPlan(LocalDrainRunPlan{
+		Iteration: LocalDrainIterationPlan{Steps: []LocalDrainIterationStep{{Action: LocalDrainIterationStepAction(255)}}},
+	})
+	if len(unknownResult.Iteration.UnknownSteps) != 1 ||
+		unknownResult.Iteration.UnknownSteps[0] != LocalDrainIterationStepAction(255) ||
+		unknownResult.Iteration.StopLoop ||
+		unknownResult.Iteration.EmptyDrain ||
+		unknownResult.Iteration.ImportBatch {
+		t.Fatalf("unknown local drain run apply = %+v, want unknown iteration only", unknownResult)
+	}
+}
+
 func TestPlanEmptyDrainJoinProbe(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {

@@ -237,6 +237,14 @@ type LocalDrainRunPlan struct {
 	Iteration LocalDrainIterationPlan
 }
 
+// LocalDrainRunApplyResult groups a staged-body drain result with the applied
+// local iteration branch selected by the downloader planner.
+type LocalDrainRunApplyResult struct {
+	Drain     StagedBodyDrainRunResult
+	Batch     BufferedBatch
+	Iteration LocalDrainIterationApplyResult
+}
+
 // FetchRefillDispatchPlan describes whether refilled outbound requests should
 // be sent.
 type FetchRefillDispatchPlan struct {
@@ -523,6 +531,16 @@ func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
 			Progress:         in.Progress,
 			BufferedBatchLen: len(batch.Buffered),
 		}),
+	}
+}
+
+// ApplyLocalDrainRunPlan resolves the downloader-owned local drain run plan
+// into the caller's loop branch while preserving the staged-body drain batch.
+func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
+	return LocalDrainRunApplyResult{
+		Drain:     plan.Drain,
+		Batch:     plan.Batch,
+		Iteration: ApplyLocalDrainIterationPlan(plan.Iteration),
 	}
 }
 

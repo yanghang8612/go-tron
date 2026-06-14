@@ -1271,11 +1271,11 @@ drainLoop:
 			break
 		}
 		drain := ss.runStagedBodyDrainLocked(now)
-		drainRun := syncdl.PlanLocalDrainRun(syncdl.LocalDrainRunInput{
+		drainRun := syncdl.ApplyLocalDrainRunPlan(syncdl.PlanLocalDrainRun(syncdl.LocalDrainRunInput{
 			Progress: ss.sessionProgressLocked(),
 			Drain:    drain,
-		})
-		iteration := syncdl.ApplyLocalDrainIterationPlan(drainRun.Iteration)
+		}))
+		iteration := drainRun.Iteration
 		switch {
 		case iteration.StopLoop:
 			ss.mu.Unlock()
