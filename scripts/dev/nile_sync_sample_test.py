@@ -23,6 +23,16 @@ class NileSampleHandler(BaseHTTPRequestHandler):
             },
             "/wallet/getnodeinfo": {"currentBlock": 105},
             "/wallet/listnodes": {"nodes": [{"address": "a"}, {"address": "b"}]},
+            "/debug/metrics?prefix=chain/freezer/": {
+                "prefix": "chain/freezer/",
+                "count": 4,
+                "metrics": [
+                    {"name": "chain/freezer/blocks", "values": {"value": 16}},
+                    {"name": "chain/freezer/passes", "values": {"value": 2}},
+                    {"name": "chain/freezer/lastpass/duration", "values": {"value": 250000000}},
+                    {"name": "chain/freezer/pebble/size", "values": {"value": 4096}},
+                ],
+            },
         }
         payload = payloads.get(self.path)
         if payload is None:
@@ -119,6 +129,8 @@ class NileSyncSampleTest(unittest.TestCase):
                     str(datadir),
                     "--http",
                     f"http://127.0.0.1:{server.server_address[1]}",
+                    "--debug-metrics-url",
+                    f"http://127.0.0.1:{server.server_address[1]}/debug/metrics?prefix=chain/freezer/",
                     "--mode",
                     "full",
                     "--start-unix",
@@ -332,6 +344,20 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertGreaterEqual(row["processCpuPercent"], 0)
             self.assertGreaterEqual(row["processUptimeSeconds"], 0)
             self.assertGreaterEqual(row["processOpenFiles"], -1)
+            self.assertEqual(
+                row["debugMetricsURL"],
+                f"http://127.0.0.1:{server.server_address[1]}/debug/metrics?prefix=chain/freezer/",
+            )
+            self.assertEqual(row["debugMetricsStatus"], "ok")
+            self.assertEqual(row["debugMetricsPrefix"], "chain/freezer/")
+            self.assertEqual(row["debugMetricsCount"], 4)
+            self.assertEqual(row["debugMetricsNumericCount"], 4)
+            self.assertIn("chain/freezer/blocks", row["debugMetricsNames"])
+            self.assertEqual(row["debugMetrics"]["chain/freezer/blocks"]["value"], 16)
+            self.assertEqual(row["debugMetricChainFreezerBlocks"], 16)
+            self.assertEqual(row["debugMetricChainFreezerPasses"], 2)
+            self.assertEqual(row["debugMetricChainFreezerLastPassDuration"], 250000000)
+            self.assertEqual(row["debugMetricChainFreezerPebbleSize"], 4096)
             self.assertEqual(row["syncLogFile"], str(sync_log))
             self.assertEqual(row["syncLogStatus"], "ok")
             self.assertEqual(row["syncLogImportedSegments"], 2)

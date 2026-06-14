@@ -69,6 +69,7 @@ scripts/dev/nile_sync_sample.sh \
   --start-unix "$(cat /Users/asuka/gtron-soak/sync-start.unix)" \
   --sync-log-file /Users/asuka/gtron-soak/logs/gtron.err.log \
   --pid-file /Users/asuka/gtron-soak/gtron.pid \
+  --debug-metrics-url 'http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/' \
   --output /Users/asuka/gtron-soak/logs/sync-samples.jsonl
 ```
 
@@ -138,6 +139,15 @@ comparisons.
 If the launch wrapper does not already maintain a pid file, write
 `echo "$$" > /Users/asuka/gtron-soak/gtron.pid` immediately before `exec gtron`;
 the shell PID is retained by the gtron process after `exec`.
+When `--debug-metrics-url` points at a gtron `/debug/metrics` endpoint, rows
+also include `debugMetricsStatus`, `debugMetricsPrefix`, `debugMetricsCount`,
+`debugMetricsNumericCount`, `debugMetricsNames`, the raw `debugMetrics` map,
+and convenience freezer gauges such as `debugMetricChainFreezerBlocks`,
+`debugMetricChainFreezerPasses`, `debugMetricChainFreezerLastPassDuration`,
+and `debugMetricChainFreezerPebbleSize`. Use a narrowed URL such as
+`http://127.0.0.1:6060/debug/metrics?prefix=chain/freezer/` during long soaks
+so the JSONL row stays compact while still correlating internal gauges with
+stage progress and disk growth.
 `sampleStatus` is `ok` when HTTP calls work, peers are present, and
 `getnodeinfo.currentBlock` agrees with `getnowblock`; otherwise it reports the
 first visible sampling issue such as `no-peers`, `height-mismatch`, or an HTTP

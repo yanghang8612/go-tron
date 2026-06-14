@@ -20,6 +20,7 @@ START_UNIX=0
 STAGE_STATUS_FILE=""
 SYNC_LOG_FILE=""
 PID_FILE=""
+DEBUG_METRICS_URL=""
 OFFLINE_DB_CHECK=0
 STRICT_OFFLINE_DB_CHECK=0
 
@@ -39,6 +40,7 @@ Options:
   --stage-status-file FILE   Parse a captured `gtron db stage-status` output file
   --sync-log-file FILE       Parse latest `Imported chain segment` log fields
   --pid-file FILE            Read gtron pid and emit process RSS/CPU/uptime/FD stats
+  --debug-metrics-url URL    Fetch optional /debug/metrics JSON into the sample row
   --offline-db-check         Also run gtron db storage-alerts against DATADIR
   --strict-offline-db-check  Fail when offline db check reports critical issues
   -h, --help                 Show this help
@@ -72,6 +74,7 @@ while [ "$#" -gt 0 ]; do
     --stage-status-file) STAGE_STATUS_FILE="${2:?}"; shift 2 ;;
     --sync-log-file) SYNC_LOG_FILE="${2:?}"; shift 2 ;;
     --pid-file) PID_FILE="${2:?}"; shift 2 ;;
+    --debug-metrics-url) DEBUG_METRICS_URL="${2:?}"; shift 2 ;;
     --offline-db-check) OFFLINE_DB_CHECK=1; shift ;;
     --strict-offline-db-check) OFFLINE_DB_CHECK=1; STRICT_OFFLINE_DB_CHECK=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -127,10 +130,12 @@ nowblock_json="$tmpdir/getnowblock.json"
 nodeinfo_json="$tmpdir/getnodeinfo.json"
 nodes_json="$tmpdir/listnodes.json"
 storage_alerts_out="$tmpdir/storage-alerts.out"
+debug_metrics_json="$tmpdir/debug-metrics.json"
 
 nowblock_status="ok"
 nodeinfo_status="ok"
 nodes_status="ok"
+debug_metrics_status="skipped"
 if ! http_get /wallet/getnowblock "$nowblock_json"; then
   nowblock_status="error"
   : >"$nowblock_json"
@@ -142,6 +147,16 @@ fi
 if ! http_get /wallet/listnodes "$nodes_json"; then
   nodes_status="error"
   : >"$nodes_json"
+fi
+if [ -n "$DEBUG_METRICS_URL" ]; then
+  if curl -sf --max-time 5 "$DEBUG_METRICS_URL" >"$debug_metrics_json"; then
+    debug_metrics_status="ok"
+  else
+    debug_metrics_status="error"
+    : >"$debug_metrics_json"
+  fi
+else
+  : >"$debug_metrics_json"
 fi
 
 offline_status="skipped"
@@ -183,6 +198,7 @@ snapshot_files="$(file_count "$DATADIR/gtron/state-snapshots")"
 python3 - "$OUTPUT" "$NETWORK" "$MODE" "$LABEL" "$HTTP" "$DATADIR" \
   "$nowblock_json" "$nodeinfo_json" "$nodes_json" "$storage_alerts_out" \
   "$STAGE_STATUS_FILE" "$SYNC_LOG_FILE" "$PID_FILE" \
+  "$DEBUG_METRICS_URL" "$debug_metrics_json" "$debug_metrics_status" \
   "$nowblock_status" "$nodeinfo_status" "$nodes_status" \
   "$offline_status" "$offline_exit" "$OFFLINE_DB_CHECK" "$STRICT_OFFLINE_DB_CHECK" \
   "$START_UNIX" "$total_bytes" "$chaindata_bytes" "$ancient_bytes" "$snapshot_bytes" \
@@ -209,6 +225,9 @@ from pathlib import Path
     stage_status_path,
     sync_log_path,
     pid_file,
+    debug_metrics_url,
+    debug_metrics_path,
+    debug_metrics_status,
     nowblock_status,
     nodeinfo_status,
     nodes_status,
@@ -784,6 +803,68 @@ def read_process_stats(path):
         row["processStatus"] = "ps-error"
     return row
 
+def parse_debug_metrics(url, path, status):
+    row = {
+        "debugMetricsURL": url,
+        "debugMetricsStatus": status,
+        "debugMetricsPrefix": "",
+        "debugMetricsCount": -1,
+        "debugMetricsNumericCount": 0,
+        "debugMetricsNames": [],
+        "debugMetrics": {},
+        "debugMetricChainFreezerBlocks": -1,
+        "debugMetricChainFreezerPasses": -1,
+        "debugMetricChainFreezerLastPassDuration": -1,
+        "debugMetricChainFreezerPebbleSize": -1,
+    }
+    if status != "ok":
+        return row
+    data = load_json(path)
+    if not isinstance(data, dict):
+        row["debugMetricsStatus"] = "invalid"
+        return row
+    metrics = data.get("metrics", [])
+    if not isinstance(metrics, list):
+        row["debugMetricsStatus"] = "invalid"
+        return row
+    row["debugMetricsPrefix"] = str(data.get("prefix", ""))
+    try:
+        row["debugMetricsCount"] = int(data.get("count", len(metrics)))
+    except Exception:
+        row["debugMetricsCount"] = len(metrics)
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        name = str(metric.get("name", ""))
+        values = metric.get("values", {})
+        if not name or not isinstance(values, dict):
+            continue
+        clean_values = {}
+        for key, value in values.items():
+            if isinstance(value, bool):
+                clean_values[str(key)] = value
+                continue
+            if isinstance(value, (int, float)):
+                clean_values[str(key)] = value
+                row["debugMetricsNumericCount"] += 1
+                continue
+            clean_values[str(key)] = str(value)
+        row["debugMetricsNames"].append(name)
+        row["debugMetrics"][name] = clean_values
+
+    def metric_value(name):
+        value = row["debugMetrics"].get(name, {}).get("value", -1)
+        try:
+            return int(value)
+        except Exception:
+            return -1
+
+    row["debugMetricChainFreezerBlocks"] = metric_value("chain/freezer/blocks")
+    row["debugMetricChainFreezerPasses"] = metric_value("chain/freezer/passes")
+    row["debugMetricChainFreezerLastPassDuration"] = metric_value("chain/freezer/lastpass/duration")
+    row["debugMetricChainFreezerPebbleSize"] = metric_value("chain/freezer/pebble/size")
+    return row
+
 def load_previous_sample(output_path):
     if not output_path:
         return {}
@@ -1246,6 +1327,7 @@ alerts = parse_alerts(alerts_text)
 stages = parse_stage_status(stage_status_path)
 sync_log = parse_sync_log(sync_log_path)
 process = read_process_stats(pid_file)
+debug_metrics = parse_debug_metrics(debug_metrics_url, debug_metrics_path, debug_metrics_status)
 height_delta = nodeinfo_current - height if nodeinfo_current > 0 and height > 0 else 0
 sync_target_height = max(height, nodeinfo_current)
 sync_target_lag_blocks = sync_target_height - height if sync_target_height > height else 0
@@ -1819,6 +1901,7 @@ row.update(alerts)
 row.update(stages)
 row.update(sync_log)
 row.update(process)
+row.update(debug_metrics)
 if offline_status == "error":
     row["offlineDbCheckTail"] = "\n".join(alerts_text.splitlines()[-5:])
 
