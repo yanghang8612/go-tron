@@ -156,6 +156,15 @@ execution schedule (`syncLogExecPlanBlocks`, `syncLogExecPlanStages`,
 `syncLogExecPlanBodyStages`, `syncLogExecPlanPostBodyStages`,
 `syncLogExecPlanExecutionStages`, `syncLogExecPlanCommitmentStages`,
 `syncLogExecPlanFinishStages`, `syncLogExecPlanFirst`, `syncLogExecPlanLast`).
+Rows also include the phase-level cursor from the same import batch
+(`syncLogPhaseCursorComplete`, `syncLogPhaseCursorCompletedPhases`,
+`syncLogPhaseCursorScheduledPhases`, `syncLogPhaseCursorIncompletePhases`,
+`syncLogPhaseCursorCompletionRatio`, `syncLogPhaseCursorCompletedTasks`,
+`syncLogPhaseCursorScheduledTasks`,
+`syncLogPhaseCursorTaskCompletionRatio`,
+`syncLogPhaseCursorCurrent*`, `syncLogPhaseCursorNextBlock`, and
+`syncLogPhaseCursorBlockedStatus`), so a blocked batch names whether the
+current staged task is still in execution, commitment, or finish.
 For the batch-phase stage planner, a fully completed N-block import normally
 reports `syncLogStageScheduled = syncLogExecPlanStages = 4*N`; a blocked row
 shows how many bodies/execution/commitment/finish tasks completed before the

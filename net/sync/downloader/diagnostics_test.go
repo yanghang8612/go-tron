@@ -147,6 +147,21 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 			BlockedStatus:      ImportStageProgressMissing,
 			HasBlocked:         true,
 		},
+		StagePhaseCursor: ImportStagePhaseCursor{
+			ScheduledPhases:       4,
+			CompletedPhases:       1,
+			ScheduledTasks:        8,
+			CompletedTasks:        3,
+			HasCurrent:            true,
+			CurrentPhase:          ImportStagePhaseExecution,
+			CurrentCanonicalStage: rawdb.StageExecution,
+			CurrentSyncStage:      rawdb.StageSyncExecution,
+			CurrentTaskIndex:      1,
+			HasNextTask:           true,
+			NextTask:              ImportExecutionStageTask(2, hash2),
+			HasBlocked:            true,
+			BlockedStatus:         ImportStageProgressMismatch,
+		},
 	}
 
 	diag := NewDiagnostics(7, 8, 9, nil).WithImportedBatchProgressPlan(plan)
@@ -174,40 +189,63 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 		diag.ImportStageBlockedStatus != ImportStageProgressMissing.String() {
 		t.Fatalf("blocked stage diagnostics = %+v, want commitment/missing at block2", diag)
 	}
+	if !diag.HasImportStagePhaseCursor() ||
+		diag.ImportPhaseCursorCompleted != 1 ||
+		diag.ImportPhaseCursorScheduled != 4 ||
+		diag.ImportPhaseCursorTaskCompleted != 3 ||
+		diag.ImportPhaseCursorTaskScheduled != 8 ||
+		diag.ImportPhaseCursorCurrent != string(ImportStagePhaseExecution) ||
+		diag.ImportPhaseCursorCurrentCanonical != string(rawdb.StageExecution) ||
+		diag.ImportPhaseCursorCurrentSync != string(rawdb.StageSyncExecution) ||
+		diag.ImportPhaseCursorCurrentTaskIndex != 1 ||
+		diag.ImportPhaseCursorNextBlock != 2 ||
+		diag.ImportPhaseCursorBlockedStatus != ImportStageProgressMismatch.String() {
+		t.Fatalf("phase cursor diagnostics = %+v, want execution cursor at block2 mismatch", diag)
+	}
 
 	empty := NewDiagnostics(1, 2, 3, nil).WithImportedBatchProgressPlan(ImportedBatchProgressPlan{})
-	if empty.HasImportBatchExecutionPlan() || empty.HasImportAppliedStagePlan() || empty.HasImportStagePlan() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
+	if empty.HasImportBatchExecutionPlan() || empty.HasImportAppliedStagePlan() || empty.HasImportStagePlan() || empty.HasImportStagePhaseCursor() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
 		t.Fatalf("empty progress diagnostics = %+v, want unchanged base counts and no import plan", empty)
 	}
 }
 
 func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 	diag := Diagnostics{
-		ImportExecutionPlannedBlocks:  2,
-		ImportExecutionPlannedStages:  8,
-		ImportExecutionBodyStages:     2,
-		ImportExecutionPostBodyStages: 6,
-		ImportExecutionExecStages:     2,
-		ImportExecutionCommitStages:   2,
-		ImportExecutionFinishStages:   2,
-		ImportExecutionFirstBlock:     1,
-		ImportExecutionLastBlock:      2,
-		ImportAppliedPlannedBlocks:    1,
-		ImportAppliedPlannedStages:    4,
-		ImportAppliedBodyStages:       1,
-		ImportAppliedPostBodyStages:   3,
-		ImportAppliedExecStages:       1,
-		ImportAppliedCommitStages:     1,
-		ImportAppliedFinishStages:     1,
-		ImportAppliedFirstBlock:       1,
-		ImportAppliedLastBlock:        1,
-		ImportStageScheduled:          4,
-		ImportStageCompleted:          2,
-		ImportStageNext:               string(ImportStagePhaseCommitment),
-		ImportStageNextBlock:          2,
-		ImportStageNextCanonical:      string(rawdb.StageCommitment),
-		ImportStageNextSync:           string(rawdb.StageSyncCommitment),
-		ImportStageBlockedStatus:      ImportStageProgressMissing.String(),
+		ImportExecutionPlannedBlocks:      2,
+		ImportExecutionPlannedStages:      8,
+		ImportExecutionBodyStages:         2,
+		ImportExecutionPostBodyStages:     6,
+		ImportExecutionExecStages:         2,
+		ImportExecutionCommitStages:       2,
+		ImportExecutionFinishStages:       2,
+		ImportExecutionFirstBlock:         1,
+		ImportExecutionLastBlock:          2,
+		ImportAppliedPlannedBlocks:        1,
+		ImportAppliedPlannedStages:        4,
+		ImportAppliedBodyStages:           1,
+		ImportAppliedPostBodyStages:       3,
+		ImportAppliedExecStages:           1,
+		ImportAppliedCommitStages:         1,
+		ImportAppliedFinishStages:         1,
+		ImportAppliedFirstBlock:           1,
+		ImportAppliedLastBlock:            1,
+		ImportStageScheduled:              4,
+		ImportStageCompleted:              2,
+		ImportStageNext:                   string(ImportStagePhaseCommitment),
+		ImportStageNextBlock:              2,
+		ImportStageNextCanonical:          string(rawdb.StageCommitment),
+		ImportStageNextSync:               string(rawdb.StageSyncCommitment),
+		ImportStageBlockedStatus:          ImportStageProgressMissing.String(),
+		ImportPhaseCursorCompleted:        1,
+		ImportPhaseCursorScheduled:        4,
+		ImportPhaseCursorTaskCompleted:    3,
+		ImportPhaseCursorTaskScheduled:    8,
+		ImportPhaseCursorCurrent:          string(ImportStagePhaseExecution),
+		ImportPhaseCursorCurrentCanonical: string(rawdb.StageExecution),
+		ImportPhaseCursorCurrentSync:      string(rawdb.StageSyncExecution),
+		ImportPhaseCursorCurrentTaskIndex: 1,
+		ImportPhaseCursorNextBlock:        2,
+		ImportPhaseCursorBlockedStatus:    ImportStageProgressMismatch.String(),
 	}
 	got := diag.AppendImportPlanLogFields([]any{"base", 1})
 	want := []any{
@@ -220,6 +258,17 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncStageNextCanonical", string(rawdb.StageCommitment),
 		"syncStageNextSync", string(rawdb.StageSyncCommitment),
 		"syncStageBlockedStatus", ImportStageProgressMissing.String(),
+		"syncPhaseCursorComplete", false,
+		"syncPhaseCursorCompletedPhases", 1,
+		"syncPhaseCursorScheduledPhases", 4,
+		"syncPhaseCursorCompletedTasks", 3,
+		"syncPhaseCursorScheduledTasks", 8,
+		"syncPhaseCursorCurrent", string(ImportStagePhaseExecution),
+		"syncPhaseCursorCurrentCanonical", string(rawdb.StageExecution),
+		"syncPhaseCursorCurrentSync", string(rawdb.StageSyncExecution),
+		"syncPhaseCursorCurrentTaskIndex", 1,
+		"syncPhaseCursorNextBlock", uint64(2),
+		"syncPhaseCursorBlockedStatus", ImportStageProgressMismatch.String(),
 		"syncExecPlanBlocks", 2,
 		"syncExecPlanStages", 8,
 		"syncExecPlanBodyStages", 2,

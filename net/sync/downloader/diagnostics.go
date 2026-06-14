@@ -20,36 +20,47 @@ type PeerDiagnostics struct {
 // Diagnostics is the lock-free sync-session snapshot consumed by import
 // summary logging.
 type Diagnostics struct {
-	BlockBufferLen                int
-	RequestedLen                  int
-	RetryListLen                  int
-	ImportExecutionPlannedBlocks  int
-	ImportExecutionPlannedStages  int
-	ImportExecutionBodyStages     int
-	ImportExecutionPostBodyStages int
-	ImportExecutionExecStages     int
-	ImportExecutionCommitStages   int
-	ImportExecutionFinishStages   int
-	ImportExecutionFirstBlock     uint64
-	ImportExecutionLastBlock      uint64
-	ImportAppliedPlannedBlocks    int
-	ImportAppliedPlannedStages    int
-	ImportAppliedBodyStages       int
-	ImportAppliedPostBodyStages   int
-	ImportAppliedExecStages       int
-	ImportAppliedCommitStages     int
-	ImportAppliedFinishStages     int
-	ImportAppliedFirstBlock       uint64
-	ImportAppliedLastBlock        uint64
-	PeerState                     string
-	ImportStageScheduled          int
-	ImportStageCompleted          int
-	ImportStageComplete           bool
-	ImportStageNext               string
-	ImportStageNextBlock          uint64
-	ImportStageNextCanonical      string
-	ImportStageNextSync           string
-	ImportStageBlockedStatus      string
+	BlockBufferLen                    int
+	RequestedLen                      int
+	RetryListLen                      int
+	ImportExecutionPlannedBlocks      int
+	ImportExecutionPlannedStages      int
+	ImportExecutionBodyStages         int
+	ImportExecutionPostBodyStages     int
+	ImportExecutionExecStages         int
+	ImportExecutionCommitStages       int
+	ImportExecutionFinishStages       int
+	ImportExecutionFirstBlock         uint64
+	ImportExecutionLastBlock          uint64
+	ImportAppliedPlannedBlocks        int
+	ImportAppliedPlannedStages        int
+	ImportAppliedBodyStages           int
+	ImportAppliedPostBodyStages       int
+	ImportAppliedExecStages           int
+	ImportAppliedCommitStages         int
+	ImportAppliedFinishStages         int
+	ImportAppliedFirstBlock           uint64
+	ImportAppliedLastBlock            uint64
+	PeerState                         string
+	ImportStageScheduled              int
+	ImportStageCompleted              int
+	ImportStageComplete               bool
+	ImportStageNext                   string
+	ImportStageNextBlock              uint64
+	ImportStageNextCanonical          string
+	ImportStageNextSync               string
+	ImportStageBlockedStatus          string
+	ImportPhaseCursorComplete         bool
+	ImportPhaseCursorCompleted        int
+	ImportPhaseCursorScheduled        int
+	ImportPhaseCursorTaskCompleted    int
+	ImportPhaseCursorTaskScheduled    int
+	ImportPhaseCursorCurrent          string
+	ImportPhaseCursorCurrentCanonical string
+	ImportPhaseCursorCurrentSync      string
+	ImportPhaseCursorCurrentTaskIndex int
+	ImportPhaseCursorNextBlock        uint64
+	ImportPhaseCursorBlockedStatus    string
 }
 
 // NewDiagnostics builds a deterministic diagnostics snapshot. Peer state is
@@ -118,7 +129,8 @@ func (d Diagnostics) WithImportedBatchProgressPlan(plan ImportedBatchProgressPla
 	return d.
 		WithImportBatchExecutionDiagnostics(plan.ExecutionDiagnostics).
 		WithImportAppliedStageDiagnostics(plan.AppliedDiagnostics).
-		WithImportStageDiagnostics(plan.StageDiagnostics)
+		WithImportStageDiagnostics(plan.StageDiagnostics).
+		WithImportStagePhaseCursor(plan.StagePhaseCursor)
 }
 
 // AppendImportPlanLogFields appends the stable log fields for downloader-owned
@@ -137,6 +149,29 @@ func (d Diagnostics) AppendImportPlanLogFields(fields []any) []any {
 				"syncStageNextCanonical", d.ImportStageNextCanonical,
 				"syncStageNextSync", d.ImportStageNextSync,
 				"syncStageBlockedStatus", d.ImportStageBlockedStatus,
+			)
+		}
+	}
+	if d.HasImportStagePhaseCursor() {
+		fields = append(fields,
+			"syncPhaseCursorComplete", d.ImportPhaseCursorComplete,
+			"syncPhaseCursorCompletedPhases", d.ImportPhaseCursorCompleted,
+			"syncPhaseCursorScheduledPhases", d.ImportPhaseCursorScheduled,
+			"syncPhaseCursorCompletedTasks", d.ImportPhaseCursorTaskCompleted,
+			"syncPhaseCursorScheduledTasks", d.ImportPhaseCursorTaskScheduled,
+		)
+		if d.ImportPhaseCursorCurrent != "" {
+			fields = append(fields,
+				"syncPhaseCursorCurrent", d.ImportPhaseCursorCurrent,
+				"syncPhaseCursorCurrentCanonical", d.ImportPhaseCursorCurrentCanonical,
+				"syncPhaseCursorCurrentSync", d.ImportPhaseCursorCurrentSync,
+				"syncPhaseCursorCurrentTaskIndex", d.ImportPhaseCursorCurrentTaskIndex,
+			)
+		}
+		if d.ImportPhaseCursorNextBlock != 0 || d.ImportPhaseCursorBlockedStatus != "" {
+			fields = append(fields,
+				"syncPhaseCursorNextBlock", d.ImportPhaseCursorNextBlock,
+				"syncPhaseCursorBlockedStatus", d.ImportPhaseCursorBlockedStatus,
 			)
 		}
 	}
@@ -195,10 +230,39 @@ func (d Diagnostics) WithImportStageDiagnostics(stage ImportStagePlanDiagnostics
 	return d
 }
 
+// WithImportStagePhaseCursor adds the phase-level staged import cursor to the
+// existing sync-session snapshot.
+func (d Diagnostics) WithImportStagePhaseCursor(cursor ImportStagePhaseCursor) Diagnostics {
+	d.ImportPhaseCursorComplete = cursor.Complete
+	d.ImportPhaseCursorCompleted = cursor.CompletedPhases
+	d.ImportPhaseCursorScheduled = cursor.ScheduledPhases
+	d.ImportPhaseCursorTaskCompleted = cursor.CompletedTasks
+	d.ImportPhaseCursorTaskScheduled = cursor.ScheduledTasks
+	if cursor.HasCurrent {
+		d.ImportPhaseCursorCurrent = string(cursor.CurrentPhase)
+		d.ImportPhaseCursorCurrentCanonical = string(cursor.CurrentCanonicalStage)
+		d.ImportPhaseCursorCurrentSync = string(cursor.CurrentSyncStage)
+		d.ImportPhaseCursorCurrentTaskIndex = cursor.CurrentTaskIndex
+	}
+	if cursor.HasNextTask {
+		d.ImportPhaseCursorNextBlock = cursor.NextTask.BlockNum
+	}
+	if cursor.HasBlocked {
+		d.ImportPhaseCursorBlockedStatus = cursor.BlockedStatus.String()
+	}
+	return d
+}
+
 // HasImportStagePlan reports whether Diagnostics carries import stage planner
 // state for the current imported batch.
 func (d Diagnostics) HasImportStagePlan() bool {
 	return d.ImportStageScheduled > 0
+}
+
+// HasImportStagePhaseCursor reports whether Diagnostics carries phase-level
+// import cursor state for the current imported batch.
+func (d Diagnostics) HasImportStagePhaseCursor() bool {
+	return d.ImportPhaseCursorScheduled > 0
 }
 
 // HasImportBatchExecutionPlan reports whether Diagnostics carries the planned
