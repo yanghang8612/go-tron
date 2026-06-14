@@ -64,6 +64,18 @@ func (f *historyFixture) reader() *PersistentHistoryReader {
 	return NewPersistentHistoryReader(f.disk, f.state, f.head)
 }
 
+func (f *historyFixture) pruneHotStateDomainHistory() {
+	f.t.Helper()
+	for blockNum := uint64(1); blockNum <= f.head; blockNum++ {
+		if err := rawdb.DeleteStateDomainChanges(f.disk, blockNum); err != nil {
+			f.t.Fatalf("DeleteStateDomainChanges block=%d: %v", blockNum, err)
+		}
+		if err := rawdb.DeleteStateTxRange(f.disk, blockNum); err != nil {
+			f.t.Fatalf("DeleteStateTxRange block=%d: %v", blockNum, err)
+		}
+	}
+}
+
 func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {
 	disk := ethrawdb.NewMemoryDatabase()
 	db := NewDatabase(disk)
@@ -160,6 +172,99 @@ func TestPersistentHistoryReaderUsesStateDomainAccountLatest(t *testing.T) {
 	}
 	if storage != (tcommon.Hash{0x02}) {
 		t.Fatalf("domain StorageAt head = %x, want 02", storage)
+	}
+}
+
+func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x75)
+	other := testAddr(0x76)
+	var slot tcommon.Hash
+	slot[31] = 0x75
+	value1 := tcommon.HexToHash("01")
+	value2 := tcommon.HexToHash("02")
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.CreateAccount(addr, corepb.AccountType_Contract)
+		s.AddBalance(addr, 100)
+		s.SetState(addr, slot, value1)
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		s.AddBalance(addr, 50)
+		s.SetState(addr, slot, value2)
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	fromRange, ok, err := rawdb.ReadStateTxRange(f.disk, 1)
+	if err != nil || !ok {
+		t.Fatalf("read block 1 tx range: ok=%v err=%v", ok, err)
+	}
+	toRange, ok, err := rawdb.ReadStateTxRange(f.disk, f.head)
+	if err != nil || !ok {
+		t.Fatalf("read head tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"history/state-domain-change-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold state-domain history: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish cold state-domain history: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	f.pruneHotStateDomainHistory()
+	if _, ok, err := rawdb.ReadStateTxRange(f.disk, 2); err != nil || ok {
+		t.Fatalf("hot tx range after prune: ok=%v err=%v, want missing", ok, err)
+	}
+	hotChanges := 0
+	if err := rawdb.IterateStateDomainChanges(f.disk, 2, func(*rawdb.StateDomainChange) (bool, error) {
+		hotChanges++
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate hot changes after prune: %v", err)
+	}
+	if hotChanges != 0 {
+		t.Fatalf("hot changes after prune = %d, want 0", hotChanges)
+	}
+
+	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
+	if _, err := hotOnly.AccountAt(addr, 1); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
+		t.Fatalf("hot-only AccountAt after prune err = %v, want ErrStateDomainHistoryUnavailable", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	acc, err := cold.AccountAt(addr, 1)
+	if err != nil {
+		t.Fatalf("cold AccountAt block 1: %v", err)
+	}
+	if acc == nil || acc.Balance() != 100 {
+		t.Fatalf("cold AccountAt block 1 = %+v, want balance 100", acc)
+	}
+	gotStorage, err := cold.StorageAt(addr, slot, 1)
+	if err != nil {
+		t.Fatalf("cold StorageAt block 1: %v", err)
+	}
+	if gotStorage != value1 {
+		t.Fatalf("cold StorageAt block 1 = %x, want %x", gotStorage, value1)
+	}
+	headStorage, err := cold.StorageAt(addr, slot, f.head)
+	if err != nil {
+		t.Fatalf("cold StorageAt head: %v", err)
+	}
+	if headStorage != value2 {
+		t.Fatalf("cold StorageAt head = %x, want %x", headStorage, value2)
 	}
 }
 
