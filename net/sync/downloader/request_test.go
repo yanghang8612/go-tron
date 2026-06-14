@@ -221,6 +221,11 @@ func TestPlanFetchReceiptRun(t *testing.T) {
 	if !reflect.DeepEqual(active.Dispatch, wantDispatch) {
 		t.Fatalf("active dispatch = %+v, want %+v", active.Dispatch, wantDispatch)
 	}
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(12)}
+	active = PlanFetchReceiptRunBuffer(active, buffer)
+	if active.Buffer != buffer {
+		t.Fatalf("active buffer = %+v, want %+v", active.Buffer, buffer)
+	}
 
 	paused := PlanFetchReceiptRun(FetchReceiptRunInput{
 		Receipt: FetchReceiptResult{Accepted: true, Inflight: 1},
@@ -234,6 +239,104 @@ func TestPlanFetchReceiptRun(t *testing.T) {
 	})
 	if !reflect.DeepEqual(paused.Dispatch, FetchReceiptDispatchPlan{}) {
 		t.Fatalf("paused dispatch = %+v, want no action", paused.Dispatch)
+	}
+
+	if got := PlanFetchReceiptRunBuffer(FetchReceiptRunPlan{}, buffer); got.Buffer != (FetchedBlockBufferPlan{}) {
+		t.Fatalf("rejected buffer run = %+v, want no buffer", got)
+	}
+}
+
+func TestApplyFetchReceiptRunPlan(t *testing.T) {
+	settlementApplier := new(recordingFetchReceiptSettlementApplier)
+	bufferApplier := new(recordingFetchedBlockBufferApplier)
+	dispatchApplier := new(recordingFetchReceiptDispatchApplier)
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
+	plan := FetchReceiptRunPlan{
+		Settlement: FetchReceiptSettlement{
+			LockedPreBuffer: []FetchReceiptSettlementStep{
+				{Action: FetchReceiptDeleteRequestedHash},
+				{Action: FetchReceiptUpdateInflight, Inflight: 3},
+				{Action: FetchReceiptSettlementStepAction(255)},
+			},
+			LockedPostBuffer: []FetchReceiptSettlementStep{
+				{Action: FetchReceiptFillFetchSlots},
+				{Action: FetchReceiptMirrorLegacy},
+			},
+			AfterUnlock: []FetchReceiptSettlementStep{
+				{Action: FetchReceiptDrainBuffered},
+			},
+		},
+		Buffer: buffer,
+		Dispatch: FetchReceiptDispatchPlan{Steps: []FetchReceiptDispatchStep{
+			{Action: FetchReceiptDispatchSendOutbound},
+			{Action: FetchReceiptDispatchStepAction(254)},
+		}},
+	}
+
+	pre := ApplyFetchReceiptRunLockedPreBufferPlan(plan, settlementApplier)
+	bufferResult := ApplyFetchReceiptRunLockedBufferPlan(plan, bufferApplier)
+	post := ApplyFetchReceiptRunLockedPostBufferPlan(plan, settlementApplier)
+	after := ApplyFetchReceiptRunAfterUnlockPlan(plan, settlementApplier)
+	dispatch := ApplyFetchReceiptRunDispatchPlan(plan, dispatchApplier)
+
+	wantSettlement := []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptUpdateInflight,
+		FetchReceiptFillFetchSlots,
+		FetchReceiptMirrorLegacy,
+		FetchReceiptDrainBuffered,
+	}
+	if !reflect.DeepEqual(settlementApplier.calls, wantSettlement) || settlementApplier.inflight != 3 {
+		t.Fatalf("run settlement calls/inflight = %+v/%d, want %+v/3", settlementApplier.calls, settlementApplier.inflight, wantSettlement)
+	}
+	if !reflect.DeepEqual(bufferApplier.staged, []FetchedBlockBufferPlan{buffer}) {
+		t.Fatalf("run buffer staged = %+v, want %+v", bufferApplier.staged, []FetchedBlockBufferPlan{buffer})
+	}
+	if dispatchApplier.sent != 1 {
+		t.Fatalf("run dispatch sends = %d, want 1", dispatchApplier.sent)
+	}
+	if !reflect.DeepEqual(pre.LockedPreBuffer.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDeleteRequestedHash, FetchReceiptUpdateInflight}) ||
+		!reflect.DeepEqual(pre.LockedPreBuffer.UnknownSteps, []FetchReceiptSettlementStepAction{FetchReceiptSettlementStepAction(255)}) ||
+		len(pre.Buffer.AppliedActions) != 0 ||
+		len(pre.LockedPostBuffer.AppliedSteps) != 0 ||
+		len(pre.AfterUnlock.AppliedSteps) != 0 ||
+		len(pre.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("run pre-buffer result = %+v, want pre-buffer only", pre)
+	}
+	if !reflect.DeepEqual(bufferResult.Buffer.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferStage}) ||
+		len(bufferResult.LockedPreBuffer.AppliedSteps) != 0 ||
+		len(bufferResult.LockedPostBuffer.AppliedSteps) != 0 ||
+		len(bufferResult.AfterUnlock.AppliedSteps) != 0 ||
+		len(bufferResult.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("run buffer result = %+v, want buffer stage only", bufferResult)
+	}
+	if !reflect.DeepEqual(post.LockedPostBuffer.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptFillFetchSlots, FetchReceiptMirrorLegacy}) ||
+		post.LockedPostBuffer.OutboundRequests != 2 ||
+		!post.LockedPostBuffer.FilledFetchSlots {
+		t.Fatalf("run post-buffer result = %+v, want fill+mirror with two outbound requests", post)
+	}
+	if !reflect.DeepEqual(after.AfterUnlock.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}) {
+		t.Fatalf("run after-unlock result = %+v, want drain", after)
+	}
+	if !reflect.DeepEqual(dispatch.Dispatch.AppliedSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchSendOutbound}) ||
+		!reflect.DeepEqual(dispatch.Dispatch.UnknownSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchStepAction(254)}) {
+		t.Fatalf("run dispatch result = %+v, want send and unknown [254]", dispatch)
+	}
+
+	if nilPre := ApplyFetchReceiptRunLockedPreBufferPlan(plan, nil); len(nilPre.LockedPreBuffer.AppliedSteps) != 0 || len(nilPre.LockedPreBuffer.UnknownSteps) != 0 {
+		t.Fatalf("nil pre-buffer run result = %+v, want empty", nilPre)
+	}
+	if nilBuffer := ApplyFetchReceiptRunLockedBufferPlan(plan, nil); len(nilBuffer.Buffer.AppliedActions) != 0 || len(nilBuffer.Buffer.UnknownActions) != 0 {
+		t.Fatalf("nil buffer run result = %+v, want empty", nilBuffer)
+	}
+	if nilPost := ApplyFetchReceiptRunLockedPostBufferPlan(plan, nil); len(nilPost.LockedPostBuffer.AppliedSteps) != 0 || len(nilPost.LockedPostBuffer.UnknownSteps) != 0 {
+		t.Fatalf("nil post-buffer run result = %+v, want empty", nilPost)
+	}
+	if nilAfter := ApplyFetchReceiptRunAfterUnlockPlan(plan, nil); len(nilAfter.AfterUnlock.AppliedSteps) != 0 || len(nilAfter.AfterUnlock.UnknownSteps) != 0 {
+		t.Fatalf("nil after-unlock run result = %+v, want empty", nilAfter)
+	}
+	if nilDispatch := ApplyFetchReceiptRunDispatchPlan(plan, nil); len(nilDispatch.Dispatch.AppliedSteps) != 0 || len(nilDispatch.Dispatch.UnknownSteps) != 0 {
+		t.Fatalf("nil dispatch run result = %+v, want empty", nilDispatch)
 	}
 }
 

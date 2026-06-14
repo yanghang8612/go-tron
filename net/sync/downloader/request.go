@@ -140,7 +140,18 @@ type FetchReceiptDispatchPlan struct {
 // dispatch decisions for one accepted fetched block body.
 type FetchReceiptRunPlan struct {
 	Settlement FetchReceiptSettlement
+	Buffer     FetchedBlockBufferPlan
 	Dispatch   FetchReceiptDispatchPlan
+}
+
+// FetchReceiptRunApplyResult groups the applied phases for one accepted
+// fetched block body.
+type FetchReceiptRunApplyResult struct {
+	LockedPreBuffer  FetchReceiptSettlementApplyResult
+	Buffer           FetchedBlockBufferApplyResult
+	LockedPostBuffer FetchReceiptSettlementApplyResult
+	AfterUnlock      FetchReceiptSettlementApplyResult
+	Dispatch         FetchReceiptDispatchApplyResult
 }
 
 // FetchReceiptDispatchStepAction names one post-drain dispatch operation after
@@ -243,6 +254,16 @@ func PlanFetchReceiptRun(in FetchReceiptRunInput) FetchReceiptRunPlan {
 	}
 }
 
+// PlanFetchReceiptRunBuffer attaches the local buffer/stage decision to an
+// accepted fetch-receipt run.
+func PlanFetchReceiptRunBuffer(plan FetchReceiptRunPlan, buffer FetchedBlockBufferPlan) FetchReceiptRunPlan {
+	if !plan.Settlement.Accepted {
+		return plan
+	}
+	plan.Buffer = buffer
+	return plan
+}
+
 // PlanFetchReceiptSettlement maps an accepted fetch receipt to the service
 // actions required to keep timers, global requested marks, and follow-up fetch
 // scheduling consistent.
@@ -291,6 +312,46 @@ func (s FetchReceiptSettlement) withSteps() FetchReceiptSettlement {
 		s.AfterUnlock = []FetchReceiptSettlementStep{{Action: FetchReceiptDrainBuffered}}
 	}
 	return s
+}
+
+// ApplyFetchReceiptRunLockedPreBufferPlan executes the lock-held pre-buffer
+// settlement phase for a fetched-block receipt run.
+func ApplyFetchReceiptRunLockedPreBufferPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
+	return FetchReceiptRunApplyResult{
+		LockedPreBuffer: ApplyFetchReceiptSettlementLockedPreBufferPlan(plan.Settlement, applier),
+	}
+}
+
+// ApplyFetchReceiptRunLockedBufferPlan executes the lock-held local
+// buffer/stage phase for a fetched-block receipt run.
+func ApplyFetchReceiptRunLockedBufferPlan(plan FetchReceiptRunPlan, applier FetchedBlockBufferPlanApplier) FetchReceiptRunApplyResult {
+	return FetchReceiptRunApplyResult{
+		Buffer: ApplyFetchedBlockBufferPlan(plan.Buffer, applier),
+	}
+}
+
+// ApplyFetchReceiptRunLockedPostBufferPlan executes the lock-held post-buffer
+// settlement phase for a fetched-block receipt run.
+func ApplyFetchReceiptRunLockedPostBufferPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
+	return FetchReceiptRunApplyResult{
+		LockedPostBuffer: ApplyFetchReceiptSettlementLockedPostBufferPlan(plan.Settlement, applier),
+	}
+}
+
+// ApplyFetchReceiptRunAfterUnlockPlan executes the post-lock local-drain phase
+// for a fetched-block receipt run.
+func ApplyFetchReceiptRunAfterUnlockPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
+	return FetchReceiptRunApplyResult{
+		AfterUnlock: ApplyFetchReceiptSettlementAfterUnlockPlan(plan.Settlement, applier),
+	}
+}
+
+// ApplyFetchReceiptRunDispatchPlan executes the final post-drain dispatch
+// phase for a fetched-block receipt run.
+func ApplyFetchReceiptRunDispatchPlan(plan FetchReceiptRunPlan, applier FetchReceiptDispatchPlanApplier) FetchReceiptRunApplyResult {
+	return FetchReceiptRunApplyResult{
+		Dispatch: ApplyFetchReceiptDispatchPlan(plan.Dispatch, applier),
+	}
 }
 
 // ApplyFetchReceiptSettlementLockedPreBufferPlan executes the lock-held

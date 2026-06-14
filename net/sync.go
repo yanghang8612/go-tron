@@ -1169,9 +1169,8 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		return true
 	}
 	receiptRun := syncdl.PlanFetchReceiptRun(syncdl.FetchReceiptRunInput{Receipt: ack})
-	settlement := receiptRun.Settlement
 	settlementApplier := &syncFetchReceiptSettlementApplier{service: ss, peerState: ps, blockHash: blockHash}
-	syncdl.ApplyFetchReceiptSettlementLockedPreBufferPlan(settlement, settlementApplier)
+	syncdl.ApplyFetchReceiptRunLockedPreBufferPlan(receiptRun, settlementApplier)
 	bid := types.BlockID{Hash: blockHash, Num: blockNum}
 	bufferFacts := syncdl.FetchedBlockBufferFacts{
 		ID:          bid,
@@ -1188,20 +1187,21 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 			}
 		}
 		bufferPlan := syncdl.PlanFetchedBlockBuffer(bufferFacts)
-		syncdl.ApplyFetchedBlockBufferPlan(bufferPlan, syncFetchedBlockBufferApplier{service: ss, peer: peer, block: block, raw: raw})
+		receiptRun = syncdl.PlanFetchReceiptRunBuffer(receiptRun, bufferPlan)
+		syncdl.ApplyFetchReceiptRunLockedBufferPlan(receiptRun, syncFetchedBlockBufferApplier{service: ss, peer: peer, block: block, raw: raw})
 	}
-	postBufferResult := syncdl.ApplyFetchReceiptSettlementLockedPostBufferPlan(settlement, settlementApplier)
+	postBufferResult := syncdl.ApplyFetchReceiptRunLockedPostBufferPlan(receiptRun, settlementApplier)
 	ss.mu.Unlock()
 
-	syncdl.ApplyFetchReceiptSettlementAfterUnlockPlan(settlement, settlementApplier)
+	syncdl.ApplyFetchReceiptRunAfterUnlockPlan(receiptRun, settlementApplier)
 	receiptRun = syncdl.PlanFetchReceiptRunAfterDrain(receiptRun, syncdl.FetchReceiptRunAfterDrainInput{
-		OutboundRequests: postBufferResult.OutboundRequests,
+		OutboundRequests: postBufferResult.LockedPostBuffer.OutboundRequests,
 		Progress: syncdl.SessionProgress{
 			Syncing: ss.IsSyncing(),
 			Paused:  ss.IsPaused(),
 		},
 	})
-	syncdl.ApplyFetchReceiptDispatchPlan(receiptRun.Dispatch, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
+	syncdl.ApplyFetchReceiptRunDispatchPlan(receiptRun, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
 	return true
 }
 
