@@ -1388,11 +1388,25 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// async flusher. Layers above solidified stay in memory and remain
 	// rewindable via switchFork's DiscardBlock. Mirrors java-tron's
 	// invariant that Manager.eraseBlock can never pop past solidified.
-	solidified := dynProps.LatestSolidifiedBlockNum()
-	if err := plan.FlushLatestUpTo(solidified); err != nil {
+	// Cap the flush cutoff at the newest COMMITTED layer. In normal forward
+	// application solidified <= the just-committed block, so this is a no-op.
+	// But switchFork re-applies a branch while dynProps can still report the
+	// pre-reorg solidified (a high-water mark that may exceed the freshly
+	// re-applied block); an uncapped cutoff lets the async flush worker — running
+	// block N-1's postFlush(solidified) — drop block N's just-committed layer
+	// before block N's own FlushLatestUpTo flushes its scope op into it, orphaning
+	// that op → "batch target layer is no longer pending". Capping at the newest
+	// committed layer keeps each postFlush from dropping the current block's
+	// layer. (Same flush-cutoff invariant the depth>2 path enforces via
+	// NewestCommittedNumber.)
+	cutoff := dynProps.LatestSolidifiedBlockNum()
+	if nc, ok := bc.buffer.NewestCommittedNumber(); ok && int64(nc) < cutoff {
+		cutoff = int64(nc)
+	}
+	if err := plan.FlushLatestUpTo(cutoff); err != nil {
 		return err
 	}
-	if err := bc.postFlush(solidified); err != nil {
+	if err := bc.postFlush(cutoff); err != nil {
 		return err
 	}
 	stats.mark(&stats.Persist)
