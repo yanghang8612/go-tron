@@ -771,6 +771,16 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 					// on this peer (lastSyncNum > lastNum). Wait until the
 					// canonical head catches up before asking this peer for
 					// the next 2000-block window.
+					//
+					// Re-arm a short delay so this peer re-evaluates once the
+					// head advances. Under async-commit depth>2 the head is
+					// published by the commit worker after the foreground
+					// applies, so an otherwise-idle scheduler would wait for the
+					// coarse watchdog poll (lost wakeup) — the fetch/HandleBlock
+					// paths only re-check while a block is in flight.
+					if ps.fetchDelayTimer == nil {
+						ss.armPeerDelayTimerLocked(ps, minFetchRequestInterval)
+					}
 					syncLog.Trace("Sync peer waiting for local head",
 						"peer", ps.peer.ID(),
 						"head", ss.chain.CurrentBlock().Number(),
