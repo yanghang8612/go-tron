@@ -181,6 +181,12 @@ func TestSelfDestructRestrictionClearsOwnerFreezeInPlace(t *testing.T) {
 	baseEnergyWeight := dp.TotalEnergyWeight()
 	selfFreeze(t, tvm, contractAddr, 1, energyAmount)
 
+	// java OperationActions.suicideAction2 → canSuicide2()/freezeV1Check reverts a
+	// SELFDESTRUCT while the owner holds UNEXPIRED V1 frozen, so the clearOwnerFreeze
+	// branch is reachable only once the freeze has expired. Advance past the 3-day
+	// expiry (opFreeze set expire = 1_000_000 + 259_200_000) so the suicide is allowed.
+	dp.SetLatestBlockHeaderTimestamp(261_000_000)
+
 	stack := newStack()
 	word := addressToUint256(obtainer)
 	stack.push(&word)
@@ -208,6 +214,35 @@ func TestSelfDestructRestrictionClearsOwnerFreezeInPlace(t *testing.T) {
 	}
 	if res := owner.Proto().GetAccountResource(); res == nil || res.GetFrozenBalanceForEnergy() == nil {
 		t.Fatal("FrozenBalanceForEnergy must remain present-but-zero to match java encoding")
+	}
+}
+
+// TestSelfDestructRevertsOnUnexpiredFrozen locks the canSuicide2 guard (java
+// OperationActions.suicideAction2 → program.canSuicide2()/freezeV1Check): a
+// non-new contract under restriction holding UNEXPIRED V1 frozen resources must
+// REVERT the SELFDESTRUCT, not destroy + clear. Without the guard go-tron drifted
+// from java (ran the freeze-inheritance where java reverts).
+func TestSelfDestructRevertsOnUnexpiredFrozen(t *testing.T) {
+	const energyAmount = int64(4 * tvmTRXPrecision)
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{Freeze: true, TransferTrc10: true, SelfdestructRestrict: true},
+		func(dp *state.DynamicProperties) {
+			dp.SetLatestBlockHeaderTimestamp(1_000_000)
+		})
+	contractAddr := tcommon.Address{0x41, 0x11}
+	obtainer := tcommon.Address{0x41, 0x22}
+	statedb.CreateAccount(contractAddr, corepb.AccountType_Contract)
+	statedb.AddBalance(contractAddr, energyAmount)
+	selfFreeze(t, tvm, contractAddr, 1, energyAmount) // unexpired (now + 3 days)
+
+	stack := newStack()
+	word := addressToUint256(obtainer)
+	stack.push(&word)
+	contract := NewContract(tcommon.Address{0x41, 0x02}, contractAddr, 0, 1_000_000)
+	if _, err := opSelfDestruct(nil, tvm.interpreter, contract, nil, stack); err != ErrExecutionReverted {
+		t.Fatalf("expected ErrExecutionReverted on unexpired frozen, got %v", err)
+	}
+	if statedb.HasSelfDestructed(contractAddr) {
+		t.Fatal("contract must not be destroyed when canSuicide2 reverts")
 	}
 }
 
