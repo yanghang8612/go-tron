@@ -834,6 +834,34 @@ func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory,
 	return nil, nil
 }
 
+// tvmWithdrawRewardAndCancelVote mirrors java-tron Program.withdrawRewardAndCancelVote,
+// which both suicide (Program.java:457) and suicide2 (547) invoke at the top when
+// allow_tvm_vote is active. It (1) settles the destroyed contract's pending voter
+// reward into allowance, (2) CANCELS its votes — recording a removal (new=nil) on
+// the pending VotesStore record so the next maintenance fold subtracts those votes
+// from the witnesses it voted for, then clearing the persistent votes — and (3)
+// rolls allowance into balance so the inheritor receives it. Without step 2 the
+// destroyed account's votes vanish from the account store (voter sum) but stay in
+// the witness vote tally (it was only ever added by the fold, never removed),
+// drifting tally above voter-sum and corrupting the standby-reward voteSum.
+func tvmWithdrawRewardAndCancelVote(tvm *TVM, owner tcommon.Address) {
+	tvmWithdrawReward(tvm, owner)
+	if votes := tvm.StateDB.GetVotes(owner); len(votes) > 0 {
+		// recordTVMPendingVotes preserves an existing record's epoch-start OldVotes
+		// and sets NewVotes=nil (java: new VotesCapsule(old=votes) / clearNewVotes),
+		// so the fold delta is (nil - old) = full removal.
+		_ = recordTVMPendingVotes(tvm, owner, votes, nil)
+		tvm.StateDB.ClearVotes(owner)
+		tvm.StateDB.SetOldTronPower(owner, 0)
+	}
+	allowance := tvm.StateDB.GetAllowance(owner)
+	if allowance != 0 {
+		tvm.StateDB.AddBalance(owner, allowance)
+	}
+	tvm.StateDB.SetAllowance(owner, 0)
+	tvm.StateDB.SetLatestWithdrawTime(owner, tvm.Timestamp)
+}
+
 func isTVMGenesisWitness(tvm *TVM, addr tcommon.Address) bool {
 	if tvm == nil || tvm.DB == nil {
 		return false

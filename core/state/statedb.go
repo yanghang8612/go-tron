@@ -1877,6 +1877,18 @@ func (s *StateDB) SetLatestWithdrawTime(addr tcommon.Address, t int64) {
 	obj.markDirty()
 }
 
+// SetOldTronPower sets the account's old_tron_power field directly. Mirrors
+// java AccountCapsule.setOldTronPower; used by the suicide vote-cancel path.
+func (s *StateDB) SetOldTronPower(addr tcommon.Address, v int64) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journalAccount(addr, obj)
+	obj.account.SetOldTronPower(v)
+	obj.markDirty()
+}
+
 // GetNetUsage returns the net (bandwidth) usage for an account.
 func (s *StateDB) GetNetUsage(addr tcommon.Address) int64 {
 	obj := s.getStateObject(addr)

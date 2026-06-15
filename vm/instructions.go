@@ -873,6 +873,17 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 
+	// java-tron Program.suicide (Program.java:457) and suicide2 (547) both call
+	// withdrawRewardAndCancelVote at the top when allow_tvm_vote is active: settle
+	// the contract's voter reward, CANCEL its votes (so the next maintenance fold
+	// removes them from the witnesses it voted for — without this the witness vote
+	// tally drifts above the true voter sum and the standby-reward voteSum
+	// diverges), and roll allowance into balance. Must precede the balance read so
+	// the inherited balance includes the rolled-in allowance.
+	if interpreter.tvmConfig.Vote {
+		tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address)
+	}
+
 	interpreter.tvm.Nonce++
 	balance := interpreter.tvm.StateDB.GetBalance(contract.Address)
 	var tokenInfo map[string]int64
