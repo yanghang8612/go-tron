@@ -499,6 +499,79 @@ func TestPlanImportedBatchProgressForExecutionBlocksLaterPhasesAfterMissingExecu
 	}
 }
 
+func TestPlanImportedBatchProgressForExecutionReportsPhaseProgress(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := BufferedBatch{
+		Blocks: []*types.Block{block1, block2},
+		Buffered: []BufferedBlock{
+			{Num: block1.Number(), Hash: block1.Hash()},
+			{Num: block2.Number(), Hash: block2.Hash()},
+		},
+	}
+	execution := PlanImportBatchExecution(batch)
+	collector := NewStageProgressCollector()
+	collector.Observe(rawdb.StageBodies, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageCommitment, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageCommitment, block2.Number(), block2.Hash())
+	collector.Observe(rawdb.StageFinish, block1.Number(), block1.Hash())
+	collector.Observe(rawdb.StageFinish, block2.Number(), block2.Hash())
+
+	got := PlanImportedBatchProgressForExecution(batch, 2, execution, collector)
+	if len(got.StagePlan.Phases) != 4 {
+		t.Fatalf("phase progress = %+v, want bodies/execution/commitment/finish", got.StagePlan.Phases)
+	}
+	bodies := got.StagePlan.Phases[0]
+	if bodies.Phase != ImportStagePhaseBodies ||
+		!bodies.Complete ||
+		!bodies.HasProgress ||
+		bodies.Progress.Stage != rawdb.StageSyncImport ||
+		bodies.Progress.BlockNum != block2.Number() ||
+		len(bodies.Completed) != 2 ||
+		bodies.HasBlocked {
+		t.Fatalf("bodies phase = %+v, want complete through block2", bodies)
+	}
+	exec := got.StagePlan.Phases[1]
+	if exec.Phase != ImportStagePhaseExecution ||
+		exec.Complete ||
+		!exec.HasProgress ||
+		exec.Progress.Stage != rawdb.StageSyncExecution ||
+		exec.Progress.BlockNum != block1.Number() ||
+		len(exec.Completed) != 1 ||
+		!exec.HasBlocked ||
+		exec.Next != ImportExecutionStageTask(block2.Number(), block2.Hash()) ||
+		exec.Blocked.Status != ImportStageProgressMismatch {
+		t.Fatalf("execution phase = %+v, want blocked at block2 with progress through block1", exec)
+	}
+	commit := got.StagePlan.Phases[2]
+	if commit.Phase != ImportStagePhaseCommitment ||
+		commit.Complete ||
+		commit.HasProgress ||
+		len(commit.Completed) != 0 ||
+		!commit.HasBlocked ||
+		commit.Blocked.Status != ImportStageProgressBlocked ||
+		commit.Next != ImportCommitmentStageTask(block1.Number(), block1.Hash()) {
+		t.Fatalf("commitment phase = %+v, want blocked by execution gap before publishing commitment rows", commit)
+	}
+	finish := got.StagePlan.Phases[3]
+	if finish.Phase != ImportStagePhaseFinish ||
+		finish.Complete ||
+		finish.HasProgress ||
+		len(finish.Completed) != 0 ||
+		!finish.HasBlocked ||
+		finish.Blocked.Status != ImportStageProgressBlocked ||
+		finish.Next != ImportFinishStageTask(block1.Number(), block1.Hash()) {
+		t.Fatalf("finish phase = %+v, want blocked by execution gap before publishing finish rows", finish)
+	}
+
+	got.StagePlan.Phases[1].Completed[0].BlockNum = 99
+	if got.StagePlan.Phases[1].Tasks[0].BlockNum == 99 {
+		t.Fatal("phase completed tasks alias phase schedule tasks")
+	}
+}
+
 func TestApplyImportedBatchProgressPlan(t *testing.T) {
 	deleteRow := rawdb.SyncStagedBlockDelete{Number: 2, Hash: tcommon.Hash{0x02}}
 	progressRow := rawdb.StageProgress{
