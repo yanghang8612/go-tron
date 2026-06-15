@@ -102,6 +102,49 @@ func TestPlanChainInventoryKeepsStaleTarget(t *testing.T) {
 	}
 }
 
+func TestBuildInventoryCandidatesGathersFactsInDownloaderOrder(t *testing.T) {
+	ids := []types.BlockID{
+		queueID(1),
+		queueID(2),
+		queueID(3),
+		queueID(4),
+		queueID(5),
+		queueID(6),
+		queueID(7),
+	}
+	reader := &recordingInventoryCandidateFactReader{
+		canonical: map[uint64]bool{1: true},
+		khaos:     map[uint64]bool{2: true},
+		buffered:  map[uint64]bool{3: true},
+		requested: map[uint64]bool{4: true},
+		peer:      map[uint64]bool{5: true},
+		reserve:   map[uint64]bool{6: true},
+	}
+
+	got := BuildInventoryCandidates(ids, reader)
+	want := []InventoryCandidate{
+		{ID: ids[0], Facts: InventoryCandidateFacts{KnownOrRequested: true}},
+		{ID: ids[1], Facts: InventoryCandidateFacts{KnownOrRequested: true}},
+		{ID: ids[2], Facts: InventoryCandidateFacts{KnownOrRequested: true}},
+		{ID: ids[3], Facts: InventoryCandidateFacts{KnownOrRequested: true}},
+		{ID: ids[4], Facts: InventoryCandidateFacts{PeerRequested: true}},
+		{ID: ids[5], Facts: InventoryCandidateFacts{ReservedPath: true}},
+		{ID: ids[6], Facts: InventoryCandidateFacts{}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(reader.peerChecks, []uint64{5, 6, 7}) {
+		t.Fatalf("peer checks = %+v, want only non-known candidates 5,6,7", reader.peerChecks)
+	}
+	if !reflect.DeepEqual(reader.reserveChecks, []uint64{6, 7}) {
+		t.Fatalf("reserve checks = %+v, want only non-known non-peer candidates 6,7", reader.reserveChecks)
+	}
+	if got := BuildInventoryCandidates([]types.BlockID{queueID(8)}, nil); !reflect.DeepEqual(got, []InventoryCandidate{{ID: queueID(8)}}) {
+		t.Fatalf("nil reader candidates = %+v, want candidate without facts", got)
+	}
+}
+
 func TestPlanChainInventoryResponseBuildsBoundedWindow(t *testing.T) {
 	got := PlanChainInventoryResponse(ChainInventoryResponseInput{
 		CommonBlock:    3,
@@ -394,6 +437,43 @@ func (a *recordingChainInventoryPostLockApplier) WriteInventoryStageProgress(sta
 	a.calls = append(a.calls, ChainInventoryWriteStageProgress)
 	a.stage = stage
 	a.target = target
+}
+
+type recordingInventoryCandidateFactReader struct {
+	canonical     map[uint64]bool
+	khaos         map[uint64]bool
+	buffered      map[uint64]bool
+	requested     map[uint64]bool
+	peer          map[uint64]bool
+	reserve       map[uint64]bool
+	peerChecks    []uint64
+	reserveChecks []uint64
+}
+
+func (r *recordingInventoryCandidateFactReader) HasCanonicalInventoryBlock(id types.BlockID) bool {
+	return r.canonical[id.Num]
+}
+
+func (r *recordingInventoryCandidateFactReader) HasKhaosInventoryBlock(id types.BlockID) bool {
+	return r.khaos[id.Num]
+}
+
+func (r *recordingInventoryCandidateFactReader) HasBufferedInventoryBlock(id types.BlockID) bool {
+	return r.buffered[id.Num]
+}
+
+func (r *recordingInventoryCandidateFactReader) HasRequestedInventoryBlock(id types.BlockID) bool {
+	return r.requested[id.Num]
+}
+
+func (r *recordingInventoryCandidateFactReader) PeerRequestedInventoryBlock(id types.BlockID) bool {
+	r.peerChecks = append(r.peerChecks, id.Num)
+	return r.peer[id.Num]
+}
+
+func (r *recordingInventoryCandidateFactReader) ReserveInventoryBlockPath(id types.BlockID) bool {
+	r.reserveChecks = append(r.reserveChecks, id.Num)
+	return r.reserve[id.Num]
 }
 
 func chainInventoryResponseReader(ids map[uint64]types.BlockID) func(uint64) (types.BlockID, bool) {

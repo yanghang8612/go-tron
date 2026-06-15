@@ -13,6 +13,17 @@ type InventoryCandidate struct {
 	Facts InventoryCandidateFacts
 }
 
+// InventoryCandidateFactReader supplies SyncService-owned facts while
+// downloader owns the order in which they are evaluated.
+type InventoryCandidateFactReader interface {
+	HasCanonicalInventoryBlock(id types.BlockID) bool
+	HasKhaosInventoryBlock(id types.BlockID) bool
+	HasBufferedInventoryBlock(id types.BlockID) bool
+	HasRequestedInventoryBlock(id types.BlockID) bool
+	PeerRequestedInventoryBlock(id types.BlockID) bool
+	ReserveInventoryBlockPath(id types.BlockID) bool
+}
+
 // ChainInventoryInput is the side-effect-free state needed to plan a
 // CHAIN_INVENTORY response.
 type ChainInventoryInput struct {
@@ -135,6 +146,31 @@ type ChainInventoryPostLockApplyResult struct {
 	WroteStageProgress bool
 	Stage              rawdb.StageID
 	StageTarget        uint64
+}
+
+// BuildInventoryCandidates gathers the downloader facts for advertised block
+// IDs in the java-tron-compatible order: drop anything already known/requested,
+// then reject same-peer duplicates, then reserve the canonical block path.
+func BuildInventoryCandidates(ids []types.BlockID, reader InventoryCandidateFactReader) []InventoryCandidate {
+	candidates := make([]InventoryCandidate, 0, len(ids))
+	for _, id := range ids {
+		facts := InventoryCandidateFacts{}
+		if reader != nil {
+			facts.KnownOrRequested =
+				reader.HasCanonicalInventoryBlock(id) ||
+					reader.HasKhaosInventoryBlock(id) ||
+					reader.HasBufferedInventoryBlock(id) ||
+					reader.HasRequestedInventoryBlock(id)
+			if !facts.KnownOrRequested {
+				facts.PeerRequested = reader.PeerRequestedInventoryBlock(id)
+			}
+			if !facts.KnownOrRequested && !facts.PeerRequested {
+				facts.ReservedPath = reader.ReserveInventoryBlockPath(id)
+			}
+		}
+		candidates = append(candidates, InventoryCandidate{ID: id, Facts: facts})
+	}
+	return candidates
 }
 
 // PlanChainInventory filters one CHAIN_INVENTORY response, advances target

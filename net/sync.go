@@ -934,35 +934,18 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		return
 	}
 	ps.chainRequested = false
-	headNum := ss.chain.CurrentBlock().Number()
-	candidates := make([]syncdl.InventoryCandidate, 0, len(inv.Ids))
+	ids := make([]types.BlockID, 0, len(inv.Ids))
 	for _, bid := range inv.Ids {
-		num := uint64(bid.Number)
-		hash := tcommon.BytesToHash(bid.Hash)
-		facts := syncdl.InventoryCandidateFacts{}
-		if num <= headNum {
-			if existing := ss.chain.GetBlockByNumber(num); existing != nil && existing.Hash() == hash {
-				facts.KnownOrRequested = true
-			}
-		}
-		if !facts.KnownOrRequested && ss.chain.HasBlockInKhaosDB(hash) {
-			facts.KnownOrRequested = true
-		}
-		if !facts.KnownOrRequested {
-			_, facts.KnownOrRequested = ss.bufferedHash[hash]
-		}
-		if !facts.KnownOrRequested {
-			_, facts.KnownOrRequested = ss.requested[hash]
-		}
-		if !facts.KnownOrRequested {
-			_, facts.PeerRequested = ps.requestedHashes[hash]
-		}
-		bid := types.BlockID{Hash: hash, Num: num}
-		if !facts.KnownOrRequested && !facts.PeerRequested {
-			facts.ReservedPath = ss.reserveBlockPathLocked(bid)
-		}
-		candidates = append(candidates, syncdl.InventoryCandidate{ID: bid, Facts: facts})
+		ids = append(ids, types.BlockID{
+			Hash: tcommon.BytesToHash(bid.Hash),
+			Num:  uint64(bid.Number),
+		})
 	}
+	candidates := syncdl.BuildInventoryCandidates(ids, syncInventoryCandidateFactReader{
+		service:   ss,
+		peerState: ps,
+		headNum:   ss.chain.CurrentBlock().Number(),
+	})
 	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
 	inventoryApplyResult := syncdl.ApplyChainInventory(syncdl.ChainInventoryInput{
 		CurrentTarget:  ss.targetHeadNum,
@@ -985,6 +968,58 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 
 	syncdl.ApplyChainInventoryPostLockPlan(syncdl.PlanChainInventoryPostLock(inventoryApplyResult), syncChainInventoryPostLockApplier{service: ss})
 	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
+}
+
+type syncInventoryCandidateFactReader struct {
+	service   *SyncService
+	peerState *syncPeerState
+	headNum   uint64
+}
+
+func (r syncInventoryCandidateFactReader) HasCanonicalInventoryBlock(id types.BlockID) bool {
+	if r.service == nil || r.service.chain == nil || id.Num > r.headNum {
+		return false
+	}
+	existing := r.service.chain.GetBlockByNumber(id.Num)
+	return existing != nil && existing.Hash() == id.Hash
+}
+
+func (r syncInventoryCandidateFactReader) HasKhaosInventoryBlock(id types.BlockID) bool {
+	if r.service == nil || r.service.chain == nil {
+		return false
+	}
+	return r.service.chain.HasBlockInKhaosDB(id.Hash)
+}
+
+func (r syncInventoryCandidateFactReader) HasBufferedInventoryBlock(id types.BlockID) bool {
+	if r.service == nil {
+		return false
+	}
+	_, ok := r.service.bufferedHash[id.Hash]
+	return ok
+}
+
+func (r syncInventoryCandidateFactReader) HasRequestedInventoryBlock(id types.BlockID) bool {
+	if r.service == nil {
+		return false
+	}
+	_, ok := r.service.requested[id.Hash]
+	return ok
+}
+
+func (r syncInventoryCandidateFactReader) PeerRequestedInventoryBlock(id types.BlockID) bool {
+	if r.peerState == nil {
+		return false
+	}
+	_, ok := r.peerState.requestedHashes[id.Hash]
+	return ok
+}
+
+func (r syncInventoryCandidateFactReader) ReserveInventoryBlockPath(id types.BlockID) bool {
+	if r.service == nil {
+		return false
+	}
+	return r.service.reserveBlockPathLocked(id)
 }
 
 func (ss *SyncService) fetchNextBatch() {
