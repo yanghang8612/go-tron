@@ -318,7 +318,7 @@ func main() {
 		s := firstBlockAtTs(maintTimeOf(C))
 		e := firstBlockAtTs(maintTimeOf(C + 1))
 		fmt.Printf("=== scan-cycle %d (blocks [%d, %d)) witness=%x — votes here fold into cycleVote[%d] ===\n", C, s, e, w.Bytes(), C+1)
-		votes, unfreezes := 0, 0
+		votes, unfreezes, triggers := 0, 0, 0
 		for n := s; n < e; n++ {
 			blk := rawdb.ReadBlock(chaindb, n)
 			if blk == nil {
@@ -359,10 +359,22 @@ func main() {
 						continue
 					}
 					fmt.Printf("blk %d UnfreezeV2 owner=%x resource=%d  headVotesWitness=%q\n", n, uc.OwnerAddress, int(uc.Resource), headVoteFor(statedb, uc.OwnerAddress, w))
+				case corepb.Transaction_Contract_TriggerSmartContract:
+					triggers++
+					tc := &contractpb.TriggerSmartContract{}
+					if c.Parameter.UnmarshalTo(tc) != nil {
+						continue
+					}
+					// A contract votes via the TVM VOTEWITNESS opcode; the voter is
+					// the contract itself, so a contract that voted for the witness
+					// still lists it at head (unless changed since).
+					if hv := headVoteFor(statedb, tc.ContractAddress, w); hv != "" {
+						fmt.Printf("blk %d TRIGGER owner=%x contract=%x  contractVotesWitness=%s  <<< CONTRACT VOTES WITNESS\n", n, tc.OwnerAddress, tc.ContractAddress, hv)
+					}
 				}
 			}
 		}
-		fmt.Printf("--- cycle %d: %d VoteWitness + %d Unfreeze ---\n", C, votes, unfreezes)
+		fmt.Printf("--- cycle %d: %d VoteWitness + %d Unfreeze + %d TriggerSmartContract ---\n", C, votes, unfreezes, triggers)
 		return
 	}
 
