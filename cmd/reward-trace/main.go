@@ -66,8 +66,8 @@ func main() {
 	replaySpec := flag.String("replay", "", "comma list of begin:end:w1count:w2count ranges to replay ComputeVoterReward over")
 	analyzeCycle := flag.Int64("analyze-cycle", -1, "dump ALL witnesses' cycleVote/cycleReward/cycleBrokerage for this cycle and flag per-vote-rate outliers (consistency check, no java needed)")
 	dumpVotes := flag.String("dump-votes", "", "comma-separated cycles: dump EVERY witness's cycleVote sorted (vote DESC, hexaddr DESC) — diff-friendly vs the java DelegationStore reference dump")
-	cycleAt := flag.String("cycle-at", "", "comma-separated block numbers: print currentCycle (via historical state) + timestamp at each (validates archive reads + brackets a cycle)")
-	scanCycle := flag.String("scan-cycle", "", "C:witnesshex — binary-search the block range of cycle C, then list every VoteWitness/Unfreeze tx in it, flagging those involving the witness (finds the tx that mis-folded a witness vote)")
+	tallyAt := flag.String("tally-at", "", "witnesshex:b1,b2,... — print the ROOTED witness vote tally + ts at each block (historical; unlike currentCycle which is a flat head pointer)")
+	scanBump := flag.String("scan-bump", "", "witnesshex:targetTally:approxBlock — find the block where the witness tally first reaches targetTally (locally monotone bracket around approxBlock), then list every Vote/Unfreeze tx in the ~1 cycle before it")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -77,8 +77,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *cycleAt == "" && *scanCycle == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --cycle-at / --scan-cycle)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *tallyAt == "" && *scanBump == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --tally-at / --scan-bump)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -238,17 +238,18 @@ func main() {
 		return
 	}
 
-	// ---- cycle<->block resolver + vote-tx scanner ----
-	// Map a cycle to its block range by binary-searching the canonical chain for
-	// the first block whose rooted DynamicProperties.currentCycle reaches a target
-	// (currentCycle is monotone non-decreasing in block height). Then scan that
-	// cycle's blocks for the vote/unfreeze txs whose maintenance fold lands in
-	// cycleVote[cycle+1]. Needs historical (archive) state for the probed roots.
+	// ---- witness-tally<->block resolver + vote-tx scanner ----
+	// currentCycle is a FLAT head pointer (identical at every root), so it cannot
+	// map cycles to blocks. The witness vote tally IS rooted state, so we locate
+	// the block where a witness's tally first reaches a target value (binary
+	// search within the locally monotone region) and scan the ~1 cycle of blocks
+	// before it — those blocks' votes were folded at that maintenance.
 	var headNum uint64
 	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
 		headNum = *hn
 	}
-	cycleAtBlock := func(n uint64) (int64, bool) {
+	// tallyAtBlock returns the ROOTED witness vote tally at block n.
+	tallyAtBlock := func(w tcommon.Address, n uint64) (int64, bool) {
 		blk := rawdb.ReadBlock(chaindb, n)
 		if blk == nil {
 			return 0, false
@@ -261,66 +262,96 @@ func main() {
 		if err != nil {
 			return 0, false
 		}
-		return state.LoadDynamicProperties(db, sdb).CurrentCycleNumber(), true
+		wit := sdb.GetWitness(w)
+		if wit == nil {
+			return 0, true
+		}
+		return wit.VoteCount(), true
 	}
 
-	if *cycleAt != "" {
-		for _, s := range strings.Split(*cycleAt, ",") {
+	if *tallyAt != "" {
+		parts := strings.SplitN(*tallyAt, ":", 2)
+		if len(parts) != 2 {
+			log.Crit("--tally-at format is witnesshex:b1,b2,...")
+		}
+		w := mustAddr(strings.TrimSpace(parts[0]))
+		for _, s := range strings.Split(parts[1], ",") {
 			s = strings.TrimSpace(s)
 			if s == "" {
 				continue
 			}
 			var n uint64
 			if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
-				fmt.Printf("bad block %q: %v\n", s, err)
 				continue
 			}
-			c, ok := cycleAtBlock(n)
+			t, ok := tallyAtBlock(w, n)
 			ts := int64(0)
 			if blk := rawdb.ReadBlock(chaindb, n); blk != nil {
 				ts = blk.Timestamp()
 			}
-			fmt.Printf("block %d: currentCycle=%d (stateOK=%v) ts=%d\n", n, c, ok, ts)
+			fmt.Printf("block %d: witnessTally=%d (stateOK=%v) ts=%d\n", n, t, ok, ts)
 		}
 		return
 	}
 
-	if *scanCycle != "" {
-		parts := strings.SplitN(*scanCycle, ":", 2)
-		if len(parts) != 2 {
-			log.Crit("--scan-cycle format is C:witnesshex")
+	if *scanBump != "" {
+		parts := strings.SplitN(*scanBump, ":", 3)
+		if len(parts) != 3 {
+			log.Crit("--scan-bump format is witnesshex:targetTally:approxBlock")
 		}
-		var targetCycle int64
-		if _, err := fmt.Sscanf(parts[0], "%d", &targetCycle); err != nil {
-			log.Crit("bad cycle in --scan-cycle", "err", err)
+		w := mustAddr(strings.TrimSpace(parts[0]))
+		var target int64
+		var approx uint64
+		fmt.Sscanf(parts[1], "%d", &target)
+		fmt.Sscanf(parts[2], "%d", &approx)
+		tally := func(n uint64) int64 {
+			t, ok := tallyAtBlock(w, n)
+			if !ok {
+				return -1
+			}
+			return t
 		}
-		wantWitness := mustAddr(strings.TrimSpace(parts[1]))
-		// first block with cycleAtBlock >= target (monotone)
-		firstBlockWithCycle := func(target int64) (uint64, bool) {
-			lo, hi, ok := uint64(1), headNum, true
-			for lo < hi {
-				mid := (lo + hi) / 2
-				c, good := cycleAtBlock(mid)
-				if !good {
-					ok = false
-					lo = mid + 1
-					continue
+		// Bracket lo (tally<target) .. hi (tally>=target) by stepping outward from
+		// approx in small steps, so we stop at the FIRST crossing and stay inside
+		// the locally monotone region around the bump.
+		const step = 200
+		lo, hi := approx, approx
+		if tally(approx) >= target {
+			for lo > 1 && tally(lo) >= target {
+				if lo <= step {
+					lo = 1
+					break
 				}
-				if c >= target {
-					hi = mid
-				} else {
-					lo = mid + 1
+				lo -= step
+			}
+		} else {
+			for hi < headNum && tally(hi) < target {
+				hi += step
+				if hi > headNum {
+					hi = headNum
+					break
 				}
 			}
-			return lo, ok
 		}
-		start, ok1 := firstBlockWithCycle(targetCycle)
-		end, ok2 := firstBlockWithCycle(targetCycle + 1)
-		fmt.Printf("=== scan-cycle %d for witness %x ===\n", targetCycle, wantWitness.Bytes())
-		fmt.Printf("cycle %d block range = [%d, %d)  (%d blocks; resolver stateOK begin=%v end=%v)\n",
-			targetCycle, start, end, end-start, ok1, ok2)
+		// binary-search first block in (lo, hi] with tally>=target
+		for lo+1 < hi {
+			mid := (lo + hi) / 2
+			if tally(mid) >= target {
+				hi = mid
+			} else {
+				lo = mid
+			}
+		}
+		M := hi
+		fmt.Printf("=== scan-bump witness %x target=%d (approx=%d) ===\n", w.Bytes(), target, approx)
+		fmt.Printf("tally first reaches %d at block M=%d  (tally[M-1]=%d tally[M]=%d) — the maintenance at M folded the preceding cycle's votes\n",
+			target, M, tally(M-1), tally(M))
+		start := uint64(1)
+		if M > 400 {
+			start = M - 400
+		}
 		votes, unfreezes := 0, 0
-		for n := start; n < end; n++ {
+		for n := start; n < M; n++ {
 			blk := rawdb.ReadBlock(chaindb, n)
 			if blk == nil {
 				continue
@@ -340,7 +371,7 @@ func main() {
 					vs := make([]string, 0, len(vc.Votes))
 					for _, v := range vc.Votes {
 						vs = append(vs, fmt.Sprintf("%x:%d", v.VoteAddress, v.VoteCount))
-						if tcommon.BytesToAddress(v.VoteAddress) == wantWitness {
+						if tcommon.BytesToAddress(v.VoteAddress) == w {
 							hit = "  <<< TARGETS WITNESS"
 						}
 					}
@@ -352,18 +383,18 @@ func main() {
 						continue
 					}
 					unfreezes++
-					printUnfreezeRow(n, "UnfreezeV1", uc.OwnerAddress, int(uc.Resource), wantWitness, statedb)
+					printUnfreezeRow(n, "UnfreezeV1", uc.OwnerAddress, int(uc.Resource), w, statedb)
 				case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
 					uc := &contractpb.UnfreezeBalanceV2Contract{}
 					if c.Parameter.UnmarshalTo(uc) != nil {
 						continue
 					}
 					unfreezes++
-					printUnfreezeRow(n, "UnfreezeV2", uc.OwnerAddress, int(uc.Resource), wantWitness, statedb)
+					printUnfreezeRow(n, "UnfreezeV2", uc.OwnerAddress, int(uc.Resource), w, statedb)
 				}
 			}
 		}
-		fmt.Printf("--- scanned %d VoteWitness + %d Unfreeze txs in cycle %d ---\n", votes, unfreezes, targetCycle)
+		fmt.Printf("--- scanned blocks [%d, %d): %d VoteWitness + %d Unfreeze ---\n", start, M, votes, unfreezes)
 		return
 	}
 
