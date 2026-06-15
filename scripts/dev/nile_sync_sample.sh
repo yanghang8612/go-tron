@@ -1177,6 +1177,17 @@ def eta_seconds(lag_blocks, rate):
         return -1.0
     return float(lag_blocks) / rate
 
+def interval_stage_rate_summary(stage, field, blocks, rate, head_lag, head_eta):
+    return {
+        "stage": stage,
+        "field": field,
+        "blocks": int(blocks),
+        "blocksPerSecond": float(rate),
+        "blocksPerMinute": float(rate) * 60.0,
+        "headLagBlocks": int(head_lag),
+        "headEtaSeconds": float(head_eta),
+    }
+
 def build_soak_health(
     sample_status,
     height_regression_blocks,
@@ -1619,6 +1630,14 @@ interval_stage_sync_commitment_rate = interval_rate(interval_stage_sync_commitme
 interval_stage_sync_finish_rate = interval_rate(interval_stage_sync_finish, interval_seconds)
 interval_stage_chain_freezer_rate = interval_rate(interval_stage_chain_freezer, interval_seconds)
 interval_stage_snapshot_event_log_build_rate = interval_rate(interval_stage_snapshot_event_log_build, interval_seconds)
+interval_stage_sync_bodies_per_minute = interval_stage_sync_bodies_rate * 60.0
+interval_stage_sync_bodies_ready_per_minute = interval_stage_sync_bodies_ready_rate * 60.0
+interval_stage_sync_import_per_minute = interval_stage_sync_import_rate * 60.0
+interval_stage_sync_execution_per_minute = interval_stage_sync_execution_rate * 60.0
+interval_stage_sync_commitment_per_minute = interval_stage_sync_commitment_rate * 60.0
+interval_stage_sync_finish_per_minute = interval_stage_sync_finish_rate * 60.0
+interval_stage_chain_freezer_per_minute = interval_stage_chain_freezer_rate * 60.0
+interval_stage_snapshot_event_log_build_per_minute = interval_stage_snapshot_event_log_build_rate * 60.0
 stage_sync_bodies_head_eta_seconds = eta_seconds(stage_sync_bodies_head_lag, interval_stage_sync_bodies_rate)
 stage_sync_bodies_ready_head_eta_seconds = eta_seconds(stage_sync_bodies_ready_head_lag, interval_stage_sync_bodies_ready_rate)
 stage_sync_import_head_eta_seconds = eta_seconds(stage_sync_import_head_lag, interval_stage_sync_import_rate)
@@ -1627,6 +1646,16 @@ stage_sync_commitment_head_eta_seconds = eta_seconds(stage_sync_commitment_head_
 stage_sync_finish_head_eta_seconds = eta_seconds(stage_sync_finish_head_lag, interval_stage_sync_finish_rate)
 stage_chain_freezer_head_eta_seconds = eta_seconds(stage_chain_freezer_head_lag, interval_stage_chain_freezer_rate)
 stage_snapshot_event_log_build_head_eta_seconds = eta_seconds(stage_snapshot_event_log_build_head_lag, interval_stage_snapshot_event_log_build_rate)
+stage_interval_rates = [
+    interval_stage_rate_summary("SyncBodies", "stageSyncBodies", interval_stage_sync_bodies, interval_stage_sync_bodies_rate, stage_sync_bodies_head_lag, stage_sync_bodies_head_eta_seconds),
+    interval_stage_rate_summary("SyncBodiesReady", "stageSyncBodiesReady", interval_stage_sync_bodies_ready, interval_stage_sync_bodies_ready_rate, stage_sync_bodies_ready_head_lag, stage_sync_bodies_ready_head_eta_seconds),
+    interval_stage_rate_summary("SyncImport", "stageSyncImport", interval_stage_sync_import, interval_stage_sync_import_rate, stage_sync_import_head_lag, stage_sync_import_head_eta_seconds),
+    interval_stage_rate_summary("SyncExecution", "stageSyncExecution", interval_stage_sync_execution, interval_stage_sync_execution_rate, stage_sync_execution_head_lag, stage_sync_execution_head_eta_seconds),
+    interval_stage_rate_summary("SyncCommitment", "stageSyncCommitment", interval_stage_sync_commitment, interval_stage_sync_commitment_rate, stage_sync_commitment_head_lag, stage_sync_commitment_head_eta_seconds),
+    interval_stage_rate_summary("SyncFinish", "stageSyncFinish", interval_stage_sync_finish, interval_stage_sync_finish_rate, stage_sync_finish_head_lag, stage_sync_finish_head_eta_seconds),
+    interval_stage_rate_summary("ChainFreezer", "stageChainFreezer", interval_stage_chain_freezer, interval_stage_chain_freezer_rate, stage_chain_freezer_head_lag, stage_chain_freezer_head_eta_seconds),
+    interval_stage_rate_summary("SnapshotEventLogBuild", "stageSnapshotEventLogBuild", interval_stage_snapshot_event_log_build, interval_stage_snapshot_event_log_build_rate, stage_snapshot_event_log_build_head_lag, stage_snapshot_event_log_build_head_eta_seconds),
+]
 height_regression_blocks = previous_height - height if interval_seconds > 0 and previous_height > 0 and height > 0 and height < previous_height else 0
 stage_progress_regressions = progress_regressions(stages, previous, [
     "stageSyncBodies",
@@ -1941,25 +1970,34 @@ row = {
     "stageStalls": stage_stalls,
     "intervalStageSyncBodiesBlocks": interval_stage_sync_bodies,
     "intervalStageSyncBodiesBlocksPerSecond": interval_stage_sync_bodies_rate,
+    "intervalStageSyncBodiesBlocksPerMinute": interval_stage_sync_bodies_per_minute,
     "intervalStageSyncBodiesReadyBlocks": interval_stage_sync_bodies_ready,
     "intervalStageSyncBodiesReadyBlocksPerSecond": interval_stage_sync_bodies_ready_rate,
+    "intervalStageSyncBodiesReadyBlocksPerMinute": interval_stage_sync_bodies_ready_per_minute,
     "intervalStageSyncBodiesReadyToBodiesRatio": ratio(interval_stage_sync_bodies_ready, interval_stage_sync_bodies),
     "intervalStageSyncImportBlocks": interval_stage_sync_import,
     "intervalStageSyncImportBlocksPerSecond": interval_stage_sync_import_rate,
+    "intervalStageSyncImportBlocksPerMinute": interval_stage_sync_import_per_minute,
     "intervalStageSyncImportToBodiesReadyRatio": ratio(interval_stage_sync_import, interval_stage_sync_bodies_ready),
     "intervalStageSyncExecutionBlocks": interval_stage_sync_execution,
     "intervalStageSyncExecutionBlocksPerSecond": interval_stage_sync_execution_rate,
+    "intervalStageSyncExecutionBlocksPerMinute": interval_stage_sync_execution_per_minute,
     "intervalStageSyncExecutionToImportRatio": ratio(interval_stage_sync_execution, interval_stage_sync_import),
     "intervalStageSyncCommitmentBlocks": interval_stage_sync_commitment,
     "intervalStageSyncCommitmentBlocksPerSecond": interval_stage_sync_commitment_rate,
+    "intervalStageSyncCommitmentBlocksPerMinute": interval_stage_sync_commitment_per_minute,
     "intervalStageSyncCommitmentToExecutionRatio": ratio(interval_stage_sync_commitment, interval_stage_sync_execution),
     "intervalStageSyncFinishBlocks": interval_stage_sync_finish,
     "intervalStageSyncFinishBlocksPerSecond": interval_stage_sync_finish_rate,
+    "intervalStageSyncFinishBlocksPerMinute": interval_stage_sync_finish_per_minute,
     "intervalStageSyncFinishToCommitmentRatio": ratio(interval_stage_sync_finish, interval_stage_sync_commitment),
     "intervalStageChainFreezerBlocks": interval_stage_chain_freezer,
     "intervalStageChainFreezerBlocksPerSecond": interval_stage_chain_freezer_rate,
+    "intervalStageChainFreezerBlocksPerMinute": interval_stage_chain_freezer_per_minute,
     "intervalStageSnapshotEventLogBuildBlocks": interval_stage_snapshot_event_log_build,
     "intervalStageSnapshotEventLogBuildBlocksPerSecond": interval_stage_snapshot_event_log_build_rate,
+    "intervalStageSnapshotEventLogBuildBlocksPerMinute": interval_stage_snapshot_event_log_build_per_minute,
+    "stageIntervalRates": stage_interval_rates,
     "soakEfficiencyWindow": soak_efficiency_window,
     "soakEfficiencyStatus": restart_recovery_status,
     "soakEfficiencyBlocksPerSecond": soak_efficiency_blocks_per_second,

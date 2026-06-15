@@ -355,6 +355,26 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["intervalStageSyncExecutionBlocks"], 0)
             self.assertEqual(row["intervalStageSyncCommitmentBlocks"], 0)
             self.assertEqual(row["intervalStageSyncFinishBlocks"], 0)
+            self.assertEqual(row["intervalStageSyncBodiesBlocksPerMinute"], 0.0)
+            self.assertEqual(row["intervalStageSyncImportBlocksPerMinute"], 0.0)
+            self.assertEqual(row["intervalStageSyncExecutionBlocksPerMinute"], 0.0)
+            self.assertEqual(row["intervalStageSyncCommitmentBlocksPerMinute"], 0.0)
+            self.assertEqual(row["intervalStageSyncFinishBlocksPerMinute"], 0.0)
+            self.assertEqual(
+                [entry["stage"] for entry in row["stageIntervalRates"]],
+                [
+                    "SyncBodies",
+                    "SyncBodiesReady",
+                    "SyncImport",
+                    "SyncExecution",
+                    "SyncCommitment",
+                    "SyncFinish",
+                    "ChainFreezer",
+                    "SnapshotEventLogBuild",
+                ],
+            )
+            self.assertEqual(row["stageIntervalRates"][5]["blocks"], 0)
+            self.assertEqual(row["stageIntervalRates"][5]["blocksPerMinute"], 0.0)
             self.assertEqual(row["intervalStageSyncBodiesReadyToBodiesRatio"], -1.0)
             self.assertEqual(row["intervalStageSyncImportToBodiesReadyRatio"], -1.0)
             self.assertEqual(row["intervalStageSyncExecutionToImportRatio"], -1.0)
@@ -766,8 +786,30 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertAlmostEqual(row["intervalStageSyncExecutionToImportRatio"], 24 / 25)
             self.assertAlmostEqual(row["intervalStageSyncCommitmentToExecutionRatio"], 24 / 24)
             self.assertAlmostEqual(row["intervalStageSyncFinishToCommitmentRatio"], 30 / 24)
+            self.assertAlmostEqual(row["intervalStageSyncBodiesBlocksPerMinute"], row["intervalStageSyncBodiesBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSyncBodiesReadyBlocksPerMinute"], row["intervalStageSyncBodiesReadyBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSyncImportBlocksPerMinute"], row["intervalStageSyncImportBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSyncExecutionBlocksPerMinute"], row["intervalStageSyncExecutionBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSyncCommitmentBlocksPerMinute"], row["intervalStageSyncCommitmentBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSyncFinishBlocksPerMinute"], row["intervalStageSyncFinishBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageChainFreezerBlocksPerMinute"], row["intervalStageChainFreezerBlocksPerSecond"] * 60)
+            self.assertAlmostEqual(row["intervalStageSnapshotEventLogBuildBlocksPerMinute"], row["intervalStageSnapshotEventLogBuildBlocksPerSecond"] * 60)
             self.assertGreater(row["intervalStageSyncFinishBlocksPerSecond"], 0)
             self.assertGreater(row["intervalStageSnapshotEventLogBuildBlocksPerSecond"], 0)
+            stage_rates = {entry["stage"]: entry for entry in row["stageIntervalRates"]}
+            self.assertEqual(stage_rates["SyncBodies"]["field"], "stageSyncBodies")
+            self.assertEqual(stage_rates["SyncBodies"]["blocks"], 20)
+            self.assertAlmostEqual(stage_rates["SyncBodies"]["blocksPerSecond"], row["intervalStageSyncBodiesBlocksPerSecond"])
+            self.assertAlmostEqual(stage_rates["SyncBodies"]["blocksPerMinute"], row["intervalStageSyncBodiesBlocksPerMinute"])
+            self.assertEqual(stage_rates["SyncBodies"]["headLagBlocks"], row["stageSyncBodiesHeadLagBlocks"])
+            self.assertEqual(stage_rates["SyncBodies"]["headEtaSeconds"], row["stageSyncBodiesHeadEtaSeconds"])
+            self.assertEqual(stage_rates["SyncFinish"]["field"], "stageSyncFinish")
+            self.assertEqual(stage_rates["SyncFinish"]["blocks"], 30)
+            self.assertAlmostEqual(stage_rates["SyncFinish"]["blocksPerSecond"], row["intervalStageSyncFinishBlocksPerSecond"])
+            self.assertAlmostEqual(stage_rates["SyncFinish"]["blocksPerMinute"], row["intervalStageSyncFinishBlocksPerMinute"])
+            self.assertEqual(stage_rates["SyncFinish"]["headLagBlocks"], row["stageSyncFinishHeadLagBlocks"])
+            self.assertEqual(stage_rates["SyncFinish"]["headEtaSeconds"], row["stageSyncFinishHeadEtaSeconds"])
+            self.assertEqual(stage_rates["SnapshotEventLogBuild"]["blocks"], 48)
             self.assertEqual(row["soakEfficiencyWindow"], "interval")
             self.assertEqual(row["soakEfficiencyStatus"], "progressing")
             self.assertEqual(row["soakEfficiencyBlocksPerSecond"], row["intervalBlocksPerSecond"])
