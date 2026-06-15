@@ -130,6 +130,47 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 		NewImportStageSchedule(1, hash1),
 		NewImportStageSchedule(2, hash2),
 	})
+	phaseProgress := []ImportStagePhaseProgress{
+		{
+			Phase:       ImportStagePhaseBodies,
+			SyncStage:   rawdb.StageSyncImport,
+			HasProgress: true,
+			Progress:    rawdb.StageProgress{Stage: rawdb.StageSyncImport, BlockNum: 2},
+			Tasks:       stagePlan.Bodies,
+			Completed:   stagePlan.Bodies,
+			Complete:    true,
+		},
+		{
+			Phase:       ImportStagePhaseExecution,
+			SyncStage:   rawdb.StageSyncExecution,
+			HasProgress: true,
+			Progress:    rawdb.StageProgress{Stage: rawdb.StageSyncExecution, BlockNum: 1},
+			Tasks:       stagePlan.Execution,
+			Completed:   stagePlan.Execution[:1],
+			Next:        stagePlan.Execution[1],
+			HasNext:     true,
+			Blocked:     ImportStageProgressDecision{Task: stagePlan.Execution[1], Stage: rawdb.StageSyncExecution, Status: ImportStageProgressMismatch},
+			HasBlocked:  true,
+		},
+		{
+			Phase:      ImportStagePhaseCommitment,
+			SyncStage:  rawdb.StageSyncCommitment,
+			Tasks:      stagePlan.Commitment,
+			Next:       stagePlan.Commitment[0],
+			HasNext:    true,
+			Blocked:    ImportStageProgressDecision{Task: stagePlan.Commitment[0], Stage: rawdb.StageSyncCommitment, Status: ImportStageProgressBlocked},
+			HasBlocked: true,
+		},
+		{
+			Phase:      ImportStagePhaseFinish,
+			SyncStage:  rawdb.StageSyncFinish,
+			Tasks:      stagePlan.Finish,
+			Next:       stagePlan.Finish[0],
+			HasNext:    true,
+			Blocked:    ImportStageProgressDecision{Task: stagePlan.Finish[0], Stage: rawdb.StageSyncFinish, Status: ImportStageProgressBlocked},
+			HasBlocked: true,
+		},
+	}
 	plan := ImportedBatchProgressPlan{
 		OK:                   true,
 		ExecutionDiagnostics: NewImportBatchExecutionPlanDiagnostics(stagePlan.Schedules, stagePlan),
@@ -147,6 +188,7 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 			BlockedStatus:      ImportStageProgressMissing,
 			HasBlocked:         true,
 		},
+		StagePlan: ImportStagePlan{Phases: phaseProgress},
 		StagePhaseCursor: ImportStagePhaseCursor{
 			ScheduledPhases:       4,
 			CompletedPhases:       1,
@@ -202,50 +244,75 @@ func TestDiagnosticsWithImportedBatchProgressPlan(t *testing.T) {
 		diag.ImportPhaseCursorBlockedStatus != ImportStageProgressMismatch.String() {
 		t.Fatalf("phase cursor diagnostics = %+v, want execution cursor at block2 mismatch", diag)
 	}
+	if !diag.HasImportStagePhaseProgress() ||
+		diag.ImportPhaseProgressScheduled != 4 ||
+		diag.ImportPhaseProgressCompleted != 1 ||
+		diag.ImportPhaseProgressBodiesBlock != 2 ||
+		diag.ImportPhaseProgressExecutionBlock != 1 ||
+		diag.ImportPhaseProgressCommitmentBlock != 0 ||
+		diag.ImportPhaseProgressFinishBlock != 0 ||
+		diag.ImportPhaseProgressBodiesCompleted != 2 ||
+		diag.ImportPhaseProgressExecutionCompleted != 1 ||
+		diag.ImportPhaseProgressCommitmentCompleted != 0 ||
+		diag.ImportPhaseProgressFinishCompleted != 0 ||
+		diag.ImportPhaseProgressBlocked != string(ImportStagePhaseExecution) ||
+		diag.ImportPhaseProgressNextBlock != 2 ||
+		diag.ImportPhaseProgressBlockedStatus != ImportStageProgressMismatch.String() {
+		t.Fatalf("phase progress diagnostics = %+v, want execution blocked after bodies phase", diag)
+	}
 
 	empty := NewDiagnostics(1, 2, 3, nil).WithImportedBatchProgressPlan(ImportedBatchProgressPlan{})
-	if empty.HasImportBatchExecutionPlan() || empty.HasImportAppliedStagePlan() || empty.HasImportStagePlan() || empty.HasImportStagePhaseCursor() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
+	if empty.HasImportBatchExecutionPlan() || empty.HasImportAppliedStagePlan() || empty.HasImportStagePlan() || empty.HasImportStagePhaseProgress() || empty.HasImportStagePhaseCursor() || empty.BlockBufferLen != 1 || empty.RequestedLen != 2 || empty.RetryListLen != 3 {
 		t.Fatalf("empty progress diagnostics = %+v, want unchanged base counts and no import plan", empty)
 	}
 }
 
 func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 	diag := Diagnostics{
-		ImportExecutionPlannedBlocks:      2,
-		ImportExecutionPlannedStages:      8,
-		ImportExecutionBodyStages:         2,
-		ImportExecutionPostBodyStages:     6,
-		ImportExecutionExecStages:         2,
-		ImportExecutionCommitStages:       2,
-		ImportExecutionFinishStages:       2,
-		ImportExecutionFirstBlock:         1,
-		ImportExecutionLastBlock:          2,
-		ImportAppliedPlannedBlocks:        1,
-		ImportAppliedPlannedStages:        4,
-		ImportAppliedBodyStages:           1,
-		ImportAppliedPostBodyStages:       3,
-		ImportAppliedExecStages:           1,
-		ImportAppliedCommitStages:         1,
-		ImportAppliedFinishStages:         1,
-		ImportAppliedFirstBlock:           1,
-		ImportAppliedLastBlock:            1,
-		ImportStageScheduled:              4,
-		ImportStageCompleted:              2,
-		ImportStageNext:                   string(ImportStagePhaseCommitment),
-		ImportStageNextBlock:              2,
-		ImportStageNextCanonical:          string(rawdb.StageCommitment),
-		ImportStageNextSync:               string(rawdb.StageSyncCommitment),
-		ImportStageBlockedStatus:          ImportStageProgressMissing.String(),
-		ImportPhaseCursorCompleted:        1,
-		ImportPhaseCursorScheduled:        4,
-		ImportPhaseCursorTaskCompleted:    3,
-		ImportPhaseCursorTaskScheduled:    8,
-		ImportPhaseCursorCurrent:          string(ImportStagePhaseExecution),
-		ImportPhaseCursorCurrentCanonical: string(rawdb.StageExecution),
-		ImportPhaseCursorCurrentSync:      string(rawdb.StageSyncExecution),
-		ImportPhaseCursorCurrentTaskIndex: 1,
-		ImportPhaseCursorNextBlock:        2,
-		ImportPhaseCursorBlockedStatus:    ImportStageProgressMismatch.String(),
+		ImportExecutionPlannedBlocks:          2,
+		ImportExecutionPlannedStages:          8,
+		ImportExecutionBodyStages:             2,
+		ImportExecutionPostBodyStages:         6,
+		ImportExecutionExecStages:             2,
+		ImportExecutionCommitStages:           2,
+		ImportExecutionFinishStages:           2,
+		ImportExecutionFirstBlock:             1,
+		ImportExecutionLastBlock:              2,
+		ImportAppliedPlannedBlocks:            1,
+		ImportAppliedPlannedStages:            4,
+		ImportAppliedBodyStages:               1,
+		ImportAppliedPostBodyStages:           3,
+		ImportAppliedExecStages:               1,
+		ImportAppliedCommitStages:             1,
+		ImportAppliedFinishStages:             1,
+		ImportAppliedFirstBlock:               1,
+		ImportAppliedLastBlock:                1,
+		ImportStageScheduled:                  4,
+		ImportStageCompleted:                  2,
+		ImportStageNext:                       string(ImportStagePhaseCommitment),
+		ImportStageNextBlock:                  2,
+		ImportStageNextCanonical:              string(rawdb.StageCommitment),
+		ImportStageNextSync:                   string(rawdb.StageSyncCommitment),
+		ImportStageBlockedStatus:              ImportStageProgressMissing.String(),
+		ImportPhaseCursorCompleted:            1,
+		ImportPhaseCursorScheduled:            4,
+		ImportPhaseCursorTaskCompleted:        3,
+		ImportPhaseCursorTaskScheduled:        8,
+		ImportPhaseCursorCurrent:              string(ImportStagePhaseExecution),
+		ImportPhaseCursorCurrentCanonical:     string(rawdb.StageExecution),
+		ImportPhaseCursorCurrentSync:          string(rawdb.StageSyncExecution),
+		ImportPhaseCursorCurrentTaskIndex:     1,
+		ImportPhaseCursorNextBlock:            2,
+		ImportPhaseCursorBlockedStatus:        ImportStageProgressMismatch.String(),
+		ImportPhaseProgressScheduled:          4,
+		ImportPhaseProgressCompleted:          1,
+		ImportPhaseProgressBodiesBlock:        2,
+		ImportPhaseProgressExecutionBlock:     1,
+		ImportPhaseProgressBodiesCompleted:    2,
+		ImportPhaseProgressExecutionCompleted: 1,
+		ImportPhaseProgressBlocked:            string(ImportStagePhaseExecution),
+		ImportPhaseProgressNextBlock:          2,
+		ImportPhaseProgressBlockedStatus:      ImportStageProgressMismatch.String(),
 	}
 	got := diag.AppendImportPlanLogFields([]any{"base", 1})
 	want := []any{
@@ -269,6 +336,17 @@ func TestDiagnosticsAppendImportPlanLogFields(t *testing.T) {
 		"syncPhaseCursorCurrentTaskIndex", 1,
 		"syncPhaseCursorNextBlock", uint64(2),
 		"syncPhaseCursorBlockedStatus", ImportStageProgressMismatch.String(),
+		"syncPhaseProgressCompletedPhases", 1,
+		"syncPhaseProgressScheduledPhases", 4,
+		"syncPhaseProgressBodiesCompletedTasks", 2,
+		"syncPhaseProgressExecutionCompletedTasks", 1,
+		"syncPhaseProgressCommitmentCompletedTasks", 0,
+		"syncPhaseProgressFinishCompletedTasks", 0,
+		"syncPhaseProgressBodiesBlock", uint64(2),
+		"syncPhaseProgressExecutionBlock", uint64(1),
+		"syncPhaseProgressBlockedPhase", string(ImportStagePhaseExecution),
+		"syncPhaseProgressNextBlock", uint64(2),
+		"syncPhaseProgressBlockedStatus", ImportStageProgressMismatch.String(),
 		"syncExecPlanBlocks", 2,
 		"syncExecPlanStages", 8,
 		"syncExecPlanBodyStages", 2,

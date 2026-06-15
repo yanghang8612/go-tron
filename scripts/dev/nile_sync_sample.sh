@@ -499,6 +499,25 @@ def parse_sync_log(path):
         "syncLogPhaseCursorCurrentTaskIndex": -1,
         "syncLogPhaseCursorNextBlock": -1,
         "syncLogPhaseCursorBlockedStatus": "",
+        "syncLogPhaseProgressCompletedPhases": -1,
+        "syncLogPhaseProgressScheduledPhases": -1,
+        "syncLogPhaseProgressIncompletePhases": -1,
+        "syncLogPhaseProgressCompletionRatio": -1.0,
+        "syncLogPhaseProgressBlockedPhase": "",
+        "syncLogPhaseProgressNextBlock": -1,
+        "syncLogPhaseProgressBlockedStatus": "",
+        "syncLogPhaseProgressBodiesBlock": -1,
+        "syncLogPhaseProgressExecutionBlock": -1,
+        "syncLogPhaseProgressCommitmentBlock": -1,
+        "syncLogPhaseProgressFinishBlock": -1,
+        "syncLogPhaseProgressBodiesHeadLagBlocks": -1,
+        "syncLogPhaseProgressExecutionHeadLagBlocks": -1,
+        "syncLogPhaseProgressCommitmentHeadLagBlocks": -1,
+        "syncLogPhaseProgressFinishHeadLagBlocks": -1,
+        "syncLogPhaseProgressBodiesCompletedTasks": -1,
+        "syncLogPhaseProgressExecutionCompletedTasks": -1,
+        "syncLogPhaseProgressCommitmentCompletedTasks": -1,
+        "syncLogPhaseProgressFinishCompletedTasks": -1,
         "syncLogExecPlanBlocks": -1,
         "syncLogExecPlanStages": -1,
         "syncLogExecPlanBodyStages": -1,
@@ -690,6 +709,19 @@ def parse_sync_log(path):
         "syncPhaseCursorCurrentTaskIndex": "syncLogPhaseCursorCurrentTaskIndex",
         "syncPhaseCursorNextBlock": "syncLogPhaseCursorNextBlock",
         "syncPhaseCursorBlockedStatus": "syncLogPhaseCursorBlockedStatus",
+        "syncPhaseProgressCompletedPhases": "syncLogPhaseProgressCompletedPhases",
+        "syncPhaseProgressScheduledPhases": "syncLogPhaseProgressScheduledPhases",
+        "syncPhaseProgressBlockedPhase": "syncLogPhaseProgressBlockedPhase",
+        "syncPhaseProgressNextBlock": "syncLogPhaseProgressNextBlock",
+        "syncPhaseProgressBlockedStatus": "syncLogPhaseProgressBlockedStatus",
+        "syncPhaseProgressBodiesBlock": "syncLogPhaseProgressBodiesBlock",
+        "syncPhaseProgressExecutionBlock": "syncLogPhaseProgressExecutionBlock",
+        "syncPhaseProgressCommitmentBlock": "syncLogPhaseProgressCommitmentBlock",
+        "syncPhaseProgressFinishBlock": "syncLogPhaseProgressFinishBlock",
+        "syncPhaseProgressBodiesCompletedTasks": "syncLogPhaseProgressBodiesCompletedTasks",
+        "syncPhaseProgressExecutionCompletedTasks": "syncLogPhaseProgressExecutionCompletedTasks",
+        "syncPhaseProgressCommitmentCompletedTasks": "syncLogPhaseProgressCommitmentCompletedTasks",
+        "syncPhaseProgressFinishCompletedTasks": "syncLogPhaseProgressFinishCompletedTasks",
         "syncExecPlanBlocks": "syncLogExecPlanBlocks",
         "syncExecPlanStages": "syncLogExecPlanStages",
         "syncExecPlanBodyStages": "syncLogExecPlanBodyStages",
@@ -715,12 +747,15 @@ def parse_sync_log(path):
     scheduled = number(row, "syncLogStageScheduled", -1)
     completed = number(row, "syncLogStageCompleted", -1)
     segment_blocks = number(row, "syncLogSegmentBlocks", -1)
+    segment_head = number(row, "syncLogSegmentHead", -1)
     exec_blocks = number(row, "syncLogExecPlanBlocks", -1)
     applied_blocks = number(row, "syncLogAppliedPlanBlocks", -1)
     phase_cursor_scheduled = number(row, "syncLogPhaseCursorScheduledPhases", -1)
     phase_cursor_completed = number(row, "syncLogPhaseCursorCompletedPhases", -1)
     phase_cursor_task_scheduled = number(row, "syncLogPhaseCursorScheduledTasks", -1)
     phase_cursor_task_completed = number(row, "syncLogPhaseCursorCompletedTasks", -1)
+    phase_progress_scheduled = number(row, "syncLogPhaseProgressScheduledPhases", -1)
+    phase_progress_completed = number(row, "syncLogPhaseProgressCompletedPhases", -1)
     if scheduled >= 0 and completed >= 0:
         row["syncLogStageIncomplete"] = max(scheduled - completed, 0)
         row["syncLogStageCompletionRatio"] = ratio(completed, scheduled)
@@ -729,6 +764,12 @@ def parse_sync_log(path):
         row["syncLogPhaseCursorCompletionRatio"] = ratio(phase_cursor_completed, phase_cursor_scheduled)
     if phase_cursor_task_scheduled >= 0 and phase_cursor_task_completed >= 0:
         row["syncLogPhaseCursorTaskCompletionRatio"] = ratio(phase_cursor_task_completed, phase_cursor_task_scheduled)
+    if phase_progress_scheduled >= 0 and phase_progress_completed >= 0:
+        row["syncLogPhaseProgressIncompletePhases"] = max(phase_progress_scheduled - phase_progress_completed, 0)
+        row["syncLogPhaseProgressCompletionRatio"] = ratio(phase_progress_completed, phase_progress_scheduled)
+    for phase in ("Bodies", "Execution", "Commitment", "Finish"):
+        block = number(row, f"syncLogPhaseProgress{phase}Block", -1)
+        row[f"syncLogPhaseProgress{phase}HeadLagBlocks"] = lag(segment_head, block)
     if segment_blocks > 0:
         row["syncLogStageTasksPerBlock"] = ratio(scheduled, segment_blocks)
         row["syncLogStageCompletedPerBlock"] = ratio(completed, segment_blocks)
