@@ -72,6 +72,7 @@ func main() {
 	scanCycle := flag.String("scan-cycle", "", "C:witnesshex — dump EVERY VoteWitness (owner+full vote list, flag if it lists the witness) and Unfreeze tx in cycle C's blocks; votes cast in cycle C are folded into cycleVote[C+1]")
 	witnessVoters := flag.String("witness-voters", "", "witnesshex — enumerate ALL head accounts that vote for the witness (addr, count, isContract); a contract voter necessarily voted via the TVM VOTEWITNESS opcode")
 	accountVotes := flag.String("account-votes", "", "hexaddr — print this account's head vote list (validates that account vote reads work at all in this tool)")
+	tallyAudit := flag.Bool("tally-audit", false, "audit the invariant 'witness vote tally == sum of its voters' votes' across ALL witnesses at head; lists every witness where they differ")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -81,8 +82,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" && *accountVotes == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters / --account-votes)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" && *accountVotes == "" && !*tallyAudit {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters / --account-votes / --tally-audit)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -413,10 +414,12 @@ func main() {
 				if tcommon.BytesToAddress(v.VoteAddress) == w {
 					voters++
 					total += v.VoteCount
+					mark := ""
 					if acct.Type() == corepb.AccountType_Contract {
 						contractVoters++
-						fmt.Printf("voter %x count=%d  <<< CONTRACT\n", row.Owner.Bytes(), v.VoteCount)
+						mark = "  <<< CONTRACT"
 					}
+					fmt.Printf("voter %x count=%d%s\n", row.Owner.Bytes(), v.VoteCount, mark)
 					break
 				}
 			}
@@ -425,7 +428,43 @@ func main() {
 		if err != nil {
 			log.Crit("iterate accounts", "err", err)
 		}
-		fmt.Printf("--- %d voters for %x (vote total=%d); %d are CONTRACTS (listed above) ---\n", voters, w.Bytes(), total, contractVoters)
+		fmt.Printf("--- %d voters for %x (vote total=%d); %d are CONTRACTS ---\n", voters, w.Bytes(), total, contractVoters)
+		return
+	}
+
+	if *tallyAudit {
+		sum := make(map[tcommon.Address]int64)
+		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+			env, derr := state.DecodeStateAccountV2(row.Value)
+			if derr != nil {
+				return true, nil
+			}
+			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			if aerr != nil || acct == nil {
+				return true, nil
+			}
+			for _, v := range acct.Votes() {
+				sum[tcommon.BytesToAddress(v.VoteAddress)] += v.VoteCount
+			}
+			return true, nil
+		})
+		if err != nil {
+			log.Crit("iterate accounts", "err", err)
+		}
+		mismatch := 0
+		for _, wAddr := range statedb.ReadWitnessIndex() {
+			wit := statedb.GetWitness(wAddr)
+			if wit == nil {
+				continue
+			}
+			tally := wit.VoteCount()
+			vs := sum[wAddr]
+			if tally != vs {
+				mismatch++
+				fmt.Printf("witness %x: tally=%d votersum=%d diff=%+d\n", wAddr.Bytes(), tally, vs, tally-vs)
+			}
+		}
+		fmt.Printf("--- %d witnesses where tally != votersum (invariant violations) ---\n", mismatch)
 		return
 	}
 
