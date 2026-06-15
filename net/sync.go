@@ -429,28 +429,16 @@ func (a syncSessionStartupApplier) CompleteCurrentHeadSyncPipeline(repair syncdl
 		return result
 	}
 	plan := syncdl.PlanSyncPipelineProgressHeadCompletion(repair, a.headBlock.Number(), a.headBlock.Hash())
-	result.Plan = plan
-	if !plan.HasHeadPrefix {
-		return result
-	}
-	if len(plan.FillStages) == 0 {
-		result.Complete = plan.Complete
-		return result
-	}
 	db := a.service.chain.DB()
 	if db == nil {
-		return result
+		return syncdl.ApplySyncPipelineProgressHeadCompletionPlan(plan, nil)
 	}
-	for _, stage := range plan.FillStages {
-		if err := rawdb.WriteStageProgressWithHash(db, stage, plan.Head, plan.HeadHash); err != nil {
-			result.WriteError = err
-			result.ErrorStage = stage
-			syncLog.Warn("Complete sync pipeline current head failed", "stage", stage, "head", plan.Head, "hash", plan.HeadHash, "err", err)
-			return result
-		}
-		result.Written++
+	result = syncdl.ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
+		return rawdb.WriteStageProgressWithHash(db, stage, blockNum, blockHash)
+	})
+	if result.WriteError != nil {
+		syncLog.Warn("Complete sync pipeline current head failed", "stage", result.ErrorStage, "head", plan.Head, "hash", plan.HeadHash, "err", result.WriteError)
 	}
-	result.Complete = true
 	return result
 }
 

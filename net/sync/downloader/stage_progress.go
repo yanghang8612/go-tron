@@ -20,6 +20,10 @@ type StageProgressRow struct {
 // StageProgressWriter persists hash-bound sync pipeline progress.
 type StageProgressWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash)
 
+// StageProgressErrorWriter persists hash-bound sync pipeline progress and
+// reports write failures to the planner apply result.
+type StageProgressErrorWriter func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error
+
 // ImportStageObservationWriter records one phase-owned import-stage
 // observation accepted by an execution plan.
 type ImportStageObservationWriter func(ImportStageObservation)
@@ -1503,6 +1507,33 @@ func PlanSyncPipelineProgressHeadCompletion(repair SyncPipelineProgressRepairRes
 	}
 	plan.FillStages = append(plan.FillStages, stages[lastIndex+1:]...)
 	return plan
+}
+
+// ApplySyncPipelineProgressHeadCompletionPlan writes the downstream sync-stage
+// rows named by a current-head completion plan. The downloader owns the ordered
+// fill semantics; callers own the concrete DB writer and logging.
+func ApplySyncPipelineProgressHeadCompletionPlan(plan SyncPipelineProgressHeadCompletionPlan, write StageProgressErrorWriter) SyncPipelineProgressHeadCompletion {
+	result := SyncPipelineProgressHeadCompletion{Plan: plan}
+	if !plan.HasHeadPrefix {
+		return result
+	}
+	if len(plan.FillStages) == 0 {
+		result.Complete = plan.Complete
+		return result
+	}
+	if write == nil {
+		return result
+	}
+	for _, stage := range plan.FillStages {
+		if err := write(stage, plan.Head, plan.HeadHash); err != nil {
+			result.WriteError = err
+			result.ErrorStage = stage
+			return result
+		}
+		result.Written++
+	}
+	result.Complete = true
+	return result
 }
 
 // RepairSyncPipelineProgressOrderFromDB repairs detected full-pipeline ordering

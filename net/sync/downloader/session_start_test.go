@@ -883,24 +883,9 @@ func (a *startupRecoveryTestApplier) CompleteCurrentHeadSyncPipeline(repair Sync
 		return result
 	}
 	plan := PlanSyncPipelineProgressHeadCompletion(repair, a.head, headHash)
-	result.Plan = plan
-	if !plan.HasHeadPrefix {
-		return result
-	}
-	if len(plan.FillStages) == 0 {
-		result.Complete = plan.Complete
-		return result
-	}
-	for _, stage := range plan.FillStages {
-		if err := rawdb.WriteStageProgressWithHash(a.db, stage, plan.Head, plan.HeadHash); err != nil {
-			result.WriteError = err
-			result.ErrorStage = stage
-			return result
-		}
-		result.Written++
-	}
-	result.Complete = true
-	return result
+	return ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
+		return rawdb.WriteStageProgressWithHash(a.db, stage, blockNum, blockHash)
+	})
 }
 
 func (a *startupRecoveryTestApplier) RestoreInventoryTarget(inventoryFloor uint64) {

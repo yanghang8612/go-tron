@@ -1822,6 +1822,66 @@ func TestPlanSyncPipelineProgressHeadCompletion(t *testing.T) {
 	}
 }
 
+func TestApplySyncPipelineProgressHeadCompletionPlan(t *testing.T) {
+	hash := tcommon.Hash{0x01}
+	plan := SyncPipelineProgressHeadCompletionPlan{
+		Head:          7,
+		HeadHash:      hash,
+		HasHeadPrefix: true,
+		LastStage:     rawdb.StageSyncExecution,
+		LastBlock:     7,
+		FillStages:    []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish},
+	}
+	var writes []rawdb.StageProgress
+	got := ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
+		writes = append(writes, rawdb.StageProgress{
+			Stage:        stage,
+			BlockNum:     blockNum,
+			BlockHash:    blockHash,
+			HasBlockHash: true,
+		})
+		return nil
+	})
+	if !got.Complete || got.Written != 2 || got.WriteError != nil || got.Plan.Head != plan.Head {
+		t.Fatalf("apply result = %+v, want complete two-stage fill", got)
+	}
+	wantWrites := []rawdb.StageProgress{
+		{Stage: rawdb.StageSyncCommitment, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+		{Stage: rawdb.StageSyncFinish, BlockNum: 7, BlockHash: hash, HasBlockHash: true},
+	}
+	if !reflect.DeepEqual(writes, wantWrites) {
+		t.Fatalf("writes = %+v, want %+v", writes, wantWrites)
+	}
+
+	alreadyComplete := ApplySyncPipelineProgressHeadCompletionPlan(SyncPipelineProgressHeadCompletionPlan{
+		Head:          7,
+		HeadHash:      hash,
+		HasHeadPrefix: true,
+		LastStage:     rawdb.StageSyncFinish,
+		LastBlock:     7,
+		Complete:      true,
+	}, nil)
+	if !alreadyComplete.Complete || alreadyComplete.Written != 0 || alreadyComplete.WriteError != nil {
+		t.Fatalf("already complete result = %+v, want complete without writes", alreadyComplete)
+	}
+
+	nilWriter := ApplySyncPipelineProgressHeadCompletionPlan(plan, nil)
+	if nilWriter.Complete || nilWriter.Written != 0 || nilWriter.WriteError != nil {
+		t.Fatalf("nil writer result = %+v, want incomplete without writes", nilWriter)
+	}
+
+	writeErr := errors.New("write failed")
+	failing := ApplySyncPipelineProgressHeadCompletionPlan(plan, func(stage rawdb.StageID, blockNum uint64, blockHash tcommon.Hash) error {
+		if stage == rawdb.StageSyncCommitment {
+			return nil
+		}
+		return writeErr
+	})
+	if failing.Complete || failing.Written != 1 || !errors.Is(failing.WriteError, writeErr) || failing.ErrorStage != rawdb.StageSyncFinish {
+		t.Fatalf("failing result = %+v, want one write then finish error", failing)
+	}
+}
+
 func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, tcommon.Hash{0x01}); err != nil {
