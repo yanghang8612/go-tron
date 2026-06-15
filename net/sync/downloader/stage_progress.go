@@ -487,14 +487,20 @@ func (s ImportBatchStagePhaseSchedule) Empty() bool {
 
 // PhasePlans returns a defensive copy of the phase-level schedule.
 func (s ImportBatchStagePhaseSchedule) PhasePlans() []ImportStagePhasePlan {
-	if len(s.Phases) == 0 {
-		return nil
-	}
-	out := make([]ImportStagePhasePlan, 0, len(s.Phases))
-	for _, phase := range s.Phases {
-		out = append(out, cloneImportStagePhasePlan(phase))
-	}
-	return out
+	return cloneImportStagePhasePlanList(s.Phases)
+}
+
+// PostBodyPhasePlans returns a defensive copy of the execution/commitment/
+// finish phase schedule. These phases are the post-body work that canonical
+// insertion must complete before a batch is fully published.
+func (s ImportBatchStagePhaseSchedule) PostBodyPhasePlans() []ImportStagePhasePlan {
+	return cloneImportStagePhasePlanList(s.PostBody)
+}
+
+// PostBodyStageTasks returns a defensive copy of all execution/commitment/
+// finish tasks in planner order.
+func (s ImportBatchStagePhaseSchedule) PostBodyStageTasks() []ImportStageTask {
+	return append([]ImportStageTask(nil), s.PostBodyTasks...)
 }
 
 // PhasePlan returns the scheduled phase by name.
@@ -664,6 +670,17 @@ func newImportStagePhasePlan(phase ImportStagePhase, canonical rawdb.StageID, sy
 func cloneImportStagePhasePlan(plan ImportStagePhasePlan) ImportStagePhasePlan {
 	plan.Tasks = append([]ImportStageTask(nil), plan.Tasks...)
 	return plan
+}
+
+func cloneImportStagePhasePlanList(source []ImportStagePhasePlan) []ImportStagePhasePlan {
+	if len(source) == 0 {
+		return nil
+	}
+	out := make([]ImportStagePhasePlan, 0, len(source))
+	for _, phase := range source {
+		out = append(out, cloneImportStagePhasePlan(phase))
+	}
+	return out
 }
 
 // MatchCanonicalObservation reports whether this phase owns a canonical stage

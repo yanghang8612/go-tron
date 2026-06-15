@@ -1085,6 +1085,29 @@ func TestNewImportBatchStagePhaseSchedule(t *testing.T) {
 	if got.Execution.Tasks[1].BlockNum == 99 {
 		t.Fatal("PhasePlans returned aliased task slice")
 	}
+	postBodyPhases := got.PostBodyPhasePlans()
+	if len(postBodyPhases) != 3 ||
+		postBodyPhases[0].Phase != ImportStagePhaseExecution ||
+		postBodyPhases[1].Phase != ImportStagePhaseCommitment ||
+		postBodyPhases[2].Phase != ImportStagePhaseFinish ||
+		postBodyPhases[2].Tasks[1] != ImportFinishStageTask(2, hash2) {
+		t.Fatalf("PostBodyPhasePlans = %+v, want execution/commitment/finish phases through block2", postBodyPhases)
+	}
+	postBodyPhases[0].Tasks[1].BlockNum = 99
+	if got.Execution.Tasks[1].BlockNum == 99 {
+		t.Fatal("PostBodyPhasePlans returned aliased task slice")
+	}
+	postBodyTasks := got.PostBodyStageTasks()
+	if len(postBodyTasks) != 6 ||
+		postBodyTasks[0] != ImportExecutionStageTask(1, hash1) ||
+		postBodyTasks[2] != ImportCommitmentStageTask(1, hash1) ||
+		postBodyTasks[5] != ImportFinishStageTask(2, hash2) {
+		t.Fatalf("PostBodyStageTasks = %+v, want execution, commitment, finish task groups", postBodyTasks)
+	}
+	postBodyTasks[0].BlockNum = 99
+	if got.PostBodyTasks[0].BlockNum == 99 {
+		t.Fatal("PostBodyStageTasks returned aliased task slice")
+	}
 	observation, ok := got.MatchPhaseObservation(rawdb.StageFinish, 2, hash2)
 	if !ok || observation.Task != ImportFinishStageTask(2, hash2) || observation.Phase.Phase != ImportStagePhaseFinish || len(observation.Phase.Tasks) != 2 {
 		t.Fatalf("finish observation = %+v ok=%v, want block2 finish in finish phase", observation, ok)

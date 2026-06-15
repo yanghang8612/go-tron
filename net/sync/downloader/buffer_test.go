@@ -694,6 +694,23 @@ func TestImportBatchExecutionAttemptOwnsStageObserver(t *testing.T) {
 		t.Fatalf("attempt phases = %+v schedule=%+v, want explicit execution/commitment/finish phases",
 			attempt.ExecutionPhases, attempt.StagePhaseSchedule)
 	}
+	if len(attempt.PostBodyPhases) != 3 ||
+		attempt.PostBodyPhases[0].Phase != ImportStagePhaseExecution ||
+		attempt.PostBodyPhases[1].Phase != ImportStagePhaseCommitment ||
+		attempt.PostBodyPhases[2].Phase != ImportStagePhaseFinish ||
+		len(attempt.PostBodyTasks) != 6 ||
+		attempt.PostBodyTasks[5] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("attempt post-body schedule = phases:%+v tasks:%+v, want execution/commitment/finish through block2",
+			attempt.PostBodyPhases, attempt.PostBodyTasks)
+	}
+	attempt.PostBodyPhases[0].Tasks[0].BlockNum = 99
+	if attempt.StagePhaseSchedule.Execution.Tasks[0].BlockNum == 99 {
+		t.Fatal("attempt post-body phases alias stage phase schedule")
+	}
+	attempt.PostBodyTasks[0].BlockNum = 99
+	if attempt.StagePhaseSchedule.PostBodyTasks[0].BlockNum == 99 {
+		t.Fatal("attempt post-body tasks alias stage phase schedule")
+	}
 	observer := attempt.StageProgressObserver()
 	observer(rawdb.StageBodies, block1.Number(), block1.Hash())
 	observer(rawdb.StageExecution, block1.Number(), block1.Hash())
@@ -953,6 +970,22 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 		result.StagePhaseSchedule.Finish.Tasks[1] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
 		t.Fatalf("result stage phase schedule = %+v, want explicit two-block post-body phases", result.StagePhaseSchedule)
 	}
+	if len(result.PostBodyPhases) != 3 ||
+		result.PostBodyPhases[0].Phase != ImportStagePhaseExecution ||
+		result.PostBodyPhases[1].Phase != ImportStagePhaseCommitment ||
+		result.PostBodyPhases[2].Phase != ImportStagePhaseFinish ||
+		len(result.PostBodyTasks) != 6 ||
+		result.PostBodyTasks[0] != ImportExecutionStageTask(block1.Number(), block1.Hash()) ||
+		result.PostBodyTasks[5] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("result post-body schedule = phases:%+v tasks:%+v, want explicit execution/commitment/finish task groups",
+			result.PostBodyPhases, result.PostBodyTasks)
+	}
+	if len(result.ExecutionAttempt.PostBodyPhases) != 3 ||
+		len(result.ExecutionAttempt.PostBodyTasks) != 6 ||
+		result.ExecutionAttempt.PostBodyTasks[5] != ImportFinishStageTask(block2.Number(), block2.Hash()) {
+		t.Fatalf("result execution attempt post-body schedule = phases:%+v tasks:%+v, want two-block post-body plan",
+			result.ExecutionAttempt.PostBodyPhases, result.ExecutionAttempt.PostBodyTasks)
+	}
 	if !reflect.DeepEqual(applier.execution.Schedule.Tasks, ImportPipelineStageTasks(block2.Number(), block2.Hash())) {
 		t.Fatalf("applier execution tasks = %+v, want block2 pipeline", applier.execution.Schedule.Tasks)
 	}
@@ -1035,6 +1068,13 @@ func TestApplyImportBatchRunPlanPreparesAttemptBeforeExecute(t *testing.T) {
 		result.ExecutionAttempt.StagePhaseSchedule.Empty() ||
 		len(result.ExecutionAttempt.ExecutionPhases) != 4 {
 		t.Fatalf("execution attempt = %+v, want prepared one-block attempt before execute", result.ExecutionAttempt)
+	}
+	if len(result.PostBodyPhases) != 3 ||
+		len(result.PostBodyTasks) != 3 ||
+		result.PostBodyTasks[0] != ImportExecutionStageTask(block.Number(), block.Hash()) ||
+		result.PostBodyTasks[2] != ImportFinishStageTask(block.Number(), block.Hash()) {
+		t.Fatalf("prepared-only post-body schedule = phases:%+v tasks:%+v, want one-block execution/commitment/finish",
+			result.PostBodyPhases, result.PostBodyTasks)
 	}
 	if result.Outcome.RecordApplied || result.Progress.OK || result.HasRecord || result.StopDrain || result.ContinueDrain {
 		t.Fatalf("result = %+v, want prepared-only run without execution settlement", result)

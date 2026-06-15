@@ -180,6 +180,8 @@ type ImportBatchExecutionAttempt struct {
 	Execution          ImportBatchExecutionPlan
 	StagePhaseSchedule ImportBatchStagePhaseSchedule
 	ExecutionPhases    []ImportStagePhasePlan
+	PostBodyPhases     []ImportStagePhasePlan
+	PostBodyTasks      []ImportStageTask
 	Collector          *StageProgressCollector
 	Diagnostics        ImportBatchExecutionPlanDiagnostics
 }
@@ -281,6 +283,8 @@ func NewImportBatchExecutionAttempt(execution ImportBatchExecutionPlan) ImportBa
 		Execution:          execution,
 		StagePhaseSchedule: phases,
 		ExecutionPhases:    phases.PhasePlans(),
+		PostBodyPhases:     phases.PostBodyPhasePlans(),
+		PostBodyTasks:      phases.PostBodyStageTasks(),
 		Collector:          NewStageProgressCollector(),
 		Diagnostics:        execution.Diagnostics,
 	}
@@ -445,6 +449,8 @@ type ImportBatchRunResult struct {
 	ExecutionAttempt     ImportBatchExecutionAttempt
 	StagePhaseSchedule   ImportBatchStagePhaseSchedule
 	ExecutionPhases      []ImportStagePhasePlan
+	PostBodyPhases       []ImportStagePhasePlan
+	PostBodyTasks        []ImportStageTask
 	Outcome              ImportOutcome
 	Progress             ImportedBatchProgressPlan
 	RecordPlan           ImportedBatchRecordPlan
@@ -583,6 +589,12 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		if result.ExecutionPhases == nil {
 			result.ExecutionPhases = result.StagePhaseSchedule.PhasePlans()
 		}
+		if result.PostBodyPhases == nil {
+			result.PostBodyPhases = result.StagePhaseSchedule.PostBodyPhasePlans()
+		}
+		if result.PostBodyTasks == nil {
+			result.PostBodyTasks = result.StagePhaseSchedule.PostBodyStageTasks()
+		}
 	}
 	prepareAttempt := func() {
 		if prepared {
@@ -594,7 +606,13 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			result.StagePhaseSchedule = attempt.StagePhaseSchedule
 		}
 		if result.ExecutionPhases == nil {
-			result.ExecutionPhases = append([]ImportStagePhasePlan(nil), attempt.ExecutionPhases...)
+			result.ExecutionPhases = cloneImportStagePhasePlanList(attempt.ExecutionPhases)
+		}
+		if result.PostBodyPhases == nil {
+			result.PostBodyPhases = cloneImportStagePhasePlanList(attempt.PostBodyPhases)
+		}
+		if result.PostBodyTasks == nil {
+			result.PostBodyTasks = append([]ImportStageTask(nil), attempt.PostBodyTasks...)
 		}
 		result.ExecutionAttempt = attempt
 		prepared = true
