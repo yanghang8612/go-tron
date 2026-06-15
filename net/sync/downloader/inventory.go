@@ -1,6 +1,9 @@
 package downloader
 
-import "github.com/tronprotocol/go-tron/core/types"
+import (
+	"github.com/tronprotocol/go-tron/core/rawdb"
+	"github.com/tronprotocol/go-tron/core/types"
+)
 
 // InventoryCandidate is one block ID from a peer CHAIN_INVENTORY response plus
 // the service-collected facts needed to decide whether it enters the fetch
@@ -77,9 +80,25 @@ type ChainInventoryStep struct {
 	HasStageTarget bool
 }
 
-// ChainInventoryPlanApplier performs state mutations named by a chain
-// inventory plan. SyncService owns peer/session fields and DB stage writes;
-// downloader owns the update ordering.
+// ChainInventoryPostLockStepAction names one post-lock side effect after a
+// CHAIN_INVENTORY response has updated peer/session state.
+type ChainInventoryPostLockStepAction uint8
+
+const (
+	ChainInventoryWriteStageProgress ChainInventoryPostLockStepAction = iota
+)
+
+// ChainInventoryPostLockStep is one downloader-owned operation that must run
+// after SyncService releases its session lock.
+type ChainInventoryPostLockStep struct {
+	Action      ChainInventoryPostLockStepAction
+	Stage       rawdb.StageID
+	StageTarget uint64
+}
+
+// ChainInventoryPlanApplier performs lock-held state mutations named by a
+// chain inventory plan. SyncService owns peer/session fields; downloader owns
+// the update ordering.
 type ChainInventoryPlanApplier interface {
 	AppendAcceptedInventory(ids []types.BlockID)
 	UpdateInventoryProgress(remainNum int64, target InventoryTargetUpdate, hasTarget bool, stageTarget uint64, hasStageTarget bool)
@@ -95,6 +114,27 @@ type ChainInventoryApplyResult struct {
 	StageTarget    uint64
 	HasStageTarget bool
 	Done           bool
+}
+
+// ChainInventoryPostLockPlan carries post-lock side effects derived from the
+// applied inventory plan. The service supplies the DB writer; downloader owns
+// whether the inventory stage frontier should be persisted.
+type ChainInventoryPostLockPlan struct {
+	Steps []ChainInventoryPostLockStep
+}
+
+// ChainInventoryPostLockPlanApplier performs post-lock inventory side effects.
+type ChainInventoryPostLockPlanApplier interface {
+	WriteInventoryStageProgress(stage rawdb.StageID, target uint64)
+}
+
+// ChainInventoryPostLockApplyResult records post-lock inventory side effects.
+type ChainInventoryPostLockApplyResult struct {
+	AppliedSteps       []ChainInventoryPostLockStepAction
+	UnknownSteps       []ChainInventoryPostLockStepAction
+	WroteStageProgress bool
+	Stage              rawdb.StageID
+	StageTarget        uint64
 }
 
 // PlanChainInventory filters one CHAIN_INVENTORY response, advances target
@@ -220,4 +260,41 @@ func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlan
 // from side-effect-free inventory facts.
 func ApplyChainInventory(in ChainInventoryInput, applier ChainInventoryPlanApplier) ChainInventoryApplyResult {
 	return ApplyChainInventoryPlan(PlanChainInventory(in), applier)
+}
+
+// PlanChainInventoryPostLock returns the post-lock persistence steps for an
+// applied inventory response.
+func PlanChainInventoryPostLock(result ChainInventoryApplyResult) ChainInventoryPostLockPlan {
+	if !result.HasStageTarget {
+		return ChainInventoryPostLockPlan{}
+	}
+	return ChainInventoryPostLockPlan{
+		Steps: []ChainInventoryPostLockStep{{
+			Action:      ChainInventoryWriteStageProgress,
+			Stage:       rawdb.StageSyncInventory,
+			StageTarget: result.StageTarget,
+		}},
+	}
+}
+
+// ApplyChainInventoryPostLockPlan executes downloader-owned post-lock
+// inventory side effects.
+func ApplyChainInventoryPostLockPlan(plan ChainInventoryPostLockPlan, applier ChainInventoryPostLockPlanApplier) ChainInventoryPostLockApplyResult {
+	var result ChainInventoryPostLockApplyResult
+	if applier == nil {
+		return result
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case ChainInventoryWriteStageProgress:
+			applier.WriteInventoryStageProgress(step.Stage, step.StageTarget)
+			result.WroteStageProgress = true
+			result.Stage = step.Stage
+			result.StageTarget = step.StageTarget
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
 }

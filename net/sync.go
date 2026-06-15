@@ -983,10 +983,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}, settlementApplier)
 	ss.mu.Unlock()
 
-	if inventoryApplyResult.HasStageTarget {
-		ss.writeStageProgress(rawdb.StageSyncInventory, inventoryApplyResult.StageTarget, tcommon.Hash{}, false)
-	}
-
+	syncdl.ApplyChainInventoryPostLockPlan(syncdl.PlanChainInventoryPostLock(inventoryApplyResult), syncChainInventoryPostLockApplier{service: ss})
 	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
 }
 
@@ -1553,6 +1550,14 @@ func (a *syncChainInventoryApplier) MarkInventoryDone() {
 	// inbound INV, so outbound TRX advertisements never reach the producer's
 	// mempool. Mark done only for downloader's one-id completion signal.
 	a.peerState.done = true
+}
+
+type syncChainInventoryPostLockApplier struct {
+	service *SyncService
+}
+
+func (a syncChainInventoryPostLockApplier) WriteInventoryStageProgress(stage rawdb.StageID, target uint64) {
+	a.service.writeStageProgress(stage, target, tcommon.Hash{}, false)
 }
 
 type syncRetryAssignmentApplier struct {

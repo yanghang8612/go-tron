@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/types"
 )
 
@@ -308,6 +309,51 @@ func TestApplyChainInventoryBuildsAndAppliesPlan(t *testing.T) {
 	}
 }
 
+func TestPlanChainInventoryPostLock(t *testing.T) {
+	empty := PlanChainInventoryPostLock(ChainInventoryApplyResult{})
+	if len(empty.Steps) != 0 {
+		t.Fatalf("empty post-lock plan = %+v, want no steps", empty)
+	}
+
+	got := PlanChainInventoryPostLock(ChainInventoryApplyResult{
+		HasStageTarget: true,
+		StageTarget:    55,
+	})
+	want := ChainInventoryPostLockPlan{Steps: []ChainInventoryPostLockStep{{
+		Action:      ChainInventoryWriteStageProgress,
+		Stage:       rawdb.StageSyncInventory,
+		StageTarget: 55,
+	}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-lock plan = %+v, want %+v", got, want)
+	}
+}
+
+func TestApplyChainInventoryPostLockPlan(t *testing.T) {
+	applier := new(recordingChainInventoryPostLockApplier)
+	plan := ChainInventoryPostLockPlan{Steps: []ChainInventoryPostLockStep{
+		{Action: ChainInventoryPostLockStepAction(255)},
+		{Action: ChainInventoryWriteStageProgress, Stage: rawdb.StageSyncInventory, StageTarget: 75},
+	}}
+	got := ApplyChainInventoryPostLockPlan(plan, applier)
+
+	if !reflect.DeepEqual(got.AppliedSteps, []ChainInventoryPostLockStepAction{ChainInventoryWriteStageProgress}) ||
+		!reflect.DeepEqual(got.UnknownSteps, []ChainInventoryPostLockStepAction{ChainInventoryPostLockStepAction(255)}) ||
+		!got.WroteStageProgress || got.Stage != rawdb.StageSyncInventory || got.StageTarget != 75 {
+		t.Fatalf("post-lock apply result = %+v, want stage progress write and unknown step", got)
+	}
+	if !reflect.DeepEqual(applier.calls, []ChainInventoryPostLockStepAction{ChainInventoryWriteStageProgress}) ||
+		applier.stage != rawdb.StageSyncInventory || applier.target != 75 {
+		t.Fatalf("post-lock applier = calls:%+v stage:%s target:%d, want inventory stage 75",
+			applier.calls, applier.stage, applier.target)
+	}
+
+	nilResult := ApplyChainInventoryPostLockPlan(plan, nil)
+	if len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.WroteStageProgress {
+		t.Fatalf("nil post-lock apply result = %+v, want empty", nilResult)
+	}
+}
+
 type recordingChainInventoryApplier struct {
 	calls          []ChainInventoryStepAction
 	accepted       []types.BlockID
@@ -336,6 +382,18 @@ func (a *recordingChainInventoryApplier) UpdateInventoryProgress(remainNum int64
 func (a *recordingChainInventoryApplier) MarkInventoryDone() {
 	a.calls = append(a.calls, ChainInventoryMarkDone)
 	a.done = true
+}
+
+type recordingChainInventoryPostLockApplier struct {
+	calls  []ChainInventoryPostLockStepAction
+	stage  rawdb.StageID
+	target uint64
+}
+
+func (a *recordingChainInventoryPostLockApplier) WriteInventoryStageProgress(stage rawdb.StageID, target uint64) {
+	a.calls = append(a.calls, ChainInventoryWriteStageProgress)
+	a.stage = stage
+	a.target = target
 }
 
 func chainInventoryResponseReader(ids map[uint64]types.BlockID) func(uint64) (types.BlockID, bool) {
