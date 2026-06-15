@@ -793,6 +793,27 @@ func TestImportPipelineStageTasks(t *testing.T) {
 	}
 }
 
+func TestImportStageSpecsDefinePlannerOrder(t *testing.T) {
+	got := ImportStageSpecs()
+	want := []ImportStageSpec{
+		{Phase: ImportStagePhaseBodies, CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport},
+		{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution},
+		{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment},
+		{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ImportStageSpecs = %+v, want %+v", got, want)
+	}
+	got[1].Phase = ImportStagePhaseFinish
+	if again := ImportStageSpecs(); !reflect.DeepEqual(again, want) {
+		t.Fatalf("ImportStageSpecs returned aliased planner spec: %+v", again)
+	}
+	hash := tcommon.Hash{0x42}
+	if got := want[2].Task(7, hash); got != ImportCommitmentStageTask(7, hash) {
+		t.Fatalf("commitment spec task = %+v, want %+v", got, ImportCommitmentStageTask(7, hash))
+	}
+}
+
 func TestImportExecutionStageTasks(t *testing.T) {
 	hash := tcommon.Hash{0x42}
 	got := ImportExecutionStageTasks(7, hash)

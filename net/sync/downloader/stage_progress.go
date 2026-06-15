@@ -224,6 +224,65 @@ type ImportStageTask struct {
 	BlockHash      tcommon.Hash
 }
 
+// ImportStageSpec is one phase in the downloader-owned import stage planner.
+// The order returned by ImportStageSpecs is the only place that defines the
+// bodies -> execution -> commitment -> finish schedule.
+type ImportStageSpec struct {
+	Phase          ImportStagePhase
+	CanonicalStage rawdb.StageID
+	SyncStage      rawdb.StageID
+}
+
+var importStageSpecs = []ImportStageSpec{
+	{Phase: ImportStagePhaseBodies, CanonicalStage: rawdb.StageBodies, SyncStage: rawdb.StageSyncImport},
+	{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution},
+	{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment},
+	{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish},
+}
+
+// ImportStageSpecs returns the downloader import stage planner phases in
+// execution order.
+func ImportStageSpecs() []ImportStageSpec {
+	return append([]ImportStageSpec(nil), importStageSpecs...)
+}
+
+// Task returns this phase's concrete stage target for one import boundary.
+func (s ImportStageSpec) Task(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
+	return ImportStageTask{
+		Phase:          s.Phase,
+		CanonicalStage: s.CanonicalStage,
+		SyncStage:      s.SyncStage,
+		BlockNum:       blockNum,
+		BlockHash:      blockHash,
+	}
+}
+
+func importStageSpecForPhase(phase ImportStagePhase) (ImportStageSpec, bool) {
+	for _, spec := range importStageSpecs {
+		if spec.Phase == phase {
+			return spec, true
+		}
+	}
+	return ImportStageSpec{}, false
+}
+
+func importStageSpecForCanonicalStage(stage rawdb.StageID) (ImportStageSpec, bool) {
+	for _, spec := range importStageSpecs {
+		if spec.CanonicalStage == stage {
+			return spec, true
+		}
+	}
+	return ImportStageSpec{}, false
+}
+
+func importStageTaskForPhase(phase ImportStagePhase, blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
+	spec, ok := importStageSpecForPhase(phase)
+	if !ok {
+		return ImportStageTask{}
+	}
+	return spec.Task(blockNum, blockHash)
+}
+
 // ImportStageObservation is one canonical stage hook observation accepted by
 // the downloader-owned phase plan.
 type ImportStageObservation struct {
@@ -521,24 +580,11 @@ func (p ImportBatchStagePlan) PhasePlan(phase ImportStagePhase) (ImportStagePhas
 			return cloneImportStagePhasePlan(phasePlan), true
 		}
 	}
-	var (
-		tasks     []ImportStageTask
-		canonical rawdb.StageID
-		syncStage rawdb.StageID
-	)
-	switch phase {
-	case ImportStagePhaseBodies:
-		tasks, canonical, syncStage = p.Bodies, rawdb.StageBodies, rawdb.StageSyncImport
-	case ImportStagePhaseExecution:
-		tasks, canonical, syncStage = p.Execution, rawdb.StageExecution, rawdb.StageSyncExecution
-	case ImportStagePhaseCommitment:
-		tasks, canonical, syncStage = p.Commitment, rawdb.StageCommitment, rawdb.StageSyncCommitment
-	case ImportStagePhaseFinish:
-		tasks, canonical, syncStage = p.Finish, rawdb.StageFinish, rawdb.StageSyncFinish
-	default:
+	spec, ok := importStageSpecForPhase(phase)
+	if !ok {
 		return ImportStagePhasePlan{}, false
 	}
-	return newImportStagePhasePlan(phase, canonical, syncStage, tasks)
+	return newImportStagePhasePlan(spec.Phase, spec.CanonicalStage, spec.SyncStage, p.tasksForPhase(phase))
 }
 
 // TasksForPhase returns the batch-level stage tasks for phase in planner order.
@@ -552,23 +598,28 @@ func (p ImportBatchStagePlan) TasksForPhase(phase ImportStagePhase) []ImportStag
 
 func newImportStagePhasePlans(plan ImportBatchStagePlan) []ImportStagePhasePlan {
 	phases := make([]ImportStagePhasePlan, 0, 4)
-	for _, spec := range []struct {
-		phase     ImportStagePhase
-		canonical rawdb.StageID
-		sync      rawdb.StageID
-		tasks     []ImportStageTask
-	}{
-		{ImportStagePhaseBodies, rawdb.StageBodies, rawdb.StageSyncImport, plan.Bodies},
-		{ImportStagePhaseExecution, rawdb.StageExecution, rawdb.StageSyncExecution, plan.Execution},
-		{ImportStagePhaseCommitment, rawdb.StageCommitment, rawdb.StageSyncCommitment, plan.Commitment},
-		{ImportStagePhaseFinish, rawdb.StageFinish, rawdb.StageSyncFinish, plan.Finish},
-	} {
-		phasePlan, ok := newImportStagePhasePlan(spec.phase, spec.canonical, spec.sync, spec.tasks)
+	for _, spec := range importStageSpecs {
+		phasePlan, ok := newImportStagePhasePlan(spec.Phase, spec.CanonicalStage, spec.SyncStage, plan.tasksForPhase(spec.Phase))
 		if ok {
 			phases = append(phases, phasePlan)
 		}
 	}
 	return phases
+}
+
+func (p ImportBatchStagePlan) tasksForPhase(phase ImportStagePhase) []ImportStageTask {
+	switch phase {
+	case ImportStagePhaseBodies:
+		return p.Bodies
+	case ImportStagePhaseExecution:
+		return p.Execution
+	case ImportStagePhaseCommitment:
+		return p.Commitment
+	case ImportStagePhaseFinish:
+		return p.Finish
+	default:
+		return nil
+	}
 }
 
 func newImportStagePhasePlan(phase ImportStagePhase, canonical rawdb.StageID, syncStage rawdb.StageID, tasks []ImportStageTask) (ImportStagePhasePlan, bool) {
@@ -952,21 +1003,28 @@ func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier Impo
 // NewImportStageSchedule returns the bodies/execution/commitment/finish targets
 // required before sync progress can be published at one import boundary.
 func NewImportStageSchedule(blockNum uint64, blockHash tcommon.Hash) ImportStageSchedule {
-	body := ImportBodyStageTask(blockNum, blockHash)
-	execution := ImportExecutionStageTask(blockNum, blockHash)
-	commitment := ImportCommitmentStageTask(blockNum, blockHash)
-	finish := ImportFinishStageTask(blockNum, blockHash)
-	postBody := []ImportStageTask{execution, commitment, finish}
-	return ImportStageSchedule{
-		BlockNum:   blockNum,
-		BlockHash:  blockHash,
-		Body:       body,
-		Execution:  execution,
-		Commitment: commitment,
-		Finish:     finish,
-		PostBody:   postBody,
-		Tasks:      append([]ImportStageTask{body}, postBody...),
+	schedule := ImportStageSchedule{
+		BlockNum:  blockNum,
+		BlockHash: blockHash,
 	}
+	for _, spec := range importStageSpecs {
+		task := spec.Task(blockNum, blockHash)
+		schedule.Tasks = append(schedule.Tasks, task)
+		switch spec.Phase {
+		case ImportStagePhaseBodies:
+			schedule.Body = task
+		case ImportStagePhaseExecution:
+			schedule.Execution = task
+			schedule.PostBody = append(schedule.PostBody, task)
+		case ImportStagePhaseCommitment:
+			schedule.Commitment = task
+			schedule.PostBody = append(schedule.PostBody, task)
+		case ImportStagePhaseFinish:
+			schedule.Finish = task
+			schedule.PostBody = append(schedule.PostBody, task)
+		}
+	}
+	return schedule
 }
 
 // PlanSchedule returns the explicit stage planner result for schedule.
@@ -1495,58 +1553,48 @@ func ImportPipelineStageTasks(blockNum uint64, blockHash tcommon.Hash) []ImportS
 // ImportBodyStageTask returns the local body-import task for one applied
 // boundary. It must precede execution tasks before progress can be published.
 func ImportBodyStageTask(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
-	return ImportStageTask{
-		Phase:          ImportStagePhaseBodies,
-		CanonicalStage: rawdb.StageBodies,
-		SyncStage:      rawdb.StageSyncImport,
-		BlockNum:       blockNum,
-		BlockHash:      blockHash,
-	}
+	return importStageTaskForPhase(ImportStagePhaseBodies, blockNum, blockHash)
 }
 
 // ImportExecutionStageTask returns the execution task for one applied import
 // boundary.
 func ImportExecutionStageTask(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
-	return ImportStageTask{Phase: ImportStagePhaseExecution, CanonicalStage: rawdb.StageExecution, SyncStage: rawdb.StageSyncExecution, BlockNum: blockNum, BlockHash: blockHash}
+	return importStageTaskForPhase(ImportStagePhaseExecution, blockNum, blockHash)
 }
 
 // ImportCommitmentStageTask returns the commitment task for one applied import
 // boundary.
 func ImportCommitmentStageTask(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
-	return ImportStageTask{Phase: ImportStagePhaseCommitment, CanonicalStage: rawdb.StageCommitment, SyncStage: rawdb.StageSyncCommitment, BlockNum: blockNum, BlockHash: blockHash}
+	return importStageTaskForPhase(ImportStagePhaseCommitment, blockNum, blockHash)
 }
 
 // ImportFinishStageTask returns the finish task for one applied import
 // boundary.
 func ImportFinishStageTask(blockNum uint64, blockHash tcommon.Hash) ImportStageTask {
-	return ImportStageTask{Phase: ImportStagePhaseFinish, CanonicalStage: rawdb.StageFinish, SyncStage: rawdb.StageSyncFinish, BlockNum: blockNum, BlockHash: blockHash}
+	return importStageTaskForPhase(ImportStagePhaseFinish, blockNum, blockHash)
 }
 
 // ImportExecutionStageTasks returns the explicit execution/commitment/finish
 // task chain for one applied import boundary.
 func ImportExecutionStageTasks(blockNum uint64, blockHash tcommon.Hash) []ImportStageTask {
-	return []ImportStageTask{
-		ImportExecutionStageTask(blockNum, blockHash),
-		ImportCommitmentStageTask(blockNum, blockHash),
-		ImportFinishStageTask(blockNum, blockHash),
+	tasks := make([]ImportStageTask, 0, len(importStageSpecs)-1)
+	for _, spec := range importStageSpecs {
+		if spec.Phase == ImportStagePhaseBodies {
+			continue
+		}
+		tasks = append(tasks, spec.Task(blockNum, blockHash))
 	}
+	return tasks
 }
 
 // StageForCanonicalStage maps canonical block insertion stages to their
 // downloader/import diagnostic counterparts.
 func StageForCanonicalStage(stage rawdb.StageID) (rawdb.StageID, bool) {
-	switch stage {
-	case rawdb.StageBodies:
-		return rawdb.StageSyncImport, true
-	case rawdb.StageExecution:
-		return rawdb.StageSyncExecution, true
-	case rawdb.StageCommitment:
-		return rawdb.StageSyncCommitment, true
-	case rawdb.StageFinish:
-		return rawdb.StageSyncFinish, true
-	default:
+	spec, ok := importStageSpecForCanonicalStage(stage)
+	if !ok {
 		return "", false
 	}
+	return spec.SyncStage, true
 }
 
 // RepairSyncStageProgress keeps a hash-bound sync diagnostic stage row only
