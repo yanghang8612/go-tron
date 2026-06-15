@@ -535,6 +535,68 @@ func TestPlanImportBatchExecutionSchedulesDecodedTarget(t *testing.T) {
 	}
 }
 
+func TestImportBatchExecutionPlanAppliedPhaseCursor(t *testing.T) {
+	block1 := testBufferedBlock(1)
+	block2 := testBufferedBlock(2)
+	batch := testImportRunBatch(t, block1, block2)
+	if got := DecodeBufferedBatch(&batch); got.Action != BufferedBatchDecodeImport || got.Err != nil {
+		t.Fatalf("decode = %+v, want import", got)
+	}
+	execution := PlanImportBatchExecution(batch)
+	appliedStagePlan, ok := execution.AppliedStagePlan(2)
+	if !ok {
+		t.Fatal("applied two-block stage plan missing")
+	}
+
+	completeCollector := NewStageProgressCollector()
+	for _, block := range []*types.Block{block1, block2} {
+		for _, stage := range []rawdb.StageID{rawdb.StageBodies, rawdb.StageExecution, rawdb.StageCommitment, rawdb.StageFinish} {
+			completeCollector.Observe(stage, block.Number(), block.Hash())
+		}
+	}
+	completePlan := completeCollector.PlanBatch(appliedStagePlan)
+	complete, ok := execution.AppliedPhaseCursor(2, completePlan)
+	if !ok {
+		t.Fatal("complete applied phase cursor missing")
+	}
+	if !complete.Complete || complete.CompletedPhases != 4 || complete.CompletedTasks != 8 ||
+		complete.HasCurrent || complete.HasNextTask || complete.HasBlocked {
+		t.Fatalf("complete phase cursor = %+v, want all four phases complete", complete)
+	}
+
+	partialCollector := NewStageProgressCollector()
+	partialCollector.Observe(rawdb.StageBodies, block1.Number(), block1.Hash())
+	partialCollector.Observe(rawdb.StageBodies, block2.Number(), block2.Hash())
+	partialCollector.Observe(rawdb.StageExecution, block1.Number(), block1.Hash())
+	partialPlan := partialCollector.PlanBatch(appliedStagePlan)
+	partial, ok := execution.AppliedPhaseCursor(2, partialPlan)
+	if !ok {
+		t.Fatal("partial applied phase cursor missing")
+	}
+	wantNext := ImportExecutionStageTask(block2.Number(), block2.Hash())
+	if partial.Complete ||
+		partial.CompletedPhases != 1 ||
+		partial.CompletedTasks != 3 ||
+		!partial.HasCurrent ||
+		partial.CurrentPhase != ImportStagePhaseExecution ||
+		partial.CurrentCanonicalStage != rawdb.StageExecution ||
+		partial.CurrentSyncStage != rawdb.StageSyncExecution ||
+		partial.CurrentTaskIndex != 1 ||
+		!partial.HasNextTask ||
+		partial.NextTask != wantNext ||
+		!partial.HasBlocked ||
+		partial.BlockedStatus != ImportStageProgressMismatch {
+		t.Fatalf("partial phase cursor = %+v, want execution block2 mismatch", partial)
+	}
+	if len(partial.CurrentTasks) != 2 || partial.CurrentTasks[1] != wantNext {
+		t.Fatalf("partial current tasks = %+v, want two execution tasks ending at block2", partial.CurrentTasks)
+	}
+
+	if cursor, ok := execution.AppliedPhaseCursor(0, completePlan); ok || cursor.ScheduledTasks != 0 {
+		t.Fatalf("invalid applied cursor = %+v ok=%v, want absent", cursor, ok)
+	}
+}
+
 func TestImportBatchExecutionPlanStageObserverFiltersToPlannedSchedules(t *testing.T) {
 	block1 := testBufferedBlock(1)
 	block2 := testBufferedBlock(2)

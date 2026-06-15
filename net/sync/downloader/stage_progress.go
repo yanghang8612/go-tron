@@ -924,7 +924,9 @@ func PlanImportedBatchProgressForExecution(batch BufferedBatch, applied int, exe
 			plan.Progress = plan.StagePlan.Progress
 			plan.Decisions = plan.StagePlan.Decisions
 			plan.StageDiagnostics = plan.StagePlan.Diagnostics()
-			plan.StagePhaseCursor = PlanImportStagePhaseCursor(plan.AppliedStagePhases, plan.StagePlan)
+			if cursor, ok := execution.AppliedPhaseCursor(applied, plan.StagePlan); ok {
+				plan.StagePhaseCursor = cursor
+			}
 			plan = plan.withSteps()
 		}
 	}

@@ -245,6 +245,18 @@ func (p ImportBatchExecutionPlan) AppliedPhaseSchedule(applied int) (ImportBatch
 	return NewImportBatchStagePhaseSchedule(stagePlan), true
 }
 
+// AppliedPhaseCursor maps a planned/observed import-stage result onto the
+// execution plan's explicit phase schedule for the accepted prefix. This keeps
+// restart/report cursors tied to the same bodies/execution/commitment/finish
+// graph that was created before canonical insertion ran.
+func (p ImportBatchExecutionPlan) AppliedPhaseCursor(applied int, stagePlan ImportStagePlan) (ImportStagePhaseCursor, bool) {
+	phaseSchedule, ok := p.AppliedPhaseSchedule(applied)
+	if !ok {
+		return ImportStagePhaseCursor{}, false
+	}
+	return PlanImportStagePhaseCursor(phaseSchedule, stagePlan), true
+}
+
 // PhaseSchedule returns the explicit phase schedule for this execution plan.
 func (p ImportBatchExecutionPlan) PhaseSchedule() ImportBatchStagePhaseSchedule {
 	if !p.StagePhases.Empty() {
