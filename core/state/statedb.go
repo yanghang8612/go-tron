@@ -1700,9 +1700,31 @@ func (s *StateDB) GetFreezeV1ExpireTime(addr tcommon.Address, resourceType int64
 	return 0
 }
 
-// CancelAllUnfreezeV2 moves all pending V2 unfreeze entries back to frozen
-// and returns the total amount cancelled.
-func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address) int64 {
+// frozenV2WeightWithDelegated returns the V2 stake weight (in TRX) for a
+// resource on this account, mirroring java AccountCapsule
+// getFrozenV2BalanceWithDelegated for BANDWIDTH/ENERGY (frozen + outgoing
+// delegated) and getTronPowerFrozenV2Balance for TRON_POWER (no delegated leg).
+// Used to compute (newWeight - oldWeight) when refreezing cancelled unstakes.
+func (s *StateDB) frozenV2WeightWithDelegated(addr tcommon.Address, resource corepb.ResourceCode) int64 {
+	balance := s.GetFrozenV2Amount(addr, resource)
+	if resource != corepb.ResourceCode_TRON_POWER {
+		balance += s.GetDelegatedFrozenV2(addr, resource)
+	}
+	return balance / trxPrecisionState
+}
+
+// CancelAllUnfreezeV2 cancels the account's pending V2 unfreeze queue, splitting
+// each entry on `now` exactly like java CancelAllUnfreezeV2Processor.execute
+// (now = getLatestBlockHeaderTimestamp) and go actuator
+// CancelAllUnfreezeV2Actuator.Execute:
+//   - UnfreezeExpireTime  > now  -> refrozen into FrozenV2 and the global
+//     total_{net,energy,tron_power}_weight ledger is adjusted by
+//     (newWeight - oldWeight).
+//   - UnfreezeExpireTime <= now  -> expired; its amount is accumulated and
+//     RETURNED so the caller (opCancelAllUnfreezeV2) can add it to balance.
+//
+// The queue is always cleared. Returns the total expired (withdrawable) amount.
+func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) int64 {
 	obj := s.getStateObject(addr)
 	if obj == nil {
 		return 0
@@ -1712,14 +1734,37 @@ func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address) int64 {
 		return 0
 	}
 	s.journalAccount(addr, obj)
-	var total int64
+	var withdrawExpire int64
 	for _, u := range entries {
-		total += u.UnfreezeAmount
-		obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+		if u.UnfreezeExpireTime > now {
+			// Refreeze and update the global resource weight by the delta.
+			oldWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
+			obj.account.AddFreezeV2(u.Type, u.UnfreezeAmount)
+			newWeight := s.frozenV2WeightWithDelegated(addr, u.Type)
+			s.addResourceWeightForCancel(u.Type, newWeight-oldWeight)
+		} else {
+			withdrawExpire += u.UnfreezeAmount
+		}
 	}
 	obj.account.ClearUnfrozenV2()
 	obj.markDirty()
-	return total
+	return withdrawExpire
+}
+
+// addResourceWeightForCancel applies a weight delta to the matching global
+// total_*_weight, mirroring java repo.addTotalNet/Energy/TronPowerWeight.
+func (s *StateDB) addResourceWeightForCancel(resource corepb.ResourceCode, delta int64) {
+	if delta == 0 || s.dynProps == nil {
+		return
+	}
+	switch resource {
+	case corepb.ResourceCode_BANDWIDTH:
+		s.dynProps.AddTotalNetWeight(delta)
+	case corepb.ResourceCode_ENERGY:
+		s.dynProps.AddTotalEnergyWeight(delta)
+	case corepb.ResourceCode_TRON_POWER:
+		s.dynProps.AddTotalTronPowerWeight(delta)
+	}
 }
 
 // UnfreezeV2Count returns the number of pending unfreeze entries.

@@ -541,24 +541,40 @@ func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory
 }
 
 func opChainID(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	if !(interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId) && interpreter.tvm.DB != nil {
-		// Same freezer hazard as BLOCKHASH: once block 0 is frozen its hot
-		// row is pruned and a bare KV read would silently fall through to
-		// the (wrong) numeric ChainID. Resolve via BlockHashReader first.
+	// Mirrors java Program.getChainId (actuator/.../vm/program/Program.java):
+	//   chainId = getBlockByNum(0).getBlockId().getBytes();   // full 32 bytes
+	//   if (allowTvmCompatibleEvm() || allowOptimizedReturnValueOfChainId())
+	//       chainId = Arrays.copyOfRange(chainId, len-4, len); // low 4 bytes
+	// So the value is ALWAYS derived from the genesis block hash, never from a
+	// numeric chain id. Post-fork (either gate on) it is the LOW 4 bytes of the
+	// genesis hash (mainnet 0x2b6653dc, Nile 0xcd8690dc); pre-fork it is the
+	// full 32-byte genesis hash.
+	//
+	// Resolve the genesis hash via BlockHashReader first (same freezer hazard as
+	// BLOCKHASH: once block 0 is frozen its hot b-<0> row is pruned and a bare
+	// KV read goes blind), then fall back to ReadBlockKV for bare-memdb stores.
+	postFork := interpreter.tvmConfig.Compatibility || interpreter.tvmConfig.OptimizedReturnValueOfChainId
+	if interpreter.tvm.DB != nil {
+		var genesisHash []byte
 		if bhr, ok := interpreter.tvm.DB.(rawdb.BlockHashReader); ok {
 			if h, found := bhr.BlockHashByNumber(0); found {
-				var v uint256.Int
-				v.SetBytes(h.Bytes())
-				stack.push(&v)
-				return nil, nil
+				genesisHash = h.Bytes()
 			}
 		} else if genesis := rawdb.ReadBlockKV(interpreter.tvm.DB, 0); genesis != nil {
+			genesisHash = genesis.Hash().Bytes()
+		}
+		if genesisHash != nil {
+			if postFork && len(genesisHash) >= 4 {
+				genesisHash = genesisHash[len(genesisHash)-4:]
+			}
 			var v uint256.Int
-			v.SetBytes(genesis.Hash().Bytes())
+			v.SetBytes(genesisHash)
 			stack.push(&v)
 			return nil, nil
 		}
 	}
+	// Last resort when the genesis block cannot be resolved at all (no DB):
+	// fall back to the numeric chain id so the opcode still yields a value.
 	v := uint256.NewInt(uint64(interpreter.tvm.ChainID))
 	stack.push(v)
 	return nil, nil

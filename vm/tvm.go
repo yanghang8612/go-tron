@@ -911,6 +911,24 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 			return nil, energy, ErrTokenTransferFailed
 		}
 		if !tvm.StateDB.AccountExists(addr) {
+			// Symmetric to the TRX leg's validatePrecompileEndowment: java's
+			// callToPrecompiledAddress token path runs
+			// VMUtils.validateForSmartContract(..., tokenId, amount), which
+			// rejects a destination with no account ("...no ToAccount. And not
+			// allowed to create account in smart contract.", VMUtils.java:241)
+			// and is re-thrown as BytecodeExecutionException("transfer failure")
+			// (Program.java:1710-1716) — NOT a TransferException, so VM.play
+			// spends ALL energy and the receipt records UNKNOWN. Precompile
+			// addresses are never auto-created on this path, so surface
+			// ErrPrecompileTransferFailure (propagated by shouldPropagateCallError
+			// → spend-all) instead of the swallowed ErrInsufficientBalance.
+			// Plain-contract/plain-address targets are pre-created above by
+			// maybeCreateNormalAccountForValueTransfer, so they never reach here.
+			if getPrecompile(addr, tvm.cfg) != nil {
+				tvm.RevertLogs(logSnap)
+				tvm.StateDB.RevertToSnapshot(snap)
+				return nil, 0, ErrPrecompileTransferFailure
+			}
 			tvm.StateDB.RevertToSnapshot(snap)
 			return nil, energy, ErrInsufficientBalance
 		}

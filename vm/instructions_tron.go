@@ -7,13 +7,14 @@ package vm
 import (
 	"encoding/binary"
 	"errors"
-	"math/bits"
+	"math/big"
 
 	"github.com/holiman/uint256"
 	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/delegation"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/reward"
+	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -563,55 +564,80 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 	return nil, nil
 }
 
+// voteWitnessWordSize = DataWord.WORD_SIZE (32), the per-element stride.
+var voteWitnessWordSize = uint256.NewInt(32)
+
+// voteWitnessMemoryLimitBig is java EnergyCost.MEM_LIMIT (3 MB) as a big.Int;
+// calcMemEnergy throws OutOfMemory when memNeeded exceeds it.
+var voteWitnessMemoryLimitBig = new(big.Int).SetUint64(tvmMemoryLimit)
+
+// voteWitnessMemoryEnergyCost computes the VOTEWITNESS memory-expansion energy,
+// faithfully reproducing java EnergyCost's THREE fork variants
+// (OperationRegistry gates which one is installed):
+//
+//   - base getVoteWitnessCost (neither flag): size = count.mul(32) — a single
+//     DataWord.mul, wrapping mod 2^256, NO +32. memNeeded short-circuits to 0
+//     when the wrapped size is 0.
+//   - getVoteWitnessCost2 (#81 allowEnergyAdjustment, CURRENTLY ACTIVE):
+//     size = count.mul(32).add(32) — both DataWord ops wrap mod 2^256. This is
+//     the divergence fixed here: 2^251*32 ≡ 0, +32 = 32, so a huge witnessCount
+//     no longer (wrongly) overflows to OutOfMemory.
+//   - getVoteWitnessCost3 (#96 allowTvmOsaka): pure BigInteger, NO wrapping —
+//     size = count*32 + 32.
+//
+// In every variant memNeeded(offset, size) = size==0 ? 0 : offset+size is a
+// BigInteger sum (NO wrap), then calcMemEnergy throws OutOfMemory when memNeeded
+// > 3 MB. Returns (energyDelta, neededBytes, err); neededBytes <= 3 MB on
+// success so it always fits uint64.
 func voteWitnessMemoryEnergyCost(in *Interpreter, mem *Memory, witnessOffset, witnessCount, amountOffset, amountCount *uint256.Int) (uint64, uint64, error) {
-	includeLengthWord := in.tvmConfig.EnergyAdjustment || in.tvmConfig.Osaka
-	wEnd, ok := voteWitnessArrayEnd(witnessOffset, witnessCount, includeLengthWord)
-	if !ok {
+	wrap := !in.tvmConfig.Osaka                                 // base + #81 use DataWord (wrapping) math
+	includeLengthWord := !wrap || in.tvmConfig.EnergyAdjustment // +32 for #81 and #96, not base
+
+	wNeeded := voteWitnessArrayMemNeeded(witnessOffset, witnessCount, wrap, includeLengthWord)
+	aNeeded := voteWitnessArrayMemNeeded(amountOffset, amountCount, wrap, includeLengthWord)
+	needed := wNeeded
+	if aNeeded.Cmp(needed) > 0 {
+		needed = aNeeded
+	}
+	if needed.Cmp(voteWitnessMemoryLimitBig) > 0 {
 		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
 	}
-	aEnd, ok := voteWitnessArrayEnd(amountOffset, amountCount, includeLengthWord)
-	if !ok {
-		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
-	}
-	needed := wEnd
-	if aEnd > needed {
-		needed = aEnd
-	}
-	if needed > tvmMemoryLimit {
-		return 0, 0, newOutOfMemoryError(VOTEWITNESS)
-	}
+	neededU64 := needed.Uint64() // safe: needed <= 3 MB
 	var oldSize uint64
 	if mem != nil {
 		oldSize = uint64(mem.len())
 	}
-	if oldSize >= needed {
-		return 0, needed, nil
+	if oldSize >= neededU64 {
+		return 0, neededU64, nil
 	}
-	return memoryEnergyCost(needed) - memoryEnergyCost(oldSize), needed, nil
+	return memoryEnergyCost(neededU64) - memoryEnergyCost(oldSize), neededU64, nil
 }
 
-func voteWitnessArrayEnd(offset, count *uint256.Int, includeLengthWord bool) (uint64, bool) {
-	if !offset.IsUint64() || !count.IsUint64() {
-		return 0, false
-	}
-	hi, size := bits.Mul64(count.Uint64(), 32)
-	if hi != 0 {
-		return 0, false
-	}
-	if size == 0 && !includeLengthWord {
-		return 0, true
-	}
-	if includeLengthWord {
-		if size > ^uint64(0)-32 {
-			return 0, false
+// voteWitnessArrayMemNeeded returns java memNeeded(offset, size) for one array.
+// When wrap is true the size word is built with DataWord (uint256, mod 2^256)
+// arithmetic; otherwise with non-wrapping big.Int (the Osaka cost3 path).
+// includeLengthWord adds the 32-byte dynamic-array length word (#81/#96).
+func voteWitnessArrayMemNeeded(offset, count *uint256.Int, wrap, includeLengthWord bool) *big.Int {
+	var size *big.Int
+	if wrap {
+		// DataWord.mul(32) [+ DataWord.add(32)], each mod 2^256.
+		w := new(uint256.Int).Mul(count, voteWitnessWordSize)
+		if includeLengthWord {
+			w.Add(w, voteWitnessWordSize)
 		}
-		size += 32
+		size = w.ToBig()
+	} else {
+		// Pure BigInteger: count*32 + 32 (Osaka cost3).
+		size = new(big.Int).Mul(count.ToBig(), big.NewInt(32))
+		if includeLengthWord {
+			size.Add(size, big.NewInt(32))
+		}
 	}
-	off := offset.Uint64()
-	if off > ^uint64(0)-size {
-		return 0, false
+	// memNeeded: size==0 -> 0, else offset + size (BigInteger, no wrap).
+	if size.Sign() == 0 {
+		return new(big.Int)
 	}
-	return off + size, true
+	return new(big.Int).Add(offset.ToBig(), size)
 }
 
 func memoryArrayLength(mem *Memory, offset int64) (int64, bool) {
@@ -1053,8 +1079,12 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	amount := int64(amountWord.Uint64())
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	caller := contract.Address
+	// java UnfreezeBalanceV2Processor uses getLatestBlockHeaderTimestamp() for the
+	// unfreezing-count gate, the expired-withdrawal sweep, and the new entry's
+	// expire time — the chain head's timestamp, NOT tvm.Timestamp (current block).
+	now := tvmLatestBlockHeaderTimestamp(in.tvm)
 
-	if amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), in.tvm.Timestamp) >= 32 {
+	if amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), now) >= 32 {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1064,7 +1094,7 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 		return nil, nil
 	}
 	tvmWithdrawReward(in.tvm, caller)
-	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, in.tvm.Timestamp)
+	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, now)
 	if withdrawnExpired > 0 {
 		in.tvm.StateDB.AddBalance(caller, withdrawnExpired)
 	}
@@ -1079,7 +1109,7 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	if in.tvm.DynProps != nil && in.tvm.DynProps.UnfreezeDelayDays() > 0 {
 		delayDays = in.tvm.DynProps.UnfreezeDelayDays()
 	}
-	expireMs := in.tvm.Timestamp + delayDays*86400_000
+	expireMs := now + delayDays*86400_000
 	in.tvm.StateDB.AddUnfreezeV2(caller, resource, amount, expireMs)
 	if err := updateTVMVotesAfterUnfreezeV2(in.tvm, caller, resource); err != nil {
 		stack.push(uint256.NewInt(0))
@@ -1096,10 +1126,27 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 // Stack: → cancelledAmount
 
 func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	cancelled := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address)
-	result := uint256.NewInt(0)
-	result.SetUint64(uint64(cancelled))
-	stack.push(result)
+	// java CancelAllUnfreezeV2Processor.execute uses now =
+	// getLatestBlockHeaderTimestamp() (the chain head's timestamp, the block
+	// BEFORE the one being applied) to split expired vs unexpired entries — the
+	// same source as the actuator's ctx.PrevBlockTime and the rest of the VM
+	// stake code (tvm.go suicide path). NOT tvm.Timestamp, which is the current
+	// block's TIMESTAMP-opcode value.
+	var now int64
+	if in.tvm.DynProps != nil {
+		now = in.tvm.DynProps.LatestBlockHeaderTimestamp()
+	}
+	// CancelAllUnfreezeV2 refreezes unexpired entries (updating global weight)
+	// and returns the expired total, which java/actuator add to the balance.
+	expired := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address, now)
+	if expired > 0 {
+		in.tvm.StateDB.AddBalance(contract.Address, expired)
+	}
+	// java OperationActions.cancelAllUnfreezeV2Action pushes ONE/ZERO for
+	// success/failure (Program.cancelAllUnfreezeV2Action returns boolean), NOT
+	// the cancelled amount. The processor succeeds whenever the account exists,
+	// which is guaranteed here.
+	stack.push(uint256.NewInt(1))
 	return nil, nil
 }
 
@@ -1108,7 +1155,7 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 
 func opWithdrawExpireUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	caller := contract.Address
-	released := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, in.tvm.Timestamp)
+	released := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, tvmLatestBlockHeaderTimestamp(in.tvm))
 	if released > 0 {
 		in.tvm.StateDB.AddBalance(caller, released)
 	}
@@ -1147,8 +1194,46 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	in.tvm.StateDB.ReduceFreezeV2(caller, resource, amount)
 	in.tvm.StateDB.AddDelegatedFrozenV2(caller, resource, amount)
 	in.tvm.StateDB.AddAcquiredDelegatedFrozenV2(receiver, resource, amount)
+
+	// Persist the per-pair DelegatedResourceV2 record + owner delegation index,
+	// identical to actuator DelegateResourceActuator.Execute and java
+	// DelegateResourceProcessor.delegateResource. The VM native contract always
+	// writes the UNLOCKED record (java createDbKeyV2(owner, receiver, false) —
+	// the opcode has no lock parameter), so without this the per-pair state that
+	// UNDELEGATERESOURCE / getDelegatedResource read back would be absent.
+	if err := tvmWriteDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount); err != nil {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
+}
+
+// tvmWriteDelegateRecord mirrors actuator DelegateResourceActuator.Execute's
+// per-pair record + index bookkeeping (java DelegateResourceProcessor.
+// delegateResource): add `amount` to the owner→receiver UNLOCKED
+// DelegatedResourceV2 record and register the receiver in the owner's
+// delegation index. Aggregate balances are updated by the caller.
+func tvmWriteDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) error {
+	dr := sdb.ReadDelegatedResourceV2(owner, receiver, false)
+	if dr == nil {
+		dr = &rawdb.DelegatedResource{From: owner, To: receiver}
+	}
+	if resource == corepb.ResourceCode_BANDWIDTH {
+		dr.FrozenBalanceForBandwidth += amount
+	} else {
+		dr.FrozenBalanceForEnergy += amount
+	}
+	if err := sdb.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
+		return err
+	}
+	receivers := sdb.ReadDelegationIndex(owner)
+	for _, r := range receivers {
+		if r == receiver {
+			return nil
+		}
+	}
+	return sdb.WriteDelegationIndex(owner, append(receivers, receiver))
 }
 
 // ── 0xDF UNDELEGATERESOURCE ───────────────────────────────────────────────────
@@ -1167,8 +1252,25 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	receiver := uint256ToAddress(&receiverWord)
 	caller := contract.Address
 
-	delegated := in.tvm.StateDB.GetDelegatedFrozenV2(caller, resource)
-	if amount > delegated {
+	// Validate against the per-pair UNLOCKED DelegatedResourceV2 record, NOT the
+	// aggregate delegated balance. Mirrors java UnDelegateResourceProcessor.
+	// validate (reads createDbKeyV2(owner, receiver, false), rejects when the
+	// record is absent or its frozen balance < amount) and actuator
+	// UnDelegateResourceActuator. The old aggregate check let an owner undelegate
+	// from a receiver it never delegated to (cross-receiver leak) as long as it
+	// had delegated the amount to some other receiver.
+	dr := in.tvm.StateDB.ReadDelegatedResourceV2(caller, receiver, false)
+	if dr == nil {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
+	var recorded int64
+	if resource == corepb.ResourceCode_BANDWIDTH {
+		recorded = dr.FrozenBalanceForBandwidth
+	} else {
+		recorded = dr.FrozenBalanceForEnergy
+	}
+	if amount > recorded {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1182,6 +1284,50 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	in.tvm.StateDB.AddFreezeV2(caller, resource, amount)
 	// java unDelegateIncrease runs UNCONDITIONALLY and blends the receiver window.
 	delegation.FoldUsageIntoOwner(in.tvm.StateDB, dp, caller, resource, transfer, recvRawWindow, recvOptimized, resourceTime)
+
+	// Decrement the per-pair record; delete record + index when fully drained.
+	// Mirrors actuator UnDelegateResourceActuator.Execute / java
+	// UnDelegateResourceProcessor.execute.
+	if err := tvmReduceDelegateRecord(in.tvm.StateDB, caller, receiver, resource, amount); err != nil {
+		stack.push(uint256.NewInt(0))
+		return nil, nil
+	}
 	stack.push(uint256.NewInt(1))
 	return nil, nil
+}
+
+// tvmReduceDelegateRecord subtracts `amount` from the owner→receiver UNLOCKED
+// DelegatedResourceV2 record. When both resource legs reach zero the record and
+// the owner's delegation-index entry are removed. Mirrors actuator
+// UnDelegateResourceActuator.Execute and java UnDelegateResourceProcessor.
+func tvmReduceDelegateRecord(sdb *state.StateDB, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) error {
+	dr := sdb.ReadDelegatedResourceV2(owner, receiver, false)
+	if dr == nil {
+		return nil
+	}
+	if resource == corepb.ResourceCode_BANDWIDTH {
+		dr.FrozenBalanceForBandwidth -= amount
+	} else {
+		dr.FrozenBalanceForEnergy -= amount
+	}
+	if dr.FrozenBalanceForBandwidth <= 0 && dr.FrozenBalanceForEnergy <= 0 {
+		if err := sdb.DeleteDelegatedResourceV2(owner, receiver, false); err != nil {
+			return err
+		}
+	} else if err := sdb.WriteDelegatedResourceV2(owner, receiver, false, dr); err != nil {
+		return err
+	}
+	// Remove the index entry only when no record remains for this pair.
+	if sdb.ReadDelegatedResourceV2(owner, receiver, false) == nil &&
+		sdb.ReadDelegatedResourceV2(owner, receiver, true) == nil {
+		receivers := sdb.ReadDelegationIndex(owner)
+		out := receivers[:0]
+		for _, r := range receivers {
+			if r != receiver {
+				out = append(out, r)
+			}
+		}
+		return sdb.WriteDelegationIndex(owner, out)
+	}
+	return nil
 }
