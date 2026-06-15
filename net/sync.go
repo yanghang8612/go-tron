@@ -946,28 +946,28 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		peerState: ps,
 		headNum:   ss.chain.CurrentBlock().Number(),
 	})
-	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
-	inventoryRun := syncdl.ApplyChainInventoryRun(syncdl.ChainInventoryInput{
-		CurrentTarget:  ss.targetHeadNum,
-		ExistingQueued: len(ps.fetchList),
-		RemainNum:      inv.RemainNum,
-		InventoryLimit: maxChainInventorySize,
-		Candidates:     candidates,
-	}, inventoryApplier)
 
-	syncLog.Debug("Chain inventory received",
-		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
-	out := ss.fillFetchSlotsLocked(time.Now())
-	progress := ss.sessionProgressLocked()
-	settlementApplier := syncPostInventorySettlementApplier{service: ss}
-	postInventory := syncdl.ApplyPostInventoryRun(syncdl.PostInventoryRunInput{
-		OutboundRequests: len(out),
-		Progress:         progress,
-	}, settlementApplier)
+	sessionApplier := &syncChainInventorySessionRunApplier{
+		service:         ss,
+		peerState:       ps,
+		now:             time.Now(),
+		inventoryBlocks: len(inv.Ids),
+		remainNum:       inv.RemainNum,
+		peerID:          peer.ID(),
+	}
+	inventorySession := syncdl.ApplyChainInventorySessionRun(syncdl.ChainInventorySessionRunInput{
+		Inventory: syncdl.ChainInventoryInput{
+			CurrentTarget:  ss.targetHeadNum,
+			ExistingQueued: len(ps.fetchList),
+			RemainNum:      inv.RemainNum,
+			InventoryLimit: maxChainInventorySize,
+			Candidates:     candidates,
+		},
+	}, sessionApplier)
 	ss.mu.Unlock()
 
-	syncdl.ApplyChainInventoryPostLockPlan(inventoryRun.PostLock, syncChainInventoryPostLockApplier{service: ss})
-	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
+	syncdl.ApplyChainInventoryPostLockPlan(inventorySession.Inventory.PostLock, syncChainInventoryPostLockApplier{service: ss})
+	syncdl.ApplyPostInventoryRunPostLockPlan(inventorySession.PostInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: sessionApplier.out}, sessionApplier)
 }
 
 type syncInventoryCandidateFactReader struct {
@@ -1020,6 +1020,58 @@ func (r syncInventoryCandidateFactReader) ReserveInventoryBlockPath(id types.Blo
 		return false
 	}
 	return r.service.reserveBlockPathLocked(id)
+}
+
+type syncChainInventorySessionRunApplier struct {
+	service         *SyncService
+	peerState       *syncPeerState
+	now             time.Time
+	inventoryBlocks int
+	remainNum       int64
+	peerID          string
+	out             []outboundSyncRequest
+}
+
+func (a *syncChainInventorySessionRunApplier) AppendAcceptedInventory(ids []types.BlockID) {
+	(&syncChainInventoryApplier{service: a.service, peerState: a.peerState}).AppendAcceptedInventory(ids)
+}
+
+func (a *syncChainInventorySessionRunApplier) UpdateInventoryProgress(remainNum int64, target syncdl.InventoryTargetUpdate, hasTarget bool, stageTarget uint64, hasStageTarget bool) {
+	(&syncChainInventoryApplier{service: a.service, peerState: a.peerState}).UpdateInventoryProgress(remainNum, target, hasTarget, stageTarget, hasStageTarget)
+}
+
+func (a *syncChainInventorySessionRunApplier) MarkInventoryDone() {
+	(&syncChainInventoryApplier{service: a.service, peerState: a.peerState}).MarkInventoryDone()
+}
+
+func (a *syncChainInventorySessionRunApplier) ResetSyncUnderLock() {
+	(syncPostInventorySettlementApplier{service: a.service}).ResetSyncUnderLock()
+}
+
+func (a *syncChainInventorySessionRunApplier) MirrorLegacyUnderLock() {
+	(syncPostInventorySettlementApplier{service: a.service}).MirrorLegacyUnderLock()
+}
+
+func (a *syncChainInventorySessionRunApplier) TryFindSyncPeer() {
+	(syncPostInventorySettlementApplier{service: a.service}).TryFindSyncPeer()
+}
+
+func (a *syncChainInventorySessionRunApplier) FinishSync() {
+	(syncPostInventorySettlementApplier{service: a.service}).FinishSync()
+}
+
+func (a *syncChainInventorySessionRunApplier) ChainInventoryApplied() {
+	syncLog.Debug("Chain inventory received",
+		"blocks", a.inventoryBlocks, "queued", len(a.peerState.fetchList), "remain", a.remainNum, "peer", a.peerID)
+}
+
+func (a *syncChainInventorySessionRunApplier) RefillFetchSlotsAfterInventory() int {
+	a.out = a.service.fillFetchSlotsLocked(a.now)
+	return len(a.out)
+}
+
+func (a *syncChainInventorySessionRunApplier) PostInventoryRunProgress() syncdl.SessionProgress {
+	return a.service.sessionProgressLocked()
 }
 
 func (ss *SyncService) fetchNextBatch() {

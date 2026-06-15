@@ -411,6 +411,86 @@ func TestApplyChainInventoryRunPlanUsesProvidedPlan(t *testing.T) {
 	}
 }
 
+func TestApplyChainInventorySessionRunAppliesInventoryThenPostInventory(t *testing.T) {
+	id11 := queueID(11)
+	input := ChainInventorySessionRunInput{Inventory: ChainInventoryInput{
+		CurrentTarget:  5,
+		ExistingQueued: 1,
+		RemainNum:      3,
+		InventoryLimit: 2,
+		Candidates: []InventoryCandidate{
+			{ID: id11, Facts: InventoryCandidateFacts{ReservedPath: true}},
+		},
+	}}
+	applier := &recordingChainInventorySessionRunApplier{
+		outbound: 2,
+		progress: SessionProgress{
+			Syncing:     true,
+			CurrentHead: 5,
+			TargetHead:  9,
+		},
+	}
+
+	got := ApplyChainInventorySessionRun(input, applier)
+	wantInventoryPlan := PlanChainInventory(input.Inventory)
+	if !reflect.DeepEqual(got.Plan.Inventory.Inventory, wantInventoryPlan) {
+		t.Fatalf("session inventory plan = %+v, want %+v", got.Plan.Inventory.Inventory, wantInventoryPlan)
+	}
+	if got.OutboundRequests != 2 || applier.refills != 1 || applier.progressReads != 1 {
+		t.Fatalf("session refill/progress = out:%d refills:%d reads:%d, want 2/1/1",
+			got.OutboundRequests, applier.refills, applier.progressReads)
+	}
+	if !reflect.DeepEqual(applier.inventory.calls, []ChainInventoryStepAction{ChainInventoryAppendAccepted, ChainInventoryUpdateProgress}) {
+		t.Fatalf("inventory calls = %+v, want append/update", applier.inventory.calls)
+	}
+	if !reflect.DeepEqual(applier.postInventory.calls, []PostInventorySettlementStepAction{PostInventoryMirror}) {
+		t.Fatalf("post-inventory calls = %+v, want mirror", applier.postInventory.calls)
+	}
+	if !reflect.DeepEqual(applier.events, []string{"append", "update", "applied", "refill", "progress", "mirror"}) {
+		t.Fatalf("events = %+v, want inventory applied before refill/progress/mirror", applier.events)
+	}
+	if len(got.Inventory.PostLock.Steps) != 1 ||
+		got.Inventory.PostLock.Steps[0].Action != ChainInventoryWriteStageProgress ||
+		got.Inventory.PostLock.Steps[0].StageTarget != wantInventoryPlan.StageTarget {
+		t.Fatalf("inventory post-lock = %+v, want stage target %d", got.Inventory.PostLock, wantInventoryPlan.StageTarget)
+	}
+	if !got.PostInventory.Plan.Dispatch.SendOutboundRequests ||
+		len(got.PostInventory.LockedSettlement.AppliedSteps) != 1 ||
+		got.PostInventory.LockedSettlement.AppliedSteps[0] != PostInventoryMirror {
+		t.Fatalf("post-inventory result = %+v, want locked mirror and dispatch plan", got.PostInventory)
+	}
+
+	nilResult := ApplyChainInventorySessionRun(input, nil)
+	if len(nilResult.Inventory.Inventory.AppliedSteps) != 0 ||
+		len(nilResult.Inventory.PostLock.Steps) != 0 ||
+		nilResult.OutboundRequests != 0 ||
+		len(nilResult.PostInventory.LockedSettlement.AppliedSteps) != 0 {
+		t.Fatalf("nil session result = %+v, want no side effects", nilResult)
+	}
+}
+
+func TestApplyChainInventorySessionRunPlanUsesProvidedInventoryPlan(t *testing.T) {
+	id11 := queueID(11)
+	plan := ChainInventorySessionRunPlan{Inventory: ChainInventoryRunPlan{Inventory: ChainInventoryPlan{Steps: []ChainInventoryStep{
+		{Action: ChainInventoryAppendAccepted, Accepted: []types.BlockID{id11}},
+		{Action: ChainInventoryUpdateProgress, StageTarget: 88, HasStageTarget: true},
+	}}}}
+	applier := &recordingChainInventorySessionRunApplier{
+		progress: SessionProgress{Syncing: true, CurrentHead: 3, TargetHead: 7},
+	}
+	got := ApplyChainInventorySessionRunPlan(plan, applier)
+
+	if !reflect.DeepEqual(got.Plan.Inventory.Inventory, plan.Inventory.Inventory) {
+		t.Fatalf("provided inventory plan = %+v, want %+v", got.Plan.Inventory.Inventory, plan.Inventory.Inventory)
+	}
+	if len(got.Inventory.PostLock.Steps) != 1 || got.Inventory.PostLock.Steps[0].StageTarget != 88 {
+		t.Fatalf("post-lock = %+v, want provided stage target 88", got.Inventory.PostLock)
+	}
+	if applier.refills != 1 || applier.progressReads != 1 {
+		t.Fatalf("refills/progress reads = %d/%d, want 1/1", applier.refills, applier.progressReads)
+	}
+}
+
 func TestPlanChainInventoryPostLock(t *testing.T) {
 	empty := PlanChainInventoryPostLock(ChainInventoryApplyResult{})
 	if len(empty.Steps) != 0 {
@@ -496,6 +576,67 @@ func (a *recordingChainInventoryPostLockApplier) WriteInventoryStageProgress(sta
 	a.calls = append(a.calls, ChainInventoryWriteStageProgress)
 	a.stage = stage
 	a.target = target
+}
+
+type recordingChainInventorySessionRunApplier struct {
+	inventory     recordingChainInventoryApplier
+	postInventory recordingPostInventorySettlementApplier
+	outbound      int
+	progress      SessionProgress
+	refills       int
+	progressReads int
+	events        []string
+}
+
+func (a *recordingChainInventorySessionRunApplier) AppendAcceptedInventory(ids []types.BlockID) {
+	a.events = append(a.events, "append")
+	a.inventory.AppendAcceptedInventory(ids)
+}
+
+func (a *recordingChainInventorySessionRunApplier) UpdateInventoryProgress(remainNum int64, target InventoryTargetUpdate, hasTarget bool, stageTarget uint64, hasStageTarget bool) {
+	a.events = append(a.events, "update")
+	a.inventory.UpdateInventoryProgress(remainNum, target, hasTarget, stageTarget, hasStageTarget)
+}
+
+func (a *recordingChainInventorySessionRunApplier) MarkInventoryDone() {
+	a.events = append(a.events, "done")
+	a.inventory.MarkInventoryDone()
+}
+
+func (a *recordingChainInventorySessionRunApplier) ResetSyncUnderLock() {
+	a.events = append(a.events, "reset")
+	a.postInventory.ResetSyncUnderLock()
+}
+
+func (a *recordingChainInventorySessionRunApplier) MirrorLegacyUnderLock() {
+	a.events = append(a.events, "mirror")
+	a.postInventory.MirrorLegacyUnderLock()
+}
+
+func (a *recordingChainInventorySessionRunApplier) TryFindSyncPeer() {
+	a.events = append(a.events, "tryFind")
+	a.postInventory.TryFindSyncPeer()
+}
+
+func (a *recordingChainInventorySessionRunApplier) FinishSync() {
+	a.events = append(a.events, "finish")
+	a.postInventory.FinishSync()
+}
+
+func (a *recordingChainInventorySessionRunApplier) ChainInventoryApplied() {
+	a.events = append(a.events, "applied")
+}
+
+func (a *recordingChainInventorySessionRunApplier) RefillFetchSlotsAfterInventory() int {
+	a.events = append(a.events, "refill")
+	a.refills++
+	return a.outbound
+}
+
+func (a *recordingChainInventorySessionRunApplier) PostInventoryRunProgress() SessionProgress {
+	a.events = append(a.events, "progress")
+	a.progressReads++
+	return a.progress
 }
 
 type recordingInventoryCandidateFactReader struct {

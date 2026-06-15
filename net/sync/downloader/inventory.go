@@ -164,6 +164,45 @@ type ChainInventoryRunApplyResult struct {
 	PostLock  ChainInventoryPostLockPlan
 }
 
+// ChainInventorySessionRunInput is the lock-held state for accepting a
+// CHAIN_INVENTORY response before fetch slots refill.
+type ChainInventorySessionRunInput struct {
+	Inventory ChainInventoryInput
+}
+
+// ChainInventorySessionRunPlan groups the inventory response run with the
+// post-inventory session settlement run.
+type ChainInventorySessionRunPlan struct {
+	Inventory     ChainInventoryRunPlan
+	PostInventory PostInventoryRunPlan
+}
+
+// ChainInventorySessionRunApplyResult groups the lock-held inventory apply
+// result with the lock-held post-inventory settlement result. The caller still
+// owns post-lock stage-progress writes, network dispatch, and after-dispatch
+// settlement.
+type ChainInventorySessionRunApplyResult struct {
+	Plan             ChainInventorySessionRunPlan
+	Inventory        ChainInventoryRunApplyResult
+	OutboundRequests int
+	PostInventory    PostInventoryRunApplyResult
+}
+
+// ChainInventorySessionRunPlanApplier performs the lock-held side effects
+// needed to accept inventory, refill fetch slots, and settle the session.
+type ChainInventorySessionRunPlanApplier interface {
+	ChainInventoryPlanApplier
+	PostInventorySettlementPlanApplier
+	RefillFetchSlotsAfterInventory() int
+	PostInventoryRunProgress() SessionProgress
+}
+
+// ChainInventorySessionRunObserver optionally observes lock-held milestones in
+// the inventory session run without changing the planner's decisions.
+type ChainInventorySessionRunObserver interface {
+	ChainInventoryApplied()
+}
+
 // BuildInventoryCandidates gathers the downloader facts for advertised block
 // IDs in the java-tron-compatible order: drop anything already known/requested,
 // then reject same-peer duplicates, then reserve the canonical block path.
@@ -326,6 +365,43 @@ func ApplyChainInventoryRunPlan(plan ChainInventoryRunPlan, applier ChainInvento
 	result.Inventory = ApplyChainInventoryPlan(plan.Inventory, applier)
 	result.PostLock = PlanChainInventoryPostLock(result.Inventory)
 	result.Plan.PostLock = result.PostLock
+	return result
+}
+
+// PlanChainInventorySessionRun derives the downloader-owned lock-held plan for
+// an accepted CHAIN_INVENTORY response.
+func PlanChainInventorySessionRun(in ChainInventorySessionRunInput) ChainInventorySessionRunPlan {
+	return ChainInventorySessionRunPlan{
+		Inventory: ChainInventoryRunPlan{
+			Inventory: PlanChainInventory(in.Inventory),
+		},
+	}
+}
+
+// ApplyChainInventorySessionRun applies the lock-held inventory update and
+// post-inventory settlement in downloader-owned order.
+func ApplyChainInventorySessionRun(in ChainInventorySessionRunInput, applier ChainInventorySessionRunPlanApplier) ChainInventorySessionRunApplyResult {
+	return ApplyChainInventorySessionRunPlan(PlanChainInventorySessionRun(in), applier)
+}
+
+// ApplyChainInventorySessionRunPlan applies a prebuilt inventory session run.
+func ApplyChainInventorySessionRunPlan(plan ChainInventorySessionRunPlan, applier ChainInventorySessionRunPlanApplier) ChainInventorySessionRunApplyResult {
+	result := ChainInventorySessionRunApplyResult{Plan: plan}
+	result.Inventory = ApplyChainInventoryRunPlan(plan.Inventory, applier)
+	result.Plan.Inventory = result.Inventory.Plan
+	if applier == nil {
+		return result
+	}
+	if observer, ok := applier.(ChainInventorySessionRunObserver); ok {
+		observer.ChainInventoryApplied()
+	}
+	result.OutboundRequests = applier.RefillFetchSlotsAfterInventory()
+	postInventory := PlanPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: result.OutboundRequests,
+		Progress:         applier.PostInventoryRunProgress(),
+	})
+	result.PostInventory = ApplyPostInventoryRunLockedPlan(postInventory, applier)
+	result.Plan.PostInventory = result.PostInventory.Plan
 	return result
 }
 
