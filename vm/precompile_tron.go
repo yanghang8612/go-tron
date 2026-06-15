@@ -1415,7 +1415,15 @@ func recoverStakingUsage(oldUsage, lastTime, now, windowSize int64, harden bool)
 		averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
 		return bigMulDivStaking(averageLastUsage, windowSize, resourcePrecisionForStaking)
 	}
-	return oldUsage * remaining / windowSize
+	// Non-harden: mirror core.increase(oldUsage, 0, lastTime, now, windowSize)
+	// exactly (java RepositoryImpl.increase/getUsage, precision=1_000_000) with
+	// int64 arithmetic to match java's `long` overflow semantics. A plain
+	// `oldUsage * remaining / windowSize` truncate drifts ~1 unit per recovered
+	// block — the same free-vs-burn fork fixed for the settle path in 6cfc163.
+	averageLastUsage := divideCeilInt64(oldUsage*resourcePrecisionForStaking, windowSize)
+	decay := float64(remaining) / float64(windowSize)
+	averageLastUsage = int64(math.Round(float64(averageLastUsage) * decay))
+	return averageLastUsage * windowSize / resourcePrecisionForStaking
 }
 
 func stakingUsageToBalance(usage, totalWeight, totalLimit int64, harden bool) int64 {
@@ -1439,6 +1447,17 @@ func divideCeilBigInt(numerator, denominator *big.Int) int64 {
 		q.Add(q, big.NewInt(1))
 	}
 	return q.Int64()
+}
+
+// divideCeilInt64 mirrors core.divideCeil: ceil(numerator/denominator) in int64
+// arithmetic. Used by the non-harden recovery branch so it stays byte-identical
+// to the settle path's core.increase (and to java's primitive-long path).
+func divideCeilInt64(numerator, denominator int64) int64 {
+	result := numerator / denominator
+	if numerator%denominator > 0 {
+		result++
+	}
+	return result
 }
 
 func bigMulDivStaking(a, b, c int64) int64 {
