@@ -273,3 +273,59 @@ func TestVoteWitnessOpcodeExpandsMemoryAtLimit(t *testing.T) {
 		t.Fatalf("remaining energy: got %d, want %d", got, wantEnergy)
 	}
 }
+
+// TestSelfDestructCancelsVotes locks java-tron Program.withdrawRewardAndCancelVote:
+// when a voting contract self-destructs under allow_tvm_vote, its votes must be
+// cancelled — a pending VotesStore record with empty NewVotes so the next
+// maintenance fold subtracts them from the witnesses — and its allowance rolled
+// into balance. Without this the witness vote tally drifts above the voter sum
+// (the Nile 21,210,788 stall: witness 41a3ee67 tally = voter-sum + 1).
+func TestSelfDestructCancelsVotes(t *testing.T) {
+	tvm, statedb, _ := newVoteRewardTVM(t)
+	contract := voteRewardAddr(0x11)
+	witness := voteRewardAddr(0x12)
+	statedb.CreateAccount(contract, corepb.AccountType_Contract)
+	statedb.AddBalance(contract, 100)
+	statedb.SetAllowance(contract, 5)
+	statedb.SetVotes(contract, []*corepb.Vote{{VoteAddress: witness.Bytes(), VoteCount: 7}})
+	// beginCycle > currentCycle (10) -> tvmWithdrawReward returns early (no reward math).
+	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
+
+	tvmWithdrawRewardAndCancelVote(tvm, contract)
+
+	if vs := statedb.GetVotes(contract); len(vs) != 0 {
+		t.Fatalf("persistent votes not cleared on suicide: %v", vs)
+	}
+	rec := statedb.ReadVotes(contract)
+	if rec == nil {
+		t.Fatal("expected a pending vote-cancellation record so the maintenance fold subtracts the votes")
+	}
+	if len(rec.NewVotes) != 0 {
+		t.Fatalf("cancellation record NewVotes must be empty, got %v", rec.NewVotes)
+	}
+	if len(rec.OldVotes) != 1 || tcommon.BytesToAddress(rec.OldVotes[0].VoteAddress) != witness || rec.OldVotes[0].VoteCount != 7 {
+		t.Fatalf("cancellation record OldVotes must be [witness:7], got %v", rec.OldVotes)
+	}
+	if bal := statedb.GetBalance(contract); bal != 105 {
+		t.Fatalf("allowance not rolled into balance: got %d want 105", bal)
+	}
+	if al := statedb.GetAllowance(contract); al != 0 {
+		t.Fatalf("allowance not zeroed: got %d", al)
+	}
+}
+
+// TestSelfDestructNoVotesNoRecord: a non-voting contract self-destruct must not
+// fabricate a pending vote record (which would spuriously move a witness tally).
+func TestSelfDestructNoVotesNoRecord(t *testing.T) {
+	tvm, statedb, _ := newVoteRewardTVM(t)
+	contract := voteRewardAddr(0x21)
+	statedb.CreateAccount(contract, corepb.AccountType_Contract)
+	statedb.AddBalance(contract, 50)
+	_ = statedb.WriteBeginCycle(contract.Bytes(), 11)
+
+	tvmWithdrawRewardAndCancelVote(tvm, contract)
+
+	if rec := statedb.ReadVotes(contract); rec != nil {
+		t.Fatalf("no votes -> no cancellation record, got %v", rec)
+	}
+}
