@@ -70,6 +70,7 @@ func main() {
 	cycleBlock := flag.String("cycle-block", "", "cycle number: print the [start,end) block range of that cycle, derived from head nextMaint/interval via in-block timestamps (no state)")
 	scanCycle := flag.String("scan-cycle", "", "C:witnesshex — dump EVERY VoteWitness (owner+full vote list, flag if it lists the witness) and Unfreeze tx in cycle C's blocks; votes cast in cycle C are folded into cycleVote[C+1]")
 	witnessVoters := flag.String("witness-voters", "", "witnesshex — enumerate ALL head accounts that vote for the witness (addr, count, isContract); a contract voter necessarily voted via the TVM VOTEWITNESS opcode")
+	accountVotes := flag.String("account-votes", "", "hexaddr — print this account's head vote list (validates that account vote reads work at all in this tool)")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -79,8 +80,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" && *accountVotes == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters / --account-votes)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -376,6 +377,21 @@ func main() {
 			}
 		}
 		fmt.Printf("--- cycle %d: %d VoteWitness + %d Unfreeze + %d TriggerSmartContract ---\n", C, votes, unfreezes, triggers)
+		return
+	}
+
+	if *accountVotes != "" {
+		addr := mustAddr(strings.TrimSpace(*accountVotes))
+		acct := statedb.GetAccount(addr)
+		fmt.Printf("account %x: exists=%v\n", addr.Bytes(), acct != nil)
+		if acct != nil {
+			fmt.Printf("  balance=%d type=%v allowance=%d\n", acct.Balance(), acct.Type(), statedb.GetAllowance(addr))
+			vs := statedb.GetVotes(addr)
+			fmt.Printf("  GetVotes -> %d entries\n", len(vs))
+			for _, v := range vs {
+				fmt.Printf("    %x : %d\n", v.VoteAddress, v.VoteCount)
+			}
+		}
 		return
 	}
 
