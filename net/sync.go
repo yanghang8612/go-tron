@@ -1341,24 +1341,16 @@ drainLoop:
 	for {
 		now := time.Now()
 		ss.mu.Lock()
-		entry := syncdl.ApplyLocalDrainEntry(syncdl.LocalDrainEntryInput{
+		drainSession := syncdl.ApplyLocalDrainSessionRun(syncdl.LocalDrainSessionRunInput{
 			Progress: ss.sessionProgressLocked(),
-		})
-		if entry.StopLoop {
-			ss.mu.Unlock()
-			break
-		}
-		drain := ss.runStagedBodyDrainLocked(now)
-		drainRun := syncdl.ApplyLocalDrainRun(syncdl.LocalDrainRunInput{
-			Progress: ss.sessionProgressLocked(),
-			Drain:    drain,
-		})
-		iteration := drainRun.Iteration
+			Next:     ss.chain.CurrentBlock().Number() + 1,
+			Max:      ss.importBatchLimitLocked(),
+		}, syncLocalDrainSessionRunApplier{service: ss, now: now})
 		switch {
-		case iteration.StopLoop:
+		case drainSession.StopLoop:
 			ss.mu.Unlock()
 			break drainLoop
-		case iteration.EmptyDrain:
+		case drainSession.EmptyDrain:
 			prepareApplier := &syncEmptyDrainPreparationApplier{service: ss, now: now}
 			prepareResult := syncdl.ApplyEmptyDrainPreparationLockedRunPlan(syncdl.EmptyDrainPreparationInput{
 				Progress: ss.sessionProgressLocked(),
@@ -1368,13 +1360,13 @@ drainLoop:
 			ss.mu.Unlock()
 			syncdl.ApplyEmptyDrainRunAfterUnlockPlan(emptyDrain, syncIdleDrainApplier{service: ss}, syncFetchRefillDispatchApplier{service: ss, out: out})
 			break drainLoop
-		case iteration.ImportBatch:
+		case drainSession.ImportBatch:
 		default:
 			ss.mu.Unlock()
 			break drainLoop
 		}
 		ss.mu.Unlock()
-		batch := drainRun.Batch
+		batch := drainSession.Batch
 		importRun := syncdl.ApplyImportBatchRun(batch, syncImportBatchRunApplier{service: ss})
 		loop := importRun.DrainLoopApply
 		if loop.StopLoop {
@@ -1385,6 +1377,26 @@ drainLoop:
 		}
 		continue drainLoop
 	}
+}
+
+type syncLocalDrainSessionRunApplier struct {
+	service *SyncService
+	now     time.Time
+}
+
+func (a syncLocalDrainSessionRunApplier) ReadAndApplyStagedBodyDrain(next uint64, max int) syncdl.StagedBodyDrainRunResult {
+	var result syncdl.StagedBodyDrainRunResult
+	if db := a.service.chain.DB(); db != nil {
+		result = syncdl.ReadAndApplyStagedBodyDrainPlan(db, next, max, syncStagedBodyDrainApplier{service: a.service, now: a.now})
+	} else {
+		result = syncdl.ReadAndApplyStagedBodyDrainPlan(nil, next, max, syncStagedBodyDrainApplier{service: a.service, now: a.now})
+	}
+	a.service.logStagedBodyReadyDrainLimit(result.Read.Ready)
+	return result
+}
+
+func (a syncLocalDrainSessionRunApplier) LocalDrainRunProgress() syncdl.SessionProgress {
+	return a.service.sessionProgressLocked()
 }
 
 type syncEmptyDrainPreparationApplier struct {
@@ -1456,14 +1468,7 @@ func (ss *SyncService) popBufferedSyncBatchLocked(now time.Time) syncdl.Buffered
 func (ss *SyncService) runStagedBodyDrainLocked(now time.Time) syncdl.StagedBodyDrainRunResult {
 	next := ss.chain.CurrentBlock().Number() + 1
 	max := ss.importBatchLimitLocked()
-	var result syncdl.StagedBodyDrainRunResult
-	if db := ss.chain.DB(); db != nil {
-		result = syncdl.ReadAndApplyStagedBodyDrainPlan(db, next, max, syncStagedBodyDrainApplier{service: ss, now: now})
-	} else {
-		result = syncdl.ReadAndApplyStagedBodyDrainPlan(nil, next, max, syncStagedBodyDrainApplier{service: ss, now: now})
-	}
-	ss.logStagedBodyReadyDrainLimit(result.Read.Ready)
-	return result
+	return syncLocalDrainSessionRunApplier{service: ss, now: now}.ReadAndApplyStagedBodyDrain(next, max)
 }
 
 func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReadyLimit) {

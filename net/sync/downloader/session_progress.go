@@ -90,6 +90,15 @@ type LocalDrainRunInput struct {
 	Drain    StagedBodyDrainRunResult
 }
 
+// LocalDrainSessionRunInput is the lock-held state needed to run one local
+// drain iteration: first decide whether staged bodies should be read, then
+// read/apply that staged-body drain and branch on the refreshed progress.
+type LocalDrainSessionRunInput struct {
+	Progress SessionProgress
+	Next     uint64
+	Max      int
+}
+
 // IdleDrainStepAction names one session-level action after a local drain found
 // no importable buffered bodies and existing peers were refilled.
 type IdleDrainStepAction uint8
@@ -244,6 +253,31 @@ type LocalDrainRunApplyResult struct {
 	Drain     StagedBodyDrainRunResult
 	Batch     BufferedBatch
 	Iteration LocalDrainIterationApplyResult
+}
+
+// LocalDrainSessionRunPlan groups the entry branch with the staged-body drain
+// target and the derived iteration plan for one lock-held local drain pass.
+type LocalDrainSessionRunPlan struct {
+	Entry LocalDrainEntryPlan
+	Next  uint64
+	Max   int
+	Run   LocalDrainRunPlan
+}
+
+// LocalDrainSessionRunApplyResult records one downloader-owned local drain
+// pass. Entry is resolved before staged bodies are touched; Run is resolved
+// only after the staged-body drain has run and fresh progress has been read.
+type LocalDrainSessionRunApplyResult struct {
+	Plan             LocalDrainSessionRunPlan
+	Entry            LocalDrainEntryApplyResult
+	Drain            StagedBodyDrainRunResult
+	RunProgress      SessionProgress
+	Run              LocalDrainRunApplyResult
+	Batch            BufferedBatch
+	ReadStagedBodies bool
+	StopLoop         bool
+	EmptyDrain       bool
+	ImportBatch      bool
 }
 
 // FetchRefillDispatchPlan describes whether refilled outbound requests should
@@ -414,6 +448,13 @@ type EmptyDrainPreparationRunPlanApplier interface {
 	EmptyDrainRunProgress() SessionProgress
 }
 
+// LocalDrainSessionRunPlanApplier performs the runtime pieces required between
+// the entry decision and the local drain iteration branch.
+type LocalDrainSessionRunPlanApplier interface {
+	ReadAndApplyStagedBodyDrain(next uint64, max int) StagedBodyDrainRunResult
+	LocalDrainRunProgress() SessionProgress
+}
+
 // PostInventorySettlementInput is the lock-free state needed after an
 // inventory message refilled fetch slots.
 type PostInventorySettlementInput struct {
@@ -560,6 +601,17 @@ func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
 	}
 }
 
+// PlanLocalDrainSessionRun creates the entry plan for one lock-held local
+// drain pass and records the staged-body drain target that apply will use if
+// the entry branch allows reading.
+func PlanLocalDrainSessionRun(in LocalDrainSessionRunInput) LocalDrainSessionRunPlan {
+	return LocalDrainSessionRunPlan{
+		Entry: PlanLocalDrainEntry(LocalDrainEntryInput{Progress: in.Progress}),
+		Next:  in.Next,
+		Max:   in.Max,
+	}
+}
+
 // ApplyLocalDrainRunPlan resolves the downloader-owned local drain run plan
 // into the caller's loop branch while preserving the staged-body drain batch.
 func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
@@ -575,6 +627,46 @@ func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
 // plan from the current staged-body drain result.
 func ApplyLocalDrainRun(in LocalDrainRunInput) LocalDrainRunApplyResult {
 	return ApplyLocalDrainRunPlan(PlanLocalDrainRun(in))
+}
+
+// ApplyLocalDrainSessionRun creates and applies one downloader-owned local
+// drain pass. Staged bodies are read only if the entry plan selects that
+// branch; the import/empty/stop branch is derived from progress refreshed after
+// the staged-body drain side effects have run.
+func ApplyLocalDrainSessionRun(in LocalDrainSessionRunInput, applier LocalDrainSessionRunPlanApplier) LocalDrainSessionRunApplyResult {
+	return ApplyLocalDrainSessionRunPlan(PlanLocalDrainSessionRun(in), applier)
+}
+
+// ApplyLocalDrainSessionRunPlan applies one local drain pass from a prebuilt
+// entry plan. The returned Plan.Run is populated with the derived drain
+// iteration plan after staged bodies are read.
+func ApplyLocalDrainSessionRunPlan(plan LocalDrainSessionRunPlan, applier LocalDrainSessionRunPlanApplier) LocalDrainSessionRunApplyResult {
+	result := LocalDrainSessionRunApplyResult{Plan: plan}
+	result.Entry = ApplyLocalDrainEntryPlan(plan.Entry)
+	if result.Entry.StopLoop {
+		result.StopLoop = true
+		return result
+	}
+	if !result.Entry.ReadStagedBodies {
+		return result
+	}
+	result.ReadStagedBodies = true
+	if applier == nil {
+		return result
+	}
+	result.Drain = applier.ReadAndApplyStagedBodyDrain(plan.Next, plan.Max)
+	result.RunProgress = applier.LocalDrainRunProgress()
+	runPlan := PlanLocalDrainRun(LocalDrainRunInput{
+		Progress: result.RunProgress,
+		Drain:    result.Drain,
+	})
+	result.Run = ApplyLocalDrainRunPlan(runPlan)
+	result.Plan.Run = result.Run.Plan
+	result.Batch = result.Run.Batch
+	result.StopLoop = result.Run.Iteration.StopLoop
+	result.EmptyDrain = result.Run.Iteration.EmptyDrain
+	result.ImportBatch = result.Run.Iteration.ImportBatch
+	return result
 }
 
 // ApplyLocalDrainEntryPlan resolves the downloader-owned local drain entry

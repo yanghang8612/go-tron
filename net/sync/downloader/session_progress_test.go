@@ -469,6 +469,107 @@ func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
 	}
 }
 
+func TestApplyLocalDrainSessionRunReadsStagedBodiesThenBranches(t *testing.T) {
+	entryProgress := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	runProgress := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
+	drain := StagedBodyDrainRunResult{Batch: importBatch}
+	applier := &recordingLocalDrainSessionRunApplier{
+		drain:    drain,
+		progress: runProgress,
+	}
+
+	result := ApplyLocalDrainSessionRun(LocalDrainSessionRunInput{
+		Progress: entryProgress,
+		Next:     6,
+		Max:      32,
+	}, applier)
+
+	if !result.ReadStagedBodies || result.StopLoop || result.EmptyDrain || !result.ImportBatch {
+		t.Fatalf("session drain result = %+v, want read/import branch", result)
+	}
+	if applier.next != 6 || applier.max != 32 {
+		t.Fatalf("staged body drain target = %d/%d, want 6/32", applier.next, applier.max)
+	}
+	if !reflect.DeepEqual(applier.calls, []string{"read", "progress"}) {
+		t.Fatalf("session drain calls = %+v, want read then refreshed progress", applier.calls)
+	}
+	if !reflect.DeepEqual(result.Drain, drain) ||
+		!reflect.DeepEqual(result.Batch, importBatch) ||
+		!reflect.DeepEqual(result.RunProgress, runProgress) {
+		t.Fatalf("session drain result = %+v, want preserved drain/batch/progress", result)
+	}
+	wantPlan := PlanLocalDrainRun(LocalDrainRunInput{Progress: runProgress, Drain: drain})
+	if !reflect.DeepEqual(result.Plan.Entry, PlanLocalDrainEntry(LocalDrainEntryInput{Progress: entryProgress})) ||
+		result.Plan.Next != 6 ||
+		result.Plan.Max != 32 ||
+		!reflect.DeepEqual(result.Plan.Run, wantPlan) {
+		t.Fatalf("session drain plan = %+v, want entry target and derived run %+v", result.Plan, wantPlan)
+	}
+	if result.Run.Iteration.Action != LocalDrainIterationImport ||
+		!reflect.DeepEqual(result.Run.Iteration.AppliedSteps, []LocalDrainIterationStepAction{LocalDrainIterationImport}) {
+		t.Fatalf("session drain iteration = %+v, want import step", result.Run.Iteration)
+	}
+}
+
+func TestApplyLocalDrainSessionRunUsesProgressAfterStagedDrain(t *testing.T) {
+	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
+	applier := &recordingLocalDrainSessionRunApplier{
+		drain:    StagedBodyDrainRunResult{Batch: importBatch},
+		progress: SessionProgress{Syncing: true, Paused: true, CurrentHead: 5, TargetHead: 9},
+	}
+
+	result := ApplyLocalDrainSessionRun(LocalDrainSessionRunInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9},
+		Next:     6,
+		Max:      32,
+	}, applier)
+
+	if !result.ReadStagedBodies || !result.StopLoop || result.EmptyDrain || result.ImportBatch {
+		t.Fatalf("session drain result = %+v, want refreshed paused progress to stop despite staged batch", result)
+	}
+	if result.Run.Iteration.Action != LocalDrainIterationStop {
+		t.Fatalf("session drain iteration = %+v, want stop from refreshed progress", result.Run.Iteration)
+	}
+}
+
+func TestApplyLocalDrainSessionRunEntryStopSkipsStagedBodies(t *testing.T) {
+	applier := &recordingLocalDrainSessionRunApplier{
+		drain:    StagedBodyDrainRunResult{Batch: BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}},
+		progress: SessionProgress{Syncing: true},
+	}
+
+	result := ApplyLocalDrainSessionRun(LocalDrainSessionRunInput{
+		Progress: SessionProgress{Syncing: true, Paused: true, CurrentHead: 5, TargetHead: 9},
+		Next:     6,
+		Max:      32,
+	}, applier)
+
+	if !result.StopLoop || result.ReadStagedBodies || result.EmptyDrain || result.ImportBatch {
+		t.Fatalf("session drain result = %+v, want entry stop without staged body read", result)
+	}
+	if len(applier.calls) != 0 {
+		t.Fatalf("session drain calls = %+v, want no staged body calls after entry stop", applier.calls)
+	}
+	if result.Entry.Action != LocalDrainEntryStop ||
+		!reflect.DeepEqual(result.Entry.AppliedSteps, []LocalDrainEntryStepAction{LocalDrainEntryStop}) {
+		t.Fatalf("entry result = %+v, want stop entry", result.Entry)
+	}
+}
+
+func TestApplyLocalDrainSessionRunWithNilApplierStopsAfterEntry(t *testing.T) {
+	result := ApplyLocalDrainSessionRun(LocalDrainSessionRunInput{
+		Progress: SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9},
+		Next:     6,
+		Max:      32,
+	}, nil)
+
+	if !result.ReadStagedBodies || result.StopLoop || result.EmptyDrain || result.ImportBatch ||
+		len(result.Batch.Buffered) != 0 || !reflect.DeepEqual(result.Drain, StagedBodyDrainRunResult{}) {
+		t.Fatalf("nil applier session drain = %+v, want entry read decision without staged body side effects", result)
+	}
+}
+
 func TestPlanEmptyDrainJoinProbe(t *testing.T) {
 	complete := SessionProgress{Syncing: true, CurrentHead: 9, TargetHead: 9, Peers: []PeerProgress{{Done: true}}}
 	if got := PlanEmptyDrainJoinProbe(EmptyDrainJoinProbeInput{Progress: complete}); got.CheckJoinAvailablePeers {
@@ -1451,6 +1552,26 @@ func (a *recordingEmptyDrainPreparationApplier) RefillFetchSlots() int {
 
 func (a *recordingEmptyDrainPreparationApplier) EmptyDrainRunProgress() SessionProgress {
 	a.progressReads++
+	return a.progress
+}
+
+type recordingLocalDrainSessionRunApplier struct {
+	drain    StagedBodyDrainRunResult
+	progress SessionProgress
+	calls    []string
+	next     uint64
+	max      int
+}
+
+func (a *recordingLocalDrainSessionRunApplier) ReadAndApplyStagedBodyDrain(next uint64, max int) StagedBodyDrainRunResult {
+	a.calls = append(a.calls, "read")
+	a.next = next
+	a.max = max
+	return a.drain
+}
+
+func (a *recordingLocalDrainSessionRunApplier) LocalDrainRunProgress() SessionProgress {
+	a.calls = append(a.calls, "progress")
 	return a.progress
 }
 
