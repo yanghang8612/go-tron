@@ -56,7 +56,7 @@ func getPrecompile(addr tcommon.Address, cfg TVMConfig) PrecompiledContract {
 	case addrFromUint(0x04):
 		return &dataCopy{}
 	case addrFromUint(0x05):
-		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka}
+		return &bigModExp{istanbul: cfg.Istanbul, osaka: cfg.Osaka, cpuTimeGuard: cfg.CpuTimeGuard}
 	case addrFromUint(0x06):
 		return &bn128Add{istanbul: cfg.Istanbul}
 	case addrFromUint(0x07):

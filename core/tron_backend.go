@@ -231,6 +231,8 @@ func (b *TronBackend) TriggerConstantContract(owner, contractAddr tcommon.Addres
 	cfg := vm.NewTVMConfig(current.Number(), dp)
 	cfg.MultiSigCheckV2 = forks.PassVersionFromStore(statedbCopy, 27,
 		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
+	cfg.CpuTimeGuard = forks.PassVersionFromStore(statedbCopy, 35,
+		dp.LatestBlockHeaderTimestamp(), dp.MaintenanceTimeInterval())
 	evm := vm.NewTVM(statedbCopy, dp, owner, current.Number(), current.Timestamp(), tcommon.Address{}, 1, cfg)
 	// BLOCKHASH/CHAINID need chain data; route through the ancient-aware
 	// lookup so constant calls see the same hashes as block execution.

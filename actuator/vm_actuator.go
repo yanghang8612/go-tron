@@ -23,6 +23,15 @@ func multiSigCheckV2Pass(ctx *Context) bool {
 	return forks.PassVersionFromStore(ctx.State, 27, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
 }
 
+// cpuTimeGuardPass evaluates VERSION_4_8_1_1 (block version 35) against the per-tx
+// context — java-tron's MUtil.checkCPUTimeForCreate2 / checkCPUTimeForModExp guard.
+func cpuTimeGuardPass(ctx *Context) bool {
+	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
+		return false
+	}
+	return forks.PassVersionFromStore(ctx.State, 35, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+}
+
 const contractNameMaxLen = 32
 const vmMinTokenID = 1_000_000
 const creatorDefaultEnergyLimit = 1000 * 10_000
@@ -264,6 +273,7 @@ func (a *VMActuator) executeCreate(ctx *Context) (*Result, error) {
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
+	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {
@@ -337,6 +347,7 @@ func (a *VMActuator) executeTrigger(ctx *Context) (*Result, error) {
 
 	cfg := vm.NewTVMConfig(ctx.BlockNumber, ctx.DynProps)
 	cfg.MultiSigCheckV2 = multiSigCheckV2Pass(ctx)
+	cfg.CpuTimeGuard = cpuTimeGuardPass(ctx)
 	tokenID := int64(0)
 	tokenValue := int64(0)
 	if cfg.TransferTrc10 {

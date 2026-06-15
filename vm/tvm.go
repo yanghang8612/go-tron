@@ -405,6 +405,55 @@ func (tvm *TVM) transferFrozenV2BalanceToInheritor(owner, inheritor tcommon.Addr
 	return expireUnfrozenBalance
 }
 
+// canSelfDestruct mirrors java-tron OperationActions.suicideAction/suicideAction2's
+// canSuicide()/canSuicide2() guard (Program.java): a contract still holding frozen
+// resources cannot self-destruct — the SELFDESTRUCT reverts. oldSuicide selects
+// canSuicide() (only the delegated-V1 check) vs canSuicide2() (also rejects the
+// owner's OWN unexpired V1 frozen bandwidth/energy). Both additionally run the V2
+// check (allow_tvm_freeze_v2): reject any delegated-V2 balance or unexpired pending
+// V2 unfreeze. Returns true (allowed) when the relevant forks are inactive. Without
+// this guard go-tron destroys a contract java would revert, and reaches the
+// inheritor-transfer with non-zero delegated balance java never sees.
+func (tvm *TVM) canSelfDestruct(owner tcommon.Address, oldSuicide bool) bool {
+	acct := tvm.StateDB.GetAccount(owner)
+	if acct == nil {
+		return true
+	}
+	var now int64
+	if tvm.DynProps != nil {
+		now = tvm.DynProps.LatestBlockHeaderTimestamp()
+	}
+	if tvm.cfg.Freeze {
+		if !oldSuicide {
+			// canSuicide2 (freezeV1Check): reject the owner's own unexpired V1 frozen.
+			for _, f := range acct.FrozenBandwidthList() {
+				if f.GetExpireTime() > now {
+					return false
+				}
+			}
+			if acct.FrozenEnergyAmount() > 0 && acct.FrozenEnergyExpireTime() > now {
+				return false
+			}
+		}
+		// canSuicide and canSuicide2: reject delegated V1.
+		if acct.DelegatedFrozenBandwidth() != 0 || acct.DelegatedFrozenEnergy() != 0 {
+			return false
+		}
+	}
+	if tvm.cfg.StakingV2 {
+		// freezeV2Check (allow_tvm_freeze_v2): reject delegated V2 + unexpired V2 unfreeze.
+		if acct.DelegatedFrozenV2BalanceForBandwidth() != 0 || acct.DelegatedFrozenV2BalanceForEnergy() != 0 {
+			return false
+		}
+		for _, u := range acct.UnfrozenV2() {
+			if u.GetUnfreezeExpireTime() > now {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Create deploys a new contract.
 func (tvm *TVM) Create(caller tcommon.Address, code []byte, energy uint64, value int64) ([]byte, tcommon.Address, uint64, error) {
 	if tvm.Depth > maxCallDepth {

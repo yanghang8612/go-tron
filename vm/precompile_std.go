@@ -118,8 +118,9 @@ func (c *dataCopy) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) (
 // TIP-7883 pricing when Osaka is active.
 
 type bigModExp struct {
-	istanbul bool
-	osaka    bool
+	istanbul     bool
+	osaka        bool
+	cpuTimeGuard bool // VERSION_4_8_1_1: degenerate-input OutOfTime guard
 }
 
 func (c *bigModExp) Run(_ *TVM, _ tcommon.Address, input []byte, energy uint64) ([]byte, uint64, error) {
@@ -159,6 +160,13 @@ func (c *bigModExp) RunWithStatus(_ *TVM, _ tcommon.Address, input []byte, energ
 
 	// Handle edge cases
 	if baseLen == 0 && modLen == 0 {
+		// java-tron PrecompiledContracts.ModExp (MUtil.checkCPUTimeForModExp): under
+		// VERSION_4_8_1_1 this degenerate input with expLen > UPPER_BOUND(1024) aborts
+		// the tx with OutOfTime instead of cheaply succeeding. Reachable only pre-Osaka
+		// — the Osaka upper-bound reject above already short-circuits expLen>1024.
+		if c.cpuTimeGuard && expLen > 1024 {
+			return nil, cost, false, ErrAlreadyTimeOut
+		}
 		return []byte{}, cost, true, nil
 	}
 

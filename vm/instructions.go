@@ -873,14 +873,28 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		return nil, ErrOutOfEnergy
 	}
 
-	// java-tron Program.suicide (Program.java:457) and suicide2 (547) both call
-	// withdrawRewardAndCancelVote at the top when allow_tvm_vote is active: settle
-	// the contract's voter reward, CANCEL its votes (so the next maintenance fold
-	// removes them from the witnesses it voted for — without this the witness vote
-	// tally drifts above the true voter sum and the standby-reward voteSum
-	// diverges), and roll allowance into balance. Must precede the balance read so
-	// the inherited balance includes the rolled-in allowance.
-	if interpreter.tvmConfig.Vote {
+	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
+	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
+
+	// java-tron OperationActions.suicideAction/suicideAction2 revert the SELFDESTRUCT
+	// (program.canSuicide()/canSuicide2()) when the contract still holds frozen
+	// resources: delegated V1 (both paths), the owner's own unexpired V1 frozen (new
+	// restriction path only), or any delegated-V2 / unexpired pending-V2-unfreeze.
+	// Without this go-tron destroys a contract java reverts.
+	if !interpreter.tvm.canSelfDestruct(contract.Address, oldSuicide) {
+		return nil, ErrExecutionReverted
+	}
+
+	// java-tron Program.suicide (Program.java:457) calls withdrawRewardAndCancelVote
+	// unconditionally at the top when allow_tvm_vote is active; suicide2 (547) runs
+	// it only AFTER its owner==obtainer early-return (543), i.e. for a distinct
+	// obtainer. So the old path always cancels votes; the new (restriction) path
+	// cancels only when owner != obtainer. It settles the contract's voter reward,
+	// CANCELs its votes (so the next maintenance fold removes them from the
+	// witnesses it voted for — else the witness vote tally drifts above the true
+	// voter sum and the standby-reward voteSum diverges) and rolls allowance into
+	// balance. Must precede the balance read so the inherited balance includes it.
+	if interpreter.tvmConfig.Vote && (oldSuicide || address != contract.Address) {
 		tvmWithdrawRewardAndCancelVote(interpreter.tvm, contract.Address)
 	}
 
@@ -898,8 +912,6 @@ func opSelfDestruct(pc *uint64, interpreter *Interpreter, contract *Contract, me
 		}
 	}
 	suicideIT := interpreter.tvm.addInternalTransactionWithTokenInfo(contract.Address, address, balance, nil, "suicide", tokenInfo)
-	oldSuicide := !interpreter.tvmConfig.SelfdestructRestrict || interpreter.tvm.isNewContract(contract.Address)
-	sameOldSuicideAddress := sameSelfDestructAddress(contract.Address, address, interpreter.tvmConfig.EnergyAdjustment)
 	if oldSuicide && sameOldSuicideAddress {
 		blackhole := interpreter.tvm.blackholeAddress()
 		if balance > 0 {

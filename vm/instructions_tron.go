@@ -150,14 +150,7 @@ func opCallToken(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, st
 		return nil, err
 	}
 
-	retOffset := int64(retOff)
-	retSize := int64(retSz)
-	if err == nil && len(ret) > 0 && retSize > 0 {
-		if int64(len(ret)) > retSize {
-			ret = ret[:retSize]
-		}
-		mem.set(uint64(retOffset), uint64(len(ret)), ret)
-	}
+	in.writeCallReturn(mem, getPrecompile(addr, in.tvm.cfg) != nil, err, retOff, retSz, ret)
 	if err == errPrecompileFailure {
 		in.returnData = nil
 	} else {
