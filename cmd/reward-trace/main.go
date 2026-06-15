@@ -69,6 +69,7 @@ func main() {
 	blockTs := flag.String("block-ts", "", "comma block numbers: print each block's timestamp (no state) + head cycle/interval/nextMaint")
 	cycleBlock := flag.String("cycle-block", "", "cycle number: print the [start,end) block range of that cycle, derived from head nextMaint/interval via in-block timestamps (no state)")
 	scanCycle := flag.String("scan-cycle", "", "C:witnesshex — dump EVERY VoteWitness (owner+full vote list, flag if it lists the witness) and Unfreeze tx in cycle C's blocks; votes cast in cycle C are folded into cycleVote[C+1]")
+	witnessVoters := flag.String("witness-voters", "", "witnesshex — enumerate ALL head accounts that vote for the witness (addr, count, isContract); a contract voter necessarily voted via the TVM VOTEWITNESS opcode")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -78,8 +79,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *cycleBlock == "" && *scanCycle == "" && *witnessVoters == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --cycle-block / --scan-cycle / --witness-voters)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -375,6 +376,38 @@ func main() {
 			}
 		}
 		fmt.Printf("--- cycle %d: %d VoteWitness + %d Unfreeze + %d TriggerSmartContract ---\n", C, votes, unfreezes, triggers)
+		return
+	}
+
+	if *witnessVoters != "" {
+		w := mustAddr(strings.TrimSpace(*witnessVoters))
+		it := db.NewIterator([]byte("a-"), nil)
+		defer it.Release()
+		voters, contractVoters := 0, 0
+		var total int64
+		for it.Next() {
+			key := it.Key()
+			if len(key) != len("a-")+21 {
+				continue
+			}
+			addr := tcommon.BytesToAddress(key[len("a-"):])
+			acct := statedb.GetAccount(addr)
+			if acct == nil {
+				continue
+			}
+			for _, v := range acct.Votes() {
+				if tcommon.BytesToAddress(v.VoteAddress) == w {
+					voters++
+					total += v.VoteCount
+					if statedb.GetContract(addr) != nil {
+						contractVoters++
+						fmt.Printf("voter %x count=%d  <<< CONTRACT\n", addr.Bytes(), v.VoteCount)
+					}
+					break
+				}
+			}
+		}
+		fmt.Printf("--- %d voters for %x (vote total=%d); %d are CONTRACTS (listed above) ---\n", voters, w.Bytes(), total, contractVoters)
 		return
 	}
 
