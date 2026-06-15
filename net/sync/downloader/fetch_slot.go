@@ -230,6 +230,12 @@ func ApplyFetchSlotRefillPlan(plan FetchSlotRefillPlan, applier FetchSlotRefillP
 	return result
 }
 
+// ApplyFetchSlotRefill creates and applies the downloader-owned peer-local
+// refill plan from side-effect-free eligibility facts.
+func ApplyFetchSlotRefill(in FetchSlotRefillInput, applier FetchSlotRefillPlanApplier) FetchSlotRefillApplyResult {
+	return ApplyFetchSlotRefillPlan(PlanFetchSlotRefill(in), applier)
+}
+
 // ApplyFetchSlotPlan executes the downloader-owned peer fetch-slot schedule.
 func ApplyFetchSlotPlan(plan FetchSlotPlan, applier FetchSlotPlanApplier) FetchSlotApplyResult {
 	var result FetchSlotApplyResult

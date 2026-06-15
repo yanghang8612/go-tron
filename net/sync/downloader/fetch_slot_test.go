@@ -234,6 +234,43 @@ func TestApplyFetchSlotRefillPlan(t *testing.T) {
 	}
 }
 
+func TestApplyFetchSlotRefillBuildsAndAppliesPlan(t *testing.T) {
+	now := time.Unix(100, 0)
+	batch := []types.BlockID{queueID(1)}
+	input := FetchSlotRefillInput{Eligibility: FetchSlotEligibilityInput{PeerPresent: true}}
+	applier := &recordingFetchSlotRefillApplier{
+		batch: batch,
+		slotInput: FetchSlotInput{
+			Now:         now,
+			MinInterval: time.Second,
+		},
+	}
+
+	result := ApplyFetchSlotRefill(input, applier)
+
+	wantPlan := PlanFetchSlotRefill(input)
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("refill result plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+	if !reflect.DeepEqual(result.Batch, batch) ||
+		result.SlotPlan.Action != PeerFetchSend ||
+		result.SlotPlan.NextFetchAt != now.Add(time.Second) ||
+		!result.SendFetch ||
+		result.RequestInventory {
+		t.Fatalf("refill result = %+v, want send batch with planned next fetch", result)
+	}
+
+	ineligibleApplier := &recordingFetchSlotRefillApplier{batch: batch}
+	ineligible := ApplyFetchSlotRefill(FetchSlotRefillInput{}, ineligibleApplier)
+	if ineligible.Plan.Eligible ||
+		len(ineligible.AppliedSteps) != 0 ||
+		len(ineligibleApplier.refillCalls) != 0 ||
+		ineligible.SendFetch ||
+		ineligible.RequestInventory {
+		t.Fatalf("ineligible refill result = %+v calls=%+v, want no-op", ineligible, ineligibleApplier.refillCalls)
+	}
+}
+
 func TestApplyFetchSlotPlan(t *testing.T) {
 	applier := new(recordingFetchSlotApplier)
 	plan := FetchSlotPlan{Steps: []FetchSlotStep{

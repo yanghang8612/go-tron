@@ -1017,12 +1017,11 @@ func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest
 			eligibility.ChainRequested = ps.chainRequested
 			eligibility.Inflight = ps.inflight
 		}
-		refill := syncdl.PlanFetchSlotRefill(syncdl.FetchSlotRefillInput{Eligibility: eligibility})
-		if !refill.Eligible {
+		applier := &syncFetchSlotRefillApplier{service: ss, peerState: ps, now: now}
+		applyResult := syncdl.ApplyFetchSlotRefill(syncdl.FetchSlotRefillInput{Eligibility: eligibility}, applier)
+		if !applyResult.Plan.Eligible {
 			continue
 		}
-		applier := &syncFetchSlotRefillApplier{service: ss, peerState: ps, now: now}
-		applyResult := syncdl.ApplyFetchSlotRefillPlan(refill, applier)
 		if applyResult.RequestInventory {
 			out = append(out, outboundSyncRequest{peer: ps.peer, chain: true})
 		}
