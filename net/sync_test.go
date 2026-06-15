@@ -256,6 +256,49 @@ func TestSyncServiceRepairsUnboundBodiesReadyOnSessionStart(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRepairsBodiesReadyHashMismatchOnSessionStart(t *testing.T) {
+	bc := makeTestChain(t)
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	for _, block := range []*types.Block{block1, block2} {
+		if err := rawdb.WriteSyncStagedBlock(bc.DB(), block); err != nil {
+			t.Fatalf("write sync staged block %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteStageProgressWithHash(bc.DB(), rawdb.StageSyncBodiesReady, block2.Number(), tcommon.Hash{0xff}); err != nil {
+		t.Fatalf("write mismatched SyncBodiesReady: %v", err)
+	}
+
+	ss := NewSyncService(bc, nil)
+	ss.mu.Lock()
+	ss.initSessionLocked(time.Now())
+	buffered := len(ss.blockBuffer)
+	target := ss.targetHeadNum
+	path1 := ss.blockPath[block1.Number()]
+	path2 := ss.blockPath[block2.Number()]
+	ss.mu.Unlock()
+
+	if buffered != 2 || target != block2.Number() {
+		t.Fatalf("restored staged bodies buffered=%d target=%d, want 2/%d", buffered, target, block2.Number())
+	}
+	if path1 != block1.Hash() || path2 != block2.Hash() {
+		t.Fatalf("restored block path = %x/%x, want block1/block2 %x/%x", path1, path2, block1.Hash(), block2.Hash())
+	}
+	ready, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady)
+	if err != nil || !ok || ready.BlockNum != block2.Number() || !ready.HasBlockHash || ready.BlockHash != block2.Hash() {
+		t.Fatalf("SyncBodiesReady after hash-mismatch repair = %+v ok=%v err=%v, want hash-bound block2", ready, ok, err)
+	}
+
+	ss.drainBufferedBlocks()
+	if got := bc.CurrentBlock(); got == nil || got.Hash() != block2.Hash() {
+		t.Fatalf("head after hash-mismatch ready restart drain = %v, want block2 %x", got, block2.Hash())
+	}
+	assertSyncPipelineProgress(t, bc.DB(), block2)
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || ok {
+		t.Fatalf("SyncBodiesReady after hash-mismatch ready drain = %+v ok=%v err=%v, want deleted", row, ok, err)
+	}
+}
+
 func TestSyncServiceDropsGappedStagedBodyTailOnSessionStart(t *testing.T) {
 	bc := makeChainWithBlocks(t, 1)
 	block2 := stubBlock(2, bc.CurrentBlock().Hash())
