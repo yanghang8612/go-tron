@@ -32,6 +32,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	tcommon "github.com/tronprotocol/go-tron/common"
@@ -62,6 +63,7 @@ func main() {
 	fromCycle := flag.Int64("from-cycle", 96000, "first cycle to dump (inclusive)")
 	toCycle := flag.Int64("to-cycle", 96600, "last cycle to dump (inclusive)")
 	replaySpec := flag.String("replay", "", "comma list of begin:end:w1count:w2count ranges to replay ComputeVoterReward over")
+	analyzeCycle := flag.Int64("analyze-cycle", -1, "dump ALL witnesses' cycleVote/cycleReward/cycleBrokerage for this cycle and flag per-vote-rate outliers (consistency check, no java needed)")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -71,8 +73,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 {
-		log.Crit("--witnesses is required")
+	if len(witnesses) == 0 && *analyzeCycle < 0 {
+		log.Crit("--witnesses is required (or use --analyze-cycle)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -118,6 +120,72 @@ func main() {
 	}
 
 	dec := reward.DecimalOfViReward
+
+	// ---- analyze-cycle: dump ALL witnesses for one cycle (consistency check) ----
+	if *analyzeCycle >= 0 {
+		c := *analyzeCycle
+		type wrow struct {
+			hx     string
+			vote   int64
+			reward int64
+			brok   int
+		}
+		addrs := statedb.ReadWitnessIndex()
+		rows := make([]wrow, 0, len(addrs))
+		for _, a := range addrs {
+			rows = append(rows, wrow{
+				hx:     fmt.Sprintf("%x", a.Bytes()),
+				vote:   statedb.ReadCycleVote(c, a.Bytes()),
+				reward: statedb.ReadCycleReward(c, a.Bytes()),
+				brok:   statedb.ReadCycleBrokerage(c, a.Bytes()),
+			})
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].vote > rows[j].vote })
+		var voteSum int64
+		top := len(rows)
+		if top > 127 {
+			top = 127
+		}
+		for i := 0; i < top; i++ {
+			if rows[i].vote >= 1 {
+				voteSum += rows[i].vote
+			}
+		}
+		w127 := dp.Witness127PayPerBlock()
+		wpb := dp.WitnessPayPerBlock()
+		fmt.Printf("=== analyze cycle %d ===\n", c)
+		fmt.Printf("witnessCount=%d  top127VoteSum=%d  Witness127PayPerBlock=%d  WitnessPayPerBlock=%d\n",
+			len(rows), voteSum, w127, wpb)
+		if voteSum > 0 {
+			fmt.Printf("eachVotePay = %d/%d = %.12f\n", w127, voteSum, float64(w127)/float64(voteSum))
+		}
+		// rate metric: reward/(vote*(100-brok)) ~ blocks*eachVotePay/100 (CONSTANT for pure standby;
+		// higher for active SRs that also earn block reward). w2 should sit in the standby cluster.
+		fmt.Printf("%-4s %-44s %14s %16s %5s %22s %16s\n",
+			"rank", "witness", "cycleVote", "cycleReward", "brok", "reward/(vote*(100-brok))", "perBlockPay(floor)")
+		for i, r := range rows {
+			mark := ""
+			if strings.HasSuffix(r.hx, "0721c5cb") {
+				mark = "  <<< w1"
+			}
+			if strings.HasSuffix(r.hx, "eeb63202") {
+				mark = "  <<< w2"
+			}
+			rate := 0.0
+			if d := r.vote * int64(100-r.brok); d != 0 {
+				rate = float64(r.reward) / float64(d)
+			}
+			perBlock := int64(0)
+			if voteSum > 0 {
+				perBlock = int64(float64(r.vote) * (float64(w127) / float64(voteSum)))
+			}
+			if i < 135 || mark != "" {
+				fmt.Printf("%-4d %-44s %14d %16d %5d %22.12f %16d%s\n",
+					i+1, r.hx, r.vote, r.reward, r.brok, rate, perBlock, mark)
+			}
+		}
+		return
+	}
 
 	// ---- per-witness per-cycle reward store dump ----
 	for _, w := range witnesses {
