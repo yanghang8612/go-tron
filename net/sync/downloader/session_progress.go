@@ -127,6 +127,25 @@ const (
 	LocalDrainEntryReadStagedBodies
 )
 
+// SessionResetStepAction names one ordered operation for clearing a sync
+// session. The service owns concrete timers and buffers; downloader owns the
+// reset schedule so finish, restart, and failover paths converge on the same
+// cleanup.
+type SessionResetStepAction uint8
+
+const (
+	SessionResetStopPeerTimers SessionResetStepAction = iota
+	SessionResetDeactivateSession
+	SessionResetClearLegacyFetchState
+	SessionResetAdvanceFetchSequence
+	SessionResetStopLegacyFetchTimer
+	SessionResetClearPeerState
+	SessionResetClearBlockTracking
+	SessionResetClearTarget
+	SessionResetResetBufferWait
+	SessionResetDeleteStagedBodies
+)
+
 // FetchRefillDispatchStepAction names one network dispatch action after peer
 // fetch slots were refilled.
 type FetchRefillDispatchStepAction uint8
@@ -176,6 +195,11 @@ type LocalDrainEntryStep struct {
 	Action LocalDrainEntryStepAction
 }
 
+// SessionResetStep is one downloader-owned cleanup step for a sync session.
+type SessionResetStep struct {
+	Action SessionResetStepAction
+}
+
 // LocalDrainEntryApplyResult records whether one drain iteration should stop
 // or read staged-body rows, as selected from the downloader-owned entry steps.
 type LocalDrainEntryApplyResult struct {
@@ -184,6 +208,13 @@ type LocalDrainEntryApplyResult struct {
 	ReadStagedBodies bool
 	AppliedSteps     []LocalDrainEntryStepAction
 	UnknownSteps     []LocalDrainEntryStepAction
+}
+
+// SessionResetApplyResult records the cleanup steps dispatched by the
+// downloader reset schedule.
+type SessionResetApplyResult struct {
+	AppliedSteps []SessionResetStepAction
+	UnknownSteps []SessionResetStepAction
 }
 
 // FetchRefillDispatchStep is one downloader-owned dispatch operation after a
@@ -236,6 +267,12 @@ type LocalDrainEntryPlan struct {
 	StopLoop         bool
 	ReadStagedBodies bool
 	Steps            []LocalDrainEntryStep
+}
+
+// SessionResetPlan describes the ordered cleanup needed to end or abandon a
+// sync session.
+type SessionResetPlan struct {
+	Steps []SessionResetStep
 }
 
 // LocalDrainRunPlan groups the staged-body drain result with the downloader
@@ -455,6 +492,21 @@ type LocalDrainSessionRunPlanApplier interface {
 	LocalDrainRunProgress() SessionProgress
 }
 
+// SessionResetPlanApplier performs the runtime operations named by a reset
+// plan. SyncService owns the mutable fields; downloader owns the ordering.
+type SessionResetPlanApplier interface {
+	StopPeerTimers()
+	DeactivateSession()
+	ClearLegacyFetchState()
+	AdvanceFetchSequence()
+	StopLegacyFetchTimer()
+	ClearPeerState()
+	ClearBlockTracking()
+	ClearTarget()
+	ResetBufferWait()
+	DeleteStagedBodies()
+}
+
 // PostInventorySettlementInput is the lock-free state needed after an
 // inventory message refilled fetch slots.
 type PostInventorySettlementInput struct {
@@ -612,6 +664,12 @@ func PlanLocalDrainSessionRun(in LocalDrainSessionRunInput) LocalDrainSessionRun
 	}
 }
 
+// PlanSessionReset returns the canonical session cleanup schedule used by
+// finish, failover restart, and explicit reset paths.
+func PlanSessionReset() SessionResetPlan {
+	return SessionResetPlan{}.withSteps()
+}
+
 // ApplyLocalDrainRunPlan resolves the downloader-owned local drain run plan
 // into the caller's loop branch while preserving the staged-body drain batch.
 func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
@@ -696,6 +754,54 @@ func ApplyLocalDrainEntryPlan(plan LocalDrainEntryPlan) LocalDrainEntryApplyResu
 // entry plan from the current session progress.
 func ApplyLocalDrainEntry(in LocalDrainEntryInput) LocalDrainEntryApplyResult {
 	return ApplyLocalDrainEntryPlan(PlanLocalDrainEntry(in))
+}
+
+// ApplySessionResetPlan executes the downloader-owned session reset schedule.
+func ApplySessionResetPlan(plan SessionResetPlan, applier SessionResetPlanApplier) SessionResetApplyResult {
+	var result SessionResetApplyResult
+	if applier == nil {
+		return result
+	}
+	if len(plan.Steps) == 0 {
+		plan = plan.withSteps()
+	}
+	for _, step := range plan.Steps {
+		switch step.Action {
+		case SessionResetStopPeerTimers:
+			applier.StopPeerTimers()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetDeactivateSession:
+			applier.DeactivateSession()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetClearLegacyFetchState:
+			applier.ClearLegacyFetchState()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetAdvanceFetchSequence:
+			applier.AdvanceFetchSequence()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetStopLegacyFetchTimer:
+			applier.StopLegacyFetchTimer()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetClearPeerState:
+			applier.ClearPeerState()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetClearBlockTracking:
+			applier.ClearBlockTracking()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetClearTarget:
+			applier.ClearTarget()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetResetBufferWait:
+			applier.ResetBufferWait()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionResetDeleteStagedBodies:
+			applier.DeleteStagedBodies()
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		default:
+			result.UnknownSteps = append(result.UnknownSteps, step.Action)
+		}
+	}
+	return result
 }
 
 // ApplyLocalDrainIterationPlan resolves the downloader-owned local drain
@@ -818,6 +924,22 @@ func (p LocalDrainEntryPlan) withSteps() LocalDrainEntryPlan {
 		p.Steps = []LocalDrainEntryStep{{Action: LocalDrainEntryStop}}
 	} else if p.ReadStagedBodies {
 		p.Steps = []LocalDrainEntryStep{{Action: LocalDrainEntryReadStagedBodies}}
+	}
+	return p
+}
+
+func (p SessionResetPlan) withSteps() SessionResetPlan {
+	p.Steps = []SessionResetStep{
+		{Action: SessionResetStopPeerTimers},
+		{Action: SessionResetDeactivateSession},
+		{Action: SessionResetClearLegacyFetchState},
+		{Action: SessionResetAdvanceFetchSequence},
+		{Action: SessionResetStopLegacyFetchTimer},
+		{Action: SessionResetClearPeerState},
+		{Action: SessionResetClearBlockTracking},
+		{Action: SessionResetClearTarget},
+		{Action: SessionResetResetBufferWait},
+		{Action: SessionResetDeleteStagedBodies},
 	}
 	return p
 }

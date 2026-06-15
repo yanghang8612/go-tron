@@ -1031,6 +1031,66 @@ func TestApplyIdleDrainAfterRefillPlan(t *testing.T) {
 	}
 }
 
+func TestPlanSessionResetSchedulesCanonicalCleanup(t *testing.T) {
+	plan := PlanSessionReset()
+	want := []SessionResetStepAction{
+		SessionResetStopPeerTimers,
+		SessionResetDeactivateSession,
+		SessionResetClearLegacyFetchState,
+		SessionResetAdvanceFetchSequence,
+		SessionResetStopLegacyFetchTimer,
+		SessionResetClearPeerState,
+		SessionResetClearBlockTracking,
+		SessionResetClearTarget,
+		SessionResetResetBufferWait,
+		SessionResetDeleteStagedBodies,
+	}
+	var got []SessionResetStepAction
+	for _, step := range plan.Steps {
+		got = append(got, step.Action)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session reset steps = %+v, want %+v", got, want)
+	}
+}
+
+func TestApplySessionResetPlan(t *testing.T) {
+	applier := new(recordingSessionResetApplier)
+	result := ApplySessionResetPlan(SessionResetPlan{Steps: []SessionResetStep{
+		{Action: SessionResetStopPeerTimers},
+		{Action: SessionResetStepAction(255)},
+		{Action: SessionResetClearBlockTracking},
+		{Action: SessionResetDeleteStagedBodies},
+	}}, applier)
+
+	want := []SessionResetStepAction{
+		SessionResetStopPeerTimers,
+		SessionResetClearBlockTracking,
+		SessionResetDeleteStagedBodies,
+	}
+	if !reflect.DeepEqual(applier.calls, want) {
+		t.Fatalf("session reset calls = %+v, want %+v", applier.calls, want)
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, want) ||
+		!reflect.DeepEqual(result.UnknownSteps, []SessionResetStepAction{SessionResetStepAction(255)}) {
+		t.Fatalf("session reset result = %+v, want applied steps and unknown [255]", result)
+	}
+
+	applier.calls = nil
+	result = ApplySessionResetPlan(SessionResetPlan{}, applier)
+	if len(applier.calls) != len(PlanSessionReset().Steps) {
+		t.Fatalf("fallback session reset calls = %d, want %d", len(applier.calls), len(PlanSessionReset().Steps))
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, applier.calls) || len(result.UnknownSteps) != 0 {
+		t.Fatalf("fallback session reset result = %+v, want all steps applied", result)
+	}
+
+	nilResult := ApplySessionResetPlan(SessionResetPlan{Steps: []SessionResetStep{{Action: SessionResetStopPeerTimers}}}, nil)
+	if len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 {
+		t.Fatalf("nil session reset result = %+v, want empty", nilResult)
+	}
+}
+
 func TestApplyFetchRefillDispatchPlan(t *testing.T) {
 	applier := new(recordingFetchRefillDispatchApplier)
 	result := ApplyFetchRefillDispatchPlan(FetchRefillDispatchPlan{Steps: []FetchRefillDispatchStep{
@@ -1489,6 +1549,10 @@ type recordingIdleDrainApplier struct {
 	calls []IdleDrainStepAction
 }
 
+type recordingSessionResetApplier struct {
+	calls []SessionResetStepAction
+}
+
 type recordingEmptyDrainJoinGate struct {
 	allowed  bool
 	calls    int
@@ -1507,6 +1571,46 @@ func (a *recordingIdleDrainApplier) FinishSync() {
 
 func (a *recordingIdleDrainApplier) JoinAvailablePeers() {
 	a.calls = append(a.calls, IdleDrainJoinAvailablePeers)
+}
+
+func (a *recordingSessionResetApplier) StopPeerTimers() {
+	a.calls = append(a.calls, SessionResetStopPeerTimers)
+}
+
+func (a *recordingSessionResetApplier) DeactivateSession() {
+	a.calls = append(a.calls, SessionResetDeactivateSession)
+}
+
+func (a *recordingSessionResetApplier) ClearLegacyFetchState() {
+	a.calls = append(a.calls, SessionResetClearLegacyFetchState)
+}
+
+func (a *recordingSessionResetApplier) AdvanceFetchSequence() {
+	a.calls = append(a.calls, SessionResetAdvanceFetchSequence)
+}
+
+func (a *recordingSessionResetApplier) StopLegacyFetchTimer() {
+	a.calls = append(a.calls, SessionResetStopLegacyFetchTimer)
+}
+
+func (a *recordingSessionResetApplier) ClearPeerState() {
+	a.calls = append(a.calls, SessionResetClearPeerState)
+}
+
+func (a *recordingSessionResetApplier) ClearBlockTracking() {
+	a.calls = append(a.calls, SessionResetClearBlockTracking)
+}
+
+func (a *recordingSessionResetApplier) ClearTarget() {
+	a.calls = append(a.calls, SessionResetClearTarget)
+}
+
+func (a *recordingSessionResetApplier) ResetBufferWait() {
+	a.calls = append(a.calls, SessionResetResetBufferWait)
+}
+
+func (a *recordingSessionResetApplier) DeleteStagedBodies() {
+	a.calls = append(a.calls, SessionResetDeleteStagedBodies)
 }
 
 type recordingFetchRefillDispatchApplier struct {

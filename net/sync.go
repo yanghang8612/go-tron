@@ -2377,7 +2377,15 @@ func slowestStateCommitPhase(s core.ApplyStats) (string, time.Duration) {
 
 // doReset clears all sync state. Must be called with ss.mu held.
 func (ss *SyncService) doReset() {
-	for _, ps := range ss.peers {
+	syncdl.ApplySessionResetPlan(syncdl.PlanSessionReset(), syncSessionResetApplier{service: ss})
+}
+
+type syncSessionResetApplier struct {
+	service *SyncService
+}
+
+func (a syncSessionResetApplier) StopPeerTimers() {
+	for _, ps := range a.service.peers {
 		if ps.fetchTimer != nil {
 			ps.fetchTimer.Stop()
 			ps.fetchTimer = nil
@@ -2387,26 +2395,53 @@ func (ss *SyncService) doReset() {
 			ps.fetchDelayTimer = nil
 		}
 	}
-	ss.syncing = false
-	ss.syncPeer = nil
-	ss.fetchList = nil
-	ss.remainNum = 0
-	ss.inflight = 0
-	ss.pending = nil
-	ss.fetchSeq++
-	if ss.fetchTimer != nil {
-		ss.fetchTimer.Stop()
-		ss.fetchTimer = nil
+}
+
+func (a syncSessionResetApplier) DeactivateSession() {
+	a.service.syncing = false
+}
+
+func (a syncSessionResetApplier) ClearLegacyFetchState() {
+	a.service.syncPeer = nil
+	a.service.fetchList = nil
+	a.service.remainNum = 0
+	a.service.inflight = 0
+	a.service.pending = nil
+}
+
+func (a syncSessionResetApplier) AdvanceFetchSequence() {
+	a.service.fetchSeq++
+}
+
+func (a syncSessionResetApplier) StopLegacyFetchTimer() {
+	if a.service.fetchTimer != nil {
+		a.service.fetchTimer.Stop()
+		a.service.fetchTimer = nil
 	}
-	ss.peers = nil
-	ss.requested = nil
-	ss.retryList = nil
-	ss.blockBuffer = nil
-	ss.bufferedHash = nil
-	ss.blockPath = nil
-	ss.targetHeadNum = 0
-	ss.bufferWait.Reset()
-	ss.deleteAllSyncBodies()
+}
+
+func (a syncSessionResetApplier) ClearPeerState() {
+	a.service.peers = nil
+	a.service.requested = nil
+	a.service.retryList = nil
+}
+
+func (a syncSessionResetApplier) ClearBlockTracking() {
+	a.service.blockBuffer = nil
+	a.service.bufferedHash = nil
+	a.service.blockPath = nil
+}
+
+func (a syncSessionResetApplier) ClearTarget() {
+	a.service.targetHeadNum = 0
+}
+
+func (a syncSessionResetApplier) ResetBufferWait() {
+	a.service.bufferWait.Reset()
+}
+
+func (a syncSessionResetApplier) DeleteStagedBodies() {
+	a.service.deleteAllSyncBodies()
 }
 
 // armFetchTimer arms the fetch-response timeout. Must be called with ss.mu held.
