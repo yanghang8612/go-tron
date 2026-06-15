@@ -510,6 +510,17 @@ def parse_sync_log(path):
         "syncLogExecPlanLast": -1,
         "syncLogExecPlanStagesPerBlock": -1.0,
         "syncLogExecPlanPostBodyStagesPerBlock": -1.0,
+        "syncLogAppliedPlanBlocks": -1,
+        "syncLogAppliedPlanStages": -1,
+        "syncLogAppliedPlanBodyStages": -1,
+        "syncLogAppliedPlanPostBodyStages": -1,
+        "syncLogAppliedPlanExecutionStages": -1,
+        "syncLogAppliedPlanCommitmentStages": -1,
+        "syncLogAppliedPlanFinishStages": -1,
+        "syncLogAppliedPlanFirst": -1,
+        "syncLogAppliedPlanLast": -1,
+        "syncLogAppliedPlanStagesPerBlock": -1.0,
+        "syncLogAppliedPlanPostBodyStagesPerBlock": -1.0,
         "syncStartupRepairStatus": "skipped" if not path else "missing",
         "syncStartupRepairSummaries": 0,
         "syncStartupRepairComplete": False,
@@ -672,6 +683,15 @@ def parse_sync_log(path):
         "syncExecPlanFinishStages": "syncLogExecPlanFinishStages",
         "syncExecPlanFirst": "syncLogExecPlanFirst",
         "syncExecPlanLast": "syncLogExecPlanLast",
+        "syncAppliedPlanBlocks": "syncLogAppliedPlanBlocks",
+        "syncAppliedPlanStages": "syncLogAppliedPlanStages",
+        "syncAppliedPlanBodyStages": "syncLogAppliedPlanBodyStages",
+        "syncAppliedPlanPostBodyStages": "syncLogAppliedPlanPostBodyStages",
+        "syncAppliedPlanExecutionStages": "syncLogAppliedPlanExecutionStages",
+        "syncAppliedPlanCommitmentStages": "syncLogAppliedPlanCommitmentStages",
+        "syncAppliedPlanFinishStages": "syncLogAppliedPlanFinishStages",
+        "syncAppliedPlanFirst": "syncLogAppliedPlanFirst",
+        "syncAppliedPlanLast": "syncLogAppliedPlanLast",
     }
     for source, dest in mappings.items():
         if source in latest:
@@ -680,6 +700,7 @@ def parse_sync_log(path):
     completed = number(row, "syncLogStageCompleted", -1)
     segment_blocks = number(row, "syncLogSegmentBlocks", -1)
     exec_blocks = number(row, "syncLogExecPlanBlocks", -1)
+    applied_blocks = number(row, "syncLogAppliedPlanBlocks", -1)
     phase_cursor_scheduled = number(row, "syncLogPhaseCursorScheduledPhases", -1)
     phase_cursor_completed = number(row, "syncLogPhaseCursorCompletedPhases", -1)
     phase_cursor_task_scheduled = number(row, "syncLogPhaseCursorScheduledTasks", -1)
@@ -698,6 +719,9 @@ def parse_sync_log(path):
     if exec_blocks > 0:
         row["syncLogExecPlanStagesPerBlock"] = ratio(row["syncLogExecPlanStages"], exec_blocks)
         row["syncLogExecPlanPostBodyStagesPerBlock"] = ratio(row["syncLogExecPlanPostBodyStages"], exec_blocks)
+    if applied_blocks > 0:
+        row["syncLogAppliedPlanStagesPerBlock"] = ratio(row["syncLogAppliedPlanStages"], applied_blocks)
+        row["syncLogAppliedPlanPostBodyStagesPerBlock"] = ratio(row["syncLogAppliedPlanPostBodyStages"], applied_blocks)
     return row
 
 def parse_etime_seconds(value):

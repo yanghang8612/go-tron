@@ -182,7 +182,14 @@ current staged task is still in execution, commitment, or finish.
 For the batch-phase stage planner, a fully completed N-block import normally
 reports `syncLogStageScheduled = syncLogExecPlanStages = 4*N`; a blocked row
 shows how many bodies/execution/commitment/finish tasks completed before the
-next missing or mismatched task. These fields are log-derived and complement the
+next missing or mismatched task. The sampler also records
+`syncLogAppliedPlanBlocks`, `syncLogAppliedPlanStages`,
+`syncLogAppliedPlanBodyStages`, `syncLogAppliedPlanPostBodyStages`,
+`syncLogAppliedPlanExecutionStages`, `syncLogAppliedPlanCommitmentStages`,
+`syncLogAppliedPlanFinishStages`, `syncLogAppliedPlanFirst`, and
+`syncLogAppliedPlanLast`, plus per-block ratios, so partial imports can be
+distinguished from the larger attempted execution plan. These fields are
+log-derived and complement the
 `stage*` fields from `gtron db stage-status`: log fields explain what the last
 import batch planned and observed, while DB fields show the persisted recovery
 boundary. The same log parser also records startup recovery fields, including
