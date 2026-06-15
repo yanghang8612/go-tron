@@ -125,3 +125,60 @@ func TestSelfDestruct2SelfObtainerSkipsVoteCancel(t *testing.T) {
 		t.Fatalf("suicide2 self-obtainer must NOT cancel votes, got %v", vs)
 	}
 }
+
+// TestTLoadTStoreAddressNamespacedAndReverts locks the EIP-1153 (Cancun) fix:
+// TLOAD/TSTORE transient storage is namespaced by the executing contract's
+// address (not the slot alone) and is rolled back by RevertToSnapshot with the
+// frame and discarded at the transaction boundary — matching java-tron
+// RepositoryImpl.transientStorage (HashBasedTable<address,key> on the per-frame
+// child repository, committed on success / discarded on revert). Pre-fix
+// go-tron keyed a single shared interpreter map by slot only and never reverted
+// it (cross-contract collision + revert-spanning leak).
+func TestTLoadTStoreAddressNamespacedAndReverts(t *testing.T) {
+	tvm, statedb, _ := newTestTVMForCreate(t, TVMConfig{Cancun: true}, nil)
+	in := tvm.interpreter
+	addrA := tcommon.Address{0x41, 0xAA}
+	addrB := tcommon.Address{0x41, 0xBB}
+	cA := NewContract(tcommon.Address{0x41, 0x01}, addrA, 0, 1_000_000)
+	cB := NewContract(tcommon.Address{0x41, 0x02}, addrB, 0, 1_000_000)
+
+	tstore := func(c *Contract, key, val uint64) {
+		st := newStack()
+		st.push(uint256.NewInt(val)) // value (bottom)
+		st.push(uint256.NewInt(key)) // slot (top, popped first)
+		if _, err := opTStore(nil, in, c, nil, st); err != nil {
+			t.Fatalf("opTStore: %v", err)
+		}
+	}
+	tload := func(c *Contract, key uint64) uint64 {
+		st := newStack()
+		st.push(uint256.NewInt(key))
+		if _, err := opTLoad(nil, in, c, nil, st); err != nil {
+			t.Fatalf("opTLoad: %v", err)
+		}
+		v := st.pop()
+		return v.Uint64()
+	}
+
+	tstore(cA, 7, 42)
+	if got := tload(cA, 7); got != 42 {
+		t.Fatalf("TLOAD A/7 = %d, want 42", got)
+	}
+	if got := tload(cB, 7); got != 0 {
+		t.Fatalf("TLOAD B/7 = %d, want 0 (address-namespaced, no slot collision)", got)
+	}
+
+	// A nested frame's TSTORE is undone when that frame reverts.
+	snap := statedb.Snapshot()
+	tstore(cA, 7, 99)
+	statedb.RevertToSnapshot(snap)
+	if got := tload(cA, 7); got != 42 {
+		t.Fatalf("TLOAD A/7 after revert = %d, want pre-frame 42", got)
+	}
+
+	// All transient storage is discarded at the transaction boundary.
+	statedb.FinalizeTransaction()
+	if got := tload(cA, 7); got != 0 {
+		t.Fatalf("TLOAD A/7 after FinalizeTransaction = %d, want 0 (EIP-1153 discard)", got)
+	}
+}
