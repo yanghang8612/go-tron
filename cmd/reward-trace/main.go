@@ -43,6 +43,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb/pebbledb"
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
@@ -397,31 +398,32 @@ func main() {
 
 	if *witnessVoters != "" {
 		w := mustAddr(strings.TrimSpace(*witnessVoters))
-		it := db.NewIterator([]byte("a-"), nil)
-		defer it.Release()
 		voters, contractVoters := 0, 0
 		var total int64
-		for it.Next() {
-			key := it.Key()
-			if len(key) != len("a-")+21 {
-				continue
+		err := rawdb.IterateStateAccountLatest(db, nil, func(row rawdb.StateAccountLatestRow) (bool, error) {
+			env, derr := state.DecodeStateAccountV2(row.Value)
+			if derr != nil {
+				return true, nil
 			}
-			addr := tcommon.BytesToAddress(key[len("a-"):])
-			acct := statedb.GetAccount(addr)
-			if acct == nil {
-				continue
+			acct, aerr := types.UnmarshalAccount(env.AccountProto)
+			if aerr != nil || acct == nil {
+				return true, nil
 			}
 			for _, v := range acct.Votes() {
 				if tcommon.BytesToAddress(v.VoteAddress) == w {
 					voters++
 					total += v.VoteCount
-					if statedb.GetContract(addr) != nil {
+					if acct.Type() == corepb.AccountType_Contract {
 						contractVoters++
-						fmt.Printf("voter %x count=%d  <<< CONTRACT\n", addr.Bytes(), v.VoteCount)
+						fmt.Printf("voter %x count=%d  <<< CONTRACT\n", row.Owner.Bytes(), v.VoteCount)
 					}
 					break
 				}
 			}
+			return true, nil
+		})
+		if err != nil {
+			log.Crit("iterate accounts", "err", err)
 		}
 		fmt.Printf("--- %d voters for %x (vote total=%d); %d are CONTRACTS (listed above) ---\n", voters, w.Bytes(), total, contractVoters)
 		return
