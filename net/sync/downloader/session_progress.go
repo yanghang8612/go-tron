@@ -474,6 +474,7 @@ type PostInventoryRunPlan struct {
 // run. LockedSettlement runs while SyncService holds its state lock; Dispatch
 // and AfterDispatchSettlement run after unlock.
 type PostInventoryRunApplyResult struct {
+	Plan                    PostInventoryRunPlan
 	LockedSettlement        PostInventorySettlementApplyResult
 	Dispatch                FetchRefillDispatchApplyResult
 	AfterDispatchSettlement PostInventorySettlementApplyResult
@@ -991,14 +992,23 @@ func (p PostInventorySettlementPlan) withSteps() PostInventorySettlementPlan {
 // post-inventory run.
 func ApplyPostInventoryRunLockedPlan(plan PostInventoryRunPlan, applier PostInventorySettlementPlanApplier) PostInventoryRunApplyResult {
 	return PostInventoryRunApplyResult{
+		Plan:             plan,
 		LockedSettlement: ApplyPostInventorySettlementLockedPlan(plan.Settlement, applier),
 	}
+}
+
+// ApplyPostInventoryRun creates and applies the lock-held portion of the
+// downloader-owned post-inventory run from current session progress. The
+// returned plan is reused by the caller for post-lock dispatch and settlement.
+func ApplyPostInventoryRun(in PostInventoryRunInput, applier PostInventorySettlementPlanApplier) PostInventoryRunApplyResult {
+	return ApplyPostInventoryRunLockedPlan(PlanPostInventoryRun(in), applier)
 }
 
 // ApplyPostInventoryRunPostLockPlan executes post-lock dispatch followed by
 // post-dispatch settlement for a full post-inventory run.
 func ApplyPostInventoryRunPostLockPlan(plan PostInventoryRunPlan, dispatchApplier FetchRefillDispatchPlanApplier, settlementApplier PostInventorySettlementPlanApplier) PostInventoryRunApplyResult {
 	return PostInventoryRunApplyResult{
+		Plan:                    plan,
 		Dispatch:                ApplyFetchRefillDispatchPlan(plan.Dispatch, dispatchApplier),
 		AfterDispatchSettlement: ApplyPostInventorySettlementAfterDispatchPlan(plan.Settlement, settlementApplier),
 	}

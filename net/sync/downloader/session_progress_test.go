@@ -1192,14 +1192,16 @@ func TestApplyPostInventoryRunPlan(t *testing.T) {
 	if !reflect.DeepEqual(locked.LockedSettlement.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryMirror}) ||
 		!reflect.DeepEqual(locked.LockedSettlement.UnknownSteps, []PostInventorySettlementStepAction{PostInventorySettlementStepAction(255)}) ||
 		len(locked.Dispatch.AppliedSteps) != 0 ||
-		len(locked.AfterDispatchSettlement.AppliedSteps) != 0 {
+		len(locked.AfterDispatchSettlement.AppliedSteps) != 0 ||
+		!reflect.DeepEqual(locked.Plan, plan) {
 		t.Fatalf("locked post-inventory run result = %+v, want locked mirror result only", locked)
 	}
 	if !reflect.DeepEqual(postLock.Dispatch.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
 		!reflect.DeepEqual(postLock.Dispatch.UnknownSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchStepAction(253)}) ||
 		!reflect.DeepEqual(postLock.AfterDispatchSettlement.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryFinish}) ||
 		!reflect.DeepEqual(postLock.AfterDispatchSettlement.UnknownSteps, []PostInventorySettlementStepAction{PostInventorySettlementStepAction(254)}) ||
-		len(postLock.LockedSettlement.AppliedSteps) != 0 {
+		len(postLock.LockedSettlement.AppliedSteps) != 0 ||
+		!reflect.DeepEqual(postLock.Plan, plan) {
 		t.Fatalf("post-lock post-inventory run result = %+v, want dispatch and after-dispatch settlement", postLock)
 	}
 
@@ -1211,6 +1213,53 @@ func TestApplyPostInventoryRunPlan(t *testing.T) {
 		len(nilPostLock.AfterDispatchSettlement.AppliedSteps) != 0 ||
 		len(nilPostLock.AfterDispatchSettlement.UnknownSteps) != 0 {
 		t.Fatalf("nil post-lock post-inventory run result = %+v, want empty", nilPostLock)
+	}
+}
+
+func TestApplyPostInventoryRunBuildsPlanForPostLockDispatch(t *testing.T) {
+	settlementApplier := new(recordingPostInventorySettlementApplier)
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+
+	result := ApplyPostInventoryRun(PostInventoryRunInput{
+		OutboundRequests: 2,
+		Progress:         active,
+	}, settlementApplier)
+
+	if !reflect.DeepEqual(settlementApplier.calls, []PostInventorySettlementStepAction{PostInventoryMirror}) {
+		t.Fatalf("post-inventory locked calls = %+v, want mirror", settlementApplier.calls)
+	}
+	if !reflect.DeepEqual(result.LockedSettlement.AppliedSteps, []PostInventorySettlementStepAction{PostInventoryMirror}) ||
+		len(result.LockedSettlement.UnknownSteps) != 0 ||
+		len(result.Dispatch.AppliedSteps) != 0 ||
+		len(result.AfterDispatchSettlement.AppliedSteps) != 0 {
+		t.Fatalf("input post-inventory run result = %+v, want locked mirror only", result)
+	}
+	wantPlan := PostInventoryRunPlan{
+		Settlement: PostInventorySettlementPlan{
+			Mirror:      true,
+			LockedSteps: []PostInventorySettlementStep{{Action: PostInventoryMirror}},
+		},
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("input post-inventory plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+
+	dispatchApplier := new(recordingFetchRefillDispatchApplier)
+	settlementApplier.calls = nil
+	postLock := ApplyPostInventoryRunPostLockPlan(result.Plan, dispatchApplier, settlementApplier)
+	if dispatchApplier.sent != 1 ||
+		!reflect.DeepEqual(postLock.Dispatch.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
+		len(postLock.Dispatch.UnknownSteps) != 0 ||
+		len(postLock.AfterDispatchSettlement.AppliedSteps) != 0 ||
+		len(settlementApplier.calls) != 0 {
+		t.Fatalf("post-lock post-inventory result = %+v sent=%d calls=%+v, want one dispatch and no settlement", postLock, dispatchApplier.sent, settlementApplier.calls)
+	}
+	if !reflect.DeepEqual(postLock.Plan, result.Plan) {
+		t.Fatalf("post-lock plan = %+v, want original plan %+v", postLock.Plan, result.Plan)
 	}
 }
 

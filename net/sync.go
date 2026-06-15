@@ -977,19 +977,18 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())
 	out := ss.fillFetchSlotsLocked(time.Now())
 	progress := ss.sessionProgressLocked()
-	postInventory := syncdl.PlanPostInventoryRun(syncdl.PostInventoryRunInput{
+	settlementApplier := syncPostInventorySettlementApplier{service: ss}
+	postInventory := syncdl.ApplyPostInventoryRun(syncdl.PostInventoryRunInput{
 		OutboundRequests: len(out),
 		Progress:         progress,
-	})
-	settlementApplier := syncPostInventorySettlementApplier{service: ss}
-	syncdl.ApplyPostInventoryRunLockedPlan(postInventory, settlementApplier)
+	}, settlementApplier)
 	ss.mu.Unlock()
 
 	if inventoryApplyResult.HasStageTarget {
 		ss.writeStageProgress(rawdb.StageSyncInventory, inventoryApplyResult.StageTarget, tcommon.Hash{}, false)
 	}
 
-	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
+	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
 }
 
 func (ss *SyncService) fetchNextBatch() {
