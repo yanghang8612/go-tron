@@ -329,6 +329,55 @@ func TestSyncServiceStartupPrunesStagedBodyGap(t *testing.T) {
 	}
 }
 
+func TestSyncServiceStartupPrunesMalformedStagedBodyTail(t *testing.T) {
+	bc := makeTestChain(t)
+
+	block1 := stubBlock(1, bc.CurrentBlock().Hash())
+	block2 := stubBlock(2, block1.Hash())
+	block3 := stubBlock(3, block2.Hash())
+	if result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block1, nil); result.StageError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("write staged block1: stage=%v progress=%v", result.StageError, result.ProgressWriteError)
+	}
+	if result := rawdb.WriteSyncStagedBlockRawAndProgress(bc.DB(), block2, rawOf(t, block3)); result.StageError != nil || result.ProgressWriteError != nil {
+		t.Fatalf("write malformed staged block2: stage=%v progress=%v", result.StageError, result.ProgressWriteError)
+	}
+
+	restarted := NewSyncService(bc, nil)
+	restarted.mu.Lock()
+	restarted.initSessionLocked(time.Now())
+	buffered := len(restarted.blockBuffer)
+	target := restarted.targetHeadNum
+	path1 := restarted.blockPath[block1.Number()]
+	_, path2 := restarted.blockPath[block2.Number()]
+	_, path3 := restarted.blockPath[block3.Number()]
+	restarted.mu.Unlock()
+
+	if buffered != 1 || target != block1.Number() {
+		t.Fatalf("restored buffered=%d target=%d, want only block1", buffered, target)
+	}
+	if path1 != block1.Hash() {
+		t.Fatalf("restored path for block1 = %x, want %x", path1, block1.Hash())
+	}
+	if path2 {
+		t.Fatalf("malformed staged block2 path was restored")
+	}
+	if path3 {
+		t.Fatalf("raw payload block3 path was restored from block2 key")
+	}
+	if row, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), block1.Number()); err != nil || !ok || row.Hash != block1.Hash() {
+		t.Fatalf("staged block1 after malformed-tail prune = %+v ok=%v err=%v, want kept", row, ok, err)
+	}
+	if _, ok, err := rawdb.ReadSyncStagedBlockRaw(bc.DB(), block2.Number()); err != nil || ok {
+		t.Fatalf("malformed staged block2 after startup ok=%v err=%v, want pruned", ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodies); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("SyncBodies after malformed-tail prune = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+	if row, ok, err := rawdb.ReadStageProgressRow(bc.DB(), rawdb.StageSyncBodiesReady); err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
+		t.Fatalf("SyncBodiesReady after malformed-tail prune = %+v ok=%v err=%v, want block1", row, ok, err)
+	}
+}
+
 func TestSyncServiceDrainRepairsBodiesReadyHashMismatch(t *testing.T) {
 	bc := makeTestChain(t)
 	ss := NewSyncService(bc, nil)
