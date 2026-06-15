@@ -277,6 +277,31 @@ func main() {
 					fmt.Printf("    witness %x: VI[%d]-VI[%d]=%s  x%d/1e18 = %s\n",
 						v.Witness.Bytes(), end-1, begin-1, d.String(), v.Count, share.String())
 				}
+				// THREE-WAY path comparison on the SAME data:
+				//   A = new-VI (what gtron uses for cycles >= newAlgoCycle) == `total` above
+				//   B = old per-cycle FLOAT (oldRewardSum): sum_cycle sum_witness floor(count/cycleVote * cycleReward)
+				//   C = old opt TELESCOPING (oldRewardSumOpt): per-witness floor(sum_cycle floor(cr*1e18/cv) * count / 1e18)
+				var oldFloat int64
+				var optTotal int64
+				for _, v := range votes {
+					viSum := new(big.Int)
+					for c := begin; c < end; c++ {
+						cr := statedb.ReadCycleReward(c, v.Witness.Bytes())
+						cv := statedb.ReadCycleVote(c, v.Witness.Bytes())
+						if cr > 0 && cv != rawdb.RewardRemark && cv != 0 {
+							voteRate := float64(v.Count) / float64(cv)
+							oldFloat += int64(voteRate * float64(cr))
+						}
+						if cr != 0 && cv != 0 {
+							viSum.Add(viSum, new(big.Int).Quo(new(big.Int).Mul(big.NewInt(cr), dec), big.NewInt(cv)))
+						}
+					}
+					if viSum.Sign() > 0 {
+						optTotal += new(big.Int).Quo(new(big.Int).Mul(viSum, big.NewInt(v.Count)), dec).Int64()
+					}
+				}
+				fmt.Printf("    PATHS: [A new-VI]=%d  [B old-per-cycle-float]=%d  [C old-opt-telescoping]=%d\n",
+					total, oldFloat, optTotal)
 			}
 		}
 	}
