@@ -1,0 +1,353 @@
+package vm
+
+import (
+	"errors"
+	"testing"
+
+	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/holiman/uint256"
+	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/state"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+)
+
+// newStakeParityTVM builds a TVM wired for the Stake-2.0 VM opcodes
+// (DELEGATERESOURCE / UNDELEGATERESOURCE / CANCELALLUNFREEZEV2). DynProps is
+// seeded so SupportUnfreezeDelay()/SupportCancelAllUnfreezeV2() return true,
+// matching the java VM native-contract gate (proposal #70/#71).
+func newStakeParityTVM(t *testing.T) (*TVM, *state.StateDB, *state.DynamicProperties) {
+	t.Helper()
+	diskdb := ethrawdb.NewMemoryDatabase()
+	sdb := state.NewDatabase(diskdb)
+	statedb, err := state.New(tcommon.Hash{}, sdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dp := state.NewDynamicProperties()
+	dp.SetUnfreezeDelayDays(14)
+	dp.SetAllowCancelAllUnfreezeV2(true)
+	statedb.SetDynamicProperties(dp)
+	tvm := NewTVM(statedb, dp, tcommon.Address{}, 1, 1_000_000, tcommon.Address{}, 1,
+		TVMConfig{StakingV2: true})
+	tvm.SetDB(diskdb)
+	return tvm, statedb, dp
+}
+
+func stakeAddr(last byte) tcommon.Address {
+	var addr tcommon.Address
+	addr[0] = 0x41
+	addr[20] = last
+	return addr
+}
+
+func addressWord(addr tcommon.Address) uint256.Int {
+	var w uint256.Int
+	w.SetBytes(addr[1:]) // drop the 0x41 prefix; uint256ToAddress re-adds it
+	return w
+}
+
+// callDelegateResource invokes opDelegateResource with the java stack layout:
+// pop order is amount, resourceType, receiver, so push receiver, resource,
+// amount (amount on top).
+func callDelegateResource(t *testing.T, tvm *TVM, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) uint64 {
+	t.Helper()
+	stack := newStack()
+	recv := addressWord(receiver)
+	stack.push(&recv)
+	stack.push(uint256.NewInt(uint64(resource)))
+	stack.push(uint256.NewInt(uint64(amount)))
+	contract := NewContract(owner, owner, 0, 1_000_000)
+	if _, err := opDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opDelegateResource error: %v", err)
+	}
+	ret := stack.pop()
+	return ret.Uint64()
+}
+
+func callUnDelegateResource(t *testing.T, tvm *TVM, owner, receiver tcommon.Address, resource corepb.ResourceCode, amount int64) uint64 {
+	t.Helper()
+	stack := newStack()
+	recv := addressWord(receiver)
+	stack.push(&recv)
+	stack.push(uint256.NewInt(uint64(resource)))
+	stack.push(uint256.NewInt(uint64(amount)))
+	contract := NewContract(owner, owner, 0, 1_000_000)
+	if _, err := opUnDelegateResource(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opUnDelegateResource error: %v", err)
+	}
+	ret := stack.pop()
+	return ret.Uint64()
+}
+
+// TestDelegateOpcodeWritesPerPairRecordAndIndex locks the F-1 fix: the VM
+// DELEGATERESOURCE opcode must persist the per-pair DelegatedResourceV2 record
+// and the owner's delegation index, identical to java-tron
+// DelegateResourceProcessor.delegateResource (writes createDbKeyV2(owner,
+// receiver, false) + the FROM/TO index) and to go-tron's actuator
+// DelegateResourceActuator.Execute. Before the fix opDelegateResource only
+// adjusted the aggregate delegated balance and left the per-pair record absent.
+func TestDelegateOpcodeWritesPerPairRecordAndIndex(t *testing.T) {
+	tvm, statedb, _ := newStakeParityTVM(t)
+	owner := stakeAddr(0x01)
+	receiver := stakeAddr(0x02)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision)
+
+	if ret := callDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision); ret != 1 {
+		t.Fatalf("delegate result: got %d, want 1", ret)
+	}
+
+	// Aggregate balances move (already worked before the fix).
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 60*tvmTRXPrecision {
+		t.Fatalf("owner remaining frozen: got %d, want %d", got, 60*tvmTRXPrecision)
+	}
+	if got := statedb.GetDelegatedFrozenV2(owner, corepb.ResourceCode_ENERGY); got != 40*tvmTRXPrecision {
+		t.Fatalf("owner delegated frozen: got %d, want %d", got, 40*tvmTRXPrecision)
+	}
+	if got := statedb.GetAccount(receiver).AcquiredDelegatedFrozenV2BalanceForEnergy(); got != 40*tvmTRXPrecision {
+		t.Fatalf("receiver acquired: got %d, want %d", got, 40*tvmTRXPrecision)
+	}
+
+	// The F-1 fix: per-pair record + index must exist (java golden:
+	// DelegateResourceProcessor.delegateResource writes the unlocked record).
+	dr := statedb.ReadDelegatedResourceV2(owner, receiver, false)
+	if dr == nil {
+		t.Fatal("per-pair DelegatedResourceV2 record missing after DELEGATERESOURCE opcode")
+	}
+	if dr.FrozenBalanceForEnergy != 40*tvmTRXPrecision {
+		t.Fatalf("per-pair record energy: got %d, want %d", dr.FrozenBalanceForEnergy, 40*tvmTRXPrecision)
+	}
+	idx := statedb.ReadDelegationIndex(owner)
+	if len(idx) != 1 || idx[0] != receiver {
+		t.Fatalf("delegation index: got %v, want [%x]", idx, receiver)
+	}
+}
+
+// TestUnDelegateOpcodeReadsPerPairRecord locks the second half of F-1: the VM
+// UNDELEGATERESOURCE opcode must validate against and decrement the per-pair
+// record (not the aggregate), and remove the record + index when it hits zero.
+// Mirrors java UnDelegateResourceProcessor.execute and go actuator
+// UnDelegateResourceActuator.Execute.
+func TestUnDelegateOpcodeReadsPerPairRecord(t *testing.T) {
+	tvm, statedb, _ := newStakeParityTVM(t)
+	owner := stakeAddr(0x11)
+	receiver := stakeAddr(0x12)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision)
+	callDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision)
+
+	// Partial undelegate: record decremented but still present.
+	if ret := callUnDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 15*tvmTRXPrecision); ret != 1 {
+		t.Fatalf("partial undelegate result: got %d, want 1", ret)
+	}
+	dr := statedb.ReadDelegatedResourceV2(owner, receiver, false)
+	if dr == nil || dr.FrozenBalanceForEnergy != 25*tvmTRXPrecision {
+		t.Fatalf("per-pair record after partial undelegate: %+v, want energy=%d", dr, 25*tvmTRXPrecision)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 75*tvmTRXPrecision {
+		t.Fatalf("owner frozen after partial undelegate: got %d, want %d", got, 75*tvmTRXPrecision)
+	}
+
+	// Remaining undelegate empties the record -> record + index deleted.
+	if ret := callUnDelegateResource(t, tvm, owner, receiver, corepb.ResourceCode_ENERGY, 25*tvmTRXPrecision); ret != 1 {
+		t.Fatalf("final undelegate result: got %d, want 1", ret)
+	}
+	if dr := statedb.ReadDelegatedResourceV2(owner, receiver, false); dr != nil {
+		t.Fatalf("per-pair record should be deleted at zero, got %+v", dr)
+	}
+	if idx := statedb.ReadDelegationIndex(owner); len(idx) != 0 {
+		t.Fatalf("delegation index should be empty, got %v", idx)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 100*tvmTRXPrecision {
+		t.Fatalf("owner frozen fully restored: got %d, want %d", got, 100*tvmTRXPrecision)
+	}
+}
+
+// TestUnDelegateOpcodeCrossReceiverIsolation locks java/actuator parity for the
+// per-pair check: owner delegated only to receiver2, so undelegating from
+// receiver1 must fail (push 0) and mutate nothing. The pre-fix code validated
+// against the aggregate GetDelegatedFrozenV2(owner) which is non-zero, so it
+// would have wrongly succeeded against receiver1.
+func TestUnDelegateOpcodeCrossReceiverIsolation(t *testing.T) {
+	tvm, statedb, _ := newStakeParityTVM(t)
+	owner := stakeAddr(0x21)
+	receiver1 := stakeAddr(0x22)
+	receiver2 := stakeAddr(0x23)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver1, corepb.AccountType_Normal)
+	statedb.CreateAccount(receiver2, corepb.AccountType_Normal)
+	statedb.AddFreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision)
+	callDelegateResource(t, tvm, owner, receiver2, corepb.ResourceCode_ENERGY, 40*tvmTRXPrecision)
+
+	ownerFrozenBefore := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY)
+	ownerDelegatedBefore := statedb.GetDelegatedFrozenV2(owner, corepb.ResourceCode_ENERGY)
+
+	// Undelegate from receiver1 (no record) must fail.
+	if ret := callUnDelegateResource(t, tvm, owner, receiver1, corepb.ResourceCode_ENERGY, 10*tvmTRXPrecision); ret != 0 {
+		t.Fatalf("cross-receiver undelegate should fail: got %d, want 0", ret)
+	}
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != ownerFrozenBefore {
+		t.Fatalf("owner frozen mutated by failed undelegate: got %d, want %d", got, ownerFrozenBefore)
+	}
+	if got := statedb.GetDelegatedFrozenV2(owner, corepb.ResourceCode_ENERGY); got != ownerDelegatedBefore {
+		t.Fatalf("owner delegated mutated by failed undelegate: got %d, want %d", got, ownerDelegatedBefore)
+	}
+	// The valid receiver2 record is untouched.
+	if dr := statedb.ReadDelegatedResourceV2(owner, receiver2, false); dr == nil || dr.FrozenBalanceForEnergy != 40*tvmTRXPrecision {
+		t.Fatalf("receiver2 record disturbed: %+v", dr)
+	}
+}
+
+// TestCancelAllUnfreezeV2OpcodeWithdrawsExpiredAndUsesHeaderTimestamp locks the
+// F-2 fix at the opcode level: CANCELALLUNFREEZEV2 must (1) add the EXPIRED
+// total to the contract's balance, (2) refreeze the unexpired entry and bump
+// the global weight, (3) push 1 on success (java OperationActions pushes
+// ONE/ZERO, not the amount), and (4) split entries on
+// DynProps.LatestBlockHeaderTimestamp() — the java getLatestBlockHeaderTimestamp
+// source — NOT tvm.Timestamp.
+//
+// To prove the `now` source, LatestBlockHeaderTimestamp and tvm.Timestamp are
+// set to DIFFERENT values straddling the unexpired entry: under the correct
+// header timestamp the 200-TRX entry is unexpired (refrozen); under the wrong
+// tvm.Timestamp source it would look expired (withdrawn). The assertions only
+// pass with the header-timestamp source.
+func TestCancelAllUnfreezeV2OpcodeWithdrawsExpiredAndUsesHeaderTimestamp(t *testing.T) {
+	tvm, statedb, dp := newStakeParityTVM(t)
+	owner := stakeAddr(0x31)
+	statedb.CreateAccount(owner, corepb.AccountType_Normal)
+	statedb.AddBalance(owner, 5*tvmTRXPrecision)
+
+	const headerNow = int64(1_000_000)
+	dp.SetLatestBlockHeaderTimestamp(headerNow)
+	// tvm.Timestamp deliberately LATER than the unexpired entry's expiry, so a
+	// buggy now=tvm.Timestamp would wrongly treat the 200-TRX entry as expired.
+	tvm.Timestamp = headerNow + 100_000
+
+	// U1 = 100 TRX ENERGY expired (<= headerNow): withdrawn to balance.
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, 100*tvmTRXPrecision, headerNow-1)
+	// U2 = 200 TRX ENERGY unexpired (> headerNow but < tvm.Timestamp): refrozen.
+	statedb.AddUnfreezeV2(owner, corepb.ResourceCode_ENERGY, 200*tvmTRXPrecision, headerNow+1)
+
+	energyWeightBefore := dp.TotalEnergyWeight()
+
+	stack := newStack()
+	contract := NewContract(owner, owner, 0, 1_000_000)
+	if _, err := opCancelAllUnfreezeV2(nil, tvm.interpreter, contract, nil, stack); err != nil {
+		t.Fatalf("opCancelAllUnfreezeV2 error: %v", err)
+	}
+
+	ret := stack.pop()
+	if ret.Uint64() != 1 {
+		t.Fatalf("opcode return: got %d, want 1 (java pushes ONE on success)", ret.Uint64())
+	}
+	// balance += 100 TRX (only the expired entry).
+	if got := statedb.GetBalance(owner); got != 105*tvmTRXPrecision {
+		t.Fatalf("balance: got %d, want %d (5 start + 100 expired)", got, 105*tvmTRXPrecision)
+	}
+	// 200 TRX refrozen into ENERGY (proves header-timestamp source: a buggy
+	// tvm.Timestamp source would have withdrawn this too, leaving 0 frozen).
+	if got := statedb.GetFrozenV2Amount(owner, corepb.ResourceCode_ENERGY); got != 200*tvmTRXPrecision {
+		t.Fatalf("refrozen energy: got %d, want %d", got, 200*tvmTRXPrecision)
+	}
+	if got := dp.TotalEnergyWeight() - energyWeightBefore; got != 200 {
+		t.Fatalf("total_energy_weight delta: got %d, want 200", got)
+	}
+	if got := statedb.UnfreezeV2Count(owner); got != 0 {
+		t.Fatalf("unfreeze queue not cleared: got %d", got)
+	}
+}
+
+// pow2 returns 2^n as a uint256.Int.
+func pow2(n uint) *uint256.Int {
+	return new(uint256.Int).Lsh(uint256.NewInt(1), n)
+}
+
+// TestVoteWitnessEnergyCostV2WrapsLikeDataWord locks the D-1 fix: the #81
+// (EnergyAdjustment, currently-active) VOTEWITNESS energy path must mirror java
+// EnergyCost.getVoteWitnessCost2, which builds the array size with
+// DataWord.mul(32) then DataWord.add(32) — BOTH wrapping mod 2^256. With
+// witnessCount = 2^251, java computes 2^251 * 32 = 2^256 ≡ 0, then +32 = 32, so
+// memNeeded = offset + 32 (tiny) and NO OutOfMemory is thrown. The pre-fix go
+// code used non-wrapping bits.Mul64 and rejected (false -> OOM), diverging.
+func TestVoteWitnessEnergyCostV2WrapsLikeDataWord(t *testing.T) {
+	tvm, _, _ := newStakeParityTVM(t)
+	in := tvm.interpreter
+	in.tvmConfig = TVMConfig{Vote: true, EnergyAdjustment: true} // v2: #81 active, not Osaka
+
+	count := pow2(251) // 2^251 * 32 == 2^256 == 0 (mod 2^256)
+	wOff := uint256.NewInt(0)
+	aOff := uint256.NewInt(0)
+	mem := newMemory()
+
+	cost, needed, err := voteWitnessMemoryEnergyCost(in, mem, wOff, count, aOff, count)
+	if err != nil {
+		t.Fatalf("v2 wrapping should NOT OOM (2^251*32 wraps to 0, +32=32): got err %v", err)
+	}
+	// wrapped size = 32, memNeeded = offset(0) + 32 = 32 -> one 32-byte word.
+	if needed != 32 {
+		t.Fatalf("v2 needed: got %d, want 32 (wrapped size)", needed)
+	}
+	if want := memoryEnergyCost(32); cost != want {
+		t.Fatalf("v2 cost: got %d, want %d", cost, want)
+	}
+}
+
+// TestVoteWitnessEnergyCostV3DoesNotWrap locks the Osaka (#96) path against
+// java EnergyCost.getVoteWitnessCost3, which uses pure BigInteger arithmetic
+// (no wrapping). With witnessCount = 2^251 the array size is astronomically
+// larger than the 3MB MEM_LIMIT, so it MUST throw OutOfMemory.
+func TestVoteWitnessEnergyCostV3DoesNotWrap(t *testing.T) {
+	tvm, _, _ := newStakeParityTVM(t)
+	in := tvm.interpreter
+	in.tvmConfig = TVMConfig{Vote: true, EnergyAdjustment: true, Osaka: true} // v3: Osaka active
+
+	count := pow2(251)
+	wOff := uint256.NewInt(0)
+	aOff := uint256.NewInt(0)
+	mem := newMemory()
+
+	_, _, err := voteWitnessMemoryEnergyCost(in, mem, wOff, count, aOff, count)
+	if !errors.Is(err, ErrOutOfMemory) {
+		t.Fatalf("v3 (Osaka) must NOT wrap: 2^251*32 > 3MB, want ErrOutOfMemory, got %v", err)
+	}
+}
+
+// TestVoteWitnessEnergyCostNormalUnchanged: for a normal small count the three
+// fork states must produce the same memNeeded/cost they did before the fix
+// (wrapping only matters for pathological inputs). count=2 at offset 0:
+//   - base (neither flag): size = 2*32 = 64, memNeeded = 64.
+//   - v2 / v3:             size = 2*32 + 32 = 96, memNeeded = 96.
+func TestVoteWitnessEnergyCostNormalUnchanged(t *testing.T) {
+	tvm, _, _ := newStakeParityTVM(t)
+	in := tvm.interpreter
+	count := uint256.NewInt(2)
+	wOff := uint256.NewInt(0)
+	aOff := uint256.NewInt(0)
+
+	cases := []struct {
+		name       string
+		cfg        TVMConfig
+		wantNeeded uint64
+	}{
+		{"base", TVMConfig{Vote: true}, 64},
+		{"v2", TVMConfig{Vote: true, EnergyAdjustment: true}, 96},
+		{"v3", TVMConfig{Vote: true, EnergyAdjustment: true, Osaka: true}, 96},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in.tvmConfig = tc.cfg
+			cost, needed, err := voteWitnessMemoryEnergyCost(in, newMemory(), wOff, count, aOff, count)
+			if err != nil {
+				t.Fatalf("%s: unexpected err %v", tc.name, err)
+			}
+			if needed != tc.wantNeeded {
+				t.Fatalf("%s needed: got %d, want %d", tc.name, needed, tc.wantNeeded)
+			}
+			if want := memoryEnergyCost(tc.wantNeeded); cost != want {
+				t.Fatalf("%s cost: got %d, want %d", tc.name, cost, want)
+			}
+		})
+	}
+}
