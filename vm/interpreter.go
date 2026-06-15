@@ -15,7 +15,6 @@ type Interpreter struct {
 	readOnly   bool   // static call mode
 	returnData []byte // return data from last CALL/CREATE
 	tvmConfig  TVMConfig
-	transient  map[uint256.Int]uint256.Int // transient storage for TLOAD/TSTORE (EIP-1153)
 	currentOp  OpCode
 	energyErr  error
 
@@ -41,7 +40,6 @@ func NewInterpreter(tvm *TVM, cfg TVMConfig) *Interpreter {
 		tvm:       tvm,
 		table:     newJumpTable(),
 		tvmConfig: cfg,
-		transient: make(map[uint256.Int]uint256.Int),
 	}
 }
 

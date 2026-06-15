@@ -38,19 +38,20 @@ func tvmLatestBlockHeaderTimestamp(tvm *TVM) int64 {
 
 // ── 0x5C TLOAD ────────────────────────────────────────────────────────────────
 
-func opTLoad(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	key := stack.pop()
-	result := in.transient[key]
-	stack.push(&result)
+func opTLoad(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	loc := stack.pop()
+	val := in.tvm.StateDB.GetTransientState(contract.Address, tcommon.Hash(loc.Bytes32()))
+	result := new(uint256.Int).SetBytes(val[:])
+	stack.push(result)
 	return nil, nil
 }
 
 // ── 0x5D TSTORE ───────────────────────────────────────────────────────────────
 
-func opTStore(_ *uint64, in *Interpreter, _ *Contract, _ *Memory, stack *Stack) ([]byte, error) {
-	key := stack.pop()
+func opTStore(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
+	loc := stack.pop()
 	val := stack.pop()
-	in.transient[key] = val
+	in.tvm.StateDB.SetTransientState(contract.Address, tcommon.Hash(loc.Bytes32()), tcommon.Hash(val.Bytes32()))
 	return nil, nil
 }
 

@@ -186,6 +186,22 @@ func (e kvResetChange) revert(stateObjects map[tcommon.Address]*stateObject, _ m
 	obj.kvDirty = e.prevDirty
 }
 
+// transientStorageChange records a single EIP-1153 transient storage write for
+// revert. It captures the StateDB.transientStorage map by reference (maps are
+// reference types) rather than the *StateDB, because the journal revert
+// signature only exposes stateObjects/witnesses. Restoring prev (which may be
+// the zero hash for a slot that was previously unset) is sufficient: a reader
+// cannot distinguish an absent slot from one holding the zero hash.
+type transientStorageChange struct {
+	storage map[transientStorageKey]tcommon.Hash
+	tk      transientStorageKey
+	prev    tcommon.Hash
+}
+
+func (e transientStorageChange) revert(_ map[tcommon.Address]*stateObject, _ map[tcommon.Address]*types.Witness) {
+	e.storage[e.tk] = e.prev
+}
+
 // journal tracks state changes for snapshot/revert.
 type journal struct {
 	entries []journalChange

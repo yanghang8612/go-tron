@@ -98,6 +98,19 @@ type StateDB struct {
 
 	journal   *journal
 	snapshots []int // journal length at each snapshot
+
+	// transientStorage holds EIP-1153 (Cancun) TLOAD/TSTORE slots for the
+	// current transaction, keyed by (contract address, slot) — the same
+	// namespacing persistent storage uses. Writes are journaled
+	// (transientStorageChange) so RevertToSnapshot rolls them back with the
+	// enclosing call frame, mirroring java-tron's per-frame child
+	// RepositoryImpl that commits transient storage to its parent only on
+	// success and discards it on revert. The whole map is cleared at every
+	// FinalizeTransaction — the EIP-1153 end-of-transaction discard. Lazily
+	// allocated on first SetTransientState; left nil on a fresh or Copy()'d
+	// StateDB so a constant-call sees empty transient storage.
+	transientStorage map[transientStorageKey]tcommon.Hash
+
 	// domainChangeNoJournal mirrors block-final writes that intentionally
 	// bypass the snapshot/revert journal but still need temporal change rows.
 	domainChangeNoJournal []journalChange
@@ -1512,6 +1525,42 @@ func (s *StateDB) FinalizeTransaction() {
 		}
 	}
 	clear(s.txFinalizeDirty)
+	// EIP-1153: transient storage is discarded at the end of every
+	// transaction. clear() on a nil map is a no-op, and it preserves the map
+	// header so any journal entries still referencing it stay valid.
+	clear(s.transientStorage)
+}
+
+// transientStorageKey identifies an EIP-1153 transient storage slot by
+// (account address, 32-byte slot). Transient storage is namespaced per
+// contract address exactly like persistent storage.
+type transientStorageKey struct {
+	addr tcommon.Address
+	key  tcommon.Hash
+}
+
+// GetTransientState returns the transient storage value at (addr, key) for the
+// current transaction, or the zero hash if unset. EIP-1153 (Cancun).
+func (s *StateDB) GetTransientState(addr tcommon.Address, key tcommon.Hash) tcommon.Hash {
+	return s.transientStorage[transientStorageKey{addr: addr, key: key}]
+}
+
+// SetTransientState writes value to the transient storage slot (addr, key) for
+// the current transaction. The write is journaled so RevertToSnapshot undoes it
+// with the enclosing call frame; the whole map is discarded at
+// FinalizeTransaction. A write that does not change the slot is skipped (no
+// journal entry), matching go-ethereum. EIP-1153 (Cancun).
+func (s *StateDB) SetTransientState(addr tcommon.Address, key, value tcommon.Hash) {
+	tk := transientStorageKey{addr: addr, key: key}
+	prev := s.transientStorage[tk] // zero hash if absent
+	if prev == value {
+		return
+	}
+	if s.transientStorage == nil {
+		s.transientStorage = make(map[transientStorageKey]tcommon.Hash)
+	}
+	s.journal.append(transientStorageChange{storage: s.transientStorage, tk: tk, prev: prev})
+	s.transientStorage[tk] = value
 }
 
 // AccountExists returns whether an account exists (non-nil and not deleted).
