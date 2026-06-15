@@ -196,6 +196,14 @@ boundary. The same log parser also records startup recovery fields, including
 `syncStartupPipelineOrderChecked`, `syncStartupPipelineOrderIssues`,
 `syncStartupPipelineOrderFirstIssue`, `syncStartupPipelineOrderReadErrors`, and
 `syncStartupPipelineOrderFirstReadErrorStage`, plus
+current-head completion fields
+(`syncStartupHeadCompletionChecked`,
+`syncStartupHeadCompletionHasPrefix`,
+`syncStartupHeadCompletionLastStage`,
+`syncStartupHeadCompletionLastBlock`,
+`syncStartupHeadCompletionFillStages`,
+`syncStartupHeadCompletionWritten`, and
+`syncStartupHeadCompletionComplete`), plus
 `syncStartupPipelineOrderRepairChecked`,
 `syncStartupPipelineOrderRepairDeleted`, and
 `syncStartupPipelineOrderRepairUpdated`, plus the repaired restart cursor
@@ -203,7 +211,8 @@ boundary. The same log parser also records startup recovery fields, including
 `syncStartupPipelineCursorLastStage`, `syncStartupPipelineCursorLastBlock`,
 `syncStartupPipelineCursorHasNext`, `syncStartupPipelineCursorNextStage`, and
 `syncStartupPipelineCursorBlocked`), so restart samples show whether the node
-repaired and revalidated full sync-stage ordering after staged-body restore,
+repaired stale rows, completed missing downstream sync stages for the current
+canonical head, revalidated full sync-stage ordering after staged-body restore,
 which persisted progress row failed to decode first, and which sync stage the
 next import pass should advance.
 

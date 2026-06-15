@@ -132,6 +132,29 @@ type SyncPipelineProgressCursor struct {
 	ErrorStage   rawdb.StageID
 }
 
+// SyncPipelineProgressHeadCompletionPlan names downstream sync-stage rows that
+// can be completed at startup because the canonical head already proves the
+// full block import boundary exists.
+type SyncPipelineProgressHeadCompletionPlan struct {
+	Head          uint64
+	HeadHash      tcommon.Hash
+	HasHeadPrefix bool
+	LastStage     rawdb.StageID
+	LastBlock     uint64
+	FillStages    []rawdb.StageID
+	Complete      bool
+}
+
+// SyncPipelineProgressHeadCompletion records the result of applying a
+// head-completion plan. The caller owns the actual stage-progress writes.
+type SyncPipelineProgressHeadCompletion struct {
+	Plan       SyncPipelineProgressHeadCompletionPlan
+	Written    int
+	WriteError error
+	ErrorStage rawdb.StageID
+	Complete   bool
+}
+
 // SyncPipelineProgressOrderRepairResult is the DB-backed startup repair result
 // for full sync-stage ordering.
 type SyncPipelineProgressOrderRepairResult struct {
@@ -1436,6 +1459,50 @@ func (c *SyncPipelineProgressCursor) setLast(row rawdb.StageProgress) {
 	c.LastBlock = row.BlockNum
 	c.LastHash = row.BlockHash
 	c.LastHasHash = row.HasBlockHash
+}
+
+// PlanSyncPipelineProgressHeadCompletion completes missing downstream sync
+// diagnostic stages only when the repaired prefix is hash-bound to the current
+// canonical head. It never advances progress beyond head, and it does nothing
+// when the prefix belongs to an older imported block.
+func PlanSyncPipelineProgressHeadCompletion(repair SyncPipelineProgressRepairResult, head uint64, headHash tcommon.Hash) SyncPipelineProgressHeadCompletionPlan {
+	plan := SyncPipelineProgressHeadCompletionPlan{
+		Head:     head,
+		HeadHash: headHash,
+	}
+	if repair.Interrupted || len(repair.Repairs) == 0 {
+		return plan
+	}
+	stages := SyncPipelineProgressStages()
+	indexByStage := make(map[rawdb.StageID]int, len(stages))
+	for i, stage := range stages {
+		indexByStage[stage] = i
+	}
+	lastIndex := -1
+	var last SyncStageProgressRepair
+	for _, candidate := range repair.Repairs {
+		if candidate.Status != SyncStageProgressKept {
+			continue
+		}
+		index, ok := indexByStage[candidate.Stage]
+		if !ok || index < lastIndex {
+			continue
+		}
+		lastIndex = index
+		last = candidate
+	}
+	if lastIndex < 0 || !last.Row.HasBlockHash || last.Row.BlockNum != head || last.Row.BlockHash != headHash {
+		return plan
+	}
+	plan.HasHeadPrefix = true
+	plan.LastStage = last.Stage
+	plan.LastBlock = last.Row.BlockNum
+	if lastIndex == len(stages)-1 {
+		plan.Complete = true
+		return plan
+	}
+	plan.FillStages = append(plan.FillStages, stages[lastIndex+1:]...)
+	return plan
 }
 
 // RepairSyncPipelineProgressOrderFromDB repairs detected full-pipeline ordering

@@ -95,6 +95,7 @@ func TestPlanSessionStartup(t *testing.T) {
 	}
 	wantSteps := []SessionStartupStep{
 		{Action: SessionStartupRepairSyncPipeline},
+		{Action: SessionStartupCompleteHeadSyncPipeline},
 		{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 99},
 		{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 99},
 		{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 100, RestoreLimit: 32, PruneStaleTail: true},
@@ -188,6 +189,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	plan := SessionStartupPlan{
 		Steps: []SessionStartupStep{
 			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupCompleteHeadSyncPipeline},
 			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
 			{Action: SessionStartupStepAction(255)},
 			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
@@ -207,6 +209,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	result := ApplySessionStartupPlan(plan, &applier)
 	want := []recordedSessionStartupCall{
 		{action: SessionStartupRepairSyncPipeline},
+		{action: SessionStartupCompleteHeadSyncPipeline},
 		{action: SessionStartupRestoreInventoryTarget, first: 9},
 		{action: SessionStartupDeleteImportedBodies, first: 8},
 		{action: SessionStartupRestoreStagedBodies, first: 10, limit: 32, prune: true},
@@ -219,6 +222,7 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	}
 	wantApplied := []SessionStartupStepAction{
 		SessionStartupRepairSyncPipeline,
+		SessionStartupCompleteHeadSyncPipeline,
 		SessionStartupRestoreInventoryTarget,
 		SessionStartupDeleteImportedBodies,
 		SessionStartupRestoreStagedBodies,
@@ -238,6 +242,9 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	}
 	if !result.HasSyncPipelineRepair || !reflect.DeepEqual(result.SyncPipelineRepairResult, repairResult) {
 		t.Fatalf("sync pipeline repair result = %+v set=%v, want %+v set", result.SyncPipelineRepairResult, result.HasSyncPipelineRepair, repairResult)
+	}
+	if !result.HasSyncPipelineHead {
+		t.Fatalf("sync pipeline head completion set=%v, want set", result.HasSyncPipelineHead)
 	}
 	if !result.HasStagedBodyRestore || !reflect.DeepEqual(result.StagedBodyRestore, restoreResult) {
 		t.Fatalf("staged body restore = %+v set=%v, want %+v set", result.StagedBodyRestore, result.HasStagedBodyRestore, restoreResult)
@@ -323,18 +330,22 @@ func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *tes
 		result.SyncPipelineRepairResult.Complete {
 		t.Fatalf("sync pipeline repair result = %+v, want kept import/execution and blocked commitment", result.SyncPipelineRepairResult)
 	}
+	if !result.HasSyncPipelineHead || !result.SyncPipelineHeadCompletion.Complete ||
+		result.SyncPipelineHeadCompletion.Written != 2 ||
+		!reflect.DeepEqual(result.SyncPipelineHeadCompletion.Plan.FillStages, []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish}) {
+		t.Fatalf("sync pipeline head completion = %+v set=%v, want commitment/finish filled", result.SyncPipelineHeadCompletion, result.HasSyncPipelineHead)
+	}
 	if !result.HasStagedBodyRestore {
 		t.Fatal("startup result did not record staged body restore")
 	}
 	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want checked with no issues", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder)
 	}
-	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor || cursor.StageRows != 4 ||
-		!cursor.HasLast || cursor.LastStage != rawdb.StageSyncExecution ||
+	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor || cursor.StageRows != 6 ||
+		!cursor.HasLast || cursor.LastStage != rawdb.StageSyncFinish ||
 		cursor.LastBlock != block2.Number() || cursor.LastHash != block2.Hash() ||
-		!cursor.HasNext || cursor.NextStage != rawdb.StageSyncCommitment ||
-		cursor.Complete || cursor.HasBlocked || cursor.Interrupted {
-		t.Fatalf("sync pipeline cursor = %+v set=%v, want execution cursor continuing at commitment", cursor, result.HasSyncPipelineCursor)
+		cursor.HasNext || !cursor.Complete || cursor.HasBlocked || cursor.Interrupted {
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want completed current-head sync pipeline", cursor, result.HasSyncPipelineCursor)
 	}
 	if restore := result.StagedBodyRestore; restore.Restored != 2 || !restore.NeedPruneTail || restore.PruneFrom != 5 ||
 		restore.TargetHead != 6 || restore.NextExpected != 5 || !restore.HaveLastRestored ||
@@ -362,15 +373,10 @@ func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *tes
 			t.Fatalf("%s progress = %+v ok=%v err=%v, want block4", stage, row, ok, err)
 		}
 	}
-	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution} {
+	for _, stage := range SyncPipelineProgressStages() {
 		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
 		if err != nil || !ok || row.BlockNum != block2.Number() || row.BlockHash != block2.Hash() {
-			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2 kept", stage, row, ok, err)
-		}
-	}
-	for _, stage := range []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish} {
-		if row, ok, err := rawdb.ReadStageProgressRow(db, stage); err != nil || ok {
-			t.Fatalf("%s progress = %+v ok=%v err=%v, want deleted", stage, row, ok, err)
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block2 completed", stage, row, ok, err)
 		}
 	}
 }
@@ -486,30 +492,31 @@ func TestApplySessionStartupPlanKeepsUpstreamAfterFinishForkHashMismatch(t *test
 		result.SyncPipelineRepairResult.Complete {
 		t.Fatalf("sync pipeline repair result = %+v, want upstream kept and finish blocked", result.SyncPipelineRepairResult)
 	}
-	for _, stage := range []rawdb.StageID{rawdb.StageSyncImport, rawdb.StageSyncExecution, rawdb.StageSyncCommitment} {
+	if !result.HasSyncPipelineHead || !result.SyncPipelineHeadCompletion.Complete ||
+		result.SyncPipelineHeadCompletion.Written != 1 ||
+		!reflect.DeepEqual(result.SyncPipelineHeadCompletion.Plan.FillStages, []rawdb.StageID{rawdb.StageSyncFinish}) {
+		t.Fatalf("sync pipeline head completion = %+v set=%v, want finish filled", result.SyncPipelineHeadCompletion, result.HasSyncPipelineHead)
+	}
+	for _, stage := range SyncPipelineProgressStages() {
 		row, ok, err := rawdb.ReadStageProgressRow(db, stage)
 		if err != nil || !ok || row.BlockNum != block1.Number() || row.BlockHash != block1.Hash() {
-			t.Fatalf("%s progress = %+v ok=%v err=%v, want block1 kept", stage, row, ok, err)
+			t.Fatalf("%s progress = %+v ok=%v err=%v, want block1 completed", stage, row, ok, err)
 		}
-	}
-	if row, ok, err := rawdb.ReadStageProgressRow(db, rawdb.StageSyncFinish); err != nil || ok {
-		t.Fatalf("SyncFinish progress = %+v ok=%v err=%v, want deleted", row, ok, err)
 	}
 	if !result.HasSyncPipelineOrder || len(result.SyncPipelineOrderIssues) != 0 {
 		t.Fatalf("sync pipeline order issues = %+v set=%v, want checked with no issues after finish repair", result.SyncPipelineOrderIssues, result.HasSyncPipelineOrder)
 	}
 	if cursor := result.SyncPipelineCursor; !result.HasSyncPipelineCursor ||
-		cursor.StageRows != 3 ||
+		cursor.StageRows != 4 ||
 		!cursor.HasLast ||
-		cursor.LastStage != rawdb.StageSyncCommitment ||
+		cursor.LastStage != rawdb.StageSyncFinish ||
 		cursor.LastBlock != block1.Number() ||
 		cursor.LastHash != block1.Hash() ||
-		!cursor.HasNext ||
-		cursor.NextStage != rawdb.StageSyncFinish ||
-		cursor.Complete ||
+		cursor.HasNext ||
+		!cursor.Complete ||
 		cursor.HasBlocked ||
 		cursor.Interrupted {
-		t.Fatalf("sync pipeline cursor = %+v set=%v, want commitment cursor continuing at finish", cursor, result.HasSyncPipelineCursor)
+		t.Fatalf("sync pipeline cursor = %+v set=%v, want completed current-head pipeline", cursor, result.HasSyncPipelineCursor)
 	}
 }
 
@@ -780,17 +787,30 @@ type recordedSessionStartupCall struct {
 	prune  bool
 }
 
+type errUnexpectedRepairResult struct{}
+
+func (errUnexpectedRepairResult) Error() string { return "unexpected repair result" }
+
 type recordingSessionStartupApplier struct {
-	calls       []recordedSessionStartupCall
-	repair      SyncPipelineProgressRepairResult
-	restore     StagedBodyRestoreResult
-	orderRepair SyncPipelineProgressOrderRepairResult
-	orderIssues []SyncPipelineProgressOrderIssue
+	calls          []recordedSessionStartupCall
+	repair         SyncPipelineProgressRepairResult
+	headCompletion SyncPipelineProgressHeadCompletion
+	restore        StagedBodyRestoreResult
+	orderRepair    SyncPipelineProgressOrderRepairResult
+	orderIssues    []SyncPipelineProgressOrderIssue
 }
 
 func (a *recordingSessionStartupApplier) RepairSyncPipeline() SyncPipelineProgressRepairResult {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRepairSyncPipeline})
 	return a.repair
+}
+
+func (a *recordingSessionStartupApplier) CompleteCurrentHeadSyncPipeline(repair SyncPipelineProgressRepairResult) SyncPipelineProgressHeadCompletion {
+	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupCompleteHeadSyncPipeline})
+	if !reflect.DeepEqual(repair, a.repair) {
+		return SyncPipelineProgressHeadCompletion{WriteError: errUnexpectedRepairResult{}}
+	}
+	return a.headCompletion
 }
 
 func (a *recordingSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64) {
@@ -854,6 +874,33 @@ func (a *startupRecoveryTestApplier) RepairSyncPipeline() SyncPipelineProgressRe
 		hash, ok := a.canonical[number]
 		return hash, ok
 	})
+}
+
+func (a *startupRecoveryTestApplier) CompleteCurrentHeadSyncPipeline(repair SyncPipelineProgressRepairResult) SyncPipelineProgressHeadCompletion {
+	var result SyncPipelineProgressHeadCompletion
+	headHash, ok := a.canonical[a.head]
+	if !ok {
+		return result
+	}
+	plan := PlanSyncPipelineProgressHeadCompletion(repair, a.head, headHash)
+	result.Plan = plan
+	if !plan.HasHeadPrefix {
+		return result
+	}
+	if len(plan.FillStages) == 0 {
+		result.Complete = plan.Complete
+		return result
+	}
+	for _, stage := range plan.FillStages {
+		if err := rawdb.WriteStageProgressWithHash(a.db, stage, plan.Head, plan.HeadHash); err != nil {
+			result.WriteError = err
+			result.ErrorStage = stage
+			return result
+		}
+		result.Written++
+	}
+	result.Complete = true
+	return result
 }
 
 func (a *startupRecoveryTestApplier) RestoreInventoryTarget(inventoryFloor uint64) {

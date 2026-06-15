@@ -63,6 +63,7 @@ type SessionStartupStepAction uint8
 
 const (
 	SessionStartupRepairSyncPipeline SessionStartupStepAction = iota
+	SessionStartupCompleteHeadSyncPipeline
 	SessionStartupRestoreInventoryTarget
 	SessionStartupDeleteImportedBodies
 	SessionStartupRestoreStagedBodies
@@ -88,6 +89,7 @@ type SessionStartupStep struct {
 // stage-recovery schedule.
 type SessionStartupPlanApplier interface {
 	RepairSyncPipeline() SyncPipelineProgressRepairResult
+	CompleteCurrentHeadSyncPipeline(repair SyncPipelineProgressRepairResult) SyncPipelineProgressHeadCompletion
 	RestoreInventoryTarget(inventoryFloor uint64)
 	DeleteImportedBodies(through uint64)
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
@@ -123,6 +125,8 @@ type SessionStartupApplyResult struct {
 	HasSyncPipelineOrder       bool
 	SyncPipelineCursor         SyncPipelineProgressCursor
 	HasSyncPipelineCursor      bool
+	SyncPipelineHeadCompletion SyncPipelineProgressHeadCompletion
+	HasSyncPipelineHead        bool
 	SyncPipelineOrderRepair    SyncPipelineProgressOrderRepairResult
 	HasSyncPipelineOrderRepair bool
 	StagedBodyRestore          StagedBodyRestoreResult
@@ -186,6 +190,7 @@ func PlanSessionStartup(in SessionStartupInput) SessionStartupPlan {
 	}
 	plan.Steps = []SessionStartupStep{
 		{Action: SessionStartupRepairSyncPipeline},
+		{Action: SessionStartupCompleteHeadSyncPipeline},
 		{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: plan.InventoryFloor},
 		{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: plan.DeleteImportedThrough},
 		{
@@ -215,6 +220,10 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.SyncPipelineRepairResult = applier.RepairSyncPipeline()
 			result.HasSyncPipelineRepair = true
 			result.SyncPipelineRepairs = result.SyncPipelineRepairResult.Repairs
+			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+		case SessionStartupCompleteHeadSyncPipeline:
+			result.SyncPipelineHeadCompletion = applier.CompleteCurrentHeadSyncPipeline(result.SyncPipelineRepairResult)
+			result.HasSyncPipelineHead = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupRestoreInventoryTarget:
 			applier.RestoreInventoryTarget(step.InventoryFloor)

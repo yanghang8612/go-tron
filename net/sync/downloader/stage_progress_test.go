@@ -1744,6 +1744,84 @@ func TestRepairSyncPipelineProgressWithResultSummarizesBoundaries(t *testing.T) 
 	}
 }
 
+func TestPlanSyncPipelineProgressHeadCompletion(t *testing.T) {
+	hash := tcommon.Hash{0x01}
+	repair := SyncPipelineProgressRepairResult{
+		Repairs: []SyncStageProgressRepair{
+			{
+				Stage:  rawdb.StageSyncImport,
+				Status: SyncStageProgressKept,
+				Row: rawdb.StageProgress{
+					Stage:        rawdb.StageSyncImport,
+					BlockNum:     7,
+					BlockHash:    hash,
+					HasBlockHash: true,
+				},
+			},
+			{
+				Stage:  rawdb.StageSyncExecution,
+				Status: SyncStageProgressKept,
+				Row: rawdb.StageProgress{
+					Stage:        rawdb.StageSyncExecution,
+					BlockNum:     7,
+					BlockHash:    hash,
+					HasBlockHash: true,
+				},
+			},
+			{Stage: rawdb.StageSyncCommitment, Status: SyncStageProgressMissing},
+			{Stage: rawdb.StageSyncFinish, Status: SyncStageProgressMissing},
+		},
+		Kept:    2,
+		Missing: 2,
+	}
+
+	got := PlanSyncPipelineProgressHeadCompletion(repair, 7, hash)
+	wantFill := []rawdb.StageID{rawdb.StageSyncCommitment, rawdb.StageSyncFinish}
+	if !got.HasHeadPrefix || got.LastStage != rawdb.StageSyncExecution || got.LastBlock != 7 ||
+		!reflect.DeepEqual(got.FillStages, wantFill) || got.Complete {
+		t.Fatalf("head completion plan = %+v, want fill commitment/finish", got)
+	}
+
+	completeRepair := repair
+	completeRepair.Repairs[2] = SyncStageProgressRepair{
+		Stage:  rawdb.StageSyncCommitment,
+		Status: SyncStageProgressKept,
+		Row: rawdb.StageProgress{
+			Stage:        rawdb.StageSyncCommitment,
+			BlockNum:     7,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+	}
+	completeRepair.Repairs[3] = SyncStageProgressRepair{
+		Stage:  rawdb.StageSyncFinish,
+		Status: SyncStageProgressKept,
+		Row: rawdb.StageProgress{
+			Stage:        rawdb.StageSyncFinish,
+			BlockNum:     7,
+			BlockHash:    hash,
+			HasBlockHash: true,
+		},
+	}
+	complete := PlanSyncPipelineProgressHeadCompletion(completeRepair, 7, hash)
+	if !complete.HasHeadPrefix || !complete.Complete || len(complete.FillStages) != 0 || complete.LastStage != rawdb.StageSyncFinish {
+		t.Fatalf("complete head plan = %+v, want already complete", complete)
+	}
+
+	older := PlanSyncPipelineProgressHeadCompletion(repair, 8, tcommon.Hash{0x08})
+	if older.HasHeadPrefix || len(older.FillStages) != 0 || older.Complete {
+		t.Fatalf("older prefix plan = %+v, want no fill", older)
+	}
+
+	blocked := PlanSyncPipelineProgressHeadCompletion(SyncPipelineProgressRepairResult{
+		Repairs: []SyncStageProgressRepair{{Stage: rawdb.StageSyncImport, Status: SyncStageProgressMissing}},
+		Missing: 1,
+	}, 7, hash)
+	if blocked.HasHeadPrefix || len(blocked.FillStages) != 0 || blocked.Complete {
+		t.Fatalf("blocked prefix plan = %+v, want no fill", blocked)
+	}
+}
+
 func TestRepairSyncPipelineProgressStopsBeforeDownstreamOnReadError(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncImport, 1, tcommon.Hash{0x01}); err != nil {
