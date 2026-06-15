@@ -148,6 +148,22 @@ type ChainInventoryPostLockApplyResult struct {
 	StageTarget        uint64
 }
 
+// ChainInventoryRunPlan groups the lock-held inventory update with the
+// post-lock persistence plan derived from applying it.
+type ChainInventoryRunPlan struct {
+	Inventory ChainInventoryPlan
+	PostLock  ChainInventoryPostLockPlan
+}
+
+// ChainInventoryRunApplyResult groups the applied lock-held inventory update
+// with the post-lock side effects the service should run after releasing the
+// session lock.
+type ChainInventoryRunApplyResult struct {
+	Plan      ChainInventoryRunPlan
+	Inventory ChainInventoryApplyResult
+	PostLock  ChainInventoryPostLockPlan
+}
+
 // BuildInventoryCandidates gathers the downloader facts for advertised block
 // IDs in the java-tron-compatible order: drop anything already known/requested,
 // then reject same-peer duplicates, then reserve the canonical block path.
@@ -296,6 +312,21 @@ func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlan
 // from side-effect-free inventory facts.
 func ApplyChainInventory(in ChainInventoryInput, applier ChainInventoryPlanApplier) ChainInventoryApplyResult {
 	return ApplyChainInventoryPlan(PlanChainInventory(in), applier)
+}
+
+// ApplyChainInventoryRun creates and applies the lock-held inventory plan, then
+// derives the post-lock persistence plan from the actual applied result.
+func ApplyChainInventoryRun(in ChainInventoryInput, applier ChainInventoryPlanApplier) ChainInventoryRunApplyResult {
+	return ApplyChainInventoryRunPlan(ChainInventoryRunPlan{Inventory: PlanChainInventory(in)}, applier)
+}
+
+// ApplyChainInventoryRunPlan applies a prebuilt inventory run plan.
+func ApplyChainInventoryRunPlan(plan ChainInventoryRunPlan, applier ChainInventoryPlanApplier) ChainInventoryRunApplyResult {
+	result := ChainInventoryRunApplyResult{Plan: plan}
+	result.Inventory = ApplyChainInventoryPlan(plan.Inventory, applier)
+	result.PostLock = PlanChainInventoryPostLock(result.Inventory)
+	result.Plan.PostLock = result.PostLock
+	return result
 }
 
 // PlanChainInventoryPostLock returns the post-lock persistence steps for an

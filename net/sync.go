@@ -947,7 +947,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		headNum:   ss.chain.CurrentBlock().Number(),
 	})
 	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
-	inventoryApplyResult := syncdl.ApplyChainInventory(syncdl.ChainInventoryInput{
+	inventoryRun := syncdl.ApplyChainInventoryRun(syncdl.ChainInventoryInput{
 		CurrentTarget:  ss.targetHeadNum,
 		ExistingQueued: len(ps.fetchList),
 		RemainNum:      inv.RemainNum,
@@ -966,7 +966,7 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 	}, settlementApplier)
 	ss.mu.Unlock()
 
-	syncdl.ApplyChainInventoryPostLockPlan(syncdl.PlanChainInventoryPostLock(inventoryApplyResult), syncChainInventoryPostLockApplier{service: ss})
+	syncdl.ApplyChainInventoryPostLockPlan(inventoryRun.PostLock, syncChainInventoryPostLockApplier{service: ss})
 	syncdl.ApplyPostInventoryRunPostLockPlan(postInventory.Plan, syncFetchRefillDispatchApplier{service: ss, out: out}, settlementApplier)
 }
 

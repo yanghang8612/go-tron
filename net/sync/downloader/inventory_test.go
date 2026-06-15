@@ -352,6 +352,65 @@ func TestApplyChainInventoryBuildsAndAppliesPlan(t *testing.T) {
 	}
 }
 
+func TestApplyChainInventoryRunBuildsPostLockPlanFromAppliedResult(t *testing.T) {
+	id11 := queueID(11)
+	input := ChainInventoryInput{
+		CurrentTarget:  5,
+		ExistingQueued: 1,
+		RemainNum:      3,
+		InventoryLimit: 2,
+		Candidates: []InventoryCandidate{
+			{ID: id11, Facts: InventoryCandidateFacts{ReservedPath: true}},
+		},
+	}
+	applier := new(recordingChainInventoryApplier)
+	got := ApplyChainInventoryRun(input, applier)
+	wantInventoryPlan := PlanChainInventory(input)
+	wantPostLock := PlanChainInventoryPostLock(got.Inventory)
+
+	if !reflect.DeepEqual(got.Plan.Inventory, wantInventoryPlan) {
+		t.Fatalf("inventory run plan = %+v, want %+v", got.Plan.Inventory, wantInventoryPlan)
+	}
+	if !reflect.DeepEqual(got.PostLock, wantPostLock) || !reflect.DeepEqual(got.Plan.PostLock, wantPostLock) {
+		t.Fatalf("post-lock plan = %+v/%+v, want %+v", got.PostLock, got.Plan.PostLock, wantPostLock)
+	}
+	if !reflect.DeepEqual(applier.calls, []ChainInventoryStepAction{ChainInventoryAppendAccepted, ChainInventoryUpdateProgress}) {
+		t.Fatalf("applier calls = %+v, want append/update", applier.calls)
+	}
+	if len(got.PostLock.Steps) != 1 ||
+		got.PostLock.Steps[0].Action != ChainInventoryWriteStageProgress ||
+		got.PostLock.Steps[0].Stage != rawdb.StageSyncInventory ||
+		got.PostLock.Steps[0].StageTarget != wantInventoryPlan.StageTarget {
+		t.Fatalf("post-lock steps = %+v, want inventory stage target %d", got.PostLock.Steps, wantInventoryPlan.StageTarget)
+	}
+
+	nilResult := ApplyChainInventoryRun(input, nil)
+	if len(nilResult.Inventory.AppliedSteps) != 0 || len(nilResult.PostLock.Steps) != 0 {
+		t.Fatalf("nil run result = %+v, want no applied steps and no post-lock plan", nilResult)
+	}
+}
+
+func TestApplyChainInventoryRunPlanUsesProvidedPlan(t *testing.T) {
+	id11 := queueID(11)
+	plan := ChainInventoryRunPlan{Inventory: ChainInventoryPlan{Steps: []ChainInventoryStep{
+		{Action: ChainInventoryAppendAccepted, Accepted: []types.BlockID{id11}},
+		{Action: ChainInventoryUpdateProgress, RemainNum: 4, StageTarget: 99, HasStageTarget: true},
+	}}}
+	applier := new(recordingChainInventoryApplier)
+	got := ApplyChainInventoryRunPlan(plan, applier)
+
+	if !reflect.DeepEqual(got.Plan.Inventory, plan.Inventory) {
+		t.Fatalf("run plan inventory = %+v, want provided %+v", got.Plan.Inventory, plan.Inventory)
+	}
+	if !reflect.DeepEqual(got.Inventory.AppliedSteps, []ChainInventoryStepAction{ChainInventoryAppendAccepted, ChainInventoryUpdateProgress}) ||
+		got.Inventory.StageTarget != 99 || !got.Inventory.HasStageTarget {
+		t.Fatalf("inventory apply = %+v, want provided stage target applied", got.Inventory)
+	}
+	if len(got.PostLock.Steps) != 1 || got.PostLock.Steps[0].StageTarget != 99 {
+		t.Fatalf("post-lock = %+v, want provided stage target 99", got.PostLock)
+	}
+}
+
 func TestPlanChainInventoryPostLock(t *testing.T) {
 	empty := PlanChainInventoryPostLock(ChainInventoryApplyResult{})
 	if len(empty.Steps) != 0 {
