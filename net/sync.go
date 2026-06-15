@@ -1190,9 +1190,9 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return true
 	}
-	receiptRun := syncdl.PlanFetchReceiptRun(syncdl.FetchReceiptRunInput{Receipt: ack})
 	settlementApplier := &syncFetchReceiptSettlementApplier{service: ss, peerState: ps, blockHash: blockHash}
-	syncdl.ApplyFetchReceiptRunLockedPreBufferPlan(receiptRun, settlementApplier)
+	receiptApply := syncdl.ApplyFetchReceiptRun(syncdl.FetchReceiptRunInput{Receipt: ack}, settlementApplier)
+	receiptRun := receiptApply.Plan
 	bid := types.BlockID{Hash: blockHash, Num: blockNum}
 	bufferFacts := syncdl.FetchedBlockBufferFacts{
 		ID:          bid,

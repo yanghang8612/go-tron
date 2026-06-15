@@ -147,6 +147,7 @@ type FetchReceiptRunPlan struct {
 // FetchReceiptRunApplyResult groups the applied phases for one accepted
 // fetched block body.
 type FetchReceiptRunApplyResult struct {
+	Plan             FetchReceiptRunPlan
 	LockedPreBuffer  FetchReceiptSettlementApplyResult
 	Buffer           FetchedBlockBufferApplyResult
 	LockedPostBuffer FetchReceiptSettlementApplyResult
@@ -318,14 +319,24 @@ func (s FetchReceiptSettlement) withSteps() FetchReceiptSettlement {
 // settlement phase for a fetched-block receipt run.
 func ApplyFetchReceiptRunLockedPreBufferPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
 	return FetchReceiptRunApplyResult{
+		Plan:            plan,
 		LockedPreBuffer: ApplyFetchReceiptSettlementLockedPreBufferPlan(plan.Settlement, applier),
 	}
+}
+
+// ApplyFetchReceiptRun creates and applies the lock-held pre-buffer settlement
+// for a fetched-block receipt run from the acknowledged receipt result. The
+// returned plan is reused by the caller for buffer, post-buffer, drain, and
+// dispatch phases.
+func ApplyFetchReceiptRun(in FetchReceiptRunInput, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
+	return ApplyFetchReceiptRunLockedPreBufferPlan(PlanFetchReceiptRun(in), applier)
 }
 
 // ApplyFetchReceiptRunLockedBufferPlan executes the lock-held local
 // buffer/stage phase for a fetched-block receipt run.
 func ApplyFetchReceiptRunLockedBufferPlan(plan FetchReceiptRunPlan, applier FetchedBlockBufferPlanApplier) FetchReceiptRunApplyResult {
 	return FetchReceiptRunApplyResult{
+		Plan:   plan,
 		Buffer: ApplyFetchedBlockBufferPlan(plan.Buffer, applier),
 	}
 }
@@ -334,6 +345,7 @@ func ApplyFetchReceiptRunLockedBufferPlan(plan FetchReceiptRunPlan, applier Fetc
 // settlement phase for a fetched-block receipt run.
 func ApplyFetchReceiptRunLockedPostBufferPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
 	return FetchReceiptRunApplyResult{
+		Plan:             plan,
 		LockedPostBuffer: ApplyFetchReceiptSettlementLockedPostBufferPlan(plan.Settlement, applier),
 	}
 }
@@ -342,6 +354,7 @@ func ApplyFetchReceiptRunLockedPostBufferPlan(plan FetchReceiptRunPlan, applier 
 // for a fetched-block receipt run.
 func ApplyFetchReceiptRunAfterUnlockPlan(plan FetchReceiptRunPlan, applier FetchReceiptSettlementPlanApplier) FetchReceiptRunApplyResult {
 	return FetchReceiptRunApplyResult{
+		Plan:        plan,
 		AfterUnlock: ApplyFetchReceiptSettlementAfterUnlockPlan(plan.Settlement, applier),
 	}
 }
@@ -350,6 +363,7 @@ func ApplyFetchReceiptRunAfterUnlockPlan(plan FetchReceiptRunPlan, applier Fetch
 // phase for a fetched-block receipt run.
 func ApplyFetchReceiptRunDispatchPlan(plan FetchReceiptRunPlan, applier FetchReceiptDispatchPlanApplier) FetchReceiptRunApplyResult {
 	return FetchReceiptRunApplyResult{
+		Plan:     plan,
 		Dispatch: ApplyFetchReceiptDispatchPlan(plan.Dispatch, applier),
 	}
 }

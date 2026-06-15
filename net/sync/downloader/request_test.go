@@ -300,26 +300,31 @@ func TestApplyFetchReceiptRunPlan(t *testing.T) {
 		len(pre.Buffer.AppliedActions) != 0 ||
 		len(pre.LockedPostBuffer.AppliedSteps) != 0 ||
 		len(pre.AfterUnlock.AppliedSteps) != 0 ||
-		len(pre.Dispatch.AppliedSteps) != 0 {
+		len(pre.Dispatch.AppliedSteps) != 0 ||
+		!reflect.DeepEqual(pre.Plan, plan) {
 		t.Fatalf("run pre-buffer result = %+v, want pre-buffer only", pre)
 	}
 	if !reflect.DeepEqual(bufferResult.Buffer.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferStage}) ||
 		len(bufferResult.LockedPreBuffer.AppliedSteps) != 0 ||
 		len(bufferResult.LockedPostBuffer.AppliedSteps) != 0 ||
 		len(bufferResult.AfterUnlock.AppliedSteps) != 0 ||
-		len(bufferResult.Dispatch.AppliedSteps) != 0 {
+		len(bufferResult.Dispatch.AppliedSteps) != 0 ||
+		!reflect.DeepEqual(bufferResult.Plan, plan) {
 		t.Fatalf("run buffer result = %+v, want buffer stage only", bufferResult)
 	}
 	if !reflect.DeepEqual(post.LockedPostBuffer.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptFillFetchSlots, FetchReceiptMirrorLegacy}) ||
 		post.LockedPostBuffer.OutboundRequests != 2 ||
-		!post.LockedPostBuffer.FilledFetchSlots {
+		!post.LockedPostBuffer.FilledFetchSlots ||
+		!reflect.DeepEqual(post.Plan, plan) {
 		t.Fatalf("run post-buffer result = %+v, want fill+mirror with two outbound requests", post)
 	}
-	if !reflect.DeepEqual(after.AfterUnlock.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}) {
+	if !reflect.DeepEqual(after.AfterUnlock.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}) ||
+		!reflect.DeepEqual(after.Plan, plan) {
 		t.Fatalf("run after-unlock result = %+v, want drain", after)
 	}
 	if !reflect.DeepEqual(dispatch.Dispatch.AppliedSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchSendOutbound}) ||
-		!reflect.DeepEqual(dispatch.Dispatch.UnknownSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchStepAction(254)}) {
+		!reflect.DeepEqual(dispatch.Dispatch.UnknownSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchStepAction(254)}) ||
+		!reflect.DeepEqual(dispatch.Plan, plan) {
 		t.Fatalf("run dispatch result = %+v, want send and unknown [254]", dispatch)
 	}
 
@@ -337,6 +342,46 @@ func TestApplyFetchReceiptRunPlan(t *testing.T) {
 	}
 	if nilDispatch := ApplyFetchReceiptRunDispatchPlan(plan, nil); len(nilDispatch.Dispatch.AppliedSteps) != 0 || len(nilDispatch.Dispatch.UnknownSteps) != 0 {
 		t.Fatalf("nil dispatch run result = %+v, want empty", nilDispatch)
+	}
+}
+
+func TestApplyFetchReceiptRunBuildsPlanForRemainingPhases(t *testing.T) {
+	settlementApplier := new(recordingFetchReceiptSettlementApplier)
+	receipt := FetchReceiptResult{Accepted: true, Inflight: 3, BatchDone: false}
+
+	result := ApplyFetchReceiptRun(FetchReceiptRunInput{Receipt: receipt}, settlementApplier)
+
+	wantPre := []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptAdvanceFetchSeq,
+		FetchReceiptUpdateInflight,
+		FetchReceiptStopFetchTimer,
+		FetchReceiptRearmFetchTimer,
+	}
+	if !reflect.DeepEqual(settlementApplier.calls, wantPre) || settlementApplier.inflight != 3 {
+		t.Fatalf("pre-buffer calls/inflight = %+v/%d, want %+v/3", settlementApplier.calls, settlementApplier.inflight, wantPre)
+	}
+	if !reflect.DeepEqual(result.LockedPreBuffer.AppliedSteps, wantPre) ||
+		len(result.LockedPreBuffer.UnknownSteps) != 0 ||
+		len(result.Buffer.AppliedActions) != 0 ||
+		len(result.LockedPostBuffer.AppliedSteps) != 0 ||
+		len(result.AfterUnlock.AppliedSteps) != 0 ||
+		len(result.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("input receipt run result = %+v, want pre-buffer only", result)
+	}
+	wantPlan := FetchReceiptRunPlan{Settlement: PlanFetchReceiptSettlement(receipt)}
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("input receipt run plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
+	remaining := PlanFetchReceiptRunBuffer(result.Plan, buffer)
+	bufferApplier := new(recordingFetchedBlockBufferApplier)
+	bufferResult := ApplyFetchReceiptRunLockedBufferPlan(remaining, bufferApplier)
+	if !reflect.DeepEqual(bufferResult.Buffer.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferStage}) ||
+		!reflect.DeepEqual(bufferApplier.staged, []FetchedBlockBufferPlan{buffer}) ||
+		!reflect.DeepEqual(bufferResult.Plan, remaining) {
+		t.Fatalf("remaining buffer result = %+v staged=%+v, want staged plan", bufferResult, bufferApplier.staged)
 	}
 }
 
