@@ -240,6 +240,7 @@ type LocalDrainRunPlan struct {
 // LocalDrainRunApplyResult groups a staged-body drain result with the applied
 // local iteration branch selected by the downloader planner.
 type LocalDrainRunApplyResult struct {
+	Plan      LocalDrainRunPlan
 	Drain     StagedBodyDrainRunResult
 	Batch     BufferedBatch
 	Iteration LocalDrainIterationApplyResult
@@ -563,6 +564,7 @@ func PlanLocalDrainRun(in LocalDrainRunInput) LocalDrainRunPlan {
 // into the caller's loop branch while preserving the staged-body drain batch.
 func ApplyLocalDrainRunPlan(plan LocalDrainRunPlan) LocalDrainRunApplyResult {
 	return LocalDrainRunApplyResult{
+		Plan:      plan,
 		Drain:     plan.Drain,
 		Batch:     plan.Batch,
 		Iteration: ApplyLocalDrainIterationPlan(plan.Iteration),

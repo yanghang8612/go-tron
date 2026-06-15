@@ -389,7 +389,8 @@ func TestApplyLocalDrainRunPlan(t *testing.T) {
 		},
 	}
 	importResult := ApplyLocalDrainRunPlan(importPlan)
-	if !reflect.DeepEqual(importResult.Batch, importBatch) ||
+	if !reflect.DeepEqual(importResult.Plan, importPlan) ||
+		!reflect.DeepEqual(importResult.Batch, importBatch) ||
 		!reflect.DeepEqual(importResult.Drain.Batch, importBatch) ||
 		!importResult.Iteration.ImportBatch ||
 		importResult.Iteration.Action != LocalDrainIterationImport ||
@@ -426,8 +427,10 @@ func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
 	importBatch := BufferedBatch{Buffered: []BufferedBlock{{Num: 6}}}
 	importDrain := StagedBodyDrainRunResult{Batch: importBatch}
 
-	importResult := ApplyLocalDrainRun(LocalDrainRunInput{Progress: active, Drain: importDrain})
-	if !reflect.DeepEqual(importResult.Batch, importBatch) ||
+	importInput := LocalDrainRunInput{Progress: active, Drain: importDrain}
+	importResult := ApplyLocalDrainRun(importInput)
+	if !reflect.DeepEqual(importResult.Plan, PlanLocalDrainRun(importInput)) ||
+		!reflect.DeepEqual(importResult.Batch, importBatch) ||
 		!reflect.DeepEqual(importResult.Drain.Batch, importBatch) ||
 		!importResult.Iteration.ImportBatch ||
 		importResult.Iteration.StopLoop ||
@@ -438,8 +441,10 @@ func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
 		t.Fatalf("import local drain run = %+v, want preserved batch and import branch", importResult)
 	}
 
-	emptyResult := ApplyLocalDrainRun(LocalDrainRunInput{Progress: active})
-	if !emptyResult.Iteration.EmptyDrain ||
+	emptyInput := LocalDrainRunInput{Progress: active}
+	emptyResult := ApplyLocalDrainRun(emptyInput)
+	if !reflect.DeepEqual(emptyResult.Plan, PlanLocalDrainRun(emptyInput)) ||
+		!emptyResult.Iteration.EmptyDrain ||
 		emptyResult.Iteration.StopLoop ||
 		emptyResult.Iteration.ImportBatch ||
 		emptyResult.Iteration.Action != LocalDrainIterationEmpty ||
@@ -448,11 +453,13 @@ func TestApplyLocalDrainRunBuildsAndAppliesPlan(t *testing.T) {
 		t.Fatalf("empty local drain run = %+v, want empty branch", emptyResult)
 	}
 
-	stoppedResult := ApplyLocalDrainRun(LocalDrainRunInput{
+	stoppedInput := LocalDrainRunInput{
 		Progress: SessionProgress{Syncing: true, Paused: true},
 		Drain:    importDrain,
-	})
-	if !stoppedResult.Iteration.StopLoop ||
+	}
+	stoppedResult := ApplyLocalDrainRun(stoppedInput)
+	if !reflect.DeepEqual(stoppedResult.Plan, PlanLocalDrainRun(stoppedInput)) ||
+		!stoppedResult.Iteration.StopLoop ||
 		stoppedResult.Iteration.EmptyDrain ||
 		stoppedResult.Iteration.ImportBatch ||
 		stoppedResult.Iteration.Action != LocalDrainIterationStop ||
