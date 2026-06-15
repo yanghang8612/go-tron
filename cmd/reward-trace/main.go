@@ -64,6 +64,7 @@ func main() {
 	toCycle := flag.Int64("to-cycle", 96600, "last cycle to dump (inclusive)")
 	replaySpec := flag.String("replay", "", "comma list of begin:end:w1count:w2count ranges to replay ComputeVoterReward over")
 	analyzeCycle := flag.Int64("analyze-cycle", -1, "dump ALL witnesses' cycleVote/cycleReward/cycleBrokerage for this cycle and flag per-vote-rate outliers (consistency check, no java needed)")
+	dumpVotes := flag.String("dump-votes", "", "comma-separated cycles: dump EVERY witness's cycleVote sorted (vote DESC, hexaddr DESC) — diff-friendly vs the java DelegationStore reference dump")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -73,8 +74,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 {
-		log.Crit("--witnesses is required (or use --analyze-cycle)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -183,6 +184,53 @@ func main() {
 				fmt.Printf("%-4d %-44s %14d %16d %5d %22.12f %16d%s\n",
 					i+1, r.hx, r.vote, r.reward, r.brok, rate, perBlock, mark)
 			}
+		}
+		return
+	}
+
+	// ---- dump-votes: every witness's cycleVote for given cycles (diff-friendly) ----
+	// Output matches the java DelegationStore reference dump line-for-line:
+	//   "<rank> <hexaddr> <vote>[ [TOP]]" then "voteSum(top127)=N nWitness=M".
+	// Sort is (vote DESC, hexaddr DESC); voteSum sums the top-127 with vote>=1,
+	// exactly like java WitnessStore.getWitnessStandby + MortgageService voteSum.
+	if *dumpVotes != "" {
+		for _, cs := range strings.Split(*dumpVotes, ",") {
+			cs = strings.TrimSpace(cs)
+			if cs == "" {
+				continue
+			}
+			var c int64
+			if _, err := fmt.Sscanf(cs, "%d", &c); err != nil {
+				fmt.Printf("bad cycle %q: %v\n", cs, err)
+				continue
+			}
+			type wv struct {
+				hx string
+				v  int64
+			}
+			addrs := statedb.ReadWitnessIndex()
+			arr := make([]wv, 0, len(addrs))
+			for _, a := range addrs {
+				arr = append(arr, wv{fmt.Sprintf("%x", a.Bytes()), statedb.ReadCycleVote(c, a.Bytes())})
+			}
+			sort.Slice(arr, func(i, j int) bool {
+				if arr[i].v != arr[j].v {
+					return arr[i].v > arr[j].v
+				}
+				return arr[i].hx > arr[j].hx
+			})
+			fmt.Printf("=== dump-votes cycle %d ===\n", c)
+			var voteSum int64
+			for i, e := range arr {
+				inTop := i < 127 && e.v >= 1
+				tag := ""
+				if inTop {
+					voteSum += e.v
+					tag = " [TOP]"
+				}
+				fmt.Printf("%3d %s %d%s\n", i, e.hx, e.v, tag)
+			}
+			fmt.Printf("voteSum(top127)=%d nWitness=%d\n", voteSum, len(arr))
 		}
 		return
 	}
