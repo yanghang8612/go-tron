@@ -833,7 +833,18 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 		tvm.rejectInternalTransactionsFrom(internalTxSnap)
 		tvm.RevertLogs(logSnap)
 		tvm.StateDB.RevertToSnapshot(snap)
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
@@ -973,7 +984,18 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 		// transfer failure (Program.callToAddress → refundEnergy) and only
 		// bills the energy actually executed; billing the full limit here
 		// drained the caller and broke cross-impl sync (stress harness ~blk 90).
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
@@ -1110,7 +1132,18 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 		// transfer failure (Program.callToAddress → refundEnergy) and bills
 		// only the energy actually executed; billing the full limit here would
 		// drain the caller and break cross-impl consensus.
-		if err == ErrExecutionReverted || isTransferFailure(err) {
+		if err == ErrExecutionReverted {
+			return ret, contract.Energy, err
+		}
+		// A transfer failure aborts only the frame that raised it. java-tron
+		// surfaces TRANSFER_FAILED solely when that frame is the entry frame
+		// (RuntimeImpl maps the entry result's TransferException); for a nested
+		// frame VM.play stores the exception in the child result and the caller's
+		// CALL opcode pushes 0 (Program.java:1157-1168) and continues, billed the
+		// full forwarded energy with no refund. Only surface it at Depth 0;
+		// otherwise hand back a childCallFailure so the caller's opCall pushes 0.
+		// (Nile 23,077,310 tx a5580051… expected REVERT, not TRANSFER_FAILED.)
+		if isTransferFailure(err) && tvm.Depth == 0 {
 			return ret, contract.Energy, err
 		}
 		if tvm.Depth == 0 {
