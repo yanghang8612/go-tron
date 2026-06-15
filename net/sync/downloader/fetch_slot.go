@@ -119,6 +119,7 @@ type FetchSlotApplyResult struct {
 
 // FetchSlotRefillApplyResult records one peer-local refill run.
 type FetchSlotRefillApplyResult struct {
+	Plan             FetchSlotRefillPlan
 	AppliedSteps     []FetchSlotRefillStepAction
 	UnknownSteps     []FetchSlotRefillStepAction
 	Batch            []types.BlockID
@@ -200,12 +201,13 @@ func (p FetchSlotPlan) withSteps() FetchSlotPlan {
 // ApplyFetchSlotRefillPlan executes the downloader-owned peer-local refill
 // schedule.
 func ApplyFetchSlotRefillPlan(plan FetchSlotRefillPlan, applier FetchSlotRefillPlanApplier) FetchSlotRefillApplyResult {
-	var result FetchSlotRefillApplyResult
+	result := FetchSlotRefillApplyResult{Plan: plan}
 	if applier == nil {
 		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
+		result.Plan = plan
 	}
 	for _, step := range plan.Steps {
 		switch step.Action {

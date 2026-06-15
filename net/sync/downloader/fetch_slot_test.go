@@ -184,6 +184,9 @@ func TestApplyFetchSlotRefillPlan(t *testing.T) {
 	}}
 	result := ApplyFetchSlotRefillPlan(plan, applier)
 
+	if !reflect.DeepEqual(result.Plan, plan) {
+		t.Fatalf("refill result plan = %+v, want original plan %+v", result.Plan, plan)
+	}
 	wantRefillCalls := []FetchSlotRefillStepAction{
 		FetchSlotRefillAssignRetry,
 		FetchSlotRefillNextBatch,
@@ -213,6 +216,9 @@ func TestApplyFetchSlotRefillPlan(t *testing.T) {
 
 	applier = &recordingFetchSlotRefillApplier{}
 	result = ApplyFetchSlotRefillPlan(FetchSlotRefillPlan{Eligible: true}, applier)
+	if !reflect.DeepEqual(fetchSlotRefillStepActions(result.Plan.Steps), wantRefillCalls) {
+		t.Fatalf("fallback refill result plan steps = %+v, want %+v", fetchSlotRefillStepActions(result.Plan.Steps), wantRefillCalls)
+	}
 	if !reflect.DeepEqual(applier.refillCalls, wantRefillCalls) {
 		t.Fatalf("fallback refill calls = %+v, want %+v", applier.refillCalls, wantRefillCalls)
 	}
@@ -220,8 +226,10 @@ func TestApplyFetchSlotRefillPlan(t *testing.T) {
 		t.Fatalf("fallback refill result = %+v, want inventory request", result)
 	}
 
-	nilResult := ApplyFetchSlotRefillPlan(FetchSlotRefillPlan{Eligible: true}, nil)
-	if len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.SendFetch || nilResult.RequestInventory {
+	nilPlan := FetchSlotRefillPlan{Eligible: true}
+	nilResult := ApplyFetchSlotRefillPlan(nilPlan, nil)
+	if !reflect.DeepEqual(nilResult.Plan, nilPlan) ||
+		len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.SendFetch || nilResult.RequestInventory {
 		t.Fatalf("nil refill result = %+v, want empty", nilResult)
 	}
 }
