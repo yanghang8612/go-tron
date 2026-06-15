@@ -19,10 +19,14 @@ import (
 // The smoking gun is that go-tron is internally INCONSISTENT: the staking
 // query precompile here (stakingWindowSizeSlots / recoverStakingUsage, which
 // backs resourceUsageBalanceAndRestoreSeconds) already ports java-tron's
-// per-account window faithfully — it just takes windowSize as a parameter. The
-// recovery formula is byte-identical to the settle path's; only the window
-// differs. So the same account, at the same slot, recovers to two different
-// usages depending on which go-tron code path observes it.
+// per-account window faithfully — it just takes windowSize as a parameter.
+// recoverStakingUsage's recovery arithmetic now matches the settle path's for
+// BOTH branches (harden -> core.increaseHardened, non-harden -> core.increase);
+// only the window differs. (The non-harden branch originally diverged with a
+// plain `oldUsage * remaining / windowSize` truncate — that separate consensus
+// bug is pinned by TestRecoverStakingUsage_NonHardenMatchesSettlePath below.)
+// So the same account, at the same slot, recovers to two different usages
+// depending only on which window the observing go-tron code path uses.
 
 // TestEnergyWindow_PrecompileReadsPerAccountWindow proves the precompile
 // honors a non-default stored window. An account whose energy_window_size was
@@ -82,6 +86,42 @@ func TestEnergyWindow_RecoveryDivergesOnWindow(t *testing.T) {
 			}
 			if perAccount == global {
 				t.Fatalf("expected divergence: per-account=%d global=%d", perAccount, global)
+			}
+		})
+	}
+}
+
+// TestRecoverStakingUsage_NonHardenMatchesSettlePath pins the non-harden branch
+// of recoverStakingUsage to java-tron's precision-averaging recovery
+// (RepositoryImpl.increase / getUsage, precision=1_000_000), which go-tron's
+// settle path already ports as core.increase (see core/energy_adaptive.go and
+// core/resource.go::recoverUsageWithHarden). The non-harden branch previously
+// did a plain `oldUsage * remaining / windowSize` truncate that drifted ~1 unit
+// per recovered block — a free-vs-burn bandwidth fork reachable on every
+// resourceUsage / checkUnDelegateResource / delegatableResource precompile call
+// while allowTvmFreezeV2 is active but allowHardenResourceCalculation
+// (proposal #97) is not (a real pre-#97 fork window on mainnet and Nile).
+func TestRecoverStakingUsage_NonHardenMatchesSettlePath(t *testing.T) {
+	cases := []struct {
+		name       string
+		oldUsage   int64
+		lastTime   int64
+		now        int64
+		windowSize int64
+		want       int64
+	}{
+		// Default mainnet window: plain truncate gave 12; java/settle give 13.
+		{"mainnet-window-drift", 13, 0, 1, 28800, 13},
+		// Tiny window: plain truncate gave 7; java/settle give 6.
+		{"small-window-drift", 21, 0, 2, 3, 6},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := recoverStakingUsage(tc.oldUsage, tc.lastTime, tc.now, tc.windowSize, false)
+			if got != tc.want {
+				t.Fatalf("recoverStakingUsage(%d, %d, %d, %d, false) = %d, want %d (non-harden must use precision-averaging, not plain truncate)",
+					tc.oldUsage, tc.lastTime, tc.now, tc.windowSize, got, tc.want)
 			}
 		})
 	}
