@@ -66,8 +66,8 @@ func main() {
 	replaySpec := flag.String("replay", "", "comma list of begin:end:w1count:w2count ranges to replay ComputeVoterReward over")
 	analyzeCycle := flag.Int64("analyze-cycle", -1, "dump ALL witnesses' cycleVote/cycleReward/cycleBrokerage for this cycle and flag per-vote-rate outliers (consistency check, no java needed)")
 	dumpVotes := flag.String("dump-votes", "", "comma-separated cycles: dump EVERY witness's cycleVote sorted (vote DESC, hexaddr DESC) — diff-friendly vs the java DelegationStore reference dump")
-	tallyAt := flag.String("tally-at", "", "witnesshex:b1,b2,... — print the ROOTED witness vote tally + ts at each block (historical; unlike currentCycle which is a flat head pointer)")
-	scanBump := flag.String("scan-bump", "", "witnesshex:targetTally:approxBlock — find the block where the witness tally first reaches targetTally (locally monotone bracket around approxBlock), then list every Vote/Unfreeze tx in the ~1 cycle before it")
+	blockTs := flag.String("block-ts", "", "comma block numbers: print each block's timestamp (no state) + head cycle/interval/nextMaint — for calibrating cycle<->block via the maintenance grid")
+	scanRange := flag.String("scan-range", "", "loBlock:hiBlock:witnesshex — scan the block range for VoteWitness txs targeting the witness + Unfreeze txs by current witness-voters (no historical state needed)")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -77,8 +77,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *tallyAt == "" && *scanBump == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --tally-at / --scan-bump)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *blockTs == "" && *scanRange == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --block-ts / --scan-range)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -238,44 +238,18 @@ func main() {
 		return
 	}
 
-	// ---- witness-tally<->block resolver + vote-tx scanner ----
-	// currentCycle is a FLAT head pointer (identical at every root), so it cannot
-	// map cycles to blocks. The witness vote tally IS rooted state, so we locate
-	// the block where a witness's tally first reaches a target value (binary
-	// search within the locally monotone region) and scan the ~1 cycle of blocks
-	// before it — those blocks' votes were folded at that maintenance.
+	// ---- block-ts / scan-range (timestamp-based; NO historical state) ----
+	// This node's witness store + currentCycle are FLAT head pointers (state.New
+	// at an old root returns head values), so cycle<->block can't use rooted state.
+	// Block timestamps ARE in the block body, so we locate the era by timestamp and
+	// scan the raw block range for the vote/unfreeze tx that mis-folded the witness.
 	var headNum uint64
 	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
 		headNum = *hn
 	}
-	// tallyAtBlock returns the ROOTED witness vote tally at block n.
-	tallyAtBlock := func(w tcommon.Address, n uint64) (int64, bool) {
-		blk := rawdb.ReadBlock(chaindb, n)
-		if blk == nil {
-			return 0, false
-		}
-		root := rawdb.ReadBlockStateRoot(chaindb, blk.Hash())
-		if root == (tcommon.Hash{}) {
-			return 0, false
-		}
-		sdb, err := state.New(root, stateDB)
-		if err != nil {
-			return 0, false
-		}
-		wit := sdb.GetWitness(w)
-		if wit == nil {
-			return 0, true
-		}
-		return wit.VoteCount(), true
-	}
 
-	if *tallyAt != "" {
-		parts := strings.SplitN(*tallyAt, ":", 2)
-		if len(parts) != 2 {
-			log.Crit("--tally-at format is witnesshex:b1,b2,...")
-		}
-		w := mustAddr(strings.TrimSpace(parts[0]))
-		for _, s := range strings.Split(parts[1], ",") {
+	if *blockTs != "" {
+		for _, s := range strings.Split(*blockTs, ",") {
 			s = strings.TrimSpace(s)
 			if s == "" {
 				continue
@@ -284,74 +258,32 @@ func main() {
 			if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
 				continue
 			}
-			t, ok := tallyAtBlock(w, n)
 			ts := int64(0)
-			if blk := rawdb.ReadBlock(chaindb, n); blk != nil {
-				ts = blk.Timestamp()
+			if b := rawdb.ReadBlock(chaindb, n); b != nil {
+				ts = b.Timestamp()
 			}
-			fmt.Printf("block %d: witnessTally=%d (stateOK=%v) ts=%d\n", n, t, ok, ts)
+			fmt.Printf("block %d: ts=%d\n", n, ts)
 		}
+		fmt.Printf("head: block=%d cycle=%d maintInterval=%d nextMaint=%d\n",
+			headNum, dp.CurrentCycleNumber(), dp.MaintenanceTimeInterval(), dp.NextMaintenanceTime())
 		return
 	}
 
-	if *scanBump != "" {
-		parts := strings.SplitN(*scanBump, ":", 3)
+	if *scanRange != "" {
+		parts := strings.SplitN(*scanRange, ":", 3)
 		if len(parts) != 3 {
-			log.Crit("--scan-bump format is witnesshex:targetTally:approxBlock")
+			log.Crit("--scan-range format is loBlock:hiBlock:witnesshex")
 		}
-		w := mustAddr(strings.TrimSpace(parts[0]))
-		var target int64
-		var approx uint64
-		fmt.Sscanf(parts[1], "%d", &target)
-		fmt.Sscanf(parts[2], "%d", &approx)
-		tally := func(n uint64) int64 {
-			t, ok := tallyAtBlock(w, n)
-			if !ok {
-				return -1
-			}
-			return t
+		var lo, hi uint64
+		fmt.Sscanf(parts[0], "%d", &lo)
+		fmt.Sscanf(parts[1], "%d", &hi)
+		w := mustAddr(strings.TrimSpace(parts[2]))
+		if hi > headNum {
+			hi = headNum
 		}
-		// Bracket lo (tally<target) .. hi (tally>=target) by stepping outward from
-		// approx in small steps, so we stop at the FIRST crossing and stay inside
-		// the locally monotone region around the bump.
-		const step = 200
-		lo, hi := approx, approx
-		if tally(approx) >= target {
-			for lo > 1 && tally(lo) >= target {
-				if lo <= step {
-					lo = 1
-					break
-				}
-				lo -= step
-			}
-		} else {
-			for hi < headNum && tally(hi) < target {
-				hi += step
-				if hi > headNum {
-					hi = headNum
-					break
-				}
-			}
-		}
-		// binary-search first block in (lo, hi] with tally>=target
-		for lo+1 < hi {
-			mid := (lo + hi) / 2
-			if tally(mid) >= target {
-				hi = mid
-			} else {
-				lo = mid
-			}
-		}
-		M := hi
-		fmt.Printf("=== scan-bump witness %x target=%d (approx=%d) ===\n", w.Bytes(), target, approx)
-		fmt.Printf("tally first reaches %d at block M=%d  (tally[M-1]=%d tally[M]=%d) — the maintenance at M folded the preceding cycle's votes\n",
-			target, M, tally(M-1), tally(M))
-		start := uint64(1)
-		if M > 400 {
-			start = M - 400
-		}
-		votes, unfreezes := 0, 0
-		for n := start; n < M; n++ {
+		fmt.Printf("=== scan-range [%d, %d] for witness %x ===\n", lo, hi, w.Bytes())
+		votes, unfreezes, hitV, hitU := 0, 0, 0, 0
+		for n := lo; n <= hi; n++ {
 			blk := rawdb.ReadBlock(chaindb, n)
 			if blk == nil {
 				continue
@@ -363,38 +295,48 @@ func main() {
 				}
 				switch tx.ContractType() {
 				case corepb.Transaction_Contract_VoteWitnessContract:
+					votes++
 					vc := &contractpb.VoteWitnessContract{}
 					if c.Parameter.UnmarshalTo(vc) != nil {
 						continue
 					}
-					hit := ""
+					targets := false
 					vs := make([]string, 0, len(vc.Votes))
 					for _, v := range vc.Votes {
 						vs = append(vs, fmt.Sprintf("%x:%d", v.VoteAddress, v.VoteCount))
 						if tcommon.BytesToAddress(v.VoteAddress) == w {
-							hit = "  <<< TARGETS WITNESS"
+							targets = true
 						}
 					}
-					votes++
-					fmt.Printf("blk %d VOTE owner=%x votes=[%s]%s\n", n, vc.OwnerAddress, strings.Join(vs, " "), hit)
+					if targets {
+						hitV++
+						fmt.Printf("blk %d VOTE owner=%x votes=[%s]  <<< TARGETS WITNESS\n", n, vc.OwnerAddress, strings.Join(vs, " "))
+					}
 				case corepb.Transaction_Contract_UnfreezeBalanceContract:
+					unfreezes++
 					uc := &contractpb.UnfreezeBalanceContract{}
 					if c.Parameter.UnmarshalTo(uc) != nil {
 						continue
 					}
-					unfreezes++
-					printUnfreezeRow(n, "UnfreezeV1", uc.OwnerAddress, int(uc.Resource), w, statedb)
+					if hv := headVoteFor(statedb, uc.OwnerAddress, w); hv != "" {
+						hitU++
+						fmt.Printf("blk %d UnfreezeV1 owner=%x resource=%d  headVotesWitness=%s\n", n, uc.OwnerAddress, int(uc.Resource), hv)
+					}
 				case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
+					unfreezes++
 					uc := &contractpb.UnfreezeBalanceV2Contract{}
 					if c.Parameter.UnmarshalTo(uc) != nil {
 						continue
 					}
-					unfreezes++
-					printUnfreezeRow(n, "UnfreezeV2", uc.OwnerAddress, int(uc.Resource), w, statedb)
+					if hv := headVoteFor(statedb, uc.OwnerAddress, w); hv != "" {
+						hitU++
+						fmt.Printf("blk %d UnfreezeV2 owner=%x resource=%d  headVotesWitness=%s\n", n, uc.OwnerAddress, int(uc.Resource), hv)
+					}
 				}
 			}
 		}
-		fmt.Printf("--- scanned blocks [%d, %d): %d VoteWitness + %d Unfreeze ---\n", start, M, votes, unfreezes)
+		fmt.Printf("--- scanned [%d, %d]: %d VoteWitness (%d target witness) + %d Unfreeze (%d by current witness-voters) ---\n",
+			lo, hi, votes, hitV, unfreezes, hitU)
 		return
 	}
 
@@ -526,18 +468,16 @@ func votesStr(vs []*corepb.Vote) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// printUnfreezeRow prints an unfreeze tx and whether the owner currently (at
-// HEAD) votes for the witness of interest — a hint that this unfreeze's vote
-// recompute could be the source of the witness's vote-tally divergence.
-func printUnfreezeRow(n uint64, typ string, owner []byte, resource int, want tcommon.Address, statedb *state.StateDB) {
-	ownerAddr := tcommon.BytesToAddress(owner)
-	headVotes := "NO"
-	for _, v := range statedb.GetVotes(ownerAddr) {
+// headVoteFor returns the owner's current (HEAD) vote count for `want` as a
+// string, or "" if the owner does not vote for it at head — a hint that an
+// unfreeze by this owner could be the source of the witness's tally divergence.
+func headVoteFor(statedb *state.StateDB, owner []byte, want tcommon.Address) string {
+	for _, v := range statedb.GetVotes(tcommon.BytesToAddress(owner)) {
 		if tcommon.BytesToAddress(v.VoteAddress) == want {
-			headVotes = fmt.Sprintf("%d", v.VoteCount)
+			return fmt.Sprintf("%d", v.VoteCount)
 		}
 	}
-	fmt.Printf("blk %d %s owner=%x resource=%d  headVotesWitness=%s\n", n, typ, owner, resource, headVotes)
+	return ""
 }
 
 func votesEntryStr(vs []reward.VoteEntry) string {
