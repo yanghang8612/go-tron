@@ -1272,40 +1272,20 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		ss.mu.Unlock()
 		return true
 	}
-	settlementApplier := &syncFetchReceiptSettlementApplier{service: ss, peerState: ps, blockHash: blockHash}
-	receiptApply := syncdl.ApplyFetchReceiptRun(syncdl.FetchReceiptRunInput{Receipt: ack}, settlementApplier)
-	receiptRun := receiptApply.Plan
-	bid := types.BlockID{Hash: blockHash, Num: blockNum}
-	bufferFacts := syncdl.FetchedBlockBufferFacts{
-		ID:          bid,
-		CurrentHead: ss.chain.CurrentBlock().Number(),
+	receiptApplier := &syncFetchReceiptSessionRunApplier{
+		syncFetchReceiptSettlementApplier: &syncFetchReceiptSettlementApplier{
+			service:   ss,
+			peerState: ps,
+			blockHash: blockHash,
+		},
+		peer:  peer,
+		block: block,
+		raw:   raw,
 	}
-	if blockNum > bufferFacts.CurrentHead {
-		if existing, ok := ss.blockBuffer[blockNum]; ok {
-			bufferFacts.ExistingBuffered = true
-			bufferFacts.ExistingBufferedHash = existing.Hash
-		} else {
-			_, bufferFacts.HashBuffered = ss.bufferedHash[blockHash]
-			if !bufferFacts.HashBuffered {
-				bufferFacts.ReservedPath = ss.reserveBlockPathLocked(bid)
-			}
-		}
-		bufferPlan := syncdl.PlanFetchedBlockBuffer(bufferFacts)
-		receiptRun = syncdl.PlanFetchReceiptRunBuffer(receiptRun, bufferPlan)
-		syncdl.ApplyFetchReceiptRunLockedBufferPlan(receiptRun, syncFetchedBlockBufferApplier{service: ss, peer: peer, block: block, raw: raw})
-	}
-	postBufferResult := syncdl.ApplyFetchReceiptRunLockedPostBufferPlan(receiptRun, settlementApplier)
+	receiptRun := syncdl.ApplyFetchReceiptSessionLockedRun(syncdl.FetchReceiptRunInput{Receipt: ack}, receiptApplier)
 	ss.mu.Unlock()
 
-	syncdl.ApplyFetchReceiptRunAfterUnlockPlan(receiptRun, settlementApplier)
-	receiptRun = syncdl.PlanFetchReceiptRunAfterDrain(receiptRun, syncdl.FetchReceiptRunAfterDrainInput{
-		OutboundRequests: postBufferResult.LockedPostBuffer.OutboundRequests,
-		Progress: syncdl.SessionProgress{
-			Syncing: ss.IsSyncing(),
-			Paused:  ss.IsPaused(),
-		},
-	})
-	syncdl.ApplyFetchReceiptRunDispatchPlan(receiptRun, syncFetchReceiptDispatchApplier{service: ss, out: settlementApplier.out})
+	syncdl.ApplyFetchReceiptSessionAfterUnlockPlan(receiptRun.Plan, receiptRun.OutboundRequests, receiptApplier, syncFetchReceiptDispatchApplier{service: ss, out: receiptApplier.out})
 	return true
 }
 
@@ -1781,6 +1761,58 @@ type syncFetchRefillDispatchApplier struct {
 
 func (a syncFetchRefillDispatchApplier) SendOutboundRequests() {
 	a.service.sendOutboundRequests(a.out)
+}
+
+type syncFetchReceiptSessionRunApplier struct {
+	*syncFetchReceiptSettlementApplier
+	peer  *p2p.Peer
+	block *types.Block
+	raw   []byte
+}
+
+func (a *syncFetchReceiptSessionRunApplier) PlanFetchedBlockBuffer(_ syncdl.FetchReceiptRunPlan) syncdl.FetchedBlockBufferPlan {
+	if a == nil || a.service == nil || a.service.chain == nil || a.block == nil {
+		return syncdl.FetchedBlockBufferPlan{}
+	}
+	blockHash := a.block.Hash()
+	blockNum := a.block.Number()
+	head := a.service.chain.CurrentBlock()
+	if head == nil || blockNum <= head.Number() {
+		return syncdl.FetchedBlockBufferPlan{}
+	}
+	bid := types.BlockID{Hash: blockHash, Num: blockNum}
+	facts := syncdl.FetchedBlockBufferFacts{
+		ID:          bid,
+		CurrentHead: head.Number(),
+	}
+	if existing, ok := a.service.blockBuffer[blockNum]; ok {
+		facts.ExistingBuffered = true
+		facts.ExistingBufferedHash = existing.Hash
+	} else {
+		_, facts.HashBuffered = a.service.bufferedHash[blockHash]
+		if !facts.HashBuffered {
+			facts.ReservedPath = a.service.reserveBlockPathLocked(bid)
+		}
+	}
+	return syncdl.PlanFetchedBlockBuffer(facts)
+}
+
+func (a *syncFetchReceiptSessionRunApplier) FetchReceiptRunProgress() syncdl.SessionProgress {
+	if a == nil || a.service == nil {
+		return syncdl.SessionProgress{}
+	}
+	return syncdl.SessionProgress{
+		Syncing: a.service.IsSyncing(),
+		Paused:  a.service.IsPaused(),
+	}
+}
+
+func (a *syncFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
+	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.DropConflictingFetchedBlock(plan)
+}
+
+func (a *syncFetchReceiptSessionRunApplier) StageFetchedBlock(plan syncdl.FetchedBlockBufferPlan) {
+	syncFetchedBlockBufferApplier{service: a.service, peer: a.peer, block: a.block, raw: a.raw}.StageFetchedBlock(plan)
 }
 
 type syncFetchedBlockBufferApplier struct {

@@ -385,6 +385,122 @@ func TestApplyFetchReceiptRunBuildsPlanForRemainingPhases(t *testing.T) {
 	}
 }
 
+func TestApplyFetchReceiptSessionLockedRunOrdersSettlementBufferAndRefill(t *testing.T) {
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
+	applier := &recordingFetchReceiptSessionRunApplier{buffer: buffer}
+
+	result := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	}, applier)
+
+	wantEvents := []string{"delete", "advance", "inflight", "stop", "plan-buffer", "stage", "fill", "mirror"}
+	if !reflect.DeepEqual(applier.events, wantEvents) {
+		t.Fatalf("session locked events = %+v, want %+v", applier.events, wantEvents)
+	}
+	if result.Plan.Buffer != buffer || !result.Plan.Settlement.Accepted || !result.Plan.Settlement.FillFetchSlots {
+		t.Fatalf("session locked plan = %+v, want accepted buffered batch-done plan", result.Plan)
+	}
+	if !reflect.DeepEqual(result.LockedPreBuffer.AppliedSteps, []FetchReceiptSettlementStepAction{
+		FetchReceiptDeleteRequestedHash,
+		FetchReceiptAdvanceFetchSeq,
+		FetchReceiptUpdateInflight,
+		FetchReceiptStopFetchTimer,
+	}) {
+		t.Fatalf("session pre-buffer steps = %+v, want delete/advance/update/stop", result.LockedPreBuffer.AppliedSteps)
+	}
+	if !reflect.DeepEqual(result.Buffer.AppliedActions, []FetchedBlockBufferAction{FetchedBlockBufferStage}) ||
+		!reflect.DeepEqual(applier.staged, []FetchedBlockBufferPlan{buffer}) {
+		t.Fatalf("session buffer result = %+v staged=%+v, want staged buffer", result.Buffer, applier.staged)
+	}
+	if !reflect.DeepEqual(result.LockedPostBuffer.AppliedSteps, []FetchReceiptSettlementStepAction{
+		FetchReceiptFillFetchSlots,
+		FetchReceiptMirrorLegacy,
+	}) || result.OutboundRequests != 2 {
+		t.Fatalf("session post-buffer = %+v outbound=%d, want fill+mirror with two outbound requests",
+			result.LockedPostBuffer, result.OutboundRequests)
+	}
+}
+
+func TestApplyFetchReceiptSessionAfterUnlockDrainsBeforeDispatch(t *testing.T) {
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
+	applier := &recordingFetchReceiptSessionRunApplier{
+		buffer:   buffer,
+		progress: SessionProgress{Syncing: true},
+	}
+	locked := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	}, applier)
+	dispatch := new(recordingFetchReceiptDispatchApplier)
+
+	result := ApplyFetchReceiptSessionAfterUnlockPlan(locked.Plan, locked.OutboundRequests, applier, dispatch)
+
+	wantTail := []string{"drain", "progress"}
+	if gotTail := applier.events[len(applier.events)-2:]; !reflect.DeepEqual(gotTail, wantTail) {
+		t.Fatalf("session after-unlock tail events = %+v, want %+v", gotTail, wantTail)
+	}
+	if !reflect.DeepEqual(result.AfterUnlock.AppliedSteps, []FetchReceiptSettlementStepAction{FetchReceiptDrainBuffered}) {
+		t.Fatalf("session after-unlock steps = %+v, want drain", result.AfterUnlock.AppliedSteps)
+	}
+	if dispatch.sent != 1 ||
+		!result.Plan.Dispatch.SendOutboundRequests ||
+		!reflect.DeepEqual(result.Dispatch.AppliedSteps, []FetchReceiptDispatchStepAction{FetchReceiptDispatchSendOutbound}) {
+		t.Fatalf("session dispatch result = %+v sent=%d plan=%+v, want post-drain send",
+			result.Dispatch, dispatch.sent, result.Plan.Dispatch)
+	}
+}
+
+func TestApplyFetchReceiptSessionAfterUnlockSkipsDispatchWhenDrainPaused(t *testing.T) {
+	applier := &recordingFetchReceiptSessionRunApplier{
+		buffer:   FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)},
+		progress: SessionProgress{Syncing: false, Paused: true},
+	}
+	locked := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	}, applier)
+	dispatch := new(recordingFetchReceiptDispatchApplier)
+
+	result := ApplyFetchReceiptSessionAfterUnlockPlan(locked.Plan, locked.OutboundRequests, applier, dispatch)
+
+	wantTail := []string{"drain", "progress"}
+	if gotTail := applier.events[len(applier.events)-2:]; !reflect.DeepEqual(gotTail, wantTail) {
+		t.Fatalf("paused after-unlock tail events = %+v, want %+v", gotTail, wantTail)
+	}
+	if dispatch.sent != 0 ||
+		result.Plan.Dispatch.SendOutboundRequests ||
+		len(result.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("paused dispatch result = %+v sent=%d plan=%+v, want no send after paused drain",
+			result.Dispatch, dispatch.sent, result.Plan.Dispatch)
+	}
+}
+
+func TestApplyFetchReceiptSessionLockedRunSkipsBufferForRejectedReceipt(t *testing.T) {
+	applier := &recordingFetchReceiptSessionRunApplier{
+		buffer: FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)},
+	}
+
+	result := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Inflight: 2},
+	}, applier)
+
+	if !reflect.DeepEqual(result.Plan, FetchReceiptRunPlan{}) ||
+		len(applier.events) != 0 ||
+		len(result.Buffer.AppliedActions) != 0 ||
+		len(result.LockedPostBuffer.AppliedSteps) != 0 ||
+		result.OutboundRequests != 0 {
+		t.Fatalf("rejected session result = %+v events=%+v, want no side effects", result, applier.events)
+	}
+
+	nilResult := ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{
+		Receipt: FetchReceiptResult{Accepted: true, BatchDone: true},
+	}, nil)
+	if !nilResult.Plan.Settlement.Accepted ||
+		len(nilResult.LockedPreBuffer.AppliedSteps) != 0 ||
+		len(nilResult.Buffer.AppliedActions) != 0 ||
+		len(nilResult.LockedPostBuffer.AppliedSteps) != 0 {
+		t.Fatalf("nil applier session result = %+v, want plan without side effects", nilResult)
+	}
+}
+
 func TestApplyFetchReceiptSettlementPlan(t *testing.T) {
 	applier := new(recordingFetchReceiptSettlementApplier)
 	plan := FetchReceiptSettlement{
@@ -675,6 +791,67 @@ type recordingFetchReceiptDispatchApplier struct {
 
 func (a *recordingFetchReceiptDispatchApplier) SendOutboundRequests() {
 	a.sent++
+}
+
+type recordingFetchReceiptSessionRunApplier struct {
+	buffer   FetchedBlockBufferPlan
+	progress SessionProgress
+	events   []string
+	inflight int
+	staged   []FetchedBlockBufferPlan
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) DeleteRequestedHash() {
+	a.events = append(a.events, "delete")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) AdvanceFetchSeq() {
+	a.events = append(a.events, "advance")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) UpdateInflight(inflight int) {
+	a.events = append(a.events, "inflight")
+	a.inflight = inflight
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) StopFetchTimer() {
+	a.events = append(a.events, "stop")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) RearmFetchTimer() {
+	a.events = append(a.events, "rearm")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) FillFetchSlots() int {
+	a.events = append(a.events, "fill")
+	return 2
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) MirrorLegacyLocked() {
+	a.events = append(a.events, "mirror")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) DrainBuffered() {
+	a.events = append(a.events, "drain")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) FetchReceiptRunProgress() SessionProgress {
+	a.events = append(a.events, "progress")
+	return a.progress
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) PlanFetchedBlockBuffer(FetchReceiptRunPlan) FetchedBlockBufferPlan {
+	a.events = append(a.events, "plan-buffer")
+	return a.buffer
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) DropConflictingFetchedBlock(plan FetchedBlockBufferPlan) {
+	a.events = append(a.events, "conflict")
+}
+
+func (a *recordingFetchReceiptSessionRunApplier) StageFetchedBlock(plan FetchedBlockBufferPlan) {
+	a.events = append(a.events, "stage")
+	a.staged = append(a.staged, plan)
 }
 
 type recordingFetchedBlockBufferApplier struct {

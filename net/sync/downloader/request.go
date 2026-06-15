@@ -155,6 +155,42 @@ type FetchReceiptRunApplyResult struct {
 	Dispatch         FetchReceiptDispatchApplyResult
 }
 
+// FetchReceiptSessionLockedRunPlanApplier performs the lock-held runtime
+// pieces for one accepted fetched block: peer/request settlement, buffer
+// planning/staging, and post-buffer fetch-slot refill.
+type FetchReceiptSessionLockedRunPlanApplier interface {
+	FetchReceiptSettlementPlanApplier
+	FetchedBlockBufferPlanApplier
+	PlanFetchedBlockBuffer(plan FetchReceiptRunPlan) FetchedBlockBufferPlan
+}
+
+// FetchReceiptSessionAfterUnlockPlanApplier performs post-lock local drain and
+// supplies fresh post-drain session progress for dispatch planning.
+type FetchReceiptSessionAfterUnlockPlanApplier interface {
+	FetchReceiptSettlementPlanApplier
+	FetchReceiptRunProgress() SessionProgress
+}
+
+// FetchReceiptSessionLockedRunApplyResult records the lock-held half of one
+// fetched block receipt session. OutboundRequests is the post-buffer refill
+// count used later, after local drain, to plan network dispatch.
+type FetchReceiptSessionLockedRunApplyResult struct {
+	Plan             FetchReceiptRunPlan
+	LockedPreBuffer  FetchReceiptSettlementApplyResult
+	Buffer           FetchedBlockBufferApplyResult
+	LockedPostBuffer FetchReceiptSettlementApplyResult
+	OutboundRequests int
+}
+
+// FetchReceiptSessionAfterUnlockApplyResult records the post-lock half of one
+// fetched block receipt session: local drain first, then dispatch planning and
+// network send after the caller supplies post-drain session progress.
+type FetchReceiptSessionAfterUnlockApplyResult struct {
+	Plan        FetchReceiptRunPlan
+	AfterUnlock FetchReceiptSettlementApplyResult
+	Dispatch    FetchReceiptDispatchApplyResult
+}
+
 // FetchReceiptDispatchStepAction names one post-drain dispatch operation after
 // a fetch receipt has settled.
 type FetchReceiptDispatchStepAction uint8
@@ -332,6 +368,25 @@ func ApplyFetchReceiptRun(in FetchReceiptRunInput, applier FetchReceiptSettlemen
 	return ApplyFetchReceiptRunLockedPreBufferPlan(PlanFetchReceiptRun(in), applier)
 }
 
+// ApplyFetchReceiptSessionLockedRun applies all lock-held phases for one
+// fetched block receipt session. The buffer plan is requested only after the
+// pre-buffer settlement has accepted the receipt.
+func ApplyFetchReceiptSessionLockedRun(in FetchReceiptRunInput, applier FetchReceiptSessionLockedRunPlanApplier) FetchReceiptSessionLockedRunApplyResult {
+	plan := PlanFetchReceiptRun(in)
+	result := FetchReceiptSessionLockedRunApplyResult{Plan: plan}
+	result.LockedPreBuffer = ApplyFetchReceiptRunLockedPreBufferPlan(plan, applier).LockedPreBuffer
+	if !plan.Settlement.Accepted || applier == nil {
+		return result
+	}
+	plan = PlanFetchReceiptRunBuffer(plan, applier.PlanFetchedBlockBuffer(plan))
+	result.Plan = plan
+	result.Buffer = ApplyFetchReceiptRunLockedBufferPlan(plan, applier).Buffer
+	post := ApplyFetchReceiptRunLockedPostBufferPlan(plan, applier)
+	result.LockedPostBuffer = post.LockedPostBuffer
+	result.OutboundRequests = post.LockedPostBuffer.OutboundRequests
+	return result
+}
+
 // ApplyFetchReceiptRunLockedBufferPlan executes the lock-held local
 // buffer/stage phase for a fetched-block receipt run.
 func ApplyFetchReceiptRunLockedBufferPlan(plan FetchReceiptRunPlan, applier FetchedBlockBufferPlanApplier) FetchReceiptRunApplyResult {
@@ -366,6 +421,25 @@ func ApplyFetchReceiptRunDispatchPlan(plan FetchReceiptRunPlan, applier FetchRec
 		Plan:     plan,
 		Dispatch: ApplyFetchReceiptDispatchPlan(plan.Dispatch, applier),
 	}
+}
+
+// ApplyFetchReceiptSessionAfterUnlockPlan applies the post-lock local drain,
+// reads fresh post-drain progress, derives dispatch, then applies that dispatch
+// plan.
+func ApplyFetchReceiptSessionAfterUnlockPlan(plan FetchReceiptRunPlan, outboundRequests int, settlementApplier FetchReceiptSessionAfterUnlockPlanApplier, dispatchApplier FetchReceiptDispatchPlanApplier) FetchReceiptSessionAfterUnlockApplyResult {
+	result := FetchReceiptSessionAfterUnlockApplyResult{}
+	result.AfterUnlock = ApplyFetchReceiptRunAfterUnlockPlan(plan, settlementApplier).AfterUnlock
+	var progress SessionProgress
+	if settlementApplier != nil {
+		progress = settlementApplier.FetchReceiptRunProgress()
+	}
+	plan = PlanFetchReceiptRunAfterDrain(plan, FetchReceiptRunAfterDrainInput{
+		OutboundRequests: outboundRequests,
+		Progress:         progress,
+	})
+	result.Plan = plan
+	result.Dispatch = ApplyFetchReceiptRunDispatchPlan(plan, dispatchApplier).Dispatch
+	return result
 }
 
 // ApplyFetchReceiptSettlementLockedPreBufferPlan executes the lock-held
