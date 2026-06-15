@@ -999,13 +999,12 @@ func (ss *SyncService) fetchNextBatch() {
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
 	progress := ss.sessionProgressLocked()
-	refill := syncdl.PlanFetchRefillRun(syncdl.FetchRefillRunInput{
+	refill := syncdl.ApplyFetchRefillRun(syncdl.FetchRefillRunInput{
 		OutboundRequests: len(out),
 		Progress:         progress,
-	})
-	syncdl.ApplyFetchRefillRunLockedPlan(refill, syncFetchRefillRunApplier{service: ss})
+	}, syncFetchRefillRunApplier{service: ss})
 	ss.mu.Unlock()
-	syncdl.ApplyFetchRefillRunPostLockPlan(refill, syncFetchRefillDispatchApplier{service: ss, out: out})
+	syncdl.ApplyFetchRefillRunPostLockPlan(refill.Plan, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 func (ss *SyncService) fillFetchSlotsLocked(now time.Time) []outboundSyncRequest {
@@ -1151,13 +1150,12 @@ func (ss *SyncService) onPeerFetchReady(peerID string) {
 	}
 	out := ss.fillFetchSlotsLocked(time.Now())
 	progress := ss.sessionProgressLocked()
-	refill := syncdl.PlanFetchRefillRun(syncdl.FetchRefillRunInput{
+	refill := syncdl.ApplyFetchRefillRun(syncdl.FetchRefillRunInput{
 		OutboundRequests: len(out),
 		Progress:         progress,
-	})
-	syncdl.ApplyFetchRefillRunLockedPlan(refill, syncFetchRefillRunApplier{service: ss})
+	}, syncFetchRefillRunApplier{service: ss})
 	ss.mu.Unlock()
-	syncdl.ApplyFetchRefillRunPostLockPlan(refill, syncFetchRefillDispatchApplier{service: ss, out: out})
+	syncdl.ApplyFetchRefillRunPostLockPlan(refill.Plan, syncFetchRefillDispatchApplier{service: ss, out: out})
 }
 
 // HandleBlock processes a received block during sync.

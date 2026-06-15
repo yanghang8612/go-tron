@@ -987,7 +987,8 @@ func TestApplyFetchRefillRunPlan(t *testing.T) {
 	locked = ApplyFetchRefillRunLockedPlan(FetchRefillRunPlan{MirrorLegacy: true}, runApplier)
 	if runApplier.mirrors != 1 ||
 		!reflect.DeepEqual(locked.Locked.AppliedSteps, []FetchRefillRunStepAction{FetchRefillRunMirrorLegacy}) ||
-		len(locked.Locked.UnknownSteps) != 0 {
+		len(locked.Locked.UnknownSteps) != 0 ||
+		!reflect.DeepEqual(locked.Plan.LockedSteps, []FetchRefillRunStep{{Action: FetchRefillRunMirrorLegacy}}) {
 		t.Fatalf("fallback locked fetch refill run result = %+v mirrors=%d, want mirror applied", locked, runApplier.mirrors)
 	}
 	if nilLocked := ApplyFetchRefillRunLockedPlan(plan, nil); len(nilLocked.Locked.AppliedSteps) != 0 || len(nilLocked.Locked.UnknownSteps) != 0 {
@@ -995,6 +996,47 @@ func TestApplyFetchRefillRunPlan(t *testing.T) {
 	}
 	if nilPostLock := ApplyFetchRefillRunPostLockPlan(plan, nil); len(nilPostLock.Dispatch.AppliedSteps) != 0 || len(nilPostLock.Dispatch.UnknownSteps) != 0 {
 		t.Fatalf("nil post-lock fetch refill run result = %+v, want empty", nilPostLock)
+	}
+}
+
+func TestApplyFetchRefillRunBuildsPlanForPostLockDispatch(t *testing.T) {
+	runApplier := new(recordingFetchRefillRunApplier)
+	active := SessionProgress{Syncing: true, CurrentHead: 5, TargetHead: 9}
+
+	result := ApplyFetchRefillRun(FetchRefillRunInput{
+		OutboundRequests: 2,
+		Progress:         active,
+	}, runApplier)
+
+	if runApplier.mirrors != 1 {
+		t.Fatalf("fetch refill run mirrors = %d, want 1", runApplier.mirrors)
+	}
+	if !reflect.DeepEqual(result.Locked.AppliedSteps, []FetchRefillRunStepAction{FetchRefillRunMirrorLegacy}) ||
+		len(result.Locked.UnknownSteps) != 0 ||
+		len(result.Dispatch.AppliedSteps) != 0 {
+		t.Fatalf("input fetch refill run result = %+v, want locked mirror only", result)
+	}
+	wantPlan := FetchRefillRunPlan{
+		MirrorLegacy: true,
+		LockedSteps:  []FetchRefillRunStep{{Action: FetchRefillRunMirrorLegacy}},
+		Dispatch: FetchRefillDispatchPlan{
+			SendOutboundRequests: true,
+			Steps:                []FetchRefillDispatchStep{{Action: FetchRefillDispatchSendOutbound}},
+		},
+	}
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("input fetch refill run plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+
+	dispatchApplier := new(recordingFetchRefillDispatchApplier)
+	postLock := ApplyFetchRefillRunPostLockPlan(result.Plan, dispatchApplier)
+	if dispatchApplier.sent != 1 ||
+		!reflect.DeepEqual(postLock.Dispatch.AppliedSteps, []FetchRefillDispatchStepAction{FetchRefillDispatchSendOutbound}) ||
+		len(postLock.Dispatch.UnknownSteps) != 0 {
+		t.Fatalf("post-lock dispatch = %+v sent=%d, want one send", postLock, dispatchApplier.sent)
+	}
+	if !reflect.DeepEqual(postLock.Plan, result.Plan) {
+		t.Fatalf("post-lock plan = %+v, want original plan %+v", postLock.Plan, result.Plan)
 	}
 }
 

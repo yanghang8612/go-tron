@@ -263,6 +263,7 @@ type FetchRefillRunPlan struct {
 // FetchRefillRunApplyResult groups the lock-held and post-lock phases for a
 // timer/manual peer-ready fetch-refill run.
 type FetchRefillRunApplyResult struct {
+	Plan     FetchRefillRunPlan
 	Locked   FetchRefillRunLockedApplyResult
 	Dispatch FetchRefillDispatchApplyResult
 }
@@ -764,11 +765,12 @@ func (p EmptyDrainPreparationPlan) withSteps() EmptyDrainPreparationPlan {
 // timer/manual peer-ready fetch-refill run.
 func ApplyFetchRefillRunLockedPlan(plan FetchRefillRunPlan, applier FetchRefillRunPlanApplier) FetchRefillRunApplyResult {
 	var result FetchRefillRunApplyResult
-	if applier == nil {
-		return result
-	}
 	if len(plan.LockedSteps) == 0 {
 		plan = plan.withLockedSteps()
+	}
+	result.Plan = plan
+	if applier == nil {
+		return result
 	}
 	for _, step := range plan.LockedSteps {
 		switch step.Action {
@@ -780,6 +782,13 @@ func ApplyFetchRefillRunLockedPlan(plan FetchRefillRunPlan, applier FetchRefillR
 		}
 	}
 	return result
+}
+
+// ApplyFetchRefillRun creates and applies the lock-held portion of the
+// downloader-owned fetch-refill run from current session progress. The returned
+// plan is reused by the caller for the post-lock dispatch phase.
+func ApplyFetchRefillRun(in FetchRefillRunInput, applier FetchRefillRunPlanApplier) FetchRefillRunApplyResult {
+	return ApplyFetchRefillRunLockedPlan(PlanFetchRefillRun(in), applier)
 }
 
 // ApplyEmptyDrainPreparationPlan executes the lock-held preparation steps for
@@ -838,6 +847,7 @@ func ApplyEmptyDrainPreparationLockedRunPlan(in EmptyDrainPreparationInput, prep
 // full timer/manual peer-ready fetch-refill run.
 func ApplyFetchRefillRunPostLockPlan(plan FetchRefillRunPlan, applier FetchRefillDispatchPlanApplier) FetchRefillRunApplyResult {
 	return FetchRefillRunApplyResult{
+		Plan:     plan,
 		Dispatch: ApplyFetchRefillDispatchPlan(plan.Dispatch, applier),
 	}
 }
