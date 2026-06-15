@@ -427,6 +427,7 @@ type ImportBatchRunPlanApplier interface {
 // plan. ContinueDrain means decode produced no importable prefix; StopDrain
 // means canonical import failed and the caller should leave the drain loop.
 type ImportBatchRunResult struct {
+	Plan                 ImportBatchRunPlan
 	Decode               BufferedBatchDecodeResult
 	Execution            ImportBatchExecutionPlan
 	ExecutionAttempt     ImportBatchExecutionAttempt
@@ -447,6 +448,7 @@ type ImportBatchRunResult struct {
 // ImportBatchRunApplyResult groups an applied import-batch run with the
 // downloader-owned drain-loop settlement decision derived from it.
 type ImportBatchRunApplyResult struct {
+	Plan           ImportBatchRunPlan
 	Run            ImportBatchRunResult
 	Settlement     ImportBatchRunSettlementPlan
 	DrainLoop      ImportBatchDrainLoopPlan
@@ -526,10 +528,12 @@ func NewImportBatchRunPlan(batch BufferedBatch) ImportBatchRunPlan {
 // ApplyImportBatchRun creates and applies the downloader-owned local import
 // run plan, then derives the drain-loop settlement from the run result.
 func ApplyImportBatchRun(batch BufferedBatch, applier ImportBatchRunPlanApplier) ImportBatchRunApplyResult {
-	run := ApplyImportBatchRunPlan(NewImportBatchRunPlan(batch), applier)
+	plan := NewImportBatchRunPlan(batch)
+	run := ApplyImportBatchRunPlan(plan, applier)
 	settlement := PlanImportBatchRunSettlement(run)
 	drainLoop := PlanImportBatchDrainLoop(settlement)
 	return ImportBatchRunApplyResult{
+		Plan:           plan,
 		Run:            run,
 		Settlement:     settlement,
 		DrainLoop:      drainLoop,
@@ -543,7 +547,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 		return ImportBatchRunResult{}
 	}
 	var (
-		result    ImportBatchRunResult
+		result    = ImportBatchRunResult{Plan: plan}
 		attempt   ImportBatchExecutionAttempt
 		insertErr error
 		elapsed   time.Duration

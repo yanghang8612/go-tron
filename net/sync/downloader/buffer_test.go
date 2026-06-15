@@ -825,11 +825,15 @@ func TestApplyImportBatchRunPlanSuccess(t *testing.T) {
 	batch := testImportRunBatch(t, block1, block2)
 	batch.BufferWaits = []time.Duration{time.Second, 2 * time.Second}
 	applier := &recordingImportBatchRunApplier{elapsed: 3 * time.Millisecond}
+	plan := NewImportBatchRunPlan(batch)
 
-	result := ApplyImportBatchRunPlan(NewImportBatchRunPlan(batch), applier)
+	result := ApplyImportBatchRunPlan(plan, applier)
 
 	if result.ContinueDrain || result.StopDrain || result.Outcome.Applied != 2 || !result.Outcome.RecordApplied {
 		t.Fatalf("result = %+v, want applied success without stop", result)
+	}
+	if !reflect.DeepEqual(result.Plan, plan) {
+		t.Fatalf("result plan = %+v, want original run plan %+v", result.Plan, plan)
 	}
 	wantCalls := []ImportBatchRunStepAction{
 		ImportBatchRunDecode,
@@ -961,6 +965,9 @@ func TestApplyImportBatchRunPlanPreparesAttemptBeforeExecute(t *testing.T) {
 
 	result := ApplyImportBatchRunPlan(plan, applier)
 
+	if !reflect.DeepEqual(result.Plan, plan) {
+		t.Fatalf("prepared-only result plan = %+v, want original run plan %+v", result.Plan, plan)
+	}
 	if result.ExecutionAttempt.Collector == nil ||
 		result.ExecutionAttempt.Execution.Schedule.BlockNum != block.Number() ||
 		result.ExecutionAttempt.StagePhaseSchedule.Empty() ||
@@ -991,6 +998,10 @@ func TestApplyImportBatchRunIncludesSettlement(t *testing.T) {
 	batch := testImportRunBatch(t, block1, block2)
 
 	success := ApplyImportBatchRun(batch, &recordingImportBatchRunApplier{})
+	wantPlan := NewImportBatchRunPlan(batch)
+	if !reflect.DeepEqual(success.Plan, wantPlan) || !reflect.DeepEqual(success.Run.Plan, wantPlan) {
+		t.Fatalf("success plan = %+v run.plan=%+v, want %+v", success.Plan, success.Run.Plan, wantPlan)
+	}
 	if !success.Run.Outcome.RecordApplied || !success.Run.HasRecord ||
 		success.Settlement.Action != ImportBatchRunSettlementContinueDrain ||
 		!success.Settlement.ContinueDrain || success.Settlement.StopDrain {
@@ -1287,6 +1298,9 @@ func TestApplyImportBatchRunPlanFirstDecodeFailureContinuesDrain(t *testing.T) {
 
 	if !result.ContinueDrain || result.StopDrain || result.Decode.Err == nil || result.Decode.Dropped.Num != 1 {
 		t.Fatalf("result = %+v, want continue after first decode failure", result)
+	}
+	if !reflect.DeepEqual(result.Plan, NewImportBatchRunPlan(batch)) {
+		t.Fatalf("decode-failure result plan = %+v, want original run plan", result.Plan)
 	}
 	if !reflect.DeepEqual(applier.calls, []ImportBatchRunStepAction{ImportBatchRunDecode}) {
 		t.Fatalf("calls = %+v, want only decode", applier.calls)
