@@ -89,6 +89,7 @@ type ChainInventoryPlanApplier interface {
 // ChainInventoryApplyResult records the downloader-owned state updates applied
 // for one CHAIN_INVENTORY response.
 type ChainInventoryApplyResult struct {
+	Plan           ChainInventoryPlan
 	AppliedSteps   []ChainInventoryStepAction
 	UnknownSteps   []ChainInventoryStepAction
 	StageTarget    uint64
@@ -184,12 +185,13 @@ func (p ChainInventoryPlan) withSteps() ChainInventoryPlan {
 // ApplyChainInventoryPlan executes downloader-owned state updates for one
 // CHAIN_INVENTORY response.
 func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlanApplier) ChainInventoryApplyResult {
-	var result ChainInventoryApplyResult
+	result := ChainInventoryApplyResult{Plan: plan}
 	if applier == nil {
 		return result
 	}
 	if len(plan.Steps) == 0 {
 		plan = plan.withSteps()
+		result.Plan = plan
 	}
 	for _, step := range plan.Steps {
 		switch step.Action {
@@ -212,4 +214,10 @@ func ApplyChainInventoryPlan(plan ChainInventoryPlan, applier ChainInventoryPlan
 		}
 	}
 	return result
+}
+
+// ApplyChainInventory creates and applies the downloader-owned response plan
+// from side-effect-free inventory facts.
+func ApplyChainInventory(in ChainInventoryInput, applier ChainInventoryPlanApplier) ChainInventoryApplyResult {
+	return ApplyChainInventoryPlan(PlanChainInventory(in), applier)
 }

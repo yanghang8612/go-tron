@@ -963,15 +963,14 @@ func (ss *SyncService) HandleChainInventory(peer *p2p.Peer, payload []byte) {
 		}
 		candidates = append(candidates, syncdl.InventoryCandidate{ID: bid, Facts: facts})
 	}
-	inventoryPlan := syncdl.PlanChainInventory(syncdl.ChainInventoryInput{
+	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
+	inventoryApplyResult := syncdl.ApplyChainInventory(syncdl.ChainInventoryInput{
 		CurrentTarget:  ss.targetHeadNum,
 		ExistingQueued: len(ps.fetchList),
 		RemainNum:      inv.RemainNum,
 		InventoryLimit: maxChainInventorySize,
 		Candidates:     candidates,
-	})
-	inventoryApplier := &syncChainInventoryApplier{service: ss, peerState: ps}
-	inventoryApplyResult := syncdl.ApplyChainInventoryPlan(inventoryPlan, inventoryApplier)
+	}, inventoryApplier)
 
 	syncLog.Debug("Chain inventory received",
 		"blocks", len(inv.Ids), "queued", len(ps.fetchList), "remain", inv.RemainNum, "peer", peer.ID())

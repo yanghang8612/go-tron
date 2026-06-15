@@ -211,6 +211,9 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 	}}
 	result := ApplyChainInventoryPlan(plan, applier)
 
+	if !reflect.DeepEqual(result.Plan, plan) {
+		t.Fatalf("result plan = %+v, want original plan %+v", result.Plan, plan)
+	}
 	wantCalls := []ChainInventoryStepAction{
 		ChainInventoryAppendAccepted,
 		ChainInventoryUpdateProgress,
@@ -230,7 +233,7 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 	}
 
 	applier = new(recordingChainInventoryApplier)
-	result = ApplyChainInventoryPlan(ChainInventoryPlan{
+	fallbackPlan := ChainInventoryPlan{
 		Accepted:       []types.BlockID{id11},
 		RemainNum:      4,
 		Target:         InventoryTargetUpdate{Target: 16},
@@ -238,7 +241,11 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 		StageTarget:    16,
 		HasStageTarget: true,
 		Done:           true,
-	}, applier)
+	}
+	result = ApplyChainInventoryPlan(fallbackPlan, applier)
+	if !reflect.DeepEqual(result.Plan, fallbackPlan.withSteps()) {
+		t.Fatalf("fallback result plan = %+v, want generated step plan", result.Plan)
+	}
 	if !reflect.DeepEqual(result.AppliedSteps, wantCalls) || len(result.UnknownSteps) != 0 || result.StageTarget != 16 || !result.HasStageTarget || !result.Done {
 		t.Fatalf("fallback apply result = %+v, want generated applied calls and stage target 16", result)
 	}
@@ -246,8 +253,58 @@ func TestApplyChainInventoryPlan(t *testing.T) {
 		t.Fatalf("fallback applied state = calls:%+v accepted:%+v remain:%d target:%+v stage:%d done:%v, want generated steps",
 			applier.calls, applier.accepted, applier.remainNum, applier.target, applier.stageTarget, applier.done)
 	}
-	if nilResult := ApplyChainInventoryPlan(plan, nil); len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.HasStageTarget || nilResult.Done {
-		t.Fatalf("nil apply result = %+v, want empty", nilResult)
+	if nilResult := ApplyChainInventoryPlan(plan, nil); !reflect.DeepEqual(nilResult.Plan, plan) || len(nilResult.AppliedSteps) != 0 || len(nilResult.UnknownSteps) != 0 || nilResult.HasStageTarget || nilResult.Done {
+		t.Fatalf("nil apply result = %+v, want original plan without applied state", nilResult)
+	}
+}
+
+func TestApplyChainInventoryBuildsAndAppliesPlan(t *testing.T) {
+	id10 := queueID(10)
+	id11 := queueID(11)
+	input := ChainInventoryInput{
+		CurrentTarget:  5,
+		ExistingQueued: 1,
+		RemainNum:      3,
+		InventoryLimit: 2,
+		Candidates: []InventoryCandidate{
+			{ID: id10, Facts: InventoryCandidateFacts{KnownOrRequested: true, ReservedPath: true}},
+			{ID: id11, Facts: InventoryCandidateFacts{ReservedPath: true}},
+		},
+	}
+	wantPlan := PlanChainInventory(input)
+	applier := new(recordingChainInventoryApplier)
+	result := ApplyChainInventory(input, applier)
+
+	if !reflect.DeepEqual(result.Plan, wantPlan) {
+		t.Fatalf("result plan = %+v, want %+v", result.Plan, wantPlan)
+	}
+	wantCalls := []ChainInventoryStepAction{
+		ChainInventoryAppendAccepted,
+		ChainInventoryUpdateProgress,
+	}
+	if !reflect.DeepEqual(result.AppliedSteps, wantCalls) || len(result.UnknownSteps) != 0 || result.Done {
+		t.Fatalf("apply result = %+v, want append/update only", result)
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) ||
+		!reflect.DeepEqual(applier.accepted, []types.BlockID{id11}) ||
+		applier.remainNum != wantPlan.RemainNum ||
+		!reflect.DeepEqual(applier.target, wantPlan.Target) ||
+		applier.hasTarget != wantPlan.HasTarget ||
+		applier.stageTarget != wantPlan.StageTarget ||
+		applier.hasStageTarget != wantPlan.HasStageTarget ||
+		applier.done {
+		t.Fatalf("applied state = calls:%+v accepted:%+v remain:%d target:%+v has:%v stage:%d/%v done:%v, want plan state %+v",
+			applier.calls, applier.accepted, applier.remainNum, applier.target, applier.hasTarget, applier.stageTarget, applier.hasStageTarget, applier.done, wantPlan)
+	}
+
+	doneApplier := new(recordingChainInventoryApplier)
+	doneResult := ApplyChainInventory(ChainInventoryInput{}, doneApplier)
+	if !doneResult.Done || !reflect.DeepEqual(doneApplier.calls, []ChainInventoryStepAction{
+		ChainInventoryAppendAccepted,
+		ChainInventoryUpdateProgress,
+		ChainInventoryMarkDone,
+	}) || !doneApplier.done {
+		t.Fatalf("done apply result = %+v calls:%+v done:%v, want generated mark-done path", doneResult, doneApplier.calls, doneApplier.done)
 	}
 }
 
