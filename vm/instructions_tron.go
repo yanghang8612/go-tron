@@ -249,6 +249,21 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
 
+	// java EnergyCost.getFreezeCost adds NEW_ACCT_CALL when the receiver word
+	// (stack[size-3]) is a dead account. The base FREEZE(20000) is already
+	// billed via the jump-table energyCost in the interpreter loop; this adds
+	// the dead-receiver surcharge through the same useEnergy penalty path.
+	// java's cost function runs for ALL FREEZE invocations under allowTvmFreeze
+	// and reads the receiver unconditionally (it does not gate on
+	// receiver==caller — for a self-freeze the caller always exists, so it is
+	// moot), so charge it here against pre-execution state, before the
+	// amount/resourceType/StakingV2 short-circuits and any CreateAccountWithTime.
+	if !in.tvm.StateDB.AccountExists(receiver) {
+		if !in.useEnergy(contract, EnergyCallNewAcct) {
+			return nil, ErrOutOfEnergy
+		}
+	}
+
 	if in.tvm.cfg.StakingV2 || amount < tvmTRXPrecision || (resourceType != 0 && resourceType != 1) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
