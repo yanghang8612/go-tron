@@ -44,6 +44,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/reward"
 	"github.com/tronprotocol/go-tron/core/state"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -65,6 +66,8 @@ func main() {
 	replaySpec := flag.String("replay", "", "comma list of begin:end:w1count:w2count ranges to replay ComputeVoterReward over")
 	analyzeCycle := flag.Int64("analyze-cycle", -1, "dump ALL witnesses' cycleVote/cycleReward/cycleBrokerage for this cycle and flag per-vote-rate outliers (consistency check, no java needed)")
 	dumpVotes := flag.String("dump-votes", "", "comma-separated cycles: dump EVERY witness's cycleVote sorted (vote DESC, hexaddr DESC) — diff-friendly vs the java DelegationStore reference dump")
+	cycleAt := flag.String("cycle-at", "", "comma-separated block numbers: print currentCycle (via historical state) + timestamp at each (validates archive reads + brackets a cycle)")
+	scanCycle := flag.String("scan-cycle", "", "C:witnesshex — binary-search the block range of cycle C, then list every VoteWitness/Unfreeze tx in it, flagging those involving the witness (finds the tx that mis-folded a witness vote)")
 	flag.Parse()
 
 	var witnesses []tcommon.Address
@@ -74,8 +77,8 @@ func main() {
 			witnesses = append(witnesses, mustAddr(h))
 		}
 	}
-	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" {
-		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes)")
+	if len(witnesses) == 0 && *analyzeCycle < 0 && *dumpVotes == "" && *cycleAt == "" && *scanCycle == "" {
+		log.Crit("--witnesses is required (or use --analyze-cycle / --dump-votes / --cycle-at / --scan-cycle)")
 	}
 
 	dbPath := filepath.Join(*datadir, "gtron", "chaindata")
@@ -235,6 +238,135 @@ func main() {
 		return
 	}
 
+	// ---- cycle<->block resolver + vote-tx scanner ----
+	// Map a cycle to its block range by binary-searching the canonical chain for
+	// the first block whose rooted DynamicProperties.currentCycle reaches a target
+	// (currentCycle is monotone non-decreasing in block height). Then scan that
+	// cycle's blocks for the vote/unfreeze txs whose maintenance fold lands in
+	// cycleVote[cycle+1]. Needs historical (archive) state for the probed roots.
+	var headNum uint64
+	if hn := rawdb.ReadBlockNumber(chaindb, headHash); hn != nil {
+		headNum = *hn
+	}
+	cycleAtBlock := func(n uint64) (int64, bool) {
+		blk := rawdb.ReadBlock(chaindb, n)
+		if blk == nil {
+			return 0, false
+		}
+		root := rawdb.ReadBlockStateRoot(chaindb, blk.Hash())
+		if root == (tcommon.Hash{}) {
+			return 0, false
+		}
+		sdb, err := state.New(root, stateDB)
+		if err != nil {
+			return 0, false
+		}
+		return state.LoadDynamicProperties(db, sdb).CurrentCycleNumber(), true
+	}
+
+	if *cycleAt != "" {
+		for _, s := range strings.Split(*cycleAt, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			var n uint64
+			if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+				fmt.Printf("bad block %q: %v\n", s, err)
+				continue
+			}
+			c, ok := cycleAtBlock(n)
+			ts := int64(0)
+			if blk := rawdb.ReadBlock(chaindb, n); blk != nil {
+				ts = blk.Timestamp()
+			}
+			fmt.Printf("block %d: currentCycle=%d (stateOK=%v) ts=%d\n", n, c, ok, ts)
+		}
+		return
+	}
+
+	if *scanCycle != "" {
+		parts := strings.SplitN(*scanCycle, ":", 2)
+		if len(parts) != 2 {
+			log.Crit("--scan-cycle format is C:witnesshex")
+		}
+		var targetCycle int64
+		if _, err := fmt.Sscanf(parts[0], "%d", &targetCycle); err != nil {
+			log.Crit("bad cycle in --scan-cycle", "err", err)
+		}
+		wantWitness := mustAddr(strings.TrimSpace(parts[1]))
+		// first block with cycleAtBlock >= target (monotone)
+		firstBlockWithCycle := func(target int64) (uint64, bool) {
+			lo, hi, ok := uint64(1), headNum, true
+			for lo < hi {
+				mid := (lo + hi) / 2
+				c, good := cycleAtBlock(mid)
+				if !good {
+					ok = false
+					lo = mid + 1
+					continue
+				}
+				if c >= target {
+					hi = mid
+				} else {
+					lo = mid + 1
+				}
+			}
+			return lo, ok
+		}
+		start, ok1 := firstBlockWithCycle(targetCycle)
+		end, ok2 := firstBlockWithCycle(targetCycle + 1)
+		fmt.Printf("=== scan-cycle %d for witness %x ===\n", targetCycle, wantWitness.Bytes())
+		fmt.Printf("cycle %d block range = [%d, %d)  (%d blocks; resolver stateOK begin=%v end=%v)\n",
+			targetCycle, start, end, end-start, ok1, ok2)
+		votes, unfreezes := 0, 0
+		for n := start; n < end; n++ {
+			blk := rawdb.ReadBlock(chaindb, n)
+			if blk == nil {
+				continue
+			}
+			for _, tx := range blk.Transactions() {
+				c := tx.Contract()
+				if c == nil || c.Parameter == nil {
+					continue
+				}
+				switch tx.ContractType() {
+				case corepb.Transaction_Contract_VoteWitnessContract:
+					vc := &contractpb.VoteWitnessContract{}
+					if c.Parameter.UnmarshalTo(vc) != nil {
+						continue
+					}
+					hit := ""
+					vs := make([]string, 0, len(vc.Votes))
+					for _, v := range vc.Votes {
+						vs = append(vs, fmt.Sprintf("%x:%d", v.VoteAddress, v.VoteCount))
+						if tcommon.BytesToAddress(v.VoteAddress) == wantWitness {
+							hit = "  <<< TARGETS WITNESS"
+						}
+					}
+					votes++
+					fmt.Printf("blk %d VOTE owner=%x votes=[%s]%s\n", n, vc.OwnerAddress, strings.Join(vs, " "), hit)
+				case corepb.Transaction_Contract_UnfreezeBalanceContract:
+					uc := &contractpb.UnfreezeBalanceContract{}
+					if c.Parameter.UnmarshalTo(uc) != nil {
+						continue
+					}
+					unfreezes++
+					printUnfreezeRow(n, "UnfreezeV1", uc.OwnerAddress, int(uc.Resource), wantWitness, statedb)
+				case corepb.Transaction_Contract_UnfreezeBalanceV2Contract:
+					uc := &contractpb.UnfreezeBalanceV2Contract{}
+					if c.Parameter.UnmarshalTo(uc) != nil {
+						continue
+					}
+					unfreezes++
+					printUnfreezeRow(n, "UnfreezeV2", uc.OwnerAddress, int(uc.Resource), wantWitness, statedb)
+				}
+			}
+		}
+		fmt.Printf("--- scanned %d VoteWitness + %d Unfreeze txs in cycle %d ---\n", votes, unfreezes, targetCycle)
+		return
+	}
+
 	// ---- per-witness per-cycle reward store dump ----
 	for _, w := range witnesses {
 		fmt.Printf("\n=== witness %x  (in witnessIndex=%v) ===\n", w.Bytes(), statedb.IsWitness(w))
@@ -361,6 +493,20 @@ func votesStr(vs []*corepb.Vote) string {
 		parts = append(parts, fmt.Sprintf("%x:%d", v.VoteAddress, v.VoteCount))
 	}
 	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// printUnfreezeRow prints an unfreeze tx and whether the owner currently (at
+// HEAD) votes for the witness of interest — a hint that this unfreeze's vote
+// recompute could be the source of the witness's vote-tally divergence.
+func printUnfreezeRow(n uint64, typ string, owner []byte, resource int, want tcommon.Address, statedb *state.StateDB) {
+	ownerAddr := tcommon.BytesToAddress(owner)
+	headVotes := "NO"
+	for _, v := range statedb.GetVotes(ownerAddr) {
+		if tcommon.BytesToAddress(v.VoteAddress) == want {
+			headVotes = fmt.Sprintf("%d", v.VoteCount)
+		}
+	}
+	fmt.Printf("blk %d %s owner=%x resource=%d  headVotesWitness=%s\n", n, typ, owner, resource, headVotes)
 }
 
 func votesEntryStr(vs []reward.VoteEntry) string {
