@@ -549,6 +549,59 @@ func query(source any, tx []byte) {
 	}
 }
 
+func TestColdArchiveAuditRejectsDotImportedReaderOnHotStore(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import . "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTxInfo = ReadTransactionInfo
+
+func direct(source any, tx []byte) {
+	_ = ReadTransactionInfo(source, tx)
+}
+
+func indirect(source any, tx []byte) {
+	_ = readTxInfo(source, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 2 {
+		t.Fatalf("offenders = %+v, want direct and function-value dot-imported readers rejected", offenders)
+	}
+	for _, offender := range offenders {
+		if !strings.Contains(offender, "rawdb.ReadTransactionInfo") {
+			t.Fatalf("offenders = %+v, want dot-imported transaction info readers reported as rawdb.ReadTransactionInfo", offenders)
+		}
+	}
+}
+
+func TestColdArchiveAuditAllowsDotImportedReaderOnChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/chain.go", `package app
+
+import . "github.com/tronprotocol/go-tron/core/rawdb"
+
+var readTxInfo = ReadTransactionInfo
+
+func direct(chainDB *ChainDB, tx []byte) {
+	_ = ReadTransactionInfo(chainDB, tx)
+}
+
+func indirect(chainDB *ChainDB, tx []byte) {
+	_ = readTxInfo(chainDB, tx)
+}
+`)
+
+	offenders := auditColdArchiveReaderCalls(t, root, map[string]struct{}{
+		"ReadTransactionInfo": {},
+	}, nil)
+	if len(offenders) != 0 {
+		t.Fatalf("offenders = %+v, want dot-imported readers on ChainDB boundary accepted", offenders)
+	}
+}
+
 func TestColdArchiveAuditRejectsColdIndexReaderFunctionValuesOnHotStore(t *testing.T) {
 	root := writeAuditFixture(t, "app/offender.go", `package app
 
@@ -1827,9 +1880,6 @@ func isRawDBCall(expr ast.Expr, rawdbNames map[string]struct{}, name string) boo
 }
 
 func coldArchiveReaderCallName(expr ast.Expr, rawdbNames map[string]struct{}, aliases map[string]string) (string, bool) {
-	if name, ok := rawDBCallName(expr, rawdbNames); ok {
-		return name, true
-	}
 	return coldArchiveReaderAliasName(expr, rawdbNames, aliases)
 }
 
@@ -1841,15 +1891,15 @@ func coldArchiveReaderAliasName(expr ast.Expr, rawdbNames map[string]struct{}, a
 		}
 		expr = paren.X
 	}
+	if key, ok := coldArchiveReaderAliasKey(expr); ok {
+		if name, ok := aliases[key]; ok {
+			return name, true
+		}
+	}
 	if name, ok := rawDBCallName(expr, rawdbNames); ok {
 		return name, true
 	}
-	key, ok := coldArchiveReaderAliasKey(expr)
-	if !ok {
-		return "", false
-	}
-	name, ok := aliases[key]
-	return name, ok
+	return "", false
 }
 
 func coldArchiveReaderAliasKey(expr ast.Expr) (string, bool) {
