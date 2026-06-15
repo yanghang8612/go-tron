@@ -485,7 +485,7 @@ func normalizeProcessBlockPrefetchConfig(cfg processBlockPrefetchConfig) process
 	return cfg
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, _ *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, prefetchCfg processBlockPrefetchConfig) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {
@@ -591,7 +591,11 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 	witnessAddr := block.WitnessAddress()
 	if witnessAddr != (tcommon.Address{}) {
 		payBlockReward(db, statedb, dynProps, witnessAddr, dynProps.WitnessPayPerBlock())
-		payStandbyWitnessWithSet(db, statedb, dynProps, standbyPaySet)
+		// java-tron rebuilds WitnessStore.getWitnessStandby at reward time,
+		// after the block's transactions have executed. A caller-provided set is
+		// only a preload hint; using it for consensus rewards can make
+		// cycleReward stale when the in-block witness set changes.
+		payStandbyWitnessWithSet(db, statedb, dynProps, nil)
 		payTransactionFeeReward(db, statedb, dynProps, witnessAddr)
 	}
 
