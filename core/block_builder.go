@@ -110,7 +110,9 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		txPB.Ret = []*corepb.Transaction_Result{buildTransactionResult(result)}
 		appliedTxProtos = append(appliedTxProtos, txPB)
 		statedb.FinalizeTransaction()
-		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
+		// Producer builds a single block: nothing to amortize, so no fork-pass
+		// cache (the block-apply path threads bc.versionPassCache instead).
+		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, nil)
 	}
 
 	var accountStateRoot tcommon.Hash

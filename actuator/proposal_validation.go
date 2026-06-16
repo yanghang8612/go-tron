@@ -322,10 +322,7 @@ func validateProposalForkGate(ctx *Context, id int64) error {
 }
 
 func proposalPassVersion(ctx *Context, version int32) bool {
-	if ctx.State == nil {
-		return false
-	}
-	return forks.PassVersionFromStore(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return ctx.PassVersion(version)
 }
 
 func validateProposalOne(id, value int64) error {

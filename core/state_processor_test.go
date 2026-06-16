@@ -162,7 +162,7 @@ func TestApplyTransaction_InBlockPreConsensusSkipsResultSizeGate(t *testing.T) {
 
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil,
 		)
 		return err
 	}
@@ -193,7 +193,7 @@ func TestApplyTransaction_InBlockExpirationLowerBound(t *testing.T) {
 		tx.Proto().RawData.Expiration = expiration
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil,
 		)
 		return err
 	}
@@ -226,7 +226,7 @@ func TestApplyTransaction_RejectsOversizedResult(t *testing.T) {
 		}
 		_, err := applyTransaction(
 			statedb, dynProps, tx, 1000, true, HeadSlot(1000, 0), 2000, 1,
-			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true,
+			nil, nil, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, true, false, true, nil,
 		)
 		return err
 	}

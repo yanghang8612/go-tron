@@ -44,20 +44,20 @@ var ErrExchangeRejected = errors.New("ExchangeTransactionContract is rejected")
 // or `core/blockbuffer.Buffer` (applyBlock path) — slice 3 of the fork-rewind
 // fix widened the type so actuator-side rawdb-direct writes are rewindable.
 func ApplyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, HeadSlot(prevBlockTime, 0), blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil)
 }
 
 // ApplyTransactionWithResourceSlot executes a transaction with java-tron's
 // resource-window time (`head slot`) separated from millisecond timestamps.
 func ApplyTransactionWithResourceSlot(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, params.DefaultBlockNumForEnergyLimit, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil)
 }
 
 func ApplyTransactionWithResourceSlotAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, validate, validateEnvelope bool) (*actuator.Result, error) {
-	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false)
+	return applyTransaction(statedb, dynProps, tx, prevBlockTime, true, headSlot, blockTime, blockNum, db, activeWitnesses, energyLimitForkBlockNum, tcommon.Hash{}, tcommon.Address{}, validate, validateEnvelope, false, nil)
 }
 
-func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool) (*actuator.Result, error) {
+func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties, tx *types.Transaction, prevBlockTime int64, hasHeadSlot bool, headSlot, blockTime int64, blockNum uint64, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, energyLimitForkBlockNum int64, genesisHash tcommon.Hash, coinbase tcommon.Address, validate, validateEnvelope bool, trustTransactionRet bool, forkPassCache *forks.VersionPassCache) (*actuator.Result, error) {
 	if err := ValidateContractCount(tx); err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 	// the prev block's timestamp (the DP value during processTransaction),
 	// so we pass prevBlockTime here for parity.
 	if tx.ContractType() == corepb.Transaction_Contract_ExchangeTransactionContract &&
-		forks.PassVersionFromStore(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
+		forkPassCache.Pass(statedb, 33, prevBlockTime, dynProps.MaintenanceTimeInterval()) {
 		return nil, ErrExchangeRejected
 	}
 	// java-tron Manager.validateCommon applies the synthetic "clear ret +
@@ -140,13 +140,14 @@ func applyTransaction(statedb *state.StateDB, dynProps *state.DynamicProperties,
 		DB:                         db,
 		ActiveWitnesses:            activeWitnesses,
 		TrustTransactionRet:        trustTransactionRet,
+		ForkPassCache:              forkPassCache,
 	}
 
 	if validateEnvelope {
 		// VERSION_4_7_1 (value 27): java-tron swapped the multi-sig dedup
 		// key from raw signature bytes to recovered address. We mirror by
 		// passing the fork-pass result through.
-		multiSigByAddress := forks.PassVersionFromStore(statedb, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
+		multiSigByAddress := forkPassCache.Pass(statedb, 27, prevBlockTime, dynProps.MaintenanceTimeInterval())
 		if err := ValidateTxEnvelope(tx, statedb, multiSigByAddress); err != nil {
 			return nil, fmt.Errorf("validate envelope: %w", err)
 		}
@@ -428,21 +429,21 @@ func transactionInfoLogAddress(addr tcommon.Address) []byte {
 // execution, such as TAPOS references and genesis witness metadata. Mutable
 // state writes go through StateDB typed stores.
 func ProcessBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRoot(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, params.DefaultBlockNumForEnergyLimit, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil)
 }
 
 func ProcessBlockWithEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, error) {
-	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil)
+	txInfos, _, err := processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), nil, nil, nil, nil)
 	return txInfos, err
 }
 
 func ProcessBlockWithJavaAccountStateRootAndEnergyFork(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, parentAccountStateRoot tcommon.Hash, genesisHashOpt ...tcommon.Hash) ([]*corepb.TransactionInfo, tcommon.Hash, error) {
-	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil)
+	return processBlock(statedb, dynProps, block, db, activeWitnesses, genesisTimestamp, energyLimitForkBlockNum, validateEnvelope, optionalGenesisHash(genesisHashOpt), &parentAccountStateRoot, nil, nil, nil)
 }
 
 func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
@@ -452,7 +453,7 @@ func optionalGenesisHash(values []tcommon.Hash) tcommon.Hash {
 	return values[0]
 }
 
-func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
+func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, block *types.Block, db actuator.BufferedKVStore, activeWitnesses []tcommon.Address, genesisTimestamp int64, energyLimitForkBlockNum int64, validateEnvelope bool, genesisHash tcommon.Hash, parentAccountStateRoot *tcommon.Hash, standbyPaySet *standbyWitnessPaySet, domainChanges *state.DomainChangeStage, forkPassCache *forks.VersionPassCache) (txInfos []*corepb.TransactionInfo, javaAccountStateRoot tcommon.Hash, err error) {
 	blockSnap := statedb.Snapshot()
 	dpProps, dpDirty := dynProps.Snapshot()
 	defer func() {
@@ -495,7 +496,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		// validateEnvelope is per-tx so a same-block tx2 sees tx1's effects
 		// (e.g. an AccountPermissionUpdate followed by a Transfer signed with
 		// the post-rotation key).
-		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true)
+		result, err := applyTransaction(statedb, dynProps, tx, prevBlockTime, true, prevBlockHeadSlot, block.Timestamp(), block.Number(), db, activeWitnesses, energyLimitForkBlockNum, genesisHash, block.WitnessAddress(), true, validateEnvelope, true, forkPassCache)
 		if err != nil {
 			return nil, tcommon.Hash{}, fmt.Errorf("tx %d: %w", i, err)
 		}
@@ -519,7 +520,7 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 			}
 		}
 
-		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result)
+		accumulateBlockEnergyUsage(dynProps, statedb, prevBlockTime, result, forkPassCache)
 	}
 
 	if parentAccountStateRoot != nil {

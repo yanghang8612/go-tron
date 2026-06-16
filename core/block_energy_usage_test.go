@@ -44,7 +44,7 @@ func TestAccumulateBlockEnergyUsage_AdaptiveOff_NoOp(t *testing.T) {
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
-	})
+	}, nil)
 
 	if got := dp.BlockEnergyUsage(); got != 7 {
 		t.Fatalf("adaptive off: block_energy_usage = %d, want 7", got)
@@ -61,7 +61,7 @@ func TestAccumulateBlockEnergyUsage_PreV3_6_5_StakeOnly(t *testing.T) {
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
-	})
+	}, nil)
 
 	// Only the stake portion (600+100) accumulates.
 	if got := dp.BlockEnergyUsage(); got != 700 {
@@ -79,7 +79,7 @@ func TestAccumulateBlockEnergyUsage_PostV3_6_5_FullUsage(t *testing.T) {
 		EnergyUsageTotal:  1000,
 		EnergyUsed:        600,
 		OriginEnergyUsage: 100,
-	})
+	}, nil)
 
 	if got := dp.BlockEnergyUsage(); got != 1000 {
 		t.Fatalf("post-3_6_5: block_energy_usage = %d, want 1000 (full)", got)
@@ -97,7 +97,7 @@ func TestAccumulateBlockEnergyUsage_PostV3_6_5_StakeOnlyEqualsTotal(t *testing.T
 	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal: 1000,
 		EnergyUsed:       1000,
-	})
+	}, nil)
 	if got := dp.BlockEnergyUsage(); got != 1000 {
 		t.Fatalf("stake-only: block_energy_usage = %d, want 1000", got)
 	}
@@ -111,7 +111,7 @@ func TestAccumulateBlockEnergyUsage_ZeroUsage_NoOp(t *testing.T) {
 
 	accumulateBlockEnergyUsage(dp, stats, 0, &actuator.Result{
 		EnergyUsageTotal: 0,
-	})
+	}, nil)
 	if got := dp.BlockEnergyUsage(); got != 42 {
 		t.Fatalf("zero usage tx: block_energy_usage = %d, want 42", got)
 	}

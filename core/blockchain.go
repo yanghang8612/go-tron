@@ -156,7 +156,11 @@ type BlockChain struct {
 	// per-maintenance ProcessProposals scan. Node-local; reset on reorg /
 	// failed apply. See proposalScanCache.
 	proposalCache *proposalScanCache
-	fc            *forks.ForkController
+	// versionPassCache skips the per-tx fork-stats read + vote tally for an SR
+	// fork version that has already activated. Node-local; reset on reorg /
+	// failed apply (same discipline as proposalCache). See forks.VersionPassCache.
+	versionPassCache *forks.VersionPassCache
+	fc               *forks.ForkController
 
 	// engine validates block headers (signature, witness scheduling, timestamp
 	// alignment) when applyBlock runs. Wired post-construction via SetEngine
@@ -380,6 +384,7 @@ func NewBlockChainWithAncient(db ethdb.KeyValueStore, stateDB *state.Database, c
 		witnessBlockCache: make(map[tcommon.Address]int64),
 		forkStatsCache:    make(map[int32][]byte, len(forks.KnownVersions)),
 		proposalCache:     newProposalScanCache(),
+		versionPassCache:  forks.NewVersionPassCache(),
 	}
 	var err error
 	bc.cycleRewards, err = newCycleRewardAccumulator(buffer)
@@ -835,8 +840,16 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	// canonical state — drop the whole cache (it rebuilds lazily next boundary).
 	maintenanceProcessed := false
 	defer func() {
-		if retErr != nil && maintenanceProcessed {
-			bc.proposalCache.reset()
+		if retErr != nil {
+			// A pass memoized while executing this (now-abandoned) block stays
+			// valid — the gate reads the committed-parent bitmap, which the
+			// revert restores — but reset anyway to mirror proposalCache's
+			// failed-apply discipline and stay robust to future mid-block
+			// fork-stats writers. Cheap: the cache rebuilds lazily.
+			bc.versionPassCache.Reset()
+			if maintenanceProcessed {
+				bc.proposalCache.reset()
+			}
 		}
 	}()
 
@@ -1068,9 +1081,9 @@ func (bc *BlockChain) applyBlockWithPlan(block *types.Block, plan *canonicalBloc
 	}
 	if blockRoot != (tcommon.Hash{}) {
 		parentRoot := current.AccountStateRoot()
-		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage)
+		txInfos, javaAccountStateRoot, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), &parentRoot, standbyPaySet, domainChangeStage, bc.versionPassCache)
 	} else {
-		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage)
+		txInfos, _, err = processBlock(statedb, dynProps, block, bc.vmKV(bc.buffer), bc.ActiveWitnesses(), bc.GenesisTimestamp(), energyLimitForkBlockNum, bc.engine != nil, bc.effectiveGenesisHash(), nil, standbyPaySet, domainChangeStage, bc.versionPassCache)
 	}
 	if err != nil {
 		return fmt.Errorf("process block: %w", err)
@@ -1746,6 +1759,10 @@ func (bc *BlockChain) switchFork(newHead *types.Block) error {
 	// branch; drop the node-local terminal-skip cache so the re-applied branch
 	// re-reads proposal state from scratch.
 	bc.proposalCache.reset()
+	// Likewise a reorg can rewind below a version's activation block, reverting
+	// it to pending on the new branch; drop the fork-pass memo so the re-applied
+	// branch re-evaluates each version from live fork-stats. See forks.VersionPassCache.
+	bc.versionPassCache.Reset()
 
 	var lcaBlock *types.Block
 	numPtr := rawdb.ReadBlockNumber(bc.chaindb, lcaHash)

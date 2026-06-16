@@ -25,7 +25,7 @@ const blockEnergyUsageForkVersion int32 = 9
 //
 // So post-3_6_5 the total bump is `EnergyUsageTotal`; pre-3_6_5 only the stake
 // portion counts.
-func accumulateBlockEnergyUsage(dp *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime int64, result *actuator.Result) {
+func accumulateBlockEnergyUsage(dp *state.DynamicProperties, forkStats forks.ForkStatsReader, prevBlockTime int64, result *actuator.Result, forkPassCache *forks.VersionPassCache) {
 	if dp == nil || result == nil {
 		return
 	}
@@ -33,7 +33,7 @@ func accumulateBlockEnergyUsage(dp *state.DynamicProperties, forkStats forks.For
 		return
 	}
 	delta := result.EnergyUsed + result.OriginEnergyUsage
-	if forks.PassVersionFromStore(forkStats, blockEnergyUsageForkVersion, prevBlockTime, dp.MaintenanceTimeInterval()) {
+	if forkPassCache.Pass(forkStats, blockEnergyUsageForkVersion, prevBlockTime, dp.MaintenanceTimeInterval()) {
 		delta = result.EnergyUsageTotal
 	}
 	if delta <= 0 {

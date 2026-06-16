@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/tronprotocol/go-tron/common"
-	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
@@ -17,19 +16,13 @@ import (
 // Returns false when DB or DynProps is missing (defensive — unit tests that
 // stub a Context without DB will not have the fork stats anyway).
 func multiSigCheckV2Pass(ctx *Context) bool {
-	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
-		return false
-	}
-	return forks.PassVersionFromStore(ctx.State, 27, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return ctx.PassVersion(27)
 }
 
 // cpuTimeGuardPass evaluates VERSION_4_8_1_1 (block version 35) against the per-tx
 // context — java-tron's MUtil.checkCPUTimeForCreate2 / checkCPUTimeForModExp guard.
 func cpuTimeGuardPass(ctx *Context) bool {
-	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
-		return false
-	}
-	return forks.PassVersionFromStore(ctx.State, 35, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
+	return ctx.PassVersion(35)
 }
 
 const contractNameMaxLen = 32

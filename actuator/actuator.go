@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/forks"
 	"github.com/tronprotocol/go-tron/core/state"
 	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
@@ -71,6 +72,27 @@ type Context struct {
 	// transactions carry unsigned Ret data, so producers and txpool validation
 	// must ignore it.
 	TrustTransactionRet bool
+	// ForkPassCache memoizes already-activated SR fork versions so the per-tx
+	// fork gates (PassVersion below) skip the fork-stats read + vote tally for
+	// a version that passed long ago. Node-local, supplied only on the
+	// block-apply path and reset on reorg; nil on producer / pool / unit-test
+	// contexts, which then fall through to the uncached store tally.
+	ForkPassCache *forks.VersionPassCache
+}
+
+// PassVersion reports whether SR software-fork `version` has activated as of
+// this transaction's context (ceil-aligned HardForkTime + vote-rate quorum,
+// java-tron ForkController.pass). It routes through ForkPassCache when the
+// block-execution path supplied one — answering an already-activated version
+// without re-reading and re-tallying its fork-stats bitmap once per tx — and a
+// nil cache falls through to the plain uncached store tally, so the result is
+// byte-identical either way. Returns false when State or DynProps is absent,
+// matching the defensive guards the call sites carried before.
+func (ctx *Context) PassVersion(version int32) bool {
+	if ctx == nil || ctx.State == nil || ctx.DynProps == nil {
+		return false
+	}
+	return ctx.ForkPassCache.Pass(ctx.State, version, ctx.PrevBlockTime, ctx.DynProps.MaintenanceTimeInterval())
 }
 
 func (ctx *Context) ResourceTime() int64 {
