@@ -66,7 +66,9 @@ func TestUpdateAdaptiveTotalEnergyLimit_ExpandWhenUnderTarget(t *testing.T) {
 	dp.SetTotalEnergyAverageUsage(0)        // well under target
 	dp.SetAdaptiveResourceLimitMultiplier(1000)
 
-	UpdateAdaptiveTotalEnergyLimit(dp)
+	if err := UpdateAdaptiveTotalEnergyLimit(dp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	got := dp.TotalEnergyCurrentLimit()
 	// Expand: 50_000_000_000 * 1000 / 999 = 50_050_050_050
@@ -84,7 +86,9 @@ func TestUpdateAdaptiveTotalEnergyLimit_ContractWhenOverTarget(t *testing.T) {
 	dp.SetTotalEnergyAverageUsage(5_000_000) // above target
 	dp.SetAdaptiveResourceLimitMultiplier(1000)
 
-	UpdateAdaptiveTotalEnergyLimit(dp)
+	if err := UpdateAdaptiveTotalEnergyLimit(dp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	got := dp.TotalEnergyCurrentLimit()
 	want := int64(60_000_000_000) * 99 / 100 // 59_400_000_000
@@ -101,7 +105,9 @@ func TestUpdateAdaptiveTotalEnergyLimit_ClampsToFloor(t *testing.T) {
 	dp.SetTotalEnergyAverageUsage(5_000_000) // above target → contract
 	dp.SetAdaptiveResourceLimitMultiplier(1000)
 
-	UpdateAdaptiveTotalEnergyLimit(dp)
+	if err := UpdateAdaptiveTotalEnergyLimit(dp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	got := dp.TotalEnergyCurrentLimit()
 	// 50B * 99/100 = 49.5B, but floor is 50B
@@ -119,7 +125,9 @@ func TestUpdateAdaptiveTotalEnergyLimit_ClampsToCeiling(t *testing.T) {
 	dp.SetTotalEnergyAverageUsage(0) // under target → expand
 	dp.SetAdaptiveResourceLimitMultiplier(50)
 
-	UpdateAdaptiveTotalEnergyLimit(dp)
+	if err := UpdateAdaptiveTotalEnergyLimit(dp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	got := dp.TotalEnergyCurrentLimit()
 	if got != ceiling {
