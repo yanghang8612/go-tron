@@ -822,6 +822,7 @@ func (tvm *TVM) Call(caller, addr tcommon.Address, input []byte, energy uint64, 
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
@@ -983,6 +984,7 @@ func (tvm *TVM) CallToken(caller, addr tcommon.Address, input []byte, energy uin
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 	contract.TokenID = tokenID
@@ -1062,6 +1064,7 @@ func (tvm *TVM) StaticCall(caller, addr tcommon.Address, input []byte, energy ui
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 
@@ -1133,6 +1136,7 @@ func (tvm *TVM) DelegateCall(caller, context, addr tcommon.Address, input []byte
 	} else {
 		contract.InternalTxHash = tvm.RootTxID
 	}
+	contract.CodeHash = tvm.StateDB.GetCodeHash(addr) // reuse state's keccak(code) to key the jumpdest cache
 	contract.SetCode(addr, code)
 	contract.SetInput(input)
 

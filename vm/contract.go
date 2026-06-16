@@ -9,6 +9,7 @@ type Contract struct {
 	Value    int64           // msg.value (TRX in sun)
 	Code     []byte          // bytecode to execute
 	CodeAddr tcommon.Address // code source address (differs for DELEGATECALL)
+	CodeHash tcommon.Hash    // Keccak256(Code) when known; keys the jumpdest cache
 	Input    []byte          // calldata
 
 	InternalTxHash tcommon.Hash // java-tron parent hash for nested internal txs
@@ -34,11 +35,14 @@ func NewContract(caller, addr tcommon.Address, value int64, energy uint64) *Cont
 	}
 }
 
-// SetCode sets the contract's bytecode and builds the jumpdest analysis.
+// SetCode sets the contract's bytecode and builds the jumpdest analysis. When the
+// caller has populated CodeHash (the StateDB code identity), the analysis is
+// served from / stored in the process-wide cache so identical code is scanned
+// once; otherwise (initcode, zero hash) it is analyzed directly.
 func (c *Contract) SetCode(addr tcommon.Address, code []byte) {
 	c.Code = code
 	c.CodeAddr = addr
-	c.jumpdests = analyzeJumpdests(code)
+	c.jumpdests = globalJumpdestCache.analyze(c.CodeHash, code)
 }
 
 // SetInput sets the contract's calldata.
