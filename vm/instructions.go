@@ -536,7 +536,12 @@ func opDifficulty(pc *uint64, interpreter *Interpreter, contract *Contract, memo
 }
 
 func opGasLimit(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(uint64(interpreter.tvm.StateDB.DynamicProperties().TotalEnergyCurrentLimit())))
+	// java-tron OperationActions.gasLimitAction pushes DataWord.ZERO(): TRON has
+	// no block gas limit, so GASLIMIT is always 0. Pushing the energy limit (a
+	// non-zero value) diverged any contract that mixes GASLIMIT into derived
+	// randomness (Nile 23,269,068: a GASLIMIT-seeded RNG flipped a branch, so
+	// gtron SUCCEEDED where java REVERTed).
+	stack.push(uint256.NewInt(0))
 	return nil, nil
 }
 
