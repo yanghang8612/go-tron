@@ -205,6 +205,7 @@ func TestForkController_Update_RebuildsOnWitnessCountChange(t *testing.T) {
 
 type countingForkStore struct {
 	data       map[int32][]byte
+	reads      int
 	batchReads int
 	writes     int
 }
@@ -214,6 +215,7 @@ func newCountingForkStore() *countingForkStore {
 }
 
 func (s *countingForkStore) ReadForkStats(version int32) []byte {
+	s.reads++
 	if v := s.data[version]; v != nil {
 		return append([]byte(nil), v...)
 	}
