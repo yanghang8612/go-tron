@@ -592,7 +592,12 @@ func opSelfBalance(pc *uint64, interpreter *Interpreter, contract *Contract, mem
 }
 
 func opBaseFee(pc *uint64, interpreter *Interpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
-	stack.push(uint256.NewInt(0))
+	// java-tron OperationActions.baseFeeAction pushes the chain energy fee
+	// (getEnergyFee(), sun per energy) unconditionally — not 0. Pushing 0
+	// diverged any London-era contract that reads block.basefee. (Sibling
+	// GASPRICE reads the same energy fee, but only for version-1 contracts.)
+	fee := interpreter.tvm.StateDB.DynamicProperties().EnergyFee()
+	stack.push(uint256.NewInt(uint64(fee)))
 	return nil, nil
 }
 
