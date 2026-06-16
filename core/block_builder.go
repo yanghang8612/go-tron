@@ -121,10 +121,14 @@ func BuildBlock(bc *BlockChain, pool *txpool.TxPool, witnessAddr tcommon.Address
 		}
 	}
 
-	// Per-block adaptive energy limit adjustment.
+	// Per-block adaptive energy limit adjustment. Under harden, a ceiling overflow
+	// is a consensus-invalid state (java would reject such a block), so abandon the
+	// build rather than emit a block peers would reject.
 	if dynProps.AllowAdaptiveEnergy() {
 		UpdateTotalEnergyAverageUsage(dynProps, bc.GenesisTimestamp())
-		UpdateAdaptiveTotalEnergyLimit(dynProps)
+		if err := UpdateAdaptiveTotalEnergyLimit(dynProps); err != nil {
+			return nil, fmt.Errorf("adaptive total energy limit: %w", err)
+		}
 	}
 
 	// Pay block reward to witness (brokerage-aware once change_delegation is on)

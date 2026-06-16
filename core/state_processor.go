@@ -529,10 +529,14 @@ func processBlock(statedb *state.StateDB, dynProps *state.DynamicProperties, blo
 		}
 	}
 
-	// Per-block adaptive energy limit adjustment.
+	// Per-block adaptive energy limit adjustment. Under harden, an overflow in the
+	// ceiling computation rejects the block (java ArithmeticException unwinds the
+	// block-processing stack); the named-return + deferred revert above mirror that.
 	if dynProps.AllowAdaptiveEnergy() {
 		UpdateTotalEnergyAverageUsage(dynProps, genesisTimestamp)
-		UpdateAdaptiveTotalEnergyLimit(dynProps)
+		if err = UpdateAdaptiveTotalEnergyLimit(dynProps); err != nil {
+			return nil, tcommon.Hash{}, fmt.Errorf("adaptive total energy limit: %w", err)
+		}
 	}
 
 	// Pay block reward to witness (and standby top-127 when change_delegation
