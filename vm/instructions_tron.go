@@ -246,7 +246,25 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 	amountWord := stack.pop()
 	receiverWord := stack.pop()
 
-	amount := int64(amountWord.Uint64())
+	// SV-3: java OperationActions.freezeAction calls program.freeze() only when
+	// allowTvmFreezeV2 is NOT active (else it pushes 0 without calling freeze);
+	// freeze() then increaseNonce() once up front (Program.java:1920), before its
+	// own validate/execute, so the nonce advances even on a validate failure. The
+	// nonce feeds a subsequent CREATE address, so mirror the +1 here (gated on the
+	// same !StakingV2 condition) before any push-0 early return.
+	if !in.tvm.cfg.StakingV2 {
+		in.tvm.Nonce++
+	}
+
+	// A (truncation): java Program.freeze parses the amount via
+	// frozenBalance.sValue().longValueExact() (Program.java:1935), which throws
+	// ArithmeticException for an out-of-int64 word -> the freeze is rejected
+	// (push 0) with zero state change. uint256ToInt64Exact carries the same
+	// reject-when-out-of-range semantics (a negative sValue is < TRX_PRECISION and
+	// would be rejected by validate anyway), replacing the old low-64-bit
+	// int64(amountWord.Uint64()) truncation that let a huge word freeze its
+	// low bits.
+	amount, amountOK := uint256ToInt64Exact(&amountWord)
 	resourceType := int64(resourceWord.Uint64())
 	caller := contract.Address
 	receiver := uint256ToAddress(&receiverWord)
@@ -266,7 +284,9 @@ func opFreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *
 		}
 	}
 
-	if in.tvm.cfg.StakingV2 || amount < tvmTRXPrecision || (resourceType != 0 && resourceType != 1) {
+	// !amountOK is evaluated before the `< tvmTRXPrecision` comparison so a
+	// rejected (out-of-range) amount never uses a bogus parsed value.
+	if in.tvm.cfg.StakingV2 || !amountOK || amount < tvmTRXPrecision || (resourceType != 0 && resourceType != 1) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -342,6 +362,10 @@ func opUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack
 	}
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
+
+	// SV-3: java unfreeze() increaseNonce() once up front (Program.java:1956),
+	// unconditionally (before validate/execute), feeding a later CREATE address.
+	in.tvm.Nonce++
 
 	resourceType := int64(resourceWord.Uint64())
 	caller := contract.Address
@@ -464,19 +488,34 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 		mem.resize(needed)
 	}
 
-	n := int64(witnessCountWord.Uint64())
-	amountN := int64(amountCountWord.Uint64())
+	// SV-3: java voteWitness() increaseNonce() once up front (Program.java:2272),
+	// after the energy cost is charged but BEFORE the memory length-word check and
+	// validate, so the nonce advances even when the vote reverts or pushes 0.
+	in.tvm.Nonce++
+
+	// java OperationActions.voteWitnessAction reads the four stack words via
+	// DataWord.intValueSafe() (clamps a >4-byte or sign-negative word to
+	// Integer.MAX_VALUE), NOT a low-64-bit truncation. A huge witnessCount whose
+	// low bits happen to match a small length word must therefore clamp to
+	// MAX_VALUE and fail the length-word check below, not slip through as a small
+	// count (the A truncation fix).
+	n := int64(wordToIntValueSafe(&witnessCountWord))
+	amountN := int64(wordToIntValueSafe(&amountCountWord))
+	wBase := int64(wordToIntValueSafe(&witnessOffsetWord))
+	aBase := int64(wordToIntValueSafe(&amountOffsetWord))
+
+	// SV-4 / java Program.voteWitness order: the memory length-word check runs
+	// FIRST (Program.java:2276 — a BytecodeExecutionException / revert on
+	// mismatch), BEFORE the witnessArrayLength == amountArrayLength equality
+	// (Program.java:2283 — a plain `return false` / push 0). Both the stored
+	// length word and the count argument are compared through intValueSafe, so a
+	// >4-byte length word also clamps to MAX_VALUE.
+	if memoryArrayLengthSafe(mem, wBase) != n || memoryArrayLengthSafe(mem, aBase) != amountN {
+		return nil, errVoteWitnessMemoryLength
+	}
 	if n != amountN {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
-	}
-	wBase := int64(witnessOffsetWord.Uint64())
-	aBase := int64(amountOffsetWord.Uint64())
-	if got, ok := memoryArrayLength(mem, wBase); !ok || got != n {
-		return nil, errVoteWitnessMemoryLength
-	}
-	if got, ok := memoryArrayLength(mem, aBase); !ok || got != n {
-		return nil, errVoteWitnessMemoryLength
 	}
 	if n < 0 || n > 30 {
 		stack.push(uint256.NewInt(0))
@@ -540,8 +579,15 @@ func opVoteWitness(_ *uint64, in *Interpreter, contract *Contract, mem *Memory, 
 		return nil, nil
 	}
 
-	votes := make([]*corepb.Vote, 0, len(voteOrder))
-	for _, witnessAddr := range voteOrder {
+	// SV-2: java VoteWitnessProcessor.execute merges votes into a
+	// HashMap<ByteString,Long> (VoteWitnessProcessor.java:54) and appends them to
+	// the account's `votes` in entrySet() order (:105-108). That order — not the
+	// first-seen insertion order we accumulated in voteOrder — is what gets
+	// protobuf-serialized into state, so reorder to the java HashMap iteration
+	// order before writing or the state root diverges.
+	hashOrder := javaHashMapOrder(voteOrder)
+	votes := make([]*corepb.Vote, 0, len(hashOrder))
+	for _, witnessAddr := range hashOrder {
 		votes = append(votes, &corepb.Vote{
 			VoteAddress: witnessAddr.Bytes(),
 			VoteCount:   voteSums[witnessAddr],
@@ -640,22 +686,43 @@ func voteWitnessArrayMemNeeded(offset, count *uint256.Int, wrap, includeLengthWo
 	return new(big.Int).Add(offset.ToBig(), size)
 }
 
-func memoryArrayLength(mem *Memory, offset int64) (int64, bool) {
-	if mem == nil || offset < 0 || offset+32 > int64(mem.len()) {
-		return 0, false
-	}
-	word := mem.getCopy(offset, 32)
-	for _, b := range word[:24] {
-		if b != 0 {
-			return 0, false
+// wordToIntValueSafe mirrors java DataWord.intValueSafe() (DataWord.java:222-228):
+// if the word occupies more than 4 bytes, or its low-32-bit signed int is
+// negative (high bit of byte[28] set), it clamps to Integer.MAX_VALUE
+// (0x7FFFFFFF); otherwise it returns the low 32 bits as a non-negative int. This
+// is how OperationActions.voteWitnessAction reads the four VOTEWITNESS stack
+// words, so a >4-byte count/offset is bounded, never truncated to its low bits.
+func wordToIntValueSafe(v *uint256.Int) int32 {
+	b := v.Bytes32()
+	// bytesOccupied: a non-zero byte anywhere in bytes[0..27] means the value
+	// needs more than 4 bytes. Also matches the java check that the low 32-bit
+	// int is negative (byte[28] high bit set), since that flips intValue() < 0.
+	for i := 0; i < 28; i++ {
+		if b[i] != 0 {
+			return 0x7FFFFFFF
 		}
 	}
-	u := binary.BigEndian.Uint64(word[24:])
-	const maxInt64 = uint64(^uint64(0) >> 1)
-	if u > maxInt64 {
-		return 0, false
+	v32 := binary.BigEndian.Uint32(b[28:])
+	if v32 > 0x7FFFFFFF {
+		return 0x7FFFFFFF
 	}
-	return int64(u), true
+	return int32(v32)
+}
+
+// memoryArrayLengthSafe reads the 32-byte dynamic-array length word at `offset`
+// and applies java DataWord.intValueSafe() to it (java Program.voteWitness:2276
+// reads `memoryLoad(offset).intValueSafe()`). It returns -1 — a sentinel that can
+// never equal a non-negative intValueSafe count — when the word lies outside the
+// (already energy-charged, pre-resized) memory, preserving go-tron's existing
+// requirement that the length word be in allocated memory (locked by
+// TestVoteWitnessOpcodeMemoryEnergyCostFollowsJavaForks).
+func memoryArrayLengthSafe(mem *Memory, offset int64) int64 {
+	if mem == nil || offset < 0 || offset+32 > int64(mem.len()) {
+		return -1
+	}
+	var w uint256.Int
+	w.SetBytes(mem.getCopy(offset, 32))
+	return int64(wordToIntValueSafe(&w))
 }
 
 func int64ExactFromWord(word []byte) (int64, bool) {
@@ -846,6 +913,10 @@ func updateTVMVotesAfterUnfreezeV1(tvm *TVM, owner tcommon.Address) error {
 
 func opWithdrawReward(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	caller := contract.Address
+	// SV-3: java withdrawReward() increaseNonce() once up front (Program.java:2332),
+	// unconditionally (before validate/execute), so the nonce advances even on the
+	// genesis-witness / no-reward push-0 paths.
+	in.tvm.Nonce++
 	if isTVMGenesisWitness(in.tvm, caller) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
@@ -1047,11 +1118,20 @@ func tvmAdjustAllowance(tvm *TVM, addr tcommon.Address, amount int64) {
 func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
-	amount := int64(amountWord.Uint64())
+	// A (truncation): java Program.freezeBalanceV2 parses the amount via
+	// frozenBalance.sValue().longValueExact() (Program.java:2029) -> an
+	// out-of-int64 word throws ArithmeticException and the freeze is rejected
+	// (push 0, no state change). uint256ToInt64Exact carries the same semantics,
+	// replacing the old low-64-bit int64(amountWord.Uint64()) truncation.
+	amount, amountOK := uint256ToInt64Exact(&amountWord)
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	caller := contract.Address
 
-	if amount < tvmTRXPrecision || !validTVMStakeV2Resource(in.tvm, resource) {
+	// SV-3: java freezeBalanceV2() increaseNonce() once up front
+	// (Program.java:2020), unconditionally, feeding a later CREATE address.
+	in.tvm.Nonce++
+
+	if !amountOK || amount < tvmTRXPrecision || !validTVMStakeV2Resource(in.tvm, resource) {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1076,7 +1156,12 @@ func opFreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory
 func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
-	amount := int64(amountWord.Uint64())
+	// A (truncation): java Program.unfreezeBalanceV2 parses the amount via
+	// unfreezeBalance.sValue().longValueExact() (Program.java:2059) -> an
+	// out-of-int64 word throws ArithmeticException and the unfreeze is rejected
+	// (push 0, no state change). uint256ToInt64Exact carries the same semantics,
+	// replacing the old low-64-bit int64(amountWord.Uint64()) truncation.
+	amount, amountOK := uint256ToInt64Exact(&amountWord)
 	resource := corepb.ResourceCode(int32(resourceWord.Uint64()))
 	caller := contract.Address
 	// java UnfreezeBalanceV2Processor uses getLatestBlockHeaderTimestamp() for the
@@ -1084,7 +1169,11 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	// expire time — the chain head's timestamp, NOT tvm.Timestamp (current block).
 	now := tvmLatestBlockHeaderTimestamp(in.tvm)
 
-	if amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), now) >= 32 {
+	// SV-3: java unfreezeBalanceV2() increaseNonce() once up front
+	// (Program.java:2051), unconditionally (before validate/execute).
+	in.tvm.Nonce++
+
+	if !amountOK || amount <= 0 || !validTVMStakeV2Resource(in.tvm, resource) || tvmUnfreezingV2Count(in.tvm.StateDB.GetAccount(caller), now) >= 32 {
 		stack.push(uint256.NewInt(0))
 		return nil, nil
 	}
@@ -1097,6 +1186,10 @@ func opUnfreezeBalanceV2(_ *uint64, in *Interpreter, contract *Contract, _ *Memo
 	withdrawnExpired := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, now)
 	if withdrawnExpired > 0 {
 		in.tvm.StateDB.AddBalance(caller, withdrawnExpired)
+		// SV-3: java increaseNonce() a SECOND time when execute() returns an
+		// expired-withdrawal balance > 0 (the withdrawExpireUnfreezeWhileUnfreezing
+		// internalTx, Program.java:2066-2069).
+		in.tvm.Nonce++
 	}
 	if in.tvm.DynProps != nil && in.tvm.DynProps.AllowNewResourceModel() {
 		in.tvm.StateDB.InitializeOldTronPowerIfNeeded(caller)
@@ -1136,11 +1229,18 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 	if in.tvm.DynProps != nil {
 		now = in.tvm.DynProps.LatestBlockHeaderTimestamp()
 	}
+	// SV-3: java cancelAllUnfreezeV2Action() increaseNonce() once up front
+	// (Program.java:2118), unconditionally (before validate/execute).
+	in.tvm.Nonce++
 	// CancelAllUnfreezeV2 refreezes unexpired entries (updating global weight)
 	// and returns the expired total, which java/actuator add to the balance.
 	expired := in.tvm.StateDB.CancelAllUnfreezeV2(contract.Address, now)
 	if expired > 0 {
 		in.tvm.StateDB.AddBalance(contract.Address, expired)
+		// SV-3: java increaseNonce() a SECOND time when the WITHDRAW_EXPIRE_BALANCE
+		// result is > 0 (the withdrawExpireUnfreezeWhileCanceling internalTx,
+		// Program.java:2131-2134).
+		in.tvm.Nonce++
 	}
 	// java OperationActions.cancelAllUnfreezeV2Action pushes ONE/ZERO for
 	// success/failure (Program.cancelAllUnfreezeV2Action returns boolean), NOT
@@ -1155,6 +1255,9 @@ func opCancelAllUnfreezeV2(_ *uint64, in *Interpreter, contract *Contract, _ *Me
 
 func opWithdrawExpireUnfreeze(_ *uint64, in *Interpreter, contract *Contract, _ *Memory, stack *Stack) ([]byte, error) {
 	caller := contract.Address
+	// SV-3: java withdrawExpireUnfreeze() increaseNonce() once up front
+	// (Program.java:2087), unconditionally (before validate/execute).
+	in.tvm.Nonce++
 	released := in.tvm.StateDB.RemoveExpiredUnfreezeV2(caller, tvmLatestBlockHeaderTimestamp(in.tvm))
 	if released > 0 {
 		in.tvm.StateDB.AddBalance(caller, released)
@@ -1172,6 +1275,10 @@ func opDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Memor
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
+	// SV-3: java delegateResource() increaseNonce() once up front
+	// (Program.java:2162), unconditionally (before validate/execute), so the nonce
+	// advances even when the amount fails validation below.
+	in.tvm.Nonce++
 	amount, ok := uint256ToInt64Exact(&amountWord)
 	if !ok || amount < tvmTRXPrecision {
 		stack.push(uint256.NewInt(0))
@@ -1243,6 +1350,9 @@ func opUnDelegateResource(_ *uint64, in *Interpreter, contract *Contract, _ *Mem
 	amountWord := stack.pop()
 	resourceWord := stack.pop()
 	receiverWord := stack.pop()
+	// SV-3: java unDelegateResource() increaseNonce() once up front
+	// (Program.java:2196), unconditionally (before validate/execute).
+	in.tvm.Nonce++
 	amount, ok := uint256ToInt64Exact(&amountWord)
 	if !ok || amount <= 0 {
 		stack.push(uint256.NewInt(0))
