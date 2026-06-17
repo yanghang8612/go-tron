@@ -677,6 +677,15 @@ func TestBuildTransactionInfo_DiagnosticReceiptFields(t *testing.T) {
 		OwnerFrozenForEnergy:        2_000_000,
 		OriginEnergyWindow:          28_800,
 		CallerEnergyWindow:          14_400,
+		CallerEnergyLimit:           3_300,
+		OriginEnergyLimit:           17_227_485,
+		OriginFrozenForEnergy:       62_826_000_000,
+		CallerEnergyUsagePre:        1_234,
+		OriginEnergyUsagePre:        17_225_691,
+		CallerEnergyLastConsumeTime: 551_787_654,
+		OriginEnergyLastConsumeTime: 551_787_600,
+		TotalEnergyWeight:           328_216_199,
+		TotalEnergyCurrentLimit:     90_000_000_000,
 	}
 
 	r := buildTransactionInfo(tx, result, 1, 3000, false).Receipt
@@ -694,6 +703,15 @@ func TestBuildTransactionInfo_DiagnosticReceiptFields(t *testing.T) {
 		{"OwnerFrozenForEnergy", r.GetOwnerFrozenForEnergy(), 2_000_000},
 		{"OriginEnergyWindow", r.GetOriginEnergyWindow(), 28_800},
 		{"CallerEnergyWindow", r.GetCallerEnergyWindow(), 14_400},
+		{"CallerEnergyLimit", r.GetCallerEnergyLimit(), 3_300},
+		{"OriginEnergyLimit", r.GetOriginEnergyLimit(), 17_227_485},
+		{"OriginFrozenForEnergy", r.GetOriginFrozenForEnergy(), 62_826_000_000},
+		{"CallerEnergyUsagePre", r.GetCallerEnergyUsagePre(), 1_234},
+		{"OriginEnergyUsagePre", r.GetOriginEnergyUsagePre(), 17_225_691},
+		{"CallerEnergyLastConsumeTime", r.GetCallerEnergyLastConsumeTime(), 551_787_654},
+		{"OriginEnergyLastConsumeTime", r.GetOriginEnergyLastConsumeTime(), 551_787_600},
+		{"TotalEnergyWeight", r.GetTotalEnergyWeight(), 328_216_199},
+		{"TotalEnergyCurrentLimit", r.GetTotalEnergyCurrentLimit(), 90_000_000_000},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
