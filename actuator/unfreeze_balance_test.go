@@ -194,8 +194,10 @@ func TestUnfreezeBalanceExecute_TronPower(t *testing.T) {
 // floor branch (decrease = -unfreezeBalance / TRX_PRECISION) whenever the
 // receiver is null OR a contract, so total_energy_weight drops by the unfrozen
 // weight. Routing a missing receiver through DecrementReceiverAcquired (which
-// returns 0 for a non-existent account) leaks total_energy_weight HIGH — the
-// root cause of the Nile 27,405,576 sync stall.
+// returns 0 for a non-existent account) leaks total_energy_weight HIGH. This
+// completes a7fda66f (existing-Contract case) for the null receiver; the test
+// sets allow_new_reward (the only era where the weight delta isn't floor-
+// overridden, so where the receiver branch is actually live).
 func TestUnfreezeBalanceExecute_DelegatedMissingContractReceiver(t *testing.T) {
 	statedb := setupStateDB(t)
 	owner := makeTestAddr(8)
