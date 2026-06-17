@@ -800,18 +800,13 @@ func tvmFrozenV2WithDelegatedWeight(s interface {
 	return balance / tvmTRXPrecision
 }
 
+// tvmAddResourceWeight applies a staking-opcode weight delta through the
+// journaled StateDB path so a later frame revert rolls it back — java's freeze
+// opcode mutates a discardable Repository, so its total_*_weight delta is
+// dropped on revert; gtron must journal the delta or it leaks (over-counting
+// total_energy_weight on a freeze-opcode-then-revert).
 func tvmAddResourceWeight(tvm *TVM, resource corepb.ResourceCode, delta int64) {
-	if tvm.DynProps == nil || delta == 0 {
-		return
-	}
-	switch resource {
-	case corepb.ResourceCode_BANDWIDTH:
-		tvm.DynProps.AddTotalNetWeight(delta)
-	case corepb.ResourceCode_ENERGY:
-		tvm.DynProps.AddTotalEnergyWeight(delta)
-	case corepb.ResourceCode_TRON_POWER:
-		tvm.DynProps.AddTotalTronPowerWeight(delta)
-	}
+	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, resource, delta)
 }
 
 func tvmUnfreezingV2Count(account interface {

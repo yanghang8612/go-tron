@@ -1751,20 +1751,45 @@ func (s *StateDB) CancelAllUnfreezeV2(addr tcommon.Address, now int64) int64 {
 	return withdrawExpire
 }
 
-// addResourceWeightForCancel applies a weight delta to the matching global
-// total_*_weight, mirroring java repo.addTotalNet/Energy/TronPowerWeight.
-func (s *StateDB) addResourceWeightForCancel(resource corepb.ResourceCode, delta int64) {
-	if delta == 0 || s.dynProps == nil {
+// applyResourceWeight adds delta to dp's matching total_*_weight, mirroring java
+// repo.addTotalNet/Energy/TronPowerWeight. Non-journaled: callers that need the
+// delta rolled back on a VM revert use StateDB.AddResourceWeightJournaled.
+func applyResourceWeight(dp *DynamicProperties, resource corepb.ResourceCode, delta int64) {
+	if delta == 0 || dp == nil {
 		return
 	}
 	switch resource {
 	case corepb.ResourceCode_BANDWIDTH:
-		s.dynProps.AddTotalNetWeight(delta)
+		dp.AddTotalNetWeight(delta)
 	case corepb.ResourceCode_ENERGY:
-		s.dynProps.AddTotalEnergyWeight(delta)
+		dp.AddTotalEnergyWeight(delta)
 	case corepb.ResourceCode_TRON_POWER:
-		s.dynProps.AddTotalTronPowerWeight(delta)
+		dp.AddTotalTronPowerWeight(delta)
 	}
+}
+
+// addResourceWeightForCancel applies a weight delta to the matching global
+// total_*_weight, mirroring java repo.addTotalNet/Energy/TronPowerWeight.
+func (s *StateDB) addResourceWeightForCancel(resource corepb.ResourceCode, delta int64) {
+	applyResourceWeight(s.dynProps, resource, delta)
+}
+
+// AddResourceWeightJournaled applies a resource-weight delta to dp AND records a
+// journal entry so a later RevertToSnapshot rolls it back. The TVM staking
+// opcodes (FREEZE/UNFREEZE) and the selfdestruct resource release must use this:
+// java applies these to a discardable Repository whose delta is dropped on
+// revert, but gtron mutates the shared DynamicProperties directly and Set is not
+// journaled — so a freeze-opcode-then-revert would otherwise leak the weight and
+// over-count total_energy_weight. dp is passed explicitly (not s.dynProps)
+// because a VM frame may run against a DynamicProperties distinct from the
+// StateDB's own (the never-committed simulation path loads a fresh one); journal
+// and mutate the exact object the frame uses and commits.
+func (s *StateDB) AddResourceWeightJournaled(dp *DynamicProperties, resource corepb.ResourceCode, delta int64) {
+	if delta == 0 || dp == nil {
+		return
+	}
+	s.journal.append(resourceWeightChange{dp: dp, resource: resource, delta: delta})
+	applyResourceWeight(dp, resource, delta)
 }
 
 // UnfreezeV2Count returns the number of pending unfreeze entries.

@@ -324,10 +324,10 @@ func (tvm *TVM) transferDelegatedResourceToInheritor(owner, inheritor tcommon.Ad
 	}
 	frozenBalanceForEnergy := ownerAccount.FrozenEnergyAmount()
 
-	if tvm.DynProps != nil {
-		tvm.DynProps.AddTotalNetWeight(-frozenBalanceForBandwidth / tvmTRXPrecision)
-		tvm.DynProps.AddTotalEnergyWeight(-frozenBalanceForEnergy / tvmTRXPrecision)
-	}
+	// Journaled so a reverting frame rolls the release back, matching java's
+	// discardable Repository (see StateDB.AddResourceWeightJournaled).
+	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_BANDWIDTH, -frozenBalanceForBandwidth/tvmTRXPrecision)
+	tvm.StateDB.AddResourceWeightJournaled(tvm.DynProps, corepb.ResourceCode_ENERGY, -frozenBalanceForEnergy/tvmTRXPrecision)
 	// java unconditionally calls repo.addBalance(inheritor, sum), but in the
 	// suicide flow the inheritor always pre-exists (createAccountIfNotExist for
 	// the obtainer, genesis for the blackhole), so addBalance(inheritor, 0) is a
