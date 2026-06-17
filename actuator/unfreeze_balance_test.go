@@ -187,6 +187,50 @@ func TestUnfreezeBalanceExecute_TronPower(t *testing.T) {
 	}
 }
 
+// TestUnfreezeBalanceExecute_DelegatedMissingContractReceiver covers the V1
+// delegated-unfreeze global-weight release when the receiver account no longer
+// exists — a contract receiver that self-destructed before the owner unfreezes.
+// Under allow_tvm_constantinople java-tron's UnfreezeBalanceActuator takes the
+// floor branch (decrease = -unfreezeBalance / TRX_PRECISION) whenever the
+// receiver is null OR a contract, so total_energy_weight drops by the unfrozen
+// weight. Routing a missing receiver through DecrementReceiverAcquired (which
+// returns 0 for a non-existent account) leaks total_energy_weight HIGH — the
+// root cause of the Nile 27,405,576 sync stall.
+func TestUnfreezeBalanceExecute_DelegatedMissingContractReceiver(t *testing.T) {
+	statedb := setupStateDB(t)
+	owner := makeTestAddr(8)
+	receiverByte := byte(9)
+	receiver := makeTestAddr(receiverByte)
+	seedAccount(statedb, owner, 7_000_000)
+	// Receiver is intentionally NOT created (it self-destructed). The owner's
+	// delegated frozen energy is still recorded; the receiver leg is skipped.
+	statedb.FreezeV1DelegatedEnergy(owner, receiver, 3_000_000)
+
+	tx := makeUnfreezeBalanceTx(8, corepb.ResourceCode_ENERGY, &receiverByte)
+	act := &UnfreezeBalanceActuator{}
+	ctx := setupContext(t, statedb, tx)
+	ctx.DynProps.SetAllowDelegateResource(true)
+	ctx.DynProps.SetAllowTvmConstantinople(true)
+	ctx.DynProps.SetAllowNewReward(true)
+	ctx.DynProps.SetTotalEnergyWeight(100)
+	if err := statedb.WriteDelegatedResourceLegacy(owner, receiver, &rawdb.DelegatedResource{
+		From:                   owner,
+		To:                     receiver,
+		FrozenBalanceForEnergy: 3_000_000,
+		ExpireTimeForEnergy:    500_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := act.Execute(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// java subtracts unfreezeBalance / TRX_PRECISION = 3_000_000 / 1_000_000 = 3.
+	if got := ctx.DynProps.TotalEnergyWeight(); got != 97 {
+		t.Fatalf("total_energy_weight: want 97 (100 - 3), got %d", got)
+	}
+}
+
 // TestUnfreezeBalanceExecute_Delegated tests that unfreezing a delegation restores balance
 // and clears the delegation.
 func TestUnfreezeBalanceExecute_Delegated(t *testing.T) {
