@@ -149,6 +149,19 @@ type Result struct {
 	OwnerFrozenForEnergy          int64
 	OriginEnergyWindow            int64
 	CallerEnergyWindow            int64
+	// Diagnostic (cross-impl parity), non-consensus — ResourceReceipt fields
+	// 20-28, filled for smart-contract txs in vm_actuator. They decompose the
+	// energy bill: recovered_usage = energy_limit - energy_left, and the limit
+	// is floor(frozen_for_energy/TRX * TotalEnergyCurrentLimit/TotalEnergyWeight).
+	CallerEnergyLimit           int64
+	OriginEnergyLimit           int64
+	OriginFrozenForEnergy       int64
+	CallerEnergyUsagePre        int64
+	OriginEnergyUsagePre        int64
+	CallerEnergyLastConsumeTime int64
+	OriginEnergyLastConsumeTime int64
+	TotalEnergyWeight           int64
+	TotalEnergyCurrentLimit     int64
 	NetUsage                      int64
 	NetFee                        int64
 	NetFeeForBandwidth            bool

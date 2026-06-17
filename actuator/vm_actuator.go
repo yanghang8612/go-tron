@@ -434,6 +434,16 @@ func accountEnergyLimitWithFixRatio(ctx *Context, account common.Address, feeLim
 		// window is the per-account state that drifts in energy-window forks;
 		// recovery reads but never persists it, so this is the pristine value.
 		result.CallerEnergyWindow = acct.EnergyWindowSize()
+		// Diagnostic (fields 20/23/25/27/28): decompose the caller bill. limit
+		// splits CallerEnergyLeft into recovered = limit - left; usage_pre and
+		// last_consume_time are the recovery inputs; total_energy_{weight,
+		// current_limit} are the global limit factors. caller_frozen_for_energy
+		// is already owner_frozen_for_energy (field 17).
+		result.CallerEnergyLimit = calcAccountEnergyLimit(acct, ctx.DynProps)
+		result.CallerEnergyUsagePre = ctx.State.GetEnergyUsage(account)
+		result.CallerEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(account)
+		result.TotalEnergyWeight = ctx.DynProps.TotalEnergyWeight()
+		result.TotalEnergyCurrentLimit = ctx.DynProps.TotalEnergyCurrentLimit()
 	}
 	if callValue < 0 {
 		callValue = 0
@@ -513,8 +523,14 @@ func totalEnergyLimitWithFixRatio(ctx *Context, origin, caller, contractAddr com
 		result.OriginEnergyLeft = originEnergyLeft
 		result.HasOriginEnergyLeft = true
 		// Diagnostic: origin energy recovery window (slots) at exec start.
+		// Fields 21/22/24/26: origin limit (the 17,227,485-vs-486 value),
+		// origin frozen-for-energy (limit numerator), and the recovery inputs.
+		result.OriginEnergyUsagePre = ctx.State.GetEnergyUsage(origin)
+		result.OriginEnergyLastConsumeTime = ctx.State.GetLatestConsumeTimeForEnergy(origin)
 		if originAcct := ctx.State.GetAccount(origin); originAcct != nil {
 			result.OriginEnergyWindow = originAcct.EnergyWindowSize()
+			result.OriginEnergyLimit = calcAccountEnergyLimit(originAcct, ctx.DynProps)
+			result.OriginFrozenForEnergy = allFrozenBalanceForEnergy(originAcct)
 		}
 	}
 

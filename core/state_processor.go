@@ -276,6 +276,20 @@ func buildTransactionInfo(tx *types.Transaction, result *actuator.Result, blockN
 			OwnerFrozenForEnergy:        result.OwnerFrozenForEnergy,
 			OriginEnergyWindow:          result.OriginEnergyWindow,
 			CallerEnergyWindow:          result.CallerEnergyWindow,
+			// Diagnostic (cross-impl parity), non-consensus — fields 20-28.
+			// Decompose the energy bill: recovered = *_energy_limit -
+			// *_energy_left, limit = floor(frozen_for_energy/TRX *
+			// TotalEnergyCurrentLimit/TotalEnergyWeight). Set for VM txs in
+			// vm_actuator at execution start.
+			CallerEnergyLimit:           result.CallerEnergyLimit,
+			OriginEnergyLimit:           result.OriginEnergyLimit,
+			OriginFrozenForEnergy:       result.OriginFrozenForEnergy,
+			CallerEnergyUsagePre:        result.CallerEnergyUsagePre,
+			OriginEnergyUsagePre:        result.OriginEnergyUsagePre,
+			CallerEnergyLastConsumeTime: result.CallerEnergyLastConsumeTime,
+			OriginEnergyLastConsumeTime: result.OriginEnergyLastConsumeTime,
+			TotalEnergyWeight:           result.TotalEnergyWeight,
+			TotalEnergyCurrentLimit:     result.TotalEnergyCurrentLimit,
 		},
 	}
 	if isVMContract {

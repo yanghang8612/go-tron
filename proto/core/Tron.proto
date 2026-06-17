@@ -362,6 +362,28 @@ message ResourceReceipt {
   int64 owner_frozen_for_energy = 17;
   int64 origin_energy_window = 18;
   int64 caller_energy_window = 19;
+  // Diagnostic (cross-impl parity) — fields 20-28, non-consensus, never hashed.
+  // They make a smart-contract energy bill fully decomposable from a single
+  // gettransactioninfobyid: the available stake-energy already recorded in
+  // origin_energy_left/caller_energy_left (fields 9/10) splits via
+  //   recovered_usage = energy_limit - energy_left
+  // so diffing *_energy_limit vs java pinpoints a total_energy_weight / limit
+  // divergence, while diffing (limit - left) pinpoints a recovery divergence —
+  // no node re-sync or manual getaccountresource math needed. The limit itself
+  // is reproducible as floor(frozen_for_energy/TRX * total_energy_current_limit
+  // / total_energy_weight); the recovered usage is reproducible from
+  // *_energy_usage_pre + *_energy_last_consume_time + *_energy_window + the
+  // block slot. Captured at execution start for the contract origin/caller.
+  // Populated only for smart-contract transactions; proto3 omits zero values.
+  int64 caller_energy_limit = 20;
+  int64 origin_energy_limit = 21;
+  int64 origin_frozen_for_energy = 22;
+  int64 caller_energy_usage_pre = 23;
+  int64 origin_energy_usage_pre = 24;
+  int64 caller_energy_last_consume_time = 25;
+  int64 origin_energy_last_consume_time = 26;
+  int64 total_energy_weight = 27;
+  int64 total_energy_current_limit = 28;
 }
 
 message MarketOrderDetail {
