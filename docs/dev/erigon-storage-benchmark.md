@@ -218,7 +218,8 @@ HTTP/peer failures, stage regressions, pipeline violations, storage alerts, and
 the current sync-stage bottleneck.
 Run it with `--offline-db-check` only after the node is stopped to add
 `storage-alerts` stage/freezer/snapshot diagnostics, including
-`stageVerifyDetails` entries such as `SyncBodiesReady` staged-body mismatches.
+`stageVerifyDetails` entries such as `SyncBodies`/`SyncBodiesReady`
+staged-body mismatches.
 
 ## Interpreting Results
 

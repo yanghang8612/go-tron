@@ -604,7 +604,7 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 		}
 		fmt.Printf("Stage progress: group=%s name=%s value=%d hash=%x verified=%s",
 			row.group, row.stage, row.progress.BlockNum, row.progress.BlockHash, row.verified)
-		if row.verified != "canonical" {
+		if row.canonicalHash != (common.Hash{}) && row.verified != "canonical" {
 			fmt.Printf(" canonicalHash=%x", row.canonicalHash)
 		}
 		fmt.Println()
@@ -946,7 +946,12 @@ func dbStageStatusRequiresCanonicalVerification(stage rawdb.StageID) bool {
 	}
 }
 
-func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbStageStatusRow, error) {
+type dbStageStatusDB interface {
+	ethdb.Iteratee
+	ethdb.KeyValueReader
+}
+
+func dbStageStatusRows(db dbStageStatusDB, canonical ethdb.KeyValueReader) ([]dbStageStatusRow, error) {
 	progress := make(map[rawdb.StageID]rawdb.StageProgress)
 	if err := rawdb.IterateStageProgress(db, func(row rawdb.StageProgress) (bool, error) {
 		progress[row.Stage] = row
@@ -961,7 +966,7 @@ func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbS
 	for _, stage := range known {
 		seen[stage] = struct{}{}
 		row, ok := progress[stage]
-		rows = append(rows, dbStageStatusRowFor(stage, row, ok, canonical))
+		rows = append(rows, dbStageStatusRowFor(stage, row, ok, db, canonical))
 	}
 
 	var unknown []rawdb.StageID
@@ -973,12 +978,12 @@ func dbStageStatusRows(db ethdb.Iteratee, canonical ethdb.KeyValueReader) ([]dbS
 	}
 	sort.Slice(unknown, func(i, j int) bool { return string(unknown[i]) < string(unknown[j]) })
 	for _, stage := range unknown {
-		rows = append(rows, dbStageStatusRowFor(stage, progress[stage], true, canonical))
+		rows = append(rows, dbStageStatusRowFor(stage, progress[stage], true, db, canonical))
 	}
 	return rows, nil
 }
 
-func dbStageStatusRowFor(stage rawdb.StageID, progress rawdb.StageProgress, present bool, canonical ethdb.KeyValueReader) dbStageStatusRow {
+func dbStageStatusRowFor(stage rawdb.StageID, progress rawdb.StageProgress, present bool, db ethdb.KeyValueReader, canonical ethdb.KeyValueReader) dbStageStatusRow {
 	row := dbStageStatusRow{
 		stage:   stage,
 		group:   dbStageStatusGroup(stage),
@@ -988,13 +993,19 @@ func dbStageStatusRowFor(stage rawdb.StageID, progress rawdb.StageProgress, pres
 		return row
 	}
 	row.progress = progress
-	row.verified, row.canonicalHash = dbStageStatusVerification(progress, canonical)
+	row.verified, row.canonicalHash = dbStageStatusVerification(stage, progress, db, canonical)
 	return row
 }
 
-func dbStageStatusVerification(progress rawdb.StageProgress, canonical ethdb.KeyValueReader) (string, common.Hash) {
+func dbStageStatusVerification(stage rawdb.StageID, progress rawdb.StageProgress, db ethdb.KeyValueReader, canonical ethdb.KeyValueReader) (string, common.Hash) {
 	if !progress.HasBlockHash {
 		return "unbound", common.Hash{}
+	}
+	switch stage {
+	case rawdb.StageSyncBodies:
+		return dbStageStatusStagedBodyProgressVerification(syncdl.ReadStagedBodyProgress(db, rawdb.StageSyncBodies)), common.Hash{}
+	case rawdb.StageSyncBodiesReady:
+		return dbStageStatusStagedBodyReadyVerification(syncdl.ReadStagedBodyReadyDrainLimit(db, progress.BlockNum)), common.Hash{}
 	}
 	if canonical == nil {
 		return "unchecked", common.Hash{}
@@ -1007,6 +1018,24 @@ func dbStageStatusVerification(progress rawdb.StageProgress, canonical ethdb.Key
 		return "mismatch", canonicalHash
 	}
 	return "canonical", canonicalHash
+}
+
+func dbStageStatusStagedBodyProgressVerification(progress syncdl.StagedBodyProgressCheck) string {
+	if progress.Valid() {
+		return "staged"
+	}
+	return dbStageStatusStagedBodyVerificationLabel(dbStageStatusStagedBodyProgressStatus(progress.Status))
+}
+
+func dbStageStatusStagedBodyReadyVerification(ready syncdl.StagedBodyReadyLimit) string {
+	if ready.Valid() {
+		return "staged"
+	}
+	return dbStageStatusStagedBodyVerificationLabel(dbStageStatusStagedBodyStatus(ready.Status))
+}
+
+func dbStageStatusStagedBodyVerificationLabel(status string) string {
+	return "staged-" + strings.TrimPrefix(status, "staged-")
 }
 
 func dbStageStatusGroup(stage rawdb.StageID) string {

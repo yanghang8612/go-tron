@@ -813,7 +813,7 @@ func TestDBStageStatusCmd(t *testing.T) {
 		"Stage status:",
 		"known=",
 		fmt.Sprintf("group=canonical name=%s value=1 hash=%x verified=canonical", rawdb.StageHeaders, block1.Hash()),
-		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncBodies, stagedBlock1.Hash(), block1.Hash()),
+		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged", rawdb.StageSyncBodies, stagedBlock1.Hash()),
 		fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=mismatch canonicalHash=%x", rawdb.StageSyncImport, mismatchHash, block1.Hash()),
 		fmt.Sprintf("group=snapshot name=%s value=11 hash=none verified=unbound", rawdb.StageSnapshotHistory),
 		fmt.Sprintf("group=freezer name=%s status=missing", rawdb.StageChainFreezer),
@@ -863,6 +863,9 @@ func TestDBStageStatusVerifyChecksSyncBodiesStagedRow(t *testing.T) {
 	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodies)) {
 		t.Fatalf("verify output missing SyncBodies line:\n%s", output)
 	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-missing", rawdb.StageSyncBodies, block1.Hash())) {
+		t.Fatalf("verify output missing SyncBodies staged-missing verification:\n%s", output)
+	}
 }
 
 func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
@@ -894,6 +897,9 @@ func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
 	}
 	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodiesReady)) {
 		t.Fatalf("verify output missing SyncBodiesReady line:\n%s", output)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s value=1 hash=%x verified=staged-hash-mismatch", rawdb.StageSyncBodiesReady, common.Hash{0xee})) {
+		t.Fatalf("verify output missing SyncBodiesReady staged hash mismatch:\n%s", output)
 	}
 }
 

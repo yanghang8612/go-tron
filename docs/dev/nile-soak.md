@@ -317,9 +317,11 @@ For a production Nile run, capture these checks:
    `finish-head` lag is the signal to profile that stage.
 5. Stop gtron mid-catch-up, restart without deleting the datadir, and confirm
    staged bodies are recovered or pruned to a contiguous prefix: the next sample
-   should not show `SyncBodiesReady` ahead of a missing or mismatched body row.
+   should not show `SyncBodies` or `SyncBodiesReady` ahead of a missing or
+   mismatched body row.
    `gtron db stage-status --db.stage.verify --datadir <dir>` now fails this
-   case by reopening the staged body row referenced by `SyncBodiesReady`.
+   case by reopening the staged body rows referenced by `SyncBodies` and
+   `SyncBodiesReady`.
 6. After catch-up, run at least one stopped-node `--offline-db-check` sample and
    keep the JSONL row together with `gtron.err.log` and `stage-status.txt`.
 
@@ -333,7 +335,9 @@ When the node is stopped, add `--offline-db-check` to also run
 alert fields in the row. The row keeps both aggregate counts and detail arrays:
 `freezerAlertDetails`, `stageVerifyDetails`, and `snapshotAlertDetails`. Do not
 enable that flag against a live Pebble datadir unless the DB can be opened by
-the diagnostic command.
+the diagnostic command. Captured `stage-status` files also populate
+`stageStagedBodyIssueRows` and `stageStagedBodyIssueDetails` when downloader
+body progress rows fail staged-body verification.
 
 ## Shielded TRC20 Replay Recovery
 

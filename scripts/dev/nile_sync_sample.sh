@@ -324,6 +324,8 @@ def parse_stage_status(path):
         "stageMismatchRows": 0,
         "stageUnboundRows": 0,
         "stageMissingCanonicalRows": 0,
+        "stageStagedBodyIssueRows": 0,
+        "stageStagedBodyIssueDetails": [],
         "stageSyncInventory": -1,
         "stageSyncBodies": -1,
         "stageSyncBodiesReady": -1,
@@ -391,6 +393,13 @@ def parse_stage_status(path):
             row["stageUnboundRows"] += 1
         elif verified == "missing-canonical":
             row["stageMissingCanonicalRows"] += 1
+        elif verified.startswith("staged-"):
+            row["stageStagedBodyIssueRows"] += 1
+            row["stageStagedBodyIssueDetails"].append({
+                "stage": name,
+                "value": value,
+                "verified": verified,
+            })
 
     stage_fields = {
         "SyncInventory": "stageSyncInventory",
@@ -1091,6 +1100,7 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
     if stages.get("stageStatusFileStatus") != "ok":
         return row
 
+    body_stages = {"SyncBodies", "SyncBodiesReady"}
     present_values = []
     progress = stages.get("stageProgress", {})
     for name, field in required:
@@ -1103,7 +1113,7 @@ def full_staged_sync_summary(stages, pipeline_violations, bottleneck, bottleneck
         row["fullStagedSyncPresentStageCount"] += 1
         present_values.append((name, value))
         verified = str(entry.get("verified", ""))
-        if verified == "canonical":
+        if (name in body_stages and verified in {"staged", "canonical"}) or (name not in body_stages and verified == "canonical"):
             row["fullStagedSyncVerifiedStageCount"] += 1
         elif verified:
             row["fullStagedSyncHashIssues"].append({"stage": name, "verified": verified})
@@ -1331,6 +1341,8 @@ def build_soak_health(
         add(critical, "stage-hash-mismatch")
     if number(stages, "stageMissingCanonicalRows", 0) > 0:
         add(critical, "stage-missing-canonical")
+    if number(stages, "stageStagedBodyIssueRows", 0) > 0:
+        add(critical, "stage-staged-body-issue")
     if number(stages, "stageUnboundRows", 0) > 0:
         add(warning, "stage-unbound-rows")
     if restart_recovery_status == "stalled":

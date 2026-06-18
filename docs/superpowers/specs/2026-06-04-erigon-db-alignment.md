@@ -473,7 +473,8 @@ Status:
   do not produce false mismatch diagnostics. `--db.stage.verify` turns the
   same view into an automation gate for canonical and sync-import stages; it
   fails on mismatched/missing canonical hashes or legacy unbound canonical
-  stage rows while leaving downloader body stages as diagnostics. It also
+  stage rows, while downloader body stages report `verified=staged` only when
+  their hash-bound progress rows still match the staged-body table. It also
   rejects canonical and sync-stage order violations, e.g. `Execution` ahead of
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
   of `SyncBodies`, cold build/prune/freezer coverage ahead of verified
