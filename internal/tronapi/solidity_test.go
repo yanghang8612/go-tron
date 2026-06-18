@@ -128,6 +128,10 @@ type isolationStubBackend struct {
 	accountIDAtBlock         uint64
 	liveAccountNetCalls      int
 	accountNetAtBlock        uint64
+	liveChainParameterCalls  int
+	chainParametersAtBlock   uint64
+	liveNextMaintenanceCalls int
+	nextMaintenanceAtBlock   uint64
 	liveAssetIDCalls         int
 	assetIDAtBlock           uint64
 	liveAssetNameCalls       int
@@ -177,6 +181,26 @@ func (s *isolationStubBackend) GetAccountNet(addr common.Address) (*apipb.Accoun
 func (s *isolationStubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
 	s.accountNetAtBlock = blockNum
 	return &apipb.AccountNetMessage{FreeNetUsed: 9, NetUsed: 99}, nil
+}
+
+func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
+	s.liveChainParameterCalls++
+	return []tronapi.ChainParameter{{Key: "live_param", Value: 1}}
+}
+
+func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
+	s.chainParametersAtBlock = blockNum
+	return []tronapi.ChainParameter{{Key: "bound_param", Value: 99}}, nil
+}
+
+func (s *isolationStubBackend) NextMaintenanceTime() int64 {
+	s.liveNextMaintenanceCalls++
+	return 1
+}
+
+func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
+	s.nextMaintenanceAtBlock = blockNum
+	return 9900, nil
 }
 
 func assetSentinel(id string, supply int64) *contractpb.AssetIssueContract {
@@ -527,6 +551,80 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityDynamicPropertyRoutesUseSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDynamicPropertyRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftDynamicPropertyRoutesUsePbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertDynamicPropertyRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertDynamicPropertyRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/getchainparameters")
+	if err != nil {
+		t.Fatalf("getchainparameters request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getchainparameters status: %d", resp.StatusCode)
+	}
+	var params struct {
+		ChainParameter []tronapi.ChainParameter `json:"chainParameter"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&params); err != nil {
+		t.Fatal(err)
+	}
+	if len(params.ChainParameter) != 1 ||
+		params.ChainParameter[0].Key != "bound_param" ||
+		params.ChainParameter[0].Value != 99 {
+		t.Fatalf("chain parameters = %+v, want bound sentinel", params.ChainParameter)
+	}
+	if stub.chainParametersAtBlock != wantBlock {
+		t.Fatalf("GetChainParametersAt block = %d, want %d", stub.chainParametersAtBlock, wantBlock)
+	}
+	if stub.liveChainParameterCalls != 0 {
+		t.Fatalf("live GetChainParameters called %d times, want 0", stub.liveChainParameterCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getnextmaintenancetime")
+	if err != nil {
+		t.Fatalf("getnextmaintenancetime request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getnextmaintenancetime status: %d", resp.StatusCode)
+	}
+	var next struct {
+		Num int64 `json:"num"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&next); err != nil {
+		t.Fatal(err)
+	}
+	if next.Num != 9900 {
+		t.Fatalf("next maintenance time = %d, want 9900", next.Num)
+	}
+	if stub.nextMaintenanceAtBlock != wantBlock {
+		t.Fatalf("NextMaintenanceTimeAt block = %d, want %d", stub.nextMaintenanceAtBlock, wantBlock)
+	}
+	if stub.liveNextMaintenanceCalls != 0 {
+		t.Fatalf("live NextMaintenanceTime called %d times, want 0", stub.liveNextMaintenanceCalls)
 	}
 }
 

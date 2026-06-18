@@ -108,9 +108,15 @@ func (s *stubBackend) GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_Bloc
 	s.lastBlockBalanceTraceID = id
 	return s.blockBalanceTrace, nil
 }
-func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter   { return nil }
+func (s *stubBackend) GetChainParameters() []tronapi.ChainParameter { return nil }
+func (s *stubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
+	return nil, nil
+}
 func (s *stubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) { return nil, nil }
 func (s *stubBackend) NextMaintenanceTime() int64                     { return 0 }
+func (s *stubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (s *stubBackend) BuildProposalCreateTransaction(owner common.Address, params map[int64]int64) (*corepb.Transaction, error) {
 	return nil, nil
 }

@@ -1040,7 +1040,23 @@ func (api *API) handleGetAccountResource(w http.ResponseWriter, r *http.Request,
 }
 
 func (api *API) getChainParameters(w http.ResponseWriter, r *http.Request) {
-	params := api.backend.GetChainParameters()
+	api.handleGetChainParameters(w, r, nil)
+}
+
+func (api *API) handleGetChainParameters(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		params []ChainParameter
+		err    error
+	)
+	if boundFn == nil {
+		params = api.backend.GetChainParameters()
+	} else {
+		params, err = api.backend.GetChainParametersAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	resp := map[string]interface{}{
 		"chainParameter": params,
 	}
@@ -1064,7 +1080,23 @@ func (api *API) listWitnesses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
-	t := api.backend.NextMaintenanceTime()
+	api.handleGetNextMaintenanceTime(w, r, nil)
+}
+
+func (api *API) handleGetNextMaintenanceTime(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		t   int64
+		err error
+	)
+	if boundFn == nil {
+		t = api.backend.NextMaintenanceTime()
+	} else {
+		t, err = api.backend.NextMaintenanceTimeAt(boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	resp := map[string]int64{"num": t}
 	data, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")

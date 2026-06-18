@@ -171,8 +171,10 @@ type Backend interface {
 	GetAccountBalanceTrace(req *contractpb.AccountBalanceRequest) (*contractpb.AccountBalanceResponse, error)
 	GetBlockBalanceTrace(id *contractpb.BlockBalanceTrace_BlockIdentifier) (*contractpb.BlockBalanceTrace, error)
 	GetChainParameters() []ChainParameter
+	GetChainParametersAt(blockNum uint64) ([]ChainParameter, error)
 	ListWitnesses() ([]*WitnessInfo, error)
 	NextMaintenanceTime() int64
+	NextMaintenanceTimeAt(blockNum uint64) (int64, error)
 
 	// Stake 2.0 transaction building
 	BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error)

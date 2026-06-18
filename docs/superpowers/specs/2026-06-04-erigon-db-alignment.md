@@ -718,7 +718,9 @@ Status:
   `WalletSolidity` asset methods now dispatch through `SystemAsset` history at
   the bound; the backend reads historical `token_id_num` and
   `allow_same_token_name` so pre-fork list/name reads use legacy records while
-  post-fork reads use V2 records.
+  post-fork reads use V2 records. HTTP solidity/PBFT `getchainparameters` and
+  `getnextmaintenancetime` now also read historical `SystemDynamicProperty`
+  rows at the solid/PBFT bound instead of live-head dynamic properties.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

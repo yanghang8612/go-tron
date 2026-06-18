@@ -515,12 +515,33 @@ func (b *TronBackend) dynamicPropertiesAtKeys(reader *state.PersistentHistoryRea
 }
 
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
-	dynProps := b.chain.DynProps()
+	return chainParametersFromDynamicProperties(b.chain.DynProps())
+}
+
+func (b *TronBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, state.NewDynamicProperties().Keys())
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct chain parameters at block %d: %w", blockNum, err)
+	}
+	return chainParametersFromDynamicProperties(dynProps), nil
+}
+
+func chainParametersFromDynamicProperties(dynProps *state.DynamicProperties) []tronapi.ChainParameter {
+	if dynProps == nil {
+		return nil
+	}
 	all := dynProps.All()
 	params := make([]tronapi.ChainParameter, 0, len(all))
 	for k, v := range all {
 		params = append(params, tronapi.ChainParameter{Key: k, Value: v})
 	}
+	sort.Slice(params, func(i, j int) bool { return params[i].Key < params[j].Key })
 	return params
 }
 
@@ -559,6 +580,20 @@ func (b *TronBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
 
 func (b *TronBackend) NextMaintenanceTime() int64 {
 	return b.chain.NextMaintenanceTime()
+}
+
+func (b *TronBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return 0, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, []string{"next_maintenance_time"})
+	if err != nil {
+		return 0, fmt.Errorf("reconstruct next maintenance time at block %d: %w", blockNum, err)
+	}
+	return dynProps.NextMaintenanceTime(), nil
 }
 
 func (b *TronBackend) BuildFreezeBalanceV2Transaction(owner tcommon.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {

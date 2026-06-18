@@ -28,8 +28,8 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getaccountbyid", api.getSolidAccountById)
 	mux.HandleFunc("/walletsolidity/getaccountnet", api.getSolidAccountNet)
 	mux.HandleFunc("/walletsolidity/listwitnesses", api.listWitnesses)
-	mux.HandleFunc("/walletsolidity/getchainparameters", api.getChainParameters)
-	mux.HandleFunc("/walletsolidity/getnextmaintenancetime", api.getNextMaintenanceTime)
+	mux.HandleFunc("/walletsolidity/getchainparameters", api.getSolidChainParameters)
+	mux.HandleFunc("/walletsolidity/getnextmaintenancetime", api.getSolidNextMaintenanceTime)
 	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getTransactionByID)
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyid", api.getTransactionInfoByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyid", api.getSolidAssetIssueByID)
@@ -60,8 +60,8 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getaccountbyid", api.getPbftAccountById)
 	mux.HandleFunc("/walletpbft/getaccountnet", api.getPbftAccountNet)
 	mux.HandleFunc("/walletpbft/listwitnesses", api.listWitnesses)
-	mux.HandleFunc("/walletpbft/getchainparameters", api.getChainParameters)
-	mux.HandleFunc("/walletpbft/getnextmaintenancetime", api.getNextMaintenanceTime)
+	mux.HandleFunc("/walletpbft/getchainparameters", api.getPbftChainParameters)
+	mux.HandleFunc("/walletpbft/getnextmaintenancetime", api.getPbftNextMaintenanceTime)
 	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getTransactionByID)
 	mux.HandleFunc("/walletpbft/gettransactioninfobyid", api.getTransactionInfoByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyid", api.getPbftAssetIssueByID)
@@ -133,6 +133,22 @@ func (api *API) getSolidAccountNet(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getPbftAccountNet(w http.ResponseWriter, r *http.Request) {
 	api.handleGetAccountNet(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidChainParameters(w http.ResponseWriter, r *http.Request) {
+	api.handleGetChainParameters(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftChainParameters(w http.ResponseWriter, r *http.Request) {
+	api.handleGetChainParameters(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
+	api.handleGetNextMaintenanceTime(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
+	api.handleGetNextMaintenanceTime(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidAssetIssueByID(w http.ResponseWriter, r *http.Request) {

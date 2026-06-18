@@ -275,6 +275,100 @@ func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitDynamicProperties := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetNextMaintenanceTime(n * 1000)
+		dynProps.SetTotalEnergyWeight(n * 10)
+		if err := dynProps.FlushRooted(statedb); err != nil {
+			t.Fatalf("flush dynamic properties block %d: %v", n, err)
+		}
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit dynamic properties block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitDynamicProperties(block1, 1)
+	root = commitDynamicProperties(block2, 2)
+
+	next1, err := b.NextMaintenanceTimeAt(block1.Number())
+	if err != nil {
+		t.Fatalf("NextMaintenanceTimeAt(block1): %v", err)
+	}
+	if next1 != 1000 {
+		t.Fatalf("NextMaintenanceTimeAt(block1) = %d, want 1000", next1)
+	}
+	next2, err := b.NextMaintenanceTimeAt(block2.Number())
+	if err != nil {
+		t.Fatalf("NextMaintenanceTimeAt(block2): %v", err)
+	}
+	if next2 != 2000 {
+		t.Fatalf("NextMaintenanceTimeAt(block2) = %d, want 2000", next2)
+	}
+
+	paramValue := func(blockNum uint64, key string) int64 {
+		t.Helper()
+		params, err := b.GetChainParametersAt(blockNum)
+		if err != nil {
+			t.Fatalf("GetChainParametersAt(%d): %v", blockNum, err)
+		}
+		for _, param := range params {
+			if param.Key == key {
+				return param.Value
+			}
+		}
+		t.Fatalf("chain parameter %q missing at block %d", key, blockNum)
+		return 0
+	}
+	if got := paramValue(block1.Number(), "next_maintenance_time"); got != 1000 {
+		t.Fatalf("block1 next_maintenance_time = %d, want 1000", got)
+	}
+	if got := paramValue(block1.Number(), "total_energy_weight"); got != 10 {
+		t.Fatalf("block1 total_energy_weight = %d, want 10", got)
+	}
+	if got := paramValue(block2.Number(), "next_maintenance_time"); got != 2000 {
+		t.Fatalf("block2 next_maintenance_time = %d, want 2000", got)
+	}
+	if got := paramValue(block2.Number(), "total_energy_weight"); got != 20 {
+		t.Fatalf("block2 total_energy_weight = %d, want 20", got)
+	}
+}
+
 func TestArchiveQuery_AccountByIdAtUsesSystemAccountIndexHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain
