@@ -91,7 +91,7 @@ type SessionStartupPlanApplier interface {
 	RepairSyncPipeline() SyncPipelineProgressRepairResult
 	CompleteCurrentHeadSyncPipeline(repair SyncPipelineProgressRepairResult) SyncPipelineProgressHeadCompletion
 	RestoreInventoryTarget(inventoryFloor uint64)
-	DeleteImportedBodies(through uint64)
+	DeleteImportedBodies(through uint64) ImportedStagedBodyCleanup
 	RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult
 	RefreshBodiesReady() StagedBodyReadyProgressRefresh
 	RepairSyncPipelineProgressOrder() SyncPipelineProgressOrderRepairResult
@@ -127,6 +127,8 @@ type SessionStartupApplyResult struct {
 	HasSyncPipelineCursor      bool
 	SyncPipelineHeadCompletion SyncPipelineProgressHeadCompletion
 	HasSyncPipelineHead        bool
+	ImportedBodyCleanup        ImportedStagedBodyCleanup
+	HasImportedBodyCleanup     bool
 	SyncPipelineOrderRepair    SyncPipelineProgressOrderRepairResult
 	HasSyncPipelineOrderRepair bool
 	StagedBodyRestore          StagedBodyRestoreResult
@@ -244,8 +246,12 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			applier.RestoreInventoryTarget(step.InventoryFloor)
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
 		case SessionStartupDeleteImportedBodies:
-			applier.DeleteImportedBodies(step.DeleteImportedThrough)
+			result.ImportedBodyCleanup = applier.DeleteImportedBodies(step.DeleteImportedThrough)
+			result.HasImportedBodyCleanup = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.ImportedBodyCleanup.Failed() {
+				return interrupt(step.Action)
+			}
 		case SessionStartupRestoreStagedBodies:
 			result.StagedBodyRestore = applier.RestoreStagedBodies(step.RestoreStagedBodiesFrom, step.RestoreLimit, step.PruneStaleTail)
 			result.HasStagedBodyRestore = true

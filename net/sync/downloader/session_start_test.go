@@ -246,6 +246,9 @@ func TestApplySessionStartupPlan(t *testing.T) {
 	if !result.HasSyncPipelineHead {
 		t.Fatalf("sync pipeline head completion set=%v, want set", result.HasSyncPipelineHead)
 	}
+	if !result.HasImportedBodyCleanup || result.ImportedBodyCleanup.Failed() {
+		t.Fatalf("imported body cleanup = %+v set=%v, want successful cleanup recorded", result.ImportedBodyCleanup, result.HasImportedBodyCleanup)
+	}
 	if !result.HasStagedBodyRestore || !reflect.DeepEqual(result.StagedBodyRestore, restoreResult) {
 		t.Fatalf("staged body restore = %+v set=%v, want %+v set", result.StagedBodyRestore, result.HasStagedBodyRestore, restoreResult)
 	}
@@ -379,6 +382,42 @@ func TestApplySessionStartupPlanStopsAfterHeadCompletionWriteFailure(t *testing.
 	}
 	if !result.HasSyncPipelineHead || result.SyncPipelineHeadCompletion.WriteError == nil || result.HasStagedBodyRestore {
 		t.Fatalf("startup result = %+v, want failed head completion without downstream restore", result)
+	}
+}
+
+func TestApplySessionStartupPlanStopsAfterImportedBodyCleanupFailure(t *testing.T) {
+	plan := SessionStartupPlan{
+		Steps: []SessionStartupStep{
+			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupCompleteHeadSyncPipeline},
+			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
+			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
+			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
+			{Action: SessionStartupRefreshBodiesReady},
+		},
+	}
+	applier := recordingSessionStartupApplier{
+		importedCleanup: ImportedStagedBodyCleanup{DeleteError: errUnexpectedRepairResult{}},
+	}
+
+	result := ApplySessionStartupPlan(plan, &applier)
+	wantCalls := []recordedSessionStartupCall{
+		{action: SessionStartupRepairSyncPipeline},
+		{action: SessionStartupCompleteHeadSyncPipeline},
+		{action: SessionStartupRestoreInventoryTarget, first: 9},
+		{action: SessionStartupDeleteImportedBodies, first: 8},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want stopped after imported cleanup failure %+v", applier.calls, wantCalls)
+	}
+	if !result.Interrupted || result.ErrorStep != SessionStartupDeleteImportedBodies {
+		t.Fatalf("startup result = %+v, want interrupted at imported body cleanup", result)
+	}
+	if !result.HasImportedBodyCleanup || !result.ImportedBodyCleanup.Failed() {
+		t.Fatalf("imported cleanup = %+v set=%v, want failed cleanup recorded", result.ImportedBodyCleanup, result.HasImportedBodyCleanup)
+	}
+	if result.HasStagedBodyRestore || result.HasBodiesReadyRefresh {
+		t.Fatalf("startup result = %+v, want no staged restore or ready refresh after imported cleanup failure", result)
 	}
 }
 
@@ -849,6 +888,9 @@ func TestApplySessionStartupPlanPrunesCorruptStagedBodyRaw(t *testing.T) {
 	if !result.HasStagedBodyRestore {
 		t.Fatal("startup result did not record staged body restore")
 	}
+	if !result.HasImportedBodyCleanup || !result.ImportedBodyCleanup.Ready.Failed() || result.ImportedBodyCleanup.Failed() {
+		t.Fatalf("imported cleanup = %+v set=%v, want non-fatal ready refresh failure before tail prune", result.ImportedBodyCleanup, result.HasImportedBodyCleanup)
+	}
 	if restore := result.StagedBodyRestore; restore.Restored != 1 || restore.ReadError == nil ||
 		!restore.NeedPruneTail || restore.PruneFrom != block2.Number() ||
 		restore.NextExpected != block2.Number() || !restore.HaveLastRestored ||
@@ -948,13 +990,14 @@ type errUnexpectedRepairResult struct{}
 func (errUnexpectedRepairResult) Error() string { return "unexpected repair result" }
 
 type recordingSessionStartupApplier struct {
-	calls          []recordedSessionStartupCall
-	repair         SyncPipelineProgressRepairResult
-	headCompletion SyncPipelineProgressHeadCompletion
-	restore        StagedBodyRestoreResult
-	orderRepair    SyncPipelineProgressOrderRepairResult
-	orderIssues    []SyncPipelineProgressOrderIssue
-	readyRefresh   StagedBodyReadyProgressRefresh
+	calls           []recordedSessionStartupCall
+	repair          SyncPipelineProgressRepairResult
+	headCompletion  SyncPipelineProgressHeadCompletion
+	importedCleanup ImportedStagedBodyCleanup
+	restore         StagedBodyRestoreResult
+	orderRepair     SyncPipelineProgressOrderRepairResult
+	orderIssues     []SyncPipelineProgressOrderIssue
+	readyRefresh    StagedBodyReadyProgressRefresh
 }
 
 func (a *recordingSessionStartupApplier) RepairSyncPipeline() SyncPipelineProgressRepairResult {
@@ -974,8 +1017,9 @@ func (a *recordingSessionStartupApplier) RestoreInventoryTarget(inventoryFloor u
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupRestoreInventoryTarget, first: inventoryFloor})
 }
 
-func (a *recordingSessionStartupApplier) DeleteImportedBodies(through uint64) {
+func (a *recordingSessionStartupApplier) DeleteImportedBodies(through uint64) ImportedStagedBodyCleanup {
 	a.calls = append(a.calls, recordedSessionStartupCall{action: SessionStartupDeleteImportedBodies, first: through})
+	return a.importedCleanup
 }
 
 func (a *recordingSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult {
@@ -1050,8 +1094,8 @@ func (a *startupRecoveryTestApplier) RestoreInventoryTarget(inventoryFloor uint6
 	a.target = rawdb.RestoreSyncInventoryTarget(a.db, inventoryFloor).Target
 }
 
-func (a *startupRecoveryTestApplier) DeleteImportedBodies(through uint64) {
-	DeleteImportedStagedBodiesThrough(a.db, through, a.head+1, a.target)
+func (a *startupRecoveryTestApplier) DeleteImportedBodies(through uint64) ImportedStagedBodyCleanup {
+	return DeleteImportedStagedBodiesThrough(a.db, through, a.head+1, a.target)
 }
 
 func (a *startupRecoveryTestApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) StagedBodyRestoreResult {

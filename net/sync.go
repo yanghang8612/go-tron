@@ -446,8 +446,8 @@ func (a syncSessionStartupApplier) RestoreInventoryTarget(inventoryFloor uint64)
 	a.service.targetHeadNum = a.service.restoreSyncInventoryTarget(inventoryFloor)
 }
 
-func (a syncSessionStartupApplier) DeleteImportedBodies(through uint64) {
-	a.service.deleteImportedSyncBodiesThrough(through)
+func (a syncSessionStartupApplier) DeleteImportedBodies(through uint64) syncdl.ImportedStagedBodyCleanup {
+	return a.service.deleteImportedSyncBodiesThrough(through)
 }
 
 func (a syncSessionStartupApplier) RestoreStagedBodies(from uint64, limit int, pruneStaleTail bool) syncdl.StagedBodyRestoreResult {
@@ -605,11 +605,12 @@ func (ss *SyncService) repairSyncPipelineProgressOrder() syncdl.SyncPipelineProg
 }
 
 func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupApplyResult) {
-	if !result.HasSyncPipelineRepair && !result.HasStagedBodyRestore && !result.HasBodiesReadyRefresh && !result.HasSyncPipelineOrderRepair && !result.HasSyncPipelineOrder {
+	if !result.HasSyncPipelineRepair && !result.HasImportedBodyCleanup && !result.HasStagedBodyRestore && !result.HasBodiesReadyRefresh && !result.HasSyncPipelineOrderRepair && !result.HasSyncPipelineOrder {
 		return
 	}
 	repair := result.SyncPipelineRepairResult
 	headCompletion := result.SyncPipelineHeadCompletion
+	cleanup := result.ImportedBodyCleanup
 	restore := result.StagedBodyRestore
 	readyRefresh := result.BodiesReadyRefresh
 	orderRepair := result.SyncPipelineOrderRepair
@@ -642,6 +643,9 @@ func (ss *SyncService) logSyncStartupRepairSummary(result syncdl.SessionStartupA
 		"syncStartupHeadCompletionWritten", headCompletion.Written,
 		"syncStartupHeadCompletionComplete", headCompletion.Complete,
 		"syncStartupHeadCompletionErrorStage", headCompletion.ErrorStage,
+		"syncStartupImportedCleanupChecked", result.HasImportedBodyCleanup,
+		"syncStartupImportedCleanupDeleted", cleanup.Deleted,
+		"syncStartupImportedCleanupFailed", cleanup.Failed(),
 		"syncStartupPipelineOrderChecked", result.HasSyncPipelineOrder,
 		"syncStartupPipelineOrderIssues", orderIssueCount,
 		"syncStartupPipelineOrderFirstIssue", firstOrderIssue,
@@ -2111,24 +2115,25 @@ func (ss *SyncService) logSyncBodiesReadyRefresh(refresh syncdl.StagedBodyReadyP
 	}
 }
 
-func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) {
+func (ss *SyncService) deleteImportedSyncBodiesThrough(head uint64) syncdl.ImportedStagedBodyCleanup {
 	if ss == nil || ss.chain == nil {
-		return
+		return syncdl.ImportedStagedBodyCleanup{}
 	}
 	db := ss.chain.DB()
 	if db == nil {
-		return
+		return syncdl.ImportedStagedBodyCleanup{}
 	}
 	current := ss.chain.CurrentBlock()
 	if current == nil {
-		return
+		return syncdl.ImportedStagedBodyCleanup{}
 	}
 	result := syncdl.DeleteImportedStagedBodiesThrough(db, head, current.Number()+1, ss.targetHeadNum)
 	if result.DeleteError != nil {
 		syncLog.Warn("Delete imported sync staged blocks failed", "head", head, "err", result.DeleteError)
-		return
+		return result
 	}
 	ss.logSyncBodiesReadyRefresh(result.Ready)
+	return result
 }
 
 func (ss *SyncService) deleteStaleSyncBodiesFrom(blockNum uint64, lastRestoredNum uint64, lastRestoredHash tcommon.Hash, haveLastRestored bool) {

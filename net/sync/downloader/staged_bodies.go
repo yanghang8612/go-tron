@@ -103,6 +103,13 @@ type ImportedStagedBodyCleanup struct {
 	Ready       StagedBodyReadyProgressRefresh
 }
 
+// Failed reports whether imported-body deletion failed. A ready-refresh error
+// here can be caused by the still-unrepaired staged tail and is handled by the
+// later restore/prune step before downstream ready progress is trusted.
+func (c ImportedStagedBodyCleanup) Failed() bool {
+	return c.DeleteError != nil
+}
+
 // StagedBodyReadyLimitStatus explains whether a persisted SyncBodiesReady row
 // is usable as the next local import drain limit.
 type StagedBodyReadyLimitStatus uint8
