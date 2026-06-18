@@ -182,11 +182,20 @@ func (s *stubBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.As
 
 // --- New Phase 13 methods (Market order queries) ---
 func (s *stubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
+func (s *stubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
 	return nil
 }
+func (s *stubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, nil
+}
 func (s *stubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return nil
+}
+func (s *stubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	return nil, nil
 }
 func (s *stubBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
 func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }

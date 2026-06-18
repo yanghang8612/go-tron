@@ -701,7 +701,13 @@ Status:
   solidity/PBFT `getaccountnet` now dispatches through `GetAccountNetAt`, whose
   backend implementation reconstructs account bandwidth usage from the shared
   archive session and reuses the same dynamic-property history boundary as
-  `getaccountresource`.
+  `getaccountresource`. HTTP solidity/PBFT market queries
+  (`getmarketorderbyid`, `getmarketordersfromaccount`,
+  `getmarketpricebypair`) and gRPC `WalletSolidity` market methods now dispatch
+  through `SystemMarket` history at the solid/PBFT bound instead of live-head
+  market rows. Backend coverage writes market order/account-order/price-list
+  rows through temporal `SystemMarket` history and verifies block-1/block-2
+  as-of reads diverge.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

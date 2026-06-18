@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/binary"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -110,6 +111,19 @@ func (s *StateDB) ReadMarketOrder(orderID []byte) *corepb.MarketOrder {
 	return o
 }
 
+// MarketOrderAt reconstructs a rooted MarketOrder at the end of blockNum.
+func (r *PersistentHistoryReader) MarketOrderAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketOrderKVKey(orderID), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	o := &corepb.MarketOrder{}
+	if err := proto.Unmarshal(raw, o); err != nil {
+		return nil, nil
+	}
+	return o, nil
+}
+
 // WriteMarketOrder stages a MarketOrder keyed by orderID. The error is non-nil
 // only for a proto marshal failure or an unregistered domain (a programmer
 // error), since SystemMarket is registered at init.
@@ -135,6 +149,23 @@ func (s *StateDB) ReadMarketAccountOrder(ownerAddr []byte) *corepb.MarketAccount
 		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}
 	}
 	return mao
+}
+
+// MarketAccountOrderAt reconstructs a rooted MarketAccountOrder at the end of
+// blockNum. It mirrors ReadMarketAccountOrder's non-nil absent/malformed result.
+func (r *PersistentHistoryReader) MarketAccountOrderAt(ownerAddr []byte, blockNum uint64) (*corepb.MarketAccountOrder, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketAccountOrderKVKey(ownerAddr), blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, nil
+	}
+	mao := &corepb.MarketAccountOrder{}
+	if err := proto.Unmarshal(raw, mao); err != nil {
+		return &corepb.MarketAccountOrder{OwnerAddress: ownerAddr}, nil
+	}
+	return mao, nil
 }
 
 // WriteMarketAccountOrder stages a MarketAccountOrder keyed by owner address.
@@ -219,6 +250,23 @@ func (s *StateDB) ReadMarketPriceList(sellTokenID, buyTokenID []byte) *corepb.Ma
 		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}
 	}
 	return pl
+}
+
+// MarketPriceListAt reconstructs a rooted MarketPriceList at the end of
+// blockNum. It mirrors ReadMarketPriceList's non-nil absent/malformed result.
+func (r *PersistentHistoryReader) MarketPriceListAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemMarket, marketPriceListKVKey(sellTokenID, buyTokenID), blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || len(raw) == 0 {
+		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, nil
+	}
+	pl := &corepb.MarketPriceList{}
+	if err := proto.Unmarshal(raw, pl); err != nil {
+		return &corepb.MarketPriceList{SellTokenId: sellTokenID, BuyTokenId: buyTokenID}, nil
+	}
+	return pl, nil
 }
 
 // WriteMarketPriceList stages the materialized MarketPriceList for a pair.

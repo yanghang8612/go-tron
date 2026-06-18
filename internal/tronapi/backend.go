@@ -222,8 +222,11 @@ type Backend interface {
 
 	// Market queries (Phase 13)
 	GetMarketOrderByID(orderID []byte) *corepb.MarketOrder
+	GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error)
 	GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder
+	GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error)
 	GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList
+	GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error)
 
 	// Exchange queries
 	ListExchanges() ([]*corepb.Exchange, error)

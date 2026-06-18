@@ -446,6 +446,135 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 	}
 }
 
+func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	owner := testInsertAddr(50)
+	orderID := []byte("order-1")
+	sellTokenID := []byte("sell")
+	buyTokenID := []byte("buy")
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitMarket := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+
+		order := &corepb.MarketOrder{
+			OrderId:                 orderID,
+			OwnerAddress:            owner[:],
+			SellTokenId:             sellTokenID,
+			SellTokenQuantity:       n * 100,
+			BuyTokenId:              buyTokenID,
+			BuyTokenQuantity:        n * 1000,
+			SellTokenQuantityRemain: n * 10,
+			SellTokenQuantityReturn: n,
+			State:                   corepb.MarketOrder_ACTIVE,
+			CreateTime:              n * 3000,
+		}
+		if err := statedb.WriteMarketOrder(orderID, order); err != nil {
+			t.Fatalf("write market order block %d: %v", n, err)
+		}
+		if err := statedb.WriteMarketAccountOrder(owner[:], &corepb.MarketAccountOrder{
+			OwnerAddress: owner[:],
+			Orders:       [][]byte{orderID},
+			Count:        1,
+			TotalCount:   n,
+		}); err != nil {
+			t.Fatalf("write market account order block %d: %v", n, err)
+		}
+		if err := statedb.WriteMarketPriceList(sellTokenID, buyTokenID, &corepb.MarketPriceList{
+			SellTokenId: sellTokenID,
+			BuyTokenId:  buyTokenID,
+			Prices: []*corepb.MarketPrice{{
+				SellTokenQuantity: n * 100,
+				BuyTokenQuantity:  n * 1000,
+			}},
+		}); err != nil {
+			t.Fatalf("write market price list block %d: %v", n, err)
+		}
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit market block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitMarket(block1, 1)
+	root = commitMarket(block2, 2)
+
+	order1, err := b.GetMarketOrderByIDAt(orderID, block1.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrderByIDAt(block1): %v", err)
+	}
+	if order1 == nil || order1.GetSellTokenQuantity() != 100 || order1.GetBuyTokenQuantity() != 1000 {
+		t.Fatalf("block1 market order = %+v, want block1 quantities", order1)
+	}
+	order2, err := b.GetMarketOrderByIDAt(orderID, block2.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrderByIDAt(block2): %v", err)
+	}
+	if order2 == nil || order2.GetSellTokenQuantity() != 200 || order2.GetBuyTokenQuantity() != 2000 {
+		t.Fatalf("block2 market order = %+v, want block2 quantities", order2)
+	}
+
+	orders1, err := b.GetMarketOrdersByAccountAt(owner, block1.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrdersByAccountAt(block1): %v", err)
+	}
+	if len(orders1) != 1 || orders1[0].GetSellTokenQuantity() != 100 {
+		t.Fatalf("block1 market orders = %+v, want block1 order", orders1)
+	}
+	orders2, err := b.GetMarketOrdersByAccountAt(owner, block2.Number())
+	if err != nil {
+		t.Fatalf("GetMarketOrdersByAccountAt(block2): %v", err)
+	}
+	if len(orders2) != 1 || orders2[0].GetSellTokenQuantity() != 200 {
+		t.Fatalf("block2 market orders = %+v, want block2 order", orders2)
+	}
+
+	prices1, err := b.GetMarketPriceByPairAt(sellTokenID, buyTokenID, block1.Number())
+	if err != nil {
+		t.Fatalf("GetMarketPriceByPairAt(block1): %v", err)
+	}
+	if len(prices1.GetPrices()) != 1 || prices1.GetPrices()[0].GetSellTokenQuantity() != 100 {
+		t.Fatalf("block1 market prices = %+v, want block1 price", prices1.GetPrices())
+	}
+	prices2, err := b.GetMarketPriceByPairAt(sellTokenID, buyTokenID, block2.Number())
+	if err != nil {
+		t.Fatalf("GetMarketPriceByPairAt(block2): %v", err)
+	}
+	if len(prices2.GetPrices()) != 1 || prices2.GetPrices()[0].GetSellTokenQuantity() != 200 {
+		t.Fatalf("block2 market prices = %+v, want block2 price", prices2.GetPrices())
+	}
+}
+
 func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	b, _, _ := archiveBackend(t)
 

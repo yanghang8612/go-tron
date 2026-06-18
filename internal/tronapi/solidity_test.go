@@ -127,6 +127,12 @@ type isolationStubBackend struct {
 	accountIDAtBlock         uint64
 	liveAccountNetCalls      int
 	accountNetAtBlock        uint64
+	liveMarketOrderCalls     int
+	marketOrderAtBlock       uint64
+	liveMarketOrdersCalls    int
+	marketOrdersAtBlock      uint64
+	liveMarketPriceCalls     int
+	marketPriceAtBlock       uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -160,6 +166,60 @@ func (s *isolationStubBackend) GetAccountNet(addr common.Address) (*apipb.Accoun
 func (s *isolationStubBackend) GetAccountNetAt(addr common.Address, blockNum uint64) (*apipb.AccountNetMessage, error) {
 	s.accountNetAtBlock = blockNum
 	return &apipb.AccountNetMessage{FreeNetUsed: 9, NetUsed: 99}, nil
+}
+
+func (s *isolationStubBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
+	s.liveMarketOrderCalls++
+	return &corepb.MarketOrder{OrderId: []byte("live-order"), SellTokenQuantity: 1, BuyTokenQuantity: 2}
+}
+
+func (s *isolationStubBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	s.marketOrderAtBlock = blockNum
+	return &corepb.MarketOrder{
+		OrderId:           []byte("bound-order"),
+		OwnerAddress:      common.Address{0x41, 0x51}.Bytes(),
+		SellTokenId:       []byte("sell"),
+		SellTokenQuantity: 9,
+		BuyTokenId:        []byte("buy"),
+		BuyTokenQuantity:  99,
+		State:             corepb.MarketOrder_ACTIVE,
+	}, nil
+}
+
+func (s *isolationStubBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
+	s.liveMarketOrdersCalls++
+	return []*corepb.MarketOrder{{OrderId: []byte("live-account-order"), SellTokenQuantity: 3}}
+}
+
+func (s *isolationStubBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	s.marketOrdersAtBlock = blockNum
+	return []*corepb.MarketOrder{{
+		OrderId:           []byte("bound-account-order"),
+		OwnerAddress:      addr.Bytes(),
+		SellTokenId:       []byte("sell"),
+		SellTokenQuantity: 11,
+		BuyTokenId:        []byte("buy"),
+		BuyTokenQuantity:  111,
+		State:             corepb.MarketOrder_ACTIVE,
+	}}, nil
+}
+
+func (s *isolationStubBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+	s.liveMarketPriceCalls++
+	return &corepb.MarketPriceList{
+		SellTokenId: sellTokenID,
+		BuyTokenId:  buyTokenID,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 4, BuyTokenQuantity: 5}},
+	}
+}
+
+func (s *isolationStubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	s.marketPriceAtBlock = blockNum
+	return &corepb.MarketPriceList{
+		SellTokenId: sellTokenID,
+		BuyTokenId:  buyTokenID,
+		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 12, BuyTokenQuantity: 120}},
+	}, nil
 }
 
 func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -388,6 +448,109 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityMarketRoutesUseSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertMarketRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftMarketRoutesUsePbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertMarketRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertMarketRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/getmarketorderbyid", "application/json", strings.NewReader(`{"value":"6f72646572"}`))
+	if err != nil {
+		t.Fatalf("getmarketorderbyid request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getmarketorderbyid status: %d", resp.StatusCode)
+	}
+	var order struct {
+		SellTokenQuantity int64 `json:"sell_token_quantity"`
+		BuyTokenQuantity  int64 `json:"buy_token_quantity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&order); err != nil {
+		t.Fatal(err)
+	}
+	if order.SellTokenQuantity != 9 || order.BuyTokenQuantity != 99 {
+		t.Fatalf("market order = %+v, want bound sentinel", order)
+	}
+	if stub.marketOrderAtBlock != wantBlock {
+		t.Fatalf("GetMarketOrderByIDAt block = %d, want %d", stub.marketOrderAtBlock, wantBlock)
+	}
+	if stub.liveMarketOrderCalls != 0 {
+		t.Fatalf("live GetMarketOrderByID called %d times, want 0", stub.liveMarketOrderCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getmarketordersfromaccount", "application/json", strings.NewReader(`{"address":"411234567890"}`))
+	if err != nil {
+		t.Fatalf("getmarketordersfromaccount request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getmarketordersfromaccount status: %d", resp.StatusCode)
+	}
+	var orders struct {
+		Orders []struct {
+			SellTokenQuantity int64 `json:"sell_token_quantity"`
+			BuyTokenQuantity  int64 `json:"buy_token_quantity"`
+		} `json:"orders"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&orders); err != nil {
+		t.Fatal(err)
+	}
+	if len(orders.Orders) != 1 || orders.Orders[0].SellTokenQuantity != 11 || orders.Orders[0].BuyTokenQuantity != 111 {
+		t.Fatalf("market orders = %+v, want bound sentinel", orders.Orders)
+	}
+	if stub.marketOrdersAtBlock != wantBlock {
+		t.Fatalf("GetMarketOrdersByAccountAt block = %d, want %d", stub.marketOrdersAtBlock, wantBlock)
+	}
+	if stub.liveMarketOrdersCalls != 0 {
+		t.Fatalf("live GetMarketOrdersByAccount called %d times, want 0", stub.liveMarketOrdersCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getmarketpricebypair", "application/json", strings.NewReader(`{"sell_token_id":"73656c6c","buy_token_id":"627579"}`))
+	if err != nil {
+		t.Fatalf("getmarketpricebypair request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getmarketpricebypair status: %d", resp.StatusCode)
+	}
+	var prices struct {
+		Prices []struct {
+			SellTokenQuantity int64 `json:"sell_token_quantity"`
+			BuyTokenQuantity  int64 `json:"buy_token_quantity"`
+		} `json:"prices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&prices); err != nil {
+		t.Fatal(err)
+	}
+	if len(prices.Prices) != 1 || prices.Prices[0].SellTokenQuantity != 12 || prices.Prices[0].BuyTokenQuantity != 120 {
+		t.Fatalf("market prices = %+v, want bound sentinel", prices.Prices)
+	}
+	if stub.marketPriceAtBlock != wantBlock {
+		t.Fatalf("GetMarketPriceByPairAt block = %d, want %d", stub.marketPriceAtBlock, wantBlock)
+	}
+	if stub.liveMarketPriceCalls != 0 {
+		t.Fatalf("live GetMarketPriceByPair called %d times, want 0", stub.liveMarketPriceCalls)
 	}
 }
 

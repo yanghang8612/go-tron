@@ -405,7 +405,10 @@ func (s *SolidityServer) GetMarketOrderById(_ context.Context, in *apipb.BytesMe
 	if in == nil || len(in.Value) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "order id required")
 	}
-	order := s.backend.GetMarketOrderByID(in.Value)
+	order, err := s.backend.GetMarketOrderByIDAt(in.Value, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if order == nil {
 		return nil, status.Error(codes.NotFound, "order not found")
 	}
@@ -417,7 +420,10 @@ func (s *SolidityServer) GetMarketOrderByAccount(_ context.Context, in *apipb.By
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	orders := s.backend.GetMarketOrdersByAccount(addr)
+	orders, err := s.backend.GetMarketOrdersByAccountAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &corepb.MarketOrderList{Orders: orders}, nil
 }
 
@@ -425,7 +431,10 @@ func (s *SolidityServer) GetMarketPriceByPair(_ context.Context, in *corepb.Mark
 	if in == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	pl := s.backend.GetMarketPriceByPair(in.SellTokenId, in.BuyTokenId)
+	pl, err := s.backend.GetMarketPriceByPairAt(in.SellTokenId, in.BuyTokenId, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if pl == nil {
 		return &corepb.MarketPriceList{}, nil
 	}

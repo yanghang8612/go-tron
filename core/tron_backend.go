@@ -1066,6 +1066,20 @@ func (b *TronBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
 	return sysKV.ReadMarketOrder(orderID)
 }
 
+func (b *TronBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	order, err := session.reader.MarketOrderAt(orderID, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read market order at block %d: %w", blockNum, err)
+	}
+	return order, nil
+}
+
 func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.MarketOrder {
 	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
 	if sysKV == nil {
@@ -1081,12 +1095,50 @@ func (b *TronBackend) GetMarketOrdersByAccount(addr tcommon.Address) []*corepb.M
 	return orders
 }
 
+func (b *TronBackend) GetMarketOrdersByAccountAt(addr tcommon.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	mao, err := session.reader.MarketAccountOrderAt(addr[:], blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read market account order at block %d: %w", blockNum, err)
+	}
+	var orders []*corepb.MarketOrder
+	for _, id := range mao.Orders {
+		order, err := session.reader.MarketOrderAt(id, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read market order %x at block %d: %w", id, blockNum, err)
+		}
+		if order != nil {
+			orders = append(orders, order)
+		}
+	}
+	return orders, nil
+}
+
 func (b *TronBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
 	if sysKV == nil {
 		return nil
 	}
 	return sysKV.ReadMarketPriceList(sellTokenID, buyTokenID)
+}
+
+func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	priceList, err := session.reader.MarketPriceListAt(sellTokenID, buyTokenID, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read market price list at block %d: %w", blockNum, err)
+	}
+	return priceList, nil
 }
 
 // listExchangesAtHead enumerates the rooted exchange set (Phase 3d) at the head

@@ -29,16 +29,25 @@ type solidTestBackend struct {
 	lastRewardAt       uint64
 	lastDelegatedAt    uint64
 	lastDelegIndexAt   uint64
+	lastMarketOrderAt  uint64
+	lastMarketOrdersAt uint64
+	lastMarketPriceAt  uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
 	liveDelegCalls     int
 	liveIndexCalls     int
+	liveMarketOrder    int
+	liveMarketOrders   int
+	liveMarketPrice    int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
 	delegatedAt        []*tronapi.DelegatedResourceInfo
 	delegIndexAt       *tronapi.DelegationIndexInfo
+	marketOrderAt      *corepb.MarketOrder
+	marketOrdersAt     []*corepb.MarketOrder
+	marketPriceAt      *corepb.MarketPriceList
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -111,6 +120,45 @@ func (b *solidTestBackend) GetDelegatedResourceAccountIndexV2At(addr common.Addr
 		return b.delegIndexAt, nil
 	}
 	return b.testBackend.GetDelegatedResourceAccountIndexV2At(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder {
+	b.liveMarketOrder++
+	return b.testBackend.GetMarketOrderByID(orderID)
+}
+
+func (b *solidTestBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	b.lastMarketOrderAt = blockNum
+	if b.marketOrderAt != nil {
+		return b.marketOrderAt, nil
+	}
+	return b.testBackend.GetMarketOrderByIDAt(orderID, blockNum)
+}
+
+func (b *solidTestBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
+	b.liveMarketOrders++
+	return b.testBackend.GetMarketOrdersByAccount(addr)
+}
+
+func (b *solidTestBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	b.lastMarketOrdersAt = blockNum
+	if b.marketOrdersAt != nil {
+		return b.marketOrdersAt, nil
+	}
+	return b.testBackend.GetMarketOrdersByAccountAt(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
+	b.liveMarketPrice++
+	return b.testBackend.GetMarketPriceByPair(sellTokenID, buyTokenID)
+}
+
+func (b *solidTestBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	b.lastMarketPriceAt = blockNum
+	if b.marketPriceAt != nil {
+		return b.marketPriceAt, nil
+	}
+	return b.testBackend.GetMarketPriceByPairAt(sellTokenID, buyTokenID, blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -355,6 +403,75 @@ func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t 
 	}
 	if backend.liveIndexCalls != 0 {
 		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", backend.liveIndexCalls)
+	}
+}
+
+func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x88)
+	backend := &solidTestBackend{
+		solidNum: 91,
+		marketOrderAt: &corepb.MarketOrder{
+			OrderId:           []byte("order"),
+			SellTokenQuantity: 9,
+			BuyTokenQuantity:  99,
+		},
+		marketOrdersAt: []*corepb.MarketOrder{{
+			OrderId:           []byte("account-order"),
+			OwnerAddress:      addr,
+			SellTokenQuantity: 11,
+			BuyTokenQuantity:  111,
+		}},
+		marketPriceAt: &corepb.MarketPriceList{
+			SellTokenId: []byte("sell"),
+			BuyTokenId:  []byte("buy"),
+			Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 12, BuyTokenQuantity: 120}},
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	order, err := client.GetMarketOrderById(context.Background(), &apipb.BytesMessage{Value: []byte("order")})
+	if err != nil {
+		t.Fatalf("GetMarketOrderById: %v", err)
+	}
+	if order.GetSellTokenQuantity() != 9 || order.GetBuyTokenQuantity() != 99 {
+		t.Fatalf("GetMarketOrderById = %+v, want solid-bound sentinel", order)
+	}
+	if backend.lastMarketOrderAt != 91 {
+		t.Fatalf("GetMarketOrderByIDAt block = %d, want solid block 91", backend.lastMarketOrderAt)
+	}
+	if backend.liveMarketOrder != 0 {
+		t.Fatalf("live GetMarketOrderByID called %d times, want 0", backend.liveMarketOrder)
+	}
+
+	orders, err := client.GetMarketOrderByAccount(context.Background(), &apipb.BytesMessage{Value: addr})
+	if err != nil {
+		t.Fatalf("GetMarketOrderByAccount: %v", err)
+	}
+	if len(orders.GetOrders()) != 1 || orders.GetOrders()[0].GetSellTokenQuantity() != 11 {
+		t.Fatalf("GetMarketOrderByAccount = %+v, want solid-bound sentinel", orders.GetOrders())
+	}
+	if backend.lastMarketOrdersAt != 91 {
+		t.Fatalf("GetMarketOrdersByAccountAt block = %d, want solid block 91", backend.lastMarketOrdersAt)
+	}
+	if backend.liveMarketOrders != 0 {
+		t.Fatalf("live GetMarketOrdersByAccount called %d times, want 0", backend.liveMarketOrders)
+	}
+
+	price, err := client.GetMarketPriceByPair(context.Background(), &corepb.MarketOrderPair{
+		SellTokenId: []byte("sell"),
+		BuyTokenId:  []byte("buy"),
+	})
+	if err != nil {
+		t.Fatalf("GetMarketPriceByPair: %v", err)
+	}
+	if len(price.GetPrices()) != 1 || price.GetPrices()[0].GetSellTokenQuantity() != 12 {
+		t.Fatalf("GetMarketPriceByPair = %+v, want solid-bound sentinel", price.GetPrices())
+	}
+	if backend.lastMarketPriceAt != 91 {
+		t.Fatalf("GetMarketPriceByPairAt block = %d, want solid block 91", backend.lastMarketPriceAt)
+	}
+	if backend.liveMarketPrice != 0 {
+		t.Fatalf("live GetMarketPriceByPair called %d times, want 0", backend.liveMarketPrice)
 	}
 }
 

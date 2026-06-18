@@ -171,11 +171,20 @@ func (b *testBackend) GetAssetIssueByAccount(addr common.Address) *contractpb.As
 	return nil
 }
 func (b *testBackend) GetMarketOrderByID(orderID []byte) *corepb.MarketOrder { return nil }
+func (b *testBackend) GetMarketOrderByIDAt(orderID []byte, blockNum uint64) (*corepb.MarketOrder, error) {
+	return nil, nil
+}
 func (b *testBackend) GetMarketOrdersByAccount(addr common.Address) []*corepb.MarketOrder {
 	return nil
 }
+func (b *testBackend) GetMarketOrdersByAccountAt(addr common.Address, blockNum uint64) ([]*corepb.MarketOrder, error) {
+	return nil, nil
+}
 func (b *testBackend) GetMarketPriceByPair(sellTokenID, buyTokenID []byte) *corepb.MarketPriceList {
 	return nil
+}
+func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blockNum uint64) (*corepb.MarketPriceList, error) {
+	return nil, nil
 }
 func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
 func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }

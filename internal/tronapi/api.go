@@ -1606,6 +1606,10 @@ func (api *API) getAssetIssueByAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrderByID(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrderByID(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Value   string `json:"value"`
 		Visible bool   `json:"visible"`
@@ -1623,7 +1627,18 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "value", err)
 		return
 	}
-	order := api.backend.GetMarketOrderByID(orderID)
+	var order *corepb.MarketOrder
+	if boundFn == nil {
+		order = api.backend.GetMarketOrderByID(orderID)
+	} else {
+		var err error
+		blockNum := boundFn()
+		order, err = api.backend.GetMarketOrderByIDAt(orderID, blockNum)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if order == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
@@ -1633,6 +1648,10 @@ func (api *API) getMarketOrderByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketOrdersFromAccount(w, r, nil)
+}
+
+func (api *API) handleGetMarketOrdersFromAccount(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		Address string `json:"address"`
 		Visible bool   `json:"visible"`
@@ -1650,7 +1669,18 @@ func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Reques
 		httpFieldErr(w, "address", err)
 		return
 	}
-	orders := api.backend.GetMarketOrdersByAccount(addr)
+	var orders []*corepb.MarketOrder
+	if boundFn == nil {
+		orders = api.backend.GetMarketOrdersByAccount(addr)
+	} else {
+		var err error
+		blockNum := boundFn()
+		orders, err = api.backend.GetMarketOrdersByAccountAt(addr, blockNum)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	var list []map[string]any
 	for _, o := range orders {
 		list = append(list, marshalMessage(o.ProtoReflect()))
@@ -1664,6 +1694,10 @@ func (api *API) getMarketOrdersFromAccount(w http.ResponseWriter, r *http.Reques
 }
 
 func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
+	api.handleGetMarketPriceByPair(w, r, nil)
+}
+
+func (api *API) handleGetMarketPriceByPair(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	var body struct {
 		SellTokenId string `json:"sell_token_id"`
 		BuyTokenId  string `json:"buy_token_id"`
@@ -1684,7 +1718,18 @@ func (api *API) getMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "buy_token_id", err)
 		return
 	}
-	pl := api.backend.GetMarketPriceByPair(sell, buy)
+	var pl *corepb.MarketPriceList
+	if boundFn == nil {
+		pl = api.backend.GetMarketPriceByPair(sell, buy)
+	} else {
+		var err error
+		blockNum := boundFn()
+		pl, err = api.backend.GetMarketPriceByPairAt(sell, buy, blockNum)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if pl == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))
