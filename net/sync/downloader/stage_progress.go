@@ -1061,6 +1061,9 @@ func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier Impo
 			result.WriteResult = applier.WriteImportedSyncProgress(step.Deletes, step.Progress)
 			result.HasWriteResult = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.WriteFailed() {
+				return result
+			}
 		case ImportedBatchRefreshBodiesReady:
 			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
 			result.HasReadyRefresh = true

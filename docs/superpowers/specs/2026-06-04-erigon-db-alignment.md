@@ -412,6 +412,10 @@ Status:
   persisted progress write/delete fails, even if canonical insertion succeeded.
   This prevents the sync loop from advancing into another staged-body chunk
   after the Erigon-style stage boundary failed to become durable.
+- The imported-batch progress applier now stops before refreshing
+  `SyncBodiesReady` when the staged-body delete or sync-stage progress write
+  fails, so the ready frontier is also downstream of a durable import-stage
+  boundary.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or
