@@ -2,11 +2,9 @@ package snapshots
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/tronprotocol/go-tron/core/rawdb"
-	"github.com/tronprotocol/go-tron/core/types"
 )
 
 type PruneHotChainLookupResult struct {
@@ -120,13 +118,11 @@ func pruneHotChainLookupsForFreezerSegment(db ethdb.KeyValueWriter, dir string, 
 		if bounds.hasMaxBlock && row.blockNum > bounds.maxBlock {
 			return nil
 		}
-		block, err := types.UnmarshalBlock(row.blockRaw)
+		verified, err := validateChainFreezerRowPayload(row, "chain lookup prune")
 		if err != nil {
-			return fmt.Errorf("snapshots: decode chain-freezer block %d for lookup prune: %w", row.blockNum, err)
+			return err
 		}
-		if block.Number() != row.blockNum {
-			return fmt.Errorf("snapshots: chain-freezer row %d contains block number %d", row.blockNum, block.Number())
-		}
+		block := verified.block
 		if !result.HasRange {
 			result.HasRange = true
 			result.FromBlock = row.blockNum

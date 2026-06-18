@@ -612,7 +612,7 @@ func appendChainFreezerTailPruneBlockRows(t *testing.T, f *rawdbfreezer.Freezer,
 		rows = append(rows, chainFreezerRawTestRow{
 			block:      block,
 			txInfosRaw: txInfosRaw,
-			stateRoot:  largeChainFreezerPayload("state-root", n),
+			stateRoot:  chainFreezerTestStateRoot(n),
 		})
 	}
 	appendChainFreezerRawRows(t, f, rows)

@@ -399,7 +399,7 @@ func TestSnapshotBootstrapCmdFetchesAndRestoresCanonicalBoundary(t *testing.T) {
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
 	defer src.Close()
 	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
-		{block: genesisBlock},
+		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock)},
 		{block: block1, stateRoot: stateRoot1.Bytes()},
 	})
 	freezerRef, err := statesnapshots.BuildChainFreezerSegmentFromAncient(rawdb.NewFreezerReader(src), sourceDir, "", 0, 1)
@@ -612,7 +612,7 @@ func TestSnapshotBuildFreezerCmdWritesDevChainIdentity(t *testing.T) {
 
 	src := openSnapshotCmdFreezer(t, ancientDataDir(dataDir))
 	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
-		{block: genesisBlock},
+		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock)},
 		{block: snapshotCmdBlock(1), stateRoot: common.Hash{0x01}.Bytes()},
 	})
 	if err := src.Close(); err != nil {
@@ -1367,7 +1367,7 @@ func TestSnapshotRestoreCmdRestartsWithColdChainIndexLookups(t *testing.T) {
 	src := openSnapshotCmdFreezer(t, filepath.Join(root, "src-freezer"))
 	defer src.Close()
 	appendSnapshotCmdFreezerRows(t, src, []snapshotCmdFreezerRow{
-		{block: genesisBlock},
+		{block: genesisBlock, txInfosRaw: snapshotCmdTxInfoRawForBlock(t, genesisBlock)},
 		{block: block1, txInfosRaw: txInfoRaw, stateRoot: stateRoot1.Bytes()},
 		{block: block2, stateRoot: stateRoot2.Bytes()},
 	})
@@ -2303,6 +2303,32 @@ func snapshotCmdBlockWithTx(t *testing.T, number uint64) (*coretypes.Block, comm
 		t.Fatalf("marshal tx info: %v", err)
 	}
 	return block, txHash, txInfoRaw
+}
+
+func snapshotCmdTxInfoRawForBlock(t *testing.T, block *coretypes.Block) []byte {
+	t.Helper()
+	txs := block.Transactions()
+	if len(txs) == 0 {
+		return nil
+	}
+	ret := &corepb.TransactionRet{
+		BlockNumber:     int64(block.Number()),
+		BlockTimeStamp:  block.Timestamp(),
+		Transactioninfo: make([]*corepb.TransactionInfo, 0, len(txs)),
+	}
+	for _, tx := range txs {
+		txHash := tx.Hash()
+		ret.Transactioninfo = append(ret.Transactioninfo, &corepb.TransactionInfo{
+			Id:             txHash[:],
+			BlockNumber:    int64(block.Number()),
+			BlockTimeStamp: block.Timestamp(),
+		})
+	}
+	raw, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal tx info for block %d: %v", block.Number(), err)
+	}
+	return raw
 }
 
 func snapshotCmdSectionBloomEncodedBit(t *testing.T, bit uint64) []byte {

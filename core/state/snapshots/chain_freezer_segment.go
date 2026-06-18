@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
 	"github.com/tronprotocol/go-tron/core/types"
@@ -50,6 +51,11 @@ type chainFreezerRow struct {
 	blockRaw     []byte
 	txInfosRaw   []byte
 	stateRootRaw []byte
+}
+
+type validatedChainFreezerRow struct {
+	block *types.Block
+	txRet *corepb.TransactionRet
 }
 
 type RestoreChainFreezerOptions struct {
@@ -127,15 +133,25 @@ func BuildChainFreezerSegmentFromAncient(reader rawdb.AncientReader, dir, relPat
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: read ancient %s block %d: %w", rawdb.AncientStateRootsTable, n, err)
 		}
-		if err := writeChainFreezerBytes(buf, blockRaw); err != nil {
+		row := chainFreezerRow{
+			blockNum:     n,
+			blockRaw:     blockRaw,
+			txInfosRaw:   txInfosRaw,
+			stateRootRaw: stateRootRaw,
+		}
+		if _, err := validateChainFreezerRowPayload(row, "chain-freezer segment build"); err != nil {
+			_ = tmp.Close()
+			return SegmentRef{}, err
+		}
+		if err := writeChainFreezerBytes(buf, row.blockRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d body: %w", n, err)
 		}
-		if err := writeChainFreezerBytes(buf, txInfosRaw); err != nil {
+		if err := writeChainFreezerBytes(buf, row.txInfosRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d tx infos: %w", n, err)
 		}
-		if err := writeChainFreezerBytes(buf, stateRootRaw); err != nil {
+		if err := writeChainFreezerBytes(buf, row.stateRootRaw); err != nil {
 			_ = tmp.Close()
 			return SegmentRef{}, fmt.Errorf("snapshots: write freezer block %d state root: %w", n, err)
 		}
@@ -184,6 +200,9 @@ func CheckChainFreezerSegment(dir string, ref SegmentRef) error {
 		if row.blockNum != ref.FromTxNum+rows {
 			return fmt.Errorf("snapshots: chain-freezer segment %q block %d out of order at row %d", ref.Path, row.blockNum, rows)
 		}
+		if _, err := validateChainFreezerRowPayload(row, "chain-freezer segment check"); err != nil {
+			return err
+		}
 		rows++
 		return nil
 	}); err != nil {
@@ -193,6 +212,42 @@ func CheckChainFreezerSegment(dir string, ref SegmentRef) error {
 		return fmt.Errorf("snapshots: chain-freezer segment %q rows %d, want %d", ref.Path, rows, expectedRows)
 	}
 	return nil
+}
+
+func validateChainFreezerRowPayload(row chainFreezerRow, context string) (validatedChainFreezerRow, error) {
+	var out validatedChainFreezerRow
+	if context == "" {
+		context = "chain-freezer segment"
+	}
+	block, err := types.UnmarshalBlock(row.blockRaw)
+	if err != nil {
+		return out, fmt.Errorf("snapshots: decode %s block %d: %w", context, row.blockNum, err)
+	}
+	if block.Number() != row.blockNum {
+		return out, fmt.Errorf("snapshots: %s row %d contains block number %d", context, row.blockNum, block.Number())
+	}
+	if len(row.stateRootRaw) != 0 && len(row.stateRootRaw) != common.HashLength {
+		return out, fmt.Errorf("snapshots: %s row %d state root length %d, want 0 or %d", context, row.blockNum, len(row.stateRootRaw), common.HashLength)
+	}
+	out.block = block
+	if len(row.txInfosRaw) == 0 {
+		if len(block.Transactions()) != 0 {
+			return out, fmt.Errorf("snapshots: %s row %d missing transaction info coverage for %d transactions", context, row.blockNum, len(block.Transactions()))
+		}
+		return out, nil
+	}
+	ret := new(corepb.TransactionRet)
+	if err := proto.Unmarshal(row.txInfosRaw, ret); err != nil {
+		return out, fmt.Errorf("snapshots: decode %s tx infos for block %d: %w", context, row.blockNum, err)
+	}
+	if ret.BlockNumber != 0 && (ret.BlockNumber < 0 || uint64(ret.BlockNumber) != row.blockNum) {
+		return out, fmt.Errorf("snapshots: %s tx infos row %d contains block number %d", context, row.blockNum, ret.BlockNumber)
+	}
+	if err := rawdb.ValidateTransactionInfosForBlock(row.blockNum, block.Transactions(), ret.Transactioninfo, context); err != nil {
+		return out, err
+	}
+	out.txRet = ret
+	return out, nil
 }
 
 var _ rawdb.AncientReader = (*Manager)(nil)
@@ -487,6 +542,9 @@ func RestoreChainFreezerSegmentToAncientWithOptions(store ChainFreezerAncientSto
 				if row.blockNum != wantBlock {
 					return fmt.Errorf("snapshots: chain-freezer segment %q block %d, want %d", ref.Path, row.blockNum, wantBlock)
 				}
+				if _, err := validateChainFreezerRowPayload(row, "chain-freezer segment restore"); err != nil {
+					return err
+				}
 				if err := op.AppendRaw(rawdb.AncientBlocksTable, row.blockNum, row.blockRaw); err != nil {
 					return err
 				}
@@ -596,13 +654,11 @@ func RestoreChainFreezerIndexesWithOptions(db ethdb.KeyValueWriter, dir string, 
 
 func restoreChainFreezerIndexesForRow(db ethdb.KeyValueWriter, row chainFreezerRow) (RestoreChainFreezerSegmentResult, error) {
 	var result RestoreChainFreezerSegmentResult
-	block, err := types.UnmarshalBlock(row.blockRaw)
+	verified, err := validateChainFreezerRowPayload(row, "chain-freezer index restore")
 	if err != nil {
-		return result, fmt.Errorf("snapshots: decode chain-freezer block %d: %w", row.blockNum, err)
+		return result, err
 	}
-	if block.Number() != row.blockNum {
-		return result, fmt.Errorf("snapshots: chain-freezer row %d contains block number %d", row.blockNum, block.Number())
-	}
+	block := verified.block
 	blockHash := block.Hash()
 	if err := rawdb.WriteBlockNumber(db, blockHash, row.blockNum); err != nil {
 		return result, err
@@ -615,20 +671,10 @@ func restoreChainFreezerIndexesForRow(db ethdb.KeyValueWriter, row chainFreezerR
 		}
 		result.TxIndexesRestored++
 	}
-	if len(row.txInfosRaw) == 0 {
+	if verified.txRet == nil {
 		return result, nil
 	}
-	var ret corepb.TransactionRet
-	if err := proto.Unmarshal(row.txInfosRaw, &ret); err != nil {
-		return result, fmt.Errorf("snapshots: decode chain-freezer tx infos for block %d: %w", row.blockNum, err)
-	}
-	if ret.BlockNumber != 0 && uint64(ret.BlockNumber) != row.blockNum {
-		return result, fmt.Errorf("snapshots: chain-freezer tx infos row %d contains block number %d", row.blockNum, ret.BlockNumber)
-	}
-	if err := rawdb.ValidateTransactionInfosForBlock(row.blockNum, block.Transactions(), ret.Transactioninfo, "chain-freezer index restore"); err != nil {
-		return result, err
-	}
-	for _, info := range ret.Transactioninfo {
+	for _, info := range verified.txRet.Transactioninfo {
 		if info == nil || len(info.Id) == 0 {
 			continue
 		}

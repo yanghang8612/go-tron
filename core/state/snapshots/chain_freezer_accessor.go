@@ -232,6 +232,9 @@ func VerifyChainFreezerAccessorSegmentAgainstChainFreezer(dir string, accessorRe
 	}
 	defer file.Close()
 	return iterateChainFreezerSegmentRows(dir, freezerRef, func(row chainFreezerRow) error {
+		if _, err := validateChainFreezerRowPayload(row, "chain-freezer accessor verification"); err != nil {
+			return err
+		}
 		offset, ok, err := accessor.RowOffset(row.blockNum)
 		if err != nil {
 			return err

@@ -225,7 +225,7 @@ func TestRestoreChainFreezerIndexesLoadsThroughSortedETL(t *testing.T) {
 	}
 }
 
-func TestRestoreChainFreezerIndexesRejectsMismatchedTransactionInfo(t *testing.T) {
+func TestBuildChainFreezerSegmentRejectsMismatchedTransactionInfo(t *testing.T) {
 	root := t.TempDir()
 	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
 	defer src.Close()
@@ -246,16 +246,77 @@ func TestRestoreChainFreezerIndexesRejectsMismatchedTransactionInfo(t *testing.T
 	})
 
 	snapshotDir := filepath.Join(root, "snapshot")
-	ref, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1)
+	if _, err := BuildChainFreezerSegmentFromAncient(src, snapshotDir, "", 0, 1); err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient error = %v, want canonical tx mismatch", err)
+	}
+}
+
+func TestBuildChainFreezerSegmentRejectsMalformedAncientBlock(t *testing.T) {
+	root := t.TempDir()
+	src := openChainFreezerTestStore(t, filepath.Join(root, "src"))
+	defer src.Close()
+	if _, err := src.ModifyAncients(func(op rawdb.AncientWriteOp) error {
+		if err := op.AppendRaw(rawdb.AncientBlocksTable, 0, []byte{0xde, 0xad}); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(rawdb.AncientTxInfosTable, 0, nil); err != nil {
+			return err
+		}
+		return op.AppendRaw(rawdb.AncientStateRootsTable, 0, nil)
+	}); err != nil {
+		t.Fatalf("ModifyAncients: %v", err)
+	}
+	if err := src.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if _, err := BuildChainFreezerSegmentFromAncient(src, filepath.Join(root, "snapshot"), "", 0, 0); err == nil || !strings.Contains(err.Error(), "decode chain-freezer segment build block 0") {
+		t.Fatalf("BuildChainFreezerSegmentFromAncient error = %v, want malformed block rejection", err)
+	}
+}
+
+func TestCheckChainFreezerSegmentRejectsMalformedPayloads(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	block0 := canonicalBoundaryTestBlock(t, 0)
+	block0Raw, err := block0.Marshal()
 	if err != nil {
-		t.Fatalf("BuildChainFreezerSegmentFromAncient: %v", err)
+		t.Fatalf("marshal block0: %v", err)
 	}
-	writer := newChainFreezerIndexOrderWriter()
-	if _, err := RestoreChainFreezerIndexes(writer, snapshotDir, ref); err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
-		t.Fatalf("RestoreChainFreezerIndexes error = %v, want canonical tx mismatch", err)
+	txBlock, _, _ := chainFreezerBlockWithTx(t, 0)
+	txBlockRaw, err := txBlock.Marshal()
+	if err != nil {
+		t.Fatalf("marshal tx block: %v", err)
 	}
-	if len(writer.putKeys) != 0 {
-		t.Fatalf("RestoreChainFreezerIndexes loaded %d keys before rejecting bad tx info", len(writer.putKeys))
+
+	for _, tc := range []struct {
+		name string
+		row  chainFreezerRow
+		want string
+	}{
+		{
+			name: "bad-state-root",
+			row: chainFreezerRow{
+				blockNum:     0,
+				blockRaw:     block0Raw,
+				stateRootRaw: []byte{0x01},
+			},
+			want: "state root length",
+		},
+		{
+			name: "missing-tx-info",
+			row: chainFreezerRow{
+				blockNum: 0,
+				blockRaw: txBlockRaw,
+			},
+			want: "missing transaction info coverage",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := writeChainFreezerSegmentRowsForTest(t, snapshotDir, tc.name+".seg", 0, 0, []chainFreezerRow{tc.row})
+			if err := CheckChainFreezerSegment(snapshotDir, ref); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CheckChainFreezerSegment error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -463,16 +524,17 @@ func TestManagerAncientRangeStreamsAcrossChainFreezerSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AncientRange txinfos 1..3: %v", err)
 	}
-	if got, want := stringifyAncientRows(rows), []string{"txinfos-1", "txinfos-2", "txinfos-3"}; !stringSlicesEqual(got, want) {
-		t.Fatalf("AncientRange txinfos = %q, want %q", got, want)
+	if want := chainFreezerAncientRows(t, src, rawdb.AncientTxInfosTable, 1, 3); !byteRowsEqual(rows, want) {
+		t.Fatalf("AncientRange txinfos = %x, want %x", rows, want)
 	}
 
-	rows, err = mgr.AncientRange(rawdb.AncientBlocksTable, 0, 4, uint64(len("block-0")+1))
+	block0Raw := chainFreezerAncientRows(t, src, rawdb.AncientBlocksTable, 0, 0)[0]
+	rows, err = mgr.AncientRange(rawdb.AncientBlocksTable, 0, 4, uint64(len(block0Raw)+1))
 	if err != nil {
 		t.Fatalf("AncientRange maxBytes: %v", err)
 	}
-	if got, want := stringifyAncientRows(rows), []string{"block-0"}; !stringSlicesEqual(got, want) {
-		t.Fatalf("AncientRange maxBytes rows = %q, want %q", got, want)
+	if want := chainFreezerAncientRows(t, src, rawdb.AncientBlocksTable, 0, 0); !byteRowsEqual(rows, want) {
+		t.Fatalf("AncientRange maxBytes rows = %x, want %x", rows, want)
 	}
 
 	if _, err := mgr.AncientRange(rawdb.AncientBlocksTable, 4, 1, 0); !errors.Is(err, rawdb.ErrNotInAncient) {
@@ -515,8 +577,8 @@ func TestManagerAncientRangeStopsAtChainFreezerSegmentGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AncientRange with later gap: %v", err)
 	}
-	if got, want := stringifyAncientRows(rows), []string{"block-0", "block-1"}; !stringSlicesEqual(got, want) {
-		t.Fatalf("AncientRange with later gap rows = %q, want %q", got, want)
+	if want := chainFreezerAncientRows(t, src, rawdb.AncientBlocksTable, 0, 1); !byteRowsEqual(rows, want) {
+		t.Fatalf("AncientRange with later gap rows = %x, want %x", rows, want)
 	}
 	if _, err := mgr.AncientRange(rawdb.AncientBlocksTable, 2, 1, 0); !errors.Is(err, rawdb.ErrNotInAncient) {
 		t.Fatalf("AncientRange gap first row error = %v, want ErrNotInAncient", err)
@@ -567,13 +629,17 @@ func appendChainFreezerTestRows(t *testing.T, f *rawdbfreezer.Freezer, from, to 
 	t.Helper()
 	if _, err := f.ModifyAncients(func(op rawdb.AncientWriteOp) error {
 		for n := from; n <= to; n++ {
-			if err := op.AppendRaw(rawdb.AncientBlocksTable, n, []byte(fmt.Sprintf("block-%d", n))); err != nil {
+			blockRaw, err := canonicalBoundaryTestBlock(t, n).Marshal()
+			if err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdb.AncientTxInfosTable, n, []byte(fmt.Sprintf("txinfos-%d", n))); err != nil {
+			if err := op.AppendRaw(rawdb.AncientBlocksTable, n, blockRaw); err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdb.AncientStateRootsTable, n, []byte(fmt.Sprintf("state-root-%d", n))); err != nil {
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, n, nil); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdb.AncientStateRootsTable, n, nil); err != nil {
 				return err
 			}
 			if n == to {
@@ -586,6 +652,63 @@ func appendChainFreezerTestRows(t *testing.T, f *rawdbfreezer.Freezer, from, to 
 	}
 	if err := f.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
+	}
+}
+
+func writeChainFreezerSegmentRowsForTest(t *testing.T, dir, relPath string, from, to uint64, rows []chainFreezerRow) SegmentRef {
+	t.Helper()
+	if relPath == "" {
+		relPath = ChainFreezerSegmentPath(from, to)
+	}
+	abs := filepath.Join(dir, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	file, err := os.Create(abs)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	count, err := chainFreezerRowCount(from, to)
+	if err != nil {
+		t.Fatalf("chainFreezerRowCount: %v", err)
+	}
+	if uint64(len(rows)) != count {
+		t.Fatalf("test rows = %d, want %d", len(rows), count)
+	}
+	if err := writeChainFreezerHeader(file, from, to, count); err != nil {
+		_ = file.Close()
+		t.Fatalf("writeChainFreezerHeader: %v", err)
+	}
+	for _, row := range rows {
+		if err := writeChainFreezerBytes(file, row.blockRaw); err != nil {
+			_ = file.Close()
+			t.Fatalf("write block row %d: %v", row.blockNum, err)
+		}
+		if err := writeChainFreezerBytes(file, row.txInfosRaw); err != nil {
+			_ = file.Close()
+			t.Fatalf("write tx info row %d: %v", row.blockNum, err)
+		}
+		if err := writeChainFreezerBytes(file, row.stateRootRaw); err != nil {
+			_ = file.Close()
+			t.Fatalf("write state root row %d: %v", row.blockNum, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	sum := sha256.Sum256(data)
+	return SegmentRef{
+		Dataset:   SegmentDatasetChainFreezer,
+		Kind:      SegmentChainFreezer,
+		FromTxNum: from,
+		ToTxNum:   to,
+		Path:      relPath,
+		Size:      uint64(len(data)),
+		Checksum:  "sha256:" + hex.EncodeToString(sum[:]),
 	}
 }
 
@@ -677,6 +800,10 @@ func chainFreezerBlockWithTx(t *testing.T, number uint64) (*types.Block, [32]byt
 	return block, txHash, txInfoRaw
 }
 
+func chainFreezerTestStateRoot(n uint64) []byte {
+	return common.HexToHash(fmt.Sprintf("%064x", n)).Bytes()
+}
+
 func assertChainFreezerTxInfo(t *testing.T, phase string, info *corepb.TransactionInfo, number uint64) {
 	t.Helper()
 	if info == nil {
@@ -723,20 +850,28 @@ func assertChainFreezerRowsEqual(t *testing.T, wantStore, gotStore *rawdbfreezer
 	}
 }
 
-func stringifyAncientRows(rows [][]byte) []string {
-	out := make([]string, len(rows))
-	for i, row := range rows {
-		out[i] = string(row)
+func chainFreezerAncientRows(t *testing.T, f *rawdbfreezer.Freezer, table string, from, to uint64) [][]byte {
+	t.Helper()
+	out := make([][]byte, 0, to-from+1)
+	for n := from; n <= to; n++ {
+		row, err := f.Ancient(table, n)
+		if err != nil {
+			t.Fatalf("Ancient(%s,%d): %v", table, n, err)
+		}
+		out = append(out, row)
+		if n == to {
+			break
+		}
 	}
 	return out
 }
 
-func stringSlicesEqual(a, b []string) bool {
+func byteRowsEqual(a, b [][]byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !bytes.Equal(a[i], b[i]) {
 			return false
 		}
 	}

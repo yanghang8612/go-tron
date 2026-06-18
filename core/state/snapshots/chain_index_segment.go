@@ -16,7 +16,6 @@ import (
 	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/rawdb/etl"
-	"github.com/tronprotocol/go-tron/core/types"
 )
 
 const (
@@ -95,13 +94,11 @@ func BuildChainIndexSegmentFromChainFreezerSegmentWithOptions(dir string, freeze
 	defer collector.Close()
 	var blocksSeen uint64
 	if err := iterateChainFreezerSegmentRows(dir, freezerRef, func(row chainFreezerRow) error {
-		block, err := types.UnmarshalBlock(row.blockRaw)
+		verified, err := validateChainFreezerRowPayload(row, "chain-index build")
 		if err != nil {
-			return fmt.Errorf("snapshots: decode chain-freezer block %d for chain index: %w", row.blockNum, err)
+			return err
 		}
-		if block.Number() != row.blockNum {
-			return fmt.Errorf("snapshots: chain-freezer row %d contains block number %d", row.blockNum, block.Number())
-		}
+		block := verified.block
 		blocksSeen++
 		if err := collector.Put(chainIndexBlockETLKey(block.Hash(), row.blockNum), nil); err != nil {
 			return err
@@ -355,10 +352,11 @@ func VerifyChainIndexSegmentAgainstChainFreezer(dir string, indexRef, freezerRef
 	defer seg.Close()
 	var blocksSeen, txsSeen uint64
 	if err := iterateChainFreezerSegmentRows(dir, freezerRef, func(row chainFreezerRow) error {
-		block, err := types.UnmarshalBlock(row.blockRaw)
+		verified, err := validateChainFreezerRowPayload(row, "chain-index verification")
 		if err != nil {
-			return fmt.Errorf("snapshots: decode chain-freezer block %d for chain index verification: %w", row.blockNum, err)
+			return err
 		}
+		block := verified.block
 		blockHash := block.Hash()
 		blockNum, ok, err := seg.BlockNumberByHash(blockHash)
 		if err != nil {

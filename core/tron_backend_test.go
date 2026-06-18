@@ -723,7 +723,11 @@ func appendBackendColdLookupAncients(t *testing.T, fz *rawdbfreezer.Freezer, db 
 			if err := op.AppendRaw(rawdb.AncientBlocksTable, block.Number(), blockRaw); err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdb.AncientTxInfosTable, block.Number(), rawdb.ReadTransactionInfosRaw(db, block.Number())); err != nil {
+			txInfosRaw := rawdb.ReadTransactionInfosRaw(db, block.Number())
+			if len(txInfosRaw) == 0 && len(block.Transactions()) != 0 {
+				txInfosRaw = testBackendTransactionInfosRawForBlock(t, block)
+			}
+			if err := op.AppendRaw(rawdb.AncientTxInfosTable, block.Number(), txInfosRaw); err != nil {
 				return err
 			}
 			if err := op.AppendRaw(rawdb.AncientStateRootsTable, block.Number(), rawdb.ReadBlockStateRootRaw(db, block.Hash())); err != nil {
@@ -735,6 +739,32 @@ func appendBackendColdLookupAncients(t *testing.T, fz *rawdbfreezer.Freezer, db 
 		return err
 	}
 	return fz.Sync()
+}
+
+func testBackendTransactionInfosRawForBlock(t *testing.T, block *types.Block) []byte {
+	t.Helper()
+	txs := block.Transactions()
+	if len(txs) == 0 {
+		return nil
+	}
+	ret := &corepb.TransactionRet{
+		BlockNumber:     int64(block.Number()),
+		BlockTimeStamp:  block.Timestamp(),
+		Transactioninfo: make([]*corepb.TransactionInfo, 0, len(txs)),
+	}
+	for _, tx := range txs {
+		txHash := tx.Hash()
+		ret.Transactioninfo = append(ret.Transactioninfo, &corepb.TransactionInfo{
+			Id:             txHash[:],
+			BlockNumber:    int64(block.Number()),
+			BlockTimeStamp: block.Timestamp(),
+		})
+	}
+	raw, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal tx info for block %d: %v", block.Number(), err)
+	}
+	return raw
 }
 
 // TestTronBackend_GetLogs_EmptyRange verifies GetLogs returns empty slice for range with no logs.
