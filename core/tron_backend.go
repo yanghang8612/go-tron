@@ -1762,7 +1762,15 @@ func (b *TronBackend) GetLogs(filter jsonrpc.LogFilter) ([]*jsonrpc.RPCLog, erro
 			continue
 		}
 		blockHash := block.Hash()
-		infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, num)
+		infos, hasInfos, err := rawdb.ReadTransactionInfosByBlockStrict(b.chain.chaindb, num)
+		if err != nil {
+			return nil, err
+		}
+		if hasInfos {
+			if err := rawdb.ValidateTransactionInfosForBlock(num, block.Transactions(), infos, "log query"); err != nil {
+				return nil, err
+			}
+		}
 
 		logIndex := uint64(0)
 

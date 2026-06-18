@@ -1207,6 +1207,11 @@ Status:
   transaction count, block number, and tx hash order. The hot `TransactionInfo`
   writer and sorted `DerivedIndexCollector` now apply the same per-tx id/key
   check before new `ti-` rows can be written.
+- The hot `eth_getLogs` fallback scan now uses the strict per-block
+  `TransactionRet` reader too. Missing per-block tx-info rows remain a
+  compatibility miss for legacy datadirs, but present rows with mismatched block
+  numbers, counts, nil entries, or tx ids fail the query instead of producing a
+  false empty or wrong log response.
 - Per-block `TransactionRet` reads now apply the same block-number guard at the
   rawdb accessor boundary for hot `tib-<block>` rows and ancient `tx_infos`
   rows: an embedded `TransactionRet.block_number` or

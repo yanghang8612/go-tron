@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -859,11 +860,40 @@ func TestTronBackend_GetLogsRejectsMismatchedTransactionInfoBlockNumber(t *testi
 		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
 		Topics:    [][]tcommon.Hash{{topic}},
 	})
-	if err != nil {
-		t.Fatalf("GetLogs: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "transaction info block number") {
+		t.Fatalf("GetLogs error = %v logs=%d, want transaction info block number error", err, len(logs))
 	}
-	if len(logs) != 0 {
-		t.Fatalf("GetLogs with mismatched TransactionInfo block number returned %d logs, want 0", len(logs))
+}
+
+func TestTronBackend_GetLogsRejectsMismatchedTransactionInfoID(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	logAddress := bytes20(0x13)
+	topic := tcommon.Hash{0xac}
+	block1, info1 := testBackendLogBlock(1, &corepb.TransactionInfo_Log{
+		Address: logAddress,
+		Topics:  [][]byte{topic[:]},
+		Data:    []byte{0x04, 0x05},
+	})
+	if err := rawdb.WriteBlock(bc.db, block1); err != nil {
+		t.Fatalf("WriteBlock block1: %v", err)
+	}
+	info1.Id = bytes.Repeat([]byte{0x99}, tcommon.HashLength)
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	}
+	bc.currentBlock.Store(block1)
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(logAddress)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("GetLogs error = %v logs=%d, want transaction info id mismatch error", err, len(logs))
 	}
 }
 
