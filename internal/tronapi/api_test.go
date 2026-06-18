@@ -251,6 +251,12 @@ func (s *stubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 	}
 	return nil, fmt.Errorf("account not found")
 }
+func (s *stubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	if s.accountByID != nil {
+		return s.accountByID, nil
+	}
+	return nil, fmt.Errorf("account not found")
+}
 func (s *stubBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
 	if s.accountNet != nil {
 		return s.accountNet, nil

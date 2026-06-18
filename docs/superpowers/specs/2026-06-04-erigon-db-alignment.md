@@ -693,6 +693,11 @@ Status:
   solid/PBFT bound instead of live-head SystemDelegation rows. Backend archive
   coverage writes V2 delegation buckets and delegation indexes through temporal
   SystemDelegation history and verifies block-1/block-2 as-of reads diverge.
+  HTTP solidity/PBFT `getaccountbyid` now dispatches through
+  `GetAccountByIdAt`, and gRPC `WalletSolidity.GetAccountById` supports the
+  `account_id` path through the same solid-block archive session. Backend
+  coverage now also exercises temporal `SystemAccountIndex` history by resolving
+  the same account ID to different accounts at block 1 and block 2.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

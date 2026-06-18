@@ -22,20 +22,23 @@ import (
 // solidTestBackend wraps testBackend with controllable solid/pbft numbers.
 type solidTestBackend struct {
 	testBackend
-	solidNum         uint64
-	lastNumQueried   uint64
-	lastAccountAt    uint64
-	lastRewardAt     uint64
-	lastDelegatedAt  uint64
-	lastDelegIndexAt uint64
-	liveAccountCalls int
-	liveRewardCalls  int
-	liveDelegCalls   int
-	liveIndexCalls   int
-	accountAt        *types.Account
-	rewardAt         *tronapi.RewardInfo
-	delegatedAt      []*tronapi.DelegatedResourceInfo
-	delegIndexAt     *tronapi.DelegationIndexInfo
+	solidNum           uint64
+	lastNumQueried     uint64
+	lastAccountAt      uint64
+	lastAccountIDAt    uint64
+	lastRewardAt       uint64
+	lastDelegatedAt    uint64
+	lastDelegIndexAt   uint64
+	liveAccountCalls   int
+	liveAccountIDCalls int
+	liveRewardCalls    int
+	liveDelegCalls     int
+	liveIndexCalls     int
+	accountAt          *types.Account
+	accountIDAt        *types.Account
+	rewardAt           *tronapi.RewardInfo
+	delegatedAt        []*tronapi.DelegatedResourceInfo
+	delegIndexAt       *tronapi.DelegationIndexInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -56,6 +59,19 @@ func (b *solidTestBackend) GetAccountAt(addr common.Address, blockNum uint64) (*
 		return b.accountAt, nil
 	}
 	return b.testBackend.GetAccountAt(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	b.liveAccountIDCalls++
+	return b.testBackend.GetAccountById(accountID)
+}
+
+func (b *solidTestBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	b.lastAccountIDAt = blockNum
+	if b.accountIDAt != nil {
+		return b.accountIDAt, nil
+	}
+	return b.testBackend.GetAccountByIdAt(accountID, blockNum)
 }
 
 func (b *solidTestBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
@@ -232,6 +248,31 @@ func TestSolidity_GetAccountByIdAddressUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveAccountCalls != 0 {
 		t.Fatalf("live GetAccount called %d times, want 0", backend.liveAccountCalls)
+	}
+}
+
+func TestSolidity_GetAccountByIdAccountIDUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x24)
+	accountAt := types.NewAccount(common.BytesToAddress(addr), corepb.AccountType_Normal)
+	accountAt.SetBalance(350)
+	backend := &solidTestBackend{
+		solidNum:    79,
+		accountIDAt: accountAt,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetAccountById(context.Background(), &corepb.Account{AccountId: []byte("user1234")})
+	if err != nil {
+		t.Fatalf("GetAccountById: %v", err)
+	}
+	if resp.GetBalance() != 350 {
+		t.Fatalf("GetAccountById balance = %d, want 350", resp.GetBalance())
+	}
+	if backend.lastAccountIDAt != 79 {
+		t.Fatalf("GetAccountByIdAt block = %d, want solid block 79", backend.lastAccountIDAt)
+	}
+	if backend.liveAccountIDCalls != 0 {
+		t.Fatalf("live GetAccountById called %d times, want 0", backend.liveAccountIDCalls)
 	}
 }
 

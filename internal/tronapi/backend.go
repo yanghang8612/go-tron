@@ -249,6 +249,7 @@ type Backend interface {
 	BuildSetAccountIdTransaction(owner common.Address, accountID []byte) (*corepb.Transaction, error)
 	BuildAccountPermissionUpdateTransaction(c *contractpb.AccountPermissionUpdateContract) (*corepb.Transaction, error)
 	GetAccountById(accountID []byte) (*types.Account, error)
+	GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error)
 	GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error)
 
 	// Generic contract transaction builder (M5.1 PR-3+)

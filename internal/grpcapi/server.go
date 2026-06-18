@@ -306,7 +306,13 @@ func (s *Server) GetAccountById(_ context.Context, in *corepb.Account) (*corepb.
 		}
 		return acc.Proto(), nil
 	}
-	// No reverse-index for account_id yet; return empty account matching java-tron behavior.
+	if len(in.AccountId) > 0 {
+		acc, err := s.backend.GetAccountById(in.AccountId)
+		if err != nil || acc == nil {
+			return &corepb.Account{}, nil
+		}
+		return acc.Proto(), nil
+	}
 	return &corepb.Account{}, nil
 }
 

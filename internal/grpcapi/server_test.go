@@ -225,6 +225,9 @@ func (b *testBackend) BuildAccountPermissionUpdateTransaction(c *contractpb.Acco
 func (b *testBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 	return nil, nil
 }
+func (b *testBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAccountNet(addr common.Address) (*apipb.AccountNetMessage, error) {
 	return nil, nil
 }

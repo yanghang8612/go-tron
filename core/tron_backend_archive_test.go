@@ -265,6 +265,75 @@ func TestArchiveQuery_AccountResourceAtUsesHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_AccountByIdAtUsesSystemAccountIndexHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	accountID := []byte("User1234")
+	addr1 := testInsertAddr(40)
+	addr2 := testInsertAddr(41)
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		if n == 1 {
+			block1 = blk
+		} else {
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitAccountID := func(blk *types.Block, n int64, addr tcommon.Address, balance int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+		statedb.CreateAccount(addr, corepb.AccountType_Normal)
+		statedb.AddBalance(addr, balance)
+		statedb.SetAccountId(addr, string(accountID))
+		if err := statedb.WriteAccountIdIndex(accountID, addr); err != nil {
+			t.Fatalf("write account id index block %d: %v", n, err)
+		}
+		root, err := statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit account id block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitAccountID(block1, 1, addr1, 111)
+	root = commitAccountID(block2, 2, addr2, 222)
+
+	got1, err := b.GetAccountByIdAt([]byte("USER1234"), block1.Number())
+	if err != nil {
+		t.Fatalf("GetAccountByIdAt(block1): %v", err)
+	}
+	if got1.Address() != addr1 || got1.Balance() != 111 {
+		t.Fatalf("block1 account = %x balance=%d, want %x balance=111", got1.Address(), got1.Balance(), addr1)
+	}
+	got2, err := b.GetAccountByIdAt([]byte("user1234"), block2.Number())
+	if err != nil {
+		t.Fatalf("GetAccountByIdAt(block2): %v", err)
+	}
+	if got2.Address() != addr2 || got2.Balance() != 222 {
+		t.Fatalf("block2 account = %x balance=%d, want %x balance=222", got2.Address(), got2.Balance(), addr2)
+	}
+}
+
 func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

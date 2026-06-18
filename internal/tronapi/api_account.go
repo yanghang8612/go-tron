@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -210,6 +211,10 @@ func (api *API) accountPermissionUpdate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (api *API) getAccountById(w http.ResponseWriter, r *http.Request) {
+	api.handleGetAccountById(w, r, nil)
+}
+
+func (api *API) handleGetAccountById(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	accountID := r.URL.Query().Get("account_id")
 	if accountID == "" {
 		var body struct {
@@ -219,7 +224,15 @@ func (api *API) getAccountById(w http.ResponseWriter, r *http.Request) {
 			accountID = body.AccountID
 		}
 	}
-	acc, err := api.backend.GetAccountById([]byte(accountID))
+	var (
+		acc *types.Account
+		err error
+	)
+	if boundFn != nil {
+		acc, err = api.backend.GetAccountByIdAt([]byte(accountID), boundFn())
+	} else {
+		acc, err = api.backend.GetAccountById([]byte(accountID))
+	}
 	if err != nil || acc == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("{}"))

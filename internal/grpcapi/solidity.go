@@ -131,6 +131,13 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 		}
 		return acc.Proto(), nil
 	}
+	if len(in.AccountId) > 0 {
+		acc, err := s.backend.GetAccountByIdAt(in.AccountId, s.solidNum())
+		if err != nil || acc == nil {
+			return &corepb.Account{}, nil
+		}
+		return acc.Proto(), nil
+	}
 	return &corepb.Account{}, nil
 }
 

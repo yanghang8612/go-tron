@@ -122,6 +122,8 @@ type isolationStubBackend struct {
 	liveAddr                 common.Address
 	solidAddr                common.Address
 	gotAt                    uint64 // last blockNum passed to GetAccountAt
+	liveAccountIDCalls       int
+	accountIDAtBlock         uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -134,6 +136,16 @@ func (s *isolationStubBackend) GetAccount(addr common.Address) (*types.Account, 
 
 func (s *isolationStubBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
 	s.gotAt = blockNum
+	return types.NewAccount(s.solidAddr, corepb.AccountType_Normal), nil
+}
+
+func (s *isolationStubBackend) GetAccountById(accountID []byte) (*types.Account, error) {
+	s.liveAccountIDCalls++
+	return types.NewAccount(s.liveAddr, corepb.AccountType_Normal), nil
+}
+
+func (s *isolationStubBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	s.accountIDAtBlock = blockNum
 	return types.NewAccount(s.solidAddr, corepb.AccountType_Normal), nil
 }
 
@@ -243,6 +255,72 @@ func TestPbftAccount_isolation(t *testing.T) {
 	}
 	if stub.gotAt != 13 {
 		t.Fatalf("GetAccountAt called with blockNum=%d; want pbftNum=13", stub.gotAt)
+	}
+}
+
+func TestSolidityAccountByIdUsesSolidBoundArchivePath(t *testing.T) {
+	liveAddr := common.Address{0x41, 0x01}
+	solidAddr := common.Address{0x41, 0x02}
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+		liveAddr:         liveAddr,
+		solidAddr:        solidAddr,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletsolidity/getaccountbyid", "application/json", strings.NewReader(`{"account_id":"user1234"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	addrField, _ := got["address"].(string)
+	if !strings.EqualFold(addrField, hex.EncodeToString(solidAddr.Bytes())) {
+		t.Fatalf("response address = %q; want solid sentinel %x (live would be %x)",
+			addrField, solidAddr.Bytes(), liveAddr.Bytes())
+	}
+	if stub.accountIDAtBlock != 42 {
+		t.Fatalf("GetAccountByIdAt block = %d; want solidNum=42", stub.accountIDAtBlock)
+	}
+	if stub.liveAccountIDCalls != 0 {
+		t.Fatalf("live GetAccountById called %d times, want 0", stub.liveAccountIDCalls)
+	}
+}
+
+func TestPbftAccountByIdUsesPbftBoundArchivePath(t *testing.T) {
+	liveAddr := common.Address{0x41, 0x01}
+	solidAddr := common.Address{0x41, 0x02}
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+		liveAddr:         liveAddr,
+		solidAddr:        solidAddr,
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/walletpbft/getaccountbyid", "application/json", strings.NewReader(`{"account_id":"user1234"}`))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	addrField, _ := got["address"].(string)
+	if !strings.EqualFold(addrField, hex.EncodeToString(solidAddr.Bytes())) {
+		t.Fatalf("response address = %q; want pbft sentinel %x (live would be %x)",
+			addrField, solidAddr.Bytes(), liveAddr.Bytes())
+	}
+	if stub.accountIDAtBlock != 13 {
+		t.Fatalf("GetAccountByIdAt block = %d; want pbftNum=13", stub.accountIDAtBlock)
+	}
+	if stub.liveAccountIDCalls != 0 {
+		t.Fatalf("live GetAccountById called %d times, want 0", stub.liveAccountIDCalls)
 	}
 }
 

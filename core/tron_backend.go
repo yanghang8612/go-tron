@@ -1230,6 +1230,35 @@ func (b *TronBackend) GetAccountById(accountID []byte) (*types.Account, error) {
 	return b.GetAccount(addr)
 }
 
+func (b *TronBackend) GetAccountByIdAt(accountID []byte, blockNum uint64) (*types.Account, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	addrBytes, ok, err := session.reader.AccountIdIndexAt(accountID, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read account id index at block %d: %w", blockNum, err)
+	}
+	if !ok || len(addrBytes) == 0 {
+		return nil, fmt.Errorf("account not found")
+	}
+	if len(addrBytes) != tcommon.AddressLength {
+		return nil, fmt.Errorf("account id index malformed at block %d: len=%d", blockNum, len(addrBytes))
+	}
+	var addr tcommon.Address
+	copy(addr[:], addrBytes)
+	acc, err := session.reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account id at block %d: %w", blockNum, err)
+	}
+	if acc == nil {
+		return nil, fmt.Errorf("account not found at block %d", blockNum)
+	}
+	return acc, nil
+}
+
 func (b *TronBackend) GetAccountNet(addr tcommon.Address) (*apipb.AccountNetMessage, error) {
 	root := b.chain.HeadStateRoot()
 	statedb, err := b.chain.openState(root)

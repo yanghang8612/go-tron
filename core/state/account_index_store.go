@@ -92,6 +92,15 @@ func (s *StateDB) ReadAccountIdIndex(accountID []byte) []byte {
 	return raw
 }
 
+// AccountIdIndexAt returns the owner address registered for accountID at the
+// end of blockNum, using temporal SystemAccountIndex history.
+func (r *PersistentHistoryReader) AccountIdIndexAt(accountID []byte, blockNum uint64) ([]byte, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	return r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemAccountIndex, accountIdIndexKVKey(accountID), blockNum)
+}
+
 // HasAccountIdIndex reports whether accountID is registered (case-insensitive).
 // Mirrors java-tron AccountIdIndexStore.has, used by SetAccountIdActuator's
 // uniqueness precheck.
