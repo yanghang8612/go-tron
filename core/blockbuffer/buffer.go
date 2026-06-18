@@ -271,6 +271,16 @@ func (b *bufferBatch) WriteCommitted(dropStale bool) (int, error) {
 	return b.writeFiltered(func(*layer) bool { return true }, dropStale)
 }
 
+// NewestCommittedNumber exposes the parent buffer's newest committed-layer block
+// number so a range-owned latest-domain writer can prune its read-your-writes
+// overlay down to the highest durable block after a partial flush.
+func (b *bufferBatch) NewestCommittedNumber() (uint64, bool) {
+	if b.closed || b.parent == nil {
+		return 0, false
+	}
+	return b.parent.NewestCommittedNumber()
+}
+
 func (b *bufferBatch) writeFiltered(matchCommitted func(*layer) bool, dropStale bool) (int, error) {
 	b.parent.flushMu.Lock()
 	defer b.parent.flushMu.Unlock()

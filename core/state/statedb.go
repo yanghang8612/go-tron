@@ -203,6 +203,15 @@ type CommitOptions struct {
 	// pending latest batch before it is physically flushed. It is only valid
 	// together with CommitWithStatsOptionsInScope.
 	FlushLatestDomain func() error
+	// BlockNumber is the number of the block being committed. It tags the scoped
+	// latest writer's read-your-writes overlay entries so a later partial flush
+	// can prune the ones whose puts are durable in the buffer's committed layers
+	// (deep async-commit overlay pruning). It must match the buffer active-layer
+	// number the latest-domain ops bind to — BeginBlock(block.Number()) precedes
+	// the commit, so callers pass block.Number() here. Required on the scoped
+	// (CommitWithStatsOptionsInScope) path; ignored on the per-block fresh-writer
+	// path, which fully flushes and clears its overlay every commit.
+	BlockNumber uint64
 }
 
 // CommitScope carries the domain transaction objects reused by a staged range
@@ -3046,6 +3055,11 @@ func (s *StateDB) commitWithStatsOptions(opts CommitOptions, scope *CommitScope)
 		defer tx.Close()
 		accountKVTemporalTx = tx
 	}
+	// Tag this block's overlay puts with its number so a later partial flush can
+	// prune the entries whose puts become durable, instead of accumulating the
+	// whole staged range (the deep async-commit overlay leak). On the fresh-writer
+	// path this is harmless: that writer is fully flushed (overlay cleared) below.
+	accountKVLatestWriter.commitBlock = opts.BlockNumber
 	for _, plan := range plans {
 		if err := s.applyAccountPlanFlat(plan, accountKVIndex, accountKVTemporalTx); err != nil {
 			if scope != nil {
