@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/types"
 	"github.com/tronprotocol/go-tron/internal/grpcapi"
 	"github.com/tronprotocol/go-tron/internal/tronapi"
@@ -20,8 +21,14 @@ import (
 // solidTestBackend wraps testBackend with controllable solid/pbft numbers.
 type solidTestBackend struct {
 	testBackend
-	solidNum       uint64
-	lastNumQueried uint64
+	solidNum         uint64
+	lastNumQueried   uint64
+	lastAccountAt    uint64
+	lastRewardAt     uint64
+	liveAccountCalls int
+	liveRewardCalls  int
+	accountAt        *types.Account
+	rewardAt         *tronapi.RewardInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -29,6 +36,32 @@ func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
 func (b *solidTestBackend) GetBlockByNumber(n uint64) (*types.Block, error) {
 	b.lastNumQueried = n
 	return b.testBackend.GetBlockByNumber(n)
+}
+
+func (b *solidTestBackend) GetAccount(addr common.Address) (*types.Account, error) {
+	b.liveAccountCalls++
+	return b.testBackend.GetAccount(addr)
+}
+
+func (b *solidTestBackend) GetAccountAt(addr common.Address, blockNum uint64) (*types.Account, error) {
+	b.lastAccountAt = blockNum
+	if b.accountAt != nil {
+		return b.accountAt, nil
+	}
+	return b.testBackend.GetAccountAt(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) {
+	b.liveRewardCalls++
+	return b.testBackend.GetReward(addr)
+}
+
+func (b *solidTestBackend) GetRewardAt(addr common.Address, blockNum uint64) (*tronapi.RewardInfo, error) {
+	b.lastRewardAt = blockNum
+	if b.rewardAt != nil {
+		return b.rewardAt, nil
+	}
+	return b.testBackend.GetRewardAt(addr, blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -119,6 +152,81 @@ func TestSolidity_GetAccount_ReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestSolidity_GetAccountUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x11)
+	accountAt := types.NewAccount(common.BytesToAddress(addr), corepb.AccountType_Normal)
+	accountAt.SetBalance(200)
+	backend := &solidTestBackend{
+		solidNum:  42,
+		accountAt: accountAt,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetAccount(context.Background(), &corepb.Account{Address: addr})
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	if resp.GetBalance() != 200 {
+		t.Fatalf("GetAccount balance = %d, want 200", resp.GetBalance())
+	}
+	if backend.lastAccountAt != 42 {
+		t.Fatalf("GetAccountAt block = %d, want solid block 42", backend.lastAccountAt)
+	}
+	if backend.liveAccountCalls != 0 {
+		t.Fatalf("live GetAccount called %d times, want 0", backend.liveAccountCalls)
+	}
+}
+
+func TestSolidity_GetAccountByIdAddressUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x22)
+	accountAt := types.NewAccount(common.BytesToAddress(addr), corepb.AccountType_Normal)
+	accountAt.SetBalance(300)
+	backend := &solidTestBackend{
+		solidNum:  77,
+		accountAt: accountAt,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetAccountById(context.Background(), &corepb.Account{Address: addr})
+	if err != nil {
+		t.Fatalf("GetAccountById: %v", err)
+	}
+	if resp.GetBalance() != 300 {
+		t.Fatalf("GetAccountById balance = %d, want 300", resp.GetBalance())
+	}
+	if backend.lastAccountAt != 77 {
+		t.Fatalf("GetAccountAt block = %d, want solid block 77", backend.lastAccountAt)
+	}
+	if backend.liveAccountCalls != 0 {
+		t.Fatalf("live GetAccount called %d times, want 0", backend.liveAccountCalls)
+	}
+}
+
+func TestSolidity_GetRewardInfoUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x33)
+	backend := &solidTestBackend{
+		solidNum: 88,
+		rewardAt: &tronapi.RewardInfo{
+			Reward: 456,
+		},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetRewardInfo(context.Background(), &apipb.BytesMessage{Value: addr})
+	if err != nil {
+		t.Fatalf("GetRewardInfo: %v", err)
+	}
+	if resp.GetNum() != 456 {
+		t.Fatalf("GetRewardInfo = %d, want 456", resp.GetNum())
+	}
+	if backend.lastRewardAt != 88 {
+		t.Fatalf("GetRewardAt block = %d, want solid block 88", backend.lastRewardAt)
+	}
+	if backend.liveRewardCalls != 0 {
+		t.Fatalf("live GetReward called %d times, want 0", backend.liveRewardCalls)
+	}
+}
+
 // TestSolidity_ListWitnesses_Empty checks ListWitnesses with an empty stub.
 func TestSolidity_ListWitnesses_Empty(t *testing.T) {
 	client := newSolidityClient(t, &solidTestBackend{})
@@ -130,4 +238,13 @@ func TestSolidity_ListWitnesses_Empty(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
+}
+
+func solidityTestAddress(fill byte) []byte {
+	addr := make([]byte, common.AddressLength)
+	addr[0] = common.AddressPrefixMainnet
+	for i := 1; i < len(addr); i++ {
+		addr[i] = fill
+	}
+	return addr
 }

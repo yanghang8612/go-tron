@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// SolidityServer implements the WalletSolidity gRPC service. Its block-returning
-// methods are clamped to the latest solidified block; all state queries delegate
-// to the same backend as the main Wallet service (state is monotonic).
+// SolidityServer implements the WalletSolidity gRPC service. Block and state
+// reads are clamped to the latest solidified block so they share the same
+// archive/as-of path as the HTTP /walletsolidity endpoints.
 // Shielded and unimplemented-in-wallet methods return codes.Unimplemented via the
 // embedded stub.
 type SolidityServer struct {
@@ -112,7 +112,7 @@ func (s *SolidityServer) GetAccount(_ context.Context, in *corepb.Account) (*cor
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Address)
-	acc, err := s.backend.GetAccount(addr)
+	acc, err := s.backend.GetAccountAt(addr, s.solidNum())
 	if err != nil || acc == nil {
 		return &corepb.Account{}, nil
 	}
@@ -125,7 +125,7 @@ func (s *SolidityServer) GetAccountById(_ context.Context, in *corepb.Account) (
 	}
 	if len(in.Address) > 0 {
 		addr := common.BytesToAddress(in.Address)
-		acc, err := s.backend.GetAccount(addr)
+		acc, err := s.backend.GetAccountAt(addr, s.solidNum())
 		if err != nil || acc == nil {
 			return &corepb.Account{}, nil
 		}
@@ -334,7 +334,7 @@ func (s *SolidityServer) GetRewardInfo(_ context.Context, in *apipb.BytesMessage
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	info, err := s.backend.GetReward(addr)
+	info, err := s.backend.GetRewardAt(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

@@ -684,7 +684,10 @@ Status:
   The same restored backend now also starts the real TRON HTTP and JSON-RPC
   server lifecycles on port `0`, discovers their bound addresses, and sends
   archive API requests through those listeners instead of only through
-  in-memory `httptest` handlers.
+  in-memory `httptest` handlers. gRPC `WalletSolidity` account and reward
+  methods now also dispatch through the solid-block `GetAccountAt`/`GetRewardAt`
+  backend paths instead of live-head reads, with tests pinning that route to
+  the shared archive/as-of state session boundary.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
