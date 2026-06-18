@@ -514,6 +514,21 @@ func (b *TronBackend) dynamicPropertiesAtKeys(reader *state.PersistentHistoryRea
 	return dp, nil
 }
 
+func (b *TronBackend) dynamicStringPropertiesAtKeys(reader *state.PersistentHistoryReader, blockNum uint64, keys []string) (*state.DynamicProperties, error) {
+	dp := state.NewDynamicProperties()
+	for _, key := range keys {
+		value, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(key), blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		dp.SetString(key, string(value))
+	}
+	return dp, nil
+}
+
 func (b *TronBackend) GetChainParameters() []tronapi.ChainParameter {
 	return chainParametersFromDynamicProperties(b.chain.DynProps())
 }
@@ -1484,12 +1499,54 @@ func (b *TronBackend) GetBurnTrx() int64 {
 	return b.chain.DynProps().BurnTrxAmount()
 }
 
+func (b *TronBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return 0, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, []string{"burn_trx_amount"})
+	if err != nil {
+		return 0, fmt.Errorf("reconstruct burn TRX at block %d: %w", blockNum, err)
+	}
+	return dynProps.BurnTrxAmount(), nil
+}
+
 func (b *TronBackend) GetBandwidthPrices() string {
 	return b.chain.DynProps().BandwidthPriceHistory()
 }
 
+func (b *TronBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicStringPropertiesAtKeys(session.reader, blockNum, []string{"bandwidth_price_history"})
+	if err != nil {
+		return "", fmt.Errorf("reconstruct bandwidth prices at block %d: %w", blockNum, err)
+	}
+	return dynProps.BandwidthPriceHistory(), nil
+}
+
 func (b *TronBackend) GetEnergyPrices() string {
 	return b.chain.DynProps().EnergyPriceHistory()
+}
+
+func (b *TronBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicStringPropertiesAtKeys(session.reader, blockNum, []string{"energy_price_history"})
+	if err != nil {
+		return "", fmt.Errorf("reconstruct energy prices at block %d: %w", blockNum, err)
+	}
+	return dynProps.EnergyPriceHistory(), nil
 }
 
 func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {

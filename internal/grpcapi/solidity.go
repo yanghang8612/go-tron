@@ -457,13 +457,25 @@ func (s *SolidityServer) GetMarketPriceByPair(_ context.Context, in *corepb.Mark
 // ── Price history ──────────────────────────────────────────────────────────────
 
 func (s *SolidityServer) GetBandwidthPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetBandwidthPrices()}, nil
+	prices, err := s.backend.GetBandwidthPricesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 func (s *SolidityServer) GetEnergyPrices(_ context.Context, _ *apipb.EmptyMessage) (*apipb.PricesResponseMessage, error) {
-	return &apipb.PricesResponseMessage{Prices: s.backend.GetEnergyPrices()}, nil
+	prices, err := s.backend.GetEnergyPricesAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.PricesResponseMessage{Prices: prices}, nil
 }
 
 func (s *SolidityServer) GetBurnTrx(_ context.Context, _ *apipb.EmptyMessage) (*apipb.NumberMessage, error) {
-	return &apipb.NumberMessage{Num: s.backend.GetBurnTrx()}, nil
+	burned, err := s.backend.GetBurnTrxAt(s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: burned}, nil
 }

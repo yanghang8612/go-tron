@@ -231,6 +231,9 @@ func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, erro
 func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
 func (s *stubBackend) TotalTransaction() int64                    { return 0 }
 func (s *stubBackend) GetBurnTrx() int64                          { return 0 }
+func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	return 0, nil
+}
 func (s *stubBackend) BuildFreezeBalanceV2Transaction(owner common.Address, amount int64, resource corepb.ResourceCode) (*corepb.Transaction, error) {
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
@@ -253,7 +256,13 @@ func (s *stubBackend) BuildVoteWitnessTransaction(owner common.Address, votes ma
 	return &corepb.Transaction{RawData: &corepb.TransactionRaw{}}, nil
 }
 func (s *stubBackend) GetBandwidthPrices() string { return "" }
-func (s *stubBackend) GetEnergyPrices() string    { return "" }
+func (s *stubBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
+func (s *stubBackend) GetEnergyPrices() string { return "" }
+func (s *stubBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	return "", nil
+}
 func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
 	if len(s.proposals) == 0 {
 		return nil, nil

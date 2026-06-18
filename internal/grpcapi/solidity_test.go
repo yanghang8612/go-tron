@@ -41,6 +41,9 @@ type solidTestBackend struct {
 	lastCanDelegateAt  uint64
 	lastAvailableAt    uint64
 	lastCanWithdrawAt  uint64
+	lastBurnAt         uint64
+	lastBandwidthAt    uint64
+	lastEnergyAt       uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -57,6 +60,9 @@ type solidTestBackend struct {
 	liveCanDelegate    int
 	liveAvailable      int
 	liveCanWithdraw    int
+	liveBurn           int
+	liveBandwidth      int
+	liveEnergy         int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -73,6 +79,9 @@ type solidTestBackend struct {
 	canDelegateAt      *tronapi.CanDelegateInfo
 	availableAt        *tronapi.AvailableUnfreezeCountInfo
 	canWithdrawAt      *tronapi.CanWithdrawUnfreezeInfo
+	burnAt             int64
+	bandwidthAt        string
+	energyAt           string
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -288,6 +297,45 @@ func (b *solidTestBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, t
 		return b.canWithdrawAt, nil
 	}
 	return b.testBackend.GetCanWithdrawUnfreezeAmountAt(addr, timestamp, blockNum)
+}
+
+func (b *solidTestBackend) GetBurnTrx() int64 {
+	b.liveBurn++
+	return b.testBackend.GetBurnTrx()
+}
+
+func (b *solidTestBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
+	b.lastBurnAt = blockNum
+	if b.burnAt != 0 {
+		return b.burnAt, nil
+	}
+	return b.testBackend.GetBurnTrxAt(blockNum)
+}
+
+func (b *solidTestBackend) GetBandwidthPrices() string {
+	b.liveBandwidth++
+	return b.testBackend.GetBandwidthPrices()
+}
+
+func (b *solidTestBackend) GetBandwidthPricesAt(blockNum uint64) (string, error) {
+	b.lastBandwidthAt = blockNum
+	if b.bandwidthAt != "" {
+		return b.bandwidthAt, nil
+	}
+	return b.testBackend.GetBandwidthPricesAt(blockNum)
+}
+
+func (b *solidTestBackend) GetEnergyPrices() string {
+	b.liveEnergy++
+	return b.testBackend.GetEnergyPrices()
+}
+
+func (b *solidTestBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
+	b.lastEnergyAt = blockNum
+	if b.energyAt != "" {
+		return b.energyAt, nil
+	}
+	return b.testBackend.GetEnergyPricesAt(blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -769,6 +817,58 @@ func TestSolidity_ListExchangesUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveExchanges != 0 {
 		t.Fatalf("live ListExchanges called %d times, want 0", backend.liveExchanges)
+	}
+}
+
+func TestSolidity_DynamicPropertyQueriesUseSolidBoundArchivePath(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum:    95,
+		burnAt:      123456,
+		bandwidthAt: "0:10,95:20",
+		energyAt:    "0:100,95:200",
+	}
+	client := newSolidityClient(t, backend)
+
+	burn, err := client.GetBurnTrx(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("GetBurnTrx: %v", err)
+	}
+	if burn.GetNum() != 123456 {
+		t.Fatalf("GetBurnTrx = %d, want solid-bound sentinel 123456", burn.GetNum())
+	}
+	if backend.lastBurnAt != 95 {
+		t.Fatalf("GetBurnTrxAt block = %d, want solid block 95", backend.lastBurnAt)
+	}
+	if backend.liveBurn != 0 {
+		t.Fatalf("live GetBurnTrx called %d times, want 0", backend.liveBurn)
+	}
+
+	bandwidth, err := client.GetBandwidthPrices(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("GetBandwidthPrices: %v", err)
+	}
+	if bandwidth.GetPrices() != "0:10,95:20" {
+		t.Fatalf("GetBandwidthPrices = %q, want solid-bound sentinel", bandwidth.GetPrices())
+	}
+	if backend.lastBandwidthAt != 95 {
+		t.Fatalf("GetBandwidthPricesAt block = %d, want solid block 95", backend.lastBandwidthAt)
+	}
+	if backend.liveBandwidth != 0 {
+		t.Fatalf("live GetBandwidthPrices called %d times, want 0", backend.liveBandwidth)
+	}
+
+	energy, err := client.GetEnergyPrices(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("GetEnergyPrices: %v", err)
+	}
+	if energy.GetPrices() != "0:100,95:200" {
+		t.Fatalf("GetEnergyPrices = %q, want solid-bound sentinel", energy.GetPrices())
+	}
+	if backend.lastEnergyAt != 95 {
+		t.Fatalf("GetEnergyPricesAt block = %d, want solid block 95", backend.lastEnergyAt)
+	}
+	if backend.liveEnergy != 0 {
+		t.Fatalf("live GetEnergyPrices called %d times, want 0", backend.liveEnergy)
 	}
 }
 

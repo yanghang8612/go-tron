@@ -725,6 +725,10 @@ Status:
   (`GetCanDelegatedMaxSize`, `GetAvailableUnfreezeCount`,
   `GetCanWithdrawUnfreezeAmount`) now use solid-bound archive account and
   `SystemDelegation` history instead of live-head state.
+  gRPC `WalletSolidity.GetBurnTrx`, `GetBandwidthPrices`, and
+  `GetEnergyPrices` now likewise read solid-bound `SystemDynamicProperty`
+  history, including string-typed price-history rows, instead of live-head
+  dynamic properties.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

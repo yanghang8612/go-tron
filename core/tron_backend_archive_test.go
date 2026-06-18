@@ -309,6 +309,9 @@ func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
 		dynProps := state.NewDynamicProperties()
 		dynProps.SetNextMaintenanceTime(n * 1000)
 		dynProps.SetTotalEnergyWeight(n * 10)
+		dynProps.AddBurnTrx(n * 100)
+		dynProps.SetBandwidthPriceHistory("0:10," + strconv.FormatInt(n, 10) + ":20")
+		dynProps.SetEnergyPriceHistory("0:100," + strconv.FormatInt(n, 10) + ":200")
 		if err := dynProps.FlushRooted(statedb); err != nil {
 			t.Fatalf("flush dynamic properties block %d: %v", n, err)
 		}
@@ -339,6 +342,48 @@ func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
 	}
 	if next2 != 2000 {
 		t.Fatalf("NextMaintenanceTimeAt(block2) = %d, want 2000", next2)
+	}
+	burn1, err := b.GetBurnTrxAt(block1.Number())
+	if err != nil {
+		t.Fatalf("GetBurnTrxAt(block1): %v", err)
+	}
+	if burn1 != 100 {
+		t.Fatalf("GetBurnTrxAt(block1) = %d, want 100", burn1)
+	}
+	burn2, err := b.GetBurnTrxAt(block2.Number())
+	if err != nil {
+		t.Fatalf("GetBurnTrxAt(block2): %v", err)
+	}
+	if burn2 != 200 {
+		t.Fatalf("GetBurnTrxAt(block2) = %d, want 200", burn2)
+	}
+	bandwidth1, err := b.GetBandwidthPricesAt(block1.Number())
+	if err != nil {
+		t.Fatalf("GetBandwidthPricesAt(block1): %v", err)
+	}
+	if bandwidth1 != "0:10,1:20" {
+		t.Fatalf("GetBandwidthPricesAt(block1) = %q, want 0:10,1:20", bandwidth1)
+	}
+	bandwidth2, err := b.GetBandwidthPricesAt(block2.Number())
+	if err != nil {
+		t.Fatalf("GetBandwidthPricesAt(block2): %v", err)
+	}
+	if bandwidth2 != "0:10,2:20" {
+		t.Fatalf("GetBandwidthPricesAt(block2) = %q, want 0:10,2:20", bandwidth2)
+	}
+	energy1, err := b.GetEnergyPricesAt(block1.Number())
+	if err != nil {
+		t.Fatalf("GetEnergyPricesAt(block1): %v", err)
+	}
+	if energy1 != "0:100,1:200" {
+		t.Fatalf("GetEnergyPricesAt(block1) = %q, want 0:100,1:200", energy1)
+	}
+	energy2, err := b.GetEnergyPricesAt(block2.Number())
+	if err != nil {
+		t.Fatalf("GetEnergyPricesAt(block2): %v", err)
+	}
+	if energy2 != "0:100,2:200" {
+		t.Fatalf("GetEnergyPricesAt(block2) = %q, want 0:100,2:200", energy2)
 	}
 
 	paramValue := func(blockNum uint64, key string) int64 {

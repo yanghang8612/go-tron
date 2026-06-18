@@ -247,10 +247,13 @@ type Backend interface {
 	// Chain-level counters (stubs until dynamic-properties tracking is wired)
 	TotalTransaction() int64
 	GetBurnTrx() int64
+	GetBurnTrxAt(blockNum uint64) (int64, error)
 
 	// Historical price strings (encoded as "blockNum:price,blockNum:price,...")
 	GetBandwidthPrices() string
+	GetBandwidthPricesAt(blockNum uint64) (string, error)
 	GetEnergyPrices() string
+	GetEnergyPricesAt(blockNum uint64) (string, error)
 
 	// Paginated queries
 	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
