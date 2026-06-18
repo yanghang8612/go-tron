@@ -421,6 +421,59 @@ func TestApplyFetchReceiptSessionLockedRunOrdersSettlementBufferAndRefill(t *tes
 	}
 }
 
+func TestApplyFetchReceiptSessionLockedRunFromStateAcknowledgesBeforePlanning(t *testing.T) {
+	batch := []types.BlockID{queueID(20), queueID(21)}
+	request := NewFetchRequestState(batch)
+	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: batch[0]}
+	applier := &recordingFetchReceiptSessionRunApplier{buffer: buffer}
+
+	result := ApplyFetchReceiptSessionLockedRunFromState(FetchReceiptSessionLockedRunInput{
+		State: FetchReceiptState{
+			Inflight:   request.Inflight,
+			Pending:    request.Pending,
+			PendingIDs: request.PendingIDs,
+		},
+		Hash: batch[0].Hash,
+		Num:  batch[0].Num,
+	}, applier)
+
+	if !result.Plan.Settlement.Accepted || result.Plan.Settlement.Inflight != 1 || result.Plan.Settlement.BatchDone {
+		t.Fatalf("settlement = %+v, want accepted with one in-flight remaining", result.Plan.Settlement)
+	}
+	if _, ok := request.Pending[batch[0].Hash]; ok {
+		t.Fatal("acked pending entry remained after session run")
+	}
+	if got, want := request.Pending[batch[1].Hash], batch[1].Num; got != want {
+		t.Fatalf("remaining pending = %d, want %d", got, want)
+	}
+	wantEvents := []string{"delete", "advance", "inflight", "stop", "rearm", "plan-buffer", "stage", "mirror"}
+	if !reflect.DeepEqual(applier.events, wantEvents) {
+		t.Fatalf("events = %+v, want %+v", applier.events, wantEvents)
+	}
+}
+
+func TestApplyFetchReceiptSessionLockedRunFromStateRejectsUnknownHash(t *testing.T) {
+	request := NewFetchRequestState([]types.BlockID{queueID(20)})
+	applier := &recordingFetchReceiptSessionRunApplier{buffer: FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}}
+
+	result := ApplyFetchReceiptSessionLockedRunFromState(FetchReceiptSessionLockedRunInput{
+		State: FetchReceiptState{
+			Inflight:   request.Inflight,
+			Pending:    request.Pending,
+			PendingIDs: request.PendingIDs,
+		},
+		Hash: queueID(99).Hash,
+		Num:  99,
+	}, applier)
+
+	if !reflect.DeepEqual(result.Plan, FetchReceiptRunPlan{}) || len(result.LockedPreBuffer.AppliedSteps) != 0 || len(result.Buffer.AppliedActions) != 0 || len(applier.events) != 0 {
+		t.Fatalf("rejected result/events = %+v/%+v, want no side effects", result, applier.events)
+	}
+	if _, ok := request.Pending[queueID(20).Hash]; !ok {
+		t.Fatal("pending entry was deleted for rejected receipt")
+	}
+}
+
 func TestApplyFetchReceiptSessionAfterUnlockDrainsBeforeDispatch(t *testing.T) {
 	buffer := FetchedBlockBufferPlan{Action: FetchedBlockBufferStage, ID: queueID(20)}
 	applier := &recordingFetchReceiptSessionRunApplier{

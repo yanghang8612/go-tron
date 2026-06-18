@@ -53,6 +53,14 @@ type FetchReceiptRunInput struct {
 	Receipt FetchReceiptResult
 }
 
+// FetchReceiptSessionLockedRunInput is the peer-local fetch state plus the
+// received block identity for one lock-held receipt session.
+type FetchReceiptSessionLockedRunInput struct {
+	State FetchReceiptState
+	Hash  tcommon.Hash
+	Num   uint64
+}
+
 // FetchReceiptSettlement is the downloader-owned state-machine decision after
 // acknowledging one received FETCH_INV_DATA block.
 type FetchReceiptSettlement struct {
@@ -394,6 +402,15 @@ func ApplyFetchReceiptSessionLockedRun(in FetchReceiptRunInput, applier FetchRec
 	result.LockedPostBuffer = post.LockedPostBuffer
 	result.OutboundRequests = post.LockedPostBuffer.OutboundRequests
 	return result
+}
+
+// ApplyFetchReceiptSessionLockedRunFromState acknowledges the received block
+// against the peer-local in-flight request state, then runs the lock-held
+// receipt session. Unknown or number-mismatched bodies produce no settlement,
+// buffer, or fetch-refill side effects.
+func ApplyFetchReceiptSessionLockedRunFromState(in FetchReceiptSessionLockedRunInput, applier FetchReceiptSessionLockedRunPlanApplier) FetchReceiptSessionLockedRunApplyResult {
+	receipt := AcknowledgeFetchReceipt(in.State, in.Hash, in.Num)
+	return ApplyFetchReceiptSessionLockedRun(FetchReceiptRunInput{Receipt: receipt}, applier)
 }
 
 // ApplyFetchReceiptRunLockedBufferPlan executes the lock-held local

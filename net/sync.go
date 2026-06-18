@@ -1291,15 +1291,6 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 	}
 	blockHash := block.Hash()
 	blockNum := block.Number()
-	ack := syncdl.AcknowledgeFetchReceipt(syncdl.FetchReceiptState{
-		Inflight:   ps.inflight,
-		Pending:    ps.pending,
-		PendingIDs: ps.pendingIDs,
-	}, blockHash, blockNum)
-	if !ack.Accepted {
-		ss.mu.Unlock()
-		return true
-	}
 	receiptApplier := &syncFetchReceiptSessionRunApplier{
 		syncFetchReceiptSettlementApplier: &syncFetchReceiptSettlementApplier{
 			service:   ss,
@@ -1310,7 +1301,19 @@ func (ss *SyncService) HandleBlock(peer *p2p.Peer, block *types.Block, raw []byt
 		block: block,
 		raw:   raw,
 	}
-	receiptRun := syncdl.ApplyFetchReceiptSessionLockedRun(syncdl.FetchReceiptRunInput{Receipt: ack}, receiptApplier)
+	receiptRun := syncdl.ApplyFetchReceiptSessionLockedRunFromState(syncdl.FetchReceiptSessionLockedRunInput{
+		State: syncdl.FetchReceiptState{
+			Inflight:   ps.inflight,
+			Pending:    ps.pending,
+			PendingIDs: ps.pendingIDs,
+		},
+		Hash: blockHash,
+		Num:  blockNum,
+	}, receiptApplier)
+	if !receiptRun.Plan.Settlement.Accepted {
+		ss.mu.Unlock()
+		return true
+	}
 	ss.mu.Unlock()
 
 	syncdl.ApplyFetchReceiptSessionAfterUnlockPlan(receiptRun.Plan, receiptRun.OutboundRequests, receiptApplier, syncFetchReceiptDispatchApplier{service: ss, out: receiptApplier.out})

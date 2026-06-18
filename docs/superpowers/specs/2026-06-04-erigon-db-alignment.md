@@ -316,11 +316,12 @@ Status:
   send the wire batch), leaving `SyncService` to apply timers and network sends.
   Outbound fetch batches also build their in-flight
   pending/requested-hash bookkeeping through downloader helpers, and received
-  block acks use the same helper boundary to validate pending hashes, delete
-  peer-local pending rows, and decrement in-flight counts before `SyncService`
-  updates the global requested marks. The accepted-body buffer decision now
-  also gathers current-head, duplicate-buffer, and path-reservation facts
-  through a downloader reader boundary before staging the raw block body.
+  block acks use a downloader receipt-session helper to validate pending
+  hashes, delete peer-local pending rows, decrement in-flight counts, and
+  order buffer planning/refill side effects before `SyncService` updates the
+  global requested marks. The accepted-body buffer decision now also gathers
+  current-head, duplicate-buffer, and path-reservation facts through a
+  downloader reader boundary before staging the raw block body.
   Timeout/disconnect failover now also uses a downloader plan for reset vs
   mirror vs fresh-peer search after remaining peers have had a chance to fill
   fetch slots. Parallel peer join capacity and join-attempt throttling are
