@@ -207,7 +207,10 @@ func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, targetTraceRead
 	}
 
 	if err := rawdb.IterateAccountTraceRows(replay, int64(blockNum), int64(blockNum), func(owner []byte, traceBlock int64, balance int64) (bool, error) {
-		existingBalance, ok := rawdb.ReadAccountTrace(targetTraceReader, owner, traceBlock)
+		existingBalance, ok, err := rawdb.ReadAccountTraceStrict(targetTraceReader, owner, traceBlock)
+		if err != nil {
+			return false, fmt.Errorf("core: target AccountTrace at block %d owner %x is corrupt: %w", traceBlock, owner, err)
+		}
 		if ok {
 			if existingBalance == balance {
 				result.ExistingAccountTraces++

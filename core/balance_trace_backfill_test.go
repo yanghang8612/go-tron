@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -186,6 +187,32 @@ func TestBackfillBalanceTracesByReplayRejectsCorruptColdTargetTrace(t *testing.T
 	}
 }
 
+func TestBackfillBalanceTracesByReplayRejectsCorruptColdTargetAccountTrace(t *testing.T) {
+	sourceDB, _, genesis, _ := newBalanceTraceBackfillSource(t)
+	cold := newBalanceTraceBackfillColdTraceReader()
+	cold.accountTraceErr = errors.New("cold account trace corrupt")
+	targetReader := rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{})
+	targetReader.SetBalanceTraceReader(cold)
+
+	_, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		sourceDB,
+		ethrawdb.NewMemoryDatabase(),
+		genesis,
+		BalanceTraceReplayBackfillOptions{
+			FromBlock:         1,
+			ToBlock:           1,
+			TargetTraceReader: targetReader,
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "target AccountTrace") || !strings.Contains(err.Error(), "cold account trace corrupt") {
+		t.Fatalf("BackfillBalanceTracesByReplay corrupt cold account trace error = %v, want corrupt account trace error", err)
+	}
+	if _, ok := rawdb.ReadAccountTrace(sourceDB, testInsertAddr(1).Bytes(), 1); ok {
+		t.Fatal("hot sender AccountTrace written despite corrupt cold target rejection")
+	}
+}
+
 func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
 	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
 	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)
@@ -307,8 +334,9 @@ func (a *balanceTraceBackfillCountingAncient) Ancient(kind string, number uint64
 }
 
 type balanceTraceBackfillColdTraceReader struct {
-	blockTraces   map[int64]*contractpb.BlockBalanceTrace
-	accountTraces map[string]map[int64]int64
+	blockTraces     map[int64]*contractpb.BlockBalanceTrace
+	accountTraces   map[string]map[int64]int64
+	accountTraceErr error
 }
 
 func newBalanceTraceBackfillColdTraceReader() *balanceTraceBackfillColdTraceReader {
@@ -324,6 +352,9 @@ func (r *balanceTraceBackfillColdTraceReader) BlockBalanceTrace(blockNum int64) 
 }
 
 func (r *balanceTraceBackfillColdTraceReader) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	if r.accountTraceErr != nil {
+		return 0, 0, false, r.accountTraceErr
+	}
 	rows := r.accountTraces[string(owner)]
 	var bestBlock int64
 	var bestBalance int64

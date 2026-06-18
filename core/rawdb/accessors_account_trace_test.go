@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -30,6 +31,20 @@ func TestAccountTrace_RoundTrip(t *testing.T) {
 	got, ok := ReadAccountTrace(db, owner, 100)
 	if !ok || got != 9_000_000 {
 		t.Fatalf("round-trip: got (%d, %v), want (9000000, true)", got, ok)
+	}
+}
+
+func TestAccountTraceStrictReportsMalformedHotRow(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	owner := mustAddr(0xab)
+	if err := db.Put(accountTraceKey(owner, 100), []byte{0xff, 0xfe}); err != nil {
+		t.Fatalf("put malformed account trace: %v", err)
+	}
+	if got, ok := ReadAccountTrace(db, owner, 100); ok || got != 0 {
+		t.Fatalf("ReadAccountTrace malformed hot row = %d/%v, want compatibility miss", got, ok)
+	}
+	if got, ok, err := ReadAccountTraceStrict(db, owner, 100); err == nil || ok || got != 0 || !strings.Contains(err.Error(), "unmarshal") {
+		t.Fatalf("ReadAccountTraceStrict malformed hot row = %d/%v/%v, want unmarshal error", got, ok, err)
 	}
 }
 

@@ -37,6 +37,24 @@ func ReadAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (in
 	return balance, true
 }
 
+// ReadAccountTraceStrict returns the exact-height account trace and preserves
+// malformed hot rows or cold sidecar lookup errors for integrity-sensitive
+// rebuild/backfill paths.
+func ReadAccountTraceStrict(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool, error) {
+	if len(owner) == 0 {
+		return 0, false, fmt.Errorf("account trace: empty owner")
+	}
+	balance, ok, err := readHotAccountTrace(db, owner, blockNum)
+	if err != nil || ok {
+		return balance, ok, err
+	}
+	traceBlock, balance, ok, err := readColdAccountTraceAtOrBefore(db, owner, blockNum)
+	if err != nil || !ok || traceBlock != blockNum {
+		return 0, false, err
+	}
+	return balance, true, nil
+}
+
 func readHotAccountTrace(db ethdb.KeyValueReader, owner []byte, blockNum int64) (int64, bool, error) {
 	if db == nil {
 		return 0, false, fmt.Errorf("account trace: nil database")
