@@ -11,6 +11,7 @@ import (
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	coretypes "github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
@@ -776,21 +777,89 @@ func TestEventLogSegmentBuildRejectsMismatchedTransactionInfo(t *testing.T) {
 }
 
 func TestEventLogSegmentBuildRejectsMismatchedTransactionInfoBlockNumber(t *testing.T) {
-	db := rawdb.NewMemoryChainDB()
+	hot := rawdb.NewMemoryDatabase()
 	block, infos := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{{
 		Address: eventLogTestAddress(0x93),
 		Data:    []byte{0x03},
 	}})
 	infos[0].BlockNumber = 2
-	if err := rawdb.WriteBlock(db, block); err != nil {
+	if err := rawdb.WriteBlock(hot, block); err != nil {
 		t.Fatalf("WriteBlock: %v", err)
 	}
-	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
-	}
+	db := rawdb.NewChainDB(hot, eventLogTestAncientWithTxInfos(t, 1, &corepb.TransactionRet{
+		BlockNumber:     1,
+		Transactioninfo: infos,
+	}))
 	if _, err := BuildEventLogSegmentFromChain(db, t.TempDir(), "", 1, 1); err == nil || !strings.Contains(err.Error(), "transaction info block number 2") {
 		t.Fatalf("BuildEventLogSegmentFromChain error = %v, want block number mismatch", err)
 	}
+}
+
+type eventLogTestAncient struct {
+	rows map[string]map[uint64][]byte
+}
+
+func eventLogTestAncientWithTxInfos(t *testing.T, blockNum uint64, ret *corepb.TransactionRet) eventLogTestAncient {
+	t.Helper()
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal ancient TransactionRet: %v", err)
+	}
+	return eventLogTestAncient{rows: map[string]map[uint64][]byte{
+		rawdb.AncientTxInfosTable: {blockNum: data},
+	}}
+}
+
+func (a eventLogTestAncient) Ancient(kind string, number uint64) ([]byte, error) {
+	if rows := a.rows[kind]; rows != nil {
+		if data, ok := rows[number]; ok {
+			return append([]byte(nil), data...), nil
+		}
+	}
+	return nil, rawdb.ErrNotInAncient
+}
+
+func (a eventLogTestAncient) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
+	if count == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, 0, count)
+	var total uint64
+	for i := uint64(0); i < count; i++ {
+		data, err := a.Ancient(kind, start+i)
+		if err != nil {
+			if len(out) != 0 && err == rawdb.ErrNotInAncient {
+				break
+			}
+			return nil, err
+		}
+		if maxBytes > 0 && len(out) != 0 && total+uint64(len(data)) > maxBytes {
+			break
+		}
+		out = append(out, data)
+		total += uint64(len(data))
+	}
+	if len(out) == 0 {
+		return nil, rawdb.ErrNotInAncient
+	}
+	return out, nil
+}
+
+func (a eventLogTestAncient) AncientCount(kind string) (uint64, error) {
+	rows := a.rows[kind]
+	var max uint64
+	for number := range rows {
+		if number+1 > max {
+			max = number + 1
+		}
+	}
+	return max, nil
+}
+
+func (a eventLogTestAncient) HasAncient(kind string, number uint64) (bool, error) {
+	rows := a.rows[kind]
+	_, ok := rows[number]
+	return ok, nil
 }
 
 func eventLogTestBlock(t *testing.T, number uint64, logs []*corepb.TransactionInfo_Log) (*coretypes.Block, []*corepb.TransactionInfo) {

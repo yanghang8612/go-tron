@@ -113,10 +113,8 @@ func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLoo
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.
 func WriteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64, infos []*corepb.TransactionInfo) error {
-	for txIndex, info := range infos {
-		if info == nil {
-			return fmt.Errorf("rawdb: nil transaction info at block %d index %d", blockNum, txIndex)
-		}
+	if err := validateTransactionInfosForKey(blockNum, infos, "write transaction infos by block"); err != nil {
+		return err
 	}
 	ret := &corepb.TransactionRet{
 		BlockNumber:     int64(blockNum),
@@ -188,6 +186,18 @@ func transactionInfoBlockNumberMatches(got int64, want uint64) bool {
 		return false
 	}
 	return uint64(got) == want
+}
+
+func validateTransactionInfosForKey(blockNum uint64, infos []*corepb.TransactionInfo, context string) error {
+	for txIndex, info := range infos {
+		if info == nil {
+			return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
+		}
+		if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+			return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during %s", info.BlockNumber, blockNum, txIndex, context)
+		}
+	}
+	return nil
 }
 
 // WriteTransactionIndex stores a tx-hash to block-number mapping.

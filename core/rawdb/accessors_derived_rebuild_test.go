@@ -151,9 +151,10 @@ func TestRebuildTransactionDerivedIndexesRejectsMismatchedTransactionInfo(t *tes
 	if err := WriteBlock(wrongBlockDB, block); err != nil {
 		t.Fatalf("WriteBlock wrongBlockDB: %v", err)
 	}
-	if err := WriteTransactionInfosByBlock(wrongBlockDB, 1, infos); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock wrongBlockDB: %v", err)
-	}
+	writeRawTransactionRetForTest(t, wrongBlockDB, 1, &corepb.TransactionRet{
+		BlockNumber:     1,
+		Transactioninfo: infos,
+	})
 	if _, err := RebuildTransactionDerivedIndexesFromBlocks(wrongBlockDB, wrongBlockDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "transaction info block number") {
 		t.Fatalf("wrong block tx-info err = %v, want block number mismatch", err)
 	}
@@ -296,9 +297,10 @@ func TestRebuildSectionBloomsRejectsBadInputs(t *testing.T) {
 	if err := WriteBlock(wrongBlockDB, block); err != nil {
 		t.Fatalf("WriteBlock wrongBlockDB: %v", err)
 	}
-	if err := WriteTransactionInfosByBlock(wrongBlockDB, 1, infos); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock wrongBlockDB: %v", err)
-	}
+	writeRawTransactionRetForTest(t, wrongBlockDB, 1, &corepb.TransactionRet{
+		BlockNumber:     1,
+		Transactioninfo: infos,
+	})
 	if _, err := RebuildSectionBloomsFromTransactionInfos(wrongBlockDB, wrongBlockDB, wrongBlockDB, 1, 1, etl.Options{TempDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "transaction info block number") {
 		t.Fatalf("wrong block tx-info err = %v, want block number mismatch", err)
 	}

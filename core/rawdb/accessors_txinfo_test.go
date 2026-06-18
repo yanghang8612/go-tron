@@ -154,11 +154,12 @@ func TestReadTransactionInfoDoesNotScanAfterMismatchedColdTxPosition(t *testing.
 func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x37}, common.HashLength)
-	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
-		{Fee: 999, BlockNumber: 8, BlockTimeStamp: 7000},
-	}); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
-	}
+	writeRawTransactionRetForTest(t, db, 7, &corepb.TransactionRet{
+		BlockNumber: 7,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Fee: 999, BlockNumber: 8, BlockTimeStamp: 7000},
+		},
+	})
 	var hash common.Hash
 	copy(hash[:], txID)
 	db.SetChainIndexReader(&fakeChainIndex{
@@ -172,11 +173,12 @@ func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
 	}
 
 	txID2 := bytes.Repeat([]byte{0x38}, common.HashLength)
-	if err := WriteTransactionInfosByBlock(db, 9, []*corepb.TransactionInfo{
-		{Id: txID2, Fee: 111, BlockNumber: 10, BlockTimeStamp: 9000},
-	}); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock scan fixture: %v", err)
-	}
+	writeRawTransactionRetForTest(t, db, 9, &corepb.TransactionRet{
+		BlockNumber: 9,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: txID2, Fee: 111, BlockNumber: 10, BlockTimeStamp: 9000},
+		},
+	})
 	if err := WriteTransactionIndex(db, txID2, 9); err != nil {
 		t.Fatalf("WriteTransactionIndex: %v", err)
 	}
@@ -303,11 +305,33 @@ func TestWriteTransactionInfosByBlockRejectsNilEntry(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionInfosByBlockRejectsMismatchedBlockNumber(t *testing.T) {
+	db := NewMemoryChainDB()
+	err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{{BlockNumber: 6}})
+	if err == nil || !strings.Contains(err.Error(), "transaction info block number 6") {
+		t.Fatalf("WriteTransactionInfosByBlock err = %v, want block number mismatch", err)
+	}
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("ReadTransactionInfosByBlock after rejected write = %+v, want nil", got)
+	}
+}
+
 func TestReadTransactionInfosByBlock_NotFound(t *testing.T) {
 	db := NewMemoryChainDB()
 	got := ReadTransactionInfosByBlock(db, 999)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 infos, got %d", len(got))
+	}
+}
+
+func writeRawTransactionRetForTest(t *testing.T, db *ChainDB, blockNum uint64, ret *corepb.TransactionRet) {
+	t.Helper()
+	data, err := proto.Marshal(ret)
+	if err != nil {
+		t.Fatalf("marshal raw TransactionRet: %v", err)
+	}
+	if err := db.Put(txInfoBlockKey(blockNum), data); err != nil {
+		t.Fatalf("put raw TransactionRet: %v", err)
 	}
 }
 
