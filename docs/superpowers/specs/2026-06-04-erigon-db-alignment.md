@@ -993,6 +993,11 @@ Status:
   replay backfill uses that archive view when checking existing target rows, so
   a pruned hot trace that is still present in a verified cold sidecar is counted
   as existing instead of being duplicated back into Pebble.
+- The standalone `cmd/balance-trace` diagnostic now opens the same
+  `state-snapshots` manager, wraps the chain freezer with snapshot fallback,
+  and routes transaction-info, account-trace, and block-balance-trace reads
+  through the cold-sidecar-aware `ChainDB` boundary. This keeps historical
+  balance investigations usable after chain lookup and balance trace pruning.
 - Exact cold `BlockBalanceTrace` lookups skip balance-trace segment files whose
   block range cannot contain the requested block before opening them. This
   keeps unrelated missing or retired newer trace sidecars from blocking older
@@ -1242,7 +1247,8 @@ Remaining:
   lifecycle pruning now covers chain lookups, section blooms, and balance
   traces, balance-trace snapshot builds now reject incomplete source ranges, and
   isolated replay backfill has replay-DB resume, collector-backed trace writes,
-  and signed-snapshot checkpoint starts. Production archive completeness still
+  signed-snapshot checkpoint starts, and snapshot-aware balance-trace
+  diagnostics. Production archive completeness still
   needs larger-datadir soak, recsplit-style event-log address/topic profiling
   beyond the current sorted sidecar, and broader API coverage on top of the
   shared backend archive/as-of state session.

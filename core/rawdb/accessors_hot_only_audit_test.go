@@ -230,10 +230,6 @@ func TestProductionColdArchiveReadersUseChainDBBoundary(t *testing.T) {
 		"actuator/actuator.go": {
 			"ReadBlockHashByNumber": {},
 		},
-		"cmd/balance-trace/main.go": {
-			"ReadAccountTrace":      {},
-			"ReadBlockBalanceTrace": {},
-		},
 		"cmd/gtron/db_cmd.go": {
 			"ReadBlockHashByNumber": {},
 		},
