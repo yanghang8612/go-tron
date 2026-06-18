@@ -53,6 +53,9 @@ func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
 	}
 	infos := ReadTransactionInfosByBlock(db, *blockNum)
 	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == *blockNum {
+		if !coldTransactionPositionMatchesReadableBlock(db, txID, lookup) {
+			return nil
+		}
 		if int(lookup.TxIndex) < len(infos) {
 			info := infos[lookup.TxIndex]
 			if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) {
@@ -115,6 +118,24 @@ func readColdTransactionIndexByHash(db *ChainDB, txHash []byte) (ChainIndexTxLoo
 		return zero, false
 	}
 	return lookup, true
+}
+
+func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, lookup ChainIndexTxLookup) bool {
+	block := ReadBlock(db, lookup.BlockNum)
+	if block == nil {
+		return true
+	}
+	txs := block.Transactions()
+	txIndex := int(lookup.TxIndex)
+	if txIndex < 0 || txIndex >= len(txs) {
+		return false
+	}
+	tx := txs[txIndex]
+	if tx == nil {
+		return false
+	}
+	txHash := tx.Hash()
+	return bytes.Equal(txHash[:], txID)
 }
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.

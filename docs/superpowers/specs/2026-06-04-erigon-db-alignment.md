@@ -247,7 +247,10 @@ Status:
   `chain-index` sidecar for historical rows. `ReadTransactionInfo` now also
   consumes the sidecar's tx hash to block-local index mapping, so archive
   receipt reads can recover from pruned per-tx rows even when old
-  `TransactionRet` payloads lack a populated `TransactionInfo.Id`.
+  `TransactionRet` payloads lack a populated `TransactionInfo.Id`; when the
+  matching block body remains readable through hot KV, ancient freezer, or cold
+  freezer fallback, the lookup cross-checks that the sidecar position names the
+  requested transaction hash before trusting the block-local receipt row.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/types"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
 )
@@ -130,6 +131,65 @@ func TestReadTransactionInfoUsesColdTxPositionWhenInfoIDMissing(t *testing.T) {
 	got := ReadTransactionInfo(db, txID)
 	if got == nil || got.Fee != 200 {
 		t.Fatalf("ReadTransactionInfo via cold tx position = %+v, want fee 200", got)
+	}
+}
+
+func TestReadTransactionInfoColdPositionChecksReadableBlockBody(t *testing.T) {
+	db := NewMemoryChainDB()
+	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7001, Expiration: 8001, Data: []byte{0x01}}}
+	txPB2 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7002, Expiration: 8002, Data: []byte{0x02}}}
+	txHash2 := types.NewTransactionFromPB(txPB2).Hash()
+	blockPB := newBlockProto(7, 7000)
+	blockPB.Transactions = []*corepb.Transaction{txPB1, txPB2}
+	block := types.NewBlockFromPB(blockPB)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 100, BlockNumber: 7, BlockTimeStamp: 7000},
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7000},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{txHash2: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			txHash2: {BlockNum: 7, TxIndex: 1},
+		},
+	})
+
+	got := ReadTransactionInfo(db, txHash2[:])
+	if got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfo checked cold tx position = %+v, want fee 200", got)
+	}
+}
+
+func TestReadTransactionInfoRejectsColdTxPositionThatMismatchesReadableBlockBody(t *testing.T) {
+	db := NewMemoryChainDB()
+	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7101, Expiration: 8101, Data: []byte{0x11}}}
+	txPB2 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7102, Expiration: 8102, Data: []byte{0x12}}}
+	txHash1 := types.NewTransactionFromPB(txPB1).Hash()
+	blockPB := newBlockProto(7, 7100)
+	blockPB.Transactions = []*corepb.Transaction{txPB1, txPB2}
+	block := types.NewBlockFromPB(blockPB)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 100, BlockNumber: 7, BlockTimeStamp: 7100},
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7100},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	db.SetChainIndexReader(&fakeChainIndex{
+		txs: map[common.Hash]uint64{txHash1: 7},
+		positions: map[common.Hash]ChainIndexTxLookup{
+			txHash1: {BlockNum: 7, TxIndex: 1},
+		},
+	})
+
+	if got := ReadTransactionInfo(db, txHash1[:]); got != nil {
+		t.Fatalf("ReadTransactionInfo accepted cold tx position mismatching block body = %+v, want nil", got)
 	}
 }
 
