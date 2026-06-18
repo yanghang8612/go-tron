@@ -289,6 +289,27 @@ func TestReadTransactionInfosByBlockStrictReportsMismatchedPayload(t *testing.T)
 	}
 }
 
+func TestReadTransactionInfosByBlockStrictReportsMalformedID(t *testing.T) {
+	db := NewMemoryChainDB()
+	writeRawTransactionRetForTest(t, db, 5, &corepb.TransactionRet{
+		BlockNumber: 5,
+		Transactioninfo: []*corepb.TransactionInfo{
+			{Id: []byte{0x06}, Fee: 600, BlockNumber: 5},
+		},
+	})
+
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("malformed TransactionInfo id read = %+v, want nil", got)
+	}
+	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
+	if err == nil || !strings.Contains(err.Error(), "transaction info id length 1") {
+		t.Fatalf("strict tx-info read = %+v/%v/%v, want id length error", infos, ok, err)
+	}
+	if !ok {
+		t.Fatal("strict tx-info read reported missing source row for malformed id")
+	}
+}
+
 func TestReadTransactionInfosByBlockStrictReportsMissingSource(t *testing.T) {
 	db := NewMemoryChainDB()
 	infos, ok, err := ReadTransactionInfosByBlockStrict(db, 5)
@@ -313,6 +334,17 @@ func TestWriteTransactionInfosByBlockRejectsMismatchedBlockNumber(t *testing.T) 
 	}
 	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
 		t.Fatalf("ReadTransactionInfosByBlock after rejected write = %+v, want nil", got)
+	}
+}
+
+func TestWriteTransactionInfosByBlockRejectsMalformedID(t *testing.T) {
+	db := NewMemoryChainDB()
+	err := WriteTransactionInfosByBlock(db, 5, []*corepb.TransactionInfo{{Id: []byte{0x01}, BlockNumber: 5}})
+	if err == nil || !strings.Contains(err.Error(), "transaction info id length 1") {
+		t.Fatalf("WriteTransactionInfosByBlock err = %v, want id length error", err)
+	}
+	if got := ReadTransactionInfosByBlock(db, 5); got != nil {
+		t.Fatalf("ReadTransactionInfosByBlock after rejected malformed id = %+v, want nil", got)
 	}
 }
 

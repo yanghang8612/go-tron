@@ -168,11 +168,8 @@ func decodeTransactionRetForBlock(data []byte, blockNum uint64) ([]*corepb.Trans
 		return nil, fmt.Errorf("rawdb: transaction ret block number %d does not match key block %d", ret.BlockNumber, blockNum)
 	}
 	for txIndex, info := range ret.Transactioninfo {
-		if info == nil {
-			return nil, fmt.Errorf("rawdb: nil transaction info at block %d index %d", blockNum, txIndex)
-		}
-		if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
-			return nil, fmt.Errorf("rawdb: transaction info block number %d at block %d index %d", info.BlockNumber, blockNum, txIndex)
+		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, "read transaction infos by block"); err != nil {
+			return nil, err
 		}
 	}
 	return ret.Transactioninfo, nil
@@ -190,12 +187,22 @@ func transactionInfoBlockNumberMatches(got int64, want uint64) bool {
 
 func validateTransactionInfosForKey(blockNum uint64, infos []*corepb.TransactionInfo, context string) error {
 	for txIndex, info := range infos {
-		if info == nil {
-			return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
+		if err := validateTransactionInfoForBlockKey(blockNum, txIndex, info, context); err != nil {
+			return err
 		}
-		if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
-			return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during %s", info.BlockNumber, blockNum, txIndex, context)
-		}
+	}
+	return nil
+}
+
+func validateTransactionInfoForBlockKey(blockNum uint64, txIndex int, info *corepb.TransactionInfo, context string) error {
+	if info == nil {
+		return fmt.Errorf("rawdb: nil transaction info at block %d index %d during %s", blockNum, txIndex, context)
+	}
+	if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+		return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during %s", info.BlockNumber, blockNum, txIndex, context)
+	}
+	if len(info.Id) != 0 && len(info.Id) != common.HashLength {
+		return fmt.Errorf("rawdb: transaction info id length %d at block %d index %d during %s", len(info.Id), blockNum, txIndex, context)
 	}
 	return nil
 }
