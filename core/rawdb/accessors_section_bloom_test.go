@@ -3,6 +3,7 @@ package rawdb
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"strings"
 	"testing"
 
@@ -70,6 +71,21 @@ func TestSectionBloom_ColdFallback(t *testing.T) {
 	bitset, ok, err = ReadSectionBloomBitSet(db, 3, 42)
 	if err != nil || !ok || !SectionBloomBitSetHas(bitset, 9) || SectionBloomBitSetHas(bitset, 7) {
 		t.Fatalf("hot ReadSectionBloomBitSet = %x/%v/%v, want hot bit 9 only", bitset, ok, err)
+	}
+}
+
+func TestSectionBloomStrictSurfacesColdReaderError(t *testing.T) {
+	db := NewMemoryChainDB()
+	db.SetSectionBloomReader(fakeSectionBloomReader{err: errors.New("cold section bloom corrupt")})
+
+	if got := ReadSectionBloom(db, 3, 42); got != nil {
+		t.Fatalf("ReadSectionBloom cold error = %x, want nil compatibility miss", got)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSet(db, 3, 42); err != nil || ok || bitset != nil {
+		t.Fatalf("ReadSectionBloomBitSet cold error = %x/%v/%v, want compatibility miss", bitset, ok, err)
+	}
+	if bitset, ok, err := ReadSectionBloomBitSetStrict(db, 3, 42); err == nil || ok || bitset != nil || !strings.Contains(err.Error(), "cold section bloom corrupt") {
+		t.Fatalf("ReadSectionBloomBitSetStrict cold error = %x/%v/%v, want cold error", bitset, ok, err)
 	}
 }
 
@@ -174,9 +190,13 @@ func encodeRawSectionBloomPayload(t *testing.T, payload []byte) []byte {
 
 type fakeSectionBloomReader struct {
 	rows map[[2]uint64][]byte
+	err  error
 }
 
 func (r fakeSectionBloomReader) SectionBloom(section, bitIndex uint64) ([]byte, bool, error) {
+	if r.err != nil {
+		return nil, false, r.err
+	}
 	value, ok := r.rows[[2]uint64{section, bitIndex}]
 	if !ok {
 		return nil, false, nil

@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -248,6 +249,34 @@ func TestRebuildSectionBloomsPreservesExistingSectionBits(t *testing.T) {
 	}
 	if !sectionBloomBitSetHas(got, 1) {
 		t.Fatalf("new block offset 1 was not added: %x", got)
+	}
+}
+
+func TestRebuildSectionBloomsRejectsColdSectionBloomReadError(t *testing.T) {
+	db := NewMemoryChainDB()
+	block, infos := derivedRebuildTestBlock(t, 1, 1)
+	infos[0].Log = []*corepb.TransactionInfo_Log{{
+		Address: []byte{0x99, 0x88, 0x77},
+	}}
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 1, infos); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	sectionReader := NewMemoryChainDB()
+	sectionReader.SetSectionBloomReader(fakeSectionBloomReader{err: errors.New("cold section bloom unavailable")})
+
+	_, err := RebuildSectionBloomsFromTransactionInfos(db, sectionReader, db, 1, 1, etl.Options{TempDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "cold section bloom unavailable") {
+		t.Fatalf("RebuildSectionBloomsFromTransactionInfos cold reader error = %v, want cold section bloom error", err)
+	}
+	bitIndexes, _, _ := sectionBloomBitsFromTransactionInfos(infos)
+	if len(bitIndexes) == 0 {
+		t.Fatal("test fixture produced no section bloom bits")
+	}
+	if got := ReadSectionBloom(db, 0, bitIndexes[0]); got != nil {
+		t.Fatalf("section bloom row written despite cold read error = %x", got)
 	}
 }
 

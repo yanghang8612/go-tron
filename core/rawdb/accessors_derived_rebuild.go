@@ -542,7 +542,7 @@ func newSectionBloomAccumulator(reader ethdb.KeyValueReader, section uint64) *se
 func (a *sectionBloomAccumulator) set(bitIndex, blockOffset uint64) error {
 	row, ok := a.rows[bitIndex]
 	if !ok {
-		existing, exists, err := ReadSectionBloomBitSet(a.reader, a.section, bitIndex)
+		existing, exists, err := ReadSectionBloomBitSetStrict(a.reader, a.section, bitIndex)
 		if err != nil {
 			return err
 		}

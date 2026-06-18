@@ -29,21 +29,35 @@ func WriteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64, value 
 
 // ReadSectionBloom returns the raw stored section-bloom value or nil if absent.
 func ReadSectionBloom(db ethdb.KeyValueReader, section, bitIndex uint64) []byte {
+	value, ok, err := ReadSectionBloomStrict(db, section, bitIndex)
+	if err != nil || !ok {
+		return nil
+	}
+	return value
+}
+
+// ReadSectionBloomStrict returns the raw stored section-bloom value plus an
+// existence flag and surfaces cold sidecar lookup errors. The non-strict
+// reader intentionally treats cold errors as misses because section blooms are
+// optional log-query prefilters; rebuild and verification paths should use this
+// strict variant so they do not republish incomplete bitsets.
+func ReadSectionBloomStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
 	data, err := db.Get(sectionBloomKey(section, bitIndex))
 	if err == nil && len(data) != 0 {
 		out := make([]byte, len(data))
 		copy(out, data)
-		return out
+		return out, true, nil
 	}
 	if cdb, ok := db.(*ChainDB); ok && cdb.sectionBloom != nil {
 		cold, ok, err := cdb.sectionBloom.SectionBloom(section, bitIndex)
-		if err == nil && ok && len(cold) != 0 {
-			out := make([]byte, len(cold))
-			copy(out, cold)
-			return out
+		if err != nil || !ok || len(cold) == 0 {
+			return nil, ok, err
 		}
+		out := make([]byte, len(cold))
+		copy(out, cold)
+		return out, true, nil
 	}
-	return nil
+	return nil, false, nil
 }
 
 // DeleteSectionBloom removes the (section, bitIndex) entry.
@@ -98,6 +112,20 @@ func ReadSectionBloomBitSet(db ethdb.KeyValueReader, section, bitIndex uint64) (
 	value := ReadSectionBloom(db, section, bitIndex)
 	if value == nil {
 		return nil, false, nil
+	}
+	bitset, err := DecodeSectionBloomBitSet(value)
+	if err != nil {
+		return nil, true, fmt.Errorf("section bloom %d/%d: decode: %w", section, bitIndex, err)
+	}
+	return bitset, true, nil
+}
+
+// ReadSectionBloomBitSetStrict reads and decodes a section-bloom row while
+// preserving cold sidecar errors for callers that require complete indexes.
+func ReadSectionBloomBitSetStrict(db ethdb.KeyValueReader, section, bitIndex uint64) ([]byte, bool, error) {
+	value, ok, err := ReadSectionBloomStrict(db, section, bitIndex)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	bitset, err := DecodeSectionBloomBitSet(value)
 	if err != nil {

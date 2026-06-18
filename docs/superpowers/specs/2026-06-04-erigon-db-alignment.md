@@ -1060,6 +1060,9 @@ Status:
   java-compatible section bitsets from retained block `TransactionInfo.log`
   payloads through `DerivedIndexCollector`. Partial-range rebuilds preserve
   existing block bits in the same section by reading and ORing existing rows.
+  Existing hot/cold section-bloom rows are now read through a strict accessor
+  in this rebuild path, so cold sidecar errors abort the rebuild instead of
+  being treated as missing rows that could clear unrelated block bits.
   The rebuild now rejects tx-bearing blocks whose `TransactionRet` coverage is
   missing, differs from the block's transaction list length, contains nil
   entries, points at a different block number, or carries a tx id that does not
