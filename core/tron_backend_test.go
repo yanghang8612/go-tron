@@ -757,6 +757,32 @@ func TestTronBackend_GetTransactionInfoByBlockNumRejectsMismatchedInfo(t *testin
 	}
 }
 
+func TestTronBackend_GetTransactionInfoByIDSurfacesMismatchedInfo(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	block, info := testBackendLogBlock(1, nil)
+	txHash := block.Transactions()[0].Hash()
+	info.Id = bytes.Repeat([]byte{0xef}, tcommon.HashLength)
+	if err := rawdb.WriteBlock(bc.db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionIndex(bc.db, txHash[:], block.Number()); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(bc.db, block.Number(), []*corepb.TransactionInfo{info}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	bc.currentBlock.Store(block)
+
+	backend := &TronBackend{chain: bc}
+	if got, err := backend.GetTransactionInfoByID(txHash); err == nil || got != nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("GetTransactionInfoByID mismatched info = %+v/%v, want nil/canonical mismatch error", got, err)
+	}
+	if got, err := backend.GetTransactionInfo(txHash); err == nil || got != nil || !strings.Contains(err.Error(), "does not match canonical tx") {
+		t.Fatalf("GetTransactionInfo mismatched info = %+v/%v, want nil/canonical mismatch error", got, err)
+	}
+}
+
 func appendBackendColdLookupAncients(t *testing.T, fz *rawdbfreezer.Freezer, db ethdb.KeyValueReader, blocks ...*types.Block) error {
 	t.Helper()
 	if _, err := fz.ModifyAncients(func(op rawdb.AncientWriteOp) error {

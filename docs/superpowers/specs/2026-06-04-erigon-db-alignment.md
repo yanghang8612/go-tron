@@ -251,6 +251,11 @@ Status:
   matching block body remains readable through hot KV, ancient freezer, or cold
   freezer fallback, the lookup cross-checks that the sidecar position names the
   requested transaction hash before trusting the block-local receipt row.
+  Strict transaction-info reads are now exported for backend/API callers: they
+  surface malformed hot rows, corrupt per-block `TransactionRet` payloads, and
+  block-body/index mismatches as archive data errors, while still using readable
+  block bodies to locate legacy receipt rows whose `TransactionInfo.Id` is
+  absent.
 - Raw freezer accessors now share the same cold path where appropriate:
   `ReadBlockRaw`, `ReadTransactionInfosRaw`, `ReadBlockHashByNumber`, and
   `ReadBlockStateRootRaw` can read through `ChainDB` instead of assuming the

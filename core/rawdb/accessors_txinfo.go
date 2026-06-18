@@ -33,43 +33,67 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 // sidecar can resolve txID -> block number and scan that block's TransactionRet
 // payload from ancient or hot per-block storage.
 func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
-	if !validTransactionHashKey(txID) {
+	info, ok, err := ReadTransactionInfoStrict(db, txID)
+	if err != nil || !ok {
 		return nil
+	}
+	return info
+}
+
+// ReadTransactionInfoStrict retrieves a TransactionInfo by txID and surfaces
+// malformed hot rows, corrupt per-block TransactionRet payloads, and
+// hash/index mismatches as data errors.
+func ReadTransactionInfoStrict(db *ChainDB, txID []byte) (*corepb.TransactionInfo, bool, error) {
+	if err := validateTransactionHashKey(txID, "read transaction info"); err != nil {
+		return nil, false, err
 	}
 	data, err := db.Get(txInfoKey(txID))
 	if err == nil {
 		info := &corepb.TransactionInfo{}
 		if err := proto.Unmarshal(data, info); err != nil {
-			return nil
+			return nil, true, err
 		}
-		if !transactionInfoIDMatches(info, txID) {
-			return nil
+		if err := validateTransactionInfoIDForKey(txID, info, "read transaction info"); err != nil {
+			return info, true, err
 		}
-		return info
+		return info, true, nil
 	}
 	blockNum := ReadTransactionIndex(db, txID)
 	if blockNum == nil {
-		return nil
+		return nil, false, nil
 	}
-	infos := ReadTransactionInfosByBlock(db, *blockNum)
+	infos, hasInfos, err := ReadTransactionInfosByBlockStrict(db, *blockNum)
+	if err != nil || !hasInfos {
+		return nil, hasInfos, err
+	}
 	if lookup, ok := readColdTransactionIndexByHash(db, txID); ok && lookup.BlockNum == *blockNum {
 		if !coldTransactionPositionMatchesReadableBlock(db, txID, lookup) {
-			return nil
+			return nil, true, fmt.Errorf("rawdb: cold transaction index position block %d tx %d does not match transaction %x", lookup.BlockNum, lookup.TxIndex, txID)
 		}
 		if int(lookup.TxIndex) < len(infos) {
 			info := infos[lookup.TxIndex]
-			if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) {
-				return info
+			if len(info.GetId()) == 0 && transactionInfoBlockNumberMatches(info.BlockNumber, *blockNum) {
+				return info, true, nil
 			}
+			if err := validateTransactionInfoIDForKey(txID, info, "read transaction info by cold position"); err != nil {
+				return info, true, err
+			}
+			if transactionInfoBlockNumberMatches(info.BlockNumber, *blockNum) {
+				return info, true, nil
+			}
+			return info, true, fmt.Errorf("rawdb: transaction info block number %d does not match indexed block %d during read transaction info by cold position", info.BlockNumber, *blockNum)
 		}
-		return nil
+		return nil, true, fmt.Errorf("rawdb: cold transaction index position %d outside transaction info coverage %d for block %d", lookup.TxIndex, len(infos), *blockNum)
+	}
+	if info, ok, err := transactionInfoByReadableBlockPosition(db, txID, *blockNum, infos, "read transaction info"); err != nil || ok {
+		return info, ok, err
 	}
 	for _, info := range infos {
 		if transactionInfoMatchesIndexedLookup(info, txID, *blockNum) && len(info.Id) != 0 {
-			return info
+			return info, true, nil
 		}
 	}
-	return nil
+	return nil, false, nil
 }
 
 func transactionInfoIDMatches(info *corepb.TransactionInfo, txID []byte) bool {
@@ -136,6 +160,28 @@ func coldTransactionPositionMatchesReadableBlock(db *ChainDB, txID []byte, looku
 	}
 	txHash := tx.Hash()
 	return bytes.Equal(txHash[:], txID)
+}
+
+func transactionInfoByReadableBlockPosition(db *ChainDB, txID []byte, blockNum uint64, infos []*corepb.TransactionInfo, context string) (*corepb.TransactionInfo, bool, error) {
+	block := ReadBlock(db, blockNum)
+	if block == nil {
+		return nil, false, nil
+	}
+	txs := block.Transactions()
+	if err := ValidateTransactionInfosForBlock(blockNum, txs, infos, context); err != nil {
+		return nil, true, err
+	}
+	for txIndex, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		hash := tx.Hash()
+		if !bytes.Equal(hash[:], txID) {
+			continue
+		}
+		return infos[txIndex], true, nil
+	}
+	return nil, true, fmt.Errorf("rawdb: transaction index points to block %d but transaction %x is not in the readable block body", blockNum, txID)
 }
 
 // WriteTransactionInfosByBlock stores all TransactionInfos for a block.

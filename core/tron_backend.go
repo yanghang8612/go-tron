@@ -313,8 +313,11 @@ func (b *TronBackend) GetTransactionByID(txHash tcommon.Hash) (*corepb.Transacti
 }
 
 func (b *TronBackend) GetTransactionInfoByID(txHash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	info := rawdb.ReadTransactionInfo(b.chain.chaindb, txHash[:])
-	if info == nil {
+	info, ok, err := rawdb.ReadTransactionInfoStrict(b.chain.chaindb, txHash[:])
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, fmt.Errorf("transaction info not found")
 	}
 	if head := b.chain.CurrentBlock(); head != nil && uint64(info.BlockNumber) > head.Number() {
@@ -331,8 +334,11 @@ func (b *TronBackend) GetTransactionInfoByBlockNum(blockNum uint64) ([]*corepb.T
 	if block == nil {
 		return nil, nil
 	}
-	infos := rawdb.ReadTransactionInfosByBlock(b.chain.chaindb, blockNum)
-	if len(infos) != 0 {
+	infos, hasInfos, err := rawdb.ReadTransactionInfosByBlockStrict(b.chain.chaindb, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	if hasInfos {
 		if err := rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), infos, "transaction info block query"); err != nil {
 			return nil, err
 		}
@@ -2356,8 +2362,11 @@ func (b *TronBackend) GetStorageAtBlock(addr tcommon.Address, slot tcommon.Hash,
 
 func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transaction, *types.Block, int, error) {
 	// Use TransactionInfo to locate the block, then find the tx within it.
-	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
-	if info == nil {
+	info, ok, err := rawdb.ReadTransactionInfoStrict(b.chain.chaindb, hash[:])
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if !ok {
 		return nil, nil, 0, nil // not found
 	}
 	block := b.chain.GetBlockByNumber(uint64(info.BlockNumber))
@@ -2373,11 +2382,12 @@ func (b *TronBackend) GetTransactionByHash(hash tcommon.Hash) (*corepb.Transacti
 }
 
 func (b *TronBackend) GetTransactionInfo(hash tcommon.Hash) (*corepb.TransactionInfo, error) {
-	info := rawdb.ReadTransactionInfo(b.chain.chaindb, hash[:])
-	if info != nil {
-		if head := b.chain.CurrentBlock(); head != nil && uint64(info.BlockNumber) > head.Number() {
-			return nil, nil
-		}
+	info, ok, err := rawdb.ReadTransactionInfoStrict(b.chain.chaindb, hash[:])
+	if err != nil || !ok {
+		return nil, err
+	}
+	if head := b.chain.CurrentBlock(); head != nil && uint64(info.BlockNumber) > head.Number() {
+		return nil, nil
 	}
 	return info, nil // nil info = not found (not an error)
 }

@@ -66,6 +66,9 @@ func TestReadTransactionInfoRejectsMismatchedHotRow(t *testing.T) {
 	if got := ReadTransactionInfo(db, txID); got != nil {
 		t.Fatalf("ReadTransactionInfo mismatched hot row = %+v, want nil", got)
 	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || info == nil {
+		t.Fatalf("ReadTransactionInfoStrict mismatched hot row = info %+v ok %v err %v, want info/ok/error", info, ok, err)
+	}
 }
 
 func TestWriteTransactionInfoRejectsMismatchedID(t *testing.T) {
@@ -164,6 +167,36 @@ func TestReadTransactionInfoColdPositionChecksReadableBlockBody(t *testing.T) {
 	}
 }
 
+func TestReadTransactionInfoUsesReadableBlockPositionWhenInfoIDMissing(t *testing.T) {
+	db := NewMemoryChainDB()
+	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7051, Expiration: 8051, Data: []byte{0x51}}}
+	txPB2 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7052, Expiration: 8052, Data: []byte{0x52}}}
+	txHash2 := types.NewTransactionFromPB(txPB2).Hash()
+	blockPB := newBlockProto(7, 7050)
+	blockPB.Transactions = []*corepb.Transaction{txPB1, txPB2}
+	block := types.NewBlockFromPB(blockPB)
+	if err := WriteBlock(db, block); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := WriteTransactionIndex(db, txHash2[:], 7); err != nil {
+		t.Fatalf("WriteTransactionIndex: %v", err)
+	}
+	if err := WriteTransactionInfosByBlock(db, 7, []*corepb.TransactionInfo{
+		{Fee: 100, BlockNumber: 7, BlockTimeStamp: 7050},
+		{Fee: 200, BlockNumber: 7, BlockTimeStamp: 7050},
+	}); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+
+	got, ok, err := ReadTransactionInfoStrict(db, txHash2[:])
+	if err != nil || !ok || got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfoStrict via readable block = %+v ok %v err %v, want fee 200", got, ok, err)
+	}
+	if got := ReadTransactionInfo(db, txHash2[:]); got == nil || got.Fee != 200 {
+		t.Fatalf("ReadTransactionInfo via readable block = %+v, want fee 200", got)
+	}
+}
+
 func TestReadTransactionInfoRejectsColdTxPositionThatMismatchesReadableBlockBody(t *testing.T) {
 	db := NewMemoryChainDB()
 	txPB1 := &corepb.Transaction{RawData: &corepb.TransactionRaw{Timestamp: 7101, Expiration: 8101, Data: []byte{0x11}}}
@@ -191,6 +224,9 @@ func TestReadTransactionInfoRejectsColdTxPositionThatMismatchesReadableBlockBody
 	if got := ReadTransactionInfo(db, txHash1[:]); got != nil {
 		t.Fatalf("ReadTransactionInfo accepted cold tx position mismatching block body = %+v, want nil", got)
 	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txHash1[:]); err == nil || !ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict mismatching block body = info %+v ok %v err %v, want nil/ok/error", info, ok, err)
+	}
 }
 
 func TestReadTransactionInfoRejectsMismatchedColdTxPosition(t *testing.T) {
@@ -213,6 +249,9 @@ func TestReadTransactionInfoRejectsMismatchedColdTxPosition(t *testing.T) {
 
 	if got := ReadTransactionInfo(db, txID); got != nil {
 		t.Fatalf("ReadTransactionInfo mismatched cold position = %+v, want nil", got)
+	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || info == nil {
+		t.Fatalf("ReadTransactionInfoStrict mismatched cold position = info %+v ok %v err %v, want info/ok/error", info, ok, err)
 	}
 }
 
@@ -238,6 +277,9 @@ func TestReadTransactionInfoDoesNotScanAfterMismatchedColdTxPosition(t *testing.
 	if got := ReadTransactionInfo(db, txID); got != nil {
 		t.Fatalf("ReadTransactionInfo scanned past mismatched cold position = %+v, want nil", got)
 	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || info == nil {
+		t.Fatalf("ReadTransactionInfoStrict scanned past mismatched cold position = info %+v ok %v err %v, want info/ok/error", info, ok, err)
+	}
 }
 
 func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
@@ -260,6 +302,9 @@ func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
 	if got := ReadTransactionInfo(db, txID); got != nil {
 		t.Fatalf("ReadTransactionInfo cold block mismatch by position = %+v, want nil", got)
 	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID); err == nil || !ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict cold block mismatch by position = info %+v ok %v err %v, want nil/ok/error", info, ok, err)
+	}
 
 	txID2 := bytes.Repeat([]byte{0x38}, common.HashLength)
 	writeRawTransactionRetForTest(t, db, 9, &corepb.TransactionRet{
@@ -273,6 +318,9 @@ func TestReadTransactionInfoRejectsColdBlockNumberMismatch(t *testing.T) {
 	}
 	if got := ReadTransactionInfo(db, txID2); got != nil {
 		t.Fatalf("ReadTransactionInfo cold block mismatch by scan = %+v, want nil", got)
+	}
+	if info, ok, err := ReadTransactionInfoStrict(db, txID2); err == nil || !ok || info != nil {
+		t.Fatalf("ReadTransactionInfoStrict cold block mismatch by scan = info %+v ok %v err %v, want nil/ok/error", info, ok, err)
 	}
 }
 
