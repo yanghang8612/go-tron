@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/common"
@@ -55,6 +56,28 @@ func TestHeadBlock(t *testing.T) {
 	h := ReadHeadBlockHash(db)
 	if h != common.HexToHash("aabb") {
 		t.Fatal("head block hash mismatch")
+	}
+}
+
+func TestHashBoundaryRowsRejectMalformedValues(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := db.Put(headBlockKey, []byte{0xaa}); err != nil {
+		t.Fatalf("put malformed head block hash: %v", err)
+	}
+	if got := ReadHeadBlockHash(db); got != (common.Hash{}) {
+		t.Fatalf("ReadHeadBlockHash malformed row = %x, want zero", got)
+	}
+	if err := db.Put(headSolidBlockKey, bytes.Repeat([]byte{0xbb}, common.HashLength-1)); err != nil {
+		t.Fatalf("put malformed solid head block hash: %v", err)
+	}
+	if got := ReadHeadSolidBlockHash(db); got != (common.Hash{}) {
+		t.Fatalf("ReadHeadSolidBlockHash malformed row = %x, want zero", got)
+	}
+	if err := db.Put(genesisStateRootKey, bytes.Repeat([]byte{0xcc}, common.HashLength+1)); err != nil {
+		t.Fatalf("put malformed genesis state root: %v", err)
+	}
+	if got := ReadGenesisStateRoot(db); got != (common.Hash{}) {
+		t.Fatalf("ReadGenesisStateRoot malformed row = %x, want zero", got)
 	}
 }
 

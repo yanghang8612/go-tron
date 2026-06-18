@@ -17,7 +17,11 @@ func ReadHeadBlockHash(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	hash, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return hash
 }
 
 func WriteHeadSolidBlockHash(db ethdb.KeyValueWriter, hash common.Hash) {
@@ -29,7 +33,11 @@ func ReadHeadSolidBlockHash(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	hash, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return hash
 }
 
 func WriteDynamicProperty(db ethdb.KeyValueWriter, name string, value []byte) {
@@ -137,7 +145,11 @@ func ReadGenesisStateRoot(db ethdb.KeyValueReader) common.Hash {
 	if err != nil {
 		return common.Hash{}
 	}
-	return common.BytesToHash(data)
+	root, ok := decodeHashRow(data)
+	if !ok {
+		return common.Hash{}
+	}
+	return root
 }
 
 // WriteBlockStateRoot persists the post-apply state root for the given
