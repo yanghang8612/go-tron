@@ -2546,15 +2546,8 @@ func (b *TronBackend) getLogsFromColdEventLogs(fromBlock, toBlock uint64, filter
 		Addresses: filter.Addresses,
 		Topics:    filter.Topics,
 	}
-	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, coldFilter)
-	if err != nil {
-		return nil, false, err
-	}
-	if !covered {
-		return nil, false, nil
-	}
 	logs := make([]*jsonrpc.RPCLog, 0)
-	err = db.IterateEventLogs(fromBlock, toBlock, coldFilter, func(row rawdb.EventLog) (bool, error) {
+	covered, err := db.IterateCoveredEventLogs(fromBlock, toBlock, coldFilter, func(row rawdb.EventLog) (bool, error) {
 		if row.BlockNum < fromBlock || row.BlockNum > toBlock {
 			return true, nil
 		}
@@ -2572,6 +2565,9 @@ func (b *TronBackend) getLogsFromColdEventLogs(fromBlock, toBlock uint64, filter
 	})
 	if err != nil {
 		return nil, true, err
+	}
+	if !covered {
+		return nil, false, nil
 	}
 	return logs, true, nil
 }

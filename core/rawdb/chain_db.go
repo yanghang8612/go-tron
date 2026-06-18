@@ -102,6 +102,13 @@ type FilteredEventLogCoverageReader interface {
 	EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filter EventLogFilter) (bool, error)
 }
 
+// CoveredEventLogReader is an optional extension for cold event-log readers
+// that can bind coverage verification and iteration to the same underlying
+// immutable view.
+type CoveredEventLogReader interface {
+	IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error)
+}
+
 // NewChainDB wraps a hot KV store and an ancient reader into a `*ChainDB`.
 // `anc` may be `NoopAncient{}` when the freezer is disabled or in tests
 // that don't want a freezer on disk.
@@ -170,6 +177,20 @@ func (db *ChainDB) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFi
 		return nil
 	}
 	return db.eventLog.IterateEventLogs(fromBlock, toBlock, filter, fn)
+}
+
+func (db *ChainDB) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
+	if db == nil || db.eventLog == nil {
+		return false, nil
+	}
+	if reader, ok := db.eventLog.(CoveredEventLogReader); ok {
+		return reader.IterateCoveredEventLogs(fromBlock, toBlock, filter, fn)
+	}
+	covered, err := db.EventLogRangeCoveredForFilter(fromBlock, toBlock, filter)
+	if err != nil || !covered {
+		return covered, err
+	}
+	return true, db.IterateEventLogs(fromBlock, toBlock, filter, fn)
 }
 
 // freezerReader wraps a `*freezer.Freezer` and translates the freezer's

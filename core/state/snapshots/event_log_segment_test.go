@@ -694,6 +694,53 @@ func TestEventLogRangeCoveredRequiresReadableSegments(t *testing.T) {
 	}
 }
 
+func TestManagerIterateCoveredEventLogsRejectsPartialCoverage(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addr := eventLogTestAddress(0x49)
+	topic := common.Hash{0xd1}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addr, Topics: [][]byte{topic[:]}, Data: []byte{0x09}},
+	})
+	if err := rawdb.WriteBlock(db, block1); err != nil {
+		t.Fatalf("WriteBlock: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock: %v", err)
+	}
+	ref, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+
+	covered, err := mgr.IterateCoveredEventLogs(1, 2, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for partially covered event-log range")
+		return true, nil
+	})
+	if err != nil || covered {
+		t.Fatalf("IterateCoveredEventLogs partial coverage = %v/%v, want false/nil", covered, err)
+	}
+
+	var rows []EventLog
+	covered, err = mgr.IterateCoveredEventLogs(1, 1, EventLogFilter{}, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("IterateCoveredEventLogs covered range = %v/%v, want true/nil", covered, err)
+	}
+	if len(rows) != 1 || rows[0].BlockNum != 1 || !bytes.Equal(rows[0].Log.GetData(), []byte{0x09}) {
+		t.Fatalf("covered rows = %+v, want block1 data 0x09", rows)
+	}
+}
+
 func TestEventLogIndexedRangeCoveredRejectsStaleIndexPostings(t *testing.T) {
 	dir := t.TempDir()
 	db := rawdb.NewMemoryChainDB()

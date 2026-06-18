@@ -1477,6 +1477,50 @@ func TestTronBackend_GetLogsRechecksColdEventLogRows(t *testing.T) {
 	}
 }
 
+func TestTronBackend_GetLogsUsesCoveredColdEventLogBoundary(t *testing.T) {
+	bc, cleanup := newTestBlockchain(t)
+	defer cleanup()
+	addr := bytes20(0x88)
+	topic := tcommon.Hash{0x88}
+	block1, _ := testBackendLogBlock(1, nil)
+	bc.currentBlock.Store(block1)
+	reader := &fakeCoveredColdEventLogReader{
+		covered: true,
+		rows: []rawdb.EventLog{{
+			BlockNum:  1,
+			TxIndex:   0,
+			LogIndex:  0,
+			TxHash:    tcommon.Hash{0xb1},
+			BlockHash: block1.Hash(),
+			Address:   tcommon.BytesToAddress(addr),
+			Log: &corepb.TransactionInfo_Log{
+				Address: addr,
+				Topics:  [][]byte{topic[:]},
+				Data:    []byte{0x88},
+			},
+		}},
+	}
+	bc.ChainDB().SetEventLogReader(reader)
+
+	from, to := uint64(1), uint64(1)
+	backend := &TronBackend{chain: bc}
+	logs, err := backend.GetLogs(jsonrpc.LogFilter{
+		FromBlock: &from,
+		ToBlock:   &to,
+		Addresses: []tcommon.Address{tcommon.BytesToAddress(addr)},
+		Topics:    [][]tcommon.Hash{{topic}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].Data != "0x88" {
+		t.Fatalf("GetLogs covered cold boundary rows = %+v, want one 0x88 log", logs)
+	}
+	if reader.coveredIterCalls != 1 || reader.coveredCalls != 0 || reader.iterCalls != 0 {
+		t.Fatalf("cold reader calls coveredIter=%d covered=%d iter=%d, want atomic boundary only", reader.coveredIterCalls, reader.coveredCalls, reader.iterCalls)
+	}
+}
+
 func TestJSONRPCGetLogsUsesColdEventLogIndex(t *testing.T) {
 	bc, cleanup := newTestBlockchain(t)
 	defer cleanup()
@@ -1868,6 +1912,38 @@ func (r fakeColdEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, filt
 		}
 	}
 	return nil
+}
+
+type fakeCoveredColdEventLogReader struct {
+	covered          bool
+	rows             []rawdb.EventLog
+	coveredCalls     int
+	iterCalls        int
+	coveredIterCalls int
+}
+
+func (r *fakeCoveredColdEventLogReader) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
+	r.coveredCalls++
+	return false, nil
+}
+
+func (r *fakeCoveredColdEventLogReader) IterateEventLogs(fromBlock, toBlock uint64, filter rawdb.EventLogFilter, fn func(rawdb.EventLog) (bool, error)) error {
+	r.iterCalls++
+	return nil
+}
+
+func (r *fakeCoveredColdEventLogReader) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter rawdb.EventLogFilter, fn func(rawdb.EventLog) (bool, error)) (bool, error) {
+	r.coveredIterCalls++
+	if !r.covered {
+		return false, nil
+	}
+	for _, row := range r.rows {
+		cont, err := fn(row)
+		if err != nil || !cont {
+			return true, err
+		}
+	}
+	return true, nil
 }
 
 func testBackendLogBlock(number uint64, logEntry *corepb.TransactionInfo_Log) (*types.Block, *corepb.TransactionInfo) {

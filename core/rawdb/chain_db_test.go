@@ -218,6 +218,73 @@ func TestChainDBIterateEventLogsForwardsColdRows(t *testing.T) {
 	}
 }
 
+func TestChainDBIterateCoveredEventLogsUsesAtomicReaderWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	want := EventLog{BlockNum: 21, Log: &corepb.TransactionInfo_Log{Address: []byte{0x21}}}
+	reader := &recordingCoveredEventLogReader{
+		covered: true,
+		rows:    []EventLog{want},
+	}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var got []EventLog
+	covered, err := cdb.IterateCoveredEventLogs(20, 22, EventLogFilter{}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("IterateCoveredEventLogs = covered %v err %v, want true/nil", covered, err)
+	}
+	if reader.coveredIterCalls != 1 || reader.coveredCalls != 0 || reader.iterCalls != 0 {
+		t.Fatalf("reader calls coveredIter=%d covered=%d iter=%d, want atomic only", reader.coveredIterCalls, reader.coveredCalls, reader.iterCalls)
+	}
+	if len(got) != 1 || got[0].BlockNum != want.BlockNum {
+		t.Fatalf("covered rows = %+v, want block %d", got, want.BlockNum)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsFallsBackToCoverageAndIteration(t *testing.T) {
+	t.Parallel()
+
+	want := EventLog{BlockNum: 31, Log: &corepb.TransactionInfo_Log{Address: []byte{0x31}}}
+	reader := &recordingBasicEventLogReader{covered: true, rows: []EventLog{want}}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	var got []EventLog
+	covered, err := cdb.IterateCoveredEventLogs(30, 32, EventLogFilter{}, func(row EventLog) (bool, error) {
+		got = append(got, row)
+		return true, nil
+	})
+	if err != nil || !covered {
+		t.Fatalf("fallback IterateCoveredEventLogs = covered %v err %v, want true/nil", covered, err)
+	}
+	if reader.coveredCalls != 1 || reader.iterCalls != 1 || len(got) != 1 || got[0].BlockNum != want.BlockNum {
+		t.Fatalf("fallback calls covered=%d iter=%d rows=%+v, want one coverage+iteration", reader.coveredCalls, reader.iterCalls, got)
+	}
+}
+
+func TestChainDBIterateCoveredEventLogsSkipsIterationWhenUncovered(t *testing.T) {
+	t.Parallel()
+
+	reader := &recordingBasicEventLogReader{covered: false, rows: []EventLog{{BlockNum: 41}}}
+	cdb := NewMemoryChainDB()
+	cdb.SetEventLogReader(reader)
+
+	covered, err := cdb.IterateCoveredEventLogs(40, 42, EventLogFilter{}, func(EventLog) (bool, error) {
+		t.Fatal("callback called for uncovered cold event-log range")
+		return true, nil
+	})
+	if err != nil || covered {
+		t.Fatalf("uncovered IterateCoveredEventLogs = covered %v err %v, want false/nil", covered, err)
+	}
+	if reader.coveredCalls != 1 || reader.iterCalls != 0 {
+		t.Fatalf("uncovered calls covered=%d iter=%d, want coverage only", reader.coveredCalls, reader.iterCalls)
+	}
+}
+
 type recordingBasicEventLogReader struct {
 	covered      bool
 	coveredCalls int
@@ -260,4 +327,28 @@ func (r *recordingEventLogReader) EventLogRangeCoveredForFilter(fromBlock, toBlo
 	r.lastTo = toBlock
 	r.lastFilter = filter
 	return r.filteredCovered, nil
+}
+
+type recordingCoveredEventLogReader struct {
+	recordingEventLogReader
+	covered          bool
+	rows             []EventLog
+	coveredIterCalls int
+}
+
+func (r *recordingCoveredEventLogReader) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
+	r.coveredIterCalls++
+	r.lastFrom = fromBlock
+	r.lastTo = toBlock
+	r.lastFilter = filter
+	if !r.covered {
+		return false, nil
+	}
+	for _, row := range r.rows {
+		cont, err := fn(row)
+		if err != nil || !cont {
+			return true, err
+		}
+	}
+	return true, nil
 }

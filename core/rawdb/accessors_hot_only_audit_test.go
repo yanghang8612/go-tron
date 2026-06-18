@@ -825,6 +825,7 @@ func TestProductionEventLogQueriesUseChainDBBoundary(t *testing.T) {
 		"EventLogRangeCovered":          {},
 		"EventLogRangeCoveredForFilter": {},
 		"IterateEventLogs":              {},
+		"IterateCoveredEventLogs":       {},
 	})
 	if len(offenders) > 0 {
 		t.Fatalf("production event-log queries must go through the cold-sidecar-aware ChainDB boundary:\n%s", strings.Join(offenders, "\n"))
@@ -915,6 +916,30 @@ func query(m coldManager) {
 	})
 	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateEventLogs") {
 		t.Fatalf("offenders = %+v, want non-ChainDB IterateEventLogs call", offenders)
+	}
+}
+
+func TestEventLogAuditRejectsCoveredIteratorOnNonChainDBBoundary(t *testing.T) {
+	root := writeAuditFixture(t, "app/offender.go", `package app
+
+import "github.com/tronprotocol/go-tron/core/rawdb"
+
+type coldManager struct{}
+
+func (coldManager) IterateCoveredEventLogs(uint64, uint64, rawdb.EventLogFilter, func(rawdb.EventLog) (bool, error)) (bool, error) {
+	return true, nil
+}
+
+func query(m coldManager) {
+	_, _ = m.IterateCoveredEventLogs(1, 2, rawdb.EventLogFilter{}, nil)
+}
+`)
+
+	offenders := auditEventLogMethodCalls(t, root, map[string]struct{}{
+		"IterateCoveredEventLogs": {},
+	})
+	if len(offenders) != 1 || !strings.Contains(offenders[0], "IterateCoveredEventLogs") {
+		t.Fatalf("offenders = %+v, want non-ChainDB IterateCoveredEventLogs call", offenders)
 	}
 }
 

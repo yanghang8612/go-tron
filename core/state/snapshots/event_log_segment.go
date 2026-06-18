@@ -785,6 +785,34 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 	if err != nil {
 		return err
 	}
+	return m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, fn)
+}
+
+func (m *Manager) IterateCoveredEventLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	if toBlock < fromBlock {
+		return false, fmt.Errorf("snapshots: covered event log manager range [%d,%d] is inverted", fromBlock, toBlock)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil || manifest == nil {
+		return false, err
+	}
+	refs, covered, err := m.coveredEventLogRefsForQuery(manifest, fromBlock, toBlock, filter)
+	if err != nil || !covered {
+		return false, err
+	}
+	if len(refs) == 0 {
+		return true, nil
+	}
+	if err := m.iterateEventLogRefs(refs, fromBlock, toBlock, filter, fn); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (m *Manager) iterateEventLogRefs(refs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
 	nextBlock := fromBlock
 	for _, ref := range refs {
 		if ref.ToTxNum < nextBlock || ref.FromTxNum > toBlock {
@@ -854,6 +882,57 @@ func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock ui
 		}
 	}
 	return out, nil
+}
+
+func (m *Manager) coveredEventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock uint64, filter EventLogFilter) ([]SegmentRef, bool, error) {
+	refs := eventLogRefs(manifest)
+	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
+	if err != nil {
+		return nil, false, err
+	}
+	if indexed {
+		candidates := eventLogIndexCandidateStartSet(plans)
+		if len(candidates) == 0 {
+			return nil, true, nil
+		}
+		out := make([]SegmentRef, 0, len(candidates))
+		for _, ref := range refs {
+			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
+				continue
+			}
+			if _, ok := candidates[ref.FromTxNum]; !ok {
+				continue
+			}
+			if err := CheckEventLogSegment(m.dir, ref); err != nil {
+				return nil, false, err
+			}
+			out = append(out, ref)
+		}
+		return out, true, nil
+	}
+
+	next := fromBlock
+	var out []SegmentRef
+	for _, ref := range refs {
+		if ref.ToTxNum < next {
+			continue
+		}
+		if ref.FromTxNum > next {
+			return nil, false, nil
+		}
+		if err := CheckEventLogSegment(m.dir, ref); err != nil {
+			return nil, false, err
+		}
+		out = append(out, ref)
+		if ref.ToTxNum >= toBlock {
+			return out, true, nil
+		}
+		if ref.ToTxNum == ^uint64(0) {
+			return nil, false, nil
+		}
+		next = ref.ToTxNum + 1
+	}
+	return nil, false, nil
 }
 
 type eventLogIndexQueryPlan struct {

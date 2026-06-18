@@ -1184,7 +1184,11 @@ Status:
   before streaming cold logs. Filtered manager queries now compose adjacent
   `event-log-index` sidecars across the request range, so a query that spans
   multiple immutable index passes can still skip unrelated event-log segment
-  files instead of falling back to a full cold scan. Backend and JSON-RPC
+  files instead of falling back to a full cold scan. Cold coverage verification
+  and event-log iteration can now run through one `ChainDB` boundary backed by
+  a single snapshot-manager manifest view, so an archive log query cannot mix a
+  passing coverage check from one immutable view with rows from a later
+  uncovered view. Backend and JSON-RPC
   `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
   segment files to prove filtered archive reads are served through the cold
   index path. The API falls back to the hot scan on coverage gaps and surfaces
