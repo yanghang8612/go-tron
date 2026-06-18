@@ -331,6 +331,34 @@ func query(db any) {
 	}
 }
 
+func TestStateLatestAuditRejectsArchiveAPIRawDBIteratorReference(t *testing.T) {
+	root := writeAuditFixture(t, "core/tron_backend.go", `package core
+
+import rawdb "github.com/tronprotocol/go-tron/core/rawdb"
+
+var iterCode = rawdb.IterateStateCode
+
+func query(db any) {
+	_ = rawdb.IterateStateKVLatestRows(db, nil)
+	_ = rawdb.IterateStateKVGeneration(db, nil, nil)
+	_ = iterCode(db, nil)
+}
+`)
+
+	offenders := auditForbiddenRawDBReferencesSkipping(t, root, stateLatestRawDBReferences(), nil, map[string]struct{}{
+		"core/state": {},
+	})
+	if len(offenders) != 3 {
+		t.Fatalf("offenders = %+v, want raw state latest iterator references rejected", offenders)
+	}
+	joined := strings.Join(offenders, "\n")
+	for _, want := range []string{"rawdb.IterateStateCode", "rawdb.IterateStateKVGeneration", "rawdb.IterateStateKVLatestRows"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("offenders = %+v, want %s rejected", offenders, want)
+		}
+	}
+}
+
 func TestStateLatestAuditAllowsStatePackageBoundary(t *testing.T) {
 	root := writeAuditFixture(t, "core/state/store.go", `package state
 
@@ -1079,10 +1107,16 @@ func stateHistoryAsOfRawDBReferences() map[string]struct{} {
 
 func stateLatestRawDBReferences() map[string]struct{} {
 	return map[string]struct{}{
-		"ReadStateAccountLatest": {},
-		"ReadStateCode":          {},
-		"ReadStateKVGeneration":  {},
-		"ReadStateKVLatest":      {},
+		"IterateStateAccountLatest":      {},
+		"IterateStateCode":               {},
+		"IterateStateKVGeneration":       {},
+		"IterateStateKVLatest":           {},
+		"IterateStateKVLatestDomainRows": {},
+		"IterateStateKVLatestRows":       {},
+		"ReadStateAccountLatest":         {},
+		"ReadStateCode":                  {},
+		"ReadStateKVGeneration":          {},
+		"ReadStateKVLatest":              {},
 	}
 }
 
