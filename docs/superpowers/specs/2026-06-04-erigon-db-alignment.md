@@ -720,7 +720,11 @@ Status:
   `allow_same_token_name` so pre-fork list/name reads use legacy records while
   post-fork reads use V2 records. HTTP solidity/PBFT `getchainparameters` and
   `getnextmaintenancetime` now also read historical `SystemDynamicProperty`
-  rows at the solid/PBFT bound instead of live-head dynamic properties.
+  rows at the solid/PBFT bound instead of live-head dynamic properties. gRPC
+  `WalletSolidity` Stake 2.0 resource availability queries
+  (`GetCanDelegatedMaxSize`, `GetAvailableUnfreezeCount`,
+  `GetCanWithdrawUnfreezeAmount`) now use solid-bound archive account and
+  `SystemDelegation` history instead of live-head state.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,

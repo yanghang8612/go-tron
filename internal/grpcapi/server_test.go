@@ -155,10 +155,19 @@ func (b *testBackend) GetDelegatedResourceAccountIndexV2At(addr common.Address, 
 func (b *testBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
 	return nil, nil
 }
+func (b *testBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
 	return nil, nil
 }
+func (b *testBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
 	return nil, nil
 }
 func (b *testBackend) GetReward(addr common.Address) (*tronapi.RewardInfo, error) { return nil, nil }

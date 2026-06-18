@@ -808,6 +808,42 @@ func readDelegatedResourceV2At(reader *state.PersistentHistoryReader, from, to t
 	return dr, nil
 }
 
+func readDelegatedResourceAt(reader *state.PersistentHistoryReader, from, to tcommon.Address, blockNum uint64) (*rawdb.DelegatedResource, error) {
+	var out *rawdb.DelegatedResource
+	mergeKey := func(key []byte) error {
+		data, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDelegation, key, blockNum)
+		if err != nil || !ok || len(data) == 0 {
+			return err
+		}
+		dr := &rawdb.DelegatedResource{}
+		if err := json.Unmarshal(data, dr); err != nil {
+			return err
+		}
+		if out == nil {
+			out = &rawdb.DelegatedResource{From: from, To: to}
+		}
+		out.FrozenBalanceForBandwidth += dr.FrozenBalanceForBandwidth
+		out.FrozenBalanceForEnergy += dr.FrozenBalanceForEnergy
+		if dr.ExpireTimeForBandwidth > out.ExpireTimeForBandwidth {
+			out.ExpireTimeForBandwidth = dr.ExpireTimeForBandwidth
+		}
+		if dr.ExpireTimeForEnergy > out.ExpireTimeForEnergy {
+			out.ExpireTimeForEnergy = dr.ExpireTimeForEnergy
+		}
+		return nil
+	}
+	for _, key := range [][]byte{
+		rawdb.DelegatedResourceStateKey(from, to),
+		rawdb.DelegatedResourceV2StateKey(from, to, false),
+		rawdb.DelegatedResourceV2StateKey(from, to, true),
+	} {
+		if err := mergeKey(key); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func nonEmptyDelegatedResource(dr *rawdb.DelegatedResource) bool {
 	return dr != nil &&
 		(dr.FrozenBalanceForBandwidth != 0 ||
@@ -885,7 +921,7 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
-	maxSize := statedb.GetFrozenV2Amount(addr, resource)
+	acc := statedb.GetAccount(addr)
 
 	// Compute already-delegated amount from the delegation index.
 	var delegated int64
@@ -901,7 +937,48 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 			delegated += dr.FrozenBalanceForEnergy
 		}
 	}
+	return canDelegateResourceFromAccount(acc, amount, resource, delegated), nil
+}
 
+func (b *TronBackend) CanDelegateResourceAt(addr tcommon.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	acc, err := session.reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account at block %d: %w", blockNum, err)
+	}
+	receivers, err := readDelegationIndexAt(session.reader, addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read delegation index at block %d: %w", blockNum, err)
+	}
+	var delegated int64
+	for _, receiver := range receivers {
+		dr, err := readDelegatedResourceAt(session.reader, addr, receiver, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read delegated resource at block %d: %w", blockNum, err)
+		}
+		if dr == nil {
+			continue
+		}
+		switch resource {
+		case corepb.ResourceCode_BANDWIDTH:
+			delegated += dr.FrozenBalanceForBandwidth
+		case corepb.ResourceCode_ENERGY:
+			delegated += dr.FrozenBalanceForEnergy
+		}
+	}
+	return canDelegateResourceFromAccount(acc, amount, resource, delegated), nil
+}
+
+func canDelegateResourceFromAccount(acc *types.Account, amount int64, resource corepb.ResourceCode, delegated int64) *tronapi.CanDelegateInfo {
+	var maxSize int64
+	if acc != nil {
+		maxSize = acc.GetFrozenV2Amount(resource)
+	}
 	canDelegate := maxSize - delegated
 	if canDelegate < 0 {
 		canDelegate = 0
@@ -910,7 +987,7 @@ func (b *TronBackend) CanDelegateResource(addr tcommon.Address, amount int64, re
 		MaxSize:         maxSize,
 		CanDelegateSize: canDelegate,
 		Balance:         amount,
-	}, nil
+	}
 }
 
 func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
@@ -923,13 +1000,28 @@ func (b *TronBackend) GetCanWithdrawUnfreezeAmount(addr tcommon.Address, timesta
 	if acc == nil {
 		return &tronapi.CanWithdrawUnfreezeInfo{Amount: 0}, nil
 	}
+	return canWithdrawUnfreezeAmountFromAccount(acc, timestamp), nil
+}
+
+func (b *TronBackend) GetCanWithdrawUnfreezeAmountAt(addr tcommon.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	acc, err := b.accountAtOrNil(addr, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	return canWithdrawUnfreezeAmountFromAccount(acc, timestamp), nil
+}
+
+func canWithdrawUnfreezeAmountFromAccount(acc *types.Account, timestamp int64) *tronapi.CanWithdrawUnfreezeInfo {
+	if acc == nil {
+		return &tronapi.CanWithdrawUnfreezeInfo{Amount: 0}
+	}
 	var total int64
 	for _, u := range acc.UnfrozenV2() {
 		if u.UnfreezeExpireTime <= timestamp {
 			total += u.UnfreezeAmount
 		}
 	}
-	return &tronapi.CanWithdrawUnfreezeInfo{Amount: total}, nil
+	return &tronapi.CanWithdrawUnfreezeInfo{Amount: total}
 }
 
 func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
@@ -938,15 +1030,40 @@ func (b *TronBackend) GetAvailableUnfreezeCount(addr tcommon.Address) (*tronapi.
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
+	return availableUnfreezeCountFromAccount(statedb.GetAccount(addr)), nil
+}
+
+func (b *TronBackend) GetAvailableUnfreezeCountAt(addr tcommon.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	acc, err := b.accountAtOrNil(addr, blockNum)
+	if err != nil {
+		return nil, err
+	}
+	return availableUnfreezeCountFromAccount(acc), nil
+}
+
+func (b *TronBackend) accountAtOrNil(addr tcommon.Address, blockNum uint64) (*types.Account, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	acc, err := session.reader.AccountAt(addr, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct account at block %d: %w", blockNum, err)
+	}
+	return acc, nil
+}
+
+func availableUnfreezeCountFromAccount(acc *types.Account) *tronapi.AvailableUnfreezeCountInfo {
 	const maxUnfreezeSlots = 32
 	count := int64(maxUnfreezeSlots)
-	if acc := statedb.GetAccount(addr); acc != nil {
+	if acc != nil {
 		count = int64(maxUnfreezeSlots - len(acc.UnfrozenV2()))
 	}
 	if count < 0 {
 		count = 0
 	}
-	return &tronapi.AvailableUnfreezeCountInfo{Count: count}, nil
+	return &tronapi.AvailableUnfreezeCountInfo{Count: count}
 }
 
 func (b *TronBackend) GetReward(addr tcommon.Address) (*tronapi.RewardInfo, error) {

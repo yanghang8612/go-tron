@@ -542,6 +542,129 @@ func TestArchiveQuery_DelegatedResourceV2AtUsesSystemDelegationHistory(t *testin
 	}
 }
 
+func TestArchiveQuery_StakeResourceAtUsesHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	owner := testInsertAddr(33)
+	receiver := testInsertAddr(34)
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitStake := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+		if statedb.GetAccount(owner) == nil {
+			statedb.CreateAccount(owner, corepb.AccountType_Normal)
+		}
+		switch n {
+		case 1:
+			statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 1000)
+			statedb.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 100, 1000)
+			statedb.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 200, 5000)
+			if err := statedb.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
+				From:                      owner,
+				To:                        receiver,
+				FrozenBalanceForBandwidth: 200,
+			}); err != nil {
+				t.Fatalf("write delegation block %d: %v", n, err)
+			}
+		case 2:
+			statedb.AddFreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 2000)
+			statedb.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 300, 2500)
+			statedb.AddUnfreezeV2(owner, corepb.ResourceCode_BANDWIDTH, 400, 7000)
+			if err := statedb.WriteDelegatedResourceV2(owner, receiver, false, &rawdb.DelegatedResource{
+				From:                      owner,
+				To:                        receiver,
+				FrozenBalanceForBandwidth: 700,
+			}); err != nil {
+				t.Fatalf("write delegation block %d: %v", n, err)
+			}
+		}
+		if err := statedb.WriteDelegationIndex(owner, []tcommon.Address{receiver}); err != nil {
+			t.Fatalf("write delegation index block %d: %v", n, err)
+		}
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit stake block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitStake(block1, 1)
+	root = commitStake(block2, 2)
+
+	can1, err := b.CanDelegateResourceAt(owner, 123, corepb.ResourceCode_BANDWIDTH, block1.Number())
+	if err != nil {
+		t.Fatalf("CanDelegateResourceAt(block1): %v", err)
+	}
+	if can1.MaxSize != 1000 || can1.CanDelegateSize != 800 || can1.Balance != 123 {
+		t.Fatalf("block1 can delegate = %+v, want max=1000 can=800 balance=123", can1)
+	}
+	can2, err := b.CanDelegateResourceAt(owner, 456, corepb.ResourceCode_BANDWIDTH, block2.Number())
+	if err != nil {
+		t.Fatalf("CanDelegateResourceAt(block2): %v", err)
+	}
+	if can2.MaxSize != 3000 || can2.CanDelegateSize != 2300 || can2.Balance != 456 {
+		t.Fatalf("block2 can delegate = %+v, want max=3000 can=2300 balance=456", can2)
+	}
+
+	available1, err := b.GetAvailableUnfreezeCountAt(owner, block1.Number())
+	if err != nil {
+		t.Fatalf("GetAvailableUnfreezeCountAt(block1): %v", err)
+	}
+	if available1.Count != 30 {
+		t.Fatalf("block1 available unfreeze count = %d, want 30", available1.Count)
+	}
+	available2, err := b.GetAvailableUnfreezeCountAt(owner, block2.Number())
+	if err != nil {
+		t.Fatalf("GetAvailableUnfreezeCountAt(block2): %v", err)
+	}
+	if available2.Count != 28 {
+		t.Fatalf("block2 available unfreeze count = %d, want 28", available2.Count)
+	}
+
+	withdrawable1, err := b.GetCanWithdrawUnfreezeAmountAt(owner, 3000, block1.Number())
+	if err != nil {
+		t.Fatalf("GetCanWithdrawUnfreezeAmountAt(block1): %v", err)
+	}
+	if withdrawable1.Amount != 100 {
+		t.Fatalf("block1 withdrawable = %d, want 100", withdrawable1.Amount)
+	}
+	withdrawable2, err := b.GetCanWithdrawUnfreezeAmountAt(owner, 3000, block2.Number())
+	if err != nil {
+		t.Fatalf("GetCanWithdrawUnfreezeAmountAt(block2): %v", err)
+	}
+	if withdrawable2.Amount != 400 {
+		t.Fatalf("block2 withdrawable = %d, want 400", withdrawable2.Amount)
+	}
+}
+
 func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

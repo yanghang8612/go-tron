@@ -38,6 +38,9 @@ type solidTestBackend struct {
 	lastMarketOrdersAt uint64
 	lastMarketPriceAt  uint64
 	lastExchangesAt    uint64
+	lastCanDelegateAt  uint64
+	lastAvailableAt    uint64
+	lastCanWithdrawAt  uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -51,6 +54,9 @@ type solidTestBackend struct {
 	liveMarketOrders   int
 	liveMarketPrice    int
 	liveExchanges      int
+	liveCanDelegate    int
+	liveAvailable      int
+	liveCanWithdraw    int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -64,6 +70,9 @@ type solidTestBackend struct {
 	marketOrdersAt     []*corepb.MarketOrder
 	marketPriceAt      *corepb.MarketPriceList
 	exchangesAt        []*corepb.Exchange
+	canDelegateAt      *tronapi.CanDelegateInfo
+	availableAt        *tronapi.AvailableUnfreezeCountInfo
+	canWithdrawAt      *tronapi.CanWithdrawUnfreezeInfo
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -240,6 +249,45 @@ func (b *solidTestBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange,
 		return b.exchangesAt, nil
 	}
 	return b.testBackend.ListExchangesAt(blockNum)
+}
+
+func (b *solidTestBackend) CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*tronapi.CanDelegateInfo, error) {
+	b.liveCanDelegate++
+	return b.testBackend.CanDelegateResource(addr, amount, resource)
+}
+
+func (b *solidTestBackend) CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*tronapi.CanDelegateInfo, error) {
+	b.lastCanDelegateAt = blockNum
+	if b.canDelegateAt != nil {
+		return b.canDelegateAt, nil
+	}
+	return b.testBackend.CanDelegateResourceAt(addr, amount, resource, blockNum)
+}
+
+func (b *solidTestBackend) GetAvailableUnfreezeCount(addr common.Address) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	b.liveAvailable++
+	return b.testBackend.GetAvailableUnfreezeCount(addr)
+}
+
+func (b *solidTestBackend) GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*tronapi.AvailableUnfreezeCountInfo, error) {
+	b.lastAvailableAt = blockNum
+	if b.availableAt != nil {
+		return b.availableAt, nil
+	}
+	return b.testBackend.GetAvailableUnfreezeCountAt(addr, blockNum)
+}
+
+func (b *solidTestBackend) GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	b.liveCanWithdraw++
+	return b.testBackend.GetCanWithdrawUnfreezeAmount(addr, timestamp)
+}
+
+func (b *solidTestBackend) GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*tronapi.CanWithdrawUnfreezeInfo, error) {
+	b.lastCanWithdrawAt = blockNum
+	if b.canWithdrawAt != nil {
+		return b.canWithdrawAt, nil
+	}
+	return b.testBackend.GetCanWithdrawUnfreezeAmountAt(addr, timestamp, blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -484,6 +532,67 @@ func TestSolidity_GetDelegatedResourceAccountIndexV2UsesSolidBoundArchivePath(t 
 	}
 	if backend.liveIndexCalls != 0 {
 		t.Fatalf("live GetDelegatedResourceAccountIndexV2 called %d times, want 0", backend.liveIndexCalls)
+	}
+}
+
+func TestSolidity_StakeResourceQueriesUseSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x78)
+	backend := &solidTestBackend{
+		solidNum:      87,
+		canDelegateAt: &tronapi.CanDelegateInfo{CanDelegateSize: 700},
+		availableAt:   &tronapi.AvailableUnfreezeCountInfo{Count: 29},
+		canWithdrawAt: &tronapi.CanWithdrawUnfreezeInfo{Amount: 5000},
+	}
+	client := newSolidityClient(t, backend)
+
+	maxSize, err := client.GetCanDelegatedMaxSize(context.Background(), &apipb.CanDelegatedMaxSizeRequestMessage{
+		OwnerAddress: addr,
+		Type:         int32(corepb.ResourceCode_BANDWIDTH),
+	})
+	if err != nil {
+		t.Fatalf("GetCanDelegatedMaxSize: %v", err)
+	}
+	if maxSize.GetMaxSize() != 700 {
+		t.Fatalf("GetCanDelegatedMaxSize = %d, want solid-bound sentinel 700", maxSize.GetMaxSize())
+	}
+	if backend.lastCanDelegateAt != 87 {
+		t.Fatalf("CanDelegateResourceAt block = %d, want solid block 87", backend.lastCanDelegateAt)
+	}
+	if backend.liveCanDelegate != 0 {
+		t.Fatalf("live CanDelegateResource called %d times, want 0", backend.liveCanDelegate)
+	}
+
+	available, err := client.GetAvailableUnfreezeCount(context.Background(), &apipb.GetAvailableUnfreezeCountRequestMessage{
+		OwnerAddress: addr,
+	})
+	if err != nil {
+		t.Fatalf("GetAvailableUnfreezeCount: %v", err)
+	}
+	if available.GetCount() != 29 {
+		t.Fatalf("GetAvailableUnfreezeCount = %d, want solid-bound sentinel 29", available.GetCount())
+	}
+	if backend.lastAvailableAt != 87 {
+		t.Fatalf("GetAvailableUnfreezeCountAt block = %d, want solid block 87", backend.lastAvailableAt)
+	}
+	if backend.liveAvailable != 0 {
+		t.Fatalf("live GetAvailableUnfreezeCount called %d times, want 0", backend.liveAvailable)
+	}
+
+	withdrawable, err := client.GetCanWithdrawUnfreezeAmount(context.Background(), &apipb.CanWithdrawUnfreezeAmountRequestMessage{
+		OwnerAddress: addr,
+		Timestamp:    12345,
+	})
+	if err != nil {
+		t.Fatalf("GetCanWithdrawUnfreezeAmount: %v", err)
+	}
+	if withdrawable.GetAmount() != 5000 {
+		t.Fatalf("GetCanWithdrawUnfreezeAmount = %d, want solid-bound sentinel 5000", withdrawable.GetAmount())
+	}
+	if backend.lastCanWithdrawAt != 87 {
+		t.Fatalf("GetCanWithdrawUnfreezeAmountAt block = %d, want solid block 87", backend.lastCanWithdrawAt)
+	}
+	if backend.liveCanWithdraw != 0 {
+		t.Fatalf("live GetCanWithdrawUnfreezeAmount called %d times, want 0", backend.liveCanWithdraw)
 	}
 }
 

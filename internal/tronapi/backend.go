@@ -199,8 +199,11 @@ type Backend interface {
 	GetDelegatedResourceAccountIndexV2(addr common.Address) (*DelegationIndexInfo, error)
 	GetDelegatedResourceAccountIndexV2At(addr common.Address, blockNum uint64) (*DelegationIndexInfo, error)
 	CanDelegateResource(addr common.Address, amount int64, resource corepb.ResourceCode) (*CanDelegateInfo, error)
+	CanDelegateResourceAt(addr common.Address, amount int64, resource corepb.ResourceCode, blockNum uint64) (*CanDelegateInfo, error)
 	GetCanWithdrawUnfreezeAmount(addr common.Address, timestamp int64) (*CanWithdrawUnfreezeInfo, error)
+	GetCanWithdrawUnfreezeAmountAt(addr common.Address, timestamp int64, blockNum uint64) (*CanWithdrawUnfreezeInfo, error)
 	GetAvailableUnfreezeCount(addr common.Address) (*AvailableUnfreezeCountInfo, error)
+	GetAvailableUnfreezeCountAt(addr common.Address, blockNum uint64) (*AvailableUnfreezeCountInfo, error)
 
 	// Rewards
 	GetReward(addr common.Address) (*RewardInfo, error)

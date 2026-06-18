@@ -271,7 +271,7 @@ func (s *SolidityServer) GetCanDelegatedMaxSize(_ context.Context, in *apipb.Can
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.CanDelegateResource(addr, 0, corepb.ResourceCode(in.Type))
+	info, err := s.backend.CanDelegateResourceAt(addr, 0, corepb.ResourceCode(in.Type), s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -286,7 +286,7 @@ func (s *SolidityServer) GetAvailableUnfreezeCount(_ context.Context, in *apipb.
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.GetAvailableUnfreezeCount(addr)
+	info, err := s.backend.GetAvailableUnfreezeCountAt(addr, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -301,7 +301,7 @@ func (s *SolidityServer) GetCanWithdrawUnfreezeAmount(_ context.Context, in *api
 		return nil, status.Error(codes.InvalidArgument, "owner address required")
 	}
 	addr := common.BytesToAddress(in.OwnerAddress)
-	info, err := s.backend.GetCanWithdrawUnfreezeAmount(addr, in.Timestamp)
+	info, err := s.backend.GetCanWithdrawUnfreezeAmountAt(addr, in.Timestamp, s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
