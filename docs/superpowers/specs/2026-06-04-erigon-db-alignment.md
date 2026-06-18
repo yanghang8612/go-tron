@@ -1082,7 +1082,8 @@ Status:
   back to the hot scan on coverage gaps and surfaces checker failures as archive
   data errors. `gtron snapshot event-log-index-stats` now gives operators a
   readonly profile of active event-log-index sidecars, including address/topic
-  key counts, postings, and worst-case candidate segment fanout.
+  key counts, postings, average postings per key, single- versus multi-segment
+  key counts, and worst-case candidate segment fanout.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
@@ -1177,9 +1178,10 @@ Status:
   snapshot restore/build paths, and production cold-builder passes now forward
   `snapshots.Config.ETL` to event-log, event-log-index, section-bloom, and
   balance-trace sidecar builders. The storage benchmark records the same
-  event-log-index key/posting/fanout counters after derived-index builds, giving
-  larger soaks a concrete selectivity signal before revisiting recsplit-style
-  accessors.
+  event-log-index key/posting/fanout counters after derived-index builds,
+  including average postings per key and single- versus multi-segment key
+  counts, giving larger soaks a concrete selectivity signal before revisiting
+  recsplit-style accessors.
 - Section-bloom segment builds now use the shared sorted ETL collector too:
   hot `sb-` rows are collected by `(section, bitIndex)` into scratch space and
   streamed into the immutable segment in lookup order. The derived-index

@@ -77,7 +77,9 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 	if len(indexStats.Segments) != 1 ||
 		indexStats.Address.Keys != 2 || indexStats.Address.Postings != 2 || indexStats.Address.MaxPostingsPerKey != 1 ||
-		indexStats.Topic.Keys != 2 || indexStats.Topic.Postings != 2 || indexStats.Topic.MaxPostingsPerKey != 1 {
+		indexStats.Address.AveragePostingsPerKeyMilli != 1000 || indexStats.Address.SingletonKeys != 2 || indexStats.Address.MultiPostingKeys != 0 ||
+		indexStats.Topic.Keys != 2 || indexStats.Topic.Postings != 2 || indexStats.Topic.MaxPostingsPerKey != 1 ||
+		indexStats.Topic.AveragePostingsPerKeyMilli != 1000 || indexStats.Topic.SingletonKeys != 2 || indexStats.Topic.MultiPostingKeys != 0 {
 		t.Fatalf("event log index stats = %+v, want two address/topic keys with one posting each", indexStats)
 	}
 	if _, err := VerifyManifestFiles(dir, VerifyManifestOptions{RequireRegistered: true, RequireChecksums: true}); err != nil {
@@ -130,6 +132,30 @@ func TestEventLogSegmentBuildVerifyLookup(t *testing.T) {
 	}
 	if visited != 1 {
 		t.Fatalf("short-circuit visited %d rows, want 1", visited)
+	}
+}
+
+func TestEventLogIndexLookupStatsAddRecomputesDistribution(t *testing.T) {
+	var total EventLogIndexLookupStats
+	total.add(EventLogIndexLookupStats{
+		Keys:                       2,
+		Postings:                   3,
+		AveragePostingsPerKeyMilli: 1500,
+		MaxPostingsPerKey:          2,
+		SingletonKeys:              1,
+		MultiPostingKeys:           1,
+	})
+	total.add(EventLogIndexLookupStats{
+		Keys:                       1,
+		Postings:                   3,
+		AveragePostingsPerKeyMilli: 3000,
+		MaxPostingsPerKey:          3,
+		MultiPostingKeys:           1,
+	})
+
+	if total.Keys != 3 || total.Postings != 6 || total.AveragePostingsPerKeyMilli != 2000 ||
+		total.MaxPostingsPerKey != 3 || total.SingletonKeys != 1 || total.MultiPostingKeys != 2 {
+		t.Fatalf("total stats = %+v, want keys=3 postings=6 avg=2000 max=3 singleton=1 multi=2", total)
 	}
 }
 

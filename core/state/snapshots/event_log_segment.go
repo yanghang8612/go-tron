@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,9 +57,12 @@ type EventLogIndexSegment struct {
 }
 
 type EventLogIndexLookupStats struct {
-	Keys              uint64
-	Postings          uint64
-	MaxPostingsPerKey uint64
+	Keys                       uint64
+	Postings                   uint64
+	AveragePostingsPerKeyMilli uint64
+	MaxPostingsPerKey          uint64
+	SingletonKeys              uint64
+	MultiPostingKeys           uint64
 }
 
 type EventLogIndexSegmentStats struct {
@@ -549,9 +553,20 @@ func (s *EventLogIndexLookupStats) add(other EventLogIndexLookupStats) {
 	} else {
 		s.Postings = math.MaxUint64
 	}
+	if singleton, overflow := checkedAdd(s.SingletonKeys, other.SingletonKeys); !overflow {
+		s.SingletonKeys = singleton
+	} else {
+		s.SingletonKeys = math.MaxUint64
+	}
+	if multi, overflow := checkedAdd(s.MultiPostingKeys, other.MultiPostingKeys); !overflow {
+		s.MultiPostingKeys = multi
+	} else {
+		s.MultiPostingKeys = math.MaxUint64
+	}
 	if other.MaxPostingsPerKey > s.MaxPostingsPerKey {
 		s.MaxPostingsPerKey = other.MaxPostingsPerKey
 	}
+	s.AveragePostingsPerKeyMilli = eventLogAveragePostingsPerKeyMilli(s.Keys, s.Postings)
 }
 
 func (s *EventLogSegment) IterateLogs(fromBlock, toBlock uint64, filter EventLogFilter, fn func(EventLog) (bool, error)) error {
@@ -1952,8 +1967,31 @@ func readEventLogLookupStats(file io.ReaderAt, offset, length uint64, keySize in
 		if postingsCount > stats.MaxPostingsPerKey {
 			stats.MaxPostingsPerKey = postingsCount
 		}
+		switch {
+		case postingsCount == 1:
+			stats.SingletonKeys++
+		case postingsCount > 1:
+			stats.MultiPostingKeys++
+		}
 	}
+	stats.AveragePostingsPerKeyMilli = eventLogAveragePostingsPerKeyMilli(stats.Keys, stats.Postings)
 	return stats, nil
+}
+
+func eventLogAveragePostingsPerKeyMilli(keys, postings uint64) uint64 {
+	if keys == 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(postings, 1000)
+	if hi >= keys {
+		return math.MaxUint64
+	}
+	q, r := bits.Div64(hi, lo, keys)
+	roundUpAt := keys/2 + keys%2
+	if r >= roundUpAt && q < math.MaxUint64 {
+		q++
+	}
+	return q
 }
 
 func compareEventLogLookupIndexMaps(ref SegmentRef, name string, expected, actual map[string][]uint64) error {

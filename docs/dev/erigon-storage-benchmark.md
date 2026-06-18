@@ -40,10 +40,16 @@ The output path is printed at startup. Each JSON row contains:
 - `eventLogIndexSegments`
 - `eventLogIndexAddressKeys`
 - `eventLogIndexAddressPostings`
+- `eventLogIndexAddressAvgPostingsMilli`
 - `eventLogIndexAddressMaxPostings`
+- `eventLogIndexAddressSingletonKeys`
+- `eventLogIndexAddressMultiPostingKeys`
 - `eventLogIndexTopicKeys`
 - `eventLogIndexTopicPostings`
+- `eventLogIndexTopicAvgPostingsMilli`
 - `eventLogIndexTopicMaxPostings`
+- `eventLogIndexTopicSingletonKeys`
+- `eventLogIndexTopicMultiPostingKeys`
 - `balanceTracePruneToBlock`
 - `balanceTraceBlockRowsPruned`
 - `balanceTraceAccountRowsPruned`
@@ -91,10 +97,11 @@ balance-trace, section-bloom, event-log, and event-log-index sidecars into the
 snapshot manifest. Use this option to measure the ETL-backed derived-index
 builders and to generate indexed log coverage before minimal-mode prune drills.
 After the build, the harness runs `gtron snapshot event-log-index-stats` and
-records address/topic key counts, postings, and worst-case postings per key for
-the event-log-index sidecars. These counters are the first profiling signal for
-whether the sorted sidecar is selective enough or needs a recsplit-style
-accessor.
+records address/topic key counts, postings, average postings per key in milli
+units, worst-case postings per key, and single- versus multi-segment key
+counts for the event-log-index sidecars. These counters are the first profiling
+signal for whether the sorted sidecar is selective enough or needs a
+recsplit-style accessor.
 
 ## Signed Cold Prune Drill
 

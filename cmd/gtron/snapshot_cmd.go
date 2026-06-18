@@ -1181,28 +1181,40 @@ func snapshotEventLogIndexStatsCmd(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Event log index stats: dir=%s segments=%d addressKeys=%d addressPostings=%d addressMaxPostings=%d topicKeys=%d topicPostings=%d topicMaxPostings=%d\n",
+	fmt.Printf("Event log index stats: dir=%s segments=%d addressKeys=%d addressPostings=%d addressAvgPostingsMilli=%d addressMaxPostings=%d addressSingletonKeys=%d addressMultiPostingKeys=%d topicKeys=%d topicPostings=%d topicAvgPostingsMilli=%d topicMaxPostings=%d topicSingletonKeys=%d topicMultiPostingKeys=%d\n",
 		dir,
 		len(inspection.Segments),
 		inspection.Address.Keys,
 		inspection.Address.Postings,
+		inspection.Address.AveragePostingsPerKeyMilli,
 		inspection.Address.MaxPostingsPerKey,
+		inspection.Address.SingletonKeys,
+		inspection.Address.MultiPostingKeys,
 		inspection.Topic.Keys,
 		inspection.Topic.Postings,
+		inspection.Topic.AveragePostingsPerKeyMilli,
 		inspection.Topic.MaxPostingsPerKey,
+		inspection.Topic.SingletonKeys,
+		inspection.Topic.MultiPostingKeys,
 	)
 	for _, stats := range inspection.Segments {
-		fmt.Printf("Event log index segment: path=%s range=[%d,%d] size=%d addressKeys=%d addressPostings=%d addressMaxPostings=%d topicKeys=%d topicPostings=%d topicMaxPostings=%d\n",
+		fmt.Printf("Event log index segment: path=%s range=[%d,%d] size=%d addressKeys=%d addressPostings=%d addressAvgPostingsMilli=%d addressMaxPostings=%d addressSingletonKeys=%d addressMultiPostingKeys=%d topicKeys=%d topicPostings=%d topicAvgPostingsMilli=%d topicMaxPostings=%d topicSingletonKeys=%d topicMultiPostingKeys=%d\n",
 			stats.Path,
 			stats.FromBlock,
 			stats.ToBlock,
 			stats.Size,
 			stats.Address.Keys,
 			stats.Address.Postings,
+			stats.Address.AveragePostingsPerKeyMilli,
 			stats.Address.MaxPostingsPerKey,
+			stats.Address.SingletonKeys,
+			stats.Address.MultiPostingKeys,
 			stats.Topic.Keys,
 			stats.Topic.Postings,
+			stats.Topic.AveragePostingsPerKeyMilli,
 			stats.Topic.MaxPostingsPerKey,
+			stats.Topic.SingletonKeys,
+			stats.Topic.MultiPostingKeys,
 		)
 	}
 	return nil

@@ -39,10 +39,16 @@ RUN_DERIVED_INDEX_BUILD_SECONDS=0
 RUN_EVENT_LOG_INDEX_SEGMENTS=0
 RUN_EVENT_LOG_INDEX_ADDRESS_KEYS=0
 RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_AVG_POSTINGS_MILLI=0
 RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_SINGLETON_KEYS=0
+RUN_EVENT_LOG_INDEX_ADDRESS_MULTI_POSTING_KEYS=0
 RUN_EVENT_LOG_INDEX_TOPIC_KEYS=0
 RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS=0
+RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI=0
 RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS=0
+RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS=0
+RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS=0
 RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
 RUN_BALANCE_TRACE_BLOCK_ROWS=0
 RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
@@ -206,10 +212,16 @@ reset_run_metrics() {
   RUN_EVENT_LOG_INDEX_SEGMENTS=0
   RUN_EVENT_LOG_INDEX_ADDRESS_KEYS=0
   RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_AVG_POSTINGS_MILLI=0
   RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_SINGLETON_KEYS=0
+  RUN_EVENT_LOG_INDEX_ADDRESS_MULTI_POSTING_KEYS=0
   RUN_EVENT_LOG_INDEX_TOPIC_KEYS=0
   RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI=0
   RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS=0
+  RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS=0
   RUN_BALANCE_TRACE_PRUNE_TO_BLOCK=-1
   RUN_BALANCE_TRACE_BLOCK_ROWS=0
   RUN_BALANCE_TRACE_ACCOUNT_ROWS=0
@@ -468,21 +480,34 @@ collect_event_log_index_stats() {
   if ! run_logged "$stats_out" "$GTRON" snapshot event-log-index-stats --datadir "$datadir" >>"$log_path"; then
     die "snapshot event-log-index-stats failed; see $log_path"
   fi
-  local segments address_keys address_postings address_max topic_keys topic_postings topic_max
+  local segments address_keys address_postings address_avg address_max address_singleton address_multi
+  local topic_keys topic_postings topic_avg topic_max topic_singleton topic_multi
   segments="$(sed -n 's/^Event log index stats:.* segments=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   address_keys="$(sed -n 's/^Event log index stats:.* addressKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   address_postings="$(sed -n 's/^Event log index stats:.* addressPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_avg="$(sed -n 's/^Event log index stats:.* addressAvgPostingsMilli=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   address_max="$(sed -n 's/^Event log index stats:.* addressMaxPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_singleton="$(sed -n 's/^Event log index stats:.* addressSingletonKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  address_multi="$(sed -n 's/^Event log index stats:.* addressMultiPostingKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   topic_keys="$(sed -n 's/^Event log index stats:.* topicKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   topic_postings="$(sed -n 's/^Event log index stats:.* topicPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_avg="$(sed -n 's/^Event log index stats:.* topicAvgPostingsMilli=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   topic_max="$(sed -n 's/^Event log index stats:.* topicMaxPostings=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_singleton="$(sed -n 's/^Event log index stats:.* topicSingletonKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
+  topic_multi="$(sed -n 's/^Event log index stats:.* topicMultiPostingKeys=\([0-9][0-9]*\).*/\1/p' "$stats_out" | tail -1)"
   RUN_EVENT_LOG_INDEX_SEGMENTS="${segments:-0}"
   RUN_EVENT_LOG_INDEX_ADDRESS_KEYS="${address_keys:-0}"
   RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS="${address_postings:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_AVG_POSTINGS_MILLI="${address_avg:-0}"
   RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS="${address_max:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_SINGLETON_KEYS="${address_singleton:-0}"
+  RUN_EVENT_LOG_INDEX_ADDRESS_MULTI_POSTING_KEYS="${address_multi:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_KEYS="${topic_keys:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS="${topic_postings:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI="${topic_avg:-0}"
   RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS="${topic_max:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS="${topic_singleton:-0}"
+  RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS="${topic_multi:-0}"
 }
 
 run_logged() {
@@ -710,8 +735,11 @@ emit_result() {
     "$RUN_COLD_FREEZER_TO_BLOCK" "$RUN_DERIVED_INDEX_TO_BLOCK" "$RUN_DERIVED_INDEX_SEGMENTS" \
     "$RUN_DERIVED_INDEX_BUILD_SECONDS" "$RUN_EVENT_LOG_INDEX_SEGMENTS" \
     "$RUN_EVENT_LOG_INDEX_ADDRESS_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_POSTINGS" \
-    "$RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_KEYS" \
-    "$RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS" "$RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_AVG_POSTINGS_MILLI" "$RUN_EVENT_LOG_INDEX_ADDRESS_MAX_POSTINGS" \
+    "$RUN_EVENT_LOG_INDEX_ADDRESS_SINGLETON_KEYS" "$RUN_EVENT_LOG_INDEX_ADDRESS_MULTI_POSTING_KEYS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_KEYS" "$RUN_EVENT_LOG_INDEX_TOPIC_POSTINGS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_AVG_POSTINGS_MILLI" "$RUN_EVENT_LOG_INDEX_TOPIC_MAX_POSTINGS" \
+    "$RUN_EVENT_LOG_INDEX_TOPIC_SINGLETON_KEYS" "$RUN_EVENT_LOG_INDEX_TOPIC_MULTI_POSTING_KEYS" \
     "$RUN_BALANCE_TRACE_PRUNE_TO_BLOCK" \
     "$RUN_BALANCE_TRACE_BLOCK_ROWS" "$RUN_BALANCE_TRACE_ACCOUNT_ROWS" \
     "$RUN_SECTION_BLOOM_PRUNE_TO_SECTION" "$RUN_SECTION_BLOOM_ROWS" \
@@ -737,9 +765,12 @@ keys = [
     "ancientFiles", "snapshotFiles",
     "coldFreezerToBlock", "derivedIndexToBlock", "derivedIndexSegments",
     "derivedIndexBuildSeconds", "eventLogIndexSegments", "eventLogIndexAddressKeys",
-    "eventLogIndexAddressPostings", "eventLogIndexAddressMaxPostings",
-    "eventLogIndexTopicKeys", "eventLogIndexTopicPostings",
-    "eventLogIndexTopicMaxPostings", "balanceTracePruneToBlock",
+    "eventLogIndexAddressPostings", "eventLogIndexAddressAvgPostingsMilli",
+    "eventLogIndexAddressMaxPostings", "eventLogIndexAddressSingletonKeys",
+    "eventLogIndexAddressMultiPostingKeys", "eventLogIndexTopicKeys",
+    "eventLogIndexTopicPostings", "eventLogIndexTopicAvgPostingsMilli",
+    "eventLogIndexTopicMaxPostings", "eventLogIndexTopicSingletonKeys",
+    "eventLogIndexTopicMultiPostingKeys", "balanceTracePruneToBlock",
     "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
     "sectionBloomPruneToSection", "sectionBloomRowsPruned",
     "signedColdPrune", "chainLookupPruneToBlock",
@@ -756,14 +787,19 @@ keys = [
     "datadir", "log",
 ]
 values = sys.argv[2:]
+if len(values) != len(keys):
+    raise SystemExit(f"storage benchmark field mismatch: {len(values)} values for {len(keys)} keys")
 ints = {
     "targetBlock", "height", "elapsedSeconds",
     "datadirBytes", "chaindataBytes", "ancientBytes", "snapshotBytes",
     "ancientFiles", "snapshotFiles", "coldFreezerToBlock", "derivedIndexToBlock",
     "derivedIndexSegments", "derivedIndexBuildSeconds", "balanceTracePruneToBlock",
     "eventLogIndexSegments", "eventLogIndexAddressKeys", "eventLogIndexAddressPostings",
-    "eventLogIndexAddressMaxPostings", "eventLogIndexTopicKeys",
-    "eventLogIndexTopicPostings", "eventLogIndexTopicMaxPostings",
+    "eventLogIndexAddressAvgPostingsMilli", "eventLogIndexAddressMaxPostings",
+    "eventLogIndexAddressSingletonKeys", "eventLogIndexAddressMultiPostingKeys",
+    "eventLogIndexTopicKeys", "eventLogIndexTopicPostings",
+    "eventLogIndexTopicAvgPostingsMilli", "eventLogIndexTopicMaxPostings",
+    "eventLogIndexTopicSingletonKeys", "eventLogIndexTopicMultiPostingKeys",
     "balanceTraceBlockRowsPruned", "balanceTraceAccountRowsPruned",
     "sectionBloomPruneToSection", "sectionBloomRowsPruned", "signedColdPrune",
     "chainLookupPruneToBlock", "chainLookupBlockIndexes", "chainLookupTxIndexes",
