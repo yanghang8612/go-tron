@@ -219,6 +219,20 @@ func (s *StateDB) ReadCycleBrokerage(cycle int64, addr []byte) int {
 	return int(int32(binary.BigEndian.Uint32(raw)))
 }
 
+// CycleBrokerageAt reconstructs a witness brokerage snapshot for cycle at the
+// end of blockNum. Missing or malformed rows default to java-tron's
+// DEFAULT_BROKERAGE.
+func (r *PersistentHistoryReader) CycleBrokerageAt(cycle int64, addr []byte, blockNum uint64) (int64, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemReward, rawdb.CycleBrokerageStateKey(cycle, addr), blockNum)
+	if err != nil {
+		return 0, err
+	}
+	if !ok || len(raw) != 4 {
+		return int64(rawdb.DefaultBrokerage), nil
+	}
+	return int64(int32(binary.BigEndian.Uint32(raw))), nil
+}
+
 func (s *StateDB) WriteCycleBrokerage(cycle int64, addr []byte, rate int) error {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], uint32(int32(rate)))

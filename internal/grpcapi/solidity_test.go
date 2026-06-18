@@ -45,6 +45,7 @@ type solidTestBackend struct {
 	lastBandwidthAt    uint64
 	lastEnergyAt       uint64
 	lastWitnessesAt    uint64
+	lastBrokerageAt    uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -65,6 +66,7 @@ type solidTestBackend struct {
 	liveBandwidth      int
 	liveEnergy         int
 	liveWitnesses      int
+	liveBrokerage      int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -85,6 +87,7 @@ type solidTestBackend struct {
 	bandwidthAt        string
 	energyAt           string
 	witnessesAt        []*tronapi.WitnessInfo
+	brokerageAt        int64
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -354,6 +357,19 @@ func (b *solidTestBackend) ListWitnessesAt(blockNum uint64) ([]*tronapi.WitnessI
 	return b.testBackend.ListWitnessesAt(blockNum)
 }
 
+func (b *solidTestBackend) GetBrokerageInfo(addr common.Address) int64 {
+	b.liveBrokerage++
+	return b.testBackend.GetBrokerageInfo(addr)
+}
+
+func (b *solidTestBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
+	b.lastBrokerageAt = blockNum
+	if b.brokerageAt != 0 {
+		return b.brokerageAt, nil
+	}
+	return b.testBackend.GetBrokerageInfoAt(addr, blockNum)
+}
+
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
@@ -539,6 +555,29 @@ func TestSolidity_GetRewardInfoUsesSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveRewardCalls != 0 {
 		t.Fatalf("live GetReward called %d times, want 0", backend.liveRewardCalls)
+	}
+}
+
+func TestSolidity_GetBrokerageInfoUsesSolidBoundArchivePath(t *testing.T) {
+	addr := solidityTestAddress(0x34)
+	backend := &solidTestBackend{
+		solidNum:    89,
+		brokerageAt: 77,
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.GetBrokerageInfo(context.Background(), &apipb.BytesMessage{Value: addr})
+	if err != nil {
+		t.Fatalf("GetBrokerageInfo: %v", err)
+	}
+	if resp.GetNum() != 77 {
+		t.Fatalf("GetBrokerageInfo = %d, want 77", resp.GetNum())
+	}
+	if backend.lastBrokerageAt != 89 {
+		t.Fatalf("GetBrokerageInfoAt block = %d, want solid block 89", backend.lastBrokerageAt)
+	}
+	if backend.liveBrokerage != 0 {
+		t.Fatalf("live GetBrokerageInfo called %d times, want 0", backend.liveBrokerage)
 	}
 }
 

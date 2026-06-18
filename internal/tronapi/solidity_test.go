@@ -130,6 +130,8 @@ type isolationStubBackend struct {
 	accountNetAtBlock        uint64
 	liveChainParameterCalls  int
 	chainParametersAtBlock   uint64
+	liveBrokerageCalls       int
+	brokerageAtBlock         uint64
 	liveWitnessCalls         int
 	witnessesAtBlock         uint64
 	liveNextMaintenanceCalls int
@@ -193,6 +195,16 @@ func (s *isolationStubBackend) GetChainParameters() []tronapi.ChainParameter {
 func (s *isolationStubBackend) GetChainParametersAt(blockNum uint64) ([]tronapi.ChainParameter, error) {
 	s.chainParametersAtBlock = blockNum
 	return []tronapi.ChainParameter{{Key: "bound_param", Value: 99}}, nil
+}
+
+func (s *isolationStubBackend) GetBrokerageInfo(addr common.Address) int64 {
+	s.liveBrokerageCalls++
+	return 1
+}
+
+func (s *isolationStubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
+	s.brokerageAtBlock = blockNum
+	return 88, nil
 }
 
 func (s *isolationStubBackend) ListWitnesses() ([]*tronapi.WitnessInfo, error) {
@@ -572,6 +584,54 @@ func TestPbftAccountNetUsesPbftBoundArchivePath(t *testing.T) {
 	}
 	if stub.liveAccountNetCalls != 0 {
 		t.Fatalf("live GetAccountNet called %d times, want 0", stub.liveAccountNetCalls)
+	}
+}
+
+func TestSolidityBrokerageUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBrokerageUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftBrokerageUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertBrokerageUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertBrokerageUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/getbrokerage?address=411234567890")
+	if err != nil {
+		t.Fatalf("getbrokerage request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getbrokerage status: %d", resp.StatusCode)
+	}
+	var got struct {
+		Brokerage int64 `json:"brokerage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Brokerage != 88 {
+		t.Fatalf("brokerage = %d, want bound sentinel 88", got.Brokerage)
+	}
+	if stub.brokerageAtBlock != wantBlock {
+		t.Fatalf("GetBrokerageInfoAt block = %d, want %d", stub.brokerageAtBlock, wantBlock)
+	}
+	if stub.liveBrokerageCalls != 0 {
+		t.Fatalf("live GetBrokerageInfo called %d times, want 0", stub.liveBrokerageCalls)
 	}
 }
 

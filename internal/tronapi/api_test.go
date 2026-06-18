@@ -232,8 +232,11 @@ func (s *stubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, erro
 	return nil, nil
 }
 func (s *stubBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
-func (s *stubBackend) TotalTransaction() int64                    { return 0 }
-func (s *stubBackend) GetBurnTrx() int64                          { return 0 }
+func (s *stubBackend) GetBrokerageInfoAt(addr common.Address, blockNum uint64) (int64, error) {
+	return 0, nil
+}
+func (s *stubBackend) TotalTransaction() int64 { return 0 }
+func (s *stubBackend) GetBurnTrx() int64       { return 0 }
 func (s *stubBackend) GetBurnTrxAt(blockNum uint64) (int64, error) {
 	return 0, nil
 }

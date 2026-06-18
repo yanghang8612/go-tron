@@ -414,6 +414,81 @@ func TestArchiveQuery_DynamicPropertiesAtUsesHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_BrokerageInfoAtUsesCycleHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	witnessAddr := testInsertAddr(41)
+	root := bc.StateRootAtBlock(0)
+	commitBrokerage := func(blk *types.Block, cycle int64, cycleRate, currentRate int) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", blk.Number(), err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, blk.Number(), blk.Hash())
+
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetCurrentCycleNumber(cycle)
+		if err := dynProps.FlushRooted(statedb); err != nil {
+			t.Fatalf("flush current cycle block %d: %v", blk.Number(), err)
+		}
+		if err := statedb.WriteWitnessBrokerage(witnessAddr, int64(currentRate)); err != nil {
+			t.Fatalf("write current brokerage block %d: %v", blk.Number(), err)
+		}
+		if err := statedb.WriteCycleBrokerage(cycle, witnessAddr.Bytes(), cycleRate); err != nil {
+			t.Fatalf("write cycle brokerage block %d: %v", blk.Number(), err)
+		}
+
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit brokerage block %d: %v", blk.Number(), err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", blk.Number(), err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitBrokerage(block1, 7, 33, 91)
+	root = commitBrokerage(block2, 8, 44, 92)
+
+	got1, err := b.GetBrokerageInfoAt(witnessAddr, block1.Number())
+	if err != nil {
+		t.Fatalf("GetBrokerageInfoAt(block1): %v", err)
+	}
+	if got1 != 33 {
+		t.Fatalf("GetBrokerageInfoAt(block1) = %d, want cycle brokerage 33", got1)
+	}
+	got2, err := b.GetBrokerageInfoAt(witnessAddr, block2.Number())
+	if err != nil {
+		t.Fatalf("GetBrokerageInfoAt(block2): %v", err)
+	}
+	if got2 != 44 {
+		t.Fatalf("GetBrokerageInfoAt(block2) = %d, want cycle brokerage 44", got2)
+	}
+}
+
 func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

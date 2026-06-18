@@ -369,7 +369,11 @@ func (s *SolidityServer) GetBrokerageInfo(_ context.Context, in *apipb.BytesMess
 		return nil, status.Error(codes.InvalidArgument, "address required")
 	}
 	addr := common.BytesToAddress(in.Value)
-	return &apipb.NumberMessage{Num: s.backend.GetBrokerageInfo(addr)}, nil
+	rate, err := s.backend.GetBrokerageInfoAt(addr, s.solidNum())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &apipb.NumberMessage{Num: rate}, nil
 }
 
 // ── Contract execution ─────────────────────────────────────────────────────────

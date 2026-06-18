@@ -1537,6 +1537,24 @@ func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {
 	return int64(sysKV.ReadCycleBrokerage(cycle, addr.Bytes()))
 }
 
+func (b *TronBackend) GetBrokerageInfoAt(addr tcommon.Address, blockNum uint64) (int64, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return 0, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, []string{"current_cycle_number"})
+	if err != nil {
+		return 0, fmt.Errorf("reconstruct current cycle at block %d: %w", blockNum, err)
+	}
+	rate, err := session.reader.CycleBrokerageAt(dynProps.CurrentCycleNumber(), addr.Bytes(), blockNum)
+	if err != nil {
+		return 0, fmt.Errorf("read cycle brokerage at block %d: %w", blockNum, err)
+	}
+	return rate, nil
+}
+
 func (b *TronBackend) TotalTransaction() int64 {
 	// Read through the buffer overlay so the counter reflects the latest
 	// applied block before the async flush worker has drained it to disk.

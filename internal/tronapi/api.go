@@ -1427,6 +1427,10 @@ func (api *API) handleGetReward(w http.ResponseWriter, r *http.Request, boundFn 
 // address. Mirrors java-tron Wallet.getBrokerage so the cross-impl test
 // can hit both nodes via the same endpoint.
 func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
+	api.handleGetBrokerage(w, r, nil)
+}
+
+func (api *API) handleGetBrokerage(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	addrStr := r.URL.Query().Get("address")
 	visible := r.URL.Query().Get("visible") == "true"
 	if addrStr == "" {
@@ -1449,7 +1453,16 @@ func (api *API) getBrokerage(w http.ResponseWriter, r *http.Request) {
 		httpFieldErr(w, "address", err)
 		return
 	}
-	rate := api.backend.GetBrokerageInfo(addr)
+	var rate int64
+	if boundFn == nil {
+		rate = api.backend.GetBrokerageInfo(addr)
+	} else {
+		rate, err = api.backend.GetBrokerageInfoAt(addr, boundFn())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	data, _ := json.Marshal(map[string]int64{"brokerage": rate})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
