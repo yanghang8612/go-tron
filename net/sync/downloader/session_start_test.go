@@ -315,6 +315,115 @@ func TestApplySessionStartupPlanStopsAfterBodiesReadyRefreshFailure(t *testing.T
 	}
 }
 
+func TestApplySessionStartupPlanStopsAfterSyncPipelineRepairInterruption(t *testing.T) {
+	plan := SessionStartupPlan{
+		Steps: []SessionStartupStep{
+			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupCompleteHeadSyncPipeline},
+			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
+			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
+			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
+		},
+	}
+	applier := recordingSessionStartupApplier{
+		repair: SyncPipelineProgressRepairResult{
+			Interrupted: true,
+			ErrorStage:  rawdb.StageSyncImport,
+			Repairs: []SyncStageProgressRepair{{
+				Stage:  rawdb.StageSyncImport,
+				Status: SyncStageProgressReadError,
+			}},
+		},
+	}
+
+	result := ApplySessionStartupPlan(plan, &applier)
+	wantCalls := []recordedSessionStartupCall{{action: SessionStartupRepairSyncPipeline}}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want stopped after sync pipeline repair failure %+v", applier.calls, wantCalls)
+	}
+	if !result.Interrupted || result.ErrorStep != SessionStartupRepairSyncPipeline {
+		t.Fatalf("startup result = %+v, want interrupted at sync pipeline repair", result)
+	}
+	if !result.HasSyncPipelineRepair || result.HasSyncPipelineHead || result.HasStagedBodyRestore {
+		t.Fatalf("startup result = %+v, want only repair result recorded", result)
+	}
+}
+
+func TestApplySessionStartupPlanStopsAfterHeadCompletionWriteFailure(t *testing.T) {
+	plan := SessionStartupPlan{
+		Steps: []SessionStartupStep{
+			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupCompleteHeadSyncPipeline},
+			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
+			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
+			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
+		},
+	}
+	applier := recordingSessionStartupApplier{
+		headCompletion: SyncPipelineProgressHeadCompletion{
+			WriteError: errUnexpectedRepairResult{},
+			ErrorStage: rawdb.StageSyncCommitment,
+		},
+	}
+
+	result := ApplySessionStartupPlan(plan, &applier)
+	wantCalls := []recordedSessionStartupCall{
+		{action: SessionStartupRepairSyncPipeline},
+		{action: SessionStartupCompleteHeadSyncPipeline},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want stopped after head completion write failure %+v", applier.calls, wantCalls)
+	}
+	if !result.Interrupted || result.ErrorStep != SessionStartupCompleteHeadSyncPipeline {
+		t.Fatalf("startup result = %+v, want interrupted at head completion", result)
+	}
+	if !result.HasSyncPipelineHead || result.SyncPipelineHeadCompletion.WriteError == nil || result.HasStagedBodyRestore {
+		t.Fatalf("startup result = %+v, want failed head completion without downstream restore", result)
+	}
+}
+
+func TestApplySessionStartupPlanStopsAfterOrderRepairInterruption(t *testing.T) {
+	plan := SessionStartupPlan{
+		Steps: []SessionStartupStep{
+			{Action: SessionStartupRepairSyncPipeline},
+			{Action: SessionStartupCompleteHeadSyncPipeline},
+			{Action: SessionStartupRestoreInventoryTarget, InventoryFloor: 9},
+			{Action: SessionStartupDeleteImportedBodies, DeleteImportedThrough: 8},
+			{Action: SessionStartupRestoreStagedBodies, RestoreStagedBodiesFrom: 10, RestoreLimit: 32, PruneStaleTail: true},
+			{Action: SessionStartupRefreshBodiesReady},
+			{Action: SessionStartupRepairSyncPipelineOrder},
+			{Action: SessionStartupCheckSyncPipelineOrder},
+			{Action: SessionStartupDeriveSyncPipelineCursor},
+		},
+	}
+	applier := recordingSessionStartupApplier{
+		orderRepair: SyncPipelineProgressOrderRepairResult{
+			Interrupted: true,
+			ErrorStage:  rawdb.StageSyncBodiesReady,
+		},
+	}
+
+	result := ApplySessionStartupPlan(plan, &applier)
+	wantCalls := []recordedSessionStartupCall{
+		{action: SessionStartupRepairSyncPipeline},
+		{action: SessionStartupCompleteHeadSyncPipeline},
+		{action: SessionStartupRestoreInventoryTarget, first: 9},
+		{action: SessionStartupDeleteImportedBodies, first: 8},
+		{action: SessionStartupRestoreStagedBodies, first: 10, limit: 32, prune: true},
+		{action: SessionStartupRefreshBodiesReady},
+		{action: SessionStartupRepairSyncPipelineOrder},
+	}
+	if !reflect.DeepEqual(applier.calls, wantCalls) {
+		t.Fatalf("calls = %+v, want stopped after order repair failure %+v", applier.calls, wantCalls)
+	}
+	if !result.Interrupted || result.ErrorStep != SessionStartupRepairSyncPipelineOrder {
+		t.Fatalf("startup result = %+v, want interrupted at order repair", result)
+	}
+	if !result.HasSyncPipelineOrderRepair || result.HasSyncPipelineOrder || result.HasSyncPipelineCursor {
+		t.Fatalf("startup result = %+v, want no downstream order check or cursor after order repair failure", result)
+	}
+}
+
 func TestApplySessionStartupPlanRepairsHalfDownloadedAndHalfExecutedState(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	block2 := testBufferedBlock(2)

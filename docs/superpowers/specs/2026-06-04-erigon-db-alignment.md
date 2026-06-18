@@ -431,6 +431,9 @@ Status:
 - Session startup now records the `SyncBodiesReady` refresh result and stops
   before downstream order repair/check/cursor derivation if that refresh cannot
   be persisted, preserving stage-before-view ordering across restart recovery.
+- The same startup scheduler now stops after sync-stage repair read/delete
+  failures, current-head completion write failures, and order-repair
+  read/write/delete failures before restoring or deriving any downstream view.
 - The higher local-drain session branch now treats that pre-import ready repair
   failure as a stop condition instead of an empty drain, so it will not refill
   fetch slots or probe peers as though the stage table were merely empty.

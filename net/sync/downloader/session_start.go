@@ -218,6 +218,11 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 	if applier == nil {
 		return result
 	}
+	interrupt := func(step SessionStartupStepAction) SessionStartupApplyResult {
+		result.Interrupted = true
+		result.ErrorStep = step
+		return result
+	}
 	for _, step := range plan.Steps {
 		switch step.Action {
 		case SessionStartupRepairSyncPipeline:
@@ -225,10 +230,16 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.HasSyncPipelineRepair = true
 			result.SyncPipelineRepairs = result.SyncPipelineRepairResult.Repairs
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.SyncPipelineRepairResult.Interrupted {
+				return interrupt(step.Action)
+			}
 		case SessionStartupCompleteHeadSyncPipeline:
 			result.SyncPipelineHeadCompletion = applier.CompleteCurrentHeadSyncPipeline(result.SyncPipelineRepairResult)
 			result.HasSyncPipelineHead = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.SyncPipelineHeadCompletion.WriteError != nil {
+				return interrupt(step.Action)
+			}
 		case SessionStartupRestoreInventoryTarget:
 			applier.RestoreInventoryTarget(step.InventoryFloor)
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
@@ -252,6 +263,9 @@ func ApplySessionStartupPlan(plan SessionStartupPlan, applier SessionStartupPlan
 			result.SyncPipelineOrderRepair = applier.RepairSyncPipelineProgressOrder()
 			result.HasSyncPipelineOrderRepair = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.SyncPipelineOrderRepair.Interrupted {
+				return interrupt(step.Action)
+			}
 		case SessionStartupCheckSyncPipelineOrder:
 			result.SyncPipelineOrderCheck = applier.CheckSyncPipelineProgressOrder()
 			result.SyncPipelineOrderIssues = result.SyncPipelineOrderCheck.Issues
