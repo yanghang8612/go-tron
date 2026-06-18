@@ -207,8 +207,11 @@ func RebuildAccountTracesFromBlockBalanceTraces(chain *ChainDB, traceReader acco
 			return nil, fmt.Errorf("rawdb: missing block %d during account trace rebuild", blockNum)
 		}
 		result.BlocksScanned++
-		trace := ReadBlockBalanceTrace(traceReader, int64(blockNum))
-		if trace != nil {
+		trace, hasTrace, err := readBlockBalanceTraceStrict(traceReader, int64(blockNum))
+		if err != nil {
+			return nil, err
+		}
+		if hasTrace {
 			if err := validateBlockBalanceTraceForRebuild(blockNum, block.Hash().Bytes(), trace); err != nil {
 				return nil, err
 			}
@@ -308,8 +311,17 @@ func AuditBlockBalanceTraceCoverage(chain *ChainDB, traceReader ethdb.KeyValueRe
 			return nil, fmt.Errorf("rawdb: missing block %d during balance trace coverage audit", blockNum)
 		}
 		result.BlocksScanned++
-		trace := ReadBlockBalanceTrace(traceReader, int64(blockNum))
-		if trace == nil {
+		trace, hasTrace, err := readBlockBalanceTraceStrict(traceReader, int64(blockNum))
+		if err != nil {
+			if trace != nil {
+				result.BlocksWithBalanceTrace++
+				if len(trace.GetTransactionBalanceTrace()) == 0 {
+					result.BlocksWithEmptyTxTrace++
+				}
+			}
+			result.MismatchedBlockBalanceTrace++
+			addIssue(blockNum, "mismatch", err.Error())
+		} else if !hasTrace {
 			result.MissingBlockBalanceTrace++
 			addIssue(blockNum, "missing", "missing BlockBalanceTrace")
 		} else {

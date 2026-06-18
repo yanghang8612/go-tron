@@ -423,13 +423,11 @@ func TestAuditBlockBalanceTraceCoverage(t *testing.T) {
 	if err := WriteAccountTrace(db, addr, 1, 1); err != nil {
 		t.Fatalf("WriteAccountTrace block1: %v", err)
 	}
-	if err := WriteBlockBalanceTrace(db, 3, derivedRebuildBalanceTrace(block1, infos3,
+	writeRawBlockBalanceTraceForRebuildTest(t, db, 3, derivedRebuildBalanceTrace(block1, infos3,
 		[]*contractpb.TransactionBalanceTrace_Operation{
 			derivedRebuildBalanceOp(0, addr, 2),
 		},
-	)); err != nil {
-		t.Fatalf("WriteBlockBalanceTrace mismatched block3: %v", err)
-	}
+	))
 
 	result, err := AuditBlockBalanceTraceCoverage(db, db, 1, 3, 8)
 	if err != nil {
@@ -604,6 +602,17 @@ func derivedRebuildBalanceTrace(block *types.Block, infos []*corepb.TransactionI
 		},
 		Timestamp:               int64(30_000 + block.Number()),
 		TransactionBalanceTrace: traces,
+	}
+}
+
+func writeRawBlockBalanceTraceForRebuildTest(t *testing.T, db *ChainDB, blockNum uint64, trace *contractpb.BlockBalanceTrace) {
+	t.Helper()
+	data, err := proto.Marshal(trace)
+	if err != nil {
+		t.Fatalf("marshal raw BlockBalanceTrace: %v", err)
+	}
+	if err := db.Put(balanceTraceKey(int64(blockNum)), data); err != nil {
+		t.Fatalf("put raw BlockBalanceTrace: %v", err)
 	}
 }
 

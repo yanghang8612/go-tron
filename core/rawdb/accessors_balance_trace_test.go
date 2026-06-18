@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestBlockBalanceTrace_RoundTrip(t *testing.T) {
@@ -56,6 +57,40 @@ func TestBlockBalanceTrace_RejectsNilWrite(t *testing.T) {
 	}
 	if HasBlockBalanceTrace(db, 1) {
 		t.Fatal("nil trace write created a row")
+	}
+}
+
+func TestBlockBalanceTrace_RejectsMismatchedWrite(t *testing.T) {
+	db := memorydb.New()
+	trace := &contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{Number: 2},
+		Timestamp:       42,
+	}
+	if err := WriteBlockBalanceTrace(db, 1, trace); err == nil {
+		t.Fatal("WriteBlockBalanceTrace accepted mismatched block number")
+	}
+	if HasBlockBalanceTrace(db, 1) {
+		t.Fatal("mismatched trace write created a readable row")
+	}
+}
+
+func TestBlockBalanceTrace_RejectsMismatchedHotRow(t *testing.T) {
+	db := memorydb.New()
+	data, err := proto.Marshal(&contractpb.BlockBalanceTrace{
+		BlockIdentifier: &contractpb.BlockBalanceTrace_BlockIdentifier{Number: 2},
+		Timestamp:       42,
+	})
+	if err != nil {
+		t.Fatalf("marshal trace: %v", err)
+	}
+	if err := db.Put(balanceTraceKey(1), data); err != nil {
+		t.Fatalf("put mismatched trace: %v", err)
+	}
+	if HasBlockBalanceTrace(db, 1) {
+		t.Fatal("HasBlockBalanceTrace accepted mismatched hot row")
+	}
+	if got := ReadBlockBalanceTrace(db, 1); got != nil {
+		t.Fatalf("ReadBlockBalanceTrace mismatched hot row = %+v, want nil", got)
 	}
 }
 

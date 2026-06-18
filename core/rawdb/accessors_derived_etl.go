@@ -66,6 +66,14 @@ func (c *DerivedIndexCollector) PutTransactionInfosByBlock(blockNum uint64, info
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")
 	}
+	for txIndex, info := range infos {
+		if info == nil {
+			return fmt.Errorf("rawdb: nil transaction info at block %d index %d during collect transaction infos by block", blockNum, txIndex)
+		}
+		if !transactionInfoBlockNumberMatches(info.BlockNumber, blockNum) {
+			return fmt.Errorf("rawdb: transaction info block number %d at block %d index %d during collect transaction infos by block", info.BlockNumber, blockNum, txIndex)
+		}
+	}
 	ret := &corepb.TransactionRet{
 		BlockNumber:     int64(blockNum),
 		Transactioninfo: infos,
@@ -107,8 +115,8 @@ func (c *DerivedIndexCollector) PutBlockBalanceTrace(blockNum int64, trace *cont
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")
 	}
-	if trace == nil {
-		return errors.New("rawdb: nil BlockBalanceTrace")
+	if err := validateBlockBalanceTraceForKey(blockNum, trace, "collect block balance trace"); err != nil {
+		return err
 	}
 	data, err := proto.Marshal(trace)
 	if err != nil {

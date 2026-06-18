@@ -14,8 +14,8 @@ import (
 // java-tron BalanceTraceStore.putBlockBalanceTrace; gated on
 // isHistoryBalanceLookup — callers must check the flag before writing.
 func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *contractpb.BlockBalanceTrace) error {
-	if trace == nil {
-		return errors.New("rawdb: nil BlockBalanceTrace")
+	if err := validateBlockBalanceTraceForKey(blockNum, trace, "write block balance trace"); err != nil {
+		return err
 	}
 	data, err := proto.Marshal(trace)
 	if err != nil {
@@ -27,24 +27,16 @@ func WriteBlockBalanceTrace(db ethdb.KeyValueWriter, blockNum int64, trace *cont
 // ReadBlockBalanceTrace returns the BlockBalanceTrace for blockNum, or nil
 // if absent.
 func ReadBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.BlockBalanceTrace {
-	data, err := db.Get(balanceTraceKey(blockNum))
-	if err != nil || len(data) == 0 {
-		return readColdBlockBalanceTrace(db, blockNum)
-	}
-	var trace contractpb.BlockBalanceTrace
-	if err := proto.Unmarshal(data, &trace); err != nil {
+	trace, ok, err := readBlockBalanceTraceStrict(db, blockNum)
+	if err != nil || !ok {
 		return nil
 	}
-	return &trace
+	return trace
 }
 
 // HasBlockBalanceTrace reports whether a trace is stored for blockNum.
 func HasBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) bool {
-	ok, _ := db.Has(balanceTraceKey(blockNum))
-	if ok {
-		return true
-	}
-	return readColdBlockBalanceTrace(db, blockNum) != nil
+	return ReadBlockBalanceTrace(db, blockNum) != nil
 }
 
 // DeleteBlockBalanceTrace removes the balance trace for blockNum.
@@ -93,17 +85,39 @@ func IterateBlockBalanceTraceRows(db ethdb.Iteratee, fromBlock, toBlock int64, f
 	return it.Error()
 }
 
-func readColdBlockBalanceTrace(db ethdb.KeyValueReader, blockNum int64) *contractpb.BlockBalanceTrace {
+func readBlockBalanceTraceStrict(db ethdb.KeyValueReader, blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	data, err := db.Get(balanceTraceKey(blockNum))
+	if err == nil && len(data) != 0 {
+		var trace contractpb.BlockBalanceTrace
+		if err := proto.Unmarshal(data, &trace); err != nil {
+			return nil, true, err
+		}
+		if err := validateBlockBalanceTraceForKey(blockNum, &trace, "read block balance trace"); err != nil {
+			return &trace, true, err
+		}
+		return &trace, true, nil
+	}
+
 	chain, ok := db.(*ChainDB)
 	if !ok || chain == nil || chain.balanceTrace == nil {
-		return nil
+		return nil, false, nil
 	}
 	trace, ok, err := chain.balanceTrace.BlockBalanceTrace(blockNum)
 	if err != nil || !ok {
-		return nil
+		return nil, ok, err
+	}
+	if err := validateBlockBalanceTraceForKey(blockNum, trace, "read cold block balance trace"); err != nil {
+		return trace, true, err
+	}
+	return trace, true, nil
+}
+
+func validateBlockBalanceTraceForKey(blockNum int64, trace *contractpb.BlockBalanceTrace, context string) error {
+	if trace == nil {
+		return errors.New("rawdb: nil BlockBalanceTrace")
 	}
 	if id := trace.GetBlockIdentifier(); id != nil && id.GetNumber() != blockNum {
-		return nil
+		return fmt.Errorf("rawdb: block balance trace payload number %d does not match key %d during %s", id.GetNumber(), blockNum, context)
 	}
-	return trace
+	return nil
 }
