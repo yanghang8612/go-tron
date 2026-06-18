@@ -79,6 +79,35 @@ func TestWriteTransactionInfoRejectsMismatchedID(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionInfoRejectsMalformedKey(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := []byte{0x21}
+	if err := WriteTransactionInfo(db, txID, &corepb.TransactionInfo{Fee: 99}); err == nil || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("WriteTransactionInfo malformed key err = %v, want hash length error", err)
+	}
+	if _, err := db.Get(txInfoKey(txID)); err == nil {
+		t.Fatal("WriteTransactionInfo malformed key created a raw row")
+	}
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo malformed key = %+v, want nil", got)
+	}
+}
+
+func TestReadTransactionInfoRejectsMalformedKey(t *testing.T) {
+	db := NewMemoryChainDB()
+	txID := []byte{0x23}
+	data, err := proto.Marshal(&corepb.TransactionInfo{Fee: 99})
+	if err != nil {
+		t.Fatalf("marshal tx info: %v", err)
+	}
+	if err := db.Put(txInfoKey(txID), data); err != nil {
+		t.Fatalf("put malformed tx info key: %v", err)
+	}
+	if got := ReadTransactionInfo(db, txID); got != nil {
+		t.Fatalf("ReadTransactionInfo malformed key = %+v, want nil", got)
+	}
+}
+
 func TestReadTransactionInfoUsesColdTxPositionWhenInfoIDMissing(t *testing.T) {
 	db := NewMemoryChainDB()
 	txID := bytes.Repeat([]byte{0x34}, common.HashLength)
@@ -379,6 +408,26 @@ func TestWriteReadTransactionIndex(t *testing.T) {
 	}
 	if *got != 42 {
 		t.Fatalf("block number: got %d, want 42", *got)
+	}
+}
+
+func TestTransactionIndexRejectsMalformedHash(t *testing.T) {
+	db := NewMemoryChainDB()
+	txHash := []byte{0xcc}
+	if err := WriteTransactionIndex(db, txHash, 42); err == nil || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("WriteTransactionIndex malformed hash err = %v, want hash length error", err)
+	}
+	if _, err := db.Get(txKey(txHash)); err == nil {
+		t.Fatal("WriteTransactionIndex malformed hash created a raw row")
+	}
+	if got := ReadTransactionIndex(db, txHash); got != nil {
+		t.Fatalf("ReadTransactionIndex malformed hash = %d, want nil", *got)
+	}
+	if err := DeleteTransactionIndex(db, txHash); err == nil || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("DeleteTransactionIndex malformed hash err = %v, want hash length error", err)
+	}
+	if err := DeleteTransactionInfo(db, txHash); err == nil || !strings.Contains(err.Error(), "transaction hash length 1") {
+		t.Fatalf("DeleteTransactionInfo malformed hash err = %v, want hash length error", err)
 	}
 }
 

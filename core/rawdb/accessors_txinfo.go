@@ -33,6 +33,9 @@ func WriteTransactionInfo(db ethdb.KeyValueWriter, txID []byte, info *corepb.Tra
 // sidecar can resolve txID -> block number and scan that block's TransactionRet
 // payload from ancient or hot per-block storage.
 func ReadTransactionInfo(db *ChainDB, txID []byte) *corepb.TransactionInfo {
+	if !validTransactionHashKey(txID) {
+		return nil
+	}
 	data, err := db.Get(txInfoKey(txID))
 	if err == nil {
 		info := &corepb.TransactionInfo{}
@@ -80,6 +83,9 @@ func transactionInfoMatchesIndexedLookup(info *corepb.TransactionInfo, txID []by
 func validateTransactionInfoIDForKey(txID []byte, info *corepb.TransactionInfo, context string) error {
 	if info == nil {
 		return fmt.Errorf("rawdb: nil transaction info during %s", context)
+	}
+	if err := validateTransactionHashKey(txID, context); err != nil {
+		return err
 	}
 	if len(info.Id) == 0 {
 		return nil
@@ -209,6 +215,9 @@ func validateTransactionInfoForBlockKey(blockNum uint64, txIndex int, info *core
 
 // WriteTransactionIndex stores a tx-hash to block-number mapping.
 func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint64) error {
+	if err := validateTransactionHashKey(txHash, "write transaction index"); err != nil {
+		return err
+	}
 	num := make([]byte, 8)
 	binary.BigEndian.PutUint64(num, blockNum)
 	return db.Put(txKey(txHash), num)
@@ -219,6 +228,9 @@ func WriteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte, blockNum uint
 // can resolve historical tx hashes without keeping every old reverse index in
 // Pebble.
 func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
+	if !validTransactionHashKey(txHash) {
+		return nil
+	}
 	data, err := db.Get(txKey(txHash))
 	if err == nil && len(data) == 8 {
 		num := binary.BigEndian.Uint64(data)
@@ -237,6 +249,9 @@ func ReadTransactionIndex(db *ChainDB, txHash []byte) *uint64 {
 
 // DeleteTransactionInfo removes the per-tx TransactionInfo row for txID.
 func DeleteTransactionInfo(db ethdb.KeyValueWriter, txID []byte) error {
+	if err := validateTransactionHashKey(txID, "delete transaction info"); err != nil {
+		return err
+	}
 	return db.Delete(txInfoKey(txID))
 }
 
@@ -247,5 +262,19 @@ func DeleteTransactionInfosByBlock(db ethdb.KeyValueWriter, blockNum uint64) err
 
 // DeleteTransactionIndex removes the tx-hash→block-number reverse index row.
 func DeleteTransactionIndex(db ethdb.KeyValueWriter, txHash []byte) error {
+	if err := validateTransactionHashKey(txHash, "delete transaction index"); err != nil {
+		return err
+	}
 	return db.Delete(txKey(txHash))
+}
+
+func validateTransactionHashKey(hash []byte, context string) error {
+	if !validTransactionHashKey(hash) {
+		return fmt.Errorf("rawdb: transaction hash length %d during %s", len(hash), context)
+	}
+	return nil
+}
+
+func validTransactionHashKey(hash []byte) bool {
+	return len(hash) == common.HashLength
 }

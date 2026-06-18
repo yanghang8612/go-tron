@@ -87,6 +87,9 @@ func (c *DerivedIndexCollector) PutTransactionIndex(txHash []byte, blockNum uint
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")
 	}
+	if err := validateTransactionHashKey(txHash, "collect transaction index"); err != nil {
+		return err
+	}
 	var num [8]byte
 	binary.BigEndian.PutUint64(num[:], blockNum)
 	return c.collector.Put(txKey(txHash), num[:])

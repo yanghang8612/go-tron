@@ -121,6 +121,12 @@ func TestDerivedIndexCollectorRejectsInvalidRowsAndLifecycle(t *testing.T) {
 	if err := collector.PutTransactionInfo(txID, &corepb.TransactionInfo{Id: otherID}); err == nil {
 		t.Fatal("PutTransactionInfo accepted mismatched transaction id")
 	}
+	if err := collector.PutTransactionInfo([]byte{0x33}, &corepb.TransactionInfo{}); err == nil {
+		t.Fatal("PutTransactionInfo accepted malformed transaction key")
+	}
+	if err := collector.PutTransactionIndex([]byte{0x34}, 7); err == nil {
+		t.Fatal("PutTransactionIndex accepted malformed transaction hash")
+	}
 	if err := collector.PutTransactionInfosByBlock(7, []*corepb.TransactionInfo{nil}); err == nil {
 		t.Fatal("PutTransactionInfosByBlock accepted nil transaction info")
 	}
