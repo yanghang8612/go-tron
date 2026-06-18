@@ -47,6 +47,9 @@ import (
 	gtronlog "github.com/tronprotocol/go-tron/common/log"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	rawdbfreezer "github.com/tronprotocol/go-tron/core/rawdb/freezer"
+	coretypes "github.com/tronprotocol/go-tron/core/types"
+	corepb "github.com/tronprotocol/go-tron/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 var log = gtronlog.NewModule("core/freezer")
@@ -550,10 +553,18 @@ func (r *Runner) OnePass() (uint64, error) {
 			if len(blockRaw) == 0 {
 				return errMissingBlock(n)
 			}
+			block, err := decodeFreezerBlockRaw(n, blockRaw)
+			if err != nil {
+				return err
+			}
 			if err := op.AppendRaw(rawdbAncientBlocks, n, blockRaw); err != nil {
 				return err
 			}
-			if err := op.AppendRaw(rawdbAncientTxInfos, n, r.chain.ReadTransactionInfosRaw(n)); err != nil {
+			txInfosRaw := r.chain.ReadTransactionInfosRaw(n)
+			if err := validateFreezerTransactionInfosRaw(n, block, txInfosRaw); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(rawdbAncientTxInfos, n, txInfosRaw); err != nil {
 				return err
 			}
 			// State-root row is hash-keyed; resolve via the block proto.
@@ -563,7 +574,7 @@ func (r *Runner) OnePass() (uint64, error) {
 			// `bodies` / `tx_infos`. Empty entries decode back to the
 			// zero hash via the slice-2 read path, which matches the
 			// pre-freezer Pebble miss → zero-hash behavior.
-			hash := r.chain.ReadBlockHashByNumber(n)
+			hash := block.Hash()
 			stateRoot := r.chain.ReadBlockStateRootRaw(hash)
 			if err := op.AppendRaw(rawdbAncientStateRoots, n, stateRoot); err != nil {
 				return err
@@ -618,6 +629,34 @@ func (r *Runner) OnePass() (uint64, error) {
 	r.blocksFrozen.Add(frozen)
 	r.pebbleSizeAfter.Store(pebbleBlockNamespaceSize(r.chain.DB()))
 	return frozen, nil
+}
+
+func decodeFreezerBlockRaw(blockNum uint64, raw []byte) (*coretypes.Block, error) {
+	block, err := coretypes.UnmarshalBlock(raw)
+	if err != nil {
+		return nil, fmt.Errorf("freezer: decode block %d: %w", blockNum, err)
+	}
+	if block.Number() != blockNum {
+		return nil, fmt.Errorf("freezer: block row %d contains block number %d", blockNum, block.Number())
+	}
+	return block, nil
+}
+
+func validateFreezerTransactionInfosRaw(blockNum uint64, block *coretypes.Block, raw []byte) error {
+	if len(raw) == 0 {
+		if block != nil && len(block.Transactions()) != 0 {
+			return fmt.Errorf("freezer: missing transaction info coverage for block %d with %d transactions", blockNum, len(block.Transactions()))
+		}
+		return nil
+	}
+	var ret corepb.TransactionRet
+	if err := proto.Unmarshal(raw, &ret); err != nil {
+		return fmt.Errorf("freezer: decode tx infos for block %d: %w", blockNum, err)
+	}
+	if ret.BlockNumber != 0 && ret.BlockNumber != int64(blockNum) {
+		return fmt.Errorf("freezer: tx infos row %d contains block number %d", blockNum, ret.BlockNumber)
+	}
+	return rawdb.ValidateTransactionInfosForBlock(blockNum, block.Transactions(), ret.Transactioninfo, "chain freezer append")
 }
 
 func (r *Runner) verifiedFinishStageBlock() (uint64, bool, error) {
