@@ -225,6 +225,16 @@ func TestManagerIteratesStateDomainChangesByAccessorKey(t *testing.T) {
 	if len(got) != 1 || got[0].Owner != owner || string(got[0].Prev) != "old-a" {
 		t.Fatalf("got changes = %+v", got)
 	}
+	got = nil
+	if err := mgr.IterateStateDomainChangesByPrefix(10, 11, owner, 3, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("iterate by prefix: %v", err)
+	}
+	if len(got) != 1 || got[0].Owner != owner || string(got[0].Key) != "slot/a" || string(got[0].Prev) != "old-a" {
+		t.Fatalf("prefix changes = %+v", got)
+	}
 }
 
 func TestManagerRestoreStateDomainHistoryLoadsThroughSortedETL(t *testing.T) {
@@ -376,6 +386,47 @@ func TestManagerIteratesStateDomainChangesByKeyStopsBeforeReadingRestOfBinaryAcc
 	}
 	if len(got) != 1 || got[0].TxNum != changes[0].TxNum || string(got[0].Key) != string(changes[0].Key) {
 		t.Fatalf("streamed keyed changes = %+v", got)
+	}
+}
+
+func TestManagerIteratesStateDomainChangesByPrefixStopsBeforeReadingRestOfBinaryAccessor(t *testing.T) {
+	dir := t.TempDir()
+	owner := common.BytesToAddress(append([]byte{common.AddressPrefixMainnet}, bytes.Repeat([]byte{0x5b}, common.AccountIDLength)...))
+	first := binaryStateDomainChange(1, 1, 1, "slot/a")
+	first.Owner = owner
+	first.Generation = 5
+	first.Domain = kvdomains.ContractStorage
+	second := binaryStateDomainChange(2, 2, 1, "zz/b")
+	second.Owner = owner
+	second.Generation = 5
+	second.Domain = kvdomains.ContractStorage
+	segRef, idxRef, accessorRef, err := writeStateDomainChangeBinaryFilesWithAccessor(dir, SegmentRef{
+		Dataset:   SegmentDatasetStateDomainChange,
+		Kind:      SegmentHistory,
+		FromTxNum: 1,
+		ToTxNum:   2,
+		Path:      "history/state-domain-change-prefix-stream-stop.seg",
+	}, []*rawdb.StateDomainChange{first, second})
+	if err != nil {
+		t.Fatalf("write binary history: %v", err)
+	}
+	segRef = corruptStateDomainChangeBinaryRecordFrameLength(t, dir, segRef, idxRef, 1)
+	if err := PublishManifest(dir, NewManifest(1, 2, []SegmentRef{segRef, accessorRef, idxRef})); err != nil {
+		t.Fatalf("publish manifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	var got []*rawdb.StateDomainChange
+	if err := mgr.IterateStateDomainChangesByPrefix(1, 2, owner, 5, kvdomains.ContractStorage, []byte("slot/"), func(change *rawdb.StateDomainChange) (bool, error) {
+		got = append(got, change)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("stream prefix stopped before corrupt record: %v", err)
+	}
+	if len(got) != 1 || got[0].TxNum != first.TxNum || string(got[0].Key) != string(first.Key) {
+		t.Fatalf("streamed prefix changes = %+v", got)
 	}
 }
 

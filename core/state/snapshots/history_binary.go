@@ -1798,6 +1798,67 @@ func iterateStateDomainChangeBinarySegmentByAccessorFile(dir string, ref Segment
 	return nil
 }
 
+func iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir string, ref SegmentRef, accessorRef SegmentRef, lookupPrefix []byte, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	if toTxNum < fromTxNum {
+		return fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
+	}
+	if len(lookupPrefix) == 0 {
+		return errors.New("snapshots: empty state-domain-change accessor lookup prefix")
+	}
+	if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory {
+		return fmt.Errorf("snapshots: state-domain-change binary segment %q is %s/%s, want state-domain-change/history", ref.Path, ref.Dataset, ref.Kind)
+	}
+	if err := validateSegment(ref, ref.FromTxNum, ref.ToTxNum); err != nil {
+		return err
+	}
+	segmentFile, segmentSize, _, err := openHistorySegmentForRead(dir, ref)
+	if err != nil {
+		return err
+	}
+	defer segmentFile.Close()
+
+	accessorFile, accessorHeader, accessorSize, err := openStateDomainChangeBinaryAccessorReader(dir, accessorRef)
+	if err != nil {
+		return err
+	}
+	defer accessorFile.Close()
+	if accessorHeader.fromTxNum != ref.FromTxNum || accessorHeader.toTxNum != ref.ToTxNum {
+		return fmt.Errorf("snapshots: state-domain-change binary accessor %q range [%d,%d], want [%d,%d]", accessorRef.Path, accessorHeader.fromTxNum, accessorHeader.toTxNum, ref.FromTxNum, ref.ToTxNum)
+	}
+
+	start, ok, err := stateDomainChangeBinaryAccessorLowerBound(accessorFile, accessorSize, accessorHeader.count, lookupPrefix)
+	if err != nil || !ok {
+		return err
+	}
+	for i := uint64(start); i < accessorHeader.count; i++ {
+		entry, err := readStateDomainChangeBinaryAccessorEntryAtBounded(accessorFile, i, accessorSize)
+		if err != nil {
+			return err
+		}
+		if !bytes.HasPrefix(entry.key, lookupPrefix) {
+			return nil
+		}
+		if entry.txNum < fromTxNum || entry.txNum > toTxNum {
+			continue
+		}
+		change, _, err := readStateDomainChangeBinaryRecordAtBounded(segmentFile, entry.offset, segmentSize)
+		if err != nil {
+			return err
+		}
+		if change.TxNum != entry.txNum || change.Seq != entry.seq {
+			return fmt.Errorf("snapshots: state-domain-change accessor entry tx/seq [%d,%d] read record [%d,%d]", entry.txNum, entry.seq, change.TxNum, change.Seq)
+		}
+		if !bytes.HasPrefix(stateDomainChangeBinaryAccessorKey(change), lookupPrefix) {
+			return fmt.Errorf("snapshots: state-domain-change accessor prefix mismatch at offset %d", entry.offset)
+		}
+		cont, err := fn(change)
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return nil
+}
+
 func readStateDomainChangeBinarySegmentByAccessorEntries(dir string, ref SegmentRef, accessor []stateDomainChangeBinaryAccessorEntry, lookupKey []byte, fromTxNum, toTxNum uint64) ([]*rawdb.StateDomainChange, error) {
 	if toTxNum < fromTxNum {
 		return nil, fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
@@ -2587,6 +2648,10 @@ func stateDomainChangeBinaryAccessorPath(segmentPath string) string {
 
 func stateDomainChangeBinaryAccessorKey(change *rawdb.StateDomainChange) []byte {
 	return stateDomainChangeBinaryAccessorLookupKey(change.FlatDomain, change.Owner, change.Generation, change.Domain, change.Key)
+}
+
+func stateDomainChangeBinaryAccessorLookupPrefix(owner common.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte) []byte {
+	return stateDomainChangeBinaryAccessorLookupKey(rawdb.StateFlatDomainKVLatest, owner, generation, domain, prefix)
 }
 
 func stateDomainChangeBinaryAccessorLookupKey(flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, key []byte) []byte {

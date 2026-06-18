@@ -366,6 +366,52 @@ func (m *Manager) IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flat
 	return nil
 }
 
+func (m *Manager) IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	if m == nil {
+		return nil
+	}
+	if toTxNum < fromTxNum {
+		return fmt.Errorf("snapshots: state-domain-change range [%d,%d] is inverted", fromTxNum, toTxNum)
+	}
+	manifest, err := m.currentManifest()
+	if err != nil {
+		return err
+	}
+	if manifest == nil {
+		return nil
+	}
+	lookupPrefix := stateDomainChangeBinaryAccessorLookupPrefix(owner, generation, domain, logicalPrefix)
+	match := func(change *rawdb.StateDomainChange) bool {
+		return stateDomainChangeMatchesAccessorPrefix(change, owner, generation, domain, logicalPrefix)
+	}
+	for _, ref := range manifest.Segments {
+		if ref.Dataset != SegmentDatasetStateDomainChange || ref.Kind != SegmentHistory || ref.ToTxNum < fromTxNum || ref.FromTxNum > toTxNum {
+			continue
+		}
+		stop := false
+		if err := iterateStateDomainChangeHistoryByPrefix(m.dir, manifest, ref, lookupPrefix, fromTxNum, toTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			if !match(change) {
+				return true, nil
+			}
+			cont, err := fn(cloneStateDomainChangeForSegment(change))
+			if err != nil {
+				return false, err
+			}
+			if !cont {
+				stop = true
+				return false, nil
+			}
+			return true, nil
+		}); err != nil {
+			return err
+		}
+		if stop {
+			return nil
+		}
+	}
+	return nil
+}
+
 func (m *Manager) RestoreStateDomainHistory(db ethdb.KeyValueWriter, fromTxNum, toTxNum uint64) (*RestoreStateDomainHistoryResult, error) {
 	return m.RestoreStateDomainHistoryWithOptions(db, fromTxNum, toTxNum, RestoreETLOptions{})
 }
@@ -617,6 +663,20 @@ func iterateStateDomainChangeHistoryByKey(dir string, manifest *Manifest, ref Se
 	return iterateStateDomainChangeHistoryRange(dir, manifest, ref, fromTxNum, toTxNum, fn)
 }
 
+func iterateStateDomainChangeHistoryByPrefix(dir string, manifest *Manifest, ref SegmentRef, lookupPrefix []byte, fromTxNum, toTxNum uint64, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	cfg, ok := DefaultDomainRegistry().ConfigForRef(ref)
+	if !ok {
+		return fmt.Errorf("snapshots: no history config registered for %s", ref.normalizedDataset())
+	}
+	if isStateDomainChangeBinarySegmentPath(ref.Path) {
+		if accessorRef, ok := cfg.HistoryAccessorRef(manifest, ref); ok {
+			return iterateStateDomainChangeBinarySegmentByAccessorPrefixFile(dir, ref, accessorRef, lookupPrefix, fromTxNum, toTxNum, fn)
+		}
+		return fmt.Errorf("snapshots: binary state-domain-change history %q missing required accessor %q", ref.Path, cfg.HistoryAccessorPathFor(ref.Path))
+	}
+	return iterateStateDomainChangeHistoryRange(dir, manifest, ref, fromTxNum, toTxNum, fn)
+}
+
 func stateDomainChangeMatchesAccessorLookup(change *rawdb.StateDomainChange, flatDomain rawdb.StateFlatDomain, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalKey []byte) bool {
 	if change == nil || change.FlatDomain != flatDomain || change.Owner != owner {
 		return false
@@ -625,6 +685,15 @@ func stateDomainChangeMatchesAccessorLookup(change *rawdb.StateDomainChange, fla
 		return true
 	}
 	return change.Generation == generation && change.Domain == domain && bytes.Equal(change.Key, logicalKey)
+}
+
+func stateDomainChangeMatchesAccessorPrefix(change *rawdb.StateDomainChange, owner common.Address, generation uint64, domain kvdomains.KVDomain, logicalPrefix []byte) bool {
+	return change != nil &&
+		change.FlatDomain == rawdb.StateFlatDomainKVLatest &&
+		change.Owner == owner &&
+		change.Generation == generation &&
+		change.Domain == domain &&
+		bytes.HasPrefix(change.Key, logicalPrefix)
 }
 
 func (s *StateDomainChangeSegment) Validate() error {
