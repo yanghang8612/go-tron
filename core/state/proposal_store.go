@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 )
@@ -76,6 +77,19 @@ func (s *StateDB) ReadProposal(id int64) *rawdb.Proposal {
 	return p
 }
 
+// ProposalAt reconstructs a rooted proposal record at the end of blockNum.
+func (r *PersistentHistoryReader) ProposalAt(id int64, blockNum uint64) (*rawdb.Proposal, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreKey(id), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	p := &rawdb.Proposal{}
+	if err := json.Unmarshal(raw, p); err != nil {
+		return nil, nil
+	}
+	return p, nil
+}
+
 // WriteProposal stages a proposal record into the system-KV. The error is
 // non-nil only for a marshal failure or an unregistered domain (a programmer
 // error), since SystemProposal is registered at init.
@@ -95,6 +109,15 @@ func (s *StateDB) ReadProposalIndex() []int64 {
 		return nil
 	}
 	return decodeProposalIndex(raw)
+}
+
+// ProposalIndexAt reconstructs the rooted proposal id index at the end of blockNum.
+func (r *PersistentHistoryReader) ProposalIndexAt(blockNum uint64) ([]int64, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemProposal, proposalStoreIndexKey, blockNum)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return decodeProposalIndex(raw), nil
 }
 
 // WriteProposalIndex stages the full proposal index into the system-KV.

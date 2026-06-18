@@ -33,6 +33,9 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/listwitnesses", api.getSolidWitnesses)
 	mux.HandleFunc("/walletsolidity/getchainparameters", api.getSolidChainParameters)
 	mux.HandleFunc("/walletsolidity/getnextmaintenancetime", api.getSolidNextMaintenanceTime)
+	mux.HandleFunc("/walletsolidity/listproposals", api.getSolidProposals)
+	mux.HandleFunc("/walletsolidity/getproposalbyid", api.getSolidProposalByID)
+	mux.HandleFunc("/walletsolidity/getpaginatedproposallist", api.getSolidPaginatedProposalList)
 	mux.HandleFunc("/walletsolidity/gettransactionbyid", api.getTransactionByID)
 	mux.HandleFunc("/walletsolidity/gettransactioninfobyid", api.getTransactionInfoByID)
 	mux.HandleFunc("/walletsolidity/getassetissuebyid", api.getSolidAssetIssueByID)
@@ -68,6 +71,9 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/listwitnesses", api.getPbftWitnesses)
 	mux.HandleFunc("/walletpbft/getchainparameters", api.getPbftChainParameters)
 	mux.HandleFunc("/walletpbft/getnextmaintenancetime", api.getPbftNextMaintenanceTime)
+	mux.HandleFunc("/walletpbft/listproposals", api.getPbftProposals)
+	mux.HandleFunc("/walletpbft/getproposalbyid", api.getPbftProposalByID)
+	mux.HandleFunc("/walletpbft/getpaginatedproposallist", api.getPbftPaginatedProposalList)
 	mux.HandleFunc("/walletpbft/gettransactionbyid", api.getTransactionByID)
 	mux.HandleFunc("/walletpbft/gettransactioninfobyid", api.getTransactionInfoByID)
 	mux.HandleFunc("/walletpbft/getassetissuebyid", api.getPbftAssetIssueByID)
@@ -179,6 +185,30 @@ func (api *API) getSolidNextMaintenanceTime(w http.ResponseWriter, r *http.Reque
 
 func (api *API) getPbftNextMaintenanceTime(w http.ResponseWriter, r *http.Request) {
 	api.handleGetNextMaintenanceTime(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidProposals(w http.ResponseWriter, r *http.Request) {
+	api.handleListProposals(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftProposals(w http.ResponseWriter, r *http.Request) {
+	api.handleListProposals(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidProposalByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetProposalById(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftProposalByID(w http.ResponseWriter, r *http.Request) {
+	api.handleGetProposalById(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidPaginatedProposalList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedProposalList(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftPaginatedProposalList(w http.ResponseWriter, r *http.Request) {
+	api.handleGetPaginatedProposalList(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidAssetIssueByID(w http.ResponseWriter, r *http.Request) {

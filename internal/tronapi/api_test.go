@@ -133,6 +133,9 @@ func (s *stubBackend) BuildProposalDeleteTransaction(owner common.Address, propo
 	return nil, nil
 }
 func (s *stubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return s.proposals, nil }
+func (s *stubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	return s.proposals, nil
+}
 
 // --- New Phase 10 methods ---
 func (s *stubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -285,6 +288,9 @@ func (s *stubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 	}
 	return s.proposals[offset:end], nil
 }
+func (s *stubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	return s.ListProposalsPaginated(offset, limit)
+}
 func (s *stubBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	return nil, nil
 }
@@ -369,6 +375,9 @@ func (s *stubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 		return &tronapi.ProposalInfo{ProposalID: 1}, nil
 	}
 	return nil, fmt.Errorf("not found")
+}
+func (s *stubBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	return s.GetProposalByID(id)
 }
 func (s *stubBackend) ValidateAddress(addr string) (bool, string) {
 	return len(addr) == 42, "test"

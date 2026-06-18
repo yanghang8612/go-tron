@@ -556,6 +556,139 @@ func TestArchiveQuery_GetContractAtUsesMetadataHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_ProposalsAtUsesSystemProposalHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	proposer1 := testInsertAddr(61)
+	proposer2 := testInsertAddr(62)
+	approval := testInsertAddr(63)
+	root := bc.StateRootAtBlock(0)
+	commitProposals := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+
+		switch n {
+		case 1:
+			if err := statedb.WriteProposal(1, &rawdb.Proposal{
+				ID:             1,
+				Proposer:       proposer1,
+				Parameters:     map[int64]int64{3: 30},
+				CreateTime:     100,
+				ExpirationTime: 200,
+				State:          rawdb.ProposalStatePending,
+			}); err != nil {
+				t.Fatalf("write proposal block %d: %v", n, err)
+			}
+			if err := statedb.WriteProposalIndex([]int64{1}); err != nil {
+				t.Fatalf("write proposal index block %d: %v", n, err)
+			}
+		case 2:
+			if err := statedb.WriteProposal(1, &rawdb.Proposal{
+				ID:             1,
+				Proposer:       proposer1,
+				Parameters:     map[int64]int64{3: 31},
+				CreateTime:     100,
+				ExpirationTime: 250,
+				Approvals:      []tcommon.Address{approval},
+				State:          rawdb.ProposalStateApproved,
+			}); err != nil {
+				t.Fatalf("write proposal1 block %d: %v", n, err)
+			}
+			if err := statedb.WriteProposal(2, &rawdb.Proposal{
+				ID:             2,
+				Proposer:       proposer2,
+				Parameters:     map[int64]int64{5: 50},
+				CreateTime:     300,
+				ExpirationTime: 400,
+				State:          rawdb.ProposalStateCanceled,
+			}); err != nil {
+				t.Fatalf("write proposal2 block %d: %v", n, err)
+			}
+			if err := statedb.WriteProposalIndex([]int64{1, 2}); err != nil {
+				t.Fatalf("write proposal index block %d: %v", n, err)
+			}
+		}
+
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit proposal state block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitProposals(block1, 1)
+	root = commitProposals(block2, 2)
+
+	list1, err := b.ListProposalsAt(block1.Number())
+	if err != nil {
+		t.Fatalf("ListProposalsAt(block1): %v", err)
+	}
+	if len(list1) != 1 || list1[0].ProposalID != 1 || list1[0].State != "PENDING" ||
+		len(list1[0].Parameters) != 1 || list1[0].Parameters[0].Key != 3 || list1[0].Parameters[0].Value != 30 {
+		t.Fatalf("block1 proposals = %+v, want pending proposal 1", list1)
+	}
+
+	got1, err := b.GetProposalByIDAt(1, block1.Number())
+	if err != nil {
+		t.Fatalf("GetProposalByIDAt(1, block1): %v", err)
+	}
+	if got1.State != "PENDING" || got1.ExpirationTime != 200 || len(got1.Approvals) != 0 {
+		t.Fatalf("proposal1 at block1 = %+v, want pre-approval state", got1)
+	}
+
+	list2, err := b.ListProposalsAt(block2.Number())
+	if err != nil {
+		t.Fatalf("ListProposalsAt(block2): %v", err)
+	}
+	if len(list2) != 2 {
+		t.Fatalf("block2 proposal count = %d, want 2", len(list2))
+	}
+	if list2[0].ProposalID != 1 || list2[0].State != "APPROVED" ||
+		len(list2[0].Approvals) != 1 || list2[0].Parameters[0].Value != 31 {
+		t.Fatalf("proposal1 at block2 = %+v, want approved updated proposal", list2[0])
+	}
+	if list2[1].ProposalID != 2 || list2[1].State != "CANCELED" ||
+		list2[1].ProposerAddress != hex.EncodeToString(proposer2.Bytes()) {
+		t.Fatalf("proposal2 at block2 = %+v, want canceled second proposal", list2[1])
+	}
+
+	got2, err := b.GetProposalByIDAt(2, block2.Number())
+	if err != nil {
+		t.Fatalf("GetProposalByIDAt(2, block2): %v", err)
+	}
+	if got2.ProposalID != 2 || got2.State != "CANCELED" || got2.Parameters[0].Value != 50 {
+		t.Fatalf("proposal2 at block2 = %+v, want canceled proposal 2", got2)
+	}
+}
+
 func TestArchiveQuery_ListWitnessesAtUsesHistory(t *testing.T) {
 	b, witness, _ := archiveBackend(t)
 	bc := b.chain

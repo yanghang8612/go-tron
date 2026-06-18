@@ -1218,11 +1218,23 @@ func (api *API) proposalDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) listProposals(w http.ResponseWriter, r *http.Request) {
+	api.handleListProposals(w, r, nil)
+}
+
+func (api *API) handleListProposals(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	proposals, err := api.backend.ListProposals()
+	var (
+		proposals []*ProposalInfo
+		err       error
+	)
+	if boundFn == nil {
+		proposals, err = api.backend.ListProposals()
+	} else {
+		proposals, err = api.backend.ListProposalsAt(boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

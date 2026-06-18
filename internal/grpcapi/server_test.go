@@ -146,6 +146,9 @@ func (b *testBackend) BuildProposalDeleteTransaction(owner common.Address, propo
 	return nil, nil
 }
 func (b *testBackend) ListProposals() ([]*tronapi.ProposalInfo, error) { return nil, nil }
+func (b *testBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
 	return b.delegatedResources, nil
 }
@@ -264,6 +267,9 @@ func (b *testBackend) GetEnergyPricesAt(blockNum uint64) (string, error) {
 func (b *testBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
 	return nil, nil
 }
+func (b *testBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	return nil, nil
+}
 func (b *testBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	return nil, nil
 }
@@ -319,10 +325,13 @@ func (b *testBackend) BuildContractTransaction(contractType corepb.Transaction_C
 	return nil, nil
 }
 func (b *testBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) { return nil, nil }
-func (b *testBackend) ValidateAddress(addr string) (bool, string)              { return false, "" }
-func (b *testBackend) SolidifiedBlockNum() uint64                              { return 0 }
-func (b *testBackend) LatestPbftBlockNum() int64                               { return -1 }
-func (b *testBackend) ValidateTransaction(tx *types.Transaction) error         { return nil }
+func (b *testBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	return nil, nil
+}
+func (b *testBackend) ValidateAddress(addr string) (bool, string)      { return false, "" }
+func (b *testBackend) SolidifiedBlockNum() uint64                      { return 0 }
+func (b *testBackend) LatestPbftBlockNum() int64                       { return -1 }
+func (b *testBackend) ValidateTransaction(tx *types.Transaction) error { return nil }
 
 // newTestClient sets up an in-process gRPC server+client using bufconn.
 func newTestClient(t *testing.T, backend tronapi.Backend) apipb.WalletClient {

@@ -194,6 +194,7 @@ type Backend interface {
 	BuildProposalApproveTransaction(owner common.Address, proposalID int64, approve bool) (*corepb.Transaction, error)
 	BuildProposalDeleteTransaction(owner common.Address, proposalID int64) (*corepb.Transaction, error)
 	ListProposals() ([]*ProposalInfo, error)
+	ListProposalsAt(blockNum uint64) ([]*ProposalInfo, error)
 
 	// Delegation/resource queries (Stake 2.0)
 	GetDelegatedResourceV2(from, to common.Address) ([]*DelegatedResourceInfo, error)
@@ -260,6 +261,7 @@ type Backend interface {
 
 	// Paginated queries
 	ListProposalsPaginated(offset, limit int) ([]*ProposalInfo, error)
+	ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*ProposalInfo, error)
 	ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error)
 
 	// Account / permission (M5.1 PR-1)
@@ -289,6 +291,7 @@ type Backend interface {
 
 	// Proposal queries (M5.1 PR-6)
 	GetProposalByID(id int64) (*ProposalInfo, error)
+	GetProposalByIDAt(id int64, blockNum uint64) (*ProposalInfo, error)
 
 	// Address validation (M5.1 PR-7) — pure utility, no state needed
 	ValidateAddress(addr string) (bool, string)

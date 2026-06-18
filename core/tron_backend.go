@@ -789,35 +789,64 @@ func (b *TronBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
 		return nil, nil
 	}
 	ids := sysKV.ReadProposalIndex()
-	var result []*tronapi.ProposalInfo
+	result := make([]*tronapi.ProposalInfo, 0, len(ids))
 	for _, id := range ids {
 		p := sysKV.ReadProposal(id)
 		if p == nil {
 			continue
 		}
-		params := proposalParametersToList(p.Parameters)
-		approvals := make([]string, len(p.Approvals))
-		for i, a := range p.Approvals {
-			approvals[i] = hex.EncodeToString(a[:])
-		}
-		stateStr := "PENDING"
-		switch p.State {
-		case rawdb.ProposalStateApproved:
-			stateStr = "APPROVED"
-		case rawdb.ProposalStateCanceled:
-			stateStr = "CANCELED"
-		}
-		result = append(result, &tronapi.ProposalInfo{
-			ProposalID:      p.ID,
-			ProposerAddress: hex.EncodeToString(p.Proposer[:]),
-			Parameters:      params,
-			ExpirationTime:  p.ExpirationTime,
-			CreateTime:      p.CreateTime,
-			Approvals:       approvals,
-			State:           stateStr,
-		})
+		result = append(result, proposalInfoFromRaw(p))
 	}
 	return result, nil
+}
+
+func (b *TronBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	ids, err := session.reader.ProposalIndexAt(blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct proposal index at block %d: %w", blockNum, err)
+	}
+	result := make([]*tronapi.ProposalInfo, 0, len(ids))
+	for _, id := range ids {
+		p, err := session.reader.ProposalAt(id, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("reconstruct proposal %d at block %d: %w", id, blockNum, err)
+		}
+		if p == nil {
+			continue
+		}
+		result = append(result, proposalInfoFromRaw(p))
+	}
+	return result, nil
+}
+
+func proposalInfoFromRaw(p *rawdb.Proposal) *tronapi.ProposalInfo {
+	params := proposalParametersToList(p.Parameters)
+	approvals := make([]string, len(p.Approvals))
+	for i, a := range p.Approvals {
+		approvals[i] = hex.EncodeToString(a[:])
+	}
+	stateStr := "PENDING"
+	switch p.State {
+	case rawdb.ProposalStateApproved:
+		stateStr = "APPROVED"
+	case rawdb.ProposalStateCanceled:
+		stateStr = "CANCELED"
+	}
+	return &tronapi.ProposalInfo{
+		ProposalID:      p.ID,
+		ProposerAddress: hex.EncodeToString(p.Proposer[:]),
+		Parameters:      params,
+		ExpirationTime:  p.ExpirationTime,
+		CreateTime:      p.CreateTime,
+		Approvals:       approvals,
+		State:           stateStr,
+	}
 }
 
 // proposalParametersToList converts a Proposal.parameters map to a sorted
@@ -1644,6 +1673,21 @@ func (b *TronBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.Prop
 	return all[offset:end], nil
 }
 
+func (b *TronBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	all, err := b.ListProposalsAt(blockNum)
+	if err != nil || len(all) == 0 {
+		return nil, err
+	}
+	if offset >= len(all) {
+		return []*tronapi.ProposalInfo{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
 func (b *TronBackend) ListExchangesPaginated(offset, limit int) ([]*corepb.Exchange, error) {
 	all := b.listExchangesAtHead()
 	if len(all) == 0 {
@@ -1824,27 +1868,24 @@ func (b *TronBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
 	if p == nil {
 		return nil, fmt.Errorf("proposal %d not found", id)
 	}
-	params := proposalParametersToList(p.Parameters)
-	approvals := make([]string, len(p.Approvals))
-	for i, a := range p.Approvals {
-		approvals[i] = hex.EncodeToString(a[:])
+	return proposalInfoFromRaw(p), nil
+}
+
+func (b *TronBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
 	}
-	stateStr := "PENDING"
-	switch p.State {
-	case rawdb.ProposalStateApproved:
-		stateStr = "APPROVED"
-	case rawdb.ProposalStateCanceled:
-		stateStr = "CANCELED"
+	defer session.Close()
+
+	p, err := session.reader.ProposalAt(id, blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct proposal %d at block %d: %w", id, blockNum, err)
 	}
-	return &tronapi.ProposalInfo{
-		ProposalID:      p.ID,
-		ProposerAddress: hex.EncodeToString(p.Proposer[:]),
-		Parameters:      params,
-		ExpirationTime:  p.ExpirationTime,
-		CreateTime:      p.CreateTime,
-		Approvals:       approvals,
-		State:           stateStr,
-	}, nil
+	if p == nil {
+		return nil, fmt.Errorf("proposal %d not found at block %d", id, blockNum)
+	}
+	return proposalInfoFromRaw(p), nil
 }
 
 func (b *TronBackend) ValidateAddress(addr string) (bool, string) {

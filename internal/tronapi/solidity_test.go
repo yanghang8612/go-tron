@@ -138,6 +138,12 @@ type isolationStubBackend struct {
 	witnessesAtBlock         uint64
 	liveNextMaintenanceCalls int
 	nextMaintenanceAtBlock   uint64
+	liveProposalCalls        int
+	proposalsAtBlock         uint64
+	liveProposalIDCalls      int
+	proposalIDAtBlock        uint64
+	liveProposalPageCalls    int
+	proposalPageAtBlock      uint64
 	liveAssetIDCalls         int
 	assetIDAtBlock           uint64
 	liveAssetNameCalls       int
@@ -254,6 +260,36 @@ func (s *isolationStubBackend) NextMaintenanceTime() int64 {
 func (s *isolationStubBackend) NextMaintenanceTimeAt(blockNum uint64) (int64, error) {
 	s.nextMaintenanceAtBlock = blockNum
 	return 9900, nil
+}
+
+func (s *isolationStubBackend) ListProposals() ([]*tronapi.ProposalInfo, error) {
+	s.liveProposalCalls++
+	return []*tronapi.ProposalInfo{{ProposalID: 1, State: "LIVE"}}, nil
+}
+
+func (s *isolationStubBackend) ListProposalsAt(blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	s.proposalsAtBlock = blockNum
+	return []*tronapi.ProposalInfo{{ProposalID: 42, State: "APPROVED"}}, nil
+}
+
+func (s *isolationStubBackend) GetProposalByID(id int64) (*tronapi.ProposalInfo, error) {
+	s.liveProposalIDCalls++
+	return &tronapi.ProposalInfo{ProposalID: id, State: "LIVE"}, nil
+}
+
+func (s *isolationStubBackend) GetProposalByIDAt(id int64, blockNum uint64) (*tronapi.ProposalInfo, error) {
+	s.proposalIDAtBlock = blockNum
+	return &tronapi.ProposalInfo{ProposalID: id, State: "BOUND"}, nil
+}
+
+func (s *isolationStubBackend) ListProposalsPaginated(offset, limit int) ([]*tronapi.ProposalInfo, error) {
+	s.liveProposalPageCalls++
+	return []*tronapi.ProposalInfo{{ProposalID: 2, State: "LIVE"}}, nil
+}
+
+func (s *isolationStubBackend) ListProposalsPaginatedAt(offset, limit int, blockNum uint64) ([]*tronapi.ProposalInfo, error) {
+	s.proposalPageAtBlock = blockNum
+	return []*tronapi.ProposalInfo{{ProposalID: 43, State: "PAGED"}}, nil
 }
 
 func assetSentinel(id string, supply int64) *contractpb.AssetIssueContract {
@@ -754,6 +790,100 @@ func assertListWitnessesUsesBound(t *testing.T, prefix string, stub *isolationSt
 	}
 	if stub.liveWitnessCalls != 0 {
 		t.Fatalf("live ListWitnesses called %d times, want 0", stub.liveWitnessCalls)
+	}
+}
+
+func TestSolidityProposalRoutesUseSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertProposalRoutesUseBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftProposalRoutesUsePbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertProposalRoutesUseBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertProposalRoutesUseBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Post(prefix+"/listproposals", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("listproposals request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("listproposals status: %d", resp.StatusCode)
+	}
+	var list struct {
+		Proposals []tronapi.ProposalInfo `json:"proposals"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Proposals) != 1 || list.Proposals[0].ProposalID != 42 || list.Proposals[0].State != "APPROVED" {
+		t.Fatalf("proposals = %+v, want bound sentinel", list.Proposals)
+	}
+	if stub.proposalsAtBlock != wantBlock {
+		t.Fatalf("ListProposalsAt block = %d, want %d", stub.proposalsAtBlock, wantBlock)
+	}
+	if stub.liveProposalCalls != 0 {
+		t.Fatalf("live ListProposals called %d times, want 0", stub.liveProposalCalls)
+	}
+
+	resp, err = http.Get(prefix + "/getproposalbyid?id=42")
+	if err != nil {
+		t.Fatalf("getproposalbyid request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getproposalbyid status: %d", resp.StatusCode)
+	}
+	var one tronapi.ProposalInfo
+	if err := json.NewDecoder(resp.Body).Decode(&one); err != nil {
+		t.Fatal(err)
+	}
+	if one.ProposalID != 42 || one.State != "BOUND" {
+		t.Fatalf("proposal = %+v, want bound sentinel", one)
+	}
+	if stub.proposalIDAtBlock != wantBlock {
+		t.Fatalf("GetProposalByIDAt block = %d, want %d", stub.proposalIDAtBlock, wantBlock)
+	}
+	if stub.liveProposalIDCalls != 0 {
+		t.Fatalf("live GetProposalByID called %d times, want 0", stub.liveProposalIDCalls)
+	}
+
+	resp, err = http.Post(prefix+"/getpaginatedproposallist", "application/json", strings.NewReader(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatalf("getpaginatedproposallist request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("getpaginatedproposallist status: %d", resp.StatusCode)
+	}
+	var page struct {
+		Proposal []tronapi.ProposalInfo `json:"proposal"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Proposal) != 1 || page.Proposal[0].ProposalID != 43 || page.Proposal[0].State != "PAGED" {
+		t.Fatalf("proposal page = %+v, want bound sentinel", page.Proposal)
+	}
+	if stub.proposalPageAtBlock != wantBlock {
+		t.Fatalf("ListProposalsPaginatedAt block = %d, want %d", stub.proposalPageAtBlock, wantBlock)
+	}
+	if stub.liveProposalPageCalls != 0 {
+		t.Fatalf("live ListProposalsPaginated called %d times, want 0", stub.liveProposalPageCalls)
 	}
 }
 
