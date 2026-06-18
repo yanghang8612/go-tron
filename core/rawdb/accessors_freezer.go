@@ -66,6 +66,15 @@ func ReadTransactionInfosRaw(db ethdb.KeyValueReader, number uint64) []byte {
 	return data
 }
 
+// WriteTransactionInfosRaw stores a pre-marshalled `corepb.TransactionRet`
+// blob under `tib-<num>` without decoding or validating it. Normal block
+// execution and backfill paths must use WriteTransactionInfosByBlock instead;
+// this helper exists for raw snapshot/freezer replay and corruption fixtures
+// that intentionally need to preserve bytes at the schema boundary.
+func WriteTransactionInfosRaw(db ethdb.KeyValueWriter, number uint64, data []byte) error {
+	return db.Put(txInfoBlockKey(number), data)
+}
+
 // ReadBlockHashByNumber returns the canonical block hash for the given block
 // number. When the caller passes a ChainDB, this walks the normal ReadBlock
 // path, so frozen block bodies are served from ancient and hot bodies from KV.

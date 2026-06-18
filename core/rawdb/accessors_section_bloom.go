@@ -21,6 +21,9 @@ const (
 // java-tron stores a zlib-compressed BitSet.toByteArray payload; callers that
 // build compatible rows should use EncodeSectionBloomBitSet first.
 func WriteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64, value []byte) error {
+	if err := validateSectionBloomBitIndex(bitIndex, "write section bloom"); err != nil {
+		return err
+	}
 	return db.Put(sectionBloomKey(section, bitIndex), value)
 }
 
@@ -45,6 +48,9 @@ func ReadSectionBloom(db ethdb.KeyValueReader, section, bitIndex uint64) []byte 
 
 // DeleteSectionBloom removes the (section, bitIndex) entry.
 func DeleteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64) error {
+	if err := validateSectionBloomBitIndex(bitIndex, "delete section bloom"); err != nil {
+		return err
+	}
 	return db.Delete(sectionBloomKey(section, bitIndex))
 }
 
@@ -53,6 +59,9 @@ func DeleteSectionBloom(db ethdb.KeyValueWriter, section, bitIndex uint64) error
 // bytes[N/8]&(1<<(N%8)). Trailing zero bytes are trimmed before compression.
 func EncodeSectionBloomBitSet(bitset []byte) ([]byte, error) {
 	trimmed := trimTrailingZeroes(bitset)
+	if len(trimmed) > SectionBloomByteSize {
+		return nil, fmt.Errorf("bitset has %d bytes, want <= %d", len(trimmed), SectionBloomByteSize)
+	}
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
 	if _, err := zw.Write(trimmed); err != nil {
@@ -73,9 +82,12 @@ func DecodeSectionBloomBitSet(value []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer zr.Close()
-	data, err := io.ReadAll(zr)
+	data, err := io.ReadAll(io.LimitReader(zr, SectionBloomByteSize+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > SectionBloomByteSize {
+		return nil, fmt.Errorf("decoded bitset has %d bytes, want <= %d", len(data), SectionBloomByteSize)
 	}
 	return data, nil
 }
@@ -138,6 +150,20 @@ func SectionBloomBitSetHas(bitset []byte, bit uint64) bool {
 func sectionBloomBitIndex(movement uint64) uint64 {
 	byteIndex := SectionBloomByteSize - 1 - movement/8
 	return byteIndex*8 + movement%8
+}
+
+func validateSectionBloomBitIndex(bitIndex uint64, op string) error {
+	if bitIndex >= SectionBloomBitSize {
+		return fmt.Errorf("%s: bit index %d exceeds %d", op, bitIndex, SectionBloomBitSize-1)
+	}
+	return nil
+}
+
+func validateSectionBloomValue(value []byte, op string) error {
+	if _, err := DecodeSectionBloomBitSet(value); err != nil {
+		return fmt.Errorf("%s: decode: %w", op, err)
+	}
+	return nil
 }
 
 func trimTrailingZeroes(data []byte) []byte {

@@ -24,6 +24,7 @@ import (
 	"github.com/tronprotocol/go-tron/params"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	contractpb "github.com/tronprotocol/go-tron/proto/core/contract"
+	"google.golang.org/protobuf/proto"
 )
 
 // newTestBlockchain creates an in-memory BlockChain with a genesis block for testing.
@@ -808,8 +809,15 @@ func TestTronBackend_GetLogsRejectsMismatchedTransactionInfoBlockNumber(t *testi
 		t.Fatalf("WriteBlock block2: %v", err)
 	}
 	info1.BlockNumber = 2
-	if err := rawdb.WriteTransactionInfosByBlock(bc.db, 1, []*corepb.TransactionInfo{info1}); err != nil {
-		t.Fatalf("WriteTransactionInfosByBlock block1: %v", err)
+	rawInfo, err := proto.Marshal(&corepb.TransactionRet{
+		BlockNumber:     1,
+		Transactioninfo: []*corepb.TransactionInfo{info1},
+	})
+	if err != nil {
+		t.Fatalf("marshal raw TransactionRet: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosRaw(bc.db, 1, rawInfo); err != nil {
+		t.Fatalf("WriteTransactionInfosRaw block1: %v", err)
 	}
 	bc.currentBlock.Store(block2)
 

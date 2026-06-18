@@ -264,6 +264,9 @@ func collectSectionBloomRowsToETL(db ethdb.Iteratee, fromBlock, toBlock uint64, 
 		if section < fromSection || section > toSection {
 			return true, nil
 		}
+		if _, err := rawdb.DecodeSectionBloomBitSet(value); err != nil {
+			return false, fmt.Errorf("snapshots: section bloom row %d/%d: decode: %w", section, bitIndex, err)
+		}
 		if err := collector.Put(sectionBloomETLKey(section, bitIndex), value); err != nil {
 			return false, err
 		}
@@ -454,7 +457,12 @@ func parseSectionBloomETLKey(key []byte) (uint64, uint64, error) {
 	if len(key) != sectionBloomETLKeySize {
 		return 0, 0, fmt.Errorf("snapshots: section bloom ETL key length %d, want %d", len(key), sectionBloomETLKeySize)
 	}
-	return binary.BigEndian.Uint64(key[0:8]), binary.BigEndian.Uint64(key[8:16]), nil
+	section := binary.BigEndian.Uint64(key[0:8])
+	bitIndex := binary.BigEndian.Uint64(key[8:16])
+	if bitIndex >= rawdb.SectionBloomBitSize {
+		return 0, 0, fmt.Errorf("snapshots: section bloom ETL bit index %d exceeds %d", bitIndex, rawdb.SectionBloomBitSize-1)
+	}
+	return section, bitIndex, nil
 }
 
 func validateSectionBloomRef(ref SegmentRef) error {

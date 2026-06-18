@@ -124,5 +124,11 @@ func (c *DerivedIndexCollector) PutSectionBloom(section, bitIndex uint64, bloom 
 	if c == nil || c.collector == nil {
 		return errors.New("rawdb: nil derived index collector")
 	}
+	if err := validateSectionBloomBitIndex(bitIndex, "collect section bloom"); err != nil {
+		return err
+	}
+	if err := validateSectionBloomValue(bloom, "collect section bloom"); err != nil {
+		return err
+	}
 	return c.collector.Put(sectionBloomKey(section, bitIndex), bloom)
 }

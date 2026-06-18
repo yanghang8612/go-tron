@@ -2,6 +2,8 @@ package rawdb
 
 import (
 	"bytes"
+	"compress/zlib"
+	"strings"
 	"testing"
 
 	ethrawdb "github.com/ethereum/go-ethereum/core/rawdb"
@@ -122,6 +124,52 @@ func TestSectionBloomBitSetCodec(t *testing.T) {
 	if !bytes.Equal(decoded, bitset) {
 		t.Fatalf("decoded bitset = %x, want %x", decoded, bitset)
 	}
+}
+
+func TestSectionBloomBitSetCodecRejectsOversizedInput(t *testing.T) {
+	bitset := setSectionBloomBit(nil, SectionBloomBitSize)
+	if _, err := EncodeSectionBloomBitSet(bitset); err == nil || !strings.Contains(err.Error(), "bitset has") {
+		t.Fatalf("EncodeSectionBloomBitSet oversized error = %v, want bitset-size error", err)
+	}
+}
+
+func TestSectionBloomRejectsInvalidBitIndex(t *testing.T) {
+	db := ethrawdb.NewMemoryDatabase()
+	if err := WriteSectionBloom(db, 0, SectionBloomBitSize, []byte{0x01}); err == nil {
+		t.Fatal("WriteSectionBloom accepted out-of-range bit index")
+	}
+	if err := DeleteSectionBloom(db, 0, SectionBloomBitSize); err == nil {
+		t.Fatal("DeleteSectionBloom accepted out-of-range bit index")
+	}
+}
+
+func TestSectionBloomBitSetCodecRejectsOversizedDecodedRow(t *testing.T) {
+	bitset := setSectionBloomBit(nil, SectionBloomBitSize)
+	encoded := encodeRawSectionBloomPayload(t, bitset)
+	if _, err := DecodeSectionBloomBitSet(encoded); err == nil || !strings.Contains(err.Error(), "decoded bitset has") {
+		t.Fatalf("DecodeSectionBloomBitSet oversized error = %v, want decoded-size error", err)
+	}
+
+	db := ethrawdb.NewMemoryDatabase()
+	if err := WriteSectionBloom(db, 3, 42, encoded); err != nil {
+		t.Fatalf("WriteSectionBloom oversized raw row: %v", err)
+	}
+	if _, ok, err := ReadSectionBloomBitSet(db, 3, 42); !ok || err == nil || !strings.Contains(err.Error(), "decoded bitset has") {
+		t.Fatalf("ReadSectionBloomBitSet oversized = ok %v err %v, want decoded-size error", ok, err)
+	}
+}
+
+func encodeRawSectionBloomPayload(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write(payload); err != nil {
+		t.Fatalf("zlib write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zlib close: %v", err)
+	}
+	return buf.Bytes()
 }
 
 type fakeSectionBloomReader struct {

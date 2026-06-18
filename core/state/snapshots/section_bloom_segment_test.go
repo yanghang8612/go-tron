@@ -2,8 +2,10 @@ package snapshots
 
 import (
 	"bytes"
+	"compress/zlib"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tronprotocol/go-tron/core/rawdb"
@@ -115,6 +117,21 @@ func TestBuildSectionBloomSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	}
 }
 
+func TestBuildSectionBloomSegmentRejectsOversizedDecodedRow(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot")
+	source := rawdb.NewMemoryChainDB()
+	row := sectionBloomTestEncodedRawPayload(t, sectionBloomTestSetBit(nil, rawdb.SectionBloomBitSize))
+	if err := rawdb.WriteSectionBloom(source, 0, 42, row); err != nil {
+		t.Fatalf("WriteSectionBloom oversized row: %v", err)
+	}
+
+	_, err := BuildSectionBloomSegmentFromDB(source, snapshotDir, "log/section-bloom-0-0.seg", 0, rawdb.SectionBloomBlockPerSection-1)
+	if err == nil || !strings.Contains(err.Error(), "decoded bitset has") {
+		t.Fatalf("BuildSectionBloomSegmentFromDB error = %v, want decoded-size error", err)
+	}
+}
+
 func sectionBloomTestEncodedBit(t *testing.T, bit uint64) []byte {
 	t.Helper()
 	encoded, err := rawdb.EncodeSectionBloomBitSet(sectionBloomTestSetBit(nil, bit))
@@ -122,6 +139,19 @@ func sectionBloomTestEncodedBit(t *testing.T, bit uint64) []byte {
 		t.Fatalf("EncodeSectionBloomBitSet: %v", err)
 	}
 	return encoded
+}
+
+func sectionBloomTestEncodedRawPayload(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write(payload); err != nil {
+		t.Fatalf("zlib write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zlib close: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func sectionBloomTestSetBit(bitset []byte, bit uint64) []byte {

@@ -3,7 +3,6 @@ package rawdb
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,7 +24,8 @@ func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
 	owner := mustAddr(0x42)
 	txID := bytes.Repeat([]byte{0xab}, 32)
 	txInfo := &corepb.TransactionInfo{Id: txID, Fee: 123, BlockNumber: 9, BlockTimeStamp: 777}
-	if err := collector.PutSectionBloom(3, 42, []byte{0xde, 0xad}); err != nil {
+	sectionBloom := mustSectionBloomEncodedBit(t, 5)
+	if err := collector.PutSectionBloom(3, 42, sectionBloom); err != nil {
 		t.Fatalf("PutSectionBloom: %v", err)
 	}
 	if err := collector.PutTransactionIndex(txID, 9); err != nil {
@@ -67,8 +67,8 @@ func TestDerivedIndexCollectorLoadsSortedRowsAndRoundTrips(t *testing.T) {
 	if got := ReadBlockBalanceTrace(rec, 9); got == nil || got.Timestamp != 900 {
 		t.Fatalf("ReadBlockBalanceTrace = %+v, want timestamp 900", got)
 	}
-	if got := ReadSectionBloom(rec, 3, 42); !bytes.Equal(got, []byte{0xde, 0xad}) {
-		t.Fatalf("ReadSectionBloom = %x, want dead", got)
+	if got := ReadSectionBloom(rec, 3, 42); !bytes.Equal(got, sectionBloom) {
+		t.Fatalf("ReadSectionBloom = %x, want %x", got, sectionBloom)
 	}
 
 	db := NewMemoryChainDB()
@@ -130,10 +130,17 @@ func TestDerivedIndexCollectorRejectsInvalidRowsAndLifecycle(t *testing.T) {
 	if err := collector.PutTransactionInfosByBlock(7, []*corepb.TransactionInfo{{Id: []byte{0x01}, BlockNumber: 7}}); err == nil {
 		t.Fatal("PutTransactionInfosByBlock accepted malformed transaction id")
 	}
+	validBloom := mustSectionBloomEncodedBit(t, 1)
+	if err := collector.PutSectionBloom(1, SectionBloomBitSize, validBloom); err == nil {
+		t.Fatal("PutSectionBloom accepted out-of-range bit index")
+	}
+	if err := collector.PutSectionBloom(1, 2, []byte{0x01}); err == nil {
+		t.Fatal("PutSectionBloom accepted malformed bloom row")
+	}
 	if err := collector.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := collector.PutSectionBloom(1, 2, []byte{0x01}); !errors.Is(err, etl.ErrCollectorClosed) {
+	if err := collector.PutSectionBloom(1, 2, validBloom); !errors.Is(err, etl.ErrCollectorClosed) {
 		t.Fatalf("PutSectionBloom after Close error = %v, want %v", err, etl.ErrCollectorClosed)
 	}
 }
@@ -258,10 +265,27 @@ func makeDerivedIndexBenchRows(n int) []derivedIndexBenchRow {
 			},
 			section:  uint64(i / 256),
 			bitIndex: uint64(i % 256),
-			bloom:    []byte(fmt.Sprintf("bloom-%04d", i)),
+			bloom:    mustSectionBloomEncodedBench(uint64(i % SectionBloomBlockPerSection)),
 		})
 	}
 	return rows
+}
+
+func mustSectionBloomEncodedBit(t *testing.T, bit uint64) []byte {
+	t.Helper()
+	encoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, bit))
+	if err != nil {
+		t.Fatalf("EncodeSectionBloomBitSet: %v", err)
+	}
+	return encoded
+}
+
+func mustSectionBloomEncodedBench(bit uint64) []byte {
+	encoded, err := EncodeSectionBloomBitSet(setSectionBloomBit(nil, bit))
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 func writeDerivedIndexBenchRowsDirect(w *derivedIndexRecordingWriter, rows []derivedIndexBenchRow) error {
