@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/binary"
 
+	tcommon "github.com/tronprotocol/go-tron/common"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	corepb "github.com/tronprotocol/go-tron/proto/core"
 	"google.golang.org/protobuf/proto"
@@ -86,6 +87,28 @@ func (s *StateDB) ReadExchangeV2(id int64) *corepb.Exchange {
 	return s.readExchange(exchangeKVDiscriminatorV2, id)
 }
 
+func (r *PersistentHistoryReader) readExchangeAt(discriminator byte, id int64, blockNum uint64) (*corepb.Exchange, error) {
+	raw, ok, err := r.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemExchange, exchangeKVKey(discriminator, id), blockNum)
+	if err != nil || !ok || len(raw) == 0 {
+		return nil, err
+	}
+	ex := &corepb.Exchange{}
+	if err := proto.Unmarshal(raw, ex); err != nil {
+		return nil, nil
+	}
+	return ex, nil
+}
+
+// ExchangeAt reconstructs a rooted V1 exchange at the end of blockNum.
+func (r *PersistentHistoryReader) ExchangeAt(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return r.readExchangeAt(exchangeKVDiscriminatorV1, id, blockNum)
+}
+
+// ExchangeV2At reconstructs a rooted V2 exchange at the end of blockNum.
+func (r *PersistentHistoryReader) ExchangeV2At(id int64, blockNum uint64) (*corepb.Exchange, error) {
+	return r.readExchangeAt(exchangeKVDiscriminatorV2, id, blockNum)
+}
+
 // WriteExchange stages the V1 (legacy) exchange keyed by its ExchangeId.
 func (s *StateDB) WriteExchange(ex *corepb.Exchange) error {
 	return s.writeExchange(exchangeKVDiscriminatorV1, ex)
@@ -118,6 +141,16 @@ func (s *StateDB) ListExchangesV2(latestID int64) []*corepb.Exchange {
 	return s.listExchanges(exchangeKVDiscriminatorV2, latestID)
 }
 
+// ListExchangesAt enumerates the V1 bucket over ids 1..latestID at blockNum.
+func (r *PersistentHistoryReader) ListExchangesAt(latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	return r.listExchangesAt(exchangeKVDiscriminatorV1, latestID, blockNum)
+}
+
+// ListExchangesV2At enumerates the V2 bucket over ids 1..latestID at blockNum.
+func (r *PersistentHistoryReader) ListExchangesV2At(latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	return r.listExchangesAt(exchangeKVDiscriminatorV2, latestID, blockNum)
+}
+
 func (s *StateDB) listExchanges(discriminator byte, latestID int64) []*corepb.Exchange {
 	var out []*corepb.Exchange
 	for id := int64(1); id <= latestID; id++ {
@@ -126,4 +159,18 @@ func (s *StateDB) listExchanges(discriminator byte, latestID int64) []*corepb.Ex
 		}
 	}
 	return out
+}
+
+func (r *PersistentHistoryReader) listExchangesAt(discriminator byte, latestID int64, blockNum uint64) ([]*corepb.Exchange, error) {
+	var out []*corepb.Exchange
+	for id := int64(1); id <= latestID; id++ {
+		ex, err := r.readExchangeAt(discriminator, id, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if ex != nil {
+			out = append(out, ex)
+		}
+	}
+	return out, nil
 }

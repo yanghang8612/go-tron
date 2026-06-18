@@ -9,7 +9,19 @@ import (
 )
 
 func (api *API) listExchanges(w http.ResponseWriter, r *http.Request) {
-	exchanges, err := api.backend.ListExchanges()
+	api.handleListExchanges(w, r, nil)
+}
+
+func (api *API) handleListExchanges(w http.ResponseWriter, r *http.Request, boundFn func() uint64) {
+	var (
+		exchanges []*corepb.Exchange
+		err       error
+	)
+	if boundFn == nil {
+		exchanges, err = api.backend.ListExchanges()
+	} else {
+		exchanges, err = api.backend.ListExchangesAt(boundFn())
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

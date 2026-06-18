@@ -482,9 +482,18 @@ var accountResourceDynamicPropertyKeys = []string{
 	"total_tron_power_weight",
 }
 
+var exchangeDynamicPropertyKeys = []string{
+	"latest_exchange_num",
+	"allow_same_token_name",
+}
+
 func (b *TronBackend) dynamicPropertiesAt(reader *state.PersistentHistoryReader, blockNum uint64) (*state.DynamicProperties, error) {
+	return b.dynamicPropertiesAtKeys(reader, blockNum, accountResourceDynamicPropertyKeys)
+}
+
+func (b *TronBackend) dynamicPropertiesAtKeys(reader *state.PersistentHistoryReader, blockNum uint64, keys []string) (*state.DynamicProperties, error) {
 	dp := state.NewDynamicProperties()
-	for _, key := range accountResourceDynamicPropertyKeys {
+	for _, key := range keys {
 		value, ok, err := reader.AccountKVAt(tcommon.SystemAccountAddress, kvdomains.SystemDynamicProperty, []byte(key), blockNum)
 		if err != nil {
 			return nil, err
@@ -1141,16 +1150,10 @@ func (b *TronBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blo
 	return priceList, nil
 }
 
-// listExchangesAtHead enumerates the rooted exchange set (Phase 3d) at the head
-// state root, walking ids 1..latest_exchange_num as RpcApiService.getExchangeList
-// does off getLatestExchangeNum. This is a behavior-preserving swap of the prior
-// flat ListAllExchanges(exchangePrefix): it returns the V1 bucket unconditionally.
-//
-// NOTE (java-parity, deferred): java-tron's getExchangeList selects the bucket
-// via Commons.getExchangeStoreFinal — V1 pre-AllowSameTokenName, V2 after — so
-// post-fork it returns the live V2 set, whereas this (like the code it replaces)
-// always reads V1. That divergence predates this refactor and is left untouched
-// here to keep the migration a pure storage move; it should be fixed separately.
+// listExchangesAtHead enumerates the rooted exchange set at the head state root,
+// walking ids 1..latest_exchange_num as RpcApiService.getExchangeList does. The
+// V1/V2 bucket is selected through the same AllowSameTokenName final-store gate
+// java-tron uses for exchange reads.
 func (b *TronBackend) listExchangesAtHead() []*corepb.Exchange {
 	sysKV := b.chain.sysKVAt(b.chain.HeadStateRoot())
 	if sysKV == nil {
@@ -1158,11 +1161,40 @@ func (b *TronBackend) listExchangesAtHead() []*corepb.Exchange {
 	}
 	// latest_exchange_num is read from the cached DynProps, which tracks the same
 	// head this opens sysKV at; both are head-only, so they stay in sync.
-	return sysKV.ListExchanges(b.chain.DynProps().LatestExchangeNum())
+	dynProps := b.chain.DynProps()
+	if dynProps.AllowSameTokenName() {
+		return sysKV.ListExchangesV2(dynProps.LatestExchangeNum())
+	}
+	return sysKV.ListExchanges(dynProps.LatestExchangeNum())
 }
 
 func (b *TronBackend) ListExchanges() ([]*corepb.Exchange, error) {
 	return b.listExchangesAtHead(), nil
+}
+
+func (b *TronBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	session, err := b.archiveStateAt(blockNum)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	dynProps, err := b.dynamicPropertiesAtKeys(session.reader, blockNum, exchangeDynamicPropertyKeys)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct exchange dynamic properties at block %d: %w", blockNum, err)
+	}
+	if dynProps.AllowSameTokenName() {
+		exchanges, err := session.reader.ListExchangesV2At(dynProps.LatestExchangeNum(), blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("read exchange v2 list at block %d: %w", blockNum, err)
+		}
+		return exchanges, nil
+	}
+	exchanges, err := session.reader.ListExchangesAt(dynProps.LatestExchangeNum(), blockNum)
+	if err != nil {
+		return nil, fmt.Errorf("read exchange list at block %d: %w", blockNum, err)
+	}
+	return exchanges, nil
 }
 
 func (b *TronBackend) GetBrokerageInfo(addr tcommon.Address) int64 {

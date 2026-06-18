@@ -133,6 +133,8 @@ type isolationStubBackend struct {
 	marketOrdersAtBlock      uint64
 	liveMarketPriceCalls     int
 	marketPriceAtBlock       uint64
+	liveExchangeCalls        int
+	exchangesAtBlock         uint64
 	liveDelegatedCalls       int
 	liveDelegationIndexCalls int
 	delegatedAtBlock         uint64
@@ -220,6 +222,23 @@ func (s *isolationStubBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []
 		BuyTokenId:  buyTokenID,
 		Prices:      []*corepb.MarketPrice{{SellTokenQuantity: 12, BuyTokenQuantity: 120}},
 	}, nil
+}
+
+func (s *isolationStubBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	s.liveExchangeCalls++
+	return []*corepb.Exchange{{ExchangeId: 1, FirstTokenBalance: 1, SecondTokenBalance: 2}}, nil
+}
+
+func (s *isolationStubBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	s.exchangesAtBlock = blockNum
+	return []*corepb.Exchange{{
+		ExchangeId:         9,
+		FirstTokenId:       []byte("solid"),
+		FirstTokenBalance:  90,
+		SecondTokenId:      []byte("_"),
+		SecondTokenBalance: 900,
+		CreatorAddress:     common.Address{0x41, 0x61}.Bytes(),
+	}}, nil
 }
 
 func (s *isolationStubBackend) GetDelegatedResourceV2(from, to common.Address) ([]*tronapi.DelegatedResourceInfo, error) {
@@ -551,6 +570,58 @@ func assertMarketRoutesUseBound(t *testing.T, prefix string, stub *isolationStub
 	}
 	if stub.liveMarketPriceCalls != 0 {
 		t.Fatalf("live GetMarketPriceByPair called %d times, want 0", stub.liveMarketPriceCalls)
+	}
+}
+
+func TestSolidityListExchangesUsesSolidBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 42, pbftNum: -1},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertListExchangesUsesBound(t, srv.URL+"/walletsolidity", stub, 42)
+}
+
+func TestPbftListExchangesUsesPbftBoundArchivePath(t *testing.T) {
+	stub := &isolationStubBackend{
+		solidStubBackend: solidStubBackend{solidNum: 5, pbftNum: 13},
+	}
+	srv := newSolidTestServer(t, stub)
+	defer srv.Close()
+
+	assertListExchangesUsesBound(t, srv.URL+"/walletpbft", stub, 13)
+}
+
+func assertListExchangesUsesBound(t *testing.T, prefix string, stub *isolationStubBackend, wantBlock uint64) {
+	t.Helper()
+
+	resp, err := http.Get(prefix + "/listexchanges")
+	if err != nil {
+		t.Fatalf("listexchanges request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("listexchanges status: %d", resp.StatusCode)
+	}
+	var got struct {
+		Exchanges []struct {
+			ExchangeID         int64 `json:"exchange_id"`
+			FirstTokenBalance  int64 `json:"first_token_balance"`
+			SecondTokenBalance int64 `json:"second_token_balance"`
+		} `json:"exchanges"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Exchanges) != 1 || got.Exchanges[0].ExchangeID != 9 || got.Exchanges[0].FirstTokenBalance != 90 {
+		t.Fatalf("exchanges = %+v, want bound sentinel", got.Exchanges)
+	}
+	if stub.exchangesAtBlock != wantBlock {
+		t.Fatalf("ListExchangesAt block = %d, want %d", stub.exchangesAtBlock, wantBlock)
+	}
+	if stub.liveExchangeCalls != 0 {
+		t.Fatalf("live ListExchanges called %d times, want 0", stub.liveExchangeCalls)
 	}
 }
 

@@ -575,6 +575,130 @@ func TestArchiveQuery_MarketQueriesAtUseSystemMarketHistory(t *testing.T) {
 	}
 }
 
+func TestArchiveQuery_ListExchangesAtUsesSystemExchangeHistory(t *testing.T) {
+	b, witness, _ := archiveBackend(t)
+	bc := b.chain
+	creator := testInsertAddr(60)
+
+	parent := bc.genesisBlock.Hash()
+	var block1, block2 *types.Block
+	for n := int64(1); n <= 2; n++ {
+		blk := buildTransferBlock(t, n, n*3000, parent, witness, n*1000)
+		if err := bc.InsertBlock(blk); err != nil {
+			t.Fatalf("insert block %d: %v", n, err)
+		}
+		parent = blk.Hash()
+		switch n {
+		case 1:
+			block1 = blk
+		case 2:
+			block2 = blk
+		}
+	}
+	if block1 == nil || block2 == nil {
+		t.Fatal("test setup did not build both blocks")
+	}
+
+	root := bc.StateRootAtBlock(0)
+	commitExchanges := func(blk *types.Block, n int64) tcommon.Hash {
+		bc.buffer.BeginBlock(blk.Hash(), blk.Number())
+		statedb, err := bc.openState(root)
+		if err != nil {
+			t.Fatalf("open state block %d: %v", n, err)
+		}
+		statedb.SetDomainChangeSetWriter(bc.buffer, uint64(n), blk.Hash())
+
+		dynProps := state.NewDynamicProperties()
+		dynProps.SetLatestExchangeNum(n)
+		if n == 2 {
+			dynProps.SetAllowSameTokenName(true)
+		}
+		if err := dynProps.FlushRooted(statedb); err != nil {
+			t.Fatalf("flush dynamic properties block %d: %v", n, err)
+		}
+
+		if n == 1 {
+			if err := statedb.WriteExchange(&corepb.Exchange{
+				ExchangeId:         1,
+				CreatorAddress:     creator[:],
+				FirstTokenId:       []byte("TOKEN"),
+				FirstTokenBalance:  100,
+				SecondTokenId:      []byte("_"),
+				SecondTokenBalance: 1000,
+			}); err != nil {
+				t.Fatalf("write v1 exchange block %d: %v", n, err)
+			}
+			if err := statedb.WriteExchangeV2(&corepb.Exchange{
+				ExchangeId:         1,
+				CreatorAddress:     creator[:],
+				FirstTokenId:       []byte("1000001"),
+				FirstTokenBalance:  200,
+				SecondTokenId:      []byte("_"),
+				SecondTokenBalance: 2000,
+			}); err != nil {
+				t.Fatalf("write v2 exchange block %d: %v", n, err)
+			}
+		} else {
+			if err := statedb.WriteExchangeV2(&corepb.Exchange{
+				ExchangeId:         1,
+				CreatorAddress:     creator[:],
+				FirstTokenId:       []byte("1000001"),
+				FirstTokenBalance:  300,
+				SecondTokenId:      []byte("_"),
+				SecondTokenBalance: 3000,
+			}); err != nil {
+				t.Fatalf("write updated v2 exchange block %d: %v", n, err)
+			}
+			if err := statedb.WriteExchangeV2(&corepb.Exchange{
+				ExchangeId:         2,
+				CreatorAddress:     creator[:],
+				FirstTokenId:       []byte("1000002"),
+				FirstTokenBalance:  400,
+				SecondTokenId:      []byte("_"),
+				SecondTokenBalance: 4000,
+			}); err != nil {
+				t.Fatalf("write second v2 exchange block %d: %v", n, err)
+			}
+		}
+
+		root, err = statedb.Commit()
+		if err != nil {
+			t.Fatalf("commit exchanges block %d: %v", n, err)
+		}
+		if err := rawdb.WriteBlockStateRoot(bc.buffer, blk.Hash(), root); err != nil {
+			t.Fatalf("write block state root %d: %v", n, err)
+		}
+		bc.buffer.CommitBlock()
+		return root
+	}
+
+	root = commitExchanges(block1, 1)
+	root = commitExchanges(block2, 2)
+
+	block1Exchanges, err := b.ListExchangesAt(block1.Number())
+	if err != nil {
+		t.Fatalf("ListExchangesAt(block1): %v", err)
+	}
+	if len(block1Exchanges) != 1 ||
+		block1Exchanges[0].GetExchangeId() != 1 ||
+		string(block1Exchanges[0].GetFirstTokenId()) != "TOKEN" ||
+		block1Exchanges[0].GetFirstTokenBalance() != 100 {
+		t.Fatalf("block1 exchanges = %+v, want V1 pre-AllowSameTokenName exchange", block1Exchanges)
+	}
+
+	block2Exchanges, err := b.ListExchangesAt(block2.Number())
+	if err != nil {
+		t.Fatalf("ListExchangesAt(block2): %v", err)
+	}
+	if len(block2Exchanges) != 2 ||
+		string(block2Exchanges[0].GetFirstTokenId()) != "1000001" ||
+		block2Exchanges[0].GetFirstTokenBalance() != 300 ||
+		block2Exchanges[1].GetExchangeId() != 2 ||
+		block2Exchanges[1].GetFirstTokenBalance() != 400 {
+		t.Fatalf("block2 exchanges = %+v, want V2 post-AllowSameTokenName exchanges", block2Exchanges)
+	}
+}
+
 func TestArchiveQuery_ArchiveStateSessionHoldsChainMutex(t *testing.T) {
 	b, _, _ := archiveBackend(t)
 

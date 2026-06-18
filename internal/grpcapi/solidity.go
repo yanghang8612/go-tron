@@ -301,7 +301,7 @@ func (s *SolidityServer) GetCanWithdrawUnfreezeAmount(_ context.Context, in *api
 // ── Exchange queries ───────────────────────────────────────────────────────────
 
 func (s *SolidityServer) ListExchanges(_ context.Context, _ *apipb.EmptyMessage) (*apipb.ExchangeList, error) {
-	exchanges, err := s.backend.ListExchanges()
+	exchanges, err := s.backend.ListExchangesAt(s.solidNum())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

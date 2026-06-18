@@ -32,6 +32,7 @@ type solidTestBackend struct {
 	lastMarketOrderAt  uint64
 	lastMarketOrdersAt uint64
 	lastMarketPriceAt  uint64
+	lastExchangesAt    uint64
 	liveAccountCalls   int
 	liveAccountIDCalls int
 	liveRewardCalls    int
@@ -40,6 +41,7 @@ type solidTestBackend struct {
 	liveMarketOrder    int
 	liveMarketOrders   int
 	liveMarketPrice    int
+	liveExchanges      int
 	accountAt          *types.Account
 	accountIDAt        *types.Account
 	rewardAt           *tronapi.RewardInfo
@@ -48,6 +50,7 @@ type solidTestBackend struct {
 	marketOrderAt      *corepb.MarketOrder
 	marketOrdersAt     []*corepb.MarketOrder
 	marketPriceAt      *corepb.MarketPriceList
+	exchangesAt        []*corepb.Exchange
 }
 
 func (b *solidTestBackend) SolidifiedBlockNum() uint64 { return b.solidNum }
@@ -159,6 +162,19 @@ func (b *solidTestBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte
 		return b.marketPriceAt, nil
 	}
 	return b.testBackend.GetMarketPriceByPairAt(sellTokenID, buyTokenID, blockNum)
+}
+
+func (b *solidTestBackend) ListExchanges() ([]*corepb.Exchange, error) {
+	b.liveExchanges++
+	return b.testBackend.ListExchanges()
+}
+
+func (b *solidTestBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	b.lastExchangesAt = blockNum
+	if b.exchangesAt != nil {
+		return b.exchangesAt, nil
+	}
+	return b.testBackend.ListExchangesAt(blockNum)
 }
 
 func newSolidityClient(t *testing.T, backend tronapi.Backend) apipb.WalletSolidityClient {
@@ -472,6 +488,34 @@ func TestSolidity_MarketQueriesUseSolidBoundArchivePath(t *testing.T) {
 	}
 	if backend.liveMarketPrice != 0 {
 		t.Fatalf("live GetMarketPriceByPair called %d times, want 0", backend.liveMarketPrice)
+	}
+}
+
+func TestSolidity_ListExchangesUsesSolidBoundArchivePath(t *testing.T) {
+	backend := &solidTestBackend{
+		solidNum: 93,
+		exchangesAt: []*corepb.Exchange{{
+			ExchangeId:         7,
+			FirstTokenId:       []byte("solid"),
+			FirstTokenBalance:  70,
+			SecondTokenId:      []byte("_"),
+			SecondTokenBalance: 700,
+		}},
+	}
+	client := newSolidityClient(t, backend)
+
+	resp, err := client.ListExchanges(context.Background(), &apipb.EmptyMessage{})
+	if err != nil {
+		t.Fatalf("ListExchanges: %v", err)
+	}
+	if len(resp.GetExchanges()) != 1 || resp.GetExchanges()[0].GetExchangeId() != 7 || resp.GetExchanges()[0].GetFirstTokenBalance() != 70 {
+		t.Fatalf("ListExchanges = %+v, want solid-bound sentinel", resp.GetExchanges())
+	}
+	if backend.lastExchangesAt != 93 {
+		t.Fatalf("ListExchangesAt block = %d, want solid block 93", backend.lastExchangesAt)
+	}
+	if backend.liveExchanges != 0 {
+		t.Fatalf("live ListExchanges called %d times, want 0", backend.liveExchanges)
 	}
 }
 

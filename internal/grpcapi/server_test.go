@@ -187,6 +187,9 @@ func (b *testBackend) GetMarketPriceByPairAt(sellTokenID, buyTokenID []byte, blo
 	return nil, nil
 }
 func (b *testBackend) ListExchanges() ([]*corepb.Exchange, error) { return nil, nil }
+func (b *testBackend) ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error) {
+	return nil, nil
+}
 func (b *testBackend) GetBrokerageInfo(addr common.Address) int64 { return 0 }
 func (b *testBackend) TotalTransaction() int64                    { return 0 }
 func (b *testBackend) GetBurnTrx() int64                          { return 0 }

@@ -39,7 +39,7 @@ func (api *API) RegisterSolidityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletsolidity/getmarketorderbyid", api.getSolidMarketOrderByID)
 	mux.HandleFunc("/walletsolidity/getmarketordersfromaccount", api.getSolidMarketOrdersFromAccount)
 	mux.HandleFunc("/walletsolidity/getmarketpricebypair", api.getSolidMarketPriceByPair)
-	mux.HandleFunc("/walletsolidity/listexchanges", api.listExchanges)
+	mux.HandleFunc("/walletsolidity/listexchanges", api.getSolidExchanges)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourcev2", api.getSolidDelegatedResourceV2)
 	mux.HandleFunc("/walletsolidity/getdelegatedresourceaccountindexv2", api.getSolidDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletsolidity/estimateenergy", api.estimateEnergy)
@@ -71,7 +71,7 @@ func (api *API) RegisterPbftRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/walletpbft/getmarketorderbyid", api.getPbftMarketOrderByID)
 	mux.HandleFunc("/walletpbft/getmarketordersfromaccount", api.getPbftMarketOrdersFromAccount)
 	mux.HandleFunc("/walletpbft/getmarketpricebypair", api.getPbftMarketPriceByPair)
-	mux.HandleFunc("/walletpbft/listexchanges", api.listExchanges)
+	mux.HandleFunc("/walletpbft/listexchanges", api.getPbftExchanges)
 	mux.HandleFunc("/walletpbft/getdelegatedresourcev2", api.getPbftDelegatedResourceV2)
 	mux.HandleFunc("/walletpbft/getdelegatedresourceaccountindexv2", api.getPbftDelegatedResourceAccountIndexV2)
 	mux.HandleFunc("/walletpbft/estimateenergy", api.estimateEnergy)
@@ -157,6 +157,14 @@ func (api *API) getSolidMarketPriceByPair(w http.ResponseWriter, r *http.Request
 
 func (api *API) getPbftMarketPriceByPair(w http.ResponseWriter, r *http.Request) {
 	api.handleGetMarketPriceByPair(w, r, api.pbftBoundNum)
+}
+
+func (api *API) getSolidExchanges(w http.ResponseWriter, r *http.Request) {
+	api.handleListExchanges(w, r, api.solidBoundNum)
+}
+
+func (api *API) getPbftExchanges(w http.ResponseWriter, r *http.Request) {
+	api.handleListExchanges(w, r, api.pbftBoundNum)
 }
 
 func (api *API) getSolidDelegatedResourceV2(w http.ResponseWriter, r *http.Request) {

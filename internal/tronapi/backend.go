@@ -230,6 +230,7 @@ type Backend interface {
 
 	// Exchange queries
 	ListExchanges() ([]*corepb.Exchange, error)
+	ListExchangesAt(blockNum uint64) ([]*corepb.Exchange, error)
 
 	// Brokerage
 	GetBrokerageInfo(addr common.Address) int64

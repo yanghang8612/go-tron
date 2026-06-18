@@ -707,7 +707,12 @@ Status:
   through `SystemMarket` history at the solid/PBFT bound instead of live-head
   market rows. Backend coverage writes market order/account-order/price-list
   rows through temporal `SystemMarket` history and verifies block-1/block-2
-  as-of reads diverge.
+  as-of reads diverge. HTTP solidity/PBFT `listexchanges` and gRPC
+  `WalletSolidity.ListExchanges` now dispatch through `SystemExchange` history
+  at the bound; the backend reads `latest_exchange_num` and
+  `allow_same_token_name` from the same historical dynamic-property snapshot so
+  pre-fork reads enumerate V1 exchanges and post-fork reads enumerate V2
+  exchanges, matching java-tron's final-store selection.
 - Backend-level cold state-domain snapshot coverage now also records
   `GetAccountResourceAt` and `GetRewardAt` answers before hot history pruning,
   deletes the hot StateDomainChange/StateTxRange rows for the covered blocks,
