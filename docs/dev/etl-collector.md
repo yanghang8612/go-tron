@@ -92,10 +92,12 @@ writes to collector-backed loads.
   coverage, and verification rebuilds address/topic postings from the active
   event-log segments before trusting the sidecar, so stage-status automation
   can compare indexed cold log coverage with the verified chain `Finish`
-  boundary.
+  boundary. Filtered cold reads can compose adjacent `event-log-index`
+  sidecars across a query range, so unrelated segment files can be skipped even
+  when no single index sidecar spans the full request.
   `TronBackend.GetLogs` uses it when checker-verified manifest coverage fully
   spans the query range; broader global/recsplit-style address/topic point
-  indexes remain follow-up work.
+  indexes beyond segment-start fanout remain follow-up work.
 - `TronBackend.GetLogs` consumes those section-bloom rows as an optional
   prefilter for address/topic-constrained log queries. Missing or malformed
   bloom rows are treated as unknown and fall back to the pre-existing
@@ -247,8 +249,8 @@ The same flags are accepted by `snapshot bootstrap`, `snapshot build-freezer`,
 
 ## Migration Targets
 
-- global/recsplit-style event-log address/topic accessors beyond segment-local
-  postings
+- global/recsplit-style event-log address/topic point accessors beyond
+  segment-start fanout and segment-local postings
 - any future RPC index build where input order follows block execution rather
   than target DB key order
 

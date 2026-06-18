@@ -833,50 +833,101 @@ func (m *Manager) IterateEventLogs(fromBlock, toBlock uint64, filter EventLogFil
 
 func (m *Manager) eventLogRefsForQuery(manifest *Manifest, fromBlock, toBlock uint64, filter EventLogFilter) ([]SegmentRef, error) {
 	refs := eventLogRefs(manifest)
-	if !eventLogFilterHasLookupKey(filter) {
+	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
+	if err != nil {
+		return nil, err
+	}
+	if !indexed {
 		return refs, nil
 	}
-	for _, indexRef := range eventLogIndexRefs(manifest) {
-		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
+	candidates := eventLogIndexCandidateStartSet(plans)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	out := make([]SegmentRef, 0, len(candidates))
+	for _, ref := range refs {
+		if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
 			continue
+		}
+		if _, ok := candidates[ref.FromTxNum]; ok {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+type eventLogIndexQueryPlan struct {
+	starts []uint64
+}
+
+func (m *Manager) eventLogIndexQueryPlans(manifest *Manifest, refs []SegmentRef, fromBlock, toBlock uint64, filter EventLogFilter) ([]eventLogIndexQueryPlan, bool, error) {
+	if !eventLogFilterHasLookupKey(filter) {
+		return nil, false, nil
+	}
+	nextBlock := fromBlock
+	var plans []eventLogIndexQueryPlan
+	for _, indexRef := range eventLogIndexRefs(manifest) {
+		if indexRef.ToTxNum < nextBlock {
+			continue
+		}
+		if indexRef.FromTxNum > nextBlock {
+			break
+		}
+		queryFrom := max(nextBlock, indexRef.FromTxNum)
+		queryTo := min(toBlock, indexRef.ToTxNum)
+		if queryTo < queryFrom {
+			continue
+		}
+		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
+			return nil, false, err
 		}
 		index, err := OpenEventLogIndexSegment(m.dir, indexRef)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		starts, used, lookupErr := index.CandidateSegmentStarts(filter)
 		closeErr := index.Close()
 		if lookupErr != nil {
-			return nil, lookupErr
+			return nil, false, lookupErr
 		}
 		if closeErr != nil {
-			return nil, closeErr
+			return nil, false, closeErr
 		}
 		if !used {
-			continue
+			return nil, false, nil
 		}
-		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, fromBlock, toBlock, filter, starts); err != nil {
-			return nil, err
+		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, refs, queryFrom, queryTo, filter, starts); err != nil {
+			return nil, false, err
 		}
-		if len(starts) == 0 {
-			return nil, nil
+		plans = append(plans, eventLogIndexQueryPlan{
+			starts: starts,
+		})
+		if queryTo >= toBlock {
+			return plans, true, nil
 		}
-		candidates := make(map[uint64]struct{}, len(starts))
-		for _, start := range starts {
+		if queryTo == ^uint64(0) {
+			break
+		}
+		nextBlock = queryTo + 1
+	}
+	return nil, false, nil
+}
+
+func eventLogIndexCandidateStartSet(plans []eventLogIndexQueryPlan) map[uint64]struct{} {
+	count := 0
+	for _, plan := range plans {
+		count += len(plan.starts)
+	}
+	if count == 0 {
+		return nil
+	}
+	candidates := make(map[uint64]struct{}, count)
+	for _, plan := range plans {
+		for _, start := range plan.starts {
 			candidates[start] = struct{}{}
 		}
-		out := make([]SegmentRef, 0, len(starts))
-		for _, ref := range refs {
-			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
-				continue
-			}
-			if _, ok := candidates[ref.FromTxNum]; ok {
-				out = append(out, ref)
-			}
-		}
-		return out, nil
 	}
-	return refs, nil
+	return candidates
 }
 
 func (m *Manager) EventLogRangeCovered(fromBlock, toBlock uint64) (bool, error) {
@@ -927,14 +978,25 @@ func (m *Manager) EventLogIndexedRangeCovered(fromBlock, toBlock uint64) (bool, 
 	if err != nil || manifest == nil {
 		return false, err
 	}
+	refs := eventLogRefs(manifest)
+	next := fromBlock
 	for _, indexRef := range eventLogIndexRefs(manifest) {
-		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
+		if indexRef.ToTxNum < next {
 			continue
 		}
-		if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, eventLogRefs(manifest)); err != nil {
+		if indexRef.FromTxNum > next {
+			return false, nil
+		}
+		if err := verifyEventLogIndexSegmentAgainstEventLogs(m.dir, indexRef, refs); err != nil {
 			return false, err
 		}
-		return true, nil
+		if indexRef.ToTxNum >= toBlock {
+			return true, nil
+		}
+		if indexRef.ToTxNum == ^uint64(0) {
+			return false, nil
+		}
+		next = indexRef.ToTxNum + 1
 	}
 	return false, nil
 }
@@ -953,40 +1015,17 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 	if err != nil || manifest == nil {
 		return false, err
 	}
-	for _, indexRef := range eventLogIndexRefs(manifest) {
-		if indexRef.FromTxNum > fromBlock || indexRef.ToTxNum < toBlock {
-			continue
-		}
-		if err := CheckEventLogIndexSegment(m.dir, indexRef); err != nil {
-			return false, err
-		}
-		index, err := OpenEventLogIndexSegment(m.dir, indexRef)
-		if err != nil {
-			return false, err
-		}
-		starts, used, lookupErr := index.CandidateSegmentStarts(filter)
-		closeErr := index.Close()
-		if lookupErr != nil {
-			return false, lookupErr
-		}
-		if closeErr != nil {
-			return false, closeErr
-		}
-		if !used {
-			continue
-		}
-		if err := verifyEventLogIndexCandidatesForFilter(m.dir, indexRef, eventLogRefs(manifest), fromBlock, toBlock, filter, starts); err != nil {
-			return false, err
-		}
-		if len(starts) == 0 {
+	refs := eventLogRefs(manifest)
+	plans, indexed, err := m.eventLogIndexQueryPlans(manifest, refs, fromBlock, toBlock, filter)
+	if err != nil {
+		return false, err
+	}
+	if indexed {
+		candidateStarts := eventLogIndexCandidateStartSet(plans)
+		if len(candidateStarts) == 0 {
 			return true, nil
 		}
-		candidateStarts := make(map[uint64]struct{}, len(starts))
-		for _, start := range starts {
-			candidateStarts[start] = struct{}{}
-		}
-		seen := make(map[uint64]struct{}, len(starts))
-		for _, ref := range eventLogRefs(manifest) {
+		for _, ref := range refs {
 			if ref.ToTxNum < fromBlock || ref.FromTxNum > toBlock {
 				continue
 			}
@@ -995,15 +1034,6 @@ func (m *Manager) EventLogRangeCoveredForFilter(fromBlock, toBlock uint64, filte
 			}
 			if err := CheckEventLogSegment(m.dir, ref); err != nil {
 				return false, err
-			}
-			seen[ref.FromTxNum] = struct{}{}
-		}
-		for start := range candidateStarts {
-			if start < fromBlock || start > toBlock {
-				continue
-			}
-			if _, ok := seen[start]; !ok {
-				return false, fmt.Errorf("snapshots: event-log-index %q points to missing event-log segment starting at block %d", indexRef.Path, start)
 			}
 		}
 		return true, nil

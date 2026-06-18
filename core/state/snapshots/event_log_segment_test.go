@@ -382,6 +382,92 @@ func TestEventLogManagerUsesGlobalIndexToSkipUnrelatedSegments(t *testing.T) {
 	}
 }
 
+func TestEventLogManagerUsesAdjacentGlobalIndexesToSkipUnrelatedSegments(t *testing.T) {
+	dir := t.TempDir()
+	db := rawdb.NewMemoryChainDB()
+	addrA := eventLogTestAddress(0x52)
+	addrB := eventLogTestAddress(0x62)
+	topicA := common.Hash{0xa7}
+	topicB := common.Hash{0xb8}
+	block1, infos1 := eventLogTestBlock(t, 1, []*corepb.TransactionInfo_Log{
+		{Address: addrA, Topics: [][]byte{topicA[:]}, Data: []byte{0x01}},
+	})
+	block2, infos2 := eventLogTestBlock(t, 2, []*corepb.TransactionInfo_Log{
+		{Address: addrB, Topics: [][]byte{topicB[:]}, Data: []byte{0x02}},
+	})
+	block3, infos3 := eventLogTestBlock(t, 3, []*corepb.TransactionInfo_Log{
+		{Address: addrA, Topics: [][]byte{topicA[:]}, Data: []byte{0x03}},
+	})
+	for _, block := range []*coretypes.Block{block1, block2, block3} {
+		if err := rawdb.WriteBlock(db, block); err != nil {
+			t.Fatalf("WriteBlock %d: %v", block.Number(), err)
+		}
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 1, infos1); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 1: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 2, infos2); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 2: %v", err)
+	}
+	if err := rawdb.WriteTransactionInfosByBlock(db, 3, infos3); err != nil {
+		t.Fatalf("WriteTransactionInfosByBlock 3: %v", err)
+	}
+	ref1, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-1-1.seg", 1, 1)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 1: %v", err)
+	}
+	ref2, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-2-2.seg", 2, 2)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 2: %v", err)
+	}
+	ref3, err := BuildEventLogSegmentFromChain(db, dir, "log/event-log-3-3.seg", 3, 3)
+	if err != nil {
+		t.Fatalf("BuildEventLogSegmentFromChain 3: %v", err)
+	}
+	indexRef1, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref1}, "log/event-log-index-1-1.idx")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments 1: %v", err)
+	}
+	indexRef2, err := BuildEventLogIndexSegmentFromEventLogSegments(dir, []SegmentRef{ref2, ref3}, "log/event-log-index-2-3.idx")
+	if err != nil {
+		t.Fatalf("BuildEventLogIndexSegmentFromEventLogSegments 2-3: %v", err)
+	}
+	if err := PublishManifest(dir, NewManifest(0, 0, []SegmentRef{ref1, ref2, ref3, indexRef1, indexRef2})); err != nil {
+		t.Fatalf("PublishManifest: %v", err)
+	}
+	mgr, err := OpenManager(dir)
+	if err != nil {
+		t.Fatalf("OpenManager: %v", err)
+	}
+	covered, err := mgr.EventLogIndexedRangeCovered(1, 3)
+	if err != nil || !covered {
+		t.Fatalf("EventLogIndexedRangeCovered adjacent indexes = %v/%v, want true/nil", covered, err)
+	}
+	if err := os.Remove(filepath.Join(dir, ref2.Path)); err != nil {
+		t.Fatalf("remove unrelated event-log segment: %v", err)
+	}
+
+	filter := EventLogFilter{
+		Addresses: []common.Address{common.BytesToAddress(addrA)},
+		Topics:    [][]common.Hash{{topicA}},
+	}
+	covered, err = mgr.EventLogRangeCoveredForFilter(1, 3, filter)
+	if err != nil || !covered {
+		t.Fatalf("EventLogRangeCoveredForFilter adjacent indexes = %v/%v, want true/nil", covered, err)
+	}
+	var rows []EventLog
+	if err := mgr.IterateEventLogs(1, 3, filter, func(row EventLog) (bool, error) {
+		rows = append(rows, row)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateEventLogs adjacent indexes: %v", err)
+	}
+	if len(rows) != 2 || rows[0].BlockNum != 1 || rows[1].BlockNum != 3 ||
+		!bytes.Equal(rows[0].Log.GetData(), []byte{0x01}) || !bytes.Equal(rows[1].Log.GetData(), []byte{0x03}) {
+		t.Fatalf("indexed rows = %+v, want block1 and block3", rows)
+	}
+}
+
 func TestBuildEventLogIndexSegmentWithOptionsUsesETLScratch(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "snapshot")

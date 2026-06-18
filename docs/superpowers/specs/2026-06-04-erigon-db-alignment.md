@@ -1120,14 +1120,18 @@ Status:
   `ChainDB`, and
   `TronBackend.GetLogs` now pushes address/topic filters into cold coverage
   checks so index-covered archive reads verify only candidate immutable segments
-  before streaming cold logs. Backend and JSON-RPC `eth_getLogs` regressions
-  delete hot `TransactionRet` rows and unrelated cold segment files to prove
-  filtered archive reads are served through the cold index path. The API falls
-  back to the hot scan on coverage gaps and surfaces checker failures as archive
-  data errors. `gtron snapshot event-log-index-stats` now gives operators a
-  readonly profile of active event-log-index sidecars, including address/topic
-  key counts, postings, average postings per key, single- versus multi-segment
-  key counts, and worst-case candidate segment fanout.
+  before streaming cold logs. Filtered manager queries now compose adjacent
+  `event-log-index` sidecars across the request range, so a query that spans
+  multiple immutable index passes can still skip unrelated event-log segment
+  files instead of falling back to a full cold scan. Backend and JSON-RPC
+  `eth_getLogs` regressions delete hot `TransactionRet` rows and unrelated cold
+  segment files to prove filtered archive reads are served through the cold
+  index path. The API falls back to the hot scan on coverage gaps and surfaces
+  checker failures as archive data errors. `gtron snapshot
+  event-log-index-stats` now gives operators a readonly profile of active
+  event-log-index sidecars, including address/topic key counts, postings,
+  average postings per key, single- versus multi-segment key counts, and
+  worst-case candidate segment fanout.
 - `gtron snapshot prune-retired` now reclaims physical snapshot files listed in
   the manifest's retired segment set after active segment preflight succeeds,
   without rewriting the signed manifest/catalog view.
