@@ -1489,6 +1489,8 @@ func (ss *SyncService) logStagedBodyReadyDrainLimit(ready syncdl.StagedBodyReady
 		syncLog.Warn("Read staged block for sync bodies ready limit failed", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash, "err", ready.ReadError)
 	case syncdl.StagedBodyReadyLimitStagedMissing:
 		syncLog.Warn("Ignoring sync bodies ready stage without matching staged block", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash)
+	case syncdl.StagedBodyReadyLimitNumberMismatch:
+		syncLog.Warn("Ignoring sync bodies ready stage block-number mismatch", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash, "stagedBlock", ready.StagedRow.Number, "stagedHash", ready.StagedHash)
 	case syncdl.StagedBodyReadyLimitHashMismatch:
 		syncLog.Warn("Ignoring sync bodies ready stage hash mismatch", "block", ready.StageRow.BlockNum, "hash", ready.StageRow.BlockHash, "stagedHash", ready.StagedHash)
 	}

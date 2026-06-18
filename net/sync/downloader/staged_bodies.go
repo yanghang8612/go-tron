@@ -74,6 +74,7 @@ const (
 	StagedBodyReadyLimitStale
 	StagedBodyReadyLimitReadError
 	StagedBodyReadyLimitStagedMissing
+	StagedBodyReadyLimitNumberMismatch
 	StagedBodyReadyLimitHashMismatch
 	StagedBodyReadyLimitValid
 )
@@ -324,6 +325,10 @@ func ValidateStagedBodyReadyDrainLimit(next uint64, row rawdb.StageProgress, hav
 	}
 	if !haveStaged {
 		result.Status = StagedBodyReadyLimitStagedMissing
+		return result
+	}
+	if staged.Number != row.BlockNum {
+		result.Status = StagedBodyReadyLimitNumberMismatch
 		return result
 	}
 	if staged.Hash != row.BlockHash {

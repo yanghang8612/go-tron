@@ -1566,6 +1566,7 @@ func TestShouldRefreshStagedBodyReadyBeforeDrain(t *testing.T) {
 		{StagedBodyReadyLimitStale, true},
 		{StagedBodyReadyLimitReadError, true},
 		{StagedBodyReadyLimitStagedMissing, true},
+		{StagedBodyReadyLimitNumberMismatch, true},
 		{StagedBodyReadyLimitHashMismatch, true},
 		{StagedBodyReadyLimitValid, false},
 	}

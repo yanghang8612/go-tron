@@ -427,6 +427,7 @@ func TestValidateStagedBodyReadyDrainLimit(t *testing.T) {
 		{name: "stale", next: 8, row: row, haveRow: true, status: StagedBodyReadyLimitStale},
 		{name: "read error", next: 7, row: row, haveRow: true, readErr: readErr, status: StagedBodyReadyLimitReadError},
 		{name: "staged missing", next: 7, row: row, haveRow: true, status: StagedBodyReadyLimitStagedMissing},
+		{name: "number mismatch", next: 7, row: row, haveRow: true, staged: rawdb.SyncStagedBlockRow{Number: 8, Hash: row.BlockHash}, haveStaged: true, status: StagedBodyReadyLimitNumberMismatch},
 		{name: "hash mismatch", next: 7, row: row, haveRow: true, staged: rawdb.SyncStagedBlockRow{Number: 7, Hash: tcommon.Hash{0xff}}, haveStaged: true, status: StagedBodyReadyLimitHashMismatch},
 		{name: "valid", next: 7, row: row, haveRow: true, staged: staged, haveStaged: true, status: StagedBodyReadyLimitValid, valid: true, limit: 7},
 	}

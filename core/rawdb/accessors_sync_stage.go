@@ -135,7 +135,7 @@ func WriteSyncStagedBlockRawAndProgress(db ethdb.KeyValueStore, block *types.Blo
 	if ok {
 		result.HadPreviousProgress = true
 		result.PreviousProgress = row
-		if row.BlockNum > result.Number {
+		if row.HasBlockHash && row.BlockNum > result.Number {
 			if err := db.Put(syncStagedBlockKey(result.Number), data); err != nil {
 				result.StageError = err
 				return result
