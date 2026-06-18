@@ -230,6 +230,10 @@ type StateDomainChangeColdKeyHistory interface {
 	IterateStateDomainChangesByKey(fromTxNum, toTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
 }
 
+type StateDomainChangeColdPrefixHistory interface {
+	IterateStateDomainChangesByPrefix(fromTxNum, toTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error
+}
+
 type StateCodeColdHistory interface {
 	GetCode(hash tcommon.Hash, txNum uint64) ([]byte, bool, error)
 }
@@ -369,6 +373,50 @@ func (r *PersistentHistoryReader) AccountKVAt(owner tcommon.Address, domain kvdo
 		return nil, false, err
 	}
 	return r.readStateAccountKVAsOf(owner, domain, key, blockNum, r.headNum)
+}
+
+func (r *PersistentHistoryReader) AccountKVPrefixAt(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, blockNum uint64, fn func(key, value []byte) (bool, error)) error {
+	if r == nil {
+		return nil
+	}
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
+	}
+	if blockNum >= r.headNum {
+		generation, _, err := r.hotLatest().KVGeneration(owner)
+		if err != nil {
+			return err
+		}
+		return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, fn)
+	}
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrStateDomainHistoryUnavailable
+	}
+	return r.readStateAccountKVPrefixAsOf(owner, domain, prefix, blockNum, r.headNum, fn)
+}
+
+func (r *PersistentHistoryReader) KVLatestPrefixAt(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, blockNum uint64, fn func(key, value []byte) (bool, error)) error {
+	if r == nil {
+		return nil
+	}
+	if !kvdomains.IsRegistered(domain) {
+		return fmt.Errorf("history account kv: unregistered domain %#04x", uint16(domain))
+	}
+	if blockNum >= r.headNum {
+		return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, fn)
+	}
+	ok, err := r.stateDomainHistoryAvailable()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrStateDomainHistoryUnavailable
+	}
+	return r.readStateKVPrefixAsOf(owner, generation, domain, prefix, blockNum, r.headNum, fn)
 }
 
 // accountAndCode walks the addr inverse index once and reconstructs both
@@ -681,8 +729,166 @@ func (r *PersistentHistoryReader) readStateAccountKVAsOf(owner tcommon.Address, 
 	return append([]byte(nil), value...), exists, nil
 }
 
+func (r *PersistentHistoryReader) readStateKVPrefixAsOf(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, targetBlock, headBlock uint64, fn func(key, value []byte) (bool, error)) error {
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return err
+	}
+	return r.readStateKVPrefixAsOfTxNum(owner, generation, domain, prefix, targetTxNum, headTxNum, fn)
+}
+
+func (r *PersistentHistoryReader) readStateKVPrefixAsOfTxNum(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, targetTxNum, headTxNum uint64, fn func(key, value []byte) (bool, error)) error {
+	entries := make(map[string][]byte)
+	if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+		return err
+	}
+	if targetTxNum < headTxNum {
+		changes, err := r.collectStateDomainChangesByPrefix(targetTxNum, headTxNum, owner, generation, domain, prefix)
+		if err != nil {
+			return err
+		}
+		for i := len(changes) - 1; i >= 0; i-- {
+			change := changes[i]
+			if change.PrevExists {
+				entries[string(change.Key)] = append([]byte(nil), change.Prev...)
+			} else {
+				delete(entries, string(change.Key))
+			}
+		}
+	}
+	return iterateHistoryStateKVEntries(entries, fn)
+}
+
+func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOf(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, targetBlock, headBlock uint64, fn func(key, value []byte) (bool, error)) error {
+	targetTxNum, err := r.stateTxNumAtBlockEnd(targetBlock)
+	if err != nil {
+		return err
+	}
+	headTxNum, err := r.stateTxNumAtBlockEnd(headBlock)
+	if err != nil {
+		return err
+	}
+	return r.readStateAccountKVPrefixAsOfTxNum(owner, domain, prefix, targetTxNum, headTxNum, fn)
+}
+
+func (r *PersistentHistoryReader) readStateAccountKVPrefixAsOfTxNum(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, targetTxNum, headTxNum uint64, fn func(key, value []byte) (bool, error)) error {
+	if r.coldHistory == nil {
+		cfg, err := stateDomainHistoryConfig()
+		if err != nil {
+			return err
+		}
+		if cfg.IterateHotAccountKVPrefixAsOf == nil {
+			return ErrStateDomainHistoryUnavailable
+		}
+		return cfg.IterateHotAccountKVPrefixAsOf(r.db, owner, domain, prefix, targetTxNum, headTxNum, fn)
+	}
+	generation, _, err := r.hotLatest().KVGeneration(owner)
+	if err != nil {
+		return err
+	}
+	entries := make(map[string][]byte)
+	if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+		return err
+	}
+	upperTxNum := headTxNum
+	for targetTxNum < upperTxNum {
+		changes, err := r.collectStateAccountKVPrefixChanges(targetTxNum, upperTxNum, owner, generation, domain, prefix)
+		if err != nil {
+			return err
+		}
+		if len(changes) == 0 {
+			break
+		}
+		generationChanged := false
+		for i := len(changes) - 1; i >= 0; i-- {
+			change := changes[i]
+			switch {
+			case historyStateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix):
+				if change.PrevExists {
+					entries[string(change.Key)] = append([]byte(nil), change.Prev...)
+				} else {
+					delete(entries, string(change.Key))
+				}
+			case historyStateDomainChangeMatchesKVGeneration(change, owner):
+				generation, _, err = r.readStateKVGenerationAsOfTxNum(owner, previousTxNum(change.TxNum), headTxNum)
+				if err != nil {
+					return err
+				}
+				entries = make(map[string][]byte)
+				if err := r.readHotStateKVLatestPrefixInto(owner, generation, domain, prefix, entries); err != nil {
+					return err
+				}
+				upperTxNum = previousTxNum(change.TxNum)
+				generationChanged = true
+			}
+			if generationChanged {
+				break
+			}
+		}
+		if !generationChanged {
+			break
+		}
+	}
+	return iterateHistoryStateKVEntries(entries, fn)
+}
+
+type hotStateLatestPrefixReader interface {
+	KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error
+}
+
+func (r *PersistentHistoryReader) readHotStateKVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	if latest, ok := r.hotLatest().(hotStateLatestPrefixReader); ok {
+		return latest.KVLatestPrefix(owner, generation, domain, prefix, fn)
+	}
+	if r == nil || r.db == nil {
+		return nil
+	}
+	return rawdb.IterateStateKVLatest(r.db, owner, generation, domain, prefix, fn)
+}
+
+func (r *PersistentHistoryReader) readHotStateKVLatestPrefixInto(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, entries map[string][]byte) error {
+	return r.readHotStateKVLatestPrefix(owner, generation, domain, prefix, func(key, value []byte) (bool, error) {
+		entries[string(key)] = append([]byte(nil), value...)
+		return true, nil
+	})
+}
+
+func iterateHistoryStateKVEntries(entries map[string][]byte, fn func(key, value []byte) (bool, error)) error {
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cont, err := fn([]byte(key), append([]byte(nil), entries[key]...))
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	return nil
+}
+
 func (r *PersistentHistoryReader) collectStateAccountKVChanges(targetTxNum, headTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte) ([]*rawdb.StateDomainChange, error) {
 	kvChanges, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVLatest, owner, generation, domain, key)
+	if err != nil {
+		return nil, err
+	}
+	generationChanges, err := r.collectStateDomainChangesByKey(targetTxNum, headTxNum, rawdb.StateFlatDomainKVGeneration, owner, 0, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	return mergeStateDomainChangeSets(kvChanges, generationChanges), nil
+}
+
+func (r *PersistentHistoryReader) collectStateAccountKVPrefixChanges(targetTxNum, headTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte) ([]*rawdb.StateDomainChange, error) {
+	kvChanges, err := r.collectStateDomainChangesByPrefix(targetTxNum, headTxNum, owner, generation, domain, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -742,6 +948,49 @@ func (r *PersistentHistoryReader) collectStateDomainChangesByKey(targetTxNum, he
 	return changes, nil
 }
 
+func (r *PersistentHistoryReader) collectStateDomainChangesByPrefix(targetTxNum, headTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte) ([]*rawdb.StateDomainChange, error) {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil, nil
+	}
+	match := func(change *rawdb.StateDomainChange) bool {
+		return historyStateDomainChangeMatchesKVLatestPrefix(change, owner, generation, domain, prefix)
+	}
+	seen := make(map[stateDomainChangeKey]struct{})
+	var changes []*rawdb.StateDomainChange
+	add := func(change *rawdb.StateDomainChange) error {
+		if change == nil || change.TxNum <= targetTxNum || change.TxNum > headTxNum || !match(change) {
+			return nil
+		}
+		key := makeStateDomainChangeKey(change)
+		if _, ok := seen[key]; ok {
+			return nil
+		}
+		seen[key] = struct{}{}
+		changes = append(changes, cloneHistoryDomainChange(change))
+		return nil
+	}
+	if err := r.iterateHotStateDomainChangesByPrefix(targetTxNum, headTxNum, owner, generation, domain, prefix, func(change *rawdb.StateDomainChange) (bool, error) {
+		return true, add(change)
+	}); err != nil {
+		return nil, err
+	}
+	if r.coldHistory != nil && targetTxNum != ^uint64(0) {
+		if prefixed, ok := r.coldHistory.(StateDomainChangeColdPrefixHistory); ok {
+			if err := prefixed.IterateStateDomainChangesByPrefix(targetTxNum+1, headTxNum, owner, generation, domain, prefix, func(change *rawdb.StateDomainChange) (bool, error) {
+				return true, add(change)
+			}); err != nil {
+				return nil, err
+			}
+		} else if err := r.coldHistory.IterateStateDomainChanges(targetTxNum+1, headTxNum, func(change *rawdb.StateDomainChange) (bool, error) {
+			return true, add(change)
+		}); err != nil {
+			return nil, err
+		}
+	}
+	sortStateDomainChanges(changes)
+	return changes, nil
+}
+
 func (r *PersistentHistoryReader) iterateHotStateDomainChangesByKey(targetTxNum, headTxNum uint64, flatDomain rawdb.StateFlatDomain, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, key []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
 	if r == nil || targetTxNum >= headTxNum {
 		return nil
@@ -754,6 +1003,35 @@ func (r *PersistentHistoryReader) iterateHotStateDomainChangesByKey(targetTxNum,
 		return ErrStateDomainHistoryUnavailable
 	}
 	return cfg.IterateHotHistoryChanges(r.db, targetTxNum, headTxNum, flatDomain, owner, generation, domain, key, fn)
+}
+
+func (r *PersistentHistoryReader) iterateHotStateDomainChangesByPrefix(targetTxNum, headTxNum uint64, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(*rawdb.StateDomainChange) (bool, error)) error {
+	if r == nil || targetTxNum >= headTxNum {
+		return nil
+	}
+	cfg, err := stateDomainHistoryConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.IterateHotHistoryPrefix == nil {
+		return ErrStateDomainHistoryUnavailable
+	}
+	return cfg.IterateHotHistoryPrefix(r.db, targetTxNum, headTxNum, owner, generation, domain, prefix, fn)
+}
+
+func historyStateDomainChangeMatchesKVLatestPrefix(change *rawdb.StateDomainChange, owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte) bool {
+	return change != nil &&
+		change.FlatDomain == rawdb.StateFlatDomainKVLatest &&
+		change.Owner == owner &&
+		change.Generation == generation &&
+		change.Domain == domain &&
+		bytes.HasPrefix(change.Key, prefix)
+}
+
+func historyStateDomainChangeMatchesKVGeneration(change *rawdb.StateDomainChange, owner tcommon.Address) bool {
+	return change != nil &&
+		change.FlatDomain == rawdb.StateFlatDomainKVGeneration &&
+		change.Owner == owner
 }
 
 func mergeStateDomainChangeSets(sets ...[]*rawdb.StateDomainChange) []*rawdb.StateDomainChange {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	tcommon "github.com/tronprotocol/go-tron/common"
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
 	"github.com/tronprotocol/go-tron/core/state/snapshots"
 )
@@ -39,6 +40,14 @@ func (r registryHotStateLatestReader) KVLatest(owner tcommon.Address, generation
 		return nil, false, ErrStateDomainHistoryUnavailable
 	}
 	return cfg.ReadHotKVLatest(r.db, owner, generation, domain, key)
+}
+
+func (r registryHotStateLatestReader) KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
+	iteratee, ok := r.db.(ethdb.Iteratee)
+	if !ok {
+		return ErrStateDomainHistoryUnavailable
+	}
+	return rawdb.IterateStateKVLatest(iteratee, owner, generation, domain, prefix, fn)
 }
 
 func (r registryHotStateLatestReader) KVGeneration(owner tcommon.Address) (uint64, bool, error) {

@@ -1,8 +1,6 @@
 package state
 
 import (
-	"fmt"
-
 	tcommon "github.com/tronprotocol/go-tron/common"
 	statedomains "github.com/tronprotocol/go-tron/core/state/domains"
 	"github.com/tronprotocol/go-tron/core/state/kvdomains"
@@ -65,9 +63,15 @@ func (v historicalLatestView) KVLatest(owner tcommon.Address, generation uint64,
 }
 
 func (v historicalLatestView) DomainIterate(owner tcommon.Address, domain kvdomains.KVDomain, prefix []byte, fn statedomains.IterateFunc) error {
-	return fmt.Errorf("%w: historical prefix iteration for owner %x domain %#04x prefix %x", ErrStateDomainHistoryUnavailable, owner, uint16(domain), prefix)
+	if v.reader == nil {
+		return nil
+	}
+	return v.reader.AccountKVPrefixAt(owner, domain, prefix, v.blockNum, fn)
 }
 
 func (v historicalLatestView) KVLatestPrefix(owner tcommon.Address, generation uint64, domain kvdomains.KVDomain, prefix []byte, fn func(key, value []byte) (bool, error)) error {
-	return fmt.Errorf("%w: historical prefix iteration for owner %x generation %d domain %#04x prefix %x", ErrStateDomainHistoryUnavailable, owner, generation, uint16(domain), prefix)
+	if v.reader == nil {
+		return nil
+	}
+	return v.reader.KVLatestPrefixAt(owner, generation, domain, prefix, v.blockNum, fn)
 }

@@ -268,6 +268,126 @@ func TestPersistentHistoryReaderReadsAccountAndStorageFromColdStateDomainHistory
 	}
 }
 
+func TestPersistentHistoryReaderAccountKVPrefixAtUsesStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x77)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+		mustSetAccountKV(t, s, owner, domain, "other/c", "c1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+
+	r := f.reader()
+	at1 := collectHistoryAccountKVPrefix(t, r, owner, domain, "reward/", 1)
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("block 1 prefix = %v, want reward/a=a1 reward/b=b1", at1)
+	}
+	at2 := collectHistoryAccountKVPrefix(t, r, owner, domain, "reward/", 2)
+	if len(at2) != 2 || at2["reward/a"] != "a2" || at2["reward/c"] != "c2" {
+		t.Fatalf("block 2 prefix = %v, want reward/a=a2 reward/c=c2", at2)
+	}
+}
+
+func TestHistoricalLatestViewIteratesAccountKVPrefixAtBound(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x78)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+
+	f.state.SetHistoricalLatestView(f.reader(), 1)
+	at1 := collectStateDBAccountKVPrefix(t, f.state, owner, domain, "reward/")
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("historical latest view prefix = %v, want block 1 values", at1)
+	}
+}
+
+func TestPersistentHistoryReaderAccountKVPrefixAtUsesColdStateDomainHistory(t *testing.T) {
+	f := newHistoryFixture(t)
+	owner := testAddr(0x79)
+	other := testAddr(0x7A)
+	domain := kvdomains.SystemReward
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a1")
+		mustSetAccountKV(t, s, owner, domain, "reward/b", "b1")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) {
+		mustSetAccountKV(t, s, owner, domain, "reward/a", "a2")
+		if err := s.DeleteAccountKV(owner, domain, []byte("reward/b")); err != nil {
+			t.Fatalf("DeleteAccountKV: %v", err)
+		}
+		mustSetAccountKV(t, s, owner, domain, "reward/c", "c2")
+	})
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) {
+		s.AddBalance(other, 1)
+	})
+
+	fromRange, ok, err := rawdb.ReadStateTxRange(f.disk, 1)
+	if err != nil || !ok {
+		t.Fatalf("read block 1 tx range: ok=%v err=%v", ok, err)
+	}
+	toRange, ok, err := rawdb.ReadStateTxRange(f.disk, f.head)
+	if err != nil || !ok {
+		t.Fatalf("read head tx range: ok=%v err=%v", ok, err)
+	}
+	dir := t.TempDir()
+	refs, err := statesnapshots.BuildStateDomainChangeHistorySegmentsFromDB(
+		f.disk,
+		dir,
+		fromRange.BeginTxNum,
+		toRange.EndTxNum,
+		"history/state-domain-change-prefix-1-3.seg",
+	)
+	if err != nil {
+		t.Fatalf("build cold state-domain history: %v", err)
+	}
+	if err := statesnapshots.PublishManifest(dir, statesnapshots.NewManifest(fromRange.BeginTxNum, toRange.EndTxNum, refs)); err != nil {
+		t.Fatalf("publish cold state-domain history: %v", err)
+	}
+	mgr, err := statesnapshots.OpenManager(dir)
+	if err != nil {
+		t.Fatalf("open snapshot manager: %v", err)
+	}
+
+	f.pruneHotStateDomainHistory()
+	hotOnly := NewPersistentHistoryReader(f.disk, nil, f.head)
+	if err := hotOnly.AccountKVPrefixAt(owner, domain, []byte("reward/"), 1, func(key, value []byte) (bool, error) {
+		return true, nil
+	}); !errors.Is(err, ErrStateDomainHistoryUnavailable) {
+		t.Fatalf("hot-only AccountKVPrefixAt after prune err = %v, want ErrStateDomainHistoryUnavailable", err)
+	}
+
+	cold := NewPersistentHistoryReaderWithColdHistory(f.disk, nil, f.head, mgr)
+	at1 := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", 1)
+	if len(at1) != 2 || at1["reward/a"] != "a1" || at1["reward/b"] != "b1" {
+		t.Fatalf("cold block 1 prefix = %v, want reward/a=a1 reward/b=b1", at1)
+	}
+	at2 := collectHistoryAccountKVPrefix(t, cold, owner, domain, "reward/", 2)
+	if len(at2) != 2 || at2["reward/a"] != "a2" || at2["reward/c"] != "c2" {
+		t.Fatalf("cold block 2 prefix = %v, want reward/a=a2 reward/c=c2", at2)
+	}
+}
+
 func TestPersistentHistoryReaderReadsCodeFromColdCodeDomain(t *testing.T) {
 	f := newHistoryFixture(t)
 	addr := testAddr(0x73)
@@ -1258,6 +1378,37 @@ type keyedColdHistoryCall struct {
 	key        string
 }
 
+func mustSetAccountKV(t *testing.T, s *StateDB, owner tcommon.Address, domain kvdomains.KVDomain, key, value string) {
+	t.Helper()
+	if err := s.SetAccountKV(owner, domain, []byte(key), []byte(value)); err != nil {
+		t.Fatalf("SetAccountKV(%s): %v", key, err)
+	}
+}
+
+func collectHistoryAccountKVPrefix(t *testing.T, r *PersistentHistoryReader, owner tcommon.Address, domain kvdomains.KVDomain, prefix string, blockNum uint64) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := r.AccountKVPrefixAt(owner, domain, []byte(prefix), blockNum, func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("AccountKVPrefixAt block %d prefix %q: %v", blockNum, prefix, err)
+	}
+	return out
+}
+
+func collectStateDBAccountKVPrefix(t *testing.T, s *StateDB, owner tcommon.Address, domain kvdomains.KVDomain, prefix string) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	if err := s.IterateAccountKV(owner, domain, []byte(prefix), func(key, value []byte) (bool, error) {
+		out[string(key)] = string(value)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("IterateAccountKV prefix %q: %v", prefix, err)
+	}
+	return out
+}
+
 type keyedColdHistoryStub struct {
 	changes       []*rawdb.StateDomainChange
 	keyedCalled   bool
@@ -1542,6 +1693,36 @@ func TestStateDB_RecreatedAccountKVAsOfDoesNotLeakOldGeneration(t *testing.T) {
 	}
 	if got, ok, err := f.state.GetAccountKVAsOf(addr, domain, keyB, 1, f.head); err != nil || !ok || string(got) != "b0" {
 		t.Errorf("archive GetAccountKVAsOf(keyB, 1) = %q ok=%v err=%v, want \"b0\"", got, ok, err)
+	}
+}
+
+func TestPersistentHistoryReaderAccountKVPrefixAtDoesNotLeakOldGeneration(t *testing.T) {
+	f := newHistoryFixture(t)
+	addr := testAddr(0x7B)
+	other := testAddr(0x7C)
+	domain := kvdomains.ContractRuntimeState
+
+	f.applyBlock(tcommon.Hash{0x01}, func(s *StateDB) {
+		s.AddBalance(addr, 100)
+		mustSetAccountKV(t, s, addr, domain, "slot/a", "a0")
+		mustSetAccountKV(t, s, addr, domain, "slot/b", "b0")
+	})
+	f.applyBlock(tcommon.Hash{0x02}, func(s *StateDB) { s.AddBalance(other, 1) })
+	f.applyBlock(tcommon.Hash{0x03}, func(s *StateDB) { s.SelfDestruct(addr) })
+	f.applyBlock(tcommon.Hash{0x04}, func(s *StateDB) {
+		s.AddBalance(addr, 999)
+		mustSetAccountKV(t, s, addr, domain, "slot/a", "a1")
+	})
+	f.applyBlock(tcommon.Hash{0x05}, func(s *StateDB) { s.AddBalance(other, 1) })
+
+	r := f.reader()
+	beforeDestroy := collectHistoryAccountKVPrefix(t, r, addr, domain, "slot/", 1)
+	if len(beforeDestroy) != 2 || beforeDestroy["slot/a"] != "a0" || beforeDestroy["slot/b"] != "b0" {
+		t.Fatalf("block 1 prefix = %v, want old generation values", beforeDestroy)
+	}
+	afterRecreate := collectHistoryAccountKVPrefix(t, r, addr, domain, "slot/", 4)
+	if len(afterRecreate) != 1 || afterRecreate["slot/a"] != "a1" {
+		t.Fatalf("block 4 prefix = %v, want only recreated generation slot/a=a1", afterRecreate)
 	}
 }
 
