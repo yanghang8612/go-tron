@@ -402,6 +402,12 @@ Status:
   commitment/finish rows from making restart diagnostics look more advanced
   than the applied pipeline. `SyncService` is left to orchestrate logging,
   pausing, ready-frontier refresh, and canonical insertion.
+- Imported-batch record/report scheduling now treats persisted sync-stage
+  progress as the boundary for throughput diagnostics: if the staged-body
+  delete or hash-bound `SyncImport`/`SyncExecution`/`SyncCommitment`/`SyncFinish`
+  write fails after canonical insertion, the downloader record plan stops
+  before stats/report emission so operators do not see an imported-segment
+  summary for a boundary that was not durably recorded.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

@@ -1,10 +1,12 @@
 package downloader
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/tronprotocol/go-tron/core/rawdb"
 	tsync "github.com/tronprotocol/go-tron/net/sync"
 )
 
@@ -108,6 +110,36 @@ func TestApplyImportedBatchRecordPlanSkipsReportWithoutStatsEmit(t *testing.T) {
 	}
 	if empty := ApplyImportedBatchRecordPlan(ImportedBatchRecordPlan{}, applier); len(empty.AppliedSteps) != 0 || empty.HasStats || empty.HasReport {
 		t.Fatalf("empty plan result = %+v, want empty", empty)
+	}
+}
+
+func TestApplyImportedBatchRecordPlanStopsAfterProgressWriteFailure(t *testing.T) {
+	progressErr := errors.New("progress write failed")
+	progress := ImportedBatchProgressPlan{OK: true, StatsBlocks: 2, StatsTransactions: 3, ReportHead: 9}
+	applier := &recordingImportedBatchRecordApplier{
+		progressApply: ImportedBatchProgressApplyResult{
+			HasWriteResult: true,
+			WriteResult:    rawdb.SyncImportProgressWriteResult{ProgressError: progressErr},
+		},
+		stats: ImportedBatchStatsRecordResult{
+			Emit:     true,
+			Snapshot: tsync.Snapshot{Blocks: 2, Txs: 3},
+		},
+		preparation: ImportedBatchReportPreparation{Remaining: 42},
+	}
+
+	got := ApplyImportedBatchRecordPlan(PlanImportedBatchRecord(progress, time.Millisecond), applier)
+	if !got.HasProgress || !got.ProgressApply.WriteFailed() || got.ProgressApply.WriteResult.ProgressError != progressErr {
+		t.Fatalf("progress apply = %+v, want write failure preserved", got.ProgressApply)
+	}
+	if !reflect.DeepEqual(got.AppliedSteps, []ImportedBatchRecordStepAction{ImportedBatchRecordApplyProgress}) {
+		t.Fatalf("applied steps = %+v, want progress only", got.AppliedSteps)
+	}
+	if !reflect.DeepEqual(applier.calls, []ImportedBatchRecordStepAction{ImportedBatchRecordApplyProgress}) {
+		t.Fatalf("applier calls = %+v, want progress only", applier.calls)
+	}
+	if got.HasStats || got.HasPreparation || got.HasReport || applier.reported {
+		t.Fatalf("record result after write failure = %+v reported=%v, want no stats/prep/report", got, applier.reported)
 	}
 }
 

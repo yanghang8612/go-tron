@@ -109,6 +109,9 @@ func ApplyImportedBatchRecordPlan(plan ImportedBatchRecordPlan, applier Imported
 			result.ProgressApply = applier.ApplyImportedBatchProgress(plan.Progress)
 			result.HasProgress = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.ProgressApply.WriteFailed() {
+				return result
+			}
 		case ImportedBatchRecordStats:
 			result.Stats = applier.RecordImportedBatchStats(plan.Progress.StatsBlocks, plan.Progress.StatsTransactions, plan.Elapsed)
 			result.HasStats = true

@@ -866,6 +866,12 @@ type ImportedBatchProgressApplyResult struct {
 	HasReadyRefresh   bool
 }
 
+// WriteFailed reports whether the imported-batch progress write failed after
+// canonical insertion accepted the staged-body prefix.
+func (r ImportedBatchProgressApplyResult) WriteFailed() bool {
+	return r.HasWriteResult && (r.WriteResult.ProgressError != nil || len(r.WriteResult.DeleteErrors) > 0)
+}
+
 // StageProgressCollector observes canonical block insertion stages and records
 // the matching downloader/import diagnostic stages.
 type StageProgressCollector struct {
