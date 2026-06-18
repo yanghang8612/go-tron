@@ -438,7 +438,9 @@ Status:
   `Bodies`, `SyncExecution` ahead of `SyncImport`, or `SyncBodiesReady` ahead
   of `SyncBodies`, cold build/prune/freezer coverage ahead of verified
   `Finish` (including balance-trace and section-bloom hot-row prune stages),
-  and cold-prune coverage violations such as
+  validates that `SyncBodiesReady` points to a readable hash-matching staged
+  body row before local import can drain it, and rejects cold-prune coverage
+  violations such as
   `SnapshotChainLookupPrune` ahead of or present without `ChainFreezer`.
   The verification gate now also opens the local snapshot manifest and checks
   actual readable cold coverage for `SnapshotEventLogBuild`,

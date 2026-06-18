@@ -337,6 +337,7 @@ func dbStorageAlertsCmd(ctx *cli.Context) error {
 		return err
 	}
 	stageIssues := dbStageStatusVerificationIssues(stageRows)
+	stageIssues = append(stageIssues, dbStageStatusStagedBodyIssues(db, stageRows)...)
 	stageIssues = append(stageIssues, dbStageStatusSnapshotCoverageIssues(stageRows, stateSnapshotsDir(cfg.DataDir))...)
 	stageStatus := "ok"
 	if len(stageIssues) > 0 {
@@ -592,6 +593,7 @@ func dbPrintStageStatus(db ethdb.KeyValueStore, canonical ethdb.KeyValueReader, 
 	}
 	if opts.Verify {
 		issues := dbStageStatusVerificationIssues(rows)
+		issues = append(issues, dbStageStatusStagedBodyIssues(db, rows)...)
 		issues = append(issues, dbStageStatusSnapshotCoverageIssues(rows, stateSnapshotsDir(dataDir))...)
 		if len(issues) > 0 {
 			return fmt.Errorf("stage status verification failed: %s", strings.Join(issues, "; "))
@@ -621,6 +623,67 @@ func dbStageStatusVerificationIssues(rows []dbStageStatusRow) []string {
 	}
 	issues = append(issues, dbStageStatusPipelineOrderIssues(rows)...)
 	return issues
+}
+
+func dbStageStatusStagedBodyIssues(db ethdb.KeyValueReader, rows []dbStageStatusRow) []string {
+	if db == nil {
+		return nil
+	}
+	for _, row := range rows {
+		if row.stage != rawdb.StageSyncBodiesReady || !row.present {
+			continue
+		}
+		ready := syncdl.ReadStagedBodyReadyDrainLimit(db, row.progress.BlockNum)
+		if ready.Valid() {
+			return nil
+		}
+		return []string{dbStageStatusStagedBodyIssue(ready)}
+	}
+	return nil
+}
+
+func dbStageStatusStagedBodyIssue(ready syncdl.StagedBodyReadyLimit) string {
+	parts := []string{
+		fmt.Sprintf("%s staged-body status=%s block=%d", rawdb.StageSyncBodiesReady, dbStageStatusStagedBodyStatus(ready.Status), ready.StageRow.BlockNum),
+	}
+	if ready.StageRow.HasBlockHash {
+		parts = append(parts, fmt.Sprintf("hash=%x", ready.StageRow.BlockHash))
+	}
+	if ready.StagedRow.Number != 0 || ready.StagedHash != (common.Hash{}) {
+		parts = append(parts, fmt.Sprintf("stagedBlock=%d stagedHash=%x", ready.StagedRow.Number, ready.StagedHash))
+	}
+	if ready.StageError != nil {
+		parts = append(parts, fmt.Sprintf("stageError=%q", ready.StageError.Error()))
+	}
+	if ready.ReadError != nil {
+		parts = append(parts, fmt.Sprintf("readError=%q", ready.ReadError.Error()))
+	}
+	return strings.Join(parts, " ")
+}
+
+func dbStageStatusStagedBodyStatus(status syncdl.StagedBodyReadyLimitStatus) string {
+	switch status {
+	case syncdl.StagedBodyReadyLimitMissing:
+		return "missing"
+	case syncdl.StagedBodyReadyLimitProgressReadError:
+		return "progress-read-error"
+	case syncdl.StagedBodyReadyLimitUnbound:
+		return "unbound"
+	case syncdl.StagedBodyReadyLimitStale:
+		return "stale"
+	case syncdl.StagedBodyReadyLimitReadError:
+		return "staged-read-error"
+	case syncdl.StagedBodyReadyLimitStagedMissing:
+		return "staged-missing"
+	case syncdl.StagedBodyReadyLimitNumberMismatch:
+		return "number-mismatch"
+	case syncdl.StagedBodyReadyLimitHashMismatch:
+		return "hash-mismatch"
+	case syncdl.StagedBodyReadyLimitValid:
+		return "valid"
+	default:
+		return "unknown"
+	}
 }
 
 func dbStageStatusPipelineOrderIssues(rows []dbStageStatusRow) []string {

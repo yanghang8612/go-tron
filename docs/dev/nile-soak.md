@@ -318,6 +318,8 @@ For a production Nile run, capture these checks:
 5. Stop gtron mid-catch-up, restart without deleting the datadir, and confirm
    staged bodies are recovered or pruned to a contiguous prefix: the next sample
    should not show `SyncBodiesReady` ahead of a missing or mismatched body row.
+   `gtron db stage-status --db.stage.verify --datadir <dir>` now fails this
+   case by reopening the staged body row referenced by `SyncBodiesReady`.
 6. After catch-up, run at least one stopped-node `--offline-db-check` sample and
    keep the JSONL row together with `gtron.err.log` and `stage-status.txt`.
 

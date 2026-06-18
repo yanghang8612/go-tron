@@ -825,6 +825,64 @@ func TestDBStageStatusCmd(t *testing.T) {
 	}
 }
 
+func TestDBStageStatusVerifyChecksSyncBodiesReadyStagedRow(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := rawdb.NewPebbleDB(chainDataDir(dataDir), 256, 500)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodies, block1.Number(), block1.Hash()); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodies: %v", err)
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, block1.Number(), common.Hash{0xee}); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodiesReady: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pebble: %v", err)
+	}
+
+	ctx := makeDBTestContext(t, []string{"--datadir", dataDir, "--db.stage.verify"})
+	output, err := captureDBCmdStdout(t, func() error {
+		return dbStageStatusCmd(ctx)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SyncBodiesReady staged-body status=hash-mismatch") {
+		t.Fatalf("dbStageStatusCmd verify err = %v, want SyncBodiesReady hash mismatch", err)
+	}
+	if !strings.Contains(output, fmt.Sprintf("group=sync name=%s", rawdb.StageSyncBodiesReady)) {
+		t.Fatalf("verify output missing SyncBodiesReady line:\n%s", output)
+	}
+}
+
+func TestDBStageStatusStagedBodyIssuesAcceptsMatchingSyncBodiesReady(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	block1, _ := dbRebuildTxIndexBlock(t, 1, 0)
+	if err := rawdb.WriteSyncStagedBlock(db, block1); err != nil {
+		t.Fatalf("WriteSyncStagedBlock: %v", err)
+	}
+	row := rawdb.StageProgress{
+		Stage:        rawdb.StageSyncBodiesReady,
+		BlockNum:     block1.Number(),
+		BlockHash:    block1.Hash(),
+		HasBlockHash: true,
+	}
+	if err := rawdb.WriteStageProgressWithHash(db, rawdb.StageSyncBodiesReady, row.BlockNum, row.BlockHash); err != nil {
+		t.Fatalf("WriteStageProgress SyncBodiesReady: %v", err)
+	}
+	rows := []dbStageStatusRow{{
+		stage:    rawdb.StageSyncBodiesReady,
+		group:    "sync",
+		present:  true,
+		progress: row,
+	}}
+	if issues := dbStageStatusStagedBodyIssues(db, rows); len(issues) != 0 {
+		t.Fatalf("dbStageStatusStagedBodyIssues = %#v, want none", issues)
+	}
+}
+
 func TestDBStageStatusPipelineOrderIssues(t *testing.T) {
 	rows := []dbStageStatusRow{
 		{
