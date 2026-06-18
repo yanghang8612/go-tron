@@ -480,6 +480,12 @@ func (r ImportBatchRunResult) RecordWriteFailed() bool {
 	return r.HasRecord && r.RecordApply.ProgressApply.WriteFailed()
 }
 
+// RecordProgressFailed reports whether imported-prefix storage/runtime
+// progress failed after canonical insertion accepted the prefix.
+func (r ImportBatchRunResult) RecordProgressFailed() bool {
+	return r.HasRecord && r.RecordApply.ProgressApply.Failed()
+}
+
 // ImportBatchRunSettlementAction names the local drain-loop branch selected
 // after one import-batch run.
 type ImportBatchRunSettlementAction uint8
@@ -665,7 +671,7 @@ func ApplyImportBatchRunPlan(plan ImportBatchRunPlan, applier ImportBatchRunPlan
 			if result.Outcome.Pause {
 				applier.PauseImport(result.Outcome.PausePeer, result.Outcome.PauseNum, insertErr)
 			}
-			result.StopDrain = result.Outcome.StopDrain || result.RecordWriteFailed()
+			result.StopDrain = result.Outcome.StopDrain || result.RecordProgressFailed()
 		}
 	}
 	return result

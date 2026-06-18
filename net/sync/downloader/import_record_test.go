@@ -143,6 +143,38 @@ func TestApplyImportedBatchRecordPlanStopsAfterProgressWriteFailure(t *testing.T
 	}
 }
 
+func TestApplyImportedBatchRecordPlanStopsAfterReadyRefreshFailure(t *testing.T) {
+	readyErr := errors.New("ready refresh failed")
+	progress := ImportedBatchProgressPlan{OK: true, StatsBlocks: 2, StatsTransactions: 3, ReportHead: 9}
+	applier := &recordingImportedBatchRecordApplier{
+		progressApply: ImportedBatchProgressApplyResult{
+			HasWriteResult:  true,
+			WriteResult:     rawdb.SyncImportProgressWriteResult{Deleted: 1, ProgressRows: 4},
+			HasReadyRefresh: true,
+			ReadyRefresh:    StagedBodyReadyProgressRefresh{Updated: true, WriteError: readyErr},
+		},
+		stats: ImportedBatchStatsRecordResult{
+			Emit:     true,
+			Snapshot: tsync.Snapshot{Blocks: 2, Txs: 3},
+		},
+		preparation: ImportedBatchReportPreparation{Remaining: 42},
+	}
+
+	got := ApplyImportedBatchRecordPlan(PlanImportedBatchRecord(progress, time.Millisecond), applier)
+	if !got.HasProgress || !got.ProgressApply.ReadyRefreshFailed() || !got.ProgressApply.Failed() || got.ProgressApply.ReadyRefresh.WriteError != readyErr {
+		t.Fatalf("progress apply = %+v, want ready refresh failure preserved", got.ProgressApply)
+	}
+	if !reflect.DeepEqual(got.AppliedSteps, []ImportedBatchRecordStepAction{ImportedBatchRecordApplyProgress}) {
+		t.Fatalf("applied steps = %+v, want progress only", got.AppliedSteps)
+	}
+	if !reflect.DeepEqual(applier.calls, []ImportedBatchRecordStepAction{ImportedBatchRecordApplyProgress}) {
+		t.Fatalf("applier calls = %+v, want progress only", applier.calls)
+	}
+	if got.HasStats || got.HasPreparation || got.HasReport || applier.reported {
+		t.Fatalf("record result after ready refresh failure = %+v reported=%v, want no stats/prep/report", got, applier.reported)
+	}
+}
+
 type recordingImportedBatchRecordApplier struct {
 	calls           []ImportedBatchRecordStepAction
 	progress        ImportedBatchProgressPlan

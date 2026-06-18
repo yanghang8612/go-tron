@@ -872,6 +872,18 @@ func (r ImportedBatchProgressApplyResult) WriteFailed() bool {
 	return r.HasWriteResult && (r.WriteResult.ProgressError != nil || len(r.WriteResult.DeleteErrors) > 0)
 }
 
+// ReadyRefreshFailed reports whether the downstream SyncBodiesReady frontier
+// could not be recomputed or persisted after the import-stage boundary write.
+func (r ImportedBatchProgressApplyResult) ReadyRefreshFailed() bool {
+	return r.HasReadyRefresh && r.ReadyRefresh.Failed()
+}
+
+// Failed reports whether any imported-batch progress side effect failed after
+// canonical insertion accepted the staged-body prefix.
+func (r ImportedBatchProgressApplyResult) Failed() bool {
+	return r.WriteFailed() || r.ReadyRefreshFailed()
+}
+
 // StageProgressCollector observes canonical block insertion stages and records
 // the matching downloader/import diagnostic stages.
 type StageProgressCollector struct {
@@ -1068,6 +1080,9 @@ func ApplyImportedBatchProgressPlan(plan ImportedBatchProgressPlan, applier Impo
 			result.ReadyRefresh = applier.RefreshSyncBodiesReady()
 			result.HasReadyRefresh = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
+			if result.ReadyRefreshFailed() {
+				return result
+			}
 		default:
 			result.UnknownSteps = append(result.UnknownSteps, step.Action)
 		}

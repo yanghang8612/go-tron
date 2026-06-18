@@ -1181,6 +1181,39 @@ func TestApplyImportBatchRunStopsDrainWhenProgressWriteFails(t *testing.T) {
 	}
 }
 
+func TestApplyImportBatchRunStopsDrainWhenReadyRefreshFails(t *testing.T) {
+	block := testBufferedBlock(1)
+	readyErr := errors.New("ready refresh failed")
+	applier := &recordingImportBatchRunApplier{
+		recordApply: ImportedBatchRecordApplyResult{
+			HasProgress: true,
+			ProgressApply: ImportedBatchProgressApplyResult{
+				HasWriteResult:  true,
+				WriteResult:     rawdb.SyncImportProgressWriteResult{Deleted: 1, ProgressRows: 4},
+				HasReadyRefresh: true,
+				ReadyRefresh:    StagedBodyReadyProgressRefresh{Updated: true, WriteError: readyErr},
+			},
+		},
+	}
+
+	result := ApplyImportBatchRun(testImportRunBatch(t, block), applier)
+
+	if !result.Run.HasRecord || result.Run.RecordWriteFailed() || !result.Run.RecordProgressFailed() || !result.Run.RecordApply.ProgressApply.ReadyRefreshFailed() {
+		t.Fatalf("record = %+v has=%v, want imported-prefix ready refresh failure", result.Run.RecordApply, result.Run.HasRecord)
+	}
+	if result.Run.Outcome.Pause || result.Run.Outcome.StopDrain {
+		t.Fatalf("outcome = %+v, want successful canonical import without sticky pause", result.Run.Outcome)
+	}
+	if !result.Run.StopDrain ||
+		result.Settlement.Action != ImportBatchRunSettlementStopDrain ||
+		!result.Settlement.StopDrain ||
+		!result.DrainLoop.StopLoop ||
+		result.DrainLoopApply.Action != ImportBatchDrainLoopStop {
+		t.Fatalf("settlement run=%+v settlement=%+v drain=%+v apply=%+v, want stop after ready refresh failure",
+			result.Run, result.Settlement, result.DrainLoop, result.DrainLoopApply)
+	}
+}
+
 func TestApplyImportBatchRunPlanSuccessWithHalfExecutedStageObservations(t *testing.T) {
 	block := testBufferedBlock(1)
 	applier := &recordingImportBatchRunApplier{

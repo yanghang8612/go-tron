@@ -416,6 +416,10 @@ Status:
   `SyncBodiesReady` when the staged-body delete or sync-stage progress write
   fails, so the ready frontier is also downstream of a durable import-stage
   boundary.
+- `SyncBodiesReady` refresh failures are now treated as imported-progress
+  failures too: the record scheduler suppresses stats/report output and the
+  local drain loop stops before attempting another chunk, preserving the same
+  stage-before-downstream-view ordering for ready-frontier writes.
 - Sync pipeline startup repair now keeps only hash-bound `SyncImport`,
   `SyncExecution`, `SyncCommitment`, and `SyncFinish` rows that still resolve to
   the current canonical chain; rows that point past the head, lack a hash, or

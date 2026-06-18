@@ -109,7 +109,7 @@ func ApplyImportedBatchRecordPlan(plan ImportedBatchRecordPlan, applier Imported
 			result.ProgressApply = applier.ApplyImportedBatchProgress(plan.Progress)
 			result.HasProgress = true
 			result.AppliedSteps = append(result.AppliedSteps, step.Action)
-			if result.ProgressApply.WriteFailed() {
+			if result.ProgressApply.Failed() {
 				return result
 			}
 		case ImportedBatchRecordStats:

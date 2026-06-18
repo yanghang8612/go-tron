@@ -31,6 +31,11 @@ type StagedBodyReadyProgressRefresh struct {
 	DeleteError error
 }
 
+// Failed reports whether recomputing or persisting SyncBodiesReady failed.
+func (r StagedBodyReadyProgressRefresh) Failed() bool {
+	return r.Frontier.Error != nil || r.WriteError != nil || r.DeleteError != nil
+}
+
 // StagedBodyReadyAfterStageRefresh records the optional SyncBodiesReady refresh
 // after one staged body was accepted.
 type StagedBodyReadyAfterStageRefresh struct {
