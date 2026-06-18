@@ -160,7 +160,10 @@ or repair the hot trace rows first; `gtron db backfill-balance-traces` does
 this by replaying canonical blocks into an isolated replay database and then
 copying only the generated trace rows back into the operator datadir through
 the sorted ETL collector. The cold sidecar is only safe when the source range is
-complete.
+complete. Maintenance commands open the same snapshot-aware chain view as
+runtime startup, so replay backfill treats matching cold `balance-trace`
+sidecar rows as existing target rows and does not rewrite them into the hot
+Pebble store after trace pruning.
 
 Use `--db.replay.dir` for long backfills so interrupted runs can resume from
 the isolated replay database head. Use `--db.replay.tempdir` for one-shot runs

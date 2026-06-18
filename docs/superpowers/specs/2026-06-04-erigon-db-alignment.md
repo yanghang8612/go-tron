@@ -988,6 +988,11 @@ Status:
   `BlockBalanceTrace` protobuf rows plus fixed-width account trace index rows,
   `snapshots.Manager` implements the cold reader, and runtime startup attaches
   it to `ChainDB` alongside the chain-index sidecar.
+- DB maintenance commands that rebuild, audit, or replay derived rows now open
+  the same snapshot-aware `ChainDB` view as runtime startup. Balance-trace
+  replay backfill uses that archive view when checking existing target rows, so
+  a pruned hot trace that is still present in a verified cold sidecar is counted
+  as existing instead of being duplicated back into Pebble.
 - Exact cold `BlockBalanceTrace` lookups skip balance-trace segment files whose
   block range cannot contain the requested block before opening them. This
   keeps unrelated missing or retired newer trace sidecars from blocking older

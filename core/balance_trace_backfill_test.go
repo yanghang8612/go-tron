@@ -97,6 +97,64 @@ func TestBackfillBalanceTracesByReplayRejectsExistingMismatch(t *testing.T) {
 	}
 }
 
+func TestBackfillBalanceTracesByReplayHonorsColdTargetTraceRows(t *testing.T) {
+	sourceDB, _, genesis, _ := newBalanceTraceBackfillSource(t)
+	replayDB := ethrawdb.NewMemoryDatabase()
+	scratchTarget := ethrawdb.NewMemoryDatabase()
+	if _, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		scratchTarget,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{FromBlock: 1, ToBlock: 1},
+	); err != nil {
+		t.Fatalf("prime replay DB: %v", err)
+	}
+
+	trace := rawdb.ReadBlockBalanceTrace(scratchTarget, 1)
+	if trace == nil {
+		t.Fatal("scratch BlockBalanceTrace missing")
+	}
+	cold := newBalanceTraceBackfillColdTraceReader()
+	cold.putBlockTrace(1, trace)
+	for _, owner := range []tcommon.Address{testInsertAddr(1), testInsertAddr(2)} {
+		balance, ok := rawdb.ReadAccountTrace(scratchTarget, owner.Bytes(), 1)
+		if !ok {
+			t.Fatalf("scratch AccountTrace %x missing", owner)
+		}
+		cold.putAccountTrace(owner.Bytes(), 1, balance)
+	}
+	targetReader := rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{})
+	targetReader.SetBalanceTraceReader(cold)
+
+	result, err := BackfillBalanceTracesByReplay(
+		rawdb.NewChainDB(sourceDB, rawdb.NoopAncient{}),
+		sourceDB,
+		replayDB,
+		genesis,
+		BalanceTraceReplayBackfillOptions{
+			FromBlock:         1,
+			ToBlock:           1,
+			TargetTraceReader: targetReader,
+		},
+	)
+	if err != nil {
+		t.Fatalf("BackfillBalanceTracesByReplay with cold target rows: %v", err)
+	}
+	if result.BlockTraceRows != 0 || result.AccountTraceRows != 0 ||
+		result.ExistingBlockTraces != 1 || result.ExistingAccountTraces != 2 {
+		t.Fatalf("result = %+v, want cold rows counted as existing without hot writes", result)
+	}
+	if got := rawdb.ReadBlockBalanceTrace(sourceDB, 1); got != nil {
+		t.Fatalf("hot target BlockBalanceTrace = %+v, want nil", got)
+	}
+	for _, owner := range []tcommon.Address{testInsertAddr(1), testInsertAddr(2)} {
+		if _, ok := rawdb.ReadAccountTrace(sourceDB, owner.Bytes(), 1); ok {
+			t.Fatalf("hot target AccountTrace %x written despite cold existing row", owner)
+		}
+	}
+}
+
 func TestBackfillBalanceTracesByReplayResumesFromReplayHead(t *testing.T) {
 	sourceDB, sourceChain, genesis, block1 := newBalanceTraceBackfillSource(t)
 	block2 := buildTransferBlock(t, 2, 6000, block1.Hash(), tcommon.Address{}, 7_000_000)
@@ -215,6 +273,53 @@ func (a *balanceTraceBackfillCountingAncient) Ancient(kind string, number uint64
 		a.reads[number]++
 	}
 	return nil, rawdb.ErrNotInAncient
+}
+
+type balanceTraceBackfillColdTraceReader struct {
+	blockTraces   map[int64]*contractpb.BlockBalanceTrace
+	accountTraces map[string]map[int64]int64
+}
+
+func newBalanceTraceBackfillColdTraceReader() *balanceTraceBackfillColdTraceReader {
+	return &balanceTraceBackfillColdTraceReader{
+		blockTraces:   make(map[int64]*contractpb.BlockBalanceTrace),
+		accountTraces: make(map[string]map[int64]int64),
+	}
+}
+
+func (r *balanceTraceBackfillColdTraceReader) BlockBalanceTrace(blockNum int64) (*contractpb.BlockBalanceTrace, bool, error) {
+	trace, ok := r.blockTraces[blockNum]
+	return trace, ok, nil
+}
+
+func (r *balanceTraceBackfillColdTraceReader) AccountTraceAtOrBefore(owner []byte, blockNum int64) (int64, int64, bool, error) {
+	rows := r.accountTraces[string(owner)]
+	var bestBlock int64
+	var bestBalance int64
+	var ok bool
+	for n, balance := range rows {
+		if n > blockNum {
+			continue
+		}
+		if !ok || n > bestBlock {
+			bestBlock = n
+			bestBalance = balance
+			ok = true
+		}
+	}
+	return bestBlock, bestBalance, ok, nil
+}
+
+func (r *balanceTraceBackfillColdTraceReader) putBlockTrace(blockNum int64, trace *contractpb.BlockBalanceTrace) {
+	r.blockTraces[blockNum] = trace
+}
+
+func (r *balanceTraceBackfillColdTraceReader) putAccountTrace(owner []byte, blockNum int64, balance int64) {
+	key := string(owner)
+	if r.accountTraces[key] == nil {
+		r.accountTraces[key] = make(map[int64]int64)
+	}
+	r.accountTraces[key][blockNum] = balance
 }
 
 func newBalanceTraceBackfillSource(t *testing.T) (ethdb.Database, *BlockChain, *params.Genesis, *types.Block) {

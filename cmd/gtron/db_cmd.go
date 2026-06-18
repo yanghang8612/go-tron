@@ -530,6 +530,24 @@ func dbFreezerHiddenSize(stats rawdbfreezer.Stats) uint64 {
 	return hidden
 }
 
+func openSnapshotPruneChainDB(db ethdb.KeyValueStore, dataDir string) (*rawdb.ChainDB, func(), error) {
+	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(dataDir)
+	if err != nil {
+		return nil, closeAncient, err
+	}
+	snapshotManager, err := statesnapshots.OpenManager(stateSnapshotsDir(dataDir))
+	if err != nil {
+		closeAncient()
+		return nil, func() {}, fmt.Errorf("open state snapshots: %w", err)
+	}
+	chainDB := rawdb.NewChainDB(db, rawdb.NewFallbackAncientReader(ancientReader, snapshotManager))
+	chainDB.SetChainIndexReader(snapshotManager)
+	chainDB.SetBalanceTraceReader(snapshotManager)
+	chainDB.SetSectionBloomReader(snapshotManager)
+	chainDB.SetEventLogReader(snapshotManager)
+	return chainDB, closeAncient, nil
+}
+
 func dbStageStatusCmd(ctx *cli.Context) error {
 	cfg := makeConfig(ctx)
 	db, err := openPebbleDB(ctx, chainDataDir(cfg.DataDir))
@@ -538,13 +556,13 @@ func dbStageStatusCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	return dbPrintStageStatus(db, rawdb.NewChainDB(db, ancientReader), cfg.DataDir, dbStageStatusOptions{
+	return dbPrintStageStatus(db, chainDB, cfg.DataDir, dbStageStatusOptions{
 		Verify: ctx.Bool("db.stage.verify"),
 	})
 }
@@ -966,13 +984,12 @@ func dbRebuildTxIndexesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	chainDB := rawdb.NewChainDB(db, ancientReader)
 	fromBlock := ctx.Uint64("db.from-block")
 	toBlock, err := dbRebuildToBlock(ctx, chainDB)
 	if err != nil {
@@ -1007,13 +1024,12 @@ func dbRebuildSectionBloomsCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	chainDB := rawdb.NewChainDB(db, ancientReader)
 	fromBlock := ctx.Uint64("db.from-block")
 	toBlock, err := dbRebuildToBlock(ctx, chainDB)
 	if err != nil {
@@ -1051,13 +1067,12 @@ func dbRebuildAccountTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	chainDB := rawdb.NewChainDB(db, ancientReader)
 	fromBlock := ctx.Uint64("db.from-block")
 	toBlock, err := dbRebuildToBlock(ctx, chainDB)
 	if err != nil {
@@ -1093,13 +1108,12 @@ func dbAuditBalanceTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	chainDB := rawdb.NewChainDB(db, ancientReader)
 	fromBlock := ctx.Uint64("db.from-block")
 	toBlock, err := dbRebuildToBlock(ctx, chainDB)
 	if err != nil {
@@ -1144,13 +1158,12 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 	}
 	defer db.Close()
 
-	ancientReader, closeAncient, err := openSnapshotPruneAncientReader(cfg.DataDir)
+	chainDB, closeAncient, err := openSnapshotPruneChainDB(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
 	defer closeAncient()
 
-	chainDB := rawdb.NewChainDB(db, ancientReader)
 	fromBlock := ctx.Uint64("db.from-block")
 	toBlock, err := dbRebuildToBlock(ctx, chainDB)
 	if err != nil {
@@ -1195,10 +1208,11 @@ func dbBackfillBalanceTracesCmd(ctx *cli.Context) error {
 
 	lastProgress := uint64(0)
 	result, err := core.BackfillBalanceTracesByReplay(chainDB, db, replayDB, genesis, core.BalanceTraceReplayBackfillOptions{
-		FromBlock: fromBlock,
-		ToBlock:   toBlock,
-		Overwrite: ctx.Bool("db.balance-trace.overwrite"),
-		ETL:       etlOpts,
+		FromBlock:         fromBlock,
+		ToBlock:           toBlock,
+		Overwrite:         ctx.Bool("db.balance-trace.overwrite"),
+		ETL:               etlOpts,
+		TargetTraceReader: chainDB,
 		Progress: func(p core.BalanceTraceReplayBackfillProgress) {
 			if p.Block == p.Target || p.Block-lastProgress >= 10000 {
 				lastProgress = p.Block

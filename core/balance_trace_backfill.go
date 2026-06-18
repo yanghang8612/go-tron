@@ -15,11 +15,12 @@ import (
 )
 
 type BalanceTraceReplayBackfillOptions struct {
-	FromBlock uint64
-	ToBlock   uint64
-	Overwrite bool
-	ETL       etl.Options
-	Progress  func(BalanceTraceReplayBackfillProgress)
+	FromBlock         uint64
+	ToBlock           uint64
+	Overwrite         bool
+	ETL               etl.Options
+	TargetTraceReader ethdb.KeyValueReader
+	Progress          func(BalanceTraceReplayBackfillProgress)
 }
 
 type BalanceTraceReplayBackfillProgress struct {
@@ -70,6 +71,10 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 	result := &BalanceTraceReplayBackfillResult{
 		FromBlock: opts.FromBlock,
 		ToBlock:   opts.ToBlock,
+	}
+	targetTraceReader := opts.TargetTraceReader
+	if targetTraceReader == nil {
+		targetTraceReader = target
 	}
 	collector, err := rawdb.NewDerivedIndexCollector(opts.ETL)
 	if err != nil {
@@ -126,7 +131,7 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 		if opts.Progress != nil {
 			opts.Progress(BalanceTraceReplayBackfillProgress{Phase: "copy", Block: blockNum, Target: opts.ToBlock})
 		}
-		if err := collectReplayedBalanceTraceRows(target, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
+		if err := collectReplayedBalanceTraceRows(target, targetTraceReader, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
 			return nil, err
 		}
 		result.BlocksBackfilled++
@@ -147,7 +152,7 @@ func BackfillBalanceTracesByReplay(source *rawdb.ChainDB, target ethdb.KeyValueS
 		if blockNum < opts.FromBlock {
 			continue
 		}
-		if err := collectReplayedBalanceTraceRows(target, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
+		if err := collectReplayedBalanceTraceRows(target, targetTraceReader, replayReader, blockNum, block.Hash(), opts.Overwrite, collector, result); err != nil {
 			return nil, err
 		}
 		result.BlocksBackfilled++
@@ -167,7 +172,7 @@ func cloneBalanceTraceBackfillGenesis(genesis *params.Genesis) *params.Genesis {
 	return &out
 }
 
-func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, replay ethdb.KeyValueStore, blockNum uint64, blockHash tcommon.Hash, overwrite bool, collector *rawdb.DerivedIndexCollector, result *BalanceTraceReplayBackfillResult) error {
+func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, targetTraceReader ethdb.KeyValueReader, replay ethdb.KeyValueStore, blockNum uint64, blockHash tcommon.Hash, overwrite bool, collector *rawdb.DerivedIndexCollector, result *BalanceTraceReplayBackfillResult) error {
 	trace := rawdb.ReadBlockBalanceTrace(rawdb.NewChainDB(replay, rawdb.NoopAncient{}), int64(blockNum))
 	if trace == nil {
 		return fmt.Errorf("core: replay produced no BlockBalanceTrace for block %d", blockNum)
@@ -180,7 +185,7 @@ func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, replay ethdb.Ke
 		return fmt.Errorf("core: replay BlockBalanceTrace payload hash %x does not match canonical block %d hash %x", id.GetHash(), blockNum, blockHash)
 	}
 
-	existing := rawdb.ReadBlockBalanceTrace(rawdb.NewChainDB(target, rawdb.NoopAncient{}), int64(blockNum))
+	existing := rawdb.ReadBlockBalanceTrace(targetTraceReader, int64(blockNum))
 	if existing != nil {
 		if proto.Equal(existing, trace) {
 			result.ExistingBlockTraces++
@@ -196,7 +201,7 @@ func collectReplayedBalanceTraceRows(target ethdb.KeyValueStore, replay ethdb.Ke
 	}
 
 	if err := rawdb.IterateAccountTraceRows(replay, int64(blockNum), int64(blockNum), func(owner []byte, traceBlock int64, balance int64) (bool, error) {
-		existingBalance, ok := rawdb.ReadAccountTrace(target, owner, traceBlock)
+		existingBalance, ok := rawdb.ReadAccountTrace(targetTraceReader, owner, traceBlock)
 		if ok {
 			if existingBalance == balance {
 				result.ExistingAccountTraces++
