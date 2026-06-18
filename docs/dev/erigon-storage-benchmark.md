@@ -162,10 +162,11 @@ rows are hash-mismatched, out of order, or claim cold coverage that the local
 manifest cannot prove. It also warns when retired snapshot files still occupy
 disk after compaction or replacement. The JSONL row includes
 `freezerAlertStatus`, `freezerAlertIssues`, `freezerAlertHiddenBytes`,
-`stageVerifyStatus`, `stageVerifyIssues`, `snapshotAlertStatus`,
-`snapshotAlertIssues`, and the `snapshotRetired*` counters; warning rows capture
-hidden freezer bytes and retired snapshot bytes that still await physical
-pruning.
+`freezerAlertDetails`, `stageVerifyStatus`, `stageVerifyIssues`,
+`stageVerifyDetails`, `snapshotAlertStatus`, `snapshotAlertIssues`,
+`snapshotAlertDetails`, and the `snapshotRetired*` counters; warning rows
+capture hidden freezer bytes and retired snapshot bytes that still await
+physical pruning.
 
 ## Sync Profile
 
@@ -205,7 +206,8 @@ Each row also includes `soakHealthStatus`, `soakHealthIssues`, and
 HTTP/peer failures, stage regressions, pipeline violations, storage alerts, and
 the current sync-stage bottleneck.
 Run it with `--offline-db-check` only after the node is stopped to add
-`storage-alerts` stage/freezer/snapshot diagnostics.
+`storage-alerts` stage/freezer/snapshot diagnostics, including
+`stageVerifyDetails` entries such as `SyncBodiesReady` staged-body mismatches.
 
 ## Interpreting Results
 

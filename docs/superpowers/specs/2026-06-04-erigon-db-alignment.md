@@ -474,7 +474,9 @@ Status:
   ID, peers, elapsed sync time, block rate, git commit, and datadir size split
   across hot `chaindata`, ancient freezer, state snapshots, and replay scratch.
   When the node is stopped, `--offline-db-check` appends the same
-  freezer/stage/snapshot alert fields used by the storage benchmark harness.
+  freezer/stage/snapshot alert fields used by the storage benchmark harness,
+  including detail arrays for stage verification and snapshot/freezer alerts so
+  `SyncBodiesReady` staged-body mismatches are visible in the JSONL row itself.
 
 Needed:
 

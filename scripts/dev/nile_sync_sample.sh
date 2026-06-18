@@ -263,9 +263,12 @@ def parse_alerts(text):
         "freezerAlertHiddenBytes": -1,
         "stageVerifyStatus": "unknown",
         "stageVerifyIssues": -1,
+        "stageVerifyDetails": [],
         "snapshotAlertStatus": "unknown",
         "snapshotAlertIssues": -1,
+        "snapshotAlertDetails": [],
         "snapshotRetiredBytes": -1,
+        "freezerAlertDetails": [],
     }
     patterns = {
         "freezerAlertStatus": r"freezerStatus=([^ ]+)",
@@ -286,6 +289,29 @@ def parse_alerts(text):
             row[key] = int(value)
         else:
             row[key] = value
+    for line in text.splitlines():
+        m = re.match(r"Storage freezer alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+        if m:
+            row["freezerAlertDetails"].append({
+                "severity": m.group(1),
+                "kind": m.group(2),
+                "detail": m.group(3),
+            })
+            continue
+        m = re.match(r"Storage stage alert: severity=([^ ]+) detail=(.*)$", line)
+        if m:
+            row["stageVerifyDetails"].append({
+                "severity": m.group(1),
+                "detail": m.group(2),
+            })
+            continue
+        m = re.match(r"Storage snapshot alert: severity=([^ ]+) kind=([^ ]+) detail=(.*)$", line)
+        if m:
+            row["snapshotAlertDetails"].append({
+                "severity": m.group(1),
+                "kind": m.group(2),
+                "detail": m.group(3),
+            })
     return row
 
 def parse_stage_status(path):

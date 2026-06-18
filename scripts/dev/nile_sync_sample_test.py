@@ -1380,6 +1380,83 @@ class NileSyncSampleTest(unittest.TestCase):
             self.assertEqual(row["syncLogExecPlanStagesPerBlock"], 4.0)
             self.assertEqual(row["syncLogExecPlanPostBodyStagesPerBlock"], 3.0)
 
+    def test_sample_preserves_offline_storage_alert_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            datadir = tmpdir / "datadir"
+            (datadir / "gtron" / "chaindata").mkdir(parents=True)
+            fake_gtron = tmpdir / "gtron"
+            fake_gtron.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env bash",
+                        "cat <<'EOF'",
+                        "Storage alerts: datadir=/tmp/nile status=critical freezerStatus=ok freezerIssues=0 stageStatus=critical stageIssues=1 snapshotStatus=warning snapshotIssues=1 retiredSegments=1 retiredFiles=1 retiredMissing=0 retiredSkippedActive=0 retiredBytes=123 hiddenSize=0",
+                        "Storage stage alert: severity=critical detail=SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa",
+                        "Storage snapshot alert: severity=warning kind=retired-prune-pending detail=retired segment still present",
+                        "EOF",
+                        "exit 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(fake_gtron, 0o755)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), NileSampleHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.addCleanup(server.shutdown)
+            self.addCleanup(server.server_close)
+
+            proc = subprocess.run(
+                [
+                    str(SCRIPT),
+                    "--datadir",
+                    str(datadir),
+                    "--http",
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "--gtron",
+                    str(fake_gtron),
+                    "--offline-db-check",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            row = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertTrue(row["offlineDbCheck"])
+            self.assertEqual(row["offlineDbCheckStatus"], "error")
+            self.assertEqual(row["stageVerifyStatus"], "critical")
+            self.assertEqual(row["stageVerifyIssues"], 1)
+            self.assertEqual(
+                row["stageVerifyDetails"],
+                [
+                    {
+                        "severity": "critical",
+                        "detail": "SyncBodiesReady staged-body status=hash-mismatch block=7 hash=ee stagedBlock=7 stagedHash=aa",
+                    }
+                ],
+            )
+            self.assertEqual(row["snapshotAlertStatus"], "warning")
+            self.assertEqual(row["snapshotAlertIssues"], 1)
+            self.assertEqual(
+                row["snapshotAlertDetails"],
+                [
+                    {
+                        "severity": "warning",
+                        "kind": "retired-prune-pending",
+                        "detail": "retired segment still present",
+                    }
+                ],
+            )
+            self.assertEqual(row["freezerAlertDetails"], [])
+            self.assertIn("stage-verify-alert", row["soakHealthIssues"])
+            self.assertIn("offline-db-check:error", row["soakHealthIssues"])
+            self.assertIn("SyncBodiesReady staged-body status=hash-mismatch", row["offlineDbCheckTail"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -330,8 +330,10 @@ state.
 
 When the node is stopped, add `--offline-db-check` to also run
 `gtron db storage-alerts --datadir <dir>` and include freezer/stage/snapshot
-alert fields in the row. Do not enable that flag against a live Pebble datadir
-unless the DB can be opened by the diagnostic command.
+alert fields in the row. The row keeps both aggregate counts and detail arrays:
+`freezerAlertDetails`, `stageVerifyDetails`, and `snapshotAlertDetails`. Do not
+enable that flag against a live Pebble datadir unless the DB can be opened by
+the diagnostic command.
 
 ## Shielded TRC20 Replay Recovery
 
